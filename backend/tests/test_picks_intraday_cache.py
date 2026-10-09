@@ -167,7 +167,8 @@ def test_evidence_tick_archives_each_durable_snapshot_once(monkeypatch):
 
     first = asyncio.run(runtime.archive_intraday_evidence_tick(app))
     second = asyncio.run(runtime.archive_intraday_evidence_tick(app))
-    assert first == {"state": "archived", "saved_files": 2, "run_id": "r1", "records": 9}
+    assert first == {"state": "archived", "saved_files": 2, "run_id": "r1", "records": 9,
+        "selection_notifications": {"state": "suppressed", "reason": "snapshot_not_fresh_ready", "created": 0}}
     assert second["state"] == "idle"
     assert calls == 1
     assert state.opportunity_evidence_saved_files == 2

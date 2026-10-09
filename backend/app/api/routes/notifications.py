@@ -1,14 +1,8 @@
-"""站内个股机会与持仓风险通知端点。
+"""原选股时点、真实持仓风险与明确个股条件的站内消息。
 
-GET /api/notifications?alert_limit=50&news_limit=15&news_min_score=<settings 默认>
-
-通知中心只消费两类具名个股事件：多维门控的 ``buy_point`` 与临板扫描的
-``pre_limit``。买点上游是 ``picks.buy_point.evaluate_buy_points``；临板是
-``__picks_watcher__`` 规则中的个股形状，不能把规则名等同于最终通知口径。
-
-板块资金异动、题材方向确认/证伪、信号健康、每日精选摘要和新闻仍保留在各自页面与
-审计表中，但不再进入消息通知。这样「可研究的信息」与「值得打断用户的个股机会」
-不再混为一谈。飞书原本就只发送同一买点规则的逐股卡片，口径保持一致。
+IMP-086：普通全市场临板/开板事件留在原观察路径，不取得机会消息资格。
+每日与盘中真实入选复用原结果，消息保留原时点；当前条件须查看选股页。
+风险和明确配置的个股条件不要求先入选。新消息仅站内，不扩展外推或交易消费者。
 
 ⚠️ **`news_limit` / `news_min_score` 仅为旧客户端兼容保留、已不被消费**
 （响应里的 ``news_min_score`` 同理，取值仍是配置默认）。`IMP-028` 收敛时留下的
@@ -57,7 +51,7 @@ from pydantic import BaseModel, Field
 from app.api.deps import require_write_token
 from app.core.config import settings
 from app.repositories.alert_repo import AlertRepository
-from app.core.bjtime import beijing_now
+from app.core.bjtime import beijing_now, to_beijing
 from app.market import trade_calendar as tc
 from app.services import notification_read_state as read_state_service
 
@@ -66,49 +60,12 @@ log = logging.getLogger(__name__)
 router = APIRouter(tags=["notifications"])
 
 BUY_POINT_RULE = "__picks_buy_point__"
-#: `__picks_watcher__` 是**一个规则产出 8 种 kind** 的聚合规则（见 `alert_triage._already_recent`
-#: 的分布表）：其中只有 `pre_limit`（临板预警）与 `flow_surge`（大单异动）带**真实标的**，
-#: 其余（board_low_absorb / board_flow_surge / falsify / high_board_break …）的
-#: symbol 一律是 `000000`（板块级/方向级），**天然过不了下方的形状门**。
+# Ordinary watcher shapes remain in diagnostics, never in opportunity items.
 WATCHER_RULE = "__picks_watcher__"
-
-#: 可进通知中心的**事件形状**（`snapshot.kind`），而非规则名。
-#:
-#: ⚠️ 2026-09-16 从「规则名收口」改为「形状收口」——用户实盘反馈：
-#: 当日 121 条临板预警**全部带真实代码**（如 09:27:44 锡华科技 8.3%、黑猫股份 7.2%，
-#: 均为 10cm 非一字板、有介入机会），却因白名单只认 `__picks_buy_point__` 而
-#: **一条都没进通知中心**；而 `__picks_buy_point__` 当日**一次都没触发**
-#: （`alert_rule` 表里根本没有该行——规则是懒创建的），于是通知中心整天为 0 条。
-#:
-#: 当前只收具名个股且有用户决策价值的事件——
-#:   - `buy_point`：多维门控后的买点（原有）；
-#:   - `pre_limit`：**涨停前**的临板预警（"距封板 1.4pct，10cm"），语义即"介入机会"。
-#:   - `board_reopen`：曾封板后开板的重评；
-#:   - `real_exit_alert`：真实持仓止损风险（风险提示，不是买点）。
-#:
-#: 刻意**不含** `flow_surge`（大单异动）：它虽有代码，但语义是"资金异动 / 题材成员跟踪"，
-#: 不是买点——纳入与否属交易信号口径，留待用户拍板（候选，非默认开启）。
-_NOTIF_KINDS = ("buy_point", "pre_limit", "board_reopen", "real_exit_alert")
-_NOTIF_RULE_NAMES = (BUY_POINT_RULE, WATCHER_RULE,
-                     "__source_board_reopen__", "__source_real_exit_alert__")
-
-#: 各形状在通知中心的外显标签（缺省回退"个股机会"，不静默显示成空字符串）
-_KIND_LABEL = {"buy_point": "个股机会", "pre_limit": "临板预警",
-               "board_reopen": "开板重评", "real_exit_alert": "真实持仓风险"}
-
-#: **读取窗口**（与 `alert_limit` 是两件事）。
-#:
-#: ⚠️ 必须显著大于返回条数，理由与"为什么必须在 DB 侧按标的过滤"是一件事：
-#: 读取是「按 triggered_at 倒序取前 N 条」再筛形状，若直接用 `alert_limit=50`
-#: 去读，最近 50 条里临板的期望只有 ~8 条 ⇒ **等于把刚放开的形状又在读取阶段
-#: 掐掉**（改完看不见效果，最难查的那种）。
-#:
-#: ⚠️⚠️ 2026-09-16 **再次踩到同一类坑，但根因不同**：窗口按条数计，而板块级事件
-#: 占单日 83%（703 条里 582 条 `symbol=000000`）——它们一条都不会进通知中心，
-#: 却把窗口吃光。实测窗口 500 时当天 121 条临板只出来 **89 条**。
-#: 修法不是把这个数字调大（那只是把边界推远），而是**在 DB 侧用
-#: `real_symbol_only=True` 过滤**（见 `alert_repo.list_events`）：个股级事件
-#: 单日实测峰值 ~156 条 ⇒ 500 覆盖 3 个交易日以上，且查询量降为原来的 1/5。
+_NOTIF_KINDS = ("buy_point", "selection", "real_exit_alert")
+_NOTIF_RULE_NAMES = (BUY_POINT_RULE, WATCHER_RULE, "__source_board_reopen__",
+                     "__source_real_exit_alert__", "__selection_notifications__")
+# The source window is per rule; ordinary monitors cannot evict selected results.
 _NOTIF_FETCH_LIMIT = 500
 
 
@@ -133,118 +90,144 @@ def get_alert_repo(request: Request) -> AlertRepository:
     return request.app.state.alert_repo
 
 
+def _json_dict(value) -> dict:
+    try:
+        value = json.loads(value) if isinstance(value, str) else value
+        return value if isinstance(value, dict) else {}
+    except (ValueError, TypeError):
+        return {}
+
+
+def _message_time(value) -> datetime:
+    try:
+        return to_beijing(datetime.fromisoformat(str(value)))
+    except (ValueError, TypeError):
+        return to_beijing(datetime.min)
+
+
+def _explicit_symbol_rule(rule) -> bool:
+    if getattr(rule, 'scope', None) != 'symbols' or getattr(rule, 'condition_type', None) not in {
+        'price_above', 'price_below', 'change_pct_above', 'change_pct_below'}:
+        return False
+    try:
+        channels = json.loads(rule.channels) if isinstance(rule.channels, str) else rule.channels
+        symbols = json.loads(rule.symbols) if isinstance(rule.symbols, str) else rule.symbols
+        return isinstance(symbols, list) and bool(symbols) and isinstance(channels, list) and 'in_app' in channels
+    except (ValueError, TypeError, AttributeError):
+        return False
+
+
 def _alert_items(
     repo: AlertRepository, limit: int, trading_dates: set | None = None
 ) -> tuple[list[dict], dict[str, int]]:
-    """具名个股机会与真实持仓风险的站内投影。triggered_at 为北京时间 naive。
-
-    `limit` 是**返回条数上限**；底层读取用 `_NOTIF_FETCH_LIMIT`（更宽，且已在
-    DB 侧限定"带真实标的"），理由见该常量的注释——否则「刚放开的形状」会被
-    读取窗口悄悄掐掉。
-
-    返回 `(items, seen)`：`seen` 是读取窗口内**各形状的原始条数**（含被形状门
-    挡下的；因读取已限定个股级，这里不再出现板块级形状）。**统计全部形状**
-    而不是只统计白名单那两种——空态要回答的是「今天到底有没有个股级事件」，
-    只报白名单会漏掉最有用的对照（如 `flow_surge` 有货但语义不是买点）。
-    白名单两键恒在（0 也返回），其余形状只在 >0 时出现。
-
-    P0-2（2026-09-08 用户指令「AI 盘中分析进站内通知」）：合并 AgentTriage
-    判读结论与响应建议进 body——AI 的盘中分析在通知中心直接可见。
-    """
+    """Read immutable selection/buy-point facts; risk and explicit reminders stay independent."""
+    from app.services.selection_notifications import OBSERVATION_VALIDITY, SELECTION_RULE, selection_dedup_key
     rules = {r.id: r for r in repo.list_rules()}
-    notif_rule_ids = {rid for rid, r in rules.items() if r.name in _NOTIF_RULE_NAMES}
-    if not notif_rule_ids:
+    allowed = {rid for rid, r in rules.items() if r.name in _NOTIF_RULE_NAMES or _explicit_symbol_rule(r)}
+    if not allowed:
         return [], {}
+    # Per-rule queries keep ordinary all-market events from exhausting the useful window.
     fetch_limit = max(limit, _NOTIF_FETCH_LIMIT)
-    # DB 侧按**真实标的**过滤：板块级事件（占单日 83%）一条都不会进通知中心，
-    # 却会把按条数计的窗口吃光（实测 121 条临板只出来 89 条）。见 `_NOTIF_FETCH_LIMIT`。
-    raw = repo.list_events(limit=fetch_limit, real_symbol_only=True)
-    if len(raw) >= fetch_limit:
-        # 窗口饱和 = 更早的条目**已被静默截断**。这正是"改完看着生效、但用户
-        # 看到的仍不是全部"的成因，所以不能只靠注释，必须在日志里喊出来。
-        log.warning(
-            "notifications: 个股级事件读取窗口已满（%d 条）⇒ 更早的条目被截断；"
-            "若单日个股级事件持续超过该值，需调大 _NOTIF_FETCH_LIMIT",
-            fetch_limit,
-        )
-    events = [e for e in raw if e.rule_id in notif_rule_ids]
-
-    # AI 判读与响应建议（P0-2）：event_id → (verdict, reason)
-    triage_by_event: dict[int, tuple[str, str]] = {}
-    try:
-        from sqlalchemy import select as _sel
-
-        from app.core.db import get_session_factory
-        from app.models.agent import AgentTriage
-
-        ids = [e.id for e in events]
-        if ids:
-            with get_session_factory()() as db:
-                rows = db.execute(
-                    _sel(AgentTriage).where(AgentTriage.event_id.in_(ids))
-                ).scalars().all()
-                for t in rows:
-                    triage_by_event[t.event_id] = (t.verdict, t.reason or "")
-    except Exception:  # noqa: BLE001  判读缺失 → body 退化为基础文本
-        log.exception("notifications: triage merge failed")
-
-    items: list[dict] = []
-    # 原机会形状两键**恒在**（0 也返回）：空态要能一眼看出"临板预警 0 条"，
-    # 缺键与 0 条在渲染侧是两回事（缺键 = 没统计，0 = 统计了确实没有）。
-    # Only the original two opportunity-shape counters are required even at 0;
-    # additional source kinds appear once actually observed.
-    seen: dict[str, int] = {"buy_point": 0, "pre_limit": 0}
+    by_id = {}
+    for rid in sorted(allowed):
+        rows = repo.list_events(limit=fetch_limit, rule_id=rid, real_symbol_only=True)
+        if len(rows) >= fetch_limit:
+            log.warning('notifications: rule %s read window saturated (%s)', rid, fetch_limit)
+        by_id.update((e.id, e) for e in rows if e.rule_id == rid)
+    # Reattach at most the two original daily identities for already visible
+    # stock/day groups. Newer events must not replace a first message's ID merely
+    # because it fell beyond the per-rule window. Every row still passes the same
+    # source/shape/ignore checks below; this does not revive filtered history.
+    from app.picks.buy_point import _buy_point_dedup_key
+    keys = set()
+    for e in by_id.values():
+        snap = _json_dict(e.snapshot)
+        if not e.symbol or e.symbol == '000000':
+            continue
+        kind, rule_name = snap.get('kind'), rules[e.rule_id].name
+        if (kind, rule_name) not in {('buy_point', BUY_POINT_RULE), ('selection', SELECTION_RULE)}:
+            continue
+        day = snap.get('trade_date') or (e.triggered_at.date().isoformat() if e.triggered_at else '')
+        if isinstance(day, str) and day:
+            keys.update((_buy_point_dedup_key(day, e.symbol), selection_dedup_key(day, e.symbol)))
+    if keys:
+        by_id.update((e.id, e) for e in repo.list_events_by_dedup_keys(list(keys)) if e.rule_id in allowed)
+    events = list(by_id.values())
+    ignored: set[int] = set()
+    buy_ids = [e.id for e in events if _json_dict(e.snapshot).get('kind') == 'buy_point']
+    if buy_ids:
+        try:
+            from sqlalchemy import select
+            from app.core.db import get_session_factory
+            from app.models.agent import AgentTriage
+            sf = getattr(repo, '_session_factory', None) or get_session_factory()
+            with sf() as db:
+                ignored = set(db.scalars(select(AgentTriage.event_id).where(
+                    AgentTriage.event_id.in_(buy_ids), AgentTriage.verdict == 'ignore')))
+        except Exception:  # Historical opinion is optional; original facts remain identifiable.
+            log.exception('notifications: historical triage read failed')
+    seen: dict[str, int] = {'selection': 0, 'buy_point': 0, 'pre_limit': 0}
+    items = []
+    groups: dict[tuple[str, str], list[tuple]] = {}
     for e in events:
-        snap = e.snapshot if isinstance(e.snapshot, dict) else {}
-        if isinstance(e.snapshot, str):
-            try:
-                snap = json.loads(e.snapshot)
-            except Exception:  # noqa: BLE001
-                snap = {}
-        kind = snap.get("kind") or ""
-        # 全部形状计数（不只白名单）：空态里"个股级 0 条"必须能对上"板块级 N 条"，
-        # 否则读侧仍分不清"没扫到"与"扫到的都不是个股级"。
+        rule = rules[e.rule_id]
+        snap = _json_dict(e.snapshot)
+        kind = snap.get('kind') or ''
         if kind:
             seen[kind] = seen.get(kind, 0) + 1
-        # 形状 + 标签双重收口（2026-09-16 起）：`kind` 必须在本端点明列的**个股级**
-        # 机会形状内，且必须带真实标的与名称。历史脏行、占位代码（`000000` 是
-        # 板块/方向/健康类事件的占位）都不冒充「真正机会」。上游缺证据时宁缺毋滥。
-        stock_name = (snap.get("name") or "").strip() if isinstance(snap.get("name"), str) else ""
-        if kind not in _NOTIF_KINDS or not e.symbol or e.symbol == "000000" or (
-            not stock_name and kind != "real_exit_alert"
-        ):
+        if not e.symbol or e.symbol == '000000':
             continue
-        direction = snap.get("direction") or ""
-        text = (snap.get("text") or "").strip()
-        bj = e.triggered_at  # 北京时间 naive（存储已统一，勿再 +8）
-        body = text or "（无正文）"
-        # P0-2：AI 盘中分析合入 body（判读结论 + 响应建议）
-        tri = triage_by_event.get(e.id)
-        if tri:
-            verdict_label = {"notify": "建议提醒", "ignore": "建议降噪", "escalate": "建议重点关注"}.get(tri[0], "结论未知")
-            body = f"{body}\nAI 判读意见（{verdict_label}）：{tri[1]}。站内事件记录与该意见分开保留。"
-        items.append(
-            {
-                "id": f"alert-{e.id}",
-                "category": "risk" if kind == "real_exit_alert" else "opportunity",
-                "label": _KIND_LABEL.get(kind, "个股机会"),
-                "session": _session_of(bj, trading_dates) if bj else "intraday",
-                "ts": bj.isoformat(sep=" ") if bj else None,
-                "title": f"【{direction or '盘中买点'}】{e.symbol} {stock_name}".strip(),
-                "body": body,
-                "symbol": e.symbol,
-                "url": None,
-                "score": None,
-                "source": {"buy_point": "盘中买点判定", "pre_limit": "临板扫描",
-                           "board_reopen": "开板重评", "real_exit_alert": "真实持仓监护"}[kind],
-                "validity": {
-                    "buy_point": "仅触发时点满足买入区间；现价越界或硬门变化后失效",
-                    "pre_limit": "仅触发时点的临板状态；涨幅、封板状态或价格变化后失效",
-                    "board_reopen": "仅当前快照确认开板；能否参与须重新核验",
-                    "real_exit_alert": "需核对当前持仓、成本与价格；原风险信号可随条件变化失效",
-                }[kind],
-            }
-        )
+        name = str(snap.get('name') or '').strip()
+        explicit = _explicit_symbol_rule(rule)
+        if explicit:
+            symbols = json.loads(rule.symbols) if isinstance(rule.symbols, str) else rule.symbols
+            if e.symbol not in symbols:
+                continue
+            category, label, source = 'reminder', '自设条件提醒', '用户指定个股条件'
+            condition = {'price_above': '价格高于', 'price_below': '价格低于', 'change_pct_above': '涨幅高于', 'change_pct_below': '涨幅低于'}[rule.condition_type]
+            unit = '元' if rule.condition_type.startswith('price_') else '%'
+            text = f'{rule.name}：{condition} {e.threshold:g}{unit}，触发值 {e.trigger_value:g}{unit}。仅为自设条件提醒，不构成选股或买卖建议。'
+            validity = '仅触发时点满足用户明确配置的条件；请核对当前行情。'
+        elif kind == 'real_exit_alert' and rule.name == '__source_real_exit_alert__':
+            category, label, source = 'risk', '真实持仓风险', '真实持仓监护'
+            text = snap.get('text') or '请核对持仓风险记录'
+            validity = '需核对当前持仓、成本与价格；原风险信号可随条件变化失效'
+        elif kind == 'selection' and rule.name == SELECTION_RULE:
+            from app.services.selection_notifications import _time
+            as_of = _time(snap.get('source_as_of'))
+            source_kind = snap.get('selection_source')
+            if not name or not as_of or not snap.get('source_id') or not snap.get('source_version') or not isinstance(snap.get('selection_evidence'), dict) or as_of.date().isoformat() != snap.get('trade_date'):
+                continue
+            if source_kind not in {'daily', 'intraday'} or (source_kind == 'intraday' and snap.get('run_id') != snap.get('source_id')):
+                continue
+            category, label = 'opportunity', '入选观察'
+            source = '每日选股原结果' if source_kind == 'daily' else '盘中选股原结果'
+            text, validity = snap.get('text') or '原入选依据缺项，请查看选股记录', OBSERVATION_VALIDITY
+        elif kind == 'buy_point' and rule.name == BUY_POINT_RULE and name and e.id not in ignored:
+            category, label, source = 'opportunity', '个股机会', '盘中买点判定'
+            text = (snap.get('text') or '原买点条件时点记录') + '。' + OBSERVATION_VALIDITY
+            validity = '仅触发时点满足原条件；当前资格须重新核验。' + OBSERVATION_VALIDITY
+        else:
+            continue
+        bj = e.triggered_at
+        display_ts = snap.get('source_as_of') if kind == 'selection' else bj.isoformat(sep=' ') if bj else None
+        item = {'id': f'alert-{e.id}', 'category': category, 'label': label,
+            'session': _session_of(bj, trading_dates) if bj else 'intraday', 'ts': display_ts,
+            'title': f'【{label}】{e.symbol} {name}'.strip(), 'body': text, 'symbol': e.symbol,
+            'url': None, 'score': None, 'source': source, 'validity': validity}
+        if category == 'opportunity':
+            day = snap.get('trade_date') or (bj.date().isoformat() if bj else '')
+            groups.setdefault((day, e.symbol), []).append((e, item, kind))
+        else:
+            items.append(item)
+    for rows in groups.values():
+        # Anchor on the first event, independently of newer snapshots or current membership.
+        rows.sort(key=lambda r: (r[0].triggered_at or datetime.min, r[0].id))
+        anchor = rows[0][1]
+        anchor['_event_ids'] = [r[0].id for r in rows]
+        if len(rows) > 1:
+            anchor['body'] += '\n' + '\n'.join(f'补充原时点 {r[1]["ts"]}（{r[1]["source"]}）：{r[1]["body"]}' for r in rows[1:])
+        items.append(anchor)
     return items, seen
 
 
@@ -282,7 +265,7 @@ async def notifications(
         errors["alerts"] = type(exc).__name__
 
     items = alert_items
-    items.sort(key=lambda x: x["ts"] or "", reverse=True)
+    items.sort(key=lambda x: _message_time(x["ts"]), reverse=True)
     # 截断在**筛选之后**（读取窗口见 `_NOTIF_FETCH_LIMIT`）：先按形状挑出个股机会，
     # 再按时间倒序取前 `alert_limit` 条——而不是"先取最近 N 条再看有没有个股机会"。
     items = items[:alert_limit]
@@ -291,14 +274,17 @@ async def notifications(
     if items:
         try:
             outbox = getattr(repo, "outbox", None)
-            states = outbox.states_for_events([int(i["id"][6:]) for i in items]) if outbox else {}
+            event_ids = [eid for i in items for eid in i.get("_event_ids", [int(i["id"][6:])])]
+            states = outbox.states_for_events(event_ids) if outbox else {}
             for item in items:
-                item["channels"] = states.get(int(item["id"][6:]), [])
+                item["channels"] = [state for eid in item.get("_event_ids", [int(item["id"][6:])]) for state in states.get(eid, [])]
         except Exception as exc:  # noqa: BLE001
             log.exception("notifications: channel status read failed")
             errors["channels"] = type(exc).__name__
             for item in items:
                 item["channels"] = None
+    for item in items:
+        item.pop("_event_ids", None)
     # 空态诊断（`BUG-016` 子项③，2026-09-16）：**只在空态附加**。
     # 空响应体本身不含任何能区分「真无机会 / 链路未跑 / 上游空」的信息 ——
     # 三者都是 `{"items": [], "count": 0}`，这正是「不可解释」的根因。

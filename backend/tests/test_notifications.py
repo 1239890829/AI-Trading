@@ -56,9 +56,12 @@ class _FakeRepo:
     def list_rules(self, enabled_only=False):
         return self._rules
 
+    def list_events_by_dedup_keys(self, keys):
+        return [e for e in self._events if getattr(e, 'dedup_key', None) in keys]
+
     def list_events(self, limit=50, rule_id=None, acknowledged=None, real_symbol_only=False):
         self.requested.append((limit, real_symbol_only))
-        rows = self._events
+        rows = [e for e in self._events if rule_id is None or e.rule_id == rule_id]
         if real_symbol_only:
             # 与 `AlertRepository.list_events` 同口径：排除空串与占位代码。
             # ⚠️ 假仓库必须**实现**这个过滤，否则"板块级事件不得吃掉读取窗口"
@@ -81,7 +84,7 @@ class _FakeRepo:
 
 
 def test_alert_items_filters_by_event_shape_not_rule_name():
-    """形状门：`pre_limit`（临板预警，带代码）放行；板块级形状挡下。"""
+    """原买点保留，普通临板和板块事件不取得机会资格。"""
     from app.api.routes.notifications import _alert_items
 
     repo = _FakeRepo(
@@ -94,12 +97,12 @@ def test_alert_items_filters_by_event_shape_not_rule_name():
     )
     items, seen = _alert_items(repo, limit=50)
     # 板块级形状**仍然**不进通知中心（哪怕它挂在新放开的 watcher 规则上）
-    assert {i["symbol"] for i in items} == {"600001", "300002"}
+    assert {i["symbol"] for i in items} == {"600001"}
     assert all(i["category"] == "opportunity" for i in items)
     assert all(i["session"] in {"pre_open", "intraday", "after_close"} for i in items)
     by_sym = {i["symbol"]: i for i in items}
     assert by_sym["600001"]["label"] == "个股机会"
-    assert by_sym["300002"]["label"] == "临板预警"  # 形状标签，不是笼统的"个股机会"
+    assert "300002" not in by_sym  # IMP-086: ordinary watcher facts stay internal.
     # `seen` 统计**全部形状**（不只白名单）：板块级 1 条要能与个股级 2 条对上，
     # 否则空态里分不清"没扫到"与"扫到的都不是个股级"。
     assert seen["buy_point"] == 1
@@ -121,9 +124,9 @@ def test_source_events_separate_open_board_and_real_holding_risk():
         ],
     )
     items, seen = _alert_items(repo, limit=50)
-    assert {item["symbol"] for item in items} == {"600001", "600002"}
+    assert {item["symbol"] for item in items} == {"600002"}
     assert {item["symbol"]: item["category"] for item in items} == {
-        "600001": "opportunity", "600002": "risk"}
+        "600002": "risk"}
     assert "position_open" not in seen  # Audit event, not a bell notification.
 
 
@@ -142,7 +145,7 @@ def test_alert_items_ignores_placeholder_symbol():
     )
     items, seen = _alert_items(repo, limit=50)
     assert items == []
-    assert seen == {"buy_point": 0, "pre_limit": 0}  # DB 侧就排除了，不是"筛掉了"
+    assert seen == {"selection": 0, "buy_point": 0, "pre_limit": 0}  # DB 侧就排除了，不是"筛掉了"
 
 
 class _UnfilteredRepo(_FakeRepo):
@@ -154,7 +157,7 @@ class _UnfilteredRepo(_FakeRepo):
 
     def list_events(self, limit=50, rule_id=None, acknowledged=None, real_symbol_only=False):
         self.requested.append((limit, real_symbol_only))
-        return self._events[:limit]
+        return [e for e in self._events if rule_id is None or e.rule_id == rule_id][:limit]
 
 
 def test_route_level_placeholder_guard_survives_missing_db_filter():
@@ -247,12 +250,12 @@ def test_placeholder_events_do_not_consume_read_window():
         _Event(1000 + i, 2, "000000", {"kind": "board_low_absorb", "direction": "算力"}, 0)
         for i in range(_NOTIF_FETCH_LIMIT)
     ]
-    board.append(_Event(9999, 2, "300002", {"kind": "pre_limit", "name": "乙公司", "text": "临板"}, 5))
-    repo = _FakeRepo(rules=[_Rule(2, "__picks_watcher__")], events=board)
+    board.append(_Event(9999, 2, "300002", {"kind": "buy_point", "name": "乙公司", "text": "临板"}, 5))
+    repo = _FakeRepo(rules=[_Rule(2, "__picks_buy_point__")], events=board)
     items, seen = _alert_items(repo, limit=50)
     assert [i["symbol"] for i in items] == ["300002"]
     # 板块级形状不出现在 `seen` 里 —— 它已在 DB 侧被排除，不是"筛掉了"
-    assert seen == {"buy_point": 0, "pre_limit": 1}
+    assert seen == {"selection": 0, "buy_point": 1, "pre_limit": 0}
 
 
 # ---------------------------------------------------------------- 路由
@@ -454,7 +457,7 @@ def test_empty_notifications_do_call_diagnostics_and_attach_it(monkeypatch):
         # 接线点：不是 None、不是原样透传别的；形状计数按契约并进去
         assert body["diagnostics"] == {
             "state": "ran_rejected", "polls": 16, "marker": "wired",
-            "shapes": {"buy_point": 0, "pre_limit": 0},
+            "shapes": {"selection": 0, "buy_point": 0, "pre_limit": 0},
         }
         assert len(calls) == 1
         assert calls[0] == ((), {})  # 端点按契约无参调用（trade_date 走默认=今天）
@@ -494,7 +497,7 @@ def test_diagnostics_non_dict_is_coerced_not_returned_as_none(monkeypatch):
         assert body["items"] == []
         assert isinstance(body["diagnostics"], dict)
         assert body["diagnostics"]["state"] == "unavailable"
-        assert body["diagnostics"]["shapes"] == {"buy_point": 0, "pre_limit": 0}
+        assert body["diagnostics"]["shapes"] == {"selection": 0, "buy_point": 0, "pre_limit": 0}
     finally:
         app.dependency_overrides.pop(notif.get_alert_repo, None)
 
@@ -515,14 +518,14 @@ def test_route_truncates_after_filtering_not_before():
         _Event(100 + i, 2, "000000", {"kind": "board_low_absorb", "direction": "算力"}, 0)
         for i in range(30)
     ]
-    events.append(_Event(200, 2, "300002", {"kind": "pre_limit", "name": "乙公司", "text": "临板"}, 5))
+    events.append(_Event(200, 2, "300002", {"kind": "buy_point", "name": "乙公司", "text": "临板"}, 5))
     app.dependency_overrides[notif.get_alert_repo] = lambda: _FakeRepo(
-        rules=[_Rule(2, "__picks_watcher__")], events=events
+        rules=[_Rule(2, "__picks_buy_point__")], events=events
     )
     try:
         body = TestClient(app).get("/api/notifications", params={"alert_limit": 5}).json()["data"]
         assert [i["symbol"] for i in body["items"]] == ["300002"]
-        assert body["items"][0]["label"] == "临板预警"
+        assert body["items"][0]["label"] == "个股机会"
     finally:
         app.dependency_overrides.pop(notif.get_alert_repo, None)
 

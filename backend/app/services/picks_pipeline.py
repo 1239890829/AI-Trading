@@ -29,6 +29,7 @@ from typing import Any
 from sqlalchemy import select
 
 from app.core.db import get_session_factory
+from app.services.selection_notifications import quote_audit, retry_daily_selection
 from app.events.store import EventStore
 from app.market import trade_calendar as tc
 from app.market.chip import get_chip_service
@@ -901,6 +902,7 @@ async def deep_score_candidates(
                 # 而个股详情页有（走 /api/quotes 的 fill_valuation）。同一标的两个口径不一致。
                 "pe_ttm": pe,
                 "pb": getattr(q_snap, "pb", None) if q_snap is not None else None,
+                "quote_audit": quote_audit(q_snap),
                 "score": score, "sub_scores": sub, "bases": bases, "vetoes": vetoes,
                 "related_events": [top_title] if top_title else [],
                 "related_event_refs": event_refs,
@@ -938,6 +940,7 @@ def assemble_card(k: dict) -> dict:
         # 估值透出（可能为 None：数据源未提供，前端按"暂无+原因"展示，不臆造）
         "pe_ttm": k.get("pe_ttm"),
         "pb": k.get("pb"),
+        "quote_audit": k.get("quote_audit") or {},
         "score": k["score"],
         "sub_scores": k["sub_scores"],
         "bases": k["bases"],
@@ -988,6 +991,7 @@ def _persist_picks(
     原先这段挂在 async 管线的末尾，同步 SQLite 读改写 + 两次大对象 `json.dumps`
     都排在事件循环上。抽出来后调用方一次 `to_thread` 包住，语义零变化。
     """
+    meta["selection_notifications"] = {"state": "pending"}
     with _db() as db:
         from app.models.daily_pick import DailyPickSet
 
@@ -1004,6 +1008,13 @@ def _persist_picks(
             for key, val in payload.items():
                 setattr(row, key, val)
         db.commit()
+    # Picks are already committed. A message failure is an observable, retryable
+    # projection failure, never a claim that the original selection did not finish.
+    try:
+        meta["selection_notifications"] = retry_daily_selection(trade_date=today, session_factory=get_session_factory())
+    except Exception as exc:
+        log.exception("daily picks saved; notification receipt update failed")
+        meta["selection_notifications"] = {"state": "failed", "reason": type(exc).__name__}
     # 需求 7 收尾（merged_into_picks 此前「有字段无接线」）：组合定稿后，把当日
     # 盘中跟踪台账中进入组合的行打合并标记，猎场台账面板可显示「已入精选」。
     # 失败只记日志——合并标记是展示增强，不应让组合落库整体失败。

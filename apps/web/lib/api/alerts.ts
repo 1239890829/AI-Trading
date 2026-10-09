@@ -93,8 +93,8 @@ export async function listAlertEvents(limit = 50, ruleId?: number): Promise<Aler
 
 export interface NotificationItem {
   id: string;
-  /** opportunity=个股机会（watcher 确认/证伪）| daily_picks=每日精选 | news=消息面/新闻/政策 | risk=策略风险（信号健康度预警） */
-  category: "opportunity" | "daily_picks" | "news" | "risk";
+  /** opportunity=个股机会（watcher 确认/证伪）| daily_picks=每日精选 | news=消息面/新闻/政策 | risk=策略风险（信号健康度预警）| reminder=用户自设条件提醒 */
+  category: "opportunity" | "daily_picks" | "news" | "risk" | "reminder";
   /** 展示标签：确认/证伪/跟踪/健康预警/每日精选/国家政策/国际时事/市场热点/原材料涨价 */
   label: string;
   /** 盘前/盘中/盘后（后端按交易日历优先判定：非交易日归盘前；日历缺失回退墙钟） */
@@ -122,23 +122,15 @@ export interface NotificationItem {
  * ⚠️ 本字段**只是解释**，不改变任何推送口径（档位门等属交易信号口径，须用户拍板）。
  */
 export interface NotificationDiagnostics {
-  /** 四态 + 一降级：上游空 / 链路未跑 / 全被否 / 有通过却空 / 诊断不可用 */
+  /** 已归档买点链的状态；缺记录不证明调度未运行，也不代表全部入选与通知来源。 */
   state: "no_pick_set" | "no_run" | "ran_rejected" | "ran_eligible" | "ran_unknown" | "unavailable";
   trade_date: string;
   as_of: string;
-  /** 读取窗口内**各事件形状的原始条数**（2026-09-16 新增）。
-   *
-   * **为什么必须单独报**：`state` / `decisions` 都来自买点链（`__picks_buy_point__`），
-   * 只回答"买点链有没有选出票"；而通知中心实际收两个形状
-   * （`buy_point` + `pre_limit`，见后端 `_NOTIF_KINDS`）——当买点链整天没触发
-   * （2026-09-16 实测：`alert_rule` 表里根本没那行）而临板预警刷了一整天时，
-   * 只看 `state` 会得出"上游空"的误导结论。
-   *
-   * 语义要点：
-   *  - 键是形状名（`buy_point` / `pre_limit` / `board_low_absorb` / …），值是**原始条数**；
-   *  - 白名单两键**恒在**（0 也返回）⇒ 「缺键 = 没统计」与「0 条 = 确实没有」可区分；
-   *  - 统计的是**读取窗口**（后端 `_NOTIF_FETCH_LIMIT`）而非全天；窗口外的旧事件不计入。
-   *  - `symbol=000000` 的板块级形状也会出现——正是它们当对照物才有诊断价值。 */
+  /** 各来源规则读取窗口内的原事件条数，不能当作全天统计或合并后的消息数。
+   *  - 机会来源是 `selection` 与 `buy_point`；普通临板等观察形状不取得机会消息资格。
+   *  - 风险与自设提醒独立，不计入原入选/买点合计。
+   *  - `{}` 或缺键表示该计数未提供，不能按 0 条解释，也不证明调度未运行。
+   *  - 原记录计数不能证明消息资格、字段校验结果或未进入列表的具体原因。 */
   shapes?: Record<string, number>;
   /** 当日盘前精选摘要；`unavailable` 时只有 `present` / `count` */
   pick_set: {
@@ -180,7 +172,7 @@ export interface NotificationsPayload {
   count: number;
   generated_at: string;
   news_min_score: number;
-  /** 当前固定为只展示多维门控后的个股机会；字段用于防前后端策略漂移。 */
+  /** 兼容策略标识；当前消息包括原入选/买点、风险及自设条件提醒。 */
   policy: "stock_opportunities_only";
   /** 单源失败显式透出（降级可见），全部成功为 null */
   errors: Record<string, string> | null;

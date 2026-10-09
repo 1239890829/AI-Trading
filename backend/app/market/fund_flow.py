@@ -30,11 +30,13 @@
 from __future__ import annotations
 
 import asyncio
+from copy import deepcopy
 import json
 import logging
 import os
 from datetime import date, datetime, time
 from pathlib import Path
+from time import monotonic
 
 from app.core.ttl_cache import TTLCache
 
@@ -362,6 +364,17 @@ _FLOW_KEYS = {"f62": "main", "f66": "super_", "f72": "big", "f78": "mid", "f84":
 _FFLOW_MIN_KEYS = ("main", "small", "mid", "big", "super_")
 
 _INTRADAY_CACHE = TTLCache("fundflow-intraday", ttl=60.0, maxsize=1)
+# 沪深分钟源由实时回退与市场分钟图共用；身份包含接口口径、日期和市场。
+_FFLOW_MIN_CACHE = TTLCache("fundflow-minute-source", ttl=60.0, maxsize=4)
+_FFLOW_MIN_READS: dict[tuple, asyncio.Task] = {}
+_MINUTE_EXPIRED_REASON = "分钟资金流源在读取期间过期，无法提供有效沪深合计"
+
+
+class _MinuteRows(list):
+    """源数据副本携带实际获取时刻；该时刻只用于进程缓存，不进入 HTTP 输出。"""
+    def __init__(self, rows: list, loaded_at: float):
+        super().__init__((t, dict(vals)) for t, vals in rows)
+        self.loaded_at = loaded_at
 
 
 async def get_fund_flow_intraday() -> dict:
@@ -371,16 +384,21 @@ async def get_fund_flow_intraday() -> dict:
     图表必须标注）。沪深各拉一次按分钟对齐相加；缓存 60s；失败显式降级。
     历史日的分钟资金流东财不提供（仅当日）——历史回看降级为日度五档+分钟成交额对比。
     """
-    hit, cached = _INTRADAY_CACHE.get("intraday")
-    if hit:
-        return cached
+    key = (beijing_now().date().isoformat(), "intraday")
+    hit, cached = _INTRADAY_CACHE.get(key)
+    if hit and monotonic() < cached[1]:
+        return deepcopy(cached[0])
     degraded: list[str] = []
+    source_times: list[float] = []
     series: dict[str, dict] = {}
     for i, (mkt, secid) in enumerate((("sh", "1.000001"), ("sz", "0.399107"))):
         rows = await _em_fflow_kline(secid)
         if rows is None:
             degraded.append(f"{mkt} 分钟资金流不可用")
             continue
+        loaded_at = getattr(rows, "loaded_at", None)
+        if loaded_at is not None:
+            source_times.append(loaded_at)
         for t, vals in rows:
             node = series.setdefault(t, {})
             node[mkt] = vals
@@ -403,11 +421,60 @@ async def get_fund_flow_intraday() -> dict:
         "degraded": degraded,
     }
     if not out["degraded"]:
-        _INTRADAY_CACHE.set("intraday", out)  # 失败不缓存
-    return out
+        deadline = min(source_times) + _INTRADAY_CACHE.ttl if source_times else monotonic() + _INTRADAY_CACHE.ttl
+        if monotonic() >= deadline:
+            # 原一轮读取已耗尽源年龄预算；返回明确降级，不递归增加整轮回源。
+            _INTRADAY_CACHE.invalidate(key)
+            out["items"] = []
+            out["degraded"].append(_MINUTE_EXPIRED_REASON)
+        else:
+            _INTRADAY_CACHE.set(key, (out, deadline))  # 失败不缓存；不叠加输入/输出 TTL
+    return deepcopy(out)
 
 
-async def _em_fflow_kline(secid: str) -> list[tuple[str, dict]] | None:
+def _minute_source_key(secid: str) -> tuple:
+    return ("push2delay:fflow:klt=1:fields2=f51-f56", beijing_now().date().isoformat(), secid)
+
+
+async def _em_fflow_kline(
+    secid: str, *, max_age: float | None = None, _refresh_expired: bool = True,
+) -> list[tuple[str, dict]] | None:
+    """共享成功的分钟源读取；取消调用方不取消仍被其他消费者等待的请求。"""
+    if secid not in ("1.000001", "0.399107"):
+        return await _em_fflow_kline_uncached(secid)
+    key = _minute_source_key(secid)
+    age_budget = _FFLOW_MIN_CACHE.ttl if max_age is None else max_age
+    hit, payload = _FFLOW_MIN_CACHE.get(key)
+    if hit and monotonic() - payload["loaded_at"] >= age_budget:
+        _FFLOW_MIN_CACHE.invalidate(key)
+
+    async def load() -> dict | None:
+        rows = await _em_fflow_kline_uncached(secid)
+        return {"rows": rows, "loaded_at": monotonic()} if rows is not None else None
+
+    task = _FFLOW_MIN_READS.get(key)
+    if task is None or task.done():
+        task = asyncio.create_task(_FFLOW_MIN_CACHE.get_or_set(key, load))
+        _FFLOW_MIN_READS[key] = task
+
+        def completed(done: asyncio.Task) -> None:
+            if _FFLOW_MIN_READS.get(key) is done:
+                _FFLOW_MIN_READS.pop(key, None)
+            if not done.cancelled():
+                done.exception()  # 最后一个调用方取消时也回收异常，避免无人领取的 task。
+
+        task.add_done_callback(completed)
+    _, payload = await asyncio.shield(task)
+    if payload is not None and monotonic() - payload["loaded_at"] >= age_budget:
+        _FFLOW_MIN_CACHE.invalidate(key)
+        if _refresh_expired:
+            return await _em_fflow_kline(secid, max_age=max_age, _refresh_expired=False)
+        log.warning("em fflow kline %s expired after one source recheck", secid)
+        return None
+    return _MinuteRows(payload["rows"], payload["loaded_at"]) if payload is not None else None
+
+
+async def _em_fflow_kline_uncached(secid: str) -> list[tuple[str, dict]] | None:
     """东财 fflow kline（分钟，累计净额元）→ [(“HH:MM”, {key: 亿元})]。重试 2 次。"""
     for attempt in range(3):
         try:
@@ -453,14 +520,20 @@ async def get_fund_flow_realtime() -> dict:
 
     东财间歇空响应 → 重试 2 次；全部失败显式 available=False（绝不填 0）。
     """
-    hit, cached = _FLOW_RT_CACHE.get("rt")
-    if hit:
-        return cached
-    out = await _fund_flow_rt_uncached()
+    key = (beijing_now().date().isoformat(), "rt")
+    hit, cached = _FLOW_RT_CACHE.get(key)
+    if hit and monotonic() < cached[1]:
+        return deepcopy(cached[0])
+    source_times: list[float] = []
+    out = await _fund_flow_rt_uncached(source_times=source_times)
     if out.get("available"):
-        _FLOW_RT_CACHE.set("rt", out)  # 失败不缓存
+        deadline = min(source_times) + _FLOW_RT_CACHE.ttl if source_times else monotonic() + _FLOW_RT_CACHE.ttl
+        if monotonic() >= deadline:
+            return {"available": False, "reason": _MINUTE_EXPIRED_REASON,
+                    "degraded": out.get("degraded", []) + [_MINUTE_EXPIRED_REASON]}
+        _FLOW_RT_CACHE.set(key, (out, deadline))  # 失败不缓存；截止时刻绑定实际输入版本
         _snapshot_today_if_closed(out)
-    return out
+    return deepcopy(out)
 
 
 def _snapshot_today_if_closed(rt: dict) -> None:
@@ -490,19 +563,19 @@ def _snapshot_today_if_closed(rt: dict) -> None:
         log.warning("fund-flow daily snapshot failed", exc_info=True)
 
 
-async def _fund_flow_rt_uncached() -> dict:
+async def _fund_flow_rt_uncached(*, source_times: list[float] | None = None) -> dict:
     degraded: list[str] = []
     diff = await _em_ulist()
     if diff is not None:
         return _rt_from_ulist(diff, degraded)
     # ulist 全败（东财逐连接抖动）：回退 push2delay 分钟流末根 bar——同为累计五档净额，
     # 口径一致但延迟约 15 分钟，显式标注绝不冒充实时。
-    fallback = await _rt_from_intraday_tail()
+    fallback = await _rt_from_intraday_tail(source_times=source_times, degraded=degraded)
     if fallback is not None:
         fallback["degraded"] = degraded + ["实时源不可用，采用 15 分钟延迟口径"]
         return fallback
-    return {"available": False, "reason": "东财资金流源不可用（已重试）",
-            "degraded": ["资金流实时数据不可用"]}
+    return {"available": False, "reason": degraded[-1] if degraded else "东财资金流源不可用（已重试）",
+            "degraded": degraded + ["资金流实时数据不可用"]}
 
 
 def _rt_from_ulist(diff: list[dict], degraded: list[str]) -> dict:
@@ -527,12 +600,34 @@ def _rt_from_ulist(diff: list[dict], degraded: list[str]) -> dict:
     }
 
 
-async def _rt_from_intraday_tail() -> dict | None:
+async def _rt_from_intraday_tail(
+    *, source_times: list[float] | None = None, degraded: list[str] | None = None,
+) -> dict | None:
     """push2delay 分钟资金流末根 bar → 实时五档净额（延迟口径）。"""
-    sh, sz = await asyncio.gather(
-        _em_fflow_kline("1.000001"), _em_fflow_kline("0.399107"))
+    async def read_markets():
+        return await asyncio.gather(
+            _em_fflow_kline("1.000001", max_age=_FLOW_RT_CACHE.ttl),
+            _em_fflow_kline("0.399107", max_age=_FLOW_RT_CACHE.ttl))
+
+    def expired(sh, sz):
+        now = monotonic()
+        return any(getattr(rows, "loaded_at", now) + _FLOW_RT_CACHE.ttl <= now
+                   for rows in (sh, sz) if rows is not None)
+
+    sh, sz = await read_markets()
+    if expired(sh, sz):
+        # 缓存源可能在另一市场回源期间过期；同时刷新两市，原重试/超时不变。
+        for secid in ("1.000001", "0.399107"):
+            _FFLOW_MIN_CACHE.invalidate(_minute_source_key(secid))
+        sh, sz = await read_markets()
+        if expired(sh, sz):
+            if degraded is not None:
+                degraded.append(_MINUTE_EXPIRED_REASON)
+            return None  # 唯一重核仍过期，不输出 available=True，也不继续回源。
     if not sh or not sz:
         return None
+    if source_times is not None:
+        source_times.extend(rows.loaded_at for rows in (sh, sz) if hasattr(rows, "loaded_at"))
     tail_sh, tail_sz = sh[-1], sz[-1]
     if tail_sh[0] != tail_sz[0]:  # 两市末根分钟不一致时取较早者，保证合计口径同刻
         idx_sh = next((i for i, p in enumerate(sh) if p[0] == tail_sz[0]), None)

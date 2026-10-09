@@ -24,7 +24,7 @@ export const STREAM_ABNORMAL: readonly StreamStatus[] = ["connecting", "polling"
 
 /**
  * 行情流：优先 WebSocket（/ws/quotes），断线自动重连；
- * 连续失败 3 次后降级为 REST 轮询（5s），并在恢复时切回 WS。
+ * 连续失败 3 次后降级为 REST 轮询（请求结束后间隔 5s），并在恢复时切回 WS。
  *
  * 订阅更新（2026-09-01 架构方案 P1，修复实锤断点 P2）：后端支持
  * {"action":"subscribe"} 动态切换订阅集——自选集合变化时发送 subscribe 消息
@@ -48,9 +48,11 @@ export function useQuoteStream(symbols: string[], opts?: { throttleMs?: number }
 
   // symbols 的实时值供重连/订阅使用（effect 闭包不可靠，渲染期写 ref 在并发渲染下同样不可靠）
   const symbolsRef = useRef<string[]>(symbols);
+  const refreshSelectionRef = useRef<(() => void) | null>(null);
   useEffect(() => {
-    symbolsRef.current = symbols;
-  }, [symbols]);
+    symbolsRef.current = key ? key.split(",") : [];
+    refreshSelectionRef.current?.();
+  }, [key]);
 
   const wsRef = useRef<WebSocket | null>(null);
   const connectedRef = useRef(false);
@@ -62,7 +64,7 @@ export function useQuoteStream(symbols: string[], opts?: { throttleMs?: number }
     let closed = false;
     let retry = 0;
     let reconnectTimer: ReturnType<typeof setTimeout> | null = null;
-    let pollTimer: ReturnType<typeof setInterval> | null = null;
+    let pollTimer: ReturnType<typeof setTimeout> | null = null;
     let pingTimer: ReturnType<typeof setInterval> | null = null;
     let openTimer: ReturnType<typeof setTimeout> | null = null;
     let throttleTimer: ReturnType<typeof setTimeout> | null = null;
@@ -77,9 +79,13 @@ export function useQuoteStream(symbols: string[], opts?: { throttleMs?: number }
       throttleTimer = null;
     };
     const applyNow = (list: Quote[]) => {
+      if (closed) return;
+      const selected = new Set(symbolsRef.current);
+      const current = list.filter(quote => selected.has(quote.symbol));
+      if (list.length && !current.length) return;
       lastAppliedAt = Date.now();
       pending = null;
-      setQuotes(Object.fromEntries(list.map((q) => [q.symbol, q])));
+      setQuotes(Object.fromEntries(current.map((q) => [q.symbol, q])));
     };
     const apply = (list: Quote[]) => {
       if (throttleMs <= 0) {
@@ -102,36 +108,77 @@ export function useQuoteStream(symbols: string[], opts?: { throttleMs?: number }
       }, throttleMs - elapsed);
     };
 
-    // S2-5（2026-09-11）：降级轮询也纳入可见性门控——WS 断链后若标签页被切走，
-    // 原先每 5s 照发（正是 P0-1「盘口 5s 一路到深夜」的另一半）。tick 在隐藏期
-    // 直接返回（定时器保留，开销为零），回可见时由下面的 visibilitychange 立即补一拍。
-    let pollTick: (() => void) | null = null;
-    const startPolling = () => {
-      if (pollTimer || closed) return;
-      setStatus("polling");
-      const tick = async () => {
-        if (typeof document !== "undefined" && document.visibilityState === "hidden") return;
-        try {
-          apply(await getQuotes(symbolsRef.current));
-        } catch {
-          setStatus("error");
-        }
-      };
-      pollTick = tick;
-      void tick();
-      pollTimer = setInterval(tick, 5000);
-    };
-
-    const stopPolling = () => {
-      if (pollTimer) clearInterval(pollTimer);
+    // A fallback request owns one completion-based timer. Visibility, subscription
+    // and WS recovery invalidate results, while an outstanding HTTP request drains.
+    let polling = false;
+    let pollGeneration = 0;
+    let pollInFlight: Promise<void> | null = null;
+    let pollAgain = false;
+    const hidden = () => document.visibilityState === "hidden";
+    const clearPollTimer = () => {
+      if (pollTimer !== null) clearTimeout(pollTimer);
       pollTimer = null;
-      pollTick = null;
     };
-
+    const tick = (): Promise<void> => {
+      if (closed || !polling || hidden() || !symbolsRef.current.length) return Promise.resolve();
+      if (pollInFlight) {
+        pollAgain = true;
+        return pollInFlight;
+      }
+      const generation = pollGeneration;
+      const requestedSymbols = [...symbolsRef.current];
+      const current = () => !closed && polling && !hidden()
+        && generation === pollGeneration;
+      pollInFlight = (async () => {
+        try {
+          const list = await getQuotes(requestedSymbols);
+          if (current()) apply(list);
+        } catch {
+          if (current()) setStatus("error");
+        } finally {
+          pollInFlight = null;
+          if (!closed && polling && !hidden()) {
+            clearPollTimer();
+            if (pollAgain) {
+              pollAgain = false;
+              void tick();
+            } else {
+              pollTimer = setTimeout(() => { pollTimer = null; void tick(); }, 5000);
+            }
+          }
+        }
+      })();
+      return pollInFlight;
+    };
+    const restartPolling = () => {
+      pollGeneration += 1;
+      clearPollTimer();
+      if (!closed && polling && !hidden()) void tick();
+    };
+    const startPolling = () => {
+      if (polling || closed) return;
+      polling = true;
+      setStatus("polling");
+      void tick();
+    };
+    const stopPolling = () => {
+      polling = false;
+      pollGeneration += 1;
+      pollAgain = false;
+      clearPollTimer();
+      clearThrottle();
+      pending = null;
+    };
+    refreshSelectionRef.current = () => {
+      clearThrottle();
+      pending = null;
+      restartPolling();
+    };
     const onVisibility = () => {
-      if (closed || !pollTick) return;
-      if (document.visibilityState === "hidden") return;
-      void pollTick(); // 回可见：立即补一拍，不等下一个 5s
+      if (closed || !polling) return;
+      clearThrottle();
+      pending = null;
+      restartPolling();
     };
     document.addEventListener("visibilitychange", onVisibility);
 
@@ -171,6 +218,7 @@ export function useQuoteStream(symbols: string[], opts?: { throttleMs?: number }
       // 重连失败 3 次自然落入 REST 轮询兜底）
       let lastMsgAt = Date.now();
       ws.onopen = () => {
+        if (closed || wsRef.current !== ws) return;
         clearOpenTimer();
         retry = 0;
         stopPolling();
@@ -188,6 +236,7 @@ export function useQuoteStream(symbols: string[], opts?: { throttleMs?: number }
         }, 15000);
       };
       ws.onmessage = (ev) => {
+        if (closed || wsRef.current !== ws) return;
         lastMsgAt = Date.now();
         try {
           const msg = JSON.parse(ev.data as string) as { type: string; data?: Quote[] };
@@ -196,8 +245,11 @@ export function useQuoteStream(symbols: string[], opts?: { throttleMs?: number }
           // 休市显示"休市"，刷新失败显示"数据过期"；恢复 quotes 推送时切回 live
           // （2026-09-01 修复：原实现把 stale 误标成 polling，且开盘后永不恢复 live）。
           if ((msg.type === "snapshot" || msg.type === "quotes" || msg.type === "stale") && msg.data) {
-            apply(msg.data);
-            const closedData = msg.data.some((q) => q.quality_reasons?.includes("market_closed"));
+            const selected = new Set(symbolsRef.current);
+            const currentData = msg.data.filter(quote => selected.has(quote.symbol));
+            if (msg.data.length && !currentData.length) return;
+            apply(currentData);
+            const closedData = currentData.some((q) => q.quality_reasons?.includes("market_closed"));
             if (closedData) {
               // 休市数据可能以 quotes 类型到达（REST 兜底/快照路径），一律置休市态
               setStatus("closed");
@@ -210,6 +262,8 @@ export function useQuoteStream(symbols: string[], opts?: { throttleMs?: number }
         } catch {}
       };
       ws.onclose = () => {
+        if (closed || wsRef.current !== ws) return;
+        wsRef.current = null;
         clearOpenTimer();
         if (pingTimer) clearInterval(pingTimer);
         pingTimer = null;
@@ -219,7 +273,7 @@ export function useQuoteStream(symbols: string[], opts?: { throttleMs?: number }
         reconnectTimer = setTimeout(() => void connect(), Math.min(1000 * 2 ** retry, 10000));
       };
       ws.onerror = () => {
-        wsRef.current?.close();
+        if (!closed && wsRef.current === ws) ws.close();
       };
     };
 
@@ -227,6 +281,7 @@ export function useQuoteStream(symbols: string[], opts?: { throttleMs?: number }
 
     return () => {
       closed = true;
+      refreshSelectionRef.current = null;
       connectedRef.current = false;
       clearOpenTimer();
       clearThrottle();

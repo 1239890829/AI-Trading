@@ -8,6 +8,7 @@ import pytest
 
 from app.market import board_flow as bf
 from app.core.bjtime import BJ_TZ  # S2-8 时区收敛
+from app.core.ttl_cache import TTLCache
 
 
 def _run(coro):
@@ -78,6 +79,129 @@ def _bj(year=2026, month=9, day=7, hour=15, minute=6):
     from datetime import datetime
 
     return datetime(year, month, day, hour, minute, tzinfo=BJ_TZ)
+
+
+@pytest.fixture()
+def isolated_list_reads(monkeypatch, fresh_memo):
+    clock = {"now": _bj(hour=10)}
+    monkeypatch.setattr(bf, "beijing_now", lambda: clock["now"])
+    monkeypatch.setattr(bf, "_LIST_CACHE", TTLCache("test-board-list", 30, maxsize=4))
+    monkeypatch.setattr(bf, "_LIST_EOD_CACHE", TTLCache("test-board-list-eod", 300, maxsize=4))
+    monkeypatch.setattr(bf, "_LIST_READS", {}, raising=False)
+    return clock
+
+
+def test_board_same_key_cold_reads_share_pages(monkeypatch, isolated_list_reads):
+    calls = []
+
+    class HTTP:
+        async def get(self, url, params, headers):
+            pn = int(params["pn"])
+            calls.append(pn)
+            await asyncio.sleep(0)
+            return FakeResp(_clist_payload([_em_board(code=f"BK{pn}")], total=250))
+
+    monkeypatch.setattr(bf, "_HTTP", HTTP())
+
+    async def go():
+        results = await asyncio.gather(*(bf.get_board_list("concept") for _ in range(8)))
+        assert sorted(calls) == [1, 2, 3]
+        assert all(len(rows) == 3 and degraded == [] for rows, degraded in results)
+        results[0][0][0]["name"] = "consumer change"
+        assert all(rows[0]["name"] == "通信技术" for rows, _ in results[1:])
+
+    _run(go())
+
+
+def test_board_warm_cache_keeps_delay_and_unmodified_rows(monkeypatch, isolated_list_reads):
+    fake = FakeHTTP()
+    fake.add("push2.eastmoney", [RuntimeError("fixture primary unavailable")])
+    fake.add("push2delay.eastmoney", [_clist_payload([_em_board(f62="-", f184="-")])])
+    monkeypatch.setattr(bf, "_HTTP", fake)
+
+    async def go():
+        rows, degraded = await bf.get_board_list("concept")
+        assert "push2delay" in degraded[0]
+        rows[0]["name"] = "consumer change"
+        degraded.clear()
+        warm_rows, warm_degraded = await bf.get_board_list("concept")
+        assert warm_degraded == ["主域不可达，使用延迟口径（push2delay）"]
+        assert warm_rows[0]["name"] == "通信技术"
+        assert warm_rows[0]["main_net_yi"] is None and warm_rows[0]["main_net_ratio"] is None
+        assert len(fake.calls) == 2
+
+    _run(go())
+
+
+def test_board_list_cache_separates_kind_and_date(monkeypatch, isolated_list_reads):
+    calls = []
+
+    class HTTP:
+        async def get(self, url, params, headers):
+            calls.append(params["fs"])
+            return FakeResp(_clist_payload([_em_board()]))
+
+    monkeypatch.setattr(bf, "_HTTP", HTTP())
+
+    async def go():
+        await bf.get_board_list("concept")
+        await bf.get_board_list("concept")
+        await bf.get_board_list("industry")
+        isolated_list_reads["now"] = _bj(day=8, hour=10)
+        await bf.get_board_list("concept")
+        assert calls == [bf._KIND_FS["concept"], bf._KIND_FS["industry"], bf._KIND_FS["concept"]]
+
+    _run(go())
+
+
+def test_board_cancelled_reader_keeps_shared_read(monkeypatch, isolated_list_reads):
+    async def go():
+        entered, release = asyncio.Event(), asyncio.Event()
+        calls = []
+
+        class HTTP:
+            async def get(self, url, params, headers):
+                calls.append(url)
+                entered.set()
+                await release.wait()
+                return FakeResp(_clist_payload([_em_board()]))
+
+        monkeypatch.setattr(bf, "_HTTP", HTTP())
+        first = asyncio.create_task(bf.get_board_list("concept"))
+        await entered.wait()
+        second = asyncio.create_task(bf.get_board_list("concept"))
+        await asyncio.sleep(0)
+        first.cancel()
+        with pytest.raises(asyncio.CancelledError):
+            await first
+        release.set()
+        rows, degraded = await second
+        assert len(rows) == 1 and degraded == [] and len(calls) == 1
+
+    _run(go())
+
+
+def test_board_failed_shared_read_does_not_cache_failure(monkeypatch, isolated_list_reads):
+    calls = []
+
+    class HTTP:
+        async def get(self, url, params, headers):
+            calls.append(url)
+            await asyncio.sleep(0)
+            if len(calls) <= 2:
+                raise RuntimeError("fixture both domains unavailable")
+            return FakeResp(_clist_payload([_em_board()]))
+
+    monkeypatch.setattr(bf, "_HTTP", HTTP())
+
+    async def go():
+        failed = await asyncio.gather(*(bf.get_board_list("concept") for _ in range(8)))
+        assert all(rows is None and degraded == ["东财板块列表不可用（双域已重试）"] for rows, degraded in failed)
+        assert len(calls) == 2
+        rows, degraded = await bf.get_board_list("concept")
+        assert len(rows) == 1 and degraded == [] and len(calls) == 3
+
+    _run(go())
 
 
 # ---------------------------------------------------------------- 解析层

@@ -79,30 +79,6 @@ export async function resolveAgentTask(
   return (await sendJson<AgentTask>(`/api/agent/tasks/${id}/resolve`, "POST", { outcome, note })).data;
 }
 
-export interface AgentBubble {
-  id: number;
-  event_id: number;
-  verdict: string;
-  reason: string;
-  /** 股票名称（判读合并，缺名称的判读不会进入气泡） */
-  name?: string | null;
-  /** llm=AI 判读 / rules=确定性去重 / llm_fallback=LLM 不可用按规则提醒（界面须标注） */
-  model: string;
-  acked: boolean;
-  symbol: string;
-  trigger_value: number | null;
-  threshold: number | null;
-  created_at: string | null;
-}
-
-export async function getAgentBubbles(limit = 5): Promise<AgentBubble[]> {
-  return getJsonArray<AgentBubble>(`/api/agent/triage/pending?limit=${limit}`);
-}
-
-export async function ackAgentTriage(id: number): Promise<boolean> {
-  return (await sendJson<{ ok: boolean }>(`/api/agent/triage/${id}/ack`, "POST")).data.ok;
-}
-
 export interface AgentParamInfo {
   key: string;
   label: string;

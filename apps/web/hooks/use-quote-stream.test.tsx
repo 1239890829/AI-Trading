@@ -1,6 +1,8 @@
 import { act, renderHook } from "@testing-library/react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
+import { getQuotes } from "@/lib/api";
+import type { Quote } from "@/types/market";
 import { useQuoteStream } from "@/hooks/use-quote-stream";
 
 /**
@@ -23,7 +25,7 @@ vi.mock("@/lib/ws-credential", () => ({
 
 vi.mock("@/lib/api", () => ({
   wsBase: () => "ws://test.local/backend",
-  getQuotes: async () => [],
+  getQuotes: vi.fn(async () => []),
 }));
 
 class FakeWS {
@@ -47,7 +49,7 @@ class FakeWS {
     this.readyState = 3;
   }
 
-  send() {
+  send(_message?: string) {
     /* noop */
   }
 }
@@ -65,10 +67,13 @@ beforeEach(() => {
   cred.calls = 0;
   vi.stubGlobal("WebSocket", FakeWS);
   vi.useFakeTimers();
+  vi.mocked(getQuotes).mockReset().mockResolvedValue([]);
+  vi.spyOn(document, "visibilityState", "get").mockReturnValue("visible");
 });
 
 afterEach(() => {
   vi.useRealTimers();
+  vi.restoreAllMocks();
   vi.unstubAllGlobals();
 });
 
@@ -119,4 +124,114 @@ describe("行情 WS 的子协议凭据（R22）", () => {
     await settle();
     expect(FakeWS.instances).toHaveLength(0);
   });
+});
+
+const quote = (symbol: string, price: number) => ({symbol, price, quality: "high"} as Quote);
+async function degrade() {
+  await settle();
+  for (const delay of [2_000, 4_000]) {
+    await act(async () => { FakeWS.instances.at(-1)!.onclose?.(); await vi.advanceTimersByTimeAsync(delay); });
+  }
+  await act(async () => { FakeWS.instances.at(-1)!.onclose?.(); });
+}
+
+it("fallback never overlaps a slow request and schedules five seconds after completion", async () => {
+  let resolve!: (quotes: Quote[]) => void;
+  vi.mocked(getQuotes).mockImplementationOnce(() => new Promise(done => { resolve = done; }));
+  const {result, unmount} = renderHook(() => useQuoteStream(["600519"]));
+  await degrade();
+  await act(async () => { await vi.advanceTimersByTimeAsync(5_000); });
+  expect(getQuotes).toHaveBeenCalledTimes(1);
+  await act(async () => { resolve([quote("600519", 100)]); });
+  expect(result.current.quotes["600519"].price).toBe(100);
+  await act(async () => { await vi.advanceTimersByTimeAsync(4_999); });
+  expect(getQuotes).toHaveBeenCalledTimes(1);
+  await act(async () => { await vi.advanceTimersByTimeAsync(1); });
+  expect(getQuotes).toHaveBeenCalledTimes(2);
+  unmount();
+});
+
+it("hidden fallback pauses, discards its old response and fetches immediately on visibility return", async () => {
+  let resolve!: (quotes: Quote[]) => void;
+  vi.mocked(getQuotes).mockImplementationOnce(() => new Promise(done => { resolve = done; }));
+  const visibility = vi.spyOn(document, "visibilityState", "get");
+  const {result, unmount} = renderHook(() => useQuoteStream(["600519"]));
+  await degrade();
+  await act(async () => { visibility.mockReturnValue("hidden"); document.dispatchEvent(new Event("visibilitychange")); resolve([quote("600519", 100)]); });
+  expect(result.current.quotes).toEqual({});
+  await act(async () => { await vi.advanceTimersByTimeAsync(5_000); });
+  expect(getQuotes).toHaveBeenCalledTimes(1);
+  vi.mocked(getQuotes).mockResolvedValueOnce([quote("600519", 101)]);
+  await act(async () => { visibility.mockReturnValue("visible"); document.dispatchEvent(new Event("visibilitychange")); });
+  expect(getQuotes).toHaveBeenCalledTimes(2);
+  expect(result.current.quotes["600519"].price).toBe(101);
+  unmount();
+});
+
+it("switching symbols discards the old fallback reply and then requests the current symbols", async () => {
+  let resolve!: (quotes: Quote[]) => void;
+  vi.mocked(getQuotes).mockImplementationOnce(() => new Promise(done => { resolve = done; }));
+  const {result, rerender, unmount} = renderHook(({symbols}) => useQuoteStream(symbols), {initialProps: {symbols: ["600519"]}});
+  await degrade();
+  rerender({symbols: ["000001"]});
+  vi.mocked(getQuotes).mockResolvedValueOnce([quote("000001", 20)]);
+  await act(async () => { resolve([quote("600519", 100)]); });
+  expect(getQuotes).toHaveBeenLastCalledWith(["000001"]);
+  expect(result.current.quotes["600519"]).toBeUndefined();
+  expect(result.current.quotes["000001"].price).toBe(20);
+  unmount();
+});
+
+it("WS recovery and unmount prevent stale fallback replies from overwriting current quotes", async () => {
+  let resolve!: (quotes: Quote[]) => void;
+  vi.mocked(getQuotes).mockImplementationOnce(() => new Promise(done => { resolve = done; }));
+  const {result, unmount} = renderHook(() => useQuoteStream(["600519"]));
+  await degrade();
+  await act(async () => { await vi.advanceTimersByTimeAsync(8_000); });
+  const ws = FakeWS.instances.at(-1)!;
+  await act(async () => {
+    ws.readyState = FakeWS.OPEN;
+    ws.onopen?.();
+    ws.onmessage?.({data: JSON.stringify({type: "quotes", data: [quote("600519", 110)]})});
+    resolve([quote("600519", 100)]);
+  });
+  expect(result.current.quotes["600519"].price).toBe(110);
+  expect(result.current.status).toBe("live");
+  unmount();
+  await act(async () => { await vi.advanceTimersByTimeAsync(10_000); });
+  expect(getQuotes).toHaveBeenCalledTimes(1);
+});
+
+it("live symbol subscriptions stay on one socket and an old-symbol snapshot cannot replace the new result", async () => {
+  const {result, rerender, unmount} = renderHook(({symbols}) => useQuoteStream(symbols), {initialProps: {symbols: ["600519"]}});
+  await settle();
+  const ws = FakeWS.instances[0];
+  const send = vi.spyOn(ws, "send");
+  await act(async () => { ws.readyState = FakeWS.OPEN; ws.onopen?.(); });
+  rerender({symbols: ["000001"]});
+  expect(FakeWS.instances).toHaveLength(1);
+  expect(send).toHaveBeenLastCalledWith(JSON.stringify({action: "subscribe", symbols: ["000001"]}));
+  await act(async () => {
+    ws.onmessage?.({data: JSON.stringify({type: "quotes", data: [quote("000001", 20)]})});
+    ws.onmessage?.({data: JSON.stringify({type: "stale", data: [quote("600519", 100)]})});
+  });
+  expect(result.current.quotes).toEqual({"000001": quote("000001", 20)});
+  expect(result.current.status).toBe("live");
+  unmount();
+});
+
+it("late messages from a replaced socket cannot overwrite a recovered connection", async () => {
+  const {result, unmount} = renderHook(() => useQuoteStream(["600519"]));
+  await settle();
+  const old = FakeWS.instances[0];
+  await act(async () => { old.onclose?.(); await vi.advanceTimersByTimeAsync(2_000); });
+  const current = FakeWS.instances.at(-1)!;
+  await act(async () => {
+    current.readyState = FakeWS.OPEN; current.onopen?.();
+    current.onmessage?.({data: JSON.stringify({type: "quotes", data: [quote("600519", 110)]})});
+    old.onmessage?.({data: JSON.stringify({type: "stale", data: [quote("600519", 90)]})});
+  });
+  expect(result.current.quotes["600519"].price).toBe(110);
+  expect(result.current.status).toBe("live");
+  unmount();
 });

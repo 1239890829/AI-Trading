@@ -67,6 +67,7 @@ _KIND_FS = {"concept": "m:90+t:3+f:!50", "industry": "m:90+t:2+f:!50"}
 #: 板块现值缓存：盘中 30s（一次翻页全市场拉齐，前端排序不回源）/ 盘外 300s
 _LIST_CACHE = TTLCache("boardflow-list", ttl=30.0, maxsize=4)
 _LIST_EOD_CACHE = TTLCache("boardflow-list-eod", ttl=300.0, maxsize=4)
+_LIST_READS: dict[tuple, asyncio.Task] = {}
 #: 单板块分钟/成员：下钻时才拉，小容量防驻留
 _MINUTE_CACHE = TTLCache("boardflow-minute", ttl=60.0, maxsize=4)
 _MEMBERS_CACHE = TTLCache("boardflow-members", ttl=60.0, maxsize=8)
@@ -189,25 +190,48 @@ def _board_rows_from_diff(diff: list[dict], kind: str) -> list[dict]:
     return rows
 
 
+class _BoardListUnavailable(Exception):
+    def __init__(self, degraded: list[str]):
+        super().__init__(degraded[-1])
+        self.degraded = degraded
+
+
 async def get_board_list(kind: str) -> tuple[list[dict] | None, list[str]]:
     """全量板块行（concept/industry）。缓存盘中 30s / 盘外 300s；失败不缓存。"""
     if kind not in _KIND_FS:
         return None, [f"kind 非法：{kind!r}"]
     cache = _LIST_CACHE if _in_session() else _LIST_EOD_CACHE
-    hit, cached = cache.get(kind)
-    if hit:
-        return cached, []
-    diff, host = await _clist_pages(_KIND_FS[kind], _BOARD_LIST_FIELDS)
-    if diff is None:
-        return None, ["东财板块列表不可用（双域已重试）"]
-    degraded: list[str] = []
-    if host == _HOSTS[1]:
-        degraded.append("主域不可达，使用延迟口径（push2delay）")
-    rows = _board_rows_from_diff(diff, kind)
-    if not rows:
-        return None, degraded + ["板块列表解析为空"]
-    cache.set(kind, rows)
-    return rows, degraded
+    key = (beijing_now().date().isoformat(), kind, _HOSTS, _BOARD_LIST_FIELDS)
+    pending_key = (cache, key)
+
+    async def load() -> dict:
+        diff, host = await _clist_pages(_KIND_FS[kind], _BOARD_LIST_FIELDS)
+        if diff is None:
+            raise _BoardListUnavailable(["东财板块列表不可用（双域已重试）"])
+        degraded = ["主域不可达，使用延迟口径（push2delay）"] if host == _HOSTS[1] else []
+        rows = _board_rows_from_diff(diff, kind)
+        if not rows:
+            raise _BoardListUnavailable(degraded + ["板块列表解析为空"])
+        return {"rows": rows, "degraded": degraded, "source": host}
+
+    task = _LIST_READS.get(pending_key)
+    if task is None or task.done():
+        task = asyncio.create_task(cache.get_or_set(key, load))
+        _LIST_READS[pending_key] = task
+
+        def completed(done: asyncio.Task) -> None:
+            if _LIST_READS.get(pending_key) is done:
+                _LIST_READS.pop(pending_key, None)
+            if not done.cancelled():
+                done.exception()
+
+        task.add_done_callback(completed)
+    try:
+        _, payload = await asyncio.shield(task)
+    except _BoardListUnavailable as exc:
+        return None, list(exc.degraded)
+    # 各消费者会排序、补榜位/连续流入；这些写操作不能污染源缓存和其他消费者。
+    return [dict(row) for row in payload["rows"]], list(payload["degraded"])
 
 
 # ---------------------------------------------------------------- 板块下钻（分钟/成员）

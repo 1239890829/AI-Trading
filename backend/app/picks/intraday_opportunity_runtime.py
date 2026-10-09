@@ -425,6 +425,16 @@ async def archive_intraday_evidence_tick(app) -> dict:
             "intraday opportunity evidence archive not ready: "
             + str(evidence.get("reason") or evidence.get("state") or "unknown")
         )
+    # Projection belongs to this writer, after exact evidence and before its cursor.
+    # A failed event write retries the same immutable run; UI reads stay side-effect free.
+    from app.core.config import settings
+    from app.services.selection_notifications import publish_intraday_selection
+    receipt = await asyncio.to_thread(
+        publish_intraday_selection, payload["data"], trade_date=trade_date.isoformat(),
+        snapshot_as_of=snapshot_bundle[2], snapshot_state=snapshot_bundle[1],
+        run_id=evidence["run_id"],
+        fresh_within=float(getattr(svc, "poll_interval", settings.snapshot_poll_interval_seconds)) * 3,
+    )
     state.opportunity_evidence_saved_files = saved_files
     log.info(
         "intraday opportunity evidence archived: snapshot=%s run=%s records=%s",
@@ -433,4 +443,5 @@ async def archive_intraday_evidence_tick(app) -> dict:
     return {
         "state": "archived", "saved_files": saved_files,
         "run_id": evidence.get("run_id"), "records": evidence.get("records"),
+        "selection_notifications": receipt,
     }

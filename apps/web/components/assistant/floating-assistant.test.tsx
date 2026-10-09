@@ -9,16 +9,6 @@ import { act, cleanup, fireEvent, render, screen, waitFor } from "@testing-libra
  * 以及工具回执要显示**中文标签**（后端 labels），不是英文键名。
  */
 
-// lib/api 的其余导出保持真实；两个轮询接口在 jsdom 里没有后端，直接桩掉。
-vi.mock("@/lib/api", async () => {
-  const actual = await vi.importActual<typeof import("@/lib/api")>("@/lib/api");
-  return {
-    ...actual,
-    getAgentBubbles: vi.fn(async () => []),
-    ackAgentTriage: vi.fn(async () => undefined),
-  };
-});
-
 import { FloatingAssistant } from "@/components/assistant/floating-assistant";
 import { loadSessions, CURRENT_KEY, SESSIONS_KEY } from "@/lib/assistant-sessions";
 

@@ -1,7 +1,7 @@
 "use client";
 
 import Link from "next/link";
-import { Suspense, useCallback, useState } from "react";
+import { Suspense, useState } from "react";
 import { MarketLensPicker } from "@/components/ui/workspace-deck";
 import { useSearchParams } from "next/navigation";
 import { Panel } from "@/components/panel";
@@ -21,16 +21,11 @@ import {
   getMarketOverview,
   getSentiment,
   getSentimentHistory,
-  type Breadth,
-  type Freshness,
-  type Sentiment,
-  type SentimentHistoryPayload,
 } from "@/lib/api";
 import { fmt, fmtAmount, pctColor, pctText, sourceLabel, timeText, triAmount } from "@/lib/format";
-import { usePollingFetch } from "@/hooks/use-polling-fetch";
+import { useResource } from "@/hooks/use-polling-fetch";
 import { useExitPresence } from "@/hooks/use-exit-presence";
 import { FadeSwap, PageSkeletonFallback, Skeleton } from "@/components/ui/loading";
-import type { LimitUpRecord, Quote } from "@/types/market";
 import "./market-bc.css";
 
 /**
@@ -58,68 +53,38 @@ function MarketInner() {
   const view: ViewKey =
     raw === "heatmap" || raw === "events" || raw === "fund" ? raw : "overview";
 
-  const [indices, setIndices] = useState<Quote[]>([]);
-  const [totalAmount, setTotalAmount] = useState<number | null>(null);
-  // 成交额的三态判据（S2-1 契约）。**必须与数值分开存**：`null` 有「上游尚未就绪」
-  // 与「真的没有数据」两种成因，只凭数值无法区分（2026-09-14 报障根因）。
-  const [amountFreshness, setAmountFreshness] = useState<Freshness | null>(null);
-  const [poolError, setPoolError] = useState(false);
-  const [contextError, setContextError] = useState(false);
-  const [pool, setPool] = useState<LimitUpRecord[]>([]);
-  const [breadth, setBreadth] = useState<Breadth | null>(null);
-  const [sent, setSent] = useState<Sentiment | null>(null);
-  const [sentHist, setSentHist] = useState<SentimentHistoryPayload | null>(null);
+  // Only the active overview owns these reads. Returning results lets useResource
+  // discard flights from a departed lens while retaining each source's last value.
+  const enabled = view === "overview";
+  const overview = useResource(async () => ({
+    value: await getMarketOverview(),
+    readAt: new Date().toLocaleTimeString("zh-CN", { hour12: false }),
+  }), {intervalMs: 10_000, enabled});
+  const poolResource = useResource(getLimitUpPool, {intervalMs: 10_000, enabled});
+  const breadthResource = useResource(getBreadth, {intervalMs: 30_000, enabled});
+  const sentimentResource = useResource(getSentiment, {intervalMs: 30_000, enabled});
+  const historyResource = useResource(() => getSentimentHistory(10), {intervalMs: 60_000, enabled});
+  const indices = overview.data?.value.indices ?? [];
+  const totalAmount = overview.data?.value.total_amount ?? null;
+  const amountFreshness = overview.data?.value.total_amount_freshness ?? null;
+  const pool = poolResource.data?.slice(0, 10) ?? [];
+  const poolError = !!poolResource.error;
+  const breadth = breadthResource.error ? null : breadthResource.data ?? null;
+  const sent = sentimentResource.error ? null : sentimentResource.data ?? null;
+  const sentHist = historyResource.data ?? null;
+  const contextError = !!(breadthResource.error || sentimentResource.error)
+    || breadthResource.data === null || sentimentResource.data === null;
+  const error = overview.error ? "市场概览读取失败，保留值仅作上次结果参考。请重试或核对系统维护状态。" : null;
+  const updatedAt = overview.data?.readAt ?? "";
+  const pending = overview.pending;
   const [basisOpen, setBasisOpen] = useState(false);
+  const sentimentUnavailable = !!sentimentResource.error || sentimentResource.data === null;
+  const [lastSentimentUnavailable, setLastSentimentUnavailable] = useState(false);
+  if (lastSentimentUnavailable !== sentimentUnavailable) {
+    setLastSentimentUnavailable(sentimentUnavailable);
+    if (sentimentUnavailable) setBasisOpen(false);
+  }
   const basisPresence = useExitPresence(basisOpen ? sent : null);
-  const [error, setError] = useState<string | null>(null);
-  const [updatedAt, setUpdatedAt] = useState("");
-  // 首轮加载在途：区分「加载中」（骨架占位）与「确认无数据」（空态文案），
-  // 避免内容加载完成后整块突然出现（2026-09-04 统一加载体验）。
-  const [pending, setPending] = useState(true);
-
-  // 快慢轮询拆分（评审 O2，2026-09-01）：指数/涨停速览是盘中变量保 10s；
-  // 宽度/情绪是准日频聚合（后端 60s 缓存 + 全市场快照），10s 拉属于浪费 → 30s；
-  // 情绪历史序列本来就是日频 → 60s。
-  const loadFast = useCallback(async () => {
-    try {
-      const [overview, zt] = await Promise.allSettled([getMarketOverview(), getLimitUpPool()]);
-      if (overview.status === "fulfilled") {
-        setIndices(overview.value.indices);
-        setTotalAmount(overview.value.total_amount);
-        setAmountFreshness(overview.value.total_amount_freshness);
-        setError(null);
-        setUpdatedAt(new Date().toLocaleTimeString("zh-CN", { hour12: false }));
-      } else setError("市场概览读取失败，保留值仅作上次结果参考。请重试或核对系统维护状态。");
-      setPoolError(zt.status === "rejected");
-      if (zt.status === "fulfilled") setPool(zt.value.slice(0, 10));
-    } catch {
-      setError("市场概览读取失败，请重试或核对系统维护状态。");
-    } finally {
-      setPending(false);
-    }
-  }, []);
-
-  const loadSlow = useCallback(async () => {
-    try {
-      const [breadthRes, sentRes] = await Promise.all([
-        getBreadth().catch(() => null),
-        getSentiment().catch(() => null),
-      ]);
-      setContextError(breadthRes === null || sentRes === null);
-      setBreadth(breadthRes);
-      setSent(sentRes);
-      if (sentRes === null) setBasisOpen(false);
-    } catch {}
-  }, []);
-
-  usePollingFetch(loadFast, 10_000);
-  usePollingFetch(loadSlow, 30_000);
-
-  // 历史序列变化慢（日频），独立 60s 轮询，不跟随 10s 行情刷新
-  usePollingFetch(async () => {
-    const h = await getSentimentHistory(10).catch(() => null);
-    if (h) setSentHist(h); // 拉取失败保持上一次序列（原 .catch(()=>{}) 语义）
-  }, 60_000);
 
   const sh = indices.find((q) => q.market === "SH" && q.symbol === "000001");
   const search = sp.toString();

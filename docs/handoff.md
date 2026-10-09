@@ -1,37 +1,40 @@
-# 当前交接：IMP-085 板块资金流空间整改
+# 当前交接：IMP-086 选股消息单出口与重复读取收口
 
-> 总方案v9.13；U01–U55；任务唯一状态归W07/IMP-085；现役UI方案[原版技能与UI方案](product/ui-original-skills-plan-20261008.md) §9.10；Jev现役蓝图[jev-integration](ai/jev-integration.md)。IMP-084已由PR #243/#244完成发布，本轮不复用其历史绿色。
+> 总方案v9.13；累计U01–U55；唯一状态归W02/IMP-086；Jev现役蓝图[jev-integration](ai/jev-integration.md)；UI现役入口[原版技能与UI方案](product/ui-original-skills-plan-20261008.md)。历史证据不冒充本批验证。
 
 ## 1. 现场、授权与版本
 
 - **当前主门**：G2
-- **本轮主任务**：IMP-085
-- **主切片首选**：IMP-085
-- **版本**：从最新origin/master `2212b6278ce9890a5be4047e9b92c0e759a7d73c`创建`codex/fund-flow-space`；依赖IMP-084已完成。
-- **U50 降级授权回执**：用户2026-10-09直接要求修复市场→资金流向→板块资金流的空白与拥挤。2026-09-24 Codex `DEGRADED_FULL_CONTROL`授权未撤销；作者=发布操作者，非独立Review；准确HEAD DegradedRelease、完整适用门禁与required CI继续执行。
-- **实现范围**：资金阅读区左右比例、板块卡容器列数、专属内外边距、名称/金额排列、手机阅读面宽度。保留B+C风格、原筛选/排序/增量加载/下钻/三个分析视图、来源/时间/质量，列表为纵向滚动所有者。后台、API、行情计算、AI预算/模型、交易风控/权限不变。
-- **恢复**：保留既有ui-current-saved-20261008标签与artifacts/recovery/ui-current-20261008；本次未替换恢复副本。
+- **本轮主任务**：IMP-086
+- **主切片首选**：IMP-086
+- **版本**：从最新origin/master `e2565fb7c19487dae62fc5251d130388e281dd71`创建`codex/selection-notification-focus`；代码提交`b684a7d9743c1e9177ece0f24e36b27126837f0d`。硬依赖IMP-085已发布，post-merge三项CI通过。本批发布绑定随后协调文档HEAD，精确回执与CI不能复用依赖版本。
+- **U50 降级授权回执**：用户2026-10-09明确追加要求，选股保持原逻辑，真正入选结果及时进入消息通知一个主动出口，助手保留人工问答；要求排查系统卡顿、加载慢与过期。2026-09-24 Codex `DEGRADED_FULL_CONTROL`授权未撤销；作者=发布操作者，非独立Review；准确HEAD DegradedRelease、本地完整门禁与required CI保留。
+- **施工边界**：复用原每日/盘中最终结果、AlertEvent和原水位，不增加候选池/评分/模型/表。普通全市场临板/开板观察不独立取得机会通知资格；指定个股自设提醒、持仓风险与系统失败独立保护。原buy_point交易/Outbox消费者不改。修已证实共享读取问题；全系统SLO、真实开盘/重研究竞争仍归IMP-019，不称本批全部解决。
+- **现场**：3000运行本批production构建`6P_W80UJq3IcYruOUicUX`，前端PID83601；8000已正常终止旧实例并启动PID88202，无reload。重启前只读核无pending外发、无运行/排队Agent；保留原调度、风险/系统与原Outbox保护，不承诺未来零外发。前端绑定0.0.0.0:3000，手机使用本机当前局域网IP。
+- **恢复**：既有`ui-current-saved-20261008`标签与`artifacts/recovery/ui-current-20261008`保持；不删除业务数据或退出的判读历史。
 
 ## 2. U49 主动审计回执 / 作者Preflight与有界反证
 
-原版Impeccable执行Layout/Adapt，原版Taste执行Scan→Diagnose→Fix；窄修复使用现役实现作为设计上下文。IAB实际1280×720测得资金容器1232px，板块480.74px、右侧735.25px；板块卡仅121.58px、内边距18px。整屏≥1280触发共享Masonry三列，与板块实际容器宽度冲突；依据artifacts/runs/fund-space-20261009/screenshots/before-1280.png。手机390px修改前截图同目录before-390.png。
+既有选股候选来源、评分/淘汰/容量、新闻与依据已存在。本轮只改变结果曝光与读取所有者，停止助手30秒自动气泡及普通事件自动AI批判读，保留人工聊天与原有选股语义消费者。TypeSafe按真实语义缺口评估；精确身份、源时间、去重、风控和执行继续由代码承担。治理使用living-system-governor的现状/最小修补/退出比较；消息交互使用interaction-design核状态、反馈与入口一致性，不开启整版视觉重设计。
 
-反证范围为左右比例、共享卡壳边距、列数断点、长名称/金额、父子最小宽高、手机横向阅读面、列表增量sentinel、筛选/排序、下钻退出与分析视图；共享Masonry另有猎场消费者，本次只覆盖板块专属class，不全局调整。右侧分析保留其独立读数与容器滚动归属。源失败保留不可用提示，不用模拟结果填空白。
+反例：每新快照在GET强制exact-current-run会隐藏刚发消息；latest-member显隐会复活旧未读。因此资格在写端核验，读取保留原入选时点事实。每日持久行可覆盖，需冻结真实最终卡片与生成版本，不伪造归档run；盘中绑定真实归档run、采用原正常容量，不能把研究limit10000当普通名单。日内同股一次可降噪也可能漏同日重入，风险/自设提醒不受其去重。每日A被并发B替换、取锁等待跨报价期限和500条窗口导致首ID换锚均取得RED→GREEN：同事务版本CAS后核源钟、批事件+receipt原子提交；有界原dedup键补取祖先再同一来源/ignore管线。失败整批回滚，原选股不撤销。收盘后每日观察不能错误套盘中短时限。盘中当前仅一个顺序await完整tick的同scenario归档发布入口，不把此单实例边界冒充多实例部署验证。
 
-## 3. 当前验证与发布
+读取反证涵盖隐藏市场视图、WS降级慢回包重叠、切股/可见性/恢复WS/卸载、K线/盘口首挂重复、沪深分钟源跨消费者共享、不同日期/取消/失败恢复、板块成功暖缓存来源提示与消费者污染。不得用缓存叠加延长数据有效期，不变动源优先级/重试预算，不藏stale或删除数据提速。
 
-代码提交`f982293f3af3e10f86adf0bc267de15c49c428bb`，协调文档另行提交；候选最终HEAD以PR回执为准。
+## 3. 当前证据与验证边界
 
-本批最终源码的前端tsc/eslint、production build、doc-health/workspace-hygiene/public_repo_scan通过。完整Vitest默认与UTC均单worker、显式`--pool=threads`：100文件886 passed，344.48s/400.05s。此前fork池全量出现markdown corpus超时（另一次workspace超时），未改变用例、断言或超时；两次较早fork默认/UTC全量各886通过仅为补丁前基线，准确HEAD CI仍按仓库标准池核验。后端无代码变更，本地不重复其全量，required backend CI保留。Jev Review两次HTTP451，无baseline/复评分数，不能写通过。Impeccable最终检测结果为空；这是局部检测结果，不是全项目审计。
+- 隔离同基线对照：假HTTP50ms、原退避不变；实时回退+分钟冷读回源7→5次；8个板块并发冷读24→3次、备源路径32→4次；完整冷响应digest一致，暖缓存保留延迟提示。50项资金/板块定向用例包含3个始终过期RED→GREEN反例；重核有界，仍过期明确不可用。最终完整门禁见下文，合成测量不是实盘SLO。
+- 现役只读现场已可取health/metrics；2026-10-09 15:11–15:13单次资金分钟读约7.25s、板块3.42s，均返回不可用原因而非有效行情。进程保留窗口资金接口P95约16.95s，盘中选股约14.92s；样本版本/负载未配对，不作改善结论。收盘后hub的market_closed非实时标记与宽度约181s源龄分别记录，不能混作故障或把接收时间当源时间。
+- 定向RED已见助手自动请求、隐藏视图请求、慢轮询重叠/旧回包、板块请求放大/来源提示、未选临板仍进入通知与自设提醒遗漏。最终通知/原outbox/买点/每日/盘中定向161通过；详情23项含在途预取切页、A→B→A与原撤单同步通过。前端tsc/完整ESLint通过，默认/UTC均100文件904项通过（177.07/149.23s），生产构建8静态页通过。最终冻结源码全后端4812通过/83跳过/1原Starlette警告（412.00s），pyflakes app/tests/scripts无错误；原参数化import-lint跳过不是覆盖增加。首版本及中止版本另存，不复用旧门禁放行。
+- 最终Jev代码复评请求返回HTTP451，isError=true，无分数/previousEvaluation；保留工具缺口，作者复核不冒充独立Review。两名不同实现关注面代理只读复核原子事件/Outbox/consumer、source/ignore与当前单实例归档入口，未发现新增阻断；其结论不替代准确HEAD DegradedRelease。
+- 协调文档完成后doc-health/workspace-hygiene通过，文档/卫生隔离守卫182项通过（6.80s）；三模块现状、原消费者与新增缺口仅在细功能审计§40记录候选，不扩本批实现。
+- 真实运行：通知GET200、count0、errors=null；今日每日记录缺失，未补造旧结果或触发生成/模型。1280/390/320真实页面核通知、助手人工打开/收回、切股/Canvas、市场切换；手机dialog宽度与viewport一致无横溢出，关闭按钮36×36，关闭后焦点回铃铛。截图只进忽略产物。实源盘后一次资金分钟6.78s且两源不可用、板块0.237s但双域不可用；不是性能/SLO成功，也不能用快速失败冒充提速。准确HEAD PR、required CI、release_check与post-merge按本轮发布回执继续核实。
+- 本批产物只进忽略`artifacts/runs/selection-notifications-20261009/`；现场详情归[运行性能](system/runtime-performance.md)，原任务状态不复制。
 
-最终实际组件合成夹具验收：1280×720板块663.27px/分析552.73px、卡305.63px；390×844卡326px；320×640卡260px、列表131px；1280×600列表313px。四种视口页面根没有X/Y溢出；320px短屏通过叶级滚动读取卡片完整字段，120项增量末项与口径说明均可达，不宣称同帧全见。筛选、Enter下钻、Esc关闭与回焦、当前/历史/机构游资入口已操作。生产3000东财板块源中途失败，保留不可用/重试，成交摘要仍有实源；卡片极端内容截图明确为3101隔离合成夹具，不冒充真实行情。图表算法和读者未修改；真实手机、软键盘、触摸拖动、大缩放与全部质量状态的独立实屏未取得。
+## 4. 已完成依赖与传播
 
-3000已加载最终production构建`uan4kQ7Mk6taV-q14tbiU`，前端PID40262、后端75041；三项修改源码SHA-256无漂移，市场页/代理health/后端health/LAN只读HTTP200。临时3101/3102夹具服务已正常停止并复查无监听，IAB临时视口已reset、临时标签为空。既有恢复包与tag保持。详见忽略产物`artifacts/runs/fund-space-20261009/`的browser-acceptance.json、runtime-release.json、final-source-manifest.json、screenshots及门禁日志。发布CI/准确HEAD回执/合并后核验尚待取得。
+IMP-085 [PR #245](https://github.com/1239890829/AI-Trading/pull/245)准确HEAD `c6189af28b5b9b5c9605888e9c9d05250ea94237`经过DegradedRelease、required CI与release_check，match-head合并为`e2565fb7c19487dae62fc5251d130388e281dd71`（2026-10-09T07:02:03Z）。post-merge运行37896728491的backend/frontend/docs均completed/success，分支已清理。首CI缺累计U01–U55范围标记已修复，88项本地文档守卫与最终CI通过，未改标准。完整局部UI证据归W07/IMP-085与原版技能方案§9.10。
 
-传播核对：W07/IMP-085、原版UI方案§9.10与本handoff承接同一授权切片；INDEX/总方案/AGENTS/领域蓝图/协作Skills不适用，因为没有新页面、文档入口、长期产品语义、模型、工具、权限或治理规则变化。
+传播核对：总方案、Jev用途修订、猎场/产品闭环/细功能审计与W02同步本次用户追加消费语义；W06/原性能报告仅补现场证据与旧条件纠正。无新文档入口、模型/工具/权限或协作流程，INDEX/AGENTS/协作Skills不适用。现役原版Impeccable/Taste职责不更改，无新增或退出设计权威。
 
 开放世界持续演进入口：[持续演进](ai/continuous-evolution.md)。外部候选仅提出验证，不自动安装或准入。
-
-## 4. 新增用户要求的边界
-
-用户明确选股保持简洁，复用现有实际入选结果，只保留消息通知一个主动出口；助手保留人工问答，AI仅在选股存在实际语义缺口时评估价值，不新建候选池或第二套评分。自设提醒、持仓风险与系统异常分别保留。全系统加载慢/过期另取跨模块请求、缓存与上游源证据，不通过隐藏stale修复。上述要求已获授权，但不属于本IMP-085布局diff；先完成本项发布，再登记通知消费收口和实测性能切片。当前没有改通知/选股业务。

@@ -108,26 +108,14 @@ class AlertRepository:
     ) -> tuple[AlertEvent, bool]:
         """Atomically create one durable event (+ optional outbox), or reuse it."""
         with self._session_factory() as db:
-            existing = db.query(AlertEvent).filter(AlertEvent.dedup_key == dedup_key).one_or_none()
-            if existing is not None:
-                db.expunge(existing)
-                return existing, False
-
-            # Read the parent before adding the new event. Querying after db.add()
-            # would trigger an autoflush, letting the unique-key race escape the
-            # IntegrityError recovery boundary below.
-            rule = db.query(AlertRule).filter(AlertRule.id == rule_id).one()
-            event = AlertEvent(
-                rule_id=rule_id,
-                symbol=symbol,
-                trigger_value=trigger_value,
-                threshold=threshold,
-                dedup_key=dedup_key,
-                snapshot=json.dumps(snapshot, ensure_ascii=False, default=str) if snapshot else None,
-                delivered_channels=json.dumps(delivered_channels, ensure_ascii=False) if delivered_channels else None,
+            event, inserted = self.record_trigger_once_in_session(
+                db, rule_id, symbol, trigger_value, threshold,
+                dedup_key=dedup_key, snapshot=snapshot, delivered_channels=delivered_channels,
             )
-            db.add(event)
-            rule.last_triggered_at = beijing_now_naive()
+            if not inserted:
+                db.expunge(event)
+                return event, False
+            rule = db.get(AlertRule, rule_id)  # Parent is already in this session; no autoflush.
             try:
                 # enqueue_feishu() flushes to obtain event.id, so the unique
                 # dedup collision may happen before commit. Keep flush + outbox
@@ -159,6 +147,37 @@ class AlertRepository:
             db.refresh(event)
             db.expunge(event)
             return event, True
+
+    def record_trigger_once_in_session(
+        self, db, rule_id: int, symbol: str, trigger_value: float, threshold: float,
+        *, dedup_key: str, snapshot: dict | None = None,
+        delivered_channels: list[str] | None = None,
+    ) -> tuple[AlertEvent, bool]:
+        """Stage a local event; the caller owns commit and conflict rollback/retry."""
+        existing = db.query(AlertEvent).filter(AlertEvent.dedup_key == dedup_key).one_or_none()
+        if existing is not None:
+            return existing, False
+        # Read the parent before adding: any flush collision stays at the caller's
+        # commit/flush boundary, including the existing outbox recovery above.
+        rule = db.query(AlertRule).filter(AlertRule.id == rule_id).one()
+        event = AlertEvent(
+            rule_id=rule_id, symbol=symbol, trigger_value=trigger_value, threshold=threshold,
+            dedup_key=dedup_key,
+            snapshot=json.dumps(snapshot, ensure_ascii=False, default=str) if snapshot else None,
+            delivered_channels=json.dumps(delivered_channels, ensure_ascii=False) if delivered_channels else None,
+        )
+        db.add(event)
+        rule.last_triggered_at = beijing_now_naive()
+        return event, True
+
+    def list_events_by_dedup_keys(self, keys: list[str]) -> list[AlertEvent]:
+        """Read bounded existing identities through their unique index, in batches."""
+        keys = sorted(set(keys))
+        rows = []
+        with self._session_factory() as db:
+            for start in range(0, len(keys), 900):
+                rows.extend(db.query(AlertEvent).filter(AlertEvent.dedup_key.in_(keys[start:start + 900])).all())
+        return rows
 
     def get_event(self, event_id: int | None) -> AlertEvent | None:
         with self._session_factory() as db:
