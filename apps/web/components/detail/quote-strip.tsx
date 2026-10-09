@@ -1,5 +1,8 @@
-/** 紧凑行情条（详情页顶部）：名称/代码/质量徽标/加自选 + 价格涨跌 + 关键指标带。纯展示。
+"use client";
+
+/** 紧凑行情条（详情页顶部）：名称/代码/质量徽标/加自选 + 价格涨跌 + 关键指标带。手机可就地收起详细指标。
  *  hideWatchlist=true 时隐藏加自选区（指数无自选语义，防把 sh000001 之类加进自选）。 */
+import { useId, useState } from "react";
 import { PriceFlash } from "@/components/price-flash";
 import { QualityBadge } from "@/components/quality-badge";
 import { SuspendedBadge } from "@/components/detail/suspended-badge";
@@ -21,6 +24,8 @@ export function QuoteStrip({
   /** 停牌判定（日K 缺失交易日数推导）。null = 未判定，不渲染徽标。 */
   tradingStatus?: TradingStatusInfo | null;
 }) {
+  const [metricsOpen, setMetricsOpen] = useState(false);
+  const metricsId = useId();
   // PE 缺失原因文案：原版把"停牌"写进猜测清单，但那是**猜**的——PE 缺失
   // 绝大部分是数据源未提供（新股/亏损股），真正的停牌应由 tradingStatus 判定。
   // 现在停牌状态真实可得，两者各归其位：这里只说"数据源未提供"，停牌由徽标表达。
@@ -46,7 +51,7 @@ export function QuoteStrip({
   ];
 
   return (
-    <div className="ui-card quote-sheet shrink-0 rounded-xl border border-zinc-200 px-4 py-1.5 dark:border-zinc-800">
+    <div className="ui-card quote-sheet shrink-0 rounded-xl border border-zinc-200 px-4 py-1.5 dark:border-zinc-800" data-metrics-expanded={metricsOpen}>
       <div className="quote-sheet-head flex flex-wrap items-baseline justify-between gap-x-4">
         <div className="flex flex-wrap items-baseline gap-2">
           <span className="text-base font-semibold">{quote.name ?? "--"}</span>
@@ -74,15 +79,20 @@ export function QuoteStrip({
           </span>
         </div>
       </div>
-      <div className="quote-sheet-metrics text-[11px] text-zinc-600 dark:text-zinc-400">
+      <div className="quote-sheet-meta">
+        <span className="quote-source text-zinc-600 dark:text-zinc-400">
+          {timeText(quote.data_timestamp)} · {sourceLabel(quote.source)}
+        </span>
+        <button type="button" className="quote-metrics-toggle hidden" aria-expanded={metricsOpen} aria-controls={metricsId} onClick={() => setMetricsOpen(open => !open)}>
+          行情指标<svg aria-hidden="true" width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.5"><path d="m7 10 5 5 5-5" /></svg>
+        </button>
+      </div>
+      <div id={metricsId} className="quote-sheet-metrics text-[11px] text-zinc-600 dark:text-zinc-400" role="region" aria-label="行情详细指标" tabIndex={0}>
         {strip.map(([k, v, title]) => (
           <span className="quote-metric" key={k} title={title}>
             <span>{k}</span> <span className="font-mono tabular-nums text-zinc-800 dark:text-zinc-200">{v}</span>
           </span>
         ))}
-        <span className="quote-source text-zinc-600 dark:text-zinc-400">
-          {timeText(quote.data_timestamp)} · {sourceLabel(quote.source)}
-        </span>
       </div>
     </div>
   );

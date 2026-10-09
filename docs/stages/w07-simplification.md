@@ -592,14 +592,38 @@
 - **依赖**：IMP-081
 - **效果前置**：无
 - **方案依据**：用户2026-10-08明确选择“第二和第三套的结合”，随后“菜单名称可以再想想，然后就开工吧”已授权正式React前端迁移；依据product/ui-original-skills-plan-20261008.md §9.7。无需再选案或确认实施；§8九稿已撤回，§9.1–9.6试件仅作历史比较和迁移基线。
-- **证据**：正式源码提交c157f179cbf7710386025800c6384008e12baa7b；[PR #241](https://github.com/1239890829/AI-Trading/pull/241)。artifacts/runs/ui-bc-production-20261008的production-acceptance.json绑定源码/构建/截图；production-verdict.md限定F-01–05 resolved/ship；production-detector-release.json=[]；browser-release-observations.json含最终四主面与助手/滚动复验，gallery.html提供图集。已完成状态指工程实现与已披露范围验收，发布实际结果由同一PR记录，仍须本轮完成，不预写未来合并成功。
+- **证据**：正式源码提交c157f179cbf7710386025800c6384008e12baa7b；[PR #241](https://github.com/1239890829/AI-Trading/pull/241)。artifacts/runs/ui-bc-production-20261008的production-acceptance.json绑定源码/构建/截图；production-verdict.md限定F-01–05 resolved/ship；production-detector-release.json=[]；browser-release-observations.json含最终四主面与助手/滚动复验，gallery.html提供图集。工程及发布均已完成，准确发布事实见同PR最终回执和publication-receipt.json；后续用户布局反馈另归IMP-083，不改写本项原验收范围。
 - **恢复**：保留tag ui-current-saved-20261008→0377b8414be70710bd4fff67818974601d5910da及artifacts/recovery/ui-current-20261008/source.tar.gz，SHA-256=f1e89ee0244b128b884b9ab7ed6f2aaecb2450ab917ae8df87bcd62ffed93。只恢复呈现源码并保留业务数据、权限及原深链；恢复前核版本和服务，不复活退出技能，旧版玻璃过透问题随恢复说明保留。
 - **范围**：工作台、选股、市场/盘面、复盘/维护及共享导航、搜索、详情、菜单和浮层；主菜单工作台/选股/市场/复盘。自选/持仓归工作台，跟踪记录归选股，受控维护经工具进入。复用原真实API、原组件消费者、证券/日期/账户scope及深链；用户取消的历史回放UI退出，历史K线与研究保留。只改前端呈现、交互和失败反馈，不改变后端规则、数据源、策略阈值、模拟撮合或权限。
 - **验收**：逐子项核功能归属与原消费者，不因换UI丢选股、四账户scope、模拟/手工记录、复盘或后台能力；合法空、失败、过期/未知不得混写。原版Impeccable、Taste及其他适用技能按独立职责留下产物，先holistic后detector，不恢复融合入口；全库存33技能/条件分支、30明确来源、40跨面要求、18细功能组、95效果+12整改按真实消费者评估，4项未辨识来源不猜测。最终DOM/行为/Canvas、320/390/桌面/短屏、容器滚动、菜单位置、关闭全族、键盘/焦点与恢复绑定最终代码；完整本地门禁、准确HEAD发布回执/required CI及post-merge核验分别留证。工程完成不代表选股持续性、收益或RSH-031效果已验证。
 - **当前实现**：正式React前端已完成：工作台真实关注/候选带与完整图表/核对；选股三组组织原十项能力，保留API/参考跟踪/模拟；市场八视角与原消费者；复盘/维护分组、提醒宽抽屉及Radix选择。IBM Plex Sans Latin+完整中文fallback、石墨/淡硫、完整手机搜索、紧凑按钮和ARIA Tabs。提醒pending/错误/可取消确认、规则回退AI不可用、全局事件身份保留。仅改前端，不改变后端业务或权限。
-- **版本与证据**：分支codex/ui-direction-selection；正式源码c157f179cbf7710386025800c6384008e12baa7b，协调文档提交随后。发布前复核origin/master及当前PR准确HEAD；历史prototype/旧文档标题不代替生产代码。证据根artifacts/runs/ui-bc-production-20261008；测试、截图、兼容代理和Jev均各有范围，不冒称全域独立Review。
+- **版本与证据**：正式源码c157f179cbf7710386025800c6384008e12baa7b，PR准确HEAD e842829eb088815b67a9811c67e5231ac234fdc2，合并c98a8d4b42e730ecaf58e0b552b681485faeb60f；原分支codex/ui-direction-selection已清理。证据根artifacts/runs/ui-bc-production-20261008；历史prototype/旧文档标题不代替生产代码，测试、截图、兼容代理和Jev均各有范围，不冒称全域独立Review。
 - **主动反证**：修复非成交视角追加逐笔、提醒原生选择/确认遗漏、嵌套菜单Esc关闭父抽屉、移动长表与风险说明过长、复盘阅读轴和渠道控件。新增真实resize测试保证助手713→1440→390仍靠右且不改存储；实屏x691→1418→368。最后market隐藏caption越界由滚动容器建立包含块修复，root scrollHeight1124→844，读屏语义保留。兼容代理仅F-01–05 ship；共享Jev最终8.2/7.8/8.4、比较方向均unchanged、regressions空，非项目独立Review。
 - **验证进度**：后端完整4654 passed/83 skipped/1 warning，471.80s；pyflakes通过。前端默认/UTC各99文件856 passed，201.25s/250.24s；tsc/eslint/生产build通过。最后仅CSS caption定位修改重新build及实屏，JS/TS未再变化。早期鉴权与文档必填字段失败已修复并完整复验，未改.env/断言/阈值。最终协调文档相关守卫186 passed（10.95s）、doc-health通过，精确暂存后再核卫生/public scan；准确HEAD required CI和发布执行结果由PR #241记录。
 - **运行与恢复**：3000运行最终Next production start并读取原真实API，token仅注入服务进程内存；工作台、代理watchlist及局域网选股HTTP200。8000原后端未重启。休市和源时间/组合日期显式保留。恢复点见本项恢复字段，不覆盖业务数据或复活退出技能，保留旧版玻璃过透说明。
 - **剩余边界**：真实手机/软键盘、读屏、系统减弱偏好和全设备性能未完整实测；TasteLab完整外站截图/DOM量测及Design Map/Taste DNA仍partial；ultramotion原仓为视频动效模板，本轮不宣称完成WebGL光学折射集成。上述范围不能由截图数量或机械detect空结果替代。
-- **下一步**：工程实现与验收已收口；本轮交付仍须在PR #241执行最终协调文档门禁、准确HEAD DegradedRelease、三required CI/release_check、match-head合并、post-merge及分支清理，结果追加同一PR；未发生前不预写成功。沿用已有工程/发布分层，不为记录未来merge SHA再造第二PR。不自动领取第二业务任务，部署仍搁置。
+- **发布收口**：PR #241准确HEAD DegradedRelease及release_check通过；已match-head合并为c98a8d4b42e730ecaf58e0b552b681485faeb60f，post-merge运行37807677169三job completed/success。最终发布回执见[PR评论](https://github.com/1239890829/AI-Trading/pull/241#issuecomment-6064317513)；本地旧分支已删除、远端已不存在，主干与已验构建45个源码哈希一致。
+- **下一步**：本项保留已完成状态与历史证据。2026-10-09用户明确保持本版风格并整改布局/滚动，独立登记IMP-083承接，不重开本项或把历史验收冒充新布局通过；部署仍搁置。
+
+## IMP-083
+
+**保留B+C风格的主从布局与滚动归属整改**
+
+- **状态**：已完成
+- **优先级**：P1
+- **阶段门**：G2
+- **门内序**：107
+- **门禁角色**：非阻断
+- **依赖**：IMP-082
+- **效果前置**：无
+- **方案依据**：用户2026-10-09认可当前风格，要求指数/自选放左、详情放右，其他页面减少纵向堆叠和空间浪费，大容器不出现竖向滚动条；按product/ui-original-skills-plan-20261008.md §9.8实施。用户当轮已授权，不再重选视觉方向。
+- **范围**：工作台、选股、市场、复盘和直接下游详情/列表/阅读容器；桌面主从并排、手机渐进披露与各层明确scroll owner。保留PR #241色盘/字体/材质/顶部导航和紧凑控件；不新增页面、业务能力、数据源、模型、权限或后端规则，不改变提醒去重/推送。
+- **验收**：工作台左侧指数/自选/持仓上下文、右侧详情与可用图表；其他页按主任务并排利用宽度。页面根和大外壳不竖滚，只有当前列表/阅读面竖滚，宽表自行横滚；末行/末列与所有动作可达，无父子双重竖滚。对320/390/1280/1440px、短屏/大缩放记录各层client/scroll宽高与真实滚动，DOM/行为/Canvas分别验收；切股、日期、四账户scope、选股十项能力、旧深链/返回来源、空错陈旧状态及键盘/焦点不退化。相应完整门禁、Jev复评、准确HEAD发布回执/required CI、post-merge及清理继续执行，不沿用旧绿色。
+- **当前现场**：从master c98a8d4b42e730ecaf58e0b552b681485faeb60f开始，分支codex/panel-layout-scroll。IMP-082工程与发布已完成，不重开。本项已完成本地实现和已披露范围内的验证；已完成状态不预写PR/CI或合并成功，准确HEAD发布仍属本轮必做交付。
+- **主动反证**：有界核高度链/min-height:0、Flex/Grid最小内容溢出、粘性头部和过长工具栏挤压、隐藏caption、菜单portal/Esc、折叠重开图表resize、列表锚点及快速切股/日期。不能通过缩字、隐藏功能或裁切内容消除滚动；不把截图数量和模型分数当金融效果或独立Review。
+- **当前实现**：手机旧globals specificity造成图表/根撑高，已加强布局scope；QuoteStrip唯一指标DOM在工作台手机默认折叠，源时间常驻；K线OHLC/控制条横滚，图表/核对收起重复对象栏，列表保留原操作。市场context冲突、题材760px宽内容及复盘手机横向全高布局已修正；共享QuoteStrip指标开关hidden并限定工作台移动端，避免模态无效开关。320px指数叠行修为grid-auto-rows:max-content及完整按钮行高，质量徽标保留；手机账户摘要details原288px二次滚动以桌面去嵌套规则扩展到所有视口宽度。
+- **证据**：本轮artifacts/runs/ui-panel-layout-20261009，截图位于screenshots。Chrome CUA实际核320×665 K线Canvas/切列表，390×844分时/指标展开/自选/选股局部滚动，1440px市场/题材/复盘；320px自选在固定外壳内实际滚到共进股份末行与移出按钮。390px复盘键盘Right已平移到正文并有review-390-body.png，触摸drag未证成功。结构、AX、Canvas、截图及实际滚动各有范围，不冒充真实手机。
+- **验证进度**：后端完整4654 passed/83 skipped/1 warning，1036.66s；pyflakes exit0。前端tsc/eslint exit0；默认/UTC各99文件857 passed（253.63s/232.43s）。QuoteStrip末次修正后tsc/受影响文件lint exit0、2文件11测试通过（6.42s）；最终生产build exit0（frontend-build-release.log），3000已再次正常start。最终根/工作台Jev correctness8.1、regressions空（workbench-jev-exact-source.json），市场/选股各correctness7.2、regressions空，已纳入末次两处CSS。静态Impeccable最后检查=[]；卫生/doc-health/public scan已有exit0，协调文档回填与精确暂存后仍须复核。PR/CI、准确HEAD发布与合并后运行绑定待执行，不预写通过。
+- **验证限制**：精确DOM/client/scroll几何与Canvas绘图区尺寸未知，Chrome self-XSS阻止只读控制台粘贴且未绕过；结构/AX/Canvas/实际滚动是本轮替代证据，不推定所有容器/尺寸/末行末列均量测通过。320/390为桌面Chrome窄窗口；真实手机、软键盘/读屏、复盘触摸drag及全设备性能未完整实测。限制随工程交付保留，不伪造证据补齐，也不把工程完成当选股或金融效果。
+- **恢复**：保持既有tag ui-current-saved-20261008与artifacts/recovery/ui-current-20261008/source.tar.gz，本轮不新增/删除恢复资产；呈现源码可按基线回退，业务数据、权限、上下文和退出技能不恢复。token沿用既有backend/.env且仅进入服务进程内存，不写前端或文档；构建后独立核实际运行版本。
+- **下一步**：本地实现与已披露范围验收已完成；精确暂存后重核协调文档/卫生/公开扫描，提交本轮PR并完成准确HEAD DegradedRelease、三required CI/release_check、match-head合并、post-merge CI、运行绑定及分支清理。发布事实发生后再回填，不预写成功；不自动领取第二业务任务。

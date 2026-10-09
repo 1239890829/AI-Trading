@@ -30,6 +30,7 @@ export function LeaderResearchPanel({date: requestedDate, onDateChange}: {date?:
           className="rounded border border-zinc-300 bg-transparent px-2 py-1 dark:border-zinc-600 focus-visible:outline-2 focus-visible:outline-sky-500" />
       </label>
     </div>
+    <div className="hunting-research-records" tabIndex={0} role="region" aria-label="强势候选研究记录">
     {error && <p role="alert" className="mt-2 text-amber-800 dark:text-amber-300">研究记录读取失败：{error}</p>}
     {!data && !error && <p role="status" className="py-3">正在读取研究记录…</p>}
     {data && <>
@@ -71,5 +72,6 @@ export function LeaderResearchPanel({date: requestedDate, onDateChange}: {date?:
       </details>
       <p className="mt-2 text-zinc-600 dark:text-zinc-400">{data.outcome_basis}</p>
     </>}
+    </div>
   </div>;
 }

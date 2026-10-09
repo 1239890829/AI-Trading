@@ -319,6 +319,7 @@ export function BoardFlowPanel() {
     <Panel
       title="板块资金流"
       className="min-h-0 shrink-0 overflow-hidden"
+      bodyClassName="overflow-hidden"
       extra={
         <span className="text-[10px] text-zinc-600 dark:text-zinc-400">
           {payload?.updated_at ? `更新 ${payload.updated_at}` : "--"}

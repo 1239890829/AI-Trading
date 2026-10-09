@@ -118,6 +118,7 @@ export function EventsTab() {
         </span>
       }
       className="h-full min-h-0 overflow-hidden"
+      bodyClassName="overflow-hidden"
     >
       <div className="flex h-full min-h-0 flex-col">
         {/* 第一行：排序 tag 切换 + 只看 L1 */}

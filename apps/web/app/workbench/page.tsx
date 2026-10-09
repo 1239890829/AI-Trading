@@ -68,6 +68,15 @@ function WorkbenchInner() {
   // 深链 tab（助手一键跳转 / 分享链接）：?ct= 图表区、?rt= 右栏，非法值忽略回落到默认
   const chartTab = parseChartTab(sp.get("ct"));
   const rightTab = parseRightTab(sp.get("rt")) ?? (mode === "positions" ? account === "manual" ? "real" : account === "paper" ? "trade" : "info" : undefined);
+  const mobileContext = `${mode}:${account}:${rightTab ?? ""}`;
+  const preferredMobileView = rightTab ? "check" : "chart";
+  const [mobileView, setMobileView] = useState<"list" | "chart" | "check">(preferredMobileView);
+  const [appliedMobileContext, setAppliedMobileContext] = useState(mobileContext);
+  // Follow a new detail/account deep link; local view switches keep their place.
+  if (appliedMobileContext !== mobileContext) {
+    setAppliedMobileContext(mobileContext);
+    setMobileView(preferredMobileView);
+  }
   const [symbols, setSymbols] = useState<string[]>([]);
   const [positions, setPositions] = useState<PaperPositionInfo[]>([]);
   const paperSymbols = useMemo(() => positions.map(p => p.symbol), [positions]);
@@ -151,6 +160,7 @@ function WorkbenchInner() {
   const switchSymbol = useCallback(
     (s: string) => {
       setSelected(s);
+      setMobileView("chart");
       const url = patchWorkspaceUrl("/workbench", sp.toString(), { symbol: s });
       router.replace(url, { scroll: false });
     },
@@ -158,6 +168,7 @@ function WorkbenchInner() {
   );
 
   const switchRightTab = useCallback((tab: RightTab) => {
+    setMobileView("check");
     const patch: Record<string, string | null> = { rt: tab };
     if (tab === "trade" || tab === "real") {
       patch.mode = "positions";
@@ -437,7 +448,11 @@ function WorkbenchInner() {
       </header>
       {error && <div role="alert" className="bc-read-warning">{error}<button onClick={() => void loadBase()}>重试读取</button></div>}
 
-      <div className="bc-workbench-scroll">
+      <nav className="bc-mobile-views" aria-label="工作台内容">
+        {([["list", "指数与自选"], ["chart", "图表"], ["check", "核对"]] as const).map(([key, label]) => <button key={key} type="button" aria-pressed={mobileView === key} onClick={() => setMobileView(key)}>{label}</button>)}
+      </nav>
+      <div className="bc-workbench-layout" data-mobile-view={mobileView}>
+        <aside className="bc-workbench-sidebar" data-account-view={mode === "positions"} aria-label="指数与证券列表">
         <div className="bc-market-context">
           <div className="bc-index-strip"><IndexCards indices={indices} selected={activeSymbol} onSelect={switchSymbol} /></div>
           <div className="bc-market-summary">
@@ -450,14 +465,16 @@ function WorkbenchInner() {
           </div>
         </div>
 
-        {mode === "positions" && <div className="bc-account-results"><AccountScopePanel account={account} date={sp.get("date") ?? undefined} /></div>}
-        {mode === "positions" && account === "manual" && realError && <p role="alert" className="bc-read-warning">手工记录读取失败，保留结果仅供参考：{realError}</p>}
-        {mode === "positions" && account === "paper" && positions.length > 0 && <Panel title={`main 模拟持仓（${positions.length}）`} className="bc-paper-positions" bodyClassName="overflow-auto">
+        {mode === "positions" && <div className="bc-account-context">
+        <div className="bc-account-results"><AccountScopePanel account={account} date={sp.get("date") ?? undefined} /></div>
+        {account === "manual" && realError && <p role="alert" className="bc-read-warning">手工记录读取失败，保留结果仅供参考：{realError}</p>}
+        {account === "paper" && positions.length > 0 && <Panel title={`main 模拟持仓（${positions.length}）`} className="bc-paper-positions" bodyClassName="overflow-auto">
           <table className="bc-position-table"><thead><tr><th>证券</th><th>数量</th><th>浮动盈亏</th></tr></thead><tbody>{positions.map(position => <tr key={position.symbol}>
             <td><button onClick={() => switchSymbol(position.symbol)}>{merged[position.symbol]?.name ?? position.symbol}<small>{position.symbol}</small></button></td>
             <td>{position.quantity} 股</td><td className={position.pnl_pct == null ? "" : pctColor(position.pnl_pct)}>{position.pnl_pct == null ? "--" : `${position.pnl_pct > 0 ? "+" : ""}${position.pnl_pct.toFixed(2)}%`}</td>
           </tr>)}</tbody></table>
         </Panel>}
+        </div>}
 
         <section className="bc-attention" aria-label={mode === "positions" ? "当前账户证券" : "关注与候选"}>
           <div className="bc-attention-heading">
@@ -487,7 +504,7 @@ function WorkbenchInner() {
               {groupError && <p role="alert" className="bc-management-error">{groupError}</p>}
             </form>}
           </div>}
-          <div className="bc-attention-track" tabIndex={0} aria-label="证券列表，可横向滚动">
+          <div className="bc-attention-track" tabIndex={0} aria-label="证券列表，可滚动">
             {sourcePending ? <div className="bc-watch-skeleton" aria-label="正在读取证券列表">{Array.from({length: 4}, (_, index) => <Skeleton key={index} className="h-20 w-44 shrink-0 rounded-lg" />)}</div> : activeRowSymbols.length === 0 ? <div className="bc-watch-empty">
               {sourceError ? "列表读取有缺项，暂不能判断为空。请重试读取。" : activeGroup === "持仓" ? account === "manual" ? "暂无手工记录。可在同证券的记账面板记录成交；记录未经券商验证。" : account === "paper" ? "main 模拟账户暂无持仓，不合并其他账户。" : "此影子范围的成交与退出见上方独立回执。" : isDynamicGroup ? "暂无系统候选。盘中跟踪随盘面重算；每日精选由后台生成，生成状态见系统维护。" : "自选为空。使用顶部搜索查看证券，再明确加入自选；也可在管理中输入代码。"}
             </div> : activeRowSymbols.map(symbol => {
@@ -517,10 +534,13 @@ function WorkbenchInner() {
           {isDynamicGroup && <p className="bc-candidate-disclaimer">系统候选用于投研观察，分数不是胜率，不构成买卖建议。</p>}
         </section>
 
+        </aside>
+        <section className="bc-workbench-detail" aria-label="证券详情">
         {/* 边界跟随证券/scope重置，保留深链与共享真实详情的全部消费者。 */}
         <PanelBoundary key={`${activeSymbol}:${mode}:${account}`} label="个股详情">
           <StockDetailPanel symbol={activeSymbol} chartTab={chartTab} rightTab={rightTab} onRightTabChange={switchRightTab} liveQuote={merged[activeSymbol]} streamStatus={status} />
         </PanelBoundary>
+        </section>
       </div>
       <PickDetailModal target={detailTarget} onClose={() => setDetailTarget(null)} />
     </main>

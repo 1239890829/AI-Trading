@@ -561,7 +561,7 @@ export function KlineChartPro({ bars, className, tradeMarks, costPrice, eventMar
     <div className={`relative flex min-h-0 flex-col ${className ?? ""}`}>
       {/* OHLC 信息条（对标同花顺）：hover 切换该日数据，离开回退最新 */}
       {d && (
-        <div className="flex shrink-0 flex-wrap items-center gap-x-3 gap-y-0.5 border-b border-zinc-100 px-3 py-1 font-mono text-[11px] tabular-nums dark:border-zinc-800/60">
+        <div className="kline-ohlc flex shrink-0 flex-wrap items-center gap-x-3 gap-y-0.5 border-b border-zinc-100 px-3 py-1 font-mono text-[11px] tabular-nums dark:border-zinc-800/60">
           <span className="text-zinc-600 dark:text-zinc-400">{d.ts.slice(0, 10)}{hoverIdx != null && hoverIdx !== bars.length - 1 && <span className="ml-1 text-zinc-600 dark:text-zinc-400">（历史）</span>}</span>
           <span className="text-zinc-600 dark:text-zinc-400">开 <span className={pctCls(dOpen != null && dClose != null ? dClose - dOpen : null)}>{fmt(d.open)}</span></span>
           <span className="text-zinc-600 dark:text-zinc-400">高 <span className="text-up-ink dark:text-up">{fmt(d.high)}</span></span>

@@ -1,0 +1,77 @@
+/* The shelf remains fixed. Its tool list and each reading surface own scrolling. */
+:root .agent-page[data-workspace] .agent-composition {
+  height:auto;
+  flex:1 1 0%;
+  min-width:0;
+  min-height:0;
+  overflow:visible;
+  padding:0;
+  gap:14px;
+}
+:root .agent-page[data-workspace] .agent-stage {
+  flex:1 1 0%;
+  min-width:0;
+  min-height:0;
+  overflow:visible;
+  background:transparent;
+}
+:root .agent-page[data-workspace] .agent-stage-content {flex:1 1 0%;min-height:0;padding:0;overflow:visible;}
+.agent-page .tool-tray,.agent-page .tool-search-grid {max-height:min(280px,35dvh);overflow-y:auto;overscroll-behavior:contain;}
+.operations-workspace {display:flex;flex-direction:column;height:100%;min-height:0;min-width:0;gap:10px;}
+.panel-reader-hint {display:none;}
+:root .agent-page .operations-workspace > .operations-layout {height:auto;flex:1 1 0%;}
+:root .agent-page .operations-layout {
+  height:100%;
+  min-height:0;
+  min-width:0;
+  grid-template-columns:minmax(260px,.7fr) minmax(0,1.5fr);
+  align-items:stretch;
+  gap:16px;
+}
+:root .agent-page .operations-status,:root .agent-page .operations-desk {
+  display:flex;
+  flex-direction:column;
+  min-height:0;
+  min-width:0;
+  padding:20px;
+}
+.agent-page .operations-status > h2,.agent-page .operations-status > p,.agent-page .operations-intro {flex:none;}
+.agent-page .operations-status pre {flex:1 1 0%;min-height:0;max-height:none;overflow:auto;overscroll-behavior:contain;font-size:12px;}
+.agent-page .operations-command-scroll {flex:1 1 0%;min-height:0;margin-top:12px;overflow:auto;overscroll-behavior:contain;}
+.agent-page .operations-note {margin-top:0;line-height:1.7;}
+.agent-page .command-receipt pre {max-height:none;overflow:visible;}
+.settings-columns {display:grid;grid-template-columns:minmax(0,1fr) minmax(0,1fr);min-height:0;min-width:0;flex:1 1 0%;gap:16px;}
+.settings-survival {max-height:min(160px,22dvh);overflow:auto;overscroll-behavior:contain;}
+.settings-form > p:not(.panel-reader-hint) {max-height:80px;overflow:auto;overscroll-behavior:contain;}
+.settings-whitelist,.settings-history {display:flex;flex-direction:column;min-height:0;min-width:0;}
+.settings-heading,.settings-history > h3 {flex:none;}
+.settings-list-scroll {min-height:0;min-width:0;flex:1 1 0%;overflow:auto;overscroll-behavior:contain;}
+.settings-form .text-\[10px\],.settings-form .text-\[11px\] {font-size:12px;line-height:1.7;}
+.evolution-workspace {display:flex;flex-direction:column;height:100%;min-height:0;min-width:0;gap:16px;}
+.evolution-overview {min-width:0;flex:none;}
+.evolution-overview-notices {max-height:min(110px,16dvh);overflow:auto;overscroll-behavior:contain;}
+.evolution-overview-notices:empty {display:none;}
+.evolution-readers {display:grid;grid-template-columns:minmax(0,1.4fr) minmax(260px,1fr);grid-template-rows:repeat(2,minmax(0,1fr));min-height:0;min-width:0;flex:1 1 0%;gap:16px;}
+.evolution-log {grid-column:1;grid-row:1 / 3;overscroll-behavior:contain;}
+.evolution-experiments,.evolution-history {display:flex;flex-direction:column;min-height:0;min-width:0;}
+.evolution-experiments > h3,.evolution-history > h3 {flex:none;}
+.evolution-list-scroll {flex:1 1 0%;min-height:0;overflow:auto;overscroll-behavior:contain;}
+.evolution-workspace .text-\[10px\],.evolution-workspace .text-\[11px\] {font-size:12px;line-height:1.7;}
+.operations-layout:focus-visible,.settings-columns:focus-visible,.evolution-readers:focus-visible {outline:2px solid var(--ui-accent);outline-offset:-2px;}
+@media(max-width:767px) {
+  :root .agent-page[data-workspace] .agent-composition {flex:1 1 0%;min-height:0;overflow:visible;gap:12px;}
+  :root .agent-page[data-workspace] .agent-stage {min-height:0;flex:1 1 0%;}
+  :root .agent-page .operations-layout {grid-template-columns:repeat(2,minmax(min(100%,280px),1fr));grid-template-rows:minmax(0,1fr);gap:12px;overflow-x:auto;overscroll-behavior:contain;scroll-snap-type:x proximity;padding-bottom:4px;}
+  :root .agent-page .operations-status,:root .agent-page .operations-desk {padding:14px;gap:8px;}
+  .agent-page .operations-layout > section {scroll-snap-align:start;}
+  .agent-page .operations-status > p {font-size:12px;line-height:1.6;}
+  .agent-page .operations-intro h2 {font-size:16px;}
+  .agent-page .operations-intro p {margin-top:5px;font-size:12px;line-height:1.6;}
+  .agent-page .operations-command-scroll {margin-top:6px;}
+  .panel-reader-hint {display:block;flex:none;margin:0;font-size:12px;line-height:1.6;color:var(--ui-muted);}
+  .settings-columns {grid-template-columns:repeat(2,minmax(min(100%,280px),1fr));grid-template-rows:minmax(0,1fr);gap:12px;overflow-x:auto;overscroll-behavior:contain;scroll-snap-type:x proximity;padding-bottom:4px;}
+  .settings-columns > section {scroll-snap-align:start;}
+  .evolution-workspace {gap:12px;}
+  .evolution-readers {grid-template-columns:repeat(3,minmax(min(100%,280px),1fr));grid-template-rows:minmax(0,1fr);gap:12px;overflow-x:auto;overscroll-behavior:contain;scroll-snap-type:x proximity;padding-bottom:4px;}
+  .evolution-readers > section {grid-column:auto;grid-row:1;scroll-snap-align:start;}
+}

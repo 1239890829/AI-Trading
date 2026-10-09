@@ -91,8 +91,8 @@ export function EvolutionTab() {
       : null;
 
   return (
-    <div className="flex h-full min-h-0 flex-col gap-3">
-      <section className="ui-card shrink-0 rounded-xl border border-zinc-200 p-3 dark:border-zinc-800">
+    <div className="evolution-workspace">
+      <section className="evolution-overview ui-card rounded-xl border border-zinc-200 p-3 dark:border-zinc-800">
         <div className="flex flex-wrap items-center justify-between gap-2">
           <div>
             <h3 className="text-xs font-medium text-zinc-700 dark:text-zinc-200">
@@ -122,6 +122,7 @@ export function EvolutionTab() {
             </button>
           </div>
         </div>
+        <div className="evolution-overview-notices">
         {autonomyNote && (
           <p className="mt-1.5 rounded-md bg-amber-500/5 px-2 py-1 text-[11px] text-amber-800 dark:text-amber-300">
             {autonomyNote}
@@ -130,10 +131,13 @@ export function EvolutionTab() {
         {error && (
           <p className="mt-1.5 rounded-md bg-red-500/5 px-2 py-1 text-[11px] text-red-700 dark:text-red-300">{error}</p>
         )}
+        </div>
       </section>
 
+      <p className="panel-reader-hint">左右滑动查看议程、实验与历史</p>
+      <div className="evolution-readers" role="region" aria-label="议程、实验与历史阅读区" tabIndex={0}>
       {/* 议程项 */}
-      <section className="ui-card min-h-0 flex-1 overflow-y-auto rounded-xl border border-zinc-200 p-3 dark:border-zinc-800">
+      <section className="evolution-log ui-card min-h-0 flex-1 overflow-y-auto rounded-xl border border-zinc-200 p-3 dark:border-zinc-800">
         {agenda === undefined ? (
           <div className="space-y-2">
             {[0, 1].map((i) => (
@@ -200,10 +204,11 @@ export function EvolutionTab() {
       </section>
 
       {/* 实验记录本：A 类自动变更的后置验证（劣化自动回滚） */}
-      <section className="ui-card shrink-0 rounded-xl border border-zinc-200 p-3 dark:border-zinc-800">
+      <section className="evolution-experiments ui-card rounded-xl border border-zinc-200 p-3 dark:border-zinc-800">
         <h3 className="mb-1.5 text-xs font-medium text-zinc-700 dark:text-zinc-200">
           实验记录本 <span className="text-[10px] text-zinc-600 dark:text-zinc-400">· 30 日后置验证，劣化自动回滚</span>
         </h3>
+        <div className="evolution-list-scroll">
         {experiments === undefined ? (
           <div className="h-6 w-full animate-pulse rounded bg-zinc-100 dark:bg-zinc-800" />
         ) : experiments.length === 0 ? (
@@ -230,11 +235,13 @@ export function EvolutionTab() {
             })}
           </div>
         )}
+        </div>
       </section>
 
       {/* 历史 */}
-      <section className="ui-card shrink-0 rounded-xl border border-zinc-200 p-3 dark:border-zinc-800">
+      <section className="evolution-history ui-card rounded-xl border border-zinc-200 p-3 dark:border-zinc-800">
         <h3 className="mb-1.5 text-xs font-medium text-zinc-700 dark:text-zinc-200">历史议程</h3>
+        <div className="evolution-list-scroll">
         {history === undefined ? (
           <div className="h-6 w-full animate-pulse rounded bg-zinc-100 dark:bg-zinc-800" />
         ) : history.length === 0 ? (
@@ -249,7 +256,9 @@ export function EvolutionTab() {
             ))}
           </div>
         )}
+        </div>
       </section>
+      </div>
     </div>
   );
 }

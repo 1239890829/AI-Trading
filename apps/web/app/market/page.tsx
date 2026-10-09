@@ -33,8 +33,8 @@ import "./market-bc.css";
 
 /**
  * Market owns its data polling; the lens only changes presentation and route.
- * The B+C layout groups environment readings above the pool and event columns.
- * At narrow/short viewports the route container scrolls; body never does.
+ * Environment readings occupy the left rail; pool and event readers use the right.
+ * Lists own their scrolling; headers and route containers stay in place.
  */
 
 const PHASE_STYLE: Record<string, string> = {
@@ -139,6 +139,8 @@ function MarketInner() {
               {contextError && <p role="status">宽度或情绪来源未就绪，缺项不能解读为零或健康。</p>}
             </div>}
 
+            <div className="bc-market-dashboard" role="region" aria-label="市场环境、涨停与事件阅读区" tabIndex={0}>
+            <div className="bc-market-context">
             <section className="bc-market-indices" aria-label="主要指数">
               {indices.length === 0 && pending ? Array.from({length: 6}, (_, index) => (
                 <div className="bc-index-skeleton" key={index}><Skeleton className="h-3 w-16" /><Skeleton className="mt-2 h-5 w-20" /></div>
@@ -198,6 +200,7 @@ function MarketInner() {
               </section>
             ) : pending ? <div className="bc-market-sentiment"><Skeleton className="h-5 w-14" /><Skeleton className="h-4 w-40" /><Skeleton className="h-4 w-24" /></div> : null}
 
+            </div>
             <div className="bc-market-reading">
               <Panel title="涨停前列" source={pool[0]?.source} className="bc-market-pool" bodyClassName="bc-market-pool-scroll" extra={<Link href={lensHref(tapeUrl("limitup"))} className="bc-market-text-action">查看全池<svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.6" aria-hidden="true"><path d="M7 17 17 7M7 7h10v10" /></svg></Link>}>
                 {poolError && <p role="alert" className="bc-market-inline-warning">涨停速览读取失败。{pool.length ? "下面是上次读取结果。" : "不能据此判断没有涨停。"}</p>}
@@ -211,6 +214,7 @@ function MarketInner() {
                 </table> : pending ? <div className="bc-market-pool-loading">{Array.from({length: 5}, (_, index) => <div key={index}><Skeleton className="h-4 w-20" /><Skeleton className="h-4 w-14" /><Skeleton className="h-4 w-14" /></div>)}</div> : poolError ? null : <p className="bc-market-empty">已读取，当前涨停池为空。日期与覆盖以来源为准。</p>}
               </Panel>
               <div className="bc-market-events"><EventPanel /></div>
+            </div>
             </div>
           </div>
         )}

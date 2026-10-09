@@ -48,13 +48,32 @@ describe("B+C workbench production consumers", () => {
     expect(await screen.findByRole("button", {name: "查看 603256 603256"})).toBeTruthy();
     expect(screen.getByText("等待行情")).toBeTruthy();
     expect(screen.getByTestId("stock-detail").textContent).toBe("600127/minute/info");
+    expect(screen.getByRole("button", {name: "核对"}).getAttribute("aria-pressed")).toBe("true");
+    fireEvent.click(screen.getByRole("button", {name: "指数与自选"}));
+    expect(screen.getByRole("button", {name: "指数与自选"}).getAttribute("aria-pressed")).toBe("true");
     fireEvent.click(screen.getByRole("button", {name: "查看 603256 603256"}));
+    expect(screen.getByRole("button", {name: "图表"}).getAttribute("aria-pressed")).toBe("true");
     const next = new URL(state.replace.mock.calls.at(-1)?.[0], "http://localhost");
     expect(next.searchParams.get("symbol")).toBe("603256");
     expect(next.searchParams.get("ct")).toBe("minute");
     expect(next.searchParams.get("rt")).toBe("info");
     expect(next.searchParams.get("from")).toBe("/market?tab=events");
+    fireEvent.click(screen.getByRole("button", {name: "核对"}));
+    expect(screen.getByTestId("stock-detail").textContent).toBe("603256/minute/info");
     expect(api.addToWatchlist).not.toHaveBeenCalled();
+  });
+
+  it("reveals an incoming account/detail deep link after a local mobile view switch", async () => {
+    const page = render(<WorkbenchPage />);
+    await screen.findByRole("button", {name: "查看 金健米业 600127"});
+    fireEvent.click(screen.getByRole("button", {name: "指数与自选"}));
+    state.params = new URLSearchParams("symbol=600127&mode=positions&account=paper&rt=trade&ct=minute");
+    page.rerender(<WorkbenchPage />);
+    expect(screen.getByRole("button", {name: "核对"}).getAttribute("aria-pressed")).toBe("true");
+    expect(screen.getByTestId("stock-detail").textContent).toBe("600127/minute/trade");
+    expect(await screen.findByText("账户结果 paper")).toBeTruthy();
+    expect(api.addToWatchlist).not.toHaveBeenCalled();
+    expect(api.removeFromWatchlist).not.toHaveBeenCalled();
   });
 
   it("keeps both system sources, deduplicates securities, and exposes each source's real detail", async () => {

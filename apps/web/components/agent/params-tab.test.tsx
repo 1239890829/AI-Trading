@@ -36,33 +36,24 @@ afterEach(() => {
 });
 
 describe("参数配置页 · 滚动契约（2026-09-10 用户报「向下滚动不了」）", () => {
-  /**
-   * `FadeSwap` 的契约是「各 tab 根节点 `h-full min-h-0` + **自管滚动**」。
-   *
-   * 实测缺口（agent-browser 读真实几何）：三段全是 `shrink-0`、且根既没有
-   * `overflow-y-auto` 也没有弹性子区块 ⇒ 内容 717px vs 容器 508px，多出的 209px
-   * 交给父级 `overflow-hidden` 直接裁掉——**一像素都滚不动**，下半截看不见。
-   * 给「变更单历史」留 `flex-1` 也不行：它会被前两段撑成 26px（内容 154px）。
-   *
-   * 所以正确形态是「根整体滚动 + 子段一律 shrink-0」。这两条断言锁住该形态，
-   * 防止以后加内容时又滑回去（jsdom 无布局，只能断言 class 契约）。
+  /** The old whole-form scroll contract is replaced by two independently bounded lists.
+   * jsdom verifies ownership; rendered dimensions and scrolling require browser evidence.
    */
-  it("根容器自管滚动，三段一律 shrink-0 且不占用弹性区", () => {
+  it("白名单与变更历史各自拥有阅读区，表单根不承担列表滚动", () => {
     const { container } = render(<ParamsTab />);
     const root = container.firstElementChild as HTMLElement;
-
     expect(root.className).toContain("h-full");
     expect(root.className).toContain("min-h-0");
-    expect(root.className).toContain("flex-col");
-    expect(root.className).toContain("overflow-y-auto");
-
-    const sections = [...container.querySelectorAll("section")];
-    expect(sections.length).toBeGreaterThan(0);
-    for (const sec of sections) {
-      expect(sec.className).toContain("shrink-0");
-      // 弹性区会把同容器内的其他段压扁，本页三段都是「按内容高展示」的信息块
-      expect(sec.className).not.toContain("flex-1");
-    }
+    expect(root.className).not.toContain("overflow-y-auto");
+    const columns = root.querySelector(".settings-columns");
+    expect(columns).toBeTruthy();
+    const whitelist = screen.getByRole("heading", {name: /参数白名单/}).closest("section")!;
+    const history = screen.getByRole("heading", {name: /变更单历史/}).closest("section")!;
+    expect(whitelist.parentElement).toBe(columns);
+    expect(history.parentElement).toBe(columns);
+    expect(whitelist.querySelector(".settings-list-scroll")).toBeTruthy();
+    expect(history.querySelector(".settings-list-scroll")).toBeTruthy();
+    expect(whitelist.querySelector(".settings-list-scroll")).not.toBe(history.querySelector(".settings-list-scroll"));
   });
 });
 

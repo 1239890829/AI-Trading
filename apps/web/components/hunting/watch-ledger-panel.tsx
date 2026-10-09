@@ -82,6 +82,7 @@ export function WatchLedgerPanel() {
       {error && <p role="alert" className="mb-2 rounded bg-amber-500/10 px-2 py-1 text-[11px] text-amber-800 dark:text-amber-300">台账加载失败：{error}{data ? "。以下保留上次读取结果，当前状态待重试核实。" : "。请稍后重试，未读到记录不代表没有跟踪。"}</p>}
       {orderNote && <p role="status" className="mb-2 rounded bg-sky-500/10 px-2 py-1 text-[11px] text-sky-700 dark:text-sky-300">{orderNote}</p>}
 
+      <div className="hunting-ledger-workarea"><div className="hunting-ledger-primary">
       {data && (data.rows?.length ?? 0) === 0 && (
         <p className="py-3 text-center text-[11px] text-zinc-600 dark:text-zinc-400">
           今日暂无跟踪记录——盘中 watcher 确认 / 买点触发 / 机会候选首见时自动登记
@@ -89,7 +90,7 @@ export function WatchLedgerPanel() {
       )}
 
       {data && (data.rows?.length ?? 0) > 0 && (
-        <div className="hunting-table-scroll overflow-x-auto" tabIndex={0} role="region" aria-label="参考跟踪明细，可横向滚动">
+        <div className="hunting-table-scroll hunting-ledger-table" tabIndex={0} role="region" aria-label="参考跟踪明细，可横向滚动">
           <table className="w-full text-xs">
             <thead>
               <tr className="border-b border-zinc-200 text-left text-[10px] text-zinc-600 dark:text-zinc-400 dark:border-zinc-800">
@@ -165,6 +166,7 @@ export function WatchLedgerPanel() {
         </div>
       )}
 
+      </div><aside className="hunting-ledger-side" tabIndex={0} aria-label="历史统计、依据与研究">
       {showHistory && (
         <div className="hunting-table-scroll mt-2 border-t border-zinc-100 pt-2 dark:border-zinc-800" tabIndex={0} role="region" aria-label="历史跟踪统计，可横向滚动">
           <table className="w-full text-[11px]">
@@ -206,6 +208,7 @@ export function WatchLedgerPanel() {
         {evidenceOpen && <OpportunityEvidencePanel />}
       </details>
       <LeaderResearchPanel />
+      </aside></div>
     </section>
   );
 }
