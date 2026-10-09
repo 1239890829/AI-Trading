@@ -60,6 +60,14 @@ export function pctText(v: number | null | undefined): string {
   return `${v > 0 ? "+" : ""}${fmt(v)}%`;
 }
 
+/** 存量临板文本的展示适配：旧 pct 是判定线的百分点差，不能改成实际涨停价涨幅。 */
+export function formatLegacyLimitDistance(text: string): string {
+  return text.replace(
+    /距封板\s*([+-]?(?:\d+(?:\.\d+)?|\.\d+))\s*pct(?![A-Za-z0-9_])/g,
+    "旧口径：距封板判定线 $1 个百分点",
+  );
+}
+
 /**
  * 胜率着色：`>= 50%` 正向、以下负向；**null / undefined 一律中性**。
  *

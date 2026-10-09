@@ -85,6 +85,7 @@ export function LimitDownTab() {
 
       <Panel
         className="min-h-0 flex-1 overflow-hidden"
+        bodyClassName="data-scroll"
         title={error ? "数量待核对" : `共 ${records.length} 只（按连续跌停天数排序）`}
         source={records[0]?.source}
       >
@@ -103,7 +104,7 @@ export function LimitDownTab() {
             <p className="px-4 py-10 text-center text-sm text-zinc-600 dark:text-zinc-400">当日暂无跌停</p>
           )
         ) : (
-          <table className="data-table w-full text-sm">
+          <table className="data-table w-full text-sm" tabIndex={0} aria-label="跌停池，左右滚动查看全部列">
             <thead className="text-left text-xs text-zinc-600 dark:text-zinc-400">
               <tr className="border-b border-zinc-200 dark:border-zinc-800">
                 {["代码", "名称", "价格", "跌幅", "连续跌停", "开板", "封单额", "换手", "成交额", "行业"].map((h) => (
@@ -141,7 +142,7 @@ export function LimitDownTab() {
                   <td className="px-2 py-2 text-right font-mono text-xs">{fmtAmount(r.seal_amount)}</td>
                   <td className="px-2 py-2 text-right font-mono text-xs">{r.turnover_rate != null ? `${fmt(r.turnover_rate)}%` : "--"}</td>
                   <td className="px-2 py-2 text-right font-mono text-xs">{fmtAmount(r.amount)}</td>
-                  <td className="max-w-[140px] truncate px-2 py-2 text-xs text-zinc-600 dark:text-zinc-300">{r.industry_board ?? "--"}</td>
+                  <td className="table-description px-2 py-2 text-xs text-zinc-600 dark:text-zinc-300">{r.industry_board ?? "--"}</td>
                 </tr>
               ))}
             </tbody>

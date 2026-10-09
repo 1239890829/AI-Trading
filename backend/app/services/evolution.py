@@ -932,9 +932,11 @@ async def _generate_agenda(sf, today: str, app=None) -> dict:
                 timeout_seconds=150.0, max_retries=0, input_chars=_message_chars(messages),
                 session_factory=sf,
             )
+            agent_budget.start(llm_lease["id"], sf)
         except agent_budget.BudgetError as exc:
+            if llm_lease is not None:
+                agent_budget.release(llm_lease["id"], sf)
             return _mark_agenda_budget_block(sf, agenda_id, str(exc))
-        agent_budget.start(llm_lease["id"], sf)
 
         def _capture_usage(value):
             nonlocal llm_usage
@@ -1007,8 +1009,24 @@ async def _generate_agenda(sf, today: str, app=None) -> dict:
 
 
 async def _llm_call(fn) -> str:
-    """LLM 同步调用包装（to_thread 不阻塞事件循环）。"""
-    return await asyncio.wait_for(asyncio.to_thread(fn), timeout=150.0)
+    """Keep the 150s deadline; cancellation/timeout drains the bounded worker before finishing."""
+    worker = asyncio.create_task(asyncio.to_thread(fn))
+    try:
+        return await asyncio.wait_for(asyncio.shield(worker), timeout=150.0)
+    except (asyncio.CancelledError, TimeoutError):
+        # A canceled coroutine cannot kill its model thread. Keep the receipt and in-flight
+        # guard active until the worker returns; late usage must reach the terminal receipt.
+        while not worker.done():
+            try:
+                await asyncio.shield(worker)
+            except asyncio.CancelledError:
+                continue
+            except Exception:
+                break
+        if not worker.cancelled():
+            with contextlib.suppress(Exception):
+                worker.result()
+        raise
 
 
 def agenda_item_outcome(item: dict) -> dict:

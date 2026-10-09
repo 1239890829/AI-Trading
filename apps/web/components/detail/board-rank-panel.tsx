@@ -33,8 +33,8 @@ export function BoardRankPanel({ className }: { className?: string }) {
   );
 
   return (
-    <div className={`flex min-h-0 flex-col ${className ?? ""}`}>
-      <div className="flex shrink-0 items-center gap-1 border-b border-zinc-100 px-2 py-1.5 dark:border-zinc-800/60">
+    <div className={`flex min-h-0 min-w-0 flex-col ${className ?? ""}`}>
+      <div className="flex shrink-0 flex-wrap items-center gap-1 border-b border-zinc-100 px-2 py-1.5 dark:border-zinc-800/60">
         {(
           [
             ["hangye", "行业"],
@@ -44,38 +44,38 @@ export function BoardRankPanel({ className }: { className?: string }) {
           <button
             key={k}
             onClick={() => setType(k)}
-            className={`rounded px-2 py-0.5 text-xs ${type === k ? "bg-zinc-100 font-medium dark:bg-zinc-800" : "text-zinc-600 dark:text-zinc-400 hover:text-zinc-900 dark:hover:text-zinc-100"}`}
+            className={`shrink-0 whitespace-nowrap rounded px-2 py-0.5 text-xs ${type === k ? "bg-zinc-100 font-medium dark:bg-zinc-800" : "text-zinc-600 dark:text-zinc-400 hover:text-zinc-900 dark:hover:text-zinc-100"}`}
           >
             {label}
           </button>
         ))}
-        <span className="ml-auto text-[10px] text-zinc-600 dark:text-zinc-400">按涨跌幅降序 · 60s 刷新</span>
+        <span className="ml-auto whitespace-nowrap text-[10px] text-zinc-600 dark:text-zinc-400">按涨跌幅降序 · 60s 刷新</span>
       </div>
       {error && <div className="shrink-0 px-3 py-2 text-xs text-amber-800 dark:text-amber-300">{error}</div>}
-      <div className="min-h-0 flex-1 overflow-y-auto">
+      <div className="data-scroll min-h-0 min-w-0 flex-1 overflow-auto" tabIndex={0} role="region" aria-label="板块涨幅排行，窄屏可横向滚动">
         <table className="w-full text-xs">
           <thead className="sticky top-0 bg-zinc-50 text-zinc-600 dark:text-zinc-400 dark:bg-zinc-900">
-            <tr className="text-left">
-              <th className="px-3 py-1.5 font-normal">板块</th>
-              <th className="px-2 py-1.5 text-right font-normal">涨跌幅</th>
-              <th className="px-2 py-1.5 text-right font-normal">成交额</th>
-              <th className="px-3 py-1.5 text-right font-normal">领涨股</th>
+            <tr className="whitespace-nowrap text-left">
+              <th className="px-2 py-1.5 font-normal">板块</th>
+              <th className="px-1.5 py-1.5 text-right font-normal">涨跌幅</th>
+              <th className="px-1.5 py-1.5 text-right font-normal">成交额</th>
+              <th className="px-2 py-1.5 text-right font-normal">领涨股</th>
             </tr>
           </thead>
           <tbody>
             {rows.map((b) => (
               <tr key={b.name} className="border-b border-zinc-100 last:border-0 dark:border-zinc-800/60">
-                <td className="px-3 py-1.5">
-                  {b.name}
-                  {b.count != null && <span className="ml-1 text-[10px] text-zinc-600 dark:text-zinc-400">{b.count}</span>}
+                <td className="px-2 py-1.5">
+                  <span className="block min-w-[4em] break-words">{b.name}</span>
+                  {b.count != null && <span className="block whitespace-nowrap text-[10px] text-zinc-600 dark:text-zinc-400">{b.count} 只</span>}
                 </td>
-                <td className={`px-2 py-1.5 text-right font-mono font-medium tabular-nums ${pctColor(b.change_pct)}`}>
+                <td className={`whitespace-nowrap px-1.5 py-1.5 text-right font-mono font-medium tabular-nums ${pctColor(b.change_pct)}`}>
                   {pctText(b.change_pct)}
                 </td>
-                <td className="px-2 py-1.5 text-right font-mono tabular-nums text-zinc-600 dark:text-zinc-400">{fmtAmount(b.amount)}</td>
-                <td className="px-3 py-1.5 text-right">
-                  <span className="text-zinc-600 dark:text-zinc-300">{b.leader_name ?? "--"}</span>
-                  <span className={`ml-1 font-mono tabular-nums ${pctColor(b.leader_change_pct)}`}>
+                <td className="whitespace-nowrap px-1.5 py-1.5 text-right font-mono tabular-nums text-zinc-600 dark:text-zinc-400">{fmtAmount(b.amount)}</td>
+                <td className="px-2 py-1.5 text-right">
+                  <span className="block min-w-[4em] break-words text-zinc-600 dark:text-zinc-300">{b.leader_name ?? "--"}</span>
+                  <span className={`block whitespace-nowrap font-mono tabular-nums ${pctColor(b.leader_change_pct)}`}>
                     {pctText(b.leader_change_pct)}
                   </span>
                 </td>

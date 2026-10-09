@@ -140,6 +140,7 @@ class MarketSnapshotService:
         dynamic = (
             "price", "open", "high", "low", "prev_close", "change",
             "change_pct", "volume", "amount", "turnover_rate", "ticktime",
+            "limit_up_price", "limit_down_price", "quality", "data_timestamp",
         )
         if quote is None:
             for key in dynamic:
@@ -162,12 +163,17 @@ class MarketSnapshotService:
             "volume": quote.volume,
             "amount": quote.amount,
             "turnover_rate": quote.turnover_rate,
+            "limit_up_price": quote.limit_up_price,
+            "limit_down_price": quote.limit_down_price,
+            "quality": quote.quality.value,
             "mktcap": (quote.total_mktcap_yi * 1e4
                        if quote.total_mktcap_yi is not None else row.get("mktcap")),
             "nmc": (quote.float_mktcap_yi * 1e4
                     if quote.float_mktcap_yi is not None else row.get("nmc")),
             "ticktime": (quote.data_timestamp.isoformat()
                          if quote.data_timestamp is not None else None),
+            "data_timestamp": (quote.data_timestamp.isoformat()
+                               if quote.data_timestamp is not None else None),
             "source": f"{quote.source or 'unknown'}_fallback",
             "received_at": now.isoformat(),
         })

@@ -183,6 +183,25 @@ describe("PickCard · 盘前名单（fromDailyPick）", () => {
 });
 
 describe("PickCard · 盘中名单（fromIntradayStock）", () => {
+  it.each([
+    ["当前未封板（距封板 2.50pct）", "当前未封板（旧口径：距封板判定线 2.50 个百分点）"],
+    ["距实际涨停价还需上涨 2.33%", "距实际涨停价还需上涨 2.33%"],
+  ])("入选、联动依据与提示使用正确距离单位：%s", (basis, displayed) => {
+    const linkage = { level: "高" as const, basis };
+    const top: IntradayTopStock = { ...topPath, pick_basis: basis, linkage };
+    const accordion: OpportunityStock = { ...accordionPath, basis, linkage };
+    const { rerender } = render(<PickCard item={fromIntradayStock(top)} />);
+    expect(screen.getByText(displayed)).toBeTruthy();
+    expect(screen.getByText("联动确定性·高").getAttribute("title")).toContain(displayed);
+
+    rerender(<PickCard item={fromIntradayStock(accordion)} />);
+    expect(screen.getByText(displayed)).toBeTruthy();
+    expect(screen.getByText("联动确定性·高").getAttribute("title")).toContain(displayed);
+    expect(top.pick_basis).toBe(basis);
+    expect(accordion.basis).toBe(basis);
+    expect(linkage.basis).toBe(basis);
+  });
+
   it("分层名单：入选理由与官方涨停原因都渲染（涨停原因来自 ladder 行，不再恒空）", () => {
     render(<PickCard item={fromIntradayStock(topPath)} />);
     expect(screen.getByText("入选")).toBeTruthy();

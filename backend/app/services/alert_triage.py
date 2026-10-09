@@ -4,14 +4,14 @@
 人工看等于没有——这正是"预警"沦为噪音的原因。
 
 设计：
-1. **确定性规则优先**（不消耗 LLM）：**同一标的**在冷却窗口内已判读过 → ignore
-   （去重，身份 = 规则 + 标的；2026-09-16 从"仅规则"收紧，见 `_already_recent`
-   的根因表）；事件被用户确认过 → 不再冒泡。
+1. **确定性规则优先**（不消耗 LLM）：过期事件、完全重复的事件和已知系统
+   运行状态先处理；同规则同标的的新事件种类、方向、阈值与版本不互相静音。
+   规则去重记录不延长冷却期，同一事件的并发请求共享一次判读。
 2. **LLM 判读**：把事件 + 当下环境（情绪相位、是否持仓、近 1h 同类事件数）
    喂给模型，要求严格输出 `{verdict, reason}`；verdict ∈ notify/ignore/escalate。
 3. **降级**：LLM 不可用/超时/输出非法 → verdict=notify 且 model 标
-   `llm_fallback`，reason 显式写"AI 判读不可用，按规则提醒"——**不伪装成
-   AI 判断**（09-04 有 LLM 全天降级先例，界面必须能看出区别）。
+   `llm_fallback`，reason 保留失败类别并明确本条未经过 AI 判读。
+   告警独立日次数预算默认不限，但单次资源和未知用量硬门继续执行。
 
 纪律：判读**不发飞书**（2026-09-08 推送定稿：飞书只保留盘中买点卡），
 只在系统内（悬浮球 + 控制台）呈现；`escalate` 由 `_save` 登记为任务中心待办
@@ -33,12 +33,12 @@ from sqlalchemy import func, select
 from app.core.db import get_session_factory
 from app.models.agent import AgentAudit, AgentTriage
 from app.models.alert import AlertEvent, AlertRule
-from app.core.bjtime import beijing_now_naive
+from app.core.bjtime import BJ_TZ, beijing_now_naive
 
 log = logging.getLogger(__name__)
 
 
-#: 冷却窗口：同一规则在此窗口内已判读过 → 直接 ignore（去重，防刷屏）
+#: 同规则、标的与事件事实的冷却窗口；ignore 去重记录不续期。
 COOLDOWN_MINUTES = 30
 #: 判读时参考的"近 1h 同类事件"上限（防 prompt 过长）
 RECENT_LIMIT = 5
@@ -63,17 +63,23 @@ _SYSTEM_PROMPT = (
     "- notify：与用户持仓/自选相关，或是明确的趋势转折、风险信号，需要马上看\n"
     "- ignore：重复事件、噪音、幅度极小、已过时效、对决策无影响\n"
     "- escalate：影响面大（全市场级风险、系统性异常），需要进待办处理\n"
+    "- relationship 中 null 表示关系未知；未持仓/未自选不代表机会无效。\n"
+    "- 规则触发不等于持续上涨；区分首次事实、重复波动与失效风险。\n"
     "纪律：不提供买卖建议；不确定时选 notify（宁可提醒，不可漏掉风险）。"
 )
 
 
-def _event_context(event: AlertEvent, session_factory) -> dict:
-    """构造判读输入（纯 DB 读，不外呼）。"""
+def _snapshot(event: AlertEvent) -> dict:
     snap = event.snapshot
     if isinstance(snap, str):
-        with contextlib.suppress(Exception):
+        with contextlib.suppress(ValueError, TypeError):
             snap = json.loads(snap)
-    snap = snap if isinstance(snap, dict) else {}
+    return snap if isinstance(snap, dict) else {}
+
+
+def _event_context(event: AlertEvent, session_factory) -> dict:
+    """构造判读输入（纯 DB 读，不外呼）。"""
+    snap = _snapshot(event)
 
     rule_name, condition = "", ""
     with session_factory() as db:
@@ -88,6 +94,25 @@ def _event_context(event: AlertEvent, session_factory) -> dict:
                 AlertEvent.triggered_at >= cutoff,
             )
         ).scalars().all()
+    # Send only relationship flags, never account amounts, costs or trade history.
+    relationship: dict[str, bool | None] = {"watchlist": None, "paper_held": None, "recorded_held": None}
+    try:
+        from app.models.watchlist import WatchlistItem
+        from app.models.paper import PaperPosition, SCOPE_MAIN
+        from app.services.real_position_service import load_positions
+
+        with session_factory() as db:
+            relationship["watchlist"] = db.scalar(select(WatchlistItem.id).where(
+                WatchlistItem.symbol == event.symbol).limit(1)) is not None
+            relationship["paper_held"] = db.scalar(select(PaperPosition.id).where(
+                PaperPosition.symbol == event.symbol, PaperPosition.scope == SCOPE_MAIN,
+                PaperPosition.quantity > 0).limit(1)) is not None
+        relationship["recorded_held"] = any(
+            position.symbol == event.symbol and position.quantity > 0
+            for position in load_positions(session_factory)
+        )
+    except Exception:
+        log.info("alert triage relationship unavailable", exc_info=False)
     return {
         "rule": rule_name,
         "condition": condition,
@@ -96,6 +121,9 @@ def _event_context(event: AlertEvent, session_factory) -> dict:
         "threshold": event.threshold,
         "text": str(snap.get("text") or "")[:200],
         "kind": snap.get("kind") or "",
+        "direction": str(snap.get("direction") or "")[:80],
+        "relationship": relationship,
+        "event_time": event.triggered_at.isoformat() if event.triggered_at else None,
         "last_hour_same_rule": len(recent),
     }
 
@@ -164,10 +192,15 @@ async def _jev_verdict(ctx: dict) -> dict | None:
     }
 
 
-async def _llm_verdict(ctx: dict, session_factory=None) -> tuple[str, str] | None:
+async def _llm_verdict(ctx: dict, session_factory=None, failure: dict | None = None) -> tuple[str, str] | None:
     """LLM 判读；返回 (verdict, reason)，不可用/非法返回 None（调用方降级）。"""
     from app.core.config import settings
-    from app.core.llm_client import chat_completion, extract_json_object
+    from app.core.llm_client import LLMError, chat_completion, extract_json_object
+
+    def unavailable(kind: str) -> None:
+        if failure is not None:
+            failure["kind"] = kind
+        return None
 
     messages = [
         {"role": "system", "content": _SYSTEM_PROMPT},
@@ -175,27 +208,34 @@ async def _llm_verdict(ctx: dict, session_factory=None) -> tuple[str, str] | Non
     ]
 
     # Deterministically unavailable providers do not consume a budget slot.
+    if not settings.review_llm_model:
+        return unavailable("not_configured")
     if settings.llm_provider == "claude_cli":
         from app.core.llm_client import resolve_cli_path
         if resolve_cli_path(settings.llm_cli_path) is None:
-            return None
+            return unavailable("unavailable")
     elif not (settings.review_llm_base_url and settings.review_llm_api_key and settings.review_llm_model):
-        return None
+        return unavailable("not_configured")
 
     from app.services import agent_budget
     sf = session_factory or get_session_factory()
+    lease = None
+    # The shared CLI adapter enforces a 120s minimum, so reserve its real deadline.
+    timeout = 120.0 if settings.llm_provider == "claude_cli" else 30.0
     try:
         lease = agent_budget.reserve(
-            agent_budget.SCOPE_AUTONOMY_LLM, purpose="triage.llm", kind="model",
+            agent_budget.SCOPE_ALERT_TRIAGE_LLM, purpose="triage.llm", kind="model",
             provider=settings.llm_provider, model=settings.review_llm_model,
-            timeout_seconds=30.0, max_retries=0,
+            timeout_seconds=timeout, max_retries=0,
             input_chars=sum(len(str(m.get("content") or "")) for m in messages),
             session_factory=sf,
         )
+        agent_budget.start(lease["id"], sf)
     except agent_budget.BudgetError as exc:
+        if lease is not None:
+            agent_budget.release(lease["id"], sf)
         log.info("alert triage llm budget blocked: %s", exc)
-        return None
-    agent_budget.start(lease["id"], sf)
+        return unavailable(exc.code)
     usage_box = {"value": None}
 
     def _call() -> str:
@@ -206,93 +246,104 @@ async def _llm_verdict(ctx: dict, session_factory=None) -> tuple[str, str] | Non
             messages=messages,
             provider=settings.llm_provider,
             cli_path=settings.llm_cli_path,
-            timeout=30.0,
+            timeout=timeout,
             usage_callback=lambda value: usage_box.__setitem__("value", value),
         )
 
+    worker = asyncio.create_task(asyncio.to_thread(_call))
     try:
-        raw = await asyncio.wait_for(asyncio.to_thread(_call), timeout=45.0)
+        # The adapter owns the deadline. Canceling to_thread cannot stop external I/O.
+        raw = await asyncio.shield(worker)
         agent_budget.finish(
             lease["id"], state="succeeded", usage=usage_box["value"],
             output_chars=len(raw), attempts=1, session_factory=sf,
         )
     except asyncio.CancelledError:
         with contextlib.suppress(Exception):
+            await asyncio.shield(worker)
+        with contextlib.suppress(Exception):
             agent_budget.finish(lease["id"], state="canceled", usage=usage_box["value"],
                                 error_kind="cancelled", session_factory=sf)
         raise
     except Exception as exc:  # noqa: BLE001  LLM 是增强层，失败必须降级
+        kind = (exc.kind.value if isinstance(exc, LLMError) else exc.code
+                if isinstance(exc, agent_budget.BudgetError) else "timeout"
+                if isinstance(exc, TimeoutError) else "unavailable")
         with contextlib.suppress(Exception):
             agent_budget.finish(lease["id"], state="failed", usage=usage_box["value"],
-                                error_kind=type(exc).__name__, session_factory=sf)
-        log.info("alert triage llm unavailable: %s", exc)
-        return None
+                                error_kind=kind, session_factory=sf)
+        log.info("alert triage llm unavailable: kind=%s", kind)
+        return unavailable(kind)
 
     try:
         data = extract_json_object(raw)
         verdict = str((data or {}).get("verdict") or "").strip().lower()
         reason = str((data or {}).get("reason") or "").strip()
         if verdict not in _VERDICTS:
-            return None
+            return unavailable("bad_response")
         return verdict, reason[:60]
     except Exception:  # noqa: BLE001
-        return None
+        return unavailable("bad_response")
+
+
+def _fallback_reason(kind: str | None) -> str:
+    reason = {
+        "budget_exhausted": "今日 AI 判读次数预算已用尽",
+        "usage_unknown": "AI 调用用量待核实，已暂停自主判读",
+        "reservation_expired": "AI 判读预算预留已跨日，请重新核验",
+        "not_configured": "AI 判读通道未配置",
+        "unavailable": "AI 判读通道不可用",
+        "timeout": "AI 判读调用超时",
+        "quota": "AI 服务额度不足",
+        "gateway_error": "AI 判读服务调用失败",
+        "bad_response": "AI 判读回复格式无效",
+        "empty": "AI 判读回复为空",
+        "input_budget_exceeded": "AI 判读输入超过资源限制",
+        "output_budget_exceeded": "AI 判读输出超过资源限制",
+        "timeout_budget_exceeded": "AI 判读超时配置超过资源限制",
+        "retry_budget_exceeded": "AI 判读重试配置超过资源限制",
+    }.get(kind or "", "AI 判读不可用")
+    return f"{reason}，按规则提醒（本条未经过 AI 判读）"
 
 
 def _already_recent(event: AlertEvent, session_factory) -> bool:
-    """**同一标的**在**事件触发时间**的冷却窗口内是否已有判读（确定性去重）。
+    """同规则、标的和事件事实在冷却期内已有判读；规则去重不续期。
 
-    ⚠️ 用事件时间而非判读时间：否则一条 3 小时前发生的旧事件（补判读时
-    triage.created_at=现在）会把当前的新事件误判成"冷却期重复"而永久静默
-    （2026-09-08 单测抓到）。
-
-    ⚠️⚠️ **去重身份必须是「规则 + 标的」，不能只有规则**（2026-09-16 用户实盘
-    反馈后收紧，见下方根因）。原实现只比 `rule_id`，而 `__picks_watcher__`
-    **一个规则同时产出 8 种 kind、共 695 条/日**：
-
-    | kind | 当日条数 | symbol |
-    |---|---|---|
-    | board_low_absorb | 293 | 全 `000000`（板块级） |
-    | board_flow_surge | 242 | 全 `000000`（板块级） |
-    | **pre_limit** | **121** | **真实代码（逐只）** |
-    | flow_surge | 35 | 真实代码 |
-    | falsify / high_board_break / timeout / signal_health | 12 | 全 `000000` |
-
-    于是"第一批里任一条被判读"就足以把**同一 ±30 分钟窗口内所有后续事件**
-    （含 121 只**各自不同**的临板股）判成 `ignore`——实测当日 121 条临板预警
-    里 **120 条**的判读理由正是「同类事件在冷却窗口内已提醒（去重）」，
-    **只逃出去 1 条（002531 天顺风能）**。用户因此错过了多只分明有介入机会的标的
-    （临板 7~9%、10cm 非一字板）。**按标的去重**后，每只股票各自拥有判读机会。
-
-    无代码事件（板块/方向/健康类）统一落 `000000` 桶 ⇒ 行为与改造前一致
-    （本就彼此同类），**不会**因本次收紧而放大板块级噪音。
+    不同kind/方向/阈值/来源版本不能互相静音。基础价格阈值的持续满足
+    仍遵循原30分钟冷却；派生事件已有生产方重触发门，新的触发值可重判。
     """
     base = event.triggered_at or beijing_now_naive()
+    if base.tzinfo is not None:
+        base = base.astimezone(BJ_TZ).replace(tzinfo=None)
     lo = base - timedelta(minutes=COOLDOWN_MINUTES)
-    hi = base + timedelta(minutes=COOLDOWN_MINUTES)
-    # 归一化：None / "" / "000000" 视为同一「无标的」桶；
-    # 用 SQL 侧 coalesce+nullif 而不是 Python 过滤——过滤会把窗口内无关行全捞回来
-    # （窗口内可达数百条），再逐条比对得不偿失。
     key = (event.symbol or "").strip() or "000000"
     norm_sym = func.coalesce(func.nullif(AlertEvent.symbol, ""), "000000")
+    snap = _snapshot(event)
+
+    def identity(snapshot: dict) -> tuple:
+        ref = snapshot.get("execution_ref")
+        return (
+            snapshot.get("kind") or "", snapshot.get("direction") or "",
+            snapshot.get("source_version") or "",
+            ref.get("decision_version") if isinstance(ref, dict) else None,
+        )
+
     with session_factory() as db:
         near = db.execute(
-            select(AlertEvent.id).where(
-                AlertEvent.rule_id == event.rule_id,
-                norm_sym == key,  # ← 本次收紧：同标的（而非仅同规则）
+            select(AlertEvent).join(AgentTriage, AgentTriage.event_id == AlertEvent.id).where(
+                AlertEvent.rule_id == event.rule_id, norm_sym == key,
                 AlertEvent.id != event.id,
-                AlertEvent.triggered_at >= lo,
-                AlertEvent.triggered_at <= hi,
+                AlertEvent.triggered_at >= lo, AlertEvent.triggered_at <= base,
+                ~((AgentTriage.model == "rules") & (AgentTriage.verdict == "ignore")),
             )
         ).scalars().all()
-        if not near:
-            return False
-        judged = set(
-            db.execute(
-                select(AgentTriage.event_id).where(AgentTriage.event_id.in_(near))
-            ).scalars().all()
-        )
-        return bool(judged)
+        for previous in near:
+            if identity(_snapshot(previous)) != identity(snap) or previous.threshold != event.threshold:
+                continue
+            if snap.get("kind") and previous.trigger_value != event.trigger_value:
+                continue
+            return True
+    return False
 
 
 # One in-flight comparison, no queue: a slow shadow call cannot accumulate
@@ -354,12 +405,41 @@ async def drain_shadow():
 async def triage_event(event: AlertEvent, session_factory=None) -> dict | None:
     """判读单条事件并落库。已有判读则返回既有结论（幂等）。"""
     sf = session_factory or get_session_factory()
+    key = (sf, event.id)
+    task = _triage_inflight.get(key)
+    if task is None:
+        task = asyncio.create_task(_triage_event(event, sf), name=f"triage-{event.id}")
+        _triage_inflight[key] = task
+        task.add_done_callback(lambda done: _triage_inflight.pop(key, None))
+    try:
+        return await asyncio.shield(task)
+    except asyncio.CancelledError:
+        # Keep both the receipt and shared result alive until the real call drains.
+        with contextlib.suppress(Exception):
+            await asyncio.shield(task)
+        raise
+
+
+_triage_inflight: dict[tuple[Any, int], asyncio.Task] = {}
+
+
+async def _triage_event(event: AlertEvent, sf) -> dict | None:
     with sf() as db:
         exist = db.execute(
             select(AgentTriage).where(AgentTriage.event_id == event.id)
         ).scalars().first()
         if exist is not None:
             return _dump(exist)
+
+    # Historical backlog remains auditable without consuming today's model calls.
+    now = beijing_now_naive()
+    triggered = event.triggered_at
+    if triggered is not None and triggered.tzinfo is not None:
+        triggered = triggered.astimezone(BJ_TZ).replace(tzinfo=None)
+    if triggered is not None and triggered < now - timedelta(hours=BUBBLE_MAX_AGE_HOURS):
+        return _save(event.id, "ignore", "事件已超过提醒时效，保留历史记录", "rules", sf)
+    if triggered is None or triggered > now:
+        return _save(event.id, "notify", "事件时间未知或异常，按规则提醒，请核对来源时间", "rules", sf)
 
     # 1) 确定性去重
     with contextlib.suppress(Exception):
@@ -368,6 +448,8 @@ async def triage_event(event: AlertEvent, session_factory=None) -> dict | None:
 
     # 2) Jev 低成本结构化判读（默认 shadow，不改变用户可见行为）。
     ctx = _event_context(event, sf)
+    if ctx["condition"] in {"llm_gateway_probe", "ths_reason_sentinel"}:
+        return _save(event.id, "notify", "系统运行状态提醒：" + (ctx["text"] or ctx["condition"]), "rules", sf)
     from app.core.config import settings
     from app.core.jev_client import record_comparison
 
@@ -386,9 +468,10 @@ async def triage_event(event: AlertEvent, session_factory=None) -> dict | None:
             return _save(event.id, verdict, reason, "jev", sf)
 
     # 3) DeepSeek 复杂判读：Jev 低置信/不可用，或 shadow 模式一律继续。
-    got = await _llm_verdict(ctx, sf)
+    failure: dict[str, str] = {}
+    got = await _llm_verdict(ctx, sf, failure)
     if got is None:
-        result = _save(event.id, "notify", "AI 判读不可用，按规则提醒（未做噪音过滤）",
+        result = _save(event.id, "notify", _fallback_reason(failure.get("kind")),
                        "llm_fallback", sf)
         if mode == "shadow":
             _schedule_shadow(event.id, ctx, result, sf)
@@ -613,7 +696,7 @@ def ack_triage(triage_id: int, session_factory=None) -> bool:
 
 
 async def triage_loop(stop: asyncio.Event, interval: float = 30.0) -> None:
-    """后台判读 worker：每 interval 扫一次未判读事件（延迟 ≤30s，够用且不刷屏）。"""
+    """串行完成本批判读后等待 interval；模型耗时不计作固定30秒延迟保证。"""
     try:
         while not stop.is_set():
             try:
@@ -623,4 +706,7 @@ async def triage_loop(stop: asyncio.Event, interval: float = 30.0) -> None:
             with contextlib.suppress(asyncio.TimeoutError):
                 await asyncio.wait_for(stop.wait(), timeout=interval)
     finally:
+        if _triage_inflight:
+            await asyncio.gather(*(asyncio.shield(task) for task in list(_triage_inflight.values())),
+                                 return_exceptions=True)
         await drain_shadow()

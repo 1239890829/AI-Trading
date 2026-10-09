@@ -155,12 +155,12 @@ function TrendBars({ counts }: { counts: [string, number][] }) {
 /** 梯队层级徽标：连板档位，视觉上越高的板越重。 */
 function LevelBadge({ boards, sameLevel }: { boards: number; sameLevel: boolean }) {
   if (sameLevel) {
-    return <span className="pl-1 font-mono text-[11px] text-zinc-600 dark:text-zinc-400">同板</span>;
+    return <span className="whitespace-nowrap pl-1 font-mono text-[11px] text-zinc-600 dark:text-zinc-400">同板</span>;
   }
   const hot = boards >= 5;
   return (
     <span
-      className={`inline-flex h-6 min-w-[26px] items-center justify-center rounded px-1 font-mono text-xs font-semibold ${
+      className={`inline-flex h-6 min-w-[26px] shrink-0 items-center justify-center whitespace-nowrap rounded px-1 font-mono text-xs font-semibold ${
         hot
           ? "bg-rose-600 text-white"
           : "bg-zinc-900 text-white dark:bg-zinc-100 dark:text-zinc-900"
@@ -377,13 +377,14 @@ export function ThemeCardView({
       {/* ── 梯队列表（卡片主体）：层级 + 角色 ───────────────────── */}
       <div className="px-4 py-3">
         <div className="mb-2 flex items-baseline gap-2">
-          <h4 className="text-xs font-medium text-zinc-600 dark:text-zinc-400">个股梯队</h4>
+          <h4 className="shrink-0 whitespace-nowrap text-xs font-medium text-zinc-600 dark:text-zinc-400">个股梯队</h4>
           <span className="text-[11px] text-zinc-600 dark:text-zinc-400">
             {card.ladder.length} 只 · 按连板高度排（层级 = 连板档位，角色 = 梯队定位）
           </span>
         </div>
-        <div className="overflow-x-auto">
-          <table className="w-full min-w-[880px] text-sm">
+        <p className="theme-ladder-hint">左右滑动查看完整梯队，也可聚焦表格后按方向键</p>
+        <div className="theme-ladder-scroll data-scroll" role="region" aria-label={`${card.theme}个股梯队，左右滚动查看全部列`} tabIndex={0}>
+          <table className="theme-ladder-table w-full text-sm">
             <thead>
               <tr className="border-b border-zinc-200 text-left text-[11px] text-zinc-600 dark:text-zinc-400 dark:border-zinc-800">
                 <th className="w-12 py-1.5 font-medium">层级</th>
@@ -413,13 +414,13 @@ export function ThemeCardView({
                     <td className="py-1.5 align-middle">
                       <Badge className={roleClass(r.role)}>{r.role}</Badge>
                     </td>
-                    <td className="py-1.5 align-middle">
+                    <td className="theme-ladder-security py-1.5 align-middle">
                       <StockLink symbol={r.symbol}>
                         <span className="text-zinc-800 dark:text-zinc-100">{r.name ?? r.symbol}</span>
-                        <span className="ml-1.5 font-mono text-[11px] text-zinc-600 dark:text-zinc-400">{r.symbol}</span>
+                        <span className="font-mono text-[11px] text-zinc-600 dark:text-zinc-400">{r.symbol}</span>
                         {r.official && (
                           <span
-                            className="ml-1.5 rounded bg-sky-500/10 px-1 align-middle text-[10px] text-sky-700 dark:text-sky-300"
+                            className="rounded bg-sky-500/10 px-1 align-middle text-[10px] text-sky-700 dark:text-sky-300"
                             title="THS 官方概念成分（结构性归属，区别于仅当日涨停归因）"
                           >
                             官方成分
@@ -427,7 +428,7 @@ export function ThemeCardView({
                         )}
                       </StockLink>
                       {r.other_themes.length > 0 && (
-                        <div className="mt-0.5 truncate text-[11px] text-zinc-600 dark:text-zinc-400" title={`同时具有标签：${r.other_themes.join("、")}`}>
+                        <div className="theme-ladder-tags mt-0.5 text-[11px] text-zinc-600 dark:text-zinc-400" title={`同时具有标签：${r.other_themes.join("、")}`}>
                           {r.other_themes.slice(0, 3).join("、")}
                           {r.other_themes.length > 3 && ` 等 ${r.other_themes.length} 个`}
                         </div>
@@ -449,7 +450,7 @@ export function ThemeCardView({
                     </td>
                     <td className="py-1.5 text-right align-middle font-mono text-xs text-zinc-600 dark:text-zinc-400">
                       {r.first_seal_time ?? "--"}
-                      {r.seal_phase && <span className="ml-1 text-zinc-600 dark:text-zinc-400">{r.seal_phase}</span>}
+                      {r.seal_phase && <span className="block text-zinc-600 dark:text-zinc-400">{r.seal_phase}</span>}
                     </td>
                     <td className="py-1.5 text-right align-middle">
                       <button

@@ -55,8 +55,9 @@ class AgentTask(Base):
 class AgentResourceUsage(Base):
     """Durable Agent resource reservation + model usage receipt (IMP-052).
 
-    Budgeted scopes use a small integer ``slot`` with a DB uniqueness constraint, so two
-    processes cannot both consume the last daily slot. Unmetered telemetry leaves slot NULL.
+    Finite budgets use a small integer ``slot`` with a DB uniqueness constraint, so two
+    processes cannot both consume the last daily slot. Unlimited alert triage and unmetered
+    telemetry leave slot NULL; triage still follows the durable reserve/start/finish lifecycle.
     Started rows are never silently released: if a process dies after external I/O began,
     startup reconciliation marks the row ``unknown`` and token usage remains explicitly unknown.
     """

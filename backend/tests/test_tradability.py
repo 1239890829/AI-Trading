@@ -7,6 +7,8 @@
 
 判据写作纪律（本仓）：每个断言都写清"为什么是这个值"，避免只钉实现、不钉语义。
 """
+from datetime import datetime, timezone
+
 from app.picks.tradability import (
     CANDIDATE_PER_THEME,
     MIN_THEME_LIMIT_UPS,
@@ -76,6 +78,20 @@ def test_seal_metrics_uses_board_specific_limits():
     assert seal_metrics("600001", "", 7.0)["in_pre_limit"] is True
     assert seal_metrics("300001", "", 7.0)["in_pre_limit"] is False
     assert seal_metrics("600001", "", 4.5)["runway_pct"] == 5.2
+
+
+def test_seal_metrics_and_linkage_share_actual_price_distance_without_changing_level():
+    metrics = seal_metrics("600001", "临板股", 7.2, quote={
+        "symbol": "600001", "name": "临板股", "price": 10.72, "limit_up_price": 11.0,
+        "quality": "high", "source": "tencent_fallback", "ticktime": datetime.now(timezone.utc).isoformat(),
+    })
+    assert metrics["runway_pct"] == 2.5 and metrics["limit_up_gap_pct"] == 2.61
+    linked = linkage_confidence(theme_limit_ups=4, theme_stage="发酵", pct=7.2,
+                                limit_pct=10.0, distance=metrics)
+    assert linked["level"] == "高"
+    assert "距实际涨停价还需上涨 2.61%" in linked["basis"]
+    unknown = linkage_confidence(theme_limit_ups=4, theme_stage="发酵", pct=7.2, limit_pct=10.0)
+    assert unknown["level"] == "高" and "距实际涨停价待核对" in unknown["basis"]
 
 
 # ---------------------------------------------------------------- 涨停集中度
@@ -225,9 +241,23 @@ def test_linkage_candidates_carry_tradability_and_basis():
     # 每只候选都必须自带"可参与"判定与可追溯依据（卡片直接展示，不二次加工）
     assert top["tradability"]["level"] == "可参与"
     assert top["linkage"]["level"] == "高"      # 6.8% 已进临板区
-    assert "当前未封板" in top["basis"] and "距封板" in top["basis"]
+    assert "当前未封板" in top["basis"] and "距实际涨停价待核对" in top["basis"]
     assert top["container"] == "小概念" and top["container_code"] == "X"
     assert top["runway_pct"] == round(9.7 - 6.8, 2)
+
+
+def test_actual_limit_distance_reaches_participant_and_top_watch_consumers():
+    from app.picks.intraday_opportunity import top_watch_stocks
+
+    quote = {**_snap("600002", "临板股", 7.2, price=10.72), "limit_up_price": 11.0,
+             "quality": "high", "source": "tencent_fallback", "ticktime": datetime.now(timezone.utc).isoformat()}
+    candidate = _candidates(["600002"], snaps=[quote])[0]
+    assert candidate["linkage"]["level"] == "高"
+    assert "距实际涨停价还需上涨 2.61%" in candidate["basis"]
+    top = top_watch_stocks({"themes": [{"theme": "算力", "participants": [candidate]}]}, limit=5)["items"][0]
+    assert top["limit_up_price"] == 11.0 and top["limit_up_gap_pct"] == 2.61
+    assert top["limit_up_gap_state"] == "ready"
+    assert "距实际涨停价还需上涨 2.61%" in top["pick_basis"]
 
 
 def test_linkage_candidates_per_theme_cap():

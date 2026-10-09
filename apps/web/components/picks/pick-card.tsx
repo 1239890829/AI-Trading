@@ -5,7 +5,7 @@ import type { ReactNode } from "react";
 import { CardHead, CardShell } from "@/components/picks/card-shell";
 import { CardEntryRow } from "@/components/picks/card-entries";
 import { useStockRowNav } from "@/components/stock-link";
-import { fmt, pctColor, pctText, triText } from "@/lib/format";
+import { fmt, formatLegacyLimitDistance, pctColor, pctText, triText } from "@/lib/format";
 import { clockOf, compareGates, gateActive, type GateComparison } from "@/lib/picks-gate";
 import { roleClass } from "@/lib/role-style";
 import type {
@@ -232,10 +232,10 @@ export function fromIntradayStock(it: IntradayTopStock | OpportunityStock): Trad
   const basisRows: { label: string; value: string }[] = [];
   // 「入选」= pick_basis——只有分层名单才产生（要解释「为什么在这档」）
   const pickBasis = "pick_basis" in it ? it.pick_basis : null;
-  if (pickBasis) basisRows.push({ label: "入选", value: pickBasis });
+  if (pickBasis) basisRows.push({ label: "入选", value: formatLegacyLimitDistance(pickBasis) });
   // 「联动」= participants 的 basis（从哪个题材挖出来、距封板还有多少跑道）。
   // 与 pick_basis 分开两行：前者是"为什么进猎场"，后者是"为什么排在这一档"。
-  if ("basis" in it && it.basis) basisRows.push({ label: "联动", value: it.basis });
+  if ("basis" in it && it.basis) basisRows.push({ label: "联动", value: formatLegacyLimitDistance(it.basis) });
   // 「涨停原因」= reason——同花顺官方原串（ladder 行自带），两条路径都有
   if (it.reason) basisRows.push({ label: "涨停原因", value: it.reason });
   // 「首封」= 可参与性判据的直接证据（开盘即涨停 vs 盘中封板）
@@ -264,7 +264,9 @@ export function fromIntradayStock(it: IntradayTopStock | OpportunityStock): Trad
     tier: "tier" in it ? (it.tier ?? null) : null,
     distinctiveness: toJudgement(it.distinctiveness),
     certainty: toJudgement(it.certainty),
-    linkage: "linkage" in it ? toJudgement(it.linkage) : null,
+    linkage: "linkage" in it && it.linkage
+      ? toJudgement({ ...it.linkage, basis: formatLegacyLimitDistance(it.linkage.basis ?? "") })
+      : null,
     tradability: toJudgement(it.tradability),
     board: it.board ?? null,
     basisRows,

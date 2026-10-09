@@ -8,7 +8,7 @@
  * - 聊天窗：SSE 流式渲染、中断（AbortController）/重新生成、最小化收回悬浮球
  * - 实体跳转：回答中的个股/题材经 entity-dict 词典识别 → 个股**就地弹窗**看详情、
  *   题材跳梯队页（2026-09-15 详情弹窗化，此前跳工作台）
- * - AI 判读提醒气泡：判读为 notify 的告警冒泡，点「查看详情」直达该股详情弹窗
+ * - 判读/规则提醒气泡：服务端筛选后的告警冒泡，点「查看详情」直达该股详情弹窗
  *   （2026-09-16，此前跳控制台告警页会丢当前页面上下文）
  * - 上下文：发送时带上当前页面 path/title/选中标的，后端注入系统提示
  * - 会话历史（IMP-004）：会话内容落 localStorage（最近 10 条）+ 历史列表，
@@ -18,8 +18,9 @@
  */
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { useRouter } from "next/navigation";
-import { API_BASE, type AgentBubble } from "@/lib/api";
+import { API_BASE, ackAgentTriage, getAgentBubbles, type AgentBubble } from "@/lib/api";
 import { themesUrl } from "@/lib/routing";
+import { formatLegacyLimitDistance } from "@/lib/format";
 import { parseWorkbenchDetailUrl } from "@/lib/detail-tabs";
 import { useSymbolDetail } from "@/components/detail/symbol-detail-context";
 import { createEntityMatcher, type EntityDict, type EntityMatch } from "@/lib/entity-links";
@@ -160,6 +161,18 @@ export function FloatingAssistant() {
   const [model, setModel] = useState("");
   const [dict, setDict] = useState<EntityDict | null>(null);
   const [bubbles, setBubbles] = useState<AgentBubble[]>([]);
+  const [activeBubbleId, setActiveBubbleId] = useState<number | null>(null);
+  const [bubbleReadError, setBubbleReadError] = useState<string | null>(null);
+  const [bubbleNavigationError, setBubbleNavigationError] = useState<string | null>(null);
+  const [bubbleAckError, setBubbleAckError] = useState<{ ids: number[]; message: string } | null>(null);
+  const [bubbleAckBusy, setBubbleAckBusy] = useState(false);
+  // 展示水位只用于本次页面会话降噪，不能充当后台已确认状态。
+  const announcedBubbleIds = useRef(new Set<number>());
+  const confirmedBubbleIds = useRef(new Set<number>());
+  const activeBubbleRef = useRef<number | null>(null);
+  const assistantOpenRef = useRef(false);
+  const bubbleAckInFlight = useRef(false);
+  const bubbleReadInFlight = useRef(false);
   const [docked, setDocked] = useState<"left" | "right" | null>("right");
   const [orbHovered, setOrbHovered] = useState(false);
   const [sessions, setSessions] = useState<StoredSession[]>([]);
@@ -168,8 +181,17 @@ export function FloatingAssistant() {
 
   const ballRef = useRef<HTMLDivElement>(null);
   const inputRef = useRef<HTMLTextAreaElement>(null);
+  const focusBubble = useCallback((id: number | null) => {
+    activeBubbleRef.current = id;
+    setActiveBubbleId(id);
+  }, []);
+  const changeAssistantOpen = useCallback((next: boolean) => {
+    assistantOpenRef.current = next;
+    if (next) focusBubble(null);
+    setOpen(next);
+  }, [focusBubble]);
   useEffect(() => { if (open) inputRef.current?.focus(); }, [open]);
-  function minimize() { setOpen(false); ballRef.current?.focus(); }
+  function minimize() { changeAssistantOpen(false); ballRef.current?.focus(); }
 
   const abortRef = useRef<AbortController | null>(null);
   const idRef = useRef(0);
@@ -283,34 +305,76 @@ export function FloatingAssistant() {
     saveCurrentId(currentId);
   }, [messages, streaming, currentId, commitSessions]);
 
-  // ---- AI 判读提醒（悬浮球气泡）------------------------------------------
-  // 只有判读为 notify 且未确认的才出现；规则触发本身不冒泡（防刷屏）。
+  // ---- 判读/规则提醒（悬浮球气泡）---------------------------------------
+  // 同一批只主动展开一条，其余通过数量入口可达。已展示 id 不因轮询或关聊天窗再次冒泡。
   // 30s 轮询：告警不是秒级决策，且 triage worker 本身也是 30s 一轮。
   // 2026-09-11（S2-5）：裸 setInterval → 统一入口（获得可见性暂停）。
   // `marketHours: false` —— 判读提醒盘后同样需要及时冒泡，不套行情类降频。
+  async function loadBubbles() {
+    // 手动重试与定时刷新共用单飞，避免旧回包覆盖后来到达的新提醒。
+    if (bubbleReadInFlight.current) return;
+    bubbleReadInFlight.current = true;
+    try {
+      const list = (await getAgentBubbles(5)).filter((item) => !confirmedBubbleIds.current.has(item.id));
+      const fresh = list.find((item) => !announcedBubbleIds.current.has(item.id));
+      for (const item of list) announcedBubbleIds.current.add(item.id);
+      setBubbles(list);
+      setBubbleReadError(null);
+      if (activeBubbleRef.current !== null && !list.some((item) => item.id === activeBubbleRef.current)) focusBubble(null);
+      if (fresh && activeBubbleRef.current === null && !assistantOpenRef.current) focusBubble(fresh.id);
+    } catch (error) {
+      // 保留最后一次可信列表，避免短时失败导致旧提醒消失后重新弹出。
+      setBubbleReadError(error instanceof Error ? error.message : "读取失败");
+    } finally {
+      bubbleReadInFlight.current = false;
+    }
+  }
   usePollingFetch(
-    async () => {
-      try {
-        const { getAgentBubbles } = await import("@/lib/api");
-        const list = await getAgentBubbles(5);
-        setBubbles(list);
-      } catch {
-        setBubbles([]); // 后端未起/接口异常：静默，不打扰
-      }
-    },
+    loadBubbles,
     30_000,
     undefined,
     { enabled: mounted, marketHours: false }
   );
 
-  async function ackBubble(id: number) {
-    const { ackAgentTriage } = await import("@/lib/api");
+  async function ackBubbles(ids: number[]) {
+    if (bubbleAckInFlight.current) return;
+    const pending = ids.filter((id) => !confirmedBubbleIds.current.has(id));
+    if (!pending.length) return;
+    bubbleAckInFlight.current = true;
+    setBubbleAckBusy(true);
+    setBubbleAckError(null);
+    const results = await Promise.allSettled(pending.map(async (id) => {
+      if (!(await ackAgentTriage(id))) throw new Error("服务器未确认该提醒");
+      return id;
+    }));
+    const failed: number[] = [];
+    let failure = "确认失败";
+    results.forEach((result, index) => {
+      if (result.status === "fulfilled") confirmedBubbleIds.current.add(result.value);
+      else {
+        failed.push(pending[index]);
+        if (result.reason instanceof Error) failure = result.reason.message;
+      }
+    });
+    setBubbles((prev) => prev.filter((item) => !confirmedBubbleIds.current.has(item.id)));
+    if (activeBubbleRef.current !== null && confirmedBubbleIds.current.has(activeBubbleRef.current)) focusBubble(null);
+    if (failed.length) setBubbleAckError({ ids: failed, message: `${failed.length} 条提醒确认失败：${failure}` });
+    bubbleAckInFlight.current = false;
+    setBubbleAckBusy(false);
+  }
+
+  function viewReminders(ids: number[], symbol?: string) {
     try {
-      await ackAgentTriage(id);
-      setBubbles((prev) => prev.filter((b) => b.id !== id));
-    } catch {
-      /* 确认失败只保留气泡，不弹错 */
+      if (symbol) openSymbolDetail({ symbol });
+      else router.push("/agent?tab=alerts");
+    } catch (error) {
+      // 入口未打开时保留未确认状态，用户可再次点击原入口。
+      setBubbleNavigationError(`打开提醒失败：${error instanceof Error ? error.message : "请稍后重试"}`);
+      return;
     }
+    setBubbleNavigationError(null);
+    if (!symbol) focusBubble(null);
+    void ackBubbles(ids);
   }
 
   // ---- 实体字典：窗口首开时拉一次，失败静默（识别是增强层） ----------------
@@ -367,7 +431,7 @@ export function FloatingAssistant() {
     drag.current = null;
     if (!d) return;
     if (!d.moved) {
-      setOpen((o) => !o);
+      changeAssistantOpen(!assistantOpenRef.current);
       return;
     }
     setPos((p) => {
@@ -660,7 +724,7 @@ export function FloatingAssistant() {
         const target = parseWorkbenchDetailUrl(m.url);
         if (target) {
           openSymbolDetail(target);
-          setOpen(false);
+          changeAssistantOpen(false);
           return;
         }
         router.push(m.url);
@@ -672,9 +736,9 @@ export function FloatingAssistant() {
       } else {
         router.push(themesUrl(m.name));
       }
-      setOpen(false);
+      changeAssistantOpen(false);
     },
-    [router, openSymbolDetail],
+    [router, openSymbolDetail, changeAssistantOpen],
   );
 
   // ---- 自动滚动（用户上翻即停止跟随） --------------------------------------
@@ -707,6 +771,10 @@ export function FloatingAssistant() {
   };
 
   const lastAssistantIdx = messages.length - 1;
+  const activeBubble = bubbles.find((item) => item.id === activeBubbleId);
+  const ruleReminder = activeBubble?.model === "llm_fallback" || activeBubble?.model === "rules";
+  const bubbleWidth = Math.min(280, viewport.w - MARGIN * 2);
+  const bubbleTop = Math.min(Math.max(MARGIN, pos.y - 8), Math.max(MARGIN, viewport.h - 260));
 
   return (
     <>
@@ -726,7 +794,7 @@ export function FloatingAssistant() {
         tabIndex={0}
         aria-expanded={open}
         aria-controls="assistant-panel"
-        onKeyDown={event => { if (!event.nativeEvent.isComposing && (event.key === "Enter" || event.key === " ")) { event.preventDefault(); setOpen(value => !value); } }}
+        onKeyDown={event => { if (!event.nativeEvent.isComposing && (event.key === "Enter" || event.key === " ")) { event.preventDefault(); changeAssistantOpen(!assistantOpenRef.current); } }}
         role="button"
         aria-label="AI 助手"
         className="assistant-launcher fixed z-50 flex cursor-grab select-none items-center justify-center transition-[left,width,height,border-radius] duration-200 ease-out active:cursor-grabbing"
@@ -767,7 +835,7 @@ export function FloatingAssistant() {
             {streaming && !open && (
               <span className="absolute -right-0.5 -top-0.5 h-3 w-3 animate-pulse rounded-full border-2 border-zinc-900 bg-emerald-400 dark:border-zinc-100" />
             )}
-            {/* 告警红点：只统计 AI 判为"值得提醒"的（notify 且未确认） */}
+            {/* 告警红点：统计服务端已筛选、尚未确认的判读/规则提醒。 */}
             {bubbles.length > 0 && !open && (
               <span
                 data-testid="assistant-alert-dot"
@@ -780,45 +848,43 @@ export function FloatingAssistant() {
         )}
       </div>
 
-      {/* 提醒气泡：AI 判读后才出现（规则触发 ≠ 值得提醒）；
-          点「查看详情」**就地打开该股详情弹窗**（2026-09-16），多条时另有入口进告警页 */}
-      {bubbles.length > 0 && !open && (
+      {/* 每批只主动展开一条；稍后与关聊天只收起展示，不伪造后台确认。 */}
+      {!open && (bubbles.length > 0 || bubbleReadError || bubbleAckError || bubbleNavigationError) && (
         <div
-          data-testid="assistant-alert-bubble"
-          className="ui-card ui-glass-overlay fixed z-50 w-[280px] rounded-xl border border-zinc-200 bg-white/95 p-3 shadow-xl backdrop-blur dark:border-zinc-800 dark:bg-zinc-950/95"
+          data-testid={activeBubble ? "assistant-alert-bubble" : "assistant-alert-summary"}
+          className="ui-card ui-glass-overlay fixed z-50 overflow-y-auto rounded-xl border border-zinc-200 bg-white/95 p-3 shadow-xl backdrop-blur dark:border-zinc-800 dark:bg-zinc-950/95"
           style={{
-            left: pos.x - 292 > 8 ? pos.x - 292 : pos.x + BALL + 12,
-            top: Math.max(8, pos.y - 8),
+            width: bubbleWidth,
+            left: Math.max(MARGIN, Math.min(pos.x - bubbleWidth - 12, viewport.w - bubbleWidth - MARGIN)),
+            top: bubbleTop,
+            maxHeight: viewport.h - bubbleTop - MARGIN,
           }}
         >
+          {activeBubble ? <>
           <div className="mb-1 flex items-center justify-between gap-2">
             <span className="text-[11px] font-medium text-zinc-700 dark:text-zinc-200">
-              AI 判读提醒 · {bubbles.length} 条
+              {ruleReminder ? "规则提醒" : "AI 判读提醒"}
             </span>
-            {bubbles[0].model === "llm_fallback" && (
-              <span className="rounded bg-amber-500/10 px-1 py-0.5 text-[10px] text-amber-800 dark:text-amber-300">
-                按规则提醒
-              </span>
-            )}
+            <button type="button" onClick={() => focusBubble(null)} className="text-[11px] text-zinc-600 dark:text-zinc-400">稍后</button>
           </div>
+          {ruleReminder && <p className="mb-1 text-[11px] text-amber-800 dark:text-amber-300">本条未经过AI判读</p>}
           <p className="line-clamp-2 text-[11px] leading-relaxed text-zinc-600 dark:text-zinc-300">
-            {bubbles[0].symbol ? `${bubbles[0].symbol} · ` : ""}
-            {bubbles[0].name ? `${bubbles[0].name} · ` : ""}
-            {bubbles[0].reason || "触发告警"}
+            {activeBubble.symbol ? `${activeBubble.symbol} · ` : ""}
+            {activeBubble.name ? `${activeBubble.name} · ` : ""}
+            {formatLegacyLimitDistance(activeBubble.reason || "触发告警")}
           </p>
-          <div className="mt-2 flex items-center gap-1.5">
+          <div className="mt-2 flex flex-wrap items-center gap-1.5">
             <button
               type="button"
               data-testid="assistant-alert-view"
+              disabled={bubbleAckBusy}
               onClick={() => {
                 // 2026-09-16 用户指令：个股提醒点开**直接看这只股的详情弹窗**，不再跳告警页
                 // ——原实现 `router.push("/agent?tab=alerts")` 会把用户从当前页面连根拔走，
                 // 而气泡里的正文已经说明是哪只股，用户想看的就是那只股本身。
                 // 兜底：无代码的判读（后端 `pending_bubbles` 已按「缺 symbol+name 视为无效」过滤，
                 // 此处是防御性分支）才回退告警页，不静默失败。
-                const b = bubbles[0];
-                if (b.symbol) openSymbolDetail({ symbol: b.symbol });
-                else router.push("/agent?tab=alerts");
+                viewReminders([activeBubble.id], activeBubble.symbol);
               }}
               className="rounded-md border border-zinc-300 px-2 py-0.5 text-[11px] text-zinc-700 hover:bg-zinc-100 dark:border-zinc-600 dark:text-zinc-200 dark:hover:bg-zinc-800"
             >
@@ -830,20 +896,36 @@ export function FloatingAssistant() {
               <button
                 type="button"
                 data-testid="assistant-alert-all"
-                onClick={() => router.push("/agent?tab=alerts")}
+                disabled={bubbleAckBusy}
+                onClick={() => viewReminders(bubbles.map((item) => item.id))}
                 className="rounded-md px-2 py-0.5 text-[11px] text-zinc-600 hover:bg-zinc-100 dark:text-zinc-400 dark:hover:bg-zinc-800"
               >
-                全部 {bubbles.length} 条
+                还有 {bubbles.length - 1} 条 · 全部提醒
               </button>
             )}
             <button
               type="button"
-              onClick={() => void ackBubble(bubbles[0].id)}
+              disabled={bubbleAckBusy}
+              onClick={() => void ackBubbles([activeBubble.id])}
               className="rounded-md px-2 py-0.5 text-[11px] text-zinc-600 hover:bg-zinc-100 dark:text-zinc-400 dark:hover:bg-zinc-800"
             >
               忽略
             </button>
           </div>
+          </> : bubbles.length > 0 && <div className="flex flex-wrap items-center gap-2 text-[11px]">
+            <button type="button" data-testid="assistant-alert-inbox" onClick={() => focusBubble(bubbles[0].id)} className="text-zinc-700 dark:text-zinc-200">还有 {bubbles.length} 条提醒</button>
+            <button type="button" data-testid="assistant-alert-all" disabled={bubbleAckBusy} onClick={() => viewReminders(bubbles.map((item) => item.id))} className="text-zinc-600 dark:text-zinc-400">全部提醒</button>
+          </div>}
+          {bubbleAckBusy && <p role="status" className="mt-2 text-[11px] text-zinc-600 dark:text-zinc-400">正在确认提醒…</p>}
+          {bubbleAckError && <div role="alert" className="mt-2 space-y-1 text-[11px] text-amber-800 dark:text-amber-300">
+            <p>{bubbleAckError.message}，记录仍保留。</p>
+            <button type="button" disabled={bubbleAckBusy} onClick={() => void ackBubbles(bubbleAckError.ids)}>重试确认</button>
+          </div>}
+          {bubbleNavigationError && <p role="alert" className="mt-2 text-[11px] text-amber-800 dark:text-amber-300">{bubbleNavigationError}，未确认提醒；请重试原入口。</p>}
+          {bubbleReadError && <div role="status" className="mt-2 space-y-1 text-[11px] text-amber-800 dark:text-amber-300">
+            <p>提醒刷新失败{bubbles.length ? "，保留上次列表" : "，尚无可用列表"}：{bubbleReadError}</p>
+            <button type="button" onClick={() => void loadBubbles()}>重试读取</button>
+          </div>}
         </div>
       )}
 
@@ -871,6 +953,10 @@ export function FloatingAssistant() {
                 <div className="truncate font-mono text-[10px] leading-tight text-zinc-600 dark:text-zinc-400">{model}</div>
               )}
             </div>
+            {bubbles.length > 0 && <button type="button" aria-label={`查看${bubbles.length}条提醒`} className="text-[11px] text-zinc-600 dark:text-zinc-400" onClick={() => {
+              changeAssistantOpen(false);
+              focusBubble(bubbles[0].id);
+            }}>提醒 {bubbles.length}</button>}
             {messages.length > 0 && (
               <button
                 type="button"

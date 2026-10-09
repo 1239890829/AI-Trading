@@ -2,22 +2,24 @@
 
 This module deliberately does **not** create another task system.  It owns two facts only:
 
-1. a small daily quota slot reservation (LLM autonomy / automatic task / code proposal), and
+1. daily reservations (LLM autonomy / alert triage / automatic task / code proposal), and
 2. metadata-only usage receipts (provider/model/token counts/attempts/timeout, never prompt text).
 
-Budgeted scopes reserve a numbered slot under a DB unique constraint.  Competing processes may
+Finite budgets reserve a numbered slot under a DB unique constraint.  Competing processes may
 race, but only one can commit the last slot.  A reservation is started immediately before external
 I/O or an autonomous action.  Unstarted stale reservations can be deleted and reused; a started
 row is never silently released because the external side effect may already have happened.
-Unknown token usage is represented as unknown, never as zero.  For the autonomous LLM scope an
-unknown started/terminal receipt blocks later reservations for the same Beijing day (fail closed).
+Unlimited alert triage still reserves a durable receipt, with no numbered slot. Unknown token usage
+is never represented as zero. A started autonomous/triage model receipt with unknown usage blocks
+later model reservations in both scopes for the same Beijing day (fail closed).
 """
 from __future__ import annotations
 
 import uuid
 from datetime import timedelta
-from sqlalchemy import delete, select, update
+from sqlalchemy import and_, delete, or_, select, update
 from sqlalchemy.exc import IntegrityError
+from sqlalchemy.orm import aliased
 
 from app.core.bjtime import beijing_now, beijing_now_naive
 from app.core.config import settings
@@ -25,12 +27,14 @@ from app.core.db import get_session_factory
 from app.models.agent import AgentResourceUsage
 
 SCOPE_AUTONOMY_LLM = "autonomy_llm"
+SCOPE_ALERT_TRIAGE_LLM = "alert_triage_llm"
 SCOPE_AUTONOMY_TASK = "autonomy_task"
 SCOPE_CODE_PROPOSAL = "code_proposal"
 SCOPE_TELEMETRY = "telemetry"
 
 _STARTED_OR_TERMINAL = {"started", "succeeded", "failed", "canceled", "unknown"}
 _TERMINAL = {"succeeded", "failed", "canceled", "unknown"}
+_MODEL_BUDGET_SCOPES = {SCOPE_AUTONOMY_LLM, SCOPE_ALERT_TRIAGE_LLM}
 
 
 class BudgetError(RuntimeError):
@@ -46,6 +50,9 @@ def _today() -> str:
 def _limit_for(scope: str) -> int | None:
     if scope == SCOPE_AUTONOMY_LLM:
         return max(0, int(settings.agent_daily_llm_budget))
+    if scope == SCOPE_ALERT_TRIAGE_LLM:
+        budget = settings.alert_triage_daily_llm_budget
+        return None if budget is None else max(0, int(budget))
     if scope == SCOPE_AUTONOMY_TASK:
         return max(0, int(settings.agent_daily_task_budget))
     if scope == SCOPE_CODE_PROPOSAL:
@@ -109,18 +116,42 @@ def recover_stale_reservations(session_factory=None, *, now=None) -> int:
         return int(result.rowcount or 0)
 
 
-def _unknown_usage_exists(sf, date: str, scope: str) -> bool:
+def _unknown_usage_exists(sf, date: str) -> bool:
     with sf() as db:
         rows = db.execute(
             select(AgentResourceUsage.id).where(
                 AgentResourceUsage.budget_date == date,
-                AgentResourceUsage.scope == scope,
+                AgentResourceUsage.scope.in_(_MODEL_BUDGET_SCOPES),
                 AgentResourceUsage.state.in_(_STARTED_OR_TERMINAL),
+                AgentResourceUsage.started_at.is_not(None),
                 AgentResourceUsage.kind == "model",
                 AgentResourceUsage.usage_known == 0,
             ).limit(1)
         ).first()
         return rows is not None
+
+
+def _triage_numbered_slots(sf, date: str, limit: int) -> list[int]:
+    """Keep today's existing triage usage when a finite cap is configured later.
+
+    Legacy triage still occupies its original autonomy slot. No receipt is rewritten and no
+    placeholder slot is created. Select only the first remaining-capacity empty slot numbers;
+    same-cap concurrent reservations contend for those same numbers under the unique constraint.
+    """
+    with sf() as db:
+        rows = db.execute(
+            select(AgentResourceUsage.scope, AgentResourceUsage.slot).where(
+                AgentResourceUsage.budget_date == date,
+                or_(
+                    AgentResourceUsage.scope == SCOPE_ALERT_TRIAGE_LLM,
+                    and_(AgentResourceUsage.scope == SCOPE_AUTONOMY_LLM,
+                         AgentResourceUsage.purpose == "triage.llm"),
+                ),
+            )
+        ).all()
+    occupied = {slot for scope, slot in rows if scope == SCOPE_ALERT_TRIAGE_LLM}
+    remaining = max(0, limit - len(rows))
+    return [slot for slot in range(1, limit + 1) if slot not in occupied][:remaining]
 
 
 def reserve(
@@ -136,18 +167,18 @@ def reserve(
     input_chars: int = 0,
     session_factory=None,
 ) -> dict:
-    """Atomically reserve one daily budget slot across processes.
+    """Reserve a durable receipt; finite daily slots are atomic across processes.
 
-    ``autonomy_llm`` additionally refuses a new call when a previous started call has unknown token
-    usage.  That prevents a timeout/crash from being silently counted as 0 tokens and then retried
-    indefinitely under a misleading budget display.
+    Both model-budget scopes refuse a new call when either has a started receipt with unknown
+    token usage. Unlimited triage removes only the daily count ceiling, not model-call limits or
+    durable reservation/start/finish accounting.
     """
     sf = session_factory or get_session_factory()
     recover_stale_reservations(sf)
     limit = _limit_for(scope)
-    if limit is None:
+    if scope == SCOPE_TELEMETRY:
         raise ValueError("unmetered telemetry does not use reserve(); call record_unmetered()")
-    if limit <= 0:
+    if limit is not None and limit <= 0:
         raise BudgetError("budget_exhausted", f"{scope} 每日预算为 0，拒绝执行")
     checked_input_chars = check_model_input(input_chars) if kind == "model" else max(0, int(input_chars or 0))
     timeout = max(0.0, float(timeout_seconds or 0.0))
@@ -166,14 +197,20 @@ def reserve(
         )
 
     date = _today()
-    if scope == SCOPE_AUTONOMY_LLM and _unknown_usage_exists(sf, date, scope):
+    if scope in _MODEL_BUDGET_SCOPES and _unknown_usage_exists(sf, date):
         raise BudgetError(
             "usage_unknown",
-            "今日已有自主模型调用的 token 用量未知；拒绝继续消耗，须先核实/跨日恢复",
+            "今日已有自主或告警判读模型调用的 token 用量未知；拒绝继续消耗，须先核实/跨日恢复",
         )
 
     now = beijing_now_naive()
-    for slot in range(1, limit + 1):
+    if limit is None:
+        slots = [None]
+    elif scope == SCOPE_ALERT_TRIAGE_LLM:
+        slots = _triage_numbered_slots(sf, date, limit)
+    else:
+        slots = range(1, limit + 1)
+    for slot in slots:
         row = AgentResourceUsage(
             id=uuid.uuid4().hex,
             budget_date=date,
@@ -203,6 +240,8 @@ def reserve(
                 return dump(row)
             except IntegrityError:
                 db.rollback()  # another process owns this numbered slot; try next
+                if slot is None:
+                    raise
     raise BudgetError("budget_exhausted", f"{scope} 今日预算已用尽（{limit}/{limit}）")
 
 
@@ -210,17 +249,41 @@ def start(usage_id: str, session_factory=None) -> dict:
     sf = session_factory or get_session_factory()
     now = beijing_now_naive()
     with sf() as db:
+        row = db.get(AgentResourceUsage, usage_id)
+        conditions = [
+            AgentResourceUsage.id == usage_id,
+            AgentResourceUsage.state == "reserved",
+        ]
+        if row is not None and row.scope in _MODEL_BUDGET_SCOPES:
+            if row.state == "reserved" and row.budget_date != _today():
+                raise BudgetError(
+                    "reservation_expired",
+                    "模型预算预留已跨北京日期，须释放后重新预留当日额度",
+                )
+            other = aliased(AgentResourceUsage)
+            conditions.append(~select(other.id).where(
+                other.budget_date == row.budget_date,
+                other.scope.in_(_MODEL_BUDGET_SCOPES),
+                other.state.in_(_STARTED_OR_TERMINAL),
+                other.started_at.is_not(None),
+                other.kind == "model",
+                other.usage_known == 0,
+                other.id != usage_id,
+            ).exists())
         result = db.execute(
-            update(AgentResourceUsage).where(
-                AgentResourceUsage.id == usage_id,
-                AgentResourceUsage.state == "reserved",
-            ).values(state="started", started_at=now, attempts=1)
+            update(AgentResourceUsage).where(*conditions)
+            .values(state="started", started_at=now, attempts=1)
         )
         if result.rowcount != 1:
             db.rollback()
             row = db.get(AgentResourceUsage, usage_id)
             if row is not None and row.state in _STARTED_OR_TERMINAL:
                 return dump(row)
+            if row is not None and row.state == "reserved" and row.scope in _MODEL_BUDGET_SCOPES:
+                raise BudgetError(
+                    "usage_unknown",
+                    "今日已有自主或告警判读模型调用的 token 用量未知；拒绝继续消耗，须先核实/跨日恢复",
+                )
             raise BudgetError("reservation_lost", "预算预留已失效或被回收；拒绝启动")
         db.commit()
         return dump(db.get(AgentResourceUsage, usage_id))
@@ -360,9 +423,13 @@ def budget_status(session_factory=None, *, date: str | None = None) -> dict:
             select(AgentResourceUsage).where(AgentResourceUsage.budget_date == date)
         ).scalars().all()
     llm = [r for r in rows if r.scope == SCOPE_AUTONOMY_LLM]
+    triage = [r for r in rows if r.scope == SCOPE_ALERT_TRIAGE_LLM or (
+        r.scope == SCOPE_AUTONOMY_LLM and r.purpose == "triage.llm"
+    )]
     tasks = [r for r in rows if r.scope == SCOPE_AUTONOMY_TASK]
     telemetry = [r for r in rows if r.kind == "model"]
     llm_limit = max(0, int(settings.agent_daily_llm_budget))
+    triage_limit = _limit_for(SCOPE_ALERT_TRIAGE_LLM)
     task_limit = max(0, int(settings.agent_daily_task_budget))
     input_tokens = sum(int(r.input_tokens or 0) for r in telemetry if r.usage_known)
     output_tokens = sum(int(r.output_tokens or 0) for r in telemetry if r.usage_known)
@@ -373,6 +440,10 @@ def budget_status(session_factory=None, *, date: str | None = None) -> dict:
         "llm_budget": llm_limit,
         "llm_exhausted": len(llm) >= llm_limit,
         "llm_reserved": sum(r.state == "reserved" for r in llm),
+        "triage_used": len(triage),
+        "triage_budget": triage_limit,
+        "triage_unlimited": triage_limit is None,
+        "triage_exhausted": triage_limit is not None and len(triage) >= triage_limit,
         "tasks_used": len(tasks),
         "task_budget": task_limit,
         "tasks_exhausted": len(tasks) >= task_limit,

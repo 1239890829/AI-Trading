@@ -367,7 +367,7 @@ export function AlertsTab() {
                       <td className="px-3 py-2">
                         {/* 2026-09-08 用户指令：触发记录状态不再需要确认——判读完成即自动置
                             acknowledged，此处只读展示终态，移除人工「确认」按钮 */}
-                        <span className="text-zinc-600 dark:text-zinc-400">{e.triage?.model === "llm_fallback" ? "规则提醒 · AI不可用" : e.triage ? "已判读" : "规则触发 · 未取得AI判读"}</span>
+                        <span className="text-zinc-600 dark:text-zinc-400">{e.triage?.model === "llm_fallback" ? "规则提醒 · 本条未经过AI判读" : e.triage ? "已判读" : "规则触发 · 未取得AI判读"}</span>
                       </td>
                     </tr>
                   ))}

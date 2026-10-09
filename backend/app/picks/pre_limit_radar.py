@@ -40,7 +40,10 @@ import logging
 from datetime import datetime, timezone
 
 from app.market.price_rules import limit_pct as _rules_limit_pct
-from app.core.bjtime import beijing_now
+from app.market.price_rules import limit_up_distance, limit_up_distance_text
+from app.core.bjtime import beijing_now, to_beijing
+from app.core.ttl_cache import cache_on
+from app.data_providers.tencent import to_tencent_symbol
 
 log = logging.getLogger(__name__)
 
@@ -50,6 +53,8 @@ SNAPSHOT_FRESH_SECONDS = 120
 SWEEP_INTERVAL = 6.0
 #: 非活跃窗口的休眠间隔（秒）
 IDLE_INTERVAL = 30.0
+DISTANCE_FETCH_TIMEOUT = 2.0
+DISTANCE_BATCH_SIZE = 50
 #: 开板重评已落事件的本进程快取；持久去重以 AlertEvent.dedup_key 为准。
 _REOPEN: set[tuple[str, str]] = set()
 
@@ -131,15 +136,122 @@ def select_candidates(
             {
                 "symbol": symbol,
                 "name": name,
+                "market": row.get("market"),
                 "pct": float(pct),
                 "limit_pct": limit,
                 "runway_pct": round(seal_threshold(limit) - float(pct), 2),
+                # 兼容字段 runway_pct 仍是距封板判定线的百分点差，只用于原排序。
+                **limit_up_distance(row),
                 "price": row.get("price"),
                 "turnover_rate": row.get("turnover_rate"),
             }
         )
     out.sort(key=lambda c: c["runway_pct"])  # 距封板最近的优先
     return out
+
+
+def _quote_distance(quote, candidate: dict, now: datetime) -> dict | None:
+    """源身份、北京时间当日及质量均通过，才使用同一Quote的现价和实际限价。"""
+    if quote is None or quote.symbol != candidate["symbol"]:
+        return None
+    expected_market = candidate.get("market") or to_tencent_symbol(candidate["symbol"])[:2].upper()
+    if quote.market != expected_market or quote.data_timestamp is None:
+        return None
+    source_time = to_beijing(quote.data_timestamp)
+    if source_time.date() != now.date() or source_time > now:
+        return None
+    if quote.freshness(fresh_within=SNAPSHOT_FRESH_SECONDS).state != "ready":
+        return None
+    metrics = limit_up_distance({
+        "symbol": quote.symbol, "market": quote.market, "name": quote.name,
+        "price": quote.price, "limit_up_price": quote.limit_up_price,
+        "quality": quote.quality.value, "source": quote.source,
+        "data_timestamp": source_time.isoformat(),
+    }, now=now)
+    return metrics if metrics["limit_up_gap_state"] == "ready" else None
+
+
+def _distance_alert_text(candidate: dict) -> str:
+    """距离基准独立于入选快照；事实事件仅存text也能追溯这份报价。"""
+    text = limit_up_distance_text(candidate)
+    if candidate.get("limit_up_gap_state") != "ready":
+        return text
+    return (
+        f"{text}（距离基准现价 {candidate['limit_up_gap_price']:.2f}，"
+        f"实际涨停价 {candidate['limit_up_price']:.2f}，"
+        f"来源 {candidate.get('limit_up_gap_source') or '待核对'}，"
+        f"源时间 {candidate.get('limit_up_gap_as_of') or '待核对'}）"
+    )
+
+
+def _distance_alert_meta(candidate: dict, snapshot_as_of: str) -> dict:
+    return {
+        "trigger_value": candidate.get("price"),
+        "snapshot_price": candidate.get("price"), "snapshot_pct": candidate["pct"],
+        "snapshot_as_of": snapshot_as_of,
+        **{key: candidate.get(key) for key in (
+            "limit_up_price", "limit_up_gap_pct", "limit_up_gap_state",
+            "limit_up_gap_price", "limit_up_gap_source", "limit_up_gap_as_of",
+        )},
+    }
+
+
+async def _enrich_candidate_distances(state, candidates: list[dict]) -> None:
+    """只补本轮提醒候选；每30秒最多50个miss，超时后的请求真实drain前不再排队。"""
+    from app.services.quote_enrich import fetch_quotes_batched
+
+    hub = getattr(state, "hub", None)
+    if hub is None or not candidates:
+        return
+    now = beijing_now()
+    day = now.date().isoformat()
+    cache = cache_on(state, "pre_limit_distance", 30.0, maxsize=256)
+    by_symbol = {c["symbol"]: c for c in candidates if c.get("limit_up_gap_state") != "ready"}
+    missing = []
+    cached_quotes = {q.symbol: q for q in hub.get_quotes(list(by_symbol))}
+    for symbol, candidate in by_symbol.items():
+        quote = cached_quotes.get(symbol)
+        metrics = _quote_distance(quote, candidate, now)
+        if metrics is not None:
+            candidate.update(metrics)
+            continue
+        hit, quote = cache.get((day, symbol))
+        if hit:
+            metrics = _quote_distance(quote, candidate, now)
+            if metrics is not None:
+                candidate.update(metrics)
+        else:
+            missing.append(symbol)
+    running = getattr(state, "_pre_limit_distance_inflight", None)
+    gate_hit, _ = cache.get((day, "__batch__"))
+    if not missing or running is not None or gate_hit:
+        return
+    symbols = missing[:DISTANCE_BATCH_SIZE]
+    requested = {symbol: by_symbol[symbol] for symbol in symbols}
+    cache.set((day, "__batch__"), True)
+    task = asyncio.create_task(fetch_quotes_batched(hub, symbols, prefer_cache=False, batch_size=DISTANCE_BATCH_SIZE))
+    state._pre_limit_distance_inflight = task
+
+    def publish(done):
+        if getattr(state, "_pre_limit_distance_inflight", None) is not done:
+            return
+        found = {} if done.cancelled() else done.result() if done.exception() is None else {}
+        checked_at = beijing_now()
+        for symbol in symbols:
+            quote = found.get(symbol)
+            valid = _quote_distance(quote, requested[symbol], checked_at)
+            cache.set((day, symbol), quote.model_copy(deep=True) if valid is not None else None)
+        state._pre_limit_distance_inflight = None
+
+    task.add_done_callback(publish)
+    done, _pending = await asyncio.wait({task}, timeout=DISTANCE_FETCH_TIMEOUT)
+    if done:
+        publish(task)
+        for symbol, candidate in requested.items():
+            _hit, quote = cache.get((day, symbol))
+            metrics = _quote_distance(quote, candidate, beijing_now())
+            if metrics is not None:
+                candidate.update(metrics)
 
 
 async def pre_limit_sweep(app) -> int:
@@ -165,6 +277,8 @@ async def pre_limit_sweep(app) -> int:
         if ((row.get("reason") or {}).get("gate")) == "sealed_no_entry"
     }
     candidates = select_candidates(rows, registered, reopen_symbols=reopenable)
+    await _enrich_candidate_distances(state, [c for c in candidates
+        if (tdate, c["symbol"]) not in _REOPEN])
 
     # 特殊情形（用户指令 4）：一字板/秒板**选对但无参与机会**——首见即封板 → 只登记观察
     # （watch_no_entry，不入持仓池）；某日开板重回临板区 → 通知重新纳入（见下方 board_reopen）
@@ -204,11 +318,13 @@ async def pre_limit_sweep(app) -> int:
                     "kind": "board_reopen", "symbol": c["symbol"], "name": c["name"],
                     "key": f"board-reopen-{c['symbol']}",
                     "direction": "开板重评",
-                    "text": f"今日曾封板后当前开板回落 {c['pct']:.1f}%（距封板 {c['runway_pct']}pct）——重新纳入评估候选，"
+                    "text": f"今日曾封板后当前开板回落：入选快照涨幅 {c['pct']:.1f}%，"
+                            f"入选快照价 {c.get('price') if c.get('price') is not None else '待核对'}，"
+                            f"快照版本时点 {snapshot_as_of}；{_distance_alert_text(c)}——重新纳入评估候选，"
                             f"仍需题材/流动性/执行条件复核，不代表保证成交",
                     "seal_state": {"ever_sealed": True, "current_sealed": False,
                                    "snapshot_state": "ready", "version": snapshot_as_of},
-                    "meta": {"trigger_value": c.get("price"), "snapshot_as_of": snapshot_as_of},
+                    "meta": _distance_alert_meta(c, snapshot_as_of),
             }
             try:
                 from app.picks.source_events import record_source_event
@@ -249,6 +365,12 @@ async def pre_limit_sweep(app) -> int:
                 "pct": c["pct"],
                 "runway_pct": c["runway_pct"],
                 "limit_pct": c["limit_pct"],
+                "limit_up_price": c["limit_up_price"],
+                "limit_up_gap_pct": c["limit_up_gap_pct"],
+                "limit_up_gap_state": c["limit_up_gap_state"],
+                "limit_up_gap_price": c["limit_up_gap_price"],
+                "limit_up_gap_source": c["limit_up_gap_source"],
+                "limit_up_gap_as_of": c["limit_up_gap_as_of"],
                 "turnover_rate": c.get("turnover_rate"),
                 "note": "涨停前预警（临板雷达，KB-DEC-011）",
             },
@@ -271,10 +393,12 @@ async def pre_limit_sweep(app) -> int:
             "name": c["name"],
             "direction": "临板预警",
             "text": (
-                f"临板 {c['pct']:.1f}%（距封板 {c['runway_pct']:.1f}pct，{c['limit_pct']:.0f}cm）"
-                f"换手 {c.get('turnover_rate') or '--'}%——涨停前预警，现价 {c.get('price')}"
+                f"临板预警：入选快照涨幅 {c['pct']:.1f}%，"
+                f"入选快照价 {c.get('price') if c.get('price') is not None else '待核对'}，"
+                f"快照版本时点 {snapshot_as_of}；{_distance_alert_text(c)}；"
+                f"涨停幅 {c['limit_pct']:.0f}%，换手 {c.get('turnover_rate') or '--'}%——涨停前预警"
             ),
-            "meta": {"trigger_value": c.get("price")},
+            "meta": _distance_alert_meta(c, snapshot_as_of),
         }
         try:
             await dispatch_alert(app, alert)
@@ -296,23 +420,33 @@ async def pre_limit_loop(app, stop: asyncio.Event) -> None:
     from app.core.scheduler import wait_or_stop
 
     log.info("pre-limit radar loop started (KB-DEC-011)")
-    while True:
-        try:
-            if stop.is_set():
-                log.info("pre-limit radar loop stop requested")
-                return
-            if radar_active_now():
-                await pre_limit_sweep(app)
-                if await wait_or_stop(stop, SWEEP_INTERVAL):
+    try:
+        while True:
+            try:
+                if stop.is_set():
                     log.info("pre-limit radar loop stop requested")
                     return
-            elif await wait_or_stop(stop, IDLE_INTERVAL):
-                log.info("pre-limit radar loop stop requested")
+                if radar_active_now():
+                    await pre_limit_sweep(app)
+                    if await wait_or_stop(stop, SWEEP_INTERVAL):
+                        log.info("pre-limit radar loop stop requested")
+                        return
+                elif await wait_or_stop(stop, IDLE_INTERVAL):
+                    log.info("pre-limit radar loop stop requested")
+                    return
+            except asyncio.CancelledError:
+                log.info("pre-limit radar loop cancelled")
                 return
-        except asyncio.CancelledError:
-            log.info("pre-limit radar loop cancelled")
-            return
-        except Exception:  # noqa: BLE001  单轮失败不终止雷达
-            log.exception("pre-limit radar sweep failed")
-            if await wait_or_stop(stop, IDLE_INTERVAL):
-                return
+            except Exception:  # noqa: BLE001  单轮失败不终止雷达
+                log.exception("pre-limit radar sweep failed")
+                if await wait_or_stop(stop, IDLE_INTERVAL):
+                    return
+    finally:
+        state = app.state if hasattr(app, "state") else app
+        task = getattr(state, "_pre_limit_distance_inflight", None)
+        if task is not None:
+            # 2s只结束本轮等待，不宣称杀掉底层线程/请求；停机同样等待真实drain。
+            try:
+                await asyncio.shield(task)
+            except (Exception, asyncio.CancelledError):
+                pass

@@ -125,6 +125,7 @@ export function LimitUpTab() {
 
       <Panel
         className="min-h-0 flex-1 overflow-hidden"
+        bodyClassName="data-scroll"
         title={error ? "数量待核对" : `共 ${shown.length} 只（按连板数排序${theme && !onlyMembers ? "，成员高亮" : ""}）`}
         source={records[0]?.source}
       >
@@ -149,7 +150,7 @@ export function LimitUpTab() {
             「{theme}」的梯队成员均不在 {tradeDate || "当日"} 的涨停池中
           </p>
         ) : (
-          <table className="data-table w-full text-sm">
+          <table className="data-table w-full text-sm" tabIndex={0} aria-label="涨停池，左右滚动查看全部列">
             <thead className="text-left text-xs text-zinc-600 dark:text-zinc-400">
               <tr className="border-b border-zinc-200 dark:border-zinc-800">
                 {["代码", "名称", "价格", "涨幅", "连板", "梯队", "涨停原因", "炸板", "封单额", "换手"].map((h) => (
@@ -188,7 +189,7 @@ export function LimitUpTab() {
                     <td className={`px-2 py-2 text-right font-mono ${pctColor(r.change_pct)}`}>{pctText(r.change_pct)}</td>
                     <td className="px-2 py-2 text-right font-mono">{r.consecutive_boards ?? "--"}</td>
                     <td className="px-2 py-2 text-right text-xs text-zinc-600 dark:text-zinc-400">{r.boards_stat ?? "--"}</td>
-                    <td className="max-w-[260px] truncate px-2 py-2 text-xs text-zinc-600 dark:text-zinc-300" title={r.reason ?? ""}>{r.reason ?? "--"}</td>
+                    <td className="table-description px-2 py-2 text-xs text-zinc-600 dark:text-zinc-300">{r.reason ?? "--"}</td>
                     <td className="px-2 py-2 text-right font-mono text-xs">{(r.break_count ?? 0) > 0 ? <span className="text-amber-800 dark:text-amber-400">{r.break_count}</span> : "0"}</td>
                     <td className="px-2 py-2 text-right font-mono text-xs">{fmtAmount(r.seal_amount)}</td>
                     <td className="px-2 py-2 text-right font-mono text-xs">{r.turnover_rate != null ? `${fmt(r.turnover_rate)}%` : "--"}</td>

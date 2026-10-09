@@ -37,6 +37,56 @@ describe("IndexCards 指数点击交互", () => {
     expect(onSelect).toHaveBeenCalledWith("sh000001");
   });
 
+  it("收起仍按市场代码显示上证、科创50、创业板，乱序和源名称变化不改变选择", () => {
+    const onSelect = vi.fn();
+    render(<IndexCards indices={[
+      idx("000300", "沪深300", "SH", 3900.2),
+      idx("sz399006", "创业板指数", "SZ", 2100.8),
+      idx("sh000688", "上证科创板50成份指数", "SH", 1000.6),
+      indices[1],
+      indices[0],
+    ]} selected="sh000688" onSelect={onSelect} />);
+    fireEvent.click(screen.getByRole("button", { name: /指数.*收起/ }));
+    expect(screen.getByText("上证指数")).toBeTruthy();
+    expect(screen.getByText("科创50")).toBeTruthy();
+    expect(screen.getByText("创业板指")).toBeTruthy();
+    expect(screen.queryByText("沪深300")).toBeNull();
+    expect(screen.queryByText("深证成指")).toBeNull();
+    const star = screen.getByTitle(/科创50 · 来源/);
+    expect(star.getAttribute("aria-pressed")).toBe("true");
+    fireEvent.click(star);
+    expect(onSelect).toHaveBeenCalledWith("sh000688");
+    fireEvent.click(screen.getByRole("button", { name: /指数.*展开/ }));
+    expect(screen.getByText("沪深300")).toBeTruthy();
+    expect(screen.getByText("深证成指")).toBeTruthy();
+  });
+
+  it("收起缺失基准明确显示未返回，不拿其他市场同代码或另一指数代替", () => {
+    const onSelect = vi.fn();
+    render(<IndexCards indices={[
+      indices[0], indices[1], idx("000688", "其他市场同代码", "SZ", 88),
+    ]} onSelect={onSelect} />);
+    fireEvent.click(screen.getByRole("button", { name: /指数.*收起/ }));
+    const missingStar = screen.getByTitle("科创50 · 本轮未返回该指数") as HTMLButtonElement;
+    const missingGrowth = screen.getByTitle("创业板指 · 本轮未返回该指数") as HTMLButtonElement;
+    expect(missingStar.disabled).toBe(true);
+    expect(missingGrowth.disabled).toBe(true);
+    expect(missingStar.textContent).toContain("未返回");
+    expect(screen.queryByText("88.00")).toBeNull();
+    expect(screen.queryByText("未开盘")).toBeNull();
+    fireEvent.click(missingStar);
+    expect(onSelect).not.toHaveBeenCalled();
+  });
+
+  it("收起保留旧行情的质量告知，不把过期基准静音成正常", () => {
+    render(<IndexCards indices={[{
+      ...indices[0], quality: "stale", quality_reasons: ["index_batch_missing"],
+    }]} />);
+    fireEvent.click(screen.getByRole("button", { name: /指数.*收起/ }));
+    expect(screen.getByText("3,300.50")).toBeTruthy();
+    expect(screen.getByTitle("本轮未返回该指数，展示旧行情").textContent).toBe("过期");
+  });
+
   it("未传 onSelect 时卡片渲染但不报错（静默降级为纯展示）", () => {
     render(<IndexCards indices={indices} />);
     expect(screen.getByText("3,300.50")).toBeTruthy(); // fmt 带千分位

@@ -5,6 +5,7 @@ import { Suspense, useCallback, useState } from "react";
 import { MarketLensPicker } from "@/components/ui/workspace-deck";
 import { useSearchParams } from "next/navigation";
 import { Panel } from "@/components/panel";
+import { ModalShell } from "@/components/ui/modal-shell";
 import { QualityBadge } from "@/components/quality-badge";
 import { EventPanel } from "@/components/event-panel";
 import { HeatmapTab } from "@/components/market/heatmap-tab";
@@ -27,6 +28,7 @@ import {
 } from "@/lib/api";
 import { fmt, fmtAmount, pctColor, pctText, sourceLabel, timeText, triAmount } from "@/lib/format";
 import { usePollingFetch } from "@/hooks/use-polling-fetch";
+import { useExitPresence } from "@/hooks/use-exit-presence";
 import { FadeSwap, PageSkeletonFallback, Skeleton } from "@/components/ui/loading";
 import type { LimitUpRecord, Quote } from "@/types/market";
 import "./market-bc.css";
@@ -67,6 +69,8 @@ function MarketInner() {
   const [breadth, setBreadth] = useState<Breadth | null>(null);
   const [sent, setSent] = useState<Sentiment | null>(null);
   const [sentHist, setSentHist] = useState<SentimentHistoryPayload | null>(null);
+  const [basisOpen, setBasisOpen] = useState(false);
+  const basisPresence = useExitPresence(basisOpen ? sent : null);
   const [error, setError] = useState<string | null>(null);
   const [updatedAt, setUpdatedAt] = useState("");
   // 首轮加载在途：区分「加载中」（骨架占位）与「确认无数据」（空态文案），
@@ -104,6 +108,7 @@ function MarketInner() {
       setContextError(breadthRes === null || sentRes === null);
       setBreadth(breadthRes);
       setSent(sentRes);
+      if (sentRes === null) setBasisOpen(false);
     } catch {}
   }, []);
 
@@ -155,6 +160,7 @@ function MarketInner() {
               ))}
             </section>
 
+            <div className="bc-market-metrics">
             <section className="bc-market-environment" aria-label="成交与市场宽度">
               <div className="bc-market-turnover">
                 <div className="bc-market-turnover-head"><span>沪深京成交额</span><Link href={lensHref("/market?tab=fund")} className="bc-market-text-action">资金详情<svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.6" aria-hidden="true"><path d="M7 17 17 7M7 7h10v10" /></svg></Link></div>
@@ -182,12 +188,7 @@ function MarketInner() {
                   <span className={`bc-market-phase ${PHASE_STYLE[sent.phase] ?? ""}`}>{sent.phase}</span>
                   <span>情绪温度 <strong>{sent.temperature}</strong><small> / 100</small></span>
                   <span className="bc-market-confidence">置信度 {sent.confidence}</span>
-                  <details className="sentiment-basis bc-market-basis"><summary>依据与失效条件</summary><div>
-                    <p><strong>依据</strong> {sent.reasons.join("；") || "未提供"}</p>
-                    <p><strong>误判风险</strong> {sent.misjudge_caveats.join("；") || "未提供"}</p>
-                    <p><strong>切换条件</strong> {sent.switch_conditions || "未提供"}</p>
-                    {sent.indicators.length > 0 && <p><strong>指标</strong> {sent.indicators.slice(0, 6).map(indicator => `${indicator.name} ${indicator.value ?? "--"}`).join("；")}</p>}
-                  </div></details>
+                  <button type="button" className="bc-market-evidence-trigger" aria-haspopup="dialog" aria-expanded={basisPresence.active} onClick={() => setBasisOpen(true)}>依据与失效条件</button>
                 </div>
                 {sentHist && sentHist.items.length > 0 && <div className="bc-market-cycle" title={sentHist.cycle.start_date ? `本轮自 ${sentHist.cycle.start_date} 起（${sentHist.cycle.start_phase ?? ""}→${sentHist.items[sentHist.items.length - 1]?.phase}），已持续 ${sentHist.cycle.days} 日` : `近 ${sentHist.items.length} 日情绪序列`}>
                   <span>近 {sentHist.items.length} 日</span><div className="bc-market-history">{sentHist.items.map(history => {
@@ -200,6 +201,7 @@ function MarketInner() {
               </section>
             ) : pending ? <div className="bc-market-sentiment"><Skeleton className="h-5 w-14" /><Skeleton className="h-4 w-40" /><Skeleton className="h-4 w-24" /></div> : null}
 
+            </div>
             </div>
             <div className="bc-market-reading">
               <Panel title="涨停前列" source={pool[0]?.source} className="bc-market-pool" bodyClassName="bc-market-pool-scroll" extra={<Link href={lensHref(tapeUrl("limitup"))} className="bc-market-text-action">查看全池<svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.6" aria-hidden="true"><path d="M7 17 17 7M7 7h10v10" /></svg></Link>}>
@@ -219,6 +221,14 @@ function MarketInner() {
           </div>
         )}
       </FadeSwap>
+      {basisPresence.value && <ModalShell open={basisPresence.active} onClose={() => setBasisOpen(false)} label="市场情绪依据与失效条件" size="md" header={<div><h2>市场情绪依据与失效条件</h2><p className="mt-1 text-xs text-zinc-600 dark:text-zinc-400">{basisPresence.value.phase} · 情绪温度 {basisPresence.value.temperature} / 100 · 置信度 {basisPresence.value.confidence}</p></div>}>
+        <div className="bc-market-evidence-copy">
+          <p><strong>依据</strong> {basisPresence.value.reasons.join("；") || "未提供"}</p>
+          <p><strong>误判风险</strong> {basisPresence.value.misjudge_caveats.join("；") || "未提供"}</p>
+          <p><strong>切换条件</strong> {basisPresence.value.switch_conditions || "未提供"}</p>
+          {basisPresence.value.indicators.length > 0 && <p><strong>指标</strong> {basisPresence.value.indicators.slice(0, 6).map(indicator => `${indicator.name} ${indicator.value ?? "--"}`).join("；")}</p>}
+        </div>
+      </ModalShell>}
     </main>
   );
 }

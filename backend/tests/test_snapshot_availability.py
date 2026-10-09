@@ -612,12 +612,33 @@ def test_fallback_rejects_stale_quotes_from_coverage_in_live_window(monkeypatch,
 
 def test_fallback_missing_quote_clears_dynamic_fields():
     now = datetime.now(timezone.utc)
-    row = MarketSnapshotService._fallback_row(_base_rows(1)[0], None, now=now)
+    base = {**_base_rows(1)[0], "limit_up_price": 88.0, "limit_down_price": 72.0, "quality": "high",
+            "data_timestamp": "2026-10-08T02:30:00+00:00"}
+    row = MarketSnapshotService._fallback_row(base, None, now=now)
     for key in ("price", "open", "high", "low", "prev_close", "change",
-                "change_pct", "volume", "amount", "turnover_rate", "ticktime"):
+                "change_pct", "volume", "amount", "turnover_rate", "ticktime",
+                "limit_up_price", "limit_down_price", "quality", "data_timestamp"):
         assert row[key] is None
     assert row["name"] == "S0"
     assert row["source"] == "quote_fallback:missing"
+
+
+def test_fallback_keeps_limit_price_current_price_source_time_and_quality_from_same_quote():
+    from app.schemas.market import Quality
+
+    now = datetime.now(timezone.utc)
+    quote = _quote("600001")
+    quote.price, quote.limit_up_price, quote.limit_down_price = 10.72, 11.0, 9.0
+    quote.quality = Quality.medium
+    row = MarketSnapshotService._fallback_row({
+        **_base_rows(1)[0], "price": 88.0, "limit_up_price": 99.0,
+        "data_timestamp": "2026-10-08T02:30:00+00:00",
+    }, quote, now=now)
+    assert row["price"] == 10.72 and row["limit_up_price"] == 11.0 and row["limit_down_price"] == 9.0
+    assert row["symbol"] == quote.symbol and row["market"] == quote.market
+    assert row["ticktime"] == quote.data_timestamp.isoformat()
+    assert row["data_timestamp"] == row["ticktime"]
+    assert row["quality"] == "medium" and row["source"] == f"{quote.source}_fallback"
 
 
 def test_rate_limit_run_invokes_fallback_but_preserves_primary_cooldown(monkeypatch):
