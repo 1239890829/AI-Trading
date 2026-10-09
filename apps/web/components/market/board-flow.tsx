@@ -199,10 +199,10 @@ function BoardCard({
   const rangeLabel = range === "intraday" ? "净流入" : `${range}净流入`;
   return (
     <div role="button" tabIndex={0} aria-label={`查看 ${row.name} 资金详情`} onClick={onClick} onKeyDown={event => { if (event.key === "Enter" || event.key === " ") { event.preventDefault(); onClick(); } }}>
-      <CardShell flow className="cursor-pointer transition-colors hover:border-zinc-300 dark:hover:border-zinc-700">
-      <div className="flex items-baseline justify-between gap-2">
-        <div className="flex min-w-0 items-center gap-1.5">
-          <span className="truncate text-sm font-semibold">{row.name}</span>
+      <CardShell flow className="board-flow-card cursor-pointer transition-colors hover:border-zinc-300 dark:hover:border-zinc-700">
+      <div className="board-flow-heading flex items-baseline justify-between gap-2">
+        <div className="board-flow-identity flex min-w-0 items-center gap-1.5">
+          <span className="board-flow-name text-sm font-semibold">{row.name}</span>
           <span className="shrink-0 font-mono text-[9px] text-zinc-600 dark:text-zinc-400">{row.board_code.replace(/^BK/, "")}</span>
         </div>
         <div className="flex shrink-0 items-center gap-1">
@@ -224,7 +224,7 @@ function BoardCard({
         </div>
       </div>
 
-      <div className="mt-1.5 flex items-end justify-between">
+      <div className="board-flow-metrics mt-1.5 flex items-end justify-between gap-3">
         <div>
           <div className={`font-mono text-lg font-semibold leading-tight tabular-nums ${pctColor(row.change_pct)}`}>{pctText(row.change_pct)}</div>
           <div className="text-[9px] text-zinc-600 dark:text-zinc-400">涨跌幅</div>
@@ -331,7 +331,7 @@ export function BoardFlowPanel() {
       <div className="flex h-full min-h-0 flex-col px-4 py-2.5">
         {!!resource.error && <p role="alert" className="text-xs text-amber-800 dark:text-amber-300">板块资金读取失败。{payload ? "以下为同范围上次结果。" : ""}<button onClick={resource.refresh}>重试读取</button></p>}
         {/* 控制行：维度 / 区间 / 排序 / 筛选 */}
-        <div className="flex shrink-0 flex-wrap items-center gap-x-3 gap-y-1.5">
+        <div className="board-flow-controls flex shrink-0 flex-wrap items-center gap-x-3 gap-y-1.5">
           <FilterMenu label="板块" value={kind} options={KIND_CHIPS} onChange={setKind} />
           <FilterMenu label="区间" value={range} options={RANGE_CHIPS} onChange={setRange} />
           <FilterMenu label="排序" value={sortKey} options={SORT_CHIPS} onChange={setSortKey} />
@@ -361,11 +361,11 @@ export function BoardFlowPanel() {
           </p>
         ) : (
           <>
-            <div className="mt-2 min-h-0 flex-1 overflow-y-auto" data-testid="board-flow-table">
+            <div className="board-flow-list mt-2 min-h-0 flex-1 overflow-y-auto" data-testid="board-flow-table" role="region" aria-label="板块资金列表" tabIndex={0}>
               {shown.length === 0 ? (
                 <p className="py-10 text-center text-xs text-zinc-600 dark:text-zinc-400">当前筛选无匹配板块</p>
               ) : (
-                <MasonryColumns>
+                <MasonryColumns gap="gap-3">
                   {shown.map((r) => (
                     <div key={r.board_code} data-testid={`board-row-${r.board_code}`} onClick={() => setDrawer(r)}>
                       <BoardCard row={r} range={range} onClick={() => setDrawer(r)} />
@@ -379,11 +379,11 @@ export function BoardFlowPanel() {
                 unit="个板块"
                 testId="board-flow-sentinel"
               />
-            </div>
-            <p className="mt-1 shrink-0 text-[10px] text-zinc-600 dark:text-zinc-400">
+            <p className="mt-1 text-[10px] text-zinc-600 dark:text-zinc-400">
               点卡看板块下钻（分钟累计 + 日度柱 + 成员排行）。净流入为东财官方板块口径（非成分股相加）；
               「主力占成交」仅今日区间；连续流入/20日区间来自收盘落盘沉淀，未沉淀显示 —。
             </p>
+            </div>
           </>
         )}
       </div>
