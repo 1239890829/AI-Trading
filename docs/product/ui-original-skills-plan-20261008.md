@@ -475,6 +475,8 @@ Chrome CUA实际核320×665 K线Canvas/切列表、390×844分时/指标展开/�
 
 3000已加载最终production构建`uan4kQ7Mk6taV-q14tbiU`，前端PID40262、后端75041；三项修改源码SHA-256无漂移，市场页/代理health/后端health/LAN只读HTTP200。临时3101/3102夹具服务已正常停止并复查无监听，IAB临时视口已reset、临时标签为空。既有恢复包与tag保持。详见忽略产物`artifacts/runs/fund-space-20261009/`的browser-acceptance.json、runtime-release.json、final-source-manifest.json、screenshots及门禁日志。发布CI/准确HEAD回执/合并后核验尚待取得。
 
+**本项发布收口**：[PR #245](https://github.com/1239890829/AI-Trading/pull/245)准确HEAD `c6189af28b5b9b5c9605888e9c9d05250ea94237`经过DegradedRelease、required CI与release_check，match-head合并为`e2565fb7c19487dae62fc5251d130388e281dd71`（2026-10-09T07:02:03Z）。post-merge运行37896728491的backend/frontend/docs均completed/success；主干已同步，原功能分支已清理。首CI因handoff缺U01–U55需求范围标记失败，恢复后88项文档守卫本地通过、最终CI通过，未改测试标准。当前原代码与3000已验构建一致，追加任务不以本项历史绿色放行。
+
 ## 附录A：逐技能原文职责与完整适用流程
 
 本附录包含修订前20项问题的处置、33项技能及条件分支、24项Impeccable命令，以及原生路径与宿主适配的具体边界。A–G字母表示本附录的工作阶段，正文§6的“交付1–7”表示成果批次，两者不是任务编号。
