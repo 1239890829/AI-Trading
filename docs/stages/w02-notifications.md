@@ -105,6 +105,6 @@
 - 入选消息以source_as_of分时段，其他消息沿事件ts；已读/清除取recorded_at，仅未提供字段时回退legacy ts，显式null仍未知。读取read_window明确最近范围，饱和但未证明更早合格消息时has_more=null；并发已读先取得SQLite写锁再读取合并，包括首次无状态行。站内可见、渠道受理/unknown和用户已读各自记录。
 - 诊断分别读每日selection receipt、盘中durable run和实际消息；旧买点无归档保留no_run，盘中新链区分no_archive/projection_unconfirmed，每日无名单为no_pick_set；不猜未运行或全天没有机会。同日同股后续合并仍不重新未读，风险消息独立于机会去重。
 - 自设个股条件和真实持仓风险在生成/发送前核自身源时点与质量；风险缺数保留uncompleted与逐股原因。维护显示真实渠道状态，删除确认说明触发历史随规则删除、外发尝试审计保留。
-- 系统健康异常按原policy及配置目标复用source事件与Outbox同事务、持久active/recovered episode及发送前恢复重检。渠道缺目标/策略关闭明确返回状态，不消费新episode；入队前失败可再观测，发送已开始后的unknown不自动重发。部分恢复只发仍活跃项，恢复后再次发生才产生新episode。该源仍由维护与原外发链消费，不加入个股铃铛范围。
+- 系统健康异常按原policy及配置目标复用source事件与Outbox同事务、持久active/recovered episode及发送前恢复重检。渠道缺目标返回channel_unavailable，原推送矩阵关闭返回policy_disabled；持久源规则停用或限制channels/scope可仅留recorded，不建立外发意图。入队前失败可再观测，发送已开始后的unknown不自动重发。部分恢复只发仍活跃项，恢复后再次发生才产生新episode。该源仍由维护与原外发链消费，不加入个股铃铛范围。
 
 上述契约已有隔离反例验证范围，完整细功能和限制见[审计§41](../product/feature-closure-audit.md#41-imp-087-原选股与可靠消息的细功能契约2026-10-09)。生产迁移/加载、真实送达、长期效果与全系统实源SLO须分别取证，文档传播不代表这些验收已通过。
