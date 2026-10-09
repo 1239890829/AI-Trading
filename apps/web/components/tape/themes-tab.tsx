@@ -20,7 +20,7 @@ import type { ThemeBoardPayload } from "@/types/market";
  * 回答三个问题——题材是否成建制、梯队是否健康、资金是否持续。
  *
  * 滚动约定（2026-08-29 修复）：全局 body 锁屏（h-screen overflow-hidden），
- * 盘面页自管滚动。本 tab 结构为：固定头部 + 单一大滚动容器承载全部卡片。
+ * 筛选与参照占左栏，右侧题材卡片列表单独滚动；窄屏可展开筛选。
  *
  * URL 同步注意：盘面页的 tab 参数在同一个 URL 上，updateUrl 必须在
  * window.location.search 基础上增删（不能新建空 URLSearchParams），
@@ -65,6 +65,7 @@ export function ThemesTab() {
   const loading = resource.pending;
   const error = resource.error instanceof Error ? resource.error.message : resource.error ? "读取失败" : null;
   const [showCaveats, setShowCaveats] = useState(false);
+  const [controlsOpen, setControlsOpen] = useState(false);
   // 题材人气（B1 热股榜）：best-effort 增强，拉取失败静默降级（看板主体不依赖它）
   const [hot, setHot] = useState<ThemesHotPayload | null>(null);
   // 飙升榜（B1）：「正在变热」信号，与人气榜口径不同；best-effort 同上
@@ -188,7 +189,12 @@ export function ThemesTab() {
   }
 
   return (
-    <div className="flex h-full min-h-0 flex-col">
+    <div className="theme-workspace">
+      <aside className="theme-context" aria-label="题材筛选与市场参照">
+        <button className="theme-controls-toggle" aria-expanded={controlsOpen} aria-controls="theme-control-body" onClick={() => setControlsOpen(value => !value)}>
+          <span>筛选与市场参照</span><span>{controlsOpen ? "收起" : "展开"}</span>
+        </button>
+        <div id="theme-control-body" className="theme-control-body" data-open={controlsOpen}>
       {/* ── 固定头部：摘要 + 筛选 ────────────────────────────── */}
       <div className="mb-3 flex shrink-0 flex-wrap items-end justify-between gap-3">
         <p className="text-xs text-zinc-600 dark:text-zinc-400">
@@ -354,6 +360,9 @@ export function ThemesTab() {
         </div>
       )}
 
+        </div>
+      </aside>
+      <div className="theme-main">
       {error && (
         <div className="mb-3 shrink-0 rounded-lg border border-amber-500/40 bg-amber-500/10 px-4 py-3 text-sm text-amber-800 dark:text-amber-300">
           题材看板加载失败：{error}
@@ -401,8 +410,8 @@ export function ThemesTab() {
       )}
 
       {/* ── 唯一滚动容器：全部卡片 + 断板股 + 口径说明 ─────────── */}
-      <div className="min-h-0 flex-1 overflow-y-auto pr-1">
-        <div className={`space-y-3 ${loading && data ? "opacity-60 transition-opacity" : ""}`}>
+      <div className="theme-card-scroll min-h-0 flex-1 overflow-y-auto pr-1">
+        <div className={`theme-card-list ${loading && data ? "opacity-60 transition-opacity" : ""}`}>
           {visibleThemes.map((c, i) => (
             <ThemeCardView
               key={c.theme}
@@ -476,6 +485,7 @@ export function ThemesTab() {
           本页为技术面结构分析，不构成投资建议。题材阶段与健康度为规则化推断，需结合盘中实际走势与个股基本面独立判断。
           梯队归属按当日涨停联动唯一判定（连板密度优先），一只票只出现在一张卡片。
         </p>
+      </div>
       </div>
     </div>
   );

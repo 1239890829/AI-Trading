@@ -37,7 +37,9 @@ export function ProductionOperations() {
       setBusy(null);
     }
   }
-  return <div className="operations-layout">
+  return <div className="operations-workspace">
+    <p className="panel-reader-hint">左右滑动查看其他阅读区</p>
+    <div className="operations-layout" role="region" aria-label="运行状态与生产命令阅读区" tabIndex={0}>
     <section className="operations-status" aria-labelledby="watcher-heading">
       <h2 id="watcher-heading">节拍持久状态</h2>
       <p>自动调度取决于服务和各项开关。机器关闭或服务未启动时不会继续生产。</p>
@@ -48,6 +50,7 @@ export function ProductionOperations() {
         <h2 id="production-heading">后台生产与维护</h2>
         <p>查看生产结果，按需补做任务。每次执行前核对影响，完成后查看回执。</p>
       </header>
+      <div className="operations-command-scroll">
       <p className="operations-note">命令沿用后端写权限、预算与安全边界。进入此区域不授予额外权限。</p>
         <div className="command-list">
           {COMMANDS.map((command) => <div key={command.label} className="command-row">
@@ -56,7 +59,9 @@ export function ProductionOperations() {
           </div>)}
         </div>
         {receipt && <details open className="command-receipt"><summary>本次命令回执</summary><pre role="status">{receipt}</pre></details>}
+      </div>
     </section>
 
+    </div>
   </div>;
 }

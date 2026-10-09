@@ -705,7 +705,7 @@ export const StockDetailPanel = memo(function StockDetailPanel({
 
       {/* 依据明细：正常文档流展开（打开时图表下移让位，不遮挡任何元素） */}
       {chartTab === "kline" && techOpen && tech && (
-        <div className="shrink-0 rounded-lg border border-zinc-200 bg-white/90 p-2 text-[11px] leading-relaxed shadow-sm dark:border-zinc-700 dark:bg-zinc-900/90">
+        <div className="tech-signal-details shrink-0 rounded-lg border border-zinc-200 bg-white/90 p-2 text-[11px] leading-relaxed shadow-sm dark:border-zinc-700 dark:bg-zinc-900/90" role="region" tabIndex={0} aria-label="技术评估依据">
           <ul className="space-y-0.5">
             {tech.signals.map((sg) => (
               <li key={sg.name} className="flex items-start gap-1.5">
@@ -734,7 +734,7 @@ export const StockDetailPanel = memo(function StockDetailPanel({
         }`}
         style={{ "--right-w": `${rightW}px` } as React.CSSProperties}
       >
-        <div className="flex min-h-0 min-w-0 flex-col gap-1.5">
+        <div className="detail-chart-column flex min-h-0 min-w-0 flex-col gap-1.5">
           {chartTab === "kline" && (
             /* 头部标题行（股票名 · 日 K 线（前复权）+ 来源）已移除：股票名在页面
                其它位置已展示，这行纯属重复占位，去掉后纵向多出约 41px 给 K 线
@@ -887,7 +887,7 @@ export const StockDetailPanel = memo(function StockDetailPanel({
                             ? "做 T 决策（分钟级）"
                             : "资讯"
           }
-          bodyClassName="overflow-y-auto"
+          bodyClassName="flex flex-col overflow-hidden"
           source={rightTab === "book" ? book?.source : undefined}
           dataTimestamp={rightTab === "book" ? book?.data_timestamp : null}
           className="min-h-0 flex-1 overflow-hidden"

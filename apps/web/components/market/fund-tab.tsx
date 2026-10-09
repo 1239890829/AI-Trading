@@ -384,6 +384,7 @@ export function FundTab() {
     () => turnHist.map((d) => d.date).filter((d) => d < todayStr),
     [turnHist, todayStr],
   );
+  const [analysisView, setAnalysisView] = useState<"current" | "history" | "seats">("current");
   const estLabel =
     turnover?.est_method === "closed"
       ? "已收盘"
@@ -394,10 +395,18 @@ export function FundTab() {
           : null;
 
   return (
-    // 滚动兜底（2026-09-04）：内容天然超一屏，根节点必须可滚——
-    // 上层 main 是 overflow-hidden，这里再丢滚动就会静默裁剪。
-    <div className="flex h-full min-h-0 flex-col gap-2 overflow-y-auto">
+    // The board list and analytical reader own their bounded surfaces independently.
+    <div className="fund-workspace">
+      <div className="fund-notices">
       {Object.entries(readErrors).filter(([,failed]) => failed).map(([name]) => <p key={name} role="alert" className="text-xs text-amber-800 dark:text-amber-300">{name}读取失败，保留值仅作上次结果；不能判断当前为空或为零。</p>)}
+      </div>
+      <div className="fund-columns" role="region" aria-label="板块资金与资金结构阅读区" tabIndex={0}>
+      <div className="fund-board-reader"><BoardFlowPanel /></div>
+      <section className="fund-analysis" aria-label="资金结构与历史核对">
+        <div className="fund-view-switch" role="group" aria-label="资金阅读内容">
+          {([{key: "current", label: "即时资金"}, {key: "history", label: "历史对照"}, {key: "seats", label: "公开席位"}] as const).map(view => <button key={view.key} aria-pressed={analysisView === view.key} onClick={() => setAnalysisView(view.key)}>{view.label}</button>)}
+        </div>
+        <div className="fund-analysis-current" hidden={analysisView !== "current"}>
       {/* 第一行：成交额对比 + 实时五档净额 */}
       <div className="grid shrink-0 gap-2 lg:grid-cols-2">
         <Panel
@@ -486,8 +495,6 @@ export function FundTab() {
         </Panel>
       </div>
 
-      {/* 第二段：板块资金流榜（L2 主视图，docs/summary/architecture-design.md §2；点行下钻抽屉） */}
-      <BoardFlowPanel />
 
       {/* 第三行：分钟级资金流累计曲线 */}
       <Panel
@@ -520,6 +527,8 @@ export function FundTab() {
         )}
       </Panel>
 
+      </div>
+      <div className="fund-analysis-history" hidden={analysisView !== "history"}>
       {/* 第三行：历史回看 */}
       <div className="grid min-h-[210px] shrink-0 gap-2 lg:grid-cols-2">
         <Panel title="成交额历史（近 10 交易日，点击切换对比）" className="min-h-0 overflow-hidden">
@@ -587,8 +596,13 @@ export function FundTab() {
         </Panel>
       </div>
 
+      </div>
+      <div className="fund-analysis-seats" hidden={analysisView !== "seats"}>
       {/* 第四行：机构/游资（龙虎榜日度） */}
       <LonghuFlowCard fallbackDates={lhbFallbackDates} />
+      </div>
+      </section>
+      </div>
     </div>
   );
 }

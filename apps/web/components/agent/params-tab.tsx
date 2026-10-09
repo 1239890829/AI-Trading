@@ -129,20 +129,15 @@ export function ParamsTab() {
   }
 
   return (
-    // 滚动归属：本页三段（概览 / 参数清单 / 变更历史）都是「按内容高展示」的信息区块，
-    // 没有一个适合独占弹性区——实测三段全 shrink-0 时内容 717px > 容器 508px，
-    // 而根 overflow-y 为 visible、FadeSwap 父为 hidden ⇒ 多出的 209px 被直接裁掉，
-    // 表现为「向下滚不动、下半截看不见」（2026-09-10 用户报）。
-    // 故按 FadeSwap 契约（各 tab 根 h-full min-h-0 + **自管滚动**）让根整体滚动，
-    // 子区块一律 shrink-0 按内容高排布，不再互相挤压（变更历史原为 flex-1 被压到 26px）。
-    <div className="settings-form flex h-full min-h-0 flex-col gap-4 overflow-y-auto">
+    // Parameter list and change history are separate bounded readers.
+    <div className="settings-form flex h-full min-h-0 flex-col gap-4">
       {error && (
         <p className="shrink-0 rounded-md bg-red-500/5 px-2 py-1.5 text-[11px] text-red-700 dark:text-red-300">{error}</p>
       )}
 
       {/* 变更存活率（P1-15）：数字 + **样本是否够用**一起展示。
           只给一个"存活率 100%"会把"只有 1 条变更"读成"策略很稳"。 */}
-      <section className="ui-card shrink-0 rounded-xl border border-zinc-200 px-3 py-2 dark:border-zinc-800">
+      <section className="settings-survival ui-card shrink-0 rounded-xl border border-zinc-200 px-3 py-2 dark:border-zinc-800">
         <div className="flex flex-wrap items-center gap-x-3 gap-y-1 text-[11px]">
           <span className="font-medium text-zinc-700 dark:text-zinc-200">变更存活率</span>
           {survival === undefined ? (
@@ -179,12 +174,15 @@ export function ParamsTab() {
         </div>
       </section>
 
+      <p className="panel-reader-hint">左右滑动查看白名单与变更历史</p>
+      <div className="settings-columns" role="region" aria-label="参数白名单与变更历史阅读区" tabIndex={0}>
       {/* 参数清单 */}
-      <section className="ui-card shrink-0 rounded-xl border border-zinc-200 p-3 dark:border-zinc-800">
+      <section className="settings-whitelist ui-card rounded-xl border border-zinc-200 p-3 dark:border-zinc-800">
         <div className="settings-heading mb-3 flex flex-wrap items-baseline justify-between gap-2">
           <h3 className="text-xs font-medium text-zinc-700 dark:text-zinc-200">参数白名单（生效值：运行时覆盖 &gt; 静态配置）</h3>
           <span className="text-[10px] text-zinc-600 dark:text-zinc-400">改参数免重启 · 全程审计留痕</span>
         </div>
+        <div className="settings-list-scroll">
         {params === undefined ? (
           <div className="h-10 w-full animate-pulse rounded bg-zinc-100 dark:bg-zinc-800" />
         ) : params === null ? (
@@ -251,12 +249,13 @@ export function ParamsTab() {
             ))}
           </div>
         )}
+        </div>
       </section>
 
-      {/* 变更单历史：整页已由根容器滚动，这里按内容高排布（原 flex-1 会在
-          前两段撑高时被压到只剩边框高度——实测 26px vs 内容 154px）。 */}
-      <section className="ui-card shrink-0 rounded-xl border border-zinc-200 p-3 dark:border-zinc-800">
+      {/* 历史与白名单各自保留标题，列表独立滚动。 */}
+      <section className="settings-history ui-card rounded-xl border border-zinc-200 p-3 dark:border-zinc-800">
         <h3 className="mb-2 text-xs font-medium text-zinc-700 dark:text-zinc-200">变更单历史（应用/回滚均留审计）</h3>
+        <div className="settings-list-scroll">
         {changes === undefined ? (
           <div className="h-10 w-full animate-pulse rounded bg-zinc-100 dark:bg-zinc-800" />
         ) : changes === null ? (
@@ -351,7 +350,9 @@ export function ParamsTab() {
             })}
           </div>
         )}
+        </div>
       </section>
+      </div>
     </div>
   );
 }

@@ -3,6 +3,7 @@
 import { useCallback, useState } from "react";
 import { Panel } from "@/components/panel";
 import { useResource } from "@/hooks/use-polling-fetch";
+import "./review-layout.css";
 import {
   ApiError,
   getReviewEffectiveness,
@@ -373,50 +374,46 @@ export function ReviewTab({ focusDate, allowDispose = false }: { focusDate?: str
   }
 
   return (
-    // minmax(0,…) 而非 auto/1fr：grid 行的 auto 会被长内容无限撑开，把同行面板压扁
-    // 并把滚动推到最外层（窄屏下表现为整页滚动、面板内无滚动条）。
-    <div className={`grid min-h-0 flex-1 gap-3 overflow-auto ${allowDispose ? "grid-rows-[minmax(0,auto)_minmax(0,1fr)] lg:grid-cols-2 lg:grid-rows-1" : "grid-rows-1"}`}>
-      <Panel title="复盘报告（冻结版本）" className="min-h-[240px]">
-        {requestedDate && !reports.some(r => r.trade_date === requestedDate) && <div className="px-4 py-3 text-sm"><button onClick={() => setSelectedDate(requestedDate)}>{requestedDate} 指定报告</button>{openDate === requestedDate && (detail ? <ReportDetail report={detail} allowDispose={allowDispose} onDisposed={reloadAfterDispose} /> : <p role={detailResource.error ? "alert" : "status"}>{detailResource.error ? "指定日期读取失败" : detailResource.pending ? "详情加载中…" : "指定日期尚无报告"}</p>)}</div>}
+    <div className="review-workspace">
+      <p className="review-reader-hint">左右滑动查看报告、正文与处置</p>
+    <div className={`review-layout${allowDispose ? " review-layout-with-disposition" : ""}`} role="region" aria-label="报告索引、正文与处置阅读区" tabIndex={0}>
+      <Panel title="复盘报告（冻结版本）" className="review-index" bodyClassName="review-index-scroll overflow-auto">
+        {requestedDate && !reports.some(r => r.trade_date === requestedDate) && <div className="px-4 py-3 text-sm"><button aria-pressed={openDate === requestedDate} onClick={() => setSelectedDate(requestedDate)}>{requestedDate} 指定报告</button></div>}
         {reports.length === 0 ? (
-          <p className="px-4 py-8 text-center text-sm text-zinc-600 dark:text-zinc-400">
+          <p className="px-4 py-8 text-sm text-zinc-600 dark:text-zinc-400">
             暂无复盘报告。后端每日盘后自动生成（未生成或调度未运行，可在系统维护核对）。
           </p>
         ) : (
           <div className="divide-y divide-zinc-100 dark:divide-zinc-800/60">
             {reports.map((r) => (
-              <div key={r.review_id}>
-                <button
-                  onClick={() => toggle(r.trade_date)}
-                  className="review-record-trigger w-full px-4 py-2.5 text-left transition-colors hover:bg-zinc-100/60 dark:hover:bg-zinc-800/40"
-                >
-                  <div className="review-record-heading text-sm">
-                    <span className="font-mono text-xs text-zinc-600 dark:text-zinc-400">{r.trade_date}</span>
-                    <span className="text-zinc-900 dark:text-zinc-100">{r.summary}</span>
-                  </div>
-                  <div className="mt-0.5 text-[11px] text-zinc-600 dark:text-zinc-400">
-                    缺口 {r.gap_count} · 行动项 {r.action_item_count}
-                    {r.model_degraded && <span className="ml-2 text-amber-800 dark:text-amber-400">模型降级</span>}
-                  </div>
-                </button>
-                {openDate === r.trade_date &&
-                  (detail ? (
-                    // 展开的详情（元洞察 + 改进项 + 数据缺口）可能很长：限高并在**面板内**
-                    // 滚动，避免把外层 grid 行撑高、滚动条跑到页面最底部看不见。
-                    // overscroll-contain：滚到边界时不把滚动传导给父容器。
-                    <div className="max-h-[55vh] overflow-y-auto overscroll-contain">
-                      <ReportDetail report={detail} allowDispose={allowDispose} onDisposed={reloadAfterDispose} />
-                    </div>
-                  ) : (
-                    <div className="px-4 py-3 text-xs text-zinc-600 dark:text-zinc-400">{detailResource.error ? <><p role="alert">{openDate} 报告读取失败。</p><button onClick={detailResource.refresh}>重试读取</button></> : detailResource.pending ? "详情加载中…" : `${openDate} 尚无报告，不回退成其它日期。`}</div>
-                  ))}
-              </div>
+              <button key={r.review_id}
+                onClick={() => toggle(r.trade_date)}
+                aria-pressed={openDate === r.trade_date}
+                className="review-record-trigger w-full px-4 py-3 text-left transition-colors hover:bg-zinc-100/60 dark:hover:bg-zinc-800/40"
+              >
+                <div className="review-record-heading text-sm">
+                  <span className="font-mono text-xs text-zinc-600 dark:text-zinc-400">{r.trade_date}</span>
+                  <span className="text-zinc-900 dark:text-zinc-100">{r.summary}</span>
+                </div>
+                <div className="mt-1 text-xs text-zinc-600 dark:text-zinc-400">
+                  缺口 {r.gap_count} · 行动项 {r.action_item_count}
+                  {r.model_degraded && <span className="ml-2 text-amber-800 dark:text-amber-400">模型降级</span>}
+                </div>
+              </button>
             ))}
           </div>
         )}
       </Panel>
 
-      {allowDispose && <Panel title="改进项处置统计（非交易效果）" className="min-h-[240px]">
+      <Panel title={openDate ? `${openDate} 复盘正文` : "复盘正文"} className="review-detail" bodyClassName="review-detail-scroll overflow-auto">
+        {openDate ? detail ? <ReportDetail report={detail} allowDispose={allowDispose} onDisposed={reloadAfterDispose} /> : (
+          <div className="px-4 py-4 text-sm text-zinc-600 dark:text-zinc-400">
+            {detailResource.error ? <><p role="alert">{openDate} 报告读取失败。</p><button onClick={detailResource.refresh}>重试读取</button></> : detailResource.pending ? <p role="status">详情加载中…</p> : <p role="status">{requestedDate === openDate && !reports.some(r => r.trade_date === openDate) ? "指定日期尚无报告" : `${openDate} 尚无报告，不回退成其它日期。`}</p>}
+          </div>
+        ) : <p className="px-4 py-4 text-sm text-zinc-600 dark:text-zinc-400">从报告列表选择日期，查看冻结记录与改进项。</p>}
+      </Panel>
+
+      {allowDispose && <Panel title="改进项处置统计（非交易效果）" className="review-disposition" bodyClassName="review-disposition-scroll overflow-auto">
         {effect === null ? (
           <p className="px-4 py-8 text-center text-sm text-zinc-600 dark:text-zinc-400">{effectiveness.error ? "处置统计读取失败，不能判断当前状态。" : effectiveness.pending ? "读取处置统计…" : "暂无处置统计。"}</p>
         ) : (
@@ -446,6 +443,7 @@ export function ReviewTab({ focusDate, allowDispose = false }: { focusDate?: str
           </table>
         )}
       </Panel>}
+    </div>
     </div>
   );
 }
