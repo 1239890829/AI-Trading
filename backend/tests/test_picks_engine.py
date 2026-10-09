@@ -261,7 +261,7 @@ def test_entry_quality_not_filled_is_missed_not_failure():
     """全天高于买入区间上沿 → 未介入，属踏空而非选股失误。"""
     e = _entry(day_open=11.0, day_high=11.5, day_low=10.5, day_close=11.2)
     assert e["filled"] is False
-    assert "未介入" in e["basis"]
+    assert "无交集" in e["basis"]
     from app.picks.engine import classify_failure
 
     cat, note = classify_failure(excess_pct=5.0, entry=e)
@@ -320,7 +320,7 @@ def test_classify_failure_good_and_flat():
 
     e = _entry()
     assert classify_failure(excess_pct=3.0, entry=e)[0] == "gone_well"
-    assert classify_failure(excess_pct=0.5, entry=e)[0] == "gone_well"
+    assert classify_failure(excess_pct=0.5, entry=e)[0] == "flat"
 
 
 def test_entry_quality_distinguishes_gate_day_from_missing_data():

@@ -41,7 +41,7 @@ from app.picks.kb_routing import snapshot_citations
 from app.services.theme_service import parse_hhmmss
 
 STRATEGY_VERSION = "stock-opportunity-funnel-v2"
-FEATURE_VERSION = "pit-evidence-v2"
+FEATURE_VERSION = "pit-evidence-v3.stock-identity"
 OUTCOME_HORIZON = "d0_close"
 OUTCOME_HORIZONS = {
     "d0_close": 0,
@@ -304,16 +304,18 @@ def build_intraday_records(
     引用一律经 `kb_routing.snapshot_citations()` 校验后落 `kb_ids` / `kb_refs` 两列，
     **本函数不自行拼这两个字段**（避免出现第二份引用口径）。
     """
-    from app.picks.intraday_opportunity import top_watch_stocks
+    from app.picks.intraday_opportunity import SELECTION_IDENTITY_VERSION, top_watch_stocks
 
     as_of = as_of.replace(tzinfo=None)
-    run_id = _hash({"scenario": "intraday", "trade_date": trade_date, "as_of": as_of.isoformat()})
+    run_id = _hash({"scenario": "intraday", "trade_date": trade_date, "as_of": as_of.isoformat(),
+                    "strategy_version": STRATEGY_VERSION, "feature_version": FEATURE_VERSION})
     kb_ids_json, kb_refs_json = snapshot_citations("intraday_opportunity", kb_ids, fragments=kb_fragments)
     ranked = top_watch_stocks(payload, limit=10_000).get("items") or []
-    rank_by_key = {
-        (str(row.get("symbol") or ""), str(row.get("theme") or "")): n
+    rank_by_symbol = {
+        str(row.get("symbol") or ""): n
         for n, row in enumerate(ranked, 1)
     }
+    sources_by_symbol = {str(row.get("symbol") or ""): row.get("theme_sources") or [] for row in ranked}
     state = _data_state(payload)
     records: list[dict] = []
     for theme in payload.get("themes") or []:
@@ -414,7 +416,6 @@ def build_intraday_records(
                 gate_decision = "unknown"
             else:
                 gate_decision = "rejected"
-            rank = rank_by_key.get((symbol, theme_name))
             linkage_level = linkage.get("level")
             if gate_decision == "unknown" or linkage_level == "unknown" or not linkage_level:
                 rank_decision = "unknown"
@@ -422,6 +423,7 @@ def build_intraday_records(
                 rank_decision = "rejected"
             else:
                 rank_decision = "ranked"
+            rank = rank_by_symbol.get(symbol) if rank_decision == "ranked" else None
             rank_evidence = {
                 "gate_decision": gate_decision,
                 "linkage_level": linkage_level,
@@ -429,6 +431,8 @@ def build_intraday_records(
                 "change_pct": stock.get("change_pct"),
                 "seal_state": stock.get("seal_state"),
                 "expected_rank": rank,
+                "selection_identity_version": SELECTION_IDENTITY_VERSION,
+                "theme_sources": sources_by_symbol.get(symbol) or [],
             }
             records.append({**common, "stage": "rank", "decision": rank_decision,
                             "rank": rank, "evidence": rank_evidence})
@@ -447,7 +451,8 @@ def build_notification_records(
     本阶段属 `intraday_pick` 场景（别名 `buy_point`）。
     """
     as_of = as_of.replace(tzinfo=None)
-    run_id = _hash({"scenario": "notification", "trade_date": trade_date, "as_of": as_of.isoformat()})
+    run_id = _hash({"scenario": "notification", "trade_date": trade_date, "as_of": as_of.isoformat(),
+                    "strategy_version": STRATEGY_VERSION, "feature_version": FEATURE_VERSION})
     kb_ids_json, kb_refs_json = snapshot_citations("buy_point", kb_ids, fragments=kb_fragments)
     hit_by = {str(h.get("item", {}).get("symbol") or ""): h for h in hits}
     skip_by = {str(s.get("symbol") or ""): str(s.get("reason") or "") for s in skips}
@@ -481,6 +486,7 @@ def build_notification_records(
             "dispatch": dispatch,
             "execution_contract": execution_contract,
             "confidence_tier": (item.get("confidence") or {}).get("tier"),
+            "dimension_evidence": item.get("dimension_evidence") or {},
             "vetoes": item.get("vetoes") or [],
             "follow_state": item.get("follow_state"),
             "observation_only": bool(item.get("observation_only")),

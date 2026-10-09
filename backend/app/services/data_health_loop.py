@@ -5,7 +5,7 @@
 非交易时段静默（收盘后的健康检查由 15:45 议程证据承担）。
 
 红线：只推系统级异常（数据管道/告警管道），不推任何股票信号；
-全中文；推送失败只记日志。
+全中文；事件与外发意图同库提交，未知受理结果不自动重发。
 """
 from __future__ import annotations
 
@@ -104,9 +104,6 @@ async def data_health_loop(app_state, stop: asyncio.Event) -> None:
     # （先崩 ①，②被 ① 掩盖从未暴露），数据健康检查与飞书 ANOMALY 推送全部失效。
     from app.core.scheduler import wait_or_stop
     from app.market.trade_calendar import in_trading_window
-    from app.services.push_policy import AnomalyPushGuard, PolicyKind, feishu_allowed
-
-    guard = AnomalyPushGuard()
     log.info("data-health sentinel loop started (interval %ds, trading hours only)", _INTERVAL_SECONDS)
     while True:
         try:
@@ -141,12 +138,9 @@ async def data_health_loop(app_state, stop: asyncio.Event) -> None:
                 failing_issue = scheduler_failing_probe(app_state)
                 if failing_issue:
                     issues.append(failing_issue)
-                if issues:
-                    fresh = guard.filter_new(issues)
-                    if fresh and feishu_allowed(PolicyKind.ANOMALY):
-                        await _push_anomaly(now, fresh, app_state)
-                else:
-                    guard.filter_new([])  # 全部恢复 → 清空活跃集
+                # The durable source receipt, not an in-memory filter, owns
+                # active episodes. Recovery must also reconcile an empty set.
+                await _push_anomaly(now, issues, app_state)
             # S2-2 收尾（09-11）：原来裸 sleep 900s ⇒ 停机时收不到 stop，只能等满
             # 10s 宽限再被强制 cancel（实测日志「超过 10s 未退出，强制 cancel」）。
             # 改 wait_or_stop 后停机即时返回，不必靠 force cancel。
@@ -162,26 +156,88 @@ async def data_health_loop(app_state, stop: asyncio.Event) -> None:
                 return
 
 
-async def _push_anomaly(now, fresh_issues: list[str], app_state) -> None:
-    """推送系统异常摘要卡（ANOMALY）。"""
-    from app.notifiers import get_notifier_registry
-    from app.services.push_policy import PolicyKind, feishu_allowed
-
-    if not feishu_allowed(PolicyKind.ANOMALY):
-        return
-    notifier = get_notifier_registry().get("feishu")
-    if notifier is None or getattr(notifier, "send_interactive", None) is None:
-        log.warning("anomaly detected but feishu notifier unavailable: %s", fresh_issues)
-        return
-    card = {
+def _health_card(now, issues: list[str]) -> dict:
+    return {
         "config": {"wide_screen_mode": True},
         "header": {"template": "red",
                    "title": {"tag": "plain_text", "content": f"系统异常 · 数据健康哨兵 {now:%H:%M}"}},
         "elements": [{"tag": "div", "text": {"tag": "lark_md",
-                     "content": "\n".join(f"⚠️ {i}" for i in fresh_issues[:5])}}],
+                     "content": "\n".join(f"⚠️ {i}" for i in issues[:5])}}],
     }
+
+
+def _reconcile_anomalies(now, issues: list[str], session_factory, channel_available: bool) -> dict:
+    """Persist observation and enqueue atomically in the existing source outbox.
+
+    Source evidence stays immutable. ``health_resolution`` and its card are
+    current projections: partial recovery drops obsolete lines before send.
+    Accepted, rejected, expired or unknown episodes remain covered while active;
+    only observed recovery permits a later recurrence to create a new episode.
+    """
+    import json
+    from uuid import uuid4
+    from sqlalchemy import select, update
+    from app.models.alert import AlertEvent, AlertRule
+    from app.models.notification_outbox import NotificationOutbox
+    from app.picks.source_events import record_source_event
+    from app.services.push_policy import PolicyKind, feishu_allowed
+
+    current = set(str(i) for i in issues if i)
+    kind = 'system_health_anomaly'
+    with session_factory() as db:
+        # Serializes concurrent probes/recovery and first episode creation.
+        db.execute(update(AlertRule).where(AlertRule.name == f'__source_{kind}__').values(
+            last_triggered_at=AlertRule.last_triggered_at))
+        rows = db.scalars(select(AlertEvent).join(AlertRule).where(
+            AlertRule.name == f'__source_{kind}__',
+        )).all()
+        covered: set[str] = set()
+        for row in rows:
+            snap = json.loads(row.snapshot or '{}')
+            resolution = snap.get('health_resolution') or {}
+            if resolution.get('state') != 'active':
+                continue
+            active = set(resolution.get('active_issues') or []).intersection(current)
+            covered.update(active)
+            resolution = {**resolution, 'active_issues': sorted(active), 'observed_at': now.isoformat(),
+                          'state': 'active' if active else 'recovered',
+                          'resolved_at': None if active else now.isoformat()}
+            snap['health_resolution'] = resolution
+            snap['card'] = _health_card(now, sorted(active))
+            row.snapshot = json.dumps(snap, ensure_ascii=False)
+        fresh = sorted(current - covered)
+        state, event_id = 'unchanged', None
+        if fresh and feishu_allowed(PolicyKind.ANOMALY) and channel_available:
+            episode = uuid4().hex
+            event_id, _, _ = record_source_event(kind, episode, symbol='000000', name='',
+                text='系统异常：' + '；'.join(fresh), source_id=episode, source_version=episode,
+                source_as_of=now.isoformat(), trade_date=now.date().isoformat(), direction='系统异常',
+                source_evidence={'issues': fresh}, card=_health_card(now, fresh),
+                session_factory=session_factory, db=db)
+            row = db.get(AlertEvent, event_id)
+            snap = json.loads(row.snapshot)
+            snap['health_resolution'] = {'state': 'active', 'active_issues': fresh,
+                                         'observed_at': now.isoformat(), 'resolved_at': None}
+            row.snapshot = json.dumps(snap, ensure_ascii=False)
+            state = 'queued' if db.scalar(select(NotificationOutbox.id).where(
+                NotificationOutbox.event_id == event_id).limit(1)) is not None else 'recorded'
+        elif fresh:
+            state = 'channel_unavailable' if not channel_available else 'policy_disabled'
+        db.commit()
+    return {'state': state, 'event_id': event_id, 'new_issues': fresh}
+
+
+async def _push_anomaly(now, issues: list[str], app_state) -> dict:
+    """Reconcile the full current set; AlertEngine later sends typed receipts."""
+    from app.core.db import get_session_factory
+    from app.core.bjtime import to_beijing
+    from app.notifiers import get_notifier_registry
+
+    notifier = get_notifier_registry().get('feishu')
+    available = notifier is not None and bool(notifier.delivery_target())
     try:
-        ok = await notifier.send_interactive(card)
-        log.info("anomaly card %s", "sent" if ok else "failed")
-    except Exception:  # noqa: BLE001
-        log.exception("anomaly card send failed")
+        return await asyncio.to_thread(_reconcile_anomalies, to_beijing(now), issues,
+                                       get_session_factory(), available)
+    except Exception:
+        log.exception('health event/intent transaction failed; episode remains retryable')
+        return {'state': 'failed', 'event_id': None}

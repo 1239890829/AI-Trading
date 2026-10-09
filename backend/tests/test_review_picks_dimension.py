@@ -34,11 +34,11 @@ def _picks_snapshot(items=1, reviews=True, obs=False) -> PicksSnapshot:
     revs = []
     if reviews:
         revs = [
-            PickReviewEntry(symbol="600000", name="股0", verdict="good",
+            PickReviewEntry(statistics_eligible=True, symbol="600000", name="股0", verdict="good",
                             reason_category="gone_well", excess_pct=3.0, note="超额为正"),
-            PickReviewEntry(symbol="600001", name="股1", verdict="bad",
+            PickReviewEntry(statistics_eligible=True, symbol="600001", name="股1", verdict="bad",
                             reason_category="entry_bad", excess_pct=-3.0, note="追高介入"),
-            PickReviewEntry(symbol="600002", name="股2", verdict="flat",
+            PickReviewEntry(statistics_eligible=True, symbol="600002", name="股2", verdict="flat",
                             reason_category="missed", excess_pct=None, note="全天未回区间"),
         ]
         if obs:
@@ -112,11 +112,11 @@ def test_picks_category_hint_judgement():
         trade_date=_TEST_TD, combo_date=_TEST_TD,
         items=[PickEntry(symbol=f"60000{i}", name=f"股{i}") for i in range(3)],
         reviews=[
-            PickReviewEntry(symbol="600000", name="股0", verdict="bad",
+            PickReviewEntry(statistics_eligible=True, symbol="600000", name="股0", verdict="bad",
                             reason_category="sentiment_misread", excess_pct=-4.0, note="退潮期逆势"),
-            PickReviewEntry(symbol="600001", name="股1", verdict="bad",
+            PickReviewEntry(statistics_eligible=True, symbol="600001", name="股1", verdict="bad",
                             reason_category="sentiment_misread", excess_pct=-3.0, note="退潮期逆势"),
-            PickReviewEntry(symbol="600002", name="股2", verdict="good",
+            PickReviewEntry(statistics_eligible=True, symbol="600002", name="股2", verdict="good",
                             reason_category="gone_well", excess_pct=2.0, note="健康"),
         ],
     )
@@ -160,10 +160,11 @@ def test_collect_picks_reads_combo_and_reviews():
         from datetime import date as _date
 
         snap = collect_picks(sf, _date(2099, 1, 2))
-        assert snap.combo_date == _TEST_TD
+        assert snap.combo_date == '2099-01-02'
         assert [i.symbol for i in snap.items] == ["600519"]
         assert len(snap.reviews) == 1 and snap.reviews[0].verdict == "good"
-        assert snap.gaps == []
+        assert snap.reviews[0].statistics_eligible is False
+        assert any(g.field == 'picks.review_binding' for g in snap.gaps)
     finally:
         _cleanup(sf, _TEST_TD)
 

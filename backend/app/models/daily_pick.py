@@ -2,7 +2,7 @@ from __future__ import annotations
 
 from datetime import datetime
 
-from sqlalchemy import DateTime, Float, Integer, String, UniqueConstraint
+from sqlalchemy import DateTime, Float, Integer, String, Text, UniqueConstraint
 from sqlalchemy.orm import Mapped, mapped_column
 
 from app.core.db import utcnow
@@ -12,8 +12,8 @@ from app.models.watchlist import Base
 class DailyPickSet(Base):
     """每日精选组合（CONTEXT.md: Daily Picks）。
 
-    每交易日一行（date 唯一）：T 日收盘后生成 T+1 组合并持久化，
-    保证「组合一致性」可回溯——复盘与换股门槛都以历史行为准。
+    每交易日一行（date 唯一）：保留当前保存的当日候选，
+    不含该日所有生成名单；逐股复盘另外绑定并保留自己的生成版本。
     items 为精选卡片数组 JSON（≤5 只），meta 为五维权重与市场快照。
     """
 
@@ -21,7 +21,7 @@ class DailyPickSet(Base):
     __table_args__ = (UniqueConstraint("date", name="uq_daily_pick_set_date"),)
 
     id: Mapped[int] = mapped_column(Integer, primary_key=True)
-    date: Mapped[str] = mapped_column(String(10), unique=True, index=True)  # 生成日 YYYY-MM-DD
+    date: Mapped[str] = mapped_column(String(10), unique=True, index=True)  # 当日候选归属日 YYYY-MM-DD
     items: Mapped[str] = mapped_column(String(8192), default="[]")  # JSON：精选卡片数组
     meta: Mapped[str] = mapped_column(String(2048), default="{}")  # JSON：权重/市场状态/候选池统计
     replaced: Mapped[str] = mapped_column(String(1024), default="[]")  # JSON：换股记录 [{out, in, delta}]
@@ -34,13 +34,12 @@ class DailyPickSet(Base):
 class DailyPickReview(Base):
     """选股复盘日志（CONTEXT.md: Pick Review）。
 
-    每日收盘后对组合逐只的回顾：实际走势 vs 入选理由；走坏原因归类为
-    固定枚举（event_expired/board_receding/market_drag/data_issue/news_gap/
-    logic_failed/gone_well），供周末元结论统计与权重微调建议。
+    每日收盘后按生成版本保存逐股价格观察，旧未绑定记录保留。
+    当前版本且窗口与源质量有效的观察可用于归因，不证明成交胜率。
     """
 
     __tablename__ = "daily_pick_review"
-    __table_args__ = (UniqueConstraint("date", "symbol", name="uq_daily_pick_review_date_symbol"),)
+    __table_args__ = (UniqueConstraint("date", "symbol", "selection_version", name="uq_daily_pick_review_generation"),)
 
     id: Mapped[int] = mapped_column(Integer, primary_key=True)
     date: Mapped[str] = mapped_column(String(10), index=True)
@@ -55,4 +54,7 @@ class DailyPickReview(Base):
     # 基准缺失固化成 0.0，与「超额恰为 0」不可区分（CUSUM/均值统计被污染）。
     excess_pct: Mapped[float | None] = mapped_column(Float, nullable=True)
     note: Mapped[str] = mapped_column(String(512), default="")
+    # NULL is an unbound legacy review, retained for reading but excluded from trusted statistics.
+    review_context: Mapped[str | None] = mapped_column(Text, nullable=True, default=None)
+    selection_version: Mapped[str | None] = mapped_column(String(64), nullable=True, default=None)
     created_at: Mapped[datetime] = mapped_column(DateTime, default=utcnow)

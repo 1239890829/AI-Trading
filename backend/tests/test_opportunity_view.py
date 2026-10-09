@@ -6,6 +6,7 @@ from sqlalchemy import create_engine, event, select
 from sqlalchemy.orm import sessionmaker
 
 from app.models.opportunity_learning import OpportunityDecisionSnapshot as Snapshot
+from app.models.opportunity_learning import OpportunityDecisionRun as Run
 from app.picks.opportunity_learning import archive_intraday_pipeline
 from app.picks.opportunity_view import read_opportunities
 from app.models.leader_research import LeaderResearchObservation as Observation
@@ -46,6 +47,36 @@ def test_empty_uncollected_and_latest_zero_run_are_distinct(sf):
     assert empty["state"] == "collected_empty"
     assert empty["cards"] == [], "old accepted cards must not survive a new empty run"
     assert empty["runs"][0]["gate_counts"] == {"not_concentrated": 1}
+
+
+@pytest.mark.parametrize("same_insert_clock", [False, True])
+def test_equal_source_clock_new_version_empty_run_cannot_revive_legacy_stock(sf, same_insert_clock):
+    from app.picks.opportunity_learning import FEATURE_VERSION, STRATEGY_VERSION
+    source_clock = datetime(2026, 9, 30, 10, 0)
+    inserted = datetime(2026, 9, 30, 2, 1, 0, 123456)
+    legacy_id = "f" * 32  # Opaque IDs cannot establish which version was actually inserted later.
+    with sf() as db:
+        db.add(Run(run_id=legacy_id, trade_date="2026-09-30", as_of=source_clock,
+                   scenario="intraday_opportunity", strategy_version=STRATEGY_VERSION,
+                   feature_version="pit-evidence-v2", data_state="ready", snapshot_state="ready",
+                   evidence_digest="a" * 64, records_total=1, created_at=inserted))
+        db.add(Snapshot(snapshot_id="legacy-rank", run_id=legacy_id, trade_date="2026-09-30",
+                        as_of=source_clock, scenario="intraday_opportunity", stage="rank", symbol="600127",
+                        name="金健米业", source_theme="算力", decision="ranked", rank=1,
+                        strategy_version=STRATEGY_VERSION, feature_version="pit-evidence-v2", data_state="ready",
+                        evidence='{"linkage_basis":"旧依据"}'))
+        db.commit()
+    current = archive(sf, payload(participant=False), 0)
+    with sf() as db:
+        run = db.get(Run, current["run_id"])
+        run.created_at = inserted if same_insert_clock else inserted.replace(microsecond=123457)
+        db.commit()
+    view = read_opportunities("2026-09-30", sf)
+    assert view["state"] == "collected_empty" and view["cards"] == []
+    assert view["runs"][0]["run_id"] == current["run_id"]
+    with sf() as db:
+        assert db.get(Run, legacy_id).feature_version == "pit-evidence-v2"
+        assert db.get(Run, current["run_id"]).feature_version == FEATURE_VERSION
 
 
 def test_polling_is_read_only_and_material_change_preserves_history(sf):

@@ -70,7 +70,7 @@ SPECS: tuple[StrategySpec, ...] = (
         basis=BASIS_MARKET_NEUTRAL,
         source="daily_pick_review",
         evaluable=True,
-        note="收盘定次日；六维评分 + 换股上限 2 只；已有 CUSUM 监控",
+        note="当日持久候选；六维评分 + 换股上限 2 只；CUSUM仅消费同版本同窗口可信观察",
     ),
     StrategySpec(
         key="intraday_watch",

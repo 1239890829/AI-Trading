@@ -692,17 +692,18 @@ def _collect_data_health(session_factory) -> dict:
         from app.picks.exit_engine import position_monitor_state
 
         pm = position_monitor_state()
-        bad = [k for k, v in pm.items() if v.get("state") == "failed"]
+        bad = [k for k, v in pm.items() if v.get("state") == "failed"
+               or v.get('evaluation_state') == 'uncompleted']
         # 只用**异常类名**（如 OperationalError）拼文案：类名对同一故障模式稳定，
         # 而完整错误消息可能每次都不同（含行号/耗时），会把哨兵的字符串去重打穿、
         # 变成每 15 分钟推一次。完整错误已在 exit_engine 的日志里。
         detail = "、".join(
-            f"{'模拟' if k == 'paper' else '真实'}持仓（{(pm[k].get('reason') or '未知').split(':')[0]}）"
+            f"{'模拟' if k == 'paper' else '真实'}持仓（{(pm[k].get('evaluation_reason') or pm[k].get('reason') or '未知').split(':')[0]}）"
             for k in bad
         )
         _add("position_monitor_read", not bad,
              "两路持仓读取正常" if not bad
-             else f"读取失败：{detail}——本轮自动离场/硬止损/真实持仓提醒已跳过"
+             else f"监护未完成：{detail}——本轮自动离场/硬止损/真实持仓提醒部分或全部未检查"
              + ("（⚠️ 监护降级，期间持仓不受止损保护）"))
     except Exception as exc:  # noqa: BLE001
         _add("position_monitor_read", False, f"检查失败：{exc}")

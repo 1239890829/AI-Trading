@@ -68,7 +68,7 @@ import logging
 from collections import Counter
 from typing import Any
 
-from sqlalchemy import select
+from sqlalchemy import case, func, select
 
 from app.core.bjtime import beijing_now
 from app.core.db import get_session_factory
@@ -138,6 +138,8 @@ def _collect_pick_set(db, trade_date: str) -> dict:
     return {
         "present": True,
         "count": len(items),
+        "generated_at": meta.get("generated_at"),
+        "selection_receipt": meta.get("selection_notifications"),
         "tier_counts": dict(tiers),
         "score_range": [min(scores), max(scores)] if scores else None,
         "observation_only": observation_only,
@@ -261,6 +263,46 @@ def _classify(pick_set: dict, decisions: dict) -> tuple[str, str]:
     )
 
 
+def _collect_selection(db, trade_date: str, pick_set: dict) -> dict:
+    """Read both original selection chains separately from buy-point decisions."""
+    from app.models.alert import AlertEvent, AlertRule
+    from app.models.opportunity_learning import OpportunityDecisionRun
+    from app.services.selection_notifications import SELECTION_RULE
+
+    receipt = pick_set.get('selection_receipt')
+    daily = {'state': (receipt.get('state', 'unknown') if isinstance(receipt, dict)
+                       else 'projection_unconfirmed' if pick_set.get('present') else 'no_pick_set'),
+             'generated_at': pick_set.get('generated_at'), 'count': pick_set.get('count', 0),
+             'receipt': receipt if isinstance(receipt, dict) else None}
+    run = db.scalar(select(OpportunityDecisionRun).where(
+        OpportunityDecisionRun.trade_date == trade_date,
+        OpportunityDecisionRun.scenario == 'intraday_opportunity',
+    ).order_by(OpportunityDecisionRun.as_of.desc(), OpportunityDecisionRun.created_at.desc(),
+               OpportunityDecisionRun.run_id.desc()).limit(1))
+    valid_snapshot = case((func.json_valid(AlertEvent.snapshot), AlertEvent.snapshot), else_='{}')
+    events = db.execute(select(AlertEvent.snapshot).join(AlertRule).where(
+        AlertRule.name == SELECTION_RULE,
+        func.json_extract(valid_snapshot, '$.trade_date') == trade_date,
+    )).scalars().all()
+    original = [_load_json(raw, {}) for raw in events]
+    original = [snap for snap in original if isinstance(snap, dict)
+                and snap.get('kind') == 'selection' and snap.get('trade_date') == trade_date]
+    daily['message_count'] = sum(snap.get('selection_source') == 'daily' for snap in original)
+    if run is None:
+        intraday = {'state': 'no_archive', 'run_id': None, 'as_of': None,
+                    'data_state': None, 'ranked_count': None,
+                    'message_count': sum(snap.get('selection_source') == 'intraday' for snap in original)}
+    else:
+        count = sum(snap.get('selection_source') == 'intraday' and snap.get('run_id') == run.run_id
+                    for snap in original)
+        intraday = {'state': 'recorded' if count else 'projection_unconfirmed',
+                    'run_id': run.run_id, 'as_of': run.as_of.isoformat(sep=' '),
+                    'data_state': run.data_state, 'ranked_count': run.rank_rows,
+                    'message_count': count}
+    return {'daily': daily, 'intraday': intraday,
+            'note': '原入选消息与买点执行分别诊断。无入选事件不能证明没有机会；日内去重可能归属于更早来源。'}
+
+
 def notification_diagnostics(
     trade_date: str | None = None, *, session_factory=None,
 ) -> dict:
@@ -278,6 +320,7 @@ def notification_diagnostics(
         with sf() as db:
             pick_set = _collect_pick_set(db, day)
             decisions = _collect_decisions(db, day)
+            selection = _collect_selection(db, day, pick_set)
     except Exception as exc:  # noqa: BLE001  诊断不可用不得拖垮通知端点
         log.exception("notification diagnostics failed")
         return {
@@ -286,6 +329,7 @@ def notification_diagnostics(
             "as_of": as_of,
             "pick_set": {"present": False, "count": 0},
             "decisions": {"present": False, "polls": 0},
+            "selection": {'daily': {'state': 'unavailable'}, 'intraday': {'state': 'unavailable'}},
             "note": (
                 f"诊断数据读取失败（{type(exc).__name__}）⇒ **本字段为空不等于没有机会**，"
                 "请按服务端日志排查。"
@@ -299,5 +343,6 @@ def notification_diagnostics(
         "as_of": as_of,
         "pick_set": pick_set,
         "decisions": decisions,
+        "selection": selection,
         "note": note,
     }

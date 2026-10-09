@@ -1,5 +1,5 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { cleanup, fireEvent, render, screen, waitFor } from "@testing-library/react";
+import { act, cleanup, fireEvent, render, screen, waitFor } from "@testing-library/react";
 
 import { getNotificationDiagnostics, getNotifications, type NotificationItem, type NotificationsPayload } from "@/lib/api";
 
@@ -511,4 +511,39 @@ it("user-defined reminders have their own category while stock opportunities, ri
     expect(list.textContent).toContain(text);
   fireEvent.click(screen.getByTestId("notification-judgment"));
   expect((await screen.findByRole("dialog", {name: "显式个股阈值"})).textContent).toContain("研究观察，不构成买卖建议");
+});
+
+
+it("opening during an initial slow read joins the same request", async () => {
+  let resolve!: (result: NotificationsPayload) => void;
+  vi.mocked(getNotifications).mockReturnValueOnce(new Promise(done => {resolve = done;}));
+  render(<NotificationBell />);
+  await waitFor(() => expect(getNotifications).toHaveBeenCalledTimes(1));
+  fireEvent.click(screen.getByRole("button", {name: /打开通知中心/}));
+  expect(getNotifications).toHaveBeenCalledTimes(1);
+  await act(async () => resolve(makePayload([item({title: "同一次读取"})])));
+  expect(await screen.findByText("同一次读取")).toBeTruthy();
+});
+
+it("shows the original evidence and both clocks without claiming current eligibility", async () => {
+  payload = makePayload([item({title: "原入选A", symbol: "600127", source_as_of: "2026-10-09T09:40:00+08:00", recorded_at: "2026-10-09T10:10:00+08:00", references: [{event_id: 9, kind: "selection", selection_source: "daily", trade_date: "2026-10-09", source_id: "daily:A", source_version: "version-A", source_as_of: "2026-10-09T09:40:00+08:00", recorded_at: "2026-10-09T10:10:00+08:00", evidence: {bases: {news: "原新闻依据A"}, invalidations: ["原失效条件A"]}}]})]);
+  render(<DetailModalProvider><NotificationBell /></DetailModalProvider>);
+  await openDrawer();
+  expect(screen.getByTestId("notification-facts").textContent).toContain("原观察：2026-10-09T09:40");
+  expect(screen.getByTestId("notification-facts").textContent).toContain("记录：2026-10-09T10:10");
+  expect(screen.getByText("消息：原新闻依据A")).toBeTruthy();
+  expect(screen.getByRole("link", {name: "查看此版本复盘"}).getAttribute("href")).toBe("/hunting?view=review&date=2026-10-09&version=version-A");
+  fireEvent.click(screen.getByTestId("notification-judgment"));
+  const original = await screen.findByRole("dialog", {name: "原入选A"});
+  expect(original.textContent).toContain("version-A");
+  expect(original.textContent).toContain("原失效条件A");
+});
+
+it("shows incomplete holding checks without creating an opportunity or an unread badge", async () => {
+  payload = {...makePayload([]), monitor: {state: "uncompleted", reason: "成本缺失", uncompleted_symbols: ["600127"], evaluated_at: null}};
+  render(<NotificationBell />);
+  await openDrawer();
+  expect(screen.getByTestId("notification-monitor-state").textContent).toContain("未完整完成（1 只）：成本缺失");
+  expect(badge()).toBeNull();
+  expect(dots()).toHaveLength(0);
 });

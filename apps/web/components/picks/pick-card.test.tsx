@@ -1,5 +1,5 @@
 import { cleanup, fireEvent, render, screen, within } from "@testing-library/react";
-import { afterEach, describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 
 import {
   JudgeChip,
@@ -666,4 +666,26 @@ describe("PickCard · 可参与性三态（2026-09-15 猎场口径）", () => {
     expect(screen.getByText(/本股当前未封板/)).toBeTruthy();
     expect(screen.getByText("可参与评估 · 当前未封板")).toBeTruthy();
   });
+});
+
+
+describe("维度读取事实", () => {
+  it("does not present a missing-data neutral placeholder as measured capital evidence", () => {
+    const pick: DailyPickItem = {...base, dimension_evidence: {capital: {state: "missing", reason: "资金源未提供"}, news: {state: "valid_empty", reason: "成功读取，无匹配事件"}}};
+    render(<PickCard item={fromDailyPick(pick)} />);
+    expect(screen.queryByRole("meter", {name: "资金评分"})).toBeNull();
+    expect(screen.getByLabelText("资金依据缺失，计算占位 50")).toBeTruthy();
+    expect(screen.getByRole("meter", {name: "消息评分"})).toBeTruthy();
+    expect(screen.getByText(/资金源未提供/)).toBeTruthy();
+  });
+});
+
+
+it("retains the original daily evidence behind one intraday card", () => {
+  const show = vi.fn();
+  render(<PickCard item={fromIntradayStock({...topPath, symbol: base.symbol})} dailyEvidence={{item: base, date: "2026-10-09", generatedAt: "2026-10-09T09:26:00+08:00", version: "version-A"}} onShowDailyEvidence={show} />);
+  fireEvent.click(screen.getByRole("button", {name: "每日依据"}));
+  expect(show).toHaveBeenCalledWith(base);
+  expect(show.mock.calls[0][0].buy_range).toEqual(base.buy_range);
+  expect(screen.getByText(/每日 2026-10-09/).getAttribute("title")).toBe("version-A");
 });

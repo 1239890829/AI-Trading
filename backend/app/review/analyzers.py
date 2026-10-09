@@ -117,7 +117,7 @@ class RulesAnalyzer:
             )
 
         findings.append(
-            f"对照组合：{p.combo_date} 生成 {len(p.items)} 只（T-1 生成、T 日持有）"
+            f"对照组合：{p.combo_date} 当日持久候选 {len(p.items)} 只（价格观察，不证明成交收益）"
         )
         if not p.reviews:
             findings.append("逐股归因行缺失：generate_daily_review 未成功执行（见 gaps）")
@@ -129,7 +129,8 @@ class RulesAnalyzer:
         item_by_symbol = {i.symbol: i for i in p.items}
         # 闸门日「仅观察」条目：本就未建议出手，误判归因不适用——单列不计入准确率
         obs_bad = [r for r in p.reviews if (item_by_symbol.get(r.symbol) and item_by_symbol[r.symbol].observation_only) and r.verdict == "bad"]
-        scored = [r for r in p.reviews if r not in obs_bad]
+        scored = [r for r in p.reviews if r not in obs_bad and r.statistics_eligible]
+        unbound = len([r for r in p.reviews if r not in obs_bad and not r.statistics_eligible])
         good = [r for r in scored if r.verdict == "good"]
         bad = [r for r in scored if r.verdict == "bad"]
         flat = [r for r in scored if r.verdict == "flat"]
@@ -148,8 +149,9 @@ class RulesAnalyzer:
             "failed": len(bad),
             "na": len(flat),
             "observation_only_excluded": len(obs_bad),
+            "unbound_or_ineligible": unbound,
             "accuracy_pct": acc,
-            "accuracy_definition": "达成 / (达成+失误)；踏空与数据缺失不计入",
+            "accuracy_definition": "同版本同窗口达成 / (达成+失误)；中性、踏空、缺失、未绑定及仅观察不计入",
             "by_category": by_cat,
         })
         if acc is not None:

@@ -67,7 +67,9 @@ def load_history(session_factory, limit: int = 60) -> tuple[list[dict], dict, st
     try:
         from sqlalchemy import select
 
-        from app.models.daily_pick import DailyPickReview, DailyPickSet
+        from app.models.daily_pick import DailyPickReview
+        from app.picks.review_contract import finite_number, iso_day, object_json, selection_rows_query, trusted_review
+        from app.core.bjtime import beijing_today
     except Exception as exc:  # noqa: BLE001
         log.warning("影子评估：模型导入失败 %s", exc)
         return [], {}, f"模型导入失败：{exc}"
@@ -76,21 +78,32 @@ def load_history(session_factory, limit: int = 60) -> tuple[list[dict], dict, st
     reviews: dict[tuple[str, str], dict] = {}
     try:
         with session_factory() as db:
-            rows = db.execute(
-                select(DailyPickSet).order_by(DailyPickSet.date.desc()).limit(limit)
-            ).scalars().all()
-            for r in rows:
+            rows = db.scalars(selection_rows_query(limit, through=beijing_today())).all()
+            seen_days = set()
+            for r in sorted(rows, key=lambda r: (r.date != iso_day(r.date), -r.id)):
+                day = iso_day(r.date)
+                if not day or day in seen_days:
+                    continue
+                seen_days.add(day)
                 sets.append({
-                    "date": r.date,
+                    "date": day,
                     "items": _json_list(r.items),
                     "rejected": _json_list(r.rejected),
                     "replaced": _json_list(r.replaced),
+                    "meta": object_json(r.meta),
                 })
+            sets.sort(key=lambda s: s['date'], reverse=True)
             rvs = db.execute(select(DailyPickReview)).scalars().all()
-            for rv in rvs:
-                reviews[(rv.date, rv.symbol)] = {
+            by_day = {s['date']: s for s in sets}
+            for rv in sorted(rvs, key=lambda r: (r.date != iso_day(r.date), -r.id)):
+                day = iso_day(rv.date)
+                combo = by_day.get(day)
+                if (day, rv.symbol) in reviews or not combo or finite_number(rv.excess_pct) is None or not trusted_review(rv.review_context, day=day, meta=combo['meta'], items=combo['items'], symbol=rv.symbol, persisted_version=rv.selection_version):
+                    continue
+                reviews[(day, rv.symbol)] = {
                     "verdict": rv.verdict,
                     "excess_pct": rv.excess_pct,
+                    "window_kind": object_json(rv.review_context).get('window_kind'),
                 }
     except Exception as exc:  # noqa: BLE001
         log.warning("影子评估：历史读取失败 %s", exc)
@@ -228,7 +241,7 @@ def _num(v: Any) -> float | None:
 
 # ---------------------------------------------------------------- 全市场走势补验
 
-#: 补验用的默认前向窗口（交易日），与 `DailyPickReview` 的 T+5 口径保持一致
+#: 独立marketdb反事实观察窗口；不是DailyPickReview的D0口径。
 FORWARD_HORIZON = 5
 
 
@@ -445,15 +458,23 @@ def eval_min_pick_score(
     # ⚠️ **必须两边同口径**：只补 added 不补 kept 的话，`kept_stat` 仍不足样本下限，
     # 判定依旧落到"可比性不足" ⇒ 还是 neutral（2026-09-11 首版就踩了这个坑）。
     added_source = "review"
+    kept_source = dropped_source = "review"
     if market_gains:
         if not raising and sim["added"] and added_stat["n"] < MIN_REVIEW_SAMPLES:
+            # A marketdb T+5 added cohort must compare to the same T+5 kept cohort,
+            # even when enough D0 kept reviews already exist.
             added_stat = _ratio_from_market(sim["added"], market_gains)
+            kept_stat = _ratio_from_market(sim["kept"], market_gains)
+            kept_source = "marketdb"
             if added_stat["n"]:
                 added_source = "marketdb"
-        if kept_stat["n"] < MIN_REVIEW_SAMPLES:
-            kept_stat = _ratio_from_market(sim["kept"], market_gains) or kept_stat
+        elif raising and (kept_stat["n"] < MIN_REVIEW_SAMPLES or dropped_stat["n"] < MIN_REVIEW_SAMPLES):
+            dropped_stat = _ratio_from_market(sim["dropped"], market_gains)
+            kept_stat = _ratio_from_market(sim["kept"], market_gains)
+            dropped_source = kept_source = "marketdb"
     out["metrics"]["review"] = {"dropped": dropped_stat, "added": added_stat,
-                                "kept": kept_stat, "added_source": added_source}
+                                "kept": kept_stat, "added_source": added_source,
+                                "kept_source": kept_source, "dropped_source": dropped_source}
 
     changed_stat = dropped_stat if raising else added_stat
     label = "剔除" if raising else "补入"
@@ -530,7 +551,11 @@ def eval_replace_threshold(*, before: Any, after: Any, sets: list[dict], reviews
         dout = reviews.get((rep.get("date"), rep.get("out")))
         if not din or not dout:
             continue
-        if (din.get("excess_pct") or 0) > (dout.get("excess_pct") or 0):
+        from app.picks.review_contract import finite_number
+        in_value, out_value = finite_number(din.get('excess_pct')), finite_number(dout.get('excess_pct'))
+        if in_value is None or out_value is None or din.get('window_kind') != dout.get('window_kind'):
+            continue
+        if in_value > out_value:
             wins_in += 1
         else:
             wins_out += 1

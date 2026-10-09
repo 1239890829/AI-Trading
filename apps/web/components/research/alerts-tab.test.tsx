@@ -147,7 +147,7 @@ describe("提醒管理自定义选择与可撤确认", () => {
     const nativeConfirm = vi.spyOn(window, "confirm");
     render(<AlertsTab />);
     fireEvent.click(await screen.findByRole("button", {name: "删除规则 茅台突破"}));
-    expect(screen.getByText(/已有触发记录会继续保留/)).toBeTruthy();
+    expect(screen.getByText(/该规则的触发历史也会删除/)).toBeTruthy();
     expect(mocked.deleteAlertRule).not.toHaveBeenCalled();
     fireEvent.click(screen.getByRole("button", {name: "取消删除"}));
     expect(screen.queryByRole("button", {name: "确认删除"})).toBeNull();
@@ -191,4 +191,13 @@ it("discloses rule fallback and does not turn a global event into a fake stock l
   expect(await screen.findByText("规则提醒 · 本条未经过AI判读")).toBeTruthy();
   expect(screen.getByText("全局事件")).toBeTruthy();
   expect(screen.queryByTitle("查看行情详情")).toBeNull();
+});
+
+
+it("shows channel acceptance as distinct from delivery and from reading", async () => {
+  vi.mocked(mocked.listAlertRules).mockResolvedValue([rule]);
+  vi.mocked(mocked.listAlertEvents).mockResolvedValue([{...event, channel_states: [{channel: "feishu", state: "accepted", reason: "ok", created_at_ms: 1000, expires_at_ms: 2000, accepted_at_ms: 1500}]}]);
+  vi.mocked(mocked.getAlertChannels).mockResolvedValue({available: ["in_app"], default: ["in_app"]});
+  render(<AlertsTab />);
+  expect(await screen.findByText(/渠道已受理（未确认送达）/)).toBeTruthy();
 });

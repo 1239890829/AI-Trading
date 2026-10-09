@@ -400,7 +400,7 @@ async def intraday_opportunities(
 @router.get("/intraday-top")
 async def intraday_top(
     request: Request,
-    limit: int = Query(default=8, ge=1, le=30),
+    limit: int | None = Query(default=None, ge=1, le=30),
 ) -> dict:
     """盘中跟踪「最推荐标的」：opportunities 的多维筛选切片（工作台动态分组口径）。
 

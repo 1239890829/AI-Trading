@@ -98,6 +98,8 @@ export interface TradingCard {
   pb: number | null;
   score: number | null;
   sub_scores: Record<string, number> | null;
+  dimensionEvidence?: DailyPickItem["dimension_evidence"];
+  themeSources?: IntradayTopStock["theme_sources"];
   confidence: DailyPickItem["confidence"];
   /* --- 标的画像（两源归一） --- */
   role: string | null;
@@ -192,6 +194,7 @@ export function fromDailyPick(it: DailyPickItem): TradingCard {
     pb: it.pb ?? null,
     score: it.score ?? null,
     sub_scores: it.sub_scores ?? null,
+    dimensionEvidence: it.dimension_evidence,
     confidence: it.confidence ?? null,
     role: it.echelon_role ?? null,
     roleBasis: it.echelon_basis ?? null,
@@ -253,6 +256,7 @@ export function fromIntradayStock(it: IntradayTopStock | OpportunityStock): Trad
     pb: null,
     score: null,
     sub_scores: null,
+    themeSources: "theme_sources" in it ? it.theme_sources : undefined,
     confidence: null,
     role: it.role ?? null,
     roleBasis: null,
@@ -331,10 +335,14 @@ function Row({ k, v, title }: { k: string; v: ReactNode; title?: string }) {
 export function PickCard({
   item,
   positionLabel = null,
+  dailyEvidence,
+  onShowDailyEvidence,
 }: {
   item: TradingCard;
   /** 闭环「标签」：sim=已模拟持仓 / real=已真实持仓（持仓状态派生，卖出自动消失） */
   positionLabel?: "sim" | "real" | null;
+  dailyEvidence?: {item: DailyPickItem; date: string; generatedAt: string | null; version: string | null};
+  onShowDailyEvidence?: (item: DailyPickItem) => void;
 }) {
   // 整行点击跳工作台（2026-09-09 用户反馈：盘中跟踪条目标点击无响应——两卡现已统一）
   const stockNav = useStockRowNav();
@@ -378,11 +386,11 @@ export function PickCard({
               }`}
               title={
                 item.origin === "picks"
-                  ? "来源：盘前选择（收盘后生成次日名单，换股门槛 15 分）"
+                  ? "来源：每日精选（当日生成的持久候选；原生成依据与当前执行复核分开）"
                   : "来源：盘中跟踪（当日实时随盘面重算）"
               }
             >
-              {item.origin === "picks" ? "盘前选择" : "盘中跟踪"}
+              {item.origin === "picks" ? "每日精选" : "盘中跟踪"}
             </span>
             {positionLabel && (
               <span
@@ -546,17 +554,43 @@ export function PickCard({
           <div className="flex flex-1 gap-1">
             {SUB_LABELS.map(([key, label]) => {
               const v = item.sub_scores?.[key];
+              const evidence = item.dimensionEvidence?.[key];
+              const absent = evidence?.state === "missing" || evidence?.state === "error";
               return (
                 <div key={key} className="flex-1" title={`${label}：${item.basisRows.find((r) => r.label === label)?.value ?? "--"}`}>
-                  {v == null ? <span className="block text-center text-[9px] text-zinc-600 dark:text-zinc-400" aria-label={`${label}评分缺失`}>暂无</span> : <div role="meter" aria-label={`${label}评分`} aria-valuemin={0} aria-valuemax={100} aria-valuenow={v} className="score-track h-1 w-full overflow-hidden rounded bg-zinc-100 dark:bg-zinc-800">
+                  {absent ? <span className="block text-center text-[9px] text-zinc-600 dark:text-zinc-400" aria-label={`${label}依据缺失，计算占位 ${v ?? "未知"}`} title={evidence.reason}>缺项</span> : v == null ? <span className="block text-center text-[9px] text-zinc-600 dark:text-zinc-400" aria-label={`${label}评分缺失`}>暂无</span> : <div role="meter" aria-label={`${label}评分`} aria-valuemin={0} aria-valuemax={100} aria-valuenow={v} className="score-track h-1 w-full overflow-hidden rounded bg-zinc-100 dark:bg-zinc-800">
                     <div className="h-full rounded bg-zinc-500 dark:bg-zinc-400" style={{ width: `${Math.max(0, Math.min(100, v))}%` }} />
                   </div>}
-                  <div className="mt-0.5 text-center text-[9px] text-zinc-600 dark:text-zinc-400">{label}</div>
+                  <div className="mt-0.5 text-center text-[9px] text-zinc-600 dark:text-zinc-400">{label}{evidence?.state === "partial" ? "·部分" : ""}</div>
                 </div>
               );
             })}
           </div>
         </div>
+      )}
+
+      {item.sub_scores && !item.dimensionEvidence && <p className="mt-2 text-xs text-zinc-600 dark:text-zinc-400">历史记录未保存各维读取状态；评分数字不能证明依据齐全。</p>}
+      {item.dimensionEvidence && Object.entries(item.dimensionEvidence).some(([, e]) => ["missing", "error", "partial"].includes(e.state)) && (
+        <details className="mt-2 text-xs leading-relaxed text-zinc-600 dark:text-zinc-400" onClick={event => event.stopPropagation()}>
+          <summary className="cursor-pointer">依据有缺项 · 查看读取状态</summary>
+          <ul className="mt-1 space-y-1">{SUB_LABELS.map(([key, label]) => {
+            const evidence = item.dimensionEvidence?.[key];
+            if (!evidence || !["missing", "error", "partial"].includes(evidence.state)) return null;
+            return <li key={key}>{label}：{evidence.reason}；当前计分 {item.sub_scores?.[key] ?? "未知"}{evidence.state !== "partial" ? " 为计算占位，不代表实测中性" : " 仅依据已取得部分"}。</li>;
+          })}</ul>
+        </details>
+      )}
+      {dailyEvidence && onShowDailyEvidence && (
+        <div className="mt-2 flex flex-wrap items-center justify-between gap-2 text-xs text-zinc-600 dark:text-zinc-400" onClick={event => event.stopPropagation()}>
+          <span className="min-w-0" title={dailyEvidence.version ?? "生成版本未记录"}>每日 {dailyEvidence.date} · {dailyEvidence.generatedAt ? clockOf(dailyEvidence.generatedAt) : "生成时点未记录"} · {dailyEvidence.item.score}分</span>
+          <button type="button" className="quiet-action shrink-0" onClick={() => onShowDailyEvidence(dailyEvidence.item)}>每日依据</button>
+        </div>
+      )}
+      {item.themeSources && item.themeSources.length > 1 && (
+        <details className="mt-2 text-xs leading-relaxed text-zinc-600 dark:text-zinc-400" onClick={event => event.stopPropagation()}>
+          <summary className="cursor-pointer">{item.themeSources.length} 个题材来源 · 同股只占一个名额</summary>
+          <ul className="mt-1 space-y-1">{item.themeSources.map((source, index) => <li key={`${source.theme}/${index}`}>{source.theme ?? "题材未记录"} · {source.strength_tier ?? "强度未记录"}：{source.pick_basis || source.linkage?.basis || "来源依据未记录"}</li>)}</ul>
+        </details>
       )}
 
       {/* 标的画像 chips：梯队地位 / 题材·阶段 / 题材强度档 / 风险档位（两源归一，有则渲染） */}

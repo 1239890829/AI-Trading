@@ -1,10 +1,10 @@
 """每日精选 API（CONTEXT.md: Daily Picks 域）。
 
 - GET  /api/picks/today           当日组合（从库读；不自动生成——生成较重，POST 触发）
-- POST /api/picks/generate        生成今日组合（写鉴权；收盘后复盘管线或手动触发）
+- POST /api/picks/generate        生成当日组合（写鉴权；当日调度或手动触发）
 - GET  /api/picks/history         历史组合（近 N 日）
 - GET  /api/picks/review?date=    复盘日志
-- POST /api/picks/review/generate 对最近组合生成/刷新复盘（写鉴权）
+- POST /api/picks/review/generate 按表现日读取或生成同版本价格观察（写鉴权）
 - GET  /api/picks/meta            走坏原因分布（周末权重微调建议的输入）
 
 数据编排（候选池 → 六维评分 → 门槛 → 落库）**已抽到 `services/picks_pipeline.py`**
@@ -61,7 +61,7 @@ def _attach_latest_execution(items: list[dict], trade_date: str) -> list[dict]:
 
 @router.post("/generate")
 async def generate_picks(request: Request, hub: QuoteHub = Depends(get_hub), _: None = Depends(require_write_token)) -> dict:
-    """生成今日组合（T 日收盘后跑，产出 T+1 组合；重复生成覆盖当日行）。
+    """生成当日持久候选（自动09:26起生成；受控重生覆盖当日行）。
 
     S2-4：管线本体已抽到 `services/picks_pipeline.py`，本路由只做依赖装配。
     常驻调度（`picks/picks_autogen.py`）直接调服务，不再反向 import 本模块、
@@ -219,20 +219,21 @@ async def today_picks(request: Request, hub: QuoteHub = Depends(get_hub)) -> dic
     today = beijing_today().isoformat()
     with _db() as db:
         from app.models.daily_pick import DailyPickSet
+        from app.picks.review_contract import day_keys, iso_day, selection_rows_query
 
-        row = db.execute(select(DailyPickSet).where(DailyPickSet.date == today)).scalar_one_or_none()
+        row = db.scalar(select(DailyPickSet).where(DailyPickSet.date.in_(day_keys(today))).order_by(DailyPickSet.date.asc()).limit(1))
         if row is None:
-            row = db.execute(select(DailyPickSet).order_by(DailyPickSet.date.desc()).limit(1)).scalar_one_or_none()
+            row = db.scalar(selection_rows_query(1, through=today))
             if row is None:
-                return {"data": {"date": None, "items": [], "meta": None, "note": "尚未生成组合：POST /api/picks/generate（或等收盘管线）"}, "meta": {}}
+                return {"data": {"date": None, "items": [], "meta": None, "note": "尚未生成组合：POST /api/picks/generate（或等待当日自动生成）"}, "meta": {}}
             meta = parse_pick_meta(row.meta)  # 炒作阶段与空仓闸门状态（前端横幅需要）
             meta["style_routing"] = await _live_style_routing(request, hub, meta.get("style_routing"))
             meta = await _attach_gates(request, hub, meta)
             return {
                 "data": {
-                    "date": row.date,
-                    "items": _attach_latest_execution(json.loads(row.items), row.date),
-                    "stale": row.date != today,
+                    "date": iso_day(row.date),
+                    "items": _attach_latest_execution(json.loads(row.items), iso_day(row.date)),
+                    "stale": iso_day(row.date) != today,
                     "meta": meta,
                 },
                 "meta": {},
@@ -242,8 +243,8 @@ async def today_picks(request: Request, hub: QuoteHub = Depends(get_hub)) -> dic
         meta = await _attach_gates(request, hub, meta)
         return {
             "data": {
-                "date": row.date,
-                "items": _attach_latest_execution(json.loads(row.items), row.date),
+                "date": iso_day(row.date),
+                "items": _attach_latest_execution(json.loads(row.items), iso_day(row.date)),
                 "replaced": json.loads(row.replaced or "[]"),
                 "meta": meta,
             },
@@ -254,28 +255,28 @@ async def today_picks(request: Request, hub: QuoteHub = Depends(get_hub)) -> dic
 @router.get("/history")
 async def history(limit: int = Query(default=10, ge=1, le=60)) -> dict:
     with _db() as db:
-        from app.models.daily_pick import DailyPickSet
+        from app.picks.review_contract import iso_day, selection_rows_query
 
-        rows = db.execute(select(DailyPickSet).order_by(DailyPickSet.date.desc()).limit(limit)).scalars().all()
+        rows = db.scalars(selection_rows_query(limit, through=beijing_today())).all()
         out = []
         for r in rows:
             items = json.loads(r.items)
             out.append(
                 {
-                    "date": r.date,
+                    "date": iso_day(r.date),
                     "symbols": [i.get("symbol") for i in items],
                     "score_avg": round(sum(i.get("score", 0) for i in items) / max(len(items), 1), 1),
                 }
             )
-        return {"data": out, "meta": {}}
+        return {"data": out, "meta": {"note": "每个交易日展示当前保存的组合；不代表所有生成版本历史"}}
 
 
 # ---------------------------------------------------------------- 选股复盘
 
 
 @router.post("/review/generate")
-async def generate_review(request: Request, hub: QuoteHub = Depends(get_hub), _: None = Depends(require_write_token)) -> dict:
-    """对最近一份组合生成/刷新复盘（表现日 = 今天；组合 T-1 生成、T 日持有）。
+async def generate_review(request: Request, date_str: str | None = Query(default=None, alias="date"), hub: QuoteHub = Depends(get_hub), _: None = Depends(require_write_token)) -> dict:
+    """按明确表现日读取或生成同版本的价格观察（历史日只读已有结果）。
 
     核心逻辑在 app.picks.daily_review.generate_daily_review（与 15:30 全局
     复盘前置步共用同一条代码路径，2026-09-04 抽出——见该模块 docstring）。
@@ -283,93 +284,107 @@ async def generate_review(request: Request, hub: QuoteHub = Depends(get_hub), _:
     from app.picks.daily_review import generate_daily_review
 
     try:
-        result = await generate_daily_review(hub, request.app.state.snapshot_service, get_session_factory())
+        result = await generate_daily_review(hub, request.app.state.snapshot_service, get_session_factory(), trade_date=date_str)
     except ValueError as exc:
         raise HTTPException(status_code=404, detail=str(exc))
     return {"data": result, "meta": {}}
 
 
 @router.get("/review")
-async def list_reviews(date_str: str | None = Query(default=None, alias="date"), limit: int = Query(default=60, ge=1, le=200)) -> dict:
+async def list_reviews(date_str: str | None = Query(default=None, alias="date"), limit: int = Query(default=60, ge=1, le=200), version: str | None = Query(default=None, min_length=1, max_length=64)) -> dict:
     with _db() as db:
-        from app.models.daily_pick import DailyPickReview
-
-        q = select(DailyPickReview).order_by(DailyPickReview.date.desc(), DailyPickReview.symbol)
+        from sqlalchemy import and_, case, func, literal, or_
+        from app.models.daily_pick import DailyPickReview, DailyPickSet
+        from app.picks.review_contract import day_keys, finite_number, iso_day, object_json, selection_version, trusted_review
+        filters = []
+        normalized = func.replace(DailyPickReview.date, '-', '')
         if date_str:
-            q = select(DailyPickReview).where(DailyPickReview.date == date_str).order_by(DailyPickReview.symbol)
-        rows = db.execute(q.limit(limit)).scalars().all()
+            try:
+                keys = day_keys(date_str)
+            except ValueError as exc:
+                raise HTTPException(status_code=422, detail=str(exc))
+            filters.append(DailyPickReview.date.in_(keys))
+        if version:
+            filters.append(DailyPickReview.selection_version == version)
+        # At most limit real days can supply limit principal rows. Canonicalize and
+        # prefer the current generation before limiting rows, including limit=1.
+        dates = db.scalars(select(func.min(DailyPickReview.date)).where(*filters).group_by(normalized).order_by(normalized.desc()).limit(limit)).all()
+        keys = {key for raw_day in dates if iso_day(raw_day) for key in day_keys(raw_day)}
+        filters.append(DailyPickReview.date.in_(keys))
+        selections = db.scalars(select(DailyPickSet).where(DailyPickSet.date.in_(keys))).all() if keys else []
+        by_day, current_conditions = {}, []
+        for selection in selections:
+            day = iso_day(selection.date)
+            if day not in by_day or selection.date == day:
+                by_day[day] = (object_json(selection.meta), json.loads(selection.items or "[]"))
+        for day, combo in by_day.items():
+            current = selection_version(day, combo[0], combo[1])
+            if current:
+                current_conditions.append(and_(normalized == day.replace('-', ''), DailyPickReview.selection_version == current))
+        generation_order = case((or_(*current_conditions), 0), else_=1) if current_conditions else literal(1)
+        ranked = select(DailyPickReview.id, func.row_number().over(partition_by=(normalized, DailyPickReview.symbol),
+                        order_by=(generation_order, case((func.length(DailyPickReview.date) == 10, 0), else_=1), DailyPickReview.id.desc())).label('rank')).where(*filters).subquery()
+        principal_ids = select(ranked.c.id).where(ranked.c.rank == 1)
+        rows = db.scalars(select(DailyPickReview).where(DailyPickReview.id.in_(principal_ids)).order_by(normalized.desc(), DailyPickReview.symbol).limit(limit)).all()
+        total = db.scalar(select(func.count()).select_from(DailyPickReview).where(*filters)) or 0
+        principals = db.scalar(select(func.count()).select_from(ranked).where(ranked.c.rank == 1)) or 0
+        def eligible(r):
+            combo = by_day.get(iso_day(r.date))
+            return bool(finite_number(r.excess_pct) is not None and combo and trusted_review(r.review_context, day=iso_day(r.date), meta=combo[0], items=combo[1], symbol=r.symbol, persisted_version=r.selection_version))
         return {
             "data": [
-                {"date": r.date, "symbol": r.symbol, "name": r.name, "verdict": r.verdict,
-                 "reason_category": r.reason_category, "excess_pct": r.excess_pct, "note": r.note}
+                {"date": iso_day(r.date), "symbol": r.symbol, "name": r.name, "verdict": r.verdict,
+                 "reason_category": r.reason_category, "excess_pct": r.excess_pct, "note": r.note, "selection_version": r.selection_version, "review_context": object_json(r.review_context),
+                 "statistics_eligible": eligible(r)}
                 for r in rows
             ],
-            "meta": {},
+            "meta": {"legacy_duplicates_hidden": total - principals,
+                     "note": "同日同股默认展示当前生成版本；可用date+version只读旧版原上下文"},
         }
 
 
 @router.get("/meta")
 async def picks_meta() -> dict:
-    """元结论：走坏原因分布 + 按梯队角色的胜率分布。
-
-    角色胜率是回答「能不能按题材抓妖」的直接证据：龙头/补涨/滞涨各自的
-    实际胜率与平均超额，比任何主观判断都硬。样本不足时如实标注。
-    """
+    """最近同版本可信价格观察的归因与角色占比；不证明成交胜率或选股增量。"""
+    from collections import Counter
+    from app.models.daily_pick import DailyPickReview
+    from app.picks.review_contract import finite_number, iso_day, object_json, selection_rows_query, trusted_review
     with _db() as db:
-        from sqlalchemy import func
-
-        from app.models.daily_pick import DailyPickReview, DailyPickSet
-
-        rows = db.execute(
-            select(DailyPickReview.reason_category, func.count(DailyPickReview.id)).group_by(DailyPickReview.reason_category)
-        ).all()
-        reviews = db.execute(
-            select(DailyPickReview).order_by(DailyPickReview.date.desc()).limit(300)
-        ).scalars().all()
-        sets = db.execute(
-            select(DailyPickSet).order_by(DailyPickSet.date.desc()).limit(90)
-        ).scalars().all()
-
-    # (date, symbol) → 梯队角色（角色存在组合 items JSON 里）
-    role_of: dict[tuple[str, str], str] = {}
+        reviews = db.scalars(select(DailyPickReview).order_by(DailyPickReview.date.desc()).limit(300)).all()
+        sets = db.scalars(selection_rows_query(90, through=beijing_today())).all()
+    by_day = {}
     for s in sets:
-        try:
-            for item in json.loads(s.items):
-                if item.get("echelon_role"):
-                    role_of[(s.date, item["symbol"])] = item["echelon_role"]
-        except Exception:
+        day = iso_day(s.date)
+        if day not in by_day or s.date == day:
+            by_day[day] = (object_json(s.meta), json.loads(s.items or "[]"))
+    agg, reasons, seen = {}, Counter(), set()
+    excluded = 0
+    for r in sorted(reviews, key=lambda x: (x.date != iso_day(x.date), -x.id)):
+        day = iso_day(r.date)
+        key = (day, r.symbol)
+        combo = by_day.get(day)
+        value = finite_number(r.excess_pct)
+        if key in seen or value is None or not combo or not trusted_review(r.review_context, day=day, meta=combo[0], items=combo[1], symbol=r.symbol, persisted_version=r.selection_version):
+            excluded += 1
             continue
-
-    agg: dict[str, dict] = {}
-    for r in reviews:
-        role = role_of.get((r.date, r.symbol))
-        if role is None:
-            continue  # 该条复盘早于梯队维度上线（8-31 前），角色未知不硬凑
+        seen.add(key)
+        reasons[r.reason_category] += 1
+        role = object_json(r.review_context).get("echelon_role")
+        if not role:
+            continue
         a = agg.setdefault(role, {"count": 0, "good": 0, "bad": 0, "flat": 0, "excess_sum": 0.0})
         a["count"] += 1
         a[r.verdict if r.verdict in ("good", "bad") else "flat"] += 1
-        a["excess_sum"] += r.excess_pct or 0.0
-    role_performance = []
-    for role, a in sorted(agg.items(), key=lambda kv: -kv[1]["count"]):
-        role_performance.append(
-            {
-                "role": role,
-                "count": a["count"],
-                "good": a["good"],
-                "bad": a["bad"],
-                "flat": a["flat"],
-                "win_rate": round(a["good"] / a["count"] * 100, 1),
-                "avg_excess": round(a["excess_sum"] / a["count"], 2),
-            }
-        )
-    return {
-        "data": {
-            "reason_distribution": {r[0]: r[1] for r in rows},
-            "role_performance": role_performance,
-            "note": "分布与角色胜率供周末权重微调建议参考；权重变更需人工确认",
-        },
-        "meta": {},
-    }
+        a["excess_sum"] += value
+    performance = [{"role": role, "count": a["count"], "good": a["good"], "bad": a["bad"],
+                    "flat": a["flat"], "win_rate": round(a["good"] / a["count"] * 100, 1),
+                    "avg_excess": round(a["excess_sum"] / a["count"], 2)}
+                   for role, a in sorted(agg.items(), key=lambda kv: -kv[1]["count"])]
+    return {"data": {"reason_distribution": dict(reasons), "role_performance": performance,
+                     "scope": {"review_rows": len(reviews), "selection_rows": len(sets),
+                               "excluded_rows": excluded, "trusted_rows": len(seen)},
+                     "note": "最近最多300条复盘、90份组合；仅同版本同窗口可信价格观察，旧未绑定与缺收益不进分母；不是成交胜率，权重变更需人工确认"},
+            "meta": {}}
 
 
 # ---------------------------------------------------------------- 执行闸门与影子持仓（picks-intraday-fusion-assessment P0-A/P0-B，2026-09-04）
