@@ -3,6 +3,8 @@
 政策：只有涨停前提醒过的股票才准入盘中跟踪；封板后才发现的一律不入册。
 """
 
+from datetime import datetime, timezone
+
 from app.picks.pre_limit_radar import (
     board_limit_pct,
     in_pre_limit_zone,
@@ -99,6 +101,24 @@ def test_select_candidates_skips_sealed_and_registered():
     assert out[0]["limit_pct"] == 10.0
 
 
+def test_actual_price_distance_does_not_change_candidate_boundaries_or_legacy_runway():
+    rows = [
+        {"symbol": "600001", "name": "下沿外", "change_pct": 6.49, "price": 10.649, "limit_up_price": 11.0},
+        {"symbol": "600002", "name": "临板股", "change_pct": 7.2, "price": 10.72, "limit_up_price": 11.0},
+        {"symbol": "600003", "name": "缺限价", "change_pct": 8.0, "price": 10.8},
+        {"symbol": "600004", "name": "判定线上", "change_pct": 9.7, "price": 10.97, "limit_up_price": 11.0},
+    ]
+    for row in rows:
+        row.update(quality="high", source="tencent_fallback", ticktime=datetime.now(timezone.utc).isoformat())
+    out = select_candidates(rows, set())
+    assert [c["symbol"] for c in out] == ["600003", "600002"]  # 仍按旧判定线距离排序。
+    by_symbol = {c["symbol"]: c for c in out}
+    assert by_symbol["600002"]["runway_pct"] == 2.5  # 兼容字段仍是百分点，未偷换含义。
+    assert by_symbol["600002"]["limit_up_gap_pct"] == 2.61
+    assert by_symbol["600003"]["limit_up_gap_pct"] is None
+    assert by_symbol["600003"]["limit_up_gap_state"] == "unknown"
+
+
 def test_select_candidates_excludes_boards_without_permission():
     """非主板板块（创业板/科创板/北交所/B 股）不进候选——提醒了也执行不了。
 
@@ -129,6 +149,38 @@ def test_registered_no_entry_can_reenter_only_when_explicitly_reopenable():
     assert select_candidates(rows,{"600006"}) == []
     got=select_candidates(rows,{"600006"},reopen_symbols={"600006"})
     assert [x["symbol"] for x in got] == ["600006"]
+
+
+def test_sweep_new_reminder_records_actual_limit_distance_without_legacy_unit(monkeypatch):
+    import asyncio
+    from datetime import datetime, timezone
+    from types import SimpleNamespace
+
+    from app.picks import pre_limit_radar as radar
+    import app.picks.watch_ledger as ledger
+    import app.picks.watcher as watcher
+
+    monkeypatch.setattr(ledger, "get_day", lambda _td: [])
+    sightings = []
+    alerts = []
+    def sighting(**kwargs):
+        sightings.append(kwargs)
+        return {"symbol": kwargs["symbol"]}
+    async def dispatch(_app, alert):
+        alerts.append(alert)
+        return True
+    monkeypatch.setattr(ledger, "record_sighting", sighting)
+    monkeypatch.setattr(watcher, "dispatch_alert", dispatch)
+    svc = SimpleNamespace(snapshot=[{
+        "symbol": "600002", "name": "临板股", "change_pct": 7.2,
+        "price": 10.72, "limit_up_price": 11.0, "turnover_rate": 8.0,
+        "quality": "high", "source": "tencent_fallback", "ticktime": datetime.now(timezone.utc).isoformat(),
+    }], last_success=datetime.now(timezone.utc))
+    assert asyncio.run(radar.pre_limit_sweep(SimpleNamespace(state=SimpleNamespace(snapshot_service=svc)))) == 1
+    assert "距实际涨停价还需上涨 2.61%" in alerts[0]["text"]
+    assert "pct" not in alerts[0]["text"]
+    assert sightings[0]["reason"]["runway_pct"] == 2.5
+    assert sightings[0]["reason"]["limit_up_gap_pct"] == 2.61
 
 
 def test_sweep_reaches_board_reopen_once_for_registered_no_entry(monkeypatch):
@@ -166,7 +218,8 @@ def test_sweep_reaches_board_reopen_once_for_registered_no_entry(monkeypatch):
 
     svc = SimpleNamespace(
         snapshot=[{"symbol": "600006", "name": "炸板股", "change_pct": 8.5,
-                   "price": 9.3, "turnover_rate": 8.0}],
+                   "price": 10.85, "limit_up_price": 11.0, "turnover_rate": 8.0,
+                   "quality": "high", "source": "tencent_fallback", "ticktime": datetime.now(timezone.utc).isoformat()}],
         last_success=datetime.now(timezone.utc),
     )
     app = SimpleNamespace(state=SimpleNamespace(snapshot_service=svc))
@@ -181,6 +234,7 @@ def test_sweep_reaches_board_reopen_once_for_registered_no_entry(monkeypatch):
     assert alerts[0]["seal_state"]["current_sealed"] is False
     assert alerts[0]["seal_state"]["version"] == svc.last_success.isoformat()
     assert "不代表保证成交" in alerts[0]["text"]
+    assert "距实际涨停价还需上涨 1.38%" in alerts[0]["text"]
     assert (td, "600006") in radar._REOPEN
 
     asyncio.run(radar.pre_limit_sweep(app))

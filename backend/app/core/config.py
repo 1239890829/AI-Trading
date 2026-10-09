@@ -394,6 +394,7 @@ class Settings(BaseSettings):
     agent_evolution_hour: int = 15
     agent_evolution_minute: int = 45
     agent_daily_llm_budget: int = 8        # 每日自主模型调用上限；DB slot 原子预留
+    alert_triage_daily_llm_budget: int | None = None  # 告警判读独立次数：None 不限每日次数，0 停用
     agent_daily_task_budget: int = 3       # 每日自动执行改进任务上限；DB slot 原子预留
     agent_model_max_timeout_seconds: float = 180.0  # Agent 模型单次 wall-time 上限
     agent_model_max_retries: int = 2       # 单次模型调用最多额外重试次数（Jev 当前行为=2）

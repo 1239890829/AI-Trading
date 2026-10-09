@@ -39,6 +39,7 @@ from __future__ import annotations
 
 from app.picks.halt_risk import board_of
 from app.picks.pre_limit_radar import board_limit_pct, pre_limit_floor, seal_threshold
+from app.market.price_rules import limit_up_distance, limit_up_distance_text
 from app.services.official_match import MAX_CONCEPT_SIZE, MIN_HITS
 from app.services.theme_service import parse_hhmmss
 
@@ -187,11 +188,12 @@ def assess(*, sealed: bool | None, first_seal_time: str | None = None) -> dict:
 # ---------------------------------------------------------------- 涨停下沿/跑道
 
 
-def seal_metrics(symbol: str, name: str = "", pct: float | None = None) -> dict:
+def seal_metrics(symbol: str, name: str = "", pct: float | None = None, *, quote: dict | None = None) -> dict:
     """涨停幅 / 封板线 / 距封板跑道（委托 `pre_limit_radar` 的单点实现，不重写）。"""
     limit = board_limit_pct(symbol, name)
     out: dict = {"limit_pct": limit, "seal_line": round(seal_threshold(limit), 2),
                  "pre_limit_floor": pre_limit_floor(limit)}
+    out.update(limit_up_distance(quote or {"symbol": symbol, "name": name}))
     if pct is not None:
         out["runway_pct"] = round(seal_threshold(limit) - float(pct), 2)
         out["in_pre_limit"] = pre_limit_floor(limit) <= float(pct) < seal_threshold(limit)
@@ -315,7 +317,8 @@ def resolve_containers(
 
 
 def linkage_confidence(
-    *, theme_limit_ups: int, theme_stage: str | None, pct: float | None, limit_pct: float
+    *, theme_limit_ups: int, theme_stage: str | None, pct: float | None, limit_pct: float,
+    distance: dict | None = None,
 ) -> dict:
     """联动置信度三态（高/中/低/unknown）+ 依据。
 
@@ -337,7 +340,7 @@ def linkage_confidence(
             "level": "高",
             "basis": (
                 f"题材{theme_stage} · 涨停 {theme_limit_ups} 家 · 已进临板区"
-                f"（距封板 {round(seal_threshold(limit_pct) - pct, 2)}pct）"
+                f"（{limit_up_distance_text(distance or {})}）"
             ),
         }
     if pct >= LINKAGE_MID_PCT:
@@ -468,8 +471,9 @@ def linkage_candidates(
                 "level": "可参与",
                 "basis": "当前未封在涨停板，可进入参与评估；未核盘口深度/排队，不保证成交",
             }
-        metrics = seal_metrics(code, name, pct)
-        conf = linkage_confidence(theme_limit_ups=theme_limit_ups, theme_stage=theme_stage, pct=pct, limit_pct=limit)
+        metrics = seal_metrics(code, name, pct, quote=row)
+        conf = linkage_confidence(theme_limit_ups=theme_limit_ups, theme_stage=theme_stage,
+                                  pct=pct, limit_pct=limit, distance=metrics)
         out.append({
             "symbol": code, "name": name, "board": board_label(code, name),
             "change_pct": round(pct, 2), "price": row.get("price"), "amount": amount_f or None,
@@ -477,7 +481,7 @@ def linkage_candidates(
             "tradability": tradability, "seal_state": seal_state, "linkage": conf,
             "basis": (
                 ("今日曾封板后已开板重评；" if ever else "")
-                + f"题材内涨停 {theme_limit_ups} 家形成集中，本股当前未封板（{pct:.1f}%，距封板 {metrics['runway_pct']}pct）——"
+                + f"题材内涨停 {theme_limit_ups} 家形成集中，本股当前未封板（{pct:.1f}%，{limit_up_distance_text(metrics)}）——"
                 + ("已进临板区" if metrics.get("in_pre_limit") else "可参与观察")
             ),
             "container": (container or {}).get("name"), "container_code": (container or {}).get("code"),

@@ -31,6 +31,7 @@ vi.mock("@/lib/api", async () => {
 });
 
 import { NotificationBell } from "@/components/notifications/notification-drawer";
+import { DetailModalProvider } from "@/components/detail/detail-modal";
 import { __resetPrefsCache } from "@/lib/notification-read";
 
 function item(over: Partial<NotificationItem> = {}): NotificationItem {
@@ -99,6 +100,20 @@ afterEach(() => {
 });
 
 describe("通知中心：未读计数与红点", () => {
+  it.each([
+    ["临板 7.2%（距封板 +2.50pct）", "临板 7.2%（旧口径：距封板判定线 +2.50 个百分点）"],
+    ["距实际涨停价还需上涨 2.33%", "距实际涨停价还需上涨 2.33%"],
+  ])("列表与判读全文保持距离口径一致：%s", async (body, displayed) => {
+    payload = makePayload([item({ title: "距离通知", body, symbol: "600519" })]);
+    render(<DetailModalProvider><NotificationBell /></DetailModalProvider>);
+    await openDrawer();
+    expect(screen.getByTestId("notification-list").textContent).toContain(displayed);
+
+    fireEvent.click(screen.getByTestId("notification-judgment"));
+    expect((await screen.findByRole("dialog", { name: "距离通知" })).textContent).toContain(displayed);
+    expect(payload.items[0].body).toBe(body);
+  });
+
   it("徽标 = 未读条数；打开抽屉后每条未读都有红点", async () => {
     payload = makePayload([
       item({ id: "a", ts: "2026-09-11 09:40:00", title: "A" }),

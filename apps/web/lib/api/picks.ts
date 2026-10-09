@@ -648,6 +648,15 @@ export interface OpportunityStock {
   linkage?: OpportunityJudgement | null;
   /** 一句话入选依据（participants 由后端生成，直接展示） */
   basis?: string | null;
+  /** 源提供的实际涨停价；不按代码段或封板判定线推算。 */
+  limit_up_price?: number | null;
+  /** (实际涨停价 / 同次报价现价 - 1) × 100；非旧runway_pct百分点差。 */
+  limit_up_gap_pct?: number | null;
+  limit_up_gap_state?: "ready" | "unknown";
+  /** 距离计算使用的同源现价、来源与源时间；可与原筛选快照现价不同。 */
+  limit_up_gap_price?: number | null;
+  limit_up_gap_source?: string | null;
+  limit_up_gap_as_of?: string | null;
   /** 现价/止损/出场：与 intraday-top 同源补全（attach_risk_fields），缺失显式 null。 */
   price?: number | null;
   stop_ref?: { pct: number; price: number; basis: string } | null;
@@ -794,6 +803,13 @@ export interface IntradayTopStock {
   reason: string | null;
   tier: number;
   pick_basis: string;
+  /** 同一报价实际涨停价及相对现价还需上涨的百分数；缺价保持unknown。 */
+  limit_up_price?: number | null;
+  limit_up_gap_pct?: number | null;
+  limit_up_gap_state?: "ready" | "unknown";
+  limit_up_gap_price?: number | null;
+  limit_up_gap_source?: string | null;
+  limit_up_gap_as_of?: string | null;
   /** 现价（全市场快照；缺失 null 显式 --） */
   price?: number | null;
   /** 止损参考位（risk.stop_loss_reference：档位基准/1.5ATR clamp 3%~12%） */

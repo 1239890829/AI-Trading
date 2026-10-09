@@ -265,13 +265,27 @@ def agenda_as_task(row) -> dict:
 
     items = [it for it in _j(row.items, []) if isinstance(it, dict)]
     budget = _j(row.budget, {})
+    budget_summary = (
+        f"自主模型 {budget.get('llm_used', '?')}/{budget.get('llm_budget', '?')}"
+        + ("（自主模型预算耗尽）" if budget.get("llm_exhausted") else "")
+        + f" · 任务 {budget.get('tasks_used', '?')}/{budget.get('task_budget', '?')}"
+    )
+    if any(key in budget for key in ("triage_used", "triage_budget", "triage_unlimited", "triage_exhausted")):
+        triage_used = budget.get("triage_used", "?")
+        triage_limit = budget.get("triage_budget")
+        if "triage_budget" in budget and triage_limit is None and budget.get("triage_unlimited") is True:
+            budget_summary += f" · 告警判读 {triage_used} 次（不限每日次数）"
+        elif triage_limit == 0:
+            budget_summary += f" · 告警判读 {triage_used}/0（已停用）"
+        elif triage_limit is not None:
+            budget_summary += f" · 告警判读 {triage_used}/{triage_limit}"
+            if budget.get("triage_exhausted"):
+                budget_summary += "（告警判读预算耗尽）"
+        else:
+            budget_summary += f" · 告警判读 {triage_used} 次（每日次数上限未记录）"
     steps: list[dict] = [{
         "index": 1, "name": "证据采集与预算", "input_summary": "",
-        "output_summary": (
-            f"LLM {budget.get('llm_used', '?')}/{budget.get('llm_budget', '?')} · "
-            f"任务 {budget.get('tasks_used', '?')}/{budget.get('task_budget', '?')}"
-            + ("（LLM 预算耗尽）" if budget.get("llm_exhausted") else "")
-        ),
+        "output_summary": budget_summary,
         "duration_ms": 0, "ok": True,
     }]
     for i, it in enumerate(items, start=2):

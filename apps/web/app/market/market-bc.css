@@ -24,16 +24,24 @@
 :root .bc-market-page .bc-market-overview,
 :root .bc-market-page .bc-market-overview:has(.bc-market-basis[open]) {height:100%;min-height:0;overflow:visible;padding:0;}
 .bc-market-dashboard {display:grid;grid-template-columns:minmax(270px,.37fr) minmax(0,1fr);flex:1 1 0%;min-height:0;min-width:0;gap:20px;}
-.bc-market-dashboard>.bc-market-context {display:grid;grid-template-rows:minmax(0,1fr) auto minmax(0,.65fr);min-height:0;min-width:0;gap:16px;}
+.bc-market-dashboard>.bc-market-context {display:grid;grid-template-rows:minmax(0,1fr) auto auto;min-height:0;min-width:0;gap:16px;}
+.bc-market-metrics {display:contents;}
 :root .bc-market-dashboard>.bc-market-context .bc-market-indices {grid-template-columns:repeat(2,minmax(0,1fr));align-content:start;min-height:0;gap:8px;padding:0;border:0;overflow:auto;overscroll-behavior:contain;}
 :root .bc-market-dashboard>.bc-market-context .bc-index-quote,:root .bc-market-dashboard>.bc-market-context .bc-index-skeleton {min-height:90px;padding:12px;border:0;border-radius:8px;background:var(--workspace-surface);}
 .bc-market-dashboard>.bc-market-context .bc-index-value {flex-wrap:wrap;gap:3px 8px;justify-content:flex-start;}
 :root .bc-market-dashboard>.bc-market-context .bc-market-environment {display:block;min-height:max-content;padding:14px 16px;overflow:visible;}
 .bc-market-dashboard>.bc-market-context .bc-market-breadth {grid-template-columns:repeat(3,minmax(0,1fr));gap:10px;margin-top:10px;padding:10px 0 0;border-left:0;border-top:1px solid var(--ui-line);}
 .bc-market-dashboard>.bc-market-context .bc-market-breadth dd {margin-top:5px;}
-:root .bc-market-dashboard>.bc-market-context .bc-market-sentiment {display:block;min-height:0;padding:0;overflow:auto;overscroll-behavior:contain;}
-.bc-market-dashboard>.bc-market-context .bc-market-sentiment-reading {gap:8px 12px;}
-.bc-market-dashboard>.bc-market-context .bc-market-cycle {justify-content:space-between;width:100%;margin-top:12px;}
+:root .bc-market-dashboard>.bc-market-context .bc-market-sentiment {display:block;min-height:max-content;padding:0;overflow:visible;}
+.bc-market-dashboard>.bc-market-context .bc-market-sentiment-reading {display:grid;grid-template-columns:minmax(0,1fr) auto;gap:4px 8px;align-items:center;}
+.bc-market-dashboard>.bc-market-context .bc-market-phase {justify-self:start;grid-column:1;grid-row:1;white-space:nowrap;}
+.bc-market-dashboard>.bc-market-context .bc-market-confidence {grid-column:2;grid-row:1;white-space:nowrap;}
+.bc-market-dashboard>.bc-market-context .bc-market-sentiment-reading > span:nth-child(2) {grid-column:1;grid-row:2;white-space:nowrap;}
+.bc-market-evidence-trigger {grid-column:2;grid-row:2;min-height:32px;padding:4px 0;color:var(--ui-muted);font-size:11px;white-space:nowrap;text-align:right;border-radius:4px;}
+.bc-market-evidence-trigger:hover {color:var(--ui-ink);}
+.bc-market-evidence-trigger:focus-visible {outline:2px solid var(--ui-accent);outline-offset:2px;}
+.bc-market-evidence-copy {display:grid;gap:14px;font-size:14px;line-height:1.8;overflow-wrap:anywhere;}
+.bc-market-dashboard>.bc-market-context .bc-market-cycle {justify-content:space-between;width:100%;margin-top:8px;}
 .bc-market-dashboard>.bc-market-context .bc-market-basis {position:relative;flex-basis:100%;}
 :root .bc-market-dashboard>.bc-market-context .bc-market-basis > div {position:static;width:auto;max-height:none;padding:12px 0 0;overflow:visible;border:0;background:transparent;box-shadow:none;}
 :root .bc-market-dashboard .bc-market-reading,
@@ -117,13 +125,26 @@
   .fund-analysis-current > .grid,.fund-analysis-history > .grid {grid-template-columns:repeat(2,minmax(260px,1fr));gap:12px;overflow-x:auto;overscroll-behavior:contain;}
   .bc-tape-page .theme-workspace {grid-template-columns:232px minmax(0,1fr);gap:16px;}
 }
+/* Short desktop screens still need a readable index quote above the fixed metrics. */
+@media(min-width:768px) and (max-height:760px) {
+  .bc-market-page.task-page {gap:10px;padding-block:12px 14px;}
+  .bc-market-page .bc-market-masthead {padding-bottom:8px;}
+  .bc-market-dashboard>.bc-market-context {gap:10px;}
+  :root .bc-market-dashboard>.bc-market-context .bc-index-quote,
+  :root .bc-market-dashboard>.bc-market-context .bc-index-skeleton {min-height:84px;padding:10px;}
+  :root .bc-market-dashboard>.bc-market-context .bc-market-environment {padding:10px 12px;}
+  .bc-market-dashboard>.bc-market-context .bc-market-breadth {gap:6px;margin-top:8px;padding-top:8px;}
+  .bc-market-dashboard>.bc-market-context .bc-market-breadth dd {margin-top:3px;}
+}
 @media(max-width:767px) {
   :root .bc-market-page.task-page > .bc-market-view {height:100%;min-height:0;overflow:visible;}
-  .bc-market-dashboard {grid-template-columns:minmax(280px,.86fr) repeat(2,minmax(300px,1fr));gap:12px;overflow-x:auto;overscroll-behavior:contain;scroll-snap-type:x proximity;padding-bottom:4px;}
-  .bc-market-dashboard>.bc-market-context,.bc-market-dashboard .bc-market-reading > .task-panel,.bc-market-dashboard .bc-market-events {scroll-snap-align:start;}
+  .bc-market-dashboard {grid-template-columns:repeat(2,minmax(280px,.86fr)) repeat(2,minmax(300px,1fr));gap:12px;overflow-x:auto;overscroll-behavior:contain;scroll-snap-type:x proximity;padding-bottom:4px;}
+  .bc-market-dashboard .bc-market-indices,.bc-market-dashboard .bc-market-metrics,.bc-market-dashboard .bc-market-reading > .task-panel,.bc-market-dashboard .bc-market-events {scroll-snap-align:start;}
   :root .bc-market-dashboard .bc-market-reading,
   :root .bc-market-overview:has(.bc-market-basis[open]) .bc-market-reading {display:contents;}
-  .bc-market-dashboard>.bc-market-context {gap:12px;}
+  .bc-market-dashboard>.bc-market-context {display:contents;}
+  .bc-market-dashboard .bc-market-metrics {display:grid;grid-template-rows:auto auto;align-content:start;min-width:0;gap:12px;}
+  .bc-market-page .bc-market-masthead {gap:8px;padding-bottom:4px;}
   :root .bc-market-dashboard>.bc-market-context .bc-market-indices {display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:8px;}
   :root .bc-market-dashboard>.bc-market-context .bc-index-quote,:root .bc-market-dashboard>.bc-market-context .bc-index-skeleton {min-height:84px;padding:10px;}
   :root .bc-market-dashboard>.bc-market-context .bc-market-environment {padding:10px 12px;}
@@ -137,6 +158,9 @@
   .bc-market-dashboard>.bc-market-context .bc-market-breadth > div {display:flex;align-items:center;justify-content:space-between;gap:6px;min-height:28px;}
   .bc-market-dashboard>.bc-market-context .bc-market-breadth dd {margin:0;font-size:13px;}
   .bc-market-dashboard>.bc-market-context .bc-market-breadth dd > a {min-height:28px;}
+  .bc-market-dashboard>.bc-market-context .bc-market-sentiment-reading {column-gap:6px;font-size:11px;}
+  .bc-market-dashboard>.bc-market-context .bc-market-sentiment-reading strong {font-size:13px;}
+  .bc-market-evidence-trigger {min-height:44px;}
   .bc-market-dashboard>.bc-market-context .bc-market-basis > div {width:min(280px,calc(100vw - 48px));}
   :root .bc-market-dashboard .bc-market-events > .task-panel {height:100%;min-height:0;}
   :root .bc-market-page .bc-market-view-heatmap > .task-panel,

@@ -205,6 +205,134 @@ def test_budget_exhausted_blocks_llm(sf, monkeypatch):
     assert "预算" in agenda["error"]["message"]
 
 
+def test_start_budget_block_releases_unstarted_agenda_without_calling_model(sf, monkeypatch):
+    from app.services import agent_budget
+
+    monkeypatch.setattr(evo.settings, "agent_daily_llm_budget", 2)
+    monkeypatch.setattr(evo.settings, "alert_triage_daily_llm_budget", None)
+    monkeypatch.setattr(evo, "collect_inputs", lambda sf2, app=None: {})
+    calls = _counting_llm(monkeypatch, json.dumps({"items": []}))
+    original_reserve = agent_budget.reserve
+    ids = {}
+
+    def reserve_then_other_call_becomes_unknown(*args, **kwargs):
+        lease = original_reserve(*args, **kwargs)
+        ids["waiting"] = lease["id"]
+        other = original_reserve(
+            agent_budget.SCOPE_ALERT_TRIAGE_LLM, purpose="triage.llm", kind="model",
+            session_factory=sf,
+        )
+        ids["other"] = other["id"]
+        agent_budget.start(other["id"], sf)
+        agent_budget.finish(other["id"], state="failed", usage=None, session_factory=sf)
+        return lease
+
+    monkeypatch.setattr(agent_budget, "reserve", reserve_then_other_call_becomes_unknown)
+    agenda = asyncio.run(evo.generate_agenda(sf))
+
+    assert calls["n"] == 0
+    assert agenda["status"] == "skipped" and agenda["error"]["code"] == "Budget"
+    assert "用量未知" in agenda["error"]["message"]
+    assert agenda["finished_at"] is not None
+    assert agenda["budget"]["llm_used"] == 0 and agenda["budget"]["llm_reserved"] == 0
+    receipts = agent_budget.recent_usage(sf)
+    assert [row["id"] for row in receipts] == [ids["other"]]
+    assert receipts[0]["state"] == "failed" and receipts[0]["usage_known"] is False
+    assert ids["waiting"] != ids["other"]
+
+
+def test_previous_day_agenda_lease_is_released_without_calling_model(sf, monkeypatch):
+    from app.services import agent_budget
+
+    monkeypatch.setattr(evo, "collect_inputs", lambda sf2, app=None: {})
+    calls = _counting_llm(monkeypatch, json.dumps({"items": []}))
+    original_reserve = agent_budget.reserve
+
+    def reserve_across_midnight(*args, **kwargs):
+        monkeypatch.setattr(agent_budget, "_today", lambda: "2026-10-08")
+        lease = original_reserve(*args, **kwargs)
+        monkeypatch.setattr(agent_budget, "_today", lambda: "2026-10-09")
+        return lease
+
+    monkeypatch.setattr(agent_budget, "reserve", reserve_across_midnight)
+    agenda = asyncio.run(evo.generate_agenda(sf))
+    assert calls["n"] == 0 and agenda["status"] == "skipped"
+    assert agenda["error"]["code"] == "Budget" and "跨北京日期" in agenda["error"]["message"]
+    assert agent_budget.recent_usage(sf) == []
+
+
+@pytest.mark.parametrize("stop_kind", ["cancel", "timeout"])
+def test_model_worker_drains_before_terminal_receipt_and_preserves_late_usage(sf, monkeypatch, stop_kind):
+    from threading import Event
+    from app.services import agent_budget
+
+    entered, release, deadline_reached = Event(), Event(), Event()
+    calls = []
+    monkeypatch.setattr(evo, "collect_inputs", lambda sf2, app=None: {})
+    monkeypatch.setattr(evo.settings, "alert_triage_daily_llm_budget", None)
+
+    def completion(*args, **kwargs):
+        calls.append(1)
+        entered.set()
+        assert release.wait(5)
+        kwargs["usage_callback"]({"input_tokens": 17, "output_tokens": 3})
+        return json.dumps({"items": []})
+
+    monkeypatch.setattr("app.core.llm_client.chat_completion", completion)
+    if stop_kind == "timeout":
+        original_wait_for = asyncio.wait_for
+
+        async def short_deadline(awaitable, timeout):
+            assert timeout == 150.0
+            try:
+                return await original_wait_for(awaitable, timeout=0.01)
+            except TimeoutError:
+                deadline_reached.set()
+                raise
+
+        monkeypatch.setattr(evo.asyncio, "wait_for", short_deadline)
+
+    async def run():
+        task = asyncio.create_task(evo.generate_agenda(sf))
+        try:
+            assert await asyncio.to_thread(entered.wait, 1)
+            if stop_kind == "cancel":
+                task.cancel()
+                await asyncio.sleep(0)
+                task.cancel()  # repeated cancel must not abandon the worker
+                await asyncio.sleep(0)
+            else:
+                assert await asyncio.to_thread(deadline_reached.wait, 1)
+            assert not task.done()
+            receipt = agent_budget.recent_usage(sf)[0]
+            assert receipt["state"] == "started" and receipt["finished_at"] is None
+            duplicate = await evo.generate_agenda(sf)
+            assert duplicate["status"] == "generating" and len(calls) == 1
+            with pytest.raises(agent_budget.BudgetError) as blocked:
+                agent_budget.reserve(
+                    agent_budget.SCOPE_ALERT_TRIAGE_LLM, purpose="later", kind="model", session_factory=sf,
+                )
+            assert blocked.value.code == "usage_unknown"
+            release.set()
+            if stop_kind == "cancel":
+                with pytest.raises(asyncio.CancelledError):
+                    await task
+            else:
+                out = await task
+                assert out["status"] == "failed" and out["error"]["code"] == "TimeoutError"
+                assert out["items"] == []
+        finally:
+            release.set()
+
+    asyncio.run(run())
+    receipt = agent_budget.recent_usage(sf)[0]
+    assert receipt["state"] == ("canceled" if stop_kind == "cancel" else "failed")
+    assert receipt["usage_known"] is True
+    assert receipt["input_tokens"] == 17 and receipt["output_tokens"] == 3
+    assert receipt["finished_at"] is not None and receipt["output_chars"] == 0
+    assert agent_budget.budget_status(sf)["token_accounting_complete"] is True
+
+
 # ---------------------------------------------------------------- R11 议程状态机
 
 def _seed_agenda(sf, status, **kw):

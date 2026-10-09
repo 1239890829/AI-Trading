@@ -188,7 +188,7 @@ it("discloses rule fallback and does not turn a global event into a fake stock l
   vi.mocked(mocked.listAlertEvents).mockResolvedValue([{...event, symbol:"000000", triage:{verdict:"notify", reason:"AI unavailable", model:"llm_fallback"}}]);
   vi.mocked(mocked.getAlertChannels).mockResolvedValue({available:["in_app"], default:["in_app"]});
   render(<AlertsTab />);
-  expect(await screen.findByText("规则提醒 · AI不可用")).toBeTruthy();
+  expect(await screen.findByText("规则提醒 · 本条未经过AI判读")).toBeTruthy();
   expect(screen.getByText("全局事件")).toBeTruthy();
   expect(screen.queryByTitle("查看行情详情")).toBeNull();
 });

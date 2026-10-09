@@ -2,7 +2,7 @@
 from __future__ import annotations
 
 import asyncio
-from datetime import datetime, timedelta
+from datetime import timedelta
 
 
 import pytest
@@ -95,6 +95,213 @@ def test_llm_unavailable_falls_back_and_marks(sf, monkeypatch):
     assert "不可用" in out["reason"]
 
 
+def test_expired_event_is_retained_without_calling_model(sf, monkeypatch):
+    async def forbidden(*_):
+        pytest.fail("expired backlog must not consume AI calls")
+
+    monkeypatch.setattr(tri, "_llm_verdict", forbidden)
+    ev = _event(sf, triggered_at=beijing_now_naive() - timedelta(hours=7))
+    out = asyncio.run(tri.triage_event(ev, sf))
+    assert out["verdict"] == "ignore" and out["model"] == "rules"
+    assert "时效" in out["reason"]
+
+
+def test_known_operational_failure_does_not_ask_model_to_diagnose_itself(sf, monkeypatch):
+    with sf() as db:
+        rule = db.get(AlertRule, 1)
+        rule.condition_type = "llm_gateway_probe"
+        db.commit()
+
+    async def forbidden(*_):
+        pytest.fail("known operational event must use its recorded facts")
+
+    monkeypatch.setattr(tri, "_llm_verdict", forbidden)
+    out = asyncio.run(tri.triage_event(_event(sf), sf))
+    assert out["verdict"] == "notify" and out["model"] == "rules"
+
+
+def test_rule_dedup_does_not_extend_model_cooldown_forever(sf, monkeypatch):
+    calls = []
+
+    async def judge(ctx, *_):
+        calls.append(ctx)
+        return "notify", "新事实"
+
+    monkeypatch.setattr(tri, "_llm_verdict", judge)
+    now = beijing_now_naive()
+    first = _event(sf, triggered_at=now - timedelta(minutes=40))
+    repeated = _event(sf, triggered_at=now - timedelta(minutes=20))
+    fresh = _event(sf, triggered_at=now)
+    assert asyncio.run(tri.triage_event(first, sf))["model"] == "llm"
+    assert asyncio.run(tri.triage_event(repeated, sf))["model"] == "rules"
+    assert asyncio.run(tri.triage_event(fresh, sf))["model"] == "llm"
+    assert len(calls) == 2
+
+
+@pytest.mark.parametrize("changed", ["kind", "direction", "threshold", "trigger_value", "source_version"])
+def test_new_event_fact_is_not_silenced_by_same_rule_and_symbol(sf, monkeypatch, changed):
+    import json
+
+    async def judge(ctx, *_):
+        return "notify", "新事实"
+
+    monkeypatch.setattr(tri, "_llm_verdict", judge)
+    first = _event(sf)
+    initial = {"kind": "flow_surge", "direction": "农业", "text": "资金变化", "name": "示例"}
+    first.snapshot = json.dumps(initial)
+    with sf() as db:
+        db.get(AlertEvent, first.id).snapshot = first.snapshot
+        db.commit()
+    asyncio.run(tri.triage_event(first, sf))
+    next_event = _event(sf)
+    updated = dict(initial)
+    if changed == "threshold":
+        next_event.threshold = 15.0
+    elif changed == "trigger_value":
+        next_event.trigger_value = 20.0
+    else:
+        updated[changed] = "新事实"
+    next_event.snapshot = json.dumps(updated)
+    assert asyncio.run(tri.triage_event(next_event, sf))["model"] == "llm"
+
+
+def test_context_exposes_only_relationship_flags_not_account_details(sf):
+    from app.models.watchlist import WatchlistItem
+    from app.models.paper import PaperPosition
+
+    with sf() as db:
+        db.add(WatchlistItem(symbol="600000", name="示例"))
+        db.add(PaperPosition(symbol="600000", scope="main", quantity=100, cost_price=12.3))
+        db.add(PaperPosition(symbol="600001", scope="shadow", quantity=100, cost_price=99))
+        db.commit()
+    ctx = tri._event_context(_event(sf), sf)
+    assert ctx["relationship"] == {"watchlist": True, "paper_held": True, "recorded_held": False}
+    assert "quantity" not in str(ctx) and "cost_price" not in str(ctx)
+    other = tri._event_context(_event(sf, symbol="600001"), sf)
+    assert other["relationship"]["paper_held"] is False
+
+
+@pytest.mark.parametrize("kind,label", [
+    ("budget_exhausted", "次数预算"), ("usage_unknown", "用量待核实"),
+    ("timeout", "超时"), ("quota", "额度不足"), ("not_configured", "未配置"),
+])
+def test_fallback_discloses_specific_failure_without_claiming_ai_judgment(sf, monkeypatch, kind, label):
+    async def failed(_ctx, _sf, failure):
+        failure["kind"] = kind
+        return None
+
+    monkeypatch.setattr(tri, "_llm_verdict", failed)
+    out = asyncio.run(tri.triage_event(_event(sf), sf))
+    assert out["verdict"] == "notify" and out["model"] == "llm_fallback"
+    assert label in out["reason"] and "未经过 AI 判读" in out["reason"]
+
+
+def test_triage_uses_independent_budget_after_eight_autonomy_calls(sf, monkeypatch):
+    from app.core.config import settings
+    from app.core import llm_client
+    from app.services import agent_budget
+
+    monkeypatch.setattr(settings, "llm_provider", "openai")
+    monkeypatch.setattr(settings, "review_llm_base_url", "https://example.invalid/v1")
+    monkeypatch.setattr(settings, "review_llm_api_key", "test-only")
+    monkeypatch.setattr(settings, "review_llm_model", "test-only")
+    monkeypatch.setattr(settings, "agent_daily_llm_budget", 8)
+    monkeypatch.setattr(settings, "alert_triage_daily_llm_budget", None)
+    monkeypatch.setattr(settings, "jev_alert_triage_mode", "off")
+    for _ in range(8):
+        lease = agent_budget.reserve(agent_budget.SCOPE_AUTONOMY_LLM, purpose="other", kind="model", session_factory=sf)
+        agent_budget.start(lease["id"], sf)
+        agent_budget.finish(lease["id"], state="succeeded", usage={"input_tokens": 1, "output_tokens": 1}, session_factory=sf)
+
+    def reply(**kw):
+        kw["usage_callback"]({"input_tokens": 20, "output_tokens": 8})
+        return '{"verdict":"notify","reason":"需要核对的新事件"}'
+
+    monkeypatch.setattr(llm_client, "chat_completion", reply)
+    out = asyncio.run(tri.triage_event(_event(sf), sf))
+    assert out["model"] == "llm"
+    status = agent_budget.budget_status(sf)
+    assert status["llm_used"] == 8 and status["triage_used"] == 1 and status["triage_unlimited"]
+
+
+def test_concurrent_same_event_shares_judgment_and_cancellation_drains(sf, monkeypatch):
+    calls = []
+    monkeypatch.setattr(__import__("app.core.config", fromlist=["settings"]).settings,
+                        "jev_alert_triage_mode", "off")
+
+    async def run():
+        entered, release = asyncio.Event(), asyncio.Event()
+
+        async def judge(*args):
+            calls.append(1)
+            entered.set()
+            await release.wait()
+            return "notify", "新事实"
+
+        monkeypatch.setattr(tri, "_llm_verdict", judge)
+        event = _event(sf)
+        first = asyncio.create_task(tri.triage_event(event, sf))
+        await entered.wait()
+        second = asyncio.create_task(tri.triage_event(event, sf))
+        await asyncio.sleep(0)
+        first.cancel()
+        await asyncio.sleep(0)
+        still_draining = not first.done()
+        release.set()
+        with pytest.raises(asyncio.CancelledError):
+            await first
+        result = await second
+        assert still_draining and calls == [1]
+        assert result["model"] == "llm"
+        assert (await tri.triage_event(event, sf))["id"] == result["id"]
+
+    asyncio.run(run())
+    with sf() as db:
+        assert db.query(AgentTriage).count() == 1
+
+
+def test_model_cancellation_keeps_receipt_started_until_thread_drains(sf, monkeypatch):
+    from threading import Event
+    from app.core import llm_client
+    from app.core.config import settings
+    from app.models.agent import AgentResourceUsage
+
+    monkeypatch.setattr(settings, "llm_provider", "claude_cli")
+    monkeypatch.setattr(settings, "review_llm_model", "test-only")
+    monkeypatch.setattr(llm_client, "resolve_cli_path", lambda path: "/test-only/claude")
+    entered, release = Event(), Event()
+
+    def reply(**kwargs):
+        entered.set()
+        assert release.wait(5)
+        kwargs["usage_callback"]({"input_tokens": 20, "output_tokens": 8})
+        return '{"verdict":"notify","reason":"新事实"}'
+
+    monkeypatch.setattr(llm_client, "chat_completion", reply)
+
+    async def run():
+        task = asyncio.create_task(tri._llm_verdict({}, sf))
+        assert await asyncio.to_thread(entered.wait, 1)
+        task.cancel()
+        await asyncio.sleep(0)
+        with sf() as db:
+            row = db.query(AgentResourceUsage).one()
+            before = row.state, row.timeout_ms, bool(row.usage_known)
+        still_draining = not task.done()
+        release.set()
+        with pytest.raises(asyncio.CancelledError):
+            await task
+        assert still_draining and before == ("started", 120000, False)
+
+    try:
+        asyncio.run(run())
+    finally:
+        release.set()
+    with sf() as db:
+        row = db.query(AgentResourceUsage).one()
+        assert row.state == "canceled" and row.usage_known and row.input_tokens == 20
+
+
 def test_triage_is_idempotent(sf, monkeypatch):
     """同一事件只判读一次。"""
     calls = {"n": 0}
@@ -155,7 +362,8 @@ def test_old_event_outside_cooldown_still_judged(sf, monkeypatch):
         return ("notify", "x")
 
     monkeypatch.setattr(tri, "_llm_verdict", fake)
-    old = _event(sf, triggered_at=datetime.utcnow() - timedelta(hours=3))
+    # AlertEvent stores Beijing naive time; UTC naive would actually be 11h old.
+    old = _event(sf, triggered_at=beijing_now_naive() - timedelta(hours=3))
     asyncio.run(tri.triage_event(old, sf))
     new = _event(sf)
     asyncio.run(tri.triage_event(new, sf))

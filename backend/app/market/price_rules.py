@@ -7,10 +7,85 @@ R1 收口为单一实现。注意 halt_risk.limit_pct(board) 是「板块键」�
 """
 from __future__ import annotations
 
-from datetime import date
+from collections.abc import Mapping
+from datetime import date, datetime
+from decimal import Decimal, InvalidOperation, ROUND_HALF_UP
+
+from app.core.bjtime import beijing_now, to_beijing
 
 
 _CHINEXT_20CM_FROM = date(2020, 8, 24)
+
+
+def _positive_price(value: object) -> Decimal | None:
+    if value is None or isinstance(value, bool):
+        return None
+    try:
+        price = Decimal(str(value))
+    except (InvalidOperation, ValueError):
+        return None
+    return price if price.is_finite() and price > 0 else None
+
+
+def limit_up_distance(row: Mapping, *, now: datetime | None = None) -> dict:
+    """同一报价中，距源提供的实际涨停价还需上涨的百分数（展示用）。
+
+    不按代码段、昨收或涨幅推算涨停价。源限价已包含交易制度与报价最小单位；
+    缺失、明显非股票/无涨幅限制、低质报价或现价高于限价时保持 unknown。
+    这不是封板判定或候选筛选规则，不替代既有涨幅阈值。
+    """
+    current = _positive_price(row.get("price"))
+    upper = _positive_price(row.get("limit_up_price"))
+    symbol = str(row.get("symbol") or "").lower()
+    market = str(row.get("market") or "").upper()
+    name = str(row.get("name") or "")
+    index = (
+        row.get("is_index") is True or row.get("security_type") == "index"
+        or symbol.startswith(("sh000", "sz399", "885", "886"))
+        or (market == "SH" and symbol.startswith("000"))
+        or (market == "SZ" and symbol.startswith("399"))
+    )
+    source = str(row.get("source") or "")
+    raw_time = row.get("data_timestamp") or row.get("ticktime")
+    try:
+        source_time = raw_time if isinstance(raw_time, datetime) else datetime.fromisoformat(str(raw_time))
+    except ValueError:
+        source_time = None
+    now = to_beijing(now) if now is not None else beijing_now()
+    # Snapshot fallback透传aware ISO ticktime与质量；Sina主源目前没有实际限价。
+    # 不能用received_at/owner刷新成功时间为缺失或陈旧的源报价补身份证明。
+    timely = False
+    if source_time is not None and source_time.tzinfo is not None:
+        source_time = to_beijing(source_time)
+        age = (now - source_time).total_seconds()
+        timely = source_time.date() == now.date() and 0 <= age <= 120
+    usable = (
+        not index and not name.startswith(("N", "C")) and row.get("quality") == "high"
+        and source not in {"", "unknown", "unknown_fallback", "mock", "mock_fallback"}
+        and timely
+    )
+    gap = None
+    if usable and current is not None and upper is not None and current <= upper:
+        try:
+            gap = float(((upper / current - 1) * 100).quantize(Decimal("0.01"), rounding=ROUND_HALF_UP))
+        except InvalidOperation:
+            pass  # 非金融范围的极端输入不能变成可用距离。
+    return {
+        "limit_up_price": float(upper) if upper is not None else None,
+        "limit_up_gap_pct": gap,
+        "limit_up_gap_state": "ready" if gap is not None else "unknown",
+        "limit_up_gap_price": float(current) if gap is not None else None,
+        "limit_up_gap_source": source if gap is not None else None,
+        "limit_up_gap_as_of": source_time.isoformat() if gap is not None else None,
+    }
+
+
+def limit_up_distance_text(metrics: Mapping) -> str:
+    """只展示新价格口径；缺值不拿旧百分点差代替。"""
+    gap = metrics.get("limit_up_gap_pct")
+    if metrics.get("limit_up_gap_state") == "ready" and gap is not None:
+        return f"距实际涨停价还需上涨 {gap:.2f}%"
+    return "距实际涨停价待核对"
 
 
 def limit_pct(symbol: str, name: str | None = None, *, asof: date | None = None) -> float:

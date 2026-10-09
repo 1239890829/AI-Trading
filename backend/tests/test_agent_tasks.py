@@ -252,11 +252,40 @@ def test_list_tasks_merges_agenda_as_readonly(monkeypatch, tmp_path):
     assert ag["status"] == "succeeded" and ag["params"]["agenda_status"] == "executed"
     # 步骤 = 预算一段 + 每个议程条目一段（字段名照搬 _StepRecorder，前端零改动）
     assert ag["steps"][0]["name"] == "证据采集与预算"
-    assert "1/8" in ag["steps"][0]["output_summary"]
+    assert ag["steps"][0]["output_summary"] == "自主模型 1/8 · 任务 0/3"
+    assert "告警判读" not in ag["steps"][0]["output_summary"]
     assert ag["steps"][1]["name"].startswith("B 类")
     assert "12 个题材梯队断层" in ag["steps"][1]["output_summary"]
     # 按类型过滤时不混入议程（真实任务查询保持原语义）
     assert [t["type"] for t in at.list_tasks(type_="review")] == ["review"]
+
+
+@pytest.mark.parametrize("triage, expected", [
+    ({"triage_used": 11, "triage_budget": None, "triage_unlimited": True,
+      "triage_exhausted": False}, "告警判读 11 次（不限每日次数）"),
+    ({"triage_used": 3, "triage_budget": 5, "triage_unlimited": False,
+      "triage_exhausted": False}, "告警判读 3/5"),
+    ({"triage_used": 5, "triage_budget": 5, "triage_unlimited": False,
+      "triage_exhausted": True}, "告警判读 5/5（告警判读预算耗尽）"),
+    ({"triage_used": 2, "triage_budget": 0, "triage_unlimited": False,
+      "triage_exhausted": True}, "告警判读 2/0（已停用）"),
+    ({"triage_used": 4}, "告警判读 4 次（每日次数上限未记录）"),
+    ({"triage_unlimited": True}, "告警判读 ? 次（每日次数上限未记录）"),
+], ids=["unlimited", "finite", "exhausted", "disabled", "missing-cap", "missing-used-and-cap"])
+def test_agenda_budget_summary_distinguishes_autonomy_and_alert_triage(monkeypatch, tmp_path, triage, expected):
+    factory, _ = _patch(monkeypatch, tmp_path)
+    budget = {"llm_used": 8, "llm_budget": 8, "llm_exhausted": True,
+              "tasks_used": 1, "task_budget": 3, **triage}
+    _seed_agenda(factory, budget=budget, items=[])
+
+    detail = at.get_task("agenda:2026-09-10")
+    listed = next(task for task in at.list_tasks() if task["type"] == "agenda")
+    for task in [detail, listed]:
+        assert task["steps"][0]["output_summary"] == (
+            "自主模型 8/8（自主模型预算耗尽） · 任务 1/3 · " + expected
+        )
+        assert task["params"]["budget"] == budget
+        assert task["read_only"] is True and task["status"] == "succeeded"
 
 
 def test_agenda_task_detail_and_readonly_cancel(monkeypatch, tmp_path):

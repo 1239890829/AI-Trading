@@ -1,6 +1,28 @@
 /** 格式化工具测试：空值/边界/单位换算/红涨绿跌语义。 */
 import { describe, expect, it } from "vitest";
-import { fmt, fmtAmount, fmtHeat, fmtVolume, isHardQuality, parseNum, pctColor, pctText, qualityLabel, shouldShowQualityBadge, sourceLabel, timeText, timeTextBJ, dateTimeTextBJ, bjDate, bjHHMM, bjMonthDay, triAmount, triText, winRateColor } from "./format";
+import { fmt, fmtAmount, fmtHeat, fmtVolume, formatLegacyLimitDistance, isHardQuality, parseNum, pctColor, pctText, qualityLabel, shouldShowQualityBadge, sourceLabel, timeText, timeTextBJ, dateTimeTextBJ, bjDate, bjHHMM, bjMonthDay, triAmount, triText, winRateColor } from "./format";
+
+describe("存量临板距离展示", () => {
+  it.each(["2", "2.50", "+2.50", "-0.30", ".5"])("保留旧百分点差原值 %s", (value) => {
+    expect(formatLegacyLimitDistance(`临板 7.2%（距封板 ${value}pct）`))
+      .toBe(`临板 7.2%（旧口径：距封板判定线 ${value} 个百分点）`);
+  });
+
+  it("多处旧文本可同时适配，重复适配不再改变结果", () => {
+    const result = formatLegacyLimitDistance("距封板 2.50pct；距封板 -0.3 pct");
+    expect(result).toBe("旧口径：距封板判定线 2.50 个百分点；旧口径：距封板判定线 -0.3 个百分点");
+    expect(formatLegacyLimitDistance(result)).toBe(result);
+  });
+
+  it.each([
+    "距实际涨停价还需上涨 2.33%",
+    "临板 7.2%（距封板判定线 2.5 个百分点）",
+    "增长 2.5pct；距封板 2.5%；距封板 2.5pct_value；距封板 2.5.1pct",
+    "",
+  ])("保留新口径与其他单位文本：%s", (text) => {
+    expect(formatLegacyLimitDistance(text)).toBe(text);
+  });
+});
 
 /**
  * 北京时间格式化（2026-09-11 收口）。

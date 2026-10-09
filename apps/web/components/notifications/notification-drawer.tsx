@@ -41,6 +41,7 @@ import { useDetailModal, type DetailPayload } from "@/components/detail/detail-m
 import { useSymbolDetail } from "@/components/detail/symbol-detail-context";
 import { NewsModal, type NewsModalItem } from "@/components/news-modal";
 import { EventFeed } from "@/components/notifications/event-feed";
+import { formatLegacyLimitDistance } from "@/lib/format";
 
 /**
  * 站内通知中心（2026-09-07 用户需求③）：导航栏铃铛 → 右侧抽屉。
@@ -130,7 +131,7 @@ function judgmentPayload(item: NotificationItem): DetailPayload {
   return {
     kind: item.category === "news" ? "event" : "generic",
     title: item.title,
-    body: item.body,
+    body: formatLegacyLimitDistance(item.body),
     symbol: item.symbol,
     source: item.source ?? null,
     date: item.ts,
@@ -448,7 +449,7 @@ function NotificationRow({
           </span>
           <span className="shrink-0 font-mono text-xs text-zinc-600 dark:text-zinc-400">{timeText(item.ts)}</span>
         </div>
-        <p className="mt-1 line-clamp-2 text-xs leading-relaxed text-zinc-600 dark:text-zinc-400">{item.body}</p>
+        <p className="mt-1 line-clamp-2 text-xs leading-relaxed text-zinc-600 dark:text-zinc-400">{formatLegacyLimitDistance(item.body)}</p>
       </button>
       <p className="mt-1 text-xs leading-relaxed text-zinc-500 dark:text-zinc-400" data-testid="notification-facts">
         来源：{item.source ?? "历史事件，来源未标注"} · 触发：{item.ts ?? "时间未知"} · {item.validity ?? "条件与时效未记录，须重新核验"}
