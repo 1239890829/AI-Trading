@@ -46,8 +46,9 @@ import { formatLegacyLimitDistance } from "@/lib/format";
 /**
  * 站内通知中心（2026-09-07 用户需求③）：导航栏铃铛 → 右侧抽屉。
  *
- * 内容保留具名买点、临板/开板与真实持仓风险。板块异动、题材方向、每日精选与新闻留在各自分析页面，
- * 不再作为会打断用户的通知。
+ * 机会消息读取原入选与买点记录，同股同日合并，保留原时点和后续条件变化。
+ * 真实持仓风险与用户自设条件提醒独立保留。普通临板/开板、大单与板块异动
+ * 仅供观察，不因此取得机会消息资格。新闻与事件在独立浏览页签读取。
  * 抽屉内一层 tab 按 盘前/盘中/盘后 分类（后端判定：交易日历优先，非交易日归盘前）。
  * 新闻不逐条推送；旧 news_min_score 参数只为客户端兼容保留。
  *
@@ -55,8 +56,8 @@ import { formatLegacyLimitDistance } from "@/lib/format";
  * `IMP-028` 的收口让「资讯 / 事件」在通知中心**彻底不可见**（实测生产库当日
  * `event_card` 798 条、通知中心 0 条）。现于抽屉**顶层**加一个「资讯 / 事件」tab：
  *  - 它是**浏览面**（只读 `GET /api/events/impact`，与盘面页事件标签同源），
- *    **不是**推送面 —— 铃铛徽标与未读红点**仍只由个股机会驱动**；
- *  - 顶层两个 tab 是两条**正交**的轴：`个股机会`（推送，按时段分页）
+ *    **不是**推送面 —— 铃铛徽标与未读红点由个股消息、风险与自设提醒驱动；
+ *  - 顶层两个 tab 是两条**正交**的轴：`个股提醒`（消息，按时段分页）
  *    与 `资讯事件`（浏览，按排序/影响力筛选）。**不把资讯塞进时段 tab** ——
  *    盘前/盘中/盘后是时间轴，塞进内容轴会让「盘中」语义含混。
  *
@@ -81,15 +82,15 @@ import { formatLegacyLimitDistance } from "@/lib/format";
  *  - **有代码的条目（个股机会）** ⇒ 行体与「行情 ↗」**都开该股详情弹窗**，
  *    与悬浮球 `openSymbolDetail`、猎场 `StockLink` **三处同落点**（[[KB-ENG-92]] 详情弹窗化）；
  *  - **判读全文**（分类 / 评分 / 理由）改由行右侧**「判读」**入口打开 ⇒ 行体换落点
- *    **不以丢失能力为代价**（同族：`IMP-031` 收敛主按钮时补「全部 N 条」）；
+ *    保留原消息标题与正文的全文核对入口；
  *  - **无代码的条目**（如消息面）保持行体 → 通用详情弹窗，不静默失败。
  */
 
-/** 顶层模式：推送面（个股机会）↔ 浏览面（资讯 / 事件）。 */
+/** 顶层模式：个股消息、风险、自设提醒 ↔ 资讯 / 事件浏览。 */
 type DrawerMode = "opportunity" | "events";
 
 const MODE_TABS: { key: DrawerMode; label: string; title: string }[] = [
-  { key: "opportunity", label: "个股提醒", title: "个股机会与真实持仓风险提醒（按盘前/盘中/盘后分页）" },
+  { key: "opportunity", label: "个股提醒", title: "原入选/买点消息、真实持仓风险与自设条件提醒（按盘前/盘中/盘后分页）" },
   { key: "events", label: "资讯 / 事件", title: "事件影响力视图（浏览面，不计入未读；与盘面页事件标签同源）" },
 ];
 
@@ -105,6 +106,7 @@ const CATEGORY_TONE: Record<NotificationItem["category"], string> = {
   daily_picks: "bg-amber-500/10 text-amber-800 dark:text-amber-400",
   news: "bg-sky-500/10 text-sky-700 dark:text-sky-300",
   risk: "bg-red-500/10 text-red-700 dark:text-red-300",
+  reminder: "bg-zinc-100 text-zinc-700 dark:bg-zinc-800 dark:text-zinc-300",
 };
 
 const CATEGORY_LABEL: Record<NotificationItem["category"], string> = {
@@ -112,6 +114,7 @@ const CATEGORY_LABEL: Record<NotificationItem["category"], string> = {
   daily_picks: "每日精选",
   news: "消息面",
   risk: "策略风险",
+  reminder: "自设提醒",
 };
 
 function timeText(ts: string | null): string {
@@ -178,6 +181,7 @@ function plainNote(s: string): string {
  * 恰恰是最该被看见的信息，归一化成"其他"等于把新情况藏起来。
  */
 const SHAPE_LABEL: Record<string, string> = {
+  selection: "入选",
   buy_point: "买点",
   pre_limit: "临板预警",
   flow_surge: "大单异动",
@@ -187,38 +191,29 @@ const SHAPE_LABEL: Record<string, string> = {
   high_board_break: "高板断裂",
   timeout: "判定超时",
   signal_health: "信号健康",
+  real_exit_alert: "真实持仓风险",
 };
 
-/** 通知中心**只收**这两个形状（与后端 `_NOTIF_KINDS` 同源，勿单侧改动）。
- *  两者都要求带真实代码 ⇒ 它们为 0 时，"空"是上游问题而非筛选问题。 */
-const NOTIF_KINDS = ["buy_point", "pre_limit"] as const;
+/** 机会消息的原事件来源。计数不等于消息资格或合并后的消息条数；风险/自设独立。 */
+const NOTIF_KINDS = ["selection", "buy_point"] as const;
 
-/**
- * 形状计数（2026-09-16 用户实盘反馈）。
- *
- * **为什么必须单独报**：`state` / `decisions` 都来自买点链，只回答"买点链有没有
- * 选出票"；而通知中心实际收**两个**形状。当日实测：`__picks_buy_point__` 规则
- * 整天未触发（`alert_rule` 表里根本没那行，规则是懒创建的），而 `pre_limit`
- * 刷了 121 条 —— 只看 `state` 会读成"上游空"，**把"另一个形状有货"整个漏掉**，
- * 这正是"用户看到机会却没收到通知"的读侧成因。
- */
+/** 读取窗口内的原事件计数；不凭空列表推断调度、消息资格或字段校验的结果。 */
 function ShapeCounts({ shapes }: { shapes: Record<string, number> }) {
   const keys = Object.keys(shapes);
-  // 空对象 ≠ 各键为 0：后端在「连规则行都没有」时返回 `{}`（规则懒创建、从未触发），
-  // 而"统计过，确实是 0"返回的是 `{buy_point: 0, pre_limit: 0}`。
-  // 两者要查的方向不同（查规则注册 / 查扫描调度），**不可合并成同一句话**。
+  // 空对象与缺键都表示计数未知，不能按 0 条解释，更不能证明未运行。
   if (keys.length === 0) {
     return (
       <p
         data-testid="notification-empty-shapes"
-        data-stock-level={0}
+        data-stock-level="unknown"
         className="border-t border-zinc-200 pt-2 text-zinc-600 dark:border-zinc-700 dark:text-zinc-400"
       >
-        当前没有两个来源规则的记录，无法从通知列表判断是否出现机会；请核对规则注册与调度。
+        来源形状计数未提供；无法判断规则是否运行或是否出现入选结果。风险和自设提醒独立核对。
       </p>
     );
   }
   const stockLevel = NOTIF_KINDS.reduce((n, k) => n + (shapes[k] ?? 0), 0);
+  const complete = NOTIF_KINDS.every((k) => typeof shapes[k] === "number");
   const rest = Object.entries(shapes)
     .filter(([k, v]) => v > 0 && !(NOTIF_KINDS as readonly string[]).includes(k))
     .sort((a, b) => b[1] - a[1]);
@@ -226,35 +221,38 @@ function ShapeCounts({ shapes }: { shapes: Record<string, number> }) {
   return (
     <div
       data-testid="notification-empty-shapes"
-      data-stock-level={stockLevel}
+      data-stock-level={complete ? stockLevel : "unknown"}
       className="space-y-1 border-t border-zinc-200 pt-2 dark:border-zinc-700"
     >
       <p className="text-zinc-700 dark:text-zinc-300">
         <span className="text-zinc-600 dark:text-zinc-400">
-          <strong className="font-medium">个股级</strong>事件（读取窗口内）：
+          <strong className="font-medium">原入选/买点记录</strong>（读取窗口内）：
         </span>
-        {NOTIF_KINDS.map((k) => `${SHAPE_LABEL[k]} ${shapes[k] ?? 0}`).join(" · ")}
+        {NOTIF_KINDS.map((k) => `${SHAPE_LABEL[k]} ${shapes[k] ?? "未提供"}`).join(" · ")}
       </p>
-      {stockLevel === 0 ? (
+      {!complete ? (
         <p className="text-zinc-600 dark:text-zinc-400">
-          读取窗口内两种个股级形状均为 0；本次空列表
-          <strong className="font-medium">不是被形状筛选挡掉</strong>，请核对临板扫描与买点规则。
+          原入选/买点计数未完整提供；无法判断读取窗口内是否有记录，也不能据此判断规则是否运行。
+        </p>
+      ) : stockLevel === 0 ? (
+        <p className="text-zinc-600 dark:text-zinc-400">
+          读取窗口内未见原入选/买点记录；不代表全天未运行或没有入选结果。
         </p>
       ) : (
         <p className="text-zinc-600 dark:text-zinc-400">
-          个股级共 {stockLevel} 条却未进列表；可能因
-          <strong className="font-medium">缺股票名称</strong>
-          等字段校验未通过，须核对原事件。
+          原记录共 {stockLevel} 条；消息按同股同日合并，不能据此判断消息资格或未进入列表的原因。请核对原事件、时点与条件。
         </p>
       )}
+      <p className="text-zinc-600 dark:text-zinc-400">风险和自设提醒独立核对。</p>
       {restTotal > 0 && (
         <p className="text-zinc-600 dark:text-zinc-400">
-          其余 {restTotal} 条为本就不进通知中心的形状（词义不是买点，如大单异动）：
+          其余来源记录 {restTotal} 条（不计入原入选/买点合计）：
           {rest
             .slice(0, 4)
             .map(([k, v]) => `${SHAPE_LABEL[k] ?? k} ${v}`)
             .join("、")}
           {rest.length > 4 ? ` 等 ${rest.length} 种` : ""}
+          。普通临板/开板、大单与板块异动仅供观察，不因此取得机会消息资格。
         </p>
       )}
     </div>
@@ -278,14 +276,16 @@ function NotificationDiagnosis({ diag }: { diag: NotificationDiagnostics }) {
       <p className="font-medium text-zinc-800 dark:text-zinc-100">
         今日买点链：{NOTIF_STATE_HEADLINE[diag.state] ?? diag.state}
       </p>
+      <p className="text-[11px] text-zinc-600 dark:text-zinc-400">
+        仅汇总今日已归档买点判定；不代表全部每日或盘中入选结果，也不代表全部通知链。
+      </p>
       <p className="text-zinc-600 dark:text-zinc-400">{plainNote(diag.note)}</p>
       {diag.state !== "unavailable" && <p className="text-[11px] text-zinc-600 dark:text-zinc-400">
         候选 {ps.count} 只 · 最高档 {d.top_tier ?? "无"} · 判定 {d.polls} 拍
         {diag.trade_date ? ` · ${diag.trade_date}` : ""}
         {diag.as_of ? ` · 诊断于 ${diag.as_of.slice(11, 16)}` : ""}
       </p>}
-      {/* 形状计数：`state`/`decisions` 只看买点链，答不了"临板预警有没有触发"
-          ⇒ 必须并列报出（当日 121 条临板全未进列表就是靠这一对照才定位到的）。 */}
+      {/* 原入选/买点与其他来源计数单独核对，不能把买点归档摘要当作全部通知链。 */}
       {diag.shapes && <details className="border-t border-zinc-200 pt-2 text-[11px] dark:border-zinc-700">
         <summary className="cursor-pointer text-zinc-600 dark:text-zinc-400">查看来源核对信息</summary>
         <div className="mt-1"><ShapeCounts shapes={diag.shapes} /></div>

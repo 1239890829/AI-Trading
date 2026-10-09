@@ -262,6 +262,8 @@ describe("通知中心：空态诊断（BUG-016 子项③）", () => {
     expect(box.textContent).toContain("1 只");
     expect(box.textContent).toContain("判定 16 拍");
     expect(box.textContent).toContain("最高档 observe");
+    expect(box.textContent).toContain("仅汇总今日已归档买点判定");
+    expect(box.textContent).toContain("不代表全部每日或盘中入选结果，也不代表全部通知链");
     // 后端 note 按 Markdown 写，抽屉是纯文本 ⇒ 星号与反引号都不得出现在界面上
     // （反引号这条是**渲染实测**发现的：只剥 `**` 时界面会原样显示 `` `快照无现价` ``）
     expect(box.textContent).not.toContain("**");
@@ -323,12 +325,8 @@ describe("通知中心：空态诊断（BUG-016 子项③）", () => {
 });
 
 /**
- * 空态**形状计数**（2026-09-16 用户实盘反馈「盘中机会为什么没提示」）。
- *
- * 场景：当日 `__picks_buy_point__` 规则整天未触发（`alert_rule` 表里没那行），
- * 而 `__picks_watcher__` 的临板预警刷了 121 条 —— 通知中心却是 0 条。
- * 上面那组诊断（`state` / `decisions`）**只来自买点链**，它只会说"上游空/全被否"，
- * 把"另一个形状有货"整个漏掉。故必须并列报出形状计数。
+ * 原事件计数不能证明消息资格、去重后的消息条数或全天运行状态。
+ * 原入选/买点是机会来源；临板等观察记录不取得机会消息资格，风险/自设独立。
  *
  * ⚠️ 这组用例的**判据边界**：只验「渲染出来的形状计数是否讲对了话」，
  * 不验后端是否算对（那在 `backend/tests/test_notifications.py`）。
@@ -336,11 +334,10 @@ describe("通知中心：空态诊断（BUG-016 子项③）", () => {
 describe("通知中心：空态形状计数（2026-09-16）", () => {
   const shapeDiag: NonNullable<NotificationsPayload["diagnostics"]> = {
     ...ranRejectedDiag,
-    // 与当日实测同构：个股级 0 条，板块级 535 条
-    shapes: { buy_point: 0, pre_limit: 0, board_low_absorb: 293, board_flow_surge: 242 },
+    shapes: { selection: 0, buy_point: 0, pre_limit: 0, board_low_absorb: 293, board_flow_surge: 242 },
   };
 
-  it("个股级为 0 → 明说「不是被筛选挡掉」，并把板块级当对照物报出", async () => {
+  it("原入选/买点为 0 → 限定读取窗口，观察计数不冒充机会消息", async () => {
     payload = diagPayload(shapeDiag);
     render(<NotificationBell />);
     await openDrawer();
@@ -349,41 +346,67 @@ describe("通知中心：空态形状计数（2026-09-16）", () => {
     // 机器可读的口径，供 e2e/其它断言复用（别只靠文案匹配）
     expect(shapes.dataset.stockLevel).toBe("0");
     expect(shapes.textContent).toContain("买点 0");
-    expect(shapes.textContent).toContain("临板预警 0");
-    expect(shapes.textContent).toContain("不是被形状筛选挡掉");
-    // 对照物：没有它，"没扫到"与"扫到的都不是个股级"仍然同形
+    expect(shapes.textContent).toContain("入选 0");
+    expect(shapes.textContent).toContain("读取窗口内未见原入选/买点记录");
+    expect(shapes.textContent).toContain("不代表全天未运行");
     expect(shapes.textContent).toContain("板块低吸 293");
     // 同样是纯文本渲染面 ⇒ 标记不得漏到界面上（同 plainNote 的教训）
     expect(shapes.textContent).not.toContain("**");
     expect(shapes.textContent).not.toContain("`");
   });
 
-  it("个股级有货却列表为空 → 指向「缺名称」，而不是「上游没扫到」", async () => {
-    // 这两种处境的处置完全不同（前者查数据，后者查调度），不可同形。
-    // 注：无代码的事件在**后端读取阶段**就被排除了（`real_symbol_only`），
-    //     所以这里剩下的唯一成因是"有代码、缺名称"。
+  it("121 条临板记录仅供观察，不获得消息资格，也不能归因为字段校验失败", async () => {
     payload = diagPayload({
       ...ranRejectedDiag,
-      shapes: { buy_point: 0, pre_limit: 121 },
+      shapes: { selection: 0, buy_point: 0, pre_limit: 121 },
     });
     render(<NotificationBell />);
     await openDrawer();
 
     const shapes = await screen.findByTestId("notification-empty-shapes");
-    expect(shapes.dataset.stockLevel).toBe("121");
-    expect(shapes.textContent).toContain("缺股票名称");
-    expect(shapes.textContent).not.toContain("不是被形状筛选挡掉");
+    expect(shapes.dataset.stockLevel).toBe("0");
+    expect(shapes.textContent).toContain("临板预警 121");
+    expect(shapes.textContent).toContain("仅供观察");
+    expect(shapes.textContent).toContain("不因此取得机会消息资格");
+    expect(shapes.textContent).not.toContain("缺股票名称");
+    expect(shapes.textContent).not.toContain("字段校验未通过");
   });
 
-  it("shapes 为空对象 → 说「规则从未触发过」，与「统计过是 0」区分开", async () => {
-    // 后端在「连规则行都没有」时返回 `{}`；与 `{buy_point: 0}` 是两个不同的结论
+  it("原入选和买点计数是原记录合计，不推断未进入列表的原因；风险/自设独立", async () => {
+    payload = diagPayload({ ...ranRejectedDiag, shapes: { selection: 2, buy_point: 3, pre_limit: 121, real_exit_alert: 1 } });
+    render(<NotificationBell />);
+    await openDrawer();
+    const shapes = await screen.findByTestId("notification-empty-shapes");
+    expect(shapes.dataset.stockLevel).toBe("5");
+    expect(shapes.textContent).toContain("入选 2");
+    expect(shapes.textContent).toContain("买点 3");
+    expect(shapes.textContent).toContain("同股同日合并");
+    expect(shapes.textContent).toContain("不能据此判断消息资格或未进入列表的原因");
+    expect(shapes.textContent).toContain("风险和自设提醒独立");
+    expect(shapes.textContent).not.toContain("缺股票名称");
+  });
+
+  it("shapes 为空对象 → 计数未知，不推断规则从未触发或调度未运行", async () => {
     payload = diagPayload({ ...ranRejectedDiag, shapes: {} });
     render(<NotificationBell />);
     await openDrawer();
 
     const shapes = await screen.findByTestId("notification-empty-shapes");
-    expect(shapes.dataset.stockLevel).toBe("0");
-    expect(shapes.textContent).toContain("无法从通知列表判断是否出现机会");
+    expect(shapes.dataset.stockLevel).toBe("unknown");
+    expect(shapes.textContent).toContain("来源形状计数未提供");
+    expect(shapes.textContent).toContain("无法判断规则是否运行");
+    expect(shapes.textContent).not.toContain("从未触发");
+  });
+
+  it("旧后端缺少入选计数 → 显示未知，不能当作入选 0", async () => {
+    payload = diagPayload({ ...ranRejectedDiag, shapes: { buy_point: 0 } });
+    render(<NotificationBell />);
+    await openDrawer();
+    const shapes = await screen.findByTestId("notification-empty-shapes");
+    expect(shapes.dataset.stockLevel).toBe("unknown");
+    expect(shapes.textContent).toContain("入选 未提供");
+    expect(shapes.textContent).toContain("原入选/买点计数未完整提供");
+    expect(shapes.textContent).not.toContain("读取窗口内未见原入选/买点记录");
   });
 
   it("旧后端不返回 shapes → 不渲染该块（不得臆造形状计数）", async () => {
@@ -472,4 +495,20 @@ it("switches notice types with arrow/home/end keys and leaves composition untouc
  expect(document.activeElement).toBe(choices[0]);
  fireEvent.keyDown(choices[0],{key:"End"});
  expect(choices[1].getAttribute("aria-selected")).toBe("true");
+});
+
+it("user-defined reminders have their own category while stock opportunities, risks, timestamps and detail stay readable", async () => {
+  payload = makePayload([
+    item({id: "custom", category: "reminder", label: "自设条件提醒", title: "显式个股阈值", body: "研究观察，不构成买卖建议", symbol: "600519", source: "用户条件规则", validity: "原触发条件需重验"}),
+    item({id: "stock", title: "原个股消息"}),
+    item({id: "risk", category: "risk", label: "持仓风险", title: "原风险消息"}),
+  ]);
+  render(<DetailModalProvider><NotificationBell /></DetailModalProvider>);
+  await openDrawer();
+  expect(screen.getByRole("tab", {name: "个股提醒"}).getAttribute("title")).toContain("原入选/买点消息、真实持仓风险与自设条件提醒");
+  const list = screen.getByTestId("notification-list");
+  for (const text of ["自设条件提醒", "自设提醒", "原个股消息", "个股机会", "原风险消息", "策略风险", "12:35", "用户条件规则", "原触发条件需重验"])
+    expect(list.textContent).toContain(text);
+  fireEvent.click(screen.getByTestId("notification-judgment"));
+  expect((await screen.findByRole("dialog", {name: "显式个股阈值"})).textContent).toContain("研究观察，不构成买卖建议");
 });

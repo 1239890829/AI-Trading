@@ -1,8 +1,12 @@
 """fund_flow 纯函数与降级逻辑单测（不外呼——数据源调用一概 monkeypatch/直测纯函数）。"""
 
+import asyncio
 from datetime import date, datetime
 
+import pytest
+
 from app.core.bjtime import BJ_TZ  # S2-8：时区常量唯一权威
+from app.core.ttl_cache import TTLCache
 from app.market import fund_flow as ff
 
 
@@ -95,7 +99,7 @@ def test_rt_fallback_chain_marks_delay(monkeypatch):
     async def fail_ulist():
         return None
 
-    async def fake_kline(secid):
+    async def fake_kline(secid, **kwargs):
         if secid == "1.000001":
             return [("14:00", {"main": -10.0, "small": 5.0, "mid": 3.0, "big": -8.0, "super_": -2.0})]
         return [("14:00", {"main": -5.0, "small": 3.0, "mid": 1.0, "big": -4.0, "super_": -1.0})]
@@ -170,3 +174,365 @@ def test_backfill_throttle(monkeypatch):
 def test_flow_store_read_missing(tmp_path, monkeypatch):
     monkeypatch.setattr(ff, "_FLOW_STORE", tmp_path / "nope.json")
     assert ff._read_flow_store() is None
+
+
+# ---------------------------------------------------------------- 同源共享读取（真实解析，隔离 HTTP/时钟/文件）
+
+@pytest.fixture()
+def isolated_minute_reads(monkeypatch, tmp_path):
+    clock = {"now": datetime(2026, 10, 9, 10, 0, tzinfo=BJ_TZ)}
+    monkeypatch.setattr(ff, "beijing_now", lambda: clock["now"])
+    monkeypatch.setattr(ff, "_FLOW_STORE", tmp_path / "daily.json")
+    monkeypatch.setattr(ff, "_FFLOW_MIN_CACHE", TTLCache("test-fflow-minute", 60, maxsize=8), raising=False)
+    monkeypatch.setattr(ff, "_FFLOW_MIN_READS", {}, raising=False)
+    monkeypatch.setattr(ff, "_FLOW_RT_CACHE", TTLCache("test-fflow-rt", 30, maxsize=1))
+    monkeypatch.setattr(ff, "_INTRADAY_CACHE", TTLCache("test-fflow-intraday", 60, maxsize=1))
+    return clock
+
+
+class MinuteResponse:
+    def __init__(self, main=100000000):
+        self.main = main
+
+    def raise_for_status(self):
+        pass
+
+    def json(self):
+        return {"data": {"klines": [f"2026-10-09 09:45,{self.main},-,0,70000000,30000000"]}}
+
+
+def test_minute_same_source_cold_reads_share_and_return_copies(monkeypatch, isolated_minute_reads):
+    calls = []
+
+    class HTTP:
+        async def get(self, url, params, headers):
+            calls.append(params["secid"])
+            await asyncio.sleep(0)
+            return MinuteResponse()
+
+    monkeypatch.setattr(ff, "_HTTP", HTTP())
+
+    async def go():
+        rows = await asyncio.gather(*(ff._em_fflow_kline("1.000001") for _ in range(8)))
+        assert calls == ["1.000001"]
+        rows[0][0][1]["main"] = 99
+        assert all(r[0][1]["main"] == 1 for r in rows[1:])
+        warm = await ff._em_fflow_kline("1.000001")
+        assert warm[0][1]["main"] == 1 and warm[0][1]["small"] is None
+        assert calls == ["1.000001"]
+
+    asyncio.run(go())
+
+
+def test_minute_cache_separates_markets_and_dates(monkeypatch, isolated_minute_reads):
+    calls = []
+
+    class HTTP:
+        async def get(self, url, params, headers):
+            calls.append(params["secid"])
+            return MinuteResponse()
+
+    monkeypatch.setattr(ff, "_HTTP", HTTP())
+
+    async def go():
+        await ff._em_fflow_kline("1.000001")
+        await ff._em_fflow_kline("1.000001")
+        await ff._em_fflow_kline("0.399107")
+        isolated_minute_reads["now"] = datetime(2026, 10, 10, 10, 0, tzinfo=BJ_TZ)
+        await ff._em_fflow_kline("1.000001")
+        assert calls == ["1.000001", "0.399107", "1.000001"]
+
+    asyncio.run(go())
+
+
+def test_minute_cancelled_reader_does_not_cancel_shared_request(monkeypatch, isolated_minute_reads):
+    async def go():
+        entered, release = asyncio.Event(), asyncio.Event()
+        calls = []
+
+        class HTTP:
+            async def get(self, url, params, headers):
+                calls.append(params["secid"])
+                entered.set()
+                await release.wait()
+                return MinuteResponse()
+
+        monkeypatch.setattr(ff, "_HTTP", HTTP())
+        first = asyncio.create_task(ff._em_fflow_kline("1.000001"))
+        await entered.wait()
+        second = asyncio.create_task(ff._em_fflow_kline("1.000001"))
+        await asyncio.sleep(0)
+        first.cancel()
+        with pytest.raises(asyncio.CancelledError):
+            await first
+        release.set()
+        rows = await second
+        assert rows[0][1]["main"] == 1
+        assert calls == ["1.000001"]
+
+    asyncio.run(go())
+
+
+def test_minute_failed_read_retries_on_next_request(monkeypatch, isolated_minute_reads):
+    calls = []
+
+    class HTTP:
+        async def get(self, url, params, headers):
+            calls.append(params["secid"])
+            if len(calls) <= 3:
+                raise RuntimeError("offline fixture")
+            return MinuteResponse()
+
+    monkeypatch.setattr(ff, "_HTTP", HTTP())
+
+    async def go():
+        failed = await asyncio.gather(*(ff._em_fflow_kline("1.000001") for _ in range(8)))
+        assert failed == [None] * 8 and len(calls) == 3
+        assert (await ff._em_fflow_kline("1.000001"))[0][1]["main"] == 1
+        assert len(calls) == 4
+
+    asyncio.run(go())
+
+
+def test_fund_realtime_warm_payload_is_not_mutated_by_reader(monkeypatch, isolated_minute_reads):
+    async def source(**kwargs):
+        return {"available": True, "as_of": "09:45:00",
+                "items": {"total": {"main": 1}}, "degraded": ["延迟"]}
+
+    monkeypatch.setattr(ff, "_fund_flow_rt_uncached", source)
+
+    async def go():
+        cold = await ff.get_fund_flow_realtime()
+        cold["items"]["total"]["main"] = 99
+        cold["degraded"].clear()
+        warm = await ff.get_fund_flow_realtime()
+        assert warm["items"]["total"]["main"] == 1 and warm["degraded"] == ["延迟"]
+
+    asyncio.run(go())
+
+
+def test_realtime_fallback_cache_does_not_extend_minute_source_age(monkeypatch, isolated_minute_reads):
+    clock, calls = {"t": 100.0}, []
+    monkeypatch.setattr(ff, "monotonic", lambda: clock["t"], raising=False)
+
+    class HTTP:
+        async def get(self, url, params, headers):
+            calls.append(params["secid"])
+            return MinuteResponse()
+
+    async def no_realtime():
+        return None
+
+    monkeypatch.setattr(ff, "_HTTP", HTTP())
+    monkeypatch.setattr(ff, "_em_ulist", no_realtime)
+
+    async def go():
+        await asyncio.gather(ff._em_fflow_kline("1.000001"), ff._em_fflow_kline("0.399107"))
+        clock["t"] = 115
+        assert (await ff.get_fund_flow_realtime())["available"] is True
+        assert len(calls) == 2
+        clock["t"] = 131  # 输出缓存仅 16s，最老源已 31s，须尊重原实时 30s 预算。
+        assert (await ff.get_fund_flow_realtime())["available"] is True
+        assert len(calls) == 4
+
+    asyncio.run(go())
+
+
+def test_intraday_cache_does_not_extend_minute_source_age(monkeypatch, isolated_minute_reads):
+    clock, calls = {"t": 100.0}, []
+    monkeypatch.setattr(ff, "monotonic", lambda: clock["t"], raising=False)
+
+    class HTTP:
+        async def get(self, url, params, headers):
+            calls.append(params["secid"])
+            return MinuteResponse()
+
+    monkeypatch.setattr(ff, "_HTTP", HTTP())
+
+    async def go():
+        await asyncio.gather(ff._em_fflow_kline("1.000001"), ff._em_fflow_kline("0.399107"))
+        clock["t"] = 145
+        await ff.get_fund_flow_intraday()
+        assert len(calls) == 2
+        clock["t"] = 161  # 输出缓存仅 16s，最老源已 61s，不能继续复用。
+        await ff.get_fund_flow_intraday()
+        assert len(calls) == 4
+
+    asyncio.run(go())
+
+
+def test_realtime_cache_age_is_bound_to_used_source_version(monkeypatch, isolated_minute_reads):
+    clock, calls = {"t": 100.0}, []
+    monkeypatch.setattr(ff, "monotonic", lambda: clock["t"])
+
+    class HTTP:
+        async def get(self, url, params, headers):
+            calls.append(params["secid"])
+            return MinuteResponse(main=len(calls) * 100000000)
+
+    async def no_realtime():
+        return None
+
+    monkeypatch.setattr(ff, "_HTTP", HTTP())
+    monkeypatch.setattr(ff, "_em_ulist", no_realtime)
+
+    async def go():
+        assert (await ff.get_fund_flow_realtime())["items"]["total"]["main"] == 3
+        clock["t"] = 120
+        ff._FFLOW_MIN_CACHE.invalidate()
+        await asyncio.gather(ff._em_fflow_kline("1.000001"), ff._em_fflow_kline("0.399107"))
+        clock["t"] = 131
+        # t=100 的聚合已过期；t=120 的输入可复用，但不能替旧值续命。
+        assert (await ff.get_fund_flow_realtime())["items"]["total"]["main"] == 7
+        assert len(calls) == 4
+
+    asyncio.run(go())
+
+
+def test_realtime_refreshes_source_that_expires_while_other_market_loads(monkeypatch, isolated_minute_reads):
+    clock, calls = {"t": 100.0}, []
+    monkeypatch.setattr(ff, "monotonic", lambda: clock["t"])
+
+    class HTTP:
+        async def get(self, url, params, headers):
+            calls.append(params["secid"])
+            if params["secid"] == "0.399107":
+                for _ in range(5):
+                    await asyncio.sleep(0)  # 沪市缓存先交付，深市响应后推进源年龄。
+                clock["t"] = 155
+            return MinuteResponse(main=len(calls) * 100000000)
+
+    async def no_realtime():
+        return None
+
+    monkeypatch.setattr(ff, "_HTTP", HTTP())
+    monkeypatch.setattr(ff, "_em_ulist", no_realtime)
+
+    async def go():
+        await ff._em_fflow_kline("1.000001")
+        clock["t"] = 129
+        out = await ff.get_fund_flow_realtime()
+        assert out["items"]["total"]["main"] == 7  # 旧沪市值 1 未混入新深圳值。
+        assert len(calls) == 4
+
+    asyncio.run(go())
+
+
+def test_intraday_warm_payload_is_not_mutated_by_reader(monkeypatch, isolated_minute_reads):
+    calls = []
+
+    class HTTP:
+        async def get(self, url, params, headers):
+            calls.append(params["secid"])
+            return MinuteResponse()
+
+    monkeypatch.setattr(ff, "_HTTP", HTTP())
+
+    async def go():
+        cold = await ff.get_fund_flow_intraday()
+        cold["items"][0]["main"] = 99
+        cold["degraded"].append("consumer change")
+        warm = await ff.get_fund_flow_intraday()
+        assert warm["items"][0]["main"] == 2 and warm["degraded"] == []
+        assert warm["items"][0]["small"] is None and len(calls) == 2
+
+    asyncio.run(go())
+
+
+def test_minute_successful_parsed_empty_is_distinct_from_failure(monkeypatch, isolated_minute_reads):
+    calls = []
+
+    class HTTP:
+        async def get(self, url, params, headers):
+            calls.append(params["secid"])
+            response = MinuteResponse()
+            response.json = lambda: {"data": {"klines": ["malformed record"]}}
+            return response
+
+    monkeypatch.setattr(ff, "_HTTP", HTTP())
+
+    async def go():
+        assert await ff._em_fflow_kline("1.000001") == []
+        assert await ff._em_fflow_kline("1.000001") == []
+        assert calls == ["1.000001"]  # 原解析契约的空列表可复用，失败 None 不可复用。
+
+    asyncio.run(go())
+
+
+def test_intraday_alternating_slow_markets_return_degraded_without_unbounded_reload(monkeypatch, isolated_minute_reads):
+    clock, calls = {"t": 100.0}, []
+    original_sleep = asyncio.sleep
+    monkeypatch.setattr(ff, "monotonic", lambda: clock["t"])
+
+    async def yield_spacing(seconds):
+        await original_sleep(0)
+
+    class HTTP:
+        async def get(self, url, params, headers):
+            calls.append(params["secid"])
+            clock["t"] += 70  # 两源交替晚到，每轮最老输入都会超过 60s。
+            return MinuteResponse()
+
+    monkeypatch.setattr(ff, "_HTTP", HTTP())
+    monkeypatch.setattr(ff.asyncio, "sleep", yield_spacing)
+
+    async def go():
+        out = await asyncio.wait_for(ff.get_fund_flow_intraday(), 0.1)  # 仅测试死循环看门狗。
+        assert out["items"] == [] and any("过期" in d for d in out["degraded"])
+        assert calls == ["1.000001", "0.399107"]
+        assert len(ff._INTRADAY_CACHE) == 0
+
+    asyncio.run(go())
+
+
+def test_realtime_second_slow_market_recheck_still_expired_is_unavailable(monkeypatch, isolated_minute_reads):
+    clock, calls = {"t": 100.0}, []
+    monkeypatch.setattr(ff, "monotonic", lambda: clock["t"])
+
+    class HTTP:
+        async def get(self, url, params, headers):
+            calls.append(params["secid"])
+            if params["secid"] == "0.399107":
+                for _ in range(5):
+                    await asyncio.sleep(0)
+                clock["t"] += 70  # 首读和唯一重核的深圳源都在沪市过期后才到。
+            return MinuteResponse()
+
+    async def no_realtime():
+        return None
+
+    monkeypatch.setattr(ff, "_HTTP", HTTP())
+    monkeypatch.setattr(ff, "_em_ulist", no_realtime)
+
+    async def go():
+        out = await asyncio.wait_for(ff.get_fund_flow_realtime(), 0.1)
+        assert out["available"] is False and "过期" in out["reason"]
+        assert any("过期" in d for d in out["degraded"])
+        assert calls == ["1.000001", "0.399107"] * 2
+        assert len(ff._FLOW_RT_CACHE) == 0
+
+    asyncio.run(go())
+
+
+def test_minute_source_scheduling_expiry_has_only_one_recheck(monkeypatch, isolated_minute_reads):
+    clock, calls = {"t": 100.0}, []
+
+    def delayed_resume():
+        clock["t"] += 70  # 每次恢复执行都晚于源年龄预算，不能递归无限刷新。
+        return clock["t"]
+
+    monkeypatch.setattr(ff, "monotonic", delayed_resume)
+
+    class HTTP:
+        async def get(self, url, params, headers):
+            calls.append(params["secid"])
+            return MinuteResponse()
+
+    monkeypatch.setattr(ff, "_HTTP", HTTP())
+
+    async def go():
+        assert await asyncio.wait_for(ff._em_fflow_kline("1.000001"), 0.1) is None
+        assert calls == ["1.000001"] * 2
+        assert len(ff._FFLOW_MIN_CACHE) == 0
+
+    asyncio.run(go())

@@ -277,14 +277,24 @@ export const StockDetailPanel = memo(function StockDetailPanel({
       };
     });
   }
-
+  // 报价补源与模拟账户都自行写 state，不能只依赖轮询 hook 丢弃旧 key 的返回值。
+  // 每次切股产生独立身份，A→B→A 及卸载后也不接受旧实例的回包。
+  const detailReadScopeRef = useRef<{ symbol: string; alive: boolean } | null>(null);
+  useEffect(() => {
+    const scope = { symbol, alive: true };
+    detailReadScopeRef.current = scope;
+    return () => { scope.alive = false; };
+  }, [symbol]);
 
   // 估值补充：ths 快照无 PE/PB/市值，每 30s 从腾讯源低频补齐（价格仍以 WS 为准）
   // 2026-09-11（S2-5）：裸 setInterval → 统一入口（获得可见性暂停 + 盘外降频）。
   usePollingFetch(
     async () => {
+      const scope = detailReadScopeRef.current;
+      if (!scope?.alive || scope.symbol !== symbol) return;
       try {
         const q = await getQuote(symbol, "tencent");
+        if (!scope.alive || scope !== detailReadScopeRef.current) return;
         setQuote((prev) => {
           // 同股才合并：保留 WS 的最新价（腾讯 REST 可能滞后）。
           // 旧实现无条件沿用 prev.price——切股后 prev 还是上一只股票的，
@@ -301,6 +311,7 @@ export const StockDetailPanel = memo(function StockDetailPanel({
           };
         });
       } catch {
+        if (!scope.alive || scope !== detailReadScopeRef.current) return;
         // REST 失败且 WS 也还没推来快照 → 确认行情拉不到（渲染"不可用"）；
         // 已有数据（WS 在推）保持不变——30s 轮询偶发失败不该抹掉实时价
         setQuote((prev) => (prev === undefined ? null : prev));
@@ -317,6 +328,8 @@ export const StockDetailPanel = memo(function StockDetailPanel({
   // 轮询 10s → 30s（费率预估与持仓盈亏对实时性不敏感，原 10s 属过密）。
   // 2026-09-11（S2-5）：裸 setInterval → 统一入口。
   const loadPaper = useCallback(async () => {
+    const scope = detailReadScopeRef.current;
+    if (!scope?.alive || scope.symbol !== symbol) return;
     try {
       const [acc, positions, orders, fs] = await Promise.all([
         getPaperAccount(),
@@ -324,9 +337,11 @@ export const StockDetailPanel = memo(function StockDetailPanel({
         getPaperOrders(),
         getPaperFills(symbol),
       ]);
+      if (!scope.alive || scope !== detailReadScopeRef.current) return;
       setPaper({ acc, positions, orders });
       setFills(fs);
     } catch {
+      if (!scope.alive || scope !== detailReadScopeRef.current) return;
       setPaper(null); // 拉取失败=确认不可用（渲染提示），与"加载中"分离
     }
   }, [symbol]);
@@ -381,54 +396,98 @@ export const StockDetailPanel = memo(function StockDetailPanel({
   //   首屏（立即）：K 线（左图默认 tab）+ 五档盘口（右列默认 tab）+ 题材 chips（首屏行）
   //   次屏（idle ≤2.5s）：分时/逐笔/资金流/财务/公司/新闻/竞价/大盘叠加——
   //     切到对应 tab 时通常已就绪；不在首屏路径上，晚到不阻塞交互。
-  // key={activeSymbol} 重挂载下 symbol 在实例内不变，原"切股清空"是死代码；
-  // 各回调的 alive 检查负责防串股（切股后晚到的旧股结果直接丢弃）。
+  // 激活页签的轮询负责立即首取；预取只补其余页签，避免同端点首挂请求两次。
+  // 预取和轮询共用本次 symbol 的 alive 身份；复用组件切股时同样丢弃旧回包。
   // 指数无盘口/逐笔数据源 → 当帧置「确认空」，不留加载中转圈。
   // 渲染期 adjust-state（P1-27）：原写法在 data effect 内同步 setBook/setTrades。
   // 本组件由 page.tsx 用 key={activeSymbol} 挂载，首帧即切股后的首帧，时机等价。
-  const [prevIndexSymbol, setPrevIndexSymbol] = useState<string | null>(null);
-  if (symbol !== prevIndexSymbol) {
-    setPrevIndexSymbol(symbol);
-    if (isIndexSymbol(symbol)) {
-      setBook(null);
-      setTrades([]);
-    }
+  const [prevDataSymbol, setPrevDataSymbol] = useState<string | null>(null);
+  if (symbol !== prevDataSymbol) {
+    setPrevDataSymbol(symbol);
+    setBars([]);
+    setTradingStatus(null);
+    setMinutes([]);
+    setVrBaseline(null);
+    setBook(isIndexSymbol(symbol) ? null : undefined);
+    setTrades(isIndexSymbol(symbol) ? [] : undefined);
   }
+
+  const dataTabsRef = useRef({ chartTab, rightTab });
+  useEffect(() => {
+    dataTabsRef.current = { chartTab, rightTab };
+  }, [chartTab, rightTab]);
+  const dataReadsRef = useRef<{
+    alive: boolean;
+    minuteRequested: boolean;
+    tradesRequested: boolean;
+    kline: () => ReturnType<typeof getKlinePayload>;
+    book: () => ReturnType<typeof getOrderBook>;
+    minute: () => ReturnType<typeof getMinuteLineWithBaseline>;
+    trades: () => ReturnType<typeof getTrades>;
+  } | null>(null);
 
   useEffect(() => {
     if (!symbol) return;
     let alive = true;
+    // 预取仍在途时切入页签，轮询复用同一请求；完成后下一拍可再次读取。
+    // 仅当前标的实例的四个端点各保留一个 Promise，不建立跨组件缓存。
+    const reuseInFlight = <T,>(load: () => Promise<T>) => {
+      let inFlight: Promise<T> | null = null;
+      return () => {
+        if (inFlight) return inFlight;
+        const next = load();
+        inFlight = next;
+        void next.then(() => { inFlight = null; }, () => { inFlight = null; });
+        return next;
+      };
+    };
+    const reads = {
+      alive: true,
+      minuteRequested: false,
+      tradesRequested: false,
+      kline: reuseInFlight(() => getKlinePayload(symbol, "1d", 120)),
+      book: reuseInFlight(() => getOrderBook(symbol)),
+      minute: reuseInFlight(() => getMinuteLineWithBaseline(symbol)),
+      trades: reuseInFlight(() => getTrades(symbol, 30)),
+    };
+    dataReadsRef.current = reads;
     const skipStockOnly = isIndexSymbol(symbol); // 指数无盘口/逐笔/资金流，跳过省失败请求
-    // 切股无需手动清空 tradingStatus：page.tsx 用 key={activeSymbol} 挂载，
-    // 切股即重挂载、state 复位（同上方的 stockThemes 注释）
-    void getKlinePayload(symbol, "1d", 120)
-      .then((p) => {
-        if (!alive) return;
-        setBars(p.bars);
-        setTradingStatus(p.trading_status);
-      })
-      .catch(() => {});
-    if (!skipStockOnly) {
-      getOrderBook(symbol)
+    if (dataTabsRef.current.chartTab !== "kline") {
+      void reads.kline()
+        .then((p) => {
+          if (!alive) return;
+          setBars(p.bars);
+          setTradingStatus(p.trading_status);
+        })
+        .catch(() => {});
+    }
+    if (!skipStockOnly && dataTabsRef.current.rightTab !== "book") {
+      reads.book()
         .then((ob) => alive && setBook(ob))
         // 首拉失败 = 确认拉不到（切股窗口结束），渲染"不可用"文案而非永远骨架；
         // 盘中 5s 轮询的失败仍静默保留上次快照（下方轮询 effect，有意设计）
         .catch(() => alive && setBook(null));
     }
-    // 指数分支的「确认空」已在渲染期置好（见上方 prevIndexSymbol 块），此处不再 setState
+    // 指数分支的「确认空」已在渲染期置好，此处不再 setState
     const cancelIdle = scheduleIdle(() => {
       if (!alive) return;
-      getMinuteLineWithBaseline(symbol)
-        .then((r) => {
-          if (!alive) return;
-          setVrBaseline(r.vr_baseline_5m);
-          setMinutes(r.points);
-        })
-        .catch(() => {});
+      if (!reads.minuteRequested) {
+        reads.minuteRequested = true;
+        reads.minute()
+          .then((r) => {
+            if (!alive) return;
+            setVrBaseline(r.vr_baseline_5m);
+            setMinutes(r.points);
+          })
+          .catch(() => {});
+      }
       if (!skipStockOnly) {
-        getTrades(symbol, 30)
-          .then((tr) => alive && setTrades(tr))
-          .catch(() => alive && setTrades([])); // 首拉失败=确认无，不再闪"暂无逐笔"当加载态
+        if (!reads.tradesRequested) {
+          reads.tradesRequested = true;
+          reads.trades()
+            .then((tr) => alive && setTrades(tr))
+            .catch(() => alive && setTrades([])); // 首拉失败=确认无，不再闪"暂无逐笔"当加载态
+        }
         getCapitalFlow<CapitalFlow>(symbol, 30)
           .then((cf) => alive && cf && setFlow(cf))
           .catch(() => {});
@@ -471,6 +530,7 @@ export const StockDetailPanel = memo(function StockDetailPanel({
     });
     return () => {
       alive = false;
+      reads.alive = false;
       cancelIdle();
     };
   }, [symbol]);
@@ -496,8 +556,10 @@ export const StockDetailPanel = memo(function StockDetailPanel({
   //    原「两个 if + timers 数组 + 手动清理」的样板由 enabled 表达。
   usePollingFetch(
     async () => {
-      const p = await getKlinePayload(symbol, "1d", 120).catch(() => null);
-      if (!p || p.bars.length === 0) return;
+      const reads = dataReadsRef.current;
+      if (!reads?.alive) return;
+      const p = await reads.kline().catch(() => null);
+      if (!reads.alive || reads !== dataReadsRef.current || !p) return;
       setBars(p.bars);
       setTradingStatus(p.trading_status);
     },
@@ -507,8 +569,11 @@ export const StockDetailPanel = memo(function StockDetailPanel({
   );
   usePollingFetch(
     async () => {
-      const r = await getMinuteLineWithBaseline(symbol).catch(() => null);
-      if (!r) return;
+      const reads = dataReadsRef.current;
+      if (!reads?.alive) return;
+      reads.minuteRequested = true;
+      const r = await reads.minute().catch(() => null);
+      if (!reads.alive || reads !== dataReadsRef.current || !r) return;
       setMinutes(r.points);
       // 基线内容守卫：数组内容没变就保留旧引用——vrBaseline 是
       // MinuteChart 创建 effect 的依赖，每 60s 换新引用会把整图
@@ -529,8 +594,16 @@ export const StockDetailPanel = memo(function StockDetailPanel({
   //    2026-09-11（S2-5）：裸 setInterval → 统一入口。
   usePollingFetch(
     async () => {
-      const b = await getOrderBook(symbol).catch(() => null);
-      if (b) setBook(b);
+      const reads = dataReadsRef.current;
+      if (!reads?.alive) return;
+      try {
+        const b = await reads.book();
+        if (reads.alive && reads === dataReadsRef.current) setBook(b);
+      } catch {
+        if (reads.alive && reads === dataReadsRef.current) {
+          setBook((prev) => prev === undefined ? null : prev);
+        }
+      }
     },
     5_000,
     symbol,
@@ -538,8 +611,17 @@ export const StockDetailPanel = memo(function StockDetailPanel({
   );
   usePollingFetch(
     async () => {
-      const t = await getTrades(symbol, 30).catch(() => null);
-      if (t) setTrades(t);
+      const reads = dataReadsRef.current;
+      if (!reads?.alive) return;
+      reads.tradesRequested = true;
+      try {
+        const t = await reads.trades();
+        if (reads.alive && reads === dataReadsRef.current) setTrades(t);
+      } catch {
+        if (reads.alive && reads === dataReadsRef.current) {
+          setTrades((prev) => prev === undefined ? [] : prev);
+        }
+      }
     },
     10_000,
     symbol,

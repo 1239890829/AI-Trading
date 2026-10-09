@@ -137,10 +137,8 @@ def register_schedulers(reg: SchedulerRegistry, app: FastAPI, services: AppServi
     snapshot_service = services.snapshot_service
     review_svc = services.review
 
-    triage_stop = asyncio.Event()
-    from app.services.alert_triage import triage_loop
-
-    reg.add("alert-triage", lambda: triage_loop(triage_stop), stop=triage_stop)
+    # IMP-086: ordinary market events no longer drive automatic AI triage.
+    # Manual triage/history and the independent risk/system fast paths remain.
 
     # --- AI 大脑：每日进化议程（docs/summary/ai-evolution.md，交易日 15:45）---
     # 无条件挂载：autonomy 关闭时议程照常生成（仅不执行，降级为建议清单）
@@ -203,9 +201,16 @@ def register_schedulers(reg: SchedulerRegistry, app: FastAPI, services: AppServi
     opportunity_evidence_stop = asyncio.Event()
     from app.picks.intraday_opportunity_runtime import archive_intraday_evidence_tick
 
+    async def _opportunity_evidence_tick():
+        # Reuse this existing writer cadence for restart-safe daily projections.
+        # The persisted daily version is the retry payload; no reselection/model IO.
+        from app.services.selection_notifications import retry_daily_selection
+        await asyncio.to_thread(retry_daily_selection)
+        return await archive_intraday_evidence_tick(app)
+
     reg.add_periodic(
         "opportunity-evidence",
-        lambda: archive_intraday_evidence_tick(app),
+        _opportunity_evidence_tick,
         interval=settings.picks_opportunity_evidence_interval_seconds,
         stop=opportunity_evidence_stop,
         first_delay=COLD_START_SNAPSHOT_DELAY_SECONDS,
@@ -351,7 +356,7 @@ def register_schedulers(reg: SchedulerRegistry, app: FastAPI, services: AppServi
     # --- 板块异动检测器（2026-09-13 第一期：自主发现 + 归因 + 强度序列落库）---
     # 与 watcher 并行不混算：watcher 跟盘前登记方向，本任务补「盘前没人登记、
     # 盘中自己冒出来」的题材（09-11 MLCC/PCB 案例）。阈值未经实证，告警走
-    # in_app+triage（推送矩阵未改动）。
+    # in_app+日志（普通事件自动判读已退出；推送矩阵未改动）。
     board_surge_stop = asyncio.Event()
     from app.picks.board_surge import board_surge_loop
 
