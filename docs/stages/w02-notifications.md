@@ -102,8 +102,8 @@
 本节只记录W02消费者对[W03/IMP-087](w03-execution.md#imp-087)的依赖，任务状态、执行验收和准确发布事实仍单点归W03；不重写上方IMP-086的历史交付。
 
 - 原每日/盘中入选消息保留references、生成/归档版本、六维可用性和多题材依据；正常盘中投影采用与API相同的运行容量。每日date+version可打开原复盘，不用当前组合回填旧消息。
-- source_as_of用于原观察时段，recorded_at用于已读/清除。读取read_window明确最近范围，饱和但未证明更早合格消息时has_more=null；并发已读在原行写锁下合并。站内可见、渠道受理/unknown和用户已读各自记录。
-- 诊断分别读每日selection receipt、盘中durable run和实际消息；没有判定归档写no_run，不猜未运行或全天没有机会。同日同股后续合并仍不重新未读，风险消息独立于机会去重。
+- 入选消息以source_as_of分时段，其他消息沿事件ts；已读/清除取recorded_at，仅未提供字段时回退legacy ts，显式null仍未知。读取read_window明确最近范围，饱和但未证明更早合格消息时has_more=null；并发已读先取得SQLite写锁再读取合并，包括首次无状态行。站内可见、渠道受理/unknown和用户已读各自记录。
+- 诊断分别读每日selection receipt、盘中durable run和实际消息；旧买点无归档保留no_run，盘中新链区分no_archive/projection_unconfirmed，每日无名单为no_pick_set；不猜未运行或全天没有机会。同日同股后续合并仍不重新未读，风险消息独立于机会去重。
 - 自设个股条件和真实持仓风险在生成/发送前核自身源时点与质量；风险缺数保留uncompleted与逐股原因。维护显示真实渠道状态，删除确认说明触发历史随规则删除、外发尝试审计保留。
 - 系统健康异常按原policy及配置目标复用source事件与Outbox同事务、持久active/recovered episode及发送前恢复重检。渠道缺目标/策略关闭明确返回状态，不消费新episode；入队前失败可再观测，发送已开始后的unknown不自动重发。部分恢复只发仍活跃项，恢复后再次发生才产生新episode。该源仍由维护与原外发链消费，不加入个股铃铛范围。
 
