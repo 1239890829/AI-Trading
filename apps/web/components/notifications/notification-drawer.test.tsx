@@ -32,7 +32,12 @@ vi.mock("@/lib/api", async () => {
 
 import { NotificationBell } from "@/components/notifications/notification-drawer";
 import { DetailModalProvider } from "@/components/detail/detail-modal";
+import { SymbolDetailModalHost, SymbolDetailProvider } from "@/components/detail/symbol-detail-modal";
 import { __resetPrefsCache } from "@/lib/notification-read";
+
+const navigation = vi.hoisted(() => ({replace: vi.fn(), push: vi.fn()}));
+vi.mock("next/navigation", () => ({usePathname: () => "/workbench", useSearchParams: () => new URLSearchParams(), useRouter: () => navigation}));
+vi.mock("@/components/stock-detail", () => ({StockDetailPanel: ({symbol}: {symbol: string}) => <p data-testid="notification-security-detail">{symbol}</p>}));
 
 function item(over: Partial<NotificationItem> = {}): NotificationItem {
   return {
@@ -100,6 +105,21 @@ afterEach(() => {
 });
 
 describe("通知中心：未读计数与红点", () => {
+  it.each(["行情", "通知正文"])("工作台从%s核对证券，打开详情且保留通知列表", async action => {
+    payload = makePayload([item({symbol: "600519", title: "来源通知"})]);
+    render(<SymbolDetailProvider><NotificationBell /><SymbolDetailModalHost /></SymbolDetailProvider>);
+    await openDrawer();
+    fireEvent.click(action === "行情" ? screen.getByRole("link", {name: /行情/}) : screen.getByText("来源通知"));
+    expect((await screen.findByTestId("notification-security-detail")).textContent).toBe("600519");
+    expect(screen.getByTestId("notification-drawer").getAttribute("data-motion-state")).toBe("open");
+    expect(screen.getByTestId("notification-list").textContent).toContain("来源通知");
+    expect(navigation.replace).not.toHaveBeenCalled();
+    expect(navigation.push).not.toHaveBeenCalled();
+    fireEvent.keyDown(window, {key: "Escape"});
+    await waitFor(() => expect(screen.queryByTestId("symbol-detail-modal")).toBeNull());
+    expect(screen.getByTestId("notification-drawer").getAttribute("data-motion-state")).toBe("open");
+  });
+
   it.each([
     ["临板 7.2%（距封板 +2.50pct）", "临板 7.2%（旧口径：距封板判定线 +2.50 个百分点）"],
     ["距实际涨停价还需上涨 2.33%", "距实际涨停价还需上涨 2.33%"],

@@ -1,8 +1,15 @@
 "use client";
 
-import { useState } from "react";
+import { useId, useState } from "react";
+import { HugeiconsIcon } from "@hugeicons/react";
+import ArrowDown01Icon from "@hugeicons/core-free-icons/ArrowDown01Icon";
 
 import { ConceptDetailModal } from "@/components/concept-detail-modal";
+import { useSymbolDetail } from "@/components/detail/symbol-detail-context";
+import { inspectionClick, useInspection } from "@/components/inspection/inspection-context";
+import { ModalShell } from "@/components/ui/modal-shell";
+import { useExitPresence } from "@/hooks/use-exit-presence";
+import { motionOrigin, type MotionOrigin } from "@/lib/surface-motion";
 import { JUMP_PILL_CLASS, JumpLink } from "@/components/ui/jump-link";
 import { MasonryColumns } from "@/components/masonry-columns";
 import { WatchLedgerPanel } from "@/components/hunting/watch-ledger-panel";
@@ -80,12 +87,14 @@ export function IntradayThemeRow({
   onToggle: () => void;
 }) {
   const stage = t.stage ?? "未知";
+  const detailsId = useId();
   const [detailOpen, setDetailOpen] = useState(false);
+  const { open: openInspection } = useInspection();
   return (
     <div className="ui-card rounded-xl border border-zinc-200 p-3 text-xs transition-colors hover:bg-zinc-50 dark:border-zinc-800 dark:hover:bg-zinc-900/50">
       {/* L10（切片 E）：题材页 ↗ 与展开按钮同级（button 内不能嵌 a），点题材名仍是展开/收起 */}
       <div className="flex w-full items-center gap-2">
-        <button onClick={onToggle} className="flex min-w-0 flex-1 flex-wrap items-center gap-2 text-left">
+        <button type="button" onClick={onToggle} aria-expanded={expanded} aria-controls={expanded ? detailsId : undefined} className="flex min-w-0 flex-1 flex-wrap items-center gap-2 text-left">
           <span className="text-sm font-semibold text-zinc-900 dark:text-zinc-50">{t.theme}</span>
           {/* 机会三层（需求 4）：今日最强/悄悄启动/孕育待发酵——择时先分层再定档 */}
           {t.opportunity_layer && (
@@ -136,9 +145,10 @@ export function IntradayThemeRow({
         </button>
         <JumpLink
           href={themesUrl(t.theme)}
-          title="打开题材梯队看板（盘面页 · 题材梯队 tab），聚焦该题材"
+          title="在当前页核对该题材的市场梯队"
+          onClick={inspectionClick(openInspection, {kind: "themes", focus: t.theme})}
         >
-          题材页 ↗
+          市场梯队
         </JumpLink>
         {t.catalog_code && (
           <button
@@ -146,7 +156,7 @@ export function IntradayThemeRow({
             className={JUMP_PILL_CLASS}
             title="查看官方成分全量（与同花顺逐符号一致）与涨停细分"
           >
-            成分 ↗
+            官方成分
           </button>
         )}
       </div>
@@ -159,7 +169,7 @@ export function IntradayThemeRow({
         </p>
       )}
       {expanded && (
-        <>
+        <div id={detailsId}>
           {t.stage_basis.length > 0 && (
             <p className="mt-1.5 text-[11px] text-zinc-600 dark:text-zinc-400">阶段依据：{t.stage_basis.join("；")}</p>
           )}
@@ -214,7 +224,7 @@ export function IntradayThemeRow({
           ) : (
             <p className="mt-2 text-[11px] text-zinc-600 dark:text-zinc-400">该题材暂无梯队成员。</p>
           )}
-        </>
+        </div>
       )}
     </div>
   );
@@ -274,30 +284,90 @@ export function OpportunitySection({
 /* ---------------------------------------------------------------- 今日行情 */
 
 export function MarketOverviewStrip({ opps }: { opps: IntradayOpportunities | null }) {
+  const { open: openInspection } = useInspection();
+  const { open: openSymbol } = useSymbolDetail();
+  const [inspection, setInspection] = useState<{
+    kind: "themes" | "broken" | "leaders";
+    snapshot: IntradayOpportunities;
+    origin: MotionOrigin | null;
+  } | null>(null);
+  const [expandedTheme, setExpandedTheme] = useState<string | null>(null);
+  const presence = useExitPresence(inspection);
   const brokenLadder = opps
     ? opps.themes.filter((t) => t.has_succession === false).length
-    : 0;
-  const stats: [string, string | number, string][] = [
-    ["涨停家数", opps?.summary.limit_up_total ?? "--", "ths 封单法口径"],
-    ["最高连板", opps ? `${opps.summary.market_max_boards ?? "--"} 板` : "--", "全市场空间板高度"],
-    ["题材机会", opps ? `${opps.themes.length} 个` : "--", "当日有候选个股的题材数"],
-    ["梯队断层", opps ? `${brokenLadder} 个` : "--", "has_succession=false 的题材（接续风险）"],
+    : null;
+  const leaders = opps?.summary.market_max_board_stocks;
+  const knownHeight = opps?.summary.market_max_boards != null;
+  const leaderIdentityMissing = knownHeight && opps!.summary.market_max_boards! > 0 && !leaders?.length;
+  const stats: { kind: "limit-up" | "leaders" | "themes" | "broken"; label: string; value: string | number; tip: string; disabled: boolean }[] = [
+    {kind: "limit-up", label: "涨停家数", value: opps?.summary.limit_up_total ?? "--", tip: "打开该交易日涨停池；名单来源与更新时点在弹层展示", disabled: !opps?.trade_date},
+    {kind: "leaders", label: "最高连板", value: knownHeight ? `${opps!.summary.market_max_boards} 板` : "--", tip: leaderIdentityMissing ? "本轮未返回最高连板个股身份，不能用可见候选猜测" : "查看同一完整涨停池的最高连板个股；并列时先展示名单", disabled: !knownHeight || leaderIdentityMissing},
+    {kind: "themes", label: "题材机会", value: opps ? `${opps.themes.length} 个` : "--", tip: "查看本轮按强度筛选的题材与参与依据，包含候选为空的题材", disabled: !opps},
+    {kind: "broken", label: "梯队断层", value: opps ? `${brokenLadder} 个` : "--", tip: "查看本轮题材中已确认梯队断层的题材；未知接续状态不计入", disabled: !opps},
   ];
+  const captured = presence.value;
+  const capturedThemes = captured?.snapshot.themes.filter(theme => captured.kind !== "broken" || theme.has_succession === false) ?? [];
+  const title = captured?.kind === "leaders" ? "最高连板个股" : captured?.kind === "broken" ? "梯队断层" : "本轮题材机会";
   return (
-    <div className="grid grid-cols-2 gap-2 md:grid-cols-4">
-      {stats.map(([label, value, tip]) => (
-        <div
-          key={label}
-          className="rounded-lg border border-zinc-200 px-2.5 py-1.5 dark:border-zinc-800"
-          title={tip}
+    <>
+    <div className="hunting-market-strip">
+      {stats.map(stat => (
+        <button
+          key={stat.kind}
+          type="button"
+          className="hunting-market-stat"
+          title={stat.tip}
+          aria-label={`${stat.label} ${stat.value} · ${stat.disabled ? stat.tip : "查看详情"}`}
+          disabled={stat.disabled}
+          onClick={event => {
+            if (!opps) return;
+            const origin = motionOrigin(event);
+            if (stat.kind === "limit-up") {
+              openInspection({kind: "limit-up", date: opps.trade_date ?? undefined, motionOrigin: origin ?? undefined});
+            } else if (stat.kind === "leaders" && leaders?.length === 1) {
+              openSymbol({symbol: leaders[0].symbol, motionOrigin: origin ?? undefined});
+            } else {
+              setExpandedTheme(null);
+              setInspection({kind: stat.kind, snapshot: opps, origin});
+            }
+          }}
         >
-          <span className="text-[11px] text-zinc-600 dark:text-zinc-400">{label}</span>
-          <div className="font-mono text-sm font-semibold tabular-nums text-zinc-900 dark:text-zinc-50">
-            {value}
-          </div>
-        </div>
+          <span className="hunting-market-label">{stat.label}<HugeiconsIcon icon={ArrowDown01Icon} size={13} strokeWidth={1.6} aria-hidden="true" /></span>
+          <strong>{stat.value}</strong>
+        </button>
       ))}
     </div>
+    {leaderIdentityMissing && <p className="hunting-source-note">最高连板个股身份未返回，暂不能打开详情。</p>}
+    {captured && <ModalShell
+      open={presence.active}
+      onClose={() => setInspection(null)}
+      motionOrigin={captured.origin}
+      presentation="drawer"
+      size="lg"
+      header={<><h2 className="text-sm font-semibold">{title}</h2><p className="mt-1 text-xs text-zinc-600 dark:text-zinc-400">{captured.snapshot.trade_date ?? "交易日未知"} · 保留点击时的同批次名单</p></>}
+      label={title}
+      bodyClassName="hunting-market-inspection overflow-auto p-4"
+      footer="题材与曾封板身份用于研究；入选不等于可成交，不构成买卖建议。"
+    >
+      {presence.active && (captured.kind === "leaders" ? (
+        (captured.snapshot.summary.market_max_board_stocks ?? []).length > 0 ? <div className="space-y-2">
+          <p className="text-xs text-zinc-600 dark:text-zinc-400">同一完整涨停池有多只并列最高股，请选择需要核对的个股。</p>
+          {(captured.snapshot.summary.market_max_board_stocks ?? []).map(stock => <div key={stock.symbol} className="flex items-center justify-between gap-3 border-b border-zinc-200 py-3 text-sm dark:border-zinc-800">
+            <StockLink symbol={stock.symbol}>{stock.name ?? stock.symbol}<span className="ml-2 text-xs text-zinc-600 dark:text-zinc-400">{stock.symbol}</span></StockLink>
+            <span className="shrink-0 text-xs tabular-nums">{stock.boards} 板</span>
+          </div>)}
+        </div> : <p className="text-sm text-zinc-600 dark:text-zinc-400">本批次暂无最高连板个股。</p>
+      ) : <>
+        <p className="mb-4 text-xs leading-6 text-zinc-600 dark:text-zinc-400">本轮按强度展示 {captured.snapshot.themes.length} 个题材{captured.kind === "broken" ? `，其中 ${capturedThemes.length} 个确认梯队断层` : "；候选为空的题材也保留形成依据"}。这不是全市场题材总数。</p>
+        {captured.kind === "broken" && capturedThemes.length === 0 ? <p className="text-sm text-zinc-600 dark:text-zinc-400">本轮展示题材暂无已确认断层；接续状态未知不等于没有风险。</p> : <OpportunitySection
+          opps={{...captured.snapshot, themes: capturedThemes}}
+          expanded={expandedTheme}
+          onToggle={theme => setExpandedTheme(current => current === theme ? null : theme)}
+          showLedger={false}
+        />}
+      </>)}
+    </ModalShell>}
+    </>
   );
 }
 

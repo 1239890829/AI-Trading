@@ -713,7 +713,7 @@ class PaperTradingEngine:
                 for o in q.order_by(PaperOrder.id).all()
             ]
 
-    def account_summary(self, market_value: float) -> dict:
+    def account_summary(self, market_value: float, *, initialize: bool = True) -> dict:
         """账户摘要。`cash` = **可用资金**；`frozen_cash` = 挂单占用；`total` = 净资产。
 
         R01 残留项修复（2026-09-14）：原 `total = cash + market_value`，
@@ -724,10 +724,19 @@ class PaperTradingEngine:
 
         三者关系：`total = cash(可用) + frozen_cash(冻结) + market_value(持仓市值)`。
         """
-        acc = self.ensure_account()
+        if initialize:
+            acc = self.ensure_account()
+        else:
+            with self._sf() as db:
+                acc = db.query(PaperAccount).filter(PaperAccount.scope == self.scope).first()
+            if acc is None:
+                return {"account_created": False, "cash": None, "frozen_cash": None,
+                        "market_value": round(market_value, 2), "total": None, "initial_cash": None,
+                        "total_pnl": None, "total_pnl_pct": None}
         frozen = self.frozen_cash()
         total = acc.cash + frozen + market_value
         return {
+            "account_created": True,
             "cash": round(acc.cash, 2),
             "frozen_cash": frozen,
             "market_value": round(market_value, 2),

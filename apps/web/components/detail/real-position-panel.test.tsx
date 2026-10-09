@@ -1,7 +1,7 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { cleanup, fireEvent, render, screen, waitFor } from "@testing-library/react";
 import { RealPositionPanel } from "@/components/detail/real-position-panel";
-import { createRealTrade, getRealPositions, type RealPositionsPayload } from "@/lib/api";
+import { createRealTrade, deleteRealPosition, getRealPositions, overrideRealPosition, type RealPositionsPayload } from "@/lib/api";
 
 // vitest 未开 globals 时 RTL 自动 cleanup 不注册，必须手动（见 trade-form.test.tsx 注释）
 afterEach(() => {
@@ -48,6 +48,22 @@ const payload = (rows: Partial<RealPositionsPayload["items"][number]>[] = []): R
 });
 
 describe("RealPositionPanel 真实持仓", () => {
+  it("只读旁览完整保留持仓与汇总，没有记账、修正或删除入口", async () => {
+    mockedGet.mockResolvedValue(payload([{overridden: true}]));
+    const view = render(<RealPositionPanel readOnly />);
+    await screen.findByText("共进股份");
+    expect(screen.getByText(/总市值/)).toBeTruthy();
+    expect(screen.getByText("已修正")).toBeTruthy();
+    expect(screen.queryByLabelText("实际成交价")).toBeNull();
+    for (const name of ["记账", "改", "删", "保存"]) expect(screen.queryByRole("button", {name})).toBeNull();
+    expect(mockedCreate).not.toHaveBeenCalled();
+    expect(vi.mocked(overrideRealPosition)).not.toHaveBeenCalled();
+    expect(vi.mocked(deleteRealPosition)).not.toHaveBeenCalled();
+    view.rerender(<RealPositionPanel />);
+    expect(screen.getByLabelText("实际成交价")).toBeTruthy();
+    expect(screen.getByTitle("手动修正数量/总成本")).toBeTruthy();
+  });
+
   it("记账必须用表单里填的实际成交价（18.479），不传现价——需求 1 命门", async () => {
     mockedGet.mockResolvedValue(payload([]));
     mockedCreate.mockResolvedValue(undefined);

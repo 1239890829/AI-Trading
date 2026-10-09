@@ -23,7 +23,7 @@ import { useRealPositions } from "@/hooks/use-real-positions";
  * 市值 | 浮动盈亏(+%) | 已实现盈亏 | 状态（已手动修正/正常）。
  * 汇总行：总市值 / 总成本 / 总浮动盈亏 / 累计已实现盈亏。
  */
-export function RealPositionPanel({ symbol, currentPrice, currentName, className }: { symbol?: string; currentPrice?: number | null; currentName?: string | null; className?: string }) {
+export function RealPositionPanel({ symbol, currentPrice, currentName, className, readOnly = false }: { symbol?: string; currentPrice?: number | null; currentName?: string | null; className?: string; readOnly?: boolean }) {
   // 聚合数据：共用 hook 一份轮询（评审 M3），reload 供表单提交后即时刷新
   const { data, error: loadError, reload } = useRealPositions();
   // 表单错误与数据加载错误分开展示（原实现共用一个 state，评审 M3 抽 hook 时拆开）
@@ -63,6 +63,7 @@ export function RealPositionPanel({ symbol, currentPrice, currentName, className
 
 
   async function submitTrade() {
+    if (readOnly) return;
     const pv = Number(price.replace(/,/g, ""));
     const qv = Number(qty);
     const fv = fee ? Number(fee) : 0;
@@ -85,6 +86,7 @@ export function RealPositionPanel({ symbol, currentPrice, currentName, className
   }
 
   async function submitOverride(row: RealPositionRow) {
+    if (readOnly) return;
     const qv = Number(editQty);
     const cv = Number(editCost.replace(/,/g, ""));
     if (!(qv > 0) || !Number.isInteger(qv)) return setError("修正数量必须为正整数");
@@ -102,6 +104,7 @@ export function RealPositionPanel({ symbol, currentPrice, currentName, className
   }
 
   async function removeRow(row: RealPositionRow) {
+    if (readOnly) return;
     if (!window.confirm(`删除 ${row.name ?? row.symbol} 的全部真实持仓流水？此操作不可恢复。`)) return;
     setBusy(true);
     try {
@@ -116,8 +119,9 @@ export function RealPositionPanel({ symbol, currentPrice, currentName, className
 
   return (
     <div className={`manual-position-panel flex min-h-0 flex-col ${className ?? ""}`}>
-      {/* 记一笔 */}
-      <div className="shrink-0 border-b border-zinc-100 px-2 py-2 dark:border-zinc-800/60">
+      {readOnly && <p className="shrink-0 px-2 py-2 text-xs text-zinc-600 dark:text-zinc-400">手工持仓只读旁览；按用户实际成交记录，未经券商核验，与模拟账户独立。</p>}
+      {/* 记一笔：旁览仅复用记录与汇总，工作台保留原编辑能力。 */}
+      {!readOnly && <div className="shrink-0 border-b border-zinc-100 px-2 py-2 dark:border-zinc-800/60">
         <div className="manual-entry-heading flex flex-wrap items-center gap-1.5">
           {(
             [
@@ -193,7 +197,7 @@ export function RealPositionPanel({ symbol, currentPrice, currentName, className
             记账
           </button>
         </div>
-      </div>
+      </div>}
 
       {(error || loadError) && (
         <div className="shrink-0 px-2 py-1.5 text-xs text-amber-800 dark:text-amber-300">{error ?? loadError}</div>
@@ -216,7 +220,7 @@ export function RealPositionPanel({ symbol, currentPrice, currentName, className
                 <span className="shrink-0 font-mono text-[10px] text-zinc-600 dark:text-zinc-400">{r.symbol}</span>
                 {r.overridden && <span className="shrink-0 rounded bg-amber-500/15 px-1 text-[10px] text-amber-800 dark:text-amber-300">已修正</span>}
               </div>
-              <div className="shrink-0 text-[11px]">
+              {!readOnly && <div className="shrink-0 text-[11px]">
                 <button data-action="quiet"
                   onClick={() => {
                     setEditSymbol(editSymbol === r.symbol ? null : r.symbol);
@@ -230,7 +234,7 @@ export function RealPositionPanel({ symbol, currentPrice, currentName, className
                 <button data-action="danger" onClick={() => void removeRow(r)} className="ml-1.5" title="删除全部流水">
                   删
                 </button>
-              </div>
+              </div>}
             </div>
             {/* 行2：持仓结构 → 现价（成本 → 现价语义，同花顺习惯） */}
             <div className="mt-1 flex items-baseline justify-between gap-2 font-mono text-[11px] tabular-nums">
@@ -268,7 +272,7 @@ export function RealPositionPanel({ symbol, currentPrice, currentName, className
                 </span>
               </div>
             )}
-            {editSymbol === r.symbol && (
+            {!readOnly && editSymbol === r.symbol && (
               <div className="mt-1 flex items-center gap-1 border-t border-zinc-100 pt-1 dark:border-zinc-800/60">
                 <span className="text-[10px] text-zinc-600 dark:text-zinc-400">修正</span>
                 <input value={editQty} onChange={(e) => setEditQty(e.target.value)} className="w-14 rounded border border-zinc-200 bg-transparent px-1 py-0.5 font-mono dark:border-zinc-700" aria-label="修正数量" />
@@ -282,7 +286,7 @@ export function RealPositionPanel({ symbol, currentPrice, currentName, className
         ))}
         {(data?.items.length ?? 0) === 0 && (
           <p className="px-4 py-8 text-center text-xs text-zinc-600 dark:text-zinc-400">
-            {data ? "暂无手工持仓记录。在上方按实际成交价录入；本系统未向券商核验。" : "加载中…"}
+            {data ? readOnly ? "暂无手工持仓记录；本系统未向券商核验。" : "暂无手工持仓记录。在上方按实际成交价录入；本系统未向券商核验。" : "加载中…"}
           </p>
         )}
         {(data?.cleared.length ?? 0) > 0 && (

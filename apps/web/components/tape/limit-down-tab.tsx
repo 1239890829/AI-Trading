@@ -1,13 +1,12 @@
 "use client";
 
-import { useCallback, useState } from "react";
-import { useSearchParams } from "next/navigation";
+import { useId } from "react";
+import { useSurfaceScope } from "@/components/inspection/surface-scope";
 import { Panel } from "@/components/panel";
 import { StockLink, useStockRowNav } from "@/components/stock-link";
 import { getLimitDownPool } from "@/lib/api";
-import { fmt, fmtAmount, pctColor, pctText } from "@/lib/format";
-import { usePollingFetch } from "@/hooks/use-polling-fetch";
-import type { LimitDownRecord } from "@/types/market";
+import { bjDate, fmt, fmtAmount, pctColor, pctText } from "@/lib/format";
+import { useResource } from "@/hooks/use-polling-fetch";
 
 /**
  * 盘面页 · 跌停 tab（2026-09-04 新增）。
@@ -19,45 +18,24 @@ import type { LimitDownRecord } from "@/types/market";
 
 export function LimitDownTab() {
   const stockNav = useStockRowNav();
-  const searchParams = useSearchParams();
-  const [records, setRecords] = useState<LimitDownRecord[]>([]);
-  const [tradeDate, setTradeDate] = useState("");
-  const [error, setError] = useState<string | null>(null);
-  const [loading, setLoading] = useState(true);
-
-  const load = useCallback(async (date?: string) => {
-    try {
-      const pool = await getLimitDownPool(date);
-      setRecords(pool);
-      setTradeDate(pool[0]?.trade_date ?? "");
-      setError(null);
-    } catch (e) {
-      setError((e as Error).message);
-      setRecords([]);
-      setTradeDate(date ?? "");
-    } finally {
-      setLoading(false);
-    }
-  }, []);
-
-  // 与 limit-up-tab 完全同构：URL 的 ?date= 是**取数唯一触发源**（2026-09-12 评审 R-7）。
-  // `key` 与「删掉 handler 里那次显式 load」必须成对出现——`useResource` 的 effect
-  // 依赖数组含 `key`（`use-resource.ts:151`）但**不含 `searchParams`**、且**无去重**：
-  // 只补 `key` 不删 load ⇒ 改一次日期发两次请求；只删 load 不补 `key` ⇒ 改日期不重拉。
-  // 诚实边界（潜在契约违反，非当前可观测缺陷）见 limit-up-tab 同处的说明。
-  const urlDate = searchParams.get("date") || undefined;
-  usePollingFetch(() => load(urlDate), null, urlDate);
+  const { searchParams, replaceSearch } = useSurfaceScope();
+  const dateId = useId();
+  const requestedDate = searchParams.get("date") || bjDate(new Date().toISOString());
+  const resource = useResource(() => getLimitDownPool(requestedDate), {key: requestedDate, intervalMs: null});
+  const records = resource.error ? [] : resource.data ?? [];
+  const tradeDate = requestedDate;
+  const error = resource.error instanceof Error ? resource.error.message : resource.error ? "读取失败" : null;
+  const loading = resource.pending;
 
   function syncUrl(date: string) {
-    const p = new URLSearchParams(window.location.search);
-    if (date) p.set("date", date);
-    else p.delete("date");
-    const qs = p.toString();
-    window.history.replaceState({}, "", qs ? `?${qs}` : window.location.pathname);
+    const params = new URLSearchParams(searchParams.toString());
+    if (date) params.set("date", date);
+    else params.delete("date");
+    replaceSearch(params);
   }
 
   const onDate = (v: string) => {
-    // 只改 URL——取数由上面 `key` 变化触发（勿在此再调 load）
+    // Standalone filters own the URL; embedded filters own their local inspection scope.
     syncUrl(v);
   };
 
@@ -66,11 +44,11 @@ export function LimitDownTab() {
       <div className="mb-3 flex shrink-0 flex-wrap items-center justify-between gap-2">
         <h2 className="text-base font-semibold">跌停池 · {tradeDate || "…"}</h2>
         <div className="query-date text-xs text-zinc-600 dark:text-zinc-400">
-          <label htmlFor="dt-date">按日期查询：</label>
+          <label htmlFor={dateId}>按日期查询：</label>
           <input
-            id="dt-date"
+            id={dateId}
             type="date"
-            value={tradeDate}
+            value={tradeDate.replace(/^(\d{4})(\d{2})(\d{2})$/, "$1-$2-$3")}
             onChange={(e) => onDate(e.target.value)}
             className="rounded-md border border-zinc-200 bg-transparent px-2 py-1 text-sm dark:border-zinc-700"
           />
@@ -80,6 +58,7 @@ export function LimitDownTab() {
       {error && (
         <div className="mb-4 shrink-0 rounded-lg border border-amber-500/40 bg-amber-500/10 px-4 py-3 text-sm text-amber-800 dark:text-amber-300">
           跌停池加载失败：{error}
+          <button type="button" className="quiet-action ml-2" onClick={resource.refresh}>重试读取</button>
         </div>
       )}
 

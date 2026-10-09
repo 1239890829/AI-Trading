@@ -41,7 +41,7 @@ from app.picks.kb_routing import snapshot_citations
 from app.services.theme_service import parse_hhmmss
 
 STRATEGY_VERSION = "stock-opportunity-funnel-v2"
-FEATURE_VERSION = "pit-evidence-v3.stock-identity"
+FEATURE_VERSION = "pit-evidence-v4.selection-entry"
 OUTCOME_HORIZON = "d0_close"
 OUTCOME_HORIZONS = {
     "d0_close": 0,
@@ -311,6 +311,7 @@ def build_intraday_records(
                     "strategy_version": STRATEGY_VERSION, "feature_version": FEATURE_VERSION})
     kb_ids_json, kb_refs_json = snapshot_citations("intraday_opportunity", kb_ids, fragments=kb_fragments)
     ranked = top_watch_stocks(payload, limit=10_000).get("items") or []
+    selection_capacity = top_watch_stocks(payload)["effective_limit"]
     rank_by_symbol = {
         str(row.get("symbol") or ""): n
         for n, row in enumerate(ranked, 1)
@@ -425,6 +426,9 @@ def build_intraday_records(
                 rank_decision = "ranked"
             rank = rank_by_symbol.get(symbol) if rank_decision == "ranked" else None
             rank_evidence = {
+                "selection_entry_contract": "selection-entry-v1",
+                "effective_limit": selection_capacity,
+                "within_display_capacity": rank is not None and rank <= selection_capacity,
                 "gate_decision": gate_decision,
                 "linkage_level": linkage_level,
                 "linkage_basis": linkage.get("basis"),

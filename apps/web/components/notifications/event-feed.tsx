@@ -1,7 +1,7 @@
 "use client";
 
 import { useCallback, useState } from "react";
-import { useRouter } from "next/navigation";
+import { inspectionClick, useInspection } from "@/components/inspection/inspection-context";
 
 import { getImpactEvents, type EventSort, type ImpactEvent } from "@/lib/api";
 import {
@@ -62,7 +62,7 @@ function EventRow({
 }) {
   const { open: openDetail } = useDetailModal();
   const { open: openSymbolDetail } = useSymbolDetail();
-  const router = useRouter();
+  const { open: inspect } = useInspection();
   const clickable = Boolean(e.url);
 
   return (
@@ -134,11 +134,7 @@ function EventRow({
                 onClick={
                   isStock
                     ? symbolDetailClick(openSymbolDetail, { symbol: d.target })
-                    : (ev) => {
-                        // 题材页是整页切换：抽屉随导航关闭（不 preventDefault，走正常路由）
-                        ev.currentTarget.blur();
-                        router.push(themesUrl(d.target));
-                      }
+                    : inspectionClick(inspect, {kind: "themes", focus: d.target})
                 }
                 title={[d.chain, d.basis].filter(Boolean).join(" ｜ ") || `关联${isStock ? "个股" : "题材"} ${d.target}`}
                 className="inline-flex items-center gap-1 rounded border border-zinc-200 px-1 py-px text-[10px] text-zinc-700 hover:border-zinc-400 dark:border-zinc-700 dark:text-zinc-200"

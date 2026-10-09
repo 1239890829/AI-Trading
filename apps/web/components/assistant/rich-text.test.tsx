@@ -109,4 +109,17 @@ describe("RichText", () => {
       "点击打开个股详情",
     );
   });
+
+  it("routes allowed Markdown context links through the consumer and preserves modified clicks", () => {
+    const onNav = vi.fn();
+    render(<RichText text="[涨停池](/tape?tab=limitup) [外链](https://example.com)" matcher={matcher} onNavigate={onNav} />);
+    const link = screen.getByRole("link", {name: "涨停池"});
+    expect(link.getAttribute("href")).toBe("/tape?tab=limitup");
+    fireEvent.click(link);
+    expect(onNav).toHaveBeenCalledWith(expect.objectContaining({type: "nav", url: "/tape?tab=limitup"}));
+    onNav.mockClear();
+    fireEvent.click(link, {ctrlKey: true});
+    expect(onNav).not.toHaveBeenCalled();
+    expect(screen.queryByRole("link", {name: "外链"})).toBeNull();
+  });
 });

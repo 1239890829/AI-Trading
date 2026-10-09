@@ -1,5 +1,7 @@
 "use client";
 
+import { inspectionRequestForHref, useInspection } from "@/components/inspection/inspection-context";
+
 /** 资讯弹窗：全站资讯类内容的统一展示形态（新闻/快讯/公告三源共用）。
 
 数据通道：后端 /api/news/content 抓取原文正文重新排版（域名白名单），
@@ -11,7 +13,7 @@ import { createPortal } from "react-dom";
 import { useRouter } from "next/navigation";
 
 import { API_BASE, getNewsContent, type ArticleBlock, type ArticleContent } from "@/lib/api";
-import { withFrom, themesUrl } from "@/lib/routing";
+import { withFrom } from "@/lib/routing";
 import { parseWorkbenchDetailUrl } from "@/lib/detail-tabs";
 import { useSymbolDetail } from "@/components/detail/symbol-detail-context";
 import { createEntityMatcher, type EntityDict, type EntityMatch, type EntityMatcher } from "@/lib/entity-links";
@@ -197,6 +199,7 @@ export function NewsModal({ item, onClose }: { item: NewsModalItem | null; onClo
   const router = useRouter();
   // 正文里的个股实体 → **就地弹窗**看详情（2026-09-15 详情弹窗化）
   const { open: openSymbolDetail } = useSymbolDetail();
+  const { open: inspect } = useInspection();
   const [content, setContent] = useState<ArticleContent | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [loading, setLoading] = useState(false);
@@ -234,22 +237,25 @@ export function NewsModal({ item, onClose }: { item: NewsModalItem | null; onClo
   // - 无法识别为标的详情的站内深链（"涨停池""题材梯队"等功能入口）照常跳转。
   const onNavigate = useCallback(
     (m: EntityMatch) => {
+      onClose();
       if (m.url && isAllowedNav(m.url)) {
         const target = parseWorkbenchDetailUrl(m.url);
         if (target) {
-          openSymbolDetail(target);
+          openSymbolDetail({...target, preferModal: true});
           return;
         }
-        router.push(withFrom(m.url));
+        const inspection = inspectionRequestForHref(m.url);
+        if (inspection) inspect(inspection);
+        else router.push(withFrom(m.url));
       } else if (m.type === "stock" && m.code) {
-        openSymbolDetail({ symbol: m.code });
+        openSymbolDetail({ symbol: m.code, preferModal: true });
       } else if (m.type === "theme") {
-        router.push(themesUrl(m.name));
+        inspect({kind: "themes", focus: m.name});
       } else if (m.type === "nav" && m.url) {
         router.push(m.url);
       }
     },
-    [router, openSymbolDetail],
+    [router, openSymbolDetail, inspect, onClose],
   );
 
   // 拉取正文；失败记 error 走降级（setState 仅出现在异步回调，不经 effect 同步触发）

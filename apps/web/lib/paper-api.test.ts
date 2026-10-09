@@ -1,11 +1,22 @@
 import { afterEach, beforeEach, expect, it, vi } from "vitest";
-import { placePaperOrder } from "./api/paper";
-import { sendJson } from "./api/internal";
+import { getPaperAccount, placePaperOrder } from "./api/paper";
+import { getJson, sendJson } from "./api/internal";
 import { ApiError } from "./api/client";
 
 vi.mock("./api/internal", () => ({ sendJson: vi.fn(), getJson: vi.fn(), getJsonArray: vi.fn() }));
 beforeEach(() => { sessionStorage.clear(); vi.clearAllMocks(); });
 afterEach(() => vi.restoreAllMocks());
+
+it("account inspection requests the read-only consumer without fabricating missing balances", async () => {
+  const snapshot = {account_created: false, cash: null, frozen_cash: null, initial_cash: null,
+    market_value: 0, total: null, total_pnl: null, total_pnl_pct: null};
+  vi.mocked(getJson).mockResolvedValue({data: snapshot, meta: {provider: "fixture", is_realtime: false,
+    is_stale: false, last_success_refresh: null, generated_at: "2026-10-09T10:00:00+08:00"}});
+  expect(await getPaperAccount(true)).toEqual(snapshot);
+  expect(getJson).toHaveBeenLastCalledWith("/api/paper/account?read_only=true");
+  await getPaperAccount();
+  expect(getJson).toHaveBeenLastCalledWith("/api/paper/account");
+});
 
 it("lost response retry keeps the original identity and deadline", async () => {
   vi.mocked(sendJson).mockRejectedValueOnce(new ApiError(0, "timeout", "timeout"));

@@ -1,5 +1,6 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { act, cleanup, fireEvent, render, screen } from "@testing-library/react";
+import { InspectionScope } from "@/components/inspection/surface-scope";
 import { LonghuTab } from "@/components/tape/longhu-tab";
 import { getLonghu } from "@/lib/api";
 import type { LongHuRecord } from "@/types/market";
@@ -62,11 +63,22 @@ beforeEach(() => {
 });
 
 async function mount() {
-  render(<LonghuTab />);
+  render(<InspectionScope initialSearch=""><LonghuTab /></InspectionScope>);
   await act(async () => {}); // flush useEffect 里的 load()
 }
 
 describe("LonghuTab 披露语义（P1-C）", () => {
+  it("compact-date deep links retain their original request while sharing today's disclosure window", async () => {
+    at(14, 20);
+    vi.mocked(getLonghu).mockRejectedValue(new Error("all providers failed"));
+    render(<InspectionScope initialSearch="date=20260902"><LonghuTab /></InspectionScope>);
+    await act(async () => {});
+    expect(getLonghu).toHaveBeenCalledWith("20260902");
+    expect((screen.getByLabelText(/按日期查询/) as HTMLInputElement).value).toBe("2026-09-02");
+    expect(screen.getByText(/今日榜单尚未披露/)).toBeTruthy();
+    expect(screen.queryByText(/加载失败/)).toBeNull();
+  });
+
   it("盘中查当天四源空（后端 502）→ 显示'尚未披露'提示，不显示加载失败", async () => {
     at(14, 20); // 盘中
     vi.mocked(getLonghu).mockRejectedValue(
@@ -81,7 +93,7 @@ describe("LonghuTab 披露语义（P1-C）", () => {
   it("查历史日期失败 → 仍显示加载失败（披露语义只适用于当天）", async () => {
     at(14, 20);
     vi.mocked(getLonghu).mockRejectedValue(new Error("boom"));
-    render(<LonghuTab />);
+    render(<InspectionScope initialSearch=""><LonghuTab /></InspectionScope>);
     await act(async () => {});
     // 默认当天查询显示"尚未披露"→ 切到历史日期后，失败就回归普通红错
     fireEvent.change(screen.getByLabelText(/按日期查询/), {
@@ -114,5 +126,26 @@ describe("LonghuTab 披露语义（P1-C）", () => {
     vi.mocked(getLonghu).mockResolvedValue([record("2026-09-02")]);
     await mount();
     expect(screen.queryByText(/未定稿快照/)).toBeNull();
+  });
+
+  it("uses the requested historical scope and rejects an earlier date's late response", async () => {
+    at(17, 5);
+    let finishOld!: (rows: LongHuRecord[]) => void;
+    let finishNew!: (rows: LongHuRecord[]) => void;
+    vi.mocked(getLonghu).mockImplementation(date => new Promise(resolve => {if (date === "2026-08-31") finishOld = resolve; else finishNew = resolve;}));
+    const replace = vi.spyOn(window.history, "replaceState");
+    render(<InspectionScope initialSearch="date=2026-08-31"><LonghuTab /></InspectionScope>);
+    await act(async () => {});
+    expect(getLonghu).toHaveBeenCalledWith("2026-08-31");
+    fireEvent.change(screen.getByLabelText(/按日期查询/), {target: {value: "2026-09-01"}});
+    await act(async () => {});
+    expect(getLonghu).toHaveBeenCalledWith("2026-09-01");
+    await act(async () => {finishNew([{...record("2026-09-01"), name: "新日席位"}]);});
+    await act(async () => {finishOld([{...record("2026-08-31"), name: "旧日席位"}]);});
+    expect(screen.queryByText("旧日席位")).toBeNull();
+    expect(screen.getByText("新日席位")).toBeTruthy();
+    expect(screen.getByRole("heading", {name: "龙虎榜 · 2026-09-01"})).toBeTruthy();
+    expect(replace).not.toHaveBeenCalled();
+    replace.mockRestore();
   });
 });

@@ -20,6 +20,8 @@ import { motionOrigin, type MotionOrigin } from "@/lib/surface-motion";
 
 export interface SymbolDetailRequest {
   motionOrigin?: MotionOrigin;
+  /** Overlay sources keep their list in place even when the workspace is /workbench. */
+  preferModal?: boolean;
   /** 标的代码：6 位个股（`600519`）或带市场前缀的指数（`sh000001`）。 */
   symbol: string;
   /** 图表区初始 tab（来自深链 `ct=`，见 lib/detail-tabs.ts）。 */
@@ -62,6 +64,8 @@ export const SymbolDetailCtx = createContext<SymbolDetailCtx>({
  * 由 `app/layout.tsx` 把它放进 `DetailModalProvider` 内层——两个方向同时满足。
  */
 export const SymbolDetailStateCtx = createContext<SymbolDetailRequest | null>(null);
+/** Every modal activation re-enters the shared overlay stack, including the same symbol. */
+export const SymbolDetailActivationCtx = createContext(0);
 
 export function useSymbolDetail(): SymbolDetailCtx {
   return useContext(SymbolDetailCtx);

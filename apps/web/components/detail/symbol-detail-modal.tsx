@@ -39,18 +39,23 @@
 import { useCallback, useContext, useMemo, useState } from "react";
 import { usePathname, useRouter } from "next/navigation";
 
-import { StockDetailPanel } from "@/components/stock-detail";
+import dynamic from "next/dynamic";
+import { PageSkeletonFallback } from "@/components/ui/loading";
 import { PanelBoundary } from "@/components/ui/panel-boundary";
 import { useExitPresence } from "@/hooks/use-exit-presence";
 import { ModalShell } from "@/components/ui/modal-shell";
 import {
   SymbolDetailCtx,
   SymbolDetailStateCtx,
+  SymbolDetailActivationCtx,
   useSymbolDetail,
   type SymbolDetailRequest,
 } from "@/components/detail/symbol-detail-context";
 import { isIndexSymbol } from "@/lib/api/client";
 import { patchWorkspaceUrl } from "@/lib/task-navigation";
+import { InspectionStateContext } from "@/components/inspection/inspection-context";
+
+const StockDetailPanel = dynamic(() => import("@/components/stock-detail").then(module => module.StockDetailPanel), {loading: () => <PageSkeletonFallback label="证券详情加载中" />});
 
 // context / 点击判定在零依赖的 symbol-detail-context.ts（断环，见该文件头注）；
 // 这里 re-export，调用方只认一个 import 源。
@@ -63,9 +68,11 @@ export type { SymbolDetailRequest } from "@/components/detail/symbol-detail-cont
  * 为什么必须拆开：见 `symbol-detail-context.ts` 的 `SymbolDetailStateCtx` 头注。
  */
 export function SymbolDetailProvider({ children }: { children: React.ReactNode }) {
-  const [req, setReq] = useState<SymbolDetailRequest | null>(null);
+  const [state, setState] = useState<{request: SymbolDetailRequest | null; activation: number}>({request: null, activation: 0});
+  const req = state.request;
   const pathname = usePathname();
   const router = useRouter();
+  const inspection = useContext(InspectionStateContext);
 
   const open = useCallback(
     (r: SymbolDetailRequest) => {
@@ -73,7 +80,9 @@ export function SymbolDetailProvider({ children }: { children: React.ReactNode }
       // 「左栏点自选 = 切右栏」与「搜索框选股 = 弹窗」两条路径行为分叉。
       // 统一按**页内切换**处理（router.replace 不产生历史噪音，见 lib/routing.ts
       // 规则一）。`from` 原样保留，否则跳过来再切股会丢掉「← 返回来源页」。
-      if (pathname === "/workbench") {
+      // 旁览盖住工作台右栏时，切换背景右栏无法让用户看见刚点的证券。
+      // 旁览内沿用证券弹窗，关闭后返回原列表；普通工作台点击仍切右栏。
+      if (pathname === "/workbench" && !inspection && !r.preferModal) {
         const from =
           typeof window === "undefined" ? null : new URLSearchParams(window.location.search).get("from");
         router.replace(
@@ -82,17 +91,19 @@ export function SymbolDetailProvider({ children }: { children: React.ReactNode }
         );
         return;
       }
-      setReq(r);
+      setState(previous => ({request: r, activation: previous.activation + 1}));
     },
-    [pathname, router],
+    [pathname, router, inspection],
   );
 
-  const close = useCallback(() => setReq(null), []);
+  const close = useCallback(() => setState(previous => ({...previous, request: null})), []);
   const value = useMemo(() => ({ open, close }), [open, close]);
 
   return (
     <SymbolDetailCtx.Provider value={value}>
-      <SymbolDetailStateCtx.Provider value={req}>{children}</SymbolDetailStateCtx.Provider>
+      <SymbolDetailActivationCtx.Provider value={state.activation}>
+        <SymbolDetailStateCtx.Provider value={req}>{children}</SymbolDetailStateCtx.Provider>
+      </SymbolDetailActivationCtx.Provider>
     </SymbolDetailCtx.Provider>
   );
 }
@@ -103,9 +114,10 @@ export function SymbolDetailProvider({ children }: { children: React.ReactNode }
  */
 export function SymbolDetailModalHost() {
   const req = useContext(SymbolDetailStateCtx);
+  const activation = useContext(SymbolDetailActivationCtx);
   const { close } = useSymbolDetail();
   const presence = useExitPresence(req);
-  return presence.value ? <SymbolDetailModalBody req={presence.value} active={presence.active} onClose={close} /> : null;
+  return presence.value ? <SymbolDetailModalBody key={activation} req={presence.value} active={presence.active} onClose={close} /> : null;
 }
 
 function SymbolDetailModalBody({ req, active, onClose }: { req: SymbolDetailRequest; active: boolean; onClose: () => void }) {

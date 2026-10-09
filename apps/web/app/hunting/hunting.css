@@ -245,3 +245,20 @@
 @media(pointer:coarse) {
   .hunting-workspace .hunting-task-group,.hunting-workspace .hunting-task-links a,.hunting-context-help>summary {min-height:44px}
 }
+
+/* Market evidence stays in the originating reading context. */
+.hunting-market-strip {display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:8px;min-width:0}
+.hunting-market-stat {display:flex;min-width:0;min-height:58px;flex-direction:column;align-items:stretch;gap:5px;padding:9px 11px;border:1px solid var(--hunt-line,var(--ui-line));border-radius:9px;background:transparent;text-align:left;color:var(--hunt-ink,var(--ui-ink))}
+.hunting-market-stat:hover:not(:disabled) {background:var(--hunt-raised,var(--ui-hover))}
+.hunting-market-stat:focus-visible {outline:2px solid var(--hunt-accent,var(--ui-accent));outline-offset:3px}
+.hunting-market-stat:disabled {opacity:.65;cursor:not-allowed}
+.hunting-market-label {display:flex;align-items:center;justify-content:space-between;gap:6px;white-space:nowrap;font-size:11px;line-height:1.4;color:var(--hunt-muted,var(--ui-muted))}
+.hunting-market-label svg {flex:none;transform:rotate(-90deg);transition:transform 180ms ease-out}
+.hunting-market-stat:hover:not(:disabled) .hunting-market-label svg {transform:rotate(-90deg) translateY(2px)}
+.hunting-market-stat>strong {font-size:14px;line-height:1.4;font-weight:600;font-variant-numeric:tabular-nums;white-space:nowrap}
+.hunting-market-inspection {overscroll-behavior:contain;scrollbar-width:thin;overflow-wrap:anywhere}
+.hunting-market-inspection .ui-card {border:0;border-bottom:1px solid var(--ui-line);border-radius:0;background:transparent;box-shadow:none;padding-inline:0}
+@media(prefers-reduced-motion:reduce) {
+  .hunting-market-label svg {transition:none}
+  .hunting-market-stat:hover:not(:disabled) .hunting-market-label svg {transform:rotate(-90deg)}
+}

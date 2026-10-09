@@ -1,8 +1,8 @@
 "use client";
 
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useId, useMemo, useState } from "react";
 import Link from "next/link";
-import { useSearchParams } from "next/navigation";
+import { useSurfaceScope } from "@/components/inspection/surface-scope";
 import { RankDelta, ThemeCardView } from "@/components/theme-card";
 import { getThemes, getThemesHot, getThemeStrength, getAuctionBenchmark, getSkyrocket } from "@/lib/api";
 import { fmtHeat, pctColor, pctText, timeText } from "@/lib/format";
@@ -49,7 +49,9 @@ const COUNT_FILTERS = [
 const TIER_LEGEND = "领涨 = 成建制·发酵/高潮·封板牢　|　强势 = 发酵/高潮或成建制高位分歧　|　活跃 = 有连板梯队　|　观察 = 暂无梯队结构";
 
 export function ThemesTab() {
-  const searchParams = useSearchParams();
+  const { searchParams, replaceSearch } = useSurfaceScope();
+  const controlId = useId();
+  const brokenOnly = searchParams.get("broken") === "1";
   // 竞价标杆/人气榜/飙升榜的个股链接：点击**就地弹窗**（2026-09-15 详情弹窗化），
   // href 保留（右键新窗口/复制链接仍走工作台深链）
   const { open } = useSymbolDetail();
@@ -124,7 +126,7 @@ export function ThemesTab() {
     mc = minCount,
   ) {
     // 在现有 URL 上增删参数（保留 tab= 等盘面页参数）
-    const params = new URLSearchParams(window.location.search);
+    const params = new URLSearchParams(searchParams.toString());
     const setOrDel = (k: string, v?: string) => {
       if (v) params.set(k, v);
       else params.delete(k);
@@ -133,8 +135,7 @@ export function ThemesTab() {
     setOrDel("sort", s !== "strength" ? s : undefined);
     setOrDel("min_boards", mb ? String(mb) : undefined);
     setOrDel("min_count", mc !== 2 ? String(mc) : undefined);
-    const qs = params.toString();
-    window.history.replaceState({}, "", qs ? `?${qs}` : window.location.pathname);
+    replaceSearch(params);
   }
 
   const onSort = (s: SortKey) => {
@@ -170,31 +171,31 @@ export function ThemesTab() {
    *  命中「功能糖」簇——簇名与同花顺概念板块口径不同，靠 official_matches 桥接） */
   const visibleThemes = useMemo(() => {
     if (!data) return [];
-    if (!focus) return data.themes;
-    return data.themes.filter(
+    const themes = brokenOnly ? data.themes.filter(theme => theme.performance.has_succession === false) : data.themes;
+    if (!focus) return themes;
+    return themes.filter(
       (c) =>
         c.theme === focus ||
         c.theme.includes(focus) ||
         (c.raw_tags ?? []).includes(focus) ||
         (c.official_matches ?? []).some((m) => m.name === focus || m.name.includes(focus))
     );
-  }, [data, focus]);
+  }, [data, focus, brokenOnly]);
 
   function clearFocus() {
     // 从 URL 移除 focus（保留 tab 等其余参数）
-    const params = new URLSearchParams(window.location.search);
+    const params = new URLSearchParams(searchParams.toString());
     params.delete("focus");
-    const qs = params.toString();
-    window.history.replaceState({}, "", qs ? `?${qs}` : window.location.pathname);
+    replaceSearch(params);
   }
 
   return (
     <div className="theme-workspace">
       <aside className="theme-context" aria-label="题材筛选与市场参照">
-        <button className="theme-controls-toggle" aria-expanded={controlsOpen} aria-controls="theme-control-body" onClick={() => setControlsOpen(value => !value)}>
+        <button className="theme-controls-toggle" aria-expanded={controlsOpen} aria-controls={controlId} onClick={() => setControlsOpen(value => !value)}>
           <span>筛选与市场参照</span><span>{controlsOpen ? "收起" : "展开"}</span>
         </button>
-        <div id="theme-control-body" className="theme-control-body" data-open={controlsOpen}>
+        <div id={controlId} className="theme-control-body" data-open={controlsOpen}>
       {/* ── 固定头部：摘要 + 筛选 ────────────────────────────── */}
       <div className="mb-3 flex shrink-0 flex-wrap items-end justify-between gap-3">
         <p className="text-xs text-zinc-600 dark:text-zinc-400">
@@ -211,7 +212,7 @@ export function ThemesTab() {
             <span className="text-zinc-600 dark:text-zinc-400">日期</span>
             <input
               type="date"
-              value={date}
+              value={date.replace(/^(\d{4})(\d{2})(\d{2})$/, "$1-$2-$3")}
               onChange={(e) => onDate(e.target.value)}
               className="rounded-md border border-zinc-200 bg-transparent px-2 py-1 text-zinc-700 dark:border-zinc-700 dark:text-zinc-200"
             />
@@ -366,6 +367,7 @@ export function ThemesTab() {
       {error && (
         <div className="mb-3 shrink-0 rounded-lg border border-amber-500/40 bg-amber-500/10 px-4 py-3 text-sm text-amber-800 dark:text-amber-300">
           题材看板加载失败：{error}
+          <button type="button" className="quiet-action ml-2" onClick={resource.refresh}>重试读取</button>
         </div>
       )}
 
@@ -405,7 +407,7 @@ export function ThemesTab() {
 
       {data && data.themes.length > 0 && visibleThemes.length === 0 && (
         <p className="py-16 text-center text-sm text-zinc-600 dark:text-zinc-400">
-          题材「{focus}」今日没有梯队卡片——可能今日无涨停、未成建制，或归属名称与看板口径不一致（可在涨停生态 tab 核对该股涨停原因原文）
+          {brokenOnly ? "当前筛选范围没有确认断层的题材卡片。" : `题材「${focus}」今日没有梯队卡片——可能今日无涨停、未成建制，或归属名称与看板口径不一致。可在涨停生态核对原始归因。`}
         </p>
       )}
 

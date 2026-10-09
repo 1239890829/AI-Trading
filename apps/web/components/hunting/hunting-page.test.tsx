@@ -90,6 +90,14 @@ it("starts intraday reads while the daily group is still waiting", async () => {
   await act(async () => resolveDaily({date: "2026-10-09", items: []}));
 });
 
+it("renders candidates before slow auxiliary review and brief reads finish", async () => {
+  vi.mocked(api.getPicksMeta).mockReturnValue(new Promise(() => {}));
+  vi.mocked(api.getMorningBriefToday).mockReturnValue(new Promise(() => {}));
+  render(<HuntingPage />);
+  expect(await screen.findByText("候选 002636")).toBeTruthy();
+  expect(screen.getByText("候选 600127")).toBeTruthy();
+});
+
 it("does not let a late daily read overwrite the results after leaving and returning", async () => {
   let resolveOld!: (value: api.DailyPicksPayload) => void;
   vi.mocked(api.getTodayPicks).mockReturnValueOnce(new Promise(resolve => {resolveOld = resolve;}));

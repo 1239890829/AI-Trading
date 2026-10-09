@@ -24,6 +24,7 @@ describe("IndexCards 指数点击交互", () => {
     render(<IndexCards indices={indices} onSelect={onSelect} />);
     fireEvent.click(screen.getByTitle(/上证指数/));
     expect(onSelect).toHaveBeenCalledWith("sh000001");
+    fireEvent.click(screen.getByRole("button", { name: /指数.*展开/ }));
     fireEvent.click(screen.getByTitle(/深证成指/));
     expect(onSelect).toHaveBeenCalledWith("sz399001");
     fireEvent.click(screen.getByTitle(/创业板指/));
@@ -46,7 +47,7 @@ describe("IndexCards 指数点击交互", () => {
       indices[1],
       indices[0],
     ]} selected="sh000688" onSelect={onSelect} />);
-    fireEvent.click(screen.getByRole("button", { name: /指数.*收起/ }));
+    expect(screen.getByRole("button", { name: /指数.*展开/ }).getAttribute("aria-expanded")).toBe("false");
     expect(screen.getByText("上证指数")).toBeTruthy();
     expect(screen.getByText("科创50")).toBeTruthy();
     expect(screen.getByText("创业板指")).toBeTruthy();
@@ -66,7 +67,6 @@ describe("IndexCards 指数点击交互", () => {
     render(<IndexCards indices={[
       indices[0], indices[1], idx("000688", "其他市场同代码", "SZ", 88),
     ]} onSelect={onSelect} />);
-    fireEvent.click(screen.getByRole("button", { name: /指数.*收起/ }));
     const missingStar = screen.getByTitle("科创50 · 本轮未返回该指数") as HTMLButtonElement;
     const missingGrowth = screen.getByTitle("创业板指 · 本轮未返回该指数") as HTMLButtonElement;
     expect(missingStar.disabled).toBe(true);
@@ -82,7 +82,6 @@ describe("IndexCards 指数点击交互", () => {
     render(<IndexCards indices={[{
       ...indices[0], quality: "stale", quality_reasons: ["index_batch_missing"],
     }]} />);
-    fireEvent.click(screen.getByRole("button", { name: /指数.*收起/ }));
     expect(screen.getByText("3,300.50")).toBeTruthy();
     expect(screen.getByTitle("本轮未返回该指数，展示旧行情").textContent).toBe("过期");
   });
@@ -103,6 +102,7 @@ describe("IndexCards 指数点击交互", () => {
 
   it("选中态：selected 匹配的指数卡获得高亮（aria/title 无关，验证样式类切换）", () => {
     const { container } = render(<IndexCards indices={indices} selected="sz399001" onSelect={vi.fn()} />);
+    fireEvent.click(screen.getByRole("button", { name: /指数.*展开/ }));
     const active = container.querySelector("button.bg-zinc-200\\/80");
     expect(active).not.toBeNull();
     expect(active?.getAttribute("title")).toContain("深证成指");

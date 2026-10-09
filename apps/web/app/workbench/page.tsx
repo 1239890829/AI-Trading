@@ -1,5 +1,8 @@
 "use client";
 
+import { inspectionClick, useInspection } from "@/components/inspection/inspection-context";
+
+
 import "./workbench.css";
 import { FilterMenu } from "@/components/ui/filter-menu";
 import { IconButton } from "@/components/ui/icon-button";
@@ -60,6 +63,7 @@ const STATUS_LABEL = STREAM_STATUS_LABEL;
 // 两边漂移时链接不会报错，只会**静默回落默认 tab**）。
 
 function WorkbenchInner() {
+  const { open: inspect } = useInspection();
   const router = useRouter();
   const sp = useSearchParams();
   const paramSymbol = sp.get("symbol");
@@ -456,7 +460,7 @@ function WorkbenchInner() {
         <div className="bc-market-context">
           <div className="bc-index-strip"><IndexCards indices={indices} selected={activeSymbol} onSelect={switchSymbol} /></div>
           <div className="bc-market-summary">
-            <button className="bc-turnover" onClick={() => router.push("/market?tab=fund")} title="查看实时对比、全日估算与资金流">
+            <button className="bc-turnover" onClick={inspectionClick(inspect, {kind: "fund"})} title="查看实时对比、全日估算与资金流">
               <span>两市成交额</span><strong title={amountFreshness?.reason ?? undefined}>{triAmount(totalAmount, amountFreshness?.state)}</strong>
               {turnDiff != null && <span className={turnDiff >= 0 ? "text-up-ink dark:text-up" : "text-down-ink dark:text-down"}>{turnDiff >= 0 ? "+" : ""}{turnDiff.toLocaleString("zh-CN", {maximumFractionDigits: 0})}亿 <small>较昨日同时刻</small></span>}
             </button>
@@ -484,7 +488,7 @@ function WorkbenchInner() {
               {isDynamicGroup && <span className="bc-list-note">盘中跟踪 + 每日精选 {picksDate ?? "未生成"}</span>}
             </div>
             <div className="bc-attention-actions">
-              <Link href="/hunting" className="bc-text-link">查看选股</Link>
+              <Link href="/hunting" onClick={inspectionClick(inspect, {kind: "selection-preview"})} className="bc-text-link">查看选股</Link>
               {mode === "watch" && <button className="bc-compact-button" aria-expanded={managing} onClick={() => {setManaging(value => !value); setAddError(null); setGroupAction(null); setGroupError(null);}}>{managing ? "完成管理" : "管理自选"}</button>}
             </div>
           </div>

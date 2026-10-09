@@ -202,6 +202,11 @@ function renderInline({ text, match, onNavigate }: InlineProps): ReactNode[] {
           <a
             key={`l${key++}`}
             href={lm[2]}
+            onClick={event => {
+              if (event.defaultPrevented || event.button !== 0 || event.metaKey || event.ctrlKey || event.shiftKey || event.altKey) return;
+              event.preventDefault();
+              onNavigate({type: "nav", text: lm[1] || lm[2], name: lm[1] || lm[2], url: lm[2]});
+            }}
             className="rounded text-sky-700 transition-colors hover:bg-sky-500/10 hover:text-sky-700 dark:text-sky-400 dark:hover:text-sky-300"
           >
             {lm[1] || lm[2]}

@@ -1,6 +1,7 @@
 "use client";
 
 import Link from "next/link";
+import { inspectionClick, useInspection } from "@/components/inspection/inspection-context";
 import { useCallback, useEffect, useState } from "react";
 import { useDetailModal } from "@/components/detail/detail-modal";
 import { eventTimeText } from "@/lib/format";
@@ -102,6 +103,7 @@ export function StockPools({ eventId }: { eventId: number }) {
 }
 
 export function EventPanel() {
+  const { open: inspect } = useInspection();
   const [items, setItems] = useState<ImpactEvent[] | null>(null);
   const [phase, setPhase] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
@@ -132,7 +134,7 @@ export function EventPanel() {
         <span className="flex items-center gap-2 text-[11px] text-zinc-600 dark:text-zinc-400">
           {phase && <span title="当前市场情绪相位（影响事件排序权重）">相位 {phase}</span>}
           <span className="hidden xl:inline">按盘面相关性排序（仅关联，不构成建议）</span>
-          <Link href="/market?tab=events" className="text-zinc-600 dark:text-zinc-400 transition-colors hover:text-zinc-900 dark:hover:text-zinc-100">
+          <Link href="/market?tab=events" onClick={inspectionClick(inspect, {kind: "events"})} className="text-zinc-600 dark:text-zinc-400 transition-colors hover:text-zinc-900 dark:hover:text-zinc-100">
             完整列表 ↗
           </Link>
         </span>
@@ -219,7 +221,7 @@ export function EventPanel() {
                       onClick={
                         d.target_type === "symbol"
                           ? symbolDetailClick(openSymbolDetail, { symbol: d.target })
-                          : undefined
+                          : inspectionClick(inspect, {kind: "themes", focus: d.target})
                       }
                       title={[d.chain, d.basis].filter(Boolean).join(" ｜ ") || `关联${d.target_type === "symbol" ? "个股" : "题材"} ${d.target}`}
                       className="inline-flex items-center gap-1 rounded border border-zinc-200 px-1.5 py-0.5 text-[11px] text-zinc-700 hover:border-zinc-400 dark:border-zinc-700 dark:text-zinc-200"

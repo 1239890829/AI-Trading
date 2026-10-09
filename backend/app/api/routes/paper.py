@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import logging
+import asyncio
 from datetime import timezone
 from uuid import UUID
 
@@ -62,10 +63,16 @@ async def _positions_with_live(request):
 
 
 @router.get("/paper/account")
-async def paper_account(request: Request):
-    engine, positions = await _positions_with_live(request)
+async def paper_account(request: Request, read_only: bool = False):
+    if read_only:
+        # Inspection is an account observation, not a settlement or initialization action.
+        engine = _engine(request)
+        prices = {quote.symbol: quote.price for quote in request.app.state.hub.get_quotes() if quote.price}
+        positions = await asyncio.to_thread(engine.positions_with_pnl, prices)
+    else:
+        engine, positions = await _positions_with_live(request)
     mv = sum((p["last_price"] or p["cost_price"]) * p["quantity"] for p in positions)
-    return {"data": engine.account_summary(mv)}
+    return {"data": await asyncio.to_thread(engine.account_summary, mv, initialize=not read_only)}
 
 
 @router.get("/paper/positions")
@@ -219,7 +226,7 @@ async def hunting_shadow_summary(request: Request, trade_date: str | None = None
             date.fromisoformat(trade_date)
         except ValueError:
             raise HTTPException(422, "日期须为YYYY-MM-DD") from None
-    data = read_summary(_engine(request)._sf, trade_date)
-    return {"data": {**data, "enabled": settings.hunting_shadow_enabled,
-                     "runtime": getattr(getattr(request.app.state, "hunting_shadow", None), "health", {"state": "not_loaded", "as_of": None}),
+    data = await asyncio.to_thread(read_summary, _engine(request)._sf, trade_date)
+    from app.picks.shadow import activation_status
+    return {"data": {**data, **activation_status(request.app, "hunting"),
                      "note": "猎场影子未启用；已存事实保留，参考价不是成交。" if not settings.hunting_shadow_enabled else "只消费现有获准买点规则，未加载新版不代表正在运行。"}}

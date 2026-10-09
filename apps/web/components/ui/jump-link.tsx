@@ -1,7 +1,7 @@
 "use client";
 
 import Link from "next/link";
-import type { ReactNode } from "react";
+import type { MouseEventHandler, ReactNode } from "react";
 
 /**
  * 跳转入口 pill（P1-18，2026-09-10）。
@@ -39,7 +39,7 @@ export function JumpLink({
   href: string;
   title?: string;
   children: ReactNode;
-  onClick?: () => void;
+  onClick?: MouseEventHandler<HTMLAnchorElement>;
 }) {
   return (
     <Link href={href} title={title} onClick={onClick} className={JUMP_PILL_CLASS}>

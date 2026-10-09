@@ -214,6 +214,15 @@ quality ∈ high/medium/low/stale/invalid，低质量数据 AI 禁用、回测�
 
 本轮只修消费者的身份、时效和失败语义，未替换或新增数据源。夹具/隔离库测试不证明实时覆盖、长期可用性或实源SLO；详细消费者见[细功能审计§41](../product/feature-closure-audit.md#41-imp-087-原选股与可靠消息的细功能契约2026-10-09)。
 
+### 7.2 首次加入与旁览消费者的事实身份（IMP-088，2026-10-09）
+
+- selection-entry-v1分recorded/partial/missing。selected_at是原首次持久记录钟，reference_price/reference_change_pct是原记录时的报价值，quote_as_of保持原源钟，source_version绑定daily selection_version或intraday run_id；观察字段不代表执行或成交。首次记录不随GET、重生成或现价改变；缺失不以现在的价格/读取时间补填。
+- 每日记录由原组合落库事务保存；recorded须原报价有来源、high/medium质量和同北京日的明确时区源钟；盘中按首次记录时60秒新鲜窗及既有5分钟未来偏差界限，收盘后按当日15:00窗口核验。异常报价保留原观察价/加入钟并标partial及原因，后续GET不重新升级；旧名单首次未记录或生成/日期不满足契约时保持missing。盘中只从当日已提交、合格rank且处于真实展示容量的selection-entry-v1快照读取，拒绝、unknown、超容量和仅参考行不取得首次加入资格。结构版本为pit-evidence-v4.selection-entry；旧v3及更早归档保留身份，默认效果读取按feature分开，不回填为新版。
+- 涨停数/最高连板及最高证券身份来自原完整涨停池，后续候选截取不改变该池身份。题材机会/断层旁览固定点击时opps批次，说明实际题材展示范围；原涨停池旁览可继续按原日期接口读取，其数据更新不冒称等于旧点击批次。
+- 影子activation描述当前真实配置，runtime.as_of描述后台回执；二者不等于行情源时间或成交时间。两影子GET及main账户read_only=true旁览只读；默认main读取保留原初始化与T+1结算。旁览未创建账户金额为null；真实委托与成交继续读原PaperOrder，不用enabled/已有委托代替成交事实。
+
+本轮不新增或替换行情源，不升级质量，不增加研究样本写者。首次加入是现有持久证据的读投影；真实前向覆盖、报价可用性、后续涨跌和端到端SLO仍须原任务取证。字段消费者与入口取舍见[细功能审计§42](../product/feature-closure-audit.md#42-imp-088-原地旁览与首次加入记录的入口覆盖2026-10-09)。
+
 ---
 
 ## 8. 全量数据源清单与使用度审计（2026-09-16）

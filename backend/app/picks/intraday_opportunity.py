@@ -295,6 +295,7 @@ def assemble(
         "summary": {
             "limit_up_total": summary.get("limit_up_total"),
             "market_max_boards": summary.get("market_max_boards"),
+            "market_max_board_stocks": summary.get("market_max_board_stocks") or [],
             "top_theme": summary.get("top_theme"),
         },
         "hot_available": hot_available,
@@ -518,6 +519,7 @@ def top_watch_stocks(payload: dict, *, limit: int | None = None) -> dict:
                     "board": s.get("board"),
                     "tier": tier,
                     "price": s.get("price"),
+                    "selection_entry": s.get("selection_entry"),
                     "limit_up_price": s.get("limit_up_price"),
                     "limit_up_gap_pct": s.get("limit_up_gap_pct"),
                     "limit_up_gap_state": s.get("limit_up_gap_state") or "unknown",
@@ -553,6 +555,7 @@ def top_watch_stocks(payload: dict, *, limit: int | None = None) -> dict:
                     "tradability": s.get("tradability"),
                     "seal_state": s.get("seal_state"),
                     "reference_only": True,
+                    "selection_entry": s.get("selection_entry"),
                     "price": s.get("price"),
                     "stop_ref": s.get("stop_ref"),
                     "exit_plan": s.get("exit_plan"),
