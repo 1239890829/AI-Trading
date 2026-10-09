@@ -124,7 +124,7 @@ class ReviewService:
         try:
             from app.picks.daily_review import generate_daily_review
 
-            await generate_daily_review(self.hub, self.snapshot_service, self.session_factory)
+            await generate_daily_review(self.hub, self.snapshot_service, self.session_factory, trade_date=anchor)
         except ValueError as exc:
             log.info("picks review skipped: %s", exc)
         except Exception:

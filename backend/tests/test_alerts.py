@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import asyncio
 import json
+from datetime import datetime, timezone
 
 from sqlalchemy import create_engine
 from sqlalchemy.orm import sessionmaker
@@ -99,7 +100,8 @@ def test_alert_engine_price_above(tmp_path):
     )
     engine = AlertEngine(repo, wl_repo, interval=60)
     engine.update_quotes({
-        "600519": {"symbol": "600519", "price": 1297.4, "change_pct": 0.39},
+        "600519": {"symbol": "600519", "price": 1297.4, "change_pct": 0.39,
+                   "source": "isolated-test", "quality": "high", "data_timestamp": datetime.now(timezone.utc)},
     })
 
     asyncio.run(engine._tick())
@@ -124,7 +126,8 @@ def test_alert_engine_cooldown_blocks_repeat(tmp_path):
     )
     engine = AlertEngine(repo, wl_repo, interval=60)
     engine.update_quotes({
-        "600519": {"symbol": "600519", "price": 100, "change_pct": 1.0},
+        "600519": {"symbol": "600519", "price": 100, "change_pct": 1.0,
+                   "source": "isolated-test", "quality": "high", "data_timestamp": datetime.now(timezone.utc)},
     })
 
     asyncio.run(engine._tick())

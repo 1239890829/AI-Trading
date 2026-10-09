@@ -34,6 +34,7 @@ SOURCE_POLICIES: dict[str, PolicyKind] = {
     "take_profit": PolicyKind.SILENT,
     "real_exit_alert": PolicyKind.CRITICAL,
     "review_report": PolicyKind.REPORT,
+    "system_health_anomaly": PolicyKind.ANOMALY,
 }
 
 
@@ -43,7 +44,16 @@ def event_key(kind: str, source_key: str) -> str:
     return hashlib.sha256(f"source-event:v1:{kind}:{source_key}".encode()).hexdigest()
 
 
-def _rule(session_factory, kind: str) -> AlertRule:
+def _rule(session_factory, kind: str, db=None) -> AlertRule:
+    if db is not None:
+        row = db.scalar(select(AlertRule).where(AlertRule.name == f'__source_{kind}__').order_by(AlertRule.id).limit(1))
+        if row is None:
+            channels = ['in_app', 'log'] + (['feishu'] if feishu_allowed(SOURCE_POLICIES[kind]) else [])
+            row = AlertRule(name=f'__source_{kind}__', enabled=1, condition_type='source_event',
+                scope='all', threshold=0.0, cooldown_seconds=0, channels=json.dumps(channels))
+            db.add(row)
+            db.flush()
+        return row
     name = f"__source_{kind}__"
     with session_factory() as db:
         row = db.scalar(select(AlertRule).where(AlertRule.name == name).order_by(AlertRule.id).limit(1))
@@ -80,6 +90,7 @@ def record_source_event(
     source_id: str, source_version: str | None, source_as_of: str,
     trade_date: str, direction: str, brief_alert: dict | None = None,
     session_factory=None, allow_external: bool = True,
+    source_evidence: dict | None = None, card: dict | None = None, db=None,
 ) -> tuple[int, bool, bool]:
     """Create one event and optional intent, then refresh its brief projection.
 
@@ -90,7 +101,9 @@ def record_source_event(
     if kind not in SOURCE_POLICIES or not source_id or not source_as_of or not trade_date:
         raise ValueError("source event identity incomplete")
     session_factory = session_factory or get_session_factory()
-    rule = _rule(session_factory, kind)
+    if db is not None and brief_alert is not None:
+        raise ValueError('brief projection requires a committed source event')
+    rule = _rule(session_factory, kind, db=db)
     policy = SOURCE_POLICIES[kind]
     now_ms = int(time.time() * 1000)
     snapshot = {
@@ -101,6 +114,10 @@ def record_source_event(
     }
     if brief_alert is not None:
         snapshot["brief_projection"] = "pending"
+    if source_evidence is not None:
+        snapshot['source_evidence'] = source_evidence
+    if card is not None:
+        snapshot['card'] = card
     try:
         channels = json.loads(rule.channels or "[]")
     except (TypeError, ValueError):
@@ -114,19 +131,29 @@ def record_source_event(
     if external:
         notifier = get_notifier_registry().get("feishu")
         target = notifier.delivery_target() if notifier is not None else ""
-    lifetime_ms = 4 * 60 * 60 * 1000 if kind == "review_report" else 5 * 60 * 1000
+    lifetime_ms = (4 * 60 * 60 * 1000 if kind == 'review_report' else
+                   15 * 60 * 1000 if kind == 'system_health_anomaly' else 5 * 60 * 1000)
     repo = AlertRepository(session_factory)
-    event, created = repo.record_trigger_once(
+    arguments = (
         rule.id, symbol or PLACEHOLDER_SYMBOL, 0.0, 0.0,
-        dedup_key=event_key(kind, source_key), snapshot=snapshot,
-        delivered_channels=["in_app"], outbox_target=target,
-        now_ms=now_ms, expires_at_ms=now_ms + lifetime_ms,
-        outbox_intent={
+    )
+    identity = dict(dedup_key=event_key(kind, source_key), snapshot=snapshot, delivered_channels=['in_app'])
+    intent = {
             "kind": "source_event", "source_kind": kind,
             "source_id": source_id, "source_version": source_version,
             "trade_date": trade_date, "policy": policy.value,
-        } if external else None,
-    )
+        } if external else None
+    if db is None:
+        event, created = repo.record_trigger_once(*arguments, **identity, outbox_target=target,
+            now_ms=now_ms, expires_at_ms=now_ms + lifetime_ms, outbox_intent=intent)
+    else:
+        from app.repositories.notification_outbox import enqueue_feishu
+
+        event, created = repo.record_trigger_once_in_session(db, *arguments, **identity)
+        if created and target is not None:
+            enqueue_feishu(db, event, rule, target=target, now_ms=now_ms,
+                          expires_at_ms=now_ms + lifetime_ms, intent=intent)
+        db.flush()
     projected = True
     if brief_alert is not None:
         try:

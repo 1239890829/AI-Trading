@@ -1,5 +1,7 @@
 "use client";
 
+import { ChannelStatus } from "@/components/notifications/channel-status";
+
 import { useCallback, useMemo, useRef, useState } from "react";
 import { Panel } from "@/components/panel";
 import { FilterMenu } from "@/components/ui/filter-menu";
@@ -155,7 +157,7 @@ export function AlertsTab() {
     try {
       await deleteAlertRule(target.id);
       setDeleteTarget(null);
-      setFeedback(`已删除规则「${target.name}」。已有触发记录继续保留。`);
+      setFeedback(`已删除规则「${target.name}」。该规则的触发历史已一并删除。`);
       await load();
     } catch (err) {
       setMutationError(err instanceof Error ? err.message : "删除失败，请重试或取消");
@@ -279,7 +281,7 @@ export function AlertsTab() {
         <div className="flex min-h-0 min-w-0 flex-col gap-3">
           <Panel title={`规则列表 (${rules.length})`} className="min-h-0 flex-1" bodyClassName="overflow-auto">
             {deleteTarget && <form onSubmit={event => {event.preventDefault(); void remove();}} className="flex flex-wrap items-center gap-2 border-b border-[var(--ui-line)] bg-[var(--control-surface)] px-3 py-3 text-xs">
-              <p className="min-w-0 flex-1 basis-full leading-relaxed">删除规则「{deleteTarget.name}」？已有触发记录会继续保留。</p>
+              <p className="min-w-0 flex-1 basis-full leading-relaxed">删除规则「{deleteTarget.name}」？该规则的触发历史也会删除，外部渠道尝试审计保留。此操作不可撤销。</p>
               <button type="submit" disabled={busyRule !== null} className="quiet-action text-[var(--tick-up-from)]">{busyRule === deleteTarget.id ? "删除中…" : "确认删除"}</button>
               <button type="button" disabled={busyRule !== null} onClick={() => {setDeleteTarget(null); setMutationError(null);}} className="quiet-action">取消删除</button>
             </form>}
@@ -363,7 +365,7 @@ export function AlertsTab() {
                         {e.trigger_value.toFixed(2)}
                       </td>
                       <td className="px-3 py-2 font-mono tabular-nums text-zinc-600 dark:text-zinc-400">{e.threshold}</td>
-                      <td className="px-3 py-2 text-zinc-600 dark:text-zinc-400">{e.delivered_channels.join(", ")}</td>
+                      <td className="px-3 py-2 text-zinc-600 dark:text-zinc-400"><ChannelStatus channels={e.channel_states} /></td>
                       <td className="px-3 py-2">
                         {/* 2026-09-08 用户指令：触发记录状态不再需要确认——判读完成即自动置
                             acknowledged，此处只读展示终态，移除人工「确认」按钮 */}

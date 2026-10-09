@@ -6,7 +6,7 @@ import { patchWorkspaceUrl } from "@/lib/task-navigation";
 import { Suspense, useCallback, useEffect, useMemo, useState } from "react";
 import Link from "next/link";
 import { useRouter, useSearchParams } from "next/navigation";
-import { usePollingFetch } from "@/hooks/use-polling-fetch";
+import { useResource } from "@/hooks/use-resource";
 import {
   ApiError,
   getIntradayOpportunities,
@@ -19,15 +19,9 @@ import {
   getSignalHealth,
   getTodayPicks,
   getWatcherState,
-  type DailyPicksPayload,
-  type IntradayOpportunities,
-  type IntradayReviewStats,
-  type IntradayTopPayload,
+  type DailyPickItem,
   type MorningBrief,
-  type PickReviewRow,
-  type SignalHealthPayload,
   type StyleRouting,
-  type WatcherState,
   getPositionLabels,
 } from "@/lib/api";
 import { PickCard, StandAsideBanner, fromDailyPick, fromIntradayStock } from "@/components/picks/pick-card";
@@ -50,7 +44,6 @@ import {
   HistoryList,
   ReasonDistribution,
   RolePerformanceTable,
-  type RolePerformance,
 } from "@/components/hunting/pick-sections";
 import { HuntingStatsBar } from "@/components/hunting/stats-bar";
 import { PostMarketEnhance } from "@/components/hunting/post-market-enhance";
@@ -69,6 +62,7 @@ import { LeaderResearchPanel } from "@/components/hunting/leader-research-panel"
 import { useExitPresence } from "@/hooks/use-exit-presence";
 import { ModalShell } from "@/components/ui/modal-shell";
 import { WatchLedgerPanel } from "@/components/hunting/watch-ledger-panel";
+import { PickDetailModal } from "@/components/picks/pick-detail-modal";
 import { CandidateCollection } from "@/components/ui/candidate-collection";
 
 /**
@@ -84,34 +78,13 @@ function HuntingInner() {
     ? requestedView : sp.get("sec") === "review" || sp.get("review") === "1" ? "review" : "discover";
   // Evidence, reference and research own their reads. Do not mount the old feed behind them.
   const isDiscovery = view === "discover" || view === "review";
+  const reviewDate = view === "review" ? sp.get("date") ?? undefined : undefined;
+  const reviewVersion = view === "review" ? sp.get("version") ?? undefined : undefined;
 
   const panel = sp.get("panel");
   const accessory = useExitPresence((panel === "evidence" || panel === "tracking") && panel !== view ? panel : null);
 
-  // —— 精选组数据 ——
-  const [data, setData] = useState<DailyPicksPayload | null>(null);
-  const [history, setHistory] = useState<{ date: string; symbols: (string | null)[]; score_avg: number }[]>([]);
-  const [reviews, setReviews] = useState<PickReviewRow[]>([]);
-  const [meta, setMeta] = useState<{
-    reason_distribution: Record<string, number>;
-    role_performance?: RolePerformance[];
-  } | null>(null);
-  const [health, setHealth] = useState<SignalHealthPayload | null>(null);
-  const [picksLoaded, setPicksLoaded] = useState(false);
-  const [picksFailed, setPicksFailed] = useState(false);
-  const [reviewReadFailures, setReviewReadFailures] = useState<string[]>([]);
-
-  // —— 跟踪组数据 ——
-  const [brief, setBrief] = useState<MorningBrief | null>(null);
-  const [briefReadFailed, setBriefReadFailed] = useState(false);
-  const [watcher, setWatcher] = useState<WatcherState | null>(null);
-  const [stats, setStats] = useState<IntradayReviewStats | null>(null);
-  const [opps, setOpps] = useState<IntradayOpportunities | null>(null);
-  const [top, setTop] = useState<IntradayTopPayload | null>(null);
-  const [intradayLoaded, setIntradayLoaded] = useState(false);
-  const [intradayFailed, setIntradayFailed] = useState(false);
-  const [topReadFailed, setTopReadFailed] = useState(false);
-
+  const [dailyDetail, setDailyDetail] = useState<DailyPickItem | null>(null);
 
   // —— URL 状态（深链为真相源）——
   // ?tag= 深链仍可解析（nav-targets 兼容）但不再分流视图——单一瀑布流（2026-09-09）
@@ -133,7 +106,6 @@ function HuntingInner() {
 
   // 闸门展示口径（2026-09-16）：优先**读取时刻复核**结果，缺省退回生成时刻落库值
   // （旧后端 / 复核不可用时不至于整个横幅消失）。对照面始终传 stored。
-  const gateView = data?.meta?.gate_live ?? data?.meta?.gate;
 
   const toggleTheme = useCallback(
     (t: string) => {
@@ -147,52 +119,48 @@ function HuntingInner() {
     [expandedTheme, sp, router],
   );
 
-  const load = useCallback(async () => {
-    // 精选主接口失败单独披露，不能因统计接口成功而伪装为有效空组合。
-    {
-      const [d, h, r, m, sh] = await Promise.all([
-        getTodayPicks().catch(() => null),
-        getPicksHistory(10).catch(() => null),
-        getPickReviews().catch(() => null),
-        getPicksMeta().catch(() => null),
-        getSignalHealth().catch(() => null),
-      ]);
-      setData(d);
-      setHistory(h ?? []);
-      setReviews(r ?? []);
-      setReviewReadFailures([...(h === null ? ["历史组合"] : []), ...(r === null ? ["精选归因"] : []), ...(m === null ? ["角色统计"] : [])]);
-      setMeta(m);
-      setHealth(sh);
-      setPicksFailed(d === null);
-      setPicksLoaded(true); // 成败都算"拉过"：失败有警示，不能永远停在骨架
-    }
-    // 跟踪组（原 /intraday 四端点 + intraday-top）
-    {
-      const [b, w, s, o, tp] = await Promise.all([
-        getMorningBriefToday()
-          .then((data) => ({ data, failed: false }))
-          .catch((e: unknown) => ({ data: null, failed: !(e instanceof ApiError && e.status === 404) })),
-        getWatcherState().catch(() => null),
-        getIntradayReview().catch(() => null),
-        getIntradayOpportunities().catch(() => null),
-        getIntradayTop().catch(() => null),
-      ]);
-      setBrief(b.data);
-      setBriefReadFailed(b.failed);
-      setWatcher(w);
-      setStats(s);
-      setOpps(o);
-      setTop(tp);
-      setTopReadFailed(tp === null);
-      setIntradayFailed(b.failed || tp === null || o === null || (b.data === null && w === null && s === null));
-      setIntradayLoaded(true);
-    }
-  }, []);
-
-  // 挂载即拉 + 60s 轮询（对齐后端 watcher 节拍）。
-  // 2026-09-11（S2-5）：可见性暂停 + 回可见补拉已内建在 usePollingFetch/useResource 里，
-  // 原先手写的那套 visibilitychange 守卫是重复实现，已删除（两个 effect 合一）。
-  usePollingFetch(load, 60_000, undefined, {enabled: isDiscovery});
+  // Each group returns its result to one owner. Late replies cannot mutate the
+  // page after a view switch; neither group waits for the other's slow source.
+  const daily = useResource(useCallback(async () => {
+    const [data, history, reviews, meta, health] = await Promise.all([
+      getTodayPicks().catch(() => null), getPicksHistory(10).catch(() => null),
+      getPickReviews(reviewDate, reviewVersion).catch(() => null), getPicksMeta().catch(() => null),
+      getSignalHealth().catch(() => null),
+    ]);
+    return {data, history, reviews, meta, health};
+  }, [reviewDate, reviewVersion]), {intervalMs: 60_000, enabled: isDiscovery, key: `${reviewDate ?? ""}/${reviewVersion ?? ""}`});
+  const intraday = useResource(useCallback(async () => {
+    const [brief, watcher, stats, opps, top] = await Promise.all([
+      getMorningBriefToday().then(data => ({data, failed: false}))
+        .catch((e: unknown) => ({data: null, failed: !(e instanceof ApiError && e.status === 404)})),
+      getWatcherState().catch(() => null), getIntradayReview().catch(() => null),
+      getIntradayOpportunities().catch(() => null), getIntradayTop().catch(() => null),
+    ]);
+    return {brief, watcher, stats, opps, top};
+  }, []), {intervalMs: 60_000, enabled: isDiscovery});
+  const data = daily.data?.data ?? null;
+  const history = daily.data?.history ?? [];
+  const reviews = daily.data?.reviews ?? [];
+  const meta = daily.data?.meta ?? null;
+  const health = daily.data?.health ?? null;
+  const picksLoaded = daily.data !== undefined;
+  const picksFailed = picksLoaded && data === null;
+  const reviewReadFailures = picksLoaded ? [
+    ...(daily.data?.history === null ? ["历史组合"] : []),
+    ...(daily.data?.reviews === null ? ["精选归因"] : []),
+    ...(daily.data?.meta === null ? ["角色统计"] : []),
+  ] : [];
+  const brief = intraday.data?.brief.data ?? null;
+  const briefReadFailed = intraday.data?.brief.failed ?? false;
+  const watcher = intraday.data?.watcher ?? null;
+  const stats = intraday.data?.stats ?? null;
+  const opps = intraday.data?.opps ?? null;
+  const top = intraday.data?.top ?? null;
+  const intradayLoaded = intraday.data !== undefined;
+  const topReadFailed = intradayLoaded && top === null;
+  const intradayFailed = intradayLoaded && (briefReadFailed || topReadFailed || opps === null || (brief === null && watcher === null && stats === null));
+  const gateView = data?.meta?.gate_live ?? data?.meta?.gate;
+  const load = () => {if (!daily.pending) daily.refresh(); if (!intraday.pending) intraday.refresh();};
 
   const alerts = brief?.alerts ?? [];
   const reviewed = (brief?.directions ?? []).filter((d) => d.review);
@@ -218,27 +186,28 @@ function HuntingInner() {
   // 盘中跟踪在前（实时优先）、盘前选择在后；同股两者都在时只出现在盘中组（防重 key）。
   // 闭环「标签」：已模拟持仓/已真实持仓（持仓状态派生，60s 轮询）
   // 2026-09-11（S2-5）：原为裸 setInterval，已收编到统一入口（与 workbench 同款重复实现）。
-  const [posLabels, setPosLabels] = useState<Record<string, string>>({});
-  usePollingFetch(async () => {
-    const m = await getPositionLabels().catch(() => null);
-    if (m) setPosLabels(m);
-  }, 60_000, undefined, {enabled: view === "discover"});
+  const positions = useResource(getPositionLabels, {intervalMs: 60_000, enabled: view === "discover"});
+  const posLabels = positions.data ?? {};
 
   // 依赖取**状态对象** data/top（引用稳定），不取派生的 items/topItems：
   // `?? []` 每次渲染都会新建数组引用，放进依赖会让 memo 每轮失效
   // （react-hooks/exhaustive-deps，P1-27）。
   //
   // 2026-09-10 用户要求分区：两卡合并后字段已统一，但**来源语义仍然不同**
-  // （盘中=当日实时动态名单，盘前=收盘定次日持久组合），混排会让两种节奏混在一起，
+  // （盘中=当日实时动态名单，每日=当日持久候选），混排会让两种节奏混在一起，
   // 因此改为**两个容器 / 两条瀑布流，盘中在上**。同 symbol 只在盘中出现（盘前组去重）。
   const pickItems = useMemo(() => {
-    const topSyms = new Set((top?.items ?? []).map((t) => t.symbol));
+    const topSyms = new Set(data?.stale || data?.date !== top?.trade_date ? [] : (top?.items ?? []).map((t) => t.symbol));
     return (data?.items ?? []).filter((p) => !topSyms.has(p.symbol));
   }, [data, top]);
   // 盘前名单的**真实只数**（去重前）：名额不兜底后「名单可能为空」是正常结论，
   // 因此分区是否渲染、抬头写几只、空态文案，一律以它为准，不以去重后的 pickItems 为准
   // ——否则「5 只全被盘中组去重」会误显示成空名单（2026-09-10 入选门槛落地时一并收口）。
   const pickTotal = data?.items?.length ?? 0;
+  const dailyBySymbol = useMemo(() => new Map(
+    !data?.stale && data?.date && data.date === top?.trade_date
+      ? data.items.map(item => [item.symbol, item] as const) : []
+  ), [data, top]);
   const minPickScore = data?.meta?.min_pick_score;
   // 换股门槛/换股上限已进控制台参数白名单（P1-15）⇒ **必须读 meta 的生效值**，
   // 不能硬编码：硬编码会在参数被调整后继续显示旧数（口径漂移）。
@@ -386,6 +355,8 @@ function HuntingInner() {
             {/* 精选复盘区（?review=1 / 生成复盘后展开；历史组合一致性可回溯） */}
             <section className="space-y-3">
               <h3 className="text-xs font-medium text-zinc-600 dark:text-zinc-400">精选复盘</h3>
+              {(reviewDate || reviewVersion) && <p className="break-all text-xs leading-relaxed text-zinc-600 dark:text-zinc-400">原记录复盘：{reviewDate ?? "指定版本"}{reviewVersion ? ` · 版本 ${reviewVersion}` : ""}。角色汇总仍采用当前可信窗口，不能代替此版本结果。</p>}
+              {meta && <p className="text-xs leading-relaxed text-zinc-600 dark:text-zinc-400">{meta.note}{meta.scope ? ` · 读取 ${meta.scope.review_rows} 条，可信 ${meta.scope.trusted_rows} 条，排除 ${meta.scope.excluded_rows} 条` : ""}</p>}
               {meta && meta.role_performance && meta.role_performance.length > 0 && (
                 <RolePerformanceTable rows={meta.role_performance} />
               )}
@@ -393,6 +364,7 @@ function HuntingInner() {
                 <ReasonDistribution dist={meta.reason_distribution} />
               )}
               {reviews.length > 0 && <DailyReviews reviews={reviews} />}
+              {picksLoaded && daily.data?.reviews !== null && (reviewDate || reviewVersion) && reviews.length === 0 && <p className="hunting-empty">该日期或版本尚无复盘记录。原入选依据保留在消息详情中，不以当前结果补填。</p>}
               {history.length > 0 && <HistoryList history={history} />}
               {reviewReadFailures.length > 0 && <p role="alert" className="hunting-empty">{reviewReadFailures.join("、")}读取失败。请刷新重试；以下只展示成功读取的结果，不能据此认定没有记录。</p>}
               {reviewReadFailures.length === 0 && reviews.length === 0 && history.length === 0 && (
@@ -446,6 +418,7 @@ function HuntingInner() {
       {accessory.value && <ModalShell open={accessory.active} label={accessory.value === "evidence" ? "机会证据台" : "参考跟踪"} size="lg" presentation="drawer" expandable onClose={() => router.replace(patchWorkspaceUrl("/hunting", sp.toString(), {panel: null}), {scroll: false})} header={<div><h2 className="text-lg font-semibold">{accessory.value === "evidence" ? "机会证据台" : "参考跟踪"}</h2></div>} footer="保留当前机会位置；参考价与观察记录不是成交，不构成买卖建议。">
         {accessory.active && (accessory.value === "evidence" ? <OpportunityEvidencePanel date={sp.get("date") ?? undefined} onDateChange={date => router.replace(patchWorkspaceUrl("/hunting", sp.toString(), {date}), {scroll: false})} /> : <WatchLedgerPanel />)}
       </ModalShell>}
+      <PickDetailModal target={dailyDetail ? {kind: "pick", item: dailyDetail} : null} onClose={() => setDailyDetail(null)} />
       <div className="hunting-content min-h-0 flex-1" data-view={view} aria-label="选股内容">
         {view === "evidence" ? <OpportunityEvidencePanel date={sp.get("date") ?? undefined} onDateChange={date => { const p = new URLSearchParams(sp.toString()); p.set("date", date); router.replace(`/hunting?${p.toString()}`, {scroll:false}); }} /> : view === "tracking" ? <WatchLedgerPanel /> : view === "research" ? <LeaderResearchPanel date={sp.get("date") ?? undefined} onDateChange={date => router.replace(patchWorkspaceUrl("/hunting", sp.toString(), {date: date ?? null}), {scroll: false})} /> : <>
         {view === "discover" && <>
@@ -472,8 +445,10 @@ function HuntingInner() {
             {!pending && !topReadFailed && <span className="hunting-section-count">{topItems.length} 只</span>}
           </div>
           <p className="hunting-source-note" title="名单与参考区均按账户交易权限过滤">权限 {top?.tradable_boards ?? "沪市主板 / 深市主板"}</p>
-          {pending ? <CardListSkeleton count={2} /> : topReadFailed ? <div role="alert" className="hunting-empty">盘中候选读取失败。请刷新重试；当前无法判断是否有符合条件的标的。</div>
-            : topItems.length > 0 ? <CandidateCollection>{topItems.map(it => <PickCard key={it.symbol} item={fromIntradayStock(it)} positionLabel={(posLabels[it.symbol] as "sim" | "real" | undefined) ?? null} />)}</CandidateCollection>
+          {!intradayLoaded ? <CardListSkeleton count={2} /> : topReadFailed ? <div role="alert" className="hunting-empty">盘中候选读取失败。请刷新重试；当前无法判断是否有符合条件的标的。</div>
+            : topItems.length > 0 ? <CandidateCollection>{topItems.map(it => <PickCard key={it.symbol} item={fromIntradayStock(it)}
+                dailyEvidence={dailyBySymbol.has(it.symbol) && data?.date ? {item: dailyBySymbol.get(it.symbol)!, date: data.date, generatedAt: data.meta?.generated_at ?? null, version: data.meta?.selection_version ?? null} : undefined}
+                onShowDailyEvidence={setDailyDetail} positionLabel={(posLabels[it.symbol] as "sim" | "real" | undefined) ?? null} />)}</CandidateCollection>
             : <div className="hunting-empty">当前没有可参与候选。题材尚未集中或条件未满足时，名单可以为空；系统不会凑满名额。</div>}
           {top?.criteria && <p className="hunting-source-note">{top.criteria}</p>}
           {topRefItems.length > 0 && <details className="hunting-reference-fold">
@@ -483,13 +458,13 @@ function HuntingInner() {
           </details>}
         </section>
         <section id="sec-daily" className="hunting-daily space-y-3">
-          <div className="hunting-section-heading"><div><h2 className="hunting-section-title">每日精选</h2><p>{data?.date ?? "组合日期待读取"} · 收盘定次日的持久组合</p></div>{!pending && !picksFailed && <span className="hunting-section-count">{pickTotal} 只</span>}</div>
-          {pending ? <CardListSkeleton count={2} /> : picksFailed ? <div role="alert" className="hunting-empty">每日精选读取失败。请刷新重试；读取失败不表示没有组合。</div>
+          <div className="hunting-section-heading"><div><h2 className="hunting-section-title">每日精选</h2><p>{data?.date ?? "组合日期待读取"} · 当日持久候选</p></div>{!pending && !picksFailed && <span className="hunting-section-count">{pickTotal} 只</span>}</div>
+          {!picksLoaded ? <CardListSkeleton count={2} /> : picksFailed ? <div role="alert" className="hunting-empty">每日精选读取失败。请刷新重试；读取失败不表示没有组合。</div>
             : pickTotal === 0 ? <div className="hunting-empty">{data?.date == null
               ? "尚未生成组合。此处仅读取已保存结果；请在系统维护核对调度与受控生成。"
               : `${data.date}${data.stale ? "（最近一次生成，非今日）" : ""} 没有标的达到入选门槛${minPickScore != null ? `（综合分≥${minPickScore}）` : ""}。这是筛选结论，不是数据缺失。`}</div>
             : pickItems.length > 0 ? <CandidateCollection>{pickItems.map(it => <PickCard key={it.symbol} item={fromDailyPick(it)} positionLabel={(posLabels[it.symbol] as "sim" | "real" | undefined) ?? null} />)}</CandidateCollection>
-            : <div className="hunting-empty">{pickTotal} 只均已在盘中候选区展示。同一标的保留一张主卡，组合身份与来源仍可核对。</div>}
+            : <div className="hunting-empty">{pickTotal} 只均已在盘中候选区展示。同一标的保留一张主卡，每日评分与原生成依据可从主卡“每日依据”查看。</div>}
           <p className="hunting-source-note">{minPickScore != null ? `综合分≥${minPickScore} · ` : ""}{replaceThreshold != null ? `换股门槛 ${replaceThreshold} 分` : "换股门槛未返回"} · {maxSwaps != null ? `每日换股上限 ${maxSwaps} 只` : "换股上限未返回"}；够格几只就保留几只。</p>
         </section>
 

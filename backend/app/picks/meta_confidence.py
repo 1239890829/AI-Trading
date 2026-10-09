@@ -26,6 +26,7 @@ from app.sentiment.engine import ADVERSE_PHASES, STRONG_PHASES
 STRONG_SCORE = 75.0
 EXECUTABLE_SCORE = 60.0
 N_DIMS = 6
+DIMENSIONS = ("tech", "news", "fundamental", "capital", "sentiment", "echelon")
 
 _LABELS = {"strong": "强执行", "executable": "可执行", "observe": "观察"}
 
@@ -39,6 +40,7 @@ def classify_confidence(
     halt_penalty: float | None = None,
     veto_count: int = 0,
     style_note: str | None = None,
+    dimension_evidence: dict | None = None,
 ) -> dict:
     """六维合成后的环境特征 → 三档置信（纯函数，供 _score_one 与测试直接调用）。
 
@@ -66,6 +68,19 @@ def classify_confidence(
         if cap == "strong":
             cap = "executable"
         reasons.append(f"评分维度不全（{len(sub_scores or {})}/{N_DIMS}），不给强执行")
+    if dimension_evidence is not None:
+        # Numeric neutral values remain part of the original score calculation.
+        # Their presence cannot prove that the source input actually succeeded.
+        incomplete = []
+        for name in DIMENSIONS:
+            evidence = dimension_evidence.get(name) or {}
+            state = evidence.get("state") or "missing"
+            if state not in {"success", "valid_empty"}:
+                incomplete.append(f"{name}={state}（{evidence.get('reason') or '未提供可用性事实'}）")
+        if incomplete:
+            if cap == "strong":
+                cap = "executable"
+            reasons.append("评分输入不完整，不给强执行：" + "；".join(incomplete))
 
     tier = cap
     if tier == "strong":

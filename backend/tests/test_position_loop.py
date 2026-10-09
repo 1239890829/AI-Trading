@@ -844,16 +844,23 @@ def test_zero_cost_real_position_fires_no_alert_and_others_still_do(monkeypatch)
         {"symbol": "600519", "name": "乙", "price": 9.0, "change_pct": -3.0},
         {"symbol": "600036", "name": "丙", "price": 10.0, "change_pct": -2.0},
     ]
+    from datetime import datetime, timezone
+    from types import SimpleNamespace
+    source_at = datetime.now(timezone.utc)
+    snap = [{**row, 'source': 'isolated-test', 'quality': 'high',
+             'data_timestamp': source_at.isoformat()} for row in snap]
     app = type("A", (), {"state": type("S", (), {
         "paper": _Engine(),
-        "snapshot_service": type("Snap", (), {"snapshot": snap})(),
+        "snapshot_service": SimpleNamespace(snapshot=snap, poll_interval=60,
+            versioned_snapshot=lambda: (snap, source_at),
+            freshness=lambda **_: SimpleNamespace(state='ready')),
     })()})()
 
     monkeypatch.setattr(ee, "load_plan", lambda: {"peaks": {}})
     monkeypatch.setattr(ee, "save_plan", lambda plan: None)
     monkeypatch.setattr(ee, "_picks_combos", lambda: {})
     ee._NOTIFIED.clear()
-    ee._REAL_READ.update(state="unknown", failures=0)
+    monkeypatch.setattr(ee, '_REAL_READ', {**ee._REAL_READ, 'state': 'unknown', 'failures': 0})
     ee._PAPER_READ.update(state="unknown", failures=0)
     notified: list[tuple] = []
     monkeypatch.setattr(ee, "_notify", lambda *a, **k: notified.append((a, k)))
@@ -865,7 +872,7 @@ def test_zero_cost_real_position_fires_no_alert_and_others_still_do(monkeypatch)
     assert sorted(alerts) == ["600036", "600519"], (fired, alerts)
     # ① 零成本那条不报、也没把整轮打挂
     assert "600105" not in alerts
-    assert not any(f["symbol"] == "600105" for f in fired)
+    assert any(f['symbol'] == '600105' and f['action'] == 'degraded' for f in fired)
     # ③ 成本来源可见
     assert "人工覆盖" in alerts["600036"] and "11.00" in alerts["600036"]
     assert "流水摊薄" in alerts["600519"] and "10.00" in alerts["600519"]

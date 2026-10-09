@@ -316,3 +316,23 @@ describe("服务端持久化：hydration", () => {
     expect(getPrefsSnapshot().clearBefore).toBe(200);
   });
 });
+
+
+describe("迟到消息的双时钟", () => {
+  it("uses first recording time for unread and clear, retaining the old observation clock", () => {
+    const message = {id: "late", ts: BJ("09:40:00"), recorded_at: BJ("10:10:00")};
+    const watermark = parseTs(BJ("10:00:00"))!;
+    expect(isCleared(message, watermark)).toBe(false);
+    expect(isUnread(message, {seenBefore: watermark, readIds: []})).toBe(true);
+    expect(withRead({seenBefore: watermark, readIds: []}, message).readIds).toEqual(["late"]);
+    expect(message.ts).toBe(BJ("09:40:00"));
+  });
+});
+
+
+it("an explicitly missing new record clock does not silently use the earlier source clock", () => {
+  const message = {id: "unknown-clock", ts: BJ("09:40:00"), recorded_at: null};
+  const watermark = parseTs(BJ("10:00:00"))!;
+  expect(isCleared(message, watermark)).toBe(false);
+  expect(isUnread(message, {seenBefore: watermark, readIds: []})).toBe(true);
+});

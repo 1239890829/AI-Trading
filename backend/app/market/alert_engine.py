@@ -82,6 +82,10 @@ class AlertEngine:
                 quote = self._quotes.get(symbol)
                 if not quote:
                     continue
+                if self._quote_block(quote) is not None:
+                    # Invalid/stale input is not a new trigger and must not spend
+                    # the user's cooldown, including in-app-only rules.
+                    continue
                 value = self._extract_value(rule.condition_type, quote)
                 if value is None:
                     continue
@@ -139,20 +143,31 @@ class AlertEngine:
         if event.symbol not in self._resolve_symbols(rule):
             return "symbol_no_longer_in_scope"
         quote = self._quotes.get(event.symbol)
-        if not quote or not (quote.get("data_timestamp") or quote.get("received_at")):
+        if not quote:
             return "quote_time_unknown"
+        reason = self._quote_block(quote)
+        if reason is not None:
+            return reason
+        value = self._extract_value(rule.condition_type, quote)
+        if value is None or not self._condition_met(rule.condition_type, value, rule.threshold):
+            return "condition_no_longer_met"
+        return None
+
+    def _quote_block(self, quote: dict) -> str | None:
+        """One trust check for generation and sending; receive time is not source time."""
+        if not quote.get('data_timestamp') or not quote.get('source'):
+            return 'quote_time_unknown'
         try:
             q = Quote.model_validate(quote)
-            ts = q.data_timestamp or q.received_at
+            ts = q.data_timestamp
             if ts.tzinfo is None or int(ts.timestamp() * 1000) > self._now_ms():
                 return "quote_time_untrusted"
+            if q.price is None or q.price <= 0:
+                return 'quote_invalid'
             if q.freshness(fresh_within=self._fresh_within).state != "ready":
                 return "quote_not_fresh"
         except (ValueError, TypeError):
             return "quote_invalid"
-        value = self._extract_value(rule.condition_type, quote)
-        if value is None or not self._condition_met(rule.condition_type, value, rule.threshold):
-            return "condition_no_longer_met"
         return None
 
     def _source_event_delivery_block(self, event, rule, intent: dict) -> str | None:
@@ -201,6 +216,23 @@ class AlertEngine:
             except Exception:
                 return "source_recheck_unavailable"
             return None if current_id == intent.get("source_id") else "report_superseded_or_missing"
+        if kind == 'system_health_anomaly':
+            if not in_trading_window():
+                return 'outside_trading_window'
+            # Re-read the current recovery projection. Sending may have been
+            # deferred across the next probe; original issue evidence stays put.
+            try:
+                current = self._repo.get_event(event.id)
+                current_snapshot = json.loads(current.snapshot) if current is not None else {}
+                resolution = current_snapshot.get('health_resolution') or {}
+            except Exception:
+                return 'source_recheck_unavailable'
+            if resolution.get('state') == 'recovered':
+                return 'health_anomaly_recovered'
+            if resolution.get('state') != 'active' or not resolution.get('active_issues'):
+                return 'source_recheck_unavailable'
+            event.snapshot = json.dumps(current_snapshot, ensure_ascii=False)
+            return None
         if kind != "real_exit_alert":
             return "source_policy_revoked"  # SILENT sources never send externally.
         if not in_trading_window():
@@ -217,9 +249,11 @@ class AlertEngine:
             return "source_recheck_unavailable"
         if cost is None or cost <= 0:
             return "source_recheck_unavailable"
+        from app.picks.exit_engine import _stop_pct, real_risk_quote
+
         quote = self._quotes.get(event.symbol)
-        fresh_within = self._fresh_within
-        if not quote:
+        q, _reason = real_risk_quote(quote or {}, fresh_within=self._fresh_within)
+        if q is None:
             snapshot_service = self._snapshot_service
             if snapshot_service is not None:
                 try:
@@ -228,21 +262,15 @@ class AlertEngine:
                         if as_of is not None and as_of.tzinfo is not None:
                             row = next((item for item in rows if item.get("symbol") == event.symbol), None)
                             if row is not None:
-                                quote = {**row, "quality": "high", "data_timestamp": as_of}
-                                fresh_within = snapshot_service.poll_interval * 3
+                                # as_of is the fetch/version clock. Preserve the
+                                # row's source time and quality without upgrading.
+                                quote = dict(row)
+                                q, _reason = real_risk_quote(quote, fresh_within=snapshot_service.poll_interval * 3)
                 except Exception:
                     return "source_recheck_unavailable"
-        if not quote or not (quote.get("data_timestamp") or quote.get("received_at")):
+        if q is None:
             return "source_recheck_unavailable"
         try:
-            q = Quote.model_validate(quote)
-            ts = q.data_timestamp or q.received_at
-            if ts.tzinfo is None or int(ts.timestamp() * 1000) > self._now_ms():
-                return "source_recheck_unavailable"
-            if q.freshness(fresh_within=fresh_within).state != "ready":
-                return "source_recheck_unavailable"
-            from app.picks.exit_engine import _stop_pct
-
             if q.price is None or q.price > cost * (1 - _stop_pct(None)):
                 return "source_condition_no_longer_met"
         except (TypeError, ValueError):

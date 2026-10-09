@@ -29,7 +29,7 @@ from typing import Any
 from sqlalchemy import select
 
 from app.core.db import get_session_factory
-from app.services.selection_notifications import quote_audit, retry_daily_selection
+from app.services.selection_notifications import daily_selection_version, quote_audit, retry_daily_selection
 from app.events.store import EventStore
 from app.market import trade_calendar as tc
 from app.market.chip import get_chip_service
@@ -721,6 +721,7 @@ async def deep_score_candidates(
         async with sem:
             sub: dict[str, float] = {}
             bases: dict[str, str] = {}
+            dimension_evidence: dict[str, dict] = {}
             # 技术（防飞刀口径 score_stock，v3 含 RPS 横截面）
             # 两段各自兜底（2026-09-14）：**取数失败**与**评分自身异常**是两回事。
             # 原实现共用一个 `except`，把评分代码的 bug 也写成「K线数据缺失，中性」——
@@ -732,19 +733,22 @@ async def deep_score_candidates(
                 dicts = [b.model_dump() if hasattr(b, "model_dump") else dict(b) for b in bars][-250:]
             except Exception as exc:  # noqa: BLE001
                 s_tech, b_tech = 50.0, f"K线数据缺失（{type(exc).__name__}），中性"
+                tech_state = "error"
             else:
                 try:
-                    s_tech, b_tech = score_tech(
-                        score_stock(dicts, rps=rps_map.get(sym), rps_note=rps_note)
-                    )
+                    tech_card = score_stock(dicts, rps=rps_map.get(sym), rps_note=rps_note)
+                    s_tech, b_tech = score_tech(tech_card)
+                    tech_state = "success" if tech_card is not None else "missing"
                 except Exception as exc:  # noqa: BLE001
                     s_tech, b_tech = 50.0, f"技术评分异常（{type(exc).__name__}），中性处理"
+                    tech_state = "error"
                     log.warning("picks tech score failed for %s", sym, exc_info=True)
             # 出场纪律的输入：ATR（止损宽度）与均线（失效条件参照）
             atr_pct = _atr_pct(dicts)
             ma5 = _ma_value(dicts, 5)
             ma10 = _ma_value(dicts, 10)
             sub["tech"], bases["tech"] = s_tech, b_tech
+            dimension_evidence["tech"] = {"state": tech_state, "reason": b_tech}
             # 消息（B1：查预构建索引，O(1)——不再逐候选扫事件表）
             event_hit = event_hits_index.get(sym, (0, 0, None, None, 0))
             bull, bear, top_title, top_dir, linked = event_hit[:5]
@@ -760,12 +764,18 @@ async def deep_score_candidates(
                     f"命中 {linked} 条关联事件（标题无方向词，方向待判），消息面中性；"
                     f"最近：「{(top_title or '')[:40]}」"
                 )
+            dimension_evidence["news"] = {
+                "state": "error" if not events_available or not event_index_available else (
+                    "partial" if linked and bull == bear == 0 else "success" if linked else "valid_empty"
+                ), "reason": bases["news"],
+            }
             # 基本面：成长性/盈利质量来自财务报告（营收增速、净利同比、ROE、毛利率——
             # normalizer 早已提取这四个字段，2026-09-01 起评分全部消费），估值来自行情快照
             rev = None
             profit = None
             roe_v = None
             gm = None
+            financial_error = None
             try:
                 fin = await hub.provider.get_financials(sym, 4)
                 if fin:
@@ -776,6 +786,7 @@ async def deep_score_candidates(
                     roe_v = d_.get("roe")
                     gm = d_.get("gross_margin")
             except Exception as exc:
+                financial_error = type(exc).__name__
                 log.warning("picks financials %s failed: %s", sym, exc)
             # ⚠️ PE 需要现价，财务报告里本来就没有（此前从 financials 取 pe_ttm → 恒 None）。
             # 估值应取自行情快照；链首 ths 不带该字段，用 fill_valuation 从腾讯补。
@@ -788,8 +799,21 @@ async def deep_score_candidates(
             sub["fundamental"], bases["fundamental"] = score_fundamental(
                 pe, rev, profit_yoy=profit, roe=roe_v, gross_margin=gm
             )
+            financial_inputs = {"pe_ttm": pe, "revenue_yoy": rev, "profit_yoy": profit,
+                                "roe": roe_v, "gross_margin": gm}
+            absent_financial = [name for name, value in financial_inputs.items() if value is None]
+            financial_state = "success" if not absent_financial else (
+                "partial" if len(absent_financial) < len(financial_inputs) else "error" if financial_error else "missing"
+            )
+            financial_reason = bases["fundamental"]
+            if absent_financial:
+                financial_reason += "；缺失字段：" + "、".join(absent_financial)
+            if financial_error:
+                financial_reason += f"；财报读取失败（{financial_error}）"
+            dimension_evidence["fundamental"] = {"state": financial_state, "reason": financial_reason}
             # 资金
             net_inflow = None
+            capital_error = None
             try:
                 flow = await hub.provider.get_capital_flow(sym, 5)
                 if flow:
@@ -800,13 +824,22 @@ async def deep_score_candidates(
                     # 被静默降级掩盖成了"数据源问题"（2026-08-31 修复）。
                     net_inflow = d_.get("net_main")
             except Exception as exc:
+                capital_error = type(exc).__name__
                 log.warning("picks capital flow %s failed: %s", sym, exc)
             sub["capital"], bases["capital"] = score_capital(net_inflow, None, on_lhb=False)
+            dimension_evidence["capital"] = {
+                "state": "success" if net_inflow is not None else "error" if capital_error else "missing",
+                "reason": bases["capital"] + (f"；资金源读取失败（{capital_error}）" if capital_error else ""),
+            }
             # 情绪（全局相位；题材涨家占比第一版缺省；promo 历史分位为接力环境修正，
             # 选股 2.0 §3——分位来自 P0-3b 校准库，缺失时不修正、basis 如实呈现）
             sub["sentiment"], bases["sentiment"] = score_sentiment(
                 market_phase, None, promo_percentile=promo_percentile
             )
+            dimension_evidence["sentiment"] = {
+                "state": "success" if market_phase else "partial" if promo_percentile is not None else "missing",
+                "reason": bases["sentiment"],
+            }
 
             # 梯队（第六维）：个股在题材天梯中的地位 × 题材阶段，联合读取。
             # 没有这一维，退潮期的最后一棒会和发酵期的真龙头拿同样分。
@@ -851,6 +884,15 @@ async def deep_score_candidates(
                 f"{role_basis}；{b_ech}"
                 + (f"；题材「{theme_name}」" if theme_name else "；未匹配到题材（按个股独立评估）")
             )
+            role_available = bool(lu) or excess is not None
+            dimension_evidence["echelon"] = {
+                "state": "success" if role_available and theme_ctx["stage"] is not None and theme_ctx["completeness"] is not None else (
+                    "partial" if role_available else "missing"
+                ), "reason": bases["echelon"] + (
+                    "；题材阶段或完整度未提供，原计算默认值不代表证据齐全"
+                    if theme_ctx["stage"] is None or theme_ctx["completeness"] is None else ""
+                ),
+            }
 
             # 停牌核查 / 异动风险（docs/summary/stock-strategy.md 第一批）：
             # 只依据已取到的个股日 K + 预取的指数日 K，零新增数据源。
@@ -884,6 +926,7 @@ async def deep_score_candidates(
                 halt_penalty=halt.get("penalty") or 0.0,
                 veto_count=len(vetoes),
                 style_note=style_note(style),
+                dimension_evidence=dimension_evidence,
             )
             return {
                 "symbol": sym, "name": c["name"], "price": c["price"], "change_pct": c["change_pct"],
@@ -904,6 +947,7 @@ async def deep_score_candidates(
                 "pb": getattr(q_snap, "pb", None) if q_snap is not None else None,
                 "quote_audit": quote_audit(q_snap),
                 "score": score, "sub_scores": sub, "bases": bases, "vetoes": vetoes,
+                "dimension_evidence": dimension_evidence,
                 "related_events": [top_title] if top_title else [],
                 "related_event_refs": event_refs,
                 "echelon_role": role,
@@ -944,6 +988,7 @@ def assemble_card(k: dict) -> dict:
         "score": k["score"],
         "sub_scores": k["sub_scores"],
         "bases": k["bases"],
+        "dimension_evidence": k.get("dimension_evidence") or {},
         "vetoes": k["vetoes"],
         "buy_range": build_buy_range(k["price"], support, resistance),
         "echelon_role": role,
@@ -1324,6 +1369,7 @@ async def generate_picks_pipeline(
     # ⑥ 卡片组装（含风险档位与出场纪律参考）+ 空仓闸门处理 + 持久化
     items = [assemble_card(k) for k in kept]
     items = apply_gate_to_picks(items, gate)
+    generated_at = beijing_now().isoformat()
     event_evidence = {
         "state": "available" if events_available and event_index_available else "unavailable",
         "active_count": len(active_events) if events_available else None,
@@ -1363,7 +1409,9 @@ async def generate_picks_pipeline(
             "tradable_boards": "沪市主板 / 深市主板（含主板 ST）",
             "excluded_board": {"count": len(board_excluded), "items": board_excluded[:20]},
         },
-        "generated_at": beijing_now().isoformat(),
+        "generated_at": generated_at,
+        "selection_contract": {"version": "daily_selection_v2", "trade_date": today, "generated_at": generated_at},
+        "selection_version": daily_selection_version(today, generated_at, items),
     }
     # G-2：落库是同步 SQLite 写（+ 大对象 json.dumps）→ 线程池（判据见 candidate_pool 顶部）
     await asyncio.to_thread(_persist_picks, today, items, meta, replaced, rejected)

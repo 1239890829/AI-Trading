@@ -137,6 +137,33 @@ def test_intraday_without_real_archive_fails_before_message(sf):
     assert AlertRepository(sf).list_events() == []
 
 
+def test_same_clock_historical_feature_run_cannot_supersede_current_selection(sf):
+    from app.picks.opportunity_learning import archive_intraday_pipeline
+    from app.services.selection_notifications import publish_intraday_selection
+
+    payload = intraday_payload()
+    archived = archive_intraday_pipeline(payload, trade_date='2026-10-09',
+                                        as_of=NOW.replace(tzinfo=None), session_factory=sf)
+    with sf() as db:
+        current = db.get(OpportunityDecisionRun, archived['run_id'])
+        db.add(OpportunityDecisionRun(run_id='z' * 64, trade_date=current.trade_date, as_of=current.as_of,
+            scenario=current.scenario, strategy_version=current.strategy_version, feature_version='historical-v1',
+            data_state='ready', snapshot_state='ready', evidence_digest='historical-evidence'))
+        db.commit()
+    receipt = publish_intraday_selection(payload, trade_date='2026-10-09', snapshot_as_of=NOW.isoformat(),
+            snapshot_state='ready', run_id=archived['run_id'], fresh_within=180, session_factory=sf)
+    assert receipt['state'] == 'completed' and receipt['selected'] > 0
+    with sf() as db:
+        db.add(OpportunityDecisionRun(run_id='newer-clock-old-feature', trade_date='2026-10-09',
+            as_of=(NOW + timedelta(seconds=1)).replace(tzinfo=None), scenario='intraday_opportunity',
+            strategy_version='older', feature_version='historical-v1', data_state='ready',
+            snapshot_state='ready', evidence_digest='newer-source-evidence'))
+        db.commit()
+    receipt = publish_intraday_selection(payload, trade_date='2026-10-09', snapshot_as_of=NOW.isoformat(),
+            snapshot_state='ready', run_id=archived['run_id'], fresh_within=180, session_factory=sf)
+    assert receipt['state'] == 'suppressed' and receipt['reason'] == 'run_superseded'
+
+
 def test_daily_batch_rollback_preserves_picks_and_retries_after_restart(sf, monkeypatch):
     import app.services.picks_pipeline as pipeline
     import app.picks.watch_ledger as ledger

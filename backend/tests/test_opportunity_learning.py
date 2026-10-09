@@ -1778,6 +1778,54 @@ def _seed_scorecard_label(
         ))
         db.commit()
 
+
+def test_stock_identity_feature_version_keeps_legacy_effects_readable_but_separate(tmp_path):
+    sf = _factory(tmp_path)
+    when = datetime(2026, 9, 16, 10, 5)
+    _seed_scorecard_label(sf, snapshot_id="stock-id-legacy", run_id="legacy-run", symbol="600001",
+                         as_of=when, feature_version="pit-evidence-v2", proxy=99.0)
+    _seed_scorecard_label(sf, snapshot_id="stock-id-current", run_id="current-run", symbol="600002",
+                         as_of=when, feature_version=FEATURE_VERSION, proxy=0.9)
+    current = opportunity_scorecard("2026-09-16", session_factory=sf)
+    assert current["sample"]["symbols"] == ["600002"]
+    legacy = opportunity_scorecard("2026-09-16", session_factory=sf, feature_version="pit-evidence-v2")
+    assert legacy["sample"]["symbols"] == ["600001"]
+    with sf() as db:
+        rows = list(db.scalars(select(OpportunityDecisionSnapshot).order_by(OpportunityDecisionSnapshot.snapshot_id)))
+        assert {row.feature_version for row in rows} == {"pit-evidence-v2", FEATURE_VERSION}
+
+
+def test_new_evidence_version_can_archive_same_source_clock_without_rewriting_old_run(tmp_path, monkeypatch):
+    import app.picks.opportunity_learning as learning
+    sf = _factory(tmp_path)
+    when = datetime(2026, 9, 16, 10, 5)
+    with monkeypatch.context() as legacy:
+        legacy.setattr(learning, "FEATURE_VERSION", "pit-evidence-v2")
+        old = archive_intraday_pipeline(_payload(), trade_date="2026-09-16", as_of=when, session_factory=sf)
+    current = archive_intraday_pipeline(_payload(), trade_date="2026-09-16", as_of=when, session_factory=sf)
+    assert current["run_id"] != old["run_id"]
+    repeated = archive_intraday_pipeline(_payload(), trade_date="2026-09-16", as_of=when, session_factory=sf)
+    assert repeated["inserted"] == 0
+    with sf() as db:
+        runs = list(db.scalars(select(OpportunityDecisionRun)))
+        assert {run.feature_version for run in runs} == {"pit-evidence-v2", FEATURE_VERSION}
+        assert len(runs) == 2
+
+
+def test_notification_archive_clock_identity_also_separates_feature_versions(tmp_path, monkeypatch):
+    import app.picks.opportunity_learning as learning
+    sf = _factory(tmp_path)
+    when = datetime(2026, 9, 16, 10, 5)
+    kwargs = {"trade_date": "2026-09-16", "as_of": when, "hits": [], "skips": [],
+              "dispatch_by_symbol": {}, "session_factory": sf}
+    with monkeypatch.context() as legacy:
+        legacy.setattr(learning, "FEATURE_VERSION", "pit-evidence-v2")
+        old = archive_notification_pipeline([], **kwargs)
+    current = archive_notification_pipeline([], **kwargs)
+    assert old["run_id"] != current["run_id"]
+    repeated = archive_notification_pipeline([], **kwargs)
+    assert repeated["run_inserted"] == 0
+
 def test_scorecard_blocks_effect_when_zero_record_run_is_degraded(tmp_path):
     from app.picks.opportunity_learning import MIN_LABELS_FOR_VERDICT
 

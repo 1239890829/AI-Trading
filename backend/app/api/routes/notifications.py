@@ -117,6 +117,23 @@ def _explicit_symbol_rule(rule) -> bool:
         return False
 
 
+def _original_reference(event, snapshot: dict) -> dict:
+    """Expose only the persisted source; never reconstruct it from current picks."""
+    evidence = snapshot.get('selection_evidence')
+    if not isinstance(evidence, dict):
+        evidence = {key: snapshot[key] for key in (
+            'execution_ref', 'confidence', 'vetoes', 'invalidations', 'buy_range',
+            'source', 'quality', 'quality_reasons', 'data_timestamp', 'received_at',
+            'source_evidence',
+        ) if key in snapshot}
+    return {'event_id': event.id, 'kind': snapshot.get('kind') or 'explicit_condition',
+        'trade_date': snapshot.get('trade_date'), 'selection_source': snapshot.get('selection_source'),
+        'source_id': snapshot.get('source_id'), 'source_version': snapshot.get('source_version'),
+        'source_as_of': snapshot.get('source_as_of') or snapshot.get('data_timestamp'),
+        'recorded_at': event.triggered_at.isoformat(sep=' ') if event.triggered_at else None,
+        'run_id': snapshot.get('run_id'), 'evidence': evidence}
+
+
 def _alert_items(
     repo: AlertRepository, limit: int, trading_dates: set | None = None
 ) -> tuple[list[dict], dict[str, int]]:
@@ -129,9 +146,11 @@ def _alert_items(
     # Per-rule queries keep ordinary all-market events from exhausting the useful window.
     fetch_limit = max(limit, _NOTIF_FETCH_LIMIT)
     by_id = {}
+    saturated = False
     for rid in sorted(allowed):
         rows = repo.list_events(limit=fetch_limit, rule_id=rid, real_symbol_only=True)
         if len(rows) >= fetch_limit:
+            saturated = True
             log.warning('notifications: rule %s read window saturated (%s)', rid, fetch_limit)
         by_id.update((e.id, e) for e in rows if e.rule_id == rid)
     # Reattach at most the two original daily identities for already visible
@@ -167,6 +186,8 @@ def _alert_items(
         except Exception:  # Historical opinion is optional; original facts remain identifiable.
             log.exception('notifications: historical triage read failed')
     seen: dict[str, int] = {'selection': 0, 'buy_point': 0, 'pre_limit': 0}
+    if saturated:
+        seen['read_window_saturated'] = 1
     items = []
     groups: dict[tuple[str, str], list[tuple]] = {}
     for e in events:
@@ -211,8 +232,12 @@ def _alert_items(
             continue
         bj = e.triggered_at
         display_ts = snap.get('source_as_of') if kind == 'selection' else bj.isoformat(sep=' ') if bj else None
+        observed_at = _message_time(display_ts) if display_ts else bj
         item = {'id': f'alert-{e.id}', 'category': category, 'label': label,
-            'session': _session_of(bj, trading_dates) if bj else 'intraday', 'ts': display_ts,
+            'session': _session_of(observed_at, trading_dates) if observed_at else 'intraday', 'ts': display_ts,
+            'source_as_of': snap.get('source_as_of') or snap.get('data_timestamp'),
+            'recorded_at': bj.isoformat(sep=' ') if bj else None,
+            'references': [_original_reference(e, snap)],
             'title': f'【{label}】{e.symbol} {name}'.strip(), 'body': text, 'symbol': e.symbol,
             'url': None, 'score': None, 'source': source, 'validity': validity}
         if category == 'opportunity':
@@ -225,6 +250,7 @@ def _alert_items(
         rows.sort(key=lambda r: (r[0].triggered_at or datetime.min, r[0].id))
         anchor = rows[0][1]
         anchor['_event_ids'] = [r[0].id for r in rows]
+        anchor['references'] = [ref for _, item, _ in rows for ref in item['references']]
         if len(rows) > 1:
             anchor['body'] += '\n' + '\n'.join(f'补充原时点 {r[1]["ts"]}（{r[1]["source"]}）：{r[1]["body"]}' for r in rows[1:])
         items.append(anchor)
@@ -266,9 +292,26 @@ async def notifications(
 
     items = alert_items
     items.sort(key=lambda x: _message_time(x["ts"]), reverse=True)
+    # A saturated source window does not prove that older rows are eligible.
+    # True is witnessed overflow; false is complete within the fetched window;
+    # null exposes the remaining unknown rather than inventing an exact count.
+    has_more = True if len(items) > alert_limit else None if shapes_seen.get('read_window_saturated') else False
     # 截断在**筛选之后**（读取窗口见 `_NOTIF_FETCH_LIMIT`）：先按形状挑出个股机会，
     # 再按时间倒序取前 `alert_limit` 条——而不是"先取最近 N 条再看有没有个股机会"。
     items = items[:alert_limit]
+    # Live status is a persistent banner consumer, not a new stock opportunity
+    # or repeat popup. The read clock and quote clock retain separate identities.
+    from app.picks.exit_engine import position_monitor_state
+
+    real_monitor = position_monitor_state()['real']
+    read_status = real_monitor.get('state', 'unknown')
+    monitor_status = ('uncompleted' if read_status == 'failed' else
+                      'empty' if read_status == 'empty' else
+                      real_monitor.get('evaluation_state', 'unknown') if read_status == 'ok' else 'unknown')
+    monitor = {'state': monitor_status,
+               'reason': real_monitor.get('reason') if read_status == 'failed' else real_monitor.get('evaluation_reason'),
+               'uncompleted_symbols': real_monitor.get('uncompleted_symbols') or [],
+               'evaluated_at': real_monitor.get('evaluated_at')}
     # 渠道回执与站内可见、浏览已读是三个事实。无 Outbox 行只能说没有记录，
     # 不能推出飞书已送达或用户已读；读取失败也不能隐藏已有站内事件。
     if items:
@@ -323,6 +366,9 @@ async def notifications(
         "data": {
             "items": items,
             "count": len(items),
+            "read_window": {"limit": alert_limit, "returned": len(items),
+                            "has_more": has_more, "scope": "recent_eligible_messages"},
+            "monitor": monitor,
             "generated_at": now.isoformat(sep=" "),
             "news_min_score": min_score,
             "policy": "stock_opportunities_only",

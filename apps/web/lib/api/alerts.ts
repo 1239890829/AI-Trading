@@ -31,7 +31,13 @@ export interface AlertRule {
   updated_at: string | null;
 }
 
+export interface DeliveryChannelState {
+  channel: string; state: string; reason: string; created_at_ms: number;
+  expires_at_ms: number; accepted_at_ms: number | null;
+}
+
 export interface AlertEvent {
+  channel_states?: DeliveryChannelState[] | null;
   /** AI 判读合并（告警面板重设计）：notify=提醒 / ignore=已降噪 / escalate=需关注
    *  model 为判读模型名；`llm_fallback` = AI 不可用、按规则提醒（P1-36 展示降级） */
   triage?: { verdict: string; reason: string; model?: string | null } | null;
@@ -91,7 +97,18 @@ export async function listAlertEvents(limit = 50, ruleId?: number): Promise<Aler
   return getJsonArray<AlertEvent>(`/api/alerts/events?${qs.toString()}`);
 }
 
+export interface NotificationReference {
+  event_id: number; kind: string; trade_date: string | null;
+  selection_source?: "daily" | "intraday" | null;
+  source_id: string | null; source_version: string | null;
+  source_as_of: string | null; recorded_at: string | null;
+  run_id?: string | null; evidence: Record<string, unknown>;
+}
+
 export interface NotificationItem {
+  recorded_at?: string | null;
+  source_as_of?: string | null;
+  references?: NotificationReference[];
   id: string;
   /** opportunity=个股机会（watcher 确认/证伪）| daily_picks=每日精选 | news=消息面/新闻/政策 | risk=策略风险（信号健康度预警）| reminder=用户自设条件提醒 */
   category: "opportunity" | "daily_picks" | "news" | "risk" | "reminder";
@@ -110,7 +127,7 @@ export interface NotificationItem {
   source?: string;
   validity?: string;
   /** 外部渠道的受理状态；null 表示状态读取失败，[] 表示没有通道意图记录。 */
-  channels?: { channel: string; state: string; reason: string; created_at_ms: number; expires_at_ms: number; accepted_at_ms: number | null }[] | null;
+  channels?: DeliveryChannelState[] | null;
 }
 
 /** 空态诊断（`BUG-016` 子项③，2026-09-16）。
@@ -122,6 +139,10 @@ export interface NotificationItem {
  * ⚠️ 本字段**只是解释**，不改变任何推送口径（档位门等属交易信号口径，须用户拍板）。
  */
 export interface NotificationDiagnostics {
+  selection?: {
+    daily: {state: string; generated_at?: string | null; count?: number; receipt?: {state?: string; created?: number; eligible?: number; reason?: string} | null};
+    intraday: {state: string; run_id?: string | null; as_of?: string | null; data_state?: string; ranked_count?: number; message_count?: number};
+  };
   /** 已归档买点链的状态；缺记录不证明调度未运行，也不代表全部入选与通知来源。 */
   state: "no_pick_set" | "no_run" | "ran_rejected" | "ran_eligible" | "ran_unknown" | "unavailable";
   trade_date: string;
@@ -168,6 +189,8 @@ export interface NotificationDiagnostics {
 }
 
 export interface NotificationsPayload {
+  monitor?: {state: string; reason: string | null; uncompleted_symbols: string[]; evaluated_at: string | null};
+  read_window?: {limit: number; returned: number; has_more: boolean | null; scope: string};
   items: NotificationItem[];
   count: number;
   generated_at: string;

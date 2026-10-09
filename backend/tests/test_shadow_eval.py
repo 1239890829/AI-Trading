@@ -336,14 +336,17 @@ def test_market_gains_below_zero_count_as_not_good():
     assert out["verdict"] == se.VERDICT_OPPOSES
 
 
-def test_raising_ignores_market_gains():
-    """抬高方向看的是**剔除者**，与 market_gains 无关（不得被它污染）。"""
+def test_raising_market_fallback_keeps_both_cohorts_in_same_window():
+    """D0缺失时两组都用marketdb；只补剔除者时仍不能给方向。"""
     sets = _sets(6)
     sim = se.simulate_min_score(sets, 55.0, 5, base_threshold=50.0)
     gains = {(d["symbol"], d["date"]): 9.9 for d in sim["dropped"]}
     out = se.eval_min_pick_score(before=50.0, after=55.0, sets=sets, reviews={},
                                  market_gains=gains)
     assert out["metrics"]["review"]["added_source"] == "review"
+    assert out["metrics"]["review"]["kept_source"] == "marketdb"
+    assert out["metrics"]["review"]["dropped_source"] == "marketdb"
+    assert out['verdict'] == se.VERDICT_NEUTRAL
 
 
 def test_market_gains_missing_keys_are_dropped_not_zeroed():
@@ -357,9 +360,32 @@ def test_market_gains_missing_keys_are_dropped_not_zeroed():
     assert "落选池" in out["note"]
 
 
-def test_forward_horizon_matches_review_caliber():
-    """补验窗口必须与 DailyPickReview 的 T+5 口径一致，否则两方向不可比。"""
+def test_market_forward_horizon_stays_independent_from_daily_review():
+    """marketdb 使用独立T+5；不可和当前同日复盘混为一个观察窗口。"""
     assert se.FORWARD_HORIZON == 5
+
+
+def test_lowering_compares_both_cohorts_at_market_window_even_with_many_d0_reviews():
+    sets = _sets(6)
+    sim = se.simulate_min_score(sets, 45.0, 5, base_threshold=50.0)
+    reviews = {(r['date'], r['symbol']): {'verdict': 'good', 'excess_pct': 5,
+                                        'window_kind': 'open_to_close'} for r in sim['kept']}
+    gains = {(r['symbol'], r['date']): -2 for r in sim['kept']}
+    gains.update({(r['symbol'], r['date']): 1 if i % 2 else -1 for i, r in enumerate(sim['added'])})
+    out = se.eval_min_pick_score(before=50, after=45, sets=sets, reviews=reviews, market_gains=gains)
+    assert out['verdict'] == se.VERDICT_SUPPORTS
+    assert out['metrics']['review']['kept_source'] == 'marketdb'
+    assert out['metrics']['review']['kept']['ratio'] == 0
+
+
+@pytest.mark.parametrize('missing', [None, float('nan')])
+def test_missing_swap_excess_is_not_neutral_zero(missing):
+    sets = [{'date': f'd{i}', 'replaced': [{'out': 'OUT', 'in': 'IN', 'delta': 5}]} for i in range(6)]
+    reviews = {(s['date'], symbol): {'verdict': 'good', 'excess_pct': missing if symbol == 'OUT' else 1}
+               for s in sets for symbol in ('IN', 'OUT')}
+    out = se.eval_replace_threshold(before=5, after=20, sets=sets, reviews=reviews)
+    assert out['metrics']['blocked_review']['n'] == 0
+    assert out['verdict'] == se.VERDICT_NEUTRAL
 
 
 def test_load_market_forward_gains_returns_empty_on_empty_input():

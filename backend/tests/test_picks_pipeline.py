@@ -314,6 +314,101 @@ def _benign_gate(**_kw):
     }
 
 
+@pytest.mark.parametrize("mode,state", [("empty", "missing"), ("fetch_error", "error"), ("score_error", "error")])
+def test_technical_source_availability_is_not_inferred_from_neutral_score(deps, monkeypatch, mode, state):
+    monkeypatch.setattr(pl, "evaluate_stand_aside", _benign_gate)
+    hub = _Hub()
+    if mode != "score_error":
+        async def kline(*_args):
+            if mode == "fetch_error":
+                raise RuntimeError("offline fixture")
+            return []
+        monkeypatch.setattr(hub.provider, "get_kline", kline)
+    else:
+        def score(*_args, **_kwargs):
+            raise ValueError("score fixture")
+        monkeypatch.setattr(pl, "score_stock", score)
+    data = _run(deps, hub)["data"]
+    assert data["items"]
+    for card in data["items"]:
+        assert card["sub_scores"]["tech"] == 50.0
+        assert card["dimension_evidence"]["tech"]["state"] == state
+        assert card["confidence"]["tier"] != "strong"
+
+
+@pytest.mark.parametrize("mode,state", [("empty", "missing"), ("partial", "partial"), ("error", "error")])
+def test_financial_inputs_distinguish_absent_partial_and_error(deps, monkeypatch, mode, state):
+    monkeypatch.setattr(pl, "evaluate_stand_aside", _benign_gate)
+    hub = _Hub()
+    original_quotes = hub.provider.get_quotes
+    async def quotes(symbols):
+        rows = await original_quotes(symbols)
+        for quote in rows:
+            quote.pe_ttm = None
+        return rows
+    async def financials(*_args):
+        if mode == "error":
+            raise RuntimeError("financial fixture")
+        return [{"revenue_yoy": 0.0}] if mode == "partial" else []
+    monkeypatch.setattr(hub.provider, "get_quotes", quotes)
+    monkeypatch.setattr(hub.provider, "get_financials", financials)
+    data = _run(deps, hub)["data"]
+    assert data["items"]
+    for card in data["items"]:
+        assert card["dimension_evidence"]["fundamental"]["state"] == state
+        assert card["sub_scores"]["fundamental"] == (58.0 if mode == "partial" else 50.0)
+
+
+def test_real_zero_flow_negative_pe_and_zero_growth_remain_available(deps, monkeypatch):
+    monkeypatch.setattr(pl, "evaluate_stand_aside", _benign_gate)
+    hub = _Hub()
+    original_quotes = hub.provider.get_quotes
+    async def quotes(symbols):
+        rows = await original_quotes(symbols)
+        for quote in rows:
+            quote.pe_ttm = -10.0
+        return rows
+    async def financials(*_args):
+        return [{"revenue_yoy": 0.0, "profit_yoy": 0.0, "roe": 0.0, "gross_margin": 0.0}]
+    async def capital(*_args):
+        return [{"net_main": 0.0}]
+    monkeypatch.setattr(hub.provider, "get_quotes", quotes)
+    monkeypatch.setattr(hub.provider, "get_financials", financials)
+    monkeypatch.setattr(hub.provider, "get_capital_flow", capital)
+    data = _run(deps, hub)["data"]
+    assert data["items"]
+    for card in data["items"]:
+        assert card["dimension_evidence"]["fundamental"]["state"] == "success"
+        assert card["dimension_evidence"]["capital"]["state"] == "success"
+        assert card["sub_scores"]["fundamental"] == 58.0
+        assert card["sub_scores"]["capital"] == 50.0
+
+
+def test_capital_source_error_keeps_neutral_calculation_and_failure_evidence(deps, monkeypatch):
+    monkeypatch.setattr(pl, "evaluate_stand_aside", _benign_gate)
+    hub = _Hub()
+    async def capital(*_args):
+        raise RuntimeError("capital fixture")
+    monkeypatch.setattr(hub.provider, "get_capital_flow", capital)
+    card = _run(deps, hub)["data"]["items"][0]
+    assert card["sub_scores"]["capital"] == 50.0
+    assert card["dimension_evidence"]["capital"]["state"] == "error"
+    assert "RuntimeError" in card["dimension_evidence"]["capital"]["reason"]
+
+
+def test_generated_selection_contract_uses_original_final_items_digest(deps, monkeypatch):
+    from datetime import datetime
+    from app.services.selection_notifications import daily_selection_version
+    monkeypatch.setattr(pl, "evaluate_stand_aside", _benign_gate)
+    data = _run(deps, _Hub())["data"]
+    generated_at = data["meta"]["generated_at"]
+    assert datetime.fromisoformat(generated_at).utcoffset().total_seconds() == 8 * 3600
+    assert data["meta"]["selection_contract"] == {
+        "version": "daily_selection_v2", "trade_date": data["date"], "generated_at": generated_at,
+    }
+    assert data["meta"]["selection_version"] == daily_selection_version(data["date"], generated_at, data["items"])
+
+
 def test_pipeline_produces_full_card_and_persists(deps, monkeypatch):
     """整条链跑通：产出卡片结构完整 + 真的落库。
 
@@ -588,6 +683,8 @@ def test_event_read_failure_is_not_persisted_as_no_events(deps, store, monkeypat
         assert card["sub_scores"]["news"] == 50.0
         assert "事件读取失败" in card["bases"]["news"]
         assert "无活跃事件" not in card["bases"]["news"]
+        assert card["dimension_evidence"]["news"]["state"] == "error"
+        assert card["confidence"]["tier"] != "strong"
 
     with pl._db() as db:
         from sqlalchemy import select
@@ -607,6 +704,7 @@ def test_empty_event_read_remains_verified_empty(deps, store, monkeypatch):
     assert data["items"]
     assert data["meta"]["event_evidence"] == {"state": "available", "active_count": 0}
     assert "无活跃事件命中" in data["items"][0]["bases"]["news"]
+    assert data["items"][0]["dimension_evidence"]["news"]["state"] == "valid_empty"
 
 
 def test_event_index_failure_is_not_persisted_as_no_events(deps, store, monkeypatch):
@@ -626,6 +724,7 @@ def test_event_index_failure_is_not_persisted_as_no_events(deps, store, monkeypa
         assert card["sub_scores"]["news"] == 50.0
         assert "事件索引失败" in card["bases"]["news"]
         assert "无活跃事件" not in card["bases"]["news"]
+        assert card["dimension_evidence"]["news"]["state"] == "error"
 
     with pl._db() as db:
         from sqlalchemy import select

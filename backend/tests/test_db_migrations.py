@@ -243,7 +243,7 @@ def test_event_observation_upgrade_preserves_legacy_rows_and_matches_model(tmp_p
             """))
         assert run_migrations(engine) == "upgraded"
         with engine.connect() as conn:
-            assert conn.scalar(text("select version_num from alembic_version")) == "e2c6a8f4b9d1"
+            assert conn.scalar(text("select version_num from alembic_version")) == "f2a7c9e4b6d8"
             assert conn.scalar(text("select count(*) from event_card where fingerprint='legacy-event'")) == 1
             assert conn.scalar(text("select count(*) from event_observation")) == 0
             assert conn.scalar(text("select count(*) from event_interpretation")) == 0

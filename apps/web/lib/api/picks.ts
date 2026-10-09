@@ -57,6 +57,12 @@ export interface ExecutionDecisionContract {
   snapshot_id?: string | null;
 }
 
+export interface DimensionEvidence {
+  state: "success" | "valid_empty" | "partial" | "missing" | "error";
+  reason: string;
+  source_as_of?: string | null;
+}
+
 export interface DailyPickItem {
   symbol: string;
   name: string | null;
@@ -67,6 +73,7 @@ export interface DailyPickItem {
   pe_ttm?: number | null;
   pb?: number | null;
   score: number;
+  dimension_evidence?: Record<string, DimensionEvidence>;
   sub_scores: Record<string, number>; // sentiment/news/tech/fundamental/capital/echelon
   bases: Record<string, string>;      // 各维度可解释依据
   vetoes: string[];
@@ -206,6 +213,8 @@ export interface DailyPicksPayload {
     weights: Record<string, number>;
     /** 组合生成时刻（ISO，带 +08:00）——「生成时 vs 当前」对照文案的时间锚点 */
     generated_at?: string;
+    selection_version?: string;
+    selection_contract?: {version: string; trade_date: string; generated_at: string};
     regime?: PickRegime;
     style_routing?: StyleRouting | null;
     gate?: StandAsideGate;
@@ -266,7 +275,15 @@ export interface PickReviewRow {
   name: string | null;
   verdict: "good" | "flat" | "bad";
   reason_category: string;
-  excess_pct: number;
+  excess_pct: number | null;
+  selection_version?: string | null;
+  statistics_eligible?: boolean;
+  review_context?: {
+    contract_version?: string; selection_version?: string; generated_at?: string;
+    performance_date?: string; window_start?: string | null; window_end?: string | null;
+    window_kind?: string; window_reason?: string; eligible_for_stats?: boolean;
+    semantics?: string; reference_return_pct?: number | null;
+  };
   note: string;
 }
 
@@ -284,9 +301,12 @@ export async function getPicksHistory(limit = 10): Promise<{ date: string; symbo
   );
 }
 
-export async function getPickReviews(date?: string): Promise<PickReviewRow[]> {
-  const qs = date ? `?date=${date}` : "";
-  return getJsonArray<PickReviewRow>(`/api/picks/review${qs}`, 15_000);
+export async function getPickReviews(date?: string, version?: string): Promise<PickReviewRow[]> {
+  const params = new URLSearchParams();
+  if (date) params.set("date", date);
+  if (version) params.set("version", version);
+  const qs = params.toString();
+  return getJsonArray<PickReviewRow>(`/api/picks/review${qs ? `?${qs}` : ""}`, 15_000);
 }
 
 export interface PickReviewGenerateResult {
@@ -312,12 +332,14 @@ export interface RolePerformance {
 export async function getPicksMeta(): Promise<{
   reason_distribution: Record<string, number>;
   role_performance?: RolePerformance[];
+  scope?: {review_rows: number; selection_rows: number; excluded_rows: number; trusted_rows: number};
   note: string;
 }> {
   return (
     await getJson<{
       reason_distribution: Record<string, number>;
       role_performance?: RolePerformance[];
+      scope?: {review_rows: number; selection_rows: number; excluded_rows: number; trusted_rows: number};
       note: string;
     }>("/api/picks/meta", 10_000)
   ).data;
@@ -775,7 +797,18 @@ export async function getIntradayOpportunities(): Promise<IntradayOpportunities>
   return (await getJson<IntradayOpportunities>(`/api/picks/intraday-opportunities`)).data;
 }
 
+export interface IntradayThemeSource {
+  theme: string | null;
+  stage: string | null;
+  strength_tier: string | null;
+  linkage?: {level: string; basis: string} | null;
+  pick_basis?: string;
+  tradability?: TradabilityJudgement | null;
+  seal_state?: SealState | null;
+}
+
 export interface IntradayTopStock {
+  theme_sources?: IntradayThemeSource[];
   symbol: string;
   name: string | null;
   role: string | null;
@@ -819,6 +852,8 @@ export interface IntradayTopStock {
 }
 
 export interface IntradayTopPayload {
+  selection_identity_version?: string;
+  effective_limit?: number;
   trade_date: string | null;
   /** 猎场候选：当前未封板，可进入参与评估；盘口深度/排队仍由后续执行链复核。 */
   items: IntradayTopStock[];
@@ -836,8 +871,9 @@ export interface IntradayTopPayload {
   caveats: string[];
 }
 
-export async function getIntradayTop(): Promise<IntradayTopPayload> {
-  return (await getJson<IntradayTopPayload>(`/api/picks/intraday-top?limit=8`, 15_000)).data;
+export async function getIntradayTop(limit?: number): Promise<IntradayTopPayload> {
+  const query = limit === undefined ? "" : `?limit=${limit}`;
+  return (await getJson<IntradayTopPayload>(`/api/picks/intraday-top${query}`, 15_000)).data;
 }
 
 export async function runIntradayReview(): Promise<{ brief_date: string; directions: { direction: string; outcome: string }[] }> {

@@ -28,6 +28,7 @@ import hashlib
 import json
 import logging
 import os
+from datetime import datetime, timezone
 
 from app.picks.position_engine import load_plan, save_plan
 from app.picks.pre_limit_radar import board_limit_pct, is_sealed
@@ -157,7 +158,8 @@ def trailing_rule(cost: float, price: float, peak: float, role: str | None) -> d
 
 def _notify(app, symbol: str, name: str, kind: str, text: str, *, critical: bool = False,
             key: str | None = None, source_id: str | None = None,
-            source_version: str | None = None, source_as_of: str | None = None) -> bool:
+            source_version: str | None = None, source_as_of: str | None = None,
+            source_evidence: dict | None = None) -> bool:
     """Record one source event before the brief; policy controls the outbox.
 
     ``critical`` remains a compatibility hint only.  It cannot upgrade a
@@ -166,6 +168,9 @@ def _notify(app, symbol: str, name: str, kind: str, text: str, *, critical: bool
     today = beijing_now().date().isoformat()
     source_key = key or f"{kind}:{symbol}:{hashlib.sha256(text.encode()).hexdigest()[:16]}"
     source_id = source_id or source_key
+    if kind == 'real_exit_alert' and not source_as_of:
+        log.error('real risk event missing provider quote clock; event not created')
+        return False
     source_as_of = source_as_of or beijing_now().isoformat()
     alert = {"kind": kind, "symbol": symbol, "name": name,
              "key": source_key, "direction": "持仓监护", "text": text, "meta": {}}
@@ -179,6 +184,7 @@ def _notify(app, symbol: str, name: str, kind: str, text: str, *, critical: bool
             source_as_of=source_as_of, trade_date=today,
             direction="真实持仓风险" if kind == "real_exit_alert" else "持仓监护",
             brief_alert=alert,
+            source_evidence=source_evidence,
         )
         return projected
     except Exception:
@@ -261,6 +267,26 @@ _PAPER_READ: dict = {
 def position_monitor_state() -> dict:
     """持仓监护两路读取状态的合并快照（数据健康哨兵单点消费）。"""
     return {"paper": dict(_PAPER_READ), "real": dict(_REAL_READ)}
+
+
+def real_risk_quote(raw: dict, *, fresh_within: float):
+    """Require the provider's complete clock; a snapshot fetch clock cannot replace it."""
+    from app.schemas.market import Quote
+
+    if not raw.get('data_timestamp') or not raw.get('source'):
+        return None, '缺少完整源报价时间或来源，不能确认真实持仓风险'
+    try:
+        quote = Quote.model_validate(raw)
+        if quote.data_timestamp.tzinfo is None or quote.data_timestamp > datetime.now(timezone.utc):
+            return None, '源报价时间身份不可信，真实持仓风险未完成'
+        if quote.price is None or quote.price <= 0:
+            return None, '真实持仓缺少有效现价，风险未完成'
+        status = quote.freshness(fresh_within=fresh_within)
+        if status.state != 'ready':
+            return None, f'真实持仓报价{status.state}，风险未完成'
+        return quote, None
+    except (ValueError, TypeError):
+        return None, '真实持仓报价无法校验，风险未完成'
 
 
 def _real_positions() -> dict[str, dict]:
@@ -503,6 +529,24 @@ async def evaluate_once(app) -> list[dict]:
 
     # ---------- 真实持仓（只提醒，CRITICAL 级） ----------
     real_pos = _real_positions()
+    snapshot_service = getattr(state, 'snapshot_service', None)
+    real_snap: dict = {}
+    snapshot_reason = '全市场快照未就绪，真实持仓风险未完成'
+    fresh_within = 0.0
+    if snapshot_service is not None:
+        try:
+            if snapshot_service.freshness(live=True).state == 'ready':
+                rows, _fetch_clock = snapshot_service.versioned_snapshot()
+                real_snap = {r.get('symbol'): r for r in rows if r.get('symbol')}
+                fresh_within = snapshot_service.poll_interval * 3
+            else:
+                snapshot_reason = '全市场快照陈旧或降级，真实持仓风险未完成'
+        except Exception:
+            log.exception('real risk snapshot unavailable')
+    hub = getattr(state, 'hub', None)
+    missed: dict[str, str] = {}
+    checked: list[str] = []
+    source_times: dict[str, str] = {}
     if _REAL_READ["state"] == "failed":
         # S1-2：读失败必须与「确实无持仓」可区分——当日一次在告警台账留痕（kind 独立，
         # 前端可按系统级渲染），并进 fired 供健康哨兵观测。降级按 SILENT
@@ -520,17 +564,33 @@ async def evaluate_once(app) -> list[dict]:
         })
     for sym, rp in real_pos.items():
         held_names.setdefault(sym, rp.get("name") or "")
-        q = snap.get(sym) or {}
-        price = q.get("price")
-        if price is None or price <= 0:
-            continue
-        pct = q.get("change_pct")
         cost = rp["cost"]
         if cost is None or cost <= 0:
             # 成本不可用（人工覆盖把总成本记成 0/负）：**无法判定止损**。
             # 不能拿 0 参与计算——判据会退化成 `price <= 0`，正价格恒不成立，
             # 该持仓会**静默永不触发**。`_real_positions` 已对该标的告警留痕。
+            missed[sym] = '真实持仓成本缺失或无效，风险未完成'
+        else:
+            from app.core.config import settings
+
+            hub_quote = getattr(hub, 'quotes', {}).get(sym) if hub is not None else None
+            raw = hub_quote.model_dump() if hasattr(hub_quote, 'model_dump') else hub_quote
+            window = max(settings.poll_interval_seconds, settings.stale_after_seconds) if raw else fresh_within
+            trusted, reason = real_risk_quote(raw or real_snap.get(sym) or {}, fresh_within=window)
+            if trusted is None and raw and sym in real_snap:
+                trusted, reason = real_risk_quote(real_snap[sym], fresh_within=fresh_within)
+            if trusted is None:
+                missed[sym] = reason if raw or sym in real_snap else snapshot_reason
+        if sym in missed:
+            key = f'position-monitor-degraded:quote:{today}:{sym}'
+            if key not in _NOTIFIED and _notify(app, sym, rp.get('name') or '', 'position_monitor_degraded',
+                    f'{missed[sym]}；本轮未检查止损，请核对持仓与当前行情。', key=key):
+                _NOTIFIED.add(key)
+            fired.append({'symbol': sym, 'action': 'degraded', 'reason': missed[sym]})
             continue
+        checked.append(sym)
+        source_times[sym] = trusted.data_timestamp.isoformat()
+        price, pct = trusted.price, trusted.change_pct
         # 成本来源可见（R07）：同一条提醒，成本来自**人工覆盖**还是**流水摊薄**
         # 对用户意味着不同的核对动作——不写清就无从判断该去改覆盖还是补流水。
         cost_src = "人工覆盖" if rp.get("overridden") else "流水摊薄"
@@ -545,11 +605,19 @@ async def evaluate_once(app) -> list[dict]:
                 )
                 if _notify(app, sym, rp.get("name") or "", "real_exit_alert", text,
                            critical=True, key=key,
-                           source_as_of=str(q.get("data_timestamp") or q.get("received_at") or beijing_now().isoformat())):
+                           source_as_of=source_times[sym], source_evidence={
+                               'quote': trusted.model_dump(mode='json'), 'cost': cost,
+                               'cost_source': cost_src, 'stop_pct': stop}):
                     _NOTIFIED.add(key)
                 fired.append({"symbol": sym, "action": "real_alert", "reason": text})
         elif pct is not None and is_sealed(pct, board_limit_pct(sym)):
             peaks[sym] = max(float(peaks.get(sym) or price), price)
+
+    _REAL_READ.update(evaluation_state='uncompleted' if missed or _REAL_READ['state'] == 'failed' else
+                      'completed' if real_pos else 'empty', uncompleted_symbols=sorted(missed),
+                      evaluation_reason='；'.join(dict.fromkeys(missed.values())) or None,
+                      checked_symbols=checked, quote_source_as_of=source_times,
+                      evaluated_at=beijing_now())
 
     # ---------- 止盈档位（P0-1）：日内冲高提醒 ----------
     # 标的池 = 持仓 ∪ 当日精选组合（持仓优先、去重后截断；本 tick 已离场的不重复）。

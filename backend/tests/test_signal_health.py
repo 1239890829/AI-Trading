@@ -79,13 +79,10 @@ def sf():
 
 class TestCollect:
     def test_aggregation_and_phase_join(self, sf):
+        from tests.pick_review_fixtures import add_bound_reviews
         with sf() as db:
-            meta = {"market_phase": "发酵"}
-            db.add(DailyPickSet(date="2026-08-01", items="[]", meta=__import__("json").dumps(meta)))
-            for sym, verdict, ex in (("600000", "good", 2.1), ("000001", "bad", -1.4),
-                                     ("300001", "good", 0.9)):
-                db.add(DailyPickReview(date="2026-08-01", symbol=sym, verdict=verdict,
-                                       reason_category="gone_well", excess_pct=ex))
+            add_bound_reviews(db, "2026-08-01", [("600000", "good", 2.1), ("000001", "bad", -1.4),
+                                               ("300001", "good", 0.9)], phase="发酵")
             db.commit()
         out = collect_signal_health(sf)
         assert out["status"] == "insufficient"  # 1 组合日 < 10，显式不判 ok
@@ -99,10 +96,9 @@ class TestCollect:
 
     def test_zero_excess_participates_in_mean(self, sf):
         """真实 0.0（恰好平大盘）必须参与统计，不是被跳过的缺失值。"""
+        from tests.pick_review_fixtures import add_bound_reviews
         with sf() as db:
-            db.add(DailyPickSet(date="2026-08-01", items="[]", meta="{}"))
-            db.add(DailyPickReview(date="2026-08-01", symbol="600000", verdict="flat",
-                                   reason_category="market_drag", excess_pct=0.0))
+            add_bound_reviews(db, "2026-08-01", [("600000", "flat", 0.0)])
             db.commit()
         out = collect_signal_health(sf)
         assert out["history"][0]["mean_excess"] == 0.0

@@ -25,6 +25,8 @@ from __future__ import annotations
 import json
 from typing import Any
 
+from sqlalchemy import update
+
 from app.core.bjtime import beijing_now_naive
 from app.core.db import get_session_factory
 from app.models.notification import SINGLETON_ID, NotificationReadState
@@ -80,6 +82,12 @@ def save_state(incoming: dict[str, Any], session_factory=None) -> dict[str, Any]
     """合并后落库并回传合并结果（合并语义见模块 docstring）。"""
     sf = session_factory or get_session_factory()
     with sf() as db:
+        # Acquire the SQLite writer lock before reading, including an absent row.
+        # Every writer then merges its committed predecessor rather than a stale
+        # SELECT snapshot. The no-op update preserves the read-only GET path.
+        db.execute(update(NotificationReadState).where(
+            NotificationReadState.id == SINGLETON_ID,
+        ).values(updated_at=NotificationReadState.updated_at))
         row = db.get(NotificationReadState, SINGLETON_ID)
         merged = merge_read_state(_row_to_dict(row), incoming)
         if row is None:

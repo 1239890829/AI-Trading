@@ -26,6 +26,11 @@ def _digest(value) -> str:
     return hashlib.sha256(json.dumps(value, ensure_ascii=False, sort_keys=True, default=str).encode()).hexdigest()
 
 
+def daily_selection_version(trade_date: str, generated_at: str, items: list[dict]) -> str:
+    """The original daily result identity, shared by its existing consumers."""
+    return _digest({'trade_date': trade_date, 'generated_at': generated_at, 'items': items})
+
+
 def selection_dedup_key(trade_date: str, symbol: str) -> str:
     return _digest(['selection:v1', trade_date, symbol])
 
@@ -89,7 +94,8 @@ def _record(items: list[dict], *, trade_date: str, source: str, source_id: str,
         symbol = str(item.get('symbol') or '')
         evidence = {key: item[key] for key in ('bases', 'pick_basis', 'source_basis', 'confidence', 'linkage',
             'quote_audit', 'invalidations', 'vetoes', 'buy_range', 'tradability', 'seal_state',
-            'related_event_refs', 'observation_only') if key in item}
+            'related_event_refs', 'observation_only', 'dimension_evidence', 'theme_sources',
+            'effective_limit') if key in item}
         basis = item.get('pick_basis') or item.get('source_basis') or '；'.join(
             str(v) for v in (item.get('bases') or {}).values() if v)
         tier = (item.get('confidence') or {}).get('label') or (item.get('confidence') or {}).get('tier') or (item.get('linkage') or {}).get('level')
@@ -98,6 +104,12 @@ def _record(items: list[dict], *, trade_date: str, source: str, source_id: str,
             text += f'规则档位：{tier}（不是胜率）。'
         if item.get('invalidations'):
             text += f'失效条件：{"；".join(map(str, item["invalidations"]))}。'
+        dimensions = item.get('dimension_evidence')
+        if isinstance(dimensions, dict):
+            missing = [str(key) for key, value in dimensions.items()
+                       if isinstance(value, dict) and value.get('state') in {'partial', 'missing', 'error'}]
+            if missing:
+                text += f'证据未齐：{"、".join(missing)}；具体缺项见原证据。'
         audit = item.get('quote_audit') or {}
         if audit.get('data_timestamp'):
             quality = {'high': '高', 'medium': '中等（降级）'}.get(audit.get('quality'), '未知')
@@ -124,7 +136,7 @@ def _daily_eligible(items: list[dict], trade_date: str, generated_at: str) -> li
 
 
 def _daily_record(items: list[dict], eligible: list[dict], *, trade_date: str, generated_at: str, session_factory, db=None) -> dict:
-    version = _digest({'trade_date': trade_date, 'generated_at': generated_at, 'items': items})
+    version = daily_selection_version(trade_date, generated_at, items)
     result = _record(eligible, trade_date=trade_date, source='daily', source_id=f'daily:{trade_date}:{generated_at}',
         source_version=version, source_as_of=generated_at, session_factory=session_factory, db=db) if eligible else {
             'state': 'completed', 'created': 0, 'selected': 0}
@@ -190,16 +202,25 @@ def publish_intraday_selection(payload: dict, *, trade_date: str, snapshot_as_of
         run = db.get(OpportunityDecisionRun, run_id)
         if run is None or run.trade_date != trade_date or run.as_of != to_beijing_naive(as_of) or run.data_state != 'ready':
             raise ValueError('selection run is not the exact ready archived fact')
+        later_source = db.scalar(select(OpportunityDecisionRun.run_id).where(
+            OpportunityDecisionRun.trade_date == trade_date, OpportunityDecisionRun.scenario == run.scenario,
+            OpportunityDecisionRun.as_of > run.as_of).limit(1))
+        if later_source is not None:
+            return {'state': 'suppressed', 'reason': 'run_superseded', 'created': 0}
         latest = db.scalar(select(OpportunityDecisionRun).where(
             OpportunityDecisionRun.trade_date == trade_date,
-            OpportunityDecisionRun.scenario == run.scenario).order_by(
+            OpportunityDecisionRun.scenario == run.scenario,
+            OpportunityDecisionRun.strategy_version == run.strategy_version,
+            OpportunityDecisionRun.feature_version == run.feature_version).order_by(
             OpportunityDecisionRun.as_of.desc(), OpportunityDecisionRun.run_id.desc()).limit(1))
         if latest.run_id != run_id:
             return {'state': 'suppressed', 'reason': 'run_superseded', 'created': 0}
         ranked = set(db.scalars(select(OpportunityDecisionSnapshot.symbol).where(
             OpportunityDecisionSnapshot.run_id == run_id, OpportunityDecisionSnapshot.stage == 'rank',
             OpportunityDecisionSnapshot.decision == 'ranked', OpportunityDecisionSnapshot.data_state == 'ready')))
-    items = [i for i in top_watch_stocks(payload)['items'] if i.get('symbol') in ranked and i.get('name')]
+    normal_top = top_watch_stocks(payload)
+    items = [{**i, 'effective_limit': normal_top['effective_limit']} for i in normal_top['items']
+             if i.get('symbol') in ranked and i.get('name')]
     return _record(items, trade_date=trade_date, source='intraday', source_id=run_id,
         source_version=run_id, source_as_of=snapshot_as_of, session_factory=sf, run_id=run_id) if items else {
             'state': 'completed', 'created': 0, 'selected': 0}

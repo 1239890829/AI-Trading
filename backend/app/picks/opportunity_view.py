@@ -6,7 +6,7 @@ import json
 import math
 from datetime import date
 
-from sqlalchemy import func, select
+from sqlalchemy import case, func, select
 
 from app.core.db import get_session_factory
 from app.models.opportunity_learning import OpportunityDecisionRun as Run
@@ -114,9 +114,17 @@ def read_opportunities(trade_date: str, session_factory=None) -> dict:
     """
     date.fromisoformat(trade_date)
     sf = session_factory or get_session_factory()
+    from app.picks.opportunity_learning import FEATURE_VERSION, STRATEGY_VERSION
+
+    current_version = case(((Run.strategy_version == STRATEGY_VERSION) &
+                            (Run.feature_version == FEATURE_VERSION), 1), else_=0)
     with sf() as db:
+        # A source clock remains the primary order. With the same source clock,
+        # compare real insert clocks rather than opaque hashes. If storage precision
+        # ties those clocks too, the reader's current evidence version is explicit.
         ranked_runs = select(Run.run_id, func.row_number().over(
-            partition_by=Run.scenario, order_by=(Run.as_of.desc(), Run.run_id.desc())
+            partition_by=Run.scenario,
+            order_by=(Run.as_of.desc(), Run.created_at.desc(), current_version.desc(), Run.run_id.desc())
         ).label("position")).where(Run.trade_date == trade_date).subquery()
         runs = list(db.scalars(select(Run).join(ranked_runs, Run.run_id == ranked_runs.c.run_id)
                               .where(ranked_runs.c.position == 1)).all())

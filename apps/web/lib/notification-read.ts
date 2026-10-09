@@ -41,6 +41,7 @@ export interface ReadState {
 export interface NotificationLike {
   id: string;
   ts: string | null;
+  recorded_at?: string | null;
 }
 
 export const READ_KEY = "ashare.notifications.read";
@@ -180,14 +181,14 @@ export function saveClearBefore(ms: number, store: Storage | null = storage()): 
 /** 条目是否被「一键清除」挡住（隐藏）。ts 缺失时按未清除处理（不隐藏）。 */
 export function isCleared(item: NotificationLike, clearBefore: number): boolean {
   if (!clearBefore) return false;
-  const t = parseTs(item.ts);
+  const t = parseTs(item.recorded_at === undefined ? item.ts : item.recorded_at);
   return t !== null && t < clearBefore;
 }
 
 /** 未读判定：ts 晚于已读水位，且没被单独读过。ts 缺失一律算未读（宁可多提醒）。 */
 export function isUnread(item: NotificationLike, state: ReadState): boolean {
   if (state.readIds.includes(item.id)) return false;
-  const t = parseTs(item.ts);
+  const t = parseTs(item.recorded_at === undefined ? item.ts : item.recorded_at);
   if (t === null) return true;
   return t > state.seenBefore;
 }
@@ -217,7 +218,7 @@ export function withRead(
   item: NotificationLike,
   now: number = Date.now(),
 ): ReadState {
-  const t = parseTs(item.ts);
+  const t = parseTs(item.recorded_at === undefined ? item.ts : item.recorded_at);
   if (t !== null && t <= state.seenBefore) return state;
   if (state.readIds.includes(item.id)) return state;
   return { seenBefore: state.seenBefore, readIds: [...state.readIds, item.id] };

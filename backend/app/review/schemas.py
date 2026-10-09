@@ -118,6 +118,9 @@ class PickReviewEntry(BaseModel):
     reason_category: str
     excess_pct: float | None = None
     note: str | None = None
+    review_context: dict[str, Any] = Field(default_factory=dict)
+    binding_state: str = "legacy_unbound"
+    statistics_eligible: bool = False
 
 
 class ShadowSnapshot(BaseModel):
@@ -137,8 +140,7 @@ class ShadowSnapshot(BaseModel):
 class PicksSnapshot(BaseModel):
     """每日精选组合 + 当日逐股归因快照（2026-09-04 新增维度）。
 
-    组合 T-1 生成、T 日持有：复盘日（trade_date）对照的组合是
-    combo_date（=组合生成日）那份；reviews 是当日收盘后 classify_failure 的结果。
+    当日持久候选；逐股观察绑定同日组合版本。旧未绑定记录可以读取，不能进入可信统计。
     """
 
     trade_date: str

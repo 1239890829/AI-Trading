@@ -36,7 +36,8 @@ import {
 import { StockLink } from "@/components/stock-link";
 import { IncrementalSentinel } from "@/components/ui/incremental-sentinel";
 import { useIncremental } from "@/hooks/use-incremental";
-import { usePollingFetch } from "@/hooks/use-polling-fetch";
+import { useResource } from "@/hooks/use-resource";
+import { ChannelStatus } from "@/components/notifications/channel-status";
 import { useDetailModal, type DetailPayload } from "@/components/detail/detail-modal";
 import { useSymbolDetail } from "@/components/detail/symbol-detail-context";
 import { NewsModal, type NewsModalItem } from "@/components/news-modal";
@@ -130,16 +131,59 @@ function timeText(ts: string | null): string {
  * 两份拼装一旦漂移（如忘了带 `symbol`、或分类映射改了），
  * 就会出现"同一个东西从两个入口点开看到不同内容"——正是本项要消除的那类不一致。
  */
+function selectionState(state: string): string {
+  return ({completed: "投影完成", pending: "待投影", failed: "投影失败", no_pick_set: "无当日组合记录", no_run: "未见归档记录", unavailable: "读取失败", unknown: "状态未知", no_archive: "未见当日归档", projection_unconfirmed: "投影结果未确认", present: "记录已保存", recorded: "已有原记录", ready: "记录就绪", ran_eligible: "已通过判定"} as Record<string, string>)[state] ?? "状态未归类，请核对原记录";
+}
+
+function evidenceLines(evidence: Record<string, unknown>): string[] {
+  const lines: string[] = [];
+  const object = (value: unknown): Record<string, unknown> => value && typeof value === "object" && !Array.isArray(value) ? value as Record<string, unknown> : {};
+  const labels: Record<string, string> = {tech: "技术", news: "消息", fundamental: "基本", capital: "资金", sentiment: "情绪", echelon: "梯队"};
+  for (const key of ["source_basis", "pick_basis"]) if (typeof evidence[key] === "string") lines.push(String(evidence[key]));
+  for (const [key, value] of Object.entries(object(evidence.bases))) if (typeof value === "string") lines.push(`${labels[key] ?? key}：${value}`);
+  const confidence = object(evidence.confidence);
+  if (confidence.label || confidence.tier) lines.push(`原规则档位：${confidence.label ?? confidence.tier}（不是胜率）；${Array.isArray(confidence.reasons) ? confidence.reasons.join("；") : "理由未记录"}`);
+  for (const [key, label] of [["linkage", "联动"], ["tradability", "可参与性"]]) {
+    const value = object(evidence[key]);
+    if (value.level || value.basis) lines.push(`${label}：${value.level ?? "未知"} · ${value.basis ?? "依据未记录"}`);
+  }
+  const range = object(evidence.buy_range);
+  if (typeof range.low === "number" && typeof range.high === "number") lines.push(`原参考区间：${range.low}–${range.high}；${range.basis ?? "依据未记录"}（不是成交）`);
+  if (evidence.observation_only === true) lines.push("原生成时仅观察，不代表当前执行资格。");
+  for (const [key, label] of [["invalidations", "失效条件"], ["vetoes", "否决依据"]]) if (Array.isArray(evidence[key]) && evidence[key].length) lines.push(`${label}：${evidence[key].filter(value => typeof value === "string").join("；")}`);
+  const audit = object(evidence.quote_audit);
+  if (audit.source || audit.data_timestamp) lines.push(`原报价：${audit.source ?? "来源未知"} · ${audit.data_timestamp ?? "源时点未知"} · 质量 ${audit.quality ?? "未知"}`);
+  for (const [key, raw] of Object.entries(object(evidence.dimension_evidence))) {
+    const value = object(raw);
+    if (["partial", "missing", "error"].includes(String(value.state))) lines.push(`${labels[key] ?? key}依据缺项：${value.reason ?? "原因未记录"}`);
+  }
+  if (Array.isArray(evidence.theme_sources)) for (const raw of evidence.theme_sources) {
+    const source = object(raw);
+    lines.push(`题材来源：${source.theme ?? "未记录"} · ${source.strength_tier ?? "强度未记录"}；${source.pick_basis ?? object(source.linkage).basis ?? "依据未记录"}`);
+  }
+  if (Array.isArray(evidence.related_event_refs)) for (const raw of evidence.related_event_refs) {
+    const event = object(raw);
+    lines.push(`原关联事件：${event.title ?? event.event_id ?? event.id ?? "事件身份未记录"}${event.source_version ? ` · 版本 ${event.source_version}` : ""}`);
+  }
+  const execution = object(evidence.execution_ref);
+  if (execution.decision_id || execution.decision_version) lines.push(`原执行引用：${execution.decision_id ?? "身份未记录"} · ${execution.decision_version ?? "版本未记录"}（不是成交）`);
+  return lines.length ? lines : ["原结构化依据未提供；不使用最新行情回填。"] ;
+}
+
 function judgmentPayload(item: NotificationItem): DetailPayload {
   return {
     kind: item.category === "news" ? "event" : "generic",
     title: item.title,
-    body: formatLegacyLimitDistance(item.body),
+    body: [formatLegacyLimitDistance(item.body), ...(item.references ?? []).flatMap(ref => [
+      `原记录 #${ref.event_id} · ${ref.source_as_of ?? "原时点未记录"} · 版本 ${ref.source_version ?? "未绑定"}`,
+      ...evidenceLines(ref.evidence),
+    ])].join("\n"),
     symbol: item.symbol,
     source: item.source ?? null,
     date: item.ts,
     meta: [
       { label: "分类", value: item.label },
+      ...(item.recorded_at ? [{label: "记录时点", value: item.recorded_at}] : []),
       ...(item.score != null ? [{ label: "评分", value: String(item.score) }] : []),
     ],
   };
@@ -286,6 +330,11 @@ function NotificationDiagnosis({ diag }: { diag: NotificationDiagnostics }) {
         {diag.as_of ? ` · 诊断于 ${diag.as_of.slice(11, 16)}` : ""}
       </p>}
       {/* 原入选/买点与其他来源计数单独核对，不能把买点归档摘要当作全部通知链。 */}
+      {diag.selection && <div className="space-y-1 border-t border-zinc-200 pt-2 dark:border-zinc-700" data-testid="notification-selection-diagnosis">
+        <p>每日入选链：{selectionState(diag.selection.daily.state)} · {diag.selection.daily.count ?? "数量未记录"} 只</p>
+        {diag.selection.daily.receipt && <p>消息投影：{selectionState(diag.selection.daily.receipt.state ?? "unknown")} · 新记录 {diag.selection.daily.receipt.created ?? "未记录"} 条</p>}
+        <p>盘中入选链：{selectionState(diag.selection.intraday.state)} · 归档候选 {diag.selection.intraday.ranked_count ?? "未记录"} 只 · 原入选消息 {diag.selection.intraday.message_count ?? "未记录"} 条</p>
+      </div>}
       {diag.shapes && <details className="border-t border-zinc-200 pt-2 text-[11px] dark:border-zinc-700">
         <summary className="cursor-pointer text-zinc-600 dark:text-zinc-400">查看来源核对信息</summary>
         <div className="mt-1"><ShapeCounts shapes={diag.shapes} /></div>
@@ -342,43 +391,6 @@ function NotificationEmptyState({ payload, tab, clearBefore }: {
   </p>;
 }
 
-function ChannelStatus({ item }: { item: NotificationItem }) {
-  const channels = item.channels;
-  if (channels === undefined || channels === null) return <span>外部渠道状态未知</span>;
-  if (channels.length === 0) return <span>无外部渠道意图记录</span>;
-  const labels: Record<string, string> = {
-    pending: "待处理", leased: "处理中", accepted: "渠道已受理（未确认送达）",
-    unknown: "受理结果未知", expired: "已过期", suppressed: "已静默",
-    permanent_failed: "发送失败",
-  };
-  const reasonLabels: Record<string, string> = {
-    intent_expired: "等待超时", send_window_closed: "发送时效已过",
-    outside_trading_window: "不在交易时段", symbol_no_longer_in_scope: "标的已不在关注范围",
-    condition_no_longer_met: "触发条件已变化", quote_not_fresh: "行情已过期",
-    quote_time_unknown: "行情时间未知", quote_time_untrusted: "行情时间不可信",
-    event_or_rule_removed_or_disabled: "规则已停用或原事件失效",
-    rule_or_channels_changed: "规则或渠道设置已变化",
-    channel_unconfigured_or_target_changed: "渠道未配置或目标已变化",
-    buy_point_decision_superseded: "买点决定已有新版本",
-    buy_point_decision_no_longer_eligible: "原买点决定不再满足条件",
-    buy_point_execution_not_ready: "执行快照未就绪",
-    buy_point_event_execution_not_ready: "原事件执行快照未就绪",
-    acceptance_unconfirmed: "平台受理回执未确认",
-    lease_lost_after_send_started: "发送已开始但回执丢失",
-  };
-  const bjTime = (ms: number) => new Intl.DateTimeFormat("sv-SE", {
-    timeZone: "Asia/Shanghai", year: "numeric", month: "2-digit", day: "2-digit",
-    hour: "2-digit", minute: "2-digit", hour12: false,
-  }).format(new Date(ms));
-  return <span>{channels.map((c) => {
-    const reason = ["unknown", "expired", "suppressed", "permanent_failed"].includes(c.state)
-      ? `；原因：${reasonLabels[c.reason] ?? "未归类，请核对原记录"}` : "";
-    const time = c.state === "accepted" && c.accepted_at_ms
-      ? `，受理于 ${bjTime(c.accepted_at_ms)}`
-      : c.expires_at_ms ? `，意图截止 ${bjTime(c.expires_at_ms)}` : "";
-    return `${c.channel === "feishu" ? "飞书" : c.channel}：${labels[c.state] ?? "状态未知"}${reason}${time}`;
-  }).join("；")}</span>;
-}
 
 function NotificationRow({
   item,
@@ -452,9 +464,19 @@ function NotificationRow({
         <p className="mt-1 line-clamp-2 text-xs leading-relaxed text-zinc-600 dark:text-zinc-400">{formatLegacyLimitDistance(item.body)}</p>
       </button>
       <p className="mt-1 text-xs leading-relaxed text-zinc-500 dark:text-zinc-400" data-testid="notification-facts">
-        来源：{item.source ?? "历史事件，来源未标注"} · 触发：{item.ts ?? "时间未知"} · {item.validity ?? "条件与时效未记录，须重新核验"}
-        <br />站内记录可见；<ChannelStatus item={item} />。未读仅表示站内尚未点开。
+        来源：{item.source ?? "历史事件，来源未标注"} · 原观察：{item.source_as_of ?? item.ts ?? "时间未知"} · 记录：{item.recorded_at ?? "历史记录钟未提供"} · {item.validity ?? "条件与时效未记录，须重新核验"}
+        <br />站内记录可见；<ChannelStatus channels={item.channels} />。未读仅表示站内尚未点开。
       </p>
+      {(item.references?.length ?? 0) > 0 && <details className="mt-2 text-xs leading-relaxed text-zinc-600 dark:text-zinc-400">
+        <summary className="cursor-pointer">原入选与判定依据（{item.references?.length} 条）</summary>
+        <ul className="mt-2 space-y-3">{item.references?.map(ref => <li key={ref.event_id} className="min-w-0 break-words">
+          <p>{ref.kind === "selection" ? "原入选" : "原判定"} · {ref.source_as_of ?? "原时点未记录"}</p>
+          <p className="break-all">版本：{ref.source_version ?? "未绑定"}{ref.run_id ? ` · 归档 ${ref.run_id}` : ""}</p>
+          {ref.selection_source === "daily" && ref.source_version && ref.trade_date && <a className="quiet-action mt-1 inline-flex" href={`/hunting?${new URLSearchParams({view: "review", date: ref.trade_date, version: ref.source_version})}`}>查看此版本复盘</a>}
+          {evidenceLines(ref.evidence).map((line, index) => <p key={index}>{line}</p>)}
+        </li>)}</ul>
+        {item.symbol && <a href="/hunting?view=discover&sec=candidates" className="quiet-action mt-2 inline-flex">查看当前选股条件</a>}
+      </details>}
       {/* 标签行：左侧仍是分类/评分；右侧 = **一体化的操作组**（行情 + 判读） */}
       <div className="mt-1 flex items-center gap-2 text-[10px] text-zinc-600 dark:text-zinc-400">
         <span className="rounded bg-zinc-100 px-1 py-px dark:bg-zinc-800">{CATEGORY_LABEL[item.category]}</span>
@@ -503,10 +525,12 @@ export function NotificationBell() {
   const presence = useExitPresence(open ? true : null);
   const drawerRef = useRef<HTMLDivElement>(null);
   useOverlayFocus(drawerRef, () => setOpen(false), open);
-  const [payload, setPayload] = useState<NotificationsPayload | null>(null);
-  const [loading, setLoading] = useState(false);
-  const [error, setError] = useState<string | null>(null);
-  const [pollError, setPollError] = useState(false);
+  const notifications = useResource(getNotifications, {intervalMs: 60_000, marketHours: false});
+  const payload = notifications.data ?? null;
+  const loading = notifications.pending;
+  const error = notifications.error ? "通知读取失败" : null;
+  const pollError = notifications.error !== null;
+  const load = () => {if (!notifications.pending) notifications.refresh();};
   const [diagnosis, setDiagnosis] = useState<NotificationDiagnostics | null>(null);
   const [diagnosisLoading, setDiagnosisLoading] = useState(false);
   const [diagnosisError, setDiagnosisError] = useState(false);
@@ -544,21 +568,6 @@ export function NotificationBell() {
     [readState, clearBefore],
   );
 
-  const load = useCallback(async () => {
-    setLoading(true);
-    setError(null);
-    try {
-      const p = await getNotifications();
-      setPayload(p);
-      setPollError(false);
-    } catch (e) {
-      setError((e as Error).message || "通知加载失败");
-      setPollError(true);
-    } finally {
-      setLoading(false);
-    }
-  }, []);
-
   const loadDiagnosis = useCallback(async () => {
     setDiagnosisLoading(true);
     setDiagnosisError(false);
@@ -571,38 +580,7 @@ export function NotificationBell() {
     }
   }, []);
 
-  // 打开抽屉即拉取（关闭后由下方 60s 轮询维持未读点新鲜）
-  //
-  // 下方 void load() 为 **C 类显式豁免**（P1-27）：load 首行是
-  // `setLoading(true)/setError(null)` 的**同步** loading 标志——这是"点击即骨架"
-  // 的既定契约，规则想防的级联渲染在这里不成立；改成微任务延后会引入一帧
-  // 无骨架的闪空，反而更差。
-  useEffect(() => {
-    if (!open) return;
-    // eslint-disable-next-line react-hooks/set-state-in-effect
-    void load();
-  }, [open, load]);
-
-  // 60s 轮询：只刷新 payload，**不再在 effect 里改已读状态**
-  // （旧实现打开抽屉就写水位，导致"红点一闪即逝"且水位格式两套，见文件头说明）。
-  // 2026-09-11（S2-5）：裸 setInterval → 统一入口（获得可见性暂停）。
-  // `marketHours: false` —— 通知含「盘后」时段条目，盘外正是需要及时看到的时候，
-  // 不能套用行情类的盘外 ×5 降频（60s 会变 120s）。
-  usePollingFetch(
-    async () => {
-      try {
-        const p = await getNotifications();
-        setPayload(p);
-        setPollError(false);
-      } catch {
-        // 保留旧列表，同时明确它已不能代表当前状态。
-        setPollError(true);
-      }
-    },
-    60_000,
-    undefined,
-    { marketHours: false }
-  );
+  // Mount, polling and explicit refresh share the same resource and reply guard.
 
   // 未读数：**派生自当前 payload**（单一真相源是 payload.items + readState），
   // 不再用「上一次轮询算出的数字」——那正是"计数在旧累积上叠加"的来源。
@@ -644,7 +622,7 @@ export function NotificationBell() {
   return (
     <>
       <IconButton
-        onClick={() => setOpen(true)}
+        onClick={() => {setOpen(true); load();}}
         aria-label={pollError ? `打开通知中心（上次读取的未读数 ${unread}）` : unread > 0 ? `打开通知中心（${unread} 条未读）` : "打开通知中心"}
         title={pollError ? "通知刷新失败：未读数依据上次读取结果" : "通知中心：个股机会、持仓风险与资讯浏览；未读仅指站内浏览状态"}
         className="header-action notification-trigger"
@@ -763,6 +741,10 @@ export function NotificationBell() {
                 {diagnosisError && <p className="mt-1 text-amber-700 dark:text-amber-300">原因记录读取失败，当前状态未知；请重试。</p>}
                 {diagnosis && <div className="mt-2 max-h-52 overflow-y-auto"><NotificationDiagnosis diag={diagnosis} /></div>}
               </div>
+              <p className="px-4 pt-2 text-xs text-zinc-600 dark:text-zinc-400">本次读取最近 {payload?.read_window?.limit ?? 50} 条消息{payload?.read_window?.has_more === true ? "，更早记录未包含" : payload?.read_window?.has_more === null ? "，更早记录是否存在尚未确认" : ""}；入选消息按原观察钟分时段，其他消息沿事件记录钟；已读按记录钟判断。</p>
+              {payload?.monitor && ["uncompleted", "unknown"].includes(payload.monitor.state) && <p role="status" data-testid="notification-monitor-state" className="mx-4 mt-2 rounded-lg border border-amber-500/25 bg-amber-500/5 px-3 py-2 text-xs leading-relaxed text-amber-800 dark:text-amber-200">
+                持仓风险核对{payload.monitor.state === "unknown" ? "尚未完成" : "未完整完成"}{payload.monitor.uncompleted_symbols.length ? `（${payload.monitor.uncompleted_symbols.length} 只）` : ""}：{payload.monitor.reason || "源数据或成本依据待核对"}。不能据此确认风险已排除。
+              </p>}
               {/* tab：盘前 / 盘中 / 盘后（红点 = 该时段有未读） */}
               <SelectionRail activeKey={tab} label="通知时段" className="notification-session-tabs">
                 {SESSION_TABS.map((t) => (

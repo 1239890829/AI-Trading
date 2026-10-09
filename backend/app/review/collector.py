@@ -366,36 +366,39 @@ def collect_trading(
 def collect_picks(session_factory, trade_date: date) -> "PicksSnapshot":
     """采集每日精选组合与当日逐股归因（同步，走 DB；调用方丢线程池）。
 
-    组合 T-1 生成、T 日持有：取 date ≤ 复盘日的最新一份（绝不取未来组合——
-    那是还没开始的持有期，对照它就是把计划当结果）。逐股归因行
+    仅取复盘日的当日候选，兼容旧紧凑日期。逐股归因行
     （daily_pick_review）由 generate_daily_review 在复盘前置步写入；
     缺失时标 gap 降级，不冒充"全部达成"。
     """
     from app.models.daily_pick import DailyPickReview, DailyPickSet
+    from app.picks.review_contract import bound_review, day_keys, finite_number, object_json, selection_version, trusted_review
     gaps: list[DataGap] = []
     td = _date_key(trade_date)
+    iso, compact = day_keys(trade_date)
 
     with session_factory() as db:
         combo_date: str | None = None
         items_raw: list[dict] = []
+        meta: dict = {}
         try:
             row = (
                 db.execute(
                     select(DailyPickSet)
-                    .where(DailyPickSet.date <= td)
-                    .order_by(DailyPickSet.date.desc())
+                    .where(DailyPickSet.date.in_((iso, compact)))
+                    .order_by(DailyPickSet.date.asc())
                     .limit(1)
                 )
                 .scalars()
                 .first()
             )
             if row is not None:
-                combo_date = row.date
+                combo_date = iso
                 items_raw = json.loads(row.items or "[]")
+                meta = object_json(row.meta)
             if not items_raw:
                 gaps.append(DataGap(
                     field="picks.combo", source="daily_pick_set",
-                    reason=f"复盘日 {td}（含此前）无任何精选组合",
+                    reason=f"复盘日 {iso} 无当日精选组合（不将旧组合或未来组合当成本日推荐）",
                     impact="picks.每日精选对照", severity="warn",
                 ))
         except Exception as exc:
@@ -409,18 +412,32 @@ def collect_picks(session_factory, trade_date: date) -> "PicksSnapshot":
             rows = (
                 db.execute(
                     select(DailyPickReview)
-                    .where(DailyPickReview.date == td)
-                    .order_by(DailyPickReview.symbol)
+                    .where(DailyPickReview.date.in_((iso, compact)))
+                    .order_by(DailyPickReview.date.asc(), DailyPickReview.symbol)
                 )
                 .scalars()
                 .all()
             )
-            for r in rows:
+            excluded = 0
+            seen = set()
+            current_version = selection_version(iso, meta, items_raw)
+            for r in sorted(rows, key=lambda r: (r.selection_version != current_version, r.date != iso, -r.id)):
+                if r.symbol in seen:
+                    continue
+                seen.add(r.symbol)
+                bound = bound_review(r.review_context, day=iso, meta=meta, items=items_raw, symbol=r.symbol, persisted_version=r.selection_version)
+                eligible = finite_number(r.excess_pct) is not None and trusted_review(r.review_context, day=iso, meta=meta, items=items_raw, symbol=r.symbol, persisted_version=r.selection_version)
+                excluded += int(not eligible)
                 reviews.append(PickReviewEntry(
                     symbol=r.symbol, name=r.name, verdict=r.verdict,
                     reason_category=r.reason_category,
-                    excess_pct=r.excess_pct, note=r.note,
+                    excess_pct=r.excess_pct, note=r.note, review_context=object_json(r.review_context),
+                    binding_state="bound" if bound else "legacy_or_superseded", statistics_eligible=eligible,
                 ))
+            if excluded:
+                gaps.append(DataGap(field="picks.review_binding", source="daily_pick_review",
+                    reason=f"{excluded} 条旧未绑定、版本已改变或观察窗口不可评，已排除可信统计",
+                    impact="picks.准确率与失误归因", severity="warn"))
             # 归因行缺失但组合存在：归因步没跑成功——诚实降级，不让准确率假装 100%
             if items_raw and not reviews:
                 gaps.append(DataGap(

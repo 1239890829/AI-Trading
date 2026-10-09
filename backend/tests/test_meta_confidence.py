@@ -78,3 +78,26 @@ class TestPrecedence:
         )
         assert out["tier"] == "observe"
         assert len(out["reasons"]) >= 3  # 每条命中原因都留痕
+
+
+def test_placeholder_score_does_not_prove_dimension_available():
+    evidence = {key: {"state": "success", "reason": "真实输入"} for key in FULL}
+    for state in ("partial", "missing", "error"):
+        evidence["news"] = {"state": state, "reason": "源输入不完整"}
+        out = classify_confidence(score=85, sub_scores=FULL, phase="发酵", dimension_evidence=evidence)
+        assert out["tier"] == "executable"
+        assert any("news" in reason and state in reason for reason in out["reasons"])
+
+
+def test_verified_empty_events_are_available_neutral_evidence():
+    evidence = {key: {"state": "success", "reason": "真实输入"} for key in FULL}
+    evidence["news"] = {"state": "valid_empty", "reason": "成功读取，无关联事件"}
+    assert classify_confidence(score=85, sub_scores=FULL, phase="发酵", dimension_evidence=evidence)["tier"] == "strong"
+
+
+def test_evidence_contract_requires_all_named_dimensions_not_dictionary_length():
+    evidence = {key: {"state": "success", "reason": "真实输入"} for key in FULL if key != "capital"}
+    evidence["unrelated"] = {"state": "success", "reason": "不是评分维度"}
+    out = classify_confidence(score=85, sub_scores=FULL, phase="发酵", dimension_evidence=evidence)
+    assert out["tier"] == "executable"
+    assert any("capital" in reason for reason in out["reasons"])

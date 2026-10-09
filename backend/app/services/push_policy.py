@@ -42,8 +42,12 @@ def feishu_allowed(kind: PolicyKind) -> bool:
 
 
 class AnomalyPushGuard:
-    """ANOMALY 类的「状态变化才推」守卫（进程内存态，重启清空可接受——
-    重启后首轮会重推一次当前异常，符合「让用户知道现状」的语义）。"""
+    """Legacy pure change filter for local consumers.
+
+    The live data-health producer uses durable source events and Outbox receipts.
+    This memory-only filter must not consume an externally deliverable episode
+    before persistence, or restart an unknown send after a process restart.
+    """
 
     def __init__(self) -> None:
         self._active: set[str] = set()

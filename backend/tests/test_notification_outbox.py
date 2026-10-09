@@ -199,10 +199,13 @@ def test_real_exit_intent_rechecks_unwatched_holding_and_defers_missing_quote(ri
     # A later all-market snapshot supplies the held symbol without altering the
     # watchlist or forcing another provider call. Reconcile the pre-send lease.
     as_of = datetime.now(timezone.utc)
+    service.update_quotes({'600999': {'symbol': '600999', 'price': 9.0, 'quality': 'high',
+        'source': 'isolated-test', 'data_timestamp': as_of - timedelta(hours=2)}})
     service.update_snapshot_service(SimpleNamespace(
         freshness=lambda **_: SimpleNamespace(state="ready"), poll_interval=60,
         versioned_snapshot=lambda: ([{"symbol": "600999", "price": 9.0,
-                                      "source": "isolated-test"}], as_of),
+                                      "source": "isolated-test", "quality": "high",
+                                      "data_timestamp": as_of}], as_of),
     ))
     repo.outbox.reconcile(row.lease_until_ms)
     asyncio.run(service._deliver_pending())

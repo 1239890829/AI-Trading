@@ -32,6 +32,8 @@ TODO（诚实口径）：阈值（人气榜名次边界、封单额下限、联�
 """
 from __future__ import annotations
 
+from copy import deepcopy
+
 from app.picks.tradability import (
     MIN_THEME_LIMIT_UPS,
     MIN_THEME_SHARE,
@@ -66,6 +68,7 @@ STAGE_CERTAINTY_BASE = {
 #: 盘中跟踪「最推荐标的」默认上限（工作台动态分组容量；题材 2~5 天周期下
 #: 8 只足够覆盖核心梯队，再多就稀释「最推荐」语义）
 TOP_WATCH_LIMIT = 8
+SELECTION_IDENTITY_VERSION = "stock-identity-v2"
 
 #: 角色自带辨识度加持（梯队地位 = 被记住的成本）
 ROLE_NOTABLE = {"空间板", "龙头", "中军", "反包"}
@@ -431,6 +434,23 @@ def attach_participants(
     }
 
 
+def _unique_stock_sources(rows: list[dict]) -> list[dict]:
+    """Keep original sorted priority; one stock occupies one display/rank slot."""
+    by_symbol: dict[str, dict] = {}
+    source_fields = ("theme", "stage", "strength_tier", "linkage", "pick_basis", "tradability",
+                     "seal_state", "distinctiveness", "certainty", "role", "boards", "reason")
+    for row in rows:
+        symbol = str(row.get("symbol") or "")
+        if not symbol:
+            continue
+        source = deepcopy({key: row.get(key) for key in source_fields if key in row})
+        if symbol not in by_symbol:
+            by_symbol[symbol] = {**row, "theme_sources": [source]}
+        elif source not in by_symbol[symbol]["theme_sources"]:
+            by_symbol[symbol]["theme_sources"].append(source)
+    return list(by_symbol.values())
+
+
 def top_watch_stocks(payload: dict, *, limit: int | None = None) -> dict:
     """盘中跟踪「最推荐标的」：**可参与**的题材联动候选（2026-09-15 用户口径）。
 
@@ -540,6 +560,7 @@ def top_watch_stocks(payload: dict, *, limit: int | None = None) -> dict:
             )
     board_excluded = int(payload.get("board_excluded_reference") or 0)
     items.sort(key=lambda x: (x["tier"], -(x["change_pct"] or 0.0)))
+    items = _unique_stock_sources(items)
     # 兜底再筛一次：即使调用方漏做了板块拆分，参考区也不会混进买不了的票。
     # 用的仍是生产者写下的**同一个事实**（`tradable`），不是第二个判据实现。
     reference = [
@@ -547,10 +568,13 @@ def top_watch_stocks(payload: dict, *, limit: int | None = None) -> dict:
         if r.get("tradable") is not False and str(r.get("symbol") or "") not in participant_symbols
     ]
     reference.sort(key=lambda x: -(x.get("boards") or 0))
+    reference = _unique_stock_sources(reference)
     closed = sum(1 for r in reference if (r.get("tradability") or {}).get("level") == "不可参与")
     unknown = sum(1 for r in reference if (r.get("tradability") or {}).get("level") in (None, "unknown"))
     return {
         "trade_date": payload.get("trade_date"),
+        "selection_identity_version": SELECTION_IDENTITY_VERSION,
+        "effective_limit": limit,
         "items": items[:limit],
         "reference_items": reference[:limit],
         "total_candidates": len(items),

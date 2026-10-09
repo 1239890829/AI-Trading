@@ -259,7 +259,7 @@ function DetailModalBody({ payload, onClose }: { payload: DetailPayload; onClose
 
         {/* 正文/摘要文本（无 url 内容的主载体，如通知类快讯） */}
         {payload.body && (
-          <p className="mt-2 whitespace-pre-wrap text-xs leading-relaxed text-zinc-700 dark:text-zinc-300">
+          <p className="mt-2 whitespace-pre-wrap [overflow-wrap:anywhere] text-xs leading-relaxed text-zinc-700 dark:text-zinc-300">
             {payload.body}
           </p>
         )}

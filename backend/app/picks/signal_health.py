@@ -141,19 +141,32 @@ def collect_daily_pick_groups(session_factory) -> list[dict]:
             select(DailyPickSet).order_by(DailyPickSet.date.asc())
         ).scalars().all()
 
-    phase_by_date: dict[str, str | None] = {}
+    from app.picks.review_contract import finite_number, iso_day, object_json, trusted_review
+    by_selection = {}
     for s in sets:
-        phase = None
-        try:
-            phase = (json.loads(s.meta or "{}") or {}).get("market_phase")
-        except (ValueError, TypeError):
-            phase = None
-        phase_by_date[s.date] = phase
+        day = iso_day(s.date)
+        if day and (day not in by_selection or s.date == day):
+            try:
+                items = json.loads(s.items or "[]")
+            except (ValueError, TypeError):
+                items = []
+            by_selection[day] = (object_json(s.meta), items)
 
     by_date: dict[str, dict] = {}
+    seen = set()
     for r in rows:
+        day = iso_day(r.date)
+        selection = by_selection.get(day)
+        if not selection or not trusted_review(r.review_context, day=day, meta=selection[0], items=selection[1], symbol=r.symbol, persisted_version=r.selection_version):
+            continue
+        excess = finite_number(r.excess_pct)
+        if excess is None:
+            continue
+        if (day, r.symbol) in seen:
+            continue
+        seen.add((day, r.symbol))
         g = by_date.setdefault(
-            r.date, {"date": r.date, "phase": phase_by_date.get(r.date),
+            day, {"date": day, "phase": object_json(r.review_context).get("market_phase"),
                      "n": 0, "good": 0, "bad": 0, "flat": 0, "ex": []},
         )
         g["n"] += 1
@@ -163,8 +176,7 @@ def collect_daily_pick_groups(session_factory) -> list[dict]:
             g["bad"] += 1
         else:
             g["flat"] += 1
-        if r.excess_pct is not None:
-            g["ex"].append(float(r.excess_pct))
+        g["ex"].append(excess)
 
     return [
         {
@@ -188,8 +200,8 @@ def collect_signal_health(session_factory, window: int = WINDOW_GROUPS) -> dict:
     out["generated_at"] = beijing_now_naive().isoformat(timespec="seconds")
     out["source"] = "daily_pick_review"
     out["caveat"] = (
-        "excess_pct 已 nullable 化（迁移 f6b2c8e4a9d3）：基准缺失观测以 None 跳过统计；"
-        "nullable 化之前的历史行若存在被固化的 0.0，note 带[基准缺失]标记可甄别"
+        "只统计绑定当前组合版本和同日观察窗口的可信结果；旧未绑定、版本漂移、"
+        "仅观察、窗口或基准缺失不参与分母。价格观察不是成交胜率或T+1可实现收益"
     )
     return out
 

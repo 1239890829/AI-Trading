@@ -25,19 +25,19 @@ export const REASON_LABELS: Record<string, string> = {
 
 export type RolePerformance = { role: string; count: number; win_rate: number; avg_excess: number };
 
-/** 梯队角色胜率表：回答「能不能按题材抓妖」的直接证据；样本随交易日积累。 */
+/** 同版可信价格窗口的角色观察；不能证明实际成交或策略胜率。 */
 export function RolePerformanceTable({ rows }: { rows: RolePerformance[] }) {
   return (
     <div className="ui-card rounded-xl border border-zinc-200 p-3 text-xs dark:border-zinc-800">
       <div className="mb-1 font-medium">
-        梯队角色胜率（回答「能不能按题材抓妖」的直接证据；样本随交易日积累）
+        梯队角色价格观察（同版窗口；不是成交胜率）
       </div>
       <table className="w-full">
         <thead>
           <tr className="text-zinc-600 dark:text-zinc-400">
             <th className="text-left font-normal">角色</th>
             <th className="text-right font-normal">样本</th>
-            <th className="text-right font-normal">胜率</th>
+            <th className="text-right font-normal">走好观察占比</th>
             <th className="text-right font-normal">平均超额</th>
           </tr>
         </thead>
@@ -81,7 +81,7 @@ export function DailyReviews({ reviews }: { reviews: PickReviewRow[] }) {
   return (
     <div className="ui-card rounded-xl border border-zinc-200 p-3 text-xs dark:border-zinc-800">
       <div className="mb-1 font-medium">
-        当日复盘（逐只归因：对在哪、错在哪）
+        精选复盘（按原记录日期与观察窗口）
         <span className="ml-1.5 font-normal text-zinc-600 dark:text-zinc-400">
           走坏 {reviews.filter((r) => r.verdict === "bad").length} / 共 {reviews.length}
         </span>
@@ -102,12 +102,16 @@ export function DailyReviews({ reviews }: { reviews: PickReviewRow[] }) {
             <StockLink symbol={r.symbol} className="font-mono text-zinc-600 dark:text-zinc-400">
               {r.symbol}
             </StockLink>
-            <span>{r.name ?? ""}</span>
+            <span>{r.name ?? ""}</span><span className="text-zinc-600 dark:text-zinc-400">{r.date}</span>
             <span className={`font-mono tabular-nums ${pctColor(r.excess_pct)}`}>
-              超额 {pctText(r.excess_pct)}
+              {r.excess_pct == null ? "收益观察未知" : `观察超额 ${pctText(r.excess_pct)}`}
             </span>
             <span className={tone}>{label}</span>
             <span className="w-full text-zinc-600 dark:text-zinc-400">{r.note}</span>
+            <span className="w-full break-words text-zinc-600 dark:text-zinc-400" title={r.review_context?.selection_version ?? "历史版本未绑定"}>
+              {r.statistics_eligible === true ? "同版可信价格观察" : r.review_context?.selection_version ? "未进入可信统计：窗口、源数据或生成版本不满足" : "历史口径未绑定，不进入可信统计"}
+              {r.review_context?.window_start ? ` · ${r.review_context.window_start} → ${r.review_context.window_end ?? "终点未知"}` : ""}
+            </span>
           </div>
         );
       })}

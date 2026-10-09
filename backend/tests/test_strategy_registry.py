@@ -39,11 +39,9 @@ def sf():
 
 
 def _add_pick_review(sf, date: str, rows: list[tuple[str, str, float | None]]) -> None:
+    from tests.pick_review_fixtures import add_bound_reviews
     with sf() as db:
-        db.add(DailyPickSet(date=date, items="[]", meta="{}"))
-        for sym, verdict, ex in rows:
-            db.add(DailyPickReview(date=date, symbol=sym, verdict=verdict,
-                                   reason_category="gone_well", excess_pct=ex))
+        add_bound_reviews(db, date, rows)
         db.commit()
 
 
