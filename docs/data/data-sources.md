@@ -204,6 +204,16 @@ provider 与 `main_board` 都经它。
 `created_at / updated_at / data_timestamp / received_at / source / quality / version`（§3.3）；
 quality ∈ high/medium/low/stale/invalid，低质量数据 AI 禁用、回测禁用、前端强制标识。
 
+### 7.1 选股、通知与复盘消费者的源时点约束（IMP-087，2026-10-09）
+
+- 每日精选的generated_at是最终结果完成时刻，trade_date是当日候选归属日。原quote_audit.data_timestamp、盘中snapshot_as_of、事件recorded_at分别保留；不能用生成、抓取或接收时间补造旧报价当时可见性。每日最终items与生成钟共同绑定selection_version，供消息和复盘核原版本。
+- 六维dimension_evidence保存success/valid_empty/partial/missing/error与实际理由。成功读取无关联事件可为valid_empty；资金净额0、负PE及零增长仍可用。原计算保留中性占位，卡片/通知明确缺项；可用性字段不补造不存在的逐维源时点。旧记录未保存读取状态保持未知。
+- 自设个股条件在事件生成与发送前共用完整data_timestamp、source、有效现价和freshness核验；received_at不足以取得触发资格。真实持仓风险核hub报价或快照行自身源钟/质量，快照抓取钟不能升级行证据；缺报价、源钟或成本保留uncompleted与逐股原因，不解释为风险不存在。
+- 每日复盘只对明确表现日及原生成版本。09:30前生成的open_to_close统计须有个股和基准high/medium、本日完整时区收盘源时间，按现有60秒收盘窗校验；开盘后生成缺入选后路径时不可评。参考价收益另核quote_audit与本次生成时刻的窗口，历史日只读已有归因，不调用今天行情补写。
+- 可信D0价格观察不证明成交或T+1收益；marketdb T+5反事实对照使用两组相同T+5窗。ISO/compact同日先归一再取历史容量，缺窗口、版本漂移、仅观察和非有限值排除可信统计，仍保留原记录。
+
+本轮只修消费者的身份、时效和失败语义，未替换或新增数据源。夹具/隔离库测试不证明实时覆盖、长期可用性或实源SLO；详细消费者见[细功能审计§41](../product/feature-closure-audit.md#41-imp-087-原选股与可靠消息的细功能契约2026-10-09)。
+
 ---
 
 ## 8. 全量数据源清单与使用度审计（2026-09-16）
