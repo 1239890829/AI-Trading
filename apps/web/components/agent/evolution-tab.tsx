@@ -225,11 +225,11 @@ export function EvolutionTab() {
                       ? { label: "样本不足", cls: "bg-amber-500/10 text-amber-800 dark:text-amber-300" }
                       : { label: `验证中（${e.verification_date?.slice(5, 10) ?? "--"} 到期）`, cls: "bg-sky-500/10 text-sky-700 dark:text-sky-300" };
               return (
-                <div key={e.id} className="flex items-center justify-between gap-2 text-[11px]">
-                  <span className="truncate text-zinc-600 dark:text-zinc-300">
-                    #{e.change_id} {e.param_key} · {e.hypothesis.slice(0, 40) || "—"}
+                <div key={e.id} className="grid min-w-0 gap-1 text-[11px]">
+                  <span className="break-words text-zinc-600 dark:text-zinc-300">
+                    #{e.change_id} {e.param_key} · {e.hypothesis || "—"}
                   </span>
-                  <span className={`shrink-0 rounded px-1 py-0.5 text-[10px] ${meta.cls}`}>{e.outcome?.label ?? (e.status === "rolled_back" ? "历史回滚结果待核实" : meta.label)}</span>
+                  <span className={`max-w-full justify-self-start break-words rounded px-1 py-0.5 text-[10px] ${meta.cls}`}>{e.outcome?.label ?? (e.status === "rolled_back" ? "历史回滚结果待核实" : meta.label)}</span>
                 </div>
               );
             })}

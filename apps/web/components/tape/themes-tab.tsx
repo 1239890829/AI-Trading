@@ -281,7 +281,7 @@ export function ThemesTab() {
           按竞价涨幅降序；非交易日/无数据后端 502，此时不渲染本条 ── */}
       {benchmarkSorted.length > 0 && (
         <div
-          className="mb-3 flex shrink-0 items-center gap-x-3 gap-y-1 overflow-x-auto rounded-lg border border-zinc-200 px-3 py-1.5 dark:border-zinc-800"
+          className="theme-reference-list theme-auction-list"
           title="同花顺短线风向标竞价基准：该交易日 09:25 集合竞价终态的标杆个股；题材为官方 tags"
         >
           <span className="shrink-0 text-[11px] text-zinc-600 dark:text-zinc-400">竞价标杆</span>
@@ -309,7 +309,7 @@ export function ThemesTab() {
       {/* ── 人气榜条（B1）：ths 热股 24 小时榜 Top10，点击跳详情；失败静默不显示 ── */}
       {hot && hot.stocks.length > 0 && (
         <div
-          className="mb-3 flex shrink-0 items-center gap-x-3 gap-y-1 overflow-x-auto rounded-lg border border-zinc-200 px-3 py-1.5 dark:border-zinc-800"
+          className="theme-reference-list theme-popularity-list"
           title="同花顺热股榜（24 小时口径，人气为估算数据）；题材归属为官方成分反查"
         >
           <span className="shrink-0 text-[11px] text-zinc-600 dark:text-zinc-400">人气榜</span>
@@ -337,7 +337,7 @@ export function ThemesTab() {
       {/* ── 飙升榜条（B1）：排名变化驱动的「正在变热」，先于人气榜的更早信号 ── */}
       {sky && sky.length > 0 && (
         <div
-          className="mb-3 flex shrink-0 items-center gap-x-3 gap-y-1 overflow-x-auto rounded-lg border border-zinc-200 px-3 py-1.5 dark:border-zinc-800"
+          className="theme-reference-list theme-surge-list"
           title="同花顺飙升榜（排名变化驱动，与人气榜排名逻辑不同；人气为估算数据、榜单有延迟）"
         >
           <span className="shrink-0 text-[11px] text-zinc-600 dark:text-zinc-400">飙升榜</span>

@@ -382,9 +382,41 @@ artifacts/runs/ui-panel-layout-20261009保存新证据。按320/390/1280/1440px�
 
 Chrome CUA实际核320×665 K线Canvas/切列表、390×844分时/指标展开/自选/选股局部滚动、1440px市场/题材/复盘；320px自选在固定外壳内实际滚到共进股份末行和移出按钮。390px复盘键盘Right已平移到正文并截图review-390-body.png，触摸drag未证成功；截图归本批次screenshots。结构、AX、真实Canvas和实际滚动分别作为已披露范围内的替代证据；精确DOM/client/scroll几何及Canvas绘图区尺寸未知，Chrome self-XSS阻止只读控制台粘贴且未绕过，不写成全容器/全尺寸量测通过。窄窗口是桌面Chrome，不是实际手机，软键盘/读屏、复盘触摸drag与全设备性能限制保留。
 
-本轮工程已取得后端完整4654 passed/83 skipped/1 warning（1036.66s）、pyflakes exit0；前端tsc/eslint exit0、默认/UTC各99文件857 passed（253.63s/232.43s）。QuoteStrip末次修正后tsc/受影响文件lint exit0、2文件11测试通过（6.42s）；最终生产build exit0（frontend-build-release.log），3000已再次正常start。最终根/工作台Jev correctness8.1、regressions空（workbench-jev-exact-source.json）；市场/选股各correctness7.2、regressions空，已纳入末次两处CSS。静态Impeccable最后检查=[]；卫生/doc-health/public scan已取得exit0，协调文档回填与精确暂存后继续复核。IMP-083本地实现与已披露范围验证已完成，发布仍是本轮必做交付；提交PR、准确HEAD回执/required CI/release_check、match-head合并、post-merge CI及运行绑定/分支清理尚待发生，不预写合并或金融效果成功。
+本轮工程已取得后端完整4654 passed/83 skipped/1 warning（1036.66s）、pyflakes exit0；前端tsc/eslint exit0、默认/UTC各99文件857 passed（253.63s/232.43s）。QuoteStrip末次修正后tsc/受影响文件lint exit0、2文件11测试通过（6.42s）；最终生产build exit0（frontend-build-release.log），3000已再次正常start。最终根/工作台Jev correctness8.1、regressions空（workbench-jev-exact-source.json）；市场/选股各correctness7.2、regressions空，已纳入末次两处CSS。静态Impeccable最后检查=[]；卫生/doc-health/public scan已取得exit0，协调文档回填与精确暂存后继续复核。IMP-083工程与发布均已完成：[PR #242](https://github.com/1239890829/AI-Trading/pull/242)准确HEAD 4d50183b0c667bc0cbd75ef2dd0f52ae7b17f92d通过DegradedRelease、required CI与release_check，match-head合并为dc43c1dbafa89806693113e765206f85db7f78c4；post-merge运行37868845814三job completed/success，原分支已清理。准确事实见同PR最终回执与publication-receipt.json；发布通过不扩大原实屏验收范围，也不推定金融效果。
 
 现有backend/.env与认证配置保持，token仅进入原服务进程内存；不写前端、文档或日志。既有ui-current-saved-20261008及恢复包保持，不新增/删除恢复资产；业务数据不回退，旧版玻璃过透说明保留。真实手机软键盘/读屏与全设备性能未完成项继续如实披露。此轮只修布局与滚动，无产品能力、交易/研究语义、权限、工具链、治理或新页面变化，传播限本方案、W07与handoff；其他权威面不适用且不另建登记册。
+
+### 9.9 榜单、短字段与紧凑读数的可读性整改
+
+用户2026-10-09指出题材梯队、人气榜、飙升榜有遮挡，右侧板数换行且换手后字段不可见；要求逐一排查页面与组件内部同类问题。工作台指数收起至少保留上证指数、科创50、创业板指数且开关完整；市场成交额完整展示、不出现微型滚动条。本轮IMP-084从已发布PR #242的dc43c1db开始，分支codex/ranking-density-layout；§9.8工程与发布已完成，post-merge运行37868845814三job completed/success。保留已认可B+C风格，不借修复再次换肤、增加无消费者动效或削减数据。
+
+**诊断与取舍**
+
+短板数、角色、价格/比率、标签和动作应有完整的最小宽度；长名称与说明按所在阅读面允许换行。先调整面板比例、列宽、间距和布局，再为确需超宽的表保留自身横滚。滚动入口在hover/focus时可见，触屏保持直接滚动或明确入口，不把“仅hover出现”当触屏验收。小型成交额是单个完整读数，不应以限高/限宽加滚动代替布局。外壳不承担竖滚，叶子列表/阅读面继续按§9.8契约拥有滚动，不以overflow:hidden藏掉末行、末列或按钮。
+
+| 需求与直接消费者 | 实施责任 | 验收证据与反例 |
+|---|---|---|
+| 题材左侧人气/飙升榜与右侧梯队表 | 市场/题材切片核榜单排列、短字段列宽、末列和操作入口，保留所有证券/字段/动作。 | 桌面与320/390px真实浏览器观察；全项、末列与操作实际可达，短板数/角色/数值不被挤到下一行；长名称不挤掉短数值。 |
+| 工作台指数折叠与披露开关 | 工作台切片保留上证/科创50/创业板的真实身份和质量，展开恢复完整集，按钮自身不被压缩裁切。 | 收起/展开连续操作与窄屏截图；三项来源/时间/质量保留；合法空、失败和陈旧不伪造指数或数量。 |
+| 市场与工作台成交额摘要 | 对应切片调整读数区域比例与内部排列，去除小型读数滚动。 | 完整值/单位/来源状态同屏可读；短屏与大数值不出现细小scroll owner，也不将成交额移出可见区域。 |
+| 共享表格、榜单、筛选、读数卡及直接下游 | 同类审计按页面→组件→字段记录FIX/KEEP及理由，逐消费者确认作用域和遗留。 | 各主页面与受影响工具入口的实屏/键盘/实际滚动；hover/focus入口与触屏限制分别记录，不以一张页面截图代替组件内部验收。 |
+
+**独立技能职责与顺序**
+
+1. 先复现并冻结字段/动作、来源时间质量、各层scroll owner和尺寸基线；按需求→消费者→缺陷→证据登记。
+2. Impeccable原版Operate的layout/adapt与craft-floor负责可读性、溢出、短屏和控件细节，执行holistic→diagnose→fix→confirmation；机械detector不能替代实屏。
+3. Taste原版redesign-existing-projects独立按Scan→Diagnose→Fix检查比例、密度和组件关系；dashboard不套主技能营销页规则，示例随机数据建议不得覆盖真实行情。
+4. UI/UX Pro Max的数据表、nowrap与响应式建议用于短字段/长内容分配；Interaction Design核披露、焦点和滚动反馈。保留各自判断与产物，不压成一个“融合评分”。
+5. 实现工作台固定指数和摘要、市场/题材列宽与榜单，再展开同类消费者的有界修复；ui-state-verify记录ready/loading/合法空/error/stale/unknown、折叠重开、键盘和末行末列，真实Canvas另验。
+6. 原版独立复查与U49反例→适用工程门→Jev代码辅助复评→准确HEAD DegradedRelease/required CI/release_check→合并后CI、运行绑定与清理。Jev不计算金融规则、不新增生产模型消费者；作者自检不冒充独立Review。
+
+本轮实现已修正排名列3ch/#1000、跨列EntryChecklist继承nowrap、工作台长错误挤压、手机展开指数父区限高、mobile max-height cascade与账户grid优先级冲突；clamp只施加data-collapsed="false"（展开态），账户mobile context改flex/首行auto，题材横滚Y overscroll:auto允许父级到末行。真实CUA 320×665工作台收起三指数/完整开关/成交摘要，展开实际到科创/沪深/中证末行。显著标记合成且无后端token的fixture使用真实组件与完整生产CSS，修正bc-tape-page壳层后重验320/390榜单末项和#1000长名、1280×800九列/榜单与梯队末行、320键盘Right到介入条件末列与长条件展开；390缺科创明确未返回、账户390×665展开/收起均保留指数与两阅读区高度。实源与fixture截图分别归本批次screenshots，不混用数据身份。
+
+本轮后端完整4654 passed/83 skipped/1 warning（1020.45s）、pyflakes exit0。工作台首轮6 passed/1 timeout，低负载串行重跑7 passed（11.95s），未改5000ms阈值；前端首轮99文件860测试中858 passed/2 failed，QualityBadge q&&门控已修为q?.quality直接渲染，markdown corpus15193ms超15000ms阈值；相关3文件27测试低负载全过（10.22s），未改测试/阈值。最终默认全量99文件860 passed（217.52s）、UTC全量99文件860 passed（219.33s），见frontend-vitest-retry.log与frontend-vitest-utc.log；末次tsc/eslint exit0（frontend-tsc-final.log、frontend-eslint-final.log），生产build exit0（frontend-build-release.log），正式3000已恢复、8000原进程保持，local HTTP/health200。局部检查不相加为全量。首轮Jev Review返回HTTP 451 unavailable，没有baseline或复评分数；按AGENTS §5明示工具缺口，不沿用旧分数、不伪称Jev通过或独立Review。
+
+市场读数改compact grid+双列内联六项统计后，正式生产390×665与1280×600实源完整且无读数内部滚动条，见market-390-short-production.png、market-1280-short-production.png；390验收仅移动原助手气泡防遮挡，未ack或改通知。Chrome兼容修正scrollbar-color:auto并恢复webkit 8px，CUA150%桌面实际click/focus显示、drag到末列、外点失焦隐藏三态留图；纯mousemove hover未独立操作，不据此宣称触屏或纯hover已验证。
+
+本轮实施与已披露范围验收已完成，workspace-hygiene、doc-health与public_repo_scan均已取得exit0（*-final.log），本次日志/属性名修正后继续复核；准确HEAD PR/CI/release/post-merge仍待收尾，不提前写发布成功。客户端精确几何、真实手机/软键盘/读屏、触摸drag和全设备性能若未取得，只标未知或未验证；不以历史绿色、CSS声明、合成fixture或桌面窄窗推定通过。既有恢复tag与包保持；传播限本方案、W07和handoff，没有新产品语义、页面、工具链、权限或治理变更，其他权威面不适用。
 
 ## 附录A：逐技能原文职责与完整适用流程
 

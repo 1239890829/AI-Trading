@@ -67,7 +67,7 @@ export function Panel({ title, children, source, dataTimestamp, quality, quality
   return (
     <section className={`task-panel flex min-w-0 flex-col overflow-hidden rounded-xl border border-zinc-200 dark:border-zinc-800 ${className ?? ""}`}>
       {showHeader && (
-        <div className="task-panel-header flex items-center justify-between gap-3 border-b border-zinc-200 bg-zinc-900/[0.03] px-4 py-2.5 dark:border-zinc-800 dark:bg-zinc-900/40">
+        <div className="task-panel-header flex shrink-0 items-center justify-between gap-3 border-b border-zinc-200 bg-zinc-900/[0.03] px-4 py-2.5 dark:border-zinc-800 dark:bg-zinc-900/40">
           {/* 标题与元信息分别收缩；窄面板允许元信息换行，保持来源可读。 */}
           <h2 className="min-w-0 truncate text-sm font-medium text-zinc-900 dark:text-zinc-100">{title}</h2>
           <div className="panel-meta flex min-w-0 flex-wrap items-center gap-3 text-xs text-zinc-600 dark:text-zinc-400">
@@ -76,8 +76,8 @@ export function Panel({ title, children, source, dataTimestamp, quality, quality
                 （2026-09-14 口径统一；此前 `{quality && …}` 这类门控散在各调用点，
                 正是「盘面显示正常 / 工作台不显示」漂移的成因）。 */}
             <QualityBadge quality={quality} reasons={qualityReasons} />
-            {source && <span title="数据来源">{sourceLabel(source)}</span>}
-            {dataTimestamp && <span title="数据时间">{timeText(dataTimestamp)}</span>}
+            {source && <span className="shrink-0 whitespace-nowrap" title="数据来源">{sourceLabel(source)}</span>}
+            {dataTimestamp && <span className="shrink-0 whitespace-nowrap" title="数据时间">{timeText(dataTimestamp)}</span>}
           </div>
         </div>
       )}

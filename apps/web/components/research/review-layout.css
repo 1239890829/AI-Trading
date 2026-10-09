@@ -21,7 +21,9 @@
 .review-layout-with-disposition {grid-template-rows:minmax(0,1fr) minmax(140px,.45fr);}
 .review-layout-with-disposition .review-detail {grid-column:2;grid-row:1 / 3;}
 .review-layout-with-disposition .review-disposition {grid-column:1;grid-row:2;}
-.review-disposition table {min-width:440px;}
+.review-disposition table {min-width:0;width:100%;}
+.review-disposition table :is(th,td) {padding:8px 6px;}
+.review-disposition table td:not(:first-child) {white-space:nowrap;}
 .review-layout:focus-visible {outline:2px solid var(--ui-accent);outline-offset:-2px;}
 @media(min-width:1360px) {
   .review-layout-with-disposition {grid-template-columns:minmax(230px,.6fr) minmax(0,1.7fr) minmax(260px,.65fr);grid-template-rows:minmax(0,1fr);}

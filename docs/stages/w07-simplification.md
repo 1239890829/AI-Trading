@@ -619,11 +619,38 @@
 - **方案依据**：用户2026-10-09认可当前风格，要求指数/自选放左、详情放右，其他页面减少纵向堆叠和空间浪费，大容器不出现竖向滚动条；按product/ui-original-skills-plan-20261008.md §9.8实施。用户当轮已授权，不再重选视觉方向。
 - **范围**：工作台、选股、市场、复盘和直接下游详情/列表/阅读容器；桌面主从并排、手机渐进披露与各层明确scroll owner。保留PR #241色盘/字体/材质/顶部导航和紧凑控件；不新增页面、业务能力、数据源、模型、权限或后端规则，不改变提醒去重/推送。
 - **验收**：工作台左侧指数/自选/持仓上下文、右侧详情与可用图表；其他页按主任务并排利用宽度。页面根和大外壳不竖滚，只有当前列表/阅读面竖滚，宽表自行横滚；末行/末列与所有动作可达，无父子双重竖滚。对320/390/1280/1440px、短屏/大缩放记录各层client/scroll宽高与真实滚动，DOM/行为/Canvas分别验收；切股、日期、四账户scope、选股十项能力、旧深链/返回来源、空错陈旧状态及键盘/焦点不退化。相应完整门禁、Jev复评、准确HEAD发布回执/required CI、post-merge及清理继续执行，不沿用旧绿色。
-- **当前现场**：从master c98a8d4b42e730ecaf58e0b552b681485faeb60f开始，分支codex/panel-layout-scroll。IMP-082工程与发布已完成，不重开。本项已完成本地实现和已披露范围内的验证；已完成状态不预写PR/CI或合并成功，准确HEAD发布仍属本轮必做交付。
+- **当前现场**：从master c98a8d4b42e730ecaf58e0b552b681485faeb60f开始，分支codex/panel-layout-scroll。本项工程及发布均已完成：[PR #242](https://github.com/1239890829/AI-Trading/pull/242)准确HEAD 4d50183b0c667bc0cbd75ef2dd0f52ae7b17f92d已合并为dc43c1dbafa89806693113e765206f85db7f78c4。后续用户对榜单、短字段和指数折叠的反馈独立归IMP-084，不重开本项或改写原验收范围。
 - **主动反证**：有界核高度链/min-height:0、Flex/Grid最小内容溢出、粘性头部和过长工具栏挤压、隐藏caption、菜单portal/Esc、折叠重开图表resize、列表锚点及快速切股/日期。不能通过缩字、隐藏功能或裁切内容消除滚动；不把截图数量和模型分数当金融效果或独立Review。
 - **当前实现**：手机旧globals specificity造成图表/根撑高，已加强布局scope；QuoteStrip唯一指标DOM在工作台手机默认折叠，源时间常驻；K线OHLC/控制条横滚，图表/核对收起重复对象栏，列表保留原操作。市场context冲突、题材760px宽内容及复盘手机横向全高布局已修正；共享QuoteStrip指标开关hidden并限定工作台移动端，避免模态无效开关。320px指数叠行修为grid-auto-rows:max-content及完整按钮行高，质量徽标保留；手机账户摘要details原288px二次滚动以桌面去嵌套规则扩展到所有视口宽度。
 - **证据**：本轮artifacts/runs/ui-panel-layout-20261009，截图位于screenshots。Chrome CUA实际核320×665 K线Canvas/切列表，390×844分时/指标展开/自选/选股局部滚动，1440px市场/题材/复盘；320px自选在固定外壳内实际滚到共进股份末行与移出按钮。390px复盘键盘Right已平移到正文并有review-390-body.png，触摸drag未证成功。结构、AX、Canvas、截图及实际滚动各有范围，不冒充真实手机。
 - **验证进度**：后端完整4654 passed/83 skipped/1 warning，1036.66s；pyflakes exit0。前端tsc/eslint exit0；默认/UTC各99文件857 passed（253.63s/232.43s）。QuoteStrip末次修正后tsc/受影响文件lint exit0、2文件11测试通过（6.42s）；最终生产build exit0（frontend-build-release.log），3000已再次正常start。最终根/工作台Jev correctness8.1、regressions空（workbench-jev-exact-source.json），市场/选股各correctness7.2、regressions空，已纳入末次两处CSS。静态Impeccable最后检查=[]；卫生/doc-health/public scan已有exit0，协调文档回填与精确暂存后仍须复核。PR/CI、准确HEAD发布与合并后运行绑定待执行，不预写通过。
 - **验证限制**：精确DOM/client/scroll几何与Canvas绘图区尺寸未知，Chrome self-XSS阻止只读控制台粘贴且未绕过；结构/AX/Canvas/实际滚动是本轮替代证据，不推定所有容器/尺寸/末行末列均量测通过。320/390为桌面Chrome窄窗口；真实手机、软键盘/读屏、复盘触摸drag及全设备性能未完整实测。限制随工程交付保留，不伪造证据补齐，也不把工程完成当选股或金融效果。
 - **恢复**：保持既有tag ui-current-saved-20261008与artifacts/recovery/ui-current-20261008/source.tar.gz，本轮不新增/删除恢复资产；呈现源码可按基线回退，业务数据、权限、上下文和退出技能不恢复。token沿用既有backend/.env且仅进入服务进程内存，不写前端或文档；构建后独立核实际运行版本。
-- **下一步**：本地实现与已披露范围验收已完成；精确暂存后重核协调文档/卫生/公开扫描，提交本轮PR并完成准确HEAD DegradedRelease、三required CI/release_check、match-head合并、post-merge CI、运行绑定及分支清理。发布事实发生后再回填，不预写成功；不自动领取第二业务任务。
+- **发布收口**：准确HEAD DegradedRelease、required CI与release_check通过，已match-head合并为dc43c1dbafa89806693113e765206f85db7f78c4；post-merge运行37868845814三job completed/success，原功能分支本地与远端均已清理。发布事实见[PR最终回执](https://github.com/1239890829/AI-Trading/pull/242#issuecomment-6072294482)及本批次publication-receipt.json；原“待发布”描述属于当时验证进度，不代表当前发布状态。
+- **下一步**：保留已完成状态与历史证据。2026-10-09用户新增榜单遮挡、短字段折行、指数折叠和小型成交额滚动整改，独立登记IMP-084承接；不把本项历史绿色冒充新范围验收。
+
+## IMP-084
+
+**榜单可读性、短字段与指数折叠密度整改**
+
+- **状态**：待交付
+- **优先级**：P1
+- **阶段门**：G2
+- **门内序**：108
+- **门禁角色**：非阻断
+- **依赖**：IMP-083
+- **效果前置**：无
+- **方案依据**：用户2026-10-09明确要求全面排查题材梯队、人气榜、飙升榜的遮挡，避免短字段折行；不可避免的宽表应有hover/focus可发现、触屏可用的横滚。工作台指数收起保留上证、科创50和创业板且开关完整；市场成交额完整展示、不出现小型滚动条。按product/ui-original-skills-plan-20261008.md §9.9实施，用户当轮直接授权。
+- **范围**：题材梯队左右榜单/表格、工作台指数与成交摘要、市场成交额，以及工作台/选股/市场/复盘和直接下游组件中同类短字段、列宽、滚动入口与比例问题；保留B+C现有风格、全部业务字段/动作/上下文和源时间质量。只做呈现整改，不改后端、数据源、通知、策略、模拟撮合、权限或模型。
+- **验收**：短板数、角色、数值、标签与操作保持完整且按语义不折行；长名称/说明允许受控换行，不全局套nowrap。优先合理分配列宽和面板比例；确需宽表时由表自身横滚，末列和动作可达，hover/focus可见滚动入口且触屏不依赖hover。人气/飙升榜所有项可达，不以overflow:hidden、隐藏字段或缩字求无溢出。收起仍见上证/科创50/创业板，开关完整可点，展开恢复完整指数集；成交额无微型滚动条。320/390px与桌面/短屏分别留实屏和交互证据，状态/Canvas/样例与实源分开；适用完整门禁、Jev复评与准确HEAD发布链继续执行。
+- **当前现场**：从master dc43c1dbafa89806693113e765206f85db7f78c4开始，分支codex/ranking-density-layout。IMP-083发布已完成，依赖满足；全仓未发现本编号占用。本轮实施与已披露范围的本地验收已完成，3000最终生产恢复；准确HEAD发布链仍待完成，状态待交付，不预写PR/CI。
+- **主动反证**：核短字段最小内容宽度、flex shrink、grid minmax、固定表列、父子overflow和末列滚动入口；区分长文与短字段、表级横滚与读数卡布局。核指数折叠/重开/有效空/错误陈旧、窄屏开关及质量徽标；同类审计覆盖共享Table/榜单/控件消费者，原版技能分责，不复活退役融合入口。真实手机、客户端精确几何和触屏行为只在取得证据后写通过。
+- **实施与证据责任**：工作台切片负责固定指数、披露按钮与紧凑摘要；市场/题材切片负责榜单全项、梯队末列和成交额；同类审计负责各页面/共享组件的漏项与恢复路径；协调记录负责需求→改动→实屏/行为→工程门的对应。本轮证据按实际产物回填，不沿用IMP-083绿色。
+- **当前实现**：排名列3ch/#1000与跨列EntryChecklist继承nowrap已修正；工作台长错误渐进披露，手机展开指数改自身88–160px滚动，收起三项完整。作者复查修正mobile max-height cascade与账户grid优先级冲突：clamp仅施加data-collapsed="false"（展开态），账户mobile context改flex/首行auto；题材横滚Y overscroll:auto允许父级到末行。
+- **证据**：`artifacts/runs/ui-density-20261009/screenshots`保存实源与合成fixture分别标记的截图。CUA真实320×665工作台已核收起三指数、完整开关/成交摘要，展开实际滚到科创/沪深/中证末行。显著标记合成且无后端token的fixture使用真实ThemesTab/Card/Checklist/Index与完整生产CSS，修正bc-tape-page壳层后重验：320/390榜单竖滚到第10项/#1000长名换行，1280×800九列全见/榜单末项/梯队末行，320键盘Right到介入条件末列并展开长条件，桌面展开条件完整；390缺科创明确未返回，390×665账户收起/展开均保留指数与两阅读区高度。夹具不代表实源，桌面窄窗不代表真实手机。
+- **验证进度**：本轮后端完整4654 passed/83 skipped/1 warning（1020.45s）、pyflakes exit0。工作台定向首轮6 passed/1项5000ms timeout（37.46s），低负载串行重跑7 passed（11.95s），未改阈值。前端首轮99文件860测试=858 passed/2 failed：QualityBadge的q&&门控已改q?.quality直接渲染，markdown corpus15193ms超15000ms阈值；相关3文件27测试低负载重试全过（10.22s），未改测试/阈值。最终默认全量99文件860 passed（217.52s）、UTC全量99文件860 passed（219.33s），见frontend-vitest-retry.log与frontend-vitest-utc.log；末次tsc/eslint exit0（frontend-tsc-final.log、frontend-eslint-final.log）、生产build exit0（frontend-build-release.log），3000已正式start、local HTTP/health200，8000原进程保持。早期局部测试不相加为全量。Jev Review首轮HTTP 451 unavailable，无baseline/复评分数，不沿用旧分数、不写通过或独立Review。
+- **生产与滚动复核**：市场compact grid+双列内联六项统计，生产390×665与1280×600实源完整且无读数内部条，截图market-390-short-production.png、market-1280-short-production.png；390验收只将助手气泡移顶部，未ack/改通知。Chrome scrollbar-color:auto恢复webkit 8px后，CUA150%桌面实际click/focus显示、drag到末列、外点失焦隐藏分别留图；纯mousemove hover未独立操作。
+- **验证限制**：workspace-hygiene、doc-health与public_repo_scan均已取得exit0（*-final.log），本次日志/属性名修正后继续复核；准确HEAD PR/CI/release/post-merge仍待收尾。客户端精确几何、真实手机/软键盘/读屏、触摸drag和全设备性能未完整实测；不把夹具、桌面窄窗、键盘Right或click/focus推定为触屏/纯hover通过。
+- **恢复**：保留ui-current-saved-20261008和既有恢复包；仅呈现源码可按dc43基线回退，不覆盖业务数据或恢复退出技能。
+- **传播核对**：限本stage、现役UI方案§9.9和handoff；没有新增页面、业务语义、工具链、模型、权限或治理规则，其他权威面不适用。
+- **下一步**：实施与已披露范围验收已完成；卫生/doc-health/公开扫描已取得exit0；末次修正精确暂存并复核后提交PR、准确HEAD DegradedRelease/required CI/release_check、match-head合并、post-merge运行绑定和分支清理；保留Jev工具缺口与验证限制，不预写发布成功、不另领第二业务任务。

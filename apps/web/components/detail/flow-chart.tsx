@@ -51,20 +51,20 @@ export function FlowChart({ flow }: { flow: CapitalFlow }) {
         <div className="shrink-0 border-t border-zinc-100 pt-1 text-[10px] text-zinc-600 dark:text-zinc-400 dark:border-zinc-800/60">{flow.definition}</div>
       </div>
       {/* 右：明细表 */}
-      <div className="min-h-0 overflow-auto">
-        <table className="w-full text-sm">
+      <div className="data-scroll min-h-0 min-w-0 overflow-auto" tabIndex={0} role="region" aria-label="每日资金流明细，窄屏可横向滚动">
+        <table className="w-full min-w-max text-sm">
           <thead className="sticky top-0 bg-zinc-50 text-left text-xs text-zinc-600 dark:text-zinc-400 dark:bg-zinc-900/50">
             <tr>{["日期", "主力净流入", "超大单", "大单", "中单", "小单"].map((h) => (
-              <th key={h} className={`px-3 py-2 font-medium ${h === "日期" ? "" : "text-right"}`}>{h}</th>
+              <th key={h} className={`whitespace-nowrap px-2 py-2 font-medium ${h === "日期" ? "" : "text-right"}`}>{h}</th>
             ))}</tr>
           </thead>
           <tbody>
             {[...flow.flow].reverse().map((r) => (
               <tr key={r.date} className="border-b border-zinc-100 last:border-0 dark:border-zinc-800/60">
-                <td className="px-3 py-1.5 font-mono text-xs">{r.date}</td>
-                <td className={`px-2 py-1.5 text-right font-mono text-xs ${(r.net_main ?? 0) > 0 ? "text-up-ink dark:text-up" : "text-down-ink dark:text-down"}`}>{fmtAmount(r.net_main)}</td>
+                <td className="whitespace-nowrap px-2 py-1.5 font-mono text-xs">{r.date}</td>
+                <td className={`whitespace-nowrap px-2 py-1.5 text-right font-mono text-xs ${(r.net_main ?? 0) > 0 ? "text-up-ink dark:text-up" : "text-down-ink dark:text-down"}`}>{fmtAmount(r.net_main)}</td>
                 {[r.net_super, r.net_big, r.net_mid, r.net_small].map((v, j) => (
-                  <td key={j} className={`px-3 py-1.5 text-right font-mono text-xs ${(v ?? 0) > 0 ? "text-up-ink dark:text-up" : "text-down-ink dark:text-down"}`}>{fmtAmount(v)}</td>
+                  <td key={j} className={`whitespace-nowrap px-2 py-1.5 text-right font-mono text-xs ${(v ?? 0) > 0 ? "text-up-ink dark:text-up" : "text-down-ink dark:text-down"}`}>{fmtAmount(v)}</td>
                 ))}
               </tr>
             ))}

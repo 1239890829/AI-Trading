@@ -446,7 +446,7 @@ function WorkbenchInner() {
           ]} onChange={value => router.push(patchWorkspaceUrl("/workbench", sp.toString(), {account: value, rt: null}), {scroll: false})} />}
         </div>
       </header>
-      {error && <div role="alert" className="bc-read-warning">{error}<button onClick={() => void loadBase()}>重试读取</button></div>}
+      {error && <div role="alert" className="bc-read-warning bc-base-warning"><details><summary>部分数据读取失败 · 查看原因</summary><p className="data-scroll" tabIndex={0}>{error}</p></details><button onClick={() => void loadBase()}>重试读取</button></div>}
 
       <nav className="bc-mobile-views" aria-label="工作台内容">
         {([["list", "指数与自选"], ["chart", "图表"], ["check", "核对"]] as const).map(([key, label]) => <button key={key} type="button" aria-pressed={mobileView === key} onClick={() => setMobileView(key)}>{label}</button>)}

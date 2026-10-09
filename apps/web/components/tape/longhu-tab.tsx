@@ -149,6 +149,7 @@ export function LonghuTab() {
 
       <Panel
         className="min-h-0 flex-1 overflow-hidden"
+        bodyClassName="data-scroll"
         title={
           error && !isPreRelease ? "数量待核对" : records.length > 0
             ? `共 ${records.length} 条 / ${stockCount} 只股票（日榜优先·按净买额降序）`
@@ -171,7 +172,7 @@ export function LonghuTab() {
             <p className="px-4 py-10 text-center text-sm text-zinc-600 dark:text-zinc-400">暂无数据（龙虎榜盘后披露，当日数据需收盘后查询）</p>
           )
         ) : (
-          <table className="w-full text-sm">
+          <table className="w-full text-sm" tabIndex={0} aria-label="公开席位，左右滚动查看全部列">
             <thead className="text-left text-xs text-zinc-600 dark:text-zinc-400">
               <tr className="border-b border-zinc-200 dark:border-zinc-800">
                 {["代码", "名称", "区间", "涨幅", ...(hasClose ? ["收盘"] : []), ...(hasTurnover ? ["换手"] : []), ...(hasAmount ? ["榜内成交"] : []), "净买额", "买入", "卖出", "游资净额", "机构净额", "上榜原因"].map((h) => (
@@ -212,8 +213,8 @@ export function LonghuTab() {
                   <td className={`px-2 py-2 text-right font-mono text-xs ${(r.org_net_value ?? 0) > 0 ? "text-up-ink dark:text-up" : (r.org_net_value ?? 0) < 0 ? "text-down-ink dark:text-down" : ""}`}>
                     {fmtAmount(r.org_net_value)}
                   </td>
-                  <td className="px-2 py-2 text-xs text-zinc-600 dark:text-zinc-400" title={r.reason ?? ""}>
-                    {(r.reason ?? "--").slice(0, 22)}
+                  <td className="table-description px-2 py-2 text-xs text-zinc-600 dark:text-zinc-400">
+                    {r.reason ?? "--"}
                   </td>
                 </tr>
               ))}
