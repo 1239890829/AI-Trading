@@ -1,12 +1,13 @@
 "use client";
 
 import Link from "next/link";
-import { useEffect, useMemo, useState } from "react";
-import { useSearchParams } from "next/navigation";
+import { useId, useMemo, useState } from "react";
+import { useSurfaceScope } from "@/components/inspection/surface-scope";
+import { inspectionClick, useInspection } from "@/components/inspection/inspection-context";
 import { Panel } from "@/components/panel";
 import { getLimitUpPool } from "@/lib/api";
 import { bjDate, fmt, fmtAmount, pctColor, pctText } from "@/lib/format";
-import { themesUrl } from "@/lib/routing";
+import { tapeUrl } from "@/lib/routing";
 import { StockLink, useStockRowNav } from "@/components/stock-link";
 import { useResource } from "@/hooks/use-polling-fetch";
 
@@ -25,7 +26,9 @@ import { useResource } from "@/hooks/use-polling-fetch";
 
 export function LimitUpTab() {
   const stockNav = useStockRowNav();
-  const searchParams = useSearchParams();
+  const { searchParams, replaceSearch } = useSurfaceScope();
+  const { open: openInspection } = useInspection();
+  const dateId = useId();
   const urlDate = searchParams.get("date") || undefined;
   const requestedDate = urlDate ?? bjDate(new Date().toISOString());
   const resource = useResource(() => getLimitUpPool(requestedDate), { key: requestedDate, intervalMs: null });
@@ -39,15 +42,14 @@ export function LimitUpTab() {
 
   function syncUrl(next: { date?: string; theme?: string; symbols?: string }) {
     // 在现有 URL 上增删参数（保留 tab= 等盘面页参数）
-    const p = new URLSearchParams(window.location.search);
+    const p = new URLSearchParams(searchParams.toString());
     if (next.date) p.set("date", next.date);
     else p.delete("date");
     if (next.theme) p.set("theme", next.theme);
     else p.delete("theme");
     if (next.symbols) p.set("symbols", next.symbols);
     else p.delete("symbols");
-    const qs = p.toString();
-    window.history.replaceState({}, "", qs ? `?${qs}` : window.location.pathname);
+    replaceSearch(p);
   }
 
   const onDate = (v: string) => {
@@ -74,9 +76,9 @@ export function LimitUpTab() {
       <div className="mb-3 flex shrink-0 flex-wrap items-center justify-between gap-2">
         <h2 className="text-base font-semibold">涨停池 · {tradeDate || "…"}</h2>
         <div className="query-date text-xs text-zinc-600 dark:text-zinc-400">
-          <label htmlFor="zt-date">按日期查询：</label>
+          <label htmlFor={dateId}>按日期查询：</label>
           <input
-            id="zt-date"
+            id={dateId}
             type="date"
             value={tradeDate.replace(/^(\d{4})(\d{2})(\d{2})$/, "$1-$2-$3")}
             onChange={(e) => onDate(e.target.value)}
@@ -105,7 +107,7 @@ export function LimitUpTab() {
             只看成员
           </label>
           <div className="flex-1" />
-          <Link href={themesUrl()} className="text-xs text-zinc-600 dark:text-zinc-400 hover:text-zinc-600 dark:hover:text-zinc-200">
+          <Link href={tapeUrl("themes", {date: tradeDate, focus: theme})} onClick={inspectionClick(openInspection, {kind: "themes", date: tradeDate, focus: theme})} className="text-xs text-zinc-600 dark:text-zinc-400 hover:text-zinc-600 dark:hover:text-zinc-200">
             返回题材梯队 ↩
           </Link>
           <button
@@ -120,6 +122,7 @@ export function LimitUpTab() {
       {error && (
         <div className="mb-4 shrink-0 rounded-lg border border-amber-500/40 bg-amber-500/10 px-4 py-3 text-sm text-amber-800 dark:text-amber-300">
           涨停池加载失败：{error}（数据源为东方财富 push2ex 免费接口）
+          <button type="button" className="quiet-action ml-2" onClick={resource.refresh}>重试读取</button>
         </div>
       )}
 

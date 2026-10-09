@@ -15,12 +15,11 @@
  * 4. **可跳转** —— theme/capital/echelon 类按 nav-targets 单点跳对应功能页。
  */
 import { createContext, useCallback, useContext, useEffect, useMemo, useState } from "react";
-import { useRouter } from "next/navigation";
+import { useInspection } from "@/components/inspection/inspection-context";
 
 import { getEventsForSymbol, getNewsContent, type ArticleBlock, type EventSummary } from "@/lib/api";
 import { CapitalFlowPanel } from "@/components/detail/capital-flow-panel";
 import { eventTimeText } from "@/lib/format";
-import { themesUrl } from "@/lib/routing";
 // 只依赖**零业务依赖**的 context 模块（不 import symbol-detail-modal）：
 // 否则形成 detail-modal → symbol-detail-modal → stock-detail → stock-events → detail-modal 的环
 import { useSymbolDetail } from "@/components/detail/symbol-detail-context";
@@ -81,7 +80,7 @@ export function DetailModalProvider({ children }: { children: React.ReactNode })
 }
 
 function DetailModalBody({ payload, onClose }: { payload: DetailPayload; onClose: () => void }) {
-  const router = useRouter();
+  const { open: inspect } = useInspection();
   const { open } = useDetailModal();
   // 「查看个股详情」→ 标的详情弹窗（2026-09-15 详情弹窗化，原先跳工作台）
   const { open: openSymbolDetail } = useSymbolDetail();
@@ -335,10 +334,10 @@ function DetailModalBody({ payload, onClose }: { payload: DetailPayload; onClose
               type="button"
               onClick={() => {
                 onClose();
-                router.push(themesUrl(payload.theme as string));
+                inspect({kind: "themes", focus: payload.theme as string});
               }}
             >
-              去题材页 {payload.theme}
+              查看题材梯队 {payload.theme}
             </button>
           )}
           {payload.url && (

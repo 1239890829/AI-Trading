@@ -70,15 +70,25 @@ describe("StockLink · 点击弹窗、链接保留", () => {
     expect(link.getAttribute("href")?.startsWith("/workbench?symbol=600519")).toBe(true);
   });
 
-  it("左键点击：打开弹窗，且不再导航到工作台", () => {
+  it("左键点击：打开弹窗，且不再导航到工作台", async () => {
     renderWithProvider(
       <StockLink symbol="600519">贵州茅台</StockLink>,
     );
     fireEvent.click(screen.getByRole("link"));
     expect(screen.getByTestId("symbol-detail-modal")).toBeTruthy();
-    expect(screen.getByTestId("detail-panel").getAttribute("data-symbol")).toBe("600519");
+    expect((await screen.findByTestId("detail-panel")).getAttribute("data-symbol")).toBe("600519");
     // preventDefault 阻断了 Link 的默认导航 ⇒ 没有 push
     expect(nav.push).not.toHaveBeenCalled();
+  });
+
+  it("工作台源浮层可显式保留链接语义并打开证券弹窗", async () => {
+    nav.pathname = "/workbench";
+    renderWithProvider(<StockLink symbol="600519" preferModal>行情</StockLink>);
+    const link = screen.getByRole("link", {name: "行情"});
+    expect(link.getAttribute("href")?.startsWith("/workbench?symbol=600519")).toBe(true);
+    fireEvent.click(link);
+    expect((await screen.findByTestId("detail-panel")).getAttribute("data-symbol")).toBe("600519");
+    expect(nav.replace).not.toHaveBeenCalled();
   });
 
   it("修饰键点击：不弹窗（放行浏览器新标签行为）", () => {

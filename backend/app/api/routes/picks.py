@@ -43,7 +43,7 @@ def _db():
     return get_session_factory()()
 
 
-def _attach_latest_execution(items: list[dict], trade_date: str) -> list[dict]:
+def _attach_latest_execution(items: list[dict], trade_date: str, meta: dict | None = None) -> list[dict]:
     """给每日精选挂最新一版执行复核事实；纯读，不触发新判定/新样本（IMP-006）。"""
     try:
         from app.picks.opportunity_learning import latest_notification_execution
@@ -52,11 +52,13 @@ def _attach_latest_execution(items: list[dict], trade_date: str) -> list[dict]:
     except Exception as exc:  # noqa: BLE001 — 执行证据读失败不能拖垮每日精选
         log.warning("picks latest execution read failed: %s", exc)
         latest = {}
-    return [
+    from app.picks.selection_entry import attach_daily_entries
+
+    return attach_daily_entries([
         {**it, "execution": latest.get(str(it.get("symbol") or ""))}
         for it in (items or [])
         if isinstance(it, dict)
-    ]
+    ], meta or {})
 
 
 @router.post("/generate")
@@ -232,7 +234,7 @@ async def today_picks(request: Request, hub: QuoteHub = Depends(get_hub)) -> dic
             return {
                 "data": {
                     "date": iso_day(row.date),
-                    "items": _attach_latest_execution(json.loads(row.items), iso_day(row.date)),
+                    "items": _attach_latest_execution(json.loads(row.items), iso_day(row.date), meta),
                     "stale": iso_day(row.date) != today,
                     "meta": meta,
                 },
@@ -244,7 +246,7 @@ async def today_picks(request: Request, hub: QuoteHub = Depends(get_hub)) -> dic
         return {
             "data": {
                 "date": iso_day(row.date),
-                "items": _attach_latest_execution(json.loads(row.items), iso_day(row.date)),
+                "items": _attach_latest_execution(json.loads(row.items), iso_day(row.date), meta),
                 "replaced": json.loads(row.replaced or "[]"),
                 "meta": meta,
             },
@@ -419,10 +421,17 @@ async def execution_gate(request: Request, date: str | None = Query(default=None
 @router.get("/shadow")
 async def shadow_state(request: Request) -> dict:
     """影子持仓账户状态（scope=shadow，独立于交易页签的 main 账户）。"""
+    from app.picks.shadow import activation_status, read_shadow_state
+
     runner = getattr(request.app.state, "paper_shadow", None)
-    if runner is None:
-        return {"data": {"enabled": False, "note": "影子持仓未启用（ASHARE_PICKS_SHADOW_ENABLED）"}, "meta": {}}
-    return {"data": {"enabled": True, **runner.state()}, "meta": {}}
+    state = await asyncio.to_thread(runner.state) if runner else await asyncio.to_thread(read_shadow_state, get_session_factory())
+    status = activation_status(request.app, "daily")
+    note = "晨窗只消费原每日精选组合及执行闸门；选择本视图不会启用或下单。"
+    if not status["enabled"]:
+        note = "每日精选影子未启用；历史账户保留，选择本视图不会启用。"
+    elif not status["activation"]["runner_loaded"]:
+        note = "已配置启用，但后台尚未装配；当前不会执行。"
+    return {"data": {**state, **status, "note": note}, "meta": {}}
 
 
 @router.get("/signal-health")

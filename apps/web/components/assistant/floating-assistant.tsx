@@ -1,5 +1,7 @@
 "use client";
 
+import { inspectionRequestForHref, useInspection } from "@/components/inspection/inspection-context";
+
 /**
  * 全局 AI 助手浮窗（所有模块页面可用）。
  *
@@ -146,6 +148,7 @@ export function FloatingAssistant() {
   const router = useRouter();
   // 助手回复里的个股实体 → 就地弹窗看详情（2026-09-15 详情弹窗化，原先跳工作台）
   const { open: openSymbolDetail } = useSymbolDetail();
+  const { open: inspect } = useInspection();
   const [mounted, setMounted] = useState(false);
   const [open, setOpen] = useState(false);
   const [pos, setPos] = useState<{ x: number; y: number } | null>(null);
@@ -634,18 +637,20 @@ export function FloatingAssistant() {
           changeAssistantOpen(false);
           return;
         }
-        router.push(m.url);
+        const inspection = inspectionRequestForHref(m.url);
+        if (inspection) inspect(inspection);
+        else router.push(m.url);
       } else if (m.type === "nav") {
         // nav 必有 url，走到这里即守卫未过（防御性降级）
-        router.push(themesUrl(m.name));
+        inspect({kind: "themes", focus: m.name});
       } else if (m.type === "stock" && m.code) {
         openSymbolDetail({ symbol: m.code });
       } else {
-        router.push(themesUrl(m.name));
+        inspect({kind: "themes", focus: m.name});
       }
       changeAssistantOpen(false);
     },
-    [router, openSymbolDetail, changeAssistantOpen],
+    [router, openSymbolDetail, inspect, changeAssistantOpen],
   );
 
   // ---- 自动滚动（用户上翻即停止跟随） --------------------------------------

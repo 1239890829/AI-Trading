@@ -84,6 +84,30 @@ const accordionPath: OpportunityStock = {
 };
 
 describe("PickCard · 盘前名单（fromDailyPick）", () => {
+  it("keeps first join evidence beside a later sealed quote and exposes its independent source clock", () => {
+    render(<PickCard item={fromDailyPick({...base, price: 50, change_pct: 10, selection_entry: {
+      state: "recorded", selected_at: "2026-10-09T10:01:02+08:00", reference_price: 40.36,
+      reference_change_pct: 1.2, quote_as_of: "2026-10-09T09:59:58+08:00", source: "daily_generation",
+      source_version: "a".repeat(64), semantics: "observation_only_not_fill",
+    }})} />);
+    const entry = screen.getByLabelText("首次加入记录");
+    expect(entry.textContent).toContain("10:01:02");
+    expect(entry.textContent).toContain("¥40.36");
+    expect(entry.textContent).toContain("+1.20%");
+    expect(entry.textContent).not.toContain("50.00");
+    fireEvent.click(within(entry).getByText("时点依据"));
+    expect(entry.textContent).toContain("09:59:58");
+    expect(entry.textContent).toContain("非成交价");
+  });
+
+  it("does not fill a legacy unknown join from its current price or render invalid numbers", () => {
+    const page = render(<PickCard item={fromDailyPick(base)} />);
+    expect(screen.getByLabelText("首次加入记录").textContent).toContain("加入参考价 未记录");
+    page.rerender(<PickCard item={fromDailyPick({...base, selection_entry: {state: "partial", selected_at: "2026-10-09T09:59:00", reference_price: Number.NaN, reference_change_pct: Number.POSITIVE_INFINITY, quote_as_of: null, source: "daily_generation", source_version: null, semantics: "observation_only_not_fill"}})} />);
+    const entry = screen.getByLabelText("首次加入记录");
+    expect(entry.textContent).toContain("首次加入 未记录");
+    expect(entry.textContent).not.toMatch(/NaN|Infinity/);
+  });
   it("distinguishes a missing dimension from a real zero score", () => {
     render(<PickCard item={fromDailyPick({...base, sub_scores: {news: 0}})} />);
     expect(screen.getByLabelText("情绪评分缺失")).toBeTruthy();
@@ -680,6 +704,19 @@ describe("维度读取事实", () => {
     expect(screen.getByRole("meter", {name: "消息评分"})).toBeTruthy();
     expect(screen.getByText(/资金源未提供/)).toBeTruthy();
   });
+});
+
+it("keeps partial first-entry facts and explains why the original quote is untrusted", () => {
+  render(<PickCard item={fromDailyPick({...base, selection_entry: {
+    state: "partial", selected_at: "2026-10-09T10:02:00+08:00", reference_price: 38.8,
+    reference_change_pct: 5.2, quote_as_of: "2099-01-01T10:00:00+08:00", source: "daily_generation",
+    source_version: "original-v", semantics: "observation_only_not_fill", reason: "首次加入已记录；原报价日期与首次入选日不同",
+  }})} />);
+  expect(screen.getByText("依据不完整")).toBeTruthy();
+  expect(screen.getByText("2026-10-09 10:02:00")).toBeTruthy();
+  expect(screen.getByText("加入参考价 ¥38.80")).toBeTruthy();
+  fireEvent.click(screen.getByText("时点依据"));
+  expect(screen.getByText("首次加入已记录；原报价日期与首次入选日不同")).toBeTruthy();
 });
 
 

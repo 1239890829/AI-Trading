@@ -623,7 +623,8 @@ async def build_theme_board(
         return {
             "trade_date": trade_date.isoformat(),
             "themes": [],
-            "summary": {"limit_up_total": 0, "theme_count": 0, "note": "当日无涨停数据"},
+            "summary": {"limit_up_total": 0, "theme_count": 0, "market_max_boards": 0,
+                        "market_max_board_stocks": [], "note": "当日无涨停数据"},
         }
 
     # ---- 2~5 并发：东财增强维度 / 板块指标 / 历史涨停池 / 炸板率 / 竞价强弱 ----
@@ -740,6 +741,8 @@ async def build_theme_board(
             "limit_up_total": len(today_pool),
             "theme_count": len(cards),
             "market_max_boards": market_max_boards,
+            "market_max_board_stocks": [{"symbol": r.symbol, "name": r.name, "boards": r.consecutive_boards or 0}
+                                        for r in today_pool if market_max_boards > 0 and (r.consecutive_boards or 0) == market_max_boards],
             "market_break_rate": market_break_rate,
             "top_theme": cards[0]["theme"] if cards else None,
         },

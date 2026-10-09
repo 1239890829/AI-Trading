@@ -1,6 +1,8 @@
 "use client";
 
 import Link from "next/link";
+import { inspectionClick, useInspection } from "@/components/inspection/inspection-context";
+
 import { Suspense, useState } from "react";
 import { MarketLensPicker } from "@/components/ui/workspace-deck";
 import { useSearchParams } from "next/navigation";
@@ -46,6 +48,7 @@ const PHASE_STYLE: Record<string, string> = {
 type ViewKey = "overview" | "fund" | "heatmap" | "events";
 
 function MarketInner() {
+  const { open: inspect } = useInspection();
   // 个股/指数详情**就地弹窗**（2026-09-15）：指数卡与标的池行不再跳工作台
   const { open: openSymbolDetail } = useSymbolDetail();
   const sp = useSearchParams();
@@ -128,7 +131,7 @@ function MarketInner() {
             <div className="bc-market-metrics">
             <section className="bc-market-environment" aria-label="成交与市场宽度">
               <div className="bc-market-turnover">
-                <div className="bc-market-turnover-head"><span>沪深京成交额</span><Link href={lensHref("/market?tab=fund")} className="bc-market-text-action">资金详情<svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.6" aria-hidden="true"><path d="M7 17 17 7M7 7h10v10" /></svg></Link></div>
+                <div className="bc-market-turnover-head"><span>沪深京成交额</span><Link href={lensHref("/market?tab=fund")} onClick={inspectionClick(inspect, {kind: "fund"})} className="bc-market-text-action">资金详情<svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.6" aria-hidden="true"><path d="M7 17 17 7M7 7h10v10" /></svg></Link></div>
                 <strong title={amountFreshness?.reason ?? undefined}>{triAmount(totalAmount, amountFreshness?.state)}</strong>
                 <span className="bc-market-turnover-source">{amountFreshness?.source ? sourceLabel(amountFreshness.source) : sh?.source ? sourceLabel(sh.source) : "来源未提供"}{amountFreshness?.as_of ? ` ${timeText(amountFreshness.as_of)}` : sh?.data_timestamp ? ` ${timeText(sh.data_timestamp)}` : ""}</span>
               </div>
@@ -142,7 +145,7 @@ function MarketInner() {
                   ["沪深京总数", breadth?.total, "", null],
                 ] as [string, string | number | null | undefined, string, string | null][]).map(([label, value, cls, href]) => {
                   const valueContent = value == null && pending ? <Skeleton className="h-4 w-12" /> : value ?? "--";
-                  return <div key={label}><dt>{label}</dt><dd className={cls}>{href ? <Link href={lensHref(href)} aria-label={`查看${label}池明细：${value ?? "未提供"}`} title={`查看${label}池明细`}>{valueContent}<svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.6" aria-hidden="true"><path d="M7 17 17 7M7 7h10v10" /></svg></Link> : valueContent}</dd></div>;
+                  return <div key={label}><dt>{label}</dt><dd className={cls}>{href ? <Link href={lensHref(href)} onClick={inspectionClick(inspect, {kind: href.includes("limitdown") ? "limit-down" : "limit-up"})} aria-label={`查看${label}池明细：${value ?? "未提供"}`} title={`查看${label}池明细`}>{valueContent}<svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.6" aria-hidden="true"><path d="M7 17 17 7M7 7h10v10" /></svg></Link> : valueContent}</dd></div>;
                 })}
               </dl>
             </section>
@@ -169,7 +172,7 @@ function MarketInner() {
             </div>
             </div>
             <div className="bc-market-reading">
-              <Panel title="涨停前列" source={pool[0]?.source} className="bc-market-pool" bodyClassName="bc-market-pool-scroll" extra={<Link href={lensHref(tapeUrl("limitup"))} className="bc-market-text-action">查看全池<svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.6" aria-hidden="true"><path d="M7 17 17 7M7 7h10v10" /></svg></Link>}>
+              <Panel title="涨停前列" source={pool[0]?.source} className="bc-market-pool" bodyClassName="bc-market-pool-scroll" extra={<Link href={lensHref(tapeUrl("limitup"))} onClick={inspectionClick(inspect, {kind: "limit-up"})} className="bc-market-text-action">查看全池<svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.6" aria-hidden="true"><path d="M7 17 17 7M7 7h10v10" /></svg></Link>}>
                 {poolError && <p role="alert" className="bc-market-inline-warning">涨停速览读取失败。{pool.length ? "下面是上次读取结果。" : "不能据此判断没有涨停。"}</p>}
                 {pool.length > 0 ? <table className="bc-market-pool-table">
                   <caption className="sr-only">今日涨停池连板前列，点击证券查看详情</caption>

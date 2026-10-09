@@ -46,11 +46,13 @@ export function StockLink({
   symbol,
   className = "",
   title = "查看个股详情",
+  preferModal = false,
   children,
 }: {
   symbol: string;
   className?: string;
   title?: string;
+  preferModal?: boolean;
   children: React.ReactNode;
 }) {
   const { open } = useSymbolDetail();
@@ -59,7 +61,7 @@ export function StockLink({
     <Link
       href={mounted ? workbenchUrlWithBack(symbol) : workbenchUrl(symbol)}
       title={title}
-      onClick={symbolDetailClick(open, { symbol })}
+      onClick={symbolDetailClick(open, { symbol, ...(preferModal ? {preferModal: true} : {}) })}
       className={`cursor-pointer rounded transition-colors hover:bg-sky-500/10 hover:text-sky-700 dark:hover:text-sky-300 ${className}`}
     >
       {children}

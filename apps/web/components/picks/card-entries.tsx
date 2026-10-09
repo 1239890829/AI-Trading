@@ -7,23 +7,38 @@
  * - **消息**（事件 + 资讯合并为一个）→ 弹通用详情弹窗（feed 列表），**不跳转**；
  *   该股既无关联事件也无资讯时整个按钮不渲染（避免"点了只有一句暂无"的噪音）。
  * - **资金** → 弹窗内展示资金图（`kind: "capital"`，复用工作台组件），**不跳转**；
- *   **梯队** → 跳题材页（题材页仍是独立功能面，这一条保留跳转）。
+ *   **梯队** → 原地题材旁览，保留当前候选。
  *   两者都阻止冒泡（卡片整块可点会带走路由）。
  *
  * 冒泡纪律：CardShell 整卡 onClick=stockNav，任何子元素按钮一律 stopAnd()。
  */
-import { useEffect, useState } from "react";
-import { useRouter } from "next/navigation";
-
+import { useResource } from "@/hooks/use-resource";
 import { getEventsForSymbol } from "@/lib/api";
 import { useDetailModal } from "@/components/detail/detail-modal";
-import { themesUrl } from "@/lib/routing";
+import { useInspection } from "@/components/inspection/inspection-context";
+import { motionOrigin } from "@/lib/surface-motion";
 
 const BTN =
   "card-entry-action";
 
-/** 预检缓存：同一 symbol 页面内只探一次（卡片多，避免请求放大；刷新即失效）。 */
-const hasFeedCache = new Map<string, boolean>();
+/** Bounded, expiring presence cache. A negative result is never permanent. */
+const hasFeedCache = new Map<string, {value: boolean; expiresAt: number}>();
+const inFlight = new Map<string, Promise<boolean>>();
+async function feedPresence(symbol: string): Promise<boolean> {
+  const cached = hasFeedCache.get(symbol);
+  if (cached && cached.expiresAt > Date.now()) return cached.value;
+  const pending = inFlight.get(symbol);
+  if (pending) return pending;
+  const request = getEventsForSymbol(symbol).then(events => {
+    const value = (events.items?.length ?? 0) > 0;
+    hasFeedCache.delete(symbol);
+    hasFeedCache.set(symbol, {value, expiresAt: Date.now() + 30_000});
+    if (hasFeedCache.size > 128) hasFeedCache.delete(hasFeedCache.keys().next().value!);
+    return value;
+  }).finally(() => inFlight.delete(symbol));
+  inFlight.set(symbol, request);
+  return request;
+}
 
 export function CardEntryRow({
   symbol,
@@ -34,39 +49,10 @@ export function CardEntryRow({
   name?: string | null;
   theme?: string | null;
 }) {
-  const router = useRouter();
   const { open } = useDetailModal();
-  const [hasFeed, setHasFeed] = useState<boolean | null>(null);
-
-  // 切股 → 当帧用缓存值或「待定」（渲染期 adjust-state；原为 effect 内同步 setState，
-  // 会残留上一只的入口一帧，且触发 react-hooks/set-state-in-effect，P1-27）
-  const [prevSymbol, setPrevSymbol] = useState<string | null>(null);
-  if (symbol !== prevSymbol) {
-    setPrevSymbol(symbol);
-    const hit = hasFeedCache.get(symbol);
-    setHasFeed(hit === undefined ? null : hit);
-  }
-
-  // 预检：有事件或资讯才显示「消息」入口（用户要求：没有就不出现）
-  useEffect(() => {
-    let alive = true;
-    if (hasFeedCache.get(symbol) !== undefined) return; // 缓存命中已在渲染期填好
-    (async () => {
-      try {
-        // ⚠️ 只用快接口预检（events 0.02s）；news/digest 实测 ~32s，
-        // 拿它做预检会让按钮几十秒后才出现（2026-09-09 实测）。
-        const ev = await getEventsForSymbol(symbol);
-        const has = (ev.items?.length ?? 0) > 0;
-        hasFeedCache.set(symbol, has);
-        if (alive) setHasFeed(has);
-      } catch {
-        if (alive) setHasFeed(false);
-      }
-    })();
-    return () => {
-      alive = false;
-    };
-  }, [symbol]);
+  const { open: inspect } = useInspection();
+  const feed = useResource(() => feedPresence(symbol), {key: symbol, intervalMs: 30_000});
+  const hasFeed = feed.data;
 
   // ⚠️ 卡片整块可点（CardShell onClick=stockNav 跳个股页），入口按钮必须阻止冒泡，
   // 否则点击会顺带触发整卡跳转——弹窗刚开就被路由带走（2026-09-09 实测）。
@@ -106,8 +92,8 @@ export function CardEntryRow({
         <button
           type="button"
           className={BTN}
-          onClick={stopAnd(() => router.push(themesUrl(theme)))}
-          title={`打开题材页：${theme} 梯队`}
+          onClick={event => { event.stopPropagation(); event.preventDefault(); inspect({kind: "themes", focus: theme, motionOrigin: motionOrigin(event)}); }}
+          title={`在当前页查看：${theme} 梯队`}
         >
           <svg aria-hidden="true" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.5"><path d="M4 19h5v-5H4zM9 14h5V9H9zM14 9h5V4h-5z" /></svg>梯队
         </button>

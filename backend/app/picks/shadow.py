@@ -261,33 +261,61 @@ class ShadowRunner:
     # ---- 状态（端点用） ----
 
     def state(self) -> dict:
-        from app.models.paper import PaperOrder, PaperPosition
+        return read_shadow_state(self._sf, self.engine.scope)
 
-        acc = self.engine.ensure_account()
-        with self._sf() as db:
-            positions = db.query(PaperPosition).filter(
-                PaperPosition.scope == self.engine.scope, PaperPosition.quantity > 0
-            ).all()
-            orders = db.query(PaperOrder).filter(
-                PaperOrder.scope == self.engine.scope
-            ).order_by(PaperOrder.id.desc()).limit(20).all()
-        return {
-            "scope": self.engine.scope,
-            "cash": round(acc.cash, 2),
-            "initial_cash": round(acc.initial_cash, 2),
-            "positions": [
-                {"symbol": p.symbol, "quantity": p.quantity, "available": p.available,
-                 "cost_price": p.cost_price, "buy_date": p.buy_date}
-                for p in positions
-            ],
-            "recent_orders": [
-                {"id": o.id, "symbol": o.symbol, "side": o.side, "price": o.price,
-                 "quantity": o.quantity, "status": o.status, "reason": o.reason,
-                 "created_at": o.created_at.isoformat() if o.created_at else None}
-                for o in orders
-            ],
-            "executed_today": self.executed_today(),
-        }
+
+def read_shadow_state(session_factory, scope="shadow") -> dict:
+    """Read an existing shadow account; opening its view never initializes funds."""
+    from app.models.paper import PaperAccount, PaperOrder, PaperPosition
+
+    with session_factory() as db:
+        acc = db.query(PaperAccount).filter(PaperAccount.scope == scope).first()
+        positions = db.query(PaperPosition).filter(PaperPosition.scope == scope, PaperPosition.quantity > 0).all()
+        orders = db.query(PaperOrder).filter(PaperOrder.scope == scope).order_by(PaperOrder.id.desc()).limit(20).all()
+        day_start = beijing_now().replace(hour=0, minute=0, second=0, microsecond=0).astimezone(timezone.utc).replace(tzinfo=None)
+        from datetime import timedelta
+        executed = db.query(PaperOrder.id).filter(PaperOrder.scope == scope, PaperOrder.side == "buy",
+            PaperOrder.created_at >= day_start, PaperOrder.created_at < day_start + timedelta(days=1)).first() is not None
+    return {"scope": scope, "account_created": acc is not None,
+            "cash": round(acc.cash, 2) if acc else None, "initial_cash": round(acc.initial_cash, 2) if acc else None,
+            "positions": [{"symbol": p.symbol, "quantity": p.quantity, "available": p.available,
+                           "cost_price": p.cost_price, "buy_date": p.buy_date} for p in positions],
+            "recent_orders": [{"id": o.id, "symbol": o.symbol, "side": o.side, "price": o.price,
+                              "quantity": o.quantity, "status": o.status, "reason": o.reason,
+                              "created_at": o.created_at.isoformat() if o.created_at else None} for o in orders],
+            "executed_today": executed}
+
+
+def activation_status(app, kind: str) -> dict:
+    """Separate configuration, loaded runner, scheduler state, and completed ticks."""
+    from app.core.config import settings
+
+    daily = kind == "daily"
+    configured = settings.picks_shadow_enabled if daily else settings.hunting_shadow_enabled
+    runner = getattr(app.state, "paper_shadow" if daily else "hunting_shadow", None)
+    registry = getattr(app.state, "schedulers", None)
+    task_name = "picks-shadow" if daily else "hunting-shadow"
+    scheduler = next((row for row in registry.snapshot() if row.get("name") == task_name), None) if registry else None
+    health = getattr(runner, "health", {}) or {}
+    state = "not_loaded" if runner is None else "paused" if not configured else "unknown"
+    if configured and runner and scheduler:
+        state = "running" if scheduler.get("state") == "running" else "paused"
+        if state == "running" and health.get("state") in {"ready", "degraded"}:
+            state = health["state"]
+        if scheduler.get("consecutive_tick_failures", 0) or scheduler.get("state") in {"dead", "restarting"}:
+            state = "degraded"
+    def clock(minutes):
+        return f"{minutes // 60:02d}:{minutes % 60:02d}"
+    return {"enabled": bool(configured),
+            "activation": {"configured": bool(configured), "runner_loaded": runner is not None,
+                "timezone": "Asia/Shanghai", "mode": "daily_morning" if daily else "qualified_buy_point",
+                "start_time": clock(settings.picks_shadow_start_minute) if daily else None,
+                "end_time": clock(settings.picks_shadow_end_minute) if daily else None,
+                "quote_recheck_seconds": None if daily else 60, "poll_seconds": 60 if daily else 30},
+            "runtime": {"state": state, "as_of": health.get("as_of") or (scheduler or {}).get("last_ok_tick"),
+                "scheduler_state": (scheduler or {}).get("state"),
+                "reason": health.get("reason") or (scheduler or {}).get("last_tick_error") or
+                          (scheduler or {}).get("not_started_reason") or ("后台尚未装配" if runner is None else None)}}
 
 
 def collect_shadow_for_review(session_factory, trade_date: date) -> dict | None:

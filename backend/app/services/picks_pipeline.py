@@ -1039,8 +1039,22 @@ def _persist_picks(
     meta["selection_notifications"] = {"state": "pending"}
     with _db() as db:
         from app.models.daily_pick import DailyPickSet
+        from app.picks.selection_entry import daily_entries
+        from sqlalchemy import text
 
+        # Serialize the first-join merge with the existing daily replacement.
+        db.execute(text("BEGIN IMMEDIATE"))
         row = db.execute(select(DailyPickSet).where(DailyPickSet.date == today)).scalar_one_or_none()
+        previous = row or db.execute(select(DailyPickSet).where(DailyPickSet.date == today.replace("-", ""))).scalar_one_or_none()
+        try:
+            previous_items = json.loads(previous.items or "[]") if previous else []
+            if not isinstance(previous_items, list):
+                previous_items = items  # Corrupt history cannot establish a new first join.
+        except (ValueError, TypeError):
+            previous_items = items
+        meta["selection_entries"] = daily_entries(items, meta,
+            previous_meta=previous.meta if previous else None, previous_items=previous_items,
+            trade_date=today, recorded_at=beijing_now())
         payload = {
             "items": json.dumps(items, ensure_ascii=False),
             "meta": json.dumps(meta, ensure_ascii=False),

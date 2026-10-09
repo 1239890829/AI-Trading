@@ -137,7 +137,7 @@ describe("通知中心：个股提醒的落点统一（IMP-033）", () => {
     fireEvent.click(screen.getByText("示例个股提醒"));
 
     expect(spies.symbolOpen).toHaveBeenCalledTimes(1);
-    expect(spies.symbolOpen).toHaveBeenCalledWith({ symbol: SYMBOL });
+    expect(spies.symbolOpen).toHaveBeenCalledWith({ symbol: SYMBOL, preferModal: true });
     // 关键：行体**不再**落到判读弹窗——否则「点正文与点股票码弹出不同内容」依旧成立
     expect(spies.detailOpen).not.toHaveBeenCalled();
   });
@@ -148,10 +148,10 @@ describe("通知中心：个股提醒的落点统一（IMP-033）", () => {
     await openDrawer();
 
     fireEvent.click(screen.getByText(/行情/));
-    expect(spies.symbolOpen).toHaveBeenNthCalledWith(1, { symbol: SYMBOL });
+    expect(spies.symbolOpen).toHaveBeenNthCalledWith(1, { symbol: SYMBOL, preferModal: true });
 
     fireEvent.click(screen.getByText("示例个股提醒"));
-    expect(spies.symbolOpen).toHaveBeenNthCalledWith(2, { symbol: SYMBOL });
+    expect(spies.symbolOpen).toHaveBeenNthCalledWith(2, { symbol: SYMBOL, preferModal: true });
     expect(spies.symbolOpen).toHaveBeenCalledTimes(2);
     expect(spies.detailOpen).not.toHaveBeenCalled();
   });

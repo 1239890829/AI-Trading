@@ -1,6 +1,7 @@
 "use client";
 
 import Link from "next/link";
+import { inspectionClick, useInspection } from "@/components/inspection/inspection-context";
 import { useMemo, useState } from "react";
 import type { StockThemeLink, StockThemes } from "@/lib/api";
 import { pctColor, pctText } from "@/lib/format";
@@ -33,6 +34,7 @@ const OFFICIAL_TOP_N = 6;
  * 双源并列展示、互不覆盖的原则不变；无归属时返回 null（零占用）。
  */
 export function ThemeChipsRow({ themes }: { themes: StockThemes | null }) {
+  const { open: inspect } = useInspection();
   const [expanded, setExpanded] = useState(false);
   const official: StockThemeLink[] = useMemo(() => {
     const list = [...(themes?.official ?? [])];
@@ -63,6 +65,7 @@ export function ThemeChipsRow({ themes }: { themes: StockThemes | null }) {
         <Link
           key={`o-${t.theme_code}`}
           href={themesUrl(t.theme_name)}
+          onClick={inspectionClick(inspect, {kind: "themes", focus: t.theme_name})}
           title={`THS 官方概念成分（${t.theme_code}）· 排序：与今日大盘方向一致家数占比（联动度${t.theme_align_1d != null ? ` ${Math.round(t.theme_align_1d * 100)}%` : "不可得"}）· 点击查看该题材当下梯队`}
           className="inline-flex items-center rounded border border-sky-500/30 bg-sky-500/5 px-1.5 py-0.5 text-zinc-700 hover:border-sky-500/60 dark:border-sky-400/30 dark:bg-sky-400/5 dark:text-zinc-200"
         >
@@ -78,6 +81,7 @@ export function ThemeChipsRow({ themes }: { themes: StockThemes | null }) {
         <Link
           key={`a-${a.theme_name}`}
           href={themesUrl(a.theme_name)}
+          onClick={inspectionClick(inspect, {kind: "themes", focus: a.theme_name})}
           title={`${a.date} 涨停归因（来自涨停原因原文）· 点击查看该题材当下梯队`}
           className="inline-flex items-center rounded border border-amber-500/30 bg-amber-500/5 px-1.5 py-0.5 text-zinc-700 hover:border-amber-500/60 dark:border-amber-400/30 dark:bg-amber-400/5 dark:text-zinc-200"
         >

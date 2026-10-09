@@ -123,6 +123,22 @@ GET 的冷热装配已撤去研究归档和台账写入；既有 `archive_intrad
 
 DailyPickReview按日期/股票/selection_version共存，review_context和版本列共同绑定原生成摘要。默认先选当前版本和规范日期再截显示容量；旧未绑定、版本漂移、仅观察、缺个股/基准可信收盘源与非有限超额值排除统计。09:30前生成的open_to_close只是同日价格观察，参考价收益还须核原quote_audit，不证明成交或T+1可实现收益；marketdb T+5对照两组同窗，不与D0混算。详细子功能和未验边界见[细功能审计§41](feature-closure-audit.md#41-imp-087-原选股与可靠消息的细功能契约2026-10-09)。
 
+### 4.4 首次加入观察与影子用途（IMP-088，2026-10-09）
+
+`selection_entry`采用selection-entry-v1，分recorded/partial/missing，包含selected_at、reference_price、reference_change_pct、quote_as_of、source和source_version，semantics固定observation_only_not_fill。selected_at是原拥有者实际持久记录的首次加入时间，quote_as_of是当时原报价的源时间；它们均不是本次打开页面的时间。卡片显示加入价/涨幅与北京时间，版本和报价钟可查；当前价、执行重检价和PaperOrder.filled_price分别保持身份。
+
+每日由现有DailyPickSet落库事务保存meta.selection_entries，按当日symbol首次追加；同日补跑、退出后再进入和当前价变化不重置已有记录。有效当日新生成可记录首次时刻；旧名单没有首次记录、日期/生成钟不合法或历史内容损坏时保留missing，不以重生成倒填历史。原价格/来源/可信质量或同日新鲜源钟不满足时为partial，保留实际加入钟与原报价值并展示原因，不宣称完整原报价。精确窗口沿数据源§7.2的原契约，GET不事后重算升级。
+
+盘中GET只投影OpportunityDecisionSnapshot：同一北京时间交易日、stage=rank、decision=ranked、selection_entry_contract匹配，且1≤rank≤effective_limit与within_display_capacity为真。按实际created_at再id取首次已提交记录，不取更早被拒、unknown、超展示容量或仅参考的源钟。该结构升级feature为pit-evidence-v4.selection-entry，stock-identity-v2的同股归并语义保留；§4.3的v3是前一版记录，效果读者仍按feature隔开，旧版只能显式读取，不补写v4标签。无归档或读取失败显示missing，合格记录原价/数据状态缺项显示partial；读取不归档、不扩样本分母。
+
+已入选后封板的股票仍可显示原首次加入事实；从未合格入选的封板参考股不伪造加入记录。这里记录出现时点供复盘优化，既不放宽候选/执行门，也不承诺当时可以成交。每日与盘中同股仍保留各自来源事实和“每日依据”，不把两个首次时点混成一个。
+
+今日盘面涨停数/最高高度来自原同源完整涨停池；最高证券身份来自summary.market_max_board_stocks，并列先列身份，缺身份不从当前可见候选猜。题材机会数是本轮按强度截取的题材数，含无参与候选的题材；断层仅计has_succession=false，unknown不当断层。两类题材旁览固定点击时原opps/date/理由并复用OpportunitySection，能继续核原股票、官方成分和市场梯队；不是全市场题材全集。
+
+每日影子用于比较原每日精选在原执行门和模拟规则下的实际委托/成交。实际配置晨窗为start_time≤北京时间<end_time，后台60秒轮询；晨窗读取最新已保存精选，可能是当日生成或此前组合，实际组合日以执行回执为准。机会影子用于验证原buy_point合格决定的执行轨，不直接消费所有盘中候选；沿既有30秒轮询、60秒同版报价重检及原RiskEngine/T+1规则。窗口与间隔由activation展示，不在UI猜配置。
+
+两者enabled表示配置开关，activation.runner_loaded表示装配；runtime分别呈现not_loaded/unknown/running/paused/ready/degraded及as_of/原因。配置已开不证明运行正常，ready也不是订单成交。每日/机会GET均只读原账户和历史回执，不ensure_account、不启用开关、不启动模型/订单；未创建账户的金额为null。关闭后仍可读历史，实际启用/暂停走原受控配置和授权，不新增前端启动按钮。
+
 ## 5. 知识逐项去向与不能丢的边界
 
 下表对应选股主册全部37个ID，表示本设计如何使用，不重写知识原文或维护第二份任务状态。原附记、否证、数据和实现状态仍在原条目/登记册；读取完成不等于重跑历史研究。

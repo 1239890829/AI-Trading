@@ -7,35 +7,29 @@
  * - 历史记录：近 N 个交易日逐日统计（胜率/平均盈亏），收盘后仍可查。
  * - 三态：盈亏/收盘价缺失显式 --（未清算或快照缺失），不臆造。
  */
-import { useCallback, useEffect, useState } from "react";
+import { useEffect, useState } from "react";
 
 import { OpportunityEvidencePanel } from "./opportunity-evidence-panel";
 import { LeaderResearchPanel } from "./leader-research-panel";
-import { usePollingFetch } from "@/hooks/use-polling-fetch";
-import { getWatchLedger, placePaperOrder, type WatchLedgerPayload } from "@/lib/api";
+import { useResource } from "@/hooks/use-resource";
+import { getWatchLedger, placePaperOrder } from "@/lib/api";
 import { fmt, pctColor, pctText, winRateColor } from "@/lib/format";
+import { bjToday } from "@/lib/market-hours";
 
-export function WatchLedgerPanel() {
-  const [data, setData] = useState<WatchLedgerPayload | undefined>(undefined);
-  const [error, setError] = useState<string | null>(null);
+export function WatchLedgerPanel({ date, readOnly = false }: { date?: string; readOnly?: boolean } = {}) {
+  const scopeDate = date?.replace(/^(\d{4})(\d{2})(\d{2})$/, "$1-$2-$3");
+  const resource = useResource(() => getWatchLedger(scopeDate, 5), {key: scopeDate ?? "today", intervalMs: 30_000});
+  const data = resource.data;
+  const error = resource.error instanceof Error ? resource.error.message : resource.error ? "读取失败" : null;
   const [showHistory, setShowHistory] = useState(false);
   const [evidenceOpen, setEvidenceOpen] = useState(false);
   const [orderNote, setOrderNote] = useState<string | null>(null);
 
-  const load = useCallback(async () => {
-    try {
-      setData(await getWatchLedger(undefined, 5));
-      setError(null);
-    } catch (e) {
-      setError(e instanceof Error ? e.message : String(e));
-    }
-  }, []);
-
-  // P1-27 收编 usePollingFetch（挂载即拉 + 定时轮询），语义不变
-  usePollingFetch(load, 30_000); // 台账 30s 刷新（低频不干扰判断）
+  const load = resource.refresh;
 
   /** 模拟建仓（系统审查 #7：闭环「选出→验证」）：入选价 × 100 股，撮合规则硬拦截 */
   const quickBuy = async (symbol: string, price: number) => {
+    if (readOnly || scopeDate || data?.trade_date !== bjToday() || resource.error) return null;
     try {
       const res = await placePaperOrder(symbol, "buy", price, 100);
       setOrderNote(res.replayed ? `${symbol} 此前已处理（原委托 #${res.id}），未重复下单；请核对工作台` : `${symbol} 模拟买单已提交（100 股 @ ${price}）——状态见工作台交易页签`);
@@ -144,7 +138,7 @@ export function WatchLedgerPanel() {
                         跟踪中
                       </span>
                     )}
-                    {r.status === "tracking" && r.entry_price != null && (
+                    {!readOnly && !scopeDate && data.trade_date === bjToday() && !resource.error && r.status === "tracking" && r.entry_price != null && (
                       <button
                         onClick={() => void quickBuy(r.symbol, r.entry_price as number)}
                         className="ml-1 rounded border border-up/40 px-1 text-[10px] text-up-ink dark:text-up transition-colors hover:bg-up/10"
@@ -201,13 +195,13 @@ export function WatchLedgerPanel() {
       )}
 
       <p className="mt-2 text-[11px] leading-relaxed text-zinc-600 dark:text-zinc-400">
-        参考跟踪、非持仓：参考价不是成交价，收盘变化不代表模拟交易收益。手工模拟建仓仍须经后端撮合与风险校验。台账说明：入选即登记（当日唯一，盘中不移除）→ 收盘清算（入选价 vs 收盘价）→ 逐股判定与统计；判定口径 收盘 ≥ 入选 = 成功、亏 ≤2% = 持平、否则失败。历史记录收盘后可查。
+        参考跟踪、非持仓：参考价不是成交价，收盘变化不代表模拟交易收益。{readOnly ? "此旁览只读核对，不提交模拟委托。" : "手工模拟建仓仍须经后端撮合与风险校验。"}台账说明：入选即登记（当日唯一，盘中不移除）→ 收盘清算（入选价 vs 收盘价）→ 逐股判定与统计；判定口径 收盘 ≥ 入选 = 成功、亏 ≤2% = 持平、否则失败。历史记录收盘后可查。
       </p>
       <details className="mt-3" onToggle={e => setEvidenceOpen(e.currentTarget.open)}>
         <summary className="min-h-11 cursor-pointer py-2 text-xs focus-visible:outline-2 focus-visible:outline-sky-500">查看同版机会依据</summary>
-        {evidenceOpen && <OpportunityEvidencePanel />}
+        {evidenceOpen && <OpportunityEvidencePanel date={scopeDate} />}
       </details>
-      <LeaderResearchPanel />
+      <LeaderResearchPanel date={scopeDate} />
       </aside></div>
     </section>
   );

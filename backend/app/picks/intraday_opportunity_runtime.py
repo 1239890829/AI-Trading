@@ -152,6 +152,12 @@ async def build_opportunities(
     # 旧实现把缓存对象原地修改，两条并发端点会共享/覆盖同一棵 dict，放大数量与字段抖动。
     payload = deepcopy(cached)
     attach_risk_to_themes(payload["data"], snap_by)
+    from app.picks.selection_entry import attach_intraday_entries
+    import asyncio
+
+    # Project joins after copying the immutable market tree; no cached mutation.
+    if not include_audit:
+        await asyncio.to_thread(attach_intraday_entries, payload["data"])
     if not include_audit:
         for theme in payload["data"].get("themes") or []:
             theme.pop("_candidate_audit", None)

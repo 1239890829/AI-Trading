@@ -3,6 +3,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 import { SymbolDetailModalHost, SymbolDetailProvider } from "@/components/detail/symbol-detail-modal";
 import { useSymbolDetail } from "@/components/detail/symbol-detail-context";
+import { InspectionStateContext, type InspectionRequest } from "@/components/inspection/inspection-context";
 
 /**
  * 标的详情弹窗（2026-09-15 详情弹窗化）。
@@ -46,6 +47,7 @@ function Host() {
       <button type="button" data-testid="open-stock" onClick={() => open({ symbol: "600519" })}>
         stock
       </button>
+      <button type="button" data-testid="open-overlay-stock" onClick={() => open({symbol: "600519", preferModal: true})}>overlay stock</button>
       <button
         type="button"
         data-testid="open-index"
@@ -67,12 +69,14 @@ function Host() {
   );
 }
 
-function renderHost() {
+function renderHost(inspection: InspectionRequest | null = null) {
   return render(
-    <SymbolDetailProvider>
-      <Host />
-      <SymbolDetailModalHost />
-    </SymbolDetailProvider>,
+    <InspectionStateContext.Provider value={inspection}>
+      <SymbolDetailProvider>
+        <Host />
+        <SymbolDetailModalHost />
+      </SymbolDetailProvider>
+    </InspectionStateContext.Provider>,
   );
 }
 
@@ -93,11 +97,11 @@ describe("标的详情弹窗 · 开关与容器", () => {
     expect(screen.queryByTestId("detail-panel")).toBeNull();
   });
 
-  it("open 后渲染弹窗，并把标的交给同一个详情面板（复用而非复制）", () => {
+  it("open 后渲染弹窗，并把标的交给同一个详情面板（复用而非复制）", async () => {
     renderHost();
     fireEvent.click(screen.getByTestId("open-stock"));
     expect(screen.getByTestId("symbol-detail-modal")).toBeTruthy();
-    expect(screen.getByTestId("detail-panel").getAttribute("data-symbol")).toBe("600519");
+    expect((await screen.findByTestId("detail-panel")).getAttribute("data-symbol")).toBe("600519");
   });
 
   it("标题按标的分型：指数 ≠ 个股", () => {
@@ -158,6 +162,28 @@ describe("标的详情弹窗 · 开关与容器", () => {
 });
 
 describe("标的详情弹窗 · 工作台内回落为页内切换", () => {
+  it("显式旁览请求在工作台真正打开弹窗，不更改右栏URL", async () => {
+    nav.pathname = "/workbench";
+    renderHost();
+    fireEvent.click(screen.getByTestId("open-overlay-stock"));
+    expect(screen.getByTestId("symbol-detail-modal")).toBeTruthy();
+    expect((await screen.findByTestId("detail-panel")).getAttribute("data-symbol")).toBe("600519");
+    expect(nav.replace).not.toHaveBeenCalled();
+    expect(nav.push).not.toHaveBeenCalled();
+  });
+
+  it("工作台旁览内点证券时打开详情，保留背景右栏与原日期范围", async () => {
+    nav.pathname = "/workbench";
+    renderHost({kind: "limit-up", date: "2026-10-02", symbols: ["600519"]});
+    fireEvent.click(screen.getByTestId("open-deeplink"));
+    expect(screen.getByTestId("symbol-detail-modal")).toBeTruthy();
+    const panel = await screen.findByTestId("detail-panel");
+    expect(panel.getAttribute("data-symbol")).toBe("600519");
+    expect(panel.getAttribute("data-chart")).toBe("flow");
+    expect(nav.replace).not.toHaveBeenCalled();
+    expect(nav.push).not.toHaveBeenCalled();
+  });
+
   it("已在 /workbench ⇒ 不弹窗，改为切换右栏标的（URL 是唯一真相源）", async () => {
     nav.pathname = "/workbench";
     renderHost();

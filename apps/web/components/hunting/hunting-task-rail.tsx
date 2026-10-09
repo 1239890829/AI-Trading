@@ -2,6 +2,8 @@
 
 import { useId, useState } from "react";
 import Link from "next/link";
+import { inspectionClick, useInspection } from "@/components/inspection/inspection-context";
+
 import { patchWorkspaceUrl } from "@/lib/task-navigation";
 
 type HuntingView = "discover" | "evidence" | "tracking" | "research" | "review";
@@ -27,6 +29,7 @@ const GROUPS: { id: string; label: string; tasks: Task[] }[] = [
 
 /** Project existing consumers into a small task rack; route keys remain compatible. */
 export function HuntingTaskRail({ view, section, search }: { view: HuntingView; section: string | null; search: string }) {
+  const { open: inspect } = useInspection();
   const selected = view === "discover" ? ["watcher", "reminders"].includes(section ?? "") ? "brief" : section ?? "candidates" : view;
   const currentGroup = GROUPS.find(group => group.tasks.some(task => task.id === selected))?.id ?? "discover";
   const [groupId, setGroupId] = useState(currentGroup);
@@ -43,6 +46,7 @@ export function HuntingTaskRail({ view, section, search }: { view: HuntingView; 
     </div>
     <nav id={panelId} className="hunting-task-links" aria-label={`${group.label}功能`}>
       {group.tasks.map(task => <Link key={task.id} scroll={false} aria-current={!task.external && selected === task.id ? "page" : undefined}
+        onClick={task.external ? inspectionClick(inspect, {kind: "review-report", date: new URLSearchParams(search).get("date") ?? undefined}) : undefined}
         href={task.external ? patchWorkspaceUrl("/agent", search, {area: "research", tab: "review", view: null, panel: null, sec: null, from: `/hunting${search ? `?${search}` : ""}`})
           : patchWorkspaceUrl("/hunting", search, {view: task.view, sec: task.section ?? null, panel: null, review: null})}>
         {task.label}{task.external && <svg aria-hidden="true" width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.6"><path d="M7 17 17 7M7 7h10v10" /></svg>}

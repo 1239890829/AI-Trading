@@ -11,9 +11,9 @@ afterEach(() => cleanup());
 
 vi.mock("@/lib/api", () => ({ getLimitDownPool: vi.fn() }));
 
-// 组件用 useSearchParams 读 ?date= 初始日期；裸 jsdom 无 Next 路由，mock 成空参数
+// 钉请求日期：响应 trade_date 不能覆盖读者原始 scope，也不能依赖宿主运行当天。
 vi.mock("next/navigation", () => ({
-  useSearchParams: () => new URLSearchParams(),
+  useSearchParams: () => new URLSearchParams("date=2026-09-04"),
   // 行级整行跳转（useStockRowNav）依赖 useRouter；缺失会连渲染都失败
   useRouter: () => ({ push: vi.fn(), replace: vi.fn(), back: vi.fn(), prefetch: vi.fn() }),
 }));
@@ -51,6 +51,7 @@ describe("LimitDownTab", () => {
       rec({ consecutive_days: 1 }),
     ]);
     await mount();
+    expect(getLimitDownPool).toHaveBeenCalledWith("2026-09-04");
     expect(screen.getByText("跌停池 · 2026-09-04")).toBeTruthy();
     expect(screen.getByText("传智教育")).toBeTruthy();
     expect(screen.getByText("2 天")).toBeTruthy(); // ≥2 天强调

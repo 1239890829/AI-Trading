@@ -8,6 +8,7 @@ import { StockLink, useStockRowNav } from "@/components/stock-link";
 import { ConceptDetailModal } from "@/components/concept-detail-modal";
 import { EntryChecklist } from "@/components/entry-checklist";
 import { JUMP_PILL_CLASS, JumpLink } from "@/components/ui/jump-link";
+import { inspectionClick, useInspection } from "@/components/inspection/inspection-context";
 import { roleClass } from "@/lib/role-style";
 import type { ThemeCard as ThemeCardType } from "@/types/market";
 
@@ -185,6 +186,7 @@ export function ThemeCardView({
   /** 资金合力（P1-5）：官方成分批量快照聚合，按题材名匹配；无数据静默 */
   strength?: ThemeStrengthRow | null;
 }) {
+  const { open: inspect } = useInspection();
   const p = card.performance;
   const board = card.board;
   const stockNav = useStockRowNav();
@@ -351,6 +353,7 @@ export function ThemeCardView({
         <div className="flex-1" />
         <JumpLink
           href={`${tapeUrl("limitup")}&${poolQuery.slice(1)}`}
+          onClick={inspectionClick(inspect, {kind: "limit-up", date: tradeDate, theme: card.theme, symbols: card.ladder.map(row => row.symbol)})}
           title="在原始涨停池中核对该题材成员（含涨停原因原文，成员高亮）"
         >
           涨停池 ↗

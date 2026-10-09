@@ -5,7 +5,7 @@ import type { ReactNode } from "react";
 import { CardHead, CardShell } from "@/components/picks/card-shell";
 import { CardEntryRow } from "@/components/picks/card-entries";
 import { useStockRowNav } from "@/components/stock-link";
-import { fmt, formatLegacyLimitDistance, pctColor, pctText, triText } from "@/lib/format";
+import { bjDate, fmt, formatLegacyLimitDistance, pctColor, pctText, timeTextBJ, triText } from "@/lib/format";
 import { clockOf, compareGates, gateActive, type GateComparison } from "@/lib/picks-gate";
 import { roleClass } from "@/lib/role-style";
 import type {
@@ -91,6 +91,7 @@ export interface TradingCard {
   change_pct: number | null;
   /** 盘前生成/首见参考价；仅用于复盘基准，绝不冒充成交。 */
   referencePrice: number | null;
+  selectionEntry?: DailyPickItem["selection_entry"];
   /** 最新动作时执行复核；null = 尚未产生盘中买点判定。 */
   execution: ExecutionDecisionContract | null;
   /* --- 估值与评分：目前仅盘前名单提供 --- */
@@ -189,6 +190,7 @@ export function fromDailyPick(it: DailyPickItem): TradingCard {
     price: executionReady ? (executable?.price ?? it.price ?? null) : (it.price ?? null),
     change_pct: executionReady ? (executable?.change_pct ?? it.change_pct ?? null) : (it.change_pct ?? null),
     referencePrice: execution?.reference_entry.price ?? it.price ?? null,
+    selectionEntry: it.selection_entry,
     execution,
     pe_ttm: it.pe_ttm ?? null,
     pb: it.pb ?? null,
@@ -251,6 +253,7 @@ export function fromIntradayStock(it: IntradayTopStock | OpportunityStock): Trad
     price: it.price ?? null,
     change_pct: it.change_pct ?? null,
     referencePrice: null,
+    selectionEntry: it.selection_entry,
     execution: null,
     pe_ttm: null,
     pb: null,
@@ -436,6 +439,8 @@ export function PickCard({
           </>
         }
       />
+
+      <SelectionEntryRow entry={item.selectionEntry} />
 
       {/* IMP-006：参考价与动作时执行快照分开呈现；两者都不是成交。 */}
       {item.origin === "picks" && (item.referencePrice != null || item.execution) && (
@@ -773,6 +778,27 @@ export function PickCard({
       <CardEntryRow symbol={item.symbol} name={item.name} theme={item.theme ?? null} />
     </CardShell>
   );
+}
+
+/** Original entry facts stay legible beside a moving quote, including sealed observations. */
+function SelectionEntryRow({ entry }: { entry?: DailyPickItem["selection_entry"] }) {
+  const usable = (entry?.state === "recorded" || entry?.state === "partial") && entry.semantics === "observation_only_not_fill";
+  const selectedAt = usable ? entry?.selected_at : null;
+  const knownTime = selectedAt && Number.isFinite(Date.parse(selectedAt)) && /(?:Z|[+-]\d{2}:\d{2})$/.test(selectedAt);
+  const price = usable && typeof entry?.reference_price === "number" && Number.isFinite(entry.reference_price) && entry.reference_price > 0 ? entry.reference_price : null;
+  const change = usable && typeof entry?.reference_change_pct === "number" && Number.isFinite(entry.reference_change_pct) ? entry.reference_change_pct : null;
+  return <div className="selection-entry-row mt-2 flex flex-wrap gap-x-3 gap-y-1 border-b border-zinc-200 pb-2 text-[11px] text-zinc-600 dark:border-zinc-800 dark:text-zinc-400" aria-label="首次加入记录" title={`首次加入用于复盘，不是成交。报价源时间：${entry?.quote_as_of ?? "未记录"}。来源版本：${entry?.source_version ?? "未记录"}`}>
+    <span className="whitespace-nowrap">首次加入 {knownTime ? <time dateTime={selectedAt}>{bjDate(selectedAt!)} {timeTextBJ(selectedAt!)}</time> : "未记录"}</span>
+    <span className="whitespace-nowrap tabular-nums">加入参考价 {price == null ? "未记录" : `¥${fmt(price)}`}</span>
+    {change != null && <span className={`whitespace-nowrap tabular-nums ${pctColor(change)}`}>当时 {pctText(change)}</span>}
+    <span className="whitespace-nowrap text-[10px]">非成交价</span>
+    {entry?.state === "partial" && <span className="whitespace-nowrap text-[10px] text-amber-800 dark:text-amber-400">依据不完整</span>}
+    {entry && (usable || entry.reason) && <details className="w-full" onClick={event => event.stopPropagation()} onKeyDown={event => event.stopPropagation()}>
+      <summary className="w-fit cursor-pointer text-[10px]">时点依据</summary>
+      <p className="mt-1 break-all">报价源时间 {entry?.quote_as_of ?? "未记录"} · {entry?.source === "daily_generation" ? "每日组合生成" : "盘中入选归档"} · 原版本 {entry?.source_version ?? "未记录"}</p>
+      {entry.reason && <p className="mt-1 [overflow-wrap:anywhere]">{entry.reason}</p>}
+    </details>}
+  </div>;
 }
 
 /** 空仓闸门横幅：情绪转弱时主动提示规避（红线 3：只提示，不下指令）。

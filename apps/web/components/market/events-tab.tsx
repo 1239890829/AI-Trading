@@ -2,13 +2,13 @@
 
 import { FilterMenu } from "@/components/ui/filter-menu";
 
-import { useCallback, useEffect, useRef, useState } from "react";
+import { useState } from "react";
 import { NewsModal, type NewsModalItem } from "@/components/news-modal";
 import { useDetailModal } from "@/components/detail/detail-modal";
 import { symbolDetailClick, useSymbolDetail } from "@/components/detail/symbol-detail-context";
 import { Panel } from "@/components/panel";
 import { StockPools, directionLabel } from "@/components/event-panel";
-import { getImpactEvents, type EventSort, type ImpactEvent } from "@/lib/api";
+import { getImpactEvents, type EventSort } from "@/lib/api";
 import {
   FOUR_STYLE,
   LEVEL_STYLE,
@@ -18,7 +18,9 @@ import {
   levelTitle,
 } from "@/lib/event-view";
 import { themesUrl, workbenchUrl } from "@/lib/routing";
-import { usePollingFetch } from "@/hooks/use-polling-fetch";
+import { useResource } from "@/hooks/use-polling-fetch";
+import { useSurfaceScope } from "@/components/inspection/surface-scope";
+import { inspectionClick, useInspection } from "@/components/inspection/inspection-context";
 import { Skeleton } from "@/components/ui/loading";
 import { IncrementalSentinel } from "@/components/ui/incremental-sentinel";
 import { useIncremental } from "@/hooks/use-incremental";
@@ -56,57 +58,39 @@ const TAGS = ["业绩", "公告", "异动", "资金", "行业"] as const;
 
 
 export function EventsTab() {
-  const [items, setItems] = useState<ImpactEvent[] | null>(null);
-  const [countsAll, setCountsAll] = useState<Record<string, number> | null>(null);
-  const [tagCounts, setTagCounts] = useState<Record<string, number> | null>(null);
-  const [error, setError] = useState<string | null>(null);
-  const [four, setFour] = useState<string>("all");
-  const [tag, setTag] = useState<string>("all");
-  const [sort, setSort] = useState<EventSort>("relevance");
+  const { searchParams } = useSurfaceScope();
+  const { open: openInspection } = useInspection();
+  const [four, setFour] = useState(() => searchParams.get("four") ?? "all");
+  const [tag, setTag] = useState(() => searchParams.get("tag") ?? "all");
+  const [sort, setSort] = useState<EventSort>(() => {
+    const requested = searchParams.get("sort");
+    return requested === "time" || requested === "impact" ? requested : "relevance";
+  });
+  const [target, setTarget] = useState(() => searchParams.get("target") ?? "");
   const [modalItem, setModalItem] = useState<NewsModalItem | null>(null);
-  const [l1Only, setL1Only] = useState(false);
+  const [l1Only, setL1Only] = useState(() => searchParams.get("l1") === "1");
   const [expanded, setExpanded] = useState<number | null>(null);
   const { open: openDetail } = useDetailModal();
-  // 方向 chip 若指向个股 → **就地弹窗**（2026-09-15 详情弹窗化）；指向题材仍走跳转
   const { open: openSymbolDetail } = useSymbolDetail();
-
-  const load = useCallback(async () => {
-    const r = await getImpactEvents(false, 100, sort);
-    setItems(r.items);
-    setCountsAll(r.countsAll);
-    setTagCounts(r.tagCounts);
-    setError(null);
-  }, [sort]);
-
-  usePollingFetch(async () => {
-    try {
-      await load();
-    } catch {
-      setError("事件影响力数据加载失败（后端不可达或数据源异常）。");
-    }
-  }, 60_000);
-
-  // 排序切换立即拉取（usePollingFetch 只在挂载与周期触发，不等 60s 轮询）；
-  // ref 守卫跳过挂载首拍（轮询已拉过），只对 sort 变化补拉。
-  const prevSort = useRef(sort);
-  useEffect(() => {
-    if (prevSort.current === sort) return;
-    prevSort.current = sort;
-    void load();
-  }, [sort, load]);
+  const resource = useResource(() => getImpactEvents(false, 100, sort), {key: sort, intervalMs: 60_000});
+  const items = resource.data?.items ?? null;
+  const countsAll = resource.data?.countsAll ?? null;
+  const tagCounts = resource.data?.tagCounts ?? null;
+  const error = resource.error ? "事件影响力数据加载失败。请重试；已保留的同范围内容仅作上次结果参考。" : null;
 
   const shown = (items ?? []).filter(
     (e) =>
       (four === "all" || e.four_category === four) &&
       (tag === "all" || e.tags.includes(tag)) &&
-      (!l1Only || e.impact_level === "L1"),
+      (!l1Only || e.impact_level === "L1") &&
+      (!target || e.source_symbol === target || e.directions.some(direction => direction.target === target)),
   );
 
   // 增量渲染（#55 分页）：/api/events/impact?limit=100 实测 75 条，每条含
   // directions/tags 嵌套渲染，一次性铺开 DOM 明显偏重。筛选条件变化时重置到首页
   // （resetKey），避免"筛完只剩 3 条却仍渲染第 90 条起"的错位。
   const { shown: shownPage, visible, sentinelRef } = useIncremental(shown, {
-    resetKey: `${four}/${tag}/${sort}/${l1Only}`,
+    resetKey: `${four}/${tag}/${sort}/${l1Only}/${target}`,
   });
 
   return (
@@ -121,6 +105,7 @@ export function EventsTab() {
       bodyClassName="overflow-hidden"
     >
       <div className="flex h-full min-h-0 flex-col">
+        {target && <div className="flex shrink-0 flex-wrap items-center gap-2 border-b border-zinc-100 px-3 py-2 text-xs text-zinc-600 dark:border-zinc-800 dark:text-zinc-400"><span>限定关联：{target}</span><button type="button" className="quiet-action" onClick={() => setTarget("")}>显示全部事件</button></div>}
         {/* 第一行：排序 tag 切换 + 只看 L1 */}
         <div className="flex shrink-0 flex-wrap items-center gap-1.5 border-b border-zinc-100 px-3 py-2 dark:border-zinc-800/60">
           <FilterMenu label="排序" value={sort} options={SORTS} onChange={setSort} />
@@ -137,7 +122,7 @@ export function EventsTab() {
         </div>
 
         {error && (
-          <p className="shrink-0 px-4 py-2 text-xs text-amber-800 dark:text-amber-300">{error}</p>
+          <p role="alert" className="shrink-0 px-4 py-2 text-xs text-amber-800 dark:text-amber-300">{error} <button type="button" className="quiet-action" onClick={resource.refresh}>重试读取</button></p>
         )}
         {items === null && !error && (
           <ul className="min-h-0 flex-1 space-y-3 overflow-hidden px-4 py-3" aria-hidden>
@@ -234,7 +219,7 @@ export function EventsTab() {
                       <a
                         key={`${d.target_type}-${d.target}`}
                         href={isStock ? workbenchUrl(d.target) : themesUrl(d.target)}
-                        onClick={isStock ? symbolDetailClick(openSymbolDetail, { symbol: d.target }) : undefined}
+                        onClick={isStock ? symbolDetailClick(openSymbolDetail, { symbol: d.target }) : inspectionClick(openInspection, { kind: "themes", focus: d.target })}
                         title={tip || `关联${isStock ? "个股" : "题材"} ${d.target}（${d.basis || "入选理由见标的池"}）`}
                         className="inline-flex items-center gap-1 rounded border border-zinc-200 px-1.5 py-0.5 text-[11px] text-zinc-700 hover:border-zinc-400 dark:border-zinc-700 dark:text-zinc-200"
                       >

@@ -39,6 +39,7 @@ import { useIncremental } from "@/hooks/use-incremental";
 import { useResource } from "@/hooks/use-resource";
 import { ChannelStatus } from "@/components/notifications/channel-status";
 import { useDetailModal, type DetailPayload } from "@/components/detail/detail-modal";
+import { inspectionClick, useInspection } from "@/components/inspection/inspection-context";
 import { useSymbolDetail } from "@/components/detail/symbol-detail-context";
 import { NewsModal, type NewsModalItem } from "@/components/news-modal";
 import { EventFeed } from "@/components/notifications/event-feed";
@@ -407,6 +408,7 @@ function NotificationRow({
   const { open: openDetail } = useDetailModal();
   // 2026-09-16 `IMP-033`：个股提醒的落点与悬浮球 / 猎场统一（就地开该股详情弹窗）。
   const { open: openSymbolDetail } = useSymbolDetail();
+  const { open: inspect } = useInspection();
   // 2026-09-09：无 url 的通知（快讯类大多无原文链接）此前渲染成死 div 点不动。
   // 现统一可点：有 url 走 NewsModal 看原文；无 url 走通用详情弹窗看 body+评分。
   const clickable = item.url?.startsWith("http") ?? false;
@@ -422,7 +424,7 @@ function NotificationRow({
       // ⚠️ 判读全文**不由此处承载** ⇒ 走下方「判读」入口——
       // **统一落点不得以丢失能力为代价**（同族纪律见 `IMP-031`）。
       // 无代码的条目（如消息面）保持通用详情弹窗，不静默失败。
-      openSymbolDetail({ symbol: item.symbol });
+      openSymbolDetail({ symbol: item.symbol, preferModal: true });
     } else {
       openDetail(judgmentPayload(item));
     }
@@ -472,10 +474,10 @@ function NotificationRow({
         <ul className="mt-2 space-y-3">{item.references?.map(ref => <li key={ref.event_id} className="min-w-0 break-words">
           <p>{ref.kind === "selection" ? "原入选" : "原判定"} · {ref.source_as_of ?? "原时点未记录"}</p>
           <p className="break-all">版本：{ref.source_version ?? "未绑定"}{ref.run_id ? ` · 归档 ${ref.run_id}` : ""}</p>
-          {ref.selection_source === "daily" && ref.source_version && ref.trade_date && <a className="quiet-action mt-1 inline-flex" href={`/hunting?${new URLSearchParams({view: "review", date: ref.trade_date, version: ref.source_version})}`}>查看此版本复盘</a>}
+          {ref.selection_source === "daily" && ref.source_version && ref.trade_date && <a className="quiet-action mt-1 inline-flex" onClick={inspectionClick(inspect, {kind: "selection-review", date: ref.trade_date, version: ref.source_version})} href={`/hunting?${new URLSearchParams({view: "review", date: ref.trade_date, version: ref.source_version})}`}>查看此版本复盘</a>}
           {evidenceLines(ref.evidence).map((line, index) => <p key={index}>{line}</p>)}
         </li>)}</ul>
-        {item.symbol && <a href="/hunting?view=discover&sec=candidates" className="quiet-action mt-2 inline-flex">查看当前选股条件</a>}
+        {item.symbol && <a href="/hunting?view=discover&sec=candidates" onClick={inspectionClick(inspect, {kind: "selection-preview", section: "candidates"})} className="quiet-action mt-2 inline-flex">查看当前选股条件</a>}
       </details>}
       {/* 标签行：左侧仍是分类/评分；右侧 = **一体化的操作组**（行情 + 判读） */}
       <div className="mt-1 flex items-center gap-2 text-[10px] text-zinc-600 dark:text-zinc-400">
@@ -495,6 +497,7 @@ function NotificationRow({
           >
             <StockLink
               symbol={item.symbol}
+              preferModal
               className="px-1.5 py-0.5 text-zinc-600 dark:text-zinc-400"
               title={`查看 ${item.symbol} 行情详情`}
             >

@@ -63,7 +63,20 @@ export interface DimensionEvidence {
   source_as_of?: string | null;
 }
 
+export interface SelectionEntry {
+  state: "recorded" | "partial" | "missing";
+  selected_at: string | null;
+  reference_price: number | null;
+  reference_change_pct: number | null;
+  quote_as_of: string | null;
+  source: "daily_generation" | "intraday_rank_archive";
+  source_version: string | null;
+  semantics: "observation_only_not_fill";
+  reason?: string | null;
+}
+
 export interface DailyPickItem {
+  selection_entry?: SelectionEntry | null;
   symbol: string;
   name: string | null;
   price: number | null;
@@ -644,6 +657,7 @@ export interface SealState {
 }
 
 export interface OpportunityStock {
+  selection_entry?: SelectionEntry | null;
   symbol: string;
   name: string | null;
   role: string | null;
@@ -716,7 +730,8 @@ export interface OpportunityTheme {
 export interface IntradayOpportunities {
   trade_date: string | null;
   themes: OpportunityTheme[];
-  summary: { limit_up_total: number | null; market_max_boards: number | null; top_theme: string | null };
+  summary: { limit_up_total: number | null; market_max_boards: number | null; top_theme: string | null;
+    market_max_board_stocks?: {symbol: string; name: string | null; boards: number}[] };
   hot_available: boolean;
   caveats: string[];
   /** 题材联动挖掘汇总（2026-09-15）：挖了几个题材、补入几只 */
@@ -808,6 +823,7 @@ export interface IntradayThemeSource {
 }
 
 export interface IntradayTopStock {
+  selection_entry?: SelectionEntry | null;
   theme_sources?: IntradayThemeSource[];
   symbol: string;
   name: string | null;

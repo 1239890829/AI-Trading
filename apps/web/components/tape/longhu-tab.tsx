@@ -1,13 +1,13 @@
 "use client";
 
-import { useCallback, useEffect, useMemo, useState } from "react";
+import { useEffect, useId, useMemo, useState } from "react";
 import { Panel } from "@/components/panel";
 import { StockLink, useStockRowNav } from "@/components/stock-link";
 import { getLonghu, getLonghuThemeTrail, type LonghuTrailPayload } from "@/lib/api";
 import { fmt, fmtAmount, pctColor, pctText } from "@/lib/format";
-import { usePollingFetch } from "@/hooks/use-polling-fetch";
+import { useResource } from "@/hooks/use-polling-fetch";
+import { useSurfaceScope } from "@/components/inspection/surface-scope";
 import { bjMinuteOfDay, bjToday } from "@/lib/market-hours";
-import type { LongHuRecord } from "@/types/market";
 
 /** 盘面页 · 龙虎榜 tab（原 /longhu 页迁移，2026-09-01 系统重构）。 */
 
@@ -25,21 +25,23 @@ function scopeText(rd?: number | null): string {
 
 export function LonghuTab() {
   const stockNav = useStockRowNav();
-  const [records, setRecords] = useState<LongHuRecord[]>([]);
-  const [tradeDate, setTradeDate] = useState("");
-  const [error, setError] = useState<string | null>(null);
-  // 数据返回那一刻的客户端时间，用于判断"这份数据是不是盘中未定稿"。
-  // 必须在拿到数据后再取（放在渲染期会 SSR 水合不一致，放在挂载 effect 里会被 lint 告警）。
-  // 失败态也要取：判断"查询是否落在披露前"，见 isPreRelease。
-  const [now, setNow] = useState<Date | null>(null);
-  // 本次请求的日期参数（空 = 默认查当天，与后端语义一致）。失败时 records/tradeDate
-  // 都是空的，凭它才知道用户查的是不是"披露前的当日"。
-  const [queryDate, setQueryDate] = useState<string | null>(null);
-  // 首次拉取在途：区分「加载中」与「确认无数据」（2026-09-04 统一加载体验）
-  const [loading, setLoading] = useState(true);
-  // 题材迁徙（B3）：best-effort 增强，失败静默降级（主榜不依赖它）
+  const { searchParams, replaceSearch } = useSurfaceScope();
+  const dateId = useId();
+  const queryDate = searchParams.get("date") || undefined;
+  const requestedDate = queryDate || bjToday();
+  const resource = useResource(async () => ({records: await getLonghu(queryDate), readAt: new Date()}), {key: requestedDate, intervalMs: null});
+  const records = useMemo(() => resource.error ? [] : resource.data?.records ?? [], [resource.error, resource.data]);
+  const tradeDate = resource.data?.records[0]?.trade_date ?? requestedDate;
+  const error = resource.error instanceof Error ? resource.error.message : resource.error ? "读取失败" : null;
+  const now = useMemo(() => resource.data?.readAt ?? (resource.error ? new Date() : null), [resource.data, resource.error]);
+  const loading = resource.pending;
   const [trail, setTrail] = useState<LonghuTrailPayload | null>(null);
   const [trailOpen, setTrailOpen] = useState(false);
+  function onDate(date: string) {
+    const params = new URLSearchParams(searchParams.toString());
+    if (date) params.set("date", date); else params.delete("date");
+    replaceSearch(params);
+  }
 
   useEffect(() => {
     let alive = true;
@@ -54,25 +56,6 @@ export function LonghuTab() {
       alive = false;
     };
   }, []);
-
-  const load = useCallback(async (date?: string) => {
-    setQueryDate(date ?? null);
-    try {
-      const list = await getLonghu(date);
-      setRecords(list);
-      setTradeDate(list[0]?.trade_date ?? "");
-      setNow(new Date());
-      setError(null);
-    } catch (e) {
-      setError((e as Error).message);
-      setRecords([]);
-      setNow(new Date());
-    } finally {
-      setLoading(false);
-    }
-  }, []);
-
-  usePollingFetch(load, null);
 
   // 数据源返回的是原序（实测既非升序也非降序），这里显式排序，别让表格标题说谎。
   // 排序口径：日榜(1) 优先于三日榜(3)——两者是不同统计区间的累计值，金额不可直接比大小；
@@ -103,7 +86,7 @@ export function LonghuTab() {
   // 披露前的当日查询改走"尚未披露"提示，只有披露时刻（约 17:00）之后仍拿不到才算失败。
   const isPreRelease = useMemo(() => {
     if (!now) return false;
-    const want = queryDate || bjToday(); // 不带日期参数 = 后端默认查当天
+    const want = (queryDate || bjToday()).replace(/^(\d{4})(\d{2})(\d{2})$/, "$1-$2-$3"); // 不带日期参数 = 后端默认查当天
     if (want !== bjToday()) return false;
     return bjMinuteOfDay(now) < 17 * 60;
   }, [now, queryDate]);
@@ -124,11 +107,12 @@ export function LonghuTab() {
       <div className="mb-4 flex shrink-0 flex-wrap items-center justify-between gap-2">
         <h2 className="text-base font-semibold">龙虎榜 · {tradeDate || "…"}</h2>
         <div className="query-date text-xs text-zinc-600 dark:text-zinc-400">
-          <label htmlFor="lh-date">按日期查询（T-1 盘后披露）：</label>
+          <label htmlFor={dateId}>按日期查询（T-1 盘后披露）：</label>
           <input
-            id="lh-date"
+            id={dateId}
             type="date"
-            onChange={(e) => void load(e.target.value || undefined)}
+            value={requestedDate.replace(/^(\d{4})(\d{2})(\d{2})$/, "$1-$2-$3")}
+            onChange={(e) => onDate(e.target.value)}
             className="rounded-md border border-zinc-200 bg-transparent px-2 py-1 text-sm dark:border-zinc-700"
           />
         </div>
@@ -138,6 +122,7 @@ export function LonghuTab() {
         <div className="mb-4 shrink-0 rounded-lg border border-amber-500/40 bg-amber-500/10 px-4 py-3 text-sm text-amber-800 dark:text-amber-300">
           {/* 加载失败时 records 为空，无从判断实际数据源，不猜、不写死源名 */}
           龙虎榜加载失败：{error}
+          <button type="button" className="quiet-action ml-2" onClick={resource.refresh}>重试读取</button>
         </div>
       )}
 

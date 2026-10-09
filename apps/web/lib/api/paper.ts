@@ -17,6 +17,18 @@ export interface PaperAccountInfo {
   total_pnl_pct: number;
 }
 
+/** Observation of existing funds; an uninitialized account has unknown amounts. */
+export interface PaperAccountSnapshot {
+  account_created: boolean;
+  cash: number | null;
+  frozen_cash: number | null;
+  initial_cash: number | null;
+  market_value: number;
+  total: number | null;
+  total_pnl: number | null;
+  total_pnl_pct: number | null;
+}
+
 export interface PaperPositionInfo {
   symbol: string;
   quantity: number;
@@ -49,7 +61,11 @@ export interface PaperFill {
   fee: number;
 }
 
-export const getPaperAccount = () => getJson<PaperAccountInfo>("/api/paper/account").then((b) => b.data);
+export function getPaperAccount(readOnly: true): Promise<PaperAccountSnapshot>;
+export function getPaperAccount(readOnly?: false): Promise<PaperAccountInfo>;
+export function getPaperAccount(readOnly = false): Promise<PaperAccountInfo | PaperAccountSnapshot> {
+  return getJson<PaperAccountInfo | PaperAccountSnapshot>(`/api/paper/account${readOnly ? "?read_only=true" : ""}`).then((body) => body.data);
+}
 
 export const getPaperPositions = () => getJsonArray<PaperPositionInfo>("/api/paper/positions");
 
