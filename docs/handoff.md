@@ -1,6 +1,6 @@
 # 当前交接：IMP-085 板块资金流空间整改
 
-> 总方案v9.13；任务唯一状态归W07/IMP-085；现役UI方案[原版技能与UI方案](product/ui-original-skills-plan-20261008.md) §9.10；Jev现役蓝图[jev-integration](ai/jev-integration.md)。IMP-084已由PR #243/#244完成发布，本轮不复用其历史绿色。
+> 总方案v9.13；U01–U55；任务唯一状态归W07/IMP-085；现役UI方案[原版技能与UI方案](product/ui-original-skills-plan-20261008.md) §9.10；Jev现役蓝图[jev-integration](ai/jev-integration.md)。IMP-084已由PR #243/#244完成发布，本轮不复用其历史绿色。
 
 ## 1. 现场、授权与版本
 
