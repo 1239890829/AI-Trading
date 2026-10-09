@@ -68,7 +68,7 @@ export function HuntingStatsBar({
   rolePerformance: RolePerformance[] | undefined;
   stats: IntradayReviewStats | null;
 }) {
-  // 精选侧副证据：样本 ≥3 的角色里胜率最高者（样本太小的「100% 胜率」是噪音）
+  // 精选侧副证据：有效记录 ≥3 条的角色里走好观察占比最高者；不推断未来表现。
   const bestRole = (rolePerformance ?? [])
     .filter((r) => r.count >= 3)
     .sort((a, b) => b.win_rate - a.win_rate)[0];
@@ -78,10 +78,10 @@ export function HuntingStatsBar({
 
   return (
     <div className="hunting-stat-strip grid grid-cols-2 gap-2 md:grid-cols-4">
-      {/* 精选口径 ①：信号健康度（滚动组合日胜率 + CUSUM 下漂） */}
+      {/* 精选口径 ①：可信价格观察的滚动走好占比 + CUSUM 下漂 */}
       <StatCard
         label="精选 · 信号健康"
-        tip="口径：每日精选命中记录的滚动组合日胜率 + CUSUM 下漂检测（与跟踪口径独立不混算）"
+        tip="口径：同版同窗可信价格观察的滚动走好占比 + CUSUM 均值下漂检测；不是成交胜率（与跟踪口径独立不混算）"
         badge={health ? { text: HEALTH_LABEL[health.status], tone: HEALTH_TONE[health.status] } : undefined}
       >
         {health ? (
@@ -96,7 +96,7 @@ export function HuntingStatsBar({
                 </span>
               </div>
               <div className="mt-0.5 text-[10px] text-zinc-600 dark:text-zinc-400">
-                近 {w?.groups ?? 0} 组合日 · {w?.total_picks ?? 0} 只 · 好 {w?.good ?? 0} / 坏 {w?.bad ?? 0} / 平 {w?.flat ?? 0}
+                近 {w?.groups ?? 0} 组合日 · {w?.total_picks ?? 0} 条 · 好 {w?.good ?? 0} / 坏 {w?.bad ?? 0} / 平 {w?.flat ?? 0}
               </div>
             </>
           )
@@ -108,14 +108,14 @@ export function HuntingStatsBar({
       {/* 精选口径 ②：最优梯队角色（role_performance 已有端点，此处挑样本达标的最优角色） */}
       <StatCard
         label="精选 · 最优角色"
-        tip="口径：按题材角色聚合的历史胜率（/api/picks/meta）；单角色样本 ≥3 只才参与排名"
+        tip="口径：同版同窗可信价格观察（/api/picks/meta），按角色走好占比排序；单角色有效记录 ≥3 条才参与排名。不是成交胜率或上涨概率"
       >
         <div className="mt-0.5 font-mono text-sm font-semibold tabular-nums text-zinc-900 dark:text-zinc-50">
           {bestRole ? (
             <>
               {bestRole.role}
               <span className={`ml-1.5 text-[10px] font-normal ${winRateColor(bestRole.win_rate, "pct")}`}>
-                胜率 {bestRole.win_rate}%
+                走好观察占比 {bestRole.win_rate}%
               </span>
             </>
           ) : (
@@ -123,7 +123,7 @@ export function HuntingStatsBar({
           )}
         </div>
         <div className="mt-0.5 text-[10px] text-zinc-600 dark:text-zinc-400">
-          {bestRole ? `平均超额 ${pctText(bestRole.avg_excess)}` : "全量角色胜率表见复盘区"}
+          {bestRole ? `平均超额 ${pctText(bestRole.avg_excess)}` : "角色价格观察表见复盘区"}
         </div>
       </StatCard>
 

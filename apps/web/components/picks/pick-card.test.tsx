@@ -238,12 +238,14 @@ describe("PickCard · 盘中名单（fromIntradayStock）", () => {
     expect(screen.getByText("确定性·高")).toBeTruthy();
   });
 
-  it("缺收盘口径维度时：不补值也不留白，用口径注记说明为什么没有", () => {
+  it("盘中缺每日评分时保留两种来源，不承诺次日生成或实际成交", () => {
     const { container } = render(<PickCard item={fromIntradayStock(topPath)} />);
     // 不适用 ⇒ 整节不渲染（盘中路径不出现盘前概念的买入区间）
     expect(container.textContent).not.toContain("买入参考区间");
     // 但必须显式说明口径，用户能看出「为什么这张卡没有评分」
-    expect(container.textContent).toContain("不含收盘六维评分");
+    expect(container.textContent).toContain("评分、估值与参考区间由每日组合原生成时点提供");
+    expect(container.textContent).not.toContain("收盘后生成次日名单");
+    expect(container.textContent).toContain("参考信息不代表成交");
     expect(container.textContent).toContain("盘中实时口径");
   });
 

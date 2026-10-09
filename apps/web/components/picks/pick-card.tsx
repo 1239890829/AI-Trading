@@ -284,10 +284,10 @@ export function fromIntradayStock(it: IntradayTopStock | OpportunityStock): Trad
     invalidations: [],
     chipSignal: null,
     relatedEvents: [],
-    // 「不补，显式标注口径」：缺的是收盘才有的维度，说明一次即可，不逐个渲染占位
+    // 盘中来源不补每日组合字段；原生成时点信息由每日来源提供。
     caliberNote:
       "盘中实时口径 · 随盘面重算：含联动确定性判定与出场纪律；" +
-      "不含收盘六维评分、估值与买入区间（收盘后生成次日名单）。判定为条件陈述，不构成买卖建议。",
+      "评分、估值与参考区间由每日组合原生成时点提供，不以盘中数据补填。参考信息不代表成交；判定为条件陈述，不构成买卖建议。",
   };
 }
 

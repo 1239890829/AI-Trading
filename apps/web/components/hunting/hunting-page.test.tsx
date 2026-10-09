@@ -117,3 +117,21 @@ it("binds original review links to their date and version and discards an older 
   expect(screen.queryByText("复盘版本 version-A")).toBeNull();
   expect(screen.getByText(/该日期或版本尚无复盘记录/)).toBeTruthy();
 });
+
+it("labels the real role summary as bound price observations and retains its existing sample gate", async () => {
+  const {HuntingStatsBar} = await vi.importActual<typeof import("@/components/hunting/stats-bar")>("@/components/hunting/stats-bar");
+  const page = render(<HuntingStatsBar health={null} stats={null} rolePerformance={[
+    {role: "龙头", count: 2, win_rate: 100, avg_excess: 3},
+    {role: "中军", count: 6, win_rate: 70, avg_excess: 1.5},
+  ]} />);
+  const role = screen.getByText("精选 · 最优角色").closest(".hunting-stat")!;
+  expect(role.textContent).toContain("中军");
+  expect(role.textContent).not.toContain("龙头");
+  expect(role.textContent).toContain("走好观察占比 70%");
+  expect(role.getAttribute("title")).toContain("同版同窗可信价格观察");
+  expect(role.getAttribute("title")).toContain("有效记录 ≥3 条");
+  expect(role.getAttribute("title")).toContain("不是成交胜率");
+  expect(screen.getByText("精选 · 信号健康").closest(".hunting-stat")?.getAttribute("title")).toContain("同版同窗可信价格观察");
+  page.rerender(<HuntingStatsBar health={null} stats={null} rolePerformance={[]} />);
+  expect(screen.getByText("角色价格观察表见复盘区")).toBeTruthy();
+});
