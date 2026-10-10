@@ -23,7 +23,7 @@ log = logging.getLogger(__name__)
 
 
 class PoolDateError(ValueError):
-    """请求日不能被证实为跌停池交易日；status_code 供 HTTP 边界映射。"""
+    """请求日不能被证实为池交易日；status_code 供 HTTP 边界映射。"""
 
     def __init__(self, status_code: int, detail: str):
         super().__init__(detail)
@@ -32,19 +32,24 @@ class PoolDateError(ValueError):
 
 async def verify_limit_down_date(provider: Any, trade_date: date) -> None:
     """所有跌停池消费入口共用日期身份闸，避免上游静默回退到前一日。"""
+    await verify_pool_date(provider, trade_date, pool_name="跌停池")
+
+
+async def verify_pool_date(provider: Any, trade_date: date, *, pool_name: str) -> None:
+    """池日期共用日历事实，显式请求不允许被上游替换为其他交易日。"""
     from app.market.trade_calendar import is_trade_day_on, trading_days
 
     try:
         days = await trading_days(provider)
     except Exception as exc:
-        raise PoolDateError(503, f"交易日历不可用，无法核实跌停池日期：{exc}") from exc
+        raise PoolDateError(503, f"交易日历不可用，无法核实{pool_name}日期：{exc}") from exc
     if not days or trade_date < days[0]:
-        raise PoolDateError(503, "交易日历未覆盖所查跌停池日期")
+        raise PoolDateError(503, f"交易日历未覆盖所查{pool_name}日期")
     state = is_trade_day_on(trade_date, days)
     if state is None:
-        raise PoolDateError(503, "交易日历尚未覆盖所查跌停池日期")
+        raise PoolDateError(503, f"交易日历尚未覆盖所查{pool_name}日期")
     if not state:
-        raise PoolDateError(422, "所查日期不是交易日，跌停池不回退到其他日期")
+        raise PoolDateError(422, f"所查日期不是交易日，{pool_name}不回退到其他日期")
 
 
 async def default_trade_date(hub) -> date:

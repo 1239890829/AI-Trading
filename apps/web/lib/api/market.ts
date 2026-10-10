@@ -68,14 +68,40 @@ export async function getTrades(symbol: string, limit = 50): Promise<Trade[]> {
   return getJsonArray<Trade>(`/api/trades/${symbol}?limit=${limit}`);
 }
 
+export interface LimitPoolSnapshot<T> { trade_date: string; pool: T[] }
+
+// 只共享最新池的在途请求，不留跨日缓存。持久 TTL / 单飞由后端已有缓存负责。
+let latestLimitUpRequest: Promise<LimitPoolSnapshot<LimitUpRecord>> | null = null;
+
+async function readLimitPool<T extends {trade_date: string}>(path: string, dateStr?: string): Promise<LimitPoolSnapshot<T>> {
+  const qs = dateStr ? `?date=${encodeURIComponent(dateStr)}` : "";
+  const data = (await getJson<LimitPoolSnapshot<T>>(`${path}${qs}`, 20_000)).data;
+  const wanted = dateStr?.replace(/^(\d{4})(\d{2})(\d{2})$/, "$1-$2-$3");
+  if (!data || !/^\d{4}-\d{2}-\d{2}$/.test(data.trade_date) || !Array.isArray(data.pool)
+      || (wanted && data.trade_date !== wanted) || data.pool.some(row => row.trade_date !== data.trade_date)) {
+    throw new Error("涨跌停池日期与请求或记录不一致，不能作为当日证据");
+  }
+  return data;
+}
+
+export function getLimitUpPoolSnapshot(dateStr?: string): Promise<LimitPoolSnapshot<LimitUpRecord>> {
+  if (dateStr) return readLimitPool<LimitUpRecord>("/api/limit-up", dateStr);
+  if (!latestLimitUpRequest) {
+    latestLimitUpRequest = readLimitPool<LimitUpRecord>("/api/limit-up").finally(() => { latestLimitUpRequest = null; });
+  }
+  return latestLimitUpRequest;
+}
+
 export async function getLimitUpPool(dateStr?: string): Promise<LimitUpRecord[]> {
-  const qs = dateStr ? `?date=${dateStr}` : "";
-  return (await getJson<{ trade_date: string; pool: LimitUpRecord[] }>(`/api/limit-up${qs}`, 20_000)).data.pool;
+  return (await getLimitUpPoolSnapshot(dateStr)).pool;
+}
+
+export function getLimitDownPoolSnapshot(dateStr?: string): Promise<LimitPoolSnapshot<LimitDownRecord>> {
+  return readLimitPool<LimitDownRecord>("/api/limit-down", dateStr);
 }
 
 export async function getLimitDownPool(dateStr?: string): Promise<LimitDownRecord[]> {
-  const qs = dateStr ? `?date=${dateStr}` : "";
-  return (await getJson<{ trade_date: string; pool: LimitDownRecord[] }>(`/api/limit-down${qs}`, 20_000)).data.pool;
+  return (await getLimitDownPoolSnapshot(dateStr)).pool;
 }
 
 export async function getLonghu(dateStr?: string): Promise<LongHuRecord[]> {

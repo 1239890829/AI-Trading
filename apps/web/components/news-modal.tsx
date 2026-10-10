@@ -11,6 +11,8 @@ import { inspectionRequestForHref, useInspection } from "@/components/inspection
 import { useCallback, useEffect, useState } from "react";
 import { createPortal } from "react-dom";
 import { useRouter } from "next/navigation";
+import { HugeiconsIcon } from "@hugeicons/react";
+import ArrowUpRight01Icon from "@hugeicons/core-free-icons/ArrowUpRight01Icon";
 
 import { API_BASE, getNewsContent, type ArticleBlock, type ArticleContent } from "@/lib/api";
 import { withFrom } from "@/lib/routing";
@@ -31,6 +33,8 @@ export interface NewsModalItem {
   kindLabel?: string;
   digest?: string | null;
   evidence?: string;
+  /** 事件解释状态与证据边界，原文正文不改写。 */
+  judgement?: string;
 }
 
 const SOURCE_LABEL: Record<string, string> = {
@@ -309,20 +313,26 @@ export function NewsModal({ item, onClose }: { item: NewsModalItem | null; onClo
       }
       footer={
         <>
-          <span className="text-zinc-600 dark:text-zinc-400">内容归原作者/来源媒体所有，本站仅作研究参考</span>
+          <span className="min-w-0 flex-1 text-zinc-600 dark:text-zinc-400">内容归原作者/来源媒体所有，本站仅作研究参考</span>
           {shownItem.url.trim() ? <a
+            data-action="secondary"
             href={shownItem.url}
             target="_blank"
-            rel="noreferrer"
-            className="font-medium text-blue-700 transition-colors hover:text-blue-500 dark:text-blue-400"
+            rel="noopener noreferrer"
           >
-            查看原文 ↗
+            <span>查看原文</span>
+            <HugeiconsIcon icon={ArrowUpRight01Icon} aria-hidden="true" size={14} strokeWidth={1.6} className="shrink-0" />
           </a> : <span>原文链接缺失</span>}
         </>
       }
       bodyClassName="overflow-y-auto px-5 py-4"
       bodyTestId="news-modal-body"
     >
+          {shownItem.judgement && (
+            <div role="note" className="mb-4 border-b border-zinc-200 pb-3 text-xs leading-relaxed text-zinc-600 dark:border-zinc-700 dark:text-zinc-300">
+              <span className="font-medium">方向说明：</span>{shownItem.judgement}
+            </div>
+          )}
           {loading && (
             <div className="space-y-2.5" data-testid="news-modal-loading">
               {[92, 100, 96, 88, 60].map((w, i) => (

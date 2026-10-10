@@ -18,6 +18,7 @@ import { mergeQuoteIntoBars, mergeQuoteIntoMinutes } from "@/lib/kline-live";
 import { isIndexSymbol } from "@/lib/api";
 import { notifyWatchlistChanged } from "@/lib/watchlist-sync";
 import { ThemeChipsRow } from "@/components/detail/theme-chips";
+import { LimitUpReasonPanel } from "@/components/detail/limit-up-reason";
 import { StockEventsRow } from "@/components/detail/stock-events";
 import { MinuteDecisionPanel } from "@/components/detail/minute-decision-panel";
 import {
@@ -685,6 +686,7 @@ export const StockDetailPanel = memo(function StockDetailPanel({
 
   return (
     <div className="stock-workspace flex min-h-0 min-w-0 flex-col gap-4">
+      <div className="stock-context-brief">
       {error && (
         <div className="shrink-0 rounded-lg border border-amber-500/40 bg-amber-500/10 px-3 py-1.5 text-xs text-amber-800 dark:text-amber-300">{error}</div>
       )}
@@ -722,6 +724,7 @@ export const StockDetailPanel = memo(function StockDetailPanel({
         </div>
       )}
 
+      {!isIndex && <LimitUpReasonPanel symbol={symbol} quote={quote} />}
       {/* ①½ 题材归属 chips（官方成分 / 涨停归因双源）→ 题材看板聚焦 */}
       {!isIndex && <details className="detail-context-disclosure">
         <summary>题材与事件线索<span aria-hidden="true">展开核对</span></summary>
@@ -732,6 +735,7 @@ export const StockDetailPanel = memo(function StockDetailPanel({
           （sh000001 等）会返回 400，此前表现为常驻「加载失败 [重试]」（2026-09-11）。 */}
       <StockEventsRow symbol={symbol} isIndex={isIndex} />
       </details>}
+      </div>
 
       {/* 共用工具行位于内容网格上方，图表与右侧核对面板保持同一顶线。 */}
       <div className="chart-toolbar flex shrink-0 flex-wrap items-center gap-2">

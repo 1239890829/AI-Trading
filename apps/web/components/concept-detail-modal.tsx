@@ -16,6 +16,7 @@ import { getConceptDetail, type ConceptDetail } from "@/lib/api";
 import { fmtAmount, pctColor, pctText } from "@/lib/format";
 import { useStockRowNav } from "@/components/stock-link";
 import { ModalShell } from "@/components/ui/modal-shell";
+import { LimitReason } from "@/components/detail/limit-reason";
 
 export function ConceptDetailModal({
   code,
@@ -157,9 +158,7 @@ export function ConceptDetailModal({
                         封单 {fmtAmount(m.seal_amount)}
                       </span>
                     )}
-                    <span className="min-w-0 flex-1 truncate" title={m.reason ?? ""}>
-                      {m.reason ?? (m.limit_up ? "（ths 涨停池未提供该股归因）" : "")}
-                    </span>
+                    {(m.reason || m.limit_up) && <div className="min-w-0 basis-full"><LimitReason reason={m.reason} source={m.reason_source} date={m.reason_date} compact /></div>}
                   </div>
                 </li>
               ))}

@@ -11,7 +11,7 @@ import { getJson } from "./internal";
 export interface EventDirectionRow {
   target_type: string;
   target: string;
-  direction: number; // -1 利空 / 0 待判 / +1 利好
+  direction: number; // -1 利空 / 0 仅关联、方向未明 / +1 利好；llm_aux 为未验证假设
   strength: number;
   chain: string;
   basis: string;
@@ -26,6 +26,8 @@ export interface EventInterpretationRef {
   observation_id: number | null;
   available_at: string | null;
   state: "active" | "pending" | "withdrawn" | "unknown";
+  /** 当前解释版本的模型专属备注；不表示假设已应用或经人工验证。 */
+  llm_aux_note?: string | null;
 }
 
 export interface EventSummary {
@@ -46,20 +48,31 @@ export interface EventSummary {
   directions: EventDirectionRow[];
   /** 列表读取时的解释版本；旧事件没有版本时保持 unknown。 */
   interpretation_ref?: EventInterpretationRef | null;
-  /** 判定状态机（2026-09-09）：judged 已判定 / pending 待判 / neutral 待判超时收敛 / expired 过期 */
+  /** 事件级状态，不替代各标的方向：pending 未明 / neutral 未明超时 / expired 过期。 */
   judge_status?: "judged" | "pending" | "neutral" | "expired" | "unknown";
   judge_status_label?: string;
   judged_at?: string | null;
   judge_reason?: string | null;
+  /** 曾发生辅助尝试的时间；不表示当前解释已判定或模型成功。 */
+  llm_judged_at?: string | null;
+  /** 当前解释版本中尚未应用的AI假设备注，不替代规则方向。 */
+  llm_aux_note?: string | null;
 }
 
 export interface EventStockPool {
-  target: string;
+  // 目录服务降级时只返回 note 和事件状态，不能当作空池。
+  target?: string;
   direction?: number;
   strength?: number;
   chain?: string;
   basis?: string;
-  stocks: { symbol: string; name: string }[];
+  matched_by?: string;
+  judge_status?: EventSummary["judge_status"];
+  judge_status_label?: string;
+  judge_reason?: string | null;
+  llm_judged_at?: string | null;
+  llm_aux_note?: string | null;
+  stocks?: { symbol: string; name: string }[];
   note?: string;
 }
 

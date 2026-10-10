@@ -25,6 +25,8 @@ from app.core.bjtime import beijing_now_naive
 
 log = logging.getLogger(__name__)
 
+LLM_AUX_UNAPPLIED_PREFIX = "LLM 辅助假设未应用："
+
 
 def record_interpretation(db, row: EventCard, observation_id: int, *,
                           state: str, effective_at: datetime, note: str | None = None) -> EventInterpretation:
@@ -61,6 +63,13 @@ def _interpretation_ref(row: EventCard, version: EventInterpretation | None) -> 
         "available_at": version.effective_at.isoformat(sep=" ") if version else None,
         "state": version.state if version else "unknown",
     }
+
+
+def _llm_aux_note(version: EventInterpretation | None) -> str | None:
+    # This is explanatory model output, never evidence of human review.
+    if version and (version.review_note or "").startswith(LLM_AUX_UNAPPLIED_PREFIX):
+        return version.review_note
+    return None
 
 
 def _latest_pending_observation(db, row: EventCard) -> EventObservation | None:
@@ -533,6 +542,7 @@ class EventStore:
             rows = []
             for row, version in pairs:
                 row.interpretation_ref = _interpretation_ref(row, version)
+                row.llm_aux_note = _llm_aux_note(version)
                 rows.append(row)
         out = [r for r in rows if self.is_active(r, now=now)] if active_only else list(rows)
         return out[:limit]
@@ -555,6 +565,7 @@ class EventStore:
                 return None
             row, version = pair
             row.interpretation_ref = _interpretation_ref(row, version)
+            row.llm_aux_note = _llm_aux_note(version)
             return row
 
     def backfill_event(

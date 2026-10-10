@@ -140,15 +140,15 @@ def title_fingerprint(title: str) -> str:
 
 # ---------------------------------------------------------------- 判定状态机（2026-09-09）
 
-#: 待判收敛时限（小时）：超过仍未判出方向 → 收敛为「中性」，不再无限期停留待判。
+#: 未明状态时限（小时）：超过仍未判出方向 → 标记超时未明，不推断中性。
 #: 取值理由：政策/公司类消息的机会窗口通常在一个交易日内，6h 覆盖盘中+盘后一段；
 #: 传闻类半衰期仅 2h，会被 expired 先行接管。
 PENDING_TIMEOUT_HOURS = 6
 
 JUDGE_STATUS_LABEL: dict[str, str] = {
     "judged": "已判定",
-    "pending": "待判",
-    "neutral": "中性（待判超时收敛）",
+    "pending": "方向未明",
+    "neutral": "未明超时",
     "expired": "已过期",
 }
 
@@ -165,10 +165,9 @@ def judge_state(
     状态流转：
     - 入库即由规则引擎判定一次（同步，judged_at=published_at）；
     - 有任一 direction≠0 → **judged**（已判定，方向已定）；
-    - 无方向行且未超时 → **pending**（待判，仍可被 LLM/人工二次判定覆盖）；
-    - 无方向行且超过 PENDING_TIMEOUT_HOURS → **neutral**（收敛为中性）；
-      这是「避免长期停留待判」的关键一跳：宁可显式说"判不出、按中性"，
-      也不让一条事件永远挂在待判队列里污染展示与统计（三态纪律的时态版）。
+    - 没有非零方向且未超时 → **pending**（方向未明，不表示排队或正在判读）；
+    - 没有非零方向且超过 PENDING_TIMEOUT_HOURS → **neutral**（未明超时）；
+      保留既有枚举供消费者兼容；时间经过不能证明事件中性。
     - 任一状态只要 age ≥ half_life → **expired**（过期不再参与评分）。
 
     :returns: {status, judged_at, reason, age_hours}
@@ -200,9 +199,9 @@ def judge_state(
 
         settled_at = pub + _td(hours=PENDING_TIMEOUT_HOURS) if pub else now
         return {"status": "neutral", "judged_at": settled_at, "age_hours": age_h,
-                "reason": f"待判超过 {PENDING_TIMEOUT_HOURS}h 未出方向 → 收敛为中性（不计入利好/利空）"}
+                "reason": f"超过 {PENDING_TIMEOUT_HOURS}h 仍无明确方向；仅标记未明超时，不计入利好/利空，不代表已判为中性"}
     return {"status": "pending", "judged_at": judged_at, "age_hours": age_h,
-            "reason": "规则引擎未命中方向词，待判（超时将自动收敛为中性）"}
+            "reason": "规则未形成明确影响方向；可能只有关联线索或缺少可验证传导，不表示 AI 正在判读或已经排队"}
 
 
 _NAME_SUFFIX = re.compile(r"(概念|板块|产业|指数)$")

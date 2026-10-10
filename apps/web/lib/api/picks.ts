@@ -663,8 +663,10 @@ export interface OpportunityStock {
   role: string | null;
   boards: number | null;
   change_pct: number | null;
-  /** 同花顺官方涨停原因原串（`+` 分隔）。ladder 行自带；缺失为 null。 */
+  /** 数据源涨停归因原串（常为 `+` 分隔）。ladder 行自带；缺失为 null。 */
   reason: string | null;
+  reason_source?: string | null;
+  reason_date?: string | null;
   hot_rank: number | null;
   /** 首封时间（涨停池官方字段）：可参与性判据「开盘即涨停」的依据 */
   first_seal_time?: string | null;
@@ -850,6 +852,8 @@ export interface IntradayTopStock {
   /** 账户是否有该板块交易权限（2026-09-15 起仅沪深主板为 true） */
   tradable?: boolean | null;
   reason: string | null;
+  reason_source?: string | null;
+  reason_date?: string | null;
   tier: number;
   pick_basis: string;
   /** 同一报价实际涨停价及相对现价还需上涨的百分数；缺价保持unknown。 */
@@ -909,6 +913,8 @@ export interface RelayRankItem {
   name: string;
   boards: number;
   reason: string;
+  reason_source?: string | null;
+  reason_date?: string | null;
   kmid2: number | null;
   max20: number | null;
 }

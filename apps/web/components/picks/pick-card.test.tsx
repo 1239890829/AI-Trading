@@ -230,8 +230,9 @@ describe("PickCard · 盘中名单（fromIntradayStock）", () => {
     render(<PickCard item={fromIntradayStock(topPath)} />);
     expect(screen.getByText("入选")).toBeTruthy();
     expect(screen.getByText("涨停原因")).toBeTruthy();
-    expect(screen.getByText("商业航天+军工+机器人")).toBeTruthy();
     expect(screen.getByText("T2 跟踪档")).toBeTruthy();
+    fireEvent.click(screen.getByRole("button", {name: /涨停原因 · 查看原文/}));
+    expect(screen.getByRole("dialog", {name: "涨停原因原文"}).textContent).toContain("商业航天+军工+机器人");
   });
 
   it("手风琴路径没有「入选」这一行：整行不出现（不许拿「入选 —」冒充缺失）", () => {
@@ -347,14 +348,14 @@ describe("适配器归一：4 组异名同义字段", () => {
     expect(c.riskTier).toBeNull();
   });
 
-  it("两源都无依据行时，整节不渲染（回归：曾渲染「入选 —」的假缺失占位）", () => {
+  it("涨停梯队原因缺失时明示，不能静默隐藏证据缺项", () => {
     const bare: OpportunityStock = { ...accordionPath, reason: null };
     const card = fromIntradayStock(bare);
-    expect(card.basisRows).toHaveLength(0);
+    expect(card.basisRows).toHaveLength(1);
 
     const { container } = render(<PickCard item={card} />);
-    expect(container.textContent).not.toContain("入选");
-    expect(container.textContent).not.toContain("涨停原因");
+    expect(container.textContent).not.toContain("入选 —");
+    expect(container.textContent).toContain("数据源未提供涨停原因");
     expect(container.textContent).not.toContain("依据");
   });
 });

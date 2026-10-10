@@ -17,6 +17,7 @@ import { themesUrl, workbenchUrlWithBack } from "@/lib/routing";
 import { symbolDetailClick, useSymbolDetail } from "@/components/detail/symbol-detail-context";
 import { usePollingFetch } from "@/hooks/use-polling-fetch";
 import { Skeleton } from "@/components/ui/loading";
+import { eventDetailPayload, eventDirectionView, eventJudgeView } from "@/lib/event-view";
 
 /**
  * 事件驱动面板（总览底部，2026-09-04 任务④重设计）。
@@ -37,14 +38,6 @@ const FOUR_STYLE: Record<string, string> = {
 };
 
 const TOP_N = 4;
-
-function directionLabel(d: number): { text: string; cls: string } {
-  if (d > 0) return { text: "利好", cls: "text-up-ink dark:text-up" };
-  if (d < 0) return { text: "利空", cls: "text-down-ink dark:text-down" };
-  return { text: "待判", cls: "text-zinc-600 dark:text-zinc-400" };
-}
-
-export { directionLabel };
 
 /** 单个事件的标的池展开（E2/L9：事件 → 标的 → 详情）。market 事件 Tab 复用。 */
 export function StockPools({ eventId }: { eventId: number }) {
@@ -68,35 +61,50 @@ export function StockPools({ eventId }: { eventId: number }) {
 
   return (
     <div className="space-y-1.5">
-      {pools.map((p) => (
-        <div key={p.target} className="text-[11px]">
-          <div className="flex items-baseline gap-1.5">
-            <span className={`font-medium ${directionLabel(p.direction ?? 0).cls}`}>
-              {p.target} {directionLabel(p.direction ?? 0).text}
-            </span>
-            {p.chain && <span className="text-zinc-600 dark:text-zinc-400">{p.chain}</span>}
-            <span className="ml-auto text-zinc-600 dark:text-zinc-400">{p.stocks.length} 只</span>
+      {pools.map((p, index) => {
+        const judgement = eventJudgeView(p);
+        // 目录未初始化时后端只给 note；这不是一个已确认题材或空标的池。
+        if (!p.target?.trim()) return (
+          <div key={`unavailable-${index}`} className="text-[11px]">
+            <span title={judgement.title} className={`whitespace-nowrap ${judgement.cls}`}>{judgement.text}</span>
+            <p className="text-zinc-600 dark:text-zinc-400">{p.note || "事件关联题材未提供，暂不能展示标的池。"}</p>
           </div>
-          {p.note ? (
-            <p className="text-zinc-600 dark:text-zinc-400">{p.note}</p>
-          ) : (
-            <div className="mt-0.5 flex flex-wrap gap-1">
-              {p.stocks.slice(0, 12).map((s) => (
-                <Link
-                  key={s.symbol}
-                  href={workbenchUrlWithBack(s.symbol)}
-                  onClick={symbolDetailClick(openSymbolDetail, { symbol: s.symbol })}
-                  className="rounded bg-zinc-100 px-1 py-0.5 font-mono text-zinc-600 hover:bg-zinc-200 dark:bg-zinc-800 dark:text-zinc-300 dark:hover:bg-zinc-700"
-                  title={`${s.symbol} ${s.name} · 查看详情`}
-                >
-                  {s.symbol} {s.name}
-                </Link>
-              ))}
-              {p.stocks.length > 12 && <span className="self-center text-zinc-600 dark:text-zinc-400">+{p.stocks.length - 12}</span>}
+        );
+        const direction = eventDirectionView({ ...p, direction: p.direction ?? 0, chain: p.chain ?? "", basis: p.basis ?? "" }, p);
+        const stocks = Array.isArray(p.stocks) ? p.stocks : null;
+        return (
+          <div key={p.target} className="text-[11px]">
+            <div className="flex flex-wrap items-baseline gap-1.5">
+              <span title={direction.title} className={`font-medium ${direction.cls}`}>
+                {p.target} {direction.text}
+              </span>
+              <span title={judgement.title} className={`shrink-0 whitespace-nowrap ${judgement.cls}`}>{judgement.text}</span>
+              {p.chain && <span className="text-zinc-600 dark:text-zinc-400">{p.chain}</span>}
+              <span className="ml-auto text-zinc-600 dark:text-zinc-400">{stocks ? `${stocks.length} 只` : "成分数据未提供"}</span>
             </div>
-          )}
-        </div>
-      ))}
+            {p.note ? (
+              <p className="text-zinc-600 dark:text-zinc-400">{p.note}</p>
+            ) : !stocks ? (
+              <p className="text-zinc-600 dark:text-zinc-400">未收到成分数据，暂不能展示关联个股。</p>
+            ) : (
+              <div className="mt-0.5 flex flex-wrap gap-1">
+                {stocks.slice(0, 12).map((s) => (
+                  <Link
+                    key={s.symbol}
+                    href={workbenchUrlWithBack(s.symbol)}
+                    onClick={symbolDetailClick(openSymbolDetail, { symbol: s.symbol })}
+                    className="rounded bg-zinc-100 px-1 py-0.5 font-mono text-zinc-600 hover:bg-zinc-200 dark:bg-zinc-800 dark:text-zinc-300 dark:hover:bg-zinc-700"
+                    title={`${s.symbol} ${s.name} · 查看详情`}
+                  >
+                    {s.symbol} {s.name}
+                  </Link>
+                ))}
+                {stocks.length > 12 && <span className="self-center text-zinc-600 dark:text-zinc-400">+{stocks.length - 12}</span>}
+              </div>
+            )}
+          </div>
+        );
+      })}
       <p className="text-[10px] text-zinc-600 dark:text-zinc-400">标的池仅为事件关联的官方成分，不构成买卖建议。</p>
     </div>
   );
@@ -179,22 +187,7 @@ export function EventPanel() {
                 {/* 2026-09-09：无 url 也可点（与 stock-events 同款缺陷修复），
                     统一走通用详情弹窗；时间与列表同一字段同一格式。 */}
                 <button
-                  onClick={() =>
-                    open({
-                      kind: "event",
-                      title: e.title,
-                      url: e.url ?? null,
-                      source: e.source ?? null,
-                      date: e.published_at ?? null,
-                      body: e.summary ?? null,
-                      meta: [
-                        { label: "四分类", value: e.four_label },
-                        ...(e.directions?.[0]?.target ? [{ label: "关联板块", value: e.directions[0].target }] : []),
-                        ...(e.directions?.[0]?.matched_by === "llm_aux" ? [{ label: "方向状态", value: "待验证假设" }] : []),
-                        ...(e.directions?.[0]?.basis ? [{ label: "依据", value: e.directions[0].basis }] : []),
-                      ],
-                    })
-                  }
+                  onClick={() => open(eventDetailPayload(e))}
                   className="truncate text-left text-sm text-zinc-800 transition-colors hover:bg-zinc-100 hover:text-zinc-900 dark:text-zinc-100 dark:hover:bg-zinc-800 dark:hover:text-zinc-50"
                   title={e.title}
                 >
@@ -207,13 +200,14 @@ export function EventPanel() {
                 </span>
               </div>
               <div className="mt-1 flex flex-wrap items-center gap-x-2 gap-y-1">
+                <span title={eventJudgeView(e).title} className={`shrink-0 whitespace-nowrap text-[11px] ${eventJudgeView(e).cls}`}>{eventJudgeView(e).text}</span>
                 {e.rank_reasons?.[0] && (
                   <span className="truncate text-[11px] text-zinc-600 dark:text-zinc-400" title={e.rank_reasons.join("；")}>
                     {e.rank_reasons[0]}
                   </span>
                 )}
                 {e.directions.slice(0, 3).map((d) => {
-                  const { text, cls } = directionLabel(d.direction);
+                  const { text, cls, title } = eventDirectionView(d, e);
                   return (
                     <Link
                       key={`${d.target_type}-${d.target}`}
@@ -223,15 +217,12 @@ export function EventPanel() {
                           ? symbolDetailClick(openSymbolDetail, { symbol: d.target })
                           : inspectionClick(inspect, {kind: "themes", focus: d.target})
                       }
-                      title={[d.chain, d.basis].filter(Boolean).join(" ｜ ") || `关联${d.target_type === "symbol" ? "个股" : "题材"} ${d.target}`}
+                      title={title || `关联${d.target_type === "symbol" ? "个股" : "题材"} ${d.target}`}
                       className="inline-flex items-center gap-1 rounded border border-zinc-200 px-1.5 py-0.5 text-[11px] text-zinc-700 hover:border-zinc-400 dark:border-zinc-700 dark:text-zinc-200"
                     >
                       <span className="text-zinc-600 dark:text-zinc-400">{d.target_type === "symbol" ? "个股" : "题材"}</span>
                       <span>{d.target}</span>
                       <span className={`font-medium ${cls}`}>{text}</span>
-                      {d.matched_by === "llm_aux" && (
-                        <span className="text-amber-700 dark:text-amber-300">待验证假设</span>
-                      )}
                     </Link>
                   );
                 })}

@@ -6,6 +6,7 @@ import type { HotTheme, ThemeStrengthRow } from "@/lib/api";
 import { tapeUrl } from "@/lib/routing";
 import { StockLink, useStockRowNav } from "@/components/stock-link";
 import { ConceptDetailModal } from "@/components/concept-detail-modal";
+import { LimitReason } from "@/components/detail/limit-reason";
 import { EntryChecklist } from "@/components/entry-checklist";
 import { JUMP_PILL_CLASS, JumpLink } from "@/components/ui/jump-link";
 import { inspectionClick, useInspection } from "@/components/inspection/inspection-context";
@@ -436,6 +437,7 @@ export function ThemeCardView({
                           {r.other_themes.length > 3 && ` 等 ${r.other_themes.length} 个`}
                         </div>
                       )}
+                      <LimitReason reason={r.reason} source={r.source} date={r.trade_date ?? tradeDate} compact />
                     </td>
                     <td className="py-1.5 text-right align-middle font-mono text-zinc-700 dark:text-zinc-200">
                       {fmtAmount(r.seal_amount)}

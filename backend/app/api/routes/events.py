@@ -76,7 +76,7 @@ def _parse_dt(value: str | None) -> datetime | None:
     return None
 
 
-def _judge_fields(row, directions=None) -> dict:
+def _judge_fields(row, directions=None, *, now: datetime | None = None) -> dict:
     """判定状态字段（单点收口：所有事件端点共用）。失败退化为 unknown，不臆造。"""
     from app.events.extract import JUDGE_STATUS_LABEL, judge_state
 
@@ -85,7 +85,7 @@ def _judge_fields(row, directions=None) -> dict:
         selected = directions if directions is not None else (row.directions or [])
         dirs = [{"direction": d.direction, "chain": getattr(d, "chain", "")}
                 for d in selected]
-        st = judge_state(pub, dirs, half_life_hours=getattr(row, "half_life_hours", None))
+        st = judge_state(pub, dirs, now=now, half_life_hours=getattr(row, "half_life_hours", None))
         nonzero = [d for d in selected if d.direction != 0]
         if st["status"] == "judged" and nonzero and all(
             getattr(d, "matched_by", None) == "llm_aux" for d in nonzero
@@ -122,7 +122,8 @@ def _serialize(row, directions=None, *, now: datetime | None = None) -> dict:
         judgement = {"judge_status": "unknown", "judge_status_label": "来源修订待复核",
                      "judged_at": None, "judge_reason": "新观察与当前解释不一致，机会判断已暂停"}
     else:
-        judgement = _judge_fields(row, selected)
+        judgement = _judge_fields(row, selected, now=now)
+    llm_judged_at = getattr(row, "llm_judged_at", None)
     out = {
         "id": row.id,
         "title": row.title,
@@ -139,13 +140,18 @@ def _serialize(row, directions=None, *, now: datetime | None = None) -> dict:
         "status": row.status,
         "is_active": EventStore.is_active(row, now=now),
         "revision_pending_at": revision_pending_at.isoformat(sep=" ") if revision_pending_at else None,
+        # Historical attempt time only; source revisions can supersede that input.
+        # It does not prove a direction or a judgement of the current version.
+        "llm_judged_at": llm_judged_at.isoformat(sep=" ") if llm_judged_at else None,
+        "llm_aux_note": (getattr(row, "llm_aux_note", None)
+                         if evidence_visible and revision_pending_at is None else None),
         "interpretation_ref": getattr(row, "interpretation_ref", None) or {
             "event_id": row.id, "version_id": None, "observation_id": None,
             "available_at": None, "state": "unknown",
         },
-        # 判定结果（2026-09-09 需求 2）：利好/利空/中性由 directions 承载，
+        # 判定结果（2026-09-09 需求 2）：利好/利空由 directions 承载，0 仅为方向未明，
         # 这里补「判定时间 + 判定状态」——状态是读时派生（judge_state 纯函数），
-        # 不落库免迁移；待判超时自动收敛中性，避免事件长期挂在「待判」。
+        # 不落库免迁移；超时只标未明，不能据此判为中性。
         **judgement,
         "directions": [
             {
@@ -511,29 +517,37 @@ async def event_stocks(event_id: int, request: Request, store: EventStore = Depe
     if row is None:
         raise HTTPException(status_code=404, detail="事件不存在")
     now = beijing_now_naive()
+    event = _serialize(row, now=now)
     if not EventStore.evidence_visible(row, now=now):
-        return {"data": {"event": _serialize(row, now=now), "pools": []},
+        return {"data": {"event": event, "pools": []},
                 "meta": {"note": "事件发布时间或解释版本尚未可见，标的池暂停",
                          "disclaimer": "标的池仅为事件关联成分，不构成买卖建议"}}
     if row.revision_pending_at is not None:
-        return {"data": {"event": _serialize(row), "pools": []},
+        return {"data": {"event": event, "pools": []},
                 "meta": {"note": "来源内容有未复核修订，标的池暂停",
                          "disclaimer": "标的池仅为事件关联成分，不构成买卖建议"}}
     svc = getattr(request.app.state, "theme_catalog", None)
     pools = []
+    judgement = {key: event[key] for key in (
+        "judge_status", "judge_status_label", "judge_reason", "llm_judged_at", "llm_aux_note",
+    )}
     if svc is not None:
         name_to_code = {t.name: t.code for t in svc.get_catalog(limit=1000)}
         for d in row.directions:
             if d.target_type != "theme":
                 continue
+            direction = {
+                "target": d.target, "direction": d.direction, "strength": d.strength,
+                "chain": d.chain, "basis": d.basis, "matched_by": d.matched_by,
+                **judgement,
+            }
             if d.matched_by == "llm_aux":
-                pools.append({"target": d.target, "direction": d.direction, "stocks": [],
+                pools.append({**direction, "stocks": [],
                               "note": "LLM 辅助方向待验证，暂不扩展标的池"})
                 continue
             code = name_to_code.get(d.target)
             if not code:
-                pools.append({"target": d.target, "direction": d.direction, "strength": d.strength,
-                              "chain": d.chain, "basis": d.basis, "stocks": [],
+                pools.append({**direction, "stocks": [],
                               "note": "题材不在官方目录，无法反查成分"})
                 continue
             members = svc.get_members(code)
@@ -550,17 +564,13 @@ async def event_stocks(event_id: int, request: Request, store: EventStore = Depe
                 elif ov.action == "include":
                     symbols.setdefault(ov.symbol, ov.symbol)
             pools.append({
-                "target": d.target,
-                "direction": d.direction,
-                "strength": d.strength,
-                "chain": d.chain,
-                "basis": d.basis,
+                **direction,
                 "stocks": [{"symbol": s, "name": n} for s, n in sorted(symbols.items())],
             })
     else:
-        pools.append({"note": "题材目录服务未初始化，无法反查成分"})
+        pools.append({**judgement, "note": "题材目录服务未初始化，无法反查成分"})
     return {
-        "data": {"event": _serialize(row), "pools": pools},
+        "data": {"event": event, "pools": pools},
         "meta": {"disclaimer": "标的池仅为事件关联成分，不构成买卖建议"},
     }
 

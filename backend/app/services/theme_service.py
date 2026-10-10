@@ -1172,6 +1172,8 @@ def _build_card(
                 # 只含「补涨/反包」两种角色、值是硬编码文案 ⇒ 绝大多数梯队员取不到、
                 # 卡片「入选原因」恒空（2026-09-10 用户反馈）。
                 "reason": rec.reason,
+                "source": getattr(rec, "source", None),
+                "trade_date": rec.trade_date.isoformat() if getattr(rec, "trade_date", None) else None,
             }
         )
 

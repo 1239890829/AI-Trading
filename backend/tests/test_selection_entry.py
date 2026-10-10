@@ -5,7 +5,7 @@ from datetime import datetime, timedelta, timezone
 from types import SimpleNamespace
 
 import pytest
-from sqlalchemy import create_engine, select
+from sqlalchemy import create_engine, event, select
 from sqlalchemy.orm import sessionmaker
 
 from app.core.bjtime import BJ_TZ
@@ -211,17 +211,32 @@ def test_partial_selection_still_records_actual_join_without_upgrading_data_qual
 def test_real_archive_records_capacity_before_a_stock_moves_into_the_display(sf, monkeypatch):
     from app.picks.opportunity_learning import archive_intraday_pipeline
     monkeypatch.setattr("app.core.runtime_params.get", lambda _key, _default: 1)
+    # as_of is the market snapshot clock; created_at records the actual archive
+    # write. Set it before insertion, independently of SQLAlchemy's cached
+    # default callable, so suite order cannot turn this fixture into a replay.
+    recorded_clock = {"now": NOW.astimezone(timezone.utc).replace(tzinfo=None)}
+    def stamp_archive_clock(_mapper, _connection, row):
+        row.created_at = recorded_clock["now"]
     stocks = [{**item("600001", pct=8), "tradability": {"level": "可参与"}, "linkage": {"level": "高"}},
               {**item("600002", pct=7), "tradability": {"level": "可参与"}, "linkage": {"level": "高"}}]
     payload = {"trade_date": DAY, "hot_available": True,
         "linkage_stats": {"snapshot_state": "ready", "snapshot_as_of": NOW.isoformat()},
         "themes": [{"theme": "题材", "participants": stocks}]}
-    archive_intraday_pipeline(payload, trade_date=DAY, as_of=NOW, session_factory=sf)
-    assert set(intraday_entries(DAY, ["600001", "600002"], session_factory=sf)) == {"600001"}
-    # Only a later actual capacity-qualified selection starts the other stock's entry.
-    stocks[1]["change_pct"] = 9
-    archive_intraday_pipeline(payload, trade_date=DAY, as_of=NOW + timedelta(minutes=1), session_factory=sf)
-    assert set(intraday_entries(DAY, ["600001", "600002"], session_factory=sf)) == {"600001", "600002"}
+    event.listen(Snapshot, "before_insert", stamp_archive_clock)
+    try:
+        archive_intraday_pipeline(payload, trade_date=DAY, as_of=NOW, session_factory=sf)
+        assert set(intraday_entries(DAY, ["600001", "600002"], session_factory=sf)) == {"600001"}
+        assert intraday_entries(DAY, ["600001"], session_factory=sf)["600001"]["selected_at"] == NOW.isoformat()
+        # Only a later actual capacity-qualified selection starts the other stock's entry.
+        stocks[1]["change_pct"] = 9
+        recorded_clock["now"] += timedelta(minutes=1)
+        archive_intraday_pipeline(payload, trade_date=DAY, as_of=NOW + timedelta(minutes=1), session_factory=sf)
+        assert set(intraday_entries(DAY, ["600001", "600002"], session_factory=sf)) == {"600001", "600002"}
+        joined = intraday_entries(DAY, ["600001", "600002"], session_factory=sf)
+        assert joined["600001"]["selected_at"] == NOW.isoformat()
+        assert joined["600002"]["selected_at"] == (NOW + timedelta(minutes=1)).isoformat()
+    finally:
+        event.remove(Snapshot, "before_insert", stamp_archive_clock)
 
 
 def test_highest_board_targets_come_from_full_pool_before_theme_display_truncation(monkeypatch):

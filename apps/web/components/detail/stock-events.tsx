@@ -3,13 +3,7 @@
 import { useEffect, useState } from "react";
 import { getEventsForSymbol, type EventSummary } from "@/lib/api";
 import { useDetailModal } from "@/components/detail/detail-modal";
-import { eventInterpretationText } from "@/lib/event-view";
-
-const DIRECTION_LABEL: Record<number, { text: string; cls: string }> = {
-  1: { text: "利好", cls: "text-up-ink dark:text-up" },
-  [-1]: { text: "利空", cls: "text-down-ink dark:text-down" },
-  0: { text: "待判", cls: "text-zinc-600 dark:text-zinc-400" },
-};
+import { eventDetailPayload, eventDirectionView, eventJudgeView } from "@/lib/event-view";
 
 const CATEGORY_LABEL: Record<string, string> = {
   policy: "政策",
@@ -110,19 +104,19 @@ export function StockEventsRow({ symbol, isIndex = false }: { symbol: string; is
       <span className="shrink-0 text-zinc-600 dark:text-zinc-400">相关事件</span>
       {events.slice(0, 3).map((e) => {
         const d = e.directions[0];
-        const dir = d ? DIRECTION_LABEL[d.direction] : null;
+        const dir = d ? eventDirectionView(d, e) : null;
+        const judgement = eventJudgeView(e);
         const title = (
           <>
             <span className="text-zinc-700 dark:text-zinc-200">{e.title.slice(0, 30)}</span>
             {dir && <span className={`ml-1 font-medium ${dir.cls}`}>{dir.text}</span>}
-            {e.directions[0]?.matched_by === "llm_aux" && (
-              <span className="ml-1 text-amber-700 dark:text-amber-300">待验证假设</span>
-            )}
+            <span title={judgement.title} className={`ml-1 whitespace-nowrap ${judgement.cls}`}>{judgement.text}</span>
           </>
         );
         const tip = [
           e.directions[0]?.chain,
           e.directions[0]?.basis,
+          judgement.title,
           `来源 ${e.source_tier}/5 · ${e.certainty}`,
         ]
           .filter(Boolean)
@@ -133,23 +127,7 @@ export function StockEventsRow({ symbol, isIndex = false }: { symbol: string; is
           <button
             key={e.id}
             onClick={() =>
-              open({
-                kind: "event",
-                title: e.title,
-                url: e.url ?? null,
-                symbol,
-                theme: e.directions[0]?.target ?? null,
-                source: e.source ?? null,
-                date: e.published_at ?? null,
-                body: e.summary ?? null,
-                meta: [
-                  { label: "列表解释版本", value: eventInterpretationText(e) },
-                  ...(dir ? [{ label: "判定", value: `${dir.text}${e.judge_status_label ? `（${e.judge_status_label}）` : ""}` }] : []),
-                  ...(e.directions[0]?.target ? [{ label: "关联板块", value: e.directions[0].target }] : []),
-                  ...(e.directions[0]?.basis ? [{ label: "依据", value: e.directions[0].basis }] : []),
-                  { label: "来源", value: `${e.source_tier}/5 · ${e.certainty}` },
-                ],
-              })
+              open({ ...eventDetailPayload(e), symbol })
             }
             title={tip}
             className="rounded border border-zinc-200 px-1.5 py-0.5 text-left hover:border-zinc-400 dark:border-zinc-700"

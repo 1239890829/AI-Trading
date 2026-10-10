@@ -24,7 +24,7 @@ from sqlalchemy.orm import aliased
 from app.core.db import get_session_factory
 from app.models.event import EventCard, EventDirection, EventObservation, EventInterpretation
 from app.core.bjtime import beijing_now_naive
-from app.events.store import record_interpretation
+from app.events.store import LLM_AUX_UNAPPLIED_PREFIX, record_interpretation
 
 log = logging.getLogger(__name__)
 
@@ -132,13 +132,23 @@ def _apply_result(sf, cand: EventCard, hits: list[dict]) -> int:
             select(EventObservation.id).where(EventObservation.event_id == cand.id)
             .order_by(EventObservation.id).limit(1)
         ).scalar_one_or_none()
-        existing = {(d.target_type, d.target) for d in row.directions}
+        existing = {(d.target_type, d.target): d for d in row.directions}
         n = 0
+        unapplied = []
         for h in hits:
             key = ("theme", h["target"])
             if key in existing:
+                prior = existing[key]
+                # Preserve the rule's zero association and its consumers. Retain
+                # an unapplied hypothesis only in the existing version journal.
+                if version is not None and prior.direction == 0 and prior.matched_by != "manual":
+                    sign = "利好" if int(h["direction"]) > 0 else "利空"
+                    unapplied.append(
+                        f"{h['target']} 的{sign}假设；保留原规则关联及未明方向，"
+                        f"未经人工验证；{str(h.get('basis') or '')[:120]}"
+                    )
                 continue
-            db.add(EventDirection(
+            added = EventDirection(
                 event_id=cand.id,
                 observation_id=observation_id,
                 target_type="theme",
@@ -148,14 +158,16 @@ def _apply_result(sf, cand: EventCard, hits: list[dict]) -> int:
                 chain=h.get("chain") or "",
                 basis=h.get("basis") or "LLM 辅助判定（规则未命中方向词）",
                 matched_by="llm_aux",
-            ))
-            existing.add(key)
+            )
+            db.add(added)
+            existing[key] = added
             n += 1
-        if n and observation_id is not None:
+        if (n or unapplied) and observation_id is not None:
             db.flush()
             db.expire(row, ["directions"])
+            note = (LLM_AUX_UNAPPLIED_PREFIX + "；".join(unapplied)) if unapplied else "LLM 辅助方向，待验证假设"
             record_interpretation(db, row, observation_id, state="active",
-                                  effective_at=beijing_now_naive(), note="LLM 辅助方向，待验证假设")
+                                  effective_at=beijing_now_naive(), note=note)
         db.commit()
         return n
 

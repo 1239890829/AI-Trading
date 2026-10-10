@@ -179,6 +179,20 @@ afterEach(() => {
 });
 
 describe("通知中心：资讯 / 事件 tab", () => {
+  it("资讯条目展示无方向状态与LLM假设，不把两者混成已判定利好", async () => {
+    eventItems = [event({ title: "尚无方向", judge_status: "neutral", judge_reason: "证据不足且已超时" }),
+      event({ id: 2, title: "模型辅助解释", judge_status: "pending", judge_status_label: "待验证假设", directions: [
+        { target_type: "theme", target: "存储芯片", direction: 1, strength: 1, chain: "", basis: "模型解释", matched_by: "llm_aux" },
+      ] })];
+    render(<EventFeed active />);
+    await screen.findByText("模型辅助解释");
+    expect(screen.getByText("未明超时").getAttribute("title")).toContain("证据不足且已超时");
+    expect(screen.getByText("利好假设")).toBeTruthy();
+    expect(screen.queryByText("利好")).toBeNull();
+    fireEvent.click(screen.getByText("模型辅助解释"));
+    expect(spies.detailOpen.mock.calls[0][0].body).toContain("尚未经人工验证");
+  });
+
   it("【不渲染即不请求】停在「个股机会」时抽屉里没有事件列表，切过去才请求", async () => {
     payload = makePayload([item({ title: "有提醒" })]);
     renderBell();

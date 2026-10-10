@@ -312,6 +312,72 @@ def test_current_version_result_uses_its_observation(tmp_path, monkeypatch):
         assert versions[-1].observation_id == observation_id
 
 
+def test_same_theme_model_hypothesis_preserves_rule_zero_and_records_non_application(
+    tmp_path, monkeypatch,
+):
+    import json
+
+    from app.events.store import EventStore
+
+    sf = _factory(tmp_path)
+    _settings(monkeypatch, min_batch=1)
+    store = EventStore(sf)
+    event, _ = store.add_event({
+        "fingerprint": "same-theme-zero", "title": "芯片供给变化信息",
+        "source": "测试", "source_item_id": "same-theme-zero",
+        "published_at": beijing_now_naive() - timedelta(minutes=10),
+        "directions": [{"target_type": "theme", "target": "半导体概念",
+                        "direction": 0, "strength": 1, "matched_by": "name",
+                        "basis": "原文仅确认半导体关联"}],
+    })
+    original = store.interpretations_of(event.id)[0]
+    original_payload = original.payload_json
+    _mock_llm(monkeypatch, [{
+        "direction": 1, "theme": "半导体概念", "chain": "测试供给传导",
+        "reason": "待验证的供给变化假设",
+    }])
+    result = la.judge_pending_batch(sf, theme_names=["半导体概念"])
+    assert result["directions_written"] == 0 and result["hit_events"] == 0
+    current = store.get_event(event.id)
+    assert len(current.directions) == 1
+    association = current.directions[0]
+    assert association.direction == 0 and association.strength == 1
+    assert association.matched_by == "name"
+    assert association.basis == "原文仅确认半导体关联"
+    versions = store.interpretations_of(event.id)
+    assert len(versions) == 2 and versions[0].payload_json == original_payload
+    assert json.loads(versions[0].payload_json)["directions"][0]["direction"] == 0
+    latest_direction = json.loads(versions[-1].payload_json)["directions"][0]
+    assert latest_direction["matched_by"] == "name" and latest_direction["direction"] == 0
+    assert versions[-1].payload_json == original_payload
+    assert association.observation_id == versions[-1].observation_id
+    from app.api.routes.events import _serialize
+    presented = _serialize(current)
+    assert presented["judge_status_label"] == "方向未明"
+    assert "LLM 辅助假设未应用" in presented["llm_aux_note"]
+    assert "利好假设" in presented["llm_aux_note"]
+    assert "未经人工验证" in presented["llm_aux_note"]
+    assert presented["interpretation_ref"]["version_id"] == versions[-1].id
+    assert presented["llm_judged_at"] is not None
+    monkeypatch.setattr(la, "_deepseek_items", lambda *_a, **_k: pytest.fail(
+        "a completed auxiliary attempt must not trigger another call"
+    ))
+    assert la.judge_pending_batch(sf, theme_names=["半导体概念"])["skipped"] is True
+
+
+def test_model_does_not_rewrite_unversioned_zero_evidence(tmp_path, monkeypatch):
+    sf = _factory(tmp_path)
+    _settings(monkeypatch, min_batch=1)
+    _event(sf, "旧事件仅有来源关联", with_dir0=True)
+    _mock_llm(monkeypatch, [{"direction": 1, "theme": "无", "reason": "测试假设"}])
+    result = la.judge_pending_batch(sf, theme_names=["无"])
+    assert result["directions_written"] == 0
+    with sf() as db:
+        direction = db.query(EventDirection).one()
+        assert direction.direction == 0 and direction.matched_by == "source"
+        assert db.query(EventInterpretation).count() == 0
+
+
 @pytest.mark.parametrize("judged_before_review", [False, True])
 @pytest.mark.parametrize("review_action", ["adopt", "retain"])
 def test_human_neutral_revision_is_not_rejudged_by_llm(

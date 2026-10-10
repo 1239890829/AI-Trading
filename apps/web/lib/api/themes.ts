@@ -146,6 +146,8 @@ export interface ConceptMember {
   /** 连板数（ths 官方；仅涨停成员） */
   boards: number | null;
   reason: string | null;
+  reason_source?: string | null;
+  reason_date?: string | null;
   tags: string[];
 }
 

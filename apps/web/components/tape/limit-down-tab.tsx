@@ -4,8 +4,8 @@ import { useId } from "react";
 import { useSurfaceScope } from "@/components/inspection/surface-scope";
 import { Panel } from "@/components/panel";
 import { StockLink, useStockRowNav } from "@/components/stock-link";
-import { getLimitDownPool } from "@/lib/api";
-import { bjDate, fmt, fmtAmount, pctColor, pctText } from "@/lib/format";
+import { getLimitDownPoolSnapshot } from "@/lib/api";
+import { fmt, fmtAmount, pctColor, pctText } from "@/lib/format";
 import { useResource } from "@/hooks/use-polling-fetch";
 
 /**
@@ -20,10 +20,10 @@ export function LimitDownTab() {
   const stockNav = useStockRowNav();
   const { searchParams, replaceSearch } = useSurfaceScope();
   const dateId = useId();
-  const requestedDate = searchParams.get("date") || bjDate(new Date().toISOString());
-  const resource = useResource(() => getLimitDownPool(requestedDate), {key: requestedDate, intervalMs: null});
-  const records = resource.error ? [] : resource.data ?? [];
-  const tradeDate = requestedDate;
+  const requestedDate = searchParams.get("date") || undefined;
+  const resource = useResource(() => getLimitDownPoolSnapshot(requestedDate), {key: requestedDate ?? "latest", intervalMs: null});
+  const records = resource.error ? [] : resource.data?.pool ?? [];
+  const tradeDate = resource.data?.trade_date ?? requestedDate?.replace(/^(\d{4})(\d{2})(\d{2})$/, "$1-$2-$3") ?? "";
   const error = resource.error instanceof Error ? resource.error.message : resource.error ? "读取失败" : null;
   const loading = resource.pending;
 

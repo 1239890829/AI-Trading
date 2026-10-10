@@ -1,7 +1,7 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { act, cleanup, render, screen } from "@testing-library/react";
 import { LimitDownTab } from "@/components/tape/limit-down-tab";
-import { getLimitDownPool } from "@/lib/api";
+import { getLimitDownPoolSnapshot } from "@/lib/api";
 import type { LimitDownRecord } from "@/types/market";
 
 // 跌停池 tab（2026-09-04 市场页跌停入口联动新增）：
@@ -9,7 +9,7 @@ import type { LimitDownRecord } from "@/types/market";
 
 afterEach(() => cleanup());
 
-vi.mock("@/lib/api", () => ({ getLimitDownPool: vi.fn() }));
+vi.mock("@/lib/api", () => ({ getLimitDownPoolSnapshot: vi.fn() }));
 
 // 钉请求日期：响应 trade_date 不能覆盖读者原始 scope，也不能依赖宿主运行当天。
 vi.mock("next/navigation", () => ({
@@ -36,7 +36,7 @@ const rec = (over: Partial<LimitDownRecord>): LimitDownRecord => ({
 });
 
 beforeEach(() => {
-  vi.mocked(getLimitDownPool).mockReset();
+  vi.mocked(getLimitDownPoolSnapshot).mockReset();
 });
 
 async function mount() {
@@ -46,12 +46,12 @@ async function mount() {
 
 describe("LimitDownTab", () => {
   it("有数据：渲染行与连续跌停天数强调（≥2 天标高风险）", async () => {
-    vi.mocked(getLimitDownPool).mockResolvedValue([
+    vi.mocked(getLimitDownPoolSnapshot).mockResolvedValue({trade_date: "2026-09-04", pool: [
       rec({ symbol: "003032", name: "传智教育", consecutive_days: 2, open_count: 1 }),
       rec({ consecutive_days: 1 }),
-    ]);
+    ]});
     await mount();
-    expect(getLimitDownPool).toHaveBeenCalledWith("2026-09-04");
+    expect(getLimitDownPoolSnapshot).toHaveBeenCalledWith("2026-09-04");
     expect(screen.getByText("跌停池 · 2026-09-04")).toBeTruthy();
     expect(screen.getByText("传智教育")).toBeTruthy();
     expect(screen.getByText("2 天")).toBeTruthy(); // ≥2 天强调
@@ -59,13 +59,13 @@ describe("LimitDownTab", () => {
   });
 
   it("空池是常态：显示『当日暂无跌停』而非错误", async () => {
-    vi.mocked(getLimitDownPool).mockResolvedValue([]);
+    vi.mocked(getLimitDownPoolSnapshot).mockResolvedValue({trade_date: "2026-09-04", pool: []});
     await mount();
     expect(screen.getByText(/当日暂无跌停/)).toBeTruthy();
   });
 
   it("数据源失败：显式琥珀错误（不静默退化成空池）", async () => {
-    vi.mocked(getLimitDownPool).mockRejectedValue(new Error("all providers failed"));
+    vi.mocked(getLimitDownPoolSnapshot).mockRejectedValue(new Error("all providers failed"));
     await mount();
     expect(screen.getByText(/跌停池加载失败/)).toBeTruthy();
     expect(screen.getByText(/all providers failed/)).toBeTruthy();

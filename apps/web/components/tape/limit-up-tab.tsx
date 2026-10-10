@@ -5,8 +5,9 @@ import { useId, useMemo, useState } from "react";
 import { useSurfaceScope } from "@/components/inspection/surface-scope";
 import { inspectionClick, useInspection } from "@/components/inspection/inspection-context";
 import { Panel } from "@/components/panel";
-import { getLimitUpPool } from "@/lib/api";
-import { bjDate, fmt, fmtAmount, pctColor, pctText } from "@/lib/format";
+import { getLimitUpPoolSnapshot } from "@/lib/api";
+import { fmt, fmtAmount, pctColor, pctText } from "@/lib/format";
+import { LimitReason } from "@/components/detail/limit-reason";
 import { tapeUrl } from "@/lib/routing";
 import { StockLink, useStockRowNav } from "@/components/stock-link";
 import { useResource } from "@/hooks/use-polling-fetch";
@@ -30,10 +31,9 @@ export function LimitUpTab() {
   const { open: openInspection } = useInspection();
   const dateId = useId();
   const urlDate = searchParams.get("date") || undefined;
-  const requestedDate = urlDate ?? bjDate(new Date().toISOString());
-  const resource = useResource(() => getLimitUpPool(requestedDate), { key: requestedDate, intervalMs: null });
-  const records = useMemo(() => resource.error ? [] : resource.data ?? [], [resource.error, resource.data]);
-  const tradeDate = requestedDate;
+  const resource = useResource(() => getLimitUpPoolSnapshot(urlDate), { key: urlDate ?? "latest", intervalMs: null });
+  const records = useMemo(() => resource.error ? [] : resource.data?.pool ?? [], [resource.error, resource.data]);
+  const tradeDate = resource.data?.trade_date ?? urlDate?.replace(/^(\d{4})(\d{2})(\d{2})$/, "$1-$2-$3") ?? "";
   const error = resource.error instanceof Error ? resource.error.message : resource.error ? "读取失败" : null;
   const loading = resource.pending || (resource.data === undefined && !resource.error);
   const theme = searchParams.get("theme") ?? "";
@@ -121,7 +121,7 @@ export function LimitUpTab() {
 
       {error && (
         <div className="mb-4 shrink-0 rounded-lg border border-amber-500/40 bg-amber-500/10 px-4 py-3 text-sm text-amber-800 dark:text-amber-300">
-          涨停池加载失败：{error}（数据源为东方财富 push2ex 免费接口）
+          涨停池加载失败：{error}
           <button type="button" className="quiet-action ml-2" onClick={resource.refresh}>重试读取</button>
         </div>
       )}
@@ -146,7 +146,7 @@ export function LimitUpTab() {
               ))}
             </div>
           ) : (
-            <p className="px-4 py-10 text-center text-sm text-zinc-600 dark:text-zinc-400">今日暂无涨停（或非交易日）</p>
+            <p className="px-4 py-10 text-center text-sm text-zinc-600 dark:text-zinc-400">所查交易日暂无涨停</p>
           )
         ) : shown.length === 0 ? (
           <p className="px-4 py-10 text-center text-sm text-zinc-600 dark:text-zinc-400">
@@ -192,7 +192,7 @@ export function LimitUpTab() {
                     <td className={`px-2 py-2 text-right font-mono ${pctColor(r.change_pct)}`}>{pctText(r.change_pct)}</td>
                     <td className="px-2 py-2 text-right font-mono">{r.consecutive_boards ?? "--"}</td>
                     <td className="px-2 py-2 text-right text-xs text-zinc-600 dark:text-zinc-400">{r.boards_stat ?? "--"}</td>
-                    <td className="table-description px-2 py-2 text-xs text-zinc-600 dark:text-zinc-300">{r.reason ?? "--"}</td>
+                    <td className="table-description px-2 py-2 text-xs text-zinc-600 dark:text-zinc-300"><LimitReason reason={r.reason} source={r.source} date={r.trade_date} compact /></td>
                     <td className="px-2 py-2 text-right font-mono text-xs">{(r.break_count ?? 0) > 0 ? <span className="text-amber-800 dark:text-amber-400">{r.break_count}</span> : "0"}</td>
                     <td className="px-2 py-2 text-right font-mono text-xs">{fmtAmount(r.seal_amount)}</td>
                     <td className="px-2 py-2 text-right font-mono text-xs">{r.turnover_rate != null ? `${fmt(r.turnover_rate)}%` : "--"}</td>
@@ -204,7 +204,7 @@ export function LimitUpTab() {
         )}
       </Panel>
       <p className="mt-4 shrink-0 text-xs text-zinc-600 dark:text-zinc-400">
-        涨停原因已接入（同花顺官方口径），是题材梯队归属的证据来源；次日表现统计/题材标签随历史数据积累在后续版本提供。
+        默认最近交易日。涨停原因保留数据源原文；备用源未提供时如实标注缺失，题材标签不替代已核实的事件因果。
       </p>
     </div>
   );
