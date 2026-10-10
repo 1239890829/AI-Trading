@@ -9,6 +9,7 @@ import { useSearchParams } from "next/navigation";
 import { Panel } from "@/components/panel";
 import { ModalShell } from "@/components/ui/modal-shell";
 import { QualityBadge } from "@/components/quality-badge";
+import { LimitReason } from "@/components/detail/limit-reason";
 import { EventPanel } from "@/components/event-panel";
 import { HeatmapTab } from "@/components/market/heatmap-tab";
 import { EventsTab } from "@/components/market/events-tab";
@@ -172,13 +173,13 @@ function MarketInner() {
             </div>
             </div>
             <div className="bc-market-reading">
-              <Panel title="涨停前列" source={pool[0]?.source} className="bc-market-pool" bodyClassName="bc-market-pool-scroll" extra={<Link href={lensHref(tapeUrl("limitup"))} onClick={inspectionClick(inspect, {kind: "limit-up"})} className="bc-market-text-action">查看全池<svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.6" aria-hidden="true"><path d="M7 17 17 7M7 7h10v10" /></svg></Link>}>
+              <Panel title={`涨停前列${pool[0]?.trade_date ? ` · ${pool[0].trade_date}` : ""}`} source={pool[0]?.source} className="bc-market-pool" bodyClassName="bc-market-pool-scroll" extra={<Link href={lensHref(tapeUrl("limitup"))} onClick={inspectionClick(inspect, {kind: "limit-up"})} className="bc-market-text-action">查看全池<svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.6" aria-hidden="true"><path d="M7 17 17 7M7 7h10v10" /></svg></Link>}>
                 {poolError && <p role="alert" className="bc-market-inline-warning">涨停速览读取失败。{pool.length ? "下面是上次读取结果。" : "不能据此判断没有涨停。"}</p>}
                 {pool.length > 0 ? <table className="bc-market-pool-table">
-                  <caption className="sr-only">今日涨停池连板前列，点击证券查看详情</caption>
+                  <caption className="sr-only">最近交易日涨停池连板前列，点击证券查看详情</caption>
                   <thead><tr><th scope="col">证券</th><th scope="col">最新价</th><th scope="col">涨跌幅</th><th scope="col">连板记录</th></tr></thead>
                   <tbody>{pool.map(record => <tr key={record.symbol} onClick={event => {event.currentTarget.querySelector("button")?.focus(); openSymbolDetail({symbol: record.symbol});}} title="查看个股详情">
-                    <td><button type="button" className="market-stock-open bc-market-stock" aria-label={`查看 ${record.name ?? record.symbol} 详情`} onClick={event => {event.stopPropagation(); openSymbolDetail({symbol: record.symbol});}}><span>{record.name ?? record.symbol}</span><small>{record.symbol}</small></button></td>
+                    <td><button type="button" className="market-stock-open bc-market-stock" aria-label={`查看 ${record.name ?? record.symbol} 详情`} onClick={event => {event.stopPropagation(); openSymbolDetail({symbol: record.symbol});}}><span>{record.name ?? record.symbol}</span><small>{record.symbol}</small></button><LimitReason reason={record.reason} source={record.source} date={record.trade_date} compact /></td>
                     <td>{fmt(record.price)}</td><td className={pctColor(record.change_pct)}>{pctText(record.change_pct)}</td><td>{record.boards_stat ?? "--"}</td>
                   </tr>)}</tbody>
                 </table> : pending ? <div className="bc-market-pool-loading">{Array.from({length: 5}, (_, index) => <div key={index}><Skeleton className="h-4 w-20" /><Skeleton className="h-4 w-14" /><Skeleton className="h-4 w-14" /></div>)}</div> : poolError ? null : <p className="bc-market-empty">已读取，当前涨停池为空。日期与覆盖以来源为准。</p>}

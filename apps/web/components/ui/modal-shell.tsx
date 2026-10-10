@@ -79,6 +79,8 @@ export interface ModalShellProps {
   footer?: React.ReactNode;
   /** 正文额外类。默认「整体滚动 + 常规内边距」；内部自管滚动的弹窗传 `flex flex-col overflow-hidden`。 */
   bodyClassName?: string;
+  /** Opt-in keyboard entry for a long, independently scrolling reading body. */
+  bodyTabIndex?: number;
   /** 正文容器的 `data-testid`。 */
   bodyTestId?: string;
   /** 面板圆角：默认 `xl`（`2xl` 用于概念弹窗这类大圆角场景）。 */
@@ -99,6 +101,7 @@ export function ModalShell({
   header,
   footer,
   bodyClassName = "overflow-y-auto px-5 py-4",
+  bodyTabIndex,
   bodyTestId,
   radius = "xl",
   children,
@@ -159,6 +162,7 @@ export function ModalShell({
           </div>
         )}
         <div
+          tabIndex={bodyTabIndex}
           data-testid={bodyTestId}
           className={`flex min-h-0 flex-1 flex-col ${bodyClassName}`}
         >

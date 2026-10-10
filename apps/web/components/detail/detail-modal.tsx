@@ -15,11 +15,14 @@
  * 4. **可跳转** —— theme/capital/echelon 类按 nav-targets 单点跳对应功能页。
  */
 import { createContext, useCallback, useContext, useEffect, useMemo, useState } from "react";
+import { HugeiconsIcon } from "@hugeicons/react";
+import ArrowUpRight01Icon from "@hugeicons/core-free-icons/ArrowUpRight01Icon";
 import { useInspection } from "@/components/inspection/inspection-context";
 
 import { getEventsForSymbol, getNewsContent, type ArticleBlock, type EventSummary } from "@/lib/api";
 import { CapitalFlowPanel } from "@/components/detail/capital-flow-panel";
 import { eventTimeText } from "@/lib/format";
+import { eventDetailPayload, eventDirectionView, eventJudgeView } from "@/lib/event-view";
 // 只依赖**零业务依赖**的 context 模块（不 import symbol-detail-modal）：
 // 否则形成 detail-modal → symbol-detail-modal → stock-detail → stock-events → detail-modal 的环
 import { useSymbolDetail } from "@/components/detail/symbol-detail-context";
@@ -204,36 +207,31 @@ function DetailModalBody({ payload, onClose }: { payload: DetailPayload; onClose
                 <ul className="mt-1 space-y-1">
                   {feedEvents.items.map((e) => {
                     const d = e.directions?.[0];
+                    const dir = d ? eventDirectionView(d, e) : null;
+                    const judgement = eventJudgeView(e);
                     return (
                       <li key={e.id}>
                         <button
                           type="button"
                           onClick={() =>
                             open({
-                              kind: "event",
-                              title: e.title,
-                              url: e.url ?? null,
+                              ...eventDetailPayload(e),
                               symbol: payload.symbol ?? null,
-                              theme: d?.target ?? payload.theme ?? null,
-                              source: e.source ?? null,
-                              date: e.published_at ?? null,
-                              body: e.summary ?? null,
-                              meta: [
-                                ...(d ? [{ label: "判定", value: `${d.direction > 0 ? "利好" : d.direction < 0 ? "利空" : "待判"}${e.judge_status_label && e.judge_status_label !== (d.direction > 0 ? "利好" : d.direction < 0 ? "利空" : "待判") ? `（${e.judge_status_label}）` : ""}` }] : []),
-                                ...(d?.basis ? [{ label: "依据", value: d.basis }] : []),
-                              ],
+                              theme: d?.target_type === "theme" ? d.target : payload.theme ?? null,
                             })
                           }
                           className="w-full rounded border border-zinc-200 px-2 py-1 text-left text-[11px] hover:border-zinc-400 dark:border-zinc-700"
                         >
                           <span className="text-zinc-700 dark:text-zinc-200">{e.title}</span>
-                          {d && (
+                          {dir && (
                             <span
-                              className={`ml-1 font-medium ${d.direction > 0 ? "text-up-ink dark:text-up" : d.direction < 0 ? "text-down-ink dark:text-down" : "text-zinc-600 dark:text-zinc-400"}`}
+                              title={dir.title}
+                              className={`ml-1 font-medium ${dir.cls}`}
                             >
-                              {d.direction > 0 ? "利好" : d.direction < 0 ? "利空" : "待判"}
+                              {dir.text}
                             </span>
                           )}
+                          <span title={judgement.title} className={`ml-1 whitespace-nowrap ${judgement.cls}`}>{judgement.text}</span>
                         </button>
                       </li>
                     );
@@ -342,12 +340,13 @@ function DetailModalBody({ payload, onClose }: { payload: DetailPayload; onClose
           )}
           {payload.url && (
             <a
+              data-action="secondary"
               href={payload.url}
               target="_blank"
               rel="noopener noreferrer"
-              className="rounded border border-zinc-200 px-2 py-1 text-[11px] text-zinc-600 hover:border-zinc-400 dark:border-zinc-700 dark:text-zinc-300"
             >
-              打开原文 ↗
+              <span>打开原文</span>
+              <HugeiconsIcon icon={ArrowUpRight01Icon} aria-hidden="true" size={14} strokeWidth={1.6} className="shrink-0" />
             </a>
           )}
         </div>

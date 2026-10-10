@@ -480,6 +480,8 @@ async def theme_catalog_detail(
             "seal_amount": seal_amount,  # 原样（元），前端 fmtAmount 自适应
             "boards": getattr(ths_rec, "consecutive_boards", None) if ths_rec else None,
             "reason": reason or None,
+            "reason_source": getattr(ths_rec, "source", None) if ths_rec else None,
+            "reason_date": ths_rec.trade_date.isoformat() if ths_rec and getattr(ths_rec, "trade_date", None) else None,
             "tags": tags,
         })
         # 细分分组：仅当日涨停成员（官方归因标签直通）
@@ -500,7 +502,7 @@ async def theme_catalog_detail(
             "members": members,
             "tag_groups": [{"tag": t, "symbols": syms} for t, syms in
                            sorted(tag_groups.items(), key=lambda kv: -len(kv[1]))],
-            "meta_note": "成分=同花顺官方目录（逐符号一致）；细分=当日涨停成员的 ths 涨停原因官方标签",
+            "meta_note": "成分=同花顺官方目录；细分=数据源提供的当日涨停归因标签，缺失不补",
         },
         "meta": {},
     }

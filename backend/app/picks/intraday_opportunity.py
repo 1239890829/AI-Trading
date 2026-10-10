@@ -236,6 +236,8 @@ def assemble(
                     # 值是硬编码文案 ⇒ 其余角色（龙头/中军/空间板/首板…）全部取不到，
                     # 卡片「入选原因」恒空（2026-09-10 用户反馈）。
                     "reason": rung.get("reason"),
+                    "reason_source": rung.get("source"),
+                    "reason_date": rung.get("trade_date"),
                     # 首封时间此前**只喂给 certainty 判定、没透出到输出**（上方的
                     # `certainty(first_seal_time=rung.get(...))`）。2026-09-15 起它是
                     # 「开盘即涨停」这条可参与性判据的唯一依据 —— 不透出，卡片就只能
@@ -544,6 +546,8 @@ def top_watch_stocks(payload: dict, *, limit: int | None = None) -> dict:
                     "stage": t.get("stage"),
                     "strength_tier": t.get("strength_tier"),
                     "reason": s.get("reason"),
+                    "reason_source": s.get("reason_source"),
+                    "reason_date": s.get("reason_date"),
                     "first_seal_time": s.get("first_seal_time"),
                     "board": s.get("board"),
                     # 板块权限事实随行带上——下面的兜底筛选读的就是它（生产路径里

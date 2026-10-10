@@ -102,7 +102,19 @@ describe("EventPanel（盘面相关性 Top4 摘要，2026-09-04 任务④）", (
 
     render(<EventPanel />);
     await screen.findByText("长鑫 LPDDR6 全球首发量产");
-    expect(screen.getByText("待验证假设")).toBeTruthy();
+    expect(screen.getByText("利好假设")).toBeTruthy();
+    expect(screen.queryByText("利好")).toBeNull();
+  });
+
+  it("显示无方向事件的真实状态，而非隐藏判定或长期待判", async () => {
+    mockedGetImpactEvents.mockResolvedValue({ count: 2, countsAll: {}, fourCounts: {}, tagCounts: {},
+      items: [evt({ directions: [], judge_status: "neutral", judge_reason: "超时未明确方向" }),
+        evt({ id: 4, title: "无关联的新消息", directions: [], judge_status: "pending" })] });
+    render(<EventPanel />);
+    await screen.findByText("无关联的新消息");
+    expect(screen.getByText("未明超时").getAttribute("title")).toContain("超时未明确方向");
+    expect(screen.getByText("方向未明")).toBeTruthy();
+    expect(screen.queryByText("待判")).toBeNull();
   });
 
   it("无活跃事件空态；加载失败显示错误", async () => {
@@ -136,5 +148,38 @@ describe("EventPanel（盘面相关性 Top4 摘要，2026-09-04 任务④）", (
     // 2026-09-03 起跳转带 from 返回参数（workbenchUrlWithBack），断言前缀而非全等
     expect(link?.getAttribute("href")?.startsWith("/workbench?symbol=600171")).toBe(true);
     expect(screen.getByText(/不构成买卖建议/)).toBeTruthy();
+  });
+
+  it("标的池保留假设与过期边界，不把模型方向裸显示成利好", async () => {
+    mockedGetEventStocks.mockResolvedValue([{ target: "存储芯片", direction: 1,
+      matched_by: "llm_aux", judge_status: "expired", judge_reason: "超过有效时限", stocks: [],
+      note: "LLM辅助方向待验证，暂不扩展标的池" }]);
+    render(<StockPools eventId={3} />);
+    await screen.findByText("存储芯片 利好假设");
+    expect(screen.getByText("已过期").getAttribute("title")).toContain("超过有效时限");
+  });
+
+  it("目录未初始化的 note-only 响应可读，不伪造题材、方向或零只标的", async () => {
+    mockedGetEventStocks.mockResolvedValue([{
+      judge_status: "pending", judge_reason: "证据不足",
+      note: "题材目录服务未初始化，无法反查成分",
+    }]);
+    render(<StockPools eventId={3} />);
+    await screen.findByText("题材目录服务未初始化，无法反查成分");
+    expect(screen.getByText("方向未明").getAttribute("title")).toContain("证据不足");
+    expect(screen.queryByText(/\d+ 只/)).toBeNull();
+    expect(screen.queryAllByRole("link")).toHaveLength(0);
+  });
+
+  it("缺失 stocks 保留原题材方向并明确数据缺失，不当作有效空池", async () => {
+    mockedGetEventStocks.mockResolvedValue([{
+      target: "存储芯片", direction: 1, judge_status: "judged",
+    }]);
+    render(<StockPools eventId={3} />);
+    await screen.findByText("存储芯片 利好");
+    expect(screen.getByText("成分数据未提供")).toBeTruthy();
+    expect(screen.getByText("未收到成分数据，暂不能展示关联个股。")).toBeTruthy();
+    expect(screen.queryByText("0 只")).toBeNull();
+    expect(screen.queryAllByRole("link")).toHaveLength(0);
   });
 });

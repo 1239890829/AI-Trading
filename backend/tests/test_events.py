@@ -75,8 +75,113 @@ def test_llm_direction_is_visible_as_hypothesis_without_stock_pool(tmp_path):
     assert event["directions"][0]["matched_by"] == "llm_aux"
     assert result["data"]["pools"] == [{
         "target": "存储芯片", "direction": 1, "stocks": [],
+        "strength": 1, "chain": "", "basis": "", "matched_by": "llm_aux",
+        "judge_status": event["judge_status"],
+        "judge_status_label": event["judge_status_label"],
+        "judge_reason": event["judge_reason"], "llm_judged_at": None, "llm_aux_note": None,
         "note": "LLM 辅助方向待验证，暂不扩展标的池",
     }]
+
+
+@pytest.mark.parametrize("age,direction,status,label", [
+    (1, 0, "pending", "方向未明"),
+    (7, 0, "neutral", "未明超时"),
+    (49, 1, "expired", "已过期"),
+])
+def test_stock_pool_projects_the_event_judgement_without_rejudging(
+    tmp_path, monkeypatch, age, direction, status, label,
+):
+    import asyncio
+    from datetime import timedelta
+    from types import SimpleNamespace as NS
+
+    from app.api.routes import events as events_route
+    from app.core.bjtime import beijing_now_naive
+
+    now = beijing_now_naive()
+    store = _isolated_store(tmp_path)
+    row, _ = store.add_event({
+        "fingerprint": f"pool-state-{status}", "title": "存储芯片关联线索",
+        "source": "测试", "published_at": now - timedelta(hours=age),
+        "half_life_hours": 48,
+        "directions": [{"target_type": "theme", "target": "存储芯片",
+                        "direction": direction, "matched_by": "name"}],
+    })
+    now = beijing_now_naive()  # Include the interpretation created by add_event.
+    monkeypatch.setattr(events_route, "beijing_now_naive", lambda: now)
+    catalogue = NS(
+        get_catalog=lambda **_kwargs: [NS(name="存储芯片", code="BK001")],
+        get_members=lambda _code: [NS(symbol="600001", name="某股")],
+        get_overrides=lambda _code: [],
+    )
+    request = NS(app=NS(state=NS(theme_catalog=catalogue)))
+    result = asyncio.run(events_route.event_stocks(row.id, request, store))["data"]
+    event, pool = result["event"], result["pools"][0]
+    assert event["judge_status"] == status and event["judge_status_label"] == label
+    assert pool["matched_by"] == "name" and pool["direction"] == direction
+    assert {key: pool[key] for key in (
+        "judge_status", "judge_status_label", "judge_reason", "llm_judged_at", "llm_aux_note",
+    )} == {key: event[key] for key in (
+        "judge_status", "judge_status_label", "judge_reason", "llm_judged_at", "llm_aux_note",
+    )}
+
+
+def test_historical_llm_attempt_does_not_claim_a_current_direction(tmp_path):
+    from datetime import timedelta
+
+    from app.api.routes.events import _serialize
+    from app.core.bjtime import beijing_now_naive
+    from app.models.event import EventCard
+
+    now = beijing_now_naive()
+    store = _isolated_store(tmp_path)
+    row, _ = store.add_event({
+        "fingerprint": "past-aux-attempt", "title": "仅存在来源关联",
+        "published_at": now - timedelta(minutes=10),
+        "directions": [{"target_type": "theme", "target": "存储芯片",
+                        "direction": 0, "matched_by": "name"}],
+    })
+    attempted_at = now - timedelta(days=1)
+    with store._sf() as db:
+        db.get(EventCard, row.id).llm_judged_at = attempted_at
+        db.commit()
+    event = _serialize(store.get_event(row.id), now=beijing_now_naive())
+    assert event["llm_judged_at"] == attempted_at.isoformat(sep=" ")
+    assert event["judge_status"] == "pending"
+    assert event["judge_status_label"] == "方向未明"
+    assert event["directions"][0]["direction"] == 0
+    assert "不表示 AI 正在判读或已经排队" in event["judge_reason"]
+
+
+@pytest.mark.parametrize("blocked", ["future", "revision"])
+def test_auxiliary_note_is_hidden_when_current_evidence_is_not_usable(tmp_path, blocked):
+    from datetime import timedelta
+
+    from app.api.routes.events import _serialize
+    from app.core.bjtime import beijing_now_naive
+    from app.events.store import LLM_AUX_UNAPPLIED_PREFIX
+    from app.models.event import EventCard, EventInterpretation
+
+    now = beijing_now_naive()
+    store = _isolated_store(tmp_path)
+    row, _ = store.add_event({
+        "fingerprint": f"hidden-aux-{blocked}", "title": "方向未知的来源关联",
+        "published_at": now - timedelta(minutes=10),
+        "directions": [{"target_type": "theme", "target": "存储芯片",
+                        "direction": 0, "matched_by": "name"}],
+    })
+    with store._sf() as db:
+        version = db.query(EventInterpretation).filter_by(event_id=row.id).one()
+        version.review_note = LLM_AUX_UNAPPLIED_PREFIX + "测试方向假设"
+        if blocked == "future":
+            version.effective_at = now + timedelta(hours=1)
+        else:
+            db.get(EventCard, row.id).revision_pending_at = now
+        db.commit()
+    event = _serialize(store.get_event(row.id), now=beijing_now_naive())
+    assert event["judge_status"] == "unknown"
+    assert event["llm_aux_note"] is None
+    assert "llm_aux_note" not in event["interpretation_ref"]
 
 
 def test_llm_hypothesis_does_not_upgrade_impact_or_market_resonance(tmp_path, monkeypatch):

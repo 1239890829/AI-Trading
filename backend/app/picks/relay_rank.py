@@ -73,6 +73,8 @@ async def compute_relay_rank(provider, trade_date: date, pool: list | None = Non
             "name": getattr(rec, "name", "") or "",
             "boards": getattr(rec, "consecutive_boards", 1) or 1,
             "reason": (getattr(rec, "reason", "") or "").strip(),
+            "reason_source": getattr(rec, "source", None),
+            "reason_date": rec.trade_date.isoformat() if getattr(rec, "trade_date", None) else None,
             "kmid2": round(fx["kmid2"], 4) if fx["kmid2"] is not None else None,
             "max20": round(fx["max20"], 4) if fx["max20"] is not None else None,
         }

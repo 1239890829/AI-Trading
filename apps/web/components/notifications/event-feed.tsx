@@ -10,6 +10,8 @@ import {
   TAG_STYLE,
   eventDetailPayload,
   eventNewsItem,
+  eventDirectionView,
+  eventJudgeView,
 } from "@/lib/event-view";
 import { NewsModal, type NewsModalItem } from "@/components/news-modal";
 import { useDetailModal } from "@/components/detail/detail-modal";
@@ -120,38 +122,35 @@ function EventRow({
       )}
 
       {/* 方向落点：个股 → 就地弹窗（与全站详情弹窗化一致）；题材 → 跳题材页 */}
-      {e.directions.length > 0 && (
-        <div className="mt-1.5 flex flex-wrap items-center gap-1">
-          {e.directions.slice(0, 3).map((d) => {
-            const isStock = d.target_type === "symbol";
-            const label = d.direction > 0 ? "利好" : d.direction < 0 ? "利空" : "待判";
-            const cls =
-              d.direction > 0 ? "text-up-ink dark:text-up" : d.direction < 0 ? "text-down-ink dark:text-down" : "text-zinc-500";
-            return (
-              <a
-                key={`${d.target_type}-${d.target}`}
-                href={isStock ? workbenchUrl(d.target) : themesUrl(d.target)}
-                onClick={
-                  isStock
-                    ? symbolDetailClick(openSymbolDetail, { symbol: d.target })
-                    : inspectionClick(inspect, {kind: "themes", focus: d.target})
-                }
-                title={[d.chain, d.basis].filter(Boolean).join(" ｜ ") || `关联${isStock ? "个股" : "题材"} ${d.target}`}
-                className="inline-flex items-center gap-1 rounded border border-zinc-200 px-1 py-px text-[10px] text-zinc-700 hover:border-zinc-400 dark:border-zinc-700 dark:text-zinc-200"
-              >
-                <span className="text-zinc-500 dark:text-zinc-400">{isStock ? "个股" : "题材"}</span>
-                <span>{d.target}</span>
-                <span className={`font-medium ${cls}`}>{label}</span>
-              </a>
-            );
-          })}
-          {e.tags.slice(0, 2).map((t) => (
-            <span key={t} className={`rounded border px-1 py-px text-[10px] ${TAG_STYLE}`}>
-              {t}
-            </span>
-          ))}
-        </div>
-      )}
+      <div className="mt-1.5 flex flex-wrap items-center gap-1">
+        <span title={eventJudgeView(e).title} className={`shrink-0 whitespace-nowrap text-[10px] ${eventJudgeView(e).cls}`}>{eventJudgeView(e).text}</span>
+        {e.directions.slice(0, 3).map((d) => {
+          const isStock = d.target_type === "symbol";
+          const { text: label, cls, title } = eventDirectionView(d, e);
+          return (
+            <a
+              key={`${d.target_type}-${d.target}`}
+              href={isStock ? workbenchUrl(d.target) : themesUrl(d.target)}
+              onClick={
+                isStock
+                  ? symbolDetailClick(openSymbolDetail, { symbol: d.target })
+                  : inspectionClick(inspect, {kind: "themes", focus: d.target})
+              }
+              title={title || `关联${isStock ? "个股" : "题材"} ${d.target}`}
+              className="inline-flex items-center gap-1 rounded border border-zinc-200 px-1 py-px text-[10px] text-zinc-700 hover:border-zinc-400 dark:border-zinc-700 dark:text-zinc-200"
+            >
+              <span className="text-zinc-500 dark:text-zinc-400">{isStock ? "个股" : "题材"}</span>
+              <span>{d.target}</span>
+              <span className={`font-medium ${cls}`}>{label}</span>
+            </a>
+          );
+        })}
+        {e.tags.slice(0, 2).map((t) => (
+          <span key={t} className={`rounded border px-1 py-px text-[10px] ${TAG_STYLE}`}>
+            {t}
+          </span>
+        ))}
+      </div>
     </div>
   );
 }

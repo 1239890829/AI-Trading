@@ -1,38 +1,26 @@
-# 当前交接：IMP-088 原地旁览与首次加入事实
+# 当前交接：IMP-089 事件状态与涨停原因闭环
 
-> 总方案v9.13；累计U01–U55；任务状态只归W07/IMP-088。现役Jev蓝图[jev-integration](ai/jev-integration.md)，设计权威见[原版技能方案](product/ui-original-skills-plan-20261008.md)。
+> 总方案v9.13；累计U01–U55；任务状态单点归[W07/IMP-089](stages/w07-simplification.md#imp-089)。前项IMP-088已由PR249/250发布，历史交接由Git追溯。现役Jev蓝图[jev-integration](ai/jev-integration.md)。
 
 ## 1. 现场、授权与版本
 
-- **当前主门**：无（G0–G4当前无可行动项）
-- **本轮主任务**：IMP-088
-- **主切片首选**：无
-- **接续**：IMP-088六项工程与主体发布完成；selector据阶段状态重算，G0–G4无可行动项，不自动领取第二业务任务。
-- **基点与分支**：实施基点2649709bc469b3d11b38234ca7916595c15826c6；主体PR249已发布并清理codex/contextual-workspace。本次同任务文档分支codex/contextual-workspace-close从最新origin/master的92015f3f59ca79006bee4b496797bed3b0afc791创建。依赖IMP-087不重复实施。
-- **U50 降级授权回执**：2026-09-24 Codex DEGRADED_FULL_CONTROL明确长期授权未撤销。本轮用户明确授权六项工作台/选股交互优化；作者=发布操作者，非独立Review。最终仍需准确HEAD DegradedRelease、完整本地门禁、required CI、release_check、match-head合并与post-merge核验。
-- **范围**：指数默认收起；影子启用用途与运行条件；未来首次入选事实；今日盘面四卡；全域原地查看消费者；加载/缓存/关闭/焦点/滚动体验。评分、模型、门槛、资金、撮合与风控不因UI接线改变，真实券商继续禁止。
-- **运行**：3000前端PID8351加载本轮production build `-OJIz0_LF5kBwlCOnqZe2`；8000后端PID20084已从主体合并源码正常重启，无reload。daily原已配置启用/runner已装配，机会影子配置关闭；本轮不改开关。实源与夹具分别取证，当前health=degraded如实保留；不强制生成、不调用模型或外发取得验收。
-- **恢复**：现役ui-current-saved-20261008及忽略恢复包保留；本项无需数据库schema迁移。旧复盘迁移备份和后续数据不能盲目覆盖。
+- **当前主门**：G2
+- **本轮主任务**：IMP-089
+- **主切片首选**：IMP-089
+- **基点与分支**：最新origin/master f337180cffb0063fa09feca63a85948ee01b21cd；codex/event-status-alignment。当前修改未发布到运行服务。
+- **U50 降级授权回执**：2026-10-10用户明确要求修复事件待判、原文对齐，并追加涨停池、个股详情、涨跌与梯队的原因缺失及同类消费者。2026-09-24长期DEGRADED_FULL_CONTROL未撤销；作者=发布操作者，不能称独立Review。
+- **运行**：现有3000/8000保留前项生产版本；不强制运行模型、批补历史、启用影子或外发取得验收。
+- **恢复**：现役UI恢复副本保留。无新表/迁移；Git差异可恢复代码，历史解释与业务数据不能盲目覆盖。
 
 ## 2. U49 主动审计回执 / 作者Preflight与反证
 
-开工先核原owner、当前SHA、账本和真实消费者。首次加入实际记录钟与源报价钟分开，原价不冒充成交；旧未知不倒填。最高连板由完整涨停池身份给出，并列先选；题材/断层保存点击批次，不冒充全市场总数。原地查看日期/筛选隔离，主导航和实际任务切换保留；链接修饰点击保留。关闭停止读取，旧回包不覆盖新对象，嵌套详情不悄悄切被挡住的背景。账户旁览不初始化/结算，配置启用不等于运行或成交，未成熟结果不报胜率。
+- 当前100条实源事件89条pending，并非全部AI故障：不少近时新闻没有可验证方向。展示层0统一待判且超时/过期漏显示；AI辅助已尝试不等当前方向确定。混合方向、模型假设、人审/撤回与旧版本不可混用。
+- 同题材模型结果与原规则0发生冲突时，必须保留规则关联消费者及原版本；仅记录未应用假设说明，不能为了消除待判升级模型权威或降低选股覆盖。
+- 涨停默认池2026-10-09有72/72原因，页面显式传周六日期会收到东财旧池69条无原因并伪标10-10；修复默认最近交易日与显式日期闸。原因日期/来源/错股、空错陈旧与所有同类展示逐入口核验。
+- 原版Impeccable scoped clarify/polish、interaction-design与ui-state-verify各负职责；现役风格保留。TypeSafe已考虑，本轮确定性日期/身份/缓存与模型权威硬门不委托语义模型。多代理取证仍是作者自检。
 
-原版Impeccable按Operate/clarify/animate/optimize职责，interaction-design按联动/状态，ui-state-verify按实际组件与小屏验收。TypeSafe已评估，本项确定性时间/身份/风控不交语义模型。不是整版重设计，不宣称全部历史设计技能完整执行。多代理关注面核验仍是作者自检，最终DegradedRelease明确身份。
+## 3. 验证与发布要求
 
-## 3. 本轮证据与未验证范围
+隔离行为与真实运行分别记录。最终后端4941 passed/83 skipped，前端112文件/1012测试在默认与UTC均通过；tsc/eslint/build/pyflakes、文档/卫生/公开扫描通过。早先全量暴露的测试归档钟与固定行情钟错日已仅在测试作用域修正，未放宽生产日期闸或原断言；预热默认回调后亦验证。桌面/短桌面/320/390核长因阅读、原文按钮居中、Tab进阅读槽、Esc回焦；正文撑高与旧阅读请求复活已反证修复。Jev baseline与最终更新输入均返回HTTP451，无评分或有效previousEvaluation；仅记录辅助缺口。准确HEAD DegradedRelease、required三项CI、release_check、match-head合并与post-merge CI及后端实际加载仍在执行，不能把本地通过称为已发布。
 
-- 源码锁定批次的完整后端4918 passed、83 skipped、1 warning，401.49s；警告为Starlette TestClient使用httpx的弃用提示。前端109文件973项默认/UTC分别通过，191.53s/164.87s；定向244/122/18及客户端账户4项为先前局部证据，不与全量相加。
-- 同批tsc、eslint、Next生产构建、pyflakes、doc-health、workspace-hygiene及公开仓库扫描已通过；构建ID为`-OJIz0_LF5kBwlCOnqZe2`。构建生成的next-env源码变更已restore，不提交；本次事实回填的文档守卫204项（17.90s）、doc-health/卫生/公开扫描通过；业务源码没有再改，文档PR仍跑完整required CI。证据位于`artifacts/runs/contextual-workspace-20261009`，不以旧绿色代替本轮门禁。
-- 首次加入selection-entry-v1；盘中PIT证据版本pit-evidence-v4.selection-entry，原策略版本未变。记录首次实际容量内rank归档时间，非更早源钟。
-- Jev主体baseline/final均返回HTTP451/isError=true，无有效评分或previousEvaluation。保留工具缺口，确定性门禁不降低。
-- 浏览器已验1280×800/600、320×640与390×844隔离合成输入：首入选依据、原涨停池、完整最高身份/Canvas、同批题材/断层、账户四scope、指数默认/展开收起、通知保留与嵌套Esc/回焦；页面根无X/Y溢出，表格横滚留在内部。几何/截图/限制见browser-acceptance.json；不冒充39源码族全部实屏或真实手机。主体PR249及post-merge三项CI已通过；新后端与前端分别按runtime-release.json核实，不把HTTP200当源健康。源数据时效、全系统SLO与策略效果仍归原owner及IMP-019，本项工程不证明上涨概率或成交收益。
-
-## 4. 传播与接续
-
-实施方案、产品闭环、猎场设计、细功能审计§42、数据源7.2及plan-registry已传播；无新文档和第二状态源。INDEX/AGENTS/协作Skills/Jev蓝图不适用变更，原权威不变。同一IMP-088主体已发布；本次仅回填实际事实，按对应准确HEAD门发布，不改业务源码；不自动领取第二业务任务。开放世界长期候选准入继续按[持续演进](ai/continuous-evolution.md)，不以本轮工程结果晋级策略。
-
-- **加载证据**：同一路由首文档直接script引用原始字节合计1,377,532→1,047,658（约减少23.9%）；本机HTML读取44.65→53.17ms不构成加载更快证据。惰性旁览与独立资源解除候选被辅助请求阻塞，未承诺全系统SLO。见loading-before/after.json。
-
-- **主体发布**：PR249准确HEAD c6d09f2b6719d76ea6c4d980fa6a8fcac1cc332a，经DegradedRelease、required CI37932915482和release_check合并为92015f3f59ca79006bee4b496797bed3b0afc791；post-merge37933414478 backend/frontend/docs均completed/success。原分支已清理。
-- **实源边界与清理**：每日影子configured/runner_loaded=true、调度运行，实际晨窗09:26≤北京时间<09:45，60秒；机会影子configured/runner_loaded=false，未改变开关。当前每日候选为空，不强制生成、不用现价回填历史。3000与LAN两页面/代理health、8000影子读端点HTTP200；health=degraded、东财板块源失败仍如实展示。71源码哈希无漂移；只读核活动执行/外发/模型为0后正常TERM旧实例，待人工确认7条与历史unknown2条保留。root-cwd鉴权探针401是未加载backend配置，backend-cwd按原凭据复核200，鉴权不改。隔离3001/8011已正常停止，临时viewport/标签清理，真实服务与既有恢复副本保留。
+开放世界长期候选准入继续按[持续演进](ai/continuous-evolution.md)，本轮确定性修复不构成模型或策略效果晋级。

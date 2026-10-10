@@ -6,6 +6,7 @@
 
 from __future__ import annotations
 
+from copy import deepcopy
 from datetime import date
 from fastapi import APIRouter, Depends, HTTPException, Query, Request
 from app.api.deps import get_hub
@@ -21,6 +22,7 @@ from app.services.market_snapshot import (
     PoolDateError,
     default_trade_date,
     verify_limit_down_date,
+    verify_pool_date,
 )
 
 router = APIRouter(tags=["market"])
@@ -33,19 +35,39 @@ from app.api.routes.market_envelope import (
 
 @router.get("/limit-up", response_model=Envelope[LimitUpPoolPayload])
 async def limit_up(
+    request: Request,
     date_str: str | None = Query(default=None, alias="date", description="YYYY-MM-DD，默认最近交易日"),
     hub: QuoteHub = Depends(get_hub),
 ) -> dict:
-    trade_date = date.fromisoformat(date_str) if date_str else await default_trade_date(hub)
     try:
-        records = await hub.provider.get_limit_up_pool(trade_date)
-    except Exception as exc:
-        raise HTTPException(status_code=502, detail=f"涨停池数据源失败：{exc}")
-    records.sort(key=lambda r: (r.consecutive_boards or 0), reverse=True)
-    return {
-        "data": {"trade_date": trade_date.isoformat(), "pool": [r.model_dump(mode="json") for r in records]},
-        "meta": await dated_meta(hub, trade_date),
-    }
+        trade_date = date.fromisoformat(date_str) if date_str else await default_trade_date(hub)
+    except ValueError as exc:
+        raise HTTPException(status_code=422, detail="涨停池日期格式非法，需 YYYY-MM-DD") from exc
+    try:
+        await verify_pool_date(hub.provider, trade_date, pool_name="涨停池")
+    except PoolDateError as exc:
+        raise HTTPException(status_code=exc.status_code, detail=str(exc)) from exc
+
+    # 同一交易日的榜单和多个个股详情共享一次读取；缓存保留原读取 meta。
+    cache = cache_on(request.app.state, "market.limit_up", 60, maxsize=8)
+
+    async def build() -> dict:
+        try:
+            records = await hub.provider.get_limit_up_pool(trade_date)
+        except Exception as exc:
+            raise HTTPException(status_code=502, detail=f"涨停池数据源失败：{exc}") from exc
+        if any(getattr(row, "trade_date", None) != trade_date for row in records):
+            raise HTTPException(status_code=502, detail="涨停池记录日期与请求不一致，拒绝混日数据")
+        rows = sorted(records, key=lambda r: (r.consecutive_boards or 0), reverse=True)
+        return {
+            "data": {"trade_date": trade_date.isoformat(), "pool": [r.model_dump(mode="json") for r in rows]},
+            "meta": await dated_meta(hub, trade_date),
+        }
+
+    hit, payload = await cache.get_or_set(trade_date, build)
+    result = deepcopy(payload)
+    result["meta"]["cached"] = hit
+    return result
 
 
 @router.get("/limit-down", response_model=Envelope[LimitDownPoolPayload])

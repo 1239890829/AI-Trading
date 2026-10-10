@@ -3,12 +3,13 @@
 覆盖三条修复：
 1. 快讯入库漏传 theme_names → 官方题材目录匹配失效（商业航天新闻零方向行）；
 2. 目录名带「概念/板块」后缀匹配不到标题词干（「芯片概念」vs「芯片」）；
-3. 判定状态机：judged/pending/neutral(超时收敛)/expired，避免长期停留待判。
+3. 判定状态机：judged/pending/neutral(未明超时)/expired，超时不推断中性。
 """
 
 from datetime import datetime, timedelta, timezone
 from app.events.extract import (
     PENDING_TIMEOUT_HOURS,
+    JUDGE_STATUS_LABEL,
     _name_stem,
     build_event,
     judge_state,
@@ -66,3 +67,15 @@ def test_judge_state_handles_naive_datetime():
     """SQLite 取出的 naive 时间不得炸（KB-ENG-08 同族）。"""
     naive = datetime(2026, 9, 9, 8, 0)  # 无 tzinfo
     assert judge_state(naive, [{"direction": -1, "chain": ""}], now=NOW)["status"] == "judged"
+
+
+def test_zero_direction_is_unknown_even_after_timeout():
+    directions = [{"direction": 0, "chain": "仅确认来源关联"}]
+    pending = judge_state(NOW, directions, now=NOW)
+    assert JUDGE_STATUS_LABEL[pending["status"]] == "方向未明"
+    assert "不表示 AI 正在判读或已经排队" in pending["reason"]
+    elapsed = judge_state(NOW - timedelta(hours=7), directions, now=NOW)
+    assert elapsed["status"] == "neutral"  # Preserve the consumer enum.
+    assert JUDGE_STATUS_LABEL[elapsed["status"]] == "未明超时"
+    assert "不代表已判为中性" in elapsed["reason"]
+    assert directions[0]["direction"] == 0

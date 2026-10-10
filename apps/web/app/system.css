@@ -209,3 +209,15 @@ input,textarea {caret-color:var(--ui-accent);}
  .alerts-management>.grid>div>.task-panel>.task-panel-body {height:300px;flex:none;overflow:auto;scrollbar-gutter:stable;}
 }
 @media(max-width:767px) { :root .drawer-mode {display:none;} }
+/* Short desktop windows reserve the chart; quote/evidence overflow stays in its own strip. */
+.stock-context-brief {display:contents;}
+@media(min-width:1024px) and (max-height:740px) {
+ .stock-workspace {row-gap:6px;}
+ .stock-context-brief {display:flex;flex:0 1 auto;min-height:0;max-height:clamp(110px,24dvh,168px);flex-direction:column;gap:6px;overflow-y:auto;overscroll-behavior:contain;scrollbar-width:thin;}
+ :root .stock-context-brief .quote-sheet {padding:6px 10px;}
+ .stock-context-brief .quote-sheet-meta {display:flex;align-items:center;justify-content:space-between;gap:8px;}
+ .stock-context-brief .quote-metrics-toggle {display:inline-flex;align-items:center;gap:4px;min-height:28px;}
+ .stock-context-brief .quote-sheet[data-metrics-expanded="false"] .quote-sheet-metrics {display:none;}
+ .stock-context-brief .limit-up-reason-panel .line-clamp-2 {-webkit-line-clamp:1;}
+ .stock-context-brief .detail-context-disclosure>summary {min-height:28px;}
+}

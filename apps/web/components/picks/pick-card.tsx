@@ -4,6 +4,7 @@ import type { ReactNode } from "react";
 
 import { CardHead, CardShell } from "@/components/picks/card-shell";
 import { CardEntryRow } from "@/components/picks/card-entries";
+import { LimitReason } from "@/components/detail/limit-reason";
 import { useStockRowNav } from "@/components/stock-link";
 import { bjDate, fmt, formatLegacyLimitDistance, pctColor, pctText, timeTextBJ, triText } from "@/lib/format";
 import { clockOf, compareGates, gateActive, type GateComparison } from "@/lib/picks-gate";
@@ -132,7 +133,7 @@ export interface TradingCard {
    */
   board: string | null;
   /* --- 依据行（归一：盘前是六维 basis 摘要，盘中是「入选 + 涨停原因」） --- */
-  basisRows: { label: string; value: string }[];
+  basisRows: { label: string; value: string; source?: string | null; date?: string | null }[];
   vetoes: string[];
   /* --- 立场与买入区间：仅盘前名单有（收盘评分产出，盘中不适用） --- */
   buyRange: { low: number; high: number; basis: string } | null;
@@ -234,7 +235,7 @@ export function fromDailyPick(it: DailyPickItem): TradingCard {
  * 两者字段天然互认（除分层名单独有的 tier / pick_basis，与手风琴独有的无 stage 之外）。
  */
 export function fromIntradayStock(it: IntradayTopStock | OpportunityStock): TradingCard {
-  const basisRows: { label: string; value: string }[] = [];
+  const basisRows: TradingCard["basisRows"] = [];
   // 「入选」= pick_basis——只有分层名单才产生（要解释「为什么在这档」）
   const pickBasis = "pick_basis" in it ? it.pick_basis : null;
   if (pickBasis) basisRows.push({ label: "入选", value: formatLegacyLimitDistance(pickBasis) });
@@ -242,7 +243,7 @@ export function fromIntradayStock(it: IntradayTopStock | OpportunityStock): Trad
   // 与 pick_basis 分开两行：前者是"为什么进猎场"，后者是"为什么排在这一档"。
   if ("basis" in it && it.basis) basisRows.push({ label: "联动", value: formatLegacyLimitDistance(it.basis) });
   // 「涨停原因」= reason——同花顺官方原串（ladder 行自带），两条路径都有
-  if (it.reason) basisRows.push({ label: "涨停原因", value: it.reason });
+  if (it.reason?.trim() || (it.boards ?? 0) > 0) basisRows.push({ label: "涨停原因", value: it.reason ?? "", source: it.reason_source, date: it.reason_date });
   // 「首封」= 可参与性判据的直接证据（开盘即涨停 vs 盘中封板）
   if (it.first_seal_time) basisRows.push({ label: "首封", value: it.first_seal_time });
 
@@ -687,7 +688,7 @@ export function PickCard({
         <div className="stock-card-basis text-[11px] leading-relaxed">
           <div className="text-[10px] font-medium text-zinc-600 dark:text-zinc-400">入选原因</div>
           <dl className="basis-ledger">{item.basisRows.map((r) => (
-            <div key={r.label}><dt>{r.label}</dt><dd>{r.value}</dd></div>
+            <div key={r.label}><dt>{r.label}</dt><dd>{r.label === "涨停原因" ? <LimitReason reason={r.value} source={r.source} date={r.date} compact /> : r.value}</dd></div>
           ))}</dl>
           {item.vetoes.map((v) => (
             <div key={v} className="text-red-700 dark:text-red-300">

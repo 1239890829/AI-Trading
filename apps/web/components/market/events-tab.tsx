@@ -7,7 +7,7 @@ import { NewsModal, type NewsModalItem } from "@/components/news-modal";
 import { useDetailModal } from "@/components/detail/detail-modal";
 import { symbolDetailClick, useSymbolDetail } from "@/components/detail/symbol-detail-context";
 import { Panel } from "@/components/panel";
-import { StockPools, directionLabel } from "@/components/event-panel";
+import { StockPools } from "@/components/event-panel";
 import { getImpactEvents, type EventSort } from "@/lib/api";
 import {
   FOUR_STYLE,
@@ -15,6 +15,8 @@ import {
   TAG_STYLE,
   eventDetailPayload,
   eventNewsItem,
+  eventDirectionView,
+  eventJudgeView,
   levelTitle,
 } from "@/lib/event-view";
 import { themesUrl, workbenchUrl } from "@/lib/routing";
@@ -120,6 +122,7 @@ export function EventsTab() {
           <FilterMenu label="分类" value={four} options={FOUR_FILTERS} onChange={setFour} />
           <FilterMenu label="事件标签" value={tag} options={[{key: "all", label: "全部标签"}, ...TAGS.map(t => ({key:t, label:t, count: tagCounts?.[t], title: `${t}类事件（规则派生）`}))]} onChange={setTag} />
         </div>
+        <p className="shrink-0 px-3 py-1.5 text-[11px] text-zinc-600 dark:text-zinc-400">方向未明表示证据不足，不代表正在后台排队判读。</p>
 
         {error && (
           <p role="alert" className="shrink-0 px-4 py-2 text-xs text-amber-800 dark:text-amber-300">{error} <button type="button" className="quiet-action" onClick={resource.refresh}>重试读取</button></p>
@@ -209,34 +212,32 @@ export function EventsTab() {
                   ))}
                 </div>
               )}
-              {e.directions.length > 0 && (
-                <div className="mt-1.5 flex flex-wrap items-center gap-1.5">
-                  {e.directions.map((d) => {
-                    const { text, cls } = directionLabel(d.direction);
-                    const isStock = d.target_type === "symbol";
-                    const tip = [d.chain, d.basis].filter(Boolean).join(" ｜ ");
-                    return (
-                      <a
-                        key={`${d.target_type}-${d.target}`}
-                        href={isStock ? workbenchUrl(d.target) : themesUrl(d.target)}
-                        onClick={isStock ? symbolDetailClick(openSymbolDetail, { symbol: d.target }) : inspectionClick(openInspection, { kind: "themes", focus: d.target })}
-                        title={tip || `关联${isStock ? "个股" : "题材"} ${d.target}（${d.basis || "入选理由见标的池"}）`}
-                        className="inline-flex items-center gap-1 rounded border border-zinc-200 px-1.5 py-0.5 text-[11px] text-zinc-700 hover:border-zinc-400 dark:border-zinc-700 dark:text-zinc-200"
-                      >
-                        <span className="text-zinc-600 dark:text-zinc-400">{isStock ? "个股" : "题材"}</span>
-                        <span>{d.target}</span>
-                        <span className={`font-medium ${cls}`}>{text}</span>
-                      </a>
-                    );
-                  })}
-                  <button
-                    onClick={() => setExpanded(expanded === e.id ? null : e.id)}
-                    className="rounded border border-zinc-200 px-1.5 py-0.5 text-[11px] text-zinc-600 hover:text-zinc-800 dark:border-zinc-700 dark:text-zinc-400 dark:hover:text-zinc-100"
-                  >
-                    {expanded === e.id ? "收起标的池" : "标的池 ↗"}
-                  </button>
-                </div>
-              )}
+              <div className="mt-1.5 flex flex-wrap items-center gap-1.5">
+                <span title={eventJudgeView(e).title} className={`shrink-0 whitespace-nowrap text-[11px] ${eventJudgeView(e).cls}`}>{eventJudgeView(e).text}</span>
+                {e.directions.map((d) => {
+                  const { text, cls, title: tip } = eventDirectionView(d, e);
+                  const isStock = d.target_type === "symbol";
+                  return (
+                    <a
+                      key={`${d.target_type}-${d.target}`}
+                      href={isStock ? workbenchUrl(d.target) : themesUrl(d.target)}
+                      onClick={isStock ? symbolDetailClick(openSymbolDetail, { symbol: d.target }) : inspectionClick(openInspection, { kind: "themes", focus: d.target })}
+                      title={tip || `关联${isStock ? "个股" : "题材"} ${d.target}（${d.basis || "入选理由见标的池"}）`}
+                      className="inline-flex items-center gap-1 rounded border border-zinc-200 px-1.5 py-0.5 text-[11px] text-zinc-700 hover:border-zinc-400 dark:border-zinc-700 dark:text-zinc-200"
+                    >
+                      <span className="text-zinc-600 dark:text-zinc-400">{isStock ? "个股" : "题材"}</span>
+                      <span>{d.target}</span>
+                      <span className={`font-medium ${cls}`}>{text}</span>
+                    </a>
+                  );
+                })}
+                {e.directions.length > 0 && <button
+                  onClick={() => setExpanded(expanded === e.id ? null : e.id)}
+                  className="rounded border border-zinc-200 px-1.5 py-0.5 text-[11px] text-zinc-600 hover:text-zinc-800 dark:border-zinc-700 dark:text-zinc-400 dark:hover:text-zinc-100"
+                >
+                  {expanded === e.id ? "收起标的池" : "标的池 ↗"}
+                </button>}
+              </div>
               {/* 题材辨识度记忆（KB-STOCK-25 / P1-1）：消息一来先拉"熟脸"——近 30 日历史龙头 */}
               {(() => {
                 const memText = e.directions

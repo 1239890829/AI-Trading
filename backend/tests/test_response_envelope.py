@@ -6,6 +6,8 @@
 from __future__ import annotations
 
 from datetime import date, datetime, timezone
+from types import SimpleNamespace
+from fastapi import FastAPI
 
 from app.api.routes import market_longhu as longhu_route
 from app.api.routes import market_pools as pools_route
@@ -96,13 +98,21 @@ def test_kline_envelope():
     assert env.data.timeframe == "1d"
 
 
-def test_limit_up_envelope():
+def test_limit_up_envelope(monkeypatch):
     import asyncio
+    from app.market import trade_calendar
+
+    async def calendar(_provider):
+        return [date(2026, 8, 28)]
+
+    monkeypatch.setattr(trade_calendar, "trading_days", calendar)
 
     hub = _FakeHub()
-    p1 = asyncio.run(pools_route.limit_up(date_str=None, hub=hub))
+    request = SimpleNamespace(app=FastAPI())
+    p1 = asyncio.run(pools_route.limit_up(request, date_str="2026-08-28", hub=hub))
     for payload in (p1,):
         env = Envelope[LimitUpPoolPayload].model_validate(payload)
+        assert env.data.trade_date == "2026-08-28"
         assert env.data.pool[0].consecutive_boards == 2
         assert set(payload["data"]["pool"][0].keys()) == set(LimitUpRecord.model_fields.keys())
 

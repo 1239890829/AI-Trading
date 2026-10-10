@@ -1,5 +1,5 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { cleanup, fireEvent, render, screen } from "@testing-library/react";
+import { cleanup, fireEvent, render, screen, within } from "@testing-library/react";
 import { ThemeCardView } from "@/components/theme-card";
 import { JUMP_PILL_CLASS } from "@/components/ui/jump-link";
 import type { ThemeStrengthRow } from "@/lib/api";
@@ -18,6 +18,17 @@ vi.mock("@/components/entry-checklist", () => ({
 
 // vitest 未开 globals 时 RTL 自动 cleanup 不注册，必须手动
 afterEach(cleanup);
+
+it("opens each rung cause for reading without adding a wide table column", async () => {
+  const rung: LadderRung = {symbol: "600825", name: "新华传媒", role: "龙头", is_primary: true,
+    other_themes: ["传媒成员标签不是原因"], boards: 4, reason: "拟收购财联社+重大资产重组", source: "ths", trade_date: "2026-10-09"};
+  const {container} = render(<ThemeCardView card={card({ladder: [rung]})} rank={1} />);
+  fireEvent.click(screen.getByRole("button", {name: /涨停原因 · 查看原文/}));
+  const dialog = await screen.findByRole("dialog", {name: "涨停原因原文"});
+  expect(within(dialog).getByText("拟收购财联社+重大资产重组")).toBeTruthy();
+  expect(within(dialog).getByText(/2026-10-09 · 同花顺/)).toBeTruthy();
+  expect(container.querySelectorAll("thead th")).toHaveLength(9);
+});
 
 function card(over: Partial<ThemeCard> = {}): ThemeCard {
   return {

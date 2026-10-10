@@ -32,6 +32,15 @@ function contentFixture(overrides: Partial<ArticleContent> = {}): ArticleContent
 }
 
 describe("NewsModal 正文块渲染（2026-09-04 排版升级）", () => {
+  it("keeps event judgement readable when the source article fails", async () => {
+    mockedContent.mockRejectedValue(new Error("原文暂不可用"));
+    render(<NewsModal item={{ ...item, digest: "来源摘要", judgement: "方向未明；辅助已尝试，但没有可验证方向。" }} onClose={() => {}} />);
+    expect(await screen.findByText("来源摘要")).toBeTruthy();
+    expect(screen.getByRole("note").textContent).toContain("辅助已尝试");
+    const source = screen.getByRole("link", { name: "查看原文" });
+    expect(source.getAttribute("href")).toBe(item.url);
+    expect(source.getAttribute("rel")).toBe("noopener noreferrer");
+  });
   it("shows a missing source explicitly instead of linking to the current page", async () => {
     mockedContent.mockRejectedValue(new Error("原文不可用"));
     render(<NewsModal item={{...item, url: "", digest: "已保存的摘要"}} onClose={() => {}} />);

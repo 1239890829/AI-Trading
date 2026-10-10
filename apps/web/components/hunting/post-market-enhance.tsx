@@ -11,6 +11,7 @@ import Link from "next/link";
 import { getLurkPool, getRelayRank, type LurkPoolPayload, type RelayRankItem } from "@/lib/api";
 import { workbenchUrl } from "@/lib/routing";
 import { symbolDetailClick, useSymbolDetail } from "@/components/detail/symbol-detail-context";
+import { LimitReason } from "@/components/detail/limit-reason";
 
 type State<T> =
   | { status: "idle" }
@@ -55,13 +56,13 @@ function RelayTable({ s }: { s: State<{ trade_date: string; items: RelayRankItem
       <div className="mb-1 text-[10px] text-zinc-600 dark:text-zinc-400">交易日 {trade_date} · kmid2 封板实度 × max20 距新高（P1-3 实证正 IC）</div>
       <ul className="space-y-1">
         {items.slice(0, 10).map((it) => (
-          <li key={it.symbol} className="flex items-baseline gap-2 text-xs">
+          <li key={it.symbol} className="flex min-w-0 flex-wrap items-baseline gap-2 text-xs">
             <span className="shrink-0 text-zinc-600 dark:text-zinc-400">{it.boards}板</span>
             <SymbolLink symbol={it.symbol} name={it.name} />
-            {it.reason && <span className="truncate text-[11px] text-zinc-600 dark:text-zinc-400">{it.reason}</span>}
             <span className="ml-auto shrink-0 font-mono text-[10px] text-zinc-600 dark:text-zinc-400">
               {it.max20 != null ? `${(it.max20 * 100).toFixed(0)}%距高` : "--"}
             </span>
+            <div className="min-w-0 basis-full"><LimitReason reason={it.reason} source={it.reason_source} date={it.reason_date ?? trade_date} compact /></div>
           </li>
         ))}
       </ul>

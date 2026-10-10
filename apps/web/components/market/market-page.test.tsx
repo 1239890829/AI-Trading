@@ -56,6 +56,17 @@ it("closes failed sentiment evidence and requires a fresh user click after recov
 });
 
 const overviewReaders = () => [api.getMarketOverview, api.getLimitUpPool, api.getBreadth, api.getSentiment, api.getSentimentHistory];
+
+it("shows attribution from the same pool row in the market leaders preview", async () => {
+  vi.mocked(api.getLimitUpPool).mockResolvedValue([{symbol:"600825",name:"新华传媒",trade_date:"2026-10-09",reason:"拟收购财联社+重大资产重组",source:"ths",quality:"high",quality_reasons:[],received_at:"2026-10-09T08:00:00Z"}]);
+  render(<MarketPage />);
+  await act(async () => {});
+  fireEvent.click(screen.getByRole("button", {name: /涨停原因 · 查看原文/}));
+  const dialog = screen.getByRole("dialog", {name: "涨停原因原文"});
+  expect(within(dialog).getByText("拟收购财联社+重大资产重组")).toBeTruthy();
+  expect(within(dialog).getByText(/2026-10-09 · 同花顺/)).toBeTruthy();
+});
+
 it.each(["fund", "heatmap", "events"])("%s lens never starts overview polling, switching back fetches every overview source immediately", async lens => {
   state.search = `tab=${lens}`;
   const view = render(<MarketPage />);
