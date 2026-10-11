@@ -13,6 +13,9 @@ import re
 SCHEMA_VERSION = "news-classification-v1"
 PROMPT_VERSION = "news-classification-v1.0"
 VALIDATOR_VERSION = "news-classification-validator-v1.1"
+CONTEXT_SCHEMA_VERSION = "news-classification-context-v2"
+CONTEXT_PROMPT_VERSION = "news-classification-context-v2.0"
+CONTEXT_VALIDATOR_VERSION = "news-classification-context-validator-v2.0"
 CATEGORIES = ("material_event", "market_action", "routine", "insufficient")
 EVENT_STATUSES = ("factual", "proposed", "denied", "rumor", "unknown")
 NOVELTIES = ("unavailable", "new", "repeat", "revision")
@@ -96,6 +99,46 @@ insufficient 必须有 uncertainties，direction 为 0，themes 为 []，chain �
 quote 至多 600 字，reason 至多 1200 字，chain 至多 1000 字。不输出置信度或买卖建议。
 """
 
+# Keep v1 intact for a same-input baseline. The extra fields expose scope and
+# source conditions; literal grounding still cannot prove semantic entailment.
+CONTEXT_SYSTEM_PROMPT = SYSTEM_PROMPT.replace(
+    "uncertainties, event_status, novelty。不要返回其他字段或 Markdown。",
+    "uncertainties, event_status, novelty, impact_object, key_conditions。不要返回其他字段或 Markdown。",
+) + """
+以下细则优先，按此顺序判断：
+1. 先保留判断所需的完整条件，再分类。key_conditions 是独立的原句引用数组，
+   每项只有 field/quote，规则同 evidence，至少一条、至多八条。保留输入中的对象、
+   适用地区/时间/门槛、拟议/审批阶段、金额/幅度、否定与相反信息及公司自述归属。
+   不要只摘有利部分；若一条引文不能覆盖，请分条。报价类保留报价范围即可。
+   材料没有的条件写入 uncertainties；不得用外部常识补写成已知条件。
+2. material_event 必须有输入明确的具体变化或可核计划、许可、调查、澄清等。
+   人物愿望/远景、泛泛看好或概念标签不等于具体项目。缺少行动内容或可核承诺的
+   项目愿景归 insufficient，例行评价可 routine。具体寻求合作/拟交易仍可 proposed；
+   不要求事件已经完成才算事件，也不把涨幅当事实催化。
+3. impact_object 是输入 title/summary 中逐字出现的明确影响对象，至多120字；
+   无法确定则空字符串。对象可以是企业、行业或居民等政策对象，不限上市股票。
+   direction 非0必须有该对象，并在 reason 解释原句支持的具体影响。
+   混合方向/传导未知可为0。有提取便利不等于地产/家装公司增收；没有企业敞口就
+   不映射股票收益。一个方向值只描述 impact_object，不能给所有对象一起背书。
+4. reason 分开写“事实：”和“解释：”。引用代表材料报告，不代表独立证实。
+   公司称无实质影响/运作正常仅是公司自述，不能升级为外部验证的事实。
+   混合事实/预期时，event_status 描述核心事件，各子事实的不同阶段留在 reason。
+5. 未收到的内容只能说“本材料未提供/尚待核实”，不能说公司/全文未披露。
+   未知不等于没有、尚未或未经：未给审计状态不能说未经审计；未给临床阶段不能
+   指定多期路径；留置不是定罪，临床批准不是上市批准，工商注册不是项目投资。
+6. chain 仅列与材料相关且可证伪的研究问题：用“假设：若…，需核…”。
+   可以为空。不添加未经支持的金额、关系、程序、阶段或必经路径。
+   假设前缀不是免责；不把一般常识包装为这条新闻的确定监管/经营安排。
+7. 返回前对照全部输入，核对关键条件是否完整、对象是否明确、未知是否误写否定。
+   insufficient 仍须 direction=0、themes=[]、chain=""，也保留 key_conditions。
+"""
+
+
+def _context_protocol(protocol: str) -> bool:
+    if protocol not in (SCHEMA_VERSION, CONTEXT_SCHEMA_VERSION):
+        raise ValueError("unknown classification protocol")
+    return protocol == CONTEXT_SCHEMA_VERSION
+
 
 def sample_content_hash(sample: dict) -> str:
     """Hash only the public text actually supplied for this classification."""
@@ -145,11 +188,12 @@ def _public_samples(samples: list[dict]) -> list[dict]:
     return public
 
 
-def build_messages(samples: list[dict]) -> list[dict[str, str]]:
+def build_messages(samples: list[dict], *, protocol: str = SCHEMA_VERSION) -> list[dict[str, str]]:
     """Project declared public fields only; refuse invalid frozen inputs."""
     rows = _public_samples(samples)
+    prompt = CONTEXT_SYSTEM_PROMPT if _context_protocol(protocol) else SYSTEM_PROMPT
     return [
-        {"role": "system", "content": SYSTEM_PROMPT},
+        {"role": "system", "content": prompt},
         {"role": "user", "content": json.dumps(rows, ensure_ascii=False, separators=(",", ":"))},
     ]
 
@@ -169,9 +213,10 @@ def _unique_json_object(pairs: list[tuple]) -> dict:
     return row
 
 
-def _item_errors(item: dict, sample: dict) -> list[str]:
+def _item_errors(item: dict, sample: dict, *, context: bool = False) -> list[str]:
     errors = []
-    if set(item) != OUTPUT_FIELDS:
+    fields = OUTPUT_FIELDS | {"impact_object", "key_conditions"} if context else OUTPUT_FIELDS
+    if set(item) != fields:
         errors.append("missing or unexpected output fields")
     category = item.get("category")
     if category not in CATEGORIES:
@@ -215,28 +260,43 @@ def _item_errors(item: dict, sample: dict) -> list[str]:
         errors.append("invalid novelty")
     if "prior_version" not in sample and item.get("novelty") != "unavailable":
         errors.append("novelty unavailable without prior_version")
-    evidence = item.get("evidence")
+    if context:
+        target = item.get("impact_object")
+        if not isinstance(target, str) or len(target) > 120 or (target and (
+            not target.strip() or not any(target in sample[field] for field in ("title", "summary"))
+        )):
+            errors.append("impact_object must be a bounded literal current-input object")
+        if direction in (-1, 1) and not (isinstance(target, str) and target.strip()):
+            errors.append("nonzero direction requires impact_object")
+        errors.extend(_citation_errors(item.get("key_conditions"), sample, label="key_conditions", current_only=True))
+    errors.extend(_citation_errors(item.get("evidence"), sample))
+    return errors
+
+
+def _citation_errors(evidence: object, sample: dict, *, label: str = "evidence",
+                     current_only: bool = False) -> list[str]:
+    errors = []
     if not isinstance(evidence, list) or not 1 <= len(evidence) <= 8:
-        errors.append("evidence must contain 1 to 8 citations")
+        errors.append(f"{label} must contain 1 to 8 citations")
         return errors
     for citation in evidence:
         if not isinstance(citation, dict) or set(citation) != {"field", "quote"}:
-            errors.append("invalid evidence citation")
+            errors.append(f"invalid {label} citation")
             continue
         field, quote = citation["field"], citation["quote"]
         source = None
         if field in ("title", "summary"):
             source = sample[field]
-        elif field in ("prior_version.title", "prior_version.summary"):
+        elif not current_only and field in ("prior_version.title", "prior_version.summary"):
             source = sample.get("prior_version", {}).get(field.split(".")[1])
         if not isinstance(quote, str) or not quote.strip() or not 2 <= len(quote) <= 600:
-            errors.append("invalid evidence quote")
+            errors.append(f"invalid {label} quote")
         elif not isinstance(source, str) or quote not in source:
-            errors.append("evidence quote not found in its declared source field")
+            errors.append(f"{label} quote not found in its declared source field")
     return errors
 
 
-def validate_response(raw: str | list, samples: list[dict]) -> dict:
+def validate_response(raw: str | list, samples: list[dict], *, protocol: str = SCHEMA_VERSION) -> dict:
     """Keep every expected sample in the denominator, including format failures.
 
     valid: accepted items in input order. invalid: expected IDs with reasons.
@@ -244,6 +304,7 @@ def validate_response(raw: str | list, samples: list[dict]) -> dict:
     Never turn transport or contract failures into the semantic insufficient class.
     """
     rows = _public_samples(samples)
+    context = _context_protocol(protocol)
     batch_errors = []
     if isinstance(raw, str):
         try:
@@ -274,13 +335,14 @@ def validate_response(raw: str | list, samples: list[dict]) -> dict:
             reasons = ["duplicate response id"]
             batch_errors.append(f"duplicate id: {sample['id']}")
         else:
-            reasons = _item_errors(items[0], sample)
+            reasons = _item_errors(items[0], sample, context=context)
         if reasons:
             invalid.append({"id": sample["id"], "reasons": reasons})
         else:
             valid.append(items[0])
     return {
-        "schema_version": SCHEMA_VERSION, "validator_version": VALIDATOR_VERSION,
+        "schema_version": CONTEXT_SCHEMA_VERSION if context else SCHEMA_VERSION,
+        "validator_version": CONTEXT_VALIDATOR_VERSION if context else VALIDATOR_VERSION,
         "ok": not (invalid or unexpected or batch_errors),
         "valid": valid, "invalid": invalid, "unexpected": unexpected, "batch_errors": batch_errors,
         "expected_count": len(rows), "valid_count": len(valid), "invalid_count": len(invalid),
