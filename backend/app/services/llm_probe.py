@@ -22,13 +22,16 @@ from __future__ import annotations
 import asyncio
 import contextlib
 import logging
-import time
+from time import monotonic
 from dataclasses import dataclass, field
 from typing import Any, Callable
 
 from app.core.config import settings
 from app.core.db import get_session_factory
-from app.core.llm_client import LLMError, LLMFailure, chat_completion_via_cli, hint_for
+from app.core.llm_client import (
+    LLMError, LLMFailure, chat_completion_via_cli, cli_health_observation, hint_for,
+    resolve_cli_path,
+)
 from app.models.alert import AlertRule
 from app.notifiers import get_notifier_registry
 from app.repositories.alert_repo import AlertRepository
@@ -60,6 +63,7 @@ def run_probe_call(model: str, cli_path: str, timeout: float) -> str:
         [{"role": "system", "content": _PROBE_SYSTEM}, {"role": "user", "content": _PROBE_USER}],
         cli_path=cli_path,
         timeout=timeout,
+        observe_health=False,
     )
 
 
@@ -87,10 +91,13 @@ class LlmProbe:
     model: str = ""
     alerts_fired: int = 0
     last_alert_at: str | None = None
+    health_source: str | None = None
+    last_health_at: str | None = None
     _last_epoch: float = field(default=0.0, repr=False)
     _last_ok: bool | None = field(default=None, repr=False)
     _last_alert_epoch: float = field(default=0.0, repr=False)
     _lock: asyncio.Lock | None = field(default=None, repr=False)
+    _target: tuple[str, str, str] | None = field(default=None, repr=False)
 
     def _lock_of(self) -> asyncio.Lock:
         if self._lock is None:
@@ -112,6 +119,8 @@ class LlmProbe:
             "probes": self.probes,
             "alerts_fired": self.alerts_fired,
             "last_alert_at": self.last_alert_at,
+            "health_source": self.health_source,
+            "last_health_at": self.last_health_at,
             "cached": cached,
             "config": {
                 "probe_interval_seconds": settings.llm_probe_interval_seconds,
@@ -133,7 +142,7 @@ class LlmProbe:
         if self._last_ok is None or not self._last_epoch:
             return False
         ttl = self.ok_ttl if self._last_ok else self.fail_ttl
-        return (time.monotonic() - self._last_epoch) < ttl
+        return (monotonic() - self._last_epoch) < ttl
 
     async def probe_once(
         self,
@@ -147,9 +156,17 @@ class LlmProbe:
         state 而不外抛——探针不是业务链路，它挂了不该影响调用方。
         """
         async with self._lock_of():
-            if not force and self._fresh():
-                return self.snapshot(cached=True)
             model, cli_path, provider = resolve_target()
+            target = (model, resolve_cli_path(cli_path) or cli_path, provider)
+            if target != self._target:
+                self._target = target
+                self._last_epoch = 0.0
+                self._last_ok = None
+                self.consecutive_failures = 0
+                self.last_ok_at = None
+                self.last_health_at = None
+                self.health_source = None
+                self.latency_ms = None
             self.model = model
             if not model or provider != "claude_cli":
                 # 未配置 / 非 CLI 后端：标 disabled 并保持，不消耗额度
@@ -159,14 +176,38 @@ class LlmProbe:
                     "未配置 review/news 的 *_llm_model"
                     if not model else f"provider={provider} 不在探针覆盖范围"
                 )
-                self._last_epoch = time.monotonic()
+                self._last_epoch = monotonic()
                 self._last_ok = False
                 return self.snapshot()
 
+            observed = cli_health_observation(model, cli_path)
+            if not force and observed and observed["epoch"] > self._last_epoch:
+                if observed["ok"] and monotonic() - observed["epoch"] < self.ok_ttl:
+                    self.state = "ok"
+                    self.health_source = "business_call"
+                    self.last_health_at = observed["at"]
+                    self.last_ok_at = observed["at"]
+                    self.last_failure_kind = None
+                    self.last_error = None
+                    self.consecutive_failures = 0
+                    self.latency_ms = None
+                    self._last_epoch = observed["epoch"]
+                    self._last_ok = True
+                    return self.snapshot(cached=True)
+                if not observed["ok"]:
+                    # A later failure invalidates cached success, not failure cooldown.
+                    if self._last_ok:
+                        self._last_epoch = 0.0
+                        self._last_ok = None
+            if not force and self._fresh():
+                return self.snapshot(cached=True)
+
             call = runner or run_probe_call
-            started = time.monotonic()
+            started = monotonic()
             self.probes += 1
             self.last_probe_at = beijing_now().isoformat(timespec="seconds")
+            self.health_source = "probe"
+            self.last_health_at = self.last_probe_at
             try:
                 reply = await asyncio.to_thread(call, model, cli_path, self.probe_timeout)
             except LLMError as exc:
@@ -178,7 +219,7 @@ class LlmProbe:
                 await self._maybe_alert()
                 return self.snapshot()
 
-            self.latency_ms = int((time.monotonic() - started) * 1000)
+            self.latency_ms = int((monotonic() - started) * 1000)
             if not isinstance(reply, str) or not reply.strip():
                 self._fail(LLMFailure.EMPTY.value, "探针收到空回复")
                 await self._maybe_alert()
@@ -188,7 +229,7 @@ class LlmProbe:
             self.last_failure_kind = None
             self.last_error = None
             self.consecutive_failures = 0
-            self._last_epoch = time.monotonic()
+            self._last_epoch = monotonic()
             self._last_ok = True
             log.info("[LLM-PROBE] ok model=%s latency=%sms", model, self.latency_ms)
             return self.snapshot()
@@ -198,7 +239,7 @@ class LlmProbe:
         self.last_failure_kind = kind
         self.last_error = detail
         self.consecutive_failures += 1
-        self._last_epoch = time.monotonic()
+        self._last_epoch = monotonic()
         self._last_ok = False
         log.warning("[LLM-PROBE] failed kind=%s detail=%s", kind, detail)
 
@@ -220,7 +261,7 @@ class LlmProbe:
             return
         if self.consecutive_failures < after:
             return
-        epoch = time.monotonic()
+        epoch = monotonic()
         if self._last_alert_epoch and (epoch - self._last_alert_epoch) < cooldown:
             log.info(
                 "llm probe alert suppressed by cooldown (%.0fs left)",
