@@ -367,7 +367,7 @@ Knowledge Base 不是收藏夹。
 - 因子、过滤器、排序器；
 - 场景/情境识别；
 - KB 结论与消费规则；
-- LLM/JEV/语义判断；
+- LLM/语义模型/语义判断；
 - 模型/能力路由；
 - 数据源优先级；
 - 风险/治理自动化；
@@ -433,7 +433,7 @@ owner
 - 检索/上下文成本；
 - 过期/适用域漂移。
 
-### LLM/JEV/路由
+### LLM/语义模型/路由
 
 - human gold / anchor recall；
 - FN/FP；
@@ -525,7 +525,7 @@ KB 的目标是**Evidence Memory**，不是百科全书。
 
 ---
 
-## 11. AI / LLM / JEV / Agent 使用纪律
+## 11. AI / LLM / 语义模型 / Agent 使用纪律
 
 ### 11.1 默认路由
 
@@ -534,7 +534,7 @@ KB 的目标是**Evidence Memory**，不是百科全书。
 ```text
 确定性规则 / 精确检索 / 缓存
         ↓ 不足
-小型 bounded semantic model / JEV
+小型 bounded semantic model
         ↓ 仍不足
 更强 LLM / ChatGPT / Codex / DeepSeek
         ↓

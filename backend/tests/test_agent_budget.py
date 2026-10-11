@@ -159,7 +159,7 @@ def test_unmetered_model_receipts_share_token_accounting_without_using_slots(sf)
         timeout_seconds=30, session_factory=sf,
     )
     b = ab.record_unmetered(
-        purpose="triage.jev", provider="jev", model="j", state="succeeded",
+        purpose="triage.auxiliary", provider="auxiliary", model="j", state="succeeded",
         usage={"input_tokens": 20, "output_tokens": 3}, attempts=2,
         timeout_seconds=8, session_factory=sf,
     )
@@ -390,9 +390,9 @@ def test_unknown_started_model_usage_blocks_both_consuming_scopes(sf, source, ta
     assert failed.value.code == "usage_unknown"
 
 
-def test_unknown_jev_telemetry_does_not_block_triage_or_autonomy(sf):
+def test_unknown_auxiliary_telemetry_does_not_block_triage_or_autonomy(sf):
     ab.record_unmetered(
-        purpose="triage.jev", provider="jev", model="fixture", state="failed",
+        purpose="triage.auxiliary", provider="auxiliary", model="fixture", state="failed",
         usage=None, attempts=1, error_kind="http_451", session_factory=sf,
     )
     for scope in [ab.SCOPE_AUTONOMY_LLM, ab.SCOPE_ALERT_TRIAGE_LLM]:

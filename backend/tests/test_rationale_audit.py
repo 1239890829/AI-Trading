@@ -7,7 +7,7 @@ from pathlib import Path
 import pytest
 
 spec = importlib.util.spec_from_file_location(
-    "rationale_audit", Path(__file__).parents[1] / "scripts" / "jev_rationale_audit.py")
+    "rationale_audit", Path(__file__).parents[1] / "scripts" / "rationale_audit.py")
 audit = importlib.util.module_from_spec(spec)
 spec.loader.exec_module(audit)
 

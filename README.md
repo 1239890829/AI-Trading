@@ -81,4 +81,4 @@ skills/         仓库随行技能：design-taste（**唯一权威视觉规范**
 - 情绪判定与误判复盘：[docs/strategy/sentiment.md](docs/strategy/sentiment.md)（含「历史误判案例库」）
 - 阶段总账与任务入口：[docs/retro-and-gaps.md](docs/retro-and-gaps.md#60-阶段索引)
 - 文档总入口：[docs/INDEX.md](docs/INDEX.md) · 计划去向：[docs/plan-registry.md](docs/plan-registry.md)
-- 其余按目录归类：system（API/WS/MCP/部署/数据契约）· product（产品闭环/功能审计）· strategy（策略/因子/风控/回测）· ai（Jev/持续演进）· review（复盘）· research（专题研究）
+- 其余按目录归类：system（API/WS/MCP/部署/数据契约）· product（产品闭环/功能审计）· strategy（策略/因子/风控/回测）· ai（语义判断/持续演进）· review（复盘）· research（专题研究）

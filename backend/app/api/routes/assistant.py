@@ -39,17 +39,14 @@ from __future__ import annotations
 import asyncio
 import json
 import logging
-import re
 import threading
 import time
 
-import anyio
 from pathlib import Path
 
 from fastapi import APIRouter, Depends, Request
 from fastapi.responses import StreamingResponse
 from pydantic import BaseModel, Field, field_validator
-from starlette.background import BackgroundTask
 
 from app.api.deps import require_write_token
 from app.assistant.cognition import describe_gap, looks_like_false_denial
@@ -77,53 +74,6 @@ router = APIRouter(tags=["assistant"])
 
 MAX_MESSAGES = 40
 MAX_CONTENT_CHARS = 8000
-
-_PUBLIC_VERIFY_TOOLS = {
-    "quotes", "orderbook", "trades", "auction", "kline", "minute",
-    "market_overview", "boards", "board_flow", "capital_flow",
-    "commodity", "climate", "limit_up", "limit_down", "limit_break",
-    "longhu", "hot", "anomaly", "sentiment", "themes", "theme_members",
-    "events", "news", "chain", "basics",
-}
-# Conservative privacy gate: if the user's request itself suggests personal portfolio/
-# account context, do not export the generated claim text even when public market
-# evidence is also present. False positives only cost a skipped shadow check.
-_PRIVATE_VERIFY_REQUEST_RE = re.compile(
-    r"(我的?(?:持仓|仓位|账户|自选|资产|盈亏)|"
-    r"(?:持仓|成本价|可用资金|账户余额|总资产|浮盈|浮亏|我持有|我买了|我卖了))"
-)
-
-
-def _run_assistant_semantic_verify(payload: dict) -> None:
-    """Background-only semantic verification; never changes the streamed answer."""
-    if not payload:
-        return
-    try:
-        from app.core.semantic_verify import verify_claims
-
-        claims = payload.get("claims") or []
-        evidence = payload.get("evidence") or []
-        result = verify_claims(
-            claims, evidence,
-            purpose="assistant_evidence_verify",
-            max_evidence_chars=int(payload.get("max_evidence_chars") or 12_000),
-        )
-        if result.get("ok"):
-            log.info(
-                "assistant semantic verify shadow claims=%s counts=%s model=%s latency_ms=%s",
-                len(result.get("items") or []),
-                result.get("counts"),
-                result.get("model"),
-                result.get("latency_ms"),
-            )
-        else:
-            log.info(
-                "assistant semantic verify skipped reason=%s",
-                result.get("reason"),
-            )
-    except Exception as exc:  # noqa: BLE001 - shadow verifier must never affect chat
-        log.info("assistant semantic verify unavailable: %s", type(exc).__name__)
-
 
 class ChatMessageIn(BaseModel):
     role: str
@@ -279,7 +229,6 @@ async def assistant_chat(req: ChatRequest, request: Request) -> StreamingRespons
     except Exception as exc:  # noqa: BLE001
         log.warning("assistant extra context skipped: %s", exc)
     combined_block = market_block + (("\n" + extra_block) if extra_block else "")
-    semantic_verify_payload: dict = {}
 
     async def _stream_round(messages: list[dict[str, str]], collect: bool, sink: list[str] | None = None):
         """Run one model round with executable I/O budgets and metadata-only usage accounting."""
@@ -370,30 +319,14 @@ async def assistant_chat(req: ChatRequest, request: Request) -> StreamingRespons
             "model": model,
             "sources": market_sources,
         })
-        from app.assistant.jev_tool_router import RouteTrace, available_tools
+        from app.assistant.tools.registry import available_tools
 
-        route_task: asyncio.Task | None = None
-        trace = None
         names_available = available_tools(tool_ctx) if tools_enabled else set()
-        route_mode = str(
-            getattr(settings, "jev_assistant_tool_mode", "off") or "off"
-        ).strip().lower()
-        # Dependency readiness is deterministic; Jev cannot add execution authority.
+        # Dependency readiness and execution authority remain deterministic.
         prompt_tool_names = names_available if tools_enabled else None
         tool_block: str | None = None
         used_tools: list[str] = []
         try:
-            if tools_enabled and route_mode in {"shadow", "cascade"}:
-                trace = RouteTrace(route_mode, names_available, req.messages[-1].content, usage_sf)
-                if len(req.messages) == 1:
-                    route_task = trace.start(req.messages[-1].content, req.page)
-                else:
-                    trace.route["reason"] = "history_not_exported"
-                if route_mode == "cascade" and route_task is not None:
-                    trace.route = await asyncio.shield(route_task)
-                    if trace.route.get("narrowed"):
-                        prompt_tool_names = set(trace.route["tools"]) & names_available
-                        trace.presented = set(prompt_tool_names)
             messages = _build_messages(
                 req, combined_block, tools_enabled=tools_enabled, tool_names=prompt_tool_names,
             )
@@ -424,7 +357,6 @@ async def assistant_chat(req: ChatRequest, request: Request) -> StreamingRespons
                 })
                 block, used = await run_tool_calls(
                     calls, tool_ctx, allowed_tools=names_available,
-                    receipts=trace.calls if trace is not None else None,
                 )
                 tool_block = f"{tool_block}\n\n{block}" if tool_block else block
                 used_tools.extend(used)
@@ -459,55 +391,6 @@ async def assistant_chat(req: ChatRequest, request: Request) -> StreamingRespons
                     log.warning("assistant grounding violations=%s", violations)
                     yield _sse({"type": "grounding", "violations": violations})
 
-            # Universal Verification (shadow-only first slice):
-            # - deterministic grounding remains first and cheapest;
-            # - if it already found a violation, do not spend another Jev call;
-            # - any extra_block disables semantic verification entirely because the
-            #   answer/claim itself may repeat positions/private project context;
-            # - any non-public used tool likewise disables the whole verifier round.
-            verify_mode = str(
-                getattr(settings, "jev_assistant_verify_mode", "off") or "off"
-            ).strip().lower()
-            private_context_present = bool(extra_block)
-            private_tool_present = bool(
-                used_tools and not set(used_tools).issubset(_PUBLIC_VERIFY_TOOLS)
-            )
-            private_request_present = bool(
-                _PRIVATE_VERIFY_REQUEST_RE.search(req.messages[-1].content)
-            )
-            if (
-                verify_mode == "shadow"
-                and not violations
-                and answer_text.strip()
-                and not private_context_present
-                and not private_tool_present
-                and not private_request_present
-            ):
-                from app.core.semantic_verify import select_verifiable_claims
-
-                public_evidence: list[str] = []
-                if market_block:
-                    public_evidence.append(market_block)
-                if tool_block and used_tools:
-                    public_evidence.append(tool_block)
-                claims = select_verifiable_claims(
-                    answer_text,
-                    max_claims=int(
-                        getattr(settings, "jev_assistant_verify_max_claims", 4)
-                    ),
-                )
-                if claims and public_evidence:
-                    semantic_verify_payload.update(
-                        claims=claims,
-                        evidence=public_evidence,
-                        max_evidence_chars=int(
-                            getattr(
-                                settings,
-                                "jev_assistant_verify_max_evidence_chars",
-                                12_000,
-                            )
-                        ),
-                    )
             # 认知缺口自曝（2026-09-11）：没调工具却声称"我没有这项数据"——
             # 大概率是工具覆盖缺口或提示词没说清，而非真的取不到。
             # 只留痕、不改答案：这是**信号**，日志累积起来就是一份自动产出的缺口清单。
@@ -527,13 +410,8 @@ async def assistant_chat(req: ChatRequest, request: Request) -> StreamingRespons
                 # 注：这里**刻意不发 SSE 事件**——新增事件类型属协议变更，
                 # 可能影响前端解析。可见化走议程证据（已有展示位），不改协议。
 
-            if trace is not None:
-                trace.terminal = "completed"
-                trace.false_denial = looks_like_false_denial(answer_text)
             yield _sse({"type": "done"})
         except asyncio.CancelledError:
-            if trace is not None:
-                trace.terminal = "disconnected"
             # 客户端断开（点了停止/关窗/跳页）：底层传输由 _stream_round 的 finally 关闭
             raise
         except LLMError as exc:
@@ -553,21 +431,10 @@ async def assistant_chat(req: ChatRequest, request: Request) -> StreamingRespons
             log.exception("assistant chat failed")
             yield _sse({"type": "error", "message": f"助手内部错误：{exc}"})
             yield _sse({"type": "done"})
-        finally:
-            # done was already yielded. Cleanup owns the actual HTTP worker until it exits;
-            # no cancellation pretends a synchronous thread has been killed.
-            if trace is not None:
-                with anyio.CancelScope(shield=True):
-                    await trace.finish(route_task)
-
     return StreamingResponse(
         event_stream(),
         media_type="text/event-stream",
         headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no"},
-        background=BackgroundTask(
-            _run_assistant_semantic_verify,
-            semantic_verify_payload,
-        ),
     )
 
 

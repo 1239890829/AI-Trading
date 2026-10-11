@@ -18,7 +18,7 @@ description: AI-Trading 的外部创新发现与准入前筛选 Skill；从最�
 4. `docs/plan-registry.md`
 5. `docs/INDEX.md`
 6. `docs/retro-and-gaps.md` 与真正相关的 `docs/stages/*`
-7. 与候选相关的专题蓝图、KB、策略/因子/数据登记；AI候选同时读 `docs/ai/jev-integration.md`；repo 类候选同时读 `docs/kb/05-repo-tracker.md`，避免重复评估已知项目
+7. 与候选相关的专题蓝图、KB、策略/因子/数据登记；AI候选同时读 `docs/ai/semantic-decisions.md`；repo 类候选同时读 `docs/kb/05-repo-tracker.md`，避免重复评估已知项目
 
 先知道现有能力和已否证方案，再去外部找，避免重复研究和“换名字重做”。
 
@@ -66,7 +66,7 @@ description: AI-Trading 的外部创新发现与准入前筛选 Skill；从最�
 
 每轮按任务需要覆盖，而不是机械全扫：
 
-- AI/LLM/Jev/Agent/Skill/MCP/协议；
+- AI/LLM/Agent/Skill/MCP/协议；
 - A股量化、选股、事件/题材、资金/筹码、市场状态、执行与风险；
 - 时间序列/金融基础模型；
 - 数据源与数据质量；
@@ -144,9 +144,9 @@ description: AI-Trading 的外部创新发现与准入前筛选 Skill；从最�
 
 WATCH/LAB 到达 `review_due` 后不得静默续期；必须重新核来源并继续、降级或 RETIRE。没有可用验证预算时，不新增半完成 LAB。
 
-## 7. Jev 的角色
+## 7. 外部语义判断的角色
 
-Jev 可以在候选很多时做 bounded：
+已准入的语义模型可在候选很多且有真实增量时做 bounded；不可用服务不调用：
 
 - 主题/用途分类；
 - 与现有任务的重复度判断；
@@ -154,7 +154,7 @@ Jev 可以在候选很多时做 bounded：
 - 多个真实候选的受限路由；
 - 证据→主张支持关系的旁路验证。
 
-Jev 不决定“是否采用某技术”，不把 confidence 当技术正确率或投资收益。确定性许可/版本/依赖/数值比较先由代码或原始事实处理；复杂技术取舍升级给 DeepSeek/Codex/ChatGPT，最后靠实验。
+模型不决定“是否采用某技术”，不把 confidence 当技术正确率或投资收益。确定性许可/版本/依赖/数值比较先由代码或原始事实处理；复杂技术取舍升级给 DeepSeek/Codex/ChatGPT，最后靠实验。
 保留有据弃权与分歧；研发共审回执、真实采用和业务效果分开。复用既有回执，不为证明模型参与而重复付费调用。
 
 ## 8. 量化/选股候选附加门

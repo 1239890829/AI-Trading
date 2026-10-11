@@ -113,9 +113,9 @@ def test_u49_proactive_discovery_guard_detects_missing_review_stage(tmp_path, mo
     (docs / "implementation-plan.md").write_text(
         "# AShare AI Trader 实施校准方案 v9.11\nU49 Proactive Discovery Gate U50 DEGRADED_FULL_CONTROL\n"
     )
-    (docs / "INDEX.md").write_text("v9.11 jev-integration.md U49 主动缺陷发现门 Preflight Review U50 降级全权闭环\n")
+    (docs / "INDEX.md").write_text("v9.11 semantic-decisions.md U49 主动缺陷发现门 Preflight Review U50 降级全权闭环\n")
     (docs / "handoff.md").write_text(
-        "v9.11 jev-integration.md U01–U50 U49 主动审计回执 Preflight Review U50 降级授权回执 DEGRADED_FULL_CONTROL\n"
+        "v9.11 semantic-decisions.md U01–U50 U49 主动审计回执 Preflight Review U50 降级授权回执 DEGRADED_FULL_CONTROL\n"
     )
     (docs / "plan-registry.md").write_text(
         "重大决策传播契约（防遗漏） 已更新 不适用 用户没问还有没有问题 DEGRADED_FULL_CONTROL DegradedRelease\n"
@@ -125,15 +125,15 @@ def test_u49_proactive_discovery_guard_detects_missing_review_stage(tmp_path, mo
     )
     (docs / "stages" / "w08-governance.md").write_text("Proactive Discovery Gate Preflight Review U50 DEGRADED_FULL_CONTROL DegradedRelease\n")
     (root / "AGENTS.md").write_text(
-        "v9.11 jev-integration.md U49 主动缺陷发现门 Preflight Review DEGRADED_FULL_CONTROL DegradedRelease\n"
+        "v9.11 semantic-decisions.md U49 主动缺陷发现门 Preflight Review DEGRADED_FULL_CONTROL DegradedRelease\n"
     )
     (root / "skills" / "living-system-governor" / "SKILL.md").write_text(
         "主动缺陷发现门（Proactive Discovery Gate） Preflight Review DEGRADED_FULL_CONTROL DegradedRelease\n"
     )
     (root / "skills" / "ashare-ledger-continue" / "SKILL.md").write_text(
         " ".join([
-            "jev-integration.md", "docs/handoff.md", "docs/INDEX.md", "docs/plan-registry.md",
-            "docs/implementation-plan.md", "docs/ai/jev-integration.md",
+            "semantic-decisions.md", "docs/handoff.md", "docs/INDEX.md", "docs/plan-registry.md",
+            "docs/implementation-plan.md", "docs/ai/semantic-decisions.md",
             "docs/retro-and-gaps.md", "docs/stages/", "U49 主动缺陷发现门", "Preflight", "Review", "DEGRADED_FULL_CONTROL", "DegradedRelease",
         ])
     )
@@ -201,18 +201,18 @@ def test_decision_propagation_detects_stale_current_pointer(tmp_path, monkeypatc
     (root / "skills" / "ashare-ledger-continue").mkdir(parents=True)
     (root / "skills" / "ashare-task-handoff").mkdir(parents=True)
 
-    (docs / "implementation-plan.md").write_text("# AShare AI Trader 实施校准方案 v9.4\nJev jev-integration.md\n")
-    (docs / "INDEX.md").write_text("v9.4 jev-integration.md\n")
-    (docs / "handoff.md").write_text("v9.4 jev-integration.md\n")
+    (docs / "implementation-plan.md").write_text("# AShare AI Trader 实施校准方案 v9.4\nJev semantic-decisions.md\n")
+    (docs / "INDEX.md").write_text("v9.4 semantic-decisions.md\n")
+    (docs / "handoff.md").write_text("v9.4 semantic-decisions.md\n")
     (docs / "plan-registry.md").write_text("重大决策传播契约（防遗漏） 已更新 不适用\n")
     (docs / "collaboration-workflow.md").write_text("plan-registry.md\n")
     for name in ("system-final-blueprint.md", "ai-evolution.md", "architecture-design.md"):
         (docs / "summary" / name).write_text("v9.4\n")
-    (root / "AGENTS.md").write_text("v9.3 jev-integration.md\n")
+    (root / "AGENTS.md").write_text("v9.3 semantic-decisions.md\n")
     (root / "skills" / "ashare-ledger-continue" / "SKILL.md").write_text(
         " ".join([
-            "jev-integration.md", "docs/handoff.md", "docs/INDEX.md", "docs/plan-registry.md",
-            "docs/implementation-plan.md", "docs/ai/jev-integration.md", "docs/retro-and-gaps.md", "docs/stages/"
+            "semantic-decisions.md", "docs/handoff.md", "docs/INDEX.md", "docs/plan-registry.md",
+            "docs/implementation-plan.md", "docs/ai/semantic-decisions.md", "docs/retro-and-gaps.md", "docs/stages/"
         ])
     )
     (root / "skills" / "ashare-task-handoff" / "SKILL.md").write_text("plan-registry.md\n")
@@ -231,17 +231,17 @@ def test_decision_propagation_auto_discovers_new_stale_current_summary(tmp_path,
     (root / "skills" / "ashare-ledger-continue").mkdir(parents=True)
     (root / "skills" / "ashare-task-handoff").mkdir(parents=True)
 
-    (docs / "implementation-plan.md").write_text("# AShare AI Trader 实施校准方案 v9.4\nJev jev-integration.md\n")
-    (docs / "INDEX.md").write_text("v9.4 jev-integration.md\n")
-    (docs / "handoff.md").write_text("v9.4 jev-integration.md\n")
+    (docs / "implementation-plan.md").write_text("# AShare AI Trader 实施校准方案 v9.4\nJev semantic-decisions.md\n")
+    (docs / "INDEX.md").write_text("v9.4 semantic-decisions.md\n")
+    (docs / "handoff.md").write_text("v9.4 semantic-decisions.md\n")
     (docs / "plan-registry.md").write_text("重大决策传播契约（防遗漏） 已更新 不适用\n")
     (docs / "collaboration-workflow.md").write_text("plan-registry.md\n")
     (docs / "summary" / "future-summary.md").write_text("> 当前方案为 ../implementation-plan.md v9.3\n")
-    (root / "AGENTS.md").write_text("v9.4 jev-integration.md\n")
+    (root / "AGENTS.md").write_text("v9.4 semantic-decisions.md\n")
     (root / "skills" / "ashare-ledger-continue" / "SKILL.md").write_text(
         " ".join([
-            "jev-integration.md", "docs/handoff.md", "docs/INDEX.md", "docs/plan-registry.md",
-            "docs/implementation-plan.md", "docs/ai/jev-integration.md", "docs/retro-and-gaps.md", "docs/stages/"
+            "semantic-decisions.md", "docs/handoff.md", "docs/INDEX.md", "docs/plan-registry.md",
+            "docs/implementation-plan.md", "docs/ai/semantic-decisions.md", "docs/retro-and-gaps.md", "docs/stages/"
         ])
     )
     (root / "skills" / "ashare-task-handoff" / "SKILL.md").write_text("plan-registry.md\n")
@@ -260,17 +260,17 @@ def test_decision_propagation_detects_reverse_target_chain_version(tmp_path, mon
     (root / "skills" / "ashare-ledger-continue").mkdir(parents=True)
     (root / "skills" / "ashare-task-handoff").mkdir(parents=True)
 
-    (docs / "implementation-plan.md").write_text("# AShare AI Trader 实施校准方案 v9.7\nJev jev-integration.md\n")
-    (docs / "INDEX.md").write_text("v9.7 jev-integration.md\n")
-    (docs / "handoff.md").write_text("v9.7 jev-integration.md\n")
+    (docs / "implementation-plan.md").write_text("# AShare AI Trader 实施校准方案 v9.7\nJev semantic-decisions.md\n")
+    (docs / "INDEX.md").write_text("v9.7 semantic-decisions.md\n")
+    (docs / "handoff.md").write_text("v9.7 semantic-decisions.md\n")
     (docs / "plan-registry.md").write_text("重大决策传播契约（防遗漏） 已更新 不适用\n")
     (docs / "collaboration-workflow.md").write_text("plan-registry.md\n")
     (docs / "summary" / "pick-signal-chain.md").write_text("> v9.5目标链见 ../implementation-plan.md\n")
-    (root / "AGENTS.md").write_text("v9.7 jev-integration.md\n")
+    (root / "AGENTS.md").write_text("v9.7 semantic-decisions.md\n")
     (root / "skills" / "ashare-ledger-continue" / "SKILL.md").write_text(
         " ".join([
-            "jev-integration.md", "docs/handoff.md", "docs/INDEX.md", "docs/plan-registry.md",
-            "docs/implementation-plan.md", "docs/ai/jev-integration.md", "docs/retro-and-gaps.md", "docs/stages/"
+            "semantic-decisions.md", "docs/handoff.md", "docs/INDEX.md", "docs/plan-registry.md",
+            "docs/implementation-plan.md", "docs/ai/semantic-decisions.md", "docs/retro-and-gaps.md", "docs/stages/"
         ])
     )
     (root / "skills" / "ashare-task-handoff" / "SKILL.md").write_text("plan-registry.md\n")
@@ -289,19 +289,19 @@ def test_decision_propagation_detects_stale_current_layer_version(tmp_path, monk
     (root / "skills" / "ashare-ledger-continue").mkdir(parents=True)
     (root / "skills" / "ashare-task-handoff").mkdir(parents=True)
 
-    (docs / "implementation-plan.md").write_text("# AShare AI Trader 实施校准方案 v9.7\nJev jev-integration.md\n")
-    (docs / "INDEX.md").write_text("v9.7 jev-integration.md\n")
-    (docs / "handoff.md").write_text("v9.7 jev-integration.md\n")
+    (docs / "implementation-plan.md").write_text("# AShare AI Trader 实施校准方案 v9.7\nJev semantic-decisions.md\n")
+    (docs / "INDEX.md").write_text("v9.7 semantic-decisions.md\n")
+    (docs / "handoff.md").write_text("v9.7 semantic-decisions.md\n")
     (docs / "plan-registry.md").write_text("重大决策传播契约（防遗漏） 已更新 不适用\n")
     (docs / "collaboration-workflow.md").write_text("plan-registry.md\n")
     (docs / "summary" / "architecture-design.md").write_text(
         "> 当前 AI/语义协处理层以 ../implementation-plan.md v9.5 为准\n"
     )
-    (root / "AGENTS.md").write_text("v9.7 jev-integration.md\n")
+    (root / "AGENTS.md").write_text("v9.7 semantic-decisions.md\n")
     (root / "skills" / "ashare-ledger-continue" / "SKILL.md").write_text(
         " ".join([
-            "jev-integration.md", "docs/handoff.md", "docs/INDEX.md", "docs/plan-registry.md",
-            "docs/implementation-plan.md", "docs/ai/jev-integration.md", "docs/retro-and-gaps.md", "docs/stages/"
+            "semantic-decisions.md", "docs/handoff.md", "docs/INDEX.md", "docs/plan-registry.md",
+            "docs/implementation-plan.md", "docs/ai/semantic-decisions.md", "docs/retro-and-gaps.md", "docs/stages/"
         ])
     )
     (root / "skills" / "ashare-task-handoff" / "SKILL.md").write_text("plan-registry.md\n")
@@ -324,10 +324,10 @@ def test_open_evolution_guard_rejects_star_hard_gate(tmp_path, monkeypatch):
 
     (docs / "implementation-plan.md").write_text(
         "# AShare AI Trader 实施校准方案 v9.5\n"
-        "Jev jev-integration.md continuous-evolution.md\n"
+        "Jev semantic-decisions.md continuous-evolution.md\n"
     )
-    (docs / "INDEX.md").write_text("v9.5 jev-integration.md continuous-evolution.md\n")
-    (docs / "handoff.md").write_text("v9.5 jev-integration.md continuous-evolution.md\n")
+    (docs / "INDEX.md").write_text("v9.5 semantic-decisions.md continuous-evolution.md\n")
+    (docs / "handoff.md").write_text("v9.5 semantic-decisions.md continuous-evolution.md\n")
     (docs / "plan-registry.md").write_text(
         "重大决策传播契约（防遗漏） 已更新 不适用 continuous-evolution.md\n"
     )
@@ -339,19 +339,19 @@ def test_open_evolution_guard_rejects_star_hard_gate(tmp_path, monkeypatch):
     (docs / "kb" / "05-repo-tracker.md").write_text(
         "Stars 只作成熟度/关注度弱信号\n5. **≥1000★ 硬门槛**保持\n"
     )
-    (root / "AGENTS.md").write_text("v9.5 jev-integration.md continuous-evolution.md\n")
+    (root / "AGENTS.md").write_text("v9.5 semantic-decisions.md continuous-evolution.md\n")
     (root / "skills" / "ashare-ledger-continue" / "SKILL.md").write_text(
         " ".join([
             "docs/handoff.md", "docs/INDEX.md", "docs/plan-registry.md",
             "docs/implementation-plan.md", "docs/ai/continuous-evolution.md",
-            "docs/ai/jev-integration.md", "docs/retro-and-gaps.md", "docs/stages/"
+            "docs/ai/semantic-decisions.md", "docs/retro-and-gaps.md", "docs/stages/"
         ])
     )
     (root / "skills" / "ashare-task-handoff" / "SKILL.md").write_text("plan-registry.md\n")
     (root / "skills" / "ashare-innovation-radar" / "SKILL.md").write_text(
         " ".join([
             "docs/ai/continuous-evolution.md", "docs/plan-registry.md",
-            "docs/retro-and-gaps.md", "docs/stages/", "docs/ai/jev-integration.md"
+            "docs/retro-and-gaps.md", "docs/stages/", "docs/ai/semantic-decisions.md"
         ])
     )
     monkeypatch.setattr(mod, "ROOT", root)
@@ -373,10 +373,10 @@ def test_open_evolution_guard_requires_governance_owner(tmp_path, monkeypatch):
 
     (docs / "implementation-plan.md").write_text(
         "# AShare AI Trader 实施校准方案 v9.5\n"
-        "Jev jev-integration.md continuous-evolution.md\n"
+        "Jev semantic-decisions.md continuous-evolution.md\n"
     )
     for name in ("INDEX.md", "handoff.md"):
-        (docs / name).write_text("v9.5 jev-integration.md continuous-evolution.md\n")
+        (docs / name).write_text("v9.5 semantic-decisions.md continuous-evolution.md\n")
     (docs / "plan-registry.md").write_text(
         "重大决策传播契约（防遗漏） 已更新 不适用 continuous-evolution.md\n"
     )
@@ -386,19 +386,19 @@ def test_open_evolution_guard_requires_governance_owner(tmp_path, monkeypatch):
     (docs / "kb" / "05-repo-tracker.md").write_text(
         "Stars 只作成熟度/关注度弱信号\n取消 ≥1000★ 硬门槛\n"
     )
-    (root / "AGENTS.md").write_text("v9.5 jev-integration.md continuous-evolution.md\n")
+    (root / "AGENTS.md").write_text("v9.5 semantic-decisions.md continuous-evolution.md\n")
     (root / "skills" / "ashare-ledger-continue" / "SKILL.md").write_text(
         " ".join([
             "docs/handoff.md", "docs/INDEX.md", "docs/plan-registry.md",
             "docs/implementation-plan.md", "docs/ai/continuous-evolution.md",
-            "docs/ai/jev-integration.md", "docs/retro-and-gaps.md", "docs/stages/"
+            "docs/ai/semantic-decisions.md", "docs/retro-and-gaps.md", "docs/stages/"
         ])
     )
     (root / "skills" / "ashare-task-handoff" / "SKILL.md").write_text("plan-registry.md\n")
     (root / "skills" / "ashare-innovation-radar" / "SKILL.md").write_text(
         " ".join([
             "docs/ai/continuous-evolution.md", "docs/plan-registry.md",
-            "docs/retro-and-gaps.md", "docs/stages/", "docs/ai/jev-integration.md"
+            "docs/retro-and-gaps.md", "docs/stages/", "docs/ai/semantic-decisions.md"
         ])
     )
     monkeypatch.setattr(mod, "ROOT", root)
