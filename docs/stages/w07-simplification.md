@@ -11,7 +11,7 @@
 ## IMP-090
 
 - **任务**：AI健康探针无头会话与重复检查收敛
-- **状态**：进行中
+- **状态**：已完成
 - **优先级**：P1
 - **阶段门**：G2
 - **门内序**：114
@@ -24,7 +24,9 @@
 - **主动反证**：CLI不支持参数不得静默回退持久化；测试时钟不能冻结事件循环；观察键漂移、并发副本、失败冷却与只读GET、健康来源/计数语义、后台在途操作和旧会话重新导入。
 - **恢复**：按本项Git差异回滚代码；聊天可取消归档。保留业务数据库、源日志、UI恢复包与模型配置。
 - **证据**：最终后端4947 passed/83 skipped/1 StarletteDeprecationWarning（175.24s），pyflakes通过；离线假CLI对子进程持久化反例控制有效，原OK回复保留；旁路记录故障不改变业务成功/原错误。652条确认的后台ping已归档，源日志保留；近期50条无ping。Jev baseline/final均HTTP451，无评分。首次生产鉴权污染与文档漏字段批保留，明确测试local/空token且补齐治理字段后重新全量通过，生产鉴权与断言不改。前端隔离副本tsc/eslint、默认/UTC各112文件1012项及Next16.3.3构建通过；证据根artifacts/runs/quiet-llm-probe-20261011。
-- **下一步**：按准确HEAD发布并在确认无在途操作后加载，验证真实探针不生成新会话；工程门禁和652条历史归档已完成。
+- **发布与运行**：[PR #253](https://github.com/1239890829/AI-Trading/pull/253)准确HEAD 71263d30b5ad1accbae9452d357bd0299c14b8b4、主代码9b489fc4，经[DegradedRelease](https://github.com/1239890829/AI-Trading/pull/253#issuecomment-6106571343)、CI38120636274 attempt1三job及release_check放行，match-head合并为27bcf7d5ebc1b50400f73a103e96773082a4c2e1（2026-10-11T07:18:38Z）；post-merge CI38120933217三job completed/success。确认在途任务、待发消息/未完成尝试、未终态模型用量均0后正常TERM旧8000，后端PID41443从已发布源码无reload加载；3000前端PID8157/build sW3ONH-epZJoX5SroTTpF保留。自然启动探针15:19:35+08:00 ok/4372ms/probes1/alerts0；从该时刻至读取无新建或修改的项目CLI会话JSONL，未归档backend ping=0，providers/工作台/代理health均200。市场health degraded照实保留，不称数据全新。源码manifest无漂移，未强制模型或probe端点取得证据。
+- **清理与边界**：主体本地/远端分支已清，隔离前端复制源/依赖/构建目录已删除，紧凑日志/XML/JSON与真实服务/源会话/业务数据/UI恢复包保留。仅同步CLI业务健康、元数据进程内复用；流式/HTTP/跨进程不冒充覆盖。未来节省量随自然业务发生，未报告收益或成本。Jev451仍为辅助缺口，作者自检不称独立审核。
+- **下一步**：本项已发布并运行生效；本轮仅按自身准确HEAD发布同任务文档闭环，不领取第二业务任务。若出现新ping先核源调用时间/来源和是否为修复前旧会话导入；新反例回原owner重开，保留原故障检测。
 
 ## IMP-089
 
