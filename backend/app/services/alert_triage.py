@@ -22,7 +22,6 @@ from __future__ import annotations
 
 import asyncio
 import contextlib
-import hashlib
 import json
 import logging
 from typing import Any
@@ -31,7 +30,7 @@ from datetime import timedelta
 from sqlalchemy import func, select
 
 from app.core.db import get_session_factory
-from app.models.agent import AgentAudit, AgentTriage
+from app.models.agent import AgentTriage
 from app.models.alert import AlertEvent, AlertRule
 from app.core.bjtime import BJ_TZ, beijing_now_naive
 
@@ -44,17 +43,6 @@ COOLDOWN_MINUTES = 30
 RECENT_LIMIT = 5
 
 _VERDICTS = ("notify", "ignore", "escalate")
-
-_JEV_CRITERIA = {
-    "notify": "需要用户现在看到：与持仓/自选直接相关，或是明确趋势/风险变化；一般级重要性。",
-    "ignore": "重复、噪音、幅度很小、过时或对用户决策没有可解释影响。",
-    "escalate": "影响面大或系统性异常，不只是普通提醒，应进入任务中心进一步处理。",
-}
-_JEV_REASON = {
-    "notify": "Jev结构化判读：值得提醒",
-    "ignore": "Jev结构化判读：噪音/重复，可忽略",
-    "escalate": "Jev结构化判读：影响面较大，升级处理",
-}
 
 _SYSTEM_PROMPT = (
     "你是 A 股盘中告警判读助手。给定一条系统告警事件与当下环境，判断它值不值得提醒用户。\n"
@@ -125,70 +113,6 @@ def _event_context(event: AlertEvent, session_factory) -> dict:
         "relationship": relationship,
         "event_time": event.triggered_at.isoformat() if event.triggered_at else None,
         "last_hour_same_rule": len(recent),
-    }
-
-
-async def _jev_verdict(ctx: dict) -> dict | None:
-    """Jev 三分类前置层；失败/非法返回 None，调用方继续 DeepSeek/规则路径。"""
-    from app.core.config import settings
-    from app.core.jev_client import evaluate
-
-    mode = str(getattr(settings, "jev_alert_triage_mode", "off") or "off").strip().lower()
-    if mode not in {"shadow", "cascade"}:
-        return None
-    questions = {
-        "verdict": {
-            "type": "choice",
-            "instructions": {
-                "task": "根据告警事件与上下文，选择本系统应如何处理该提醒。",
-                "rules": [
-                    "只判断提醒优先级，不给买卖建议。",
-                    "若证据不足，不要把普通提醒升级为系统性异常。",
-                    "重复、过时或决策无关的信息应 ignore。",
-                ],
-            },
-            "criteria": _JEV_CRITERIA,
-        }
-    }
-
-    def _call() -> dict:
-        return evaluate(ctx, questions, purpose="alert_triage")
-
-    worker = asyncio.create_task(asyncio.to_thread(_call))
-    try:
-        # The adapter owns the HTTP deadline. Do not release a shadow slot while
-        # a timed-out to_thread worker is still running in the executor.
-        result = await asyncio.shield(worker)
-    except asyncio.CancelledError:
-        # Cancellation is cooperative: keep the slot occupied until synchronous
-        # HTTP work really drains. Otherwise a restart can spawn another worker.
-        await asyncio.shield(worker)
-        raise
-    except Exception as exc:  # noqa: BLE001 — 增强层故障不得拖垮告警
-        log.info("alert triage jev unavailable: %s", type(exc).__name__)
-        return None
-    if not result.get("ok"):
-        return None
-    answer = (result.get("answers") or {}).get("verdict")
-    if not isinstance(answer, dict):
-        return None
-    verdict = str(answer.get("choice") or "").strip().lower()
-    confidence = answer.get("confidence")
-    probabilities = answer.get("probabilities")
-    if verdict not in _VERDICTS or type(confidence) not in (int, float):
-        return None
-    if not 0.0 <= float(confidence) <= 1.0 or not isinstance(probabilities, dict):
-        return None
-    if set(probabilities) != set(_VERDICTS):
-        return None
-    if (any(type(p) not in (int, float) or not 0.0 <= p <= 1.0 for p in probabilities.values())
-            or abs(sum(probabilities.values()) - 1.0) > max(0.001, .0051 * len(_VERDICTS))):
-        return None
-    return {
-        "verdict": verdict,
-        "confidence": float(confidence),
-        "model": str(result.get("model") or "jev"),
-        "latency_ms": float(result.get("latency_ms") or 0.0),
     }
 
 
@@ -346,62 +270,6 @@ def _already_recent(event: AlertEvent, session_factory) -> bool:
     return False
 
 
-# One in-flight comparison, no queue: a slow shadow call cannot accumulate
-# workers or hold up the baseline triage loop. Only metadata is persisted.
-_shadow_task: asyncio.Task | None = None
-
-
-def _shadow_receipt(event_id, ctx, baseline, recommendation, state, sf):
-    try:
-        with sf() as db:
-            db.add(AgentAudit(
-                actor="scheduler", action="triage.shadow", target=str(event_id),
-                before=json.dumps({
-                    "contract": "triage-shadow-v1", "input_sha256": hashlib.sha256(
-                        json.dumps(ctx, sort_keys=True, ensure_ascii=False).encode()
-                    ).hexdigest(),
-                    "baseline": {k: baseline[k] for k in ("verdict", "model")},
-                }, ensure_ascii=False),
-                after=json.dumps({"state": state, "recommendation": recommendation,
-                                  "adopted": False, "reason": "shadow_only"}, ensure_ascii=False),
-            ))
-            db.commit()
-    except Exception:  # audit enhancement must not invalidate a saved reminder
-        log.exception("triage shadow receipt failed for event %s", event_id)
-
-
-def _schedule_shadow(event_id, ctx, baseline, sf):
-    global _shadow_task
-    if _shadow_task is not None and not _shadow_task.done():
-        _shadow_receipt(event_id, ctx, baseline, None, "skipped_busy", sf)
-        return
-
-    async def compare():
-        from app.core.jev_client import record_comparison
-        recommendation = None
-        try:
-            recommendation = await _jev_verdict(ctx)
-            if recommendation is not None:
-                record_comparison("alert_triage", recommendation["verdict"],
-                                  baseline["verdict"], confidence=recommendation["confidence"])
-        except asyncio.CancelledError:
-            _shadow_receipt(event_id, ctx, baseline, None, "canceled", sf)
-            raise
-        except Exception:
-            log.exception("triage shadow failed for event %s", event_id)
-        _shadow_receipt(event_id, ctx, baseline, recommendation,
-                        "compared" if recommendation is not None else "unavailable", sf)
-
-    _shadow_task = asyncio.create_task(compare(), name="triage-shadow")
-
-
-async def drain_shadow():
-    """Shutdown waits for the adapter-bounded worker; cancellation is not a kill."""
-    task = _shadow_task
-    if task is not None:
-        await asyncio.shield(task)
-
-
 async def triage_event(event: AlertEvent, session_factory=None) -> dict | None:
     """判读单条事件并落库。已有判读则返回既有结论（幂等）。"""
     sf = session_factory or get_session_factory()
@@ -446,57 +314,23 @@ async def _triage_event(event: AlertEvent, sf) -> dict | None:
         if _already_recent(event, sf):
             return _save(event.id, "ignore", "同类事件在冷却窗口内已提醒（去重）", "rules", sf)
 
-    # 2) Jev 低成本结构化判读（默认 shadow，不改变用户可见行为）。
+    # 2) 已知运行故障由规则提示；其余使用既有模型判读。
     ctx = _event_context(event, sf)
     if ctx["condition"] in {"llm_gateway_probe", "ths_reason_sentinel"}:
         return _save(event.id, "notify", "系统运行状态提醒：" + (ctx["text"] or ctx["condition"]), "rules", sf)
-    from app.core.config import settings
-    from app.core.jev_client import record_comparison
-
-    mode = str(getattr(settings, "jev_alert_triage_mode", "off") or "off").strip().lower()
-    jev = await _jev_verdict(ctx) if mode == "cascade" else None
-    if mode == "cascade" and jev is not None:
-        min_conf = float(getattr(settings, "jev_alert_triage_accept_confidence", 0.90))
-        if float(jev["confidence"]) >= min_conf:
-            verdict = str(jev["verdict"])
-            reason = f"{_JEV_REASON[verdict]}（置信 {float(jev['confidence']):.2f}）"
-            if verdict in ("notify", "escalate"):
-                with contextlib.suppress(Exception):
-                    note = _response_note(event, sf)
-                    if note:
-                        reason = f"{reason}｜{note}"
-            return _save(event.id, verdict, reason, "jev", sf)
-
-    # 3) DeepSeek 复杂判读：Jev 低置信/不可用，或 shadow 模式一律继续。
     failure: dict[str, str] = {}
     got = await _llm_verdict(ctx, sf, failure)
     if got is None:
-        result = _save(event.id, "notify", _fallback_reason(failure.get("kind")),
-                       "llm_fallback", sf)
-        if mode == "shadow":
-            _schedule_shadow(event.id, ctx, result, sf)
-        return result
+        return _save(event.id, "notify", _fallback_reason(failure.get("kind")),
+                     "llm_fallback", sf)
     verdict, reason = got
-    if jev is not None:
-        record_comparison(
-            "alert_triage",
-            str(jev["verdict"]),
-            verdict,
-            confidence=float(jev["confidence"]),
-        )
-        log.info(
-            "alert triage Jev comparison mode=%s agree=%s confidence=%.3f",
-            mode, str(jev["verdict"]) == verdict, float(jev["confidence"]),
-        )
-    # 4) 响应建议（P1-5 盘中回路，只读）：notify/escalate 追加题材上下文与观察指引
+    # 3) 响应建议（P1-5 盘中回路，只读）：notify/escalate 追加题材上下文与观察指引
     if verdict in ("notify", "escalate"):
         with contextlib.suppress(Exception):
             note = _response_note(event, sf)
             if note:
                 reason = f"{reason}｜{note}"
     result = _save(event.id, verdict, reason, "llm", sf)
-    if mode == "shadow":
-        _schedule_shadow(event.id, ctx, result, sf)
     return result
 
 
@@ -709,4 +543,3 @@ async def triage_loop(stop: asyncio.Event, interval: float = 30.0) -> None:
         if _triage_inflight:
             await asyncio.gather(*(asyncio.shield(task) for task in list(_triage_inflight.values())),
                                  return_exceptions=True)
-        await drain_shadow()

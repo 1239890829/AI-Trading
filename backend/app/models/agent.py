@@ -96,7 +96,7 @@ class AgentTriage(Base):
 
     verdict：`notify`=值得提醒（进悬浮球）/ `ignore`=噪音，不上界面 /
     `escalate`=升级，进任务中心待办。
-    model：`llm`=DeepSeek 大模型判读 / `jev`=经校准阈值放行的 Jev 结构化判读 /
+    model：`llm`=DeepSeek 大模型判读 /
     `rules`=确定性规则（冷却去重等）/ `llm_fallback`=LLM 不可用，按规则提醒
     （界面必须显式标注来源，不伪装成其它模型判断）。
 

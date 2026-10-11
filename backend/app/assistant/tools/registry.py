@@ -246,7 +246,7 @@ def tool_label(name: str) -> str:
 
 
 def tool_manifest(allowed_names: set[str] | None = None) -> str:
-    """给提示词的工具清单；可由 Jev 只缩展示面，不改变执行白名单。"""
+    """给提示词的工具清单；按真实依赖筛选展示面，不改变执行白名单。"""
     allowed = None if allowed_names is None else set(allowed_names)
     if allowed is not None:
         unknown = allowed - set(TOOL_SPECS)
@@ -267,3 +267,21 @@ def tool_manifest(allowed_names: set[str] | None = None) -> str:
             continue
         lines.append(f"- {{{{tool:{spec.name}|{spec.params}}}}} → {spec.desc}")
     return "\n".join(lines)
+
+
+# Availability describes installed dependencies, not data freshness or upstream health.
+_DB_TOOLS = {"positions", "watchlist", "picks", "minute_decisions", "events",
+             "sentiment", "alert_events", "review", "param_changes", "agent_tasks"}
+
+
+def available_tools(ctx) -> set[str]:
+    names = set(TOOL_SPECS)
+    if ctx.session_factory is None:
+        names -= _DB_TOOLS
+    for name, dependency in (("paper", "paper_engine"), ("news", "event_store"),
+                             ("theme_members", "theme_catalog")):
+        if getattr(ctx, dependency, None) is None:
+            names.discard(name)
+    if ctx.hub is None and ctx.snapshot_service is None:
+        names.discard("market_overview")
+    return names

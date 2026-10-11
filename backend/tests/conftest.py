@@ -45,15 +45,6 @@ for _switch_env in SCHEDULER_SWITCH_ENV_VARS:
 os.environ["ASHARE_REVIEW_MODEL"] = "rules"
 os.environ["ASHARE_NEWS_MODEL"] = "rules"
 os.environ["ASHARE_LLM_PROVIDER"] = "openai"
-# TypeSafe/Jev 也是外部网络增强层：本机 Keychain 会把 TYPESAFE_API_KEY 注入新 shell，
-# 因此测试必须显式关掉；专项测试通过 monkeypatch + 假 _post 验证，不得碰真实 API。
-os.environ["ASHARE_JEV_ENABLED"] = "false"
-os.environ["ASHARE_JEV_USAGE_LOG_ENABLED"] = "false"
-os.environ["ASHARE_JEV_ALERT_TRIAGE_MODE"] = "off"
-os.environ["ASHARE_JEV_EVENT_AUX_MODE"] = "off"
-os.environ["ASHARE_JEV_ASSISTANT_TOOL_MODE"] = "off"
-os.environ["ASHARE_JEV_ASSISTANT_VERIFY_MODE"] = "off"
-
 # 本机 .env / Keychain 里的真实飞书目标也必须从测试进程剥离。CI 通常没有这些
 # 凭据，因此不显式清空会形成“CI 离线、本机却真发请求”的环境依赖；通知专项
 # 测试自行构造 notifier/凭据，不依赖生产秘密。

@@ -1,6 +1,6 @@
 ---
 name: ashare-ledger-continue
-description: AI-Trading 新会话接手、上下文恢复与账本继续的唯一入口；只从最新 master 的权威文档定位方案、Jev、阶段任务和下一动作，不依赖长期功能分支。
+description: AI-Trading 新会话接手、上下文恢复与账本继续的唯一入口；只从最新 master 的权威文档定位方案、语义判断、阶段任务和下一动作，不依赖长期功能分支。
 ---
 
 # 账本接续 / 项目接手
@@ -15,14 +15,14 @@ description: AI-Trading 新会话接手、上下文恢复与账本继续的唯�
 
 始终先以最新 `master` 为共享事实源，按顺序读取：
 
-1. `AGENTS.md`：红线、角色、发布与 Jev 边界；
+1. `AGENTS.md`：红线、角色、发布与模型边界；
 2. `docs/handoff.md`：当前模式、当前现场、最近重大变化；
 3. `docs/INDEX.md`：权威入口与文档定位；
 4. `docs/plan-registry.md`：文档权责、历史取代关系、重大决策传播契约；
 5. `docs/implementation-plan.md`：当前总方案与长期取舍；
 6. `docs/ai/continuous-evolution.md`：长期开放世界发现、筛选与准入前治理；
 7. `docs/product/product-closure-design.md`、`docs/product/hunting-decision-design.md`、`docs/product/feature-closure-audit.md`：产品/选股/细功能目标；若 INDEX/方案/stage 指向 `docs/research/limit-up-dragon-research.md`，同轮读取该历史涨停/龙头研究蓝图；
-8. `docs/ai/jev-integration.md`：Jev 当前唯一专题蓝图；
+8. `docs/ai/semantic-decisions.md`：语义判断当前唯一专题蓝图；
 9. `docs/retro-and-gaps.md` §5.9/§6.0 → 先读取 G0–G5/GX 阶段门治理，再扫描 W00–W09 活动任务的 ID/状态/阶段门/门内序/门禁角色/优先级/依赖/效果前置/下一步；随后只深入当前门的实际候选 `docs/stages/*`；
 10. 只有 handoff/stage 指向某个施工分支或 PR 时，才进一步读取该分支/提交/CI 作为实现证据。
 
@@ -35,7 +35,7 @@ description: AI-Trading 新会话接手、上下文恢复与账本继续的唯�
 - 当前 master / 当前模式；
 - 当前总方案版本与最重要的长期原则；
 - 最近几轮已进入主干的重大变化；
-- Jev 当前允许做什么、禁止做什么、有哪些证据门未过；
+- 语义判断当前允许做什么、禁止做什么、有哪些证据门未过；
 - 当前 P0/P1 的真实未完成/待条件事项；
 - 是否已有网页明确派工、准确任务 ID 与验收；
 - 下一候选切片是什么、为什么；若用户只是询问/审阅则只汇报候选；若用户在 Codex 端**明确调用本 Skill 并说“继续任务/继续”**，按 §3 的动态选刀规则把这句话视为“授权连续完成一个最高优先级可开工主任务及其内部切片”，但不得自动领取第二个业务任务。
@@ -69,7 +69,7 @@ description: AI-Trading 新会话接手、上下文恢复与账本继续的唯�
 3. 初次明确派工可实施；需修改只做限定整改；真实阻塞停止依赖该条件的动作，继续同任务独立可做项。重复通知不重做，同一工作区不并行写。
 4. 新提交、未推送回填、归属不明改动或版本不一致先核实；不 reset/clean，不覆盖前任成果，不丢未合分支。
 5. 发现新的模型、工具链、架构、产品语义、协作或治理决策时，必须按 `docs/plan-registry.md` §1.1 做**传播核对**：列出受影响权威面已更新项和不适用项/理由。只更新专题蓝图不算完成。跨模块长期取舍可用 `living-system-governor` 的 Context Snapshot、竞争方案、falsifier 与 KEEP/FIX/MERGE/EXPERIMENT/WATCH/RETIRE 协议辅助审计，但最终调度与状态仍只认总账/stage。
-6. Jev 只用于 bounded 语义判断/验证或条件能力路由；确定性金融规则、权限、撮合、风控、时间/数值计算和真实执行不得委托。human gold 未完成前不宣称 accuracy、不调生产阈值。
+6. 外部语义服务只有准入后才用于 bounded 语义判断/验证或条件能力路由；确定性金融规则、权限、撮合、风控、时间/数值计算和真实执行不得委托。human gold 未完成前不宣称 accuracy、不调生产阈值。
 7. 完成后按 `ashare-task-handoff` 回填同一阶段任务、证据与 handoff 指针，提交/推送并核到远端；未推送不说已交付。
 8. 本地验证、网页独立审核、准确版本 CI 和运行加载分开。额度不足不试探、不换付费 API；平台安全拒绝不绕过。
 

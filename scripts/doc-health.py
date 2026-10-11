@@ -43,7 +43,7 @@
                  **判定面 = git 跟踪清单**（= CI 检出内容），不是本地文件系统
                  ——否则回收站副本会把死引用持续"喂绿"（2026-09-12 修正，见 `_repo_basenames`、KB-ENG-70）
   K 表格分隔行   以 `|` 开头的**行块首行**，其下一行必须是 GFM 分隔行（`|---|---|`）。
-  R 重大决策传播  当前总方案版本、Jev 现役蓝图、INDEX/AGENTS/handoff/接手 Skill 等根入口必须一致；
+  R 重大决策传播  当前总方案版本、语义判断现役蓝图、INDEX/AGENTS/handoff/接手 Skill 等根入口必须一致；
                  防止“专题已升级而总方案或接手入口仍停在旧版本”。
                  动机 = §6.14 的渲染器死循环事故：`docs/` 里曾用**空行给同一张表分组**，
                  在严格 GFM 下必然打碎。渲染器那半已有 `markdown-view.test.tsx` 守住，
@@ -1642,16 +1642,16 @@ def check_decision_propagation() -> list[str]:
                     )
                     break
 
-    jev_surfaces = (
+    semantic_surfaces = (
         DOCS / "implementation-plan.md",
         DOCS / "INDEX.md",
         DOCS / "handoff.md",
         ROOT / "AGENTS.md",
         ROOT / "skills/ashare-ledger-continue/SKILL.md",
     )
-    for path in jev_surfaces:
-        if "jev-integration.md" not in _read(path):
-            errors.append(f"{path.relative_to(ROOT)}：缺 Jev 现役蓝图入口")
+    for path in semantic_surfaces:
+        if "semantic-decisions.md" not in _read(path):
+            errors.append(f"{path.relative_to(ROOT)}：缺语义判断现役蓝图入口")
 
     registry = _read(DOCS / "plan-registry.md")
     if "重大决策传播契约（防遗漏）" not in registry or "已更新" not in registry or "不适用" not in registry:
@@ -1746,7 +1746,7 @@ def check_decision_propagation() -> list[str]:
         "docs/INDEX.md",
         "docs/plan-registry.md",
         "docs/implementation-plan.md",
-        "docs/ai/jev-integration.md",
+        "docs/ai/semantic-decisions.md",
         "docs/retro-and-gaps.md",
         "docs/stages/",
     )
@@ -1793,7 +1793,7 @@ def check_decision_propagation() -> list[str]:
                 "docs/plan-registry.md",
                 "docs/retro-and-gaps.md",
                 "docs/stages/",
-                "docs/ai/jev-integration.md",
+                "docs/ai/semantic-decisions.md",
             ):
                 if token not in radar_text:
                     errors.append(f"skills/ashare-innovation-radar/SKILL.md：雷达读取链缺 {token}")
@@ -2418,7 +2418,7 @@ def main() -> int:
             print(f"       docs/{rel}（顶层分类目录未登记）")
     line("P 阶段索引", not phase_index_errors, f"{len(phase_index_errors)} 处错误（总账 ⇄ 十阶段）")
     line("Q 任务完整性", not phase_task_errors, f"{len(phase_task_errors)} 处错误（唯一状态、依赖、证据及旧号去向）")
-    line("R 重大决策传播", not propagation_errors, f"{len(propagation_errors)} 处错误（方案版本、Jev入口、Skill读取链）")
+    line("R 重大决策传播", not propagation_errors, f"{len(propagation_errors)} 处错误（方案版本、语义判断入口、Skill读取链）")
     line("S 阶段门治理", not stage_gate_errors, f"{len(stage_gate_errors)} 处错误（G门/顺位/角色/硬依赖/效果前置）")
     if not quiet:
         for message in phase_index_errors + phase_task_errors + propagation_errors + stage_gate_errors:

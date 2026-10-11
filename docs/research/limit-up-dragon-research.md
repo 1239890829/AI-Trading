@@ -1,10 +1,12 @@
 # 历史涨停、强势连板与龙头形成研究蓝图 v1
 
+> **2026-10-11 Jev退出更正**：用户要求删除不可用Jev；本文件旧Jev采用、强制评分、模型/插件维护和未来接入承诺已被取代。现役[规则／已有LLM与候选决策服务](../ai/semantic-decisions.md)保留通用业务/证据/人工gold/风控/发布能力，Jev专属子范围退出；下文历史实测不删除，不能当当前调用义务。退出状态只归W07/IMP-091。
+
 > **定位**：把历史涨停、强势连板、空间板、龙头与题材梯队当作高信息密度的研究样本，研究“首板或首次走强当天已知什么、哪些变化值得继续跟踪、哪些只是事后解释”。不要求在起爆前预知赢家；重点是首板当天、次日续强和调整后再启动时及时识别候选。本文定义研究问题、样本、特征、Jev 分工、验证协议和向猎场回流的边界；唯一任务状态归 `docs/stages/w04-research.md#rsh-031`。
 >
 > **不是**：追涨停说明书、赢家故事库、固定龙头评分器、Jev 预测器，也不是第二套选股/策略登记册。
 >
-> **关联**：[猎场决策](../product/hunting-decision-design.md)｜[题材与情绪方法论](../strategy/theme-sentiment-methodology.md)｜[新题材预判](../strategy/theme-prediction.md)｜[Jev 蓝图](../ai/jev-integration.md)｜[策略登记](../strategy/strategy-registry.md)｜[因子治理](../strategy/factor-lifecycle-governance.md)｜[W04 研究阶段](../stages/w04-research.md)
+> **关联**：[猎场决策](../product/hunting-decision-design.md)｜[题材与情绪方法论](../strategy/theme-sentiment-methodology.md)｜[新题材预判](../strategy/theme-prediction.md)｜[Jev 蓝图](../archive/jev-integration-retired-20261011.md)｜[策略登记](../strategy/strategy-registry.md)｜[因子治理](../strategy/factor-lifecycle-governance.md)｜[W04 研究阶段](../stages/w04-research.md)
 > **现行裁决**：见 [§36](#36-首板当天怎样进入候选并识别跟随机会2026-09-29)。§32 把未做完的机制与提前识别研究误写成整项完成，已由 §33 纠正；§1–13 的完整效果协议仍约束未来具体候选。
 
 ## 1. 为什么值得单独研究
@@ -401,7 +403,7 @@ IMP-049 统一 Opportunity / scenario evidence
 - 本文拥有：**历史涨停/强连板/龙头研究的样本、问题、验证和 Jev 研究分工**。
 - `../product/hunting-decision-design.md` 拥有：如何把已准入证据用于开放情境、机会状态与前台呈现。
 - `../strategy/theme-sentiment-methodology.md` / `../strategy/theme-prediction.md`：提供既有题材/梯队假设和历史规则基线；其中经验阈值不是本文结论。
-- `../ai/jev-integration.md`：拥有 Jev 全局调用规则、gold、预算与验证边界。
+- `../archive/jev-integration-retired-20261011.md`：拥有 Jev 全局调用规则、gold、预算与验证边界。
 - `../strategy/factor-lifecycle-governance.md` / `../strategy/strategy-registry.md`：拥有因子/完整策略生命周期。
 - `stages/w04-research.md`：拥有 RSH-031 唯一状态、依赖、验收和执行证据。
 

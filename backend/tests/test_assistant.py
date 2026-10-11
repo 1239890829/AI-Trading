@@ -655,109 +655,6 @@ def test_chat_route_grounding_silent_when_supported(client, monkeypatch):
     assert evs[-1] == {"type": "done"}
 
 
-def test_chat_semantic_verify_shadow_runs_for_public_market_evidence(client, monkeypatch):
-    """Universal verifier may run only when the answer was built from public evidence."""
-    captured = []
-    monkeypatch.setattr(settings, "jev_assistant_verify_mode", "shadow")
-    monkeypatch.setattr(
-        assistant_routes,
-        "_open_stream",
-        lambda msgs: _FakeStream(["贵州茅台现价 1500.5 元。"]),
-    )
-    _mock_snapshot(client, monkeypatch)
-    monkeypatch.setattr(assistant_routes, "_build_extra_context", lambda _req: "")
-    monkeypatch.setattr(
-        assistant_routes,
-        "_run_assistant_semantic_verify",
-        lambda payload: captured.append(dict(payload)),
-    )
-
-    resp = client.post("/api/assistant/chat", json={
-        "messages": [{"role": "user", "content": "贵州茅台现在多少？"}],
-    })
-    evs = _parse_sse(resp.text)
-    assert evs[-1] == {"type": "done"}
-    assert len(captured) == 1
-    assert captured[0]["claims"] == ["贵州茅台现价 1500.5 元"]
-    assert "1500.5" in "\n".join(captured[0]["evidence"])
-
-
-def test_chat_semantic_verify_skips_when_private_extra_context_exists(client, monkeypatch):
-    """Claim text itself can reveal private context, so any private extra block disables export."""
-    captured = []
-    monkeypatch.setattr(settings, "jev_assistant_verify_mode", "shadow")
-    monkeypatch.setattr(
-        assistant_routes,
-        "_open_stream",
-        lambda msgs: _FakeStream(["贵州茅台现价 1500.5 元。"]),
-    )
-    _mock_snapshot(client, monkeypatch)
-    monkeypatch.setattr(
-        assistant_routes,
-        "_build_extra_context",
-        lambda _req: "PRIVATE_POSITION_CONTEXT_SHOULD_NOT_LEAVE_PROCESS",
-    )
-    monkeypatch.setattr(
-        assistant_routes,
-        "_run_assistant_semantic_verify",
-        lambda payload: captured.append(dict(payload)),
-    )
-
-    resp = client.post("/api/assistant/chat", json={
-        "messages": [{"role": "user", "content": "贵州茅台现在多少？"}],
-    })
-    assert _parse_sse(resp.text)[-1] == {"type": "done"}
-    assert captured == [{}]
-
-
-def test_chat_semantic_verify_skips_when_request_itself_is_private(client, monkeypatch):
-    """User-provided portfolio/account wording can leak through the generated claim."""
-    captured = []
-    monkeypatch.setattr(settings, "jev_assistant_verify_mode", "shadow")
-    monkeypatch.setattr(
-        assistant_routes,
-        "_open_stream",
-        lambda msgs: _FakeStream(["贵州茅台现价 1500.5 元。"]),
-    )
-    _mock_snapshot(client, monkeypatch)
-    monkeypatch.setattr(assistant_routes, "_build_extra_context", lambda _req: "")
-    monkeypatch.setattr(
-        assistant_routes,
-        "_run_assistant_semantic_verify",
-        lambda payload: captured.append(dict(payload)),
-    )
-
-    resp = client.post("/api/assistant/chat", json={
-        "messages": [{"role": "user", "content": "我的持仓贵州茅台现在多少？"}],
-    })
-    assert _parse_sse(resp.text)[-1] == {"type": "done"}
-    assert captured == [{}]
-
-
-def test_chat_semantic_verify_skips_when_deterministic_grounding_already_failed(client, monkeypatch):
-    """Do not pay Jev twice when deterministic grounding already proves a violation."""
-    captured = []
-    monkeypatch.setattr(settings, "jev_assistant_verify_mode", "shadow")
-    monkeypatch.setattr(
-        assistant_routes,
-        "_open_stream",
-        lambda msgs: _FakeStream(["贵州茅台现价 1888.8 元。"]),
-    )
-    _mock_snapshot(client, monkeypatch)
-    monkeypatch.setattr(
-        assistant_routes,
-        "_run_assistant_semantic_verify",
-        lambda payload: captured.append(dict(payload)),
-    )
-
-    resp = client.post("/api/assistant/chat", json={
-        "messages": [{"role": "user", "content": "贵州茅台现在多少？"}],
-    })
-    evs = _parse_sse(resp.text)
-    assert [e for e in evs if e.get("type") == "grounding"]
-    assert captured == [{}]
-
-
 def test_chat_route_grounding_skipped_without_evidence(client, monkeypatch):
     """没有注入任何数据时跳过校验（无基准即校验=全盘误杀，宁缺勿滥）。
 
@@ -1339,69 +1236,17 @@ def test_chat_output_budget_blocks_delta_before_user_and_records_failed_receipt(
     assert rows[0]["output_chars"] == 4
 
 
-
-def test_shadow_done_is_yielded_before_slow_worker_drains(monkeypatch):
-    import asyncio
-    import threading
-    from types import SimpleNamespace
-    from app.assistant import jev_tool_router as jr
-    from app.assistant.tools import ToolContext
-    started, release = threading.Event(), threading.Event()
-    captured = []
-    def slow_route(*a):
-        started.set()
-        assert release.wait(3)
-        return {"ok": False, "reason": "test", "tools": ["quotes"]}
-    async def context(*a):
-        return ToolContext(provider=object())
-    monkeypatch.setattr(settings, "assistant_tools_enabled", True)
-    monkeypatch.setattr(settings, "jev_assistant_tool_mode", "shadow")
-    monkeypatch.setattr(settings, "jev_assistant_verify_mode", "off")
-    monkeypatch.setattr(assistant_routes, "_tool_context", context)
-    monkeypatch.setattr(assistant_routes, "_entity_payload", lambda *a: {"stocks": []})
-    monkeypatch.setattr(assistant_routes, "_build_extra_context", lambda *a: "")
-    monkeypatch.setattr(assistant_routes, "_open_stream", lambda *a: _FakeStream(["依据不足。 "]))
-    monkeypatch.setattr(jr, "route_tool_groups", slow_route)
-    monkeypatch.setattr(jr.RouteTrace, "save", lambda trace: captured.append(trace.terminal))
-    async def scenario():
-        req = assistant_routes.ChatRequest(messages=[{"role": "user", "content": "看看现在"}])
-        response = await assistant_routes.assistant_chat(req, SimpleNamespace())
-        stream = response.body_iterator
-        async for chunk in stream:
-            if '"type": "done"' in chunk:
-                break
-        assert await asyncio.to_thread(started.wait, 1)
-        assert not release.is_set() and captured == []
-        close = asyncio.create_task(stream.aclose())
-        await asyncio.sleep(0)
-        assert not close.done()
-        release.set()
-        await close
-        assert captured == ["completed"]
-        assert not jr._ROUTE_SLOT.locked()
-    try:
-        asyncio.run(scenario())
-    finally:
-        release.set()
-
-
-def test_cascade_shortlist_does_not_grant_unavailable_execution(client, monkeypatch):
-    from app.assistant import jev_tool_router as jr
+def test_dependency_manifest_does_not_grant_unavailable_execution(client, monkeypatch):
     from app.assistant.tools import ToolContext, TOOL_SPECS, ToolSpec
-    captured, messages = [], []
+    messages = []
     async def context(*a):
         return ToolContext(provider=object())
     async def forbidden(*a, **k):
         pytest.fail("unavailable account dependency must be rejected before dispatch")
     monkeypatch.setattr(settings, "assistant_tools_enabled", True)
-    monkeypatch.setattr(settings, "jev_assistant_tool_mode", "cascade")
-    monkeypatch.setattr(settings, "jev_assistant_verify_mode", "off")
     monkeypatch.setattr(assistant_routes, "_tool_context", context)
     monkeypatch.setattr(assistant_routes, "_build_extra_context", lambda *a: "")
     monkeypatch.setitem(TOOL_SPECS, "paper", ToolSpec("paper", "", "", forbidden))
-    monkeypatch.setattr(jr, "route_tool_groups", lambda text, page, allowed: {
-        "ok": True, "narrowed": True, "tools": ["quotes"], "baseline": sorted(allowed), "reason": "test"})
-    monkeypatch.setattr(jr.RouteTrace, "save", lambda trace: captured.append(trace))
     def stream(msgs):
         messages.append(msgs)
         return _FakeStream(["{{tool:paper}}"] if len(messages) == 1 else ["账户工具不可用。 "])
@@ -1410,30 +1255,3 @@ def test_cascade_shortlist_does_not_grant_unavailable_execution(client, monkeypa
     assert _parse_sse(resp.text)[-1] == {"type": "done"}
     assert "{{tool:quotes|" in messages[0][0]["content"]
     assert "{{tool:paper|" not in messages[0][0]["content"]
-    assert captured[0].calls == [{"tool": "paper", "state": "unavailable"}]
-    assert captured[0].terminal == "completed"
-
-
-
-def test_followup_uses_original_manifest_without_exporting_private_history(client, monkeypatch):
-    from app.assistant import jev_tool_router as jr
-    from app.assistant.tools import ToolContext
-    captured = []
-    async def context(*a):
-        return ToolContext(provider=object())
-    monkeypatch.setattr(settings, "assistant_tools_enabled", True)
-    monkeypatch.setattr(settings, "jev_assistant_tool_mode", "cascade")
-    monkeypatch.setattr(settings, "jev_assistant_verify_mode", "off")
-    monkeypatch.setattr(assistant_routes, "_tool_context", context)
-    monkeypatch.setattr(assistant_routes, "_build_extra_context", lambda *a: "")
-    monkeypatch.setattr(assistant_routes, "_open_stream", lambda *a: _FakeStream(["需要补充数据。 "]))
-    monkeypatch.setattr(jr, "evaluate", lambda *a, **k: pytest.fail("followup must not export chat history"))
-    monkeypatch.setattr(jr.RouteTrace, "save", lambda trace: captured.append(trace))
-    resp = client.post("/api/assistant/chat", json={"messages": [
-        {"role": "user", "content": "PRIVATE_POSITION_HISTORY"},
-        {"role": "assistant", "content": "已了解。"},
-        {"role": "user", "content": "再分析一下"},
-    ]})
-    assert _parse_sse(resp.text)[-1] == {"type": "done"}
-    assert captured[0].route["reason"] == "history_not_exported"
-    assert captured[0].presented == captured[0].baseline

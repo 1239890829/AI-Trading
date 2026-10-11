@@ -7,7 +7,7 @@ import sqlite3
 
 import pytest
 
-from scripts import jev_goldset as gs
+from scripts import semantic_goldset as gs
 
 
 def _db(path: Path) -> None:
@@ -217,79 +217,10 @@ def test_blind_import_rejects_changed_text_missing_and_partial_labels(tmp_path):
 
 
 
-def _fake_evaluate(state, questions, *, purpose, model):
-    answers = {}
-    for qid in questions:
-        idx = int(qid.rsplit("_", 1)[1])
-        if qid.startswith("category_"):
-            answers[qid] = {
-                "type": "choice",
-                "choice": "policy",
-                "confidence": 0.9,
-                "probabilities": {
-                    "policy": 0.9,
-                    "statement": 0.02,
-                    "data": 0.02,
-                    "rumor": 0.02,
-                    "corporate": 0.02,
-                    "other": 0.02,
-                },
-            }
-        elif qid.startswith("certainty_"):
-            answers[qid] = {
-                "type": "choice",
-                "choice": "done",
-                "confidence": 0.8,
-                "probabilities": {"done": 0.8, "proposed": 0.1, "rumor": 0.1},
-            }
-        else:
-            answers[qid] = {
-                "type": "noul",
-                "noul": 0.8 if idx % 2 == 0 else 0.2,
-            }
-    return {
-        "ok": True,
-        "model": model,
-        "answers": answers,
-        "usage": {"input_tokens": 321, "output_tokens": 44},
-        "latency_ms": 10,
-    }
 
 
-def test_predict_jev_batches_without_mutating_human_labels(tmp_path):
-    db = tmp_path / "x.db"
-    _db(db)
-    rows = gs._load_events(db)[:2]
-    before = json.loads(json.dumps(rows))
-    predictions, meta = gs.predict_jev(
-        rows,
-        model="jev-test",
-        batch_size=2,
-        evaluate_fn=_fake_evaluate,
-    )
-    assert rows == before
-    assert [p["event_id"] for p in predictions] == [1, 2]
-    assert predictions[0]["category"] == "policy"
-    assert predictions[0]["actionable"] is True
-    assert predictions[1]["actionable"] is False
-    assert predictions[0]["actionable_noul"] == 0.8
-    assert meta["calls"] == 1
-    assert meta["input_tokens"] == 321
-    assert meta["models_returned"] == {"jev-test": 1}
 
 
-def test_predict_jev_rejects_invalid_choice_probabilities(tmp_path):
-    db = tmp_path / "x.db"
-    _db(db)
-    rows = gs._load_events(db)[:1]
-
-    def bad(state, questions, *, purpose, model):
-        out = _fake_evaluate(state, questions, purpose=purpose, model=model)
-        out["answers"]["category_0"]["probabilities"]["other"] = 0.5
-        return out
-
-    with pytest.raises(ValueError, match="rounding tolerance"):
-        gs.predict_jev(rows, evaluate_fn=bad)
 
 
 def test_prioritize_review_puts_disagreement_and_uncertainty_first():
@@ -350,50 +281,9 @@ def test_prioritize_review_puts_disagreement_and_uncertainty_first():
     assert ranked[0]["priority_score"] > ranked[1]["priority_score"]
 
 
-def test_predict_cli_does_not_leave_partial_outputs_on_failure(tmp_path, monkeypatch):
-    queue = tmp_path / "queue.jsonl"
-    out = tmp_path / "predictions.jsonl"
-    meta = tmp_path / "meta.json"
-    gs.write_jsonl(queue, [{
-        "event_id": 1,
-        "reference_rule": {"category": "data", "certainty": "done", "actionable": False},
-        "human": {"category": None, "certainty": None, "actionable": None, "notes": ""},
-    }])
-
-    def fail(*_args, **_kwargs):
-        raise RuntimeError("synthetic prelabel failure")
-
-    monkeypatch.setattr(gs, "predict_jev", fail)
-    with pytest.raises(RuntimeError, match="synthetic prelabel failure"):
-        gs.main([
-            "predict-jev", str(queue),
-            "--out", str(out),
-            "--meta", str(meta),
-        ])
-    assert not out.exists()
-    assert not meta.exists()
 
 
 
-def test_parse_choice_allows_bounded_two_decimal_rounding_drift():
-    answer = {
-        "choice": "policy",
-        "confidence": 0.9,
-        # Sum = 0.99. This is compatible with independent two-decimal rounding
-        # across six labels and must not make a real Jev batch unusable.
-        "probabilities": {
-            "policy": 0.80,
-            "statement": 0.05,
-            "data": 0.04,
-            "rumor": 0.03,
-            "corporate": 0.04,
-            "other": 0.03,
-        },
-    }
-    choice, confidence, probs = gs._parse_choice(answer, gs.CATEGORY_CRITERIA)
-    assert choice == "policy"
-    assert confidence == 0.9
-    assert sum(probs.values()) == pytest.approx(0.99)
 
 
 
@@ -453,8 +343,8 @@ def test_validate_prediction_meta_binds_exact_queue(tmp_path):
     gs.atomic_write_json(meta, {
         "queue_sha256": gs.file_sha256(queue),
         "prediction_rows": 1,
-        "model_requested": "jev-test",
-        "models_returned": {"jev-test": 1},
+        "model_requested": "candidate-test",
+        "models_returned": {"candidate-test": 1},
     })
     out = gs.validate_prediction_meta(queue, preds, meta)
     assert out["queue_sha256"] == gs.file_sha256(queue)

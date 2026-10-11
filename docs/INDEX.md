@@ -56,7 +56,8 @@
 | **FN-07** | `system/data-dictionary.md` | L2 | 数据 | 数据对象审计字段约定（source/quality） |
 | **FN-08** | `archive/picks-replay-baseline.md` | L1 | 快照 | 精选 60 日回放基线（08-31 评审指名保留）。**时点快照，只读** |
 | **FN-09** | `system/llm-gateway-probe.md` | L2 | 运维 | LLM 网关健康探针（`claude_cli` 别名监控） |
-| **FN-10** | `ai/jev-integration.md` | L2 | AI/Agent 架构 | Jev 唯一现役蓝图及已批附录 A：全系统应用裁定、事件→机会理由试点、真实决策可视化、模型/插件更新与各消费者降级；§23.5给条件路由/执行回执与效果边界，§29.7给shadow发布顺序与原理由冻结命令/缺证边界；任务状态仍只归所属 stage |
+| **FN-10** | `archive/jev-integration-retired-20261011.md` | L2 | 历史档案 | 已退役Jev蓝图与历史实测；不得作为当前调用/安装/评分义务，现役入口为FN-12 |
+| **FN-12** | `ai/semantic-decisions.md` | L2 | AI/Agent 架构 | 当前规则/已有LLM路径、Jev退出范围、通用人工gold与OpenAI Decisions候选的证据/费用/准入边界；状态归W07/IMP-091 |
 | **FN-11** | `system/runtime-performance.md` | L2 | 性能测量 | IMP-019 可复现入口、全尝试对照及冷启动/DB/WS/Canvas覆盖；受控与现场证据分开，条件变化才重验 |
 | **EX-01** | `archive/live-trading-guosen-plan.md` | L1 | 搁置历史 | 国信 miniQMT 实盘蓝图。**用户已搁置**（不接受 Windows 依赖），恢复条件见文档头 |
 | **RV-01** | `review/review-agent.md` | L2 | 复盘 | 盘后复盘 Agent 架构 |
@@ -89,7 +90,7 @@
 | `data/` | 当前数据源接入、能力对比与选型 |
 | `product/` | 产品闭环、细功能审计、猎场/呈现设计 |
 | `strategy/` | 策略、因子、回测、风控、情绪与题材方法论 |
-| `ai/` | Jev、Agent 能力与开放世界持续演进 |
+| `ai/` | 语义判断、Agent能力与开放世界持续演进 |
 | `review/` | 复盘 Agent、SOP、执行清单 |
 | `research/` | 仍需实证/盲测的专题研究蓝图 |
 | `kb/` / `summary/` / `stages/` | 知识唯一权威 / 主题汇总 / 任务唯一状态 |
@@ -150,7 +151,7 @@
 | **T4 选股与策略** | `product/hunting-decision-design.md` → `kb/00-INDEX.md` 选股表 | 历史涨停/龙头研究 `research/limit-up-dragon-research.md` · `summary/stock-strategy.md` · `strategy/strategy-registry.md` · `strategy/factor-lifecycle-governance.md` + `strategy/factor-candidates.md` | **示例 ≠ 规范**；赢家复盘≠预测能力；策略/因子落地**必须先过点时全分母、OOS/前向和成本实证**；回测禁令见 `strategy/backtest-rules.md` |
 | **T5 复盘与治理** | 复盘 `kb/06-review-framework.md`；执行治理 `retro-and-gaps.md` §5.9/§6.0 | `plan-registry.md` §1.1/§1.3 · `collaboration-workflow.md` · `handoff.md` · `kb/07` · `kb/11` | W只管归属、G0–G5管门序、P0–P2管门内重要性；硬依赖未完成不得跨门；任务只在 stage 单点维护 |
 | **T6 前端与 UI** | `summary/architecture-design.md`（§1 跨页面联动设计） | `product/ui-audit-20261003.md` · `system/architecture.md` · `kb/03-engineering.md` · `skills/ui-state-verify/SKILL.md` · `skills/canvas-chart-verify/SKILL.md` | **验收以实际渲染为准**，截图、DOM、Canvas、数值与源码各证其范围；**新增页面/板块需先论证**；U54/U55按任务比较inline/Drawer/Modal与大画布；旧KB-ENG-92为历史，不固定所有详情形态 |
-| **T7 外部工具与技能** | `ai/continuous-evolution.md` → `skills/ashare-innovation-radar/SKILL.md` | `ai/jev-integration.md` · 本表 **WB-04** · `system/llm-gateway-probe.md` | 外部热度只产候选；先许可/隐私/费用/权限硬门与证据梯度，未经 owner stage 不安装/准入 |
+| **T7 外部工具与技能** | `ai/continuous-evolution.md` → `skills/ashare-innovation-radar/SKILL.md` | `ai/semantic-decisions.md` · 本表 **WB-04** · `system/llm-gateway-probe.md` | 外部热度只产候选；先许可/隐私/费用/权限硬门与证据梯度，未经 owner stage 不安装/准入 |
 | **T8 决策与"为什么当初这么定"** | `kb/04-decisions.md`（KB-DEC） | `archive/ledger-transition-20260917.md` · `implementation-plan.md` | 既有决定可依新证据和最新授权复核；保留取代关系与依据，不据历史标题锁死设计 |
 | **T9 提醒与通知链路** | `summary/pick-signal-chain.md`（**先读它**：历史定位/断点；§10 模拟动作；§11 通知读侧；§12 其余来源事件与投递） | `services/alert_triage.py`（判读闸门）· `api/routes/notifications.py`（通知收口）· `picks/watcher.py::dispatch_alert`（watcher 汇聚点）· `picks/source_events.py`（非 watcher 来源）· `services/push_policy.py` | **收敛口径时必须回扫自称该口径的注释**（`IMP-028` 遗留 5 处过期断言，见该文 §G4）；**判读闸门现状只作用于悬浮球**（§G1）；改通知来源须同步 §3.1 规则清单及 §12 |
 | **T10 跨模块长期治理 / 重大重构** | `skills/living-system-governor/SKILL.md` → `implementation-plan.md` §6/§6.2 → `retro-and-gaps.md` §5.9 | `ai/continuous-evolution.md` · `plan-registry.md` · W08/GOV-027 · 对应领域登记册/专题 | 先恢复真实上下文，运行主动缺陷发现门，再比较 KEEP/FIX/MERGE/EXPERIMENT/WATCH/RETIRE；Skill 只提供上层治理协议，不自创任务状态、不越阶段门、不替代领域 owner |
@@ -337,7 +338,7 @@
 
 ## 7. U52–U55确认后的产品入口
 
-总方案v9.13记录批准取舍；product/product-closure-design.md定义B/C任务导航、前后台、组件与六闭环；product/feature-closure-audit.md保存50项/18域去向，原批准73源/30声明为历史基线；§13–14现行机械盘点76份生产TSX/31条调度声明；ai/jev-integration.md附录B区分研发共审/业务凭证。批准来源、Skill传播及未验边界见RV-09。
+总方案v9.13记录批准取舍；product/product-closure-design.md定义B/C任务导航、前后台、组件与六闭环；product/feature-closure-audit.md保存50项/18域去向，原批准73源/30声明为历史基线；§13–14现行机械盘点76份生产TSX/31条调度声明；ai/semantic-decisions.md定义现役语义边界，退役档案附录B仅保留历史共审/业务凭证设计。批准来源、Skill传播及未验边界见RV-09。
 Governor短入口连接按需手册、决策卡与历史示例；设计/状态/Canvas/选型/雷达/对账/接续/健康Skills随PR #172同步。技能文本与引用检查的实际结果见RV-09及PR回执；宿主加载、真实UI/Canvas和业务效果仍按原stage验收。阶段状态与顺位不由下载报告或导航命名替代。
 
 

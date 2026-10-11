@@ -1,5 +1,7 @@
 # W04 点时研究与策略验证
 
+> **2026-10-11 Jev退出更正**：用户要求删除不可用Jev；本文件旧Jev采用、强制评分、模型/插件维护和未来接入承诺已被取代。现役[规则／已有LLM与候选决策服务](../ai/semantic-decisions.md)保留通用业务/证据/人工gold/风控/发布能力，Jev专属子范围退出；下文历史实测不删除，不能当当前调用义务。退出状态只归W07/IMP-091。
+
 > 定位：最终融合方案的阶段任务文档；由 [总账 §6.0](../retro-and-gaps.md#60-阶段索引) 唯一索引。任务状态只在本页更新。
 > 调度：本页 W 编号只表示领域归属；实际施工必须按 [总账 §5.9](../retro-and-gaps.md#59-阶段门优先级与跨阶段治理) 的“阶段门 → 门禁角色 → P0/P1/P2 → 门内序 → 硬依赖/效果前置”。页面上下顺序不是施工授权。
 
@@ -79,7 +81,6 @@
 - **依赖**：BUG-028, BUG-029, BUG-026, IMP-006
 - **效果前置**：无
 - **方案依据**：用户本轮选股核心要求；v9.3 基线 + v9.8/U47 增量；hunting-decision-design全文，产品闭环§3–6。
-- **U51 Jev 承接子范围（2026-09-24 已批；沿本任务原状态/门序/优先级）**：P1/G2：在原开放多轴机会/版本契约中预留 optional 语义理由、引用/反证/unknown 与新事实待重评身份；先用确定性召回和候选基线核残余歧义。Jev 只做已获准有限判断，不能让 G2 契约等待 G4 接线或把研究分用于默认排序。 方案与反例见 [Jev 附录 A](../ai/jev-integration.md#附录-a-2026-09-24-已批准的全系统应用可视化与维护方案v04)。
 - **范围**：复用picks的盘前、lurk/rps、intraday/relay/radar、gate/执行与events/KB接口；先明确统一读模型，再实现驱动/结构/角色/环境/时点/执行域的开放情境，不另建并行评分系统。
 - **验收**：观察、触发、可执行与实际 shadow fill 分离；本片各情境有成立/反例/缺失，多假设冲突及未知情境保留；旧盘前/盘中口径保留；无有效进入区间不伪造；同一机会和 decision version 可流至 UI/通知/IMP-053 shadow/复盘；盘中可随新事实生成后续版本，早盘未通过不等于全天永久拒绝；相同前缀不变，独立证据不重复加分。
 - **证据**：2026-09-30 已实现 opportunity-view-v1，只读投影原运行头/决定快照和研究观察；同股开放多假设、通知原 decision/version/进入条件、依据/反证/KB/unknown、回放引用、最新零行覆盖及来源失败分层已接既有台账消费者。GET 冷热不写样本，后台来源快照归档、同版价格/风险与台账失败重试已验。原 54b7e0c 恢复指针当前 Git 不可解析；只依据实证补 theme_gate_counts，未盲 cherry-pick。定向134 passed，最终新契约13 passed；完整后端4564 passed/81 skipped、pyflakes通过。前端与发布准确结果归 handoff/PR 回执；浏览器仅隔离合成，未称实源。契约/边界见 hunting-decision-design §4.2。
@@ -146,8 +147,7 @@
 - **门禁角色**：非阻断
 - **依赖**：无
 - **效果前置**：无
-- **方案依据**：docs/ai/jev-integration.md §29。
-- **U51 Jev 承接子范围（2026-09-24 已批；沿本任务原状态/门序/优先级）**：P1/G3：保留既有 240 条事件 strict human gold；事件修订、引用支持、公司业务直接性另立题型与独立人工样本。规则/现有 LLM/Jev+fallback 同任务比较关键错漏、覆盖、弃权、延迟和完整成本；模型预测不得写 human，也不沿用旧阈值给新模型。 方案与反例见 [Jev 附录 A](../ai/jev-integration.md#附录-a-2026-09-24-已批准的全系统应用可视化与维护方案v04)。
+- **方案依据**：docs/archive/jev-integration-retired-20261011.md §29。
 - **范围**：固定事件队列、独立人工标签、规则/Jev/现有 LLM/fallback 对照，以及 TypeSafe 与更贵模型 token/调用量、延迟和质量的同条件度量；不把 agreement 写成 accuracy。
 - **验收**：v1 240 条 human.category/certainty/actionable 独立完成且通过 strict human validation；verifier 另有独立 claim/evidence 人工集；生产阈值、额度节省或选股增益只允许由可复算 A/B / walk-forward 得出。
 - **证据**：PR #33 建立 verifier/gold-set 工具，PR #34 完成固定队列 Jev 预标注与审核优先级并均已合入 `master`。240 条固定队列当前 human 仍 0/240；规则/Jev agreement 为 category 55.42%、certainty 77.92%、actionable 57.50%，仅用于安排人工审核。2026-09-21 审计时项目累计 172 次调用（169 success / 3 failed），`alert_triage=168`、`event_llm_aux=4`；bounded live smoke 后为 173 次。晚间又用真实 `/api/assistant/chat` 请求“查询 600519 最新行情/新鲜度”验证 assistant 现役链，usage 新增 `assistant_tool_router=1`，`jev-1.13.0`、status=ok、约 711ms；总调用变为 174（171 success / 3 failed）。因此 assistant shadow 已有真实消费者 receipt，不再只是配置推断；**human gold 仍 0/240**，所以路由真实运行仍不等于 accuracy/cascade/额度节省已实证。2026-09-30 新增不泄露规则/模型答案的独立盲标导出、指纹和原文完整性核对导入，并修复 partial scorer 把未标行计入分母的问题；本机冻结 240 行盲标文件 SHA-256 `bbbf3c5389737b8e9904a4e9ddd6c6db65b53c1bb3ca4f95698aeaa1070ee785`，原队列 SHA-256 未变。当前库有 134 条 event observation，其中 revision 3、已确认 withdrawal link 0；不足以评价真实更正关系召回。以上只是材料/工程证据，人工独立性仍待外部完成。
@@ -188,7 +188,6 @@
 - **依赖**：RSH-026, IMP-020
 - **效果前置**：无
 - **方案依据**：主方案 §7.1、§9.4、§15
-- **U51 Jev 承接子范围（2026-09-24 已批；沿本任务原状态/门序/优先级）**：P2/G3 条件候选：业务暴露、催化成熟度、修订方向等窄语义特征与现有候选在同预算下竞争；预注册、时间外/消融/成本/实际 fill 口径全过才提出替换某个低价值实验或准入，单有解释价值就停在解释。 方案与反例见 [Jev 附录 A](../ai/jev-integration.md#附录-a-2026-09-24-已批准的全系统应用可视化与维护方案v04)。
 - **范围**：只研究有具体假设的召回/特征/排序/风控/退出增量；余 TA-Lib、HMM 等不按目录补齐。
 - **验收**：预注册插入点、基线、成本和退出条件；结构新颖不等于有效，OOS/前向增益不足则退出。
 - **证据**：已完成 novelty-first、EMA/Wilder 原语和部分候选实测；冗余结果保留，不能当准入证据。

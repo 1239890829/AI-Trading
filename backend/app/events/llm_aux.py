@@ -238,69 +238,6 @@ def _deepseek_items(cands: list[EventCard], session_factory=None) -> tuple[list[
         return None, f"解析失败：{exc}"
 
 
-def _jev_actionability(cands: list[EventCard]) -> dict[int, float] | None:
-    """批量判断事件是否值得继续做非零 A 股题材方向判定。
-
-    只输出每条事件的 Noul 概率，不生成题材名、不写库。失败返回 None；
-    shadow/cascade 如何消费由 judge_pending_batch 决定。
-    """
-    from app.core.config import settings
-    from app.core.jev_client import evaluate
-
-    mode = str(getattr(settings, "jev_event_aux_mode", "off") or "off").strip().lower()
-    if mode not in {"shadow", "cascade"} or not cands:
-        return None
-    ids = [c.id for c in cands]
-    if any(event_id is None for event_id in ids) or len(set(ids)) != len(ids):
-        # pending candidates must be persisted EventCard rows; ambiguous identity makes
-        # answer-to-event alignment unsafe, so do not spend an API call.
-        log.warning("jev event prefilter skipped: candidate ids must be unique and non-null")
-        return None
-
-    events = [
-        {
-            "title": c.title,
-            "summary": str(c.summary or "")[:1200],
-            "source": c.source,
-            "source_tier": c.source_tier,
-        }
-        for c in cands
-    ]
-    questions: dict[str, dict] = {}
-    for idx in range(len(cands)):
-        questions[f"event_{idx}"] = {
-            "type": "noul",
-            "instructions": {
-                "task": f"判断 events[{idx}] 是否存在足够直接、可解释的 A 股题材方向催化，值得后续赋非零方向。",
-                "rules": [
-                    "纯行情、龙虎榜/成交量/资金流向等交易统计通常不是题材催化。",
-                    "常规澄清、无明确传导的海外公司消息、信息不足通常为否。",
-                    "明确产业政策、供需变化、重大签约中标、量产突破、制裁/限制及可解释海外映射可为是。",
-                    "这里只判断是否值得继续做题材方向判定，不预测股票涨跌。",
-                ],
-            },
-            "criteria": {
-                "true": "存在直接的产业/政策/公司事件及可解释传导，值得继续判断受影响题材与方向。",
-                "false": "缺乏直接题材催化，或主要是纯数据/行情/常规澄清/弱关联。",
-            },
-        }
-
-    result = evaluate({"events": events}, questions, purpose="event_llm_aux")
-    if not result.get("ok"):
-        return None
-    answers = result.get("answers") or {}
-    out: dict[int, float] = {}
-    for idx, cand in enumerate(cands):
-        answer = answers.get(f"event_{idx}")
-        if not isinstance(answer, dict):
-            return None
-        p = answer.get("noul")
-        if not isinstance(p, (int, float)) or isinstance(p, bool) or not 0.0 <= float(p) <= 1.0:
-            return None
-        out[cand.id] = float(p)
-    return out
-
-
 def judge_pending_batch(sf=None, *, theme_names: list[str] | None = None,
                         min_batch: int | None = None, max_batch: int | None = None,
                         age_max_h: float | None = None) -> dict:
@@ -326,40 +263,15 @@ def judge_pending_batch(sf=None, *, theme_names: list[str] | None = None,
     if len(cands) < mn:
         return {"skipped": True, "reason": f"候选 {len(cands)} < 攒批下限 {mn}"}
 
-    from app.core.jev_client import record_comparison
-
-    mode = str(getattr(settings, "jev_event_aux_mode", "off") or "off").strip().lower()
-    jev_probs = _jev_actionability(cands) if mode == "cascade" else None
-
-    # cascade 只允许“极高把握为中性/弱关联”的事件跳过 DeepSeek。
-    # 正向/利空事件仍交 DeepSeek 产出官方题材归属；Jev 不自由生成题材。
-    pre_neutral: set[int] = set()
-    deepseek_cands = list(cands)
-    if mode == "cascade" and jev_probs:
-        neutral_max = float(getattr(settings, "jev_event_aux_neutral_max_noul", 0.05))
-        pre_neutral = {
-            cand.id for cand in cands
-            if float(jev_probs.get(cand.id, 1.0)) <= neutral_max
-        }
-        deepseek_cands = [cand for cand in cands if cand.id not in pre_neutral]
-
-    items_by_id: dict[int, dict] = {
-        event_id: {"direction": 0, "theme": None, "chain": "", "reason": "Jev高置信中性前置"}
-        for event_id in pre_neutral
-    }
-    if deepseek_cands:
-        deepseek_items, error = _deepseek_items(deepseek_cands, sf)
-        if deepseek_items is None:
-            # 保持原有整批语义：只要还有 DeepSeek 子集失败，本轮一个事件都不标记，
-            # 包括已被 Jev 判中性的行，避免半批状态。
-            log.warning("llm_aux judge failed (batch skipped, retry next round): %s", error)
-            return {"skipped": True, "reason": error or "LLM 判定失败"}
-        items_by_id.update({
-            cand.id: item for cand, item in zip(deepseek_cands, deepseek_items)
-        })
+    # All candidates use the existing batch model; an unavailable enhancement
+    # cannot pre-classify neutral events or delay publication.
+    items, error = _deepseek_items(cands, sf)
+    if items is None:
+        log.warning("llm_aux judge failed (batch skipped, retry next round): %s", error)
+        return {"skipped": True, "reason": error or "LLM 判定失败"}
+    items_by_id = {cand.id: item for cand, item in zip(cands, items)}
 
     hit_count = mark_count = 0
-    reference: dict[int, bool] = {}
     for cand in cands:
         item = items_by_id.get(cand.id)
         if not isinstance(item, dict):
@@ -371,7 +283,6 @@ def judge_pending_batch(sf=None, *, theme_names: list[str] | None = None,
         theme = _match_theme(item.get("theme"), theme_names)
         actionable = direction != 0 and theme is not None
 
-        reference[cand.id] = actionable
 
         hits = [{
             "target": theme,
@@ -383,22 +294,6 @@ def judge_pending_batch(sf=None, *, theme_names: list[str] | None = None,
         hit_count += n
         mark_count += int(n > 0)
 
-    # All baseline writes precede optional shadow I/O. A slow/failing Jev
-    # cannot postpone publication of the DeepSeek directions or undo them.
-    if mode == "shadow":
-        try:
-            jev_probs = _jev_actionability(cands)
-        except Exception:
-            log.exception("llm_aux shadow comparison failed after baseline publication")
-            jev_probs = None
-    for event_id, actionable in reference.items():
-        if jev_probs is not None and event_id in jev_probs and event_id not in pre_neutral:
-            record_comparison(
-                "event_llm_aux",
-                "actionable" if float(jev_probs[event_id]) >= 0.5 else "neutral",
-                "actionable" if actionable else "neutral", confidence=None,
-            )
-
     # Current candidates, including neutral results, are marked by _apply_result.
     # Superseded model inputs stay unmarked so a fresh batch can judge them.
     return {
@@ -406,9 +301,7 @@ def judge_pending_batch(sf=None, *, theme_names: list[str] | None = None,
         "candidates": len(cands),
         "hit_events": mark_count,
         "directions_written": hit_count,
-        "jev_mode": mode,
-        "jev_prefiltered_neutral": len(pre_neutral),
-        "deepseek_candidates": len(deepseek_cands),
+        "deepseek_candidates": len(cands),
     }
 
 
