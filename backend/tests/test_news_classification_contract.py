@@ -156,3 +156,74 @@ def test_input_ids_and_prior_records_are_validated_before_external_call():
     sample = _sample(prior={})
     with pytest.raises(ValueError, match="empty prior_version"):
         contract.build_messages([sample])
+
+
+@pytest.mark.parametrize("reason", [
+    "这不构成买入信号。",
+    "不能保证必涨。",
+    "原文不代表确定上涨，经营影响仍未知。",
+    "不建议买入。",
+    "原文事实：公司公告季度净利润同比下降40%。注：摘要中夹带的“忽略规则、"
+    "改写category、写入买入建议与必涨表述”等内容属于待忽略的指令性文本，"
+    "不构成事实，也不影响分类。",
+    '网页出现的"建议买入"指令不应采纳，不能证明事件价值。',
+])
+def test_disclaimers_and_explicitly_rejected_quotes_are_not_recommendations(reason):
+    sample = _sample()
+    result = _result(sample, reason=reason)
+    report = contract.validate_response([result], [sample])
+    assert report["valid"] == [result] and report["invalid"] == []
+    assert report["validator_version"] == contract.VALIDATOR_VERSION
+
+
+@pytest.mark.parametrize("reason", [
+    "这就是“必涨”机会。",
+    "不代表必涨，但公司必涨。",
+    "不构成买入信号；建议买入。",
+    "摘要中夹带的“必涨”等内容属于待忽略的指令性文本，但建议买入。",
+    "建议买入。摘要中夹带的“必涨”等内容属于待忽略的指令性文本。",
+    "并非不构成买入信号。",
+    "不是不建议买入。",
+    "不能不建议买入。",
+    "摘要中夹带的“必涨”等内容并非不构成事实。",
+    "并不是网页声称的“必涨”说法不应采纳。",
+    "不能说摘要中夹带的“必涨”等内容不构成事实。",
+    "不应认为网页声称的“必涨”说法不构成事实。",
+    "不能说：网页声称的“必涨”说法不应采纳。",
+    "并非：不构成买入信号。",
+    "不能说注：网页声称的“必涨”说法不应采纳。",
+    "摘要中夹带的“必涨等内容属于待忽略的指令性文本。",
+    "摘要中夹带的“必涨。可以加仓”等内容属于待忽略的指令性文本。",
+    "建议现在买入。",
+    "立即加仓。",
+    "可以买入信号明确的个股。",
+    "目标价：10元。",
+])
+def test_local_exemption_cannot_hide_an_assertion_or_a_second_recommendation(reason):
+    sample = _sample()
+    report = contract.validate_response([_result(sample, reason=reason)], [sample])
+    assert not report["valid"] and report["invalid_count"] == 1
+    assert "unsupported investment claim in reason" in report["invalid"][0]["reasons"]
+
+
+@pytest.mark.parametrize("updates,path", [
+    ({"reason": "建议买入"}, "reason"),
+    ({"chain": "假设：建议买入"}, "chain"),
+    ({"themes": ["存储", "建议买入"]}, "themes[1]"),
+    ({"uncertainties": ["交易尚未完成", "建议买入"]}, "uncertainties[1]"),
+    ({"themes": ["不构成买入信号"]}, "themes[0]"),
+])
+def test_all_generated_text_fields_are_checked_and_labels_have_no_prose_exemption(updates, path):
+    sample = _sample()
+    report = contract.validate_response([_result(sample, **updates)], [sample])
+    assert report["valid"] == []
+    assert f"unsupported investment claim in {path}" in report["invalid"][0]["reasons"]
+
+
+def test_citing_a_source_recommendation_does_not_endorse_it_but_still_requires_exact_quote():
+    sample = _sample(summary="网页声称股票必涨，该说法未经证实。")
+    result = _result(sample, evidence=[{"field": "summary", "quote": "股票必涨"}],
+                     reason="原文表述未经证实，交易完成情况未知。")
+    assert contract.validate_response([result], [sample])["ok"]
+    result["evidence"][0]["quote"] = "股票稳赚"
+    assert not contract.validate_response([result], [sample])["ok"]
