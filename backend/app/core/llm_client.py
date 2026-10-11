@@ -20,6 +20,9 @@ import json
 import logging
 import shutil
 import subprocess
+import threading
+from time import monotonic
+from collections import OrderedDict
 from enum import Enum
 from pathlib import Path
 from typing import Any, Callable, Iterator
@@ -27,6 +30,35 @@ from typing import Any, Callable, Iterator
 import httpx
 
 log = logging.getLogger(__name__)
+
+# Bounded, process-local transport observations. No prompts, responses or credentials.
+_cli_health: OrderedDict[tuple[str, str], dict[str, Any]] = OrderedDict()
+_cli_health_lock = threading.Lock()
+
+
+def cli_health_observation(model: str, cli_path: str) -> dict[str, Any] | None:
+    """Return a copy for this exact model/executable; other targets cannot prove health."""
+    key = (model, resolve_cli_path(cli_path) or cli_path)
+    with _cli_health_lock:
+        value = _cli_health.get(key)
+        return dict(value) if value is not None else None
+
+
+def _record_cli_health(model: str, cli_path: str, *, ok: bool) -> None:
+    try:
+        from app.core.bjtime import beijing_now
+
+        key = (model, resolve_cli_path(cli_path) or cli_path)
+        with _cli_health_lock:
+            _cli_health[key] = {
+                "ok": ok, "epoch": monotonic(),
+                "at": beijing_now().isoformat(timespec="seconds"),
+            }
+            _cli_health.move_to_end(key)
+            while len(_cli_health) > 16:
+                _cli_health.popitem(last=False)
+    except Exception as exc:  # observational metadata cannot change business success/failure
+        log.debug("CLI health observation failed: %s", type(exc).__name__)
 
 
 class LLMFailure(str, Enum):
@@ -178,6 +210,30 @@ def chat_completion_via_cli(
     cli_path: str = "",
     timeout: float = 120.0,
     usage_callback: Callable[[dict[str, int] | None], None] | None = None,
+    observe_health: bool = True,
+) -> str:
+    """Stateless CLI completion; optional transport observation never changes its result."""
+    try:
+        content = _chat_completion_via_cli(
+            model, messages, cli_path=cli_path, timeout=timeout,
+            usage_callback=usage_callback,
+        )
+    except LLMError:
+        if observe_health:
+            _record_cli_health(model, cli_path, ok=False)
+        raise
+    if observe_health:
+        _record_cli_health(model, cli_path, ok=True)
+    return content
+
+
+def _chat_completion_via_cli(
+    model: str,
+    messages: list[dict[str, str]],
+    *,
+    cli_path: str = "",
+    timeout: float = 120.0,
+    usage_callback: Callable[[dict[str, int] | None], None] | None = None,
 ) -> str:
     """子进程调 `claude -p` 无头模式，返回最终回复文本。
 
@@ -202,6 +258,7 @@ def chat_completion_via_cli(
         "--output-format", "json",
         "--model", model,
         "--tools", "",
+        "--no-session-persistence",
         "--exclude-dynamic-system-prompt-sections",
     ]
     if system:

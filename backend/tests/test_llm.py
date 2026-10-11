@@ -183,6 +183,7 @@ def test_cli_completion_success_and_command_shape(monkeypatch):
     assert "--system-prompt" in cmd
     assert cmd[cmd.index("--system-prompt") + 1] == "你是金融复盘分析器"
     assert "--tools" in cmd and cmd[cmd.index("--tools") + 1] == ""  # 关工具省 tokens
+    assert "--no-session-persistence" in cmd  # headless calls must not become imported tasks
     assert calls[0]["kwargs"]["timeout"] >= 120  # CLI 冷启动下超时下限抬到 120s
 
 

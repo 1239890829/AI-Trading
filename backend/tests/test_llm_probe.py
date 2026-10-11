@@ -21,6 +21,109 @@ from app.services import llm_probe as probe_mod
 from app.services.llm_probe import LlmProbe, probe_loop
 
 
+@pytest.fixture(autouse=True)
+def isolated_cli_observations(monkeypatch):
+    monkeypatch.setattr(lc, "_cli_health", lc.OrderedDict())
+
+
+def test_recent_business_call_skips_probe_without_extending_observation(monkeypatch):
+    _enable(monkeypatch)
+    clock = [100.0]
+    monkeypatch.setattr(lc, "monotonic", lambda: clock[0])
+    monkeypatch.setattr(probe_mod, "monotonic", lambda: clock[0])
+    monkeypatch.setattr(lc, "resolve_cli_path", lambda p="": "/fake/claude")
+    monkeypatch.setattr(lc, "_chat_completion_via_cli", lambda *a, **k: "answer")
+    lc.chat_completion_via_cli("glm-5.3", [{"role": "user", "content": "business"}])
+    calls = []
+    p = LlmProbe(ok_ttl=30)
+    runner = lambda *args: calls.append(1) or "OK"
+    snap = asyncio.run(p.probe_once(runner=runner))
+    assert calls == [] and snap["probes"] == 0
+    assert snap["health_source"] == "business_call"
+    assert snap["last_probe_at"] is None
+    assert snap["last_health_at"] == snap["last_ok_at"]
+    clock[0] = 129
+    asyncio.run(p.probe_once(runner=runner))
+    clock[0] = 131
+    snap = asyncio.run(p.probe_once(runner=runner))
+    assert calls == [1] and snap["health_source"] == "probe"
+
+
+def test_business_failure_invalidates_success_cache(monkeypatch):
+    _enable(monkeypatch)
+    clock = [100.0]
+    monkeypatch.setattr(lc, "monotonic", lambda: clock[0])
+    monkeypatch.setattr(probe_mod, "monotonic", lambda: clock[0])
+    monkeypatch.setattr(lc, "resolve_cli_path", lambda p="": "/fake/claude")
+    p = LlmProbe(alert_enabled=False)
+    asyncio.run(p.probe_once(runner=lambda *args: "OK"))
+    clock[0] = 101
+
+    def failed(*args, **kwargs):
+        raise lc.LLMError("need quota", lc.LLMFailure.QUOTA)
+
+    monkeypatch.setattr(lc, "_chat_completion_via_cli", failed)
+    with pytest.raises(lc.LLMError):
+        lc.chat_completion_via_cli("glm-5.3", [{"role": "user", "content": "business"}])
+    calls = []
+    def runner(*args):
+        calls.append(1)
+        raise lc.LLMError("need quota", lc.LLMFailure.QUOTA)
+    snap = asyncio.run(p.probe_once(runner=runner))
+    assert snap["state"] == "failed" and snap["last_failure_kind"] == "quota"
+    asyncio.run(p.probe_once(runner=runner))
+    assert calls == [1]  # failure cooldown still prevents repeated calls
+
+
+def test_observations_are_scoped_bounded_and_copied(monkeypatch):
+    monkeypatch.setattr(lc, "resolve_cli_path", lambda p="": p or "/fake/claude")
+    for i in range(17):
+        lc._record_cli_health(str(i), "/one", ok=True)
+    assert len(lc._cli_health) == 16
+    assert lc.cli_health_observation("0", "/one") is None
+    assert lc.cli_health_observation("16", "/two") is None
+    observed = lc.cli_health_observation("16", "/one")
+    observed["ok"] = False
+    assert lc.cli_health_observation("16", "/one")["ok"] is True
+
+
+def test_switch_model_cannot_reuse_cached_health(monkeypatch):
+    _enable(monkeypatch, model="first")
+    calls = []
+    p = LlmProbe()
+    runner = lambda model, *args: calls.append(model) or "OK"
+    asyncio.run(p.probe_once(runner=runner))
+    _enable(monkeypatch, model="second")
+    snap = asyncio.run(p.probe_once(runner=runner))
+    assert calls == ["first", "second"] and snap["model"] == "second"
+
+
+def test_force_probes_even_with_recent_business_success(monkeypatch):
+    _enable(monkeypatch)
+    lc._record_cli_health("glm-5.3", "", ok=True)
+    calls = []
+    snap = asyncio.run(LlmProbe().probe_once(
+        force=True, runner=lambda *args: calls.append(1) or "OK",
+    ))
+    assert calls == [1] and snap["cached"] is False
+
+
+def test_observation_fault_preserves_business_result_and_failure(monkeypatch):
+    def boom():
+        raise RuntimeError("observation fault")
+
+    monkeypatch.setattr("app.core.bjtime.beijing_now", boom)
+    monkeypatch.setattr(lc, "_chat_completion_via_cli", lambda *a, **k: "answer")
+    assert lc.chat_completion_via_cli("m", [{"role": "user", "content": "business"}]) == "answer"
+    original = lc.LLMError("need quota", lc.LLMFailure.QUOTA)
+    def failed(*args, **kwargs):
+        raise original
+    monkeypatch.setattr(lc, "_chat_completion_via_cli", failed)
+    with pytest.raises(lc.LLMError) as caught:
+        lc.chat_completion_via_cli("m", [{"role": "user", "content": "business"}])
+    assert caught.value is original
+
+
 # ---------------------------------------------------------------- ① 失败分类
 
 
