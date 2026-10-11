@@ -45,13 +45,21 @@ returncode / timeout / stdout / HTTP 状态与 `LLMFailure`，**不得 match 该
 - 未配 model 或非 `claude_cli` 后端 → `state=disabled`，**绝不发请求**（不自己制造消耗）
 - 探针失败不影响任何业务功能；异常全兜住落 `state`
 
+## 无头会话与重复体检（2026-10-11）
+
+同步单轮CLI（含探针、复盘、新闻）使用`--no-session-persistence`，不再保存可被桌面导入的聊天记录。CLI不支持该参数时按原分类失败，不静默回退保存会话；普通交互式Claude会话与流式助手不受此改动影响。参数语义按[官方CLI参考](https://code.claude.com/docs/en/cli-reference)及本机`--help`核对。
+
+探针优先复用同一模型/可执行路径最近30分钟的同步业务成功结果，观察只保留时间与成功/失败、最多16个目标、线程锁保护且返回副本；不保留提示词、正文或凭据。新的失败失效旧成功；切换目标不复用旧缓存。探针自身不写业务观察，模型输出语义正确性不由输送成功证明。流式、HTTP及跨进程调用不被冒充已覆盖。
+
+`health_source=business_call`时`last_health_at`为原业务调用完成时刻，`probes`与`last_probe_at`不增加；轮询不滚动延长原观察。过期或失败后恢复真实体检，`force=1`仍强制调用。原半小时调度、失败短缓存、告警阈值及冷却保留；空闲全天运行仍约48次体检，但不再创建持久聊天任务。实际节省量取决于同目标业务调用，不预报成本或数量。
+
 ## 端点
 
 ```bash
 # 一站式可观测（只读上次结果，不触发调用）
 curl -s 'http://127.0.0.1:8000/api/system/providers' | jq .llm_gateway
 
-# 手动体检：force=1 发一次真实最小调用（约 $0.0006、1~8s，走 to_thread 不堵事件循环）
+# 手动体检：force=1 发一次真实最小调用（费用与延迟取决于当前模型/网关，走 to_thread 不堵事件循环）
 curl -s 'http://127.0.0.1:8000/api/system/llm-probe?force=1' | jq .
 ```
 
@@ -99,7 +107,7 @@ need quota 0.098258
 ```
 ASHARE_LLM_PROBE_ALERT_AFTER=3              # 连续失败几次才发
 ASHARE_LLM_PROBE_ALERT_COOLDOWN_SECONDS=3600 # 冷却：定时探针不冷却必然刷屏
-ASHARE_LLM_PROBE_CHANNELS=in_app,log,feishu
+ASHARE_LLM_PROBE_CHANNELS=in_app,log
 ```
 
 - 冷却是硬要求（2026-09-04 定案的"预警规则无冷却"缺陷：3.5h 连发 7 条雷同事件）
