@@ -33,6 +33,70 @@ def _result(sample, **updates):
     return row
 
 
+def _context_result(sample, **updates):
+    row = _result(sample, impact_object="", key_conditions=[
+        {"field": "summary", "quote": sample["summary"]},
+    ])
+    row.update(updates)
+    return row
+
+
+def test_context_comparison_uses_identical_public_input_and_retains_limitations():
+    sample = _sample(summary="公司称董事会运作正常，但具体代行职责本材料未提供。")
+    sample["author_checks"] = {"expected": "do not send"}
+    old = contract.build_messages([sample])
+    new = contract.build_messages([sample], protocol=contract.CONTEXT_SCHEMA_VERSION)
+    assert old[1] == new[1] and old[0] != new[0]
+    assert "author_checks" not in new[1]["content"]
+    output = _context_result(sample)
+    report = contract.validate_response([output], [sample], protocol=contract.CONTEXT_SCHEMA_VERSION)
+    assert report["ok"] and report["valid"][0]["key_conditions"][0]["quote"] == sample["summary"]
+    assert not contract.validate_response([output], [sample])["ok"]
+
+
+@pytest.mark.parametrize("target,direction,accepted", [
+    ("职工", 1, True), ("职工", -1, True), ("职工", 0, True),
+    ("", 0, True), ("", 1, False), ("", -1, False),
+    ("地产上市公司", 1, False), (" ", 1, False), (None, 1, False),
+    ("职工" * 61, 1, False),
+])
+def test_context_direction_requires_literal_current_object_without_forcing_neutral(target, direction, accepted):
+    sample = _sample(title="新政策便利职工提取公积金", summary="职工可按条件提取，不代表地产公司增收。")
+    output = _context_result(sample, impact_object=target, direction=direction)
+    report = contract.validate_response([output], [sample], protocol=contract.CONTEXT_SCHEMA_VERSION)
+    assert report["ok"] is accepted
+    assert report["expected_count"] == 1
+
+
+@pytest.mark.parametrize("conditions", [
+    [], None, [{"field": "summary", "quote": "公司实际停产"}],
+    [{"field": "prior_version.summary", "quote": "公司称运作正常"}],
+    [{"field": "summary", "quote": "公司称运作正常", "extra": "unapproved"}],
+    [{"field": "summary", "quote": "公司称运作正常"}] * 9,
+])
+def test_context_cannot_drop_conditions_or_bind_them_to_stale_or_invented_text(conditions):
+    sample = _sample(summary="公司称运作正常，实际经营影响待核。", prior={"summary": "公司称运作正常"})
+    output = _context_result(sample)
+    output["key_conditions"] = conditions
+    report = contract.validate_response([output], [sample], protocol=contract.CONTEXT_SCHEMA_VERSION)
+    assert not report["ok"] and report["invalid_count"] == 1
+    assert report["valid"] == []
+
+
+def test_context_failure_keeps_missing_ids_and_does_not_change_legacy_contract():
+    samples = [_sample("a", summary="审批尚未完成。"), _sample("b", summary="标的尚未盈利。")]
+    old = _result(samples[0], direction=1)
+    assert contract.validate_response([old], samples[:1])["ok"]
+    current = _context_result(samples[0], direction=1)
+    report = contract.validate_response([current], samples, protocol=contract.CONTEXT_SCHEMA_VERSION)
+    assert report["invalid_count"] == 2 and report["expected_count"] == 2
+    assert not report["valid"]
+    with pytest.raises(ValueError, match="unknown classification protocol"):
+        contract.build_messages(samples, protocol="automatic-production")
+    with pytest.raises(ValueError, match="unknown classification protocol"):
+        contract.validate_response([], samples, protocol="automatic-production")
+
+
 @pytest.mark.parametrize("title,updates", [
     ("机器人概念走强，多股涨停", {
         "category": "market_action", "event_status": "factual", "uncertainties": [],
