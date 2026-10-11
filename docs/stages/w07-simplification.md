@@ -11,7 +11,7 @@
 ## IMP-091
 
 - **任务**：不可用Jev接入退役与替代路径核验
-- **状态**：进行中
+- **状态**：已完成
 - **优先级**：P1
 - **阶段门**：G2
 - **门内序**：115
@@ -23,9 +23,10 @@
 - **顺序**：消费者和fallback核对→登记退出与替代→代码/专属资产退役→当前权威入口传播→行为与全量门禁→准确HEAD发布与运行验收。
 - **验收**：项目运行/配置不再依赖Jev或读取其凭据；规则去重、模型失败提醒、批量新闻状态CAS、工具依赖/白名单、grounding及使用量硬门保留；既有人工作业/gold数据不删。Decisions只核官方原始文档，不宣称账户可用、质量/延迟收益已验证；新服务先LAB后准入。
 - **主动反证**：误删通用评估与人类标签、历史provider字段被改写、删路由同时删依赖硬门、失去故障/取消/预算守卫、现役文档仍强制调用已退役服务、测试固化外部不可用的失败。
-- **证据**：最终后端4854 passed/81 skipped/1 StarletteDeprecationWarning（164.38s），pyflakes/doc-health/卫生/公开扫描通过；消费者165与文档88为局部不相加。首轮残留配置与恢复目录门禁已纠正，根目录误运行collection错误保留，最终正确目录全量通过；不放宽断言。官方Decisions公开beta/端点/Schema/价格已核。Jev Review/Guard官方卸载，本机专属MCP/四skill/CLI/Keychain注入与凭据/两LaunchAgent/8777桥退出；Codex无关配置解析一致、生成模型配置hash不变，私有恢复归档保留。取证进artifacts/runs/retire-jev-20261011；前端隔离副本tsc/eslint、默认与UTC各112文件1012 passed及正式构建通过；准确HEAD发布/运行验收尚待。
-- **恢复**：Git保存旧代码/蓝图与对应PR证据；仅受控重新准入才恢复外部调用，历史业务数据库和人工gold保留。
-- **下一步**：完成本项消费者退役、传播和验证；替代服务不因文档可读而自动启用。
+- **证据**：最终后端4854 passed/81 skipped/1 StarletteDeprecationWarning（164.38s），pyflakes/doc-health/卫生/公开扫描通过；消费者165与文档88为局部不相加。首轮残留配置与恢复目录门禁已纠正，根目录误运行collection错误保留，最终正确目录全量通过；不放宽断言。官方Decisions公开beta/端点/Schema/价格已核。Jev Review/Guard官方卸载，本机专属MCP/四skill/CLI/Keychain注入与凭据/两LaunchAgent/8777桥退出；Codex无关配置解析一致、生成模型配置hash不变，私有恢复归档保留。取证进artifacts/runs/retire-jev-20261011；前端隔离副本tsc/eslint、默认与UTC各112文件1012 passed及正式构建通过；准确HEAD发布与运行验收已完成，见下项。
+- **发布与运行**：[PR #255](https://github.com/1239890829/AI-Trading/pull/255)准确HEAD 32db3192afa9d3afc0eb21d04ab2961e3ad46d53，经[DegradedRelease](https://github.com/1239890829/AI-Trading/pull/255#issuecomment-6106949449)、CI38123486372三job与release_check放行，match-head合并为0e485dae4028ad2d03625223cf1cb6f30d448ec5（2026-10-11T08:09:06Z）；post-master CI38123799161三job completed/success，原分支本地/远端均清理。确认在途任务/消息/尝试/模型用量均0后正常TERM旧8000，新PID52476无reload加载主代码；3000 PID8157/build sW3ONH-epZJoX5SroTTpF保留。providers无jev字段，原claude_cli自然探针16:10:12+08:00 ok/2770ms，工作台/代理200；无新增持久ping会话。市场health degraded照实保留，未触发强制probe/新付费调用。全局最终核验无专属进程（含另2个驻留context MCP已正常终止），恢复tar可读且0600/根0700，生成模型配置保持原hash。
+- **恢复**：Git保存旧代码/蓝图与对应PR证据；本机旧配置、专属源码及历史元数据只进忽略artifacts的私有tar与manifest。人工gold/业务数据库/UI恢复包保留；恢复旧调用须新准入授权，不自动复活专属模型评分。
+- **下一步**：本项已生效；本轮只完成同任务文档发布，不领取第二业务任务。Decisions仍为未准入候选；后续只有真实需求、账户/费用授权与目标域证据才开启实验。新反例回原owner，不从旧Jev历史恢复强制调用。
 
 ## IMP-090
 
