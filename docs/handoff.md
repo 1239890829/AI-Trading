@@ -1,8 +1,15 @@
-# 当前交接：RSH-030 现有DeepSeek有限新闻LAB
+# 当前交接：RSH-030 关键词纠错与真实新闻有限续验
 
 > 总方案v9.13；累计U01–U55；唯一研究状态归[W04/RSH-030](stages/w04-research.md#rsh-030)。现役语义蓝图[semantic-decisions](ai/semantic-decisions.md)。用户明确本批小规模验证，不影响选股与消息，不接Jev/Decisions。
 
 ## 1. 现场、授权与最新验收
+
+- **本轮明确授权**：2026-10-11用户要求修LAB关键词误拒，验真实财经新闻分类/依据，确认价值后再考虑接入；不改选股/消息，KEV不接、Jev/Decisions不恢复。从最新master 1085a32c9fc64d17c1f384a31e63d3824caa2ea5复用干净独立工作区建立codex/news-claim-guard；旧6次与旧合成回执保留历史身份。
+- **本轮结果**：validator v1.1、提示v1.0不变；专项74通过。原合成同一输出离线15/16→16/16，原hash不变；另冻结16条核过原页的短摘录，新2次调用全部字段/引用有效。作者分类15/16、状态16/16、适用方向13/13、关键引用16/16与分组26/26；人工gold=0，分类/传导准确率与选股增益未知。愿景类别、政策影响对象、临床多期外推及审计未知变否定等问题保留；摘录省略的信息不记模型漏读，也不当公司/全文未披露，不翻绿。
+- **本轮实测**：输入4552/输出7215 tokens，18.731s/18.304s为8条批耗时，非稳定性能统计。实际网关身份/费用未知。证据在artifacts/runs/deepseek-real-news-followup-20261011，来源AI生成/WAF/转载/公告日期与unknown分别保留。有限调用已结束，不扩大采样、不调提示求通过。
+- **本轮运行和工程**：仅scripts/tests及既有权威文档变更，生产app/前端/选股/消息/配置/调度diff=0；8000/3000仍是原PID 52476/8157，原backend degraded保留。完整后端4928 passed/81 skipped/1既有StarletteDeprecationWarning（162.70s），pyflakes通过；前端tsc/eslint、默认/UTC各112文件1012测试（70.22s/70.16s）与Next正式构建通过。doc-health/卫生/公开扫描通过，5份报告Markdown/HTML内容和结构逐项对账通过。专项74为全量子集，不相加；准确HEAD发布事实由本轮PR的DegradedRelease、required CI、release_check及合并后CI承载。新词法检查不需生产重启。
+
+以下为已发布首批基线，不能当本轮完整门禁：
 
 - **当前主门**：无（有限LAB工程/实测结束；父研究待独立人工条件，不重复调用）
 - **主切片首选**：无（本轮只完成获准RSH-030有限LAB与发布，不领取第二业务任务）
