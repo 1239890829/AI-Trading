@@ -56,11 +56,12 @@ returncode / timeout / stdout / HTTP 状态与 `LLMFailure`，**不得 match 该
 ## 端点
 
 ```bash
+# 鉴权启用时须配置环境变量 ASHARE_API_TOKEN；不在示例中写入令牌正文
 # 一站式可观测（只读上次结果，不触发调用）
-curl -s 'http://127.0.0.1:8000/api/system/providers' | jq .llm_gateway
+curl -s -H "X-API-Token: $ASHARE_API_TOKEN" 'http://127.0.0.1:8000/api/system/providers' | jq .llm_gateway
 
 # 手动体检：force=1 发一次真实最小调用（费用与延迟取决于当前模型/网关，走 to_thread 不堵事件循环）
-curl -s 'http://127.0.0.1:8000/api/system/llm-probe?force=1' | jq .
+curl -s -H "X-API-Token: $ASHARE_API_TOKEN" 'http://127.0.0.1:8000/api/system/llm-probe?force=1' | jq .
 ```
 
 返回体关键字段：`state`（`ok`/`failed`/`disabled`/`idle`）、`last_failure_kind`、

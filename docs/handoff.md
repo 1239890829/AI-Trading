@@ -4,11 +4,11 @@
 
 ## 1. 现场、授权与版本
 
-- **当前主门**：G2
-- **主切片首选**：IMP-090
+- **当前主门**：无；IMP-090主体已收口，selector须在下一轮重算。
+- **主切片首选**：无；本轮只发布同任务闭环文档。
 - **U50 降级授权回执**：2026-10-11用户明确开始解决ping刷屏；2026-09-24长期DEGRADED_FULL_CONTROL未撤销，作者=发布操作者，不能称独立Review。
-- **版本**：基点origin/master 63774535c40c5ba2df03071071480806645f1d3d已同步，分支codex/quiet-llm-probe。selector原无可行动项，本项为唯一新增主任务。
-- **现场**：3000生产前端/8000后端仍运行原已发布版本，无reload；本轮尚未加载。业务数据库、模型配置及UI恢复包不改。
+- **版本**：主体[PR #253](https://github.com/1239890829/AI-Trading/pull/253)准确HEAD71263d30b5ad1accbae9452d357bd0299c14b8b4，主代码9b489fc4，已合并为27bcf7d5ebc1b50400f73a103e96773082a4c2e1。当前codex/quiet-probe-close从此最新master创建，只回填同任务事实。
+- **现场**：8000后端PID41443已从发布源码无reload加载；3000前端PID8157/build sW3ONH-epZJoX5SroTTpF保持运行。四份源码/测试manifest无漂移；业务数据库、模型配置及UI恢复包不改。
 
 ## 2. U49 主动审计回执 / 作者Preflight与反证
 
@@ -22,12 +22,12 @@
 
 首次全量受本机shared/token配置影响，测试进程显式local/空token复验，不修改生产鉴权或断言；第二批2项文档治理字段失败补齐后重验，当前doc-health/卫生/公开扫描通过，失败批保留不冒充通过。前端在隔离同源副本/公开配置样例/同版本依赖下验证，不改运行中生产.next；tsc/eslint通过，默认/UTC各112文件1012项通过（71.59s/70.53s），Next16.3.3生产构建通过。首次副本漏带已跟踪的公开.env样例而触发守卫，补样例后复验，不放宽断言、不复制私有配置。
 
-Jev baseline/final均HTTP451，无分数或有效previousEvaluation，不称评分通过。真实后台只读在途任务、通知待发/未完成尝试及未终态模型用量均0；加载前再次确认。当前归档事实不等于运行代码已更新，真实探针无新文件须加载后单独验证。元数据不出提示词/回复/凭据，不改变业务判断或模型配置。
+Jev baseline/final均HTTP451，无分数或有效previousEvaluation，不称评分通过。加载前再次只读确认在途任务、通知待发/未完成尝试及未终态模型用量均0。正常TERM旧8000后加载新源码；自然启动探针15:19:35+08:00 ok/4372ms/probes1/alerts0，未新建或修改项目CLI会话JSONL；未归档backend ping=0。providers/3000工作台/代理health均200，市场health degraded保留，不冒充全数据新鲜。元数据不出提示词/回复/凭据，不改变业务判断或模型配置。
 
 传播核对：现有system/llm-gateway-probe、原owner stage及handoff已更新；INDEX原文档入口不变，无新文件；总方案、AGENTS、Skills与Jev蓝图不适用，因为不引入新模型/路由/权限/产品语义或治理门。仅收敛既有探针会话与重复调用，运行效果和费用不由单测代替。
 
 ## 4. 发布与恢复
 
-本轮准确HEAD的required CI、DegradedRelease、release_check、match-head合并、post-merge CI与运行加载尚未完成。不领取第二业务任务。按本项Git差异恢复，聊天可以取消归档，源日志/业务数据/UI恢复副本保留；不回滚数据库或修改模型配置。
+主体[DegradedRelease](https://github.com/1239890829/AI-Trading/pull/253#issuecomment-6106571343)、CI38120636274 attempt1三job、release_check与match-head合并通过，post-merge CI38120933217三job completed/success；真实运行另核如上。主体本地/远端分支已清，隔离前端源/依赖/构建副本已删除，紧凑证据与真实服务保留；本轮文档回填守卫195 passed（4.68s）、doc-health/卫生/公开扫描通过，源码manifest无漂移；文档候选仍按自身准确HEAD发布，不预报其CI通过。项目拥有的本轮pytest basetemp已清，失败批日志/XML与运行证据保留。不领取第二业务任务。按本项Git差异恢复，聊天可以取消归档，源日志/业务数据/UI恢复副本保留；不回滚数据库或修改模型配置。
 
 开放世界候选继续按[持续演进](ai/continuous-evolution.md)准入；本轮是确定性运行修复，不改变Jev/策略效果准入或模型路由。
