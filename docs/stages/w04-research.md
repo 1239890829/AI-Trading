@@ -138,7 +138,7 @@
 
 ## RSH-030
 
-**Jev 语义特征、人工金标准与额度节省实证**
+**新闻语义、判断依据与独立效果验证**
 
 - **状态**：待条件
 - **优先级**：P1
@@ -147,13 +147,16 @@
 - **门禁角色**：非阻断
 - **依赖**：无
 - **效果前置**：无
-- **方案依据**：docs/archive/jev-integration-retired-20261011.md §29。
-- **范围**：固定事件队列、独立人工标签、规则/Jev/现有 LLM/fallback 对照，以及 TypeSafe 与更贵模型 token/调用量、延迟和质量的同条件度量；不把 agreement 写成 accuracy。
-- **验收**：v1 240 条 human.category/certainty/actionable 独立完成且通过 strict human validation；verifier 另有独立 claim/evidence 人工集；生产阈值、额度节省或选股增益只允许由可复算 A/B / walk-forward 得出。
+- **方案依据**：[现役语义蓝图§2](../ai/semantic-decisions.md#2-现有deepseek新闻分类与依据lab)；用户2026-10-11批准现有DeepSeek有限新闻LAB，不接Jev/Decisions、不影响选股/消息；原docs/archive/jev-integration-retired-20261011.md §29只留历史。
+- **范围**：现有规则/生成模型的公开新闻分类与依据、有限LAB、独立人工标签、完整失败分母和输入/提示绑定。退出Jev/TypeSafe模型调用，不删除旧人工队列与历史证据；新四分类不强转旧category/certainty/actionable。
+- **验收**：本批工程验收为24条冻结公开initial、标题/标题＋摘要各3批真实调用、原句/字段/身份/unknown校验及报告，结果只进artifacts。独立效果另验：v1旧240条人工及verifier题型保留原范围；新四分类须匹配输入的独立人工标签，不能把机器引用通过或作者解释当accuracy。生产阈值、费用节省或选股增益须另有同基线效果证据与批准。
 - **证据**：PR #33 建立 verifier/gold-set 工具，PR #34 完成固定队列 Jev 预标注与审核优先级并均已合入 `master`。240 条固定队列当前 human 仍 0/240；规则/Jev agreement 为 category 55.42%、certainty 77.92%、actionable 57.50%，仅用于安排人工审核。2026-09-21 审计时项目累计 172 次调用（169 success / 3 failed），`alert_triage=168`、`event_llm_aux=4`；bounded live smoke 后为 173 次。晚间又用真实 `/api/assistant/chat` 请求“查询 600519 最新行情/新鲜度”验证 assistant 现役链，usage 新增 `assistant_tool_router=1`，`jev-1.13.0`、status=ok、约 711ms；总调用变为 174（171 success / 3 failed）。因此 assistant shadow 已有真实消费者 receipt，不再只是配置推断；**human gold 仍 0/240**，所以路由真实运行仍不等于 accuracy/cascade/额度节省已实证。2026-09-30 新增不泄露规则/模型答案的独立盲标导出、指纹和原文完整性核对导入，并修复 partial scorer 把未标行计入分母的问题；本机冻结 240 行盲标文件 SHA-256 `bbbf3c5389737b8e9904a4e9ddd6c6db65b53c1bb3ca4f95698aeaa1070ee785`，原队列 SHA-256 未变。当前库有 134 条 event observation，其中 revision 3、已确认 withdrawal link 0；不足以评价真实更正关系召回。以上只是材料/工程证据，人工独立性仍待外部完成。
-- **下一步**：恢复条件：本轮可独立完成的盲标工具和固定材料已交付，静态改为 `待条件`，后续普通“继续”不再重复运行同一 Jev 预标或扫描旧样本。需要一名未见规则/Jev 结果的独立人工按 §29.6 完成 240 行并留下过程说明；有合格真实 claim/evidence 与同源更正/撤回观察对时再冻结 verifier/关系题独立样本。任一条件新增时按相应题型恢复局部评价；三者不互锁无关 G2 修复或 RSH-031 价格研究。人工字段不得由 Jev/ChatGPT 自填，原 36 条作者预标不算 gold。严格校验后才比较规则、Jev、现有 LLM 与 fallback 的关键错漏、覆盖、弃权、延迟和成本；生产阈值、额度节省或选股增益另须同条件 A/B / walk-forward。未取得上述输入时维持 shadow/弃权和原规则，不重做旧调用。RSH-031 若提出有独立价值的语义候选，再按市场状态/事件类型/板高分层建历史 anchor；Jev 只能写 prediction。
-- **恢复**：预标注永不回写 human；任何实验失败只停用对应 Jev 增量，不覆盖原始队列、规则结果或否证证据。
-- **U53–U55独立评价（P18）**：原240条事件human gold与关系题的责任不变；组件/全域设计/导航边界另建对应题型，允许多个合理答案和有效弃权。人工先独立判断再看模型，对照相同资料无JEV/加JEV的关键漏项、违规、纠错耗时、集成/维护成本；保留N03自选/持仓一级拆分证据不足。事件gold不替代组件/导航真值，也不成为普通G2 UI修复前置；候选内质量与端到端发现质量分别评。
+- **2026-10-11有限LAB**：`news_classification_contract.py`/`news_classification_lab.py`复用现有CLI传输，生产app/选股/消息/配置/调度diff为0。24条2026-10-09至11公开initial冻结SHA-256 `d17273294c6ca9e9295b3dd83228c9e035d7f1994bf80341907410f75d585c20`，6调用均成功、两组各24条字段/引用契约有效；输入14079、输出19953 tokens。标题组每批P50/P95=14.782/17.093s，摘要组17.120/25.723s（各仅3批，非稳定性能统计）。费用不用考虑的新授权取代原1美元上限；中转实际账单仍未知，不记0。无独立human、没有旧提示基线，不能声称准确率、生产改进或选股价值。
+- **作者反证**：拟收购在两组方向+1/0不稳定；愿景表态在material/routine间变化；同条事实/预测混合时event_status不代表所有主张均已发生。两组均无insufficient预测，不足以证明此类召回。上述是后续独立复核问题，不是作者gold或已证错误率。started无终态计unknown、人工仅给匹配summary输入计质量、24样本/6请求边界已用故障注入修复。
+- **工程验证**：专项41及完整后端4895 passed/81 skipped，pyflakes、前端tsc/eslint、默认/UTC各1012测试、生产构建、doc-health/卫生/公开扫描通过；生产消费者diff为0。独立只读工程复查未发现剩余阻断项，仍按作者DegradedRelease准确HEAD发布，不冒充独立Review或独立人工语义评价。恢复材料和逐条可阅读结果只在忽略artifacts保存。
+- **下一步**：本批6调用结束即停，有限工程与实测已完成，不调生产、不追加同队列反复研究。恢复条件是获得匹配输入的独立人工过程与标签，届时仅恢复相应质量评价。旧240条/verifier/关系题在原题型独立推进，不互锁无关G2修复或价格研究。无新增人工或来源证据时，维持现役规则和研究身份，不恢复Jev/Decisions，不把作者/其他模型当human。
+- **恢复**：研究输出永不回写human/业务解释/规则或生产评分；失败保持原始样本与否证证据，停止对应实验。未来生产消费另行批准。
+- **U53–U55独立评价（P18）**：原240条事件human gold与关系题的责任不变；组件/全域设计/导航边界另建对应题型，允许多个合理答案和有效弃权。人工先独立判断再看模型，对照相同资料的现役基线与获准候选，评价关键漏项、违规、纠错耗时、集成/维护成本；旧无Jev/加Jev对照仅留历史，不恢复已退出服务。保留N03自选/持仓一级拆分证据不足。事件gold不替代组件/导航真值，也不成为普通G2 UI修复前置；候选内质量与端到端发现质量分别评。
 
 ## RSH-031
 
