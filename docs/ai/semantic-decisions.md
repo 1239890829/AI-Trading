@@ -17,15 +17,70 @@
 
 通用研究工具：`backend/scripts/semantic_goldset.py`负责export-events/export-blind/import-human/validate/prioritize/compare-reference/score；`backend/scripts/rationale_audit.py`负责机会理由覆盖与原证据审计。旧Jev预标注命令退出；现有人工标注和预测文件保持原字段，不伪造新的概率含义。
 
-## 2. OpenAI Decisions API：已核事实与采用边界
+## 2. 现有DeepSeek新闻分类与依据LAB
+
+2026-10-11用户批准复用现有DeepSeek完善新闻分类、判断依据并做小规模验证，明确不影响现有选股/消息，不再接Jev或Decisions。随后明确费用不用考虑；原1美元实验上限被此新指令取代，但仍只运行有限公开新闻样本，记录可取得的tokens/耗时，未知实际中转费用不写0。项目模型名继续从现有后端配置读取，不新增Key、SDK、MCP、模型路由或生产开关。
+
+研究契约与有限runner为`backend/scripts/news_classification_contract.py`和`backend/scripts/news_classification_lab.py`。仅LAB脚本消费，不导入事件store/生产预算/选股/通知，不写业务库；临时CLI工作目录、禁工具/技能/MCP/hooks、无会话持久化及`observe_health=False`保证本轮实验不改变应用事实或健康状态。失败停止当前批，不自动重试；已开始回执和输出文件以独占创建阻止无意续跑重复调用。
+
+### 2.1 分类和依据
+
+| 字段 | 用途与限制 |
+|---|---|
+| material_event / market_action / routine / insufficient | 实质催化或风险 / 纯涨跌资金人气描述 / 例行事项 / 信息不足；不替换生产原category与影响力字段 |
+| direction -1/0/1 | 明确对象的潜在影响；纯盘面、例行和不足为0，多对象冲突保留未知，不是上涨概率 |
+| themes / chain / reason | 研究候选题材、显式“假设：”传导、原文事实与解释；未提供目录时不假称生产匹配 |
+| evidence(field, quote) | 每条逐字绑定输入标题/摘要/前版本；引用命中只证明锚定，不证明推理正确 |
+| event_status / uncertainties | 已报告事实、拟议、否认、传闻、未知，以及范围和缺失；“拟”不得当完成 |
+| novelty | 无前版只能unavailable；新媒体、新时间不能自动成为新事实 |
+
+格式错、漏ID、重复ID、外ID、拒绝、引用不符与超时保留运行unknown，不能偷换为语义insufficient或中性。旧`direction/theme/chain/reason`及240条人工队列的category/certainty/actionable语义不同，不强行互转。
+
+### 2.2 有限验证与使用
+
+冻结24条近期公开initial观察，标题和来源摘要共3650字符；来源/发布时间/可用时间/输入hash/原采集hash分别保留。作者按内容覆盖选择，不代表生产类别比例；候选事件族分组不冒充可靠去重，后续修订与未来内容不倒填。材料在忽略`artifacts/runs/deepseek-news-lab-20261011/`，人工字段为空；样本和调用身份由manifest/逐批输入及提示hash绑定。
+
+标题与标题＋摘要各3批、每批8条，共6个预声明调用；它们用同一新提示观察信息丰富度差异。没有旧提示同输入配对或独立人工gold，不能把差异宣称为提示改进收益、准确率或选股增益。完成本批即停；不扩大样本、调生产参数或另起持续shadow。精确原句、字段/身份/格式和失败分母可在本轮验证，分类语义与经营传导正确性仍要独立人工复核。
+
+在backend目录使用现有Python环境：
+
+```bash
+python -m scripts.news_classification_lab prepare --samples <samples.jsonl> --manifest <manifest.json> --out <artifacts/prepared>
+python -m scripts.news_classification_lab run-cli --samples <samples.jsonl> --manifest <manifest.json> --requests <prepared/requests.jsonl> --config <backend/.env> --out <artifacts/live/receipts.jsonl> --allow-existing-model-cost
+python -m scripts.news_classification_lab review --samples <samples.jsonl> --manifest <manifest.json> --requests <prepared/requests.jsonl> --receipts <live/receipts.jsonl> --out <artifacts/report.json>
+```
+
+prepare只生成公开输入和隐藏预测的`blind.jsonl`；run-cli须显式调用授权，不能由GET/助手/调度器自动触发。独立人工可给blind条目human={category,reviewer,independent:true}，review通过`--annotations`导入并核原文不变；机器只能验证声明，不能凭布尔值证明人工独立。盲表含标题＋摘要，只给同输入的summary组计质量；title-only组没有匹配输入gold，保持描述消融，不能套另一组真值判错。报告全样本/尝试/未尝试/有效/失败/unknown分母与每批耗时；started未终态同样计尝试与费用未知，缺gold时质量指标为空。中转账单未知，CLI模型别名和tokens不等于官方服务身份或真实USD账单。
+
+本次只交付研究工具与有限报告；未来生产消费须另有目标域独立效果证据和用户批准，既有选股评分/消息资格/去重/报价检查保持原逻辑。状态归[W04/RSH-030](../stages/w04-research.md#rsh-030)，退役事实仍归W07/IMP-091。
+
+### 2.3 首批实测与使用取舍
+
+提示版本news-classification-v1.0，配置模型别名deepseek-v4-flash；CLI能成功转发不证明中转实际底层模型身份。24条不同新闻分别给两个输入版本，共6次调用、48条输出，不能当48条独立新闻。两组各24/24通过字段、身份与逐字引用校验；语义准确率仍未知。
+
+| 描述性指标 | 仅标题 | 标题＋来源摘要 |
+|---|---:|---:|
+| 实质事件或风险 | 12 | 11 |
+| 纯行情/资金/人气 | 6 | 6 |
+| 例行事项 | 6 | 7 |
+| 信息不足预测 | 0 | 0 |
+| 每批耗时P50 / P95 | 14.782s / 17.093s | 17.120s / 25.723s |
+
+每组仅3个批次；该耗时不是单条耗时，也不是稳定生产P95。调用总输入14079、输出19953 tokens；6次中转实际账单均未知。样本没有前版本，因此全部novelty为unavailable；两组没有信息不足预测，不能证明该类召回。
+
+作者复核发现：六条纯行情新闻均没有被强行写成新增产业催化；澄清未量产/无收入、调查、临床试验批准与获批叠加退市风险均保留了限制。也发现拟收购的方向从标题组+1变为摘要组0，愿景表态在实质事件/例行事项间变化，混合事实与预测的event_status仍需逐个主张复核。这些是待独立核验的观察，不能当人工gold，也不能宣称摘要组更准确。
+
+本批已能产出有原句依据和未知条件的研究分类，尚不能自动认定选股机会。保留本次提示/样本/回执版本；独立复核后再决定是否修改契约或接入现役新闻链，不以循环重跑替代新证据。
+
+## 3. OpenAI Decisions API：原评估资料，当前不接入
 
 2026-10-11已打开官方[指南](https://developers.openai.com/api/docs/guides/decisions)及[Python API参考](https://developers.openai.com/api/reference/python/resources/decisions/methods/create)。接口为`POST /v1/decisions`，公开beta，指南当前列出的模型为`gpt-6-luna`。支持文本/图像与多问题，返回`predicate`条件概率、`choice`固定选项、`score`有序等级加权评分；也可能返回refusal。
 
 基础价格按指南为每百万输入token 0.10美元，只计输入；地区处理与长上下文可能加价。官方约10倍于Responses的速度是厂商描述，未经本项目同输入、同质量、端到端实测，不能写成已取得收益。账户权限、地区/网关支持和余额当前未验证；Codex/ChatGPT订阅不当API额度。
 
-这是候选替代，不是本轮生产默认；没有安装SDK、配置新Key、开启付费或新语义调用。当前`claude_cli`兼容生成链不能证明它能代理`/v1/decisions`，不得猜测可复用凭据。
+以上保留先前调查的事实；用户已改为只用现有DeepSeek，本轮及后续常规继续不恢复Decisions实验、安装SDK或要求新Key。当前`claude_cli`兼容生成链不能证明它能代理`/v1/decisions`，不得猜测可复用凭据。未来重新研究须新的明确授权。
 
-### 2.1 对应关系与不兼容点
+### 3.1 对应关系与不兼容点（历史候选）
 
 | 原窄判断需求 | Decisions候选 | 必须处理 |
 |---|---|---|
@@ -35,7 +90,7 @@
 | 跨问题依赖 | 分步调用 | 独立问题可同批；依赖前一个答案的不能假装并行 |
 | 缺失/拒答/超时/格式错 | unknown或已有baseline | 不伪造0/中性、不把运输成功当语义正确 |
 
-### 2.2 后续准入步骤
+### 3.2 外部服务一般准入边界
 
 1. 仅选一个有真实消费者的场景，例如公开新闻类别或提醒优先级；不从全市场逐条调用起步。
 2. 用户明确同意账户、费用上限与调用范围，Key只进后端secret。固定模型、question/rubric版本和脱敏输入；保护私有账户/聊天与提示注入边界。
@@ -45,7 +100,7 @@
 
 不把模型概率、confidence或自评当股价上涨概率、胜率、事实正确率或发布批准。价格、权限、T+1、涨跌停、风控、账户与执行一律由确定性代码裁定。
 
-## 3. 治理与验收
+## 4. 治理与验收
 
 遵守现行v9.13、U49主动反证与Preflight、U50 `DEGRADED_FULL_CONTROL`和`DegradedRelease`准确HEAD回执；正常独立Review与作者自审不可互相冒充。只退出Jev专属评分调用，不退出其余完整门禁、独立审核、发布或恢复能力。跨模块变化按[重大决策传播](../plan-registry.md#11-重大决策传播契约防遗漏)核对总方案/INDEX/AGENTS/Skills/stage/handoff。
 

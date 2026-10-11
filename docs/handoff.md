@@ -1,26 +1,30 @@
-# 当前交接：IMP-091 Jev退出已生效
+# 当前交接：RSH-030 现有DeepSeek有限新闻LAB
 
-> 总方案v9.13；累计U01–U55；唯一状态归[W07/IMP-091](stages/w07-simplification.md#imp-091)。现役语义蓝图[semantic-decisions](ai/semantic-decisions.md)。本轮仅同任务文档收口，不自动领取第二业务任务。
+> 总方案v9.13；累计U01–U55；唯一研究状态归[W04/RSH-030](stages/w04-research.md#rsh-030)。现役语义蓝图[semantic-decisions](ai/semantic-decisions.md)。用户明确本批小规模验证，不影响选股与消息，不接Jev/Decisions。
 
 ## 1. 现场、授权与最新验收
 
-- **当前主门**：G2
-- **主切片首选**：无（IMP-091已完成；本轮仅同任务文档闭环）
-- **U50 降级授权回执**：2026-09-24 DEGRADED_FULL_CONTROL未撤销；2026-10-11用户明确删除不可用Jev，并确认项目接入＋本机插件和skill一起清理。作者=发布操作者，不称独立Review。
-- **代码发布**：[PR #255](https://github.com/1239890829/AI-Trading/pull/255)，准确HEAD 32db3192afa9d3afc0eb21d04ab2961e3ad46d53、合并0e485dae4028ad2d03625223cf1cb6f30d448ec5；DegradedRelease、required CI38123486372三job及release_check通过。post-master CI38123799161三job completed/success；原codex/retire-jev本地/远端已删除。本轮文档闭环限定handoff与W07事实回填，不改业务代码；对应PR回执归档发布事实，不形成新施工派工。
-- **完整门禁**：后端4854 passed/81 skipped/1 StarletteDeprecationWarning（164.38s），pyflakes通过；隔离前端tsc/eslint、默认及UTC各112文件1012 passed（69.51s/71.17s），Next正式构建exit0（15.39s）。doc-health/卫生/公开扫描通过。165消费者、88文档、12卫生/配置、最终108消费者为局部子集，不与全量相加。专属JeV路径/测试退出导致通过数减少，不称覆盖增强。CI时长另有元数据；账户余额接口不可读，写未知，未开启付费。同任务文档收口另核97项文档/卫生及10项Markdown渲染通过，不与主体全量相加；首回填漏2个机器传播标记已恢复，原守卫未修改。
-- **运行**：8000新PID52476从已发布主代码0e485dae无reload加载；启动前agent/outbox/attempt/model usage在途均0，正常TERM旧实例。3000 PID8157/build sW3ONH-epZJoX5SroTTpF保留，前端业务源码本项未改。providers无jev字段；原claude_cli自然探针16:10:12+08:00 ok/2770ms/probes1/alerts0，工作台与代理health 200；无新增持久ping会话。行情health仍degraded，不冒充新鲜数据。
-- **本机清理**：Jev Review/Guard官方卸载；专属MCP/四skill/CLI/Keychain凭据与注入/环境hook/两LaunchAgent/8777专用桥已备份后退出。最终无专属进程，含复核发现的2个context MCP已正常终止；Codex无关配置解析一致，生成模型设置原hash不变。旧源码/配置/使用量仅在私有恢复tar，0600/根0700，业务库/人工gold/UI恢复包未删除。
-- **证据根**：artifacts/runs/retire-jev-20261011；source-manifest-final、commit-scope-verified、global-verify-final、global-recovery/archive-index、runtime-start/acceptance、release-check和CI JSON绑定上述事实。早期dead env与恢复目录门禁失败已修正，根目录误运行pytest collection另有保留；最终正确backend目录全量绿色，断言/鉴权/门禁未放宽。
+- **当前主门**：无（有限LAB工程/实测结束；父研究待独立人工条件，不重复调用）
+- **主切片首选**：无（本轮只完成获准RSH-030有限LAB与发布，不领取第二业务任务）
+- **U50 降级授权回执**：2026-09-24 DEGRADED_FULL_CONTROL未撤销；2026-10-11用户明确现有DeepSeek有限新闻验证，随后“费用不用考虑”取代本批原1美元上限。作者=发布操作者，不称独立Review；独立工程复查也不当人工gold。
+- **版本与范围**：从最新master基线b3519d03bfc6ce86f833ca5e8c7e297d7d01e5aa建立codex/deepseek-news-lab独立工作区。新增研究脚本/测试与原权威文档，生产app、前端、选股、消息、配置及调度diff均0。
+- **真实有限验证**：24条2026-10-09至11公开initial，冻结样本SHA-256 d17273294c6ca9e9295b3dd83228c9e035d7f1994bf80341907410f75d585c20。两个输入版本各3批8条，共6调用、48输出；每组24/24字段/身份/逐字引用校验有效。输入14079、输出19953 tokens；配置别名deepseek-v4-flash，不证明中转实际底层身份；实际账单未知，不记0。
+- **效果边界**：新盲表human=0/24，旧队列human=0/240；没有旧提示同输入基线，不报准确率、生产改进或选股增益。各组3批耗时：标题P50/P95=14.782/17.093s，摘要17.120/25.723s；不当稳定生产或单条延迟。无前版，novelty全部unavailable。
+- **完整本地门禁**：后端4895 passed/81 skipped/1既有StarletteDeprecationWarning（171.13s），pyflakes通过；前端tsc/eslint通过（7.36s/11.78s）、默认与UTC各112文件1012 passed（69.49s/68.60s），Next正式构建exit0（15.48s）。doc-health/卫生/公开扫描通过；报告Markdown/HTML逐条357/357、结构和时间对账通过。专项41是全量子集，不相加。首轮4893 passed/81 skipped/2失败只因未暂存新代码与旧交接门不一致，修正文档/精确暂存后全量通过，原守卫/断言未变。CI账户余额读取403，写未知，未开启付费。
+- **发布依据**：同分支对应PR保存准确HEAD的DegradedRelease、required CI、release_check与合并后master CI；作者自查和只读工程复查均不冒充独立Review。主目录既有服务无新app代码需要重启，研究脚本的合入不成为生产模型准入。
+- **运行**：主目录8000/3000既有服务保留，本轮无重启、业务库写入或生产模型调用；仅离线runner显式复用CLI，observe_health=False、临时cwd、禁工具/MCP/skills/hooks、无会话持久化。6次调用已结束，不开常驻shadow或重复续跑。
+- **证据根**：artifacts/runs/deepseek-news-lab-20261011；samples/manifest、prepared/requests/blind/identity、live/receipts/started与report-v1。旧prepare的max_rows=30只属最初材料元数据，实际24样本/6请求；代码边界已统一24，原证据保留并独立记录更正，不覆盖回执。
 
 ## 2. U49 主动审计回执 / 作者Preflight与反证
 
-检查消费者/fallback、工具依赖/执行白名单、取消/真实线程drain、事件CAS/全批失败、人工标签/预测身份、目录卫生、全局配置/模型漂移、权威指针和未授权付费。available_tools迁唯一注册表且原函数逐字一致。Jev影子/级联/外部核验/研究预标注及专属评分义务退出；grounding、规则去重、预算、通用人工gold/rationale工具及历史provider事实保留。不能将退出辅助评分描述成退出工程审核。
+先核消费者与人工准入：四分类仅由LAB消费，旧生产category/影响力字段不互转。冻结公开输入/提示hash；漏ID、重复/外ID、格式错、引用不符、超时与未尝试均保留分母，不偷换为中性或语义insufficient。已开始无终态回收为interrupted_unknown/费用未知；摘要盲标只给同输入组计质量；24样本与6调用上限一致。故障注入专项及单独只读工程复查未发现剩余阻断项，作者反证不冒充独立发布Review。
 
-总方案/INDEX/plan-registry/semantic-decisions、AGENTS、现役Skills（Governor1.4.1）、stage及机器传播守卫已更新；旧蓝图只在archive，GOV-024退出，父业务/人工gold任务不误取消。交易/风控/数据口径与界面不适用，因为未改其规则/模型/资金。代码CI、运行加载和文档闭环各自绑定准确版本。
+语义反例：拟收购方向+1/0不稳定；愿景表态在实质事件/例行间变化；混合事实/预测的单event_status不能给全部主张背书；两组insufficient=0不证明召回。保留原提示v1.0与48输出身份，不能先调提示再拿旧回执冒充新验证。纯行情6条/组均方向0、无新增产业催化，澄清与风险有事实/未知边界；这些仍是作者观察，不是human gold。
 
-## 3. 替代方案与下一步
+总方案/INDEX/plan-registry/semantic-decisions、AGENTS、W04与handoff同步。协作/Skills/门序/CI、产品/猎场/消息/UI与源切流不适用新规则，因没有改变这些权限或消费者。
 
-当前运行使用规则→已有生成模型→明确失败降级；无Jev后台等待或凭据读取。OpenAI Decisions官方指南/参考已核：公开beta、POST /v1/decisions、当前gpt-6-luna、predicate/choice/score、基础输入0.10美元/百万token。账户/地区/网关/费用上限及目标域质量未知，厂商速度说法不作本项目收益；没有自动配置或调用。旧概率阈值不能直接继承，更不能当上涨概率/胜率。
+## 3. 已发布退出事实与恢复条件
 
-按[开放世界持续演进](ai/continuous-evolution.md)保持候选/费用/准入边界。本项已实施、发布、运行验收；本轮只发布同任务文档回填。后续候选走既有消费者、人工gold/同基线/LAB与费用授权，不为了替代名字另造SDK/配置/注册表。常规继续重跑selector，只按现役stage选择；不得重复退出、恢复旧强制调用或领取未经授权的第二任务。
+Jev退出归[W07/IMP-091](stages/w07-simplification.md#imp-091)：主体PR #255已合并0e485dae4028ad2d03625223cf1cb6f30d448ec5，post-master三job成功，文档回填已进当前基线。8000从退出代码加载，本机专属插件/skill/MCP/CLI与凭据已有私有恢复包；不再清理或恢复旧服务。历史人工gold/业务库/UI恢复包未删除。
+
+本批有限工具、真实调用、报告与完整本地验证已完成；发布事实由准确PR/HEAD回执承载。父研究只在获得匹配输入的独立人工过程/标签等新证据后恢复，先人工独立判断再看模型。无新证据不再扩样或重复本队列，不影响普通修复，不接Jev/Decisions；未来生产消费须独立效果证据与另行批准，按[开放世界持续演进](ai/continuous-evolution.md)核真实消费者、同基线、反证和退出条件。
