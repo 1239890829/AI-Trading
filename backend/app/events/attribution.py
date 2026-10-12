@@ -64,7 +64,9 @@ def _valid_direction_record(value) -> bool:
     if not isinstance(value, dict):
         return False
     return (
-        isinstance(value.get("target_type"), str) and value["target_type"] in ("symbol", "theme", "macro")
+        # "market" is produced by the existing NFP/rate chains. It is valid
+        # evidence context, but _relation only maps symbol/theme rows to stocks.
+        isinstance(value.get("target_type"), str) and value["target_type"] in ("symbol", "theme", "macro", "market")
         and isinstance(value.get("target"), str) and bool(value["target"].strip())
         and type(value.get("direction")) is int and value["direction"] in (-1, 0, 1)
         and type(value.get("strength")) is int and 1 <= value["strength"] <= 5

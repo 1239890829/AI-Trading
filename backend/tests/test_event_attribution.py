@@ -12,6 +12,7 @@ from sqlalchemy.orm import sessionmaker
 
 from app.api.routes import events as routes
 from app.events.attribution import read_attribution
+from app.events.extract import build_event
 from app.events.store import EventStore
 from app.models.event import EventCard, EventDirection, EventInterpretation
 from app.models.watchlist import Base
@@ -87,6 +88,39 @@ def test_theme_direction_does_not_become_stock_benefit_or_llm_validation(store):
     assert data["stock_relation"]["status"] == "unverified_model"
     assert data["stock_relation"]["direction"] is None
     assert data["stock_relation"]["recorded_direction"] == 1
+
+
+def test_real_macro_producer_survives_persistence_and_both_attribution_routes(store):
+    event = build_event("美国非农就业大幅低于预期", source="财联社",
+                        published_at=NOW - timedelta(minutes=5), source_published_at=NOW - timedelta(minutes=5))
+    assert {d["target_type"] for d in event["directions"]} == {"market", "theme"}
+    assert any(d["target_type"] == "market" and d["direction"] == 1 for d in event["directions"])
+    row, _ = store.add_event(event)
+    request = NS(app=NS(state=NS(theme_catalog=NS(
+        get_official_for_symbol=lambda _symbol: [{"theme_name": "苹果概念"}],
+    ))))
+    single = asyncio.run(routes.event_attribution(row.id, request, symbol="600001", store=store))
+    stocks = asyncio.run(routes.stock_attribution("600001", request, limit=12, store=store))
+    for result in (single, stocks):
+        assert result["data"]["count"] == 1
+        data = result["data"]["items"][0]
+        assert data["event_id"] == row.id
+        assert data["state"] == "active"
+        assert data["stock_relation"]["status"] == "theme_only"
+        assert data["stock_relation"]["matched_themes"] == ["苹果概念"]
+        assert data["stock_relation"]["direction"] is None
+        assert data["stock_relation"]["recorded_direction"] is None
+
+
+def test_market_only_producer_does_not_create_direct_stock_relationship(store):
+    event = build_event("美联储宣布降息", source="财联社", published_at=NOW - timedelta(minutes=5))
+    assert {d["target_type"] for d in event["directions"]} == {"market"}
+    row, _ = store.add_event(event)
+    data = read_attribution(store._sf, event_id=row.id, symbol="600001", now=NOW)["data"]["items"][0]
+    assert data["state"] == "active"
+    assert data["stock_relation"]["status"] == "unknown"
+    assert data["stock_relation"]["direction"] is None
+    assert read_attribution(store._sf, symbol="600001", now=NOW)["data"]["count"] == 0
 
 
 def test_association_and_denial_preserve_unknown_instead_of_forcing_positive(store):
@@ -319,6 +353,8 @@ def test_malformed_direction_is_not_displayed_as_a_valid_stock_judgment(store, m
     ("directions", ["bad direction"]),
     ("directions", [{"target_type": "theme", "target": ["芯片"], "direction": 1}]),
     ("directions", [{"target_type": [], "target": "芯片", "direction": 1}]),
+    ("directions", [{"target_type": "unsupported", "target": "芯片", "direction": 1,
+                     "strength": 1, "chain": "", "basis": "", "matched_by": "name"}]),
 ])
 def test_one_malformed_interpretation_does_not_break_other_stock_evidence(store, field, malformed):
     good = add(store, source_item_id="good")
