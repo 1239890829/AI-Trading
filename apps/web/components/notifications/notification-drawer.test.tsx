@@ -133,17 +133,29 @@ describe("通知中心：未读计数与红点", () => {
 
   it.each(["行情", "通知正文"])("工作台从%s核对证券，打开详情且保留通知列表", async action => {
     payload = makePayload([item({symbol: "600519", title: "来源通知"})]);
-    render(<SymbolDetailProvider><NotificationBell /><SymbolDetailModalHost /></SymbolDetailProvider>);
-    await openDrawer();
-    fireEvent.click(action === "行情" ? screen.getByRole("link", {name: /行情/}) : screen.getByText("来源通知"));
-    expect((await screen.findByTestId("notification-security-detail")).textContent).toBe("600519");
-    expect(screen.getByTestId("notification-drawer").getAttribute("data-motion-state")).toBe("open");
-    expect(screen.getByTestId("notification-list").textContent).toContain("来源通知");
-    expect(navigation.replace).not.toHaveBeenCalled();
-    expect(navigation.push).not.toHaveBeenCalled();
-    fireEvent.keyDown(window, {key: "Escape"});
-    await waitFor(() => expect(screen.queryByTestId("symbol-detail-modal")).toBeNull());
-    expect(screen.getByTestId("notification-drawer").getAttribute("data-motion-state")).toBe("open");
+    let resolveNotifications!: (value: NotificationsPayload) => void;
+    const response = new Promise<NotificationsPayload>(resolve => {resolveNotifications = resolve;});
+    vi.mocked(getNotifications).mockImplementation(() => response);
+    try {
+      render(<SymbolDetailProvider><NotificationBell /><SymbolDetailModalHost /></SymbolDetailProvider>);
+      await openDrawer();
+      expect(screen.queryByRole("link", {name: /行情/})).toBeNull();
+      expect(screen.queryByText("来源通知")).toBeNull();
+      const target = action === "行情" ? screen.findByRole("link", {name: /行情/}) : screen.findByText("来源通知");
+      await act(async () => resolveNotifications(payload));
+      fireEvent.click(await target);
+      expect((await screen.findByTestId("notification-security-detail")).textContent).toBe("600519");
+      expect(screen.getByTestId("notification-drawer").getAttribute("data-motion-state")).toBe("open");
+      expect(screen.getByTestId("notification-list").textContent).toContain("来源通知");
+      expect(navigation.replace).not.toHaveBeenCalled();
+      expect(navigation.push).not.toHaveBeenCalled();
+      fireEvent.keyDown(window, {key: "Escape"});
+      await waitFor(() => expect(screen.queryByTestId("symbol-detail-modal")).toBeNull());
+      expect(screen.getByTestId("notification-drawer").getAttribute("data-motion-state")).toBe("open");
+    } finally {
+      await act(async () => resolveNotifications(payload));
+      vi.mocked(getNotifications).mockImplementation(async () => payload);
+    }
   });
 
   it.each([
