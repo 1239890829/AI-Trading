@@ -6,7 +6,7 @@ import {LimitUpReasonPanel} from "./limit-up-reason";
 import {LimitReason} from "./limit-reason";
 
 vi.mock("@/lib/api", () => ({getLimitUpPoolSnapshot: vi.fn(), getStockAttribution: vi.fn()}));
-afterEach(() => {cleanup(); vi.useRealTimers(); vi.mocked(getLimitUpPoolSnapshot).mockReset(); vi.mocked(getStockAttribution).mockReset();});
+afterEach(() => {cleanup(); vi.useRealTimers(); vi.unstubAllGlobals(); vi.mocked(getLimitUpPoolSnapshot).mockReset(); vi.mocked(getStockAttribution).mockReset();});
 const quote = (symbol = "600825", date = "2026-10-09T08:00:00Z"): Quote => ({symbol, data_timestamp: date, source: "tencent", quality:"high", quality_reasons:[], received_at:date});
 const pool = (reason: string | null = "拟收购财联社+重大资产重组", date = "2026-10-09", symbol = "600825"): LimitPoolSnapshot<LimitUpRecord> => ({trade_date:date, pool:[{symbol,reason,source:"ths",trade_date:date,quality:"high",quality_reasons:[],received_at:`${date}T08:00:00Z`}]});
 const emptyPool = (): LimitPoolSnapshot<LimitUpRecord> => ({trade_date:"2026-10-09",pool:[]});
@@ -75,14 +75,14 @@ describe("shared security detail limit-up attribution", () => {
   });
   it("opens full source in a reading overlay and closes without removing the quote summary", async () => {
     vi.mocked(getLimitUpPoolSnapshot).mockResolvedValue(pool());
-    render(<LimitUpReasonPanel symbol="600825" quote={quote()} />);
+    const {container} = render(<LimitUpReasonPanel symbol="600825" quote={quote()} />);
     fireEvent.click(await screen.findByRole("button",{name:"查看全文"}));
     const dialog = await screen.findByRole("dialog",{name:"涨停原因 600825"});
     expect(within(dialog).getByText("拟收购财联社+重大资产重组")).toBeTruthy();
     expect(within(dialog).getByText(/2026-10-09 · 同花顺/)).toBeTruthy();
     fireEvent.click(within(dialog).getByRole("button",{name:"关闭"}));
     await vi.waitFor(() => expect(screen.queryByRole("dialog",{name:"涨停原因 600825"})).toBeNull());
-    expect(screen.getByText("拟收购财联社+重大资产重组")).toBeTruthy();
+    expect(within(container).getByText("拟收购财联社+重大资产重组")).toBeTruthy();
   });
   it("drops a late response when the current stock changes", async () => {
     let finish!: (data: LimitPoolSnapshot<LimitUpRecord>) => void;
@@ -148,6 +148,24 @@ describe("shared security detail limit-up attribution", () => {
     rerender(<LimitReason reason="原文甲" compact />);
     expect(screen.queryByRole("dialog")).toBeNull();
   });
+  it("a missing source immediately stops its reader, retains the exit image and never reopens it implicitly", async () => {
+    vi.useFakeTimers();
+    vi.stubGlobal("matchMedia", () => ({matches:false, addEventListener:()=>{}, removeEventListener:()=>{}}));
+    vi.mocked(getStockAttribution).mockResolvedValue({schema_version:1, symbol:"600825", count:0, items:[]});
+    const view = render(<LimitReason symbol="600825" reason="原文甲" compact />);
+    fireEvent.click(screen.getByRole("button", {name:/涨停原因 · 查看原文/}));
+    await act(async () => {});
+    expect(getStockAttribution).toHaveBeenCalledTimes(1);
+    view.rerender(<LimitReason symbol="600825" reason={null} compact />);
+    expect(screen.queryByRole("dialog")).toBeNull();
+    expect(screen.queryByRole("button", {name:"涨停归因 · 证据核对"})).toBeNull();
+    expect(document.querySelector("[data-exit-visual]")?.textContent).toContain("原文甲");
+    await act(async () => { await vi.advanceTimersByTimeAsync(160); });
+    expect(document.querySelector("[data-exit-visual]")).toBeNull();
+    expect(getStockAttribution).toHaveBeenCalledTimes(1);
+    view.rerender(<LimitReason symbol="600825" reason="原文甲" compact />);
+    expect(screen.queryByRole("dialog")).toBeNull();
+  });
   it("keeps a full long original available to touch and keyboard, without fabricating a source", async () => {
     const reason = "自有消息面+".repeat(40);
     const {container} = render(<LimitReason reason={reason} compact />);
@@ -189,6 +207,7 @@ it("隐藏停止池读取并取消portal原文，恢复不自动重开", async (
   expect(screen.getByRole("dialog")).toBeTruthy();
   view.rerender(<LimitUpReasonPanel symbol="600825" quote={quote()} active={false} />);
   expect(screen.queryByRole("dialog")).toBeNull();
+  expect(document.querySelector("[data-motion-state=closed] [data-exit-visual]")).toBeTruthy();
   await act(async () => {await vi.advanceTimersByTimeAsync(300_000);});
   expect(getLimitUpPoolSnapshot).toHaveBeenCalledTimes(1);
   view.rerender(<LimitUpReasonPanel symbol="600825" quote={quote()} active />);

@@ -105,19 +105,57 @@ afterEach(() => {
 });
 
 describe("通知中心：未读计数与红点", () => {
+  it("关闭立即撤销模态和焦点占用，保留完整列表160ms后移除", async () => {
+    vi.useFakeTimers();
+    try {
+      payload = makePayload([item({title:"退出中的通知正文"})]);
+      render(<NotificationBell />);
+      await act(async () => {});
+      const trigger = screen.getByRole("button", {name:/打开通知中心/});
+      trigger.focus();
+      fireEvent.click(trigger);
+      await act(async () => {});
+      const panel = screen.getByTestId("notification-drawer");
+      const list = screen.getByTestId("notification-list");
+      fireEvent.keyDown(window, {key:"Escape"});
+      expect(screen.queryByRole("dialog", {name:"通知中心"})).toBeNull();
+      expect(panel.hasAttribute("inert")).toBe(true);
+      expect(panel.hasAttribute("aria-modal")).toBe(false);
+      expect(panel.contains(list)).toBe(true);
+      expect(panel.textContent).toContain("退出中的通知正文");
+      expect(document.activeElement).toBe(trigger);
+      await act(async () => vi.advanceTimersByTime(159));
+      expect(screen.getByTestId("notification-drawer")).toBe(panel);
+      await act(async () => vi.advanceTimersByTime(1));
+      expect(screen.queryByTestId("notification-drawer")).toBeNull();
+    } finally {vi.useRealTimers();}
+  });
+
   it.each(["行情", "通知正文"])("工作台从%s核对证券，打开详情且保留通知列表", async action => {
     payload = makePayload([item({symbol: "600519", title: "来源通知"})]);
-    render(<SymbolDetailProvider><NotificationBell /><SymbolDetailModalHost /></SymbolDetailProvider>);
-    await openDrawer();
-    fireEvent.click(action === "行情" ? screen.getByRole("link", {name: /行情/}) : screen.getByText("来源通知"));
-    expect((await screen.findByTestId("notification-security-detail")).textContent).toBe("600519");
-    expect(screen.getByTestId("notification-drawer").getAttribute("data-motion-state")).toBe("open");
-    expect(screen.getByTestId("notification-list").textContent).toContain("来源通知");
-    expect(navigation.replace).not.toHaveBeenCalled();
-    expect(navigation.push).not.toHaveBeenCalled();
-    fireEvent.keyDown(window, {key: "Escape"});
-    await waitFor(() => expect(screen.queryByTestId("symbol-detail-modal")).toBeNull());
-    expect(screen.getByTestId("notification-drawer").getAttribute("data-motion-state")).toBe("open");
+    let resolveNotifications!: (value: NotificationsPayload) => void;
+    const response = new Promise<NotificationsPayload>(resolve => {resolveNotifications = resolve;});
+    vi.mocked(getNotifications).mockImplementation(() => response);
+    try {
+      render(<SymbolDetailProvider><NotificationBell /><SymbolDetailModalHost /></SymbolDetailProvider>);
+      await openDrawer();
+      expect(screen.queryByRole("link", {name: /行情/})).toBeNull();
+      expect(screen.queryByText("来源通知")).toBeNull();
+      const target = action === "行情" ? screen.findByRole("link", {name: /行情/}) : screen.findByText("来源通知");
+      await act(async () => resolveNotifications(payload));
+      fireEvent.click(await target);
+      expect((await screen.findByTestId("notification-security-detail")).textContent).toBe("600519");
+      expect(screen.getByTestId("notification-drawer").getAttribute("data-motion-state")).toBe("open");
+      expect(screen.getByTestId("notification-list").textContent).toContain("来源通知");
+      expect(navigation.replace).not.toHaveBeenCalled();
+      expect(navigation.push).not.toHaveBeenCalled();
+      fireEvent.keyDown(window, {key: "Escape"});
+      await waitFor(() => expect(screen.queryByTestId("symbol-detail-modal")).toBeNull());
+      expect(screen.getByTestId("notification-drawer").getAttribute("data-motion-state")).toBe("open");
+    } finally {
+      await act(async () => resolveNotifications(payload));
+      vi.mocked(getNotifications).mockImplementation(async () => payload);
+    }
   });
 
   it.each([

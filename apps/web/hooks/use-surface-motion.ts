@@ -4,66 +4,78 @@ import { useCallback, useLayoutEffect, useRef, type RefObject } from "react";
 import { useReducedMotion } from "@/hooks/use-exit-presence";
 import { SURFACE_EASE, surfaceTransform, type MotionOrigin } from "@/lib/surface-motion";
 
-/** Animate geometry only. State, focus and business mounting remain immediate. */
+type SurfaceFrame = { transform: string; opacity: string | number; borderRadius: string };
+
+/** One visual owner per panel. Focus, commands and reader mounting stay immediate. */
 export function useSurfaceMotion(ref: RefObject<HTMLDivElement | null>, open: boolean, origin: MotionOrigin | null | undefined, layout: string) {
   const reduced = useReducedMotion();
+  const owned = !reduced && typeof HTMLElement !== "undefined" && typeof HTMLElement.prototype.animate === "function";
   const previous = useRef<DOMRect | null>(null);
   const animation = useRef<Animation | null>(null);
-  const started = useRef(false);
+  const interrupted = useRef<SurfaceFrame | null>(null);
+  const state = useRef<{open: boolean; layout: string} | null>(null);
   const keyboard = useRef(false);
   const prepare = useCallback((animate = true) => {
-    previous.current = animate && !reduced ? ref.current?.getBoundingClientRect() ?? null : null;
-    animation.current?.cancel();
+    const panel = ref.current, current = animation.current;
+    previous.current = animate && !reduced ? panel?.getBoundingClientRect() ?? null : null;
+    interrupted.current = null;
+    if (current) {
+      if (animate && !reduced && panel && current.playState !== "finished") {
+        const style = getComputedStyle(panel);
+        interrupted.current = {transform:style.transform || "none", opacity:style.opacity || 1, borderRadius:style.borderRadius};
+      }
+      // A grip drag must take ownership immediately, before its first move.
+      current.cancel(); animation.current = null;
+    }
   }, [ref, reduced]);
 
   useLayoutEffect(() => {
     function key(event: KeyboardEvent) {
-      if (event.isComposing) return;
-      keyboard.current = true;
-      animation.current?.cancel();
-      ref.current?.setAttribute("data-motion-keyboard", "true");
+      if (!event.isComposing) keyboard.current = true;
     }
-    function pointer() {
-      keyboard.current = false;
-      ref.current?.removeAttribute("data-motion-keyboard");
-    }
+    function pointer() { keyboard.current = false; }
     window.addEventListener("keydown", key, true);
     window.addEventListener("pointerdown", pointer, true);
     return () => { window.removeEventListener("keydown", key, true); window.removeEventListener("pointerdown", pointer, true); };
-  }, [ref]);
+  }, []);
 
   useLayoutEffect(() => {
     const panel = ref.current;
     if (!panel) return;
-    const wasStarted = started.current;
-    started.current = true;
-    if (reduced || keyboard.current || typeof panel.animate !== "function") {
-      previous.current = null;
-      return;
-    }
+    const prior = state.current;
+    state.current = {open, layout};
+    const fromLayout = previous.current;
+    previous.current = null;
+    const resumed = interrupted.current;
+    interrupted.current = null;
+    if (!owned) return;
+    const changing = !prior || prior.open !== open || prior.layout !== layout || fromLayout || resumed;
+    if (!changing) return;
+
     const source = origin?.element;
     const sourceBounds = source?.isConnected ? source.getBoundingClientRect() : null;
-    const sourceRect = sourceBounds && sourceBounds.right > 0 && sourceBounds.bottom > 0 && sourceBounds.left < window.innerWidth && sourceBounds.top < window.innerHeight ? sourceBounds : null;
+    const sourceRect = sourceBounds && sourceBounds.width > 0 && sourceBounds.height > 0 && sourceBounds.right > 0 && sourceBounds.bottom > 0 && sourceBounds.left < window.innerWidth && sourceBounds.top < window.innerHeight ? sourceBounds : null;
     const target = panel.getBoundingClientRect();
-    const from = previous.current ?? (!wasStarted && open ? sourceRect : null);
-    previous.current = null;
-    const closing = !open && sourceRect;
-    const transform = surfaceTransform(closing || from || target, target);
-    if (transform && (closing || from)) {
-      const radius = getComputedStyle(panel).borderRadius;
-      const sourceRadius = origin?.kind === "capsule" ? "999px" : "14px";
-      animation.current = panel.animate(
-        closing ? [{ transform: "none", opacity: 1, borderRadius: radius }, { transform, opacity: 0, borderRadius: sourceRadius }] : [{ transform, opacity: .4, borderRadius: sourceRadius }, { transform: "none", opacity: 1, borderRadius: radius }],
-        { duration: closing ? 150 : 260, easing: SURFACE_EASE, fill: "none" },
-      );
-    }
+    const spatial = origin !== null && !keyboard.current;
+    const radius = getComputedStyle(panel).borderRadius;
+    const sourceRadius = origin?.kind === "capsule" ? "999px" : "14px";
+    const geometry = spatial && surfaceTransform(!open ? sourceRect || target : fromLayout || sourceRect || target, target);
+    const hasGeometry = !!geometry && !!(!open ? sourceRect : fromLayout || sourceRect);
+    const compactMove = !spatial ? "none" : panel.classList.contains("motion-drawer") ? (window.innerWidth < 640 ? "translateY(16px)" : "translateX(16px)") : "scale(.98)";
+    const rest: SurfaceFrame = {transform:"none", opacity:1, borderRadius:radius};
+    const away: SurfaceFrame = {transform:hasGeometry && geometry ? geometry : compactMove, opacity:open && hasGeometry ? .4 : 0, borderRadius:hasGeometry ? sourceRadius : radius};
+    const frames = open ? [resumed || away, rest] : [resumed || rest, away];
+    const current = panel.animate(frames, {duration:open ? (hasGeometry ? 260 : 200) : 150, easing:SURFACE_EASE, fill:"none"});
+    animation.current = current;
     return () => {
-      animation.current?.cancel();
-      animation.current = null;
-      // StrictMode replays setup after cleanup: restore the entry state as well.
-      started.current = wasStarted;
+      if (animation.current === current && current.playState !== "finished") {
+        const style = getComputedStyle(panel);
+        interrupted.current = {transform:style.transform || "none", opacity:style.opacity || 1, borderRadius:style.borderRadius};
+      }
+      current.cancel();
+      if (animation.current === current) animation.current = null;
     };
-  }, [open, origin, layout, reduced, ref]);
+  }, [open, origin, layout, owned, ref]);
 
-  return { prepare, reduced };
+  return { prepare, reduced, owned };
 }

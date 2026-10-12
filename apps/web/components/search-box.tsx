@@ -5,7 +5,7 @@ import Search01Icon from "@hugeicons/core-free-icons/Search01Icon";
 import Cancel01Icon from "@hugeicons/core-free-icons/Cancel01Icon";
 import { CloseButton } from "@/components/ui/icon-button";
 
-import { useCallback, useEffect, useId, useLayoutEffect, useRef, useState } from "react";
+import { useCallback, useEffect, useId, useLayoutEffect, useMemo, useRef, useState } from "react";
 import { useExitPresence } from "@/hooks/use-exit-presence";
 import { ApiError, addToWatchlist, searchSymbols } from "@/lib/api";
 import { notifyWatchlistChanged } from "@/lib/watchlist-sync";
@@ -104,7 +104,7 @@ export function SearchBox({collapsible = false}: {collapsible?: boolean}) {
   }, [q, runSearch]);
 
   // 少于 2 字时直接派生空列表（旧写法在 effect 里同步 setItems([])，会触发级联渲染）
-  const results = q.trim().length >= MIN_QUERY_LEN && resultQuery === q.trim() ? items : [];
+  const results = useMemo(() => q.trim().length >= MIN_QUERY_LEN && resultQuery === q.trim() ? items : [], [q, resultQuery, items]);
 
   const dismiss = useCallback(() => {
     if (timerRef.current) {
@@ -202,7 +202,10 @@ export function SearchBox({collapsible = false}: {collapsible?: boolean}) {
     open &&
     kw.length >= MIN_QUERY_LEN &&
     (results.length > 0 || loading || error !== null || searched);
-  const panelPresence = useExitPresence(showPanel ? true : null);
+  // Closing cancels the query immediately; its last visible reading stays intact during exit.
+  const panelSnapshot = useMemo(() => ({results, loading, error, searched, addNote, adding, kw}), [results, loading, error, searched, addNote, adding, kw]);
+  const panelPresence = useExitPresence(showPanel ? panelSnapshot : null);
+  const panel = panelPresence.value;
 
   return (
     <div ref={boxRef} data-search-expanded={expanded || undefined} data-collapsible={collapsible || undefined} className="search-field relative w-32 min-w-0 sm:w-44 md:w-52" onKeyDown={event => {
@@ -264,31 +267,31 @@ export function SearchBox({collapsible = false}: {collapsible?: boolean}) {
         />
       )}
       </div>
-      {panelPresence.value && (
+      {panel && (
         <section id={panelId} data-motion-state={showPanel ? "open" : "closed"} aria-hidden={!showPanel || undefined} inert={!showPanel} className="ui-glass-overlay search-popover motion-float" aria-label="证券搜索结果">
           <header className="search-popover-heading">
             <div><strong>证券搜索</strong><span>匹配代码或名称</span></div>
             <CloseButton onClose={closeAndFocus} label="关闭搜索结果" autoFocus={false} />
           </header>
         <ul className="search-result-list">
-          {addNote && <li role="status" className="px-3 py-2 text-xs">{addNote}</li>}
-          {error !== null && (
+          {panel.addNote && <li role="status" className="px-3 py-2 text-xs">{panel.addNote}</li>}
+          {panel.error !== null && (
             <li className="px-3 py-2 text-xs text-red-700 dark:text-red-400" role="alert">
-              <p>{error}</p>
+              <p>{panel.error}</p>
               <button type="button" className="quiet-action search-retry" onClick={() => runSearch(kw)}>重新搜索</button>
             </li>
           )}
-          {loading && results.length === 0 && error === null && (
+          {panel.loading && panel.results.length === 0 && panel.error === null && (
             <li className="px-3 py-2 text-xs text-zinc-600 dark:text-zinc-400" role="status">
               搜索中…
             </li>
           )}
-          {!loading && error === null && searched && results.length === 0 && (
+          {!panel.loading && panel.error === null && panel.searched && panel.results.length === 0 && (
             <li className="px-3 py-2 text-xs text-zinc-600 dark:text-zinc-400" role="status">
-              未找到与「{kw}」匹配的股票
+              未找到与「{panel.kw}」匹配的股票
             </li>
           )}
-          {results.map((it) => (
+          {panel.results.map((it) => (
             <li key={`${it.source}-${it.symbol}`}>
               <div className="search-result-row">
                 <button type="button" onClick={() => go(it)} className="search-result-open" onKeyDown={event => {
@@ -305,8 +308,8 @@ export function SearchBox({collapsible = false}: {collapsible?: boolean}) {
                 {it.is_realtime ? (
                   <span className="search-watch-state">已自选 ✓</span>
                 ) : (
-                  <button type="button" disabled={adding !== null} aria-label={`加入自选 ${it.name ?? it.symbol}`} onClick={(e) => void quickAdd(e, it)} className="search-watch-action" title="加入自选">
-                    {adding === it.symbol ? "保存中" : "＋"}
+                  <button type="button" disabled={panel.adding !== null} aria-label={`加入自选 ${it.name ?? it.symbol}`} onClick={(e) => void quickAdd(e, it)} className="search-watch-action" title="加入自选">
+                    {panel.adding === it.symbol ? "保存中" : "＋"}
                   </button>
                 )}
               </div>

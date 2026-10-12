@@ -507,6 +507,30 @@ describe("FloatingAssistant 会话历史", () => {
 
 
 describe("assistant keyboard context", () => {
+  it("keeps the same content through the inert exit and removes it after 160ms", async () => {
+    vi.useFakeTimers();
+    try {
+      vi.stubGlobal("fetch", vi.fn(async () => new Response(JSON.stringify({data: [], meta: {}}), {headers:{"content-type":"application/json"}})));
+      render(<FloatingAssistant />);
+      await act(async () => openPanel());
+      const panel = screen.getByTestId("assistant-panel");
+      const input = screen.getByTestId("assistant-input");
+      fireEvent.change(input, {target:{value:"保留中的草稿"}});
+      fireEvent.click(screen.getByRole("button", {name:"最小化"}));
+      expect(screen.queryByRole("region", {name:"AI 助手面板"})).toBeNull();
+      expect(panel.hasAttribute("inert")).toBe(true);
+      expect(panel.contains(input)).toBe(true);
+      expect((input as HTMLTextAreaElement).value).toBe("保留中的草稿");
+      expect(document.activeElement).toBe(screen.getByTestId("assistant-ball"));
+      await act(async () => vi.advanceTimersByTime(159));
+      expect(screen.getByTestId("assistant-panel")).toBe(panel);
+      await act(async () => vi.advanceTimersByTime(1));
+      expect(screen.queryByTestId("assistant-panel")).toBeNull();
+      await act(async () => openPanel());
+      expect((screen.getByTestId("assistant-input") as HTMLTextAreaElement).value).toBe("保留中的草稿");
+    } finally {vi.useRealTimers();}
+  });
+
   it("minimizing aborts the invisible dictionary read while the explicitly started answer continues", async () => {
     const stream = makeStream();
     const dictionarySignals: AbortSignal[] = [];
@@ -525,7 +549,7 @@ describe("assistant keyboard context", () => {
     fireEvent.click(screen.getByRole("button", {name:"最小化"}));
     expect(dictionarySignals[0].aborted).toBe(true);
     expect(chatSignal.aborted).toBe(false);
-    expect(screen.queryByTestId("assistant-input")).toBeNull();
+    expect(screen.queryByRole("textbox")).toBeNull(); // Retained exit content is inert and inaccessible.
     await act(async () => {stream.emit({type:"delta", text:"原来的解释完成"}); stream.emit({type:"done"}); stream.close();});
     await act(async () => openPanel());
     expect(screen.getByText("原来的解释完成")).toBeTruthy();
@@ -541,7 +565,7 @@ describe("assistant keyboard context", () => {
     expect(document.activeElement).toBe(await screen.findByTestId("assistant-input"));
     fireEvent.keyDown(document.activeElement!, {key:"Escape"});
     expect(screen.queryByRole("region", {name:"AI 助手面板"})).toBeNull();
-    expect(screen.queryByTestId("assistant-input")).toBeNull();
+    expect(screen.queryByRole("textbox")).toBeNull();
     const shell = screen.getByTestId("assistant-panel");
     expect(shell.hasAttribute("inert")).toBe(true);
     expect(shell.getAttribute("data-motion-state")).toBe("closed");

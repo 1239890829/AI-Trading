@@ -1,5 +1,5 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { cleanup, fireEvent, render, screen, waitFor } from "@testing-library/react";
+import { act, cleanup, fireEvent, render, screen, waitFor } from "@testing-library/react";
 
 import type { ImpactEvent, NotificationItem, NotificationsPayload } from "@/lib/api";
 
@@ -179,6 +179,29 @@ afterEach(() => {
 });
 
 describe("通知中心：资讯 / 事件 tab", () => {
+  it("退出画面仍在时立即停止事件轮询，再打开补读一次", async () => {
+    vi.useFakeTimers();
+    try {
+      renderBell();
+      await act(async () => {});
+      fireEvent.click(screen.getByRole("button", {name:/打开通知中心/}));
+      await act(async () => {});
+      fireEvent.click(screen.getByTestId("notification-mode-events"));
+      await act(async () => {});
+      expect(spies.getImpactEvents).toHaveBeenCalledTimes(1);
+      await act(async () => vi.advanceTimersByTime(59_950));
+      fireEvent.click(screen.getByRole("button", {name:/^关闭$/}));
+      await act(async () => vi.advanceTimersByTime(50));
+      expect(screen.getByTestId("notification-drawer").hasAttribute("inert")).toBe(true);
+      expect(spies.getImpactEvents).toHaveBeenCalledTimes(1);
+      await act(async () => vi.advanceTimersByTime(110));
+      expect(screen.queryByTestId("notification-drawer")).toBeNull();
+      fireEvent.click(screen.getByRole("button", {name:/打开通知中心/}));
+      await act(async () => {});
+      expect(spies.getImpactEvents).toHaveBeenCalledTimes(2);
+    } finally {vi.useRealTimers();}
+  });
+
   it("资讯条目展示无方向状态与LLM假设，不把两者混成已判定利好", async () => {
     eventItems = [event({ title: "尚无方向", judge_status: "neutral", judge_reason: "证据不足且已超时" }),
       event({ id: 2, title: "模型辅助解释", judge_status: "pending", judge_status_label: "待验证假设", directions: [

@@ -12,8 +12,18 @@
 @media(min-width:768px) {.theme-controls-motion,.theme-controls-motion>.motion-disclosure-body {height:100%;}}
 @starting-style {.motion-disclosure[data-open="true"] {grid-template-rows:0fr;opacity:0;}}
 .motion-float {opacity:1;transform:none;transition:opacity 160ms ease-out,transform 160ms var(--ease-out);}
-.motion-float[data-motion-state="closed"] {opacity:0;transform:translateY(6px);pointer-events:none;}
-@starting-style {.motion-float {opacity:0;transform:translateY(6px);}}
+.motion-float[data-motion-state="open"] {animation:float-enter 160ms var(--ease-out);}
+.motion-float[data-motion-state="closed"] {opacity:0;transform:translateY(6px);pointer-events:none;animation:float-exit 150ms ease-in both;}
+@keyframes float-enter {from {opacity:0;transform:translateY(6px);} to {opacity:1;transform:none;}}
+@keyframes float-exit {from {opacity:1;transform:none;} to {opacity:0;transform:translateY(6px);}}
+/* A distinct closed animation lets Radix retain its own portal until animationend. */
+.control-hint[data-state="closed"] {animation:hint-exit 120ms ease-in both;pointer-events:none;}
+@keyframes hint-exit {from {opacity:1;transform:none;} to {opacity:0;transform:translateY(-2px);}}
+/* Cursor-driven positioning stays immediate; opacity never changes its edge flip. */
+.flow-tooltip-motion[data-motion-state="open"] {animation:flow-tip-enter 120ms ease-out;}
+.flow-tooltip-motion[data-motion-state="closed"] {opacity:0;animation:flow-tip-exit 120ms ease-in both;}
+@keyframes flow-tip-enter {from {opacity:0;} to {opacity:1;}}
+@keyframes flow-tip-exit {from {opacity:1;} to {opacity:0;}}
 
 /* Native summary keyboard/toggle semantics remain untouched. Older browsers
    retain immediate disclosure; no document listener or per-row animation work. */
@@ -35,6 +45,7 @@
 }
 @media(prefers-reduced-motion:reduce) {
   .motion-disclosure,.motion-float,details::details-content {transition:none!important;}
+  .motion-float,.control-hint,.flow-tooltip-motion {animation:none!important;}
   .motion-float,.motion-float[data-motion-state="closed"] {transform:none;}
 }
 /* Layout transitions run for user intent, never for quote ticks. */

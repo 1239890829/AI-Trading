@@ -10,7 +10,7 @@ export function ControlHint({children, content, inactive = false}: {children: Re
   return <Tooltip.Provider delayDuration={350}>
     <Tooltip.Root open={open && !inactive} onOpenChange={setOpen}>
       <Tooltip.Trigger asChild>{children}</Tooltip.Trigger>
-      <Tooltip.Portal><Tooltip.Content className="control-hint" side="bottom" sideOffset={8} collisionPadding={12}>{content}<Tooltip.Arrow className="control-hint-arrow" width={10} height={5}/></Tooltip.Content></Tooltip.Portal>
+      <Tooltip.Portal><Tooltip.Content className="control-hint" aria-hidden={!open || inactive || undefined} side="bottom" sideOffset={8} collisionPadding={12}>{content}<Tooltip.Arrow className="control-hint-arrow" width={10} height={5}/></Tooltip.Content></Tooltip.Portal>
     </Tooltip.Root>
   </Tooltip.Provider>;
 }
