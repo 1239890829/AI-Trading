@@ -37,7 +37,7 @@ const BLOCKED: OrderCheckResult = {
 
 // vitest 未开 globals，RTL 的自动 cleanup 不会注册，必须手动清理：
 // 否则多个 TradeForm 实例会累积在 document.body，getByText 命中多个元素
-afterEach(cleanup);
+afterEach(() => {cleanup(); vi.useRealTimers();});
 
 beforeEach(() => {
   vi.clearAllMocks();
@@ -289,4 +289,55 @@ it("shows server fee and disables an expired approval", async () => {
   await waitRiskReady();
   expect(screen.getByText(/费 7.89/)).toBeTruthy();
   expect((screen.getByRole("button", { name: "买入 600127" }) as HTMLButtonElement).disabled).toBe(true);
+});
+
+ describe("TradeForm · 隐藏与恢复", () => {
+  it("隐藏暂停预检与timer，保留手填草稿，恢复必须等待新预检", async () => {
+    vi.useFakeTimers();
+    vi.setSystemTime(new Date("2026-10-09T10:00:00+08:00"));
+    vi.mocked(checkOrderRisk).mockImplementation(async () => ({...OK, checked_at: new Date().toISOString()}));
+    const view = render(<TradeForm symbol="600519" price={20} />);
+    fireEvent.change(screen.getByLabelText("价格"), {target: {value: "19.8"}});
+    fireEvent.change(screen.getByLabelText("数量"), {target: {value: "200"}});
+    await act(async () => {await vi.advanceTimersByTimeAsync(300);});
+    const submit = () => screen.getByRole("button", {name: "买入 600519"}) as HTMLButtonElement;
+    expect(submit().disabled).toBe(false);
+    const checked = vi.mocked(checkOrderRisk).mock.calls.length;
+    view.rerender(<TradeForm symbol="600519" price={25} active={false} />);
+    await act(async () => {await vi.advanceTimersByTimeAsync(120_000);});
+    expect(checkOrderRisk).toHaveBeenCalledTimes(checked);
+    expect(submit().disabled).toBe(true);
+    expect((screen.getByLabelText("价格") as HTMLInputElement).value).toBe("19.8");
+    expect((screen.getByLabelText("数量") as HTMLInputElement).value).toBe("200");
+    view.rerender(<TradeForm symbol="600519" price={25} active />);
+    expect(submit().disabled).toBe(true);
+    fireEvent.click(submit());
+    expect(placePaperOrder).not.toHaveBeenCalled();
+    await act(async () => {await vi.advanceTimersByTimeAsync(300);});
+    expect(checkOrderRisk).toHaveBeenCalledTimes(checked + 1);
+    expect(submit().disabled).toBe(false);
+    fireEvent.click(submit());
+    await act(async () => {});
+    expect(placePaperOrder).toHaveBeenCalledWith("600519", "buy", 19.8, 200);
+  });
+
+  it("相同草稿快速隐藏再恢复，旧允许回包不能使尚在途的新预检通过", async () => {
+    vi.useFakeTimers();
+    vi.setSystemTime(new Date("2026-10-09T10:00:00+08:00"));
+    let oldDone!: (result: OrderCheckResult) => void;
+    let freshDone!: (result: OrderCheckResult) => void;
+    vi.mocked(checkOrderRisk).mockImplementationOnce(() => new Promise(resolve => {oldDone = resolve;})).mockImplementationOnce(() => new Promise(resolve => {freshDone = resolve;}));
+    const view = render(<TradeForm symbol="600519" price={20} />);
+    await act(async () => {await vi.advanceTimersByTimeAsync(300);});
+    view.rerender(<TradeForm symbol="600519" price={20} active={false} />);
+    view.rerender(<TradeForm symbol="600519" price={20} active />);
+    await act(async () => {await vi.advanceTimersByTimeAsync(300); oldDone({...OK, checked_at: new Date().toISOString()});});
+    const submit = screen.getByRole("button", {name: "买入 600519"}) as HTMLButtonElement;
+    expect(submit.disabled).toBe(true);
+    fireEvent.click(submit);
+    expect(placePaperOrder).not.toHaveBeenCalled();
+    await act(async () => {freshDone({...BLOCKED, checked_at: new Date().toISOString()});});
+    expect(submit.disabled).toBe(true);
+    expect(screen.getByText(/单票仓位上限/)).toBeTruthy();
+  });
 });

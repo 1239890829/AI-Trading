@@ -6,7 +6,7 @@ import {LimitUpReasonPanel} from "./limit-up-reason";
 import {LimitReason} from "./limit-reason";
 
 vi.mock("@/lib/api", () => ({getLimitUpPoolSnapshot: vi.fn()}));
-afterEach(() => {cleanup(); vi.mocked(getLimitUpPoolSnapshot).mockReset();});
+afterEach(() => {cleanup(); vi.useRealTimers(); vi.mocked(getLimitUpPoolSnapshot).mockReset();});
 const quote = (symbol = "600825", date = "2026-10-09T08:00:00Z"): Quote => ({symbol, data_timestamp: date, source: "tencent", quality:"high", quality_reasons:[], received_at:date});
 const pool = (reason: string | null = "拟收购财联社+重大资产重组", date = "2026-10-09", symbol = "600825"): LimitPoolSnapshot<LimitUpRecord> => ({trade_date:date, pool:[{symbol,reason,source:"ths",trade_date:date,quality:"high",quality_reasons:[],received_at:`${date}T08:00:00Z`}]});
 const emptyPool = (): LimitPoolSnapshot<LimitUpRecord> => ({trade_date:"2026-10-09",pool:[]});
@@ -157,4 +157,37 @@ describe("shared security detail limit-up attribution", () => {
     expect(within(dialog).getByText(/来源未记录/)).toBeTruthy();
     expect(container.querySelector(".truncate")).toBeNull();
   });
+});
+
+it("隐藏停止池读取并取消portal原文，恢复不自动重开", async () => {
+  vi.useFakeTimers();
+  vi.mocked(getLimitUpPoolSnapshot).mockResolvedValue(pool());
+  const view = render(<LimitUpReasonPanel symbol="600825" quote={quote()} />);
+  await act(async () => {});
+  fireEvent.click(screen.getByRole("button", {name: "查看全文"}));
+  expect(screen.getByRole("dialog")).toBeTruthy();
+  view.rerender(<LimitUpReasonPanel symbol="600825" quote={quote()} active={false} />);
+  expect(screen.queryByRole("dialog")).toBeNull();
+  await act(async () => {await vi.advanceTimersByTimeAsync(300_000);});
+  expect(getLimitUpPoolSnapshot).toHaveBeenCalledTimes(1);
+  view.rerender(<LimitUpReasonPanel symbol="600825" quote={quote()} active />);
+  await act(async () => {});
+  expect(getLimitUpPoolSnapshot).toHaveBeenCalledTimes(2);
+  expect(screen.queryByRole("dialog")).toBeNull();
+});
+
+it("隐藏不能清掉源失败而复活旧原因，恢复的新读取完成前仍不展示", async () => {
+  vi.mocked(getLimitUpPoolSnapshot).mockResolvedValueOnce(pool()).mockRejectedValueOnce(new Error("当前源失败"));
+  const view = render(<LimitUpReasonPanel symbol="600825" quote={quote()} />);
+  await act(async () => {});
+  await refreshPool();
+  expect(screen.queryByText("涨停原因")).toBeNull();
+  view.rerender(<LimitUpReasonPanel symbol="600825" quote={quote()} active={false} />);
+  expect(screen.queryByText("涨停原因")).toBeNull();
+  let finish!: (snapshot: LimitPoolSnapshot<LimitUpRecord>) => void;
+  vi.mocked(getLimitUpPoolSnapshot).mockImplementationOnce(() => new Promise(resolve => {finish = resolve;}));
+  view.rerender(<LimitUpReasonPanel symbol="600825" quote={quote()} active />);
+  expect(screen.queryByText("涨停原因")).toBeNull();
+  await act(async () => {finish(pool());});
+  expect(screen.getByText("涨停原因")).toBeTruthy();
 });

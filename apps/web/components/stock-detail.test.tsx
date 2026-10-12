@@ -41,6 +41,10 @@ const api = vi.hoisted(() => ({
   getPaperFills: vi.fn(),
   cancelPaperOrder: vi.fn(),
   checkOrderRisk: vi.fn(),
+  getRealPositions: vi.fn(),
+  getLimitUpPoolSnapshot: vi.fn(),
+  getSpeedRank: vi.fn(),
+  getBoards: vi.fn(),
 }));
 
 vi.mock("@/lib/api", async (importOriginal) => ({
@@ -130,6 +134,10 @@ beforeEach(() => {
   api.getCompanyProfile.mockResolvedValue(null);
   api.getNewsDigest.mockResolvedValue({ announcements: [], news: [], announcements_error: null, news_error: null });
   api.getThemesCatalog.mockResolvedValue([]);
+  api.getRealPositions.mockResolvedValue({items: [], cleared: [], total: {market_value: 0, cost_total: 0, unrealized_pnl: 0, realized_pnl: 0}, count: 0});
+  api.getLimitUpPoolSnapshot.mockResolvedValue({trade_date: "2026-10-09", pool: []});
+  api.getSpeedRank.mockResolvedValue({theme: "881156.TI", theme_name: "粮食概念", window: "5m", basis: "最近5分钟", items: []});
+  api.getBoards.mockResolvedValue([]);
   api.getPaperAccount.mockResolvedValue(account());
   api.getPaperPositions.mockResolvedValue([]);
   api.getPaperOrders.mockResolvedValue([]);
@@ -453,5 +461,169 @@ describe("StockDetailPanel · 每个端点只读取一次首屏", () => {
     expect(api.getTrades).not.toHaveBeenCalled();
     expect(api.getKlinePayload).toHaveBeenCalledTimes(1);
     expect(api.getMinuteLineWithBaseline).toHaveBeenCalledTimes(1);
+  });
+});
+
+ describe("StockDetailPanel · 隐藏详情与共享持仓", () => {
+  const coreReads = () => [api.getQuote, api.getKlinePayload, api.getOrderBook, api.getMinuteLineWithBaseline, api.getTrades, api.getStockThemes, api.getWatchlist, api.getFinancials, api.getCompanyProfile, api.getNewsDigest, api.getAuction, api.getCapitalFlow, api.getMarketOverview];
+
+  it("初次隐藏不建立自身WS、不发主读取；恢复立即读取并保留idle预取", async () => {
+    const view = render(<StockDetailPanel symbol="600519" active={false} />);
+    await advance(120_000);
+    for (const read of coreReads()) expect(read).not.toHaveBeenCalled();
+    for (const symbols of calls.symbols) expect(symbols).toEqual([]);
+    view.rerender(<StockDetailPanel symbol="600519" active />);
+    await settle();
+    expect(api.getQuote).toHaveBeenCalledTimes(1);
+    expect(api.getKlinePayload).toHaveBeenCalledTimes(1);
+    expect(api.getOrderBook).toHaveBeenCalledTimes(1);
+    expect(api.getStockThemes).toHaveBeenCalledTimes(1);
+    await advance(900);
+    expect(api.getMinuteLineWithBaseline).toHaveBeenCalledTimes(1);
+    expect(api.getTrades).toHaveBeenCalledTimes(1);
+  });
+
+  it("已有streamStatus即认定上游所有者，不为尚缺的首帧quote再订阅", () => {
+    render(<StockDetailPanel symbol="600519" chartTab="flow" streamStatus="connecting" />);
+    for (const symbols of calls.symbols) expect(symbols).toEqual([]);
+  });
+
+  it("隐藏期间暂停主读取、忽略报价tick，恢复校准期间保留原图表", async () => {
+    const view = render(<StockDetailPanel symbol="600519" />);
+    await settle();
+    expect(view.getByTestId("kline-price").textContent).toBe("20");
+    view.rerender(<StockDetailPanel symbol="600519" active={false} />);
+    const counts = coreReads().map(read => read.mock.calls.length);
+    const renders = calls.symbols.length;
+    await advance(120_000);
+    view.rerender(<StockDetailPanel symbol="600519" active={false} liveQuote={{...audit, symbol: "600519", price: 333}} streamStatus="stale" />);
+    expect(calls.symbols.length).toBe(renders);
+    expect(coreReads().map(read => read.mock.calls.length)).toEqual(counts);
+    expect(view.getByTestId("kline-price").textContent).toBe("20");
+    const next = deferred<KlinePayload>();
+    api.getKlinePayload.mockReturnValueOnce(next.promise);
+    view.rerender(<StockDetailPanel symbol="600519" active />);
+    await settle();
+    expect(view.getByTestId("kline-price").textContent).toBe("20");
+    await act(async () => { next.resolve(kline("600519", 44)); });
+    expect(view.getByTestId("kline-price").textContent).toBe("44");
+  });
+
+  it.each<[ChartTab, RightTab]>([["kline", "book"], ["minute", "trades"]])("隐藏再恢复后旧 %s/%s 回包不能覆盖当前校准", async (chartTab, rightTab) => {
+    const old = {kline: deferred<KlinePayload>(), book: deferred<OrderBook>(), minute: deferred<ReturnType<typeof minute>>(), trades: deferred<Trade[]>()};
+    api.getKlinePayload.mockReturnValueOnce(old.kline.promise);
+    api.getOrderBook.mockReturnValueOnce(old.book.promise);
+    api.getMinuteLineWithBaseline.mockReturnValueOnce(old.minute.promise);
+    api.getTrades.mockReturnValueOnce(old.trades.promise);
+    const view = render(<StockDetailPanel symbol="600519" chartTab={chartTab} rightTab={rightTab} />);
+    await advance(900);
+    view.rerender(<StockDetailPanel symbol="600519" chartTab={chartTab} rightTab={rightTab} active={false} />);
+    await advance(60_000);
+    view.rerender(<StockDetailPanel symbol="600519" chartTab={chartTab} rightTab={rightTab} active />);
+    await settle();
+    const chartId = chartTab === "kline" ? "kline-price" : "minute-price";
+    expect(view.getByTestId(chartId).textContent).toBe("20");
+    await act(async () => {old.kline.resolve(kline("600519", 111)); old.book.resolve(book("600519", 111)); old.minute.resolve(minute(111)); old.trades.resolve(trades("600519", 111));});
+    expect(view.getByTestId(chartId).textContent).toBe("20");
+    expect(within(view.getByRole("tabpanel")).queryByText("111.00")).toBeNull();
+  });
+
+  it("旧估值/模拟账户晚回不能覆盖恢复后的结果，隐藏停止预检并保留交易草稿", async () => {
+    const oldQuote = deferred<Quote>();
+    const oldFills = deferred<PaperFill[]>();
+    api.getQuote.mockReturnValueOnce(oldQuote.promise).mockResolvedValue({...audit, symbol: "600519", name: "当前报价", price: 22});
+    api.getPaperFills.mockReturnValueOnce(oldFills.promise).mockResolvedValue([fill("600519", 22)]);
+    api.getPaperPositions.mockResolvedValue([position("600519", 300, 22)]);
+    const view = render(<StockDetailPanel symbol="600519" rightTab="trade" />);
+    view.rerender(<StockDetailPanel symbol="600519" rightTab="trade" active={false} />);
+    const paperCount = api.getPaperAccount.mock.calls.length;
+    await advance(60_000);
+    expect(api.getPaperAccount).toHaveBeenCalledTimes(paperCount);
+    view.rerender(<StockDetailPanel symbol="600519" rightTab="trade" active />);
+    await settle();
+    expect(view.getByText("当前报价")).toBeTruthy();
+    fireEvent.change(view.getByLabelText("价格"), {target: {value: "19.8"}});
+    fireEvent.change(view.getByLabelText("数量"), {target: {value: "200"}});
+    view.rerender(<StockDetailPanel symbol="600519" rightTab="trade" active={false} />);
+    await advance(60_000);
+    const checks = api.checkOrderRisk.mock.calls.length;
+    await advance(60_000);
+    expect(api.checkOrderRisk).toHaveBeenCalledTimes(checks);
+    await act(async () => {oldQuote.resolve({...audit, symbol: "600519", name: "旧报价", price: 111}); oldFills.resolve([fill("600519", 111)]);});
+    view.rerender(<StockDetailPanel symbol="600519" rightTab="trade" active />);
+    await settle();
+    expect(view.queryByText("旧报价")).toBeNull();
+    expect((view.getByLabelText("价格") as HTMLInputElement).value).toBe("19.8");
+    expect((view.getByLabelText("数量") as HTMLInputElement).value).toBe("200");
+    expect(view.getByTestId("kline-price").getAttribute("data-cost-price")).toBe("22");
+  });
+
+  it("共享持仓的null/error也传到面板，不启动独立轮询，隐藏保留记账草稿", async () => {
+    const shared = {data: null, error: "共享持仓读取失败", reload: vi.fn(async () => {})};
+    const view = render(<StockDetailPanel symbol="600519" chartTab="flow" rightTab="real" realPositions={shared} />);
+    await settle();
+    expect(view.getByText("共享持仓读取失败")).toBeTruthy();
+    fireEvent.change(view.getByLabelText("实际成交价"), {target: {value: "19.8"}});
+    fireEvent.change(view.getByLabelText("数量"), {target: {value: "200"}});
+    view.rerender(<StockDetailPanel symbol="600519" chartTab="flow" rightTab="real" realPositions={shared} active={false} />);
+    await advance(60_000);
+    expect(api.getRealPositions).not.toHaveBeenCalled();
+    view.rerender(<StockDetailPanel symbol="600519" chartTab="flow" rightTab="real" realPositions={shared} active />);
+    expect((view.getByLabelText("实际成交价") as HTMLInputElement).value).toBe("19.8");
+    expect((view.getByLabelText("数量") as HTMLInputElement).value).toBe("200");
+  });
+
+  it.each(["speed", "boards"] as const)("隐藏时停止指数%s子轮询，恢复立即重新读取并拒绝旧回包", async rightTab => {
+    api.getThemesCatalog.mockResolvedValue([{code: "881156.TI", name: "粮食概念"}]);
+    const endpoint = rightTab === "speed" ? api.getSpeedRank : api.getBoards;
+    let finish!: (value: unknown) => void;
+    endpoint.mockImplementationOnce(() => new Promise(resolve => { finish = resolve; }));
+    const view = render(<StockDetailPanel symbol="sh000001" chartTab="kline" rightTab={rightTab} />);
+    await settle();
+    expect(endpoint).toHaveBeenCalledTimes(1);
+    view.rerender(<StockDetailPanel symbol="sh000001" chartTab="kline" rightTab={rightTab} active={false} />);
+    await advance(120_000);
+    expect(endpoint).toHaveBeenCalledTimes(1);
+    view.rerender(<StockDetailPanel symbol="sh000001" chartTab="kline" rightTab={rightTab} active />);
+    await settle();
+    expect(endpoint).toHaveBeenCalledTimes(2);
+    await act(async () => { finish(rightTab === "speed" ? {theme: "881156.TI", theme_name: "旧题材回包", window: "5m", items: [], note: "旧回包标志"} : [{code: "old", name: "旧板块回包"}]); });
+    expect(view.queryByText("旧回包标志")).toBeNull();
+    expect(view.queryByText("旧板块回包")).toBeNull();
+  });
+});
+
+ describe("StockDetailPanel · 恢复失败保留既有结果", () => {
+  it.each([
+    {endpoint: "getOrderBook" as const, tab: "盘口", result: "66.00"},
+    {endpoint: "getTrades" as const, tab: "逐笔", result: "77.00"},
+    {endpoint: "getFinancials" as const, tab: "资料", result: "报告期 2026-06-30"},
+  ])("恢复时$endpoint预取失败保留同股上次结果", async ({endpoint, tab, result}) => {
+    api.getOrderBook.mockResolvedValue(book("600519", 66));
+    api.getTrades.mockResolvedValue(trades("600519", 77));
+    api.getFinancials.mockResolvedValue([{report_date: "2026-06-30", source: "eastmoney", revenue: 123_000_000}]);
+    const view = render(<StockDetailPanel symbol="600519" chartTab="flow" rightTab="profile" />);
+    await advance(900);
+    expect(api[endpoint]).toHaveBeenCalledTimes(1);
+    api[endpoint].mockRejectedValue(new Error("恢复读取失败"));
+    view.rerender(<StockDetailPanel symbol="600519" chartTab="flow" rightTab="profile" active={false} />);
+    view.rerender(<StockDetailPanel symbol="600519" chartTab="flow" rightTab="profile" active />);
+    await advance(900);
+    expect(api[endpoint]).toHaveBeenCalledTimes(2);
+    fireEvent.click(view.getByRole("tab", {name: tab}));
+    await settle();
+    expect(within(view.getByRole("tabpanel")).getByText(result)).toBeTruthy();
+  });
+
+  it("指数叠加首段在隐藏后完成，不接着启动概览读取", async () => {
+    const old = deferred<MinutePoint[]>();
+    api.getMinuteLine.mockReturnValueOnce(old.promise);
+    const view = render(<StockDetailPanel symbol="600519" />);
+    await advance(900);
+    expect(api.getMinuteLine).toHaveBeenCalledTimes(1);
+    expect(api.getMarketOverview).not.toHaveBeenCalled();
+    view.rerender(<StockDetailPanel symbol="600519" active={false} />);
+    await act(async () => {old.resolve(minute().points);});
+    expect(api.getMarketOverview).not.toHaveBeenCalled();
   });
 });

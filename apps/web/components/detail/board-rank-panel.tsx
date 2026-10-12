@@ -1,6 +1,6 @@
 "use client";
 
-import { useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { usePollingFetch } from "@/hooks/use-polling-fetch";
 import { getBoards, type BoardRow } from "@/lib/api";
 import { fmtAmount, pctColor, pctText } from "@/lib/format";
@@ -8,28 +8,40 @@ import { Skeleton } from "@/components/ui/loading";
 
 /** 板块涨幅榜（指数详情右列"板块"标签）：行业/概念切换，按涨跌幅降序。
  *  复用 /api/boards（新浪闪电口径，后端 60s 缓存），零新增数据源。 */
-export function BoardRankPanel({ className }: { className?: string }) {
+export function BoardRankPanel({ className, active = true }: { className?: string; active?: boolean }) {
   const [type, setType] = useState<"hangye" | "concept">("hangye");
   const [rows, setRows] = useState<BoardRow[]>([]);
   const [error, setError] = useState<string | null>(null);
   // pending 哨兵（审查 F2/R2）：首拉完成前渲染表体骨架，"暂无数据"不抢跑
   const [loaded, setLoaded] = useState(false);
+  const readScopeRef = useRef<{ alive: boolean } | null>(null);
+  useEffect(() => {
+    if (!active) return;
+    const scope = { alive: true };
+    readScopeRef.current = scope;
+    return () => { scope.alive = false; };
+  }, [type, active]);
 
   // 2026-09-11（S2-5）：裸 setInterval → 统一入口（可见性暂停 + 盘外降频）。
   usePollingFetch(
     async () => {
+      const scope = readScopeRef.current;
+      if (!scope?.alive) return;
       try {
         const b = await getBoards(type);
+        if (!scope.alive || scope !== readScopeRef.current) return;
         setRows(b);
         setError(null);
       } catch (e) {
+        if (!scope.alive || scope !== readScopeRef.current) return;
         setError((e as Error).message);
       } finally {
-        setLoaded(true);
+        if (scope.alive && scope === readScopeRef.current) setLoaded(true);
       }
     },
     60_000,
-    type
+    type,
+    { enabled: active }
   );
 
   return (

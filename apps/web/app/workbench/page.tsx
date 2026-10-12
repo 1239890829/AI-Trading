@@ -12,7 +12,7 @@ import Cancel01Icon from "@hugeicons/core-free-icons/Cancel01Icon";
 import Link from "next/link";
 import { AccountScopePanel } from "@/components/detail/account-scope-panel";
 import { patchWorkspaceUrl } from "@/lib/task-navigation";
-import { Suspense, useCallback, useEffect, useMemo, useState } from "react";
+import { Suspense, useCallback, useEffect, useMemo, useRef, useState, useSyncExternalStore } from "react";
 import { useRouter, useSearchParams } from "next/navigation";
 import { Panel } from "@/components/panel";
 import { parseChartTab, parseRightTab } from "@/lib/detail-tabs";
@@ -57,6 +57,14 @@ import { LAST_SYMBOL_KEY, originLabel } from "@/lib/routing";
 import type { Quote } from "@/types/market";
 
 const STATUS_LABEL = STREAM_STATUS_LABEL;
+const MOBILE_QUERY = "(max-width: 1023px)";
+function mobileSnapshot() { return typeof window.matchMedia === "function" && window.matchMedia(MOBILE_QUERY).matches; }
+function subscribeMobile(listener: () => void) {
+  if (typeof window.matchMedia !== "function") return () => {};
+  const query = window.matchMedia(MOBILE_QUERY);
+  query.addEventListener("change", listener);
+  return () => query.removeEventListener("change", listener);
+}
 
 // ?ct= / ?rt= 深链参数解析（2026-09-11 抽到 lib/detail-tabs.ts：这是与
 // lib/nav-targets.ts 构造器之间的跨模块契约，放在那里才能被交叉断言——
@@ -86,9 +94,16 @@ function WorkbenchInner() {
   const paperSymbols = useMemo(() => positions.map(p => p.symbol), [positions]);
   // 左栏列表 pending 哨兵（审查 F2/R2）：loadBase/dyn 首拉完成前渲染行骨架
   const [baseLoaded, setBaseLoaded] = useState(false);
+  const [paperLoaded, setPaperLoaded] = useState(false);
+  const [baseErrors, setBaseErrors] = useState<Record<string, string>>({});
+  const baseReadRef = useRef(0);
+  useEffect(() => () => { baseReadRef.current += 1; }, []);
   // 真实持仓（CONTEXT.md: Holdings Group）：共用 hook 一份轮询（评审 M3），
   // 标的列表派生进 WS 订阅，「持仓」分类共用
-  const { data: realData, error: realError } = useRealPositions();
+  const { data: realData, error: realError, reload: reloadRealPositions } = useRealPositions();
+  const realPositions = useMemo(() => ({data: realData, error: realError, reload: reloadRealPositions}), [realData, realError, reloadRealPositions]);
+  const isMobile = useSyncExternalStore(subscribeMobile, mobileSnapshot, () => false);
+  const detailActive = !isMobile || mobileView !== "list";
   const realSymbols = useMemo(() => realData?.items.map((i) => i.symbol) ?? [], [realData]);
   const [indices, setIndices] = useState<Quote[]>([]);
   const [totalAmount, setTotalAmount] = useState<number | null>(null);
@@ -187,35 +202,45 @@ function WorkbenchInner() {
   const backLabel = originLabel(backFrom);
 
   const loadBase = useCallback(async () => {
-    try {
-      // 原 groups 裸 fetch 从未被消费（gs 解构后无人用）——随收口一并删除
-      const [wl, overview, paperPositions, groupNames] = await Promise.allSettled([
-        getWatchlist(), getMarketOverview(), getPaperPositions(), getWatchlistGroups(),
-      ]);
-      const failures: string[] = [];
-      if (wl.status === "fulfilled") {
-        setGroupMap(Object.fromEntries(wl.value.map(i => [i.symbol, i.group_name ?? "默认"])));
-        setSymbols(wl.value.map(i => i.symbol));
-      } else failures.push("自选读取失败");
-      if (groupNames.status === "fulfilled") setAllGroupNames(["默认", ...groupNames.value]);
-      else failures.push("分组读取失败");
-      if (overview.status === "fulfilled") {
-        setIndices(overview.value.indices); setTotalAmount(overview.value.total_amount);
-        setAmountFreshness(overview.value.total_amount_freshness);
+    // Each result owns its display: a slow auxiliary endpoint must not hold the list.
+    // Manual refresh or a watchlist mutation supersedes every older in-flight read.
+    const version = ++baseReadRef.current;
+    const current = () => version === baseReadRef.current;
+    const report = (key: string, message?: string) => {
+      if (!current()) return;
+      setBaseErrors(previous => {
+        if (previous[key] === message || (!message && !(key in previous))) return previous;
+        const next = {...previous};
+        if (message) next[key] = message;
+        else delete next[key];
+        return next;
+      });
+    };
+    await Promise.allSettled([
+      getWatchlist().then(value => {
+        if (!current()) return;
+        setGroupMap(Object.fromEntries(value.map(i => [i.symbol, i.group_name ?? "默认"])));
+        setSymbols(value.map(i => i.symbol));
+        report("watch");
+      }, () => report("watch", "自选读取失败")).finally(() => { if (current()) setBaseLoaded(true); }),
+      getMarketOverview().then(value => {
+        if (!current()) return;
+        setIndices(value.indices); setTotalAmount(value.total_amount);
+        setAmountFreshness(value.total_amount_freshness);
         setUpdatedAt(new Date().toLocaleTimeString("zh-CN", {hour12: false}));
-      } else failures.push("行情概览读取失败");
-      if (paperPositions.status === "fulfilled") setPositions(paperPositions.value);
-      else failures.push("main 模拟持仓读取失败");
-      setError(failures.length ? `${failures.join("；")}。保留值仅为上次结果，不能判断当前为空。` : null);
-    } catch {
-      // ⚠️ 文案里禁止出现 `--reload`（AGENTS.md §6.1）：它与 SQLite 锁组合会反复挂死，
-      // 教用户照抄 = 复现已知事故。此前本行就是反例（IMP-001）。
-      setError("自选或行情读取失败，请稍后重试；保留数据只作上次结果参考。服务状态可在系统维护核对。");
-    } finally {
-      // pending 三态哨兵（审查 F2/R2）：首次拉取完成前左栏渲染行骨架，
-      // 不再抢跑「自选为空或行情未就绪」文案（加载中≠确认空）
-      setBaseLoaded(true);
-    }
+        report("overview");
+      }, () => report("overview", "行情概览读取失败")),
+      getPaperPositions().then(value => {
+        if (!current()) return;
+        setPositions(value);
+        report("paper");
+      }, () => report("paper", "main 模拟持仓读取失败")).finally(() => { if (current()) setPaperLoaded(true); }),
+      getWatchlistGroups().then(value => {
+        if (!current()) return;
+        setAllGroupNames(["默认", ...value]);
+        report("groups");
+      }, () => report("groups", "分组读取失败")),
+    ]);
   }, []);
 
   // 风控市场状态（评审 O2）：七档状态变化以日为尺度，独立 30s 轮询——
@@ -435,8 +460,9 @@ function WorkbenchInner() {
     { key: "猎场", label: "系统候选", count: new Set([...topSymbols, ...picksSymbols]).size, title: "盘中跟踪与每日精选；只读系统结果" },
     ...groups.map((group) => ({ key: group, label: group })),
   ];
-  const sourcePending = !baseLoaded || (isDynamicGroup && (!dynReady.picks || !dynReady.top));
-  const sourceError = error || (isDynamicGroup && (dynErrors.picks || dynErrors.top));
+  const sourcePending = isDynamicGroup ? !dynReady.picks || !dynReady.top : mode === "positions" ? account === "paper" ? !paperLoaded : account === "manual" ? !realData && !realError : false : !baseLoaded;
+  const sourceError = isDynamicGroup ? dynErrors.picks || dynErrors.top : mode === "positions" ? account === "paper" ? baseErrors.paper : account === "manual" ? realError : null : baseErrors.watch;
+  const readWarning = [error, ...Object.values(baseErrors)].filter(Boolean).join("；");
 
   return (
     <main data-workspace="workbench" className="task-page bc-workbench">
@@ -458,7 +484,7 @@ function WorkbenchInner() {
           ]} onChange={value => router.push(patchWorkspaceUrl("/workbench", sp.toString(), {account: value, rt: null}), {scroll: false})} />}
         </div>
       </header>
-      {error && <div role="alert" className="bc-read-warning bc-base-warning"><details><summary>部分数据读取失败 · 查看原因</summary><p className="data-scroll" tabIndex={0}>{error}</p></details><button onClick={() => void loadBase()}>重试读取</button></div>}
+      {readWarning && <div role="alert" className="bc-read-warning bc-base-warning"><details><summary>部分数据读取失败 · 查看原因</summary><p className="data-scroll" tabIndex={0}>{readWarning}。保留值仅为上次结果，不能判断当前为空。</p></details><button onClick={() => {setError(null); void loadBase();}}>重试读取</button></div>}
 
       <nav className="bc-mobile-views" aria-label="工作台内容">
         {([["list", "指数与自选"], ["chart", "图表"], ["check", "核对"]] as const).map(([key, label]) => <button key={key} type="button" aria-pressed={mobileView === key} onClick={() => setMobileView(key)}>{label}</button>)}
@@ -554,7 +580,7 @@ function WorkbenchInner() {
         <section className="bc-workbench-detail" aria-label="证券详情">
         {/* 边界跟随证券/scope重置，保留深链与共享真实详情的全部消费者。 */}
         <PanelBoundary key={`${activeSymbol}:${mode}:${account}`} label="个股详情">
-          <StockDetailPanel symbol={activeSymbol} chartTab={chartTab} rightTab={rightTab} onRightTabChange={switchRightTab} liveQuote={merged[activeSymbol]} streamStatus={status} />
+          <StockDetailPanel symbol={activeSymbol} chartTab={chartTab} rightTab={rightTab} onRightTabChange={switchRightTab} liveQuote={merged[activeSymbol]} streamStatus={status} active={detailActive} realPositions={realPositions} />
         </PanelBoundary>
         </section>
       </div>
