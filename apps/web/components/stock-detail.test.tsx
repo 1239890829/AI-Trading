@@ -4,6 +4,8 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { StockDetailPanel, type ChartTab, type RightTab } from "@/components/stock-detail";
 import type { KlinePayload, MinutePoint, PaperAccountInfo, PaperFill, PaperPositionInfo } from "@/lib/api";
 import { mergeQuoteIntoMinutes } from "@/lib/kline-live";
+import { getWatchlist as readActualWatchlist } from "@/lib/api/watchlist";
+import { notifyWatchlistChanged } from "@/lib/watchlist-sync";
 import type { Kline, OrderBook, Quote, Trade } from "@/types/market";
 
 /**
@@ -423,6 +425,69 @@ afterEach(() => {
   vi.unstubAllGlobals();
   vi.restoreAllMocks();
   vi.useRealTimers();
+});
+
+describe("StockDetailPanel · 自选读取真实请求边界", () => {
+  it("post-add failed calibration retains confirmed membership, while a later successful empty list removes it", async () => {
+    api.getWatchlist.mockResolvedValueOnce([]).mockRejectedValueOnce(new Error("unavailable")).mockResolvedValueOnce([]);
+    vi.stubGlobal("fetch", vi.fn(async () => new Response(JSON.stringify({data: {symbol: "600519"}, meta: {}}))));
+    const view = render(<StockDetailPanel symbol="600519" chartTab="flow" liveQuote={{...audit, symbol: "600519", price: 20}} />);
+    await settle();
+    fireEvent.click(view.getByRole("button", {name: "＋ 自选"}));
+    await settle();
+    expect(api.getWatchlist).toHaveBeenCalledTimes(2);
+    expect(view.getByText("已在自选")).toBeTruthy();
+    act(() => notifyWatchlistChanged());
+    await settle();
+    expect(api.getWatchlist).toHaveBeenCalledTimes(3);
+    expect(view.queryByText("已在自选")).toBeNull();
+    expect(view.getByRole("button", {name: "＋ 自选"})).toBeTruthy();
+  });
+  it("shares a real watchlist read with another owner and deactivation cancels only the detail subscriber", async () => {
+    api.getWatchlist.mockImplementation(readActualWatchlist);
+    let finish!: (response: Response) => void;
+    let sourceSignal!: AbortSignal;
+    const fetcher = vi.fn((_url: string, init: RequestInit) => {
+      sourceSignal = init.signal as AbortSignal;
+      return new Promise<Response>(resolve => {finish = resolve;});
+    });
+    vi.stubGlobal("fetch", fetcher);
+    const otherOwner = readActualWatchlist();
+    const view = render(<StockDetailPanel symbol="600519" chartTab="flow" liveQuote={{...audit, symbol: "600519", price: 20}} />);
+    await settle();
+    expect(fetcher).toHaveBeenCalledTimes(1);
+    view.rerender(<StockDetailPanel symbol="600519" active={false} chartTab="flow" liveQuote={{...audit, symbol: "600519", price: 20}} />);
+    await settle();
+    expect(sourceSignal.aborted).toBe(false);
+    await act(async () => {
+      finish(new Response(JSON.stringify({data: [{symbol: "600519"}], meta: {}})));
+      expect(await otherOwner).toEqual([{symbol: "600519"}]);
+    });
+    expect(view.queryByText("已在自选")).toBeNull();
+  });
+
+  it("add success stays selected when a pre-write shared read arrives late; write notification immediately recalibrates", async () => {
+    api.getWatchlist.mockImplementation(readActualWatchlist);
+    const pending: {init: RequestInit; finish: (data: unknown) => void}[] = [];
+    const fetcher = vi.fn((_url: string, init: RequestInit) => new Promise<Response>(resolve => {
+      pending.push({init, finish: data => resolve(new Response(JSON.stringify({data, meta: {}})))});
+    }));
+    vi.stubGlobal("fetch", fetcher);
+    const previousOwner = readActualWatchlist();
+    const view = render(<StockDetailPanel symbol="600519" chartTab="flow" liveQuote={{...audit, symbol: "600519", price: 20}} />);
+    await settle();
+    expect(fetcher).toHaveBeenCalledTimes(1);
+    fireEvent.click(view.getByRole("button", {name: "＋ 自选"}));
+    expect(pending[1].init.method).toBe("POST");
+    await act(async () => {pending[1].finish({symbol: "600519"});});
+    expect(view.getByText("已在自选")).toBeTruthy();
+    expect(pending[0].init.signal?.aborted).toBe(false);
+    await act(async () => {pending[0].finish([]); await previousOwner;});
+    expect(view.getByText("已在自选")).toBeTruthy();
+    expect(fetcher).toHaveBeenCalledTimes(3);
+    await act(async () => {pending[2].finish([{symbol: "600519"}]);});
+    expect(view.queryByRole("button", {name: "＋ 自选"})).toBeNull();
+  });
 });
 
 describe("StockDetailPanel · 右列与图表过渡", () => {

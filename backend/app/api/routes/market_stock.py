@@ -7,6 +7,8 @@
 from __future__ import annotations
 
 import logging
+import asyncio
+from copy import deepcopy
 from fastapi import APIRouter, Depends, HTTPException, Query, Request
 from fastapi.responses import JSONResponse
 from app.api.deps import get_hub
@@ -27,6 +29,37 @@ log = logging.getLogger("app.api.routes.market")
 from app.api.routes.market_envelope import (
     meta_payload,
 )
+
+
+async def _cached_read(request: Request, cache, key, factory) -> tuple[bool, dict]:
+    """Share only an in-flight read; keep each existing cache lifetime unchanged."""
+    hit, cached = cache.get(key)
+    if hit:
+        return True, deepcopy(cached)
+    attr = "_market_stock_reads"
+    reads = getattr(request.app.state, attr, None)
+    if reads is None:
+        reads = {}
+        setattr(request.app.state, attr, reads)
+    identity = (cache, key)
+    task = reads.get(identity)
+    if task is None or task.done():
+        # Do not retain an unbounded set of distinct user URLs while sources are slow.
+        if len(reads) >= 128:
+            hit, result = await cache.get_or_set(key, factory)
+            return hit, deepcopy(result)
+        task = asyncio.create_task(cache.get_or_set(key, factory))
+        reads[identity] = task
+
+        def completed(done: asyncio.Task) -> None:
+            if reads.get(identity) is done:
+                reads.pop(identity, None)
+            if not done.cancelled():
+                done.exception()
+
+        task.add_done_callback(completed)
+    hit, result = await asyncio.shield(task)
+    return hit, deepcopy(result)
 
 
 @router.get("/financials/{symbol}")
@@ -59,16 +92,15 @@ async def announcements(
     """个股公告（东财，title/date/类型/原文链接）。进程内缓存 60s（切股回看不闪加载）。"""
     cache = cache_on(request.app.state, "market.announcements", 60, maxsize=512)
     key = (symbol, limit)
-    hit, cached = cache.get(key)
-    if hit:
-        return {"data": cached, "meta": {**meta_payload(hub), "cached": True}}
-    try:
+    async def load():
         rows = await hub.provider.get_announcements(symbol, limit)
+        return {"symbol": symbol, "items": rows}
+
+    try:
+        hit, data = await _cached_read(request, cache, key, load)
     except Exception as exc:
         raise HTTPException(status_code=502, detail=f"公告数据源失败：{exc}")
-    data = {"symbol": symbol, "items": rows}
-    cache.set(key, data)
-    return {"data": data, "meta": meta_payload(hub)}
+    return {"data": data, "meta": {**meta_payload(hub), **({"cached": True} if hit else {})}}
 
 
 @router.get("/news/content", response_model=Envelope[dict])
@@ -89,18 +121,14 @@ async def news_content(
         raise HTTPException(status_code=400, detail=str(exc))
 
     cache = cache_on(request.app.state, "news.content", 600, maxsize=256)
-    hit, cached = cache.get(url)
-    if hit:
-        return {"data": {**cached, "cached": True}, "meta": {**meta_payload(hub), "cached": True}}
-
     try:
-        article = await fetch_article(url)
+        hit, article = await _cached_read(request, cache, url, lambda: fetch_article(url))
     except ArticleFetchError as exc:
         raise HTTPException(status_code=502, detail=str(exc))
     except Exception as exc:  # 网络层异常统一收敛为可降级失败
         raise HTTPException(status_code=502, detail=f"正文抓取失败：{exc}")
-    cache.set(url, article)
-    return {"data": article, "meta": meta_payload(hub)}
+    return {"data": {**article, **({"cached": True} if hit else {})},
+            "meta": {**meta_payload(hub), **({"cached": True} if hit else {})}}
 
 
 @router.get("/news/{symbol}")
@@ -113,16 +141,15 @@ async def news(
     """个股相关新闻（东财资讯检索，含正文摘要）。进程内缓存 60s（技术债 #4）。"""
     cache = cache_on(request.app.state, "market.news", 60, maxsize=512)
     key = (symbol, limit)
-    hit, cached = cache.get(key)
-    if hit:
-        return {"data": cached, "meta": {**meta_payload(hub), "cached": True}}
-    try:
+    async def load():
         rows = await hub.provider.get_news(symbol, limit)
+        return {"symbol": symbol, "items": rows}
+
+    try:
+        hit, data = await _cached_read(request, cache, key, load)
     except Exception as exc:
         raise HTTPException(status_code=502, detail=f"新闻数据源失败：{exc}")
-    data = {"symbol": symbol, "items": rows}
-    cache.set(key, data)
-    return {"data": data, "meta": meta_payload(hub)}
+    return {"data": data, "meta": {**meta_payload(hub), **({"cached": True} if hit else {})}}
 
 
 @router.get("/search", response_model=Envelope[list[SymbolSearchItem]])

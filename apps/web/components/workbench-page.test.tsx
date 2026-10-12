@@ -3,6 +3,7 @@ import { act, cleanup, fireEvent, render, screen, waitFor } from "@testing-libra
 import WorkbenchPage from "@/app/workbench/page";
 import type { SymbolBoardFund } from "@/lib/api";
 import {notifyWatchlistChanged} from "@/lib/watchlist-sync";
+import {getWatchlist as readActualWatchlist} from "@/lib/api/watchlist";
 
 const state = vi.hoisted(() => ({
   params: new URLSearchParams("symbol=600127&ct=minute&rt=info&from=%2Fmarket%3Ftab%3Devents"),
@@ -60,6 +61,41 @@ async function selectList(name: string) {
 }
 
 describe("B+C workbench production consumers", () => {
+  it("shares the real initial GET but manual calibration bypasses the old owner without flashing or accepting its late result", async () => {
+    const previous = vi.mocked(api.getWatchlist).getMockImplementation()!;
+    vi.mocked(api.getWatchlist).mockImplementation(readActualWatchlist);
+    const pending: {signal: AbortSignal; finish: (data: unknown) => void}[] = [];
+    const fetcher = vi.fn((_url: string, init: RequestInit) => new Promise<Response>(resolve => {
+      pending.push({signal: init.signal as AbortSignal, finish: data => resolve(new Response(JSON.stringify({data, meta: {}})))});
+    }));
+    vi.stubGlobal("fetch", fetcher);
+    const sibling = readActualWatchlist();
+    const view = render(<WorkbenchPage />);
+    try {
+      expect(fetcher).toHaveBeenCalledTimes(1);
+      await act(async () => {pending[0].finish([{symbol: "600127", group_name: "默认"}]); await sibling;});
+      expect(screen.getByRole("button", {name: "查看 金健米业 600127"})).toBeTruthy();
+      act(() => notifyWatchlistChanged());
+      expect(fetcher).toHaveBeenCalledTimes(2);
+      const oldSibling = readActualWatchlist();
+      expect(fetcher).toHaveBeenCalledTimes(2);
+      act(() => notifyWatchlistChanged());
+      expect(fetcher).toHaveBeenCalledTimes(3);
+      expect(pending[1].signal.aborted).toBe(false);
+      expect(screen.getByRole("button", {name: "查看 金健米业 600127"})).toBeTruthy();
+      expect(screen.queryByLabelText("正在读取证券列表")).toBeNull();
+      expect(screen.queryByText(/自选读取失败/)).toBeNull();
+      await act(async () => {pending[2].finish([{symbol: "002297", group_name: "默认"}]);});
+      expect(screen.getByRole("button", {name: "查看 002297 002297"})).toBeTruthy();
+      await act(async () => {pending[1].finish([{symbol: "600127", group_name: "默认"}]); await oldSibling;});
+      expect(screen.getByRole("button", {name: "查看 002297 002297"})).toBeTruthy();
+      expect(screen.queryByRole("button", {name: "查看 金健米业 600127"})).toBeNull();
+      expect(screen.queryByText(/自选读取失败/)).toBeNull();
+    } finally {
+      view.unmount();
+      vi.mocked(api.getWatchlist).mockImplementation(previous);
+    }
+  });
   it("passes the existing quote owner to selected detail while preserving list quotes", async () => {
     render(<WorkbenchPage />);
     expect(await screen.findByRole("button", {name: "查看 金健米业 600127"})).toBeTruthy();

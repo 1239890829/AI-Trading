@@ -284,7 +284,8 @@ def test_fund_snapshot_never_creates_nontrading_or_unknown_date(monkeypatch, tmp
 def test_fund_history_filters_proven_nontrade_days_without_rewriting_store(monkeypatch, tmp_path):
     store = tmp_path / "daily.json"
     now = datetime(2026, 9, 14, 10, 0, tzinfo=BJ_TZ)
-    record = {"sh": {"main": 1}, "sz": {"main": 2}, "source": "snapshot"}
+    values = {key: 0 for key in ff._FLOW_KEYS.values()}
+    record = {"sh": {**values, "main": 1}, "sz": {**values, "main": 2}, "source": "snapshot"}
     raw = json.dumps({"updated_at": "fixture", "days": {
         "2026-09-10": record, "2026-09-11": record, "2026-09-12": record, "2026-09-13": record,
         "2026-09-14": record, "2026-08-31": record,

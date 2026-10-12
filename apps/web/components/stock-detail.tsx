@@ -18,7 +18,7 @@ import { analyze } from "@/lib/technical-analysis";
 import { buildEventMarks, buildMinuteNewsEvents } from "@/lib/event-markers";
 import { mergeQuoteIntoBars, mergeQuoteIntoMinutes } from "@/lib/kline-live";
 import { isIndexSymbol } from "@/lib/api";
-import { notifyWatchlistChanged } from "@/lib/watchlist-sync";
+import { notifyWatchlistChanged, subscribeWatchlist } from "@/lib/watchlist-sync";
 import { ThemeChipsRow } from "@/components/detail/theme-chips";
 import { LimitUpReasonPanel } from "@/components/detail/limit-up-reason";
 import { StockAttributionPanel } from "@/components/detail/attribution-evidence";
@@ -407,9 +407,22 @@ export const StockDetailPanel = memo(function StockDetailPanel({
   useEffect(() => {
     if (!active) return;
     let alive = true;
-    getWatchlistSymbols().then((list) => alive && setInWatchlist(list.includes(symbol)));
+    let generation = 0;
+    let controller: AbortController | undefined;
+    const reload = () => {
+      const current = ++generation;
+      controller?.abort();
+      controller = new AbortController();
+      getWatchlistSymbols(controller.signal).then((list) => {
+        if (alive && current === generation) setInWatchlist(list.includes(symbol));
+      }, () => { /* 失败或取消不证明集合为空，保留已确认的 membership。 */ });
+    };
+    reload();
+    const unsubscribe = subscribeWatchlist(reload);
     return () => {
       alive = false;
+      controller?.abort();
+      unsubscribe();
     };
   }, [symbol, active]);
 
@@ -1134,10 +1147,6 @@ export const StockDetailPanel = memo(function StockDetailPanel({
     || Object.is(prev[key], next[key]));
 });
 
-async function getWatchlistSymbols(): Promise<string[]> {
-  try {
-    return (await getWatchlist()).map((i) => i.symbol);
-  } catch {
-    return [];
-  }
+async function getWatchlistSymbols(signal: AbortSignal): Promise<string[]> {
+  return (await getWatchlist({signal})).map((i) => i.symbol);
 }

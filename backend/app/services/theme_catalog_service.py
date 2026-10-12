@@ -269,6 +269,10 @@ class ThemeCatalogService:
         # 板块日涨幅缓存（详情页题材 chips 排序/徽标用）：TTL 120s + 异步单飞 + 并发闸
         self._day_change_cache = TTLCache("theme_day_change", ttl=120.0, maxsize=512)
         self._board_fetch_sem = asyncio.Semaphore(6)
+        # Scoped to this provider/client and its DB owner. Share only a running
+        # sync; completed values never acquire another member freshness window.
+        self._member_reads: dict[str, asyncio.Task[int]] = {}
+        self._member_closing = False
 
     async def day_changes(self, codes: list[str]) -> dict[str, float | None]:
         """官方板块指数当日涨跌幅（最新日 K close / 前一日 - 1，%）。
@@ -301,6 +305,11 @@ class ThemeCatalogService:
         return out
 
     async def aclose(self) -> None:
+        self._member_closing = True
+        # A canceled view may leave a shared source/write draining. Complete this
+        # owner's bounded reads before closing the client they still consume.
+        if self._member_reads:
+            await asyncio.gather(*tuple(self._member_reads.values()), return_exceptions=True)
         await self._client.aclose()
 
     # -- fetch -----------------------------------------------------------
@@ -375,6 +384,23 @@ class ThemeCatalogService:
 
     async def sync_members(self, code: str) -> int:
         """upsert 单题材成分（官方口径：当前成分，非历史成分）。DB 写入走 to_thread。"""
+        if self._member_closing:
+            raise RuntimeError("theme catalog service is closing")
+        task = self._member_reads.get(code)
+        if task is None or task.done():
+            task = asyncio.create_task(self._sync_members_once(code))
+            self._member_reads[code] = task
+
+            def completed(done: asyncio.Task) -> None:
+                if self._member_reads.get(code) is done:
+                    self._member_reads.pop(code, None)
+                if not done.cancelled():
+                    done.exception()
+
+            task.add_done_callback(completed)
+        return await asyncio.shield(task)
+
+    async def _sync_members_once(self, code: str) -> int:
         items = await self.fetch_members(code)
         n = await asyncio.to_thread(self._write_members, code, items)
         log.info("theme members synced: %s -> %d stocks", code, n)

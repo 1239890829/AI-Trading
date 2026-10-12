@@ -198,16 +198,19 @@ export function HeatmapTab() {
     if (scope !== "watch") return;
     let alive = true;
     let generation = 0;
-    const reload = async () => {
+    let controller: AbortController | undefined;
+    const reload = async (fresh = false) => {
       const current = ++generation;
+      controller?.abort();
+      controller = new AbortController();
       try {
-        const list = await getWatchlist();
+        const list = await getWatchlist({signal: controller.signal, fresh});
         if (alive && current === generation) { setWatchSymbols(new Set(list.map(item => item.symbol))); setWatchError(null); }
       } catch { if (alive && current === generation) setWatchError("自选列表同步失败，保留集合可能已过期。"); }
     };
     void reload();
-    const unsubscribe = subscribeWatchlist(() => void reload());
-    return () => { alive = false; unsubscribe(); };
+    const unsubscribe = subscribeWatchlist(() => void reload(true));
+    return () => { alive = false; controller?.abort(); unsubscribe(); };
   }, [scope]);
 
   const visible = useMemo(() => {

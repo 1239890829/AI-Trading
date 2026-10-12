@@ -133,7 +133,11 @@ def test_snapshot_today_if_closed_persists_once(monkeypatch, tmp_path):
     monkeypatch.setattr(ff.trade_calendar, "known_trade_days", lambda: [date(2026, 9, 4)])
     # 14:00 不落盘
     monkeypatch.setattr(ff, "beijing_now", lambda: datetime(2026, 9, 4, 14, 0, tzinfo=BJ_TZ))
-    rt = {"available": True, "items": {"sh": {"main": -1.0}, "sz": {"main": -2.0}}}
+    # A completed snapshot must carry both real source clocks and all five tiers.
+    values = {key: 0.0 for key in ff._FLOW_KEYS.values()}
+    rt = {"available": True,
+          "source_timestamps": {market: "2026-09-04T15:00:00+08:00" for market in ("sh", "sz")},
+          "items": {"sh": {**values, "main": -1.0}, "sz": {**values, "main": -2.0}}}
     ff._snapshot_today_if_closed(rt)
     assert not store_file.exists()
     # 15:06 落盘
@@ -162,8 +166,7 @@ def test_flow_total_yi_merges_markets():
 def test_backfill_throttle(monkeypatch):
     # monotonic 绝对值不可依赖（CI 新 runner 可能 < 300s）：注入固定时钟
     clock = {"t": 10000.0}
-    import time as _time
-    monkeypatch.setattr(_time, "monotonic", lambda: clock["t"])
+    monkeypatch.setattr(ff, "monotonic", lambda: clock["t"])
     monkeypatch.setattr(ff, "_last_backfill_ts", [0.0])
     assert ff._backfill_throttled() is False  # 首次放行
     clock["t"] += 60

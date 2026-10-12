@@ -97,9 +97,11 @@ function WorkbenchInner() {
   const [paperLoaded, setPaperLoaded] = useState(false);
   const [baseErrors, setBaseErrors] = useState<Record<string, string>>({});
   const baseReadRef = useRef({watch: 0, groups: 0, paper: 0, overview: 0});
+  const watchReadsRef = useRef<{watch?: AbortController; groups?: AbortController; fresh: boolean}>({fresh: false});
   useEffect(() => () => {
     const reads = baseReadRef.current;
     reads.watch += 1; reads.groups += 1; reads.paper += 1; reads.overview += 1;
+    watchReadsRef.current.watch?.abort(); watchReadsRef.current.groups?.abort();
   }, []);
   // 真实持仓（CONTEXT.md: Holdings Group）：共用 hook 一份轮询（评审 M3），
   // 标的列表派生进 WS 订阅，「持仓」分类共用
@@ -221,8 +223,13 @@ function WorkbenchInner() {
   const {refresh: refreshWatch} = useResource(async () => {
     const version = baseReadRef.current.watch;
     const current = () => version === baseReadRef.current.watch;
+    const controller = new AbortController();
+    watchReadsRef.current.watch?.abort();
+    watchReadsRef.current.watch = controller;
+    const fresh = watchReadsRef.current.fresh;
+    watchReadsRef.current.fresh = false;
     try {
-      const value = await getWatchlist();
+      const value = await getWatchlist({signal: controller.signal, fresh});
       if (!current()) return;
       setGroupMap(Object.fromEntries(value.map(i => [i.symbol, i.group_name ?? "默认"])));
       setSymbols(value.map(i => i.symbol));
@@ -232,8 +239,11 @@ function WorkbenchInner() {
   }, {intervalMs: 60_000, marketHours: false});
   const {refresh: refreshGroups} = useResource(async () => {
     const version = baseReadRef.current.groups;
+    const controller = new AbortController();
+    watchReadsRef.current.groups?.abort();
+    watchReadsRef.current.groups = controller;
     try {
-      const value = await getWatchlistGroups();
+      const value = await getWatchlistGroups({signal: controller.signal});
       if (version !== baseReadRef.current.groups) return;
       setAllGroupNames(["默认", ...value]);
       reportBase("groups");
@@ -263,6 +273,8 @@ function WorkbenchInner() {
   }, {intervalMs: 10_000});
   const refreshWatchlist = useCallback(() => {
     baseReadRef.current.watch += 1; baseReadRef.current.groups += 1;
+    watchReadsRef.current.watch?.abort(); watchReadsRef.current.groups?.abort();
+    watchReadsRef.current.fresh = true;
     refreshWatch(); refreshGroups();
   }, [refreshWatch, refreshGroups]);
   const loadBase = useCallback(async () => {

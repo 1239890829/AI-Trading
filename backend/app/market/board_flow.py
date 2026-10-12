@@ -74,6 +74,7 @@ _LIST_READS: dict[tuple, asyncio.Task] = {}
 #: 单板块分钟/成员：下钻时才拉，小容量防驻留
 _MINUTE_CACHE = TTLCache("boardflow-minute", ttl=60.0, maxsize=4)
 _MEMBERS_CACHE = TTLCache("boardflow-members", ttl=60.0, maxsize=8)
+_DRILL_READS: dict[tuple, asyncio.Task] = {}
 
 _HTTP = None
 
@@ -241,41 +242,74 @@ async def get_board_list(kind: str) -> tuple[list[dict] | None, list[str]]:
 
 # ---------------------------------------------------------------- 板块下钻（分钟/成员）
 
-async def get_board_minute(board_code: str) -> dict:
-    """板块分钟五档资金流累计曲线（延迟 ~15min 口径）。复用 fund_flow 同一解析（R1）。"""
-    hit, cached = _MINUTE_CACHE.get(board_code)
+class _DrillUnavailable(Exception):
+    def __init__(self, payload: dict):
+        super().__init__(payload.get("reason") or "板块来源不可用")
+        self.payload = payload
+
+
+async def _drill_read(cache: TTLCache, board_code: str, factory) -> dict:
+    key = (beijing_now().date().isoformat(), board_code)
+    hit, cached = cache.get(key)
     if hit:
-        return cached
+        return deepcopy(cached)
+    identity = (cache, key)
+    task = _DRILL_READS.get(identity)
+    if task is None or task.done():
+        if len(_DRILL_READS) >= 128:
+            try:
+                _, result = await cache.get_or_set(key, factory)
+            except _DrillUnavailable as exc:
+                result = exc.payload
+            return deepcopy(result)
+        task = asyncio.create_task(cache.get_or_set(key, factory))
+        _DRILL_READS[identity] = task
+
+        def completed(done: asyncio.Task) -> None:
+            if _DRILL_READS.get(identity) is done:
+                _DRILL_READS.pop(identity, None)
+            if not done.cancelled():
+                done.exception()
+
+        task.add_done_callback(completed)
+    try:
+        _, result = await asyncio.shield(task)
+    except _DrillUnavailable as exc:
+        result = exc.payload
+    return deepcopy(result)
+
+
+async def get_board_minute(board_code: str) -> dict:
+    """Shared minute read; local daily history remains usable when minute source fails."""
     from app.market.fund_flow import _em_fflow_kline
 
-    rows = await _em_fflow_kline(f"90.{board_code}")
-    if rows is None:
-        return {"available": False, "reason": "板块分钟资金流不可用（已重试）", "items": [], "degraded": []}
-    items = [{"t": t, **vals} for t, vals in rows]
-    # 日度主力净额序列（落盘，零外呼）：下钻抽屉的 5/10/20 日柱状 + 连续流入高亮。
-    # 仅收盘快照沉淀过的 Top 板块有数据，其余空数组（三态，不外呼补）。
+    async def load():
+        rows = await _em_fflow_kline(f"90.{board_code}")
+        if rows is None:
+            raise _DrillUnavailable({"available": False, "reason": "板块分钟资金流不可用（已重试）",
+                                     "items": [], "degraded": []})
+        return {"available": True, "items": [{"t": t, **vals} for t, vals in rows],
+                "updated_at": beijing_now().strftime("%H:%M:%S"), "degraded": []}
+
+    out = await _drill_read(_MINUTE_CACHE, board_code, load)
     bars = (_load_dayk_store().get(board_code) or {}).get("bars") or []
-    out = {
-        "available": True,
-        "board_code": board_code,
-        "items": items,  # [{t, main, small, mid, big, super_}]（亿元，累计口径）
-        "daily_bars": [{"date": b[0], "main_yi": b[1], "close_pct": b[2]} for b in bars],
-        "delayed": True,  # 延迟口径标志（前端必须标注）
-        "updated_at": beijing_now().strftime("%H:%M:%S"),
-        "degraded": [] if bars else ["日度历史未沉淀（每日收盘后自动累积 Top 板块）"],
-    }
-    _MINUTE_CACHE.set(board_code, out)
+    out.update({"board_code": board_code, "delayed": True,
+                "daily_bars": [{"date": b[0], "main_yi": b[1], "close_pct": b[2]} for b in bars]})
+    if not bars:
+        out["degraded"].append("日度历史未沉淀（每日收盘后自动累积 Top 板块）")
     return out
 
 
 async def get_board_members(board_code: str) -> dict:
+    """成员 Top20 保留原 60s TTL；并发同板块共享一轮，失败下一轮可恢复。"""
+    return await _drill_read(_MEMBERS_CACHE, board_code, lambda: _load_board_members(board_code))
+
+
+async def _load_board_members(board_code: str) -> dict:
     """板块成员个股资金排行 Top20（fs=b:BKxxxx，fid=f62 服务端降序）。"""
-    hit, cached = _MEMBERS_CACHE.get(board_code)
-    if hit:
-        return deepcopy(cached)
     diff, host = await _clist_pages(f"b:{board_code}", _MEMBER_FIELDS, pz=20, first_page_only=True)
     if diff is None:
-        return {"available": False, "reason": "板块成员资金排行不可用（双域已重试）", "rows": [], "degraded": []}
+        raise _DrillUnavailable({"available": False, "reason": "板块成员资金排行不可用（双域已重试）", "rows": [], "degraded": []})
     rows: list[dict] = []
     for it in diff[:20]:
         code, name = it.get("f12"), it.get("f14")
@@ -301,9 +335,9 @@ async def get_board_members(board_code: str) -> dict:
         "updated_at": beijing_now().strftime("%H:%M:%S"),
         "degraded": (["主域不可达，使用延迟口径（push2delay）"] if host == _HOSTS[1] else []),
     }
-    if out["available"]:
-        _MEMBERS_CACHE.set(board_code, out)
-    return deepcopy(out)
+    if not out["available"]:
+        raise _DrillUnavailable(out)
+    return out
 
 
 # ---------------------------------------------------------------- 落盘：读路径零外呼

@@ -216,42 +216,44 @@ async def _attach_gates(request: Request, hub: QuoteHub, meta: dict) -> dict:
     return meta
 
 
-@router.get("/today")
-async def today_picks(request: Request, hub: QuoteHub = Depends(get_hub)) -> dict:
-    today = beijing_today().isoformat()
+def _read_today_selection(today: str) -> dict | None:
+    """Materialize one read-only selection in its worker-owned Session."""
     with _db() as db:
         from app.models.daily_pick import DailyPickSet
         from app.picks.review_contract import day_keys, iso_day, selection_rows_query
 
         row = db.scalar(select(DailyPickSet).where(DailyPickSet.date.in_(day_keys(today))).order_by(DailyPickSet.date.asc()).limit(1))
+        fallback = row is None
         if row is None:
             row = db.scalar(selection_rows_query(1, through=today))
             if row is None:
-                return {"data": {"date": None, "items": [], "meta": None, "note": "尚未生成组合：POST /api/picks/generate（或等待当日自动生成）"}, "meta": {}}
-            meta = parse_pick_meta(row.meta)  # 炒作阶段与空仓闸门状态（前端横幅需要）
-            meta["style_routing"] = await _live_style_routing(request, hub, meta.get("style_routing"))
-            meta = await _attach_gates(request, hub, meta)
-            return {
-                "data": {
-                    "date": iso_day(row.date),
-                    "items": _attach_latest_execution(json.loads(row.items), iso_day(row.date), meta),
-                    "stale": iso_day(row.date) != today,
-                    "meta": meta,
-                },
-                "meta": {},
-            }
-        meta = parse_pick_meta(row.meta)
-        meta["style_routing"] = await _live_style_routing(request, hub, meta.get("style_routing"))
-        meta = await _attach_gates(request, hub, meta)
-        return {
-            "data": {
-                "date": iso_day(row.date),
-                "items": _attach_latest_execution(json.loads(row.items), iso_day(row.date), meta),
-                "replaced": json.loads(row.replaced or "[]"),
-                "meta": meta,
-            },
-            "meta": {},
+                return None
+        data = {
+            "date": iso_day(row.date),
+            "items": json.loads(row.items),
+            "meta": parse_pick_meta(row.meta),
         }
+        if fallback:
+            data["stale"] = data["date"] != today
+        else:
+            data["replaced"] = json.loads(row.replaced or "[]")
+        return data
+
+
+@router.get("/today")
+async def today_picks(request: Request, hub: QuoteHub = Depends(get_hub)) -> dict:
+    today = beijing_today().isoformat()
+    data = await asyncio.to_thread(_read_today_selection, today)
+    if data is None:
+        return {"data": {"date": None, "items": [], "meta": None, "note": "尚未生成组合：POST /api/picks/generate（或等待当日自动生成）"}, "meta": {}}
+    # Live judgements remain per-read, in their existing order, after DB close.
+    meta = data["meta"]
+    meta["style_routing"] = await _live_style_routing(request, hub, meta.get("style_routing"))
+    data["meta"] = await _attach_gates(request, hub, meta)
+    # This later evidence read stays after live judgement; do not freeze it into
+    # the earlier selection snapshot or run a synchronous Session on the loop.
+    data["items"] = await asyncio.to_thread(_attach_latest_execution, data["items"], data["date"], meta)
+    return {"data": data, "meta": {}}
 
 
 @router.get("/history")
