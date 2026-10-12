@@ -3,7 +3,7 @@
 import { useEffect, useState } from "react";
 import { getEventsForSymbol, type EventSummary } from "@/lib/api";
 import { useDetailModal } from "@/components/detail/detail-modal";
-import { eventDetailPayload, eventDirectionView, eventJudgeView } from "@/lib/event-view";
+import { eventDetailPayload, eventDirectionForSymbol, eventDirectionView, eventJudgeView } from "@/lib/event-view";
 
 const CATEGORY_LABEL: Record<string, string> = {
   policy: "政策",
@@ -103,8 +103,8 @@ export function StockEventsRow({ symbol, isIndex = false }: { symbol: string; is
     <div className="flex shrink-0 flex-wrap items-center gap-x-2 gap-y-1 text-xs">
       <span className="shrink-0 text-zinc-600 dark:text-zinc-400">相关事件</span>
       {events.slice(0, 3).map((e) => {
-        const d = e.directions[0];
-        const dir = d ? eventDirectionView(d, e) : null;
+        const d = eventDirectionForSymbol(e, symbol);
+        const dir = d ? eventDirectionView(d, e, symbol) : null;
         const judgement = eventJudgeView(e);
         const title = (
           <>
@@ -114,8 +114,7 @@ export function StockEventsRow({ symbol, isIndex = false }: { symbol: string; is
           </>
         );
         const tip = [
-          e.directions[0]?.chain,
-          e.directions[0]?.basis,
+          dir?.title,
           judgement.title,
           `来源 ${e.source_tier}/5 · ${e.certainty}`,
         ]
@@ -127,10 +126,10 @@ export function StockEventsRow({ symbol, isIndex = false }: { symbol: string; is
           <button
             key={e.id}
             onClick={() =>
-              open({ ...eventDetailPayload(e), symbol })
+              open(eventDetailPayload(e, symbol))
             }
             title={tip}
-            className="rounded border border-zinc-200 px-1.5 py-0.5 text-left hover:border-zinc-400 dark:border-zinc-700"
+            className="min-w-0 max-w-full rounded border border-zinc-200 px-1.5 py-0.5 text-left [overflow-wrap:anywhere] hover:border-zinc-400 dark:border-zinc-700"
           >
             {title}
           </button>

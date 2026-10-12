@@ -68,7 +68,7 @@ const MUTED_DIRECTION = "text-zinc-600 dark:text-zinc-400";
 
 /** The event state and a target's direction are separate facts. */
 export function eventJudgeView(e: EventJudgement): { text: string; cls: string; title: string } {
-  const labels = { judged: "已判定", pending: "方向未明", neutral: "未明超时", expired: "已过期", unknown: "状态未知" };
+  const labels = { judged: "已有方向记录", pending: "方向未明", neutral: "未明超时", expired: "已过期", unknown: "状态未知" };
   const status = e.judge_status ?? "unknown";
   const text = status === "unknown" && e.judge_status_label?.includes("复核")
     ? "待复核" : labels[status];
@@ -79,7 +79,7 @@ export function eventJudgeView(e: EventJudgement): { text: string; cls: string; 
       : status === "expired"
         ? "事件已超过有效时限；原方向仅保留用于查看依据。"
         : status === "judged"
-          ? "事件包含已判定方向；不代表每个关联标的都有明确方向。"
+          ? "事件包含非零方向记录；不代表消息已核实、每个关联标的受益或涨停因果成立。"
           : "当前判定状态不可确认；不要据此推断方向。";
   return {
     text,
@@ -90,28 +90,43 @@ export function eventJudgeView(e: EventJudgement): { text: string; cls: string; 
   };
 }
 
-/** A zero row only establishes association, including in an otherwise judged event. */
+/** Prefer this stock's row; a theme or another stock cannot supply its direction. */
+export function eventDirectionForSymbol(e: Pick<EventSummary, "directions">, symbol?: string | null): EventDirectionRow | undefined {
+  return symbol
+    ? e.directions.find(d => d.target_type === "symbol" && d.target === symbol)
+      ?? e.directions.find(d => d.target_type === "theme")
+    : e.directions[0];
+}
+
+/** Direction records remain clues; neither rules nor human entries verify causality. */
 export function eventDirectionView(
-  d: Pick<EventDirectionRow, "direction" | "matched_by" | "chain" | "basis">,
+  d: Pick<EventDirectionRow, "direction" | "matched_by" | "chain" | "basis"> & Partial<Pick<EventDirectionRow, "target_type" | "target">>,
   e?: EventJudgement,
+  symbol?: string | null,
 ): { text: string; cls: string; title: string } {
   const nonzero = d.direction !== 0;
   const hypothesis = nonzero && d.matched_by === "llm_aux";
-  const text = d.direction > 0 ? `利好${hypothesis ? "假设" : ""}`
-    : d.direction < 0 ? `利空${hypothesis ? "假设" : ""}` : "方向未明";
+  const polarity = d.direction > 0 ? "正向" : "负向";
+  const origin = d.matched_by === "manual" ? "人工" : ["name", "name-stem", "alias", "source", "board", "chain"].includes(d.matched_by || "") ? "规则" : "";
+  const recordedText = !nonzero ? "方向未明" : hypothesis ? `模型${polarity}假设`
+    : origin === "人工" ? `人工${polarity}记录` : origin ? `${origin}${polarity}线索` : `${polarity}记录`;
+  const outsideStock = !!symbol && (d.target_type !== "symbol" || d.target !== symbol);
+  const text = outsideStock ? d.target_type === "theme" ? `题材线索 · ${d.target}` : "其他对象线索" : recordedText;
   const boundary = hypothesis ? "LLM 辅助方向尚未经人工验证，不能作为已判定事实。"
-    : !nonzero ? "仅确认关联，当前证据不足以明确该标的方向。" : "";
+    : !nonzero ? "仅记录关联线索，当前证据不足以明确该标的方向。"
+      : "方向是规则或人工记录的线索；未独立核实消息、公司受益或涨停因果。";
+  const stockBoundary = outsideStock ? `${d.target || "其他对象"} 的${recordedText}；未记录 ${symbol} 的个股影响方向，不能将题材方向套用于该股。` : "";
   return {
     text,
-    cls: hypothesis ? "text-amber-700 dark:text-amber-300"
+    cls: outsideStock ? MUTED_DIRECTION : hypothesis ? "text-amber-700 dark:text-amber-300"
       : d.direction > 0 ? "text-up-ink dark:text-up" : d.direction < 0 ? "text-down-ink dark:text-down" : MUTED_DIRECTION,
-    title: [d.chain, d.basis, boundary, e ? eventJudgeView(e).title : ""].filter(Boolean).join(" ｜ "),
+    title: [stockBoundary, boundary, d.chain, d.basis, e ? eventJudgeView(e).title : ""].filter(Boolean).join(" ｜ "),
   };
 }
 
 export function eventJudgementExplanation(e: EventSummary): string {
   const hypothesis = e.directions.some(d => d.matched_by === "llm_aux" && d.direction !== 0);
-  return [eventJudgeView(e).title, hypothesis ? "LLM 辅助方向尚未经人工验证，不能作为已判定事实。" : ""].filter(Boolean).join("\n");
+  return [eventJudgeView(e).title, "来源与方向记录不证明消息属实或涨停因果。", hypothesis ? "LLM 辅助方向尚未经人工验证，不能作为已判定事实。" : ""].filter(Boolean).join("\n");
 }
 
 /**
@@ -142,15 +157,16 @@ export function eventNewsItem(e: ImpactEvent): NewsModalItem {
  * 保留 `eventId` 身份。方向、状态与依据来自同一次列表读取，
  * 详情展示该快照，不伪造尚未拉取的更新结果。
  */
-export function eventDetailPayload(e: EventSummary): DetailPayload {
-  const d = e.directions?.[0];
+export function eventDetailPayload(e: EventSummary, symbol?: string | null): DetailPayload {
+  const d = eventDirectionForSymbol(e, symbol);
+  const direction = d ? eventDirectionView(d, e, symbol) : null;
   return {
     kind: "event",
     title: e.title,
     url: e.url ?? null,
     eventId: e.id,
     eventRefs: e.interpretation_ref ? [e.interpretation_ref] : undefined,
-    symbol: d?.target_type === "symbol" ? d.target : null,
+    symbol: symbol || (d?.target_type === "symbol" ? d.target : null),
     theme: d?.target_type === "theme" ? d.target : null,
     source: e.source ?? null,
     date: e.published_at ?? null,
@@ -159,12 +175,12 @@ export function eventDetailPayload(e: EventSummary): DetailPayload {
       { label: "判定状态", value: eventJudgeView(e).text },
       { label: "来源级别", value: `${e.source_tier}/5 · ${e.certainty}` },
       ...(d?.target ? [{ label: d.target_type === "symbol" ? "关联个股" : "关联题材", value: d.target }] : []),
-      ...(d
-        ? [{ label: "方向", value: eventDirectionView(d, e).text }]
+      ...(direction
+        ? [{ label: "方向记录", value: direction.text }]
         : []),
-      ...(d?.basis ? [{ label: "依据", value: d.basis }] : []),
-      ...(d?.chain ? [{ label: "传导链", value: d.chain }] : []),
+      ...(d?.basis ? [{ label: "原记录依据（待核）", value: d.basis }] : []),
+      ...(d?.chain ? [{ label: "原传导线索（待核）", value: d.chain }] : []),
     ],
-    body: [e.summary, `判定说明：${eventJudgementExplanation(e)}`].filter(Boolean).join("\n\n"),
+    body: [e.summary, direction?.title, `判定说明：${eventJudgementExplanation(e)}`].filter(Boolean).join("\n\n"),
   };
 }

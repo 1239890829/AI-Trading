@@ -72,7 +72,7 @@ describe("EventPanel（盘面相关性 Top4 摘要，2026-09-04 任务④）", (
     // 方向 chip：存储芯片 利好 → 题材聚焦链接（L9 联动）
     const chip = screen.getByText("存储芯片").closest("a");
     expect(chip?.getAttribute("href")).toBe("/tape?tab=themes&focus=%E5%AD%98%E5%82%A8%E8%8A%AF%E7%89%87");
-    expect(screen.getByText("利好")).toBeTruthy();
+    expect(screen.getByText("正向记录")).toBeTruthy();
     // 完整列表入口指向事件 Tab
     const more = screen.getByText("完整列表 ↗").closest("a");
     expect(more?.getAttribute("href")).toBe("/market?tab=events");
@@ -102,7 +102,7 @@ describe("EventPanel（盘面相关性 Top4 摘要，2026-09-04 任务④）", (
 
     render(<EventPanel />);
     await screen.findByText("长鑫 LPDDR6 全球首发量产");
-    expect(screen.getByText("利好假设")).toBeTruthy();
+    expect(screen.getByText("模型正向假设")).toBeTruthy();
     expect(screen.queryByText("利好")).toBeNull();
   });
 
@@ -155,7 +155,7 @@ describe("EventPanel（盘面相关性 Top4 摘要，2026-09-04 任务④）", (
       matched_by: "llm_aux", judge_status: "expired", judge_reason: "超过有效时限", stocks: [],
       note: "LLM辅助方向待验证，暂不扩展标的池" }]);
     render(<StockPools eventId={3} />);
-    await screen.findByText("存储芯片 利好假设");
+    await screen.findByText("存储芯片 模型正向假设");
     expect(screen.getByText("已过期").getAttribute("title")).toContain("超过有效时限");
   });
 
@@ -176,7 +176,7 @@ describe("EventPanel（盘面相关性 Top4 摘要，2026-09-04 任务④）", (
       target: "存储芯片", direction: 1, judge_status: "judged",
     }]);
     render(<StockPools eventId={3} />);
-    await screen.findByText("存储芯片 利好");
+    await screen.findByText("存储芯片 正向记录");
     expect(screen.getByText("成分数据未提供")).toBeTruthy();
     expect(screen.getByText("未收到成分数据，暂不能展示关联个股。")).toBeTruthy();
     expect(screen.queryByText("0 只")).toBeNull();

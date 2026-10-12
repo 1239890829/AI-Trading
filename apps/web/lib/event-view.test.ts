@@ -30,7 +30,7 @@ describe("event direction and judgement boundaries", () => {
 
   it("does not treat a zero target as judged because another target has a direction", () => {
     const e = { ...event, judge_status: "judged" as const, directions: [direction, { ...direction, target: "AI", direction: 1 }] };
-    expect(eventJudgeView(e).text).toBe("已判定");
+    expect(eventJudgeView(e).text).toBe("已有方向记录");
     expect(eventDirectionView(direction, e).text).toBe("方向未明");
   });
 
@@ -51,11 +51,11 @@ describe("event direction and judgement boundaries", () => {
   });
 
   it.each(["expired", "unknown"] as const)("keeps the original nonzero direction visible beside %s", judge_status => {
-    expect(eventDirectionView({ ...direction, direction: 1 }, { judge_status }).text).toBe("利好");
-    expect(eventDirectionView({ ...direction, direction: -1 }, { judge_status }).text).toBe("利空");
+    expect(eventDirectionView({ ...direction, direction: 1 }, { judge_status }).text).toBe("正向记录");
+    expect(eventDirectionView({ ...direction, direction: -1 }, { judge_status }).text).toBe("负向记录");
   });
 
-  it.each([[1, "利好假设"], [-1, "利空假设"]] as const)("marks model direction %s as an unvalidated hypothesis", (value, text) => {
+  it.each([[1, "模型正向假设"], [-1, "模型负向假设"]] as const)("marks model direction %s as an unvalidated hypothesis", (value, text) => {
     const d = { ...direction, direction: value, matched_by: "llm_aux" };
     const e = { ...event, judge_status: "judged" as const, directions: [d] };
     expect(eventDirectionView(d, e).text).toBe(text);
@@ -82,8 +82,8 @@ describe("event direction and judgement boundaries", () => {
       directions: [direction, { ...direction, target: "AI", direction: -1 }],
       llm_aux_note: "LLM 辅助假设未应用：存储芯片可能受益；依据尚待复核" };
     expect(eventDirectionView(direction, e).text).toBe("方向未明");
-    expect(eventDirectionView(e.directions[1], e).text).toBe("利空");
-    expect(eventJudgeView(e).text).toBe("已判定");
+    expect(eventDirectionView(e.directions[1], e).text).toBe("负向记录");
+    expect(eventJudgeView(e).text).toBe("已有方向记录");
     expect(eventNewsItem(e).judgement).toContain(`AI有假设，未应用：${e.llm_aux_note}`);
     expect(eventDetailPayload(e).body).toContain(e.llm_aux_note);
   });
@@ -96,5 +96,47 @@ describe("event direction and judgement boundaries", () => {
     expect(eventJudgeView(e).text).toBe("方向未明");
     expect(eventNewsItem(e).judgement).not.toContain("AI有假设，未应用");
     expect(eventDetailPayload(e).body).not.toContain(e.review_note);
+  });
+
+  it("marks lexical directions as unverified rule clues, including a cost-pressure counterexample", () => {
+    const d = { ...direction, target_type: "symbol", target: "600127", direction: 1, matched_by: "source",
+      chain: "来源标的新闻命中利好词「涨价」→ 利好", basis: "单股新闻来源" };
+    const e = { ...event, title: "粮食涨价推升公司原料成本，毛利率下降", directions: [d], judge_status: "judged" as const };
+    const original = JSON.stringify(e);
+    expect(eventDirectionView(d, e).text).toBe("规则正向线索");
+    expect(eventDirectionView(d, e).title).toContain("未独立核实");
+    expect(eventJudgeView(e).text).toBe("已有方向记录");
+    expect(eventDetailPayload(e).body).toContain("不证明消息属实或涨停因果");
+    expect(eventDetailPayload(e).eventRefs).toEqual([event.interpretation_ref]);
+    expect(JSON.stringify(e)).toBe(original);
+  });
+
+  it("does not treat a manual direction entry as verified fact or causal proof", () => {
+    const d = {...direction, direction: -1, matched_by: "manual"};
+    expect(eventDirectionView(d).text).toBe("人工负向记录");
+    expect(eventDirectionView(d).title).toContain("未独立核实");
+    expect(d.direction).toBe(-1);
+  });
+
+  it("uses the requested stock record rather than a preceding positive theme or another stock", () => {
+    const e = { ...event, directions: [
+      { ...direction, direction: 1, matched_by: "name" },
+      { ...direction, target_type: "symbol", target: "600001", direction: 1, matched_by: "source" },
+      { ...direction, target_type: "symbol", target: "600519", direction: -1, matched_by: "source" },
+    ] };
+    const payload = eventDetailPayload(e, "600519");
+    expect(payload.symbol).toBe("600519");
+    expect(payload.meta).toContainEqual({label: "方向记录", value: "规则负向线索"});
+    expect(payload.meta).toContainEqual({label: "关联个股", value: "600519"});
+    expect(e.directions[0].direction).toBe(1);
+    expect(payload.eventRefs).toEqual([event.interpretation_ref]);
+  });
+
+  it("keeps theme direction scoped when no direction for the requested stock exists", () => {
+    const e = { ...event, directions: [{ ...direction, direction: 1, matched_by: "name" }] };
+    const payload = eventDetailPayload(e, "600127");
+    expect(payload.meta).toContainEqual({label: "方向记录", value: "题材线索 · 存储芯片"});
+    expect(payload.body).toContain("未记录 600127 的个股影响方向");
+    expect(e.directions[0].direction).toBe(1);
   });
 });
