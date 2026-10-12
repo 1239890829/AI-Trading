@@ -7,6 +7,49 @@ import type { Quote } from "@/types/market";
 
 export type StreamStatus = "connecting" | "live" | "polling" | "closed" | "stale" | "error";
 
+/** One stream owner's immediate, symbol-scoped view. null means a received
+ * frame omitted that subscribed symbol; undefined means no observation yet. */
+export interface QuoteFeed {
+  subscribe(symbol: string, listener: () => void): () => void;
+  getSnapshot(symbol: string): Quote | null | undefined;
+}
+
+function createQuoteFeed(symbols: string[]) {
+  let selected = new Set(symbols);
+  let current = new Map<string, Quote | null>();
+  const listeners = new Map<string, Set<() => void>>();
+  const replace = (next: Map<string, Quote | null>) => {
+    const previous = current;
+    current = next;
+    for (const [symbol, group] of listeners) {
+      if (previous.get(symbol) !== next.get(symbol)) group.forEach(listener => listener());
+    }
+  };
+  const feed: QuoteFeed = {
+    subscribe(symbol, listener) {
+      const group = listeners.get(symbol) ?? new Set<() => void>();
+      group.add(listener);
+      listeners.set(symbol, group);
+      return () => {group.delete(listener); if (!group.size) listeners.delete(symbol);};
+    },
+    getSnapshot: symbol => current.get(symbol),
+  };
+  return {
+    feed,
+    setSymbols(nextSymbols: string[]) {
+      selected = new Set(nextSymbols);
+      replace(new Map([...current].filter(([symbol]) => selected.has(symbol))));
+    },
+    publish(list: Quote[]) {
+      const next = new Map<string, Quote | null>([...selected].map(symbol => [symbol, null]));
+      for (const quote of list) if (selected.has(quote.symbol)) next.set(quote.symbol, quote);
+      replace(next);
+    },
+    clear: () => replace(new Map()),
+    dispose() {replace(new Map()); listeners.clear();},
+  };
+}
+
 /** 连接状态 → 界面文案（共享：工作台与个股详情同一套，避免两处文案漂移）。 */
 export const STREAM_STATUS_LABEL: Record<StreamStatus, { text: string; cls: string }> = {
   connecting: { text: "连接中", cls: "text-zinc-600 dark:text-zinc-400" },
@@ -32,14 +75,16 @@ export const STREAM_ABNORMAL: readonly StreamStatus[] = ["connecting", "polling"
  * 重连失败 3 次还会误入降级轮询。
  */
 export function useQuoteStream(symbols: string[], opts?: { throttleMs?: number }) {
+  const [owner] = useState(() => createQuoteFeed(symbols));
+  useEffect(() => () => owner.dispose(), [owner]);
   const [quotes, setQuotes] = useState<Record<string, Quote>>({});
   const [status, setStatus] = useState<StreamStatus>("connecting");
   // 已发送的订阅 key（去重用，见下方订阅 effect 注释）
   const [sentKey, setSentKey] = useState("");
   // 展示节流（2026-09-02 用户反馈：自选列表 1Hz 刷新频繁闪烁）：
   // WS 仍按 1Hz 全量接收（内部状态不丢数据），对外 quotes 状态按
-  // throttleMs 节流应用（trailing——间隔内的最后一条生效），价格类面板
-  // 不必跟着推送节奏逐秒重渲染。首帧（首次应用）不节流，避免白屏等拍。
+  // throttleMs 节流应用（trailing——间隔内的最后一条生效）。选中详情通过
+  // quoteFeed 即时消费同一连接，列表不跟着逐秒重渲染。首帧不节流。
   // status 不节流：连接态变化必须即时呈现。不传 throttleMs 行为不变。
   const throttleMs = opts?.throttleMs ?? 0;
 
@@ -51,8 +96,9 @@ export function useQuoteStream(symbols: string[], opts?: { throttleMs?: number }
   const refreshSelectionRef = useRef<(() => void) | null>(null);
   useEffect(() => {
     symbolsRef.current = key ? key.split(",") : [];
+    owner.setSymbols(symbolsRef.current);
     refreshSelectionRef.current?.();
-  }, [key]);
+  }, [key, owner]);
 
   const wsRef = useRef<WebSocket | null>(null);
   const connectedRef = useRef(false);
@@ -88,16 +134,21 @@ export function useQuoteStream(symbols: string[], opts?: { throttleMs?: number }
       setQuotes(Object.fromEntries(current.map((q) => [q.symbol, q])));
     };
     const apply = (list: Quote[]) => {
+      if (closed) return;
+      const selected = new Set(symbolsRef.current);
+      const current = list.filter(quote => selected.has(quote.symbol));
+      if (list.length && !current.length) return;
+      owner.publish(current);
       if (throttleMs <= 0) {
-        applyNow(list);
+        applyNow(current);
         return;
       }
-      pending = list;
+      pending = current;
       const elapsed = Date.now() - lastAppliedAt;
       if (elapsed >= throttleMs) {
         if (throttleTimer) clearTimeout(throttleTimer);
         throttleTimer = null;
-        applyNow(list);
+        applyNow(current);
         return;
       }
       if (throttleTimer) return; // 已有待触发的 trailing 应用
@@ -289,12 +340,13 @@ export function useQuoteStream(symbols: string[], opts?: { throttleMs?: number }
       if (pingTimer) clearInterval(pingTimer);
       document.removeEventListener("visibilitychange", onVisibility);
       stopPolling();
+      owner.clear();
       wsRef.current?.close();
       wsRef.current = null;
     };
     // throttleMs 是**数字**（`opts?.throttleMs ?? 0`），依赖按值比较——
     // 调用方每次传内联对象也不会导致重连；真改动节流值时才重连，符合预期。
-  }, [hasSymbols, throttleMs]);
+  }, [hasSymbols, throttleMs, owner]);
 
   // 订阅更新：连接存活时发 subscribe 消息切换订阅集（不重连）。
   // ⚠️ 依赖只允许 key（集合的稳定字符串）：symbols 数组每次渲染都是新引用，
@@ -315,5 +367,5 @@ export function useQuoteStream(symbols: string[], opts?: { throttleMs?: number }
     } catch {}
   }, [key, sentKey]);
 
-  return { quotes, status };
+  return { quotes, status, quoteFeed: owner.feed };
 }

@@ -4,7 +4,7 @@ import { useEffect, useState } from "react";
 import {
   getMinuteDecisions,
   getMinuteSignals,
-  type MinuteDecisionItem,
+  type MinuteDecisionsPayload,
   type MinuteSignalsPayload,
 } from "@/lib/api";
 import { bjHHMM, bjMonthDay, fmt, pctColor, pctText } from "@/lib/format";
@@ -36,6 +36,8 @@ function biasCls(bias: string): string {
   return bias === "低吸偏向" ? "text-up-ink dark:text-up" : "text-down-ink dark:text-down";
 }
 
+type ReadState<T> = { data: T | null; error: string | null; pending: boolean };
+
 export function MinuteDecisionPanel({
   symbol,
   className,
@@ -43,47 +45,39 @@ export function MinuteDecisionPanel({
   symbol: string;
   className?: string;
 }) {
-  const [sig, setSig] = useState<MinuteSignalsPayload | null>(null);
-  const [decisions, setDecisions] = useState<MinuteDecisionItem[]>([]);
-  const [note, setNote] = useState<string | null>(null);
-  const [openCount, setOpenCount] = useState(0);
-  const [error, setError] = useState<string | null>(null);
-  const [loading, setLoading] = useState(true);
-
+  const [signalsRead, setSignalsRead] = useState<ReadState<MinuteSignalsPayload>>({ data: null, error: null, pending: true });
+  const [decisionsRead, setDecisionsRead] = useState<ReadState<MinuteDecisionsPayload>>({ data: null, error: null, pending: true });
   const [nonce, setNonce] = useState(0);
+  const [prevSymbol, setPrevSymbol] = useState(symbol);
+  if (symbol !== prevSymbol) {
+    setPrevSymbol(symbol);
+    setSignalsRead({ data: null, error: null, pending: true });
+    setDecisionsRead({ data: null, error: null, pending: true });
+  }
 
   useEffect(() => {
     let alive = true;
-    // loading 初值 true（挂载即加载）；非首次由刷新按钮在事件处理里置 true。
-    // 刻意不在 effect 体内同步 setState——那会触发级联渲染（eslint set-state-in-effect）。
-    // 信号与决策库独立容错：一个源挂了不应让整块空白（各自给出三态）
-    void Promise.allSettled([getMinuteSignals(symbol), getMinuteDecisions(symbol, 30)])
-      .then(([s, d]) => {
-        if (!alive) return;
-        if (s.status === "fulfilled") {
-          setSig(s.value);
-          setError(null);
-        } else {
-          setSig(null);
-          setError((s.reason as Error)?.message ?? "分钟信号不可用");
-        }
-        if (d.status === "fulfilled") {
-          setDecisions(d.value.items);
-          setNote(d.value.note);
-          setOpenCount(d.value.open_count);
-        } else {
-          setDecisions([]);
-          setNote(null);
-        }
-      })
-      .finally(() => {
-        if (alive) setLoading(false);
+    // 两个只读展示来源独立返回；保留挂载/手动刷新频率，不添加轮询。
+    void getMinuteSignals(symbol)
+      .then(data => alive && setSignalsRead({ data, error: null, pending: false }))
+      .catch((e: unknown) => {
+        if (alive) setSignalsRead(prev => ({ ...prev, error: e instanceof Error ? e.message : "分钟信号不可用", pending: false }));
+      });
+    void getMinuteDecisions(symbol, 30)
+      .then(data => alive && setDecisionsRead({ data, error: null, pending: false }))
+      .catch((e: unknown) => {
+        if (alive) setDecisionsRead(prev => ({ ...prev, error: e instanceof Error ? e.message : "决策记录不可用", pending: false }));
       });
     return () => {
       alive = false;
     };
   }, [symbol, nonce]);
 
+  const sig = signalsRead.data;
+  const decisions = decisionsRead.data?.items ?? [];
+  const note = decisionsRead.data?.note;
+  const openCount = decisionsRead.data?.open_count ?? 0;
+  const loading = signalsRead.pending || decisionsRead.pending;
   const latest = sig?.signals.length ? sig.signals[sig.signals.length - 1] : null;
   const degraded = sig?.degraded ?? [];
 
@@ -98,7 +92,8 @@ export function MinuteDecisionPanel({
         )}
         <button data-action="secondary"
           onClick={() => {
-            setLoading(true);
+            setSignalsRead(prev => ({ ...prev, pending: true }));
+            setDecisionsRead(prev => ({ ...prev, pending: true }));
             setNonce((n) => n + 1);
           }}
           className="ml-auto"
@@ -109,11 +104,12 @@ export function MinuteDecisionPanel({
       </div>
 
       <div className="min-h-0 flex-1 overflow-y-auto px-3 py-2 text-xs">
-        {error && (
-          <div className="mb-2 rounded border border-amber-500/40 bg-amber-500/10 px-2 py-1.5 text-[11px] text-amber-800 dark:text-amber-300">
-            {error}
+        {signalsRead.error && (
+          <div role="alert" className="mb-2 rounded border border-amber-500/40 bg-amber-500/10 px-2 py-1.5 text-[11px] text-amber-800 dark:text-amber-300">
+            信号读取失败（{signalsRead.error}）。{sig ? "保留上次信号、依据与时间，当前状态待核实。" : "尚未读到信号，不表示当前确无；可刷新重试。"}
           </div>
         )}
+        {signalsRead.pending && !sig && <p className="py-2 text-[11px] text-zinc-600 dark:text-zinc-400">分钟信号加载中…</p>}
 
         {/* ---- 当前信号 ---- */}
         {sig &&
@@ -149,7 +145,7 @@ export function MinuteDecisionPanel({
             </div>
           ) : (
             <p className="py-4 text-center text-[11px] text-zinc-600 dark:text-zinc-400">
-              当前无越过阈值的做 T 信号（引擎已在运行）
+              {signalsRead.error ? "上次读取无越过阈值的信号，当前状态待核实" : "当前无越过阈值的做 T 信号（引擎已在运行）"}
             </p>
           ))}
 
@@ -175,11 +171,13 @@ export function MinuteDecisionPanel({
             <span>决策记录（近 {decisions.length} 条）</span>
             {openCount > 0 && <span>待结算 {openCount}</span>}
           </div>
-          {decisions.length === 0 ? (
+          {decisionsRead.error && <p role="alert" className="mb-2 text-[11px] text-amber-800 dark:text-amber-300">决策记录读取失败（{decisionsRead.error}）。{decisionsRead.data ? "保留上次记录、结算状态与时间，当前状态待核实。" : "尚未读到记录，不表示没有记录；可刷新重试。"}</p>}
+          {decisionsRead.pending && !decisionsRead.data && <p className="py-2 text-[11px] text-zinc-600 dark:text-zinc-400">决策记录加载中…</p>}
+          {decisionsRead.data && decisions.length === 0 && !decisionsRead.error ? (
             <p className="py-2 text-[11px] text-zinc-600 dark:text-zinc-400">
               暂无记录。该股进入盘中跟踪台账后，收盘会统一扫描并记录当日信号。
             </p>
-          ) : (
+          ) : decisions.length > 0 ? (
             <ul className="space-y-1">
               {decisions.map((d) => {
                 const o = d.outcome ? OUTCOME[d.outcome] : null;
@@ -227,7 +225,7 @@ export function MinuteDecisionPanel({
                 );
               })}
             </ul>
-          )}
+          ) : null}
           {note && <p className="mt-1.5 text-[10px] leading-relaxed text-zinc-600 dark:text-zinc-400">{note}</p>}
         </div>
       </div>

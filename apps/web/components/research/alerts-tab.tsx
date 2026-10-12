@@ -2,13 +2,13 @@
 
 import { ChannelStatus } from "@/components/notifications/channel-status";
 
-import { useCallback, useMemo, useRef, useState } from "react";
+import { useMemo, useState } from "react";
 import { Panel } from "@/components/panel";
 import { FilterMenu } from "@/components/ui/filter-menu";
 import { HugeiconsIcon } from "@hugeicons/react";
 import Tick02Icon from "@hugeicons/core-free-icons/Tick02Icon";
 import { StockLink } from "@/components/stock-link";
-import { usePollingFetch } from "@/hooks/use-polling-fetch";
+import { useResource } from "@/hooks/use-resource";
 import {
   createAlertRule,
   deleteAlertRule,
@@ -17,7 +17,6 @@ import {
   listAlertRules,
   updateAlertRule,
   type AlertConditionType,
-  type AlertEvent,
   type AlertRule,
   type AlertRuleCreate,
   type AlertScope,
@@ -40,43 +39,18 @@ const SCOPE_LABEL: Record<AlertScope, string> = {
 };
 
 export function AlertsTab() {
-  const [rules, setRules] = useState<AlertRule[]>([]);
-  const [events, setEvents] = useState<AlertEvent[]>([]);
-  const [channels, setChannels] = useState<string[]>([]);
-  const [channelConfig, setChannelConfig] = useState<Record<string, boolean>>({});
-  const [loading, setLoading] = useState(true);
-  const [error, setError] = useState<string | null>(null);
-
-  const didLoadRef = useRef(false);
-  const load = useCallback(async () => {
-    // 平滑刷新（2026-09-09 用户反馈：轮询时页面闪烁）——仅首次加载走 loading
-    // 骨架；轮询时静默拉取，数据变化才 setState（JSON 浅比较跳过相同数据，
-    // 消除无谓重渲染与 sticky thead 抖动）。
-    const first = !didLoadRef.current;
-    didLoadRef.current = true;
-    try {
-      if (first) setLoading(true);
-      const [r, e, ch] = await Promise.all([
-        listAlertRules(),
-        listAlertEvents(30),
-        getAlertChannels(),
-      ]);
-      setRules((prev) => (JSON.stringify(prev) === JSON.stringify(r) ? prev : r));
-      setEvents((prev) => (JSON.stringify(prev) === JSON.stringify(e) ? prev : e));
-      setChannels(ch.available);
-      setChannelConfig(ch.configured ?? {});
-      setError(null);
-    } catch (err) {
-      setError(err instanceof Error ? err.message : "加载失败");
-    } finally {
-      if (first) setLoading(false);
-    }
-  }, []);
-
-  // `marketHours: false`（2026-09-12 评审 R-7）：预警规则/事件/通道**不是行情数据**，
-  // 走 `useResource` 默认的「盘外 ×5 降频 + 封顶 120s」会让盘后新产生的告警最多晚 2 分钟
-  // 才出现——而盘后恰恰是复盘告警的高峰。关掉降频，维持 10s 恒定节奏。
-  usePollingFetch(load, 10_000, undefined, { marketHours: false });
+  // 三个端点没有共同快照版本。各自交付，只有持续变化的触发记录周期校准。
+  const rulesResource = useResource(listAlertRules, { marketHours: false });
+  const eventsResource = useResource(() => listAlertEvents(30), { intervalMs: 10_000, marketHours: false });
+  const channelsResource = useResource(getAlertChannels, { marketHours: false });
+  const rules = rulesResource.data ?? [];
+  const events = useMemo(() => eventsResource.data ?? [], [eventsResource.data]);
+  const channels = channelsResource.data?.available ?? [];
+  const channelConfig = channelsResource.data?.configured ?? {};
+  const loading = channelsResource.data === undefined || channelsResource.error != null;
+  const rulesLoading = rulesResource.data === undefined && rulesResource.pending;
+  const eventsLoading = eventsResource.data === undefined && eventsResource.pending;
+  const rulesUnconfirmed = rulesResource.pending || rulesResource.error != null;
 
   // P1-36：判读层「已挡（ignore）」事件——被挡清单可见，才能判断"是不是挡多了"。
   const blocked = useMemo(
@@ -124,7 +98,7 @@ export function AlertsTab() {
       });
       setSymbolInput("");
       setFeedback("规则已创建。实际触发与送达以后台记录为准。");
-      await load();
+      rulesResource.refresh();
     } catch (err) {
       setMutationError(err instanceof Error ? err.message : "创建失败，请重试");
     } finally {
@@ -140,7 +114,7 @@ export function AlertsTab() {
     try {
       await updateAlertRule(rule.id, { enabled: !rule.enabled });
       setFeedback(`规则「${rule.name}」已${rule.enabled ? "停用" : "启用"}。`);
-      await load();
+      rulesResource.refresh();
     } catch (err) {
       setMutationError(err instanceof Error ? err.message : "更新失败，请重试");
     } finally {
@@ -158,7 +132,8 @@ export function AlertsTab() {
       await deleteAlertRule(target.id);
       setDeleteTarget(null);
       setFeedback(`已删除规则「${target.name}」。该规则的触发历史已一并删除。`);
-      await load();
+      rulesResource.refresh();
+      eventsResource.refresh(); // 删除规则同时级联删除其触发历史。
     } catch (err) {
       setMutationError(err instanceof Error ? err.message : "删除失败，请重试或取消");
     } finally {
@@ -170,10 +145,12 @@ export function AlertsTab() {
     <div className="alerts-management flex h-full min-h-0 min-w-0 flex-col gap-3">
       <div className="flex shrink-0 items-center justify-between">
         <h2 className="text-base font-medium">提醒规则与记录</h2>
-        <span className="text-xs text-zinc-600 dark:text-zinc-400">每 10 秒刷新</span>
+        <span className="text-xs text-zinc-600 dark:text-zinc-400">触发记录每 10 秒刷新</span>
       </div>
 
-      {error && <div role="alert" className="flex shrink-0 flex-wrap items-center gap-2 rounded-lg bg-[var(--control-surface)] px-3 py-2 text-xs text-[var(--ui-ink)]">读取失败，保留结果仅作上次记录：{error}<button className="quiet-action" onClick={() => void load()}>重试读取</button></div>}
+      {[{ label: "规则", resource: rulesResource }, { label: "触发记录", resource: eventsResource }, { label: "通道", resource: channelsResource }].map(({ label, resource }) => resource.error != null &&
+        <div key={label} role="alert" className="flex shrink-0 flex-wrap items-center gap-2 rounded-lg bg-[var(--control-surface)] px-3 py-2 text-xs text-[var(--ui-ink)]">{label}读取失败：{resource.error instanceof Error ? resource.error.message : "接口异常"}。{resource.data !== undefined ? "保留上次读取结果，当前状态未确认。" : "当前状态未确认。"}<button className="quiet-action" onClick={resource.refresh}>重试读取</button></div>
+      )}
       {mutationError && <p role="alert" className="shrink-0 rounded-lg bg-[var(--control-surface)] px-3 py-2 text-xs text-[var(--ui-ink)]">操作未完成：{mutationError}</p>}
       {feedback && <p role="status" className="shrink-0 text-xs text-[var(--ui-muted)]">{feedback}</p>}
 
@@ -282,11 +259,11 @@ export function AlertsTab() {
           <Panel title={`规则列表 (${rules.length})`} className="min-h-0 flex-1" bodyClassName="overflow-auto">
             {deleteTarget && <form onSubmit={event => {event.preventDefault(); void remove();}} className="flex flex-wrap items-center gap-2 border-b border-[var(--ui-line)] bg-[var(--control-surface)] px-3 py-3 text-xs">
               <p className="min-w-0 flex-1 basis-full leading-relaxed">删除规则「{deleteTarget.name}」？该规则的触发历史也会删除，外部渠道尝试审计保留。此操作不可撤销。</p>
-              <button type="submit" disabled={busyRule !== null} className="quiet-action text-[var(--tick-up-from)]">{busyRule === deleteTarget.id ? "删除中…" : "确认删除"}</button>
+              <button type="submit" disabled={busyRule !== null || rulesUnconfirmed} className="quiet-action text-[var(--tick-up-from)]">{busyRule === deleteTarget.id ? "删除中…" : "确认删除"}</button>
               <button type="button" disabled={busyRule !== null} onClick={() => {setDeleteTarget(null); setMutationError(null);}} className="quiet-action">取消删除</button>
             </form>}
-            {loading ? <p role="status" className="px-4 py-6 text-xs text-[var(--ui-muted)]">正在读取规则…</p> : rules.length === 0 ? (
-              <p className="px-4 py-6 text-center text-sm text-zinc-600 dark:text-zinc-400">{error ? "规则读取失败，当前是否为空尚未确认。请重试读取。" : "暂无规则。"}</p>
+            {rulesLoading ? <p role="status" className="px-4 py-6 text-xs text-[var(--ui-muted)]">正在读取规则…</p> : rules.length === 0 ? (
+              <p className="px-4 py-6 text-center text-sm text-zinc-600 dark:text-zinc-400">{rulesResource.error ? "规则读取失败，当前是否为空尚未确认。请重试读取。" : "暂无规则。"}</p>
             ) : (
               <table className="w-full min-w-[680px] text-xs [&_td]:align-top [&_th]:whitespace-nowrap">
                 <thead className="sticky top-0 bg-zinc-50 text-zinc-600 dark:text-zinc-400 dark:bg-zinc-900">
@@ -313,7 +290,7 @@ export function AlertsTab() {
                       <td className="px-3 py-2">
                         <button
                           onClick={() => void toggleEnabled(r)}
-                          disabled={busyRule !== null}
+                          disabled={busyRule !== null || rulesUnconfirmed}
                           aria-pressed={r.enabled}
                           aria-label={`${r.enabled ? "停用" : "启用"}规则 ${r.name}`}
                           className={`quiet-action rounded-md px-2 py-0.5 ${r.enabled ? "bg-up/10 text-up-ink dark:text-up" : "bg-zinc-100 text-zinc-600 dark:text-zinc-400 dark:bg-zinc-800"}`}
@@ -322,7 +299,7 @@ export function AlertsTab() {
                         </button>
                       </td>
                       <td className="px-3 py-2">
-                        <button disabled={busyRule !== null} onClick={() => {setDeleteTarget(r); setMutationError(null); setFeedback("");}} className="quiet-action text-zinc-600 dark:text-zinc-400 hover:text-red-400" aria-label={`删除规则 ${r.name}`}>
+                        <button disabled={busyRule !== null || rulesUnconfirmed} onClick={() => {setDeleteTarget(r); setMutationError(null); setFeedback("");}} className="quiet-action text-zinc-600 dark:text-zinc-400 hover:text-red-400" aria-label={`删除规则 ${r.name}`}>
                           删除
                         </button>
                       </td>
@@ -334,8 +311,8 @@ export function AlertsTab() {
           </Panel>
 
           <Panel title={`最近触发记录 (${events.length})`} className="min-h-0 flex-1" bodyClassName="overflow-auto">
-            {loading ? <p role="status" className="px-4 py-6 text-xs text-[var(--ui-muted)]">正在读取触发记录…</p> : events.length === 0 ? (
-              <p className="px-4 py-6 text-center text-sm text-zinc-600 dark:text-zinc-400">{error ? "触发记录读取失败，不能判断当前没有触发。" : "暂无触发。"}</p>
+            {eventsLoading ? <p role="status" className="px-4 py-6 text-xs text-[var(--ui-muted)]">正在读取触发记录…</p> : events.length === 0 ? (
+              <p className="px-4 py-6 text-center text-sm text-zinc-600 dark:text-zinc-400">{eventsResource.error ? "触发记录读取失败，不能判断当前没有触发。" : "暂无触发。"}</p>
             ) : (
               <table className="w-full min-w-[680px] text-xs [&_td]:align-top [&_th]:whitespace-nowrap">
                 <thead className="sticky top-0 bg-zinc-50 text-zinc-600 dark:text-zinc-400 dark:bg-zinc-900">

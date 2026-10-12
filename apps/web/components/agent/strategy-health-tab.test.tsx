@@ -1,5 +1,5 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { cleanup, render, screen, waitFor } from "@testing-library/react";
+import { act, cleanup, fireEvent, render, screen, waitFor } from "@testing-library/react";
 
 /**
  * 策略健康度面板（#11）。
@@ -23,6 +23,44 @@ afterEach(() => {
   cleanup();
   healthMock.mockReset();
   registryMock.mockReset();
+});
+
+describe("策略健康 · 独立读取", () => {
+  const health = { strategies: [{ strategy_key: "k", name: "独立健康结果", status: "ok" }] };
+  it("慢登记册不挡健康结果，核验尚未返回不能解释为未跑过", async () => {
+    healthMock.mockResolvedValue(health);
+    registryMock.mockReturnValue(new Promise(() => {}));
+    render(<StrategyHealthTab />);
+    expect(await screen.findByText(/独立健康结果/)).toBeTruthy();
+    expect(screen.getByText(/登记册正在读取，核验结论未知/)).toBeTruthy();
+    expect(screen.queryByText(/未跑过核验/)).toBeNull();
+  });
+
+  it("登记册失败不清健康主体，不能声称没有核验产物", async () => {
+    healthMock.mockResolvedValue(health);
+    registryMock.mockRejectedValue(new Error("registry offline"));
+    render(<StrategyHealthTab />);
+    expect(await screen.findByText(/独立健康结果/)).toBeTruthy();
+    expect(screen.getByText(/核验登记册加载失败/)).toBeTruthy();
+    expect(screen.queryByText(/未跑过核验/)).toBeNull();
+  });
+
+  it("健康刷新失败保留上次结果，恢复后清错误，旧登记册晚回不覆盖新版", async () => {
+    let old!: (items: unknown[]) => void;
+    healthMock.mockResolvedValueOnce(health).mockRejectedValueOnce(new Error("health offline")).mockResolvedValue(health);
+    registryMock.mockResolvedValueOnce([]).mockReturnValueOnce(new Promise(resolve => { old = resolve; }))
+      .mockResolvedValue([{ key: "k", verification: { available: true, verdict: "current verification" } }]);
+    render(<StrategyHealthTab />);
+    await screen.findByText(/独立健康结果/);
+    fireEvent.click(screen.getByRole("button", { name: "刷新" }));
+    expect(await screen.findByText(/策略健康加载失败.*上次读取结果/)).toBeTruthy();
+    expect(screen.getByText(/独立健康结果/)).toBeTruthy();
+    fireEvent.click(screen.getByRole("button", { name: "刷新" }));
+    expect(await screen.findByText("current verification")).toBeTruthy();
+    await act(async () => old([{ key: "k", verification: { available: true, verdict: "old verification" } }]));
+    expect(screen.queryByText("old verification")).toBeNull();
+    expect(screen.queryByText(/health offline/)).toBeNull();
+  });
 });
 
 function stub(health: unknown, registry: unknown[] = []) {

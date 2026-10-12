@@ -113,6 +113,129 @@ function deferred<T>() {
 async function settle() { await act(async () => {}); }
 async function advance(ms: number) { await act(async () => { await vi.advanceTimersByTimeAsync(ms); }); }
 
+function testQuoteFeed() {
+  const data = new Map<string, Quote | null>();
+  const listeners = new Map<string, Set<() => void>>();
+  return {
+    subscribe(symbol: string, listener: () => void) {
+      const group = listeners.get(symbol) ?? new Set<() => void>();
+      group.add(listener); listeners.set(symbol, group);
+      return () => {group.delete(listener); if (!group.size) listeners.delete(symbol);};
+    },
+    getSnapshot: (symbol: string) => data.get(symbol),
+    publish(symbol: string, value: Quote | null) {
+      data.set(symbol, value); listeners.get(symbol)?.forEach(listener => listener());
+    },
+    listenerCount: (symbol: string) => listeners.get(symbol)?.size ?? 0,
+  };
+}
+
+describe("StockDetailPanel · 即时报价复用", () => {
+  it.each(["kline", "minute"] as const)("%s follows the selected feed immediately and never regresses to the delayed list prop", async (chartTab) => {
+    const feed = testQuoteFeed();
+    const first = {...audit, symbol: "600519", price: 20, volume: 100, amount: 2000, data_timestamp: "2026-10-09T02:00:00Z"};
+    feed.publish("600519", first);
+    const props = {symbol: "600519", chartTab, liveQuote: first, quoteFeed: feed};
+    const view = render(<StockDetailPanel {...props} />); await settle();
+    const second = {...first, price: 22, volume: 200, amount: 4400, data_timestamp: "2026-10-09T02:00:30Z", received_at: "2026-10-09T02:00:31Z"};
+    await act(async () => {feed.publish("600519", second);});
+    expect(view.getByTestId(`${chartTab}-price`).textContent).toBe("22");
+    expect(view.container.querySelector(".quote-sheet")?.textContent).toContain("22.00");
+    view.rerender(<StockDetailPanel {...props} liveQuote={{...first, price: 21}} />);
+    expect(view.getByTestId(`${chartTab}-price`).textContent).toBe("22");
+    if (chartTab === "minute") {
+      expect(mergeQuoteIntoMinutes).toHaveBeenLastCalledWith(minute().points, second, false);
+      expect(view.getByTestId("minute-price").getAttribute("data-avg")).toBe("22");
+    }
+    expect(calls.symbols.every(symbols => symbols.length === 0)).toBe(true);
+  });
+
+  it("hidden detail stops the selected subscription, preserves its chart and resumes from the current feed without a new stream", async () => {
+    const feed = testQuoteFeed();
+    const first = {...audit, symbol: "600519", price: 21, data_timestamp: "2026-10-09T02:00:00Z"};
+    feed.publish("600519", first);
+    const props = {symbol: "600519", quoteFeed: feed};
+    const view = render(<StockDetailPanel {...props} />); await settle();
+    expect(feed.listenerCount("600519")).toBe(1);
+    expect(view.getByTestId("kline-price").textContent).toBe("21");
+    view.rerender(<StockDetailPanel {...props} active={false} />);
+    expect(feed.listenerCount("600519")).toBe(0);
+    const merges = vi.mocked(mergeQuoteIntoMinutes).mock.calls.length;
+    await act(async () => {feed.publish("600519", {...first, price: 22, data_timestamp: "2026-10-09T02:00:30Z"});});
+    expect(view.getByTestId("kline-price").textContent).toBe("21");
+    expect(mergeQuoteIntoMinutes).toHaveBeenCalledTimes(merges);
+    view.rerender(<StockDetailPanel {...props} active />); await settle();
+    expect(feed.listenerCount("600519")).toBe(1);
+    expect(view.getByTestId("kline-price").textContent).toBe("22");
+    view.rerender(<StockDetailPanel {...props} symbol="000001" />); await settle();
+    expect(feed.listenerCount("600519")).toBe(0);
+    expect(feed.listenerCount("000001")).toBe(1);
+    await act(async () => {feed.publish("600519", {...first, price: 99}); feed.publish("000001", {...first, symbol: "000001", price: 23});});
+    expect(view.getByTestId("kline-price").textContent).toBe("23");
+    expect(calls.symbols.every(symbols => symbols.length === 0)).toBe(true);
+    view.unmount(); expect(feed.listenerCount("000001")).toBe(0);
+  });
+
+  it("a missing latest frame keeps the last selected chart with an explicit hint instead of reviving the slow prop", async () => {
+    const feed = testQuoteFeed();
+    const old = {...audit, symbol: "600519", price: 20, data_timestamp: "2026-10-09T02:00:00Z"};
+    const latest = {...old, price: 22, data_timestamp: "2026-10-09T02:00:30Z"};
+    feed.publish("600519", latest);
+    const props = {symbol: "600519", quoteFeed: feed, liveQuote: old};
+    const view = render(<StockDetailPanel {...props} />); await settle();
+    await act(async () => {feed.publish("600519", null);});
+    view.rerender(<StockDetailPanel {...props} liveQuote={{...old, price: 21}} />);
+    expect(view.getByTestId("kline-price").textContent).toBe("22");
+    expect(view.container.querySelector(".quote-sheet")?.textContent).toContain("22.00");
+    expect(view.getByText(/最近行情帧缺少该证券/)).toBeTruthy();
+    await act(async () => {feed.publish("600519", {...latest, price: 23});});
+    expect(view.getByTestId("kline-price").textContent).toBe("23");
+    expect(view.queryByText(/最近行情帧缺少该证券/)).toBeNull();
+  });
+
+  it("a missing quote frame suspends precheck eligibility, preserves the trading draft and rechecks on recovery", async () => {
+    api.checkOrderRisk.mockImplementation(async () => ({allowed: true, checked_at: new Date().toISOString(), estimated_fee: 5, max_qty: 1000, reasons: [], warnings: [], state: "allowed"}));
+    const feed = testQuoteFeed();
+    const latest = {...audit, symbol: "600519", price: 22, data_timestamp: "2026-10-09T02:00:30Z"};
+    feed.publish("600519", latest);
+    const view = render(<StockDetailPanel symbol="600519" rightTab="trade" quoteFeed={feed} />); await settle();
+    fireEvent.change(view.getByLabelText("价格"), {target: {value: "21.8"}});
+    fireEvent.change(view.getByLabelText("数量"), {target: {value: "200"}});
+    await advance(300);
+    const submit = () => view.getByRole("button", {name: "买入 600519"}) as HTMLButtonElement;
+    expect(submit().disabled).toBe(false);
+    await act(async () => {feed.publish("600519", null);});
+    expect(submit().disabled).toBe(true);
+    const checks = api.checkOrderRisk.mock.calls.length;
+    await advance(1000); expect(api.checkOrderRisk).toHaveBeenCalledTimes(checks);
+    expect((view.getByLabelText("价格") as HTMLInputElement).value).toBe("21.8");
+    expect((view.getByLabelText("数量") as HTMLInputElement).value).toBe("200");
+    await act(async () => {feed.publish("600519", {...latest, price: 23});});
+    expect(submit().disabled).toBe(true);
+    await advance(300);
+    expect(api.checkOrderRisk.mock.calls.length).toBeGreaterThan(checks);
+    expect(submit().disabled).toBe(false);
+  });
+
+  it("late valuation enrichment cannot mix older REST flow fields or provenance into the latest accepted quote", async () => {
+    const enrichment = deferred<Quote>(); api.getQuote.mockReturnValueOnce(enrichment.promise);
+    const feed = testQuoteFeed();
+    const first = {...audit, symbol: "600519", price: 20, volume: 100_000, amount: 2_000_000, data_timestamp: "2026-10-09T02:00:00Z"};
+    feed.publish("600519", first);
+    const view = render(<StockDetailPanel symbol="600519" quoteFeed={feed} />); await settle();
+    const latest = {...first, price: 22, volume: 200_000, amount: 4_400_000, high: 23, data_timestamp: "2026-10-09T02:00:30Z", received_at: "2026-10-09T02:00:31Z"};
+    await act(async () => {feed.publish("600519", latest); enrichment.resolve({...first, price: 19, source: "tencent", received_at: "2026-10-09T02:00:45Z", pe_ttm: 32});});
+    const metrics = view.getByRole("region", {name: "行情详细指标"});
+    const metric = (name: string) => [...metrics.querySelectorAll(".quote-metric")].find(node => node.firstElementChild?.textContent === name)?.textContent;
+    expect(metric("成交量")).toContain("2,000手");
+    expect(metric("成交额")).toContain("440.00 万");
+    expect(metric("最高")).toContain("23.00");
+    expect(metric("PE")).toContain("32.00");
+    expect(view.container.querySelector(".quote-source")?.textContent).toContain("通达信");
+    expect(view.getByTestId("kline-price").textContent).toBe("22");
+  });
+});
+
 beforeEach(() => {
   vi.useFakeTimers();
   vi.setSystemTime(new Date("2026-10-09T02:00:00Z"));
@@ -236,12 +359,92 @@ describe("StockDetailPanel · 估值和模拟持仓回包归属", () => {
     expect(view.getByTestId("kline-price").getAttribute("data-cost-price")).toBe("19");
     expect(view.getByTestId("kline-price").getAttribute("data-fill-count")).toBe("1");
   });
+
+  it.each(["success", "failure"])("same-scope old paper poll %s cannot overwrite the post-cancel refresh", async (outcome) => {
+    const old = deferred<PaperFill[]>();
+    api.getPaperAccount.mockResolvedValueOnce(account(100)).mockResolvedValueOnce(account(111)).mockResolvedValue(account(222));
+    api.getPaperPositions.mockResolvedValueOnce([position("600519", 200, 17)]).mockResolvedValueOnce([position("600519", 100, 11)]).mockResolvedValue([position("600519", 300, 19)]);
+    api.getPaperOrders.mockResolvedValueOnce([{id: 7, symbol: "600519", side: "buy", price: 19, quantity: 100, status: "pending"}]).mockResolvedValueOnce([{id: 7, symbol: "600519", side: "buy", price: 11, quantity: 100, status: "pending"}]).mockResolvedValue([]);
+    api.getPaperFills.mockResolvedValueOnce([]).mockReturnValueOnce(old.promise).mockResolvedValue([fill("600519", 19)]);
+    const view = render(<StockDetailPanel symbol="600519" rightTab="trade" />); await settle();
+    await advance(30_000);
+    fireEvent.click(view.getByRole("button", {name: "撤"})); await settle();
+    expect(view.getByText("300股 · 可卖300")).toBeTruthy();
+    await act(async () => {if (outcome === "success") old.resolve([fill("600519", 11)]); else old.reject(new Error("old failure"));});
+    expect(view.getByText("300股 · 可卖300")).toBeTruthy();
+    expect(view.queryByRole("button", {name: "撤"})).toBeNull();
+    expect(view.queryByText("模拟账户数据加载失败（稍后自动重试）")).toBeNull();
+    expect(view.queryByText(/保留上次读取的模拟账户/)).toBeNull();
+    expect(view.getByTestId("kline-price").getAttribute("data-cost-price")).toBe("19");
+    expect(view.getByTestId("kline-price").getAttribute("data-fill-count")).toBe("1");
+  });
+
+  it("paper refresh failure preserves the readable snapshot but blocks stale pending-order actions", async () => {
+    api.checkOrderRisk.mockImplementation(async () => ({ allowed: true, checked_at: new Date().toISOString(), estimated_fee: 5, max_qty: 1000, reasons: [], warnings: [], state: "allowed" }));
+    api.getPaperPositions.mockResolvedValue([position("600519", 200, 17)]);
+    api.getPaperOrders.mockResolvedValue([{id: 7, symbol: "600519", side: "buy", price: 19, quantity: 100, status: "pending"}]);
+    api.getPaperFills.mockResolvedValueOnce([fill("600519", 17)]).mockRejectedValue(new Error("current failure"));
+    const view = render(<StockDetailPanel symbol="600519" rightTab="trade" />); await settle();
+    fireEvent.change(view.getByLabelText("价格"), {target: {value: "19.8"}});
+    fireEvent.change(view.getByLabelText("数量"), {target: {value: "200"}});
+    await advance(300);
+    const submit = () => view.getByRole("button", {name: "买入 600519"}) as HTMLButtonElement;
+    expect(submit().disabled).toBe(false);
+    fireEvent.click(view.getByRole("button", {name: "撤"})); await settle();
+    expect(view.getByText(/保留上次读取的模拟账户/)).toBeTruthy();
+    expect(view.getByText("200股 · 可卖200")).toBeTruthy();
+    expect((view.getByRole("button", {name: "撤"}) as HTMLButtonElement).disabled).toBe(true);
+    expect(submit().disabled).toBe(true);
+    const checks = api.checkOrderRisk.mock.calls.length;
+    await advance(1000);
+    expect(api.checkOrderRisk).toHaveBeenCalledTimes(checks);
+    expect(view.getByTestId("kline-price").getAttribute("data-fill-count")).toBe("1");
+    api.getPaperFills.mockResolvedValue([fill("600519", 19)]);
+    api.getPaperOrders.mockResolvedValue([]);
+    api.getPaperPositions.mockResolvedValue([position("600519", 300, 19)]);
+    await advance(30_000);
+    expect(view.getByText("300股 · 可卖300")).toBeTruthy();
+    expect(view.queryByText(/保留上次读取的模拟账户/)).toBeNull();
+    expect(view.queryByRole("button", {name: "撤"})).toBeNull();
+    expect((view.getByLabelText("价格") as HTMLInputElement).value).toBe("19.8");
+    expect((view.getByLabelText("数量") as HTMLInputElement).value).toBe("200");
+    expect(submit().disabled).toBe(true);
+    await advance(300);
+    expect(api.checkOrderRisk.mock.calls.length).toBeGreaterThan(checks);
+    expect(submit().disabled).toBe(false);
+  });
 });
 
 afterEach(() => {
   cleanup();
   calls.symbols.length = 0;
   vi.useRealTimers();
+});
+
+describe("StockDetailPanel · 资讯首次错误与旧结果保留", () => {
+  const digest = () => ({announcements: [{title: "原公告依据", date: "2026-10-09", url: "https://example.invalid/announcement", source: "fixture"}], news: [{title: "原新闻依据", date: "2026-10-09", url: "https://example.invalid/news", source: "fixture"}], announcements_error: null, news_error: null});
+  it("first digest failure is retryable and never says there are no announcements or news", async () => {
+    api.getNewsDigest.mockRejectedValueOnce(new Error("digest-offline")).mockResolvedValue(digest());
+    const view = render(<StockDetailPanel symbol="600519" rightTab="info" chartTab="flow" />);
+    await advance(2500);
+    expect(view.getByText(/公告源暂时不可用/)).toBeTruthy(); expect(view.getByText(/新闻源暂时不可用/)).toBeTruthy();
+    expect(view.queryByText("暂无公告")).toBeNull(); expect(view.queryByText("暂无新闻")).toBeNull();
+    fireEvent.click(view.getByRole("button", {name: "重试资讯"})); await settle();
+    expect(view.getByText("原公告依据")).toBeTruthy(); expect(view.getByText("原新闻依据")).toBeTruthy();
+    expect(view.queryByText(/源暂时不可用/)).toBeNull(); expect(api.getNewsDigest).toHaveBeenCalledTimes(2);
+  });
+  it("resume failure retains both original rows, while a different symbol never inherits them", async () => {
+    api.getNewsDigest.mockResolvedValueOnce(digest()).mockRejectedValue(new Error("digest-offline"));
+    const view = render(<StockDetailPanel symbol="600519" rightTab="info" chartTab="flow" />); await advance(2500);
+    view.rerender(<StockDetailPanel symbol="600519" rightTab="info" chartTab="flow" active={false} />);
+    view.rerender(<StockDetailPanel symbol="600519" rightTab="info" chartTab="flow" active />); await advance(2500);
+    expect(view.getByText("原公告依据")).toBeTruthy(); expect(view.getByText("原新闻依据")).toBeTruthy();
+    expect(view.getByText(/保留上次读取的新闻/)).toBeTruthy();
+    view.rerender(<StockDetailPanel symbol="000001" rightTab="info" chartTab="flow" />);
+    expect(view.queryByText("原公告依据")).toBeNull(); expect(view.queryByText("原新闻依据")).toBeNull();
+    await advance(2500);
+    expect(view.getByText(/新闻源暂时不可用/)).toBeTruthy(); expect(view.queryByText("暂无新闻")).toBeNull();
+  });
 });
 
 describe("StockDetailPanel · WS 订阅复用（P1-5）", () => {

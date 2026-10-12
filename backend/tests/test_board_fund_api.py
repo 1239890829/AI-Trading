@@ -11,6 +11,8 @@ from __future__ import annotations
 
 from types import SimpleNamespace
 
+import pytest
+
 from app.api.routes import market_flow as flow_route
 from app.api.routes import theme_catalog as tc_route
 
@@ -154,6 +156,122 @@ def test_by_symbols_empty_board_ref_is_absent(monkeypatch):
     ))
     assert payload["data"]["boards"] == {}
     assert payload["data"]["note"]
+
+
+@pytest.mark.parametrize("initial", ["http_error", "network_error", "empty"])
+def test_unproven_profile_ref_recovers_after_batch_ttl_not_six_hours(monkeypatch, initial):
+    """Optional source failures and genuine empty groups have no distinct proof."""
+    import asyncio
+    import httpx
+    from app.core import ttl_cache
+    from app.data_providers.eastmoney import EastmoneyProvider
+    from app.services import theme_service
+
+    clock = [ttl_cache.monotonic()]
+    monkeypatch.setattr(ttl_cache, "monotonic", lambda: clock[0])
+    counts = {"basic": 0, "boards": 0}
+    stage = [initial]
+
+    def response(request):
+        if "datacenter-web" in request.url.host:
+            counts["basic"] += 1
+            return httpx.Response(200, json={"result": {"data": [{
+                "SECURITY_CODE": "600519", "SECURITY_NAME_ABBR": "fixture",
+            }]}})
+        counts["boards"] += 1
+        if stage[0] == "network_error":
+            raise httpx.ConnectError("isolated unavailable", request=request)
+        if stage[0] == "http_error":
+            return httpx.Response(503, json={})
+        if stage[0] == "empty":
+            return httpx.Response(200, json={"ssbk": [], "hxtc": []})
+        return httpx.Response(200, json={"ssbk": [
+            {"BOARD_NAME": "食品饮料", "BOARD_CODE": "0438", "BOARD_RANK": 1},
+            {"BOARD_NAME": "白酒Ⅱ", "BOARD_CODE": "1277", "BOARD_RANK": 2},
+        ]})
+
+    async def no_fund_rows(_codes):
+        return {}
+
+    monkeypatch.setattr(theme_service, "board_rows_for_codes", no_fund_rows)
+    request = _request()
+
+    async def scenario():
+        provider = EastmoneyProvider.__new__(EastmoneyProvider)
+        provider._client = httpx.AsyncClient(transport=httpx.MockTransport(response))
+        try:
+            hub = _hub(provider)
+            first = await flow_route.market_board_fund_by_symbols(request, "600519", hub)
+            assert first["data"]["boards"] == {} and first["data"]["note"]
+            stage[0] = "ready"
+            assert (await flow_route.market_board_fund_by_symbols(request, "600519", hub))["data"] == first["data"]
+            assert counts == {"basic": 1, "boards": 1}  # Existing batch cache stays 60s.
+            clock[0] += 61
+            recovered = await flow_route.market_board_fund_by_symbols(request, "600519", hub)
+            assert recovered["data"]["boards"]["600519"] == {
+                "board_name": "白酒Ⅱ", "board_code": "BK1277", "level": "industry",
+                "kind": None, "change_pct": None, "main_net_yi": None,
+                "main_net_ratio": None, "streak": None,
+            }
+            assert counts == {"basic": 2, "boards": 2}
+            clock[0] += 61
+            stage[0] = "network_error"
+            again = await flow_route.market_board_fund_by_symbols(request, "600519", hub)
+            assert again["data"] == recovered["data"]
+            assert counts == {"basic": 2, "boards": 2}  # Proven ref retains its 6h cache.
+        finally:
+            await provider.aclose()
+
+    asyncio.run(scenario())
+
+
+def test_genuine_empty_ref_remains_unknown_and_only_retries_after_batch_ttl(monkeypatch):
+    import asyncio
+    from app.core import ttl_cache
+
+    clock = [ttl_cache.monotonic()]
+    monkeypatch.setattr(ttl_cache, "monotonic", lambda: clock[0])
+    _patch_board_list(monkeypatch, {"industry": [], "concept": []})
+    provider = _ProfileProvider({}, {})
+    request, hub = _request(), _hub(provider)
+
+    async def scenario():
+        for _ in range(2):
+            result = await flow_route.market_board_fund_by_symbols(request, "600519", hub)
+            assert result["data"]["boards"] == {} and result["data"]["note"]
+        assert provider.calls == 1
+        clock[0] += 61
+        result = await flow_route.market_board_fund_by_symbols(request, "600519", hub)
+        assert result["data"]["boards"] == {} and result["data"]["note"]
+        assert provider.calls == 2
+
+    asyncio.run(scenario())
+
+
+def test_unknown_ref_short_cache_is_shared_across_symbol_batches(monkeypatch):
+    import asyncio
+    from app.core import ttl_cache
+
+    clock = [ttl_cache.monotonic()]
+    monkeypatch.setattr(ttl_cache, "monotonic", lambda: clock[0])
+    _patch_board_list(monkeypatch, {"industry": [], "concept": []})
+    provider = _ProfileProvider({"000001": {"industry": ["金融", "银行Ⅱ"]}},
+                                {"000001": {"银行Ⅱ": "0475"}})
+    request, hub = _request(), _hub(provider)
+
+    async def scenario():
+        for batch in ("600519", "600519,000001", "000001,600519"):
+            payload = await flow_route.market_board_fund_by_symbols(request, batch, hub)
+            assert "600519" not in payload["data"]["boards"]
+        assert provider.calls == 2  # Both symbols read once despite three batch keys.
+        provider._groups["600519"] = {"industry": ["食品饮料", "白酒Ⅱ"]}
+        provider._codes["600519"] = {"白酒Ⅱ": "1277"}
+        clock[0] += 61
+        result = await flow_route.market_board_fund_by_symbols(request, "600519,000001", hub)
+        assert set(result["data"]["boards"]) == {"600519", "000001"}
+        assert provider.calls == 3  # Only the unknown ref expires; the positive stays 6h.
+
+    asyncio.run(scenario())
 
 
 def test_by_symbols_partial_fund_rows_keep_identity_and_reuse_cache(monkeypatch):

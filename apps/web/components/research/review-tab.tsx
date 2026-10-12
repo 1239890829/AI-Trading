@@ -1,6 +1,6 @@
 "use client";
 
-import { useCallback, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 import { Panel } from "@/components/panel";
 import { useResource } from "@/hooks/use-polling-fetch";
 import "./review-layout.css";
@@ -84,6 +84,29 @@ function ReviewText({ text }: { text: string }) {
   return <>{text}</>;
 }
 
+// Visibility reads do not set Resource.pending. Disposition also needs to wait
+// for those reads; keep this owner fact local to the two sources it consumes.
+function useDispositionResource<T>(fn: () => Promise<T>, key: unknown, enabled = true) {
+  const sequence = useRef(0);
+  const alive = useRef(false);
+  const [read, setRead] = useState({ key, pending: false });
+  useEffect(() => {
+    alive.current = enabled;
+    return () => { alive.current = false; sequence.current += 1; };
+  }, [key, enabled]);
+  const resource = useResource(async () => {
+    const current = ++sequence.current;
+    setRead({ key, pending: true });
+    try {
+      return await fn();
+    } finally {
+      if (alive.current && current === sequence.current) setRead({ key, pending: false });
+    }
+  }, { key, enabled, intervalMs: null, marketHours: false });
+  const inFlight = Object.is(read.key, key) && read.pending;
+  return { ...resource, inFlight, reading: resource.pending || inFlight };
+}
+
 /**
  * 单条改进项的处置控件。
  *
@@ -98,10 +121,12 @@ function ActionItemDispose({
   item,
   status,
   onDisposed,
+  disabled = false,
 }: {
   item: ActionItemRef;
   status: string;
   onDisposed: () => void;
+  disabled?: boolean;
 }) {
   // 需填理由时展开输入框；null 表示未处于处置中
   const [pending, setPending] = useState<ActionItemStatus | null>(null);
@@ -113,6 +138,7 @@ function ActionItemDispose({
   const addressable = /^\d+$/.test(item.id);
 
   async function submit(next: ActionItemStatus, withNote: string) {
+    if (disabled || busy) return;
     setBusy(true);
     setError(null);
     try {
@@ -151,7 +177,7 @@ function ActionItemDispose({
       {status !== "confirmed" && (
         <button
           onClick={() => click("confirmed")}
-          disabled={busy}
+          disabled={busy || disabled}
           className="rounded border border-zinc-300 px-1.5 py-0.5 text-[11px] text-zinc-600 dark:text-zinc-400 transition-colors hover:border-sky-500 hover:text-sky-400 disabled:opacity-40 dark:border-zinc-700"
         >
           确认
@@ -160,7 +186,7 @@ function ActionItemDispose({
       {status !== "applied" && (
         <button
           onClick={() => click("applied")}
-          disabled={busy}
+          disabled={busy || disabled}
           className="rounded border border-zinc-300 px-1.5 py-0.5 text-[11px] text-zinc-600 dark:text-zinc-400 transition-colors hover:border-emerald-500 hover:text-emerald-400 disabled:opacity-40 dark:border-zinc-700"
         >
           已实施
@@ -168,14 +194,14 @@ function ActionItemDispose({
       )}
       <button
         onClick={() => click("rejected")}
-        disabled={busy}
+        disabled={busy || disabled}
         className="rounded border border-zinc-300 px-1.5 py-0.5 text-[11px] text-zinc-600 dark:text-zinc-400 transition-colors hover:border-zinc-500 disabled:opacity-40 dark:border-zinc-700"
       >
         驳回
       </button>
       <button
         onClick={() => click("reverted")}
-        disabled={busy}
+        disabled={busy || disabled}
         className="rounded border border-zinc-300 px-1.5 py-0.5 text-[11px] text-zinc-600 dark:text-zinc-400 transition-colors hover:border-amber-500 hover:text-amber-400 disabled:opacity-40 dark:border-zinc-700"
       >
         回退
@@ -183,7 +209,7 @@ function ActionItemDispose({
       {status !== "pending" && (
         <button
           onClick={() => void submit("pending", "")}
-          disabled={busy}
+          disabled={busy || disabled}
           className="text-[11px] text-zinc-600 dark:text-zinc-400 transition-colors hover:text-zinc-900 disabled:opacity-40 dark:hover:text-zinc-100"
         >
           撤销处置
@@ -202,7 +228,7 @@ function ActionItemDispose({
           <div className="flex items-center gap-2">
             <button
               onClick={() => void submit(pending, note)}
-              disabled={busy || !note.trim()}
+              disabled={busy || disabled || !note.trim()}
               className="rounded border border-sky-600 px-2 py-0.5 text-[11px] text-sky-700 dark:text-sky-400 disabled:opacity-40"
             >
               提交
@@ -229,8 +255,10 @@ function ReportDetail({
   report,
   onDisposed,
   allowDispose,
+  readError = false,
 }: {
   allowDispose: boolean;
+  readError?: boolean;
   report: ReviewReportDetail;
   onDisposed: () => void;
 }) {
@@ -302,7 +330,7 @@ function ReportDetail({
           </div>
           <div className="space-y-1.5">
             {report.action_items.map((a) => (
-              <div key={a.id} className="rounded-lg border border-zinc-200 px-3 py-2 dark:border-zinc-800">
+              <div key={JSON.stringify([report.trade_date, a.id, a.category, a.title])} className="rounded-lg border border-zinc-200 px-3 py-2 dark:border-zinc-800">
                 <div className="flex items-baseline gap-2 text-xs">
                   <span className={`font-mono font-semibold ${PRIORITY_CLS[a.priority] ?? "text-zinc-600 dark:text-zinc-400"}`}>{a.priority}</span>
                   <span className="text-zinc-900 dark:text-zinc-100">{a.title}</span>
@@ -319,6 +347,7 @@ function ReportDetail({
                   item={{ id: a.id, trade_date: report.trade_date, category: a.category, title: a.title }}
                   status={a.status ?? "pending"}
                   onDisposed={onDisposed}
+                  disabled={readError}
                 /> : <p className="mt-1 text-xs text-zinc-600 dark:text-zinc-400">{STATUS_LABEL[a.status ?? "pending"] ?? a.status} · 管理处置在系统维护中进行</p>}
               </div>
             ))}
@@ -336,7 +365,7 @@ function ReportDetail({
  */
 export function ReviewTab({ focusDate, allowDispose = false }: { focusDate?: string; allowDispose?: boolean } = {}) {
   const requestedDate = focusDate?.replaceAll("-", "");
-  const list = useResource(getReviewReports, { key: requestedDate, intervalMs: null, marketHours: false });
+  const list = useDispositionResource(getReviewReports, requestedDate);
   const effectiveness = useResource(getReviewEffectiveness, { enabled: allowDispose, intervalMs: null, marketHours: false });
   const reports = list.data ?? null;
   const effect = effectiveness.data ?? null;
@@ -344,21 +373,19 @@ export function ReviewTab({ focusDate, allowDispose = false }: { focusDate?: str
   // undefined follows the requested date/latest report; null explicitly closes the detail.
   const [selectedDate, setSelectedDate] = useState<string | null | undefined>();
   const openDate = selectedDate === undefined ? requestedDate ?? reports?.[0]?.trade_date ?? null : selectedDate;
-  const detailResource = useResource(async () => {
+  const detailResource = useDispositionResource(async () => {
     try { return await getReviewReport(openDate!); } catch (error) {
       if (error instanceof ApiError && error.status === 404) return null;
       throw error;
     }
-  }, {
-    key: openDate, enabled: !!openDate, intervalMs: null, marketHours: false,
-  });
-  const detail = detailResource.error ? null : detailResource.data ?? null;
+  }, openDate, !!openDate);
+  const detail = detailResource.data ?? null;
   const toggle = useCallback((date: string) => setSelectedDate(openDate === date ? null : date), [openDate]);
   const reloadAfterDispose = useCallback(() => {
     list.refresh(); effectiveness.refresh(); detailResource.refresh();
   }, [list, effectiveness, detailResource]);
 
-  if (error) {
+  if (error && reports === null) {
     return (
       <Panel title="复盘报告">
         <p className="px-4 py-8 text-center text-sm text-amber-800 dark:text-amber-500">复盘报告加载失败：{error}</p><button onClick={list.refresh} className="px-4 py-2">重试读取</button>
@@ -376,6 +403,7 @@ export function ReviewTab({ focusDate, allowDispose = false }: { focusDate?: str
   return (
     <div className="review-workspace">
       <p className="review-reader-hint">左右滑动查看报告、正文与处置</p>
+      {error && <p role="alert" className="px-4 py-2 text-xs text-amber-800 dark:text-amber-300">报告列表刷新失败，保留上次读取：{error} <button onClick={list.refresh}>重试列表</button></p>}
     <div className={`review-layout${allowDispose ? " review-layout-with-disposition" : ""}`} role="region" aria-label="报告索引、正文与处置阅读区" tabIndex={0}>
       <Panel title="复盘报告（冻结版本）" className="review-index" bodyClassName="review-index-scroll overflow-auto">
         {requestedDate && !reports.some(r => r.trade_date === requestedDate) && <div className="px-4 py-3 text-sm"><button aria-pressed={openDate === requestedDate} onClick={() => setSelectedDate(requestedDate)}>{requestedDate} 指定报告</button></div>}
@@ -406,7 +434,9 @@ export function ReviewTab({ focusDate, allowDispose = false }: { focusDate?: str
       </Panel>
 
       <Panel title={openDate ? `${openDate} 复盘正文` : "复盘正文"} className="review-detail" bodyClassName="review-detail-scroll overflow-auto">
-        {openDate ? detail ? <ReportDetail report={detail} allowDispose={allowDispose} onDisposed={reloadAfterDispose} /> : (
+        {allowDispose && detail && (list.inFlight || detailResource.inFlight) && <p role="status" className="px-4 py-2 text-xs text-zinc-600 dark:text-zinc-400">正在核对当前处置状态，暂不可操作。</p>}
+        {!!detailResource.error && detail && <p role="alert" className="px-4 py-2 text-xs text-amber-800 dark:text-amber-300">正文刷新失败，保留上次报告；当前处置状态待确认。<button onClick={detailResource.refresh}>重试正文</button></p>}
+        {openDate ? detail ? <ReportDetail report={detail} allowDispose={allowDispose} readError={list.reading || detailResource.reading || !!list.error || !!detailResource.error} onDisposed={reloadAfterDispose} /> : (
           <div className="px-4 py-4 text-sm text-zinc-600 dark:text-zinc-400">
             {detailResource.error ? <><p role="alert">{openDate} 报告读取失败。</p><button onClick={detailResource.refresh}>重试读取</button></> : detailResource.pending ? <p role="status">详情加载中…</p> : <p role="status">{requestedDate === openDate && !reports.some(r => r.trade_date === openDate) ? "指定日期尚无报告" : `${openDate} 尚无报告，不回退成其它日期。`}</p>}
           </div>
@@ -414,6 +444,7 @@ export function ReviewTab({ focusDate, allowDispose = false }: { focusDate?: str
       </Panel>
 
       {allowDispose && <Panel title="改进项处置统计（非交易效果）" className="review-disposition" bodyClassName="review-disposition-scroll overflow-auto">
+        {!!effectiveness.error && effect && <p role="alert" className="px-4 py-2 text-xs text-amber-800 dark:text-amber-300">处置统计刷新失败，保留上次统计。<button onClick={effectiveness.refresh}>重试统计</button></p>}
         {effect === null ? (
           <p className="px-4 py-8 text-center text-sm text-zinc-600 dark:text-zinc-400">{effectiveness.error ? "处置统计读取失败，不能判断当前状态。" : effectiveness.pending ? "读取处置统计…" : "暂无处置统计。"}</p>
         ) : (

@@ -1,7 +1,7 @@
-import { afterEach, describe, expect, it, vi } from "vitest";
-import { cleanup, render, screen } from "@testing-library/react";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { act, cleanup, fireEvent, render, screen, waitFor } from "@testing-library/react";
 import { EvolutionTab } from "./evolution-tab";
-import { getAgentExperiments, getAgentAgenda, type AgentAgenda, type AgentAgendaItem } from "@/lib/api";
+import { getAgentExperiments, getAgentAgenda, getAgentAgendas, runAgentAgenda, type AgentAgenda, type AgentAgendaItem } from "@/lib/api";
 
 vi.mock("@/lib/api", () => ({
   getAgentAgenda: vi.fn(),
@@ -10,6 +10,12 @@ vi.mock("@/lib/api", () => ({
   runAgentAgenda: vi.fn(),
 }));
 afterEach(() => { cleanup(); vi.clearAllMocks(); });
+beforeEach(() => {
+  vi.mocked(getAgentAgenda).mockReset().mockResolvedValue(null);
+  vi.mocked(getAgentAgendas).mockReset().mockResolvedValue([]);
+  vi.mocked(getAgentExperiments).mockReset().mockResolvedValue([]);
+  vi.mocked(runAgentAgenda).mockReset();
+});
 
 function fixture(cls: AgentAgendaItem["class"], status: AgentAgendaItem["status"]): AgentAgenda {
   return {
@@ -74,4 +80,55 @@ it("IMP-025 · 实验只归档未恢复的结果不冒充回滚或验证通过",
   expect(await screen.findByText("已归档，未恢复参数")).toBeTruthy();
   expect(screen.queryByText("已自动回滚")).toBeNull();
   expect(screen.queryByText("验证通过")).toBeNull();
+});
+
+describe("进化议程 · 独立读取", () => {
+  it("慢实验记录不阻塞已成功今日议程与历史", async () => {
+    vi.mocked(getAgentAgenda).mockResolvedValueOnce(fixture("B", "executed"));
+    vi.mocked(getAgentAgendas).mockResolvedValueOnce([fixture("B", "executed")]);
+    vi.mocked(getAgentExperiments).mockReturnValueOnce(new Promise(() => {}));
+    render(<EvolutionTab />);
+    expect(await screen.findByText("文档已写入")).toBeTruthy();
+    expect(screen.getByText("2026-09-18")).toBeTruthy();
+  });
+
+  it("历史失败不把成功今日议程改成尚未生成", async () => {
+    vi.mocked(getAgentAgenda).mockResolvedValueOnce(fixture("B", "executed"));
+    vi.mocked(getAgentAgendas).mockRejectedValueOnce(new Error("history offline"));
+    render(<EvolutionTab />);
+    expect(await screen.findByText("文档已写入")).toBeTruthy();
+    expect(screen.getByText(/历史议程读取失败/)).toBeTruthy();
+    expect(screen.queryByText(/今日议程尚未生成/)).toBeNull();
+  });
+
+  it("今日议程首次失败是未知，非确认未生成；手动读取恢复且不运行议程", async () => {
+    vi.mocked(getAgentAgenda).mockRejectedValueOnce(new Error("agenda offline"));
+    render(<EvolutionTab />);
+    expect(await screen.findByText(/今日议程读取失败/)).toBeTruthy();
+    expect(screen.queryByText(/今日议程尚未生成/)).toBeNull();
+    fireEvent.click(screen.getByRole("button", { name: "重新读取" }));
+    expect(await screen.findByText(/今日议程尚未生成/)).toBeTruthy();
+    expect(runAgentAgenda).not.toHaveBeenCalled();
+  });
+
+  it("重新读取失败保留旧议程；真实写后校准不会被旧请求覆盖", async () => {
+    let old!: (agenda: AgentAgenda | null) => void;
+    const fresh = fixture("B", "executed");
+    fresh.items[0].finding = "写后新议程";
+    vi.mocked(getAgentAgenda).mockResolvedValueOnce(fixture("B", "executed"))
+      .mockRejectedValueOnce(new Error("refresh offline"))
+      .mockReturnValueOnce(new Promise(resolve => { old = resolve; })).mockResolvedValue(fresh);
+    vi.mocked(runAgentAgenda).mockResolvedValue(fresh);
+    render(<EvolutionTab />);
+    await screen.findByText("文档已写入");
+    fireEvent.click(screen.getByRole("button", { name: "重新读取" }));
+    expect(await screen.findByText(/今日议程读取失败.*上次读取结果/)).toBeTruthy();
+    expect(screen.getByText("文档已写入")).toBeTruthy();
+    fireEvent.click(screen.getByRole("button", { name: "重新读取" }));
+    fireEvent.click(screen.getByRole("button", { name: "立即进化（降级兜底）" }));
+    expect(await screen.findByText("写后新议程")).toBeTruthy();
+    await act(async () => old(fixture("C", "proposed")));
+    expect(screen.getByText("写后新议程")).toBeTruthy();
+    await waitFor(() => expect(runAgentAgenda).toHaveBeenCalledTimes(1));
+  });
 });

@@ -22,6 +22,7 @@ export function TradePanel({
   quote,
   onPaperChanged,
   active = true,
+  readError,
 }: {
   symbol: string;
   paper: PaperBundle;
@@ -30,11 +31,13 @@ export function TradePanel({
   /** 下单/撤单/重置后刷新模拟账户数据（壳内 loadPaper，2026-09-01 替代全局事件）。 */
   onPaperChanged: () => void;
   active?: boolean;
+  readError?: string | null;
 }) {
   const [cancelError, setCancelError] = useState<string | null>(null);
   const [cancelling, setCancelling] = useState<number | null>(null);
   return (
     <div className="flex min-h-0 flex-1 flex-col">
+      {readError && <p role="alert" className="shrink-0 px-3 py-2 text-xs text-amber-800 dark:text-amber-300">保留上次读取的模拟账户（{readError}）。当前持仓、挂单与成交状态待核实，恢复读取后再操作。</p>}
       <div className="grid shrink-0 grid-cols-2 gap-1 border-b border-zinc-100 px-3 py-2 text-xs dark:border-zinc-800/60">
         <span className="text-zinc-600 dark:text-zinc-400">
           总资产 <span className="font-mono text-sm text-zinc-700 dark:text-zinc-100">{fmt(paper.acc.total)}</span>
@@ -49,7 +52,7 @@ export function TradePanel({
           总盈亏 <span className="font-mono text-sm">{fmt(paper.acc.total_pnl)}（{fmt(paper.acc.total_pnl_pct)}%）</span>
         </span>
       </div>
-      <TradeForm symbol={symbol} price={quote?.price ?? null} limitUp={quote?.limit_up_price ?? null} limitDown={quote?.limit_down_price ?? null} onTraded={onPaperChanged} active={active} />
+      <TradeForm symbol={symbol} price={quote?.price ?? null} limitUp={quote?.limit_up_price ?? null} limitDown={quote?.limit_down_price ?? null} onTraded={onPaperChanged} active={active && !readError} />
       <h3 className="shrink-0 px-3 pb-1 pt-2 text-xs font-medium text-zinc-600 dark:text-zinc-300">持仓</h3>
       <div className="min-h-0 flex-1 overflow-y-auto">
         <table className="w-full text-sm">
@@ -79,8 +82,9 @@ export function TradePanel({
                 <span className={o.side === "buy" ? "text-up-ink dark:text-up" : "text-down-ink dark:text-down"}>{o.side === "buy" ? "买" : "卖"} {o.symbol}</span>
                 <span className="font-mono text-zinc-600 dark:text-zinc-400">{fmt(o.price)} × {o.quantity}</span>
                 <button data-action="danger"
-                  disabled={cancelling !== null}
+                  disabled={cancelling !== null || !!readError || !active}
                   onClick={async () => {
+                    if (readError || !active) return;
                     setCancelling(o.id); setCancelError(null);
                     try { await cancelPaperOrder(o.id); onPaperChanged(); }
                     catch (e) { setCancelError((e as Error).message); }

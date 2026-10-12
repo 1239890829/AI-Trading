@@ -214,7 +214,8 @@ async def _build_opportunities_uncached(
     # 缓存前写入，两端点共用同一份。
     from app.services.official_match import attach_official
 
-    attach_official(app, payload["data"].get("themes") or [])
+    # 目录服务的同步读在 worker 内自建 Session，不能阻塞行情事件循环。
+    await asyncio.to_thread(attach_official, app, payload["data"].get("themes") or [])
 
     # 猎场候选口径（2026-09-15 用户指令）：涨停梯队退居**参考信息**，候选改为
     # 「题材内**当前未封板**、通过候选门槛的联动个股」。容器直接取卡片刚挂好的

@@ -1,5 +1,5 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { cleanup, fireEvent, render, screen, waitFor } from "@testing-library/react";
+import { act, cleanup, fireEvent, render, screen, waitFor } from "@testing-library/react";
 import { ReviewTab } from "./review-tab";
 import type { ReviewReportDetail, ReviewReportSummary } from "@/lib/api";
 
@@ -86,6 +86,89 @@ function setup(itemId = "42", status = "pending") {
 }
 
 describe("ReviewTab 改进项处置闭环", () => {
+  it("可见性重读期间保持草稿但暂停处置，失败后恢复仍保留同身份草稿", async () => {
+    setup();
+    render(<ReviewTab allowDispose />);
+    fireEvent.click(await screen.findByRole("button", { name: "驳回" }));
+    const note = screen.getByPlaceholderText("驳回理由（必填）");
+    fireEvent.change(note, { target: { value: "仍需核实源时间" } });
+    let finishList!: (value: ReviewReportSummary[]) => void;
+    let failDetail!: (reason: Error) => void;
+    vi.mocked(mocked.getReviewReports).mockImplementationOnce(() => new Promise(resolve => { finishList = resolve; }));
+    vi.mocked(mocked.getReviewReport).mockImplementationOnce(() => new Promise((_resolve, reject) => { failDetail = reject; }));
+    fireEvent(document, new Event("visibilitychange"));
+    await waitFor(() => expect(mocked.getReviewReport).toHaveBeenCalledTimes(2));
+    expect(screen.getByRole("button", { name: "提交" })).toHaveProperty("disabled", true);
+    fireEvent.click(screen.getByRole("button", { name: "提交" }));
+    expect(mocked.updateActionItemStatus).not.toHaveBeenCalled();
+    expect(note).toHaveProperty("value", "仍需核实源时间");
+    await act(async () => finishList([SUMMARY]));
+    expect(screen.getByRole("button", { name: "提交" })).toHaveProperty("disabled", true);
+    await act(async () => failDetail(new Error("offline")));
+    expect(screen.getByRole("button", { name: "提交" })).toHaveProperty("disabled", true);
+    fireEvent.click(screen.getByRole("button", { name: "重试正文" }));
+    await waitFor(() => expect(screen.getByRole("button", { name: "提交" })).toHaveProperty("disabled", false));
+    expect(screen.getByPlaceholderText("驳回理由（必填）")).toHaveProperty("value", "仍需核实源时间");
+  });
+
+  it("旧重读晚回不能解锁仍在校准的新重读", async () => {
+    setup();
+    let finishMutation!: (value: Awaited<ReturnType<typeof mocked.updateActionItemStatus>>) => void;
+    vi.mocked(mocked.updateActionItemStatus).mockImplementationOnce(() => new Promise(resolve => { finishMutation = resolve; }));
+    render(<ReviewTab allowDispose />);
+    fireEvent.click(await screen.findByRole("button", { name: "确认" }));
+    await waitFor(() => expect(mocked.updateActionItemStatus).toHaveBeenCalledTimes(1));
+    let finishOld!: (value: ReviewReportDetail) => void;
+    let finishNew!: (value: ReviewReportDetail) => void;
+    vi.mocked(mocked.getReviewReport)
+      .mockImplementationOnce(() => new Promise(resolve => { finishOld = resolve; }))
+      .mockImplementationOnce(() => new Promise(resolve => { finishNew = resolve; }));
+    fireEvent(document, new Event("visibilitychange"));
+    await waitFor(() => expect(mocked.getReviewReport).toHaveBeenCalledTimes(2));
+    await act(async () => finishMutation({
+      id: 42, review_id: SUMMARY.review_id, trade_date: SUMMARY.trade_date,
+      title: "补齐阻断级数据缺失：breadth, sentiment", category: "data", priority: "P0",
+      target: "snapshot_service.breadth_payload", proposed_change: "检查 provider 健康状态与快照服务是否就绪",
+      status: "confirmed", resolution_note: "", resolved_at: "2026-09-01T14:00:00",
+    }));
+    await waitFor(() => expect(mocked.getReviewReport).toHaveBeenCalledTimes(3));
+    await act(async () => finishOld(detailWith("42")));
+    expect(screen.getByRole("button", { name: "确认" })).toHaveProperty("disabled", true);
+    expect(screen.getByRole("status").textContent).toContain("正在核对当前处置状态");
+    expect(screen.queryByRole("alert")).toBeNull();
+    await act(async () => finishNew(detailWith("42")));
+    await waitFor(() => expect(screen.getByRole("button", { name: "确认" })).toHaveProperty("disabled", false));
+    expect(screen.queryByRole("status")).toBeNull();
+    expect(screen.queryByRole("alert")).toBeNull();
+  });
+
+  it("报告重跑复用 id 但行动项身份变更时不继承旧处置草稿", async () => {
+    setup();
+    render(<ReviewTab allowDispose />);
+    fireEvent.click(await screen.findByRole("button", { name: "驳回" }));
+    fireEvent.change(screen.getByPlaceholderText("驳回理由（必填）"), { target: { value: "仅适用于原缺口" } });
+    const changed = detailWith("42");
+    changed.action_items[0] = { ...changed.action_items[0], title: "新报告的风控核验", category: "risk" };
+    vi.mocked(mocked.getReviewReport).mockResolvedValue(changed);
+    fireEvent(document, new Event("visibilitychange"));
+    await screen.findByText("新报告的风控核验");
+    expect(screen.queryByPlaceholderText("驳回理由（必填）")).toBeNull();
+    expect(mocked.updateActionItemStatus).not.toHaveBeenCalled();
+  });
+
+  it("同日期刷新失败保留报告正文与列表，旧处置状态只读", async () => {
+    setup();
+    render(<ReviewTab allowDispose />);
+    await screen.findByText("补齐阻断级数据缺失：breadth, sentiment");
+    vi.mocked(mocked.getReviewReports).mockRejectedValue(new Error("offline"));
+    vi.mocked(mocked.getReviewReport).mockRejectedValue(new Error("offline"));
+    fireEvent(document, new Event("visibilitychange"));
+    await waitFor(() => expect(screen.getAllByRole("alert").some(node => node.textContent?.includes("上次"))).toBe(true));
+    expect(screen.getByText("补齐阻断级数据缺失：breadth, sentiment")).toBeTruthy();
+    expect(screen.getByRole("button", { name: /20260901.*委托/ })).toBeTruthy();
+    expect(screen.getByRole("button", { name: "确认" })).toHaveProperty("disabled", true);
+    expect(mocked.updateActionItemStatus).not.toHaveBeenCalled();
+  });
   it("改进项带处置入口，点击「确认」即提交并刷新", async () => {
     setup();
     render(<ReviewTab allowDispose />);

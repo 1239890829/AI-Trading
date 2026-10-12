@@ -1,10 +1,10 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { cleanup, fireEvent, render, screen } from "@testing-library/react";
+import { act, cleanup, fireEvent, render, screen } from "@testing-library/react";
 import { AlertsTab } from "./alerts-tab";
 import type { AlertEvent, AlertRule } from "@/lib/api";
 
 // vitest 未开 globals 时 RTL 自动 cleanup 不注册，必须手动（见 trade-form.test.tsx 注释）
-afterEach(() => {cleanup(); vi.clearAllMocks(); vi.restoreAllMocks();});
+afterEach(() => {cleanup(); vi.useRealTimers(); vi.clearAllMocks(); vi.restoreAllMocks();});
 
 vi.mock("next/link", () => ({
   // jsdom 下 App Router Link 依赖路由上下文，测试里降级为普通 <a> 即可断言 href
@@ -106,23 +106,76 @@ describe("AlertsTab 渠道配置状态（configured 诚实展示）", () => {
 
 
 beforeEach(() => {
-  vi.mocked(mocked.listAlertRules).mockResolvedValue([rule]);
-  vi.mocked(mocked.listAlertEvents).mockResolvedValue([]);
-  vi.mocked(mocked.getAlertChannels).mockResolvedValue({available: ["in_app", "log"], default: ["in_app"]});
+  vi.mocked(mocked.listAlertRules).mockReset().mockResolvedValue([rule]);
+  vi.mocked(mocked.listAlertEvents).mockReset().mockResolvedValue([]);
+  vi.mocked(mocked.getAlertChannels).mockReset().mockResolvedValue({available: ["in_app", "log"], default: ["in_app"]});
+  Object.defineProperty(document, "visibilityState", { configurable: true, value: "visible" });
   vi.mocked(mocked.createAlertRule).mockResolvedValue(rule);
   vi.mocked(mocked.updateAlertRule).mockResolvedValue(rule);
   vi.mocked(mocked.deleteAlertRule).mockResolvedValue(undefined);
 });
 
+describe("提醒管理 · 独立读取", () => {
+  it("慢通道不阻塞规则和已触发记录", async () => {
+    vi.mocked(mocked.getAlertChannels).mockReturnValueOnce(new Promise(() => {}));
+    vi.mocked(mocked.listAlertEvents).mockResolvedValueOnce([event]);
+    render(<AlertsTab />);
+    expect(await screen.findByRole("button", { name: "删除规则 茅台突破" })).toBeTruthy();
+    expect(screen.getByTitle("查看行情详情")).toBeTruthy();
+    expect((screen.getByRole("button", { name: "创建规则" }) as HTMLButtonElement).disabled).toBe(true);
+  });
+
+  it("只轮询事件，规则和通道不每 10s 重读；事件失败保留旧记录且恢复", async () => {
+    vi.useFakeTimers();
+    vi.mocked(mocked.listAlertEvents).mockResolvedValueOnce([event])
+      .mockRejectedValueOnce(new Error("events offline")).mockResolvedValue([event]);
+    render(<AlertsTab />);
+    await act(async () => { await vi.advanceTimersByTimeAsync(0); });
+    await act(async () => { await vi.advanceTimersByTimeAsync(10_000); });
+    expect(mocked.listAlertRules).toHaveBeenCalledTimes(1);
+    expect(mocked.getAlertChannels).toHaveBeenCalledTimes(1);
+    expect(screen.getByTitle("查看行情详情")).toBeTruthy();
+    expect(screen.getByText(/触发记录读取失败.*上次读取结果/)).toBeTruthy();
+    await act(async () => { await vi.advanceTimersByTimeAsync(10_000); });
+    expect(screen.queryByText(/events offline/)).toBeNull();
+    expect(mocked.listAlertEvents).toHaveBeenCalledTimes(3);
+  });
+
+  it("删除成功后独立校准规则和级联事件，不重复读通道", async () => {
+    vi.mocked(mocked.listAlertEvents).mockResolvedValueOnce([event]).mockResolvedValue([]);
+    vi.mocked(mocked.listAlertRules).mockResolvedValueOnce([rule]).mockResolvedValue([]);
+    render(<AlertsTab />);
+    fireEvent.click(await screen.findByRole("button", { name: "删除规则 茅台突破" }));
+    fireEvent.click(screen.getByRole("button", { name: "确认删除" }));
+    expect(await screen.findByText("暂无规则。")).toBeTruthy();
+    expect(screen.getByText("暂无触发。")).toBeTruthy();
+    expect(mocked.getAlertChannels).toHaveBeenCalledTimes(1);
+    expect(mocked.deleteAlertRule).toHaveBeenCalledExactlyOnceWith(1);
+  });
+
+  it("事件首次失败保持未知，不污染成功规则，读源重试不执行任何命令", async () => {
+    vi.mocked(mocked.listAlertEvents).mockRejectedValueOnce(new Error("events first offline")).mockResolvedValue([event]);
+    render(<AlertsTab />);
+    expect(await screen.findByText(/不能判断当前没有触发/)).toBeTruthy();
+    expect(screen.getByRole("button", { name: "删除规则 茅台突破" })).toBeTruthy();
+    expect(screen.queryByText("暂无触发。")).toBeNull();
+    fireEvent.click(screen.getByRole("button", { name: "重试读取" }));
+    expect(await screen.findByTitle("查看行情详情")).toBeTruthy();
+    expect(mocked.createAlertRule).not.toHaveBeenCalled();
+    expect(mocked.updateAlertRule).not.toHaveBeenCalled();
+    expect(mocked.deleteAlertRule).not.toHaveBeenCalled();
+  });
+});
+
 describe("提醒管理自定义选择与可撤确认", () => {
-  it("读取失败不把未确认的规则和记录显示成已确认空集", async () => {
+  it("规则失败保持未知，不污染独立成功的触发记录空集", async () => {
     vi.mocked(mocked.listAlertRules).mockRejectedValueOnce(new Error("offline"));
     render(<AlertsTab />);
     expect(await screen.findByRole("alert")).toHaveProperty("textContent", expect.stringContaining("读取失败"));
     expect(screen.getByText(/当前是否为空尚未确认/)).toBeTruthy();
-    expect(screen.getByText(/不能判断当前没有触发/)).toBeTruthy();
     expect(screen.queryByText("暂无规则。")).toBeNull();
-    expect(screen.queryByText("暂无触发。")).toBeNull();
+    expect(screen.getByText("暂无触发。")).toBeTruthy();
+    expect(screen.queryByText(/不能判断当前没有触发/)).toBeNull();
   });
   it("条件与范围通过键盘菜单选择，提交保留原scope/通道/冷却契约", async () => {
     const {container} = render(<AlertsTab />);

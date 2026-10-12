@@ -155,6 +155,7 @@ describe("PickCard · 盘前名单（fromDailyPick）", () => {
   it("执行复核与参考价分开显示，明确不等于成交", () => {
     const withExecution: DailyPickItem = {
       ...base,
+      tradability: {level: "可参与", basis: "fixture 当前未封板"},
       execution: {
         contract_version: "execution-facts-v1",
         decision_id: "OD-demo",
@@ -172,11 +173,25 @@ describe("PickCard · 盘前名单（fromDailyPick）", () => {
         gate_decision: "passed",
       },
     };
-    render(<PickCard item={fromDailyPick(withExecution)} />);
+    Object.freeze(withExecution.execution!.executable_snapshot);
+    Object.freeze(withExecution.execution!);
+    const item = fromDailyPick(withExecution);
+    const page = render(<PickCard item={item} />);
     expect(screen.getByText(/参考价 40.36/)).toBeTruthy();
     expect(screen.getByText(/执行快照 40.88/)).toBeTruthy();
     const chip = screen.getByText("执行复核·通过");
     expect(chip.getAttribute("title")).toContain("不表示已成交");
+    page.rerender(<PickCard item={item} readError />);
+    expect(screen.queryByText("执行复核·通过")).toBeNull();
+    expect(screen.queryByText("可参与评估 · 当前未封板")).toBeNull();
+    expect(screen.getByText("执行复核·待读取").getAttribute("title")).toContain("ODV-demo");
+    expect(screen.getByText(/上次执行快照 40.88/).getAttribute("title")).toContain("sina_market");
+    expect(screen.getByText(/涨停池精确判定/)).toBeTruthy();
+    expect(withExecution.execution!.gate_decision).toBe("passed");
+    expect(withExecution.execution!.executable_snapshot.state).toBe("ready");
+    page.rerender(<PickCard item={item} readError={false} />);
+    expect(screen.getByText("执行复核·通过")).toBeTruthy();
+    expect(screen.getByText("可参与评估 · 当前未封板")).toBeTruthy();
   });
 
   it("执行行情陈旧时直接显示陈旧原因，不把旧价伪装成可执行", () => {

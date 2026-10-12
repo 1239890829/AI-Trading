@@ -37,3 +37,17 @@ it("does not cache a read failure as an empty result", async () => {
   await screen.findByRole("button", {name: "消息"});
   expect(getEventsForSymbol).toHaveBeenCalledTimes(2);
 });
+
+it("a late presence reply for the previous symbol cannot add a message entry to the new symbol", async () => {
+  let resolveOld!: (value: Awaited<ReturnType<typeof getEventsForSymbol>>) => void;
+  vi.mocked(getEventsForSymbol).mockReset()
+    .mockReturnValueOnce(new Promise(resolve => {resolveOld = resolve;}))
+    .mockResolvedValueOnce({symbol: "600998", themes: [], count: 0, items: []});
+  const page = render(<CardEntryRow symbol="600997" />);
+  await waitFor(() => expect(getEventsForSymbol).toHaveBeenCalledWith("600997"));
+  page.rerender(<CardEntryRow symbol="600998" />);
+  await waitFor(() => expect(getEventsForSymbol).toHaveBeenCalledWith("600998"));
+  await act(async () => resolveOld({symbol: "600997", themes: [], count: 1, items: [{} as EventSummary]}));
+  expect(screen.queryByRole("button", {name: "消息"})).toBeNull();
+  expect(getEventsForSymbol).toHaveBeenCalledTimes(2);
+});

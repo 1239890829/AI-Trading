@@ -5,7 +5,9 @@
  * 折叠展示，默认收起（辅助信息，不占猎场常驻注意力）；展开时拉取。
  * 定位纪律：两表都是「顺序/观察参考」，非买卖信号——口径说明常驻小字。
  */
-import { useEffect, useState } from "react";
+import { useState } from "react";
+import {useResource, type Resource} from "@/hooks/use-resource";
+import {bjDate} from "@/lib/format";
 import Link from "next/link";
 
 import { getLurkPool, getRelayRank, type LurkPoolPayload, type RelayRankItem } from "@/lib/api";
@@ -17,7 +19,13 @@ type State<T> =
   | { status: "idle" }
   | { status: "loading" }
   | { status: "error"; msg: string }
-  | { status: "ready"; data: T };
+  | { status: "ready"; data: T; error?: string };
+
+function readState<T>(resource: Resource<T>): State<T> {
+  const error = resource.error instanceof Error ? resource.error.message : resource.error ? String(resource.error) : undefined;
+  if (resource.data !== undefined) return {status: "ready", data: resource.data, error};
+  return error ? {status: "error", msg: error} : {status: "loading"};
+}
 
 /** 接力/潜伏表里的个股：点击**就地弹窗**看详情（2026-09-15 详情弹窗化）。 */
 function SymbolLink({ symbol, name }: { symbol: string; name?: string }) {
@@ -48,12 +56,12 @@ function SectionLabel({ text, tone }: { text: string; tone: "sky" | "amber" | "t
 function RelayTable({ s }: { s: State<{ trade_date: string; items: RelayRankItem[] }> }) {
   if (s.status === "idle" || s.status === "loading") return <p className="py-2 text-xs text-zinc-600 dark:text-zinc-400">次日接力参考加载中…</p>;
   if (s.status === "error") return <p className="py-2 text-xs text-amber-800 dark:text-amber-300">{s.msg}</p>;
-  if (s.status === "ready" && s.data.items.length === 0)
-    return <p className="py-2 text-xs text-zinc-600 dark:text-zinc-400">今日涨停池为空或暂无排序结果。</p>;
   const { trade_date, items } = s.data;
   return (
     <div>
+      {s.error && <p role="alert" className="py-2 text-xs text-amber-800 dark:text-amber-300">接力参考读取失败：{s.error}。保留上次读取结果，当前状态待重试核实。</p>}
       <div className="mb-1 text-[10px] text-zinc-600 dark:text-zinc-400">交易日 {trade_date} · kmid2 封板实度 × max20 距新高（P1-3 实证正 IC）</div>
+      {items.length === 0 && <p className="py-2 text-xs text-zinc-600 dark:text-zinc-400">{s.error ? "上次读取的排序结果为空，当前状态待重试核实。" : "今日涨停池为空或暂无排序结果。"}</p>}
       <ul className="space-y-1">
         {items.slice(0, 10).map((it) => (
           <li key={it.symbol} className="flex min-w-0 flex-wrap items-baseline gap-2 text-xs">
@@ -76,6 +84,7 @@ export function LurkTable({ s, date }: { s: State<LurkPoolPayload>; date: (ms: n
   const { items, as_of, stale_days, stale, stale_note } = s.data;
   return (
     <div>
+      {s.error && <p role="alert" className="py-2 text-xs text-amber-800 dark:text-amber-300">潜伏观察读取失败：{s.error}。保留上次读取结果，当前状态待重试核实。</p>}
       {/* 陈旧披露（2026-09-11）：池按**库内最新 K 线**判定，停更时看着正常却是旧数据。
           新鲜时只标「数据截至」；滞后超阈值才显式告警——不降级、不隐藏，只摊开口径。 */}
       <div className="mb-1 text-[10px] text-zinc-600 dark:text-zinc-400">
@@ -106,39 +115,17 @@ export function LurkTable({ s, date }: { s: State<LurkPoolPayload>; date: (ms: n
 }
 
 export function PostMarketEnhance({ initiallyOpen = false }: { initiallyOpen?: boolean } = {}) {
-  const [relay, setRelay] = useState<State<{ trade_date: string; items: RelayRankItem[] }>>({ status: "idle" });
-  const [lurk, setLurk] = useState<State<LurkPoolPayload>>({ status: "idle" });
   const [open, setOpen] = useState(initiallyOpen);
+  // Same-day reopen keeps its last observation; a new Beijing date is a new scope.
+  const scope = bjDate(new Date().toISOString());
+  const relay = useResource(getRelayRank, {key: scope, enabled: open});
+  const lurk = useResource(getLurkPool, {key: scope, enabled: open});
 
   const [previousInitial, setPreviousInitial] = useState(initiallyOpen);
   if (previousInitial !== initiallyOpen) {
     setPreviousInitial(initiallyOpen);
     if (initiallyOpen) setOpen(true);
   }
-
-  // 展开即回到「加载中」（渲染期 adjust-state；原为 effect 内同步 setState，P1-27）
-  const [prevOpen, setPrevOpen] = useState(false);
-  if (prevOpen !== open) {
-    setPrevOpen(open);
-    if (open) {
-      setRelay({ status: "loading" });
-      setLurk({ status: "loading" });
-    }
-  }
-
-  useEffect(() => {
-    if (!open) return;
-    let alive = true;
-    getRelayRank()
-      .then((d) => alive && setRelay({ status: "ready", data: d }))
-      .catch((e: Error) => alive && setRelay({ status: "error", msg: e.message }));
-    getLurkPool()
-      .then((d) => alive && setLurk({ status: "ready", data: d }))
-      .catch((e: Error) => alive && setLurk({ status: "error", msg: e.message }));
-    return () => {
-      alive = false;
-    };
-  }, [open]);
 
   const dateText = (ms: number) => {
     const d = new Date(ms);
@@ -162,7 +149,7 @@ export function PostMarketEnhance({ initiallyOpen = false }: { initiallyOpen?: b
             <span className="text-[10px] text-zinc-600 dark:text-zinc-400">今日涨停池 · 按实证接力质量排序（仅供参考，非买卖信号）</span>
           </div>
           <div className="mt-1.5">
-            <RelayTable s={relay} />
+            <RelayTable s={readState(relay)} />
           </div>
         </section>
         <section>
@@ -171,7 +158,7 @@ export function PostMarketEnhance({ initiallyOpen = false }: { initiallyOpen?: b
             <span className="text-[10px] text-zinc-600 dark:text-zinc-400">缩量横盘+试盘+回踩不破位 · 中线观察（20 日涨停率 1.67× 实证）</span>
           </div>
           <div className="mt-1.5">
-            <LurkTable s={lurk} date={dateText} />
+            <LurkTable s={readState(lurk)} date={dateText} />
           </div>
         </section>
       </div>

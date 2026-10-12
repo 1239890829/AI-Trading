@@ -1,11 +1,13 @@
-import { afterEach, describe, expect, it } from "vitest";
-import { cleanup, render, screen } from "@testing-library/react";
+import { afterEach, describe, expect, it, vi } from "vitest";
+import { act, cleanup, fireEvent, render, screen } from "@testing-library/react";
 
-import { LurkTable } from "@/components/hunting/post-market-enhance";
+import { LurkTable, PostMarketEnhance } from "@/components/hunting/post-market-enhance";
 import type { LurkPoolPayload } from "@/lib/api";
+import {getLurkPool, getRelayRank} from "@/lib/api";
+vi.mock("@/lib/api", () => ({getLurkPool: vi.fn(), getRelayRank: vi.fn()}));
 
 // vitest 未开 globals 时 RTL 自动 cleanup 不注册，必须手动（见 trade-form.test.tsx 注释）
-afterEach(cleanup);
+afterEach(() => {cleanup(); vi.useRealTimers(); vi.resetAllMocks();});
 
 // 与组件内 dateText 同构（确认日仅做展示，不参与断言口径）
 const dateText = (ms: number) => {
@@ -84,4 +86,47 @@ describe("潜伏观察池 · 陈旧披露（2026-09-11）", () => {
     expect(screen.getByText("boom")).toBeTruthy();
     expect(screen.queryByText(/数据截至/)).toBeNull();
   });
+});
+
+it("same-day reopening preserves complete prior results while refreshing and after failure", async () => {
+  vi.useFakeTimers({toFake: ["Date"]});
+  vi.setSystemTime(new Date("2026-10-12T16:00:00+08:00"));
+  const relay = {trade_date: "2026-10-12", items: [{symbol: "600991", name: "接力甲", boards: 2, max20: null}, {symbol: "600992", name: "接力乙", boards: 1, max20: null}]};
+  vi.mocked(getRelayRank).mockResolvedValueOnce(relay as Awaited<ReturnType<typeof getRelayRank>>);
+  vi.mocked(getLurkPool).mockResolvedValueOnce(payload({trade_date: "2026-10-12", as_of: "2026-10-12", items: [{symbol: "600993", confirm_ms: 1788969600000}, {symbol: "600994", confirm_ms: 1788969600000}]}));
+  render(<PostMarketEnhance initiallyOpen />);
+  await screen.findByText("600991");
+  const fold = screen.getByText("接力与潜伏").closest("details")!;
+  fold.open = false; fireEvent(fold, new Event("toggle")); await act(async () => {});
+  let rejectRelay!: (error: Error) => void;
+  let rejectLurk!: (error: Error) => void;
+  vi.mocked(getRelayRank).mockReturnValueOnce(new Promise((_resolve, reject) => {rejectRelay = reject;}));
+  vi.mocked(getLurkPool).mockReturnValueOnce(new Promise((_resolve, reject) => {rejectLurk = reject;}));
+  fold.open = true; fireEvent(fold, new Event("toggle")); await act(async () => {});
+  for (const symbol of ["600991", "600992", "600993", "600994"]) expect(screen.getByText(symbol)).toBeTruthy();
+  await act(async () => {rejectRelay(new Error("relay-offline")); rejectLurk(new Error("lurk-offline"));});
+  for (const symbol of ["600991", "600992", "600993", "600994"]) expect(screen.getByText(symbol)).toBeTruthy();
+  expect(screen.getAllByText(/保留上次/)).toHaveLength(2);
+  expect(getRelayRank).toHaveBeenCalledTimes(2); expect(getLurkPool).toHaveBeenCalledTimes(2);
+  fold.open = false; fireEvent(fold, new Event("toggle")); await act(async () => {});
+  vi.setSystemTime(new Date("2026-10-13T16:00:00+08:00"));
+  vi.mocked(getRelayRank).mockRejectedValue(new Error("new-day-offline"));
+  vi.mocked(getLurkPool).mockRejectedValue(new Error("new-day-offline"));
+  fold.open = true; fireEvent(fold, new Event("toggle")); await act(async () => {});
+  for (const symbol of ["600991", "600992", "600993", "600994"]) expect(screen.queryByText(symbol)).toBeNull();
+});
+
+it("a response from a closed request cannot overwrite the new open scope", async () => {
+  let oldRelay!: (value: Awaited<ReturnType<typeof getRelayRank>>) => void;
+  let oldLurk!: (value: LurkPoolPayload) => void;
+  vi.mocked(getRelayRank).mockReturnValueOnce(new Promise(resolve => {oldRelay = resolve;}));
+  vi.mocked(getLurkPool).mockReturnValueOnce(new Promise(resolve => {oldLurk = resolve;}));
+  render(<PostMarketEnhance initiallyOpen />); await act(async () => {});
+  const fold = screen.getByText("接力与潜伏").closest("details")!;
+  fold.open = false; fireEvent(fold, new Event("toggle")); await act(async () => {});
+  vi.mocked(getRelayRank).mockResolvedValueOnce({trade_date: "2026-10-12", items: []});
+  vi.mocked(getLurkPool).mockResolvedValueOnce(payload({items: [{symbol: "600995", confirm_ms: 1788969600000}]}));
+  fold.open = true; fireEvent(fold, new Event("toggle")); await screen.findByText("600995");
+  await act(async () => {oldRelay({trade_date: "2026-10-11", items: []}); oldLurk(payload({items: [{symbol: "OLD", confirm_ms: 1788969600000}]}));});
+  expect(screen.getByText("600995")).toBeTruthy(); expect(screen.queryByText("OLD")).toBeNull();
 });

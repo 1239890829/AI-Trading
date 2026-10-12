@@ -8,9 +8,10 @@ import type { Quote } from "@/types/market";
 const charts = vi.hoisted(() => [] as ReturnType<typeof makeChart>[]);
 type Options = Record<string, unknown> & { autoscaleInfoProvider?: () => { priceRange: { minValue: number; maxValue: number } } };
 function makeSeries(kind: string, options: Options) {
+  const opts = { ...options };
   return {
-    kind, opts: { ...options }, values: [] as { time: number; value?: number }[],
-    applyOptions(next: Options) { Object.assign(this.opts, next); },
+    kind, opts, values: [] as { time: number; value?: number }[],
+    applyOptions: vi.fn((next: Options) => { Object.assign(opts, next); }),
     setData(values: { time: number; value?: number }[]) { this.values = values; },
     createPriceLine: vi.fn((opts: Options) => ({ opts, applyOptions: vi.fn() })),
   };
@@ -51,6 +52,46 @@ const liveMinuteQuote: Quote = {
   symbol: "600519", price: 105.3, volume: 1_100_000, amount: 115_830_000,
   data_timestamp: "2026-10-09T10:00:30+08:00", received_at: "2026-10-09T02:00:31Z", source: "tencent", quality: "high", quality_reasons: [],
 };
+
+describe("MinuteChart 实际轴域更新", () => {
+  it("经源时刻证明的结束标签原位跟价，浮层区分桶结束与实际报价钟", () => {
+    const source: MinutePoint[] = [{ ...restMinutes[1], ts: "2026-10-09T10:01:00+08:00",
+      time_label: "interval_end", observation_ts: "2026-10-09T10:00:30+08:00" }];
+    const merged = mergeQuoteIntoMinutes(source, { ...liveMinuteQuote, data_timestamp: "2026-10-09T10:00:50+08:00" })!;
+    const view = render(<MinuteChart points={source} prevClose={104} referenceDate="2026-10-09" />);
+    const chart = charts[0];
+    view.rerender(<MinuteChart points={merged} prevClose={104} referenceDate="2026-10-09" />);
+    const time = Date.UTC(2026, 9, 9, 10, 1) / 1000;
+    expect(chart.series[0].values.find(value => value.time === time)?.value).toBe(105.3);
+    const move = chart.subscribeCrosshairMove.mock.calls[0][0] as (p: {time:number; point:{x:number;y:number}}) => void;
+    fireEvent.pointerEnter(view.container.querySelector('[data-chart-surface]')!);
+    act(() => move({ time, point: { x: 100, y: 100 } }));
+    expect(view.container.querySelector('[data-f="hhmm"]')?.textContent).toBe("分钟截至 10:01 · 报价 10:00:50");
+    expect(charts).toHaveLength(1);
+  });
+  it("域内 tick 继续更新数据，但不重复写入相同的坐标范围", () => {
+    const view = render(<MinuteChart points={[point(100)]} prevClose={100} limitPct={10} />);
+    const chart = charts[0];
+    for (const series of chart.series) series.applyOptions.mockClear();
+    view.rerender(<MinuteChart points={[point(101, "31", 100.5)]} prevClose={100} limitPct={10} />);
+    expect(charts).toHaveLength(1);
+    expect(chart.series[0].values.some(value => value.value === 101)).toBe(true);
+    const axisWrites = chart.series.flatMap(series => series.applyOptions.mock.calls)
+      .filter(([options]) => options.autoscaleInfoProvider);
+    expect(axisWrites).toHaveLength(0);
+    view.rerender(<MinuteChart points={[point(120, "32", 110)]} prevClose={100} limitPct={10} />);
+    expect(range(chart.series[0])?.maxValue).toBeGreaterThanOrEqual(120);
+    expect(chart.series[0].applyOptions).toHaveBeenCalled();
+  });
+
+  it("低频配置创建新图时，数值相同的轴域仍安装到新的系列", () => {
+    const points = [point(100)];
+    const view = render(<MinuteChart points={points} prevClose={100} limitPct={10} />);
+    view.rerender(<MinuteChart points={points} prevClose={100} limitPct={10} exactBaseline={[1000]} />);
+    expect(charts).toHaveLength(2);
+    expect(range(charts[1].series[0])).toEqual(range(charts[0].series[0]));
+  });
+});
 
 describe("MinuteChart 消费真实 WS 合并结果", () => {
   // lightweight-charts is a series recorder here; these checks cover data and DOM, not Canvas.

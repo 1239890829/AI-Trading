@@ -1,7 +1,7 @@
 "use client";
 
-import { usePollingFetch } from "@/hooks/use-polling-fetch";
-import { useCallback, useEffect, useMemo, useState } from "react";
+import { useResource } from "@/hooks/use-resource";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 
 import {
   cancelAgentTask,
@@ -70,40 +70,60 @@ const PARAM_LABEL: Record<string, string> = {
 const timeText = dateTimeTextBJ;
 
 export function TaskCenter() {
+  const [taskReading, setTaskReading] = useState(false);
+  const taskRead = useRef({ generation: 0, reading: false });
+  const mounted = useRef(false);
+  useEffect(() => {
+    mounted.current = true;
+    return () => { mounted.current = false; };
+  }, []);
+  const readTasks = useCallback(async () => {
+    const generation = ++taskRead.current.generation;
+    taskRead.current.reading = true;
+    setTaskReading(true);
+    try {
+      return await getAgentTasks();
+    } finally {
+      if (generation === taskRead.current.generation) {
+        taskRead.current.reading = false;
+        if (mounted.current) setTaskReading(false);
+      }
+    }
+  }, []);
   // 三态：undefined=尚未拉到（骨架）/ null=拉过且失败（错误态）/ 有值=渲染
-  const [types, setTypes] = useState<AgentTaskType[] | undefined | null>(undefined);
-  const [tasks, setTasks] = useState<AgentTask[] | undefined | null>(undefined);
+  const typesResource = useResource(getAgentTaskTypes, { marketHours: false });
+  const tasksResource = useResource(readTasks, { marketHours: false });
+  const types = typesResource.data ?? (typesResource.error ? null : undefined);
+  const tasks = tasksResource.data ?? (tasksResource.error ? null : undefined);
   const [error, setError] = useState<string | null>(null);
   const [selected, setSelected] = useState<string | null>(null);
   const [creating, setCreating] = useState<string | null>(null);
   const [paramsText, setParamsText] = useState("");
-
-  const load = useCallback(async () => {
-    try {
-      const [t, list] = await Promise.all([getAgentTaskTypes(), getAgentTasks()]);
-      setTypes(t);
-      setTasks(list);
-      setError(null);
-    } catch (e) {
-      setTypes(null);
-      setTasks(null);
-      setError(e instanceof Error ? e.message : String(e));
-    }
-  }, []);
-
-  // 挂载即拉取（P1-27 收编 usePollingFetch）：setState 落在 promise 回调里，
-  // 不再触发 react-hooks/set-state-in-effect。load 依赖为 []（无参数），语义不变。
-  usePollingFetch(load, null);
+  const [resolving, setResolving] = useState(false);
+  const resolveLock = useRef(false);
+  const [resolveReceipts, setResolveReceipts] = useState<Record<string, { outcome: "done" | "dismissed"; task: AgentTask }>>({});
 
   // 有任务在跑时按 3s 轮询（无 running 则停），避免无谓请求
   const hasRunning = useMemo(
     () => (tasks ?? []).some((t) => t.status === "queued" || t.status === "running"),
     [tasks],
   );
-  // 2026-09-11（S2-5）：裸 setInterval → 统一入口（获得可见性暂停）。
-  // `marketHours: false` —— 议程自动执行发生在 15:45（盘外），任务中心必须保持
-  // 3s 节奏让用户看到进度，不能套行情类的盘外降频。
-  usePollingFetch(load, 3_000, undefined, { enabled: hasRunning, marketHours: false });
+  // 只有一个任务读取 owner。结算后按需校准，避免 interval 改变导致额外立即请求。
+  // 首次失败与后续失败都继续重试；静态入口不随任务进度重复读取。
+  const { data: taskData, error: taskError, pending: taskPending, refresh: refreshTasks } = tasksResource;
+  useEffect(() => {
+    if (taskReading || taskPending || (taskData !== undefined && !taskError && !hasRunning)) return;
+    const timer = setTimeout(() => {
+      if (!taskRead.current.reading && document.visibilityState !== "hidden") refreshTasks();
+    }, 3_000);
+    return () => clearTimeout(timer);
+  }, [taskData, taskError, taskPending, taskReading, hasRunning, refreshTasks]);
+
+  function refresh() {
+    setError(null);
+    typesResource.refresh();
+    refreshTasks();
+  }
 
   async function submit(type: string) {
     setCreating(type);
@@ -122,7 +142,7 @@ export function TaskCenter() {
       const t = await createAgentTask(type, params);
       setSelected(t.id);
       setParamsText("");
-      await load();
+      refreshTasks();
     } catch (e) {
       setError(e instanceof Error ? e.message : String(e));
     } finally {
@@ -133,7 +153,8 @@ export function TaskCenter() {
   async function cancel(id: string) {
     try {
       await cancelAgentTask(id);
-      await load();
+      setError(null);
+      refreshTasks();
     } catch (e) {
       setError(e instanceof Error ? e.message : String(e));
     }
@@ -141,11 +162,25 @@ export function TaskCenter() {
 
   /** 处置待办（P1-36）：done=已处置 / dismissed=判定无需处理 */
   async function resolve(id: string, outcome: "done" | "dismissed") {
+    const task = (tasks ?? []).find(t => t.id === id);
+    if (resolveLock.current || taskRead.current.reading || taskPending || taskError != null || resolveReceipts[id] || !task || task.read_only || task.status !== "needs_confirm") return;
+    resolveLock.current = true;
+    setResolving(true);
     try {
-      await resolveAgentTask(id, outcome);
-      await load();
+      const response = await resolveAgentTask(id, outcome);
+      if (!mounted.current) return;
+      // POST 回执与后续持久读取分开；旧待办不能在校准慢/失败时再次处置。
+      setResolveReceipts(prev => ({ ...prev, [id]: { outcome, task: response } }));
+      setError(null);
+      refreshTasks();
     } catch (e) {
+      if (!mounted.current) return;
       setError(e instanceof Error ? e.message : String(e));
+      // 网络失败无法证明处置未落地，先重新读取再提供操作资格。
+      refreshTasks();
+    } finally {
+      resolveLock.current = false;
+      if (mounted.current) setResolving(false);
     }
   }
 
@@ -157,7 +192,10 @@ export function TaskCenter() {
   const paramRows = Object.entries(detail?.params ?? {}).filter(
     ([, v]) => typeof v === "string" || typeof v === "number",
   );
-  const actionable = detail !== null && !detail.read_only && detail.status === "needs_confirm";
+  const needsDisposition = detail !== null && !detail.read_only && detail.status === "needs_confirm";
+  const resolveReceipt = detail ? resolveReceipts[detail.id] : undefined;
+  const actionable = needsDisposition && !taskReading && !taskPending && taskError == null && !resolving && !resolveReceipt;
+  const receiptCalibrated = resolveReceipt && detail && !taskReading && !taskPending && taskError == null && detail.status !== "needs_confirm" && detail.status === resolveReceipt.task.status;
 
   return (
     <div className="task-center-layout h-full min-h-0">
@@ -167,11 +205,16 @@ export function TaskCenter() {
         <div className="flex items-center justify-between">
           <span className="text-xs text-zinc-600 dark:text-zinc-400">任务列表</span>
           <button data-action="quiet"
-            onClick={() => void load()}
+            onClick={refresh}
           >
             刷新
           </button>
         </div>
+        {taskError != null && tasks != null && (
+          <p role="alert" className="text-[11px] text-amber-700 dark:text-amber-300">
+            任务刷新失败。上次读取结果，当前任务状态未确认；将自动重试。
+          </p>
+        )}
         <div className="min-h-0 flex-1 space-y-1.5 overflow-y-auto pr-1">
           {tasks === undefined ? (
             <div className="space-y-1.5">
@@ -181,7 +224,7 @@ export function TaskCenter() {
             </div>
           ) : tasks === null ? (
             <p className="rounded-lg border border-dashed border-zinc-200 p-3 text-[11px] text-zinc-600 dark:text-zinc-400 dark:border-zinc-700">
-              任务列表加载失败（后端未启动或接口异常）。
+              任务列表加载失败（后端未启动或接口异常），将自动重试。
             </p>
           ) : tasks.length === 0 ? (
             <p className="rounded-lg border border-dashed border-zinc-200 p-3 text-[11px] text-zinc-600 dark:text-zinc-400 dark:border-zinc-700">
@@ -232,6 +275,7 @@ export function TaskCenter() {
             <h3 className="text-xs font-medium text-zinc-700 dark:text-zinc-200">新建任务</h3>
             <span className="text-[10px] text-zinc-600 dark:text-zinc-400">首批仅 L0 只读/生成类；写类任务在参数配置模块（P1）开放</span>
           </div>
+          {typesResource.error != null && types != null && <p role="alert" className="mb-2 text-[11px] text-amber-700 dark:text-amber-300">任务入口刷新失败，下方为上次读取结果。请点击“刷新”重试。</p>}
           {types === undefined ? (
             <div role="status" aria-label="正在读取任务入口" className="h-8 w-full animate-pulse rounded bg-zinc-100 dark:bg-zinc-800" />
           ) : types === null ? (
@@ -295,14 +339,16 @@ export function TaskCenter() {
                     {detail.cancel_requested_at ? "取消中…" : "取消任务"}
                   </button>
                 )}
-                {actionable && (
+                {needsDisposition && (
                   <div className="flex shrink-0 items-center gap-1.5">
                     <button data-action="command"
+                      disabled={!actionable}
                       onClick={() => void resolve(detail.id, "done")}
                     >
                       已处置
                     </button>
                     <button data-action="quiet"
+                      disabled={!actionable}
                       onClick={() => void resolve(detail.id, "dismissed")}
                     >
                       忽略
@@ -337,6 +383,13 @@ export function TaskCenter() {
                 </div>
               </dl>
 
+              {resolving && <p role="status" className="mb-2 text-[11px] text-zinc-600 dark:text-zinc-400">处置提交中，暂不可重复处置。</p>}
+              {resolveReceipt && <p role="status" className="mb-2 rounded-md bg-sky-500/5 px-2 py-1.5 text-[11px] text-sky-800 dark:text-sky-300">
+                处置请求已提交（{resolveReceipt.outcome === "done" ? "已处置" : "忽略"}）。返回任务状态：{STATUS_META[resolveReceipt.task.status]?.label ?? "未知"}
+                {resolveReceipt.task.finished_at ? ` · ${timeText(resolveReceipt.task.finished_at)}` : ""}。
+                {receiptCalibrated ? "持久状态已校准。" : "持久状态待校准，请刷新或等待读取恢复。"}
+                该回执不表示业务动作已执行或消息已送达。
+              </p>}
               {actionable && (
                 <p className="mb-2 rounded-md bg-amber-500/5 px-2 py-1.5 text-[11px] text-amber-800 dark:text-amber-300">
                   待人工处置：AI 判读把该告警升级为「需处理」。系统不会自动执行任何动作——

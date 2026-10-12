@@ -222,3 +222,245 @@ def test_news_digest_502_when_both_sources_fail(client, monkeypatch):
     resp = client.get("/api/news/digest/000002?limit=5")
     assert resp.status_code == 502
     assert "均失败" in resp.json()["detail"]
+
+
+def _direct_digest(provider, state, *, symbol="600519", limit=5):
+    from types import SimpleNamespace
+    from app.api.routes.news import news_digest
+
+    request = SimpleNamespace(app=SimpleNamespace(state=state))
+    return news_digest(symbol, request, limit, SimpleNamespace(provider=provider))
+
+
+def test_digest_actual_provider_missing_both_capabilities_returns_502():
+    import asyncio
+    from types import SimpleNamespace
+
+    import httpx
+    from fastapi import FastAPI
+
+    from app.api.deps import get_hub
+    from app.api.routes import news as route
+    from app.data_providers.mock import MockProvider
+
+    provider = MockProvider()
+    assert not hasattr(provider, "get_news") and not hasattr(provider, "get_announcements")
+    api = FastAPI()
+    api.include_router(route.router, prefix="/api")
+    api.dependency_overrides[get_hub] = lambda: SimpleNamespace(provider=provider)
+
+    async def scenario():
+        async with httpx.AsyncClient(transport=httpx.ASGITransport(app=api, raise_app_exceptions=False),
+                                     base_url="http://isolated") as client:
+            response = await client.get("/api/news/digest/600519?limit=5")
+        assert response.status_code == 502
+        detail = response.json()["detail"]
+        assert "get_news" in detail and "get_announcements" in detail
+
+    asyncio.run(scenario())
+
+
+def test_digest_single_missing_capability_keeps_available_side_and_error():
+    import asyncio
+    from types import SimpleNamespace
+
+    async def news(*_args):
+        return [dict(row) for row in _NEWS_FIXTURE]
+
+    async def ann(*_args):
+        return [dict(row) for row in _ANN_FIXTURE]
+
+    async def scenario():
+        # Deliberately absent attributes, not methods that simulate failure.
+        for available, missing, rows_key, error_key in [
+            (SimpleNamespace(get_announcements=ann), "get_news", "announcements", "news_error"),
+            (SimpleNamespace(get_news=news), "get_announcements", "news", "announcements_error"),
+        ]:
+            result = await _direct_digest(available, SimpleNamespace())
+            assert result["data"][rows_key]
+            assert missing in result["data"][error_key]
+            other_rows = "news" if rows_key == "announcements" else "announcements"
+            other_error = "news_error" if error_key == "announcements_error" else "announcements_error"
+            assert result["data"][other_rows] == []
+            assert result["data"][other_error] is None
+
+    asyncio.run(scenario())
+
+
+def test_digest_concurrent_cold_requests_share_sources_and_summary(monkeypatch):
+    import asyncio
+    from types import SimpleNamespace
+    from app.api.routes import news as route
+    from app.core import ttl_cache
+
+    calls = {"news": 0, "ann": 0, "summary": 0}
+    original = route.SummaryRouter.summarize
+
+    def summarize(self, news, ann):
+        calls["summary"] += 1
+        return original(self, news, ann)
+
+    monkeypatch.setattr(route.SummaryRouter, "summarize", summarize)
+
+    async def scenario():
+        gate, started = asyncio.Event(), asyncio.Event()
+
+        async def news(_symbol, _limit):
+            calls["news"] += 1
+            started.set()
+            await gate.wait()
+            return [dict(r) for r in _NEWS_FIXTURE]
+
+        async def ann(_symbol, _limit):
+            calls["ann"] += 1
+            return [dict(r) for r in _ANN_FIXTURE]
+
+        provider = SimpleNamespace(get_news=news, get_announcements=ann)
+        state = SimpleNamespace()
+        tasks = [asyncio.create_task(_direct_digest(provider, state)) for _ in range(4)]
+        await asyncio.wait_for(started.wait(), 1)
+        gate.set()
+        results = await asyncio.gather(*tasks)
+        assert calls == {"news": 1, "ann": 1, "summary": 1}
+        assert all(result["data"] == results[0]["data"] for result in results)
+        assert (await _direct_digest(provider, state))["meta"]["cached"] is True
+        assert calls == {"news": 1, "ann": 1, "summary": 1}
+        # Patch the cache clock only; the event loop clock remains real.
+        clock = ttl_cache.monotonic
+        monkeypatch.setattr(ttl_cache, "monotonic", lambda: clock() + 301)
+        await _direct_digest(provider, state)
+        assert calls == {"news": 2, "ann": 2, "summary": 2}
+        await _direct_digest(provider, state, limit=6)
+        await _direct_digest(provider, state, symbol="000001", limit=6)
+        assert calls == {"news": 4, "ann": 4, "summary": 4}
+
+    asyncio.run(scenario())
+
+
+def test_digest_starts_independent_sources_before_either_finishes():
+    import asyncio
+    from types import SimpleNamespace
+
+    async def scenario():
+        news_started, ann_started = asyncio.Event(), asyncio.Event()
+        release = asyncio.Event()
+
+        async def news(_symbol, _limit):
+            news_started.set()
+            await release.wait()
+            return []
+
+        async def ann(_symbol, _limit):
+            ann_started.set()
+            await release.wait()
+            return []
+
+        task = asyncio.create_task(_direct_digest(
+            SimpleNamespace(get_news=news, get_announcements=ann), SimpleNamespace()))
+        try:
+            await asyncio.wait_for(news_started.wait(), 1)
+            await asyncio.wait_for(ann_started.wait(), 0.1)
+        finally:
+            release.set()
+            await task
+
+    asyncio.run(scenario())
+
+
+def test_digest_same_failed_flight_is_shared_and_next_request_recovers(monkeypatch):
+    import asyncio
+    from types import SimpleNamespace
+    from fastapi import HTTPException
+    from app.api.routes import news as route
+
+    calls = {"news": 0, "ann": 0}
+
+    def forbidden_summary(*_args, **_kwargs):
+        raise AssertionError("Both source failures must not reach summary")
+
+    original = route.SummaryRouter.summarize
+    monkeypatch.setattr(route.SummaryRouter, "summarize", forbidden_summary)
+
+    async def scenario():
+        gate, started = asyncio.Event(), asyncio.Event()
+        failing = True
+
+        async def read(kind):
+            calls[kind] += 1
+            started.set()
+            await gate.wait()
+            if failing:
+                raise RuntimeError(f"{kind} unavailable")
+            return []
+
+        provider = SimpleNamespace(get_news=lambda *_: read("news"),
+                                   get_announcements=lambda *_: read("ann"))
+        state = SimpleNamespace()
+        tasks = [asyncio.create_task(_direct_digest(provider, state)) for _ in range(4)]
+        await asyncio.wait_for(started.wait(), 1)
+        gate.set()
+        errors = await asyncio.gather(*tasks, return_exceptions=True)
+        assert all(isinstance(error, HTTPException) and error.status_code == 502 for error in errors)
+        assert all("news unavailable" in error.detail and "ann unavailable" in error.detail for error in errors)
+        assert calls == {"news": 1, "ann": 1}
+        failing = False
+        monkeypatch.setattr(route.SummaryRouter, "summarize", original)
+        recovered = await _direct_digest(provider, state)
+        assert recovered["data"]["news_error"] is None
+        assert recovered["data"]["announcements_error"] is None
+        assert calls == {"news": 2, "ann": 2}
+
+    asyncio.run(scenario())
+
+
+def test_digest_cancelled_waiter_does_not_duplicate_or_stop_summary_thread(monkeypatch):
+    import asyncio
+    import threading
+    from types import SimpleNamespace
+    import pytest
+    from app.api.routes import news as route
+
+    started, release = threading.Event(), threading.Event()
+    jobs = []
+    original = route.SummaryRouter.summarize
+
+    def summarize(self, news, ann):
+        jobs.append("started")
+        started.set()
+        assert release.wait(timeout=2)
+        result = original(self, news, ann)
+        jobs.append("drained")
+        return result
+
+    monkeypatch.setattr(route.SummaryRouter, "summarize", summarize)
+
+    async def rows(*_args):
+        return []
+
+    async def wait_started():
+        while not started.is_set():
+            await asyncio.sleep(0)
+
+    async def scenario():
+        provider = SimpleNamespace(get_news=rows, get_announcements=rows)
+        state = SimpleNamespace()
+        owner = asyncio.create_task(_direct_digest(provider, state))
+        survivor = None
+        try:
+            await asyncio.wait_for(wait_started(), 1)
+            survivor = asyncio.create_task(_direct_digest(provider, state))
+            await asyncio.sleep(0)
+            owner.cancel()
+            with pytest.raises(asyncio.CancelledError):
+                await owner
+            assert jobs == ["started"]  # The actual thread has not drained.
+            release.set()
+            result = await survivor
+            assert result["data"]["model"]["actual"] == "rules"
+            assert (await _direct_digest(provider, state))["meta"]["cached"] is True
+            assert jobs == ["started", "drained"]
+        finally:
+            release.set()
+            await asyncio.gather(owner, *([survivor] if survivor else []), return_exceptions=True)
+
+    asyncio.run(scenario())

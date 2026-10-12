@@ -1,6 +1,7 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { cleanup, fireEvent, render, screen, waitFor } from "@testing-library/react";
+import { act, cleanup, fireEvent, render, screen, waitFor } from "@testing-library/react";
 import { KbBrowserTab } from "./kb-browser-tab";
+import { getAgentKbTree, getAgentKbFile, type KbTier } from "@/lib/api";
 
 // 分层呈现（2026-09-12）的**契约测试**。
 //
@@ -17,7 +18,7 @@ import { KbBrowserTab } from "./kb-browser-tab";
 // ⚠️ fixture 必须走 `vi.hoisted`：`vi.mock` 的工厂被提升到 import 之前执行，
 // 直接引用模块顶层 `const` 会撞 "Cannot access before initialization"。
 const { FILES } = vi.hoisted(() => {
-  const mk = (path: string, name: string, dir: string, tier: string, kb_ids: string[]) => ({
+  const mk = (path: string, name: string, dir: string, tier: KbTier, kb_ids: string[]) => ({
     path,
     name,
     dir,
@@ -65,6 +66,15 @@ beforeEach(() => {
 afterEach(cleanup);
 
 describe("知识库面板 · 分层折叠（2026-09-12）", () => {
+  it("关闭后目录晚回不再启动正文读取", async () => {
+    let finish!: (value: Awaited<ReturnType<typeof getAgentKbTree>>) => void;
+    vi.mocked(getAgentKbTree).mockImplementationOnce(() => new Promise(resolve => { finish = resolve; }));
+    const view = render(<KbBrowserTab />);
+    await waitFor(() => expect(getAgentKbTree).toHaveBeenCalledTimes(1));
+    view.unmount();
+    await act(async () => finish({ root: "/repo/docs", files: FILES }));
+    expect(getAgentKbFile).not.toHaveBeenCalled();
+  });
   it("默认只渲染 canonical + 现役，归档与逐日日志折起不占版面", async () => {
     await mount();
 

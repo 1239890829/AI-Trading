@@ -1,5 +1,5 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { cleanup, render, screen, waitFor } from "@testing-library/react";
+import { act, cleanup, fireEvent, render, screen, waitFor } from "@testing-library/react";
 import { MinuteDecisionPanel } from "@/components/detail/minute-decision-panel";
 import {
   getMinuteDecisions,
@@ -9,7 +9,7 @@ import {
 } from "@/lib/api";
 
 // vitest 未开 globals 时 RTL 自动 cleanup 不注册，必须手动（见 trade-form.test.tsx 注释）
-afterEach(cleanup);
+afterEach(() => {cleanup(); vi.resetAllMocks();});
 
 vi.mock("@/lib/api", async () => {
   const actual = await vi.importActual<typeof import("@/lib/api")>("@/lib/api");
@@ -65,6 +65,52 @@ const SIGNAL = {
 };
 
 describe("MinuteDecisionPanel 做 T 决策", () => {
+  it.each(["signals", "decisions"])("the %s source renders without waiting for its unresolved partner", async (first) => {
+    if (first === "signals") {
+      mockedSignals.mockResolvedValue(signals([SIGNAL]));
+      mockedDecisions.mockReturnValue(new Promise(() => {}));
+    } else {
+      mockedSignals.mockReturnValue(new Promise(() => {}));
+      mockedDecisions.mockResolvedValue({...decisions([]), note: "独立决策来源已返回"});
+    }
+    render(<MinuteDecisionPanel symbol="600519" />);
+    expect(await screen.findByText(first === "signals" ? "低吸偏向" : "独立决策来源已返回")).toBeTruthy();
+    expect(mockedSignals).toHaveBeenCalledTimes(1); expect(mockedDecisions).toHaveBeenCalledTimes(1);
+  });
+
+  it("both same-symbol failures keep prior independent content and do not turn them into empty sets", async () => {
+    mockedSignals.mockResolvedValue(signals([SIGNAL]));
+    mockedDecisions.mockResolvedValue({...decisions([]), note: "上次决策来源说明"});
+    render(<MinuteDecisionPanel symbol="600519" />);
+    await screen.findByText("低吸偏向");
+    mockedSignals.mockRejectedValue(new Error("signal-offline"));
+    mockedDecisions.mockRejectedValue(new Error("decision-offline"));
+    fireEvent.click(screen.getByRole("button", {name: "刷新做 T 信号"}));
+    expect(await screen.findByText(/信号读取失败/)).toHaveProperty("textContent", expect.stringContaining("上次"));
+    expect(screen.getByText(/决策记录读取失败/).textContent).toContain("上次");
+    expect(screen.getByText("低吸偏向")).toBeTruthy(); expect(screen.getByText("上次决策来源说明")).toBeTruthy();
+    expect(screen.queryByText(/当前无越过阈值/)).toBeNull();
+  });
+
+  it("new symbol pending and late old replies never expose the old signal or error", async () => {
+    mockedSignals.mockResolvedValueOnce(signals([SIGNAL]));
+    mockedDecisions.mockResolvedValueOnce({...decisions([]), note: "旧标的记录"});
+    const view = render(<MinuteDecisionPanel symbol="600519" />); await screen.findByText("低吸偏向");
+    let oldSignal!: (value: MinuteSignalsPayload) => void;
+    let oldDecision!: (value: MinuteDecisionsPayload) => void;
+    mockedSignals.mockReturnValueOnce(new Promise(resolve => {oldSignal = resolve;}));
+    mockedDecisions.mockReturnValueOnce(new Promise(resolve => {oldDecision = resolve;}));
+    fireEvent.click(screen.getByRole("button", {name: "刷新做 T 信号"})); await act(async () => {});
+    mockedSignals.mockResolvedValue(signals([{...SIGNAL, bias: "高抛偏向"}], {symbol: "000001"}));
+    mockedDecisions.mockResolvedValue({...decisions([]), note: "新标的记录"});
+    view.rerender(<MinuteDecisionPanel symbol="000001" />);
+    expect(screen.queryByText("低吸偏向")).toBeNull(); expect(screen.queryByText("旧标的记录")).toBeNull();
+    await screen.findByText("高抛偏向");
+    await act(async () => {oldSignal(signals([SIGNAL])); oldDecision({...decisions([]), note: "旧晚回"});});
+    expect(screen.getByText("高抛偏向")).toBeTruthy(); expect(screen.getByText("新标的记录")).toBeTruthy();
+    expect(screen.queryByText("旧晚回")).toBeNull();
+  });
+
   it("信号渲染偏向 + 依据 + 失效条件，且带不构成买卖建议声明", async () => {
     mockedSignals.mockResolvedValue(signals([SIGNAL]));
     mockedDecisions.mockResolvedValue(decisions([]));
@@ -190,7 +236,19 @@ describe("MinuteDecisionPanel 做 T 决策", () => {
     mockedSignals.mockRejectedValue(new Error("分时数据源失败"));
     mockedDecisions.mockResolvedValue(decisions([]));
     render(<MinuteDecisionPanel symbol="600519" />);
-    await waitFor(() => expect(screen.getByText("分时数据源失败")).toBeTruthy());
+    await waitFor(() => expect(screen.getByText(/信号读取失败（分时数据源失败）/)).toBeTruthy());
     expect(screen.getByText(/暂无记录/)).toBeTruthy();
+  });
+
+  it("initial decisions failure is explicit rather than no records, and a user refresh restores current empty truth", async () => {
+    mockedSignals.mockResolvedValue(signals([]));
+    mockedDecisions.mockRejectedValueOnce(new Error("decisions-offline")).mockResolvedValue(decisions([]));
+    render(<MinuteDecisionPanel symbol="600519" />);
+    expect(await screen.findByText(/决策记录读取失败/)).toBeTruthy();
+    expect(screen.queryByText(/暂无记录/)).toBeNull();
+    fireEvent.click(screen.getByRole("button", {name: "刷新做 T 信号"}));
+    await screen.findByText(/暂无记录/);
+    expect(screen.queryByText(/决策记录读取失败/)).toBeNull();
+    expect(mockedDecisions).toHaveBeenCalledTimes(2);
   });
 });

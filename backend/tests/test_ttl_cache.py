@@ -40,6 +40,94 @@ def test_ttl_expiry(clock):
     assert c.get("k") == (True, 2)
 
 
+def test_per_item_expiry_preserves_default_lifetime_and_none_hits(clock):
+    c = TTLCache("t.item-expiry", ttl=6 * 3600)
+    c.set("known", {"code": "BK1277"})
+    c.set("unknown", None, ttl=60)
+    clock["now"] += 59
+    assert c.get("unknown") == (True, None)
+    clock["now"] += 1
+    assert c.get("unknown") == (False, None)
+    assert c.get("known") == (True, {"code": "BK1277"})
+    clock["now"] += 6 * 3600 - 60
+    assert c.get("known") == (False, None)
+    assert c.ttl == 6 * 3600
+    assert c.stats()["misses"] == 2 and c.stats()["evictions"] == 0
+
+
+def test_overwrite_replaces_item_lifetime_and_explicit_none_restores_default(clock):
+    c = TTLCache("t.item-overwrite", ttl=100)
+    c.set("k", "short", ttl=1)
+    clock["now"] += 0.5
+    c.set("k", "default", ttl=None)
+    clock["now"] += 1
+    assert c.get("k") == (True, "default")
+    c.set("k", "short-again", ttl=2)
+    clock["now"] += 2
+    assert c.get("k") == (False, None)
+    c.set("k", "new-default")
+    clock["now"] += 99
+    assert c.get("k") == (True, "new-default")
+    clock["now"] += 1
+    assert c.get("k") == (False, None)
+
+
+def test_item_expiry_counts_a_miss_without_lru_eviction(clock):
+    c = TTLCache("t.item-lru", ttl=100, maxsize=2)
+    c.set("a", None, ttl=1)
+    c.set("b", 2, ttl=10)
+    clock["now"] += 1
+    assert c.get("a") == (False, None)
+    assert len(c) == 1 and c.misses == 1 and c.evictions == 0
+    c.set("c", 3, ttl=5)
+    assert c.get("b") == (True, 2)
+    c.set("d", 4)
+    assert c.get("c") == (False, None)
+    assert c.get("b") == (True, 2) and c.get("d") == (True, 4)
+    assert c.evictions == 1 and c.misses == 2
+
+
+@pytest.mark.parametrize("ttl", [float("nan"), float("inf"), float("-inf")])
+def test_nonfinite_item_ttl_rejected_without_overwriting(ttl, clock):
+    c = TTLCache("t.item-invalid", ttl=100)
+    c.set("k", "existing")
+    with pytest.raises(ValueError, match="finite"):
+        c.set("k", "invalid", ttl=ttl)
+    assert c.get("k") == (True, "existing")
+
+
+@pytest.mark.parametrize("ttl", [0, -1])
+def test_finite_nonpositive_item_ttl_expires_immediately(ttl, clock):
+    c = TTLCache("t.item-immediate", ttl=100)
+    c.set("k", "immediate", ttl=ttl)
+    assert c.get("k") == (False, None)
+
+
+@pytest.mark.parametrize("ttl", [float("nan"), float("inf"), 0, -1])
+def test_default_ttl_validation_and_expiry_semantics_unchanged(ttl, clock):
+    c = TTLCache("t.default-compat", ttl=ttl)
+    c.set("k", 1)
+    assert c.get("k") == ((False, None) if ttl <= 0 else (True, 1))
+
+
+def test_per_item_lifetime_set_and_get_from_workers(clock):
+    from concurrent.futures import ThreadPoolExecutor
+
+    c = TTLCache("t.item-workers", ttl=100, maxsize=16)
+
+    def write(key):
+        c.set(key, key, ttl=1 if key % 2 == 0 else 100)
+        return c.get(key)
+
+    with ThreadPoolExecutor(max_workers=4) as pool:
+        assert list(pool.map(write, range(16))) == [(True, key) for key in range(16)]
+    clock["now"] += 1
+    with ThreadPoolExecutor(max_workers=4) as pool:
+        results = list(pool.map(c.get, range(16)))
+    assert results == [(False, None) if key % 2 == 0 else (True, key) for key in range(16)]
+    assert len(c) == 8 and c.misses == 8 and c.evictions == 0
+
+
 def test_lru_eviction_bounded(clock):
     c = TTLCache("t.lru", ttl=60, maxsize=2)
     c.set("a", 1)

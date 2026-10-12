@@ -192,6 +192,7 @@ type SeriesBundle = {
   priceLines: { pl: IPriceLine; pick: (p: MinutePalette) => string }[];
   slots: number[];
   base0: number;
+  axisRange?: readonly [number, number, number, number];
 };
 
 const emptyBundle = (): SeriesBundle => ({
@@ -785,7 +786,10 @@ export function MinuteChart({
         }
         if (cls !== undefined && el.getAttribute("class") !== cls) el.setAttribute("class", cls);
       };
-      put("hhmm", bjIso.slice(11, 16));
+      const observation = d.observation_ts ? new Date(d.observation_ts).getTime() : NaN;
+      put("hhmm", d.time_label === "interval_end" && Number.isFinite(observation)
+        ? `分钟截至 ${bjIso.slice(11, 16)} · 报价 ${new Date(observation + BJ_OFFSET * 1000).toISOString().slice(11, 19)}`
+        : bjIso.slice(11, 16));
       put("price", isPositivePrice(d.price) ? d.price.toFixed(2) : "--");
       put("pct", fmtPct(changePct), `font-mono text-[11px] tabular-nums ${pctCls(changePct)}`);
       put("avg", isPositivePrice(d.avg) ? d.avg.toFixed(2) : "--");
@@ -914,6 +918,11 @@ export function MinuteChart({
     dbg.__minuteRange = axis ? { min: axis.min, max: axis.max } : null;
     dbg.__minuteOutOfBand = axis?.outOfBand ?? false;
     if (!axis) return;
+    // Quote ticks often change points without changing the displayed domain.
+    // Keep the installed domain on this bundle so a new chart still receives it.
+    const nextRange = [axis.min, axis.max, axis.pctMin, axis.pctMax] as const;
+    if (s.axisRange?.every((value, index) => value === nextRange[index])) return;
+    s.axisRange = nextRange;
     for (const series of [s.price, s.avg, s.auction, s.events]) {
       series?.applyOptions({ autoscaleInfoProvider: () => ({ priceRange: { minValue: axis.min, maxValue: axis.max } }) });
     }

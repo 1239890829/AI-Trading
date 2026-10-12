@@ -20,7 +20,7 @@ export function LeaderResearchPanel({date: requestedDate, onDateChange}: {date?:
   const [limit, setLimit] = useState(10);
   const result = useResource(() => getLeaderResearch(date || undefined), { key: date, intervalMs: 60_000 });
   const error = result.error ? String(result.error) : undefined;
-  const data = error ? undefined : result.data;
+  const data = result.data;
 
   return <div className="ui-card hunting-research mt-4 border border-zinc-200 p-4 text-xs text-zinc-700 dark:border-zinc-800 dark:text-zinc-300">
     <div className="flex flex-wrap items-center justify-between gap-2">
@@ -31,7 +31,7 @@ export function LeaderResearchPanel({date: requestedDate, onDateChange}: {date?:
       </label>
     </div>
     <div className="hunting-research-records" tabIndex={0} role="region" aria-label="强势候选研究记录">
-    {error && <p role="alert" className="mt-2 text-amber-800 dark:text-amber-300">研究记录读取失败：{error}</p>}
+    {error && <p role="alert" className="mt-2 text-amber-800 dark:text-amber-300">研究记录读取失败：{error}{data ? "。以下保留上次读取结果，当前状态待重试核实。" : "。未读到记录不代表没有机会。"}</p>}
     {!data && !error && <p role="status" className="py-3">正在读取研究记录…</p>}
     {data && <>
       <p className="mt-2">{data.trade_date} · {data.cards.length} 只 · 当前采集：{HEALTH[data.collector.state] ?? "状态未知"}</p>

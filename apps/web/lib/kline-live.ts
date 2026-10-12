@@ -26,6 +26,9 @@ interface MinuteLivePoint {
   cum_amount?: number | null;
   avg?: number | null;
   minute_amount?: number | null;
+  /** Only a same-response source quote can prove a forming interval's end label. */
+  observation_ts?: string | null;
+  time_label?: "interval_end" | null;
 }
 
 function nonnegative(value: unknown): value is number {
@@ -38,6 +41,10 @@ function sameSource(a: { source?: string }, b: { source?: string }): boolean {
 
 function adjacentMinutes(previous: MinuteLivePoint | undefined, point: MinuteLivePoint): boolean {
   if (!previous || !bjDate(point.ts) || bjDate(previous.ts) !== bjDate(point.ts)) return false;
+  // A forming end-labelled point is not a sealed cumulative baseline. This
+  // applies to both the chart amount fallback and subsequent live updates.
+  if (previous.time_label === "interval_end"
+    && (!previous.observation_ts || new Date(previous.observation_ts).getTime() !== new Date(previous.ts).getTime())) return false;
   return new Date(point.ts).getTime() - new Date(previous.ts).getTime() === 60_000
     && isContinuousSession(hhmmToMin(bjHHMM(previous.ts)))
     && isContinuousSession(hhmmToMin(bjHHMM(point.ts)));
@@ -136,8 +143,22 @@ export function mergeQuoteIntoMinutes<T extends MinuteLivePoint>(
   if (!qHHMM || !lastHHMM || !qDate || !lastDate || qDate !== lastDate) return null;
   const qMin = hhmmToMin(qHHMM);
   const lastMin = hhmmToMin(lastHHMM);
-  if (qMin < lastMin) return null;
   if (!isContinuousSession(qMin) || !isContinuousSession(lastMin)) return null;
+
+  // Tencent can label the forming minute by its end (13:48 for a 13:47 quote).
+  // Preserve that label; compare real observation times only when the provider
+  // proved the same-response interval. Never infer this from received_at alone.
+  const observationMs = last.observation_ts ? new Date(last.observation_ts).getTime() : NaN;
+  const lastMs = new Date(last.ts).getTime();
+  const markedEnd = last.time_label === "interval_end" && last.source === "tencent";
+  if (markedEnd && !quote.data_timestamp) return null;
+  const endLabel = markedEnd && sameSource(last, quote) && Number.isFinite(observationMs)
+    && bjDate(last.observation_ts) === lastDate && lastMs - observationMs >= 0
+    && lastMs - observationMs <= 60_000;
+  const quoteMs = new Date(quoteTs as string).getTime();
+  if (endLabel && quoteMs < observationMs) return null;
+  const slotMin = endLabel ? (qMin === 690 || qMin === 900 ? qMin : qMin + 1) : qMin;
+  if (slotMin < lastMin) return null;
 
   const comparable = sameSource(last, quote);
   const cumVolume = nonnegative(quote.volume)
@@ -149,7 +170,7 @@ export function mergeQuoteIntoMinutes<T extends MinuteLivePoint>(
   const avg = ratio != null && Number.isFinite(ratio) && ratio > 0 ? +ratio.toFixed(3) : null;
   let volume: number | null = null;
   let minuteAmount: number | null = null;
-  if (qMin === lastMin) {
+  if (slotMin === lastMin) {
     const previous = points[points.length - 2];
     if (previous && adjacentMinutes(previous, last) && sameSource(previous, last) && comparable) {
       if (cumVolume != null && nonnegative(previous.cum_volume) && nonnegative(last.cum_volume)
@@ -165,9 +186,11 @@ export function mergeQuoteIntoMinutes<T extends MinuteLivePoint>(
     if (last.price === price && (last.cum_volume ?? null) === cumVolume
       && (last.cum_amount ?? null) === cumAmount && (last.avg ?? null) === avg
       && (last.volume ?? null) === volume && getMinuteAmount(last, previous) === minuteAmount
-      && last.source === quote.source) return null;
+      && last.source === quote.source && (!endLabel || last.observation_ts === quoteTs)) return null;
     const next = { ...last, price, volume, cum_volume: cumVolume, cum_amount: cumAmount,
-      avg, minute_amount: minuteAmount, source: quote.source };
+      avg, minute_amount: minuteAmount, source: quote.source,
+      ...(endLabel ? { observation_ts: quoteTs, time_label: "interval_end" as const }
+        : markedEnd ? { observation_ts: null, time_label: null } : {}) };
     return [...points.slice(0, -1), next] as T[];
   }
 
@@ -175,7 +198,10 @@ export function mergeQuoteIntoMinutes<T extends MinuteLivePoint>(
   const slotTs = new Date(quoteTs as string);
   if (isNaN(slotTs.getTime())) return null;
   slotTs.setSeconds(0, 0);
+  if (endLabel && slotMin !== qMin) slotTs.setMinutes(slotTs.getMinutes() + 1);
   const next = { ...last, ts: slotTs.toISOString(), price, volume: null, cum_volume: cumVolume,
-    cum_amount: cumAmount, avg, minute_amount: null, source: quote.source } as T;
+    cum_amount: cumAmount, avg, minute_amount: null, source: quote.source,
+    ...(endLabel ? { observation_ts: quoteTs, time_label: "interval_end" as const }
+      : markedEnd ? { observation_ts: null, time_label: null } : {}) } as T;
   return [...points, next];
 }

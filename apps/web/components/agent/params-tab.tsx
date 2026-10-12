@@ -1,8 +1,8 @@
 "use client";
 
-import { usePollingFetch } from "@/hooks/use-polling-fetch";
+import { useResource } from "@/hooks/use-resource";
 import { FilterMenu } from "@/components/ui/filter-menu";
-import { useCallback, useEffect, useState } from "react";
+import { useState } from "react";
 
 import {
   applyAgentParamChange,
@@ -13,9 +13,6 @@ import {
   getAgentRollbackReasons,
   rollbackAgentParamChange,
   type AgentParamChange,
-  type AgentParamInfo,
-  type AgentParamSurvival,
-  type AgentRollbackReason,
 } from "@/lib/api";
 import { dateTimeTextBJ } from "@/lib/format";
 
@@ -47,10 +44,16 @@ const STATUS_META: Record<string, { label: string; cls: string }> = {
 
 export function ParamsTab() {
   // 三态：undefined=尚未拉到（骨架）/ null=加载失败 / 有值=渲染
-  const [params, setParams] = useState<AgentParamInfo[] | undefined | null>(undefined);
-  const [changes, setChanges] = useState<AgentParamChange[] | undefined | null>(undefined);
-  const [survival, setSurvival] = useState<AgentParamSurvival | undefined | null>(undefined);
-  const [reasons, setReasons] = useState<AgentRollbackReason[]>([]);
+  const paramsResource = useResource(getAgentParams, { marketHours: false });
+  const changesResource = useResource(getAgentParamChanges, { marketHours: false });
+  const survivalResource = useResource(getAgentParamSurvival, { marketHours: false });
+  const reasonsResource = useResource(getAgentRollbackReasons, { marketHours: false });
+  const params = paramsResource.data ?? (paramsResource.error ? null : undefined);
+  const changes = changesResource.data ?? (changesResource.error ? null : undefined);
+  const survival = survivalResource.data ?? (survivalResource.error ? null : undefined);
+  const reasons = reasonsResource.data ?? [];
+  const changesUnconfirmed = changesResource.pending || changesResource.error != null;
+  const reasonsUnconfirmed = reasonsResource.data === undefined || reasonsResource.pending || reasonsResource.error != null;
   const [error, setError] = useState<string | null>(null);
   const [editingKey, setEditingKey] = useState<string | null>(null);
   const [draftText, setDraftText] = useState("");
@@ -61,28 +64,16 @@ export function ParamsTab() {
   const [reasonCode, setReasonCode] = useState("manual");
   const [reasonNote, setReasonNote] = useState("");
 
-  const load = useCallback(async () => {
-    try {
-      const [p, c, s, rs] = await Promise.all([
-        getAgentParams(),
-        getAgentParamChanges(),
-        getAgentParamSurvival(),
-        getAgentRollbackReasons(),
-      ]);
-      setParams(p);
-      setChanges(c);
-      setSurvival(s);
-      setReasons(rs);
-      setError(null);
-    } catch (e) {
-      setParams(null);
-      setError(e instanceof Error ? e.message : String(e));
-    }
-  }, []);
-
-  // 挂载即拉取（P1-27 收编 usePollingFetch）：setState 落在 promise 回调里，
-  // 不再触发 react-hooks/set-state-in-effect。load 依赖为 []（无参数），语义不变。
-  usePollingFetch(load, null);
+  function refreshState() {
+    paramsResource.refresh();
+    changesResource.refresh();
+    survivalResource.refresh();
+  }
+  function refresh() {
+    setError(null);
+    refreshState();
+    reasonsResource.refresh();
+  }
 
   async function propose() {
     if (!editingKey) return;
@@ -92,7 +83,7 @@ export function ParamsTab() {
       await createAgentParamChange(editingKey, draftText);
       setEditingKey(null);
       setDraftText("");
-      await load();
+      refreshState();
     } catch (e) {
       setError(e instanceof Error ? e.message : String(e)); // 422：值域非法，显式展示
     } finally {
@@ -105,7 +96,7 @@ export function ParamsTab() {
     setError(null);
     try {
       await fn(changeId);
-      await load();
+      refreshState();
     } catch (e) {
       setError(e instanceof Error ? e.message : String(e));
     } finally {
@@ -120,7 +111,7 @@ export function ParamsTab() {
       await rollbackAgentParamChange(id, { reason_code: reasonCode, note: reasonNote });
       setRollbackFor(null);
       setReasonNote("");
-      await load();
+      refreshState();
     } catch (e) {
       setError(e instanceof Error ? e.message : String(e));
     } finally {
@@ -131,6 +122,11 @@ export function ParamsTab() {
   return (
     // Parameter list and change history are separate bounded readers.
     <div className="settings-form flex h-full min-h-0 flex-col gap-4">
+      <button data-action="quiet" className="self-start" onClick={refresh}>重新读取</button>
+      {[{ label: "白名单", resource: paramsResource }, { label: "变更历史", resource: changesResource },
+        { label: "存活统计", resource: survivalResource }, { label: "回滚原因", resource: reasonsResource }].map(({ label, resource }) => resource.error != null &&
+        <p key={label} role="alert" className="shrink-0 text-[11px] text-amber-700 dark:text-amber-300">{label}读取失败：{resource.error instanceof Error ? resource.error.message : "接口异常"}。{resource.data !== undefined ? "保留上次读取结果，当前状态未确认。" : "当前状态未确认。"}</p>
+      )}
       {error && (
         <p className="shrink-0 rounded-md bg-red-500/5 px-2 py-1.5 text-[11px] text-red-700 dark:text-red-300">{error}</p>
       )}
@@ -293,7 +289,7 @@ export function ParamsTab() {
                   {c.status === "draft" && c.manual_apply_allowed === true && (
                     <div className="mt-1 flex gap-1.5">
                       <button data-action="command"
-                        disabled={busy}
+                        disabled={busy || changesUnconfirmed}
                         onClick={() => void act(c.id, applyAgentParamChange)}
                       >
                         确认生效
@@ -302,7 +298,7 @@ export function ParamsTab() {
                   )}
                   {c.status === "applied" && rollbackFor !== c.id && (
                     <button data-action="secondary"
-                      disabled={busy}
+                      disabled={busy || changesUnconfirmed}
                       onClick={() => {
                         setRollbackFor(c.id);
                         setReasonCode("manual");
@@ -332,7 +328,7 @@ export function ParamsTab() {
                           className="min-w-[140px] flex-1 rounded border border-zinc-300 bg-transparent px-1.5 py-0.5 text-[11px] dark:border-zinc-600"
                         />
                         <button data-action="danger"
-                          disabled={busy}
+                          disabled={busy || changesUnconfirmed || reasonsUnconfirmed}
                           onClick={() => void doRollback(c.id)}
                         >
                           确认回滚

@@ -270,7 +270,23 @@ async def pre_limit_sweep(app) -> int:
 
     tdate = beijing_now().date().isoformat()
     tstamp = beijing_now().strftime("%H:%M:%S")
-    day_rows = {r.get("symbol"): r for r in get_day(tdate)}
+    # The repo creates and closes its own Session in the worker. Keep the loop
+    # responsive during a SQLite wait, and drain the real read on cancellation.
+    read = asyncio.create_task(asyncio.to_thread(get_day, tdate))
+    try:
+        ledger_rows = await asyncio.shield(read)
+    except asyncio.CancelledError:
+        while not read.done():
+            try:
+                await asyncio.shield(read)
+            except asyncio.CancelledError:
+                continue
+            except Exception:
+                break
+        if not read.cancelled():
+            read.exception()
+        raise
+    day_rows = {r.get("symbol"): r for r in ledger_rows}
     registered = set(day_rows)
     reopenable = {
         symbol for symbol, row in day_rows.items()

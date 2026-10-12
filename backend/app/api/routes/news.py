@@ -48,62 +48,83 @@ async def news_digest(
     if hit:
         return {"data": cached, "meta": {"cached": True}}
 
-    # 数据源单侧失败降级而非整体 502：新闻源（东财搜索）有间歇软封锁，
-    # 若整体失败会把同时可用的公告也吃掉；错误原因显式透出（news_error/
-    # announcements_error 非空 = 该侧已降级），绝不静默空列表。双侧都挂才 502。
-    news_rows: list = []
-    ann_rows: list = []
-    news_error: str | None = None
-    ann_error: str | None = None
-    try:
-        news_rows = await hub.provider.get_news(symbol, limit)
-    except Exception as exc:
-        news_error = str(exc)
-    try:
-        ann_rows = await hub.provider.get_announcements(symbol, limit)
-    except Exception as exc:
-        ann_error = str(exc)
-    if news_error and ann_error:
-        raise HTTPException(
-            status_code=502,
-            detail=f"新闻与公告数据源均失败：news({news_error})；announcements({ann_error})",
+    async def _build() -> dict:
+        # 数据源单侧失败降级而非整体 502：新闻源（东财搜索）有间歇软封锁，
+        # 若整体失败会把同时可用的公告也吃掉；错误原因显式透出（news_error/
+        # announcements_error 非空 = 该侧已降级），绝不静默空列表。双侧都挂才 502。
+        async def _read(method: str):
+            try:
+                read_rows = getattr(hub.provider, method)
+                return await read_rows(symbol, limit), None
+            except Exception as exc:
+                return [], str(exc)
+
+        # These sources are independent; retain each side's failure separately.
+        (news_rows, news_error), (ann_rows, ann_error) = await asyncio.gather(
+            _read("get_news"), _read("get_announcements"),
         )
+        if news_error and ann_error:
+            raise HTTPException(
+                status_code=502,
+                detail=f"新闻与公告数据源均失败：news({news_error})；announcements({ann_error})",
+            )
 
-    def _usage_reporter(receipt: dict) -> None:
-        from app.services import agent_budget
-        agent_budget.record_unmetered(
-            purpose="news.llm", provider=settings.llm_provider, model=settings.news_llm_model,
-            state=str(receipt.get("state") or "failed"),
-            usage=receipt.get("usage") if isinstance(receipt.get("usage"), dict) else None,
-            attempts=max(1, int(receipt.get("attempts") or 1)),
-            timeout_seconds=float(receipt.get("timeout_seconds") or 0.0),
-            input_chars=max(0, int(receipt.get("input_chars") or 0)),
-            output_chars=max(0, int(receipt.get("output_chars") or 0)),
-            error_kind=(str(receipt.get("error_kind")) if receipt.get("error_kind") else None),
+        def _usage_reporter(receipt: dict) -> None:
+            from app.services import agent_budget
+            agent_budget.record_unmetered(
+                purpose="news.llm", provider=settings.llm_provider, model=settings.news_llm_model,
+                state=str(receipt.get("state") or "failed"),
+                usage=receipt.get("usage") if isinstance(receipt.get("usage"), dict) else None,
+                attempts=max(1, int(receipt.get("attempts") or 1)),
+                timeout_seconds=float(receipt.get("timeout_seconds") or 0.0),
+                input_chars=max(0, int(receipt.get("input_chars") or 0)),
+                output_chars=max(0, int(receipt.get("output_chars") or 0)),
+                error_kind=(str(receipt.get("error_kind")) if receipt.get("error_kind") else None),
+            )
+
+        rt = SummaryRouter(
+            requested=settings.news_model,
+            llm=LLMSummarizer(
+                base_url=settings.news_llm_base_url,
+                api_key=settings.news_llm_api_key,
+                model=settings.news_llm_model,
+                provider=settings.llm_provider,
+                cli_path=settings.llm_cli_path,
+                usage_reporter=_usage_reporter,
+            ),
         )
+        # LLM 接入后摘要是同步 HTTP，必须丢线程池，不阻塞事件循环
+        summarized, usage = await asyncio.to_thread(rt.summarize, news_rows, ann_rows)
 
-    rt = SummaryRouter(
-        requested=settings.news_model,
-        llm=LLMSummarizer(
-            base_url=settings.news_llm_base_url,
-            api_key=settings.news_llm_api_key,
-            model=settings.news_llm_model,
-            provider=settings.llm_provider,
-            cli_path=settings.llm_cli_path,
-            usage_reporter=_usage_reporter,
-        ),
-    )
-    # LLM 接入后摘要是同步 HTTP，必须丢线程池，不阻塞事件循环
-    summarized, usage = await asyncio.to_thread(rt.summarize, news_rows, ann_rows)
+        payload = NewsDigestPayload(
+            symbol=symbol,
+            news=[_to_item(r) for r in summarized.get("news", [])],
+            announcements=[_to_item(r) for r in summarized.get("announcements", [])],
+            model=usage,
+            news_error=news_error,
+            announcements_error=ann_error,
+        )
+        data = payload.model_dump()
+        return data
 
-    payload = NewsDigestPayload(
-        symbol=symbol,
-        news=[_to_item(r) for r in summarized.get("news", [])],
-        announcements=[_to_item(r) for r in summarized.get("announcements", [])],
-        model=usage,
-        news_error=news_error,
-        announcements_error=ann_error,
-    )
-    data = payload.model_dump()
-    cache.set(key, data)
-    return {"data": data, "meta": {}}
+    # Share the whole cold pipeline, including a failed in-flight result. A
+    # completed failure is removed immediately, so a later request can recover.
+    pending = getattr(request.app.state, "_news_digest_reads", None)
+    if pending is None:
+        pending = {}
+        request.app.state._news_digest_reads = pending
+    task = pending.get(key)
+    if task is None or task.done():
+        task = asyncio.create_task(cache.get_or_set(key, _build))
+        pending[key] = task
+
+        def completed(done: asyncio.Task) -> None:
+            if pending.get(key) is done:
+                pending.pop(key, None)
+            if not done.cancelled():
+                done.exception()
+
+        task.add_done_callback(completed)
+    # A disconnected caller must not cancel other callers or the summary thread.
+    hit, data = await asyncio.shield(task)
+    return {"data": data, "meta": {"cached": True} if hit else {}}

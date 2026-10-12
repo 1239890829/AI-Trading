@@ -1,4 +1,5 @@
 import { act, renderHook } from "@testing-library/react";
+import { useCallback, useSyncExternalStore } from "react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 import { getQuotes } from "@/lib/api";
@@ -127,6 +128,109 @@ describe("行情 WS 的子协议凭据（R22）", () => {
 });
 
 const quote = (symbol: string, price: number) => ({symbol, price, quality: "high"} as Quote);
+type TestFeed = {
+  subscribe(symbol: string, listener: () => void): () => void;
+  getSnapshot(symbol: string): Quote | null | undefined;
+};
+function feedOf(stream: ReturnType<typeof useQuoteStream>): TestFeed | undefined {
+  return (stream as ReturnType<typeof useQuoteStream> & {quoteFeed?: TestFeed}).quoteFeed;
+}
+function useFastQuote(feed: TestFeed | undefined, symbol: string, fallback?: Quote) {
+  const subscribe = useCallback((listener: () => void) => feed?.subscribe(symbol, listener) ?? (() => {}), [feed, symbol]);
+  const snapshot = useCallback(() => feed ? feed.getSnapshot(symbol) : fallback, [feed, symbol, fallback]);
+  return useSyncExternalStore(subscribe, snapshot, snapshot);
+}
+
+it("one owner delivers complete selected quotes immediately while its list stays throttled", async () => {
+  const owner = renderHook(() => useQuoteStream(["600519", "000001"], {throttleMs: 3000}));
+  await settle();
+  const ws = FakeWS.instances[0];
+  const first = {...quote("600519", 100), source: "tencent", data_timestamp: "2026-10-12T05:43:22Z", received_at: "2026-10-12T05:43:24Z", volume: 100, amount: 10_000};
+  await act(async () => {ws.readyState = FakeWS.OPEN; ws.onopen?.(); ws.onmessage?.({data: JSON.stringify({type: "quotes", data: [first]})});});
+  const feed = feedOf(owner.result.current);
+  const fast = renderHook(() => useFastQuote(feed, "600519", owner.result.current.quotes["600519"]));
+  const slow = owner.result.current.quotes;
+  const second = {...first, price: 101, volume: 200, amount: 20_100, data_timestamp: "2026-10-12T05:43:23Z", received_at: "2026-10-12T05:43:25Z", quality: "stale" as const, quality_reasons: ["refresh_failed"]};
+  await act(async () => {await vi.advanceTimersByTimeAsync(1000); ws.onmessage?.({data: JSON.stringify({type: "stale", data: [second]})});});
+  expect(fast.result.current).toEqual(second);
+  expect(owner.result.current.quotes).toBe(slow);
+  expect(owner.result.current.quotes["600519"].price).toBe(100);
+  expect(owner.result.current.status).toBe("stale");
+  expect(FakeWS.instances).toHaveLength(1);
+  await act(async () => {await vi.advanceTimersByTimeAsync(2000);});
+  expect(owner.result.current.quotes["600519"]).toEqual(second);
+  fast.unmount(); owner.unmount();
+});
+
+it("the immediate feed prunes removed subscriptions, rejects old frames and clears on stop", async () => {
+  const owner = renderHook(({symbols}) => useQuoteStream(symbols, {throttleMs: 3000}), {initialProps: {symbols: ["600519"]}});
+  await settle();
+  const ws = FakeWS.instances[0];
+  await act(async () => {ws.readyState = FakeWS.OPEN; ws.onopen?.(); ws.onmessage?.({data: JSON.stringify({type: "quotes", data: [quote("600519", 100)]})});});
+  const feed = feedOf(owner.result.current);
+  owner.rerender({symbols: ["000001"]});
+  expect(feed?.getSnapshot("600519")).toBeUndefined();
+  const fast = renderHook(() => useFastQuote(feed, "000001"));
+  await act(async () => {
+    ws.onmessage?.({data: JSON.stringify({type: "quotes", data: [quote("000001", 20)]})});
+    ws.onmessage?.({data: JSON.stringify({type: "stale", data: [quote("600519", 99)]})});
+  });
+  expect(fast.result.current).toEqual(quote("000001", 20));
+  expect(feed?.getSnapshot("600519")).toBeUndefined();
+  expect(FakeWS.instances).toHaveLength(1);
+  owner.rerender({symbols: []});
+  expect(fast.result.current).toBeUndefined();
+  await act(async () => {ws.onmessage?.({data: JSON.stringify({type: "quotes", data: [quote("000001", 21)]})});});
+  expect(feed?.getSnapshot("000001")).toBeUndefined();
+  fast.unmount(); owner.unmount();
+});
+
+it("REST fallback publishes through the same immediate feed before a pending list interval", async () => {
+  // A longer list interval exposes this ingress independently of the 5s poll cadence.
+  const owner = renderHook(() => useQuoteStream(["600519"], {throttleMs: 10_000}));
+  await settle();
+  const ws = FakeWS.instances[0];
+  await act(async () => {ws.readyState = FakeWS.OPEN; ws.onopen?.(); ws.onmessage?.({data: JSON.stringify({type: "quotes", data: [quote("600519", 100)]})});});
+  const fast = renderHook(() => useFastQuote(feedOf(owner.result.current), "600519"));
+  const fallback = {...quote("600519", 101), quality: "stale" as const, quality_reasons: ["quote_age_exceeded"], source: "tencent", volume: 1000, amount: 101_000, data_timestamp: "2026-10-12T05:43:22Z", received_at: "2026-10-12T05:43:24Z"};
+  vi.mocked(getQuotes).mockResolvedValueOnce([fallback]);
+  await degrade();
+  expect(fast.result.current).toEqual(fallback);
+  expect(owner.result.current.quotes["600519"].price).toBe(100);
+  expect(getQuotes).toHaveBeenCalledTimes(1);
+  expect(owner.result.current.status).toBe("polling");
+  fast.unmount(); owner.unmount();
+});
+
+it("a foreign REST response cannot blank the selected immediate quote and a later valid reply recovers", async () => {
+  const owner = renderHook(() => useQuoteStream(["600519"], {throttleMs: 3000}));
+  await settle(); const ws = FakeWS.instances[0];
+  await act(async () => {ws.readyState = FakeWS.OPEN; ws.onopen?.(); ws.onmessage?.({data: JSON.stringify({type: "quotes", data: [quote("600519", 100)]})});});
+  const fast = renderHook(() => useFastQuote(feedOf(owner.result.current), "600519"));
+  vi.mocked(getQuotes).mockResolvedValueOnce([quote("000001", 1)]).mockResolvedValueOnce([quote("600519", 101)]);
+  await degrade();
+  expect(fast.result.current).toEqual(quote("600519", 100));
+  expect(feedOf(owner.result.current)?.getSnapshot("000001")).toBeUndefined();
+  await act(async () => {await vi.advanceTimersByTimeAsync(5000);});
+  expect(fast.result.current).toEqual(quote("600519", 101));
+  fast.unmount(); owner.unmount();
+});
+
+it("an explicit missing frame is distinct from no observation and unmount cancels pending delivery", async () => {
+  const owner = renderHook(() => useQuoteStream(["600519"], {throttleMs: 3000}));
+  await settle(); const feed = feedOf(owner.result.current);
+  expect(feed?.getSnapshot("600519")).toBeUndefined();
+  const fast = renderHook(() => useFastQuote(feed, "600519"));
+  const ws = FakeWS.instances[0];
+  await act(async () => {ws.readyState = FakeWS.OPEN; ws.onopen?.(); ws.onmessage?.({data: JSON.stringify({type: "quotes", data: [quote("600519", 100)]})});});
+  await act(async () => {await vi.advanceTimersByTimeAsync(1000); ws.onmessage?.({data: JSON.stringify({type: "quotes", data: []})});});
+  expect(fast.result.current).toBeNull();
+  expect(owner.result.current.quotes["600519"].price).toBe(100);
+  owner.unmount();
+  expect(fast.result.current).toBeUndefined();
+  await act(async () => {await vi.advanceTimersByTimeAsync(3000); ws.onmessage?.({data: JSON.stringify({type: "quotes", data: [quote("600519", 200)]})});});
+  expect(fast.result.current).toBeUndefined(); fast.unmount();
+});
 async function degrade() {
   await settle();
   for (const delay of [2_000, 4_000]) {
@@ -159,12 +263,14 @@ it("hidden fallback pauses, discards its old response and fetches immediately on
   await degrade();
   await act(async () => { visibility.mockReturnValue("hidden"); document.dispatchEvent(new Event("visibilitychange")); resolve([quote("600519", 100)]); });
   expect(result.current.quotes).toEqual({});
+  expect(result.current.quoteFeed.getSnapshot("600519")).toBeUndefined();
   await act(async () => { await vi.advanceTimersByTimeAsync(5_000); });
   expect(getQuotes).toHaveBeenCalledTimes(1);
   vi.mocked(getQuotes).mockResolvedValueOnce([quote("600519", 101)]);
   await act(async () => { visibility.mockReturnValue("visible"); document.dispatchEvent(new Event("visibilitychange")); });
   expect(getQuotes).toHaveBeenCalledTimes(2);
   expect(result.current.quotes["600519"].price).toBe(101);
+  expect(result.current.quoteFeed.getSnapshot("600519")?.price).toBe(101);
   unmount();
 });
 
@@ -179,6 +285,8 @@ it("switching symbols discards the old fallback reply and then requests the curr
   expect(getQuotes).toHaveBeenLastCalledWith(["000001"]);
   expect(result.current.quotes["600519"]).toBeUndefined();
   expect(result.current.quotes["000001"].price).toBe(20);
+  expect(result.current.quoteFeed.getSnapshot("600519")).toBeUndefined();
+  expect(result.current.quoteFeed.getSnapshot("000001")?.price).toBe(20);
   unmount();
 });
 
@@ -196,6 +304,7 @@ it("WS recovery and unmount prevent stale fallback replies from overwriting curr
     resolve([quote("600519", 100)]);
   });
   expect(result.current.quotes["600519"].price).toBe(110);
+  expect(result.current.quoteFeed.getSnapshot("600519")?.price).toBe(110);
   expect(result.current.status).toBe("live");
   unmount();
   await act(async () => { await vi.advanceTimersByTimeAsync(10_000); });

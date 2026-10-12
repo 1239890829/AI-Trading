@@ -13,6 +13,7 @@
 from __future__ import annotations
 
 import logging
+import threading
 
 from app.core.ttl_cache import cache_on
 
@@ -25,17 +26,25 @@ MIN_HITS = 2
 #: 每簇最多挂靠的官方概念数
 MAX_MATCHES = 3
 
+_INDEX_LOCK_INIT = threading.Lock()
+
 
 def _official_symbol_index(svc) -> tuple[dict[str, list[tuple[str, str]]], dict[str, int]]:
     """symbol → [(概念 code, name)] 反查索引 + 概念成分规模表。"""
     index: dict[str, list[tuple[str, str]]] = {}
     sizes: dict[str, int] = {}
-    for t in svc.get_catalog(limit=1000):
+    catalog = svc.get_catalog(limit=1000)
+    try:
+        symbols_by_code = svc.member_symbols_bulk([t.code for t in catalog])
+    except Exception:  # noqa: BLE001 - 批读失败仍保留原逐概念覆盖与容错
+        symbols_by_code = None
+    for t in catalog:
         try:
-            members = svc.get_members(t.code)
-            sizes[t.code] = len(members)
-            for m in members:
-                index.setdefault(m.symbol, []).append((t.code, t.name))
+            symbols = (symbols_by_code.get(t.code, []) if symbols_by_code is not None
+                       else [m.symbol for m in svc.get_members(t.code)])
+            sizes[t.code] = len(symbols)
+            for symbol in symbols:
+                index.setdefault(symbol, []).append((t.code, t.name))
         except Exception:  # noqa: BLE001 - 单概念成员失败不影响整体索引
             continue
     return index, sizes
@@ -50,13 +59,19 @@ def _state(holder):
 
 def _get_index(holder) -> tuple[dict[str, list[tuple[str, str]]], dict[str, int]]:
     state = _state(holder)
-    cache = cache_on(state, "themes.official.index", 300, maxsize=2)
-    hit, cached = cache.get("index")
-    if not hit:
-        svc = state.theme_catalog
-        cached = _official_symbol_index(svc)
-        cache.set("index", cached)
-    return cached
+    # get/build/set 跨多次同步读。整段在 worker 内按 holder 合并冷建造。
+    with _INDEX_LOCK_INIT:
+        lock = getattr(state, "_official_index_lock", None)
+        if lock is None:
+            lock = threading.Lock()
+            state._official_index_lock = lock
+    with lock:
+        cache = cache_on(state, "themes.official.index", 300, maxsize=2)
+        hit, cached = cache.get("index")
+        if not hit:
+            cached = _official_symbol_index(state.theme_catalog)
+            cache.set("index", cached)
+        return cached
 
 
 def attach_official(holder, themes_list: list[dict]) -> None:

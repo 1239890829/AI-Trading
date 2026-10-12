@@ -1,6 +1,6 @@
 "use client";
 
-import { useCallback, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { inspectionClick, useInspection } from "@/components/inspection/inspection-context";
 
 import { getImpactEvents, type EventSort, type ImpactEvent } from "@/lib/api";
@@ -18,7 +18,7 @@ import { useDetailModal } from "@/components/detail/detail-modal";
 import { symbolDetailClick, useSymbolDetail } from "@/components/detail/symbol-detail-context";
 import { IncrementalSentinel } from "@/components/ui/incremental-sentinel";
 import { useIncremental } from "@/hooks/use-incremental";
-import { usePollingFetch } from "@/hooks/use-polling-fetch";
+import { useResource } from "@/hooks/use-resource";
 import { themesUrl, workbenchUrl } from "@/lib/routing";
 
 /**
@@ -156,27 +156,25 @@ function EventRow({
 }
 
 export function EventFeed({ active, refreshToken = 0 }: { active: boolean; refreshToken?: number }) {
-  const [items, setItems] = useState<ImpactEvent[] | null>(null);
-  const [countsAll, setCountsAll] = useState<Record<string, number> | null>(null);
   const [sort, setSort] = useState<EventSort>("relevance");
   const [l1Only, setL1Only] = useState(false);
-  const [error, setError] = useState<string | null>(null);
   const [newsItem, setNewsItem] = useState<NewsModalItem | null>(null);
 
-  const load = useCallback(async () => {
-    try {
-      const r = await getImpactEvents(false, 100, sort);
-      setItems(r.items);
-      setCountsAll(r.countsAll);
-      setError(null);
-    } catch (e) {
-      setError((e as Error).message || "资讯加载失败");
-    }
-  }, [sort]);
-
-  // `key`：排序切换或抽屉顶部「刷新」被按下时立即重拉（否则要等下一次 60s 轮询）；
-  // `enabled = active`：抽屉没切到本 tab 时不发请求。
-  usePollingFetch(load, 60_000, `${sort}#${refreshToken}`, { marketHours: false, enabled: active });
+  // 数据身份是排序；手动刷新只校准同一身份，保留已有内容并丢弃旧请求。
+  const events = useResource(() => getImpactEvents(false, 100, sort), {
+    intervalMs: 60_000, key: sort, marketHours: false, enabled: active,
+  });
+  const previousRead = useRef({ sort, active, refreshToken });
+  const refresh = events.refresh;
+  useEffect(() => {
+    const previous = previousRead.current;
+    previousRead.current = { sort, active, refreshToken };
+    // 恢复或切排序本身已拉取，不再为同轮刷新 token 重复开一次请求。
+    if (active && previous.active && previous.sort === sort && previous.refreshToken !== refreshToken) refresh();
+  }, [active, sort, refreshToken, refresh]);
+  const items = events.data?.items ?? null;
+  const countsAll = events.data?.countsAll ?? null;
+  const error = events.error ? (events.error instanceof Error ? events.error.message : "资讯加载失败") : null;
 
   const shown = (items ?? []).filter((e) => !l1Only || e.impact_level === "L1");
   const { shown: shownPage, visible, sentinelRef } = useIncremental(shown, {
@@ -207,7 +205,7 @@ export function EventFeed({ active, refreshToken = 0 }: { active: boolean; refre
       <div className="min-h-0 flex-1 space-y-2 overflow-y-auto px-4 py-3" data-testid="event-feed-list">
         {error && (
           <p className="rounded-lg border border-amber-500/40 bg-amber-500/10 px-3 py-2 text-xs text-amber-800 dark:text-amber-300">
-            {error}（切走再切回可重试）
+            {error}。{items !== null ? "下方为上次读取结果，当前资讯状态未确认；将自动重试。" : "资讯状态未确认，将自动重试。"}
           </p>
         )}
         {items === null && !error && (

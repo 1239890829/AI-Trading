@@ -89,22 +89,27 @@ export function InfoPanel({
   news,
   annError,
   newsError,
+  loading = false,
+  onRetry,
 }: {
   anns: InfoItem[] | null;
   news: InfoItem[] | null;
   /** 数据源三态：非 null = 该侧数据源失败已降级（显式提示，绝不静默空列表） */
   annError?: string | null;
   newsError?: string | null;
+  loading?: boolean;
+  onRetry?: () => void;
 }) {
   const [modalItem, setModalItem] = useState<NewsModalItem | null>(null);
   const openModal = (item: InfoItem, kindLabel: string) =>
     setModalItem({ title: item.title, url: item.url, date: item.date, source: item.source, digest: item.digest ?? null, kindLabel });
   return (
     <div className="min-h-0 overflow-y-auto">
+      {(annError || newsError) && onRetry && <button data-action="secondary" className="mx-3 mt-2 text-xs" disabled={loading} onClick={onRetry}>{loading ? "重试中…" : "重试资讯"}</button>}
       <h3 className="px-3 py-1.5 text-xs font-medium text-zinc-600 dark:text-zinc-300">近期公告</h3>
       {annError && (
-        <p className="mx-3 mb-1 rounded bg-amber-500/10 px-2 py-1 text-[11px] text-amber-800 dark:text-amber-400">
-          公告源暂时不可用（{annError}），稍后自动恢复
+        <p role="alert" className="mx-3 mb-1 rounded bg-amber-500/10 px-2 py-1 text-[11px] text-amber-800 dark:text-amber-400">
+          公告源暂时不可用（{annError}）。{anns ? "保留上次读取的公告，当前内容待核实。" : "尚未读到公告，可重试；读取失败不表示暂无公告。"}
         </p>
       )}
       {(anns ?? []).map((a, i) => (
@@ -115,16 +120,16 @@ export function InfoPanel({
         >
           <div className="truncate text-xs text-zinc-900 dark:text-zinc-200">{a.title}</div>
           <div className="text-[11px] text-zinc-600 dark:text-zinc-400">
-            {a.date} {a.type ? `· ${a.type}` : ""}
+            {a.date} · {a.source} {a.type ? `· ${a.type}` : ""}
           </div>
           <DigestRow item={a} />
         </button>
       ))}
-      {anns && anns.length === 0 && <p className="px-3 py-3 text-xs text-zinc-600 dark:text-zinc-400">暂无公告</p>}
+      {!annError && anns && anns.length === 0 && <p className="px-3 py-3 text-xs text-zinc-600 dark:text-zinc-400">暂无公告</p>}
       <h3 className="border-t border-zinc-100 px-3 py-1.5 text-xs font-medium text-zinc-600 dark:border-zinc-800/60 dark:text-zinc-300">相关新闻</h3>
       {newsError && (
-        <p className="mx-3 mb-1 rounded bg-amber-500/10 px-2 py-1 text-[11px] text-amber-800 dark:text-amber-400">
-          新闻源暂时不可用（{newsError}），稍后自动恢复
+        <p role="alert" className="mx-3 mb-1 rounded bg-amber-500/10 px-2 py-1 text-[11px] text-amber-800 dark:text-amber-400">
+          新闻源暂时不可用（{newsError}）。{news ? "保留上次读取的新闻，当前内容待核实。" : "尚未读到新闻，可重试；读取失败不表示暂无新闻。"}
         </p>
       )}
       {(news ?? []).map((n, i) => (
@@ -134,11 +139,11 @@ export function InfoPanel({
           className="block w-full border-b border-zinc-100 px-3 py-1.5 text-left hover:bg-zinc-50 dark:border-zinc-800/60 dark:hover:bg-zinc-900"
         >
           <div className="truncate text-xs text-zinc-900 dark:text-zinc-200">{n.title}</div>
-          <div className="text-[11px] text-zinc-600 dark:text-zinc-400">{n.date}</div>
+          <div className="text-[11px] text-zinc-600 dark:text-zinc-400">{n.date} · {n.source}</div>
           <DigestRow item={n} />
         </button>
       ))}
-      {news && news.length === 0 && <p className="px-3 py-3 text-xs text-zinc-600 dark:text-zinc-400">暂无新闻</p>}
+      {!newsError && news && news.length === 0 && <p className="px-3 py-3 text-xs text-zinc-600 dark:text-zinc-400">暂无新闻</p>}
       <NewsModal item={modalItem} onClose={() => setModalItem(null)} />
     </div>
   );
