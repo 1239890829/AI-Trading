@@ -6,6 +6,8 @@
 - GET  /api/events/flash-coverage           快讯各频道持久水位与断档状态
 - GET  /api/events/{id}/stocks               标的池：方向题材 → 官方成分反查 + override
 - GET  /api/events/symbol/{symbol}           个股相关活跃事件（详情页事件标签）
+- GET  /api/events/symbol/{symbol}/attribution  已记录事件的只读归因证据
+- GET  /api/events/{id}/attribution         单事件证据，可指定个股核对关系
 - POST /api/events                           手动注册单条事件（写鉴权）
 - POST /api/events/{id}/review-revision      精确观察版本的人工修订复核
 - POST /api/events/{id}/review-symbol-direction  多标的来源关联的逐股人工审定
@@ -207,7 +209,7 @@ class ReviewedInterpretationIn(BaseModel):
     source_tier: int = Field(ge=1, le=5)
     category: Literal["policy", "statement", "data", "rumor", "corporate", "other"]
     fact_kind: Literal["fact", "opinion", "rumor"]
-    certainty: Literal["done", "proposed", "rumor"]
+    certainty: Literal["done", "proposed", "rumor", "unknown"]
     half_life_hours: int = Field(ge=1, le=720)
     directions: list[ReviewedDirectionIn]
 
@@ -625,6 +627,45 @@ async def events_for_symbol(
         },
         "meta": {},
     }
+
+
+def _read_attribution(store: EventStore, catalog, *, symbol: str | None = None,
+                      event_id: int | None = None, limit: int = 12, now: datetime) -> dict:
+    from app.events.attribution import read_attribution
+
+    # This only reads cached relations. It never calls get_stocks/sync_members,
+    # providers, body extraction, or model services. Run the entire DB work off
+    # the event loop; reuse the injected EventStore's session factory.
+    themes = {row["theme_name"] for row in catalog.get_official_for_symbol(symbol)} if catalog and symbol else set()
+    result = read_attribution(store._sf, symbol=symbol, theme_names=themes,
+                              event_id=event_id, limit=limit, now=now)
+    if event_id is not None and not result["data"]["items"] and store.get_event(event_id) is None:
+        raise HTTPException(status_code=404, detail="事件不存在")
+    return result
+
+
+@router.get("/events/symbol/{symbol}/attribution")
+async def stock_attribution(
+    symbol: str, request: Request,
+    limit: int = Query(default=12, ge=1, le=30),
+    store: EventStore = Depends(get_store),
+) -> dict:
+    return await asyncio.to_thread(
+        _read_attribution, store, getattr(request.app.state, "theme_catalog", None),
+        symbol=normalize_symbol(symbol), limit=limit, now=beijing_now_naive(),
+    )
+
+
+@router.get("/events/{event_id}/attribution")
+async def event_attribution(
+    event_id: int, request: Request, symbol: str | None = Query(default=None),
+    store: EventStore = Depends(get_store),
+) -> dict:
+    return await asyncio.to_thread(
+        _read_attribution, store, getattr(request.app.state, "theme_catalog", None),
+        symbol=normalize_symbol(symbol) if symbol is not None else None,
+        event_id=event_id, now=beijing_now_naive(),
+    )
 
 
 @router.post("/events/backfill-directions", dependencies=[Depends(require_write_token)])

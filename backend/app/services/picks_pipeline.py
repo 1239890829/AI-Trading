@@ -582,7 +582,7 @@ def _build_event_hits_index(
 
     返回 {symbol: (利好强度和, 利空强度和, 主事件标题, 主方向文案, 关联数, 全部解释版本引用)}。
     强度和已乘 `event_weight(source_tier, certainty)`（选股 2.0 §3）：
-    tier1 官方落地政策 ≈ 25 条 tier5 自媒体传闻的权重，消息面不再被
+    tier5 官方落地政策权重高于 tier1 自媒体传闻，消息面不再被
     同质化的条数淹没。list_events 已 selectinload 预加载方向行（detached
     后仍可安全访问），索引构建零额外查询——原实现每候选股重复全量扫事件表
     （24 只深评 × 每次约 31 次查询）；关联数含 direction=0（"来源关联、
@@ -599,6 +599,8 @@ def _build_event_hits_index(
         for row in rows:
             w = event_weight(row.source_tier, row.certainty)
             for d in row.directions:
+                if getattr(d, "matched_by", None) == "llm_aux":
+                    continue  # Unvalidated model hypotheses never supply message scores.
                 if d.target_type != "symbol" or not d.target:
                     continue  # 题材方向的个股传导第一版不计入单股消息分（防过度外推）
                 agg = index.setdefault(
@@ -615,10 +617,10 @@ def _build_event_hits_index(
                     agg["bull"] += d.strength * w
                 elif d.direction == -1:
                     agg["bear"] += d.strength * w
-                if agg["top_title"] is None and d.direction != 0:
+                if agg["top_title"] is None and d.direction in (-1, 1) and w > 0:
                     agg["top_title"] = row.title
                     agg["top_dir"] = "利好" if d.direction == 1 else "利空"
-                if agg["pending_title"] is None and d.direction == 0:
+                if agg["pending_title"] is None and (d.direction == 0 or w == 0):
                     agg["pending_title"] = row.title
     except Exception as exc:
         log.warning("picks event index failed: %s", exc)
@@ -759,9 +761,10 @@ async def deep_score_candidates(
             elif not event_index_available:
                 bases["news"] = "事件索引失败，消息面不可用；50 分仅为计算占位"
             elif bull == bear == 0 and linked:
-                # 有关联但无方向词：诚实说"命中了但待判"，而不是"无命中"
+                # Keep association evidence when polarity, provenance or stage
+                # cannot support a weighted claim. Do not blame absent keywords.
                 bases["news"] = (
-                    f"命中 {linked} 条关联事件（标题无方向词，方向待判），消息面中性；"
+                    f"命中 {linked} 条关联事件（方向、来源或阶段未核），消息面中性；"
                     f"最近：「{(top_title or '')[:40]}」"
                 )
             dimension_evidence["news"] = {

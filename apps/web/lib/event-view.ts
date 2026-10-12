@@ -130,6 +130,9 @@ export function eventNewsItem(e: ImpactEvent): NewsModalItem {
     digest: e.summary ?? null,
     evidence: `列表解释版本 ${eventInterpretationText(e)} · ${eventJudgeView(e).text}${e.directions.some(d => d.matched_by === "llm_aux") ? " · 模型假设未验证" : ""}${e.llm_aux_note ? " · AI有假设，未应用" : ""}`,
     judgement: eventJudgementExplanation(e),
+    eventId: e.id,
+    eventRef: e.interpretation_ref,
+    symbol: e.directions.find(d => d.target_type === "symbol")?.target || e.source_symbol,
   };
 }
 
@@ -146,6 +149,7 @@ export function eventDetailPayload(e: EventSummary): DetailPayload {
     title: e.title,
     url: e.url ?? null,
     eventId: e.id,
+    eventRefs: e.interpretation_ref ? [e.interpretation_ref] : undefined,
     symbol: d?.target_type === "symbol" ? d.target : null,
     theme: d?.target_type === "theme" ? d.target : null,
     source: e.source ?? null,

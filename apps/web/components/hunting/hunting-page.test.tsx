@@ -178,12 +178,12 @@ it("closed reference details keeps the full count but makes no per-stock presenc
   fold.open = true; fireEvent(fold, new Event("toggle")); await act(async () => {});
   expect(screen.getByText("候选 600987")).toBeTruthy();
   expect(screen.getByText("候选 600988")).toBeTruthy();
-  expect(refCalls()).toHaveLength(2);
+  expect(refCalls()).toHaveLength(0);
   await act(async () => {await vi.advanceTimersByTimeAsync(30_000);});
-  expect(refCalls()).toHaveLength(4);
+  expect(refCalls()).toHaveLength(0);
   fold.open = false; fireEvent(fold, new Event("toggle")); await act(async () => {});
   await act(async () => {await vi.advanceTimersByTimeAsync(60_000);});
-  expect(refCalls()).toHaveLength(4);
+  expect(refCalls()).toHaveLength(0);
   expect(screen.getByText(/涨停梯队 2 只/)).toBeTruthy();
   expect(screen.getByText("候选 002636")).toBeTruthy();
   expect(screen.getByText("候选 600127")).toBeTruthy();

@@ -159,7 +159,7 @@ export function ConceptDetailModal({
                         封单 {fmtAmount(m.seal_amount)}
                       </span>
                     )}
-                    {(m.reason || m.limit_up) && <div className="min-w-0 basis-full"><LimitReason reason={m.reason} source={m.reason_source} date={m.reason_date} compact /></div>}
+                    {(m.reason || m.limit_up) && <div className="min-w-0 basis-full"><LimitReason symbol={m.symbol} reason={m.reason} source={m.reason_source} date={m.reason_date} compact /></div>}
                   </div>
                 </li>
               ))}

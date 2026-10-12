@@ -437,7 +437,7 @@ export function ThemeCardView({
                           {r.other_themes.length > 3 && ` 等 ${r.other_themes.length} 个`}
                         </div>
                       )}
-                      <LimitReason reason={r.reason} source={r.source} date={r.trade_date ?? tradeDate} compact />
+                      <LimitReason symbol={r.symbol} reason={r.reason} source={r.source} date={r.trade_date ?? tradeDate} compact />
                     </td>
                     <td className="py-1.5 text-right align-middle font-mono text-zinc-700 dark:text-zinc-200">
                       {fmtAmount(r.seal_amount)}

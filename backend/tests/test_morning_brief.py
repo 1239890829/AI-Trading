@@ -639,6 +639,40 @@ def test_brief_archives_event_version_used_for_direction(hermetic, brief_dir):
     assert mb.load_brief("20260914")["directions"][0]["event_refs"][0]["version_id"] == 11
 
 
+@pytest.mark.parametrize("source,announcement,strength", [
+    ("公告", True, 2.0), ("财联社", False, 1.6),
+    ("eastmoney", False, 1.2), ("未知转载", False, 0.8),
+])
+def test_event_producer_grades_reach_morning_consumer(hermetic, source, announcement, strength):
+    from app.events.extract import build_event
+
+    data = build_event("粮食订单签约", source=source, is_announcement=announcement,
+                       theme_names=["粮食"])
+    row = NS(id=7, **{key: value for key, value in data.items() if key != "directions"},
+             directions=[NS(**direction) for direction in data["directions"]])
+    state = _hermetic_state()
+    state.event_store = NS(list_events=lambda **_kwargs: [row])
+    evidence = asyncio.run(mb.collect_evidence(state))
+    assert evidence["event_strength"]["粮食"] == pytest.approx(strength)
+
+
+def test_unknown_stage_cannot_strengthen_morning_direction(hermetic):
+    row = NS(id=7, source_tier=5, certainty=None,
+             directions=[NS(target_type="theme", target="粮食", direction=1, strength=2)])
+    state = _hermetic_state()
+    state.event_store = NS(list_events=lambda **_kwargs: [row])
+    evidence = asyncio.run(mb.collect_evidence(state))
+    assert evidence["event_strength"]["粮食"] == 0
+    assert evidence["event_counts"]["粮食"].get("bull", 0) == 0
+    assert evidence["event_counts"]["粮食"].get("bear", 0) == 0
+    assert evidence["event_counts"]["粮食"]["pending"] == 1
+    assert evidence["event_refs"]["粮食"] == [{"event_id": 7, "version_id": None, "state": "unknown"}]
+    brief = mb.assemble_brief(evidence)
+    direction = next(item for item in brief["directions"] if item["direction"] == "粮食")
+    assert "阶段未核" in direction["logic"]
+    assert "利好 0 / 利空 0" in direction["logic"]
+
+
 def test_brief_legacy_event_reference_remains_unknown(hermetic):
     """旧事件没有解释版本时不可事后推定一个版本。"""
     import asyncio

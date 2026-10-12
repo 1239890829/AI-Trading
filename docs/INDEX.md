@@ -58,6 +58,7 @@
 | **FN-09** | `system/llm-gateway-probe.md` | L2 | 运维 | LLM 网关健康探针（`claude_cli` 别名监控） |
 | **FN-10** | `archive/jev-integration-retired-20261011.md` | L2 | 历史档案 | 已退役Jev蓝图与历史实测；不得作为当前调用/安装/评分义务，现役入口为FN-12 |
 | **FN-12** | `ai/semantic-decisions.md` | L2 | AI/Agent 架构 | 当前规则/已有LLM路径、DeepSeek新闻分类/依据有限LAB、关键词误拒、完整语境/对象/关键条件配对与人工gold；Jev退役和Decisions不接入，状态分别归W07/IMP-091、W04/RSH-030 |
+| **FN-13** | `product/limit-up-attribution.md` | L2 | 产品/事件归因 | 多维消息证据、股票关联、市场响应、连续采集及选股/通知/复盘边界；工程状态归W00/IMP-092 |
 | **FN-11** | `system/runtime-performance.md` | L2 | 性能测量 | IMP-019 可复现入口、全尝试对照及冷启动/DB/WS/Canvas覆盖；受控与现场证据分开，条件变化才重验 |
 | **EX-01** | `archive/live-trading-guosen-plan.md` | L1 | 搁置历史 | 国信 miniQMT 实盘蓝图。**用户已搁置**（不接受 Windows 依赖），恢复条件见文档头 |
 | **RV-01** | `review/review-agent.md` | L2 | 复盘 | 盘后复盘 Agent 架构 |

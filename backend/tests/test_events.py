@@ -241,6 +241,64 @@ def test_classify_certainty_and_category():
     assert classify_category("长鑫 LPDDR6 全球首发量产") == "corporate"
 
 
+def test_build_event_keeps_pending_stage_from_summary():
+    event = build_event("公司收购芯片资产公告", source="公告", is_announcement=True,
+                        summary="公司拟收购芯片资产，尚需监管批准。", source_symbol="600001")
+    assert event["source_tier"] == 5
+    assert event["certainty"] == "proposed"
+
+
+def test_forecast_is_not_a_completed_business_event():
+    assert classify_certainty("机构预计算力订单有望增长") == ("opinion", "proposed")
+    assert classify_certainty("") == ("fact", "unknown")
+
+
+def test_denied_cooperation_retains_link_without_positive_direction():
+    event = build_event("公司澄清芯片合作消息", source="公告", is_announcement=True,
+                        summary="网传合作订单不属实，公司尚未签署合作协议。",
+                        source_symbol="600001", theme_names=["芯片"])
+    assert event["certainty"] == "unknown"
+    assert event["directions"]
+    assert all(row["direction"] == 0 for row in event["directions"])
+    assert all("否认" in row["basis"] for row in event["directions"])
+
+
+def test_generic_risk_disclaimer_does_not_erase_completed_order():
+    event = build_event("芯片订单已签署", is_announcement=True, source_symbol="600001",
+                        summary="订单已签署。本公告不构成投资建议，请注意投资风险。")
+    assert event["certainty"] == "done"
+    assert next(row for row in event["directions"] if row["target_type"] == "symbol")["direction"] == 1
+
+
+@pytest.mark.parametrize("scope", [
+    "本次交易不涉及其他业务，原业务持续执行。",
+    "本次交易未涉及其它产品，原产品继续生产。",
+    "本次交易不涉及关联交易，公司产品生产正常。",
+    "本次交易不涉及关联交易\n公司产品生产正常。",
+])
+def test_scope_description_does_not_deny_completed_order(scope):
+    event = build_event("公司订单已签署公告", is_announcement=True,
+                        source_symbol="600001", summary=f"已签署订单。{scope}")
+    assert event["certainty"] == "done"
+    direction = next(row for row in event["directions"] if row["target_type"] == "symbol")
+    assert direction["direction"] == 1
+    assert "否认" not in direction["basis"]
+
+
+@pytest.mark.parametrize("summary", [
+    "公司尚未签署订单。",
+    "公司不涉及相关芯片业务。",
+    "公司未涉及相关芯片产品。",
+    "公司不存在合作订单。",
+])
+def test_explicit_business_denial_remains_unconfirmed(summary):
+    event = build_event("公司回应订单合作消息", is_announcement=True,
+                        source_symbol="600001", summary=summary)
+    assert event["certainty"] == "unknown"
+    assert event["directions"]
+    assert all(row["direction"] == 0 for row in event["directions"])
+
+
 def test_title_fingerprint_dedupes_punctuation():
     a = title_fingerprint("长鑫 LPDDR6 全球首发量产！")
     b = title_fingerprint("长鑫LPDDR6全球首发量产")

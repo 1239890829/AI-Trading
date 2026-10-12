@@ -15,12 +15,13 @@
 
 三态纪律：缺数据/窗口未到 → `unknown`（显式「未判定」），绝不臆造成
 confirmed 或 faded；「有新涨停」与「资金净流入」是两套口径，分开采、分开说。
+兼容状态 confirmed 仅表示观察到市场呼应，不证明消息属实或涨停因果。
 """
 from __future__ import annotations
 
 import asyncio
 import logging
-from datetime import date, datetime
+from datetime import date, datetime, time
 from app.core.bjtime import beijing_now_naive, to_beijing_naive  # S2-8 时区收敛
 
 log = logging.getLogger(__name__)
@@ -36,29 +37,33 @@ def _parse_hhmmss(s: str) -> tuple[int, int, int] | None:
     parts = s.split(":")
     try:
         if len(parts) == 3:
-            return int(parts[0]), int(parts[1]), int(parts[2])
-        if len(parts) == 2:
-            return int(parts[0]), int(parts[1]), 0
-        if len(parts) == 1 and len(parts[0]) in (3, 4):  # "935" / "0935"
+            parsed = int(parts[0]), int(parts[1]), int(parts[2])
+        elif len(parts) == 2:
+            parsed = int(parts[0]), int(parts[1]), 0
+        elif len(parts) == 1 and len(parts[0]) in (3, 4):  # "935" / "0935"
             hhmm = parts[0].zfill(4)
-            return int(hhmm[:2]), int(hhmm[2:]), 0
+            parsed = int(hhmm[:2]), int(hhmm[2:]), 0
+        else:
+            return None
+        time(*parsed)  # Validate actual clock ranges before comparing strings.
+        return parsed
     except (TypeError, ValueError):
         return None
     return None
 
 
-def _seal_after(visible_start: datetime | None, seal: str | None, trade_date: date) -> bool:
+def _seal_after(visible_start: datetime | None, seal: str | None, trade_date: date,
+                *, now: datetime | None = None) -> bool:
     """封板时间是否晚于事件与解释均可见的时点。"""
     if visible_start is None or not seal:
         return False
-    if visible_start.date() < trade_date:
-        return True  # 昨日已可见，今日封板都晚于该时点
-    if visible_start.date() > trade_date:
-        return False  # 池的交易日早于当前版本可见日
     t = _parse_hhmmss(seal)
     if t is None:
         return False
-    return t >= (visible_start.hour, visible_start.minute, visible_start.second)
+    seal_at = datetime.combine(trade_date, time(*t))
+    if now is not None and seal_at > to_beijing_naive(now):
+        return False
+    return seal_at >= to_beijing_naive(visible_start)
 
 
 def _interpretation_visible_at(row) -> datetime | None:
@@ -105,24 +110,32 @@ def verify_event(
 
     返回
     ----
-    {status, basis, new_limit_ups, net_inflow_yi, age_minutes}
-    status ∈ fermenting / confirmed / faded / unknown；basis 说明判定依据。
+    status ∈ fermenting / confirmed / faded / unknown；basis 说明市场响应依据。
+    verification_scope=market_response；fact_verified/causality_verified 恒为 False。
     """
     now = to_beijing_naive(now or beijing_now_naive())
     published_at = to_beijing_naive(published_at) if published_at is not None else None
     visible_at = to_beijing_naive(visible_at) if visible_at is not None else None
     visible_start = max(published_at, visible_at) if published_at and visible_at else None
     age_min = round((now - visible_start).total_seconds() / 60, 1) if visible_start else None
+    scope = {
+        "verification_scope": "market_response",
+        "market_response_only": True,
+        "fact_verified": False,
+        "causality_verified": False,
+        "status_label": "市场响应待核",
+        "disclaimer": "仅描述关联市场响应，不证明消息属实或涨停因果",
+    }
 
     # ① 窗口未到 / 无题材 / 缺可见时点 → unknown（显式「未判定」，不臆造）
     if not theme_targets:
-        return {"status": "unknown", "basis": "事件无关联题材", "new_limit_ups": 0,
+        return {**scope, "status": "unknown", "basis": "事件无关联题材", "new_limit_ups": 0,
                 "net_inflow_yi": None, "age_minutes": age_min}
     if visible_start is None:
-        return {"status": "unknown", "basis": "解释版本可见时点未知，无法判消息后发酵",
+        return {**scope, "status": "unknown", "basis": "解释版本可见时点未知，无法判消息后发酵",
                 "new_limit_ups": 0, "net_inflow_yi": None, "age_minutes": None}
     if age_min < MIN_AGE_MINUTES:
-        return {"status": "unknown", "basis": "采样窗口未到（事件与解释均可见 <30 分钟）",
+        return {**scope, "status": "unknown", "basis": "采样窗口未到（事件与解释均可见 <30 分钟）",
                 "new_limit_ups": 0, "net_inflow_yi": None, "age_minutes": age_min}
 
     # ② 可见后新涨停：reason 含关联题材 且 封板 ≥ 发布时间和解释可见时间
@@ -130,7 +143,8 @@ def verify_event(
     for r in limit_up_pool:
         reason = str(r.get("reason") or "")
         seal = r.get("first_seal_time")
-        if any(_theme_in_reason(t, reason) for t in theme_targets) and _seal_after(visible_start, seal, trade_date):
+        if (any(_theme_in_reason(t, reason) for t in theme_targets)
+                and _seal_after(visible_start, seal, trade_date, now=now)):
             new_limit_ups += 1
 
     # ③ 关联板块主力净流入（f62，亿；None=映射不到）
@@ -142,7 +156,7 @@ def verify_event(
     outflow = net is not None and net < 0
 
     if has_new and inflow:
-        status, basis = "confirmed", f"消息可见后新涨停 {new_limit_ups} 家 且 关联板块主力净流入 {net:+.2f} 亿"
+        status, basis = "confirmed", f"观察到市场呼应：消息可见后新涨停 {new_limit_ups} 家 且 关联板块主力净流入 {net:+.2f} 亿"
     elif has_new:
         status, basis = "fermenting", f"消息可见后新涨停 {new_limit_ups} 家，但板块资金未净流入"
     elif inflow:
@@ -155,7 +169,10 @@ def verify_event(
         status, basis = "unknown", "消息可见后无新涨停，板块资金映射不到（数据不足，不臆造）"
 
     return {
+        **scope,
         "status": status,
+        "status_label": {"confirmed": "已观察市场呼应", "fermenting": "部分市场呼应",
+                         "faded": "当前响应偏弱", "unknown": "市场响应待核"}[status],
         "basis": basis,
         "new_limit_ups": new_limit_ups,
         "net_inflow_yi": net,

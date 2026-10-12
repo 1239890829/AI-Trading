@@ -139,7 +139,7 @@ class EventStore:
                             source_tier=event.get("source_tier", 3),
                             published_at=event.get("published_at") or beijing_now_naive(),
                             fact_kind=event.get("fact_kind", "fact"),
-                            certainty=event.get("certainty", "done"),
+                            certainty=event.get("certainty") or "unknown",
                             category=event.get("category", "other"),
                             half_life_hours=event.get("half_life_hours", 48),
                             source_symbol=event.get("source_symbol"), status="active",

@@ -57,8 +57,18 @@ _FLIP_POSITIVE = re.compile(r"国产|自主|自研|信创|替代|可控")
 _FLIP_NEGATIVE = re.compile(r"租赁|海外|转口|出海")
 _RUMOR = re.compile(r"据悉|传闻|市场消息|知情人士|小作文")
 #: v2：论文/实验室类措辞 = 研究阶段而非落地（hotspot §3.3：论文级消息不宜给确定性方向）
-_PROPOSED = re.compile(r"拟|将|计划|寻求|考虑|酝酿|讨论|草案|论文|实验室|理论上|研究表明|学术")
+_PROPOSED = re.compile(r"拟|将|计划|寻求|考虑|酝酿|讨论|草案|论文|实验室|理论上|研究表明|学术"
+                       r"|尚需|仍需|待审批|待批准")
 _OPINION = re.compile(r"或|恐|有望|预计|分析人士|机构认为|或将其")
+# Only explicit business denials. Generic disclaimers and negative sentiment
+# are not denials of the reported claim. Mixed-object semantics remain LAB.
+_BUSINESS_DENIAL = re.compile(
+    r"不属实|(?:并未|尚未|未)(?:签署|签订|供货|量产|达成)"
+    r"|不存在(?:合作|订单)"
+    # A transaction's scope can exclude other business without denying its
+    # signed order. Do not borrow a business noun from the next clause either.
+    r"|(?:不涉及|未涉及)(?!(?:其他|其它)(?:业务|产品))[^。；，,\n]{0,24}(?:业务|产品)"
+)
 #: 政策主体词（2026-09-09 补）：出现这些词才把「支持/推动/建设」类宽泛表述算作政策事件，
 #: 避免把普通公司新闻误判成政策利好（category 决定半衰期，误判会让短消息长期滞留）。
 _POLICY_BODY = re.compile(r"规划|印发|国务院|发改委|工信部|科技部|财政部|商务部|证监会|央行|政治局|常委会|部委"
@@ -100,14 +110,17 @@ def classify_source_tier(source: str | None, *, is_announcement: bool = False) -
     return 2
 
 
-def classify_certainty(title: str) -> tuple[str, str]:
-    """(fact_kind, certainty)：事实/解读/传闻 三档 + 已落地/拟议/传闻 三档。"""
-    if _RUMOR.search(title):
+def classify_certainty(title: str, summary: str | None = None) -> tuple[str, str]:
+    """Preserve explicit stage and denial qualifiers from title and summary."""
+    text = _judge_text(title, summary)
+    if not text.strip() or _BUSINESS_DENIAL.search(text):
+        return "fact", "unknown"
+    if _RUMOR.search(text):
         return "rumor", "rumor"
-    if _PROPOSED.search(title):
+    if _OPINION.search(text):
+        return "opinion", "proposed"
+    if _PROPOSED.search(text):
         return "fact", "proposed"
-    if _OPINION.search(title):
-        return "opinion", "done"
     return "fact", "done"
 
 
@@ -442,7 +455,7 @@ def build_event(title: str, *, source: str | None = None, url: str | None = None
     元素形如 ``{"theme_name": ..., "board_name": ..., "board_code": ...}``，
     各生成一行 matched_by="board" 方向行。
     """
-    fact_kind, certainty = classify_certainty(title)
+    fact_kind, certainty = classify_certainty(title, summary)
     category = classify_category(title, summary)
     base_rows = extract_directions(title, theme_names or [], summary)
     directions = _dedupe_chain_rows(base_rows, match_chains(title, summary))
@@ -472,6 +485,14 @@ def build_event(title: str, *, source: str | None = None, url: str | None = None
     # 撞约束并让整条事件丢失（详见 dedupe_directions docstring）。
     directions = dedupe_directions(directions)
     _demote_if_proposed(directions, certainty)
+    if _BUSINESS_DENIAL.search(_judge_text(title, summary)):
+        # A lexical "cooperation/order/production" hit inside a denial must not
+        # qualify an opportunity. Preserve source/theme links for review.
+        for direction in directions:
+            direction["direction"] = 0
+            direction["strength"] = 1
+            direction["chain"] = "文本含明确业务否认；关联保留，逐对象影响待核"
+            direction["basis"] += "；文本含明确业务否认，不据被否认的动词推断利好或利空"
     return {
         "fingerprint": title_fingerprint(title),
         "title": title.strip(),
