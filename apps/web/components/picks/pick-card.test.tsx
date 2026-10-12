@@ -90,7 +90,7 @@ describe("PickCard · 盘前名单（fromDailyPick）", () => {
       reference_change_pct: 1.2, quote_as_of: "2026-10-09T09:59:58+08:00", source: "daily_generation",
       source_version: "a".repeat(64), semantics: "observation_only_not_fill",
     }})} />);
-    const entry = screen.getByLabelText("首次加入记录");
+    const entry = screen.getByLabelText("每日首次加入记录");
     expect(entry.textContent).toContain("10:01:02");
     expect(entry.textContent).toContain("¥40.36");
     expect(entry.textContent).toContain("+1.20%");
@@ -102,10 +102,11 @@ describe("PickCard · 盘前名单（fromDailyPick）", () => {
 
   it("does not fill a legacy unknown join from its current price or render invalid numbers", () => {
     const page = render(<PickCard item={fromDailyPick(base)} />);
-    expect(screen.getByLabelText("首次加入记录").textContent).toContain("加入参考价 未记录");
+    expect(screen.getByLabelText("每日首次加入记录").textContent).toContain("首次入选依据未记录");
+    expect(screen.queryByText("加入参考价 未记录")).toBeNull();
     page.rerender(<PickCard item={fromDailyPick({...base, selection_entry: {state: "partial", selected_at: "2026-10-09T09:59:00", reference_price: Number.NaN, reference_change_pct: Number.POSITIVE_INFINITY, quote_as_of: null, source: "daily_generation", source_version: null, semantics: "observation_only_not_fill"}})} />);
-    const entry = screen.getByLabelText("首次加入记录");
-    expect(entry.textContent).toContain("首次加入 未记录");
+    const entry = screen.getByLabelText("每日首次加入记录");
+    expect(entry.textContent).toContain("首次入选依据未记录");
     expect(entry.textContent).not.toMatch(/NaN|Infinity/);
   });
   it("distinguishes a missing dimension from a real zero score", () => {
@@ -218,6 +219,96 @@ describe("PickCard · 盘前名单（fromDailyPick）", () => {
     expect(screen.getByTitle("执行快照非可用状态，主价格回退为组合生成/首见参考价（不是成交价）")).toBeTruthy();
     const chip = screen.getByText("执行快照·陈旧");
     expect(chip.getAttribute("title")).toContain("上游停更");
+  });
+});
+
+describe("首次加入记录的来源与参考身份", () => {
+  const intradayEntry: NonNullable<IntradayTopStock["selection_entry"]> = {
+    state: "recorded", selected_at: "2026-10-09T10:12:00+08:00", reference_price: 5.10,
+    reference_change_pct: 3.8, quote_as_of: "2026-10-09T10:11:58+08:00", source: "intraday_rank_archive",
+    source_version: "intraday-original", semantics: "observation_only_not_fill",
+  };
+  const dailyEntry: NonNullable<DailyPickItem["selection_entry"]> = {
+    ...intradayEntry, selected_at: "2026-10-09T09:26:02+08:00", reference_price: 4.90,
+    quote_as_of: "2026-10-09T09:26:00+08:00", source: "daily_generation", source_version: "daily-original",
+  };
+
+  it("explains an unarchived reference without implying it was never selected or copying its current price", () => {
+    const item = fromIntradayStock({...topPath, reference_only: true});
+    expect(item.referenceOnly).toBe(true);
+    render(<PickCard item={item} />);
+    const entry = screen.getByLabelText("盘中首次加入记录");
+    expect(entry.textContent).toContain("当前仅参考，未查到已归档入选依据");
+    expect(entry.textContent).not.toMatch(/首次加入 未记录|加入参考价 未记录|从未入选|5\.42/);
+    fireEvent.click(within(entry).getByText("时点依据"));
+    expect(entry.textContent).toContain("未用现价或读取时间补填");
+  });
+
+  it("preserves a recorded join after the stock becomes a sealed reference and labels its snapshot clock", () => {
+    render(<PickCard item={fromIntradayStock({...topPath, price: 5.42, reference_only: true, selection_entry: intradayEntry})} />);
+    const entry = screen.getByLabelText("盘中首次加入记录");
+    expect(entry.textContent).toContain("盘中首次加入");
+    expect(entry.textContent).toContain("10:12:00");
+    expect(entry.textContent).toContain("加入参考价 ¥5.10");
+    expect(entry.textContent).not.toContain("未查到");
+    fireEvent.click(within(entry).getByText("时点依据"));
+    expect(entry.textContent).toContain("行情快照时间 2026-10-09T10:11:58+08:00");
+    expect(entry.textContent).not.toContain("报价源时间");
+    expect(entry.textContent).toContain("intraday-original");
+  });
+
+  it("keeps daily and intraday entry clocks and prices independent on one overlapping card", () => {
+    render(<PickCard item={fromIntradayStock({...topPath, symbol: base.symbol, selection_entry: intradayEntry})}
+      dailyEvidence={{item: {...base, selection_entry: dailyEntry}, date: "2026-10-09", generatedAt: "2026-10-09T09:26:00+08:00", version: "daily-original"}} />);
+    const intraday = screen.getByLabelText("盘中首次加入记录");
+    const daily = screen.getByLabelText("每日首次加入记录");
+    expect(intraday.textContent).toContain("10:12:00");
+    expect(intraday.textContent).toContain("¥5.10");
+    expect(intraday.textContent).not.toContain("09:26:02");
+    expect(daily.textContent).toContain("09:26:02");
+    expect(daily.textContent).toContain("¥4.90");
+    fireEvent.click(within(daily).getByText("时点依据"));
+    expect(daily.textContent).toContain("报价源时间");
+    expect(daily.textContent).not.toContain("行情快照时间");
+  });
+
+  it("shows an available daily record while explaining the separate missing intraday archive", () => {
+    render(<PickCard item={fromIntradayStock({...topPath, symbol: base.symbol})}
+      dailyEvidence={{item: {...base, selection_entry: dailyEntry}, date: "2026-10-09", generatedAt: null, version: "daily-original"}} />);
+    expect(screen.getByLabelText("盘中首次加入记录").textContent).toContain("首次入选依据未记录");
+    expect(screen.getByLabelText("盘中首次加入记录").textContent).not.toContain("¥4.90");
+    expect(screen.getByLabelText("每日首次加入记录").textContent).toContain("¥4.90");
+  });
+
+  it("preserves the archive-read failure reason rather than describing the stock as never selected", () => {
+    render(<PickCard item={fromIntradayStock({...topPath, reference_only: true, selection_entry: {
+      ...intradayEntry, state: "missing", selected_at: null, reference_price: null, reference_change_pct: null,
+      quote_as_of: null, source_version: null, reason: "首次入选证据读取失败；未用当前报价补填",
+    }})} />);
+    const entry = screen.getByLabelText("盘中首次加入记录");
+    fireEvent.click(within(entry).getByText("时点依据"));
+    expect(entry.textContent).toContain("首次入选证据读取失败");
+    expect(entry.textContent).not.toContain("从未入选");
+  });
+
+  it("does not display an entry from a different source or an unrelated daily stock", () => {
+    render(<PickCard item={fromIntradayStock({...topPath, selection_entry: dailyEntry})}
+      dailyEvidence={{item: {...base, selection_entry: dailyEntry}, date: "2026-10-09", generatedAt: null, version: "daily-original"}} />);
+    expect(screen.getByLabelText("盘中首次加入记录").textContent).toContain("首次入选依据未记录");
+    expect(screen.queryByLabelText("每日首次加入记录")).toBeNull();
+    expect(screen.getByLabelText("盘中首次加入记录").textContent).not.toContain("09:26:02");
+  });
+
+  it("retains a partial join clock while identifying its missing original price", () => {
+    render(<PickCard item={fromIntradayStock({...topPath, selection_entry: {
+      ...intradayEntry, state: "partial", reference_price: null, reference_change_pct: Number.NaN,
+      reason: "首次加入已记录，原参考价缺项或归档数据降级",
+    }})} />);
+    const entry = screen.getByLabelText("盘中首次加入记录");
+    expect(entry.textContent).toContain("10:12:00");
+    expect(entry.textContent).toContain("加入参考价 缺项");
+    expect(entry.textContent).toContain("依据不完整");
+    expect(entry.textContent).not.toMatch(/NaN|5\.42/);
   });
 });
 
@@ -371,7 +462,7 @@ describe("适配器归一：4 组异名同义字段", () => {
     const { container } = render(<PickCard item={card} />);
     expect(container.textContent).not.toContain("入选 —");
     expect(container.textContent).toContain("数据源未提供涨停原因");
-    expect(container.textContent).not.toContain("依据");
+    expect(screen.queryByText("依据", {exact: true})).toBeNull();
   });
 });
 

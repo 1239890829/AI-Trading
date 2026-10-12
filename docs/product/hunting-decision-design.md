@@ -127,13 +127,13 @@ DailyPickReview按日期/股票/selection_version共存，review_context和版�
 
 ### 4.4 首次加入观察与影子用途（IMP-088，2026-10-09）
 
-`selection_entry`采用selection-entry-v1，分recorded/partial/missing，包含selected_at、reference_price、reference_change_pct、quote_as_of、source和source_version，semantics固定observation_only_not_fill。selected_at是原拥有者实际持久记录的首次加入时间，quote_as_of是当时原报价的源时间；它们均不是本次打开页面的时间。卡片显示加入价/涨幅与北京时间，版本和报价钟可查；当前价、执行重检价和PaperOrder.filled_price分别保持身份。
+`selection_entry`采用selection-entry-v1，分recorded/partial/missing，包含selected_at、reference_price、reference_change_pct、quote_as_of、source和source_version，semantics固定observation_only_not_fill。selected_at是原拥有者实际持久记录的首次加入时间；daily_generation的quote_as_of是原逐股报价源钟，intraday_rank_archive的同名字段是该轮行情快照版本钟，并非逐股报价源事件时间。两者均不是本次打开页面的时间。卡片分别标注“报价源时间”和“行情快照时间”，加入价/涨幅与北京时间、来源版本可查；当前价、执行重检价和PaperOrder.filled_price分别保持身份。
 
 每日由现有DailyPickSet落库事务保存meta.selection_entries，按当日symbol首次追加；同日补跑、退出后再进入和当前价变化不重置已有记录。有效当日新生成可记录首次时刻；旧名单没有首次记录、日期/生成钟不合法或历史内容损坏时保留missing，不以重生成倒填历史。原价格/来源/可信质量或同日新鲜源钟不满足时为partial，保留实际加入钟与原报价值并展示原因，不宣称完整原报价。精确窗口沿数据源§7.2的原契约，GET不事后重算升级。
 
 盘中GET只投影OpportunityDecisionSnapshot：同一北京时间交易日、stage=rank、decision=ranked、selection_entry_contract匹配，且1≤rank≤effective_limit与within_display_capacity为真。按实际created_at再id取首次已提交记录，不取更早被拒、unknown、超展示容量或仅参考的源钟。该结构升级feature为pit-evidence-v4.selection-entry，stock-identity-v2的同股归并语义保留；§4.3的v3是前一版记录，效果读者仍按feature隔开，旧版只能显式读取，不补写v4标签。无归档或读取失败显示missing，合格记录原价/数据状态缺项显示partial；读取不归档、不扩样本分母。
 
-已入选后封板的股票仍可显示原首次加入事实；从未合格入选的封板参考股不伪造加入记录。这里记录出现时点供复盘优化，既不放宽候选/执行门，也不承诺当时可以成交。每日与盘中同股仍保留各自来源事实和“每日依据”，不把两个首次时点混成一个。
+已入选后封板的股票仍可显示原首次加入事实；从未合格入选的封板参考股不伪造加入记录。参考身份由原梯队生产者与top投影明确传递，缺归档时显示“当前仅参考，未查到已归档入选依据”，不堆叠时间与价格占位，也不把读取失败或旧版缺项断言为从未入选。真实候选缺记录仍明确提示并保留原因。这里记录出现时点供复盘优化，既不放宽候选/执行门，也不承诺当时可以成交。每日与盘中同股在去重主卡分别显示各自首次加入事实和“每日依据”，不把两个首次时点或价格混成一个。新盘中候选读侧可能先于下一轮持久快照归档出现；GET不为消除未知而写入样本或重选。
 
 今日盘面涨停数/最高高度来自原同源完整涨停池；最高证券身份来自summary.market_max_board_stocks，并列先列身份，缺身份不从当前可见候选猜。题材机会数是本轮按强度截取的题材数，含无参与候选的题材；断层仅计has_succession=false，unknown不当断层。两类题材旁览固定点击时原opps/date/理由并复用OpportunitySection，能继续核原股票、官方成分和市场梯队；不是全市场题材全集。
 

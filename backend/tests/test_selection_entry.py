@@ -186,6 +186,35 @@ def test_sealed_reference_retains_original_join_and_unselected_reference_stays_m
     assert data["themes"][0]["stocks"][1]["selection_entry"]["state"] == "missing"
 
 
+def test_theme_ladder_marks_reference_identity_and_retains_only_original_entry(sf):
+    from app.picks.intraday_opportunity import assemble, top_watch_stocks
+
+    add_snapshot(sf, "first")
+    data = assemble({"trade_date": DAY, "themes": [{
+        "theme": "题材", "stage": "发酵", "strength_tier": "强势",
+        "performance": {"limit_up_count": 3, "max_boards": 2},
+        "ladder": [{"symbol": "600127", "name": "曾入选后封板", "boards": 2, "change_pct": 10},
+                   {"symbol": "600002", "name": "从未合格入选", "boards": 1, "change_pct": 10}],
+    }]}, [], False)
+    theme = data["themes"][0]
+    theme["participants"] = [{**item("600003", pct=8),
+        "tradability": {"level": "可参与"}, "linkage": {"level": "高"}}]
+    attach_intraday_entries(data, session_factory=sf)
+
+    assert all(stock["reference_only"] is True for stock in theme["stocks"])
+    assert theme["stocks"][0]["selection_entry"]["reference_price"] == 10
+    assert theme["stocks"][0]["selection_entry"]["selected_at"] == NOW.isoformat()
+    assert theme["stocks"][1]["selection_entry"]["state"] == "missing"
+    assert theme["participants"][0].get("reference_only") is not True
+    top = top_watch_stocks(data, limit=1)
+    assert top["effective_limit"] == 1 and top["total_candidates"] == 1
+    assert [stock["symbol"] for stock in top["items"]] == ["600003"]
+    assert top["items"][0].get("reference_only") is not True
+    assert top["reference_total"] == 2
+    assert top["reference_items"][0]["reference_only"] is True
+    assert top["reference_items"][0]["selection_entry"] == theme["stocks"][0]["selection_entry"]
+
+
 def test_legacy_capacity_is_not_guessed_and_cross_day_does_not_reuse(sf):
     add_snapshot(sf, "legacy", contract=None)
     assert intraday_entries(DAY, ["600127"], session_factory=sf) == {}

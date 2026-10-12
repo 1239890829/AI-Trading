@@ -91,6 +91,9 @@
 
 - **发布与运行收口**：[PR #249](https://github.com/1239890829/AI-Trading/pull/249)准确HEAD `c6d09f2b6719d76ea6c4d980fa6a8fcac1cc332a`通过[DegradedRelease回执](https://github.com/1239890829/AI-Trading/pull/249#issuecomment-6081282168)、required CI37932915482、release_check并match-head合并为`92015f3f59ca79006bee4b496797bed3b0afc791`（2026-10-09T12:56:51Z）。post-merge运行37933414478三job均completed/success；本地实施分支已删，远端自动移除经ls-remote空结果确认。3000/8000及LAN工作台/选股/代理health HTTP200；真实health为degraded，东财板块源失败如实保留。daily activation configured/runner_loaded均true，09:26≤北京时间<09:45/60秒；hunting configured/runner_loaded均false，已有记录可读。每日当前没有持久候选，不强制生成或调用模型取得样本。首次生产字段覆盖仍随未来自然入选记录增长，旧缺失不倒填。只读重启前queued/running=0、outbox待派发/leased/未完成尝试=0、模型reserved/started未终态=0；7条needs_confirm及2条历史usage unknown保留。初始root-cwd鉴权探针未加载backend配置而401，修正到backend-cwd原凭据后三个读端点均200；未修改鉴权。实源工作台/账户旁览再核默认三指数、当前页复用与真实窗口，截图与runtime-release.json在忽略证据目录。隔离3001/8011正常停止、临时viewport reset与标签关闭；真实3000/8000、既有恢复包/tag保留。真实手机硬件、全系统SLO与未来收益不是本轮工程通过结论。
 
+- **2026-10-12用户纠偏与修补**：直接复核“首次加入、加入价、报价源时间均未记录”，主代码`fab25cdf2870956311c44f30d5ce9f6fd07843c9`。实库当日每日名单为空；当日10条ranked归档均有v1合同，读接口确有recorded，不能称全部写入丢失。问题是参考卡无条件套首次加入占位、重叠主卡藏住每日记录、盘中快照钟误称逐股源钟。原梯队生产者补reference_only，统一卡片按身份与来源显示：参考缺归档仅说明原因，有原记录继续保留；每日/盘中分源展示，不回填当前价或历史时点。盘中原quote_as_of字段只改显示名为行情快照时间，不改变其数据含义、筛选门或归档节拍。
+- **2026-10-12验证与边界**：行为反例先红后绿；定向后端57项、卡片53项通过，完整后端5019 passed/81 skipped/1原有弃用提示（195.90s），前端默认/UTC各117文件1199项通过（102.69s/91.19s）；tsc/eslint/pyflakes/Next生产构建通过。团队反证覆盖首次记录后封板、读取失败/旧缺项、同股双源、无效时间/价格和容量不变，不冒充独立发布Review。文档/账本/环境守卫204项通过，doc-health/卫生/公开扫描通过；隔离生产构建3190接现役8000原GET，桌面1280及390/320真实接口卡片已验，根与记录区域无横向溢出。每日双源为行为夹具，今日实源每日名单为空；不是手机硬件验收。准确HEAD发布收口记录归本轮handoff和忽略证据`artifacts/runs/selection-entry-20261012`；未记录逐股盘中源事件钟仍未知，GET不归档、不制造样本，长期选股效果不从工程测试推断。
+
 ## IMP-050
 
 **猎场及全站用户视图与后台职责分离**
