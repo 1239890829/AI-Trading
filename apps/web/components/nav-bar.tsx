@@ -27,12 +27,18 @@ function NavBarInner() {
       if (!marker.current) return;
       marker.current.style.opacity = selected ? "1" : "0";
       if (selected) {
-        marker.current.style.transform = `translateX(${selected.offsetLeft}px) scaleX(${selected.offsetWidth})`;
+        // Keep the rail inside its link. Scaling a 1px rounded shape stretches
+        // its end caps, and integer offsetWidth can overlap the next gap.
+        const bounds = selected.getBoundingClientRect();
+        const origin = nav.current!.getBoundingClientRect();
+        marker.current.style.width = `${Math.max(0, bounds.width - 12)}px`;
+        marker.current.style.transform = `translateX(${bounds.left - origin.left + nav.current!.scrollLeft + 6}px)`;
       }
     }
     measure();
     const observer = typeof ResizeObserver === "function" ? new ResizeObserver(measure) : null;
     if(nav.current) observer?.observe(nav.current);
+    nav.current?.querySelectorAll("a").forEach(link => observer?.observe(link));
     window.addEventListener("resize",measure);
     return () => {observer?.disconnect();window.removeEventListener("resize",measure);};
   },[activeId]);

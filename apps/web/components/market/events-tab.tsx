@@ -3,6 +3,7 @@
 import { FilterMenu } from "@/components/ui/filter-menu";
 
 import { useState } from "react";
+import { useExitPresence } from "@/hooks/use-exit-presence";
 import { NewsModal, type NewsModalItem } from "@/components/news-modal";
 import { useDetailModal } from "@/components/detail/detail-modal";
 import { symbolDetailClick, useSymbolDetail } from "@/components/detail/symbol-detail-context";
@@ -72,6 +73,7 @@ export function EventsTab() {
   const [modalItem, setModalItem] = useState<NewsModalItem | null>(null);
   const [l1Only, setL1Only] = useState(() => searchParams.get("l1") === "1");
   const [expanded, setExpanded] = useState<number | null>(null);
+  const expandedPresence = useExitPresence(expanded);
   const { open: openDetail } = useDetailModal();
   const { open: openSymbolDetail } = useSymbolDetail();
   const resource = useResource(() => getImpactEvents(false, 100, sort), {key: sort, intervalMs: 60_000});
@@ -233,6 +235,8 @@ export function EventsTab() {
                 })}
                 {e.directions.length > 0 && <button
                   onClick={() => setExpanded(expanded === e.id ? null : e.id)}
+                  aria-expanded={expanded === e.id}
+                  aria-controls={`event-pool-${e.id}`}
                   className="rounded border border-zinc-200 px-1.5 py-0.5 text-[11px] text-zinc-600 hover:text-zinc-800 dark:border-zinc-700 dark:text-zinc-400 dark:hover:text-zinc-100"
                 >
                   {expanded === e.id ? "收起标的池" : "标的池 ↗"}
@@ -251,9 +255,13 @@ export function EventsTab() {
                   </p>
                 ) : null;
               })()}
-              {expanded === e.id && (
-                <div className="mt-2">
-                  <StockPools eventId={e.id} />
+              {expandedPresence.value === e.id && (
+                <div className="motion-disclosure" data-open={expanded === e.id} aria-hidden={expanded !== e.id || undefined} inert={expanded !== e.id}>
+                <div className="motion-disclosure-body">
+                <div className="mt-2" id={`event-pool-${e.id}`}>
+                  <StockPools eventId={e.id} active={expanded === e.id} />
+                </div>
+                </div>
                 </div>
               )}
             </li>

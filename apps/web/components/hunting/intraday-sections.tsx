@@ -91,6 +91,8 @@ export function IntradayThemeRow({
   const stage = t.stage ?? "未知";
   const detailsId = useId();
   const [detailOpen, setDetailOpen] = useState(false);
+  const detailPresence = useExitPresence(detailOpen ? t.catalog_code ?? null : null);
+  const bodyPresence = useExitPresence(expanded ? true : null);
   const { open: openInspection } = useInspection();
   return (
     <div className="ui-card rounded-xl border border-zinc-200 p-3 text-xs transition-colors hover:bg-zinc-50 dark:border-zinc-800 dark:hover:bg-zinc-900/50">
@@ -162,16 +164,17 @@ export function IntradayThemeRow({
           </button>
         )}
       </div>
-      {detailOpen && t.catalog_code && (
-        <ConceptDetailModal code={t.catalog_code} name={t.theme} onClose={() => setDetailOpen(false)} />
+      {detailPresence.value && (
+        <ConceptDetailModal key={detailPresence.value} code={detailPresence.value} name={t.theme} active={detailPresence.active} onClose={() => setDetailOpen(false)} />
       )}
       {t.risks.length > 0 && !expanded && (
         <p className="mt-1 text-[11px] text-amber-800 dark:text-amber-300" title={t.risks.join("；")}>
           ⚠ {t.risks[0]}
         </p>
       )}
-      {expanded && (
-        <div id={detailsId}>
+      {bodyPresence.value && (
+        <div className="motion-disclosure" data-open={expanded} aria-hidden={!expanded || undefined} inert={!expanded}>
+        <div className="motion-disclosure-body" id={detailsId}>
           {t.stage_basis.length > 0 && (
             <p className="mt-1.5 text-[11px] text-zinc-600 dark:text-zinc-400">阶段依据：{t.stage_basis.join("；")}</p>
           )}
@@ -226,6 +229,7 @@ export function IntradayThemeRow({
           ) : (
             <p className="mt-2 text-[11px] text-zinc-600 dark:text-zinc-400">该题材暂无梯队成员。</p>
           )}
+        </div>
         </div>
       )}
     </div>

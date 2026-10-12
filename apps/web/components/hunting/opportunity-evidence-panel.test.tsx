@@ -1,5 +1,5 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { cleanup, fireEvent, render, screen, waitFor } from "@testing-library/react";
+import { act, cleanup, fireEvent, render, screen, waitFor } from "@testing-library/react";
 import { OpportunityEvidencePanel } from "./opportunity-evidence-panel";
 import { getOpportunities, type OpportunityView } from "@/lib/api/picks";
 vi.mock("@/lib/api/picks", () => ({ getOpportunities: vi.fn() }));
@@ -9,6 +9,16 @@ const payload = (date = "2026-09-30"): OpportunityView => ({
   disclaimer: "不构成买卖建议", coverage: "读取已有决定，未采集不等于没有机会",
 });
 describe("同版机会依据", () => {
+  it("closing a retained evidence panel stops polling and rejects a late read", async () => {
+    vi.useFakeTimers();
+    let finish!: (value: OpportunityView) => void;
+    vi.mocked(getOpportunities).mockImplementationOnce(() => new Promise(resolve => {finish = resolve;}));
+    const view = render(<OpportunityEvidencePanel date="2026-10-12" />);
+    view.rerender(<OpportunityEvidencePanel date="2026-10-12" active={false} />);
+    await act(async () => {finish({...payload("2026-10-12"), coverage:"已经关闭的晚到依据"}); await vi.advanceTimersByTimeAsync(300_000);});
+    expect(getOpportunities).toHaveBeenCalledTimes(1);
+    expect(screen.queryByText("已经关闭的晚到依据")).toBeNull();
+  });
   it("distinguishes uncollected, collected empty and failed reads", async () => {
     vi.mocked(getOpportunities).mockResolvedValueOnce(payload())
       .mockResolvedValueOnce({ ...payload("2026-09-29"), state: "collected_empty" })

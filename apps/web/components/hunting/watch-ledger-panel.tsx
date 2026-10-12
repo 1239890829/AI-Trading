@@ -8,6 +8,7 @@
  * - 三态：盈亏/收盘价缺失显式 --（未清算或快照缺失），不臆造。
  */
 import { useEffect, useState } from "react";
+import { useExitPresence } from "@/hooks/use-exit-presence";
 
 import { OpportunityEvidencePanel } from "./opportunity-evidence-panel";
 import { LeaderResearchPanel } from "./leader-research-panel";
@@ -23,6 +24,8 @@ export function WatchLedgerPanel({ date, readOnly = false }: { date?: string; re
   const error = resource.error instanceof Error ? resource.error.message : resource.error ? "读取失败" : null;
   const [showHistory, setShowHistory] = useState(false);
   const [evidenceOpen, setEvidenceOpen] = useState(false);
+  const historyPresence = useExitPresence(showHistory ? true : null);
+  const evidencePresence = useExitPresence(evidenceOpen ? true : null);
   const [orderNote, setOrderNote] = useState<string | null>(null);
 
   const load = resource.refresh;
@@ -161,7 +164,9 @@ export function WatchLedgerPanel({ date, readOnly = false }: { date?: string; re
       )}
 
       </div><aside className="hunting-ledger-side" tabIndex={0} aria-label="历史统计、依据与研究">
-      {showHistory && (
+      {historyPresence.value && (
+        <div className="motion-disclosure" data-open={showHistory} aria-hidden={!showHistory || undefined} inert={!showHistory}>
+        <div className="motion-disclosure-body">
         <div className="hunting-table-scroll mt-2 border-t border-zinc-100 pt-2 dark:border-zinc-800" tabIndex={0} role="region" aria-label="历史跟踪统计，可横向滚动">
           <table className="w-full text-[11px]">
             <thead>
@@ -192,6 +197,8 @@ export function WatchLedgerPanel({ date, readOnly = false }: { date?: string; re
             </tbody>
           </table>
         </div>
+        </div>
+        </div>
       )}
 
       <p className="mt-2 text-[11px] leading-relaxed text-zinc-600 dark:text-zinc-400">
@@ -199,7 +206,7 @@ export function WatchLedgerPanel({ date, readOnly = false }: { date?: string; re
       </p>
       <details className="mt-3" onToggle={e => setEvidenceOpen(e.currentTarget.open)}>
         <summary className="min-h-11 cursor-pointer py-2 text-xs focus-visible:outline-2 focus-visible:outline-sky-500">查看同版机会依据</summary>
-        {evidenceOpen && <OpportunityEvidencePanel date={scopeDate} />}
+        {evidencePresence.value && <div aria-hidden={!evidenceOpen || undefined} inert={!evidenceOpen}><OpportunityEvidencePanel date={scopeDate} active={evidenceOpen} /></div>}
       </details>
       <LeaderResearchPanel date={scopeDate} />
       </aside></div>

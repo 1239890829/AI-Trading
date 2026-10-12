@@ -1,0 +1,53 @@
+/* Operate-mode continuity: one bounded reveal per deliberate state change. */
+.motion-disclosure {
+  display:grid;
+  grid-template-rows:0fr;
+  opacity:0;
+  transition:grid-template-rows 160ms var(--ease-out),opacity 120ms ease-out;
+}
+.motion-disclosure[data-open="true"] {grid-template-rows:1fr;opacity:1;}
+.motion-disclosure-body {min-width:0;min-height:0;overflow:clip;}
+.theme-chips-extras {width:100%;flex-basis:100%;}
+.theme-controls-motion {min-height:0;}
+@media(min-width:768px) {.theme-controls-motion,.theme-controls-motion>.motion-disclosure-body {height:100%;}}
+@starting-style {.motion-disclosure[data-open="true"] {grid-template-rows:0fr;opacity:0;}}
+.motion-float {opacity:1;transform:none;transition:opacity 160ms ease-out,transform 160ms var(--ease-out);}
+.motion-float[data-motion-state="closed"] {opacity:0;transform:translateY(6px);pointer-events:none;}
+@starting-style {.motion-float {opacity:0;transform:translateY(6px);}}
+
+/* Native summary keyboard/toggle semantics remain untouched. Older browsers
+   retain immediate disclosure; no document listener or per-row animation work. */
+@supports selector(details::details-content) and (transition-behavior:allow-discrete) {
+  details::details-content {
+    opacity:0;
+    transition:opacity 160ms ease-out,content-visibility 160ms allow-discrete;
+  }
+  details[open]::details-content {opacity:1;}
+  @supports (interpolate-size:allow-keywords) {
+    details:not(.chart-legend):not(.bc-base-warning details)::details-content {
+      interpolate-size:allow-keywords;
+      block-size:0;
+      overflow:clip;
+      transition:block-size 160ms var(--ease-out),opacity 120ms ease-out,content-visibility 160ms allow-discrete;
+    }
+    details[open]:not(.chart-legend):not(.bc-base-warning details)::details-content {block-size:auto;}
+  }
+}
+@media(prefers-reduced-motion:reduce) {
+  .motion-disclosure,.motion-float,details::details-content {transition:none!important;}
+  .motion-float,.motion-float[data-motion-state="closed"] {transform:none;}
+}
+/* Layout transitions run for user intent, never for quote ticks. */
+.detail-content-grid {transition:grid-template-columns 160ms var(--ease-out);}
+.detail-side-slot {position:relative;display:flex;min-width:0;min-height:0;}
+.detail-side-slot>.detail-side-column {flex:1;}
+.detail-side-slot[data-collapsed="true"] {overflow:clip;}
+.detail-side-slot[data-collapsed="true"]>.detail-side-column {position:absolute;inset:0 auto 0 0;width:var(--side-reading-w);}
+.detail-side-slot>.detail-side-expand {position:relative;z-index:1;flex:1;}
+.hunting-reference-trigger {display:flex;align-items:center;flex-wrap:wrap;gap:6px;width:fit-content;padding:0;border:0;background:none;text-align:left;cursor:pointer;font-size:12px;line-height:1.6;color:var(--hunt-ink);}
+.hunting-reference-trigger>svg {flex:none;transition:transform 160ms var(--ease-out);}
+.hunting-reference-trigger[aria-expanded="true"]>svg {transform:rotate(90deg);}
+.hunting-reference-trigger>span {color:var(--hunt-muted);font-size:11px;}
+.hunting-reference-fold .candidate-collection {margin-top:12px;}
+@media(max-width:1023px){.bc-workbench-layout[data-mobile-view="chart"] .detail-side-slot {display:none;} main[data-workspace="workbench"].bc-workbench .detail-side-slot {flex:1;min-height:0;}}
+@media(prefers-reduced-motion:reduce){.detail-content-grid,.hunting-reference-trigger>svg{transition:none;}}

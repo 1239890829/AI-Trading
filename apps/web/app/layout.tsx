@@ -2,6 +2,8 @@ import type { Metadata } from "next";
 import "./globals.css";
 import "./controls.css";
 import "./system.css";
+import "./styles/disclosure-motion.css";
+import "./styles/fund-history.css";
 import { NavBar } from "@/components/nav-bar";
 import { FloatingAssistant } from "@/components/assistant/floating-assistant";
 import { InspectionHost, InspectionProvider } from "@/components/inspection/inspection-host";

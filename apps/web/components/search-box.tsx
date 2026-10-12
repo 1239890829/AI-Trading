@@ -6,6 +6,7 @@ import Cancel01Icon from "@hugeicons/core-free-icons/Cancel01Icon";
 import { CloseButton } from "@/components/ui/icon-button";
 
 import { useCallback, useEffect, useId, useLayoutEffect, useRef, useState } from "react";
+import { useExitPresence } from "@/hooks/use-exit-presence";
 import { ApiError, addToWatchlist, searchSymbols } from "@/lib/api";
 import { notifyWatchlistChanged } from "@/lib/watchlist-sync";
 import { useSymbolDetail } from "@/components/detail/symbol-detail-context";
@@ -201,6 +202,7 @@ export function SearchBox({collapsible = false}: {collapsible?: boolean}) {
     open &&
     kw.length >= MIN_QUERY_LEN &&
     (results.length > 0 || loading || error !== null || searched);
+  const panelPresence = useExitPresence(showPanel ? true : null);
 
   return (
     <div ref={boxRef} data-search-expanded={expanded || undefined} data-collapsible={collapsible || undefined} className="search-field relative w-32 min-w-0 sm:w-44 md:w-52" onKeyDown={event => {
@@ -262,8 +264,8 @@ export function SearchBox({collapsible = false}: {collapsible?: boolean}) {
         />
       )}
       </div>
-      {showPanel && (
-        <section id={panelId} className="ui-glass-overlay search-popover" aria-label="证券搜索结果">
+      {panelPresence.value && (
+        <section id={panelId} data-motion-state={showPanel ? "open" : "closed"} aria-hidden={!showPanel || undefined} inert={!showPanel} className="ui-glass-overlay search-popover motion-float" aria-label="证券搜索结果">
           <header className="search-popover-heading">
             <div><strong>证券搜索</strong><span>匹配代码或名称</span></div>
             <CloseButton onClose={closeAndFocus} label="关闭搜索结果" autoFocus={false} />

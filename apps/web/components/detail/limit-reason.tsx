@@ -21,6 +21,6 @@ export function LimitReason({reason, source, date, symbol, compact = false, miss
   </div>;
   return compact ? <div className="min-w-0 text-[11px]" onClick={event => event.stopPropagation()} onKeyDown={event => event.stopPropagation()}>
     <button type="button" className="block w-full space-y-1 whitespace-normal py-1 text-left text-zinc-700 dark:text-zinc-300" onClick={() => setOpenedReason(identity)}><span className="line-clamp-2 [overflow-wrap:anywhere]">原因摘要：{text}</span><span className="block text-[10px]">涨停原因 · 查看原文</span></button>
-    {presence.value && <ModalShell open={presence.active} onClose={() => setOpenedReason(null)} label="涨停原因原文" size="md" zIndex={70} header={<h2 className="text-sm font-medium">涨停原因原文</h2>} bodyTabIndex={0} bodyClassName="data-scroll min-w-0 overflow-y-auto px-5 py-4 text-xs">{presence.active && <>{body}{symbol && <StockAttributionPanel symbol={symbol} title="涨停归因 · 证据核对" bounded={false} />}</>}</ModalShell>}
+    {presence.value && <ModalShell open={presence.active} onClose={() => setOpenedReason(null)} label="涨停原因原文" size="md" zIndex={70} header={<h2 className="text-sm font-medium">涨停原因原文</h2>} bodyTabIndex={0} bodyClassName="data-scroll min-w-0 overflow-y-auto px-5 py-4 text-xs">{presence.active && <>{body}{symbol && <StockAttributionPanel symbol={symbol} title="涨停归因 · 证据核对" defaultExpanded defaultSourceExpanded bounded={false} />}</>}</ModalShell>}
   </div> : body;
 }

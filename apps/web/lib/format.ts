@@ -1,6 +1,18 @@
+// 只复用有限的展示精度，避免每个行情单元格重复构造 Intl 格式器。
+// 其它精度仍交给 Intl 原规则处理（含小数精度、NaN 和 RangeError），不缓存数值。
+const numberFormats = new Map<number, Intl.NumberFormat>();
+function numberText(v: number, digits: number): string {
+  let formatter = Number.isInteger(digits) && digits >= 0 && digits <= 20 ? numberFormats.get(digits) : undefined;
+  if (!formatter) {
+    formatter = new Intl.NumberFormat("zh-CN", {minimumFractionDigits: digits, maximumFractionDigits: digits});
+    if (Number.isInteger(digits) && digits >= 0 && digits <= 20) numberFormats.set(digits, formatter);
+  }
+  return formatter.format(v);
+}
+
 export function fmt(v: number | null | undefined, digits = 2): string {
   if (v === null || v === undefined || Number.isNaN(v)) return "--";
-  return v.toLocaleString("zh-CN", { minimumFractionDigits: digits, maximumFractionDigits: digits });
+  return numberText(v, digits);
 }
 
 /**
@@ -19,7 +31,7 @@ export function parseNum(s: string | number | null | undefined): number {
 /** 亿元金额格式（无符号，表头/轴标签用）。 */
 export function fmtYi(v: number | null | undefined, digits = 0): string {
   if (v === null || v === undefined || Number.isNaN(v)) return "--";
-  return v.toLocaleString("zh-CN", { maximumFractionDigits: digits, minimumFractionDigits: digits });
+  return numberText(v, digits);
 }
 
 /** 亿元金额带符号格式：+32.3亿 / -12.3亿 / --。

@@ -213,7 +213,6 @@ main[data-workspace="workbench"].bc-workbench .detail-chart-panel {border:0;back
  .bc-workbench .quote-metrics-toggle {display:inline-flex;align-items:center;gap:6px;min-height:30px;padding:3px 6px;font-size:11px;white-space:nowrap;background:transparent;}
  .bc-workbench .quote-metrics-toggle svg {width:12px;height:12px;transition:transform 160ms ease;}
  .bc-workbench .quote-metrics-toggle[aria-expanded="true"] svg {transform:rotate(180deg);}
- main[data-workspace="workbench"].bc-workbench .quote-sheet[data-metrics-expanded="false"] .quote-sheet-metrics {display:none;}
  main[data-workspace="workbench"].bc-workbench .chart-toolbar {flex-wrap:nowrap;overflow-x:auto;gap:8px;}
  .bc-workbench .chart-toolbar .chart-modes {flex:none;}
  .bc-workbench .chart-assessment {flex-wrap:nowrap;white-space:nowrap;padding:4px 6px;}
@@ -256,3 +255,26 @@ main[data-workspace="workbench"].bc-workbench .detail-chart-panel {border:0;back
  .bc-workbench-sidebar[data-account-view="true"]>.bc-market-context {display:flex;max-height:none;}
  .bc-workbench-sidebar[data-account-view="true"] .bc-index-strip>.ui-card {display:flex;flex-direction:column;}
 }
+
+/* Compact quotations keep metadata and independently sized action hit areas. */
+.bc-attention-track {gap:6px;}
+.bc-attention-select {display:grid;grid-template-columns:minmax(0,1fr) max-content;align-items:center;gap:4px 8px;padding:8px 10px 2px;min-height:44px;}
+.bc-attention-identity {gap:5px;}
+.bc-attention-identity strong {font-size:12px;}
+.bc-attention-identity > span {font-size:10px;}
+.bc-attention-price {justify-content:flex-end;gap:6px;}
+.bc-attention-price strong {font-size:14px;}
+.bc-attention-fund,.bc-candidate-basis {grid-column:1 / -1;}
+.bc-attention-meta {padding:0 6px 4px 10px;min-height:24px;}
+@media(max-width:600px) {
+ .bc-attention-select {padding-top:8px;}
+ .bc-attention-meta {min-height:28px;}
+ .bc-workbench .bc-remove-watch.icon-button {min-width:44px;min-height:44px;width:44px;height:44px;}
+ .bc-workbench .bc-remove-watch .icon-button-face {width:24px;height:24px;}
+}
+
+.bc-index-strip > .ui-card {gap:6px;}
+.bc-index-strip .index-extras-grid {display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:6px;max-height:154px;overflow:auto;overscroll-behavior:contain;scrollbar-gutter:stable;}
+.bc-workbench-sidebar[data-account-view="true"] .bc-index-strip > .ui-card {grid-template-rows:auto auto minmax(0,1fr);}
+.bc-workbench-sidebar[data-account-view="true"] .bc-index-strip > .ui-card:has(.index-disclosure[aria-expanded="false"]) {grid-template-rows:auto auto auto;}
+.bc-workbench-sidebar[data-account-view="true"] .index-extras-grid {max-height:100%;}

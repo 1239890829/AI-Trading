@@ -15,6 +15,7 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 
 import { MarkdownView } from "@/components/agent/markdown-view";
+import { useExitPresence } from "@/hooks/use-exit-presence";
 import { getAgentKbFile, getAgentKbTree, type KbFileMeta } from "@/lib/api";
 
 const dirOf = (f: KbFileMeta) => f.dir || "docs/";
@@ -136,6 +137,9 @@ export function KbBrowserTab() {
       total: matched.length,
     };
   }, [files, query]);
+  // Directory rows have no automatic IO. Retain their last visible search
+  // result during exit; the separate document reader remains unchanged.
+  const historyPresence = useExitPresence(historyVisible ? groups.historyByDir : null);
 
   const renderFileRow = (f: KbFileMeta) => (
     <button
@@ -216,12 +220,14 @@ export function KbBrowserTab() {
                       />
                     </svg>
                   </button>
-                  {historyVisible && (
-                    <div id="kb-history-list">
+                  <div id="kb-history-list" className="motion-disclosure" data-open={historyPresence.active}
+                    aria-hidden={!historyPresence.active} inert={!historyPresence.active}>
+                    <div className="motion-disclosure-body">
+                    {historyPresence.value !== null && <>
                       <p className="px-2 pt-1 text-[10px] text-zinc-600 dark:text-zinc-400">
                         只读历史 / 逐日记录 · 引用前先确认未过时
                       </p>
-                      {groups.historyByDir.map(([dir, fs]) => (
+                      {historyPresence.value.map(([dir, fs]) => (
                         <div key={dir}>
                           <p className="px-2 pt-2 text-[10px] font-medium text-zinc-600 dark:text-zinc-400">
                             {dir} · {fs.length}
@@ -229,8 +235,9 @@ export function KbBrowserTab() {
                           {fs.map(renderFileRow)}
                         </div>
                       ))}
+                    </>}
                     </div>
-                  )}
+                  </div>
                 </div>
               )}
             </>

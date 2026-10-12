@@ -16,6 +16,7 @@ vi.mock("@/components/market/fund-tab", () => ({ FundTab: () => null }));
 vi.mock("@/lib/api", () => ({
   getMarketOverview: vi.fn(), getLimitUpPool: vi.fn(), getBreadth: vi.fn(),
   getSentiment: vi.fn(), getSentimentHistory: vi.fn(),
+  indexDetailSymbol: (symbol: string, market: string) => `${market.toLowerCase()}${symbol}`,
 }));
 
 const sentiment: api.Sentiment = {
@@ -56,6 +57,28 @@ it("closes failed sentiment evidence and requires a fresh user click after recov
 });
 
 const overviewReaders = () => [api.getMarketOverview, api.getLimitUpPool, api.getBreadth, api.getSentiment, api.getSentimentHistory];
+
+it("keeps the three index identities collapsed by default and expands without another read", async () => {
+  const indices = [
+    {symbol: "399001", market: "SZ", name: "深证成指"},
+    {symbol: "399006", market: "SZ", name: "创业板指"},
+    {symbol: "000001", market: "SH", name: "上证指数"},
+    {symbol: "000688", market: "SH", name: "科创50"},
+  ].map(q => ({...q, price: 100, amount: 1e8, change_pct: 1} as Quote));
+  vi.mocked(api.getMarketOverview).mockResolvedValue({indices, total_amount: null, total_amount_freshness: null});
+  render(<MarketPage />);
+  await act(async () => {});
+  const region = within(screen.getByRole("region", {name: "主要指数"}));
+  expect(region.getByRole("button", {name: /上证指数/})).toBeTruthy();
+  expect(region.getByRole("button", {name: /科创50/})).toBeTruthy();
+  expect(region.getByRole("button", {name: /创业板指/})).toBeTruthy();
+  expect(region.queryByRole("button", {name: /深证成指/})).toBeNull();
+  fireEvent.click(region.getByRole("button", {name: /主要指数.*展开/}));
+  expect(region.getByRole("button", {name: /深证成指/})).toBeTruthy();
+  fireEvent.click(region.getByRole("button", {name: /主要指数.*收起/}));
+  expect(region.queryByRole("button", {name: /深证成指/})).toBeNull();
+  expect(api.getMarketOverview).toHaveBeenCalledTimes(1);
+});
 
 it("shows attribution from the same pool row in the market leaders preview", async () => {
   vi.mocked(api.getLimitUpPool).mockResolvedValue([{symbol:"600825",name:"新华传媒",trade_date:"2026-10-09",reason:"拟收购财联社+重大资产重组",source:"ths",quality:"high",quality_reasons:[],received_at:"2026-10-09T08:00:00Z"}]);

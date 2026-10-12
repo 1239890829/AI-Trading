@@ -4,7 +4,7 @@ import {DetailModalProvider, useDetailModal} from "./detail-modal";
 import {getEventsForSymbol, getStockAttribution, type EventSummary} from "@/lib/api";
 
 vi.mock("@/lib/api", () => ({getEventsForSymbol: vi.fn(), getNewsContent: vi.fn(), getStockAttribution: vi.fn()}));
-vi.mock("@/components/ui/modal-shell", () => ({ModalShell: ({children}: {children: React.ReactNode}) => <section>{children}</section>}));
+vi.mock("@/components/ui/modal-shell", () => ({ModalShell: ({children, open, onClose}: {children: React.ReactNode; open: boolean; onClose: () => void}) => <section aria-hidden={!open || undefined} inert={!open} data-testid="detail-shell">{open && <button onClick={onClose}>关闭详情</button>}{children}</section>}));
 vi.mock("@/components/detail/capital-flow-panel", () => ({CapitalFlowPanel: () => null}));
 vi.mock("@/components/detail/symbol-detail-context", () => ({useSymbolDetail: () => ({open: vi.fn()})}));
 afterEach(() => {cleanup(); vi.resetAllMocks();});
@@ -55,6 +55,27 @@ it("a different symbol cannot inherit the old feed failure or its late reply", a
   await act(async () => {failOld(new Error("old-feed-error"));});
   expect(screen.queryByRole("alert")).toBeNull(); expect(screen.queryByText(/old-feed-error/)).toBeNull();
   expect(screen.getByText(/关联事件 · 0 条/)).toBeTruthy();
+});
+
+it("closing halts the feed consumer during exit and reopening the same symbol cannot accept its late result", async () => {
+  vi.useFakeTimers();
+  try {
+    let finish!: (data: Awaited<ReturnType<typeof getEventsForSymbol>>) => void;
+    vi.mocked(getEventsForSymbol).mockImplementationOnce(() => new Promise(resolve => {finish = resolve;}))
+      .mockResolvedValueOnce({symbol:"600519", themes:[], count:0, items:[]});
+    host(); fireEvent.click(screen.getByRole("button", {name:"打开 600519"}));
+    fireEvent.click(screen.getByRole("button", {name:"关闭详情"}));
+    expect(screen.getByTestId("detail-shell").hasAttribute("inert")).toBe(true);
+    expect(screen.queryByText("关联事件加载中…")).toBeNull();
+    fireEvent(document, new Event("visibilitychange"));
+    expect(getEventsForSymbol).toHaveBeenCalledTimes(1);
+    fireEvent.click(screen.getByRole("button", {name:"打开 600519"}));
+    await act(async () => {});
+    await act(async () => {finish({symbol:"600519", themes:["旧回复"], count:1, items:[{id:99, title:"已关闭会话的晚到事件", directions:[], url:null, source:"fixture", source_tier:3, published_at:"2026-10-12T09:00:00+08:00", fact_kind:"fact", certainty:"done", category:"corporate", half_life_hours:48, source_symbol:"600519", is_active:true}]}); vi.advanceTimersByTime(200);});
+    expect(screen.getByText(/关联事件 · 0 条/)).toBeTruthy();
+    expect(screen.queryByText(/已关闭会话的晚到事件/)).toBeNull();
+    expect(getEventsForSymbol).toHaveBeenCalledTimes(2);
+  } finally {vi.useRealTimers();}
 });
 
 it("selection evidence keeps original entry facts beside current explanations", async () => {

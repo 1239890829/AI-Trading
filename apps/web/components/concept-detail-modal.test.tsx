@@ -84,4 +84,20 @@ describe("概念详情读取身份与无感刷新", () => {
     expect(await screen.findByRole("alert")).toHaveProperty("textContent", expect.stringContaining("offline"));
     expect(screen.queryByText("加载中…")).toBeNull();
   });
+
+  it("inactive exit shell stops visibility reads, removes member operations, and ignores late content", async () => {
+    let finish!: (value: ConceptDetail) => void;
+    vi.mocked(getConceptDetail).mockImplementationOnce(() => new Promise(resolve => {finish = resolve;}))
+      .mockResolvedValueOnce(detail("A", "重新打开的成分"));
+    const view = render(<ConceptDetailModal code="A" name="概念" onClose={() => {}} />);
+    view.rerender(<ConceptDetailModal code="A" name="概念" active={false} onClose={() => {}} />);
+    fireEvent(document, new Event("visibilitychange"));
+    expect(getConceptDetail).toHaveBeenCalledTimes(1);
+    expect(screen.queryByPlaceholderText("搜代码/名称")).toBeNull();
+    await act(async () => finish(detail("A", "已关闭的晚到成分")));
+    expect(screen.queryByText("已关闭的晚到成分")).toBeNull();
+    view.rerender(<ConceptDetailModal code="A" name="概念" onClose={() => {}} />);
+    await screen.findByText("重新打开的成分", {selector:"span"});
+    expect(getConceptDetail).toHaveBeenCalledTimes(2);
+  });
 });

@@ -116,6 +116,12 @@ export function useQuoteStream(symbols: string[], opts?: { throttleMs?: number }
     let throttleTimer: ReturnType<typeof setTimeout> | null = null;
     let lastAppliedAt = 0;
     let pending: Quote[] | null = null;
+    // QuoteHub 的 snapshot/quotes/stale 都是整个订阅集的快照，不是变更增量。
+    // 隐藏时继续接收真实 WS 帧和心跳，只暂缓 React/feed 通知。
+    // 保存完整 Quote，不能仅按价格去重而丢掉源钟、质量、成交量或金额。
+    let latestFrame: Quote[] | null = null;
+    let deferredStatus: StreamStatus | null = null;
+    const hidden = () => document.visibilityState === "hidden";
     const clearOpenTimer = () => {
       if (openTimer) clearTimeout(openTimer);
       openTimer = null;
@@ -125,7 +131,7 @@ export function useQuoteStream(symbols: string[], opts?: { throttleMs?: number }
       throttleTimer = null;
     };
     const applyNow = (list: Quote[]) => {
-      if (closed) return;
+      if (closed || hidden()) return;
       const selected = new Set(symbolsRef.current);
       const current = list.filter(quote => selected.has(quote.symbol));
       if (list.length && !current.length) return;
@@ -138,6 +144,8 @@ export function useQuoteStream(symbols: string[], opts?: { throttleMs?: number }
       const selected = new Set(symbolsRef.current);
       const current = list.filter(quote => selected.has(quote.symbol));
       if (list.length && !current.length) return;
+      latestFrame = current;
+      if (hidden()) return;
       owner.publish(current);
       if (throttleMs <= 0) {
         applyNow(current);
@@ -165,7 +173,6 @@ export function useQuoteStream(symbols: string[], opts?: { throttleMs?: number }
     let pollGeneration = 0;
     let pollInFlight: Promise<void> | null = null;
     let pollAgain = false;
-    const hidden = () => document.visibilityState === "hidden";
     const clearPollTimer = () => {
       if (pollTimer !== null) clearTimeout(pollTimer);
       pollTimer = null;
@@ -223,13 +230,25 @@ export function useQuoteStream(symbols: string[], opts?: { throttleMs?: number }
     refreshSelectionRef.current = () => {
       clearThrottle();
       pending = null;
+      latestFrame = null;
+      deferredStatus = null;
       restartPolling();
     };
     const onVisibility = () => {
-      if (closed || !polling) return;
+      if (closed) return;
       clearThrottle();
       pending = null;
-      restartPolling();
+      if (polling) {
+        restartPolling();
+      } else if (!hidden()) {
+        // 一次校准直接采用隐藏期最后一帧，不等待列表节流或另发重复 REST。
+        if (latestFrame !== null) {
+          owner.publish(latestFrame);
+          applyNow(latestFrame);
+        }
+        if (deferredStatus !== null) setStatus(deferredStatus);
+        deferredStatus = null;
+      }
     };
     document.addEventListener("visibilitychange", onVisibility);
 
@@ -275,7 +294,10 @@ export function useQuoteStream(symbols: string[], opts?: { throttleMs?: number }
         stopPolling();
         lastMsgAt = Date.now();
         setSentKey(""); // 新 socket 允许下一次 key 变化时重发订阅
-        setStatus("live");
+        // A new connection supersedes the previous socket's deferred label.
+        // Its first snapshot does not itself emit a live status.
+        if (hidden()) deferredStatus = "live";
+        else { deferredStatus = null; setStatus("live"); }
         pingTimer = setInterval(() => {
           if (wsRef.current && wsRef.current.readyState === WebSocket.OPEN) {
             if (Date.now() - lastMsgAt > 32_000) {
@@ -301,13 +323,13 @@ export function useQuoteStream(symbols: string[], opts?: { throttleMs?: number }
             if (msg.data.length && !currentData.length) return;
             apply(currentData);
             const closedData = currentData.some((q) => q.quality_reasons?.includes("market_closed"));
-            if (closedData) {
-              // 休市数据可能以 quotes 类型到达（REST 兜底/快照路径），一律置休市态
-              setStatus("closed");
-            } else if (msg.type === "stale") {
-              setStatus("stale");
-            } else if (msg.type === "quotes") {
-              setStatus("live");
+            // A reconnect snapshot may itself contain a failed-refresh cache.
+            // Its real quality must supersede the transport's onopen=live.
+            const staleSnapshot = msg.type === "snapshot" && currentData.some(q => q.quality === "stale");
+            const nextStatus = closedData ? "closed" : msg.type === "stale" || staleSnapshot ? "stale" : msg.type === "quotes" ? "live" : null;
+            if (nextStatus !== null) {
+              if (hidden()) deferredStatus = nextStatus;
+              else {deferredStatus = null; setStatus(nextStatus);}
             }
           }
         } catch {}

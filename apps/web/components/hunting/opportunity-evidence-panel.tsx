@@ -1,7 +1,8 @@
 "use client";
 
 import { SelectionRail } from "@/components/ui/selection-rail";
-import { useRef, useState } from "react";
+import { useMemo, useRef, useState } from "react";
+import { useExitPresence } from "@/hooks/use-exit-presence";
 import { useResource } from "@/hooks/use-polling-fetch";
 import { getOpportunities, type OpportunityView } from "@/lib/api/picks";
 import { bjDate } from "@/lib/format";
@@ -23,7 +24,7 @@ const ROUTES: Record<string, string> = {
 };
 
 /** One read-only consumer for versioned decisions, without new rankings or actions. */
-export function OpportunityEvidencePanel({date: requestedDate, onDateChange}: {date?: string; onDateChange?: (date: string) => void} = {}) {
+export function OpportunityEvidencePanel({date: requestedDate, onDateChange, active = true}: {date?: string; onDateChange?: (date: string) => void; active?: boolean} = {}) {
   const [localDate, setDate] = useState(() => bjDate(new Date().toISOString()));
   const date = requestedDate?.replace(/^(\d{4})(\d{2})(\d{2})$/, "$1-$2-$3") ?? localDate;
   const [inspectionMode, setInspectionMode] = useState<"follow" | "pin" | "compare">("follow");
@@ -33,10 +34,11 @@ export function OpportunityEvidencePanel({date: requestedDate, onDateChange}: {d
   const [pinned, setPinned] = useState<{date: string; card: OpportunityView["cards"][number]} | null>(null);
   const [compared, setCompared] = useState<{date: string; card: OpportunityView["cards"][number]} | null>(null);
   const [limit, setLimit] = useState(10);
-  const result = useResource(() => getOpportunities(date), { key: date, intervalMs: 60_000 });
+  const result = useResource(() => getOpportunities(date), { key: date, intervalMs: 60_000, enabled: active });
   const data = result.data;
   const selected = data?.cards.find(card => card.symbol === selectedSymbol);
-  const inspected = inspectionMode === "follow" ? selected && {date, card: selected} : pinned;
+  const inspected = useMemo(() => inspectionMode === "follow" ? selected ? {date, card: selected} : null : pinned, [inspectionMode, selected, date, pinned]);
+  const inspectionPresence = useExitPresence(active ? inspected : null);
   function inspect(card: OpportunityView["cards"][number]) {
     setSelectedSymbol(card.symbol);
     if (inspectionMode === "pin") setPinned({date, card});
@@ -92,7 +94,7 @@ export function OpportunityEvidencePanel({date: requestedDate, onDateChange}: {d
       </div>)}
     </>}
     </div>
-    {inspected && <aside aria-label="当前证据侧栏" className="evidence-inspection grid gap-3 rounded-lg border border-zinc-300 p-3 dark:border-zinc-600" tabIndex={0}>{[inspected, ...(inspectionMode === "compare" && compared ? [compared] : [])].map((item, index) => <div key={index}><h5 className="font-semibold">{item.card.name} {item.card.symbol} · {item.date}{inspectionMode !== "follow" && index === 0 ? "（固定快照）" : ""}</h5>{item.card.hypotheses.map(h => <div key={h.opportunity_id} className="mt-2 space-y-1 break-words"><p><span className="opportunity-state" data-state={h.state}>{STATES[h.state] ?? h.state}</span> · {h.decision_version ?? `研究观察 ${h.observation_id ?? "身份待核"}`}</p><p>来源 {h.source} · {h.as_of}</p><p>依据 {h.reasons.join("；") || "未记录"}</p><p>等待 {h.unknowns.join("；") || "须核动作前条件"}</p><p>{h.execution_blocker}</p><p>参考 {h.reference.price ?? "缺失"}，非成交。</p></div>)}</div>)}{inspectionMode === "compare" && !compared && <p>请选择第二个对象／日期／版本。不同 scope 不合并收益。</p>}<button onClick={() => { setSelectedSymbol(null); setPinned(null); setCompared(null); const origin = inspectOrigin.current; if (origin?.isConnected && !origin.closest("details:not([open])")) origin.focus(); else dateInput.current?.focus(); }}>关闭侧栏</button></aside>}
+    {inspectionPresence.value && <aside aria-label="当前证据侧栏" data-motion-state={active && inspected ? "open" : "closed"} aria-hidden={!active || !inspected || undefined} inert={!active || !inspected} className="motion-float evidence-inspection grid gap-3 rounded-lg border border-zinc-300 p-3 dark:border-zinc-600" tabIndex={0}>{[inspectionPresence.value, ...(inspectionMode === "compare" && compared ? [compared] : [])].map((item, index) => <div key={index}><h5 className="font-semibold">{item.card.name} {item.card.symbol} · {item.date}{inspectionMode !== "follow" && index === 0 ? "（固定快照）" : ""}</h5>{item.card.hypotheses.map(h => <div key={h.opportunity_id} className="mt-2 space-y-1 break-words"><p><span className="opportunity-state" data-state={h.state}>{STATES[h.state] ?? h.state}</span> · {h.decision_version ?? `研究观察 ${h.observation_id ?? "身份待核"}`}</p><p>来源 {h.source} · {h.as_of}</p><p>依据 {h.reasons.join("；") || "未记录"}</p><p>等待 {h.unknowns.join("；") || "须核动作前条件"}</p><p>{h.execution_blocker}</p><p>参考 {h.reference.price ?? "缺失"}，非成交。</p></div>)}</div>)}{inspectionMode === "compare" && !compared && <p>请选择第二个对象／日期／版本。不同 scope 不合并收益。</p>}<button onClick={() => { setSelectedSymbol(null); setPinned(null); setCompared(null); const origin = inspectOrigin.current; if (origin?.isConnected && !origin.closest("details:not([open])")) origin.focus(); else dateInput.current?.focus(); }}>关闭侧栏</button></aside>}
     </div>
   </section>;
 }

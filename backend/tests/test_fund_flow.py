@@ -130,6 +130,7 @@ def test_rt_fallback_chain_full_failure(monkeypatch):
 def test_snapshot_today_if_closed_persists_once(monkeypatch, tmp_path):
     store_file = tmp_path / "daily.json"
     monkeypatch.setattr(ff, "_FLOW_STORE", store_file)
+    monkeypatch.setattr(ff.trade_calendar, "known_trade_days", lambda: [date(2026, 9, 4)])
     # 14:00 不落盘
     monkeypatch.setattr(ff, "beijing_now", lambda: datetime(2026, 9, 4, 14, 0, tzinfo=BJ_TZ))
     rt = {"available": True, "items": {"sh": {"main": -1.0}, "sz": {"main": -2.0}}}

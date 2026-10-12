@@ -51,38 +51,6 @@
 :root .bc-market-dashboard .bc-market-pool-scroll {max-height:none!important;}
 .bc-market-dashboard:focus-visible {outline:2px solid var(--ui-accent);outline-offset:3px;}
 
-/* Fund analysis keeps all existing data consumers mounted while changing readers. */
-.fund-workspace {display:flex;flex-direction:column;height:100%;min-height:0;min-width:0;gap:12px;}
-.fund-notices:empty {display:none;}
-.fund-notices {flex:none;max-height:100px;overflow:auto;overscroll-behavior:contain;}
-.fund-columns {display:grid;grid-template-columns:minmax(0,1.2fr) minmax(0,1fr);flex:1 1 0%;min-height:0;min-width:0;gap:16px;}
-.fund-board-reader,.fund-analysis {min-height:0;min-width:0;}
-.fund-board-reader > .task-panel {height:100%;}
-/* Board density follows this reader's width, not the browser's viewport. */
-.board-flow-list {overscroll-behavior:contain;scrollbar-gutter:stable;}
-.board-flow-list:focus-visible {outline:2px solid var(--ui-accent);outline-offset:-2px;}
-.board-flow-list > .card-gallery {column-count:auto;column-width:248px;}
-:root .board-flow-card.stock-card-slot {padding:2px;}
-:root .board-flow-card .stock-card {padding:14px;}
-.board-flow-heading {flex-wrap:wrap;}
-.board-flow-identity {flex:1 1 auto;flex-wrap:wrap;}
-.board-flow-name {overflow-wrap:anywhere;}
-.board-flow-metrics > div {white-space:nowrap;}
-.fund-analysis {display:flex;flex-direction:column;gap:12px;}
-.fund-view-switch {display:flex;flex:none;align-items:center;gap:6px;}
-.fund-view-switch > button {min-height:34px;padding:6px 12px;border:1px solid transparent;border-radius:7px;font-size:13px;white-space:nowrap;color:var(--ui-muted);}
-.fund-view-switch > button[aria-pressed=true] {background:var(--ui-selected);color:var(--ui-ink);border-color:var(--glass-border);}
-.fund-view-switch > button:hover {background:var(--ui-hover);}
-.fund-view-switch > button:focus-visible {outline:2px solid var(--ui-accent);outline-offset:2px;}
-.fund-analysis-current {display:grid;grid-template-rows:minmax(0,1fr) minmax(0,1fr);min-height:0;min-width:0;flex:1 1 0%;gap:16px;}
-.fund-analysis-current > .grid {display:grid;grid-template-columns:repeat(2,minmax(0,1fr));min-height:0;gap:16px;}
-.fund-analysis-current > .grid > .task-panel,.fund-analysis-current > .task-panel {min-height:0;}
-.fund-analysis-history,.fund-analysis-seats {display:flex;min-height:0;min-width:0;flex:1 1 0%;}
-.fund-analysis-history > .grid {display:grid;grid-template-columns:repeat(2,minmax(0,1fr));height:100%;min-height:0;gap:16px;flex:1 1 0%;}
-.fund-analysis-history > .grid > .task-panel,.fund-analysis-seats > .task-panel {min-height:0;flex:1 1 0%;}
-.fund-analysis-current[hidden],.fund-analysis-history[hidden],.fund-analysis-seats[hidden] {display:none;}
-:root .bc-market-page .bc-market-view-fund > .fund-workspace {height:100%;min-height:0;gap:12px;padding:0;overflow:visible;}
-
 /* Theme filters and reference strips support the main card reader from the left. */
 .bc-tape-page .theme-workspace {display:grid;grid-template-columns:248px minmax(0,1fr);height:100%;min-height:0;min-width:0;gap:16px;}
 .theme-context {min-height:0;min-width:0;}
@@ -131,8 +99,6 @@
 
 @media(max-width:1180px) and (min-width:768px) {
   .bc-market-dashboard {grid-template-columns:minmax(260px,.45fr) minmax(0,1fr);gap:16px;}
-  .fund-columns {grid-template-columns:minmax(0,1.2fr) minmax(0,1fr);}
-  .fund-analysis-current > .grid,.fund-analysis-history > .grid {grid-template-columns:repeat(2,minmax(260px,1fr));gap:12px;overflow-x:auto;overscroll-behavior:contain;}
   .bc-tape-page .theme-workspace {grid-template-columns:232px minmax(0,1fr);gap:16px;}
 }
 /* Short desktop screens still need a readable index quote above the fixed metrics. */
@@ -175,18 +141,8 @@
   :root .bc-market-dashboard .bc-market-events > .task-panel {height:100%;min-height:0;}
   :root .bc-market-page .bc-market-view-heatmap > .task-panel,
   :root .bc-market-page .bc-market-view-events > .task-panel {height:100%;min-height:0;}
-  .fund-columns {grid-template-columns:repeat(2,100%);gap:12px;overflow-x:auto;overscroll-behavior:contain;scroll-snap-type:x proximity;padding-bottom:4px;}
   .bc-market-page:has(.bc-market-view-fund) .bc-market-masthead {flex-direction:row;flex-wrap:nowrap;align-items:center;}
   .bc-market-page:has(.bc-market-view-fund) .bc-market-masthead .workspace-context {width:auto;}
-  .board-flow-controls {display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:6px;}
-  :root .board-flow-controls > .filter-trigger {width:100%;min-height:44px;height:44px;gap:4px;padding-inline:6px;}
-  .board-flow-controls .filter-label {display:none;}
-  .board-flow-controls > .flow-control-group {grid-column:1/-1;display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:4px;}
-  .board-flow-controls .flow-control-group > button {min-height:44px;padding-inline:6px;}
-  .fund-board-reader,.fund-analysis {scroll-snap-align:start;}
-  .fund-analysis-current > .grid,.fund-analysis-history > .grid {grid-template-columns:repeat(2,minmax(280px,1fr));gap:12px;overflow-x:auto;overscroll-behavior:contain;}
-  .fund-view-switch {gap:2px;}
-  .fund-view-switch > button {min-height:44px;padding:9px 10px;font-size:12px;}
   :root .bc-tape-page .bc-tape-view > div {height:100%;min-height:0;}
   :root .bc-tape-page .bc-tape-view > div > .task-panel {flex:1 1 0%;min-height:0;max-height:none;}
   .bc-tape-page .theme-workspace {display:flex;flex-direction:column;gap:12px;}
@@ -194,7 +150,6 @@
   .theme-controls-toggle {display:flex;align-items:center;justify-content:space-between;gap:12px;width:100%;min-height:44px;padding:8px 12px;border-radius:8px;background:var(--control-surface);font-size:13px;}
   .theme-controls-toggle > span:last-child {font-size:12px;color:var(--ui-muted);}
   .theme-control-body {height:auto;max-height:40dvh;margin-top:12px;}
-  .theme-control-body[data-open=false] {display:none;}
   .theme-control-body > div:first-child > div {gap:10px;}
   .theme-control-body > div:first-child > div > div > span:first-child {flex-basis:auto;margin:0;}
   .theme-main {flex:1 1 0%;}
@@ -202,3 +157,27 @@
   :root .bc-tape-page .bc-tape-view-themes .theme-card-scroll {flex:1 1 0%;min-height:0;overflow-y:auto;}
   :root .bc-tape-page .bc-tape-view-longhu details[open] > div {max-height:25dvh;overflow:auto;overscroll-behavior:contain;}
 }
+
+/* Indices keep the same three market identities visible; extras alone disclose. */
+:root .bc-market-dashboard>.bc-market-context .bc-market-indices {display:flex;flex-direction:column;gap:6px;align-content:initial;}
+.market-indices-toggle {display:flex;align-items:center;justify-content:space-between;flex:none;width:100%;min-height:30px;padding:3px 2px;color:var(--ui-muted);font-size:12px;text-align:left;}
+.market-indices-toggle > span:last-child {display:flex;align-items:center;gap:6px;font-size:11px;}
+.market-indices-toggle svg {transition:transform 160ms var(--ease-out);}
+.market-indices-toggle[aria-expanded=true] svg {transform:rotate(180deg);}
+.market-index-primary,.market-index-expansion {flex:none;}
+.market-index-primary,.market-index-expansion > div {display:grid;grid-template-columns:minmax(0,1fr);gap:6px;min-height:0;}
+:root .bc-market-dashboard>.bc-market-context .bc-index-quote {display:grid;grid-template-columns:minmax(0,1fr) max-content;align-items:center;gap:3px 8px;min-height:62px;padding:8px 12px 10px;}
+.bc-market-dashboard>.bc-market-context .bc-index-name {grid-column:1;grid-row:1;gap:6px;}
+.bc-market-dashboard>.bc-market-context .bc-index-value {grid-column:2;grid-row:1;margin:0;gap:8px;white-space:nowrap;flex-wrap:nowrap;}
+.bc-market-dashboard>.bc-market-context .bc-index-value strong {font-size:15px;}
+.bc-market-dashboard>.bc-market-context .bc-index-value > span {font-size:11px;}
+.bc-market-dashboard>.bc-market-context .bc-index-amount {grid-column:1 / -1;margin:0;text-align:right;white-space:nowrap;line-height:18px;}
+.market-index-expansion {display:grid;grid-template-rows:0fr;opacity:0;transition:grid-template-rows 160ms var(--ease-out),opacity 160ms var(--ease-out);}
+.market-index-expansion[data-expanded=true] {grid-template-rows:1fr;opacity:1;}
+.market-index-expansion > div {overflow:hidden;}
+@starting-style {.market-index-expansion[data-expanded=true] {grid-template-rows:0fr;opacity:0;}}
+@media(max-width:767px) {.market-indices-toggle {min-height:44px;}}
+@media(prefers-reduced-motion:reduce) {.market-index-expansion,.market-indices-toggle svg,.fund-analysis-readers > div,.fund-history-column {transition:none;transform:none;}}
+
+
+/* Reserve readable labels before spending remaining height on bars. */

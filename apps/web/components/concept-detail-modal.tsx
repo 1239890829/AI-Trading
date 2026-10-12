@@ -22,13 +22,15 @@ export function ConceptDetailModal({
   code,
   name,
   onClose,
+  active = true,
 }: {
   code: string;
   name: string;
   onClose: () => void;
+  active?: boolean;
 }) {
   const stockNav = useStockRowNav();
-  const resource = useResource(() => getConceptDetail(code), { key: code });
+  const resource = useResource(() => getConceptDetail(code), { key: code, enabled: active });
   const detail = resource.data;
   const error = resource.error instanceof Error ? resource.error.message : String(resource.error);
   const [filters, setFilters] = useState({ code, tab: "__all__", q: "", detail: undefined as typeof detail });
@@ -55,6 +57,7 @@ export function ConceptDetailModal({
 
   return (
     <ModalShell
+      open={active}
       onClose={onClose}
       label={`${detail?.name ?? name} 概念详情`}
       size="md"
@@ -79,6 +82,7 @@ export function ConceptDetailModal({
         </>
       }
     >
+      {active && <>
         {/* 细分 tab + 搜索：单行布局——tab 容器横向滚动（概念多时不换行不挤压），
             搜索框 shrink-0 固定右侧，整行高度恒定 */}
         <div className="flex shrink-0 items-center gap-2 border-b border-zinc-100 px-4 py-2 dark:border-zinc-800">
@@ -167,6 +171,7 @@ export function ConceptDetailModal({
           ))}
         </div>
 
+      </>}
     </ModalShell>
   );
 }

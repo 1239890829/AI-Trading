@@ -507,6 +507,31 @@ describe("FloatingAssistant 会话历史", () => {
 
 
 describe("assistant keyboard context", () => {
+  it("minimizing aborts the invisible dictionary read while the explicitly started answer continues", async () => {
+    const stream = makeStream();
+    const dictionarySignals: AbortSignal[] = [];
+    let chatSignal!: AbortSignal;
+    vi.stubGlobal("fetch", vi.fn((url: string | URL, init?: RequestInit) => {
+      if (String(url).includes("/assistant/chat")) {
+        chatSignal = init?.signal as AbortSignal;
+        return Promise.resolve(new Response(stream.body, {headers:{"content-type":"text/event-stream"}}));
+      }
+      dictionarySignals.push(init?.signal as AbortSignal);
+      return new Promise<Response>(() => {});
+    }));
+    render(<FloatingAssistant />);
+    await act(async () => openPanel());
+    await send("继续已启动的只读解释");
+    fireEvent.click(screen.getByRole("button", {name:"最小化"}));
+    expect(dictionarySignals[0].aborted).toBe(true);
+    expect(chatSignal.aborted).toBe(false);
+    expect(screen.queryByTestId("assistant-input")).toBeNull();
+    await act(async () => {stream.emit({type:"delta", text:"原来的解释完成"}); stream.emit({type:"done"}); stream.close();});
+    await act(async () => openPanel());
+    expect(screen.getByText("原来的解释完成")).toBeTruthy();
+    expect(dictionarySignals).toHaveLength(2);
+  });
+
   it("opens from keyboard, focuses input, and returns focus on Escape without posting", async () => {
     const fetchMock = vi.fn(async (_url: string | URL) => new Response(JSON.stringify({data: [], meta: {}}), {headers: {"content-type":"application/json"}}));
     vi.stubGlobal("fetch", fetchMock);
@@ -515,7 +540,11 @@ describe("assistant keyboard context", () => {
     fireEvent.keyDown(ball, {key:"Enter"});
     expect(document.activeElement).toBe(await screen.findByTestId("assistant-input"));
     fireEvent.keyDown(document.activeElement!, {key:"Escape"});
-    expect(screen.queryByTestId("assistant-panel")).toBeNull();
+    expect(screen.queryByRole("region", {name:"AI 助手面板"})).toBeNull();
+    expect(screen.queryByTestId("assistant-input")).toBeNull();
+    const shell = screen.getByTestId("assistant-panel");
+    expect(shell.hasAttribute("inert")).toBe(true);
+    expect(shell.getAttribute("data-motion-state")).toBe("closed");
     expect(document.activeElement).toBe(ball);
     expect(fetchMock.mock.calls.some(call => String(call[0]).includes("/assistant/chat"))).toBe(false);
   });

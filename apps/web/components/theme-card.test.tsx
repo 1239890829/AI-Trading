@@ -1,5 +1,5 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { cleanup, fireEvent, render, screen, within } from "@testing-library/react";
+import { act, cleanup, fireEvent, render, screen, within } from "@testing-library/react";
 import { ThemeCardView } from "@/components/theme-card";
 import { JUMP_PILL_CLASS } from "@/components/ui/jump-link";
 import type { ThemeStrengthRow } from "@/lib/api";
@@ -11,13 +11,13 @@ vi.mock("next/navigation", () => ({ useRouter: () => ({ push: vi.fn() }) }));
 // 展开行内嵌的介入条件清单自带取数，入口测试只关心「按钮 ↔ 展开行」的联动，
 // 因此桩成纯展示组件，避免在单测里发请求（清单自身行为见 entry-checklist.test.tsx）
 vi.mock("@/components/entry-checklist", () => ({
-  EntryChecklist: ({ symbol }: { symbol: string }) => (
-    <div data-testid="stub-checklist">{symbol}</div>
+  EntryChecklist: ({ symbol, active = true }: { symbol: string; active?: boolean }) => (
+    <div data-testid="stub-checklist" data-active={String(active)}>{symbol}</div>
   ),
 }));
 
 // vitest 未开 globals 时 RTL 自动 cleanup 不注册，必须手动
-afterEach(cleanup);
+afterEach(() => {cleanup(); vi.useRealTimers();});
 
 it("opens each rung cause for reading without adding a wide table column", async () => {
   const rung: LadderRung = {symbol: "600825", name: "新华传媒", role: "龙头", is_primary: true,
@@ -200,7 +200,11 @@ describe("题材卡 · 介入条件入口（P1-13）", () => {
     expect(stubs).toHaveLength(1);
     expect(stubs[0].textContent).toBe("000901");
 
+    vi.useFakeTimers();
     fireEvent.click(screen.getByRole("button", { name: "收起" }));
+    expect(screen.getByTestId("stub-checklist").closest("[inert]")).toBeTruthy();
+    expect(screen.getByTestId("stub-checklist").dataset.active).toBe("false");
+    act(() => vi.advanceTimersByTime(160));
     expect(screen.queryByTestId("stub-checklist")).toBeNull();
   });
 });

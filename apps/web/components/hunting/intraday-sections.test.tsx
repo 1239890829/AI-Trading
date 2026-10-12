@@ -1,4 +1,4 @@
-import { cleanup, render, screen } from "@testing-library/react";
+import { act, cleanup, render, screen } from "@testing-library/react";
 import { afterEach, expect, it, vi } from "vitest";
 import { OpportunitySection } from "./intraday-sections";
 import type { IntradayOpportunities, OpportunityTheme } from "@/lib/api";
@@ -8,7 +8,7 @@ vi.mock("@/components/picks/pick-card", () => ({
   PickCard: ({ item, readError }: { item: { symbol: string }; readError?: boolean }) =>
     <article data-testid={item.symbol} data-read-error={String(!!readError)}>{readError ? "参与条件待核" : "当前可参与"}</article>,
 }));
-afterEach(cleanup);
+afterEach(() => {cleanup(); vi.useRealTimers();});
 const theme: OpportunityTheme = {
   theme: "固定题材", stage: "主升", stage_basis: [], strength_score: 70, strength_tier: "A",
   tier_basis: null, formation: null, health_note: null, risks: [], max_boards: 2,
@@ -28,4 +28,15 @@ it("题材来源失效同时降级参与组与梯队组，恢复后再显示当�
   view.rerender(<OpportunitySection opps={opps} expanded="固定题材" onToggle={() => {}} showLedger={false} />);
   expect(screen.getByTestId("600001").dataset.readError).toBe("false");
   expect(screen.getByTestId("600002").dataset.readError).toBe("false");
+});
+
+it("theme collapse removes candidates from the accessible scope immediately and rapid reversal preserves the reopened cards", () => {
+  vi.useFakeTimers();
+  const view = render(<OpportunitySection opps={opps} expanded="固定题材" onToggle={() => {}} showLedger={false} />);
+  view.rerender(<OpportunitySection opps={opps} expanded={null} onToggle={() => {}} showLedger={false} />);
+  expect(screen.queryAllByRole("article")).toHaveLength(0);
+  expect(screen.getByTestId("600001").closest("[inert]")).toBeTruthy();
+  view.rerender(<OpportunitySection opps={opps} expanded="固定题材" onToggle={() => {}} showLedger={false} />);
+  act(() => vi.advanceTimersByTime(200));
+  expect(screen.getAllByRole("article")).toHaveLength(2);
 });

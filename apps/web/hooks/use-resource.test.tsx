@@ -221,6 +221,115 @@ describe("useResource", () => {
     expect(result.current.pending).toBe(false);
   });
 
+  it.each(["success", "failure"] as const)("写后刷新立即替换慢读取，旧 %s 不覆盖新结果或提前结束 pending", async oldOutcome => {
+    const gates: Array<{resolve: (v: string) => void; reject: (reason: Error) => void}> = [];
+    const fn = vi.fn(() => new Promise<string>((resolve, reject) => { gates.push({resolve, reject}); }));
+    const {result} = renderHook(() => useResource(fn, {intervalMs: 10_000, marketHours: false, key: "same"}));
+    await act(async () => {gates[0].resolve("baseline");});
+    await advance(10_000);
+    expect(fn).toHaveBeenCalledTimes(2);
+    act(() => {result.current.refresh(); result.current.refresh();});
+    expect(fn).toHaveBeenCalledTimes(3); // 同 React 批次只重读一次，不等旧请求 drain。
+    expect(result.current.pending).toBe(true);
+    await act(async () => {
+      if (oldOutcome === "success") gates[1].resolve("before-write");
+      else gates[1].reject(new Error("old failure"));
+    });
+    expect(fn).toHaveBeenCalledTimes(3);
+    expect(result.current.data).toBe("baseline");
+    expect(result.current.error).toBeNull();
+    expect(result.current.pending).toBe(true);
+    await advance(10_000); // 旧请求收尾不得重建自己的轮询链。
+    expect(fn).toHaveBeenCalledTimes(3);
+    await act(async () => {gates[2].resolve("after-write");});
+    expect(result.current.data).toBe("after-write");
+    expect(result.current.pending).toBe(false);
+    await advance(9_999);
+    expect(fn).toHaveBeenCalledTimes(3);
+    await advance(1);
+    expect(fn).toHaveBeenCalledTimes(4);
+  });
+
+  it("旧 key 的手动重读在切换或关闭后不得覆盖新 key", async () => {
+    const gates: Array<(v: string) => void> = [];
+    const fn = vi.fn(() => new Promise<string>(resolve => {gates.push(resolve);}));
+    const {result, rerender} = renderHook(({key, enabled}) => useResource(fn, {key, enabled}), {initialProps: {key: "a", enabled: true}});
+    act(() => {result.current.refresh(); result.current.refresh();});
+    rerender({key: "b", enabled: true});
+    expect(fn).toHaveBeenCalledTimes(3);
+    await act(async () => {gates[0]("A"); gates[1]("A-refreshed");});
+    expect(result.current.data).toBeUndefined();
+    expect(result.current.pending).toBe(true);
+    await act(async () => {gates[2]("B");});
+    expect(fn).toHaveBeenCalledTimes(3);
+    expect(result.current.data).toBe("B");
+    expect(result.current.pending).toBe(false);
+    act(() => {result.current.refresh(); result.current.refresh();});
+    rerender({key: "b", enabled: false});
+    await act(async () => {gates[3]("closed");});
+    expect(fn).toHaveBeenCalledTimes(4);
+    expect(result.current.status).toBe("unknown");
+    expect(result.current.pending).toBe(false);
+  });
+
+  it("隐藏初挂暂缓首读，可见时只首读一次，隐藏排队刷新恢复后补读", async () => {
+    setVisibility("hidden");
+    const fn = vi.fn(async () => "current");
+    const {result} = renderHook(() => useResource(fn));
+    expect(fn).not.toHaveBeenCalled();
+    act(() => {result.current.refresh(); result.current.refresh();});
+    expect(fn).not.toHaveBeenCalled();
+    await act(async () => {setVisibility("visible");});
+    expect(fn).toHaveBeenCalledTimes(1);
+    expect(result.current.data).toBe("current");
+    expect(result.current.pending).toBe(false);
+  });
+
+  it("在途失效后转隐藏，不补后台请求；回来只读一次当前结果", async () => {
+    const gates: Array<(value: string) => void> = [];
+    const fn = vi.fn(() => new Promise<string>(resolve => {gates.push(resolve);}));
+    const {result} = renderHook(() => useResource(fn));
+    act(() => {setVisibility("hidden"); result.current.refresh();});
+    await act(async () => {gates.shift()!("before-write");});
+    expect(fn).toHaveBeenCalledTimes(1);
+    expect(result.current.data).toBeUndefined();
+    act(() => {setVisibility("visible");});
+    expect(fn).toHaveBeenCalledTimes(2);
+    await act(async () => {gates.shift()!("after-write");});
+    expect(result.current.data).toBe("after-write");
+    expect(result.current.pending).toBe(false);
+  });
+
+  it("同步抛错不会把自动读取的单飞锁留住，回可见仍可恢复", async () => {
+    let fail = true;
+    const fn = vi.fn(() => {if (fail) throw new Error("sync failure"); return Promise.resolve("recovered");});
+    const {result} = renderHook(() => useResource(fn));
+    await flush();
+    expect(result.current.status).toBe("error");
+    fail = false;
+    act(() => {setVisibility("hidden"); setVisibility("visible");});
+    await flush();
+    expect(fn).toHaveBeenCalledTimes(2);
+    expect(result.current.data).toBe("recovered");
+    expect(result.current.pending).toBe(false);
+  });
+
+  it("回包结算和单飞锁释放之间的刷新也能补读，不能永久 pending", async () => {
+    const gates: Array<(value: string) => void> = [];
+    const fn = vi.fn(() => new Promise<string>(resolve => {gates.push(resolve);}));
+    const {result} = renderHook(() => useResource(fn));
+    await act(async () => {
+      gates.shift()!("first");
+      await Promise.resolve(); // run 已返回，finally 尚未释放 owner
+      result.current.refresh();
+    });
+    expect(fn).toHaveBeenCalledTimes(2);
+    expect(result.current.pending).toBe(true);
+    await act(async () => {gates.shift()!("current");});
+    expect(result.current.data).toBe("current");
+    expect(result.current.pending).toBe(false);
+  });
+
   it("【守卫】enabled=false 时 refresh() 是 no-op，不得把 pending 卡在 true", async () => {
     // 2026-09-12 评审批次 2：旧实现无条件 setRefreshing(true)，而 effect 在
     // `if (!enabled) return;` 处提前返回 ⇒ 没有任何路径把 refreshing 清回 false，

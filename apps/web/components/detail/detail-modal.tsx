@@ -28,6 +28,7 @@ import { eventDetailPayload, eventDirectionForSymbol, eventDirectionView, eventJ
 // 否则形成 detail-modal → symbol-detail-modal → stock-detail → stock-events → detail-modal 的环
 import { useSymbolDetail } from "@/components/detail/symbol-detail-context";
 import { ModalShell } from "@/components/ui/modal-shell";
+import { useExitPresence } from "@/hooks/use-exit-presence";
 
 export type DetailKind = "news" | "event" | "feed" | "attribution" | "theme" | "capital" | "echelon" | "generic";
 
@@ -75,19 +76,20 @@ const KIND_LABEL: Record<DetailKind, string> = {
 };
 
 export function DetailModalProvider({ children }: { children: React.ReactNode }) {
-  const [payload, setPayload] = useState<DetailPayload | null>(null);
-  const open = useCallback((p: DetailPayload) => setPayload(p), []);
-  const close = useCallback(() => setPayload(null), []);
+  const [state, setState] = useState<{payload: DetailPayload | null; activation: number}>({payload: null, activation: 0});
+  const presence = useExitPresence(state.payload);
+  const open = useCallback((payload: DetailPayload) => setState(previous => ({payload, activation: previous.activation + 1})), []);
+  const close = useCallback(() => setState(previous => ({...previous, payload: null})), []);
   const value = useMemo(() => ({ open, close }), [open, close]);
   return (
     <Ctx.Provider value={value}>
       {children}
-      {payload ? <DetailModalBody payload={payload} onClose={close} /> : null}
+      {presence.value ? <DetailModalBody key={state.activation} payload={presence.value} active={presence.active} onClose={close} /> : null}
     </Ctx.Provider>
   );
 }
 
-function DetailModalBody({ payload, onClose }: { payload: DetailPayload; onClose: () => void }) {
+function DetailModalBody({ payload, active, onClose }: { payload: DetailPayload; active: boolean; onClose: () => void }) {
   const { open: inspect } = useInspection();
   const { open } = useDetailModal();
   // 「查看个股详情」→ 标的详情弹窗（2026-09-15 详情弹窗化，原先跳工作台）
@@ -123,7 +125,7 @@ function DetailModalBody({ payload, onClose }: { payload: DetailPayload; onClose
 
   // 事件：快接口（0.02s），先渲染（effect 只负责发起请求，不再同步 setState）
   useEffect(() => {
-    if (!isFeed || !payload.symbol) return;
+    if (!active || !isFeed || !payload.symbol) return;
     let alive = true;
     getEventsForSymbol(payload.symbol)
       .then((ev) => alive && setFeedEvents({ status: "ready", items: ev?.items ?? [] }))
@@ -131,7 +133,7 @@ function DetailModalBody({ payload, onClose }: { payload: DetailPayload; onClose
     return () => {
       alive = false;
     };
-  }, [isFeed, payload.symbol, attempt]);
+  }, [active, isFeed, payload.symbol, attempt]);
 
   // 2026-09-09 需求 1：**不再单独拉取个股全部资讯**。
   // 猎场/卡片的「消息」定位 = 与该股**入选相关**的消息与事件（即 EventStore 里
@@ -153,7 +155,7 @@ function DetailModalBody({ payload, onClose }: { payload: DetailPayload; onClose
   }
 
   useEffect(() => {
-    if (isFeed) return; // feed 走上面的列表分支
+    if (!active || isFeed) return; // feed 走上面的列表分支
     if (!payload.url || (payload.kind !== "news" && payload.kind !== "event")) return;
     let alive = true;
     getNewsContent(payload.url)
@@ -171,10 +173,11 @@ function DetailModalBody({ payload, onClose }: { payload: DetailPayload; onClose
     };
     // isFeed 由 payload.kind 派生（见上方 const），补进依赖只是让 lint 显式可见，
     // 实际重跑时机与 payload.kind 完全一致，行为不变。
-  }, [payload.url, payload.kind, isFeed, attempt]);
+  }, [active, payload.url, payload.kind, isFeed, attempt]);
 
   return (
     <ModalShell presentation="drawer"
+      open={active}
       onClose={onClose}
       label={payload.title}
       size="md"
@@ -193,6 +196,7 @@ function DetailModalBody({ payload, onClose }: { payload: DetailPayload; onClose
       }
       bodyClassName="overflow-y-auto px-4 py-3"
     >
+      {active && <>
         {/* 元信息（判定结果/方向/板块等，跨模块透传） */}
         {payload.meta && payload.meta.length > 0 && (
           <dl className="mt-2 grid grid-cols-1 gap-x-3 gap-y-1 text-[11px] min-[480px]:grid-cols-2">
@@ -376,6 +380,7 @@ function DetailModalBody({ payload, onClose }: { payload: DetailPayload; onClose
             </a>
           )}
         </div>
+      </>}
     </ModalShell>
   );
 }
