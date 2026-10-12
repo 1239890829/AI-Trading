@@ -43,6 +43,7 @@ from pathlib import Path
 from typing import Any
 
 from app.market import trade_calendar as tc
+from app.events.extract import classify_certainty
 from app.picks.echelon import theme_ladder_health
 from app.picks.engine import event_weight
 from app.picks.intraday_rules import (
@@ -252,6 +253,8 @@ def assemble_brief(evidence: dict) -> dict:
             logic_parts.append(
                 f"近24h事件净强度 {ev_strength[tag]:+.2f}（利好 {ec.get('bull', 0)} / 利空 {ec.get('bear', 0)} 条）"
             )
+        if ec.get("pending"):
+            logic_parts.append(f"关联 {ec['pending']} 条方向、来源或阶段未核；未计入利好/利空强度")
         if stat:
             avg = stat.get("avg_change")
             logic_parts.append(
@@ -505,6 +508,10 @@ async def collect_evidence(app_state) -> dict:
             batch_refs: dict[str, list[dict]] = {}
             for row in _ev_rows:
                 w = event_weight(row.source_tier, row.certainty)
+                source_title = getattr(row, "title", "") or ""
+                source_summary = getattr(row, "summary", None)
+                if (source_title or source_summary) and classify_certainty(source_title, source_summary)[1] == "unknown":
+                    w = 0.0  # Consumption-only downgrade; never rewrite the saved interpretation.
                 row_themes: list[str] = []
                 row_syms: list[str] = []
                 for d in row.directions:
@@ -518,10 +525,14 @@ async def collect_evidence(app_state) -> dict:
                         if tag not in row_themes:
                             row_themes.append(tag)
                         if d.direction:
-                            sign = 1 if d.direction == 1 else -1
-                            batch_strength[tag] = batch_strength.get(tag, 0.0) + sign * d.strength * w
+                            batch_strength.setdefault(tag, 0.0)
+                        if d.direction in (-1, 1) and w > 0:
+                            batch_strength[tag] += d.direction * d.strength * w
                             c = batch_counts.setdefault(tag, {"bull": 0, "bear": 0})
                             c["bull" if d.direction == 1 else "bear"] += 1
+                        else:
+                            c = batch_counts.setdefault(tag, {"bull": 0, "bear": 0})
+                            c["pending"] = c.get("pending", 0) + 1
                     elif d.target_type == "symbol" and d.target:
                         row_syms.append(d.target)
                 for tag in row_themes:

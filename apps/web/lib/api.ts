@@ -14,6 +14,7 @@ export * from "./api/client";
 export * from "./api/agent";
 export * from "./api/alerts";
 export * from "./api/events";
+export * from "./api/attribution";
 export * from "./api/market";
 export * from "./api/news";
 export * from "./api/paper";

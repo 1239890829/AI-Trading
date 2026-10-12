@@ -639,6 +639,100 @@ def test_brief_archives_event_version_used_for_direction(hermetic, brief_dir):
     assert mb.load_brief("20260914")["directions"][0]["event_refs"][0]["version_id"] == 11
 
 
+@pytest.mark.parametrize("source,announcement,strength", [
+    ("公告", True, 2.0), ("财联社", False, 1.6),
+    ("eastmoney", False, 1.2), ("未知转载", False, 0.8),
+])
+def test_event_producer_grades_reach_morning_consumer(hermetic, source, announcement, strength):
+    from app.events.extract import build_event
+
+    data = build_event("粮食订单签约", source=source, is_announcement=announcement,
+                       theme_names=["粮食"])
+    row = NS(id=7, **{key: value for key, value in data.items() if key != "directions"},
+             directions=[NS(**direction) for direction in data["directions"]])
+    state = _hermetic_state()
+    state.event_store = NS(list_events=lambda **_kwargs: [row])
+    evidence = asyncio.run(mb.collect_evidence(state))
+    assert evidence["event_strength"]["粮食"] == pytest.approx(strength)
+
+
+def test_unknown_stage_cannot_strengthen_morning_direction(hermetic):
+    row = NS(id=7, source_tier=5, certainty=None,
+             directions=[NS(target_type="theme", target="粮食", direction=1, strength=2)])
+    state = _hermetic_state()
+    state.event_store = NS(list_events=lambda **_kwargs: [row])
+    evidence = asyncio.run(mb.collect_evidence(state))
+    assert evidence["event_strength"]["粮食"] == 0
+    assert evidence["event_counts"]["粮食"].get("bull", 0) == 0
+    assert evidence["event_counts"]["粮食"].get("bear", 0) == 0
+    assert evidence["event_counts"]["粮食"]["pending"] == 1
+    assert evidence["event_refs"]["粮食"] == [{"event_id": 7, "version_id": None, "state": "unknown"}]
+    brief = mb.assemble_brief(evidence)
+    direction = next(item for item in brief["directions"] if item["direction"] == "粮食")
+    assert "阶段未核" in direction["logic"]
+    assert "利好 0 / 利空 0" in direction["logic"]
+
+
+@pytest.mark.parametrize("summary,expected_strength", [
+    ("公司暂无相关芯片业务。", 0),
+    ("公司没有相关芯片产品。", 0),
+    ("订单已签署，公司没有重大财务变化。", 2),
+    ("已签署订单。本次交易不涉及其他业务，原业务持续执行。", 2),
+    ("公司拟收购芯片资产，正在推进。", 2),
+])
+def test_persisted_done_record_consumers_preserve_original_evidence(hermetic, tmp_path, summary, expected_strength):
+    from sqlalchemy import create_engine, select
+    from sqlalchemy.orm import sessionmaker
+    from app.events.attribution import read_attribution
+    from app.events.store import EventStore
+    from app.models.event import EventInterpretation
+    from app.models.watchlist import Base
+    from app.services.picks_pipeline import _build_event_hits_index
+
+    engine = create_engine(f"sqlite:///{tmp_path / 'legacy-consumption.db'}")
+    Base.metadata.create_all(engine)
+    sf = sessionmaker(bind=engine, expire_on_commit=False)
+    store = EventStore(sf)
+    # Reproduce the former extractor's persisted done/+1 fields. The source
+    # itself includes a denial; a read must not rewrite that old interpretation.
+    row, _ = store.add_event({
+        "fingerprint": "legacy-done", "title": "公司澄清芯片合作消息", "summary": summary,
+        "source": "公司公告", "source_tier": 5, "source_symbol": "600001",
+        "certainty": "done", "category": "corporate", "fact_kind": "fact",
+        "half_life_hours": 72, "directions": [
+            {"target_type": kind, "target": target, "direction": 1, "strength": 2,
+             "basis": "旧规则命中合作", "chain": "旧规则合作线索", "matched_by": "source"}
+            for kind, target in [("symbol", "600001"), ("theme", "芯片")]
+        ],
+    })
+    before = store.get_event(row.id)
+    ref = dict(before.interpretation_ref)
+    with sf() as db:
+        original = db.scalar(select(EventInterpretation).where(EventInterpretation.event_id == row.id))
+        original_payload = original.payload_json
+    state = _hermetic_state()
+    state.event_store = store
+    evidence = asyncio.run(mb.collect_evidence(state))
+    tag = mb.normalize_theme("芯片")
+    assert evidence["event_strength"][tag] == expected_strength
+    assert evidence["event_counts"][tag].get("bull", 0) == (1 if expected_strength else 0)
+    assert evidence["event_counts"][tag].get("pending", 0) == (0 if expected_strength else 1)
+    assert evidence["event_refs"][tag] == [ref]
+    bull, bear, title, direction, linked, refs = _build_event_hits_index(store.list_events(active_only=True))["600001"]
+    assert (bull, bear) == (expected_strength, 0)
+    assert title == before.title and direction == ("利好" if expected_strength else None)
+    assert linked == 1 and refs == [ref]
+    projected = read_attribution(sf, symbol="600001")["data"]["items"][0]
+    assert projected["stock_relation"]["direction"] == (1 if expected_strength else None)
+    after = store.get_event(row.id)
+    assert (after.title, after.summary, after.certainty) == (before.title, summary, "done")
+    assert [(d.target, d.direction, d.strength) for d in after.directions] == [(d.target, 1, 2) for d in before.directions]
+    assert after.interpretation_ref == ref
+    with sf() as db:
+        assert db.get(EventInterpretation, original.id).payload_json == original_payload
+    engine.dispose()
+
+
 def test_brief_legacy_event_reference_remains_unknown(hermetic):
     """旧事件没有解释版本时不可事后推定一个版本。"""
     import asyncio

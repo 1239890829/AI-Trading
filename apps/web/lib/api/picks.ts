@@ -7,6 +7,7 @@
  */
 
 import { getJson, getJsonArray, sendJson } from "./internal";
+import type {EventInterpretationRef} from "./events";
 
 export interface StopLossRef {
   pct: number;
@@ -76,6 +77,7 @@ export interface SelectionEntry {
 }
 
 export interface DailyPickItem {
+  related_event_refs?: EventInterpretationRef[];
   selection_entry?: SelectionEntry | null;
   symbol: string;
   name: string | null;
@@ -657,6 +659,7 @@ export interface SealState {
 }
 
 export interface OpportunityStock {
+  related_event_refs?: EventInterpretationRef[];
   selection_entry?: SelectionEntry | null;
   symbol: string;
   name: string | null;
@@ -825,6 +828,7 @@ export interface IntradayThemeSource {
 }
 
 export interface IntradayTopStock {
+  related_event_refs?: EventInterpretationRef[];
   selection_entry?: SelectionEntry | null;
   theme_sources?: IntradayThemeSource[];
   symbol: string;

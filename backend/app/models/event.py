@@ -32,8 +32,8 @@ class EventCard(Base):
     published_at: Mapped[datetime] = mapped_column(DateTime, default=utcnow)
     # fact=事实 / opinion=解读 / rumor=传闻（事实与解读分离，不得混写）
     fact_kind: Mapped[str] = mapped_column(String(8), default="fact")
-    # done=已落地 / proposed=拟议 / rumor=传闻
-    certainty: Mapped[str] = mapped_column(String(8), default="done")
+    # done=已报告 / proposed=拟议 / rumor=传闻 / unknown=缺阶段依据
+    certainty: Mapped[str] = mapped_column(String(8), default="unknown")
     # policy=政策 / statement=发言 / data=数据 / rumor=传闻 / corporate=公司 / other
     category: Mapped[str] = mapped_column(String(16), default="other")
     half_life_hours: Mapped[int] = mapped_column(Integer, default=48)

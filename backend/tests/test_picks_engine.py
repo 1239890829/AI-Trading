@@ -413,22 +413,39 @@ def test_score_sentiment_promo_clamped():
 
 
 def test_event_weight_tier_and_certainty():
-    """tier1 官方落地 = 1.0；tier5 传闻 = 0.06；缺失按中性档不冒充已判。"""
-    from app.picks.engine import CERTAINTY_WEIGHTS, TIER_WEIGHTS, event_weight
+    """Use the persisted producer contract: 5 official, 1 self-media."""
+    from app.picks.engine import event_weight
 
-    assert event_weight(1, "done") == pytest.approx(1.0)
-    assert event_weight(5, "rumor") == pytest.approx(0.06)  # 0.2 × 0.3
-    assert event_weight(None, None) == pytest.approx(TIER_WEIGHTS[3] * CERTAINTY_WEIGHTS["done"])
-    # 未知档位逐项回落中性档（0.6 × 0.6 = 0.36），不抛异常也不给满分
-    assert event_weight(9, "nonsense") == pytest.approx(0.36)
+    assert event_weight(5, "done") == pytest.approx(1.0)
+    assert event_weight(1, "rumor") == pytest.approx(0.06)
+    assert event_weight(None, None) == 0
+    assert event_weight(5, None) == 0
+    assert event_weight(None, "done") == 0
+    assert event_weight(5, "nonsense") == 0
+
+
+@pytest.mark.parametrize("tier", [True, False, "5", "invalid", 5.0, 0, 9, [], {}])
+def test_event_weight_rejects_malformed_source_tier(tier):
+    """A malformed grade must not be coerced into an authoritative source."""
+    from app.picks.engine import event_weight
+
+    with pytest.raises(ValueError, match="source_tier"):
+        event_weight(tier, "done")
+
+
+@pytest.mark.parametrize("certainty", [None, "", "unknown", "high", "DONE", 1, [], {}])
+def test_event_weight_unknown_stage_cannot_contribute(certainty):
+    from app.picks.engine import event_weight
+
+    assert event_weight(5, certainty) == 0
 
 
 def test_news_weighted_strength_separates_official_from_rumor():
     """同样 3 点强度：官方来源得分显著高于传闻来源（同向利好）。"""
-    from app.picks.engine import score_news
+    from app.picks.engine import event_weight, score_news
 
-    s_official, _ = score_news(3, 0, "政策落地", "利好")   # tier1 done：3×1.0
-    s_rumor, _ = score_news(3 * 0.04, 0, "群里传的", "利好")  # tier5 rumor：3×0.04
+    s_official, _ = score_news(3 * event_weight(5, "done"), 0, "政策落地", "利好")
+    s_rumor, _ = score_news(3 * event_weight(1, "rumor"), 0, "群里传的", "利好")
     assert s_official > s_rumor + 10
 
 

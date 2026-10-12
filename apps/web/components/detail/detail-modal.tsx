@@ -19,16 +19,17 @@ import { HugeiconsIcon } from "@hugeicons/react";
 import ArrowUpRight01Icon from "@hugeicons/core-free-icons/ArrowUpRight01Icon";
 import { useInspection } from "@/components/inspection/inspection-context";
 
-import { getEventsForSymbol, getNewsContent, type ArticleBlock, type EventSummary } from "@/lib/api";
+import { getEventsForSymbol, getNewsContent, type ArticleBlock, type EventSummary, type EventInterpretationRef, type SelectionEntry } from "@/lib/api";
+import { StockAttributionPanel } from "./attribution-evidence";
 import { CapitalFlowPanel } from "@/components/detail/capital-flow-panel";
-import { eventTimeText } from "@/lib/format";
+import { bjDate, eventTimeText, fmt, pctText, timeTextBJ } from "@/lib/format";
 import { eventDetailPayload, eventDirectionView, eventJudgeView } from "@/lib/event-view";
 // 只依赖**零业务依赖**的 context 模块（不 import symbol-detail-modal）：
 // 否则形成 detail-modal → symbol-detail-modal → stock-detail → stock-events → detail-modal 的环
 import { useSymbolDetail } from "@/components/detail/symbol-detail-context";
 import { ModalShell } from "@/components/ui/modal-shell";
 
-export type DetailKind = "news" | "event" | "feed" | "theme" | "capital" | "echelon" | "generic";
+export type DetailKind = "news" | "event" | "feed" | "attribution" | "theme" | "capital" | "echelon" | "generic";
 
 export interface DetailPayload {
   kind: DetailKind;
@@ -40,6 +41,9 @@ export interface DetailPayload {
   theme?: string | null;
   /** 事件 id：用于取事件详情（方向行/判定状态） */
   eventId?: number | null;
+  /** Exact references from the source list or original selection record, not new inferred history. */
+  eventRefs?: EventInterpretationRef[];
+  selectionEntry?: SelectionEntry | null;
   source?: string | null;
   date?: string | null;
   /** 附加元信息（如判定状态、利好/利空、产业链） */
@@ -63,6 +67,7 @@ const KIND_LABEL: Record<DetailKind, string> = {
   news: "资讯",
   event: "事件",
   feed: "消息",
+  attribution: "驱动依据",
   theme: "题材",
   capital: "资金",
   echelon: "梯队",
@@ -101,6 +106,12 @@ function DetailModalBody({ payload, onClose }: { payload: DetailPayload; onClose
     items: [],
   });
   const isFeed = payload.kind === "feed";
+  const selection = payload.selectionEntry;
+  const recordedSelection = !!selection && ["recorded", "partial"].includes(selection.state)
+    && selection.semantics === "observation_only_not_fill"
+    && ["daily_generation", "intraday_rank_archive"].includes(selection.source);
+  const selectedAt = recordedSelection && selection.selected_at && /(?:Z|[+-]\d{2}:\d{2})$/.test(selection.selected_at)
+    && Number.isFinite(Date.parse(selection.selected_at)) ? selection.selected_at : null;
 
   // 切股/重试 → 当帧回到「加载中」（渲染期 adjust-state，P1-27）
   const feedKey = `${isFeed ? 1 : 0}:${payload.symbol ?? ""}:${attempt}`;
@@ -184,15 +195,26 @@ function DetailModalBody({ payload, onClose }: { payload: DetailPayload; onClose
     >
         {/* 元信息（判定结果/方向/板块等，跨模块透传） */}
         {payload.meta && payload.meta.length > 0 && (
-          <dl className="mt-2 grid grid-cols-2 gap-x-3 gap-y-1 text-[11px]">
+          <dl className="mt-2 grid grid-cols-1 gap-x-3 gap-y-1 text-[11px] min-[480px]:grid-cols-2">
             {payload.meta.map((m) => (
               <div key={m.label} className="flex gap-1">
                 <dt className="shrink-0 text-zinc-600 dark:text-zinc-400">{m.label}</dt>
-                <dd className="min-w-0 truncate text-zinc-700 dark:text-zinc-200">{m.value}</dd>
+                <dd className="min-w-0 [overflow-wrap:anywhere] text-zinc-700 dark:text-zinc-200">{m.value}</dd>
               </div>
             ))}
           </dl>
         )}
+
+        {payload.kind === "attribution" && <div className="min-w-0 border-b border-zinc-200 pb-2 text-xs dark:border-zinc-700/60" aria-label="原首次加入依据">
+          <h3 className="font-medium">原首次加入记录</h3>
+          <div className="mt-1 flex flex-wrap gap-x-3 gap-y-1 text-zinc-600 dark:text-zinc-400">
+            <span>加入时间 {selectedAt ? <time dateTime={selectedAt}>{bjDate(selectedAt)} {timeTextBJ(selectedAt)}</time> : "未记录"}</span>
+            <span className="tabular-nums">参考价 {recordedSelection && typeof selection.reference_price === "number" && Number.isFinite(selection.reference_price) && selection.reference_price > 0 ? `¥${fmt(selection.reference_price)}` : "未记录"}</span>
+            {recordedSelection && typeof selection.reference_change_pct === "number" && Number.isFinite(selection.reference_change_pct) && <span className="tabular-nums">当时 {pctText(selection.reference_change_pct)}</span>}
+            <span>非成交记录</span>
+          </div>
+        </div>}
+        {(payload.kind === "attribution" || payload.kind === "event") && (payload.symbol || payload.eventId) && <StockAttributionPanel key={`${payload.symbol || ""}:${payload.eventId || ""}`} symbol={payload.symbol} eventId={payload.eventId} defaultExpanded bounded={false} selectedAt={selectedAt} recordedRefs={payload.eventRefs} selectionContext={payload.kind === "attribution"} title={payload.kind === "event" ? "事件依据核对" : "驱动线索"} />}
 
         {/* feed（消息+事件合并）：列表 → 点条目切到单条详情 */}
         {isFeed && (
@@ -266,7 +288,7 @@ function DetailModalBody({ payload, onClose }: { payload: DetailPayload; onClose
         )}
 
         {/* 三态：加载 / 错误（可重试）/ 空（显式说明） */}
-        <div className="mt-3">
+        {payload.kind !== "attribution" && <div className="mt-3">
           {state.status === "loading" && <p className="text-xs text-zinc-600 dark:text-zinc-400">正文加载中…</p>}
           {state.status === "error" && (
             <div className="rounded border border-amber-200 bg-amber-50 p-2 text-xs text-amber-800 dark:border-amber-900 dark:bg-amber-950/40 dark:text-amber-300">
@@ -307,10 +329,10 @@ function DetailModalBody({ payload, onClose }: { payload: DetailPayload; onClose
               )}
             </div>
           )}
-        </div>
+        </div>}
 
         {/* 无原文链接时的兜底说明（此前这类事件直接不可点）；feed 是列表视图不适用 */}
-        {!payload.url && !isFeed && (
+        {!payload.url && !isFeed && payload.kind !== "attribution" && (
           <p className="mt-2 text-[11px] text-zinc-600 dark:text-zinc-400">
             该事件由快讯流提取，源站未提供原文链接；判定结果见上方元信息。
           </p>

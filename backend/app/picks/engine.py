@@ -115,17 +115,24 @@ REASON_CATEGORIES = {
 
 
 # ---- 事件可信度权重（选股 2.0 §3 消息面增强：tier × certainty，2026-09-02）----
-# tier：1=官方/监管 … 5=自媒体传闻；certainty：done=已落地 / proposed=提议中 / rumor=传闻
-TIER_WEIGHTS = {1: 1.0, 2: 0.8, 3: 0.6, 4: 0.4, 5: 0.2}
+# Persisted EventCard/extract contract: 5 official, 4 first-line, 3 mainstream,
+# 2 aggregator/unknown channel, 1 self-media. Do not reinterpret historical IDs.
+TIER_WEIGHTS = {1: 0.2, 2: 0.4, 3: 0.6, 4: 0.8, 5: 1.0}
 CERTAINTY_WEIGHTS = {"done": 1.0, "proposed": 0.6, "rumor": 0.3}
 
 
 def event_weight(source_tier: int | None, certainty: str | None) -> float:
-    """单条事件的可信度权重。缺失字段按中性档（tier 3 / done）处理——
-    权重缺失默认取中间值，但会在索引层留下"未加权"的痕迹，不冒充已判。"""
-    return TIER_WEIGHTS.get(int(source_tier or 3), 0.6) * CERTAINTY_WEIGHTS.get(
-        str(certainty or "done"), 0.6
-    )
+    """Use producer grades. Missing provenance or stage has zero contribution.
+
+    A corrupt grade raises into the consumers' existing atomic batch failure
+    path. A missing or unknown stage retains the relation without claiming that
+    the business event completed. Archived pick/brief scores are not rewritten.
+    """
+    if source_tier is not None and (type(source_tier) is not int or source_tier not in TIER_WEIGHTS):
+        raise ValueError("source_tier must be an integer from 1 to 5 or None")
+    tier_weight = TIER_WEIGHTS.get(source_tier, 0.0)
+    certainty_weight = CERTAINTY_WEIGHTS.get(certainty, 0.0) if isinstance(certainty, str) else 0.0
+    return tier_weight * certainty_weight
 
 
 def score_sentiment(
@@ -165,7 +172,7 @@ def score_news(bull_events: int, bear_events: int, top_title: str | None, top_di
 
     输入 bull/bear 是强度和（事件索引层已乘 `event_weight`：source_tier 越权威、
     certainty 越确定权重越高，见下方常量），不再是裸条数——
-    一条 tier1 官方落地政策的权重远高于三条 tier5 传闻。
+    一条 tier5 官方落地政策的权重远高于三条 tier1 传闻。
     利空权重更高（突发利空的反身性更强）；无事件=中性 50 分（不臆测）。
     top 事件标题进 basis 供卡片「关联消息」。
     """

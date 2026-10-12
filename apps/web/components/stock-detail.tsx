@@ -20,6 +20,7 @@ import { isIndexSymbol } from "@/lib/api";
 import { notifyWatchlistChanged } from "@/lib/watchlist-sync";
 import { ThemeChipsRow } from "@/components/detail/theme-chips";
 import { LimitUpReasonPanel } from "@/components/detail/limit-up-reason";
+import { StockAttributionPanel } from "@/components/detail/attribution-evidence";
 import { StockEventsRow } from "@/components/detail/stock-events";
 import { MinuteDecisionPanel } from "@/components/detail/minute-decision-panel";
 import {
@@ -774,6 +775,7 @@ export const StockDetailPanel = memo(function StockDetailPanel({
           指数不渲染——/api/events/symbol/{code} 只接受 6 位个股代码，指数段
           （sh000001 等）会返回 400，此前表现为常驻「加载失败 [重试]」（2026-09-11）。 */}
       <StockEventsRow symbol={symbol} isIndex={isIndex} />
+      <StockAttributionPanel symbol={symbol} active={active} bounded={false} />
       </details>}
       </div>
 

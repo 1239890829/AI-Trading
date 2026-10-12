@@ -14,7 +14,8 @@ import { useRouter } from "next/navigation";
 import { HugeiconsIcon } from "@hugeicons/react";
 import ArrowUpRight01Icon from "@hugeicons/core-free-icons/ArrowUpRight01Icon";
 
-import { API_BASE, getNewsContent, type ArticleBlock, type ArticleContent } from "@/lib/api";
+import { API_BASE, getNewsContent, type ArticleBlock, type ArticleContent, type EventInterpretationRef } from "@/lib/api";
+import { StockAttributionPanel } from "@/components/detail/attribution-evidence";
 import { withFrom } from "@/lib/routing";
 import { parseWorkbenchDetailUrl } from "@/lib/detail-tabs";
 import { useSymbolDetail } from "@/components/detail/symbol-detail-context";
@@ -35,6 +36,9 @@ export interface NewsModalItem {
   evidence?: string;
   /** 事件解释状态与证据边界，原文正文不改写。 */
   judgement?: string;
+  eventId?: number;
+  eventRef?: EventInterpretationRef | null;
+  symbol?: string | null;
 }
 
 const SOURCE_LABEL: Record<string, string> = {
@@ -333,6 +337,7 @@ export function NewsModal({ item, onClose }: { item: NewsModalItem | null; onClo
               <span className="font-medium">方向说明：</span>{shownItem.judgement}
             </div>
           )}
+          {!!shownItem.eventId && presence.active && <StockAttributionPanel key={shownItem.eventId} eventId={shownItem.eventId} symbol={shownItem.symbol} title="事件依据核对" bounded={false} recordedRefs={shownItem.eventRef ? [shownItem.eventRef] : undefined} />}
           {loading && (
             <div className="space-y-2.5" data-testid="news-modal-loading">
               {[92, 100, 96, 88, 60].map((w, i) => (

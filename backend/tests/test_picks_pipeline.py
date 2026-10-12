@@ -62,8 +62,80 @@ class _Event:
         self.id = eid
         self.title = title
         self.source_tier = 2
-        self.certainty = "high"
+        self.certainty = "done"
         self.directions = [_Direction(target, 1, target_type)]
+
+
+def test_event_producer_grades_reach_selection_consumer_in_correct_order():
+    """Check the real index and score, not a second copy of the weight table."""
+    from types import SimpleNamespace as NS
+    from app.events.extract import build_event
+    from app.picks.engine import score_news
+
+    scores = []
+    for source, announcement in [("公告", True), ("财联社", False),
+                                 ("eastmoney", False), ("未知转载", False)]:
+        data = build_event("粮食订单签约", source=source, is_announcement=announcement,
+                           source_symbol="600001")
+        row = NS(id=1, **{key: value for key, value in data.items() if key != "directions"},
+                 directions=[NS(**direction) for direction in data["directions"]])
+        bull, bear, title, direction, linked, refs = pl._build_event_hits_index([row])["600001"]
+        score, _basis = score_news(bull, bear, title, direction)
+        assert linked == 1
+        assert refs == [{"event_id": 1, "version_id": None, "state": "unknown"}]
+        scores.append(score)
+    assert scores == pytest.approx([86.0, 78.8, 71.6, 64.4])
+
+
+@pytest.mark.parametrize("summary", ["公司暂无相关芯片业务。", "公司没有相关芯片产品。"])
+def test_absent_business_never_adds_selection_message_strength(summary):
+    from types import SimpleNamespace as NS
+    from app.events.extract import build_event
+    from app.picks.engine import score_news
+
+    data = build_event("公司澄清芯片合作消息", is_announcement=True,
+                       source_symbol="600001", summary=summary)
+    row = NS(id=1, **{key: value for key, value in data.items() if key != "directions"},
+             directions=[NS(**direction) for direction in data["directions"]])
+    bull, bear, title, direction, linked, refs = pl._build_event_hits_index([row])["600001"]
+    assert (bull, bear) == (0, 0)
+    assert title == row.title and direction is None
+    assert linked == 1 and refs == [{"event_id": 1, "version_id": None, "state": "unknown"}]
+    assert score_news(bull, bear, title, direction)[0] == 50
+
+
+def test_unknown_event_stage_keeps_reference_without_selection_score():
+    from types import SimpleNamespace as NS
+
+    ref = {"event_id": 7, "version_id": 11, "state": "active"}
+    row = NS(id=7, title="阶段待核的公告", source_tier=5, certainty=None,
+             interpretation_ref=ref, directions=[NS(target_type="symbol", target="600001",
+                                                    direction=1, strength=2)])
+    bull, bear, title, direction, linked, refs = pl._build_event_hits_index([row])["600001"]
+    assert (bull, bear) == (0, 0)
+    assert title == row.title and direction is None
+    assert linked == 1 and refs == [ref]
+
+
+def test_unweighted_headline_cannot_mask_supported_selection_direction():
+    from types import SimpleNamespace as NS
+
+    unweighted = NS(id=7, title="阶段待核的利好标题", source_tier=5, certainty=None,
+                    directions=[NS(target_type="symbol", target="600001", direction=1, strength=2)])
+    supported = NS(id=8, title="已披露减持公告", source_tier=5, certainty="done",
+                   directions=[NS(target_type="symbol", target="600001", direction=-1, strength=2)])
+    bull, bear, title, direction, linked, refs = pl._build_event_hits_index([unweighted, supported])["600001"]
+    assert (bull, bear, title, direction, linked) == (0, 2, supported.title, "利空", 2)
+    assert [ref["event_id"] for ref in refs] == [7, 8]
+
+
+def test_model_hypothesis_cannot_add_selection_message_score():
+    from types import SimpleNamespace as NS
+
+    hypothesis = NS(id=7, title="待核模型假设", source_tier=5, certainty="done",
+                    directions=[NS(target_type="symbol", target="600001", direction=1,
+                                   strength=2, matched_by="llm_aux")])
+    assert pl._build_event_hits_index([hypothesis]) == {}
 
 
 class _Store:
@@ -312,6 +384,20 @@ def _benign_gate(**_kw):
         "stand_aside": False, "level": "none", "reasons": [], "phase": None,
         "strip_buy_range": False, "observation_only": False,
     }
+
+
+def test_unknown_stage_is_explicit_in_generated_selection_basis(deps, store, monkeypatch):
+    monkeypatch.setattr(pl, "evaluate_stand_aside", _benign_gate)
+    event = _Event(7, "阶段待核的公告")
+    event.certainty = None
+    monkeypatch.setattr(store, "list_events", lambda **_kwargs: [event])
+    data = _run(deps, _Hub())["data"]
+    card = next(item for item in data["items"] if item["symbol"] == "600519")
+    assert card["sub_scores"]["news"] == 50
+    assert "阶段未核" in card["bases"]["news"]
+    assert "标题无方向词" not in card["bases"]["news"]
+    assert card["related_events"] == [event.title]
+    assert card["dimension_evidence"]["news"]["state"] == "partial"
 
 
 @pytest.mark.parametrize("mode,state", [("empty", "missing"), ("fetch_error", "error"), ("score_error", "error")])

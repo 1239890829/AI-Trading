@@ -462,7 +462,8 @@ describe("适配器归一：4 组异名同义字段", () => {
     const { container } = render(<PickCard item={card} />);
     expect(container.textContent).not.toContain("入选 —");
     expect(container.textContent).toContain("数据源未提供涨停原因");
-    expect(screen.queryByText("依据", {exact: true})).toBeNull();
+    expect(screen.getByRole("button", {name: "依据"})).toBeTruthy();
+    expect(card.basisRows.some(row => row.label === "入选")).toBe(false);
   });
 });
 

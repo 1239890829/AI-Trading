@@ -149,6 +149,7 @@ export interface TradingCard {
   /* --- 其他 --- */
   chipSignal: DailyPickItem["chip_signal"];
   relatedEvents: string[];
+  relatedEventRefs?: DailyPickItem["related_event_refs"];
   /** 卡底口径注记：解释「本卡为什么缺某几节」。null = 不需要解释。 */
   caliberNote: string | null;
 }
@@ -227,6 +228,7 @@ export function fromDailyPick(it: DailyPickItem): TradingCard {
     invalidations: it.invalidations ?? [],
     chipSignal: it.chip_signal ?? null,
     relatedEvents: it.related_events ?? [],
+    relatedEventRefs: it.related_event_refs,
     // 盘前名单是收盘产出的完整口径（评分/估值/买入区间/失效条件都在），无需额外解释
     caliberNote: null,
   };
@@ -292,6 +294,7 @@ export function fromIntradayStock(it: IntradayTopStock | OpportunityStock): Trad
     invalidations: [],
     chipSignal: null,
     relatedEvents: [],
+    relatedEventRefs: it.related_event_refs,
     // 盘中来源不补每日组合字段；原生成时点信息由每日来源提供。
     caliberNote:
       "盘中实时口径 · 随盘面重算：含联动确定性判定与出场纪律；" +
@@ -705,7 +708,7 @@ export function PickCard({
         <div className="stock-card-basis text-[11px] leading-relaxed">
           <div className="text-[10px] font-medium text-zinc-600 dark:text-zinc-400">入选原因</div>
           <dl className="basis-ledger">{item.basisRows.map((r) => (
-            <div key={r.label}><dt>{r.label}</dt><dd>{r.label === "涨停原因" ? <LimitReason reason={r.value} source={r.source} date={r.date} compact /> : r.value}</dd></div>
+            <div key={r.label}><dt>{r.label}</dt><dd>{r.label === "涨停原因" ? <LimitReason symbol={item.symbol} reason={r.value} source={r.source} date={r.date} compact /> : r.value}</dd></div>
           ))}</dl>
           {item.vetoes.map((v) => (
             <div key={v} className="text-red-700 dark:text-red-300">
@@ -793,7 +796,7 @@ export function PickCard({
       )}
 
       {/* 跨模块入口（2026-09-09 需求 3）：事件弹窗 / 消息·资金·梯队跳转 */}
-      <CardEntryRow symbol={item.symbol} name={item.name} theme={item.theme ?? null} />
+      <CardEntryRow symbol={item.symbol} name={item.name} theme={item.theme ?? null} selectionEntry={item.selectionEntry} eventRefs={item.relatedEventRefs} />
     </CardShell>
   );
 }

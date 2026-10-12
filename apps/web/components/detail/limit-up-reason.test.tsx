@@ -1,12 +1,12 @@
 import {act, cleanup, fireEvent, render, screen, within} from "@testing-library/react";
 import {afterEach, describe, expect, it, vi} from "vitest";
-import {getLimitUpPoolSnapshot, type LimitPoolSnapshot} from "@/lib/api";
+import {getLimitUpPoolSnapshot, getStockAttribution, type LimitPoolSnapshot} from "@/lib/api";
 import type {LimitUpRecord, Quote} from "@/types/market";
 import {LimitUpReasonPanel} from "./limit-up-reason";
 import {LimitReason} from "./limit-reason";
 
-vi.mock("@/lib/api", () => ({getLimitUpPoolSnapshot: vi.fn()}));
-afterEach(() => {cleanup(); vi.useRealTimers(); vi.mocked(getLimitUpPoolSnapshot).mockReset();});
+vi.mock("@/lib/api", () => ({getLimitUpPoolSnapshot: vi.fn(), getStockAttribution: vi.fn()}));
+afterEach(() => {cleanup(); vi.useRealTimers(); vi.mocked(getLimitUpPoolSnapshot).mockReset(); vi.mocked(getStockAttribution).mockReset();});
 const quote = (symbol = "600825", date = "2026-10-09T08:00:00Z"): Quote => ({symbol, data_timestamp: date, source: "tencent", quality:"high", quality_reasons:[], received_at:date});
 const pool = (reason: string | null = "拟收购财联社+重大资产重组", date = "2026-10-09", symbol = "600825"): LimitPoolSnapshot<LimitUpRecord> => ({trade_date:date, pool:[{symbol,reason,source:"ths",trade_date:date,quality:"high",quality_reasons:[],received_at:`${date}T08:00:00Z`}]});
 const emptyPool = (): LimitPoolSnapshot<LimitUpRecord> => ({trade_date:"2026-10-09",pool:[]});
@@ -156,6 +156,28 @@ describe("shared security detail limit-up attribution", () => {
     expect(within(dialog).getByText(reason)).toBeTruthy();
     expect(within(dialog).getByText(/来源未记录/)).toBeTruthy();
     expect(container.querySelector(".truncate")).toBeNull();
+  });
+
+  it("does not retain an open attribution overlay when another security has the same reason", () => {
+    const view = render(<LimitReason symbol="600825" date="2026-10-09" reason="公司独立事件" compact />);
+    fireEvent.click(screen.getByRole("button", {name: /涨停原因 · 查看原文/}));
+    expect(screen.getByRole("dialog", {name: "涨停原因原文"})).toBeTruthy();
+    view.rerender(<LimitReason symbol="600127" date="2026-10-09" reason="公司独立事件" compact />);
+    expect(screen.queryByRole("dialog")).toBeNull();
+    view.rerender(<LimitReason symbol="600825" date="2026-10-09" reason="公司独立事件" compact />);
+    expect(screen.queryByRole("dialog")).toBeNull();
+  });
+
+  it("reads evidence only after expanding it inside the source-tag overlay", async () => {
+    vi.mocked(getStockAttribution).mockResolvedValue({schema_version: 1, symbol: "600825", count: 0, items: []});
+    render(<LimitReason symbol="600825" date="2026-10-09" reason="拟收购" compact />);
+    expect(getStockAttribution).not.toHaveBeenCalled();
+    fireEvent.click(screen.getByRole("button", {name: /涨停原因 · 查看原文/}));
+    expect(getStockAttribution).not.toHaveBeenCalled();
+    fireEvent.click(screen.getByRole("button", {name: "涨停归因 · 证据核对"}));
+    await screen.findByText(/暂未找到关联事件/);
+    expect(getStockAttribution).toHaveBeenCalledTimes(1);
+    expect(getStockAttribution).toHaveBeenCalledWith("600825");
   });
 });
 

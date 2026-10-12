@@ -70,7 +70,7 @@ function RelayTable({ s }: { s: State<{ trade_date: string; items: RelayRankItem
             <span className="ml-auto shrink-0 font-mono text-[10px] text-zinc-600 dark:text-zinc-400">
               {it.max20 != null ? `${(it.max20 * 100).toFixed(0)}%距高` : "--"}
             </span>
-            <div className="min-w-0 basis-full"><LimitReason reason={it.reason} source={it.reason_source} date={it.reason_date ?? trade_date} compact /></div>
+            <div className="min-w-0 basis-full"><LimitReason symbol={it.symbol} reason={it.reason} source={it.reason_source} date={it.reason_date ?? trade_date} compact /></div>
           </li>
         ))}
       </ul>

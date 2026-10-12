@@ -48,6 +48,12 @@ def test_confirmed_new_limit_up_plus_inflow():
     assert v["status"] == "confirmed"
     assert v["new_limit_ups"] == 1  # 只有 10:30 那只算消息可见后
     assert v["net_inflow_yi"] == 3.2
+    assert v["verification_scope"] == "market_response"
+    assert v["status_label"] == "已观察市场呼应"
+    assert v["fact_verified"] is False
+    assert v["causality_verified"] is False
+    assert "不证明消息属实" in v["disclaimer"]
+    assert "市场呼应" in v["basis"]
 
 
 def test_fermenting_new_limit_up_but_no_inflow():
@@ -154,6 +160,10 @@ def test_parse_hhmmss_formats():
     assert _parse_hhmmss("") is None
     assert _parse_hhmmss(None) is None
     assert _parse_hhmmss("abc") is None
+    assert _parse_hhmmss("24:00:00") is None
+    assert _parse_hhmmss("09:60:00") is None
+    assert _parse_hhmmss("09:30:60") is None
+    assert _parse_hhmmss("-1:30:00") is None
 
 
 def test_seal_after_boundary():
@@ -166,6 +176,20 @@ def test_seal_after_boundary():
     assert _seal_after(datetime(2026, 9, 9, 20, 0, 0), "09:31:00", TODAY) is True
     # 当前可见版本晚于池的交易日，池里的封板绝不可能算在版本之后。
     assert _seal_after(datetime(2026, 9, 11, 9, 0, 0), "10:30:00", TODAY) is False
+    assert _seal_after(datetime(2026, 9, 9, 20, 0, 0), "bad", TODAY) is False
+
+
+def test_future_seal_cannot_confirm_market_response():
+    now = datetime(2026, 9, 10, 11, 0)
+    verdict = verify_event(published_at=datetime(2026, 9, 10, 10, 0),
+                           visible_at=datetime(2026, 9, 10, 10, 0), theme_targets=["低空经济"],
+                           limit_up_pool=_pool(("15:00:00", "低空经济")),
+                           board_fund=_fund(3.2), trade_date=TODAY, now=now)
+    assert verdict["new_limit_ups"] == 0
+    assert verdict["status"] == "fermenting"
+    assert verdict["market_response_only"] is True
+    assert verdict["fact_verified"] is False
+    assert verdict["causality_verified"] is False
 
 
 # ---------------------------------------------------------------- 编排层
