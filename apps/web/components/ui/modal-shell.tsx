@@ -31,7 +31,7 @@
  * 加锁只会是 no-op 死代码（同 `symbol-detail-modal` 的判断）。
  */
 import { CloseButton } from "./icon-button";
-import { useCallback, useRef, useState, useSyncExternalStore } from "react";
+import { Component, createRef, useCallback, useRef, useState, useSyncExternalStore, type RefObject } from "react";
 import { useOverlayFocus } from "@/hooks/use-overlay-focus";
 import { createPortal } from "react-dom";
 import { useSurfaceMotion } from "@/hooks/use-surface-motion";
@@ -56,6 +56,89 @@ const SIZE_CLASS: Record<ModalSize, string> = {
 /** 客户端挂载标志的空订阅（portal 目标 `document.body` 在 SSR 不存在）。 */
 const subscribeNoop = () => () => {};
 
+type ExitSnapshot = {visual: HTMLElement; panel: {width: number; height: number}; body: {left: number; top: number; width: number; height: number}; scroll: Array<{node: HTMLElement; top: number; left: number}>};
+
+/** Copy visuals without ever constructing an element carrying a media/network URL. */
+function copyExitVisual(source: Node, scroll: ExitSnapshot["scroll"]): Node | null {
+  if (source.nodeType === Node.TEXT_NODE) return document.createTextNode(source.textContent || "");
+  if (!(source instanceof Element)) return null;
+  if (source.matches("iframe, object, embed, video, audio, source, link, script, style, base")) return null;
+  const image = source instanceof HTMLImageElement;
+  const copy = image ? document.createElement("canvas") : document.createElementNS(source.namespaceURI, source.localName);
+  for (const attribute of [...source.attributes]) {
+    if (/^(?:id|name|for|form|list|headers|action|formaction|href|xlink:href|target|download|src|srcset|poster|background|srcdoc|autofocus|contenteditable|popovertarget|commandfor|data-testid|aria-controls|aria-labelledby|aria-describedby|aria-owns|aria-details|aria-errormessage|aria-flowto|aria-activedescendant|on.*)$/i.test(attribute.name)) continue;
+    if (/url\s*\(/i.test(attribute.value)) continue;
+    if (attribute.name === "value" && source instanceof HTMLInputElement && source.type === "password") continue;
+    copy.setAttribute(attribute.name, attribute.value);
+  }
+  if (copy instanceof HTMLInputElement && source instanceof HTMLInputElement) { copy.value = source.type === "password" ? "" : source.value; copy.checked = source.checked; }
+  if (copy instanceof HTMLTextAreaElement && source instanceof HTMLTextAreaElement) copy.value = source.value;
+  if (copy instanceof HTMLCanvasElement && (source instanceof HTMLCanvasElement || image)) {
+    if (image) {
+      const scale = Math.min(1, 2048 / Math.max(source.naturalWidth, source.naturalHeight, 1));
+      copy.width = Math.round(source.naturalWidth * scale); copy.height = Math.round(source.naturalHeight * scale);
+      copy.style.width = `${source.offsetWidth}px`; copy.style.height = `${source.offsetHeight}px`;
+    }
+    try {
+      if (!image || (source.complete && copy.width && copy.height)) copy.getContext("2d")?.drawImage(source, 0, 0, copy.width, copy.height);
+    } catch { /* A missing bitmap cannot block close. */ }
+  }
+  for (const child of source.childNodes) {
+    const childCopy = copyExitVisual(child, scroll);
+    if (childCopy) copy.append(childCopy);
+  }
+  if (copy instanceof HTMLSelectElement && source instanceof HTMLSelectElement) copy.value = source.value;
+  if (copy instanceof HTMLElement && source instanceof HTMLElement) scroll.push({node:copy, top:source.scrollTop, left:source.scrollLeft});
+  return copy;
+}
+type ReadingBodyProps = {open: boolean; reduced: boolean; panelRef: RefObject<HTMLDivElement | null>; className: string; tabIndex?: number; testid?: string; children: React.ReactNode};
+
+/** A close-only DOM image. React readers unmount in the same commit as business close. */
+class ReadingBody extends Component<ReadingBodyProps, Record<string, never>, ExitSnapshot | null> {
+  private body = createRef<HTMLDivElement>();
+  private visual: HTMLElement | null = null;
+  private priorSize: {width: string; height: string} | null = null;
+
+  getSnapshotBeforeUpdate(previous: ReadingBodyProps): ExitSnapshot | null {
+    const body = this.body.current, panel = this.props.panelRef.current;
+    if (!previous.open || this.props.open || this.props.reduced || !body || !panel) return null;
+    const scroll: ExitSnapshot["scroll"] = [];
+    const visual = copyExitVisual(body, scroll) as HTMLElement;
+    visual.setAttribute("data-exit-visual", ""); visual.setAttribute("aria-hidden", "true"); visual.inert = true;
+    // Layout dimensions do not include the currently running WAAPI transform.
+    return {visual, panel:{width:panel.offsetWidth, height:panel.offsetHeight}, body:{left:body.offsetLeft, top:body.offsetTop, width:body.offsetWidth, height:body.offsetHeight}, scroll};
+  }
+
+  componentDidUpdate(_previous: ReadingBodyProps, _state: Record<string, never>, snapshot: ExitSnapshot | null) {
+    if (this.props.open || this.props.reduced) { this.clearVisual(); return; }
+    const panel = this.props.panelRef.current;
+    if (!snapshot || !panel) return;
+    this.clearVisual();
+    this.priorSize = {width:panel.style.width, height:panel.style.height};
+    // Freeze once, then clamp on viewport resize. No per-frame layout measurements.
+    panel.style.width = `min(${snapshot.panel.width}px, calc(100vw - 16px))`;
+    panel.style.height = `min(${snapshot.panel.height}px, calc(100dvh - 16px))`;
+    Object.assign(snapshot.visual.style, {position:"absolute", left:`${snapshot.body.left}px`, top:`${snapshot.body.top}px`, width:`${snapshot.body.width}px`, height:`${snapshot.body.height}px`, maxWidth:"100%", margin:"0", pointerEvents:"none"});
+    panel.append(snapshot.visual); this.visual = snapshot.visual;
+    snapshot.scroll.forEach(({node, top, left}) => { node.scrollTop = top; node.scrollLeft = left; });
+    if (this.body.current) this.body.current.style.visibility = "hidden";
+  }
+
+  componentWillUnmount() { this.clearVisual(); }
+
+  private clearVisual() {
+    this.visual?.remove(); this.visual = null;
+    const panel = this.props.panelRef.current;
+    if (panel && this.priorSize) { panel.style.width = this.priorSize.width; panel.style.height = this.priorSize.height; }
+    this.priorSize = null;
+    if (this.body.current) this.body.current.style.visibility = "";
+  }
+
+  render() {
+    return <div ref={this.body} tabIndex={this.props.tabIndex} data-testid={this.props.testid} className={this.props.className}>{this.props.open ? this.props.children : null}</div>;
+  }
+}
+
 export interface ModalShellProps {
   onClose: () => void;
   /** False only while an inert reading surface finishes its visual exit. */
@@ -69,7 +152,7 @@ export interface ModalShellProps {
   presentation?: "modal" | "drawer";
   /** Opt-in reading drawer modes keep the same mounted content and form state. */
   expandable?: boolean;
-  /** Actual pointer source, or null for immediate keyboard/deep-link presentation. */
+  /** Actual pointer source; keyboard/deep links use a short non-spatial fade. */
   motionOrigin?: MotionOrigin | null;
   /** 层级：默认 50。内容详情弹窗（可从其他弹窗内打开）用 60。 */
   zIndex?: number;
@@ -142,14 +225,15 @@ export function ModalShell({
         ref={panelRef}
         tabIndex={-1}
         role="dialog"
-        aria-modal={isModal || undefined}
+        aria-modal={(open && isModal) || undefined}
         aria-label={label}
         data-testid={testid}
-        data-motion-immediate={motionOrigin === null || motion.reduced || undefined}
+        data-motion-immediate={motion.reduced || undefined}
+        data-motion-owner={motion.owned ? "web-animation" : undefined}
         data-shared-surface={motionOrigin ? motionOrigin.kind : undefined}
         data-mobile-snap={gesture.compact ? "compact" : "full"}
         style={motionOrigin !== undefined ? {transformOrigin: "top left"} : undefined}
-        className={`pointer-events-auto ui-glass-overlay ${presentation === "drawer" ? "motion-drawer mobile-drawer" : "motion-modal"} flex flex-col overflow-hidden border border-zinc-200 bg-white shadow-2xl dark:border-zinc-800 dark:bg-zinc-900 ${
+        className={`relative pointer-events-auto ui-glass-overlay ${presentation === "drawer" ? "motion-drawer mobile-drawer" : "motion-modal"} flex flex-col overflow-hidden border border-zinc-200 bg-white shadow-2xl dark:border-zinc-800 dark:bg-zinc-900 ${
           radius === "2xl" ? "rounded-2xl" : "rounded-xl"
         } ${presentation === "drawer" ? (size === "lg" && (!expandable || expanded) ? "h-full w-[min(1200px,96vw)]" : "h-full w-full max-w-2xl") : SIZE_CLASS[size]}`}
       >
@@ -161,13 +245,16 @@ export function ModalShell({
             <CloseButton onClose={onClose} />
           </div>
         )}
-        <div
+        <ReadingBody
+          open={open}
+          reduced={motion.reduced}
+          panelRef={panelRef}
           tabIndex={bodyTabIndex}
-          data-testid={bodyTestId}
+          testid={bodyTestId}
           className={`flex min-h-0 flex-1 flex-col ${bodyClassName}`}
         >
           {children}
-        </div>
+        </ReadingBody>
         {footer !== undefined && (
           <div className="overlay-footer flex shrink-0 items-center justify-between gap-3 border-t border-zinc-100 px-5 py-2.5 text-[11px] leading-relaxed text-zinc-600 dark:border-zinc-800/80 dark:text-zinc-400">
             {footer}

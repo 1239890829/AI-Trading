@@ -1,6 +1,7 @@
 "use client";
 
 import { useCallback, useMemo, useRef, useState } from "react";
+import { useExitPresence } from "@/hooks/use-exit-presence";
 import { fmtYi, signedYi } from "@/lib/format";
 import { tradingSeqFromHHMM } from "@/lib/market-hours";
 import type { FlowIntradayPoint, FlowTier } from "@/lib/api";
@@ -94,9 +95,12 @@ export function FlowIntradayChart({ items }: { items: FlowIntradayPoint[] }) {
     [seqs],
   );
 
+  const hp = hoverIdx != null ? items[hoverIdx] ?? null : null;
+  const tipPresence = useExitPresence(hp);
+  const tip = tipPresence.value;
   if (items.length === 0) return null;
-  const hp = hoverIdx != null ? items[hoverIdx] : null;
   const hoverLeftPct = hp ? (tradingSeqFromHHMM(hp.t) / 240) * 100 : 0;
+  const tipLeftPct = tip ? (tradingSeqFromHHMM(tip.t) / 240) * 100 : 0;
 
   return (
     <div className="w-full" data-testid="flow-intraday-chart">
@@ -131,15 +135,21 @@ export function FlowIntradayChart({ items }: { items: FlowIntradayPoint[] }) {
                 />
               );
             })}
-            {/* tooltip：靠近右缘时翻转到指针左侧 */}
+          </>
+        )}
+            {/* Current-point markers stop immediately; only the last tooltip reading exits. */}
+        {tip && (
             <div
-              className="pointer-events-none absolute top-1 z-10 w-44 rounded-md border border-zinc-200 bg-white/95 p-2 shadow-lg dark:border-zinc-700 dark:bg-zinc-900/95"
-              style={{ left: `${hoverLeftPct}%`, transform: hoverLeftPct > 60 ? "translateX(calc(-100% - 8px))" : "translateX(8px)" }}
+              className="flow-tooltip-motion pointer-events-none absolute top-1 z-10 w-44 rounded-md border border-zinc-200 bg-white/95 p-2 shadow-lg dark:border-zinc-700 dark:bg-zinc-900/95"
+              style={{ left: `${tipLeftPct}%`, transform: tipLeftPct > 60 ? "translateX(calc(-100% - 8px))" : "translateX(8px)" }}
+              data-motion-state={tipPresence.active ? "open" : "closed"}
+              aria-hidden={!tipPresence.active || undefined}
+              inert={!tipPresence.active}
               data-testid="flow-tooltip"
             >
-              <p className="mb-1 font-mono text-[10px] text-zinc-600 dark:text-zinc-400">{hp.t}｜分钟累计净额（亿元）</p>
+              <p className="mb-1 font-mono text-[10px] text-zinc-600 dark:text-zinc-400">{tip.t}｜分钟累计净额（亿元）</p>
               {TIER_META.map((m) => {
-                const v = hp[m.key];
+                const v = tip[m.key];
                 return (
                   <p key={m.key} className="flex items-center justify-between py-px text-[10px]">
                     <span className="inline-flex items-center gap-1 text-zinc-600 dark:text-zinc-400">
@@ -151,7 +161,6 @@ export function FlowIntradayChart({ items }: { items: FlowIntradayPoint[] }) {
                 );
               })}
             </div>
-          </>
         )}
       </div>
       {/* 时间轴：HTML 行（替代 SVG 内文字，定高下不变形） */}

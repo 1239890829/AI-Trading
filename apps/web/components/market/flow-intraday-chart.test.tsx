@@ -1,4 +1,4 @@
-import { cleanup, fireEvent, render, screen } from "@testing-library/react";
+import { act, cleanup, fireEvent, render, screen } from "@testing-library/react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 import { FlowIntradayChart } from "@/components/market/flow-intraday-chart";
@@ -41,6 +41,7 @@ beforeEach(() => stubRect());
 afterEach(() => {
   cleanup();
   vi.restoreAllMocks();
+  vi.unstubAllGlobals();
 });
 
 describe("FlowIntradayChart（P0-4 渲染契约）", () => {
@@ -75,10 +76,46 @@ describe("FlowIntradayChart（P0-4 渲染契约）", () => {
     expect(after).toEqual(before); // 悬停只改覆盖层，不动曲线
   });
 
-  it("mouseleave 收起 tooltip", () => {
-    const { container } = render(<FlowIntradayChart items={[PT("09:30", 10), PT("09:31", -10)]} />);
+  it("mouseleave 立即移除当前点，最后提示退出160ms后移除，重入与切点保留同一节点", async () => {
+    vi.useFakeTimers();
+    try {
+      const { container } = render(<FlowIntradayChart items={[PT("09:30", 10), PT("15:00", -10)]} />);
+      const box = container.querySelector(".cursor-crosshair")!;
+      const paths = [...container.querySelectorAll("path")].map(path => path.getAttribute("d"));
+      fireEvent.mouseMove(box, { clientX: 0 });
+      const tip = screen.getByTestId("flow-tooltip");
+      fireEvent.mouseMove(box, { clientX: 240 });
+      expect(screen.getByTestId("flow-tooltip")).toBe(tip);
+      expect(tip.textContent).toContain("15:00");
+      expect(tip.getAttribute("data-motion-state")).toBe("open");
+      const edgeTransform = tip.style.transform;
+      fireEvent.mouseLeave(box);
+      expect(tip.hasAttribute("inert")).toBe(true);
+      expect(tip.getAttribute("aria-hidden")).toBe("true");
+      expect(tip.getAttribute("data-motion-state")).toBe("closed");
+      expect(tip.style.transform).toBe(edgeTransform);
+      expect(box.querySelector(".inset-y-0")).toBeNull();
+      await act(async () => vi.advanceTimersByTime(80));
+      fireEvent.mouseMove(box, { clientX: 0 });
+      expect(screen.getByTestId("flow-tooltip")).toBe(tip);
+      expect(tip.textContent).toContain("09:30");
+      expect(tip.hasAttribute("inert")).toBe(false);
+      await act(async () => vi.advanceTimersByTime(80));
+      expect(screen.getByTestId("flow-tooltip")).toBe(tip);
+      fireEvent.mouseLeave(box);
+      await act(async () => vi.advanceTimersByTime(159));
+      expect(screen.getByTestId("flow-tooltip")).toBe(tip);
+      await act(async () => vi.advanceTimersByTime(1));
+      expect(screen.queryByTestId("flow-tooltip")).toBeNull();
+      expect([...container.querySelectorAll("path")].map(path => path.getAttribute("d"))).toEqual(paths);
+    } finally {vi.useRealTimers();}
+  });
+
+  it("减少动效时离开立即移除提示", () => {
+    vi.stubGlobal("matchMedia", () => ({matches:true, addEventListener:vi.fn(), removeEventListener:vi.fn()}));
+    const {container} = render(<FlowIntradayChart items={[PT("09:30", 10)]} />);
     const box = container.querySelector(".cursor-crosshair")!;
-    fireEvent.mouseMove(box, { clientX: 0 });
+    fireEvent.mouseMove(box, {clientX:0});
     expect(screen.getByTestId("flow-tooltip")).toBeTruthy();
     fireEvent.mouseLeave(box);
     expect(screen.queryByTestId("flow-tooltip")).toBeNull();

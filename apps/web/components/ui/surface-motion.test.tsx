@@ -8,7 +8,7 @@ import { useExitPresence } from "@/hooks/use-exit-presence";
 let reduce = false;
 const listeners = new Set<() => void>();
 const animations: { cancel: ReturnType<typeof vi.fn> }[] = [];
-const animate = vi.fn(() => { const a = { cancel: vi.fn() }; animations.push(a); return a as unknown as Animation; });
+const animate = vi.fn((_frames: Keyframe[], _options: KeyframeAnimationOptions) => { const a = { cancel: vi.fn() }; animations.push(a); return a as unknown as Animation; });
 beforeEach(() => {
   reduce = false; listeners.clear(); animations.length = 0;
   vi.stubGlobal("matchMedia", (query: string) => ({ matches: query.includes("reduce") ? reduce : query.includes("max-width"), addEventListener: (_: string, fn: () => void) => listeners.add(fn), removeEventListener: (_: string, fn: () => void) => listeners.delete(fn) }));
@@ -38,16 +38,17 @@ describe("actual surface lifecycle", () => {
     expect(animations.at(-1)!.cancel).not.toHaveBeenCalled();
   });
 
-  it("opens at the pointer source, but Escape closes immediately without a reverse animation", () => {
+  it("Escape stops the live reader immediately but still fades the exiting surface", () => {
     render(<Host />);
     fireEvent.click(screen.getByText("打开工具"), {detail:1});
     expect(animate).toHaveBeenCalledTimes(1);
     fireEvent.keyDown(window, {key:"Escape"});
-    expect(animate).toHaveBeenCalledTimes(1);
-    expect(screen.queryByLabelText("草稿")).toBeNull();
+    expect(animate).toHaveBeenCalledTimes(2);
+    expect(screen.queryByRole("textbox", {name:"草稿"})).toBeNull();
+    expect(animate.mock.calls.at(-1)?.[0]).toEqual(expect.arrayContaining([expect.objectContaining({opacity:0})]));
     expect(animations[0].cancel).toHaveBeenCalled();
   });
-  it("keyboard entry and resize keep the input immediate and mounted", () => {
+  it("keyboard entry fades without spatial motion and resize preserves the live input", () => {
     render(<Host />);
     fireEvent.click(screen.getByText("打开工具"), {detail:0});
     const input = screen.getByLabelText("草稿") as HTMLInputElement;
@@ -56,7 +57,8 @@ describe("actual surface lifecycle", () => {
     expect(screen.getByRole("dialog").dataset.mobileSnap).toBe("compact");
     expect(screen.getByLabelText("草稿")).toBe(input);
     expect(input.value).toBe("保留");
-    expect(animate).not.toHaveBeenCalled();
+    expect(animate).toHaveBeenCalled();
+    expect(animate.mock.calls[0]?.[0]).toEqual([expect.objectContaining({transform:"none", opacity:0}), expect.objectContaining({transform:"none", opacity:1})]);
   });
   it("switching to reduced motion cancels a running surface and unmount also cleans up", () => {
     const view = render(<Host />);
@@ -78,7 +80,9 @@ describe("actual surface lifecycle", () => {
   it("secondary pointers and canceled gestures cannot resize or close a drawer", () => {
     render(<Host />); fireEvent.click(screen.getByText("打开工具"), {detail:0});
     const handle = screen.getByRole("button", {name:"收起至半屏"});
-    pointer(handle,"pointerdown",100,100); pointer(handle,"pointermove",240,200,2);
+    pointer(handle,"pointerdown",100,100);
+    expect(animations[0].cancel).toHaveBeenCalled();
+    pointer(handle,"pointermove",240,200,2);
     pointer(handle,"pointercancel",240,300);
     expect(screen.getByRole("dialog").dataset.mobileSnap).toBe("full");
     expect(screen.getByRole("dialog").style.transform).toBe("");

@@ -165,13 +165,14 @@
 .market-indices-toggle svg {transition:transform 160ms var(--ease-out);}
 .market-indices-toggle[aria-expanded=true] svg {transform:rotate(180deg);}
 .market-index-primary,.market-index-expansion {flex:none;}
-.market-index-primary,.market-index-expansion > div {display:grid;grid-template-columns:minmax(0,1fr);gap:6px;min-height:0;}
-:root .bc-market-dashboard>.bc-market-context .bc-index-quote {display:grid;grid-template-columns:minmax(0,1fr) max-content;align-items:center;gap:3px 8px;min-height:62px;padding:8px 12px 10px;}
-.bc-market-dashboard>.bc-market-context .bc-index-name {grid-column:1;grid-row:1;gap:6px;}
-.bc-market-dashboard>.bc-market-context .bc-index-value {grid-column:2;grid-row:1;margin:0;gap:8px;white-space:nowrap;flex-wrap:nowrap;}
-.bc-market-dashboard>.bc-market-context .bc-index-value strong {font-size:15px;}
-.bc-market-dashboard>.bc-market-context .bc-index-value > span {font-size:11px;}
-.bc-market-dashboard>.bc-market-context .bc-index-amount {grid-column:1 / -1;margin:0;text-align:right;white-space:nowrap;line-height:18px;}
+.market-index-primary,.market-index-expansion > div {display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:6px;min-height:0;}
+:root .bc-market-dashboard>.bc-market-context .bc-index-quote,:root .bc-market-dashboard>.bc-market-context .bc-index-skeleton {display:flex;flex-direction:column;align-items:stretch;gap:4px;min-height:116px;padding:8px 6px 10px;}
+.bc-market-dashboard>.bc-market-context .bc-index-skeleton > div {max-width:100%;}
+.bc-market-dashboard>.bc-market-context .bc-index-name {gap:0;font-size:11px;white-space:nowrap;}
+.bc-market-dashboard>.bc-market-context .bc-index-value {flex-direction:column;align-items:flex-start;margin:0;gap:4px;white-space:nowrap;flex-wrap:nowrap;}
+.bc-market-dashboard>.bc-market-context .bc-index-value strong {font-size:14px;}
+.bc-market-dashboard>.bc-market-context .bc-index-status {display:flex;align-items:center;flex-wrap:wrap;gap:3px;font-size:10px;line-height:14px;}
+.bc-market-dashboard>.bc-market-context .bc-index-amount {display:flex;flex-direction:column;gap:0;margin-top:auto;text-align:left;white-space:nowrap;font-size:10px;line-height:14px;}
 .market-index-expansion {display:grid;grid-template-rows:0fr;opacity:0;transition:grid-template-rows 160ms var(--ease-out),opacity 160ms var(--ease-out);}
 .market-index-expansion[data-expanded=true] {grid-template-rows:1fr;opacity:1;}
 .market-index-expansion > div {overflow:hidden;}

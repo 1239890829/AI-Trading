@@ -770,7 +770,6 @@ export function FloatingAssistant() {
           className="motion-float ai-material ui-glass-overlay fixed z-50 flex flex-col overflow-hidden rounded-2xl border border-zinc-200 bg-white/95 shadow-2xl shadow-zinc-900/10 backdrop-blur dark:border-zinc-800 dark:bg-zinc-950/95 dark:shadow-black/50"
           style={panelStyle}
         >
-          {open && <>
           {/* 头部：墨玉徽标 + 名称 + 模型（mono 弱化），按钮族统一次要级 */}
           <div className="flex items-center gap-2.5 border-b border-zinc-200/80 px-4 py-3 dark:border-zinc-800/80">
             {/* 与悬浮球同款墨玉反色，档位同步（P2-27） */}
@@ -1048,7 +1047,6 @@ export function FloatingAssistant() {
               AI 生成内容仅供参考，不构成投资建议
             </div>
           </div>
-          </>}
         </div>
       )}
     </>

@@ -108,9 +108,9 @@ function MarketInner() {
     <button type="button" className="bc-index-quote" key={`${q.market}-${q.symbol}`}
       onClick={() => openSymbolDetail({symbol: indexDetailSymbol(q.symbol, q.market)})}
       title={`查看 ${q.name ?? q.symbol} 指数详情${q.quality_reasons?.length ? "｜" + q.quality_reasons.join("；") : ""}`}>
-      <span className="bc-index-name"><span>{q.name ?? q.symbol}</span><QualityBadge quality={q.quality} reasons={q.quality_reasons} /></span>
-      <span className="bc-index-value"><strong>{q.price == null ? "未开盘" : fmt(q.price)}</strong><span className={pctColor(q.change_pct)}>{pctText(q.change_pct)}</span></span>
-      <span className="bc-index-amount">成交额 {fmtAmount(q.amount)}</span>
+      <span className="bc-index-name"><span>{q.name ?? q.symbol}</span></span>
+      <span className="bc-index-value"><strong>{q.price == null ? "未开盘" : fmt(q.price)}</strong><span className="bc-index-status"><span className={pctColor(q.change_pct)}>{pctText(q.change_pct)}</span><QualityBadge quality={q.quality} reasons={q.quality_reasons} /></span></span>
+      <span className="bc-index-amount"><span>成交额</span><span>{fmtAmount(q.amount)}</span></span>
     </button>
   );
 
@@ -143,7 +143,7 @@ function MarketInner() {
                 <div className="bc-index-skeleton" key={index}><Skeleton className="h-3 w-16" /><Skeleton className="mt-2 h-5 w-20" /></div>
               )) : PRIMARY_INDICES.map(([symbol, name]) => {
                 const quote = primaryIndices.find(q => indexDetailSymbol(q.symbol, q.market) === symbol);
-                return quote ? indexQuote(quote) : <button type="button" className="bc-index-quote" disabled key={symbol} title={`${name} · 本轮未返回该指数`}><span className="bc-index-name">{name}</span><span className="bc-index-value">未返回</span><span className="bc-index-amount">成交额 --</span></button>;
+                return quote ? indexQuote(quote) : <button type="button" className="bc-index-quote" disabled key={symbol} title={`${name} · 本轮未返回该指数`}><span className="bc-index-name">{name}</span><span className="bc-index-value">未返回</span><span className="bc-index-amount"><span>成交额</span><span>--</span></span></button>;
               })}
               </div>
               <div id="market-extra-indices" className="market-index-expansion" data-expanded={extraIndexPresence.active} inert={!extraIndexPresence.active} aria-hidden={!extraIndexPresence.active}>

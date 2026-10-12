@@ -42,6 +42,29 @@ beforeEach(() => {
 });
 
 describe("SearchBox 搜索体验（防抖/竞态/loading/失败/空结果）", () => {
+  it("错误结果关闭时保留最后正文直到退出结束，焦点和查询立即退出", async () => {
+    vi.useFakeTimers();
+    try {
+      vi.mocked(searchSymbols).mockRejectedValue(new ApiError(503, "源暂不可用", "source_unavailable"));
+      const {container} = render(<SearchBox />);
+      const input = typeQuery("600127");
+      await act(async () => vi.advanceTimersByTime(250));
+      const panel = screen.getByRole("region", {name:"证券搜索结果"});
+      const error = screen.getByRole("alert");
+      fireEvent.click(screen.getByRole("button", {name:"关闭搜索结果"}));
+      expect(screen.queryByRole("region", {name:"证券搜索结果"})).toBeNull();
+      expect(panel.hasAttribute("inert")).toBe(true);
+      expect(panel.contains(error)).toBe(true);
+      expect(panel.textContent).toContain("源暂不可用");
+      expect(document.activeElement).toBe(input);
+      await act(async () => vi.advanceTimersByTime(159));
+      expect(container.querySelector(".search-popover")).toBe(panel);
+      await act(async () => vi.advanceTimersByTime(1));
+      expect(container.querySelector(".search-popover")).toBeNull();
+      expect(searchSymbols).toHaveBeenCalledTimes(1);
+    } finally {vi.useRealTimers();}
+  });
+
   it("关闭结果立即恢复搜索焦点并保留不可操作退出壳；快速重开不被旧退出计时移除", async () => {
     vi.useFakeTimers();
     try {

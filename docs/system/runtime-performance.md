@@ -173,6 +173,8 @@ health读取时宽度源为新浪、5572行，原源时间15:10:07.961、源龄�
 
 用户直派沿IMP-019，成功fetch基点f26246c6，分支codex/performance-ui。核工作台/自选/分组/模拟持仓、详情/图表、市场各视图、资金下钻、盘面题材、选股/依据、事件、消息、助手与维护入口。AST清点25个route文件，198个HTTP及2个WS入口；全量源码清点不等于各端点性能实测。§7–8已修内容是基线，不能作为本轮新收益。
 
+首批PR #265合并master50725ef4、三项合并后CI通过，8000/3000已激活；本次追加从该基点建codex/market-index-row，纠正指数宽度及弹窗过渡的实际遗漏。前批仅测到transition属性，未证明所有关闭画面；下文以具体失败路径和本次行为/画面证据修订，不把原绿色当已验真实退出。
+
 先复现读链放大及失败恢复，再修确定性热点；UI核尺寸、焦点、局部滚动、退出所有权和快速反向。原版impeccable负责精修/批量目视，interaction-design负责控制反馈，GSAP性能规范约束动效生命周期；旧融合skill不恢复。没有新源/模型/业务页面/通知资格，报价和持仓时效不降。
 
 ### 前端与UI：位置、原因和改法
@@ -185,10 +187,10 @@ health读取时宽度源为新浪、5572行，原源时间15:10:07.961、源龄�
 | lib/format.ts | 每数字重建Intl.NumberFormat | 最多21个精度实例复用，输出/空值/RangeError不变 |
 | app/backend/[...path]/route.ts | req取消未传上游 | signal透传、取消499；SSE不套REST8s。mock链验证，真实TCP断开传播尚未证明 |
 | components/nav-bar.tsx、app/controls.css/system.css | 整数宽度及scale marker可能越界/压边 | 浮点测量、各link ResizeObserver、单一内缩rail。基线稳定态未复现双元素，不虚称已证重叠根因 |
-| app/market/page.tsx/market-bc.css、components/index-cards.tsx | 全量指数挤空间，成交额贴底，收起立即卸载 | 默认上证/科创50/创业板、额外展开；缺报价未知，紧凑横排卡/下边距和160ms退出 |
+| app/market/page.tsx/market-bc.css、components/index-cards.tsx | 全量指数挤空间，成交额贴底，收起立即卸载；原市场单列卡过宽 | 默认上证/科创50/创业板、额外展开；市场两组均三列，卡内价格/涨幅与质量/成交额分层，下边距保留。320–1280px三列实测无卡内横向溢出；缺报价未知，展开160ms退出 |
 | app/workbench/workbench.css | 自选多层块形成高行 | 名称代码左、价格涨幅右、紧凑辅助行；行业/原因资格/来源和手机44px命中保留 |
 | components/market/fund-tab.tsx/board-flow.tsx、app/styles/fund-history.css | 窄区域再次分两列、逐柱金额/日期挤压、零线错位 | 历史上下分配、共用零线、柱高按容器百分比、5个均匀日期刻度，所有日期可点/键盘/选择，完整五档单独显示；复用弹层加载共享布局与样式；缺值不画假零 |
-| detail/picks/search/assistant/theme/hunting/events等共享入口 | 条件卸载截断退出；视觉保留可能隐藏IO | 关闭立即inert/active=false、视觉壳160ms，焦点/晚到/快速反向安全；助手已发回答继续；原生details渐进增强，旧浏览器即时回退、reduced-motion直接终态 |
+| detail/picks/search/assistant/theme/hunting/events等共享入口；ui/modal-shell、hooks/use-surface-motion、globals/disclosure-motion.css | shared/immediate样式关闭兜底动画；Esc取消后不再退出；关闭active清正文导致自适应面板塌缩；独立float仅starting-style；Radix Tooltip闭态动画名未变化 | 有效来源保留几何转场，键盘/无源/失效源淡入退出兜底；关闭active/focus/新IO立即结束，正文只保留惰性视觉快照160ms，去DOM身份且inert，快速重开清理；搜索保留最后阅读快照，助手已发回答继续；float/Tooltip使用独立入/出动画。原生details渐进增强，旧浏览器即时回退、reduced-motion直接终态 |
 | detail/limit-reason.tsx/limit-up-reason.tsx/attribution-evidence.tsx | 原因仍需反复展开/材料全铺开 | 原因正文自动展开、归因仍单条点击，当前条原摘要自动展开；未知和修订保留 |
 
 ### 后端已修复
@@ -398,7 +400,9 @@ health读取时宽度源为新浪、5572行，原源时间15:10:07.961、源龄�
 
 ### 实屏验收与交叉反证
 
-1280px桌面及320/390px手机，采用真实后端只读数据，非mock。桌面自选112.7→78.1px；手机98.1px，44px删除命中与详情无重叠。K线主Canvas800×404；页面横向宽度等于viewport。市场三基准默认展示、额外指数展开间隔6px无压叠，金额下边距完整。320px历史卡正文200/226px且scrollHeight=clientHeight，日期刻度5个无重叠；全日期可点击、键盘或菜单，完整五档与来源可见。真实涨停原因弹层默认展开正文与消息列表，事件材料仍逐条打开，实际transition=0.2s。
+首批1280px桌面及320/390px手机采用真实后端只读数据，非mock。桌面自选112.7→78.1px；手机98.1px，44px删除命中与详情无重叠。K线主Canvas800×404；页面横向宽度等于viewport。320px历史卡原预览正文200/226px且scrollHeight=clientHeight，生产另一日期/提示组合出现1px取整差；完整五档仍可见，不能泛化为任意数据均无溢出。日期刻度5个无重叠；全日期可点击、键盘或菜单，来源可见。涨停原因默认展开，事件材料逐条阅读。原transition=0.2s只证明样式存在，不能证明入场/关闭真实过渡；本次据用户纠偏重新复现修复。
+
+追加验收：真实只读市场在320/390/768/1024/1280px均三列，卡内scrollWidth=clientWidth；默认三项同一top，展开额外三项同一top，完整数值与成交额保留。真实原因弹窗Esc关闭后焦点回原按钮、退出副本无残留。独立浏览器夹具导入实际ModalShell/hooks及本轮源CSS，不请求后端、不调用模型：1280×720与390×900各测来源/无源/来源真实卸载/synthetic Esc/55ms快速反向/抽屉六场景；另用可信Esc按键补一场。13场均采到多个真实opacity/transform退出中间帧，关闭帧活跃读取者为0、正文尺寸不塌缩；退出动画150ms，视觉壳保留160ms。Canvas、媒体、去身份、无WAAPI、reduced及真实原因消费者边界由定向行为测试验证。追加完整门禁后端5165/81跳过/184.13s，前端默认/UTC各1303、122文件/87.30与84.30s，tsc/eslint和停dev生产构建通过。夹具正文是合成资料，不能当行情、低端真机或全站FPS实测；惰性DOM/像素复制有一次关闭成本，未证明零成本。长证据归artifacts/runs/market-index-motion-20261012及motion-exit-browser-20261012。
 
 交叉作者检查发现隐藏旧连接stale/closed污染新连接及新过期snapshot被onopen live吞掉，两项P2均经原逻辑判红、修复后fresh/stale/closed竞争序列验证。前端首轮全量7项失败揭示人工刷新排队会阻塞写后/取消反馈；恢复原立即刷新契约，原5消费者测试未改，94专项通过。epoch失效守卫注入可使旧finally错误解锁判红。CSS迁移反证补齐市场固定容器精确选择器。后端共享task/副本/Top20/部分写入/历史与日历未发现新增阻断；检查不是独立网页Review。所有等待者同时取消后源实际异常、双文件同时失败只有代码反证，未增加对应专项，明确证据边界。
 

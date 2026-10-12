@@ -105,6 +105,32 @@ afterEach(() => {
 });
 
 describe("通知中心：未读计数与红点", () => {
+  it("关闭立即撤销模态和焦点占用，保留完整列表160ms后移除", async () => {
+    vi.useFakeTimers();
+    try {
+      payload = makePayload([item({title:"退出中的通知正文"})]);
+      render(<NotificationBell />);
+      await act(async () => {});
+      const trigger = screen.getByRole("button", {name:/打开通知中心/});
+      trigger.focus();
+      fireEvent.click(trigger);
+      await act(async () => {});
+      const panel = screen.getByTestId("notification-drawer");
+      const list = screen.getByTestId("notification-list");
+      fireEvent.keyDown(window, {key:"Escape"});
+      expect(screen.queryByRole("dialog", {name:"通知中心"})).toBeNull();
+      expect(panel.hasAttribute("inert")).toBe(true);
+      expect(panel.hasAttribute("aria-modal")).toBe(false);
+      expect(panel.contains(list)).toBe(true);
+      expect(panel.textContent).toContain("退出中的通知正文");
+      expect(document.activeElement).toBe(trigger);
+      await act(async () => vi.advanceTimersByTime(159));
+      expect(screen.getByTestId("notification-drawer")).toBe(panel);
+      await act(async () => vi.advanceTimersByTime(1));
+      expect(screen.queryByTestId("notification-drawer")).toBeNull();
+    } finally {vi.useRealTimers();}
+  });
+
   it.each(["行情", "通知正文"])("工作台从%s核对证券，打开详情且保留通知列表", async action => {
     payload = makePayload([item({symbol: "600519", title: "来源通知"})]);
     render(<SymbolDetailProvider><NotificationBell /><SymbolDetailModalHost /></SymbolDetailProvider>);
