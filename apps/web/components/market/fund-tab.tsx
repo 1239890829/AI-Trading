@@ -2,7 +2,7 @@
 
 import { FilterMenu } from "@/components/ui/filter-menu";
 
-import { useCallback, useMemo, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { Panel } from "@/components/panel";
 import { Skeleton } from "@/components/ui/loading";
 import { useResource } from "@/hooks/use-polling-fetch";
@@ -176,40 +176,40 @@ function aggregateLonghu(records: LongHuRecord[]) {
  * 必然空榜报错——此时回退到最近已披露的历史交易日（fallbackDates，来自成交额历史），
  * 拉到哪日如实标注日期；当日榜一经披露，下次轮询自动切回当日。
  */
-function LonghuFlowCard({ fallbackDates }: { fallbackDates: string[] }) {
-  const [payload, setPayload] = useState<{ date: string; records: LongHuRecord[] } | null>(null);
-  const [error, setError] = useState<string | null>(null);
-  const [pending, setPending] = useState(true);
+export function LonghuFlowCard({ fallbackDates }: { fallbackDates: string[] }) {
+  const fallbackKey = fallbackDates.join(",");
+  const scope = useRef(0);
+  useEffect(() => {
+    scope.current += 1;
+    return () => { scope.current += 1; };
+  }, [fallbackKey]);
 
   // 回退池未就绪时 60s 重试（避免高频失败调用喂熔断器），就绪后 5 分钟；
   // intervalMs 变化会重挂 effect 立即补拉一次
-  usePollingFetch(async () => {
-    try {
+  const resource = useResource(async () => {
+      const generation = scope.current;
       try {
         const records = await getLonghu();
-        setPayload({ date: records[0]?.trade_date ?? "", records });
-        setError(null);
-        return;
+        return { date: records[0]?.trade_date ?? "", records };
       } catch {
-        /* 当日未披露，走回退 */
+        /* 当日读取失败，尝试已声明的历史日期。 */
       }
       for (const d of fallbackDates) {
+        if (generation !== scope.current) throw new Error("读取范围已退出");
         try {
           const records = await getLonghu(d);
           if (records.length > 0) {
-            setPayload({ date: records[0]?.trade_date ?? d, records });
-            setError(null);
-            return;
+            return { date: records[0]?.trade_date ?? d, records };
           }
         } catch {
           continue; // 该日也失败，继续回退
         }
       }
-      setError(fallbackDates.length ? "当日龙虎榜未披露，历史日回退失败" : "龙虎榜数据源失败");
-    } finally {
-      setPending(false);
-    }
-  }, fallbackDates.length > 0 ? 300_000 : 60_000);
+      throw new Error(fallbackDates.length ? "当日读取失败，历史日回退失败" : "龙虎榜数据源失败");
+  }, { key: fallbackKey, intervalMs: fallbackDates.length > 0 ? 300_000 : 60_000 });
+  const payload = resource.data;
+  const error = resource.error instanceof Error ? resource.error.message : resource.error ? String(resource.error) : null;
+  const pending = !payload && resource.pending;
 
   const agg = useMemo(() => (payload ? aggregateLonghu(payload.records) : null), [payload]);
 
@@ -219,6 +219,7 @@ function LonghuFlowCard({ fallbackDates }: { fallbackDates: string[] }) {
       className="min-h-0 shrink-0 overflow-hidden"
       extra={<span className="text-[10px] text-zinc-600 dark:text-zinc-400">{payload?.date ? `${payload.date} 上榜` : "--"} · 交易所收盘后披露</span>}
     >
+      {error && payload && <p role="alert" className="px-4 py-2 text-xs text-amber-800 dark:text-amber-300">刷新失败，以下为上次读取：{error}</p>}
       {pending ? (
         <div className="space-y-2 px-4 py-3">
           <Skeleton className="h-10 w-full" />
@@ -273,7 +274,9 @@ function LonghuFlowCard({ fallbackDates }: { fallbackDates: string[] }) {
         </div>
       ) : (
         <div className="px-4 py-5 text-center text-sm text-zinc-600 dark:text-zinc-400">
-          龙虎榜数据暂不可用（{error ?? "当日尚未披露"}），每 5 分钟自动重试。
+          {error ? `龙虎榜数据暂不可用（${error}）` : "此次读取未返回可计入当日的机构/游资记录，不据此判断未披露。"}
+          {payload && agg?.unknownRange ? `另有 ${agg.unknownRange} 条非当日区间记录未计入。` : ""}
+          每 {fallbackDates.length ? "5 分钟" : "60 秒"} 自动重试。
           <span className="mt-1 block text-[10px]">机构/游资席位净额为交易所日度披露（约收盘后 17:00+），实时全市场数据无此拆分，本页不提供臆造字段。</span>
         </div>
       )}

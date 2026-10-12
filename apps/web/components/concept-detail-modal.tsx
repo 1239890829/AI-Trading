@@ -9,10 +9,10 @@
  *   数据源支持后接入——界面不提供关键词自创分组。
  * 外壳走全站统一的 `ModalShell`（2026-09-15：portal / 遮罩 / Esc / 尺寸档收在一处）。
  */
-import { useCallback, useMemo, useState } from "react";
+import { useMemo, useState } from "react";
 
-import { usePollingFetch } from "@/hooks/use-polling-fetch";
-import { getConceptDetail, type ConceptDetail } from "@/lib/api";
+import { useResource } from "@/hooks/use-resource";
+import { getConceptDetail } from "@/lib/api";
 import { fmtAmount, pctColor, pctText } from "@/lib/format";
 import { useStockRowNav } from "@/components/stock-link";
 import { ModalShell } from "@/components/ui/modal-shell";
@@ -28,24 +28,22 @@ export function ConceptDetailModal({
   onClose: () => void;
 }) {
   const stockNav = useStockRowNav();
-  const [detail, setDetail] = useState<ConceptDetail | undefined | null>(undefined);
-  const [error, setError] = useState<string | null>(null);
-  const [tab, setTab] = useState<string>("__all__");
-  const [q, setQ] = useState("");
-
-  const load = useCallback(async () => {
-    try {
-      setDetail(await getConceptDetail(code));
-      setError(null);
-    } catch (e) {
-      setDetail(null);
-      setError(e instanceof Error ? e.message : String(e));
-    }
-  }, [code]);
-
-  // P1-27 收编 usePollingFetch：setState 落在 promise 回调里。
-  // `code` 是会变的入参 → 必须作为第三参 key 传入，否则切概念不会立即重拉。
-  usePollingFetch(load, null, code);
+  const resource = useResource(() => getConceptDetail(code), { key: code });
+  const detail = resource.data;
+  const error = resource.error instanceof Error ? resource.error.message : String(resource.error);
+  const [filters, setFilters] = useState({ code, tab: "__all__", q: "", detail: undefined as typeof detail });
+  // A scope change resets its filters before commit. Within the same concept,
+  // only a successful new result can retire a tag; failure keeps the selection.
+  if (filters.code !== code || (detail !== undefined && filters.detail !== detail)) {
+    const current = filters.code === code ? filters : { code, tab: "__all__", q: "", detail: undefined };
+    setFilters({
+      ...current, detail,
+      tab: detail && current.tab !== "__all__" && !detail.tag_groups.some(group => group.tag === current.tab) ? "__all__" : current.tab,
+    });
+  }
+  const tab = filters.code === code ? filters.tab : "__all__";
+  const q = filters.code === code ? filters.q : "";
+  const setTab = (tab: string) => setFilters(current => ({ ...current, tab }));
 
   const members = useMemo(() => {
     const list = detail?.members ?? [];
@@ -71,7 +69,7 @@ export function ConceptDetailModal({
           <p className="mt-0.5 text-[11px] text-zinc-600 dark:text-zinc-400">
             {detail
               ? `官方成分 ${detail.total} 只（与同花顺逐符号一致） · 今日涨停 ${detail.limit_up_count}`
-              : "加载中…"}
+              : resource.error ? "读取失败" : "加载中…"}
           </p>
         </>
       }
@@ -96,7 +94,7 @@ export function ConceptDetailModal({
           </div>
           <input
             value={q}
-            onChange={(e) => setQ(e.target.value)}
+            onChange={(e) => setFilters(current => ({ ...current, q: e.target.value }))}
             placeholder="搜代码/名称"
             className="w-28 shrink-0 rounded-lg border border-zinc-200 bg-transparent px-2 py-1 text-xs text-zinc-700 placeholder:text-zinc-400 focus:border-zinc-400 focus:outline-none dark:border-zinc-700 dark:text-zinc-200"
           />
@@ -104,15 +102,18 @@ export function ConceptDetailModal({
 
         {/* 列表 */}
         <div className="min-h-0 flex-1 overflow-y-auto px-4 py-2">
-          {detail === undefined ? (
+          {resource.error != null && <div role="alert" className="py-2 text-xs text-amber-800 dark:text-amber-300">
+            {detail ? "刷新失败，保留上次成分：" : "加载失败："}{error}
+            <button type="button" onClick={resource.refresh} aria-label="重试概念读取" className="ml-2 ui-filter">重试</button>
+          </div>}
+          {detail === undefined && !resource.error ? (
             <div className="space-y-1.5 py-2">
               {[0, 1, 2, 3, 4].map((i) => (
                 <div key={i} className="h-9 w-full animate-pulse rounded-lg bg-zinc-100 dark:bg-zinc-800" />
               ))}
             </div>
-          ) : detail === null ? (
-            <p className="py-6 text-center text-xs text-red-700 dark:text-red-500">加载失败：{error}</p>
-          ) : members.length === 0 ? (
+          ) : detail === undefined ? null : (
+          members.length === 0 ? (
             <p className="py-6 text-center text-xs text-zinc-600 dark:text-zinc-400">
               {tab === "__all__" ? "无匹配成分" : "该细分下暂无当日涨停成员"}
             </p>
@@ -163,7 +164,7 @@ export function ConceptDetailModal({
                 </li>
               ))}
             </ul>
-          )}
+          ))}
         </div>
 
     </ModalShell>

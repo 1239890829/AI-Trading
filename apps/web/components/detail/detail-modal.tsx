@@ -96,7 +96,7 @@ function DetailModalBody({ payload, onClose }: { payload: DetailPayload; onClose
   // ⚠️ 2026-09-09 实测两个接口耗时天差地别：events/symbol 0.02s、news/digest **32s**
   // （后者要抓原文+摘要）。此前用 Promise.all 一起等 → 事件块被慢接口白白拖住，
   // 表现为「一直加载中，半天才出」。改为：事件独立快渲染，资讯后台加载并带超时提示。
-  const [feedEvents, setFeedEvents] = useState<{ status: "loading" | "ready"; items: EventSummary[] }>({
+  const [feedEvents, setFeedEvents] = useState<{ status: "loading" | "ready" | "error"; items: EventSummary[]; error?: string }>({
     status: "loading",
     items: [],
   });
@@ -116,7 +116,7 @@ function DetailModalBody({ payload, onClose }: { payload: DetailPayload; onClose
     let alive = true;
     getEventsForSymbol(payload.symbol)
       .then((ev) => alive && setFeedEvents({ status: "ready", items: ev?.items ?? [] }))
-      .catch(() => alive && setFeedEvents({ status: "ready", items: [] }));
+      .catch((e: unknown) => alive && setFeedEvents({ status: "error", items: [], error: e instanceof Error ? e.message : "关联事件读取失败" }));
     return () => {
       alive = false;
     };
@@ -198,6 +198,10 @@ function DetailModalBody({ payload, onClose }: { payload: DetailPayload; onClose
         {isFeed && (
           <div className="mt-3 space-y-3">
             {feedEvents.status === "loading" && <p className="text-xs text-zinc-600 dark:text-zinc-400">关联事件加载中…</p>}
+            {feedEvents.status === "error" && <div role="alert" className="text-xs text-amber-800 dark:text-amber-300">
+              <p>关联事件读取失败（{feedEvents.error}），尚不能确认是否存在相关事件。</p>
+              <button data-action="secondary" className="mt-2" onClick={() => setAttempt(n => n + 1)}>重试关联事件</button>
+            </div>}
             {feedEvents.status === "ready" && feedEvents.items.length === 0 && (
               <p className="text-xs text-zinc-600 dark:text-zinc-400">关联事件 · 0 条（今日无与该股题材匹配的活跃事件）</p>
             )}

@@ -1,7 +1,7 @@
-import { afterEach, describe, expect, it, vi } from "vitest";
-import { cleanup, fireEvent, render, screen, waitFor } from "@testing-library/react";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { act, cleanup, fireEvent, render, screen, waitFor } from "@testing-library/react";
 
-import { getAgentTasks, type AgentTask } from "@/lib/api";
+import { getAgentTasks, getAgentTaskTypes, type AgentTask } from "@/lib/api";
 import { TaskCenter } from "./task-center";
 
 /**
@@ -52,8 +52,19 @@ vi.mock("@/lib/api", () => ({
   createAgentTask: (...args: unknown[]) => createAgentTask(...(args as [])),
 }));
 
+beforeEach(() => {
+  resolveAgentTask.mockReset().mockResolvedValue({ ...ESCALATION_TODO, status: "succeeded", finished_at: "2026-09-10T14:06:00" });
+  vi.mocked(getAgentTasks).mockReset().mockResolvedValue([ESCALATION_TODO]);
+  vi.mocked(getAgentTaskTypes).mockReset().mockResolvedValue([
+    { type: "review", label: "生成复盘报告", risk: "L0", desc: "" },
+    { type: "data_check", label: "数据体检", risk: "L0", desc: "" },
+  ]);
+  Object.defineProperty(document, "visibilityState", { configurable: true, value: "visible" });
+});
+
 afterEach(() => {
   cleanup();
+  vi.useRealTimers();
   vi.clearAllMocks();
 });
 
@@ -91,10 +102,7 @@ describe("任务中心 · 告警升级待办（P1-36）", () => {
 
   it("处置按钮不出现于需要执行的任务（running 走取消，不是处置）", async () => {
     const { getAgentTasks } = await import("@/lib/api");
-    // S2-5（2026-09-11）起轮询由 useResource 承载：「启用轮询」这一跳会**立即补拉一次**
-    // （与 stock-detail「切入页签立即拉一次」同一语义，见 hooks/use-resource.ts）。
-    // 原实现用 setInterval，启动轮询时不补拉 ⇒ mockResolvedValueOnce 只需喂一次。
-    // 现在会连拉两次，故改为 mockImplementation 让"每次拉取都返回运行中任务"成立。
+    // 每次读取都返回运行中任务，避免本用例把完成时间或轮询次数当成处置资格。
     const mocked = vi.mocked(getAgentTasks);
     const original = mocked.getMockImplementation();
     mocked.mockImplementation(async () => [
@@ -132,6 +140,223 @@ describe("任务中心 · 告警升级待办（P1-36）", () => {
     }
   });
 
+});
+
+describe("任务中心 · 单一读取与失败恢复", () => {
+  const running: AgentTask = { ...ESCALATION_TODO, id: "run-1", type: "review", status: "running" };
+  async function flush(ms = 0) {
+    await act(async () => { await vi.advanceTimersByTimeAsync(ms); });
+  }
+
+  it("初次运行中结果不重复请求；只轮询任务，不反复读取静态入口", async () => {
+    vi.useFakeTimers();
+    vi.mocked(getAgentTasks).mockResolvedValue([running]);
+    render(<TaskCenter />);
+    await flush();
+    expect(getAgentTasks).toHaveBeenCalledTimes(1);
+    expect(getAgentTaskTypes).toHaveBeenCalledTimes(1);
+    await flush(3_000);
+    expect(getAgentTasks).toHaveBeenCalledTimes(2);
+    expect(getAgentTaskTypes).toHaveBeenCalledTimes(1);
+  });
+
+  it("入口迟到不挡住独立任务列表", async () => {
+    vi.mocked(getAgentTaskTypes).mockReturnValueOnce(new Promise(() => {}));
+    render(<TaskCenter />);
+    expect(await screen.findByText("告警升级待办")).toBeTruthy();
+    expect(screen.getByRole("status", { name: "正在读取任务入口" })).toBeTruthy();
+  });
+
+  it("入口失败不清空已成功任务列表", async () => {
+    vi.mocked(getAgentTaskTypes).mockRejectedValueOnce(new Error("types offline"));
+    render(<TaskCenter />);
+    expect(await screen.findByText("告警升级待办")).toBeTruthy();
+    expect(screen.getByText(/任务入口读取失败，暂时无法创建/)).toBeTruthy();
+  });
+
+  it("首次任务失败也自动重试，成功终态停止轮询", async () => {
+    vi.useFakeTimers();
+    vi.mocked(getAgentTasks).mockRejectedValueOnce(new Error("initial offline"));
+    render(<TaskCenter />);
+    await flush();
+    expect(screen.getByText(/任务列表加载失败/)).toBeTruthy();
+    await flush(3_000);
+    expect(getAgentTasks).toHaveBeenCalledTimes(2);
+    expect(screen.getByText("告警升级待办")).toBeTruthy();
+    await flush(9_000);
+    expect(getAgentTasks).toHaveBeenCalledTimes(2);
+    expect(getAgentTaskTypes).toHaveBeenCalledTimes(1);
+  });
+
+  it("轮询失败保留上次任务及选择，明确未确认；恢复后清错误", async () => {
+    vi.useFakeTimers();
+    vi.mocked(getAgentTasks).mockResolvedValueOnce([running])
+      .mockRejectedValueOnce(new Error("poll offline"))
+      .mockResolvedValue([{ ...running, status: "succeeded" }]);
+    render(<TaskCenter />);
+    await flush();
+    fireEvent.click(screen.getAllByText("生成复盘报告")[0]);
+    await flush(3_000);
+    expect(screen.getByRole("button", { name: "取消任务" })).toBeTruthy();
+    expect(screen.getByText(/上次读取结果，当前任务状态未确认/)).toBeTruthy();
+    await flush(3_000);
+    expect(screen.queryByText(/上次读取结果，当前任务状态未确认/)).toBeNull();
+    expect(screen.queryByRole("button", { name: "取消任务" })).toBeNull();
+    expect(screen.getAllByText("成功")).toHaveLength(2);
+  });
+
+  it("隐藏停止重试，恢复立即校准；卸载后不再轮询", async () => {
+    vi.useFakeTimers();
+    vi.mocked(getAgentTasks).mockResolvedValue([running]);
+    const view = render(<TaskCenter />);
+    await flush();
+    await act(async () => {
+      Object.defineProperty(document, "visibilityState", { configurable: true, value: "hidden" });
+      document.dispatchEvent(new Event("visibilitychange"));
+    });
+    await flush(9_000);
+    expect(getAgentTasks).toHaveBeenCalledTimes(1);
+    await act(async () => {
+      Object.defineProperty(document, "visibilityState", { configurable: true, value: "visible" });
+      document.dispatchEvent(new Event("visibilitychange"));
+    });
+    await flush();
+    expect(getAgentTasks).toHaveBeenCalledTimes(2);
+    view.unmount();
+    await flush(9_000);
+    expect(getAgentTasks).toHaveBeenCalledTimes(2);
+  });
+
+  it("恢复可见发起的慢读取与原重试时钟不重复请求", async () => {
+    vi.useFakeTimers();
+    let complete!: (tasks: AgentTask[]) => void;
+    vi.mocked(getAgentTasks).mockResolvedValueOnce([running])
+      .mockReturnValueOnce(new Promise(resolve => { complete = resolve; }))
+      .mockResolvedValue([running]);
+    render(<TaskCenter />);
+    await flush();
+    await flush(1_000);
+    await act(async () => {
+      Object.defineProperty(document, "visibilityState", { configurable: true, value: "hidden" });
+      document.dispatchEvent(new Event("visibilitychange"));
+      Object.defineProperty(document, "visibilityState", { configurable: true, value: "visible" });
+      document.dispatchEvent(new Event("visibilitychange"));
+    });
+    await flush(3_000);
+    expect(getAgentTasks).toHaveBeenCalledTimes(2);
+    await act(async () => complete([running]));
+    await flush(2_999);
+    expect(getAgentTasks).toHaveBeenCalledTimes(2);
+    await flush(1);
+    expect(getAgentTasks).toHaveBeenCalledTimes(3);
+  });
+
+  it.each(["success", "failure"])("取消后新读取先回，旧轮询晚回 %s 不污染终态", async late => {
+    vi.useFakeTimers();
+    let finishOld!: (tasks: AgentTask[]) => void;
+    let failOld!: (error: Error) => void;
+    vi.mocked(getAgentTasks).mockResolvedValueOnce([running])
+      .mockReturnValueOnce(new Promise((resolve, reject) => { finishOld = resolve; failOld = reject; }))
+      .mockResolvedValue([{ ...running, status: "canceled" }]);
+    render(<TaskCenter />);
+    await flush();
+    fireEvent.click(screen.getAllByText("生成复盘报告")[0]);
+    await flush(3_000);
+    fireEvent.click(screen.getByRole("button", { name: "取消任务" }));
+    await flush();
+    expect(cancelAgentTask).toHaveBeenCalledWith("run-1");
+    expect(screen.getAllByText("已取消")).toHaveLength(2);
+    await act(async () => late === "success" ? finishOld([running]) : failOld(new Error("old poll error")));
+    expect(screen.queryByText("执行中")).toBeNull();
+    expect(screen.queryByText(/当前任务状态未确认/)).toBeNull();
+    expect(screen.queryByRole("button", { name: "取消任务" })).toBeNull();
+    expect(getAgentTaskTypes).toHaveBeenCalledTimes(1);
+  });
+});
+
+describe("任务中心 · 处置回执与当前资格", () => {
+  async function flush(ms = 0) {
+    await act(async () => { await vi.advanceTimersByTimeAsync(ms); });
+  }
+  function deferred<T>() {
+    let resolve!: (value: T) => void;
+    let reject!: (error: Error) => void;
+    const promise = new Promise<T>((done, fail) => { resolve = done; reject = fail; });
+    return { promise, resolve, reject };
+  }
+  async function selectTodo() {
+    render(<TaskCenter />); await flush();
+    fireEvent.click(screen.getByText("告警升级待办"));
+  }
+  const button = (name: "已处置" | "忽略") => screen.getByRole("button", {name}) as HTMLButtonElement;
+
+  it("a local task read and failed calibration disable both dispositions but keep the draft", async () => {
+    vi.useFakeTimers();
+    const read = deferred<AgentTask[]>();
+    vi.mocked(getAgentTasks).mockResolvedValueOnce([ESCALATION_TODO]).mockReturnValueOnce(read.promise).mockResolvedValue([ESCALATION_TODO]);
+    await selectTodo();
+    fireEvent.change(screen.getByLabelText("可选任务参数（JSON）"), {target: {value: '{"trade_date":"20261012"}'}});
+    fireEvent.click(screen.getByRole("button", {name: "刷新"})); await flush();
+    fireEvent.click(button("已处置")); fireEvent.click(button("忽略"));
+    expect(resolveAgentTask).not.toHaveBeenCalled();
+    expect(button("已处置").disabled).toBe(true); expect(button("忽略").disabled).toBe(true);
+    await act(async () => read.reject(new Error("calibration offline")));
+    expect(screen.getByText(/当前任务状态未确认/)).toBeTruthy();
+    expect(button("已处置").disabled).toBe(true); expect(button("忽略").disabled).toBe(true);
+    expect((screen.getByLabelText("可选任务参数（JSON）") as HTMLInputElement).value).toBe('{"trade_date":"20261012"}');
+    await flush(3_000);
+    expect(button("已处置").disabled).toBe(false); expect(button("忽略").disabled).toBe(false);
+  });
+
+  it("an in-flight disposition rejects both same and opposite repeated clicks", async () => {
+    vi.useFakeTimers();
+    const post = deferred<AgentTask>(); resolveAgentTask.mockReturnValue(post.promise);
+    await selectTodo();
+    fireEvent.click(button("已处置")); fireEvent.click(button("忽略")); fireEvent.click(button("已处置"));
+    expect(resolveAgentTask).toHaveBeenCalledTimes(1);
+    expect(resolveAgentTask).toHaveBeenCalledWith("esc-42", "done");
+    expect(button("已处置").disabled).toBe(true); expect(button("忽略").disabled).toBe(true);
+    await act(async () => post.resolve({...ESCALATION_TODO, status: "succeeded"}));
+  });
+
+  it.each(["done", "dismissed"] as const)("%s POST receipt stays separate from a slow durable GET and never permits the opposite action", async outcome => {
+    vi.useFakeTimers();
+    const read = deferred<AgentTask[]>();
+    const confirmed: AgentTask = {...ESCALATION_TODO, status: outcome === "done" ? "succeeded" : "canceled", finished_at: "2026-09-10T14:06:00", params: {...ESCALATION_TODO.params, resolve: {outcome, note: "fixture disposition"}}};
+    resolveAgentTask.mockResolvedValue(confirmed);
+    vi.mocked(getAgentTasks).mockResolvedValueOnce([ESCALATION_TODO]).mockReturnValueOnce(read.promise);
+    await selectTodo();
+    fireEvent.click(button(outcome === "done" ? "已处置" : "忽略")); await flush();
+    const receipt = screen.getByText(/处置请求已提交/);
+    expect(receipt.textContent).toContain(outcome === "done" ? "成功" : "已取消");
+    expect(receipt.textContent).toContain("持久状态待校准");
+    expect(receipt.textContent).toContain("不表示业务动作已执行或消息已送达");
+    fireEvent.click(button(outcome === "done" ? "忽略" : "已处置"));
+    expect(resolveAgentTask).toHaveBeenCalledTimes(1);
+    await act(async () => read.resolve([confirmed]));
+    expect(screen.queryByRole("button", {name: "已处置"})).toBeNull();
+    expect(screen.queryByRole("button", {name: "忽略"})).toBeNull();
+    expect(screen.getByText(/持久状态已校准/)).toBeTruthy();
+    expect(getAgentTasks).toHaveBeenCalledTimes(2);
+  });
+
+  it("POST success plus GET failure retains its real receipt and blocks repeat disposition until recovery", async () => {
+    vi.useFakeTimers();
+    const confirmed: AgentTask = {...ESCALATION_TODO, status: "succeeded", finished_at: "2026-09-10T14:06:00"};
+    resolveAgentTask.mockResolvedValue(confirmed);
+    vi.mocked(getAgentTasks).mockResolvedValueOnce([ESCALATION_TODO]).mockRejectedValueOnce(new Error("post calibration offline")).mockResolvedValue([confirmed]);
+    await selectTodo();
+    fireEvent.click(button("已处置")); await flush();
+    expect(screen.getByText(/处置请求已提交/).textContent).toContain("成功");
+    expect(screen.getByText(/当前任务状态未确认/)).toBeTruthy();
+    fireEvent.click(button("忽略")); fireEvent.click(button("已处置"));
+    expect(resolveAgentTask).toHaveBeenCalledTimes(1);
+    await flush(3_000);
+    expect(screen.queryByText(/当前任务状态未确认/)).toBeNull();
+    expect(screen.queryByRole("button", {name: "已处置"})).toBeNull();
+    expect(screen.getByText(/持久状态已校准/)).toBeTruthy();
+    expect(getAgentTasks).toHaveBeenCalledTimes(3);
+  });
 });
 
 

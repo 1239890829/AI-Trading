@@ -1,15 +1,13 @@
 "use client";
 
-import { usePollingFetch } from "@/hooks/use-polling-fetch";
-import { useCallback, useEffect, useState } from "react";
+import { useResource } from "@/hooks/use-resource";
+import { useState } from "react";
 
 import {
   getAgentAgenda,
   getAgentAgendas,
   getAgentExperiments,
   runAgentAgenda,
-  type AgentAgenda,
-  type AgentExperiment,
 } from "@/lib/api";
 import { timeTextBJ } from "@/lib/format";
 
@@ -47,37 +45,27 @@ const AGENDA_STATUS: Record<string, string> = {
 const timeText = timeTextBJ;
 
 export function EvolutionTab() {
-  const [agenda, setAgenda] = useState<AgentAgenda | null | undefined>(undefined);
-  const [history, setHistory] = useState<AgentAgenda[] | undefined>(undefined);
-  const [experiments, setExperiments] = useState<AgentExperiment[] | undefined>(undefined);
+  const agendaResource = useResource(getAgentAgenda, { marketHours: false });
+  const historyResource = useResource(getAgentAgendas, { marketHours: false });
+  const experimentsResource = useResource(getAgentExperiments, { marketHours: false });
+  const agenda = agendaResource.data;
+  const history = historyResource.data;
+  const experiments = experimentsResource.data;
   const [error, setError] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
 
-  const load = useCallback(async () => {
-    try {
-      const [a, list, exps] = await Promise.all([
-        getAgentAgenda(), getAgentAgendas(), getAgentExperiments(),
-      ]);
-      setAgenda(a);
-      setHistory(list);
-      setExperiments(exps);
-      setError(null);
-    } catch (e) {
-      setAgenda(null);
-      setError(e instanceof Error ? e.message : String(e));
-    }
-  }, []);
-
-  // 挂载即拉取（P1-27 收编 usePollingFetch）：setState 落在 promise 回调里，
-  // 不再触发 react-hooks/set-state-in-effect。load 依赖为 []（无参数），语义不变。
-  usePollingFetch(load, null);
+  function refresh() {
+    agendaResource.refresh();
+    historyResource.refresh();
+    experimentsResource.refresh();
+  }
 
   async function runNow() {
     setBusy(true);
     setError(null);
     try {
       await runAgentAgenda();
-      await load();
+      refresh();
     } catch (e) {
       setError(e instanceof Error ? e.message : String(e));
     } finally {
@@ -103,6 +91,7 @@ export function EvolutionTab() {
             </p>
           </div>
           <div className="flex items-center gap-2">
+            <button data-action="quiet" onClick={refresh}>重新读取</button>
             {agenda && (
               <span className={`rounded px-1.5 py-0.5 text-[10px] ${
                 agenda.status === "executed"
@@ -123,6 +112,10 @@ export function EvolutionTab() {
           </div>
         </div>
         <div className="evolution-overview-notices">
+        {[{ label: "今日议程", resource: agendaResource }, { label: "历史议程", resource: historyResource },
+          { label: "实验记录", resource: experimentsResource }].map(({ label, resource }) => resource.error != null &&
+          <p key={label} role="alert" className="mt-1.5 text-[11px] text-amber-700 dark:text-amber-300">{label}读取失败：{resource.error instanceof Error ? resource.error.message : "接口异常"}。{resource.data !== undefined ? "保留上次读取结果，当前状态未确认。" : "当前状态未确认。"}</p>
+        )}
         {autonomyNote && (
           <p className="mt-1.5 rounded-md bg-amber-500/5 px-2 py-1 text-[11px] text-amber-800 dark:text-amber-300">
             {autonomyNote}
@@ -138,7 +131,7 @@ export function EvolutionTab() {
       <div className="evolution-readers" role="region" aria-label="议程、实验与历史阅读区" tabIndex={0}>
       {/* 议程项 */}
       <section className="evolution-log ui-card min-h-0 flex-1 overflow-y-auto rounded-xl border border-zinc-200 p-3 dark:border-zinc-800">
-        {agenda === undefined ? (
+        {agenda === undefined && agendaResource.error ? <p className="text-[11px] text-zinc-600 dark:text-zinc-400">今日议程状态未知，请重新读取。</p> : agenda === undefined ? (
           <div className="space-y-2">
             {[0, 1].map((i) => (
               <div key={i} className="h-16 w-full animate-pulse rounded-lg bg-zinc-100 dark:bg-zinc-800" />
@@ -209,7 +202,7 @@ export function EvolutionTab() {
           实验记录本 <span className="text-[10px] text-zinc-600 dark:text-zinc-400">· 30 日后置验证，劣化自动回滚</span>
         </h3>
         <div className="evolution-list-scroll">
-        {experiments === undefined ? (
+        {experiments === undefined && experimentsResource.error ? <p className="text-[11px] text-zinc-600 dark:text-zinc-400">实验记录状态未知，请重新读取。</p> : experiments === undefined ? (
           <div className="h-6 w-full animate-pulse rounded bg-zinc-100 dark:bg-zinc-800" />
         ) : experiments.length === 0 ? (
           <p className="text-[11px] text-zinc-600 dark:text-zinc-400">暂无进行中的实验。影子候选不会自动转正或创建已生效实验。</p>
@@ -242,7 +235,7 @@ export function EvolutionTab() {
       <section className="evolution-history ui-card rounded-xl border border-zinc-200 p-3 dark:border-zinc-800">
         <h3 className="mb-1.5 text-xs font-medium text-zinc-700 dark:text-zinc-200">历史议程</h3>
         <div className="evolution-list-scroll">
-        {history === undefined ? (
+        {history === undefined && historyResource.error ? <p className="text-[11px] text-zinc-600 dark:text-zinc-400">历史议程状态未知，请重新读取。</p> : history === undefined ? (
           <div className="h-6 w-full animate-pulse rounded bg-zinc-100 dark:bg-zinc-800" />
         ) : history.length === 0 ? (
           <p className="text-[11px] text-zinc-600 dark:text-zinc-400">暂无历史。</p>

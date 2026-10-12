@@ -8,6 +8,7 @@ from __future__ import annotations
 
 import asyncio
 import logging
+from copy import deepcopy
 from datetime import date
 from fastapi import APIRouter, Depends, HTTPException, Query, Request
 from app.api.deps import get_hub
@@ -182,8 +183,9 @@ async def themes(
     # T3/B3：官方板块 K 线交叉验证（缓存的 payload 已验证过时内部直接跳过）
     await _verify_board_multi_day(request, payload["data"])
 
-    themes_list = list(payload["data"]["themes"])
-    _attach_official_flags(request, themes_list)
+    # 挂靠会写卡片与嵌套成员标记；worker 只修改本请求副本。
+    themes_list = deepcopy(payload["data"]["themes"])
+    await asyncio.to_thread(_attach_official_flags, request, themes_list)
     if min_boards > 0:
         themes_list = [t for t in themes_list if t["performance"]["max_boards"] >= min_boards]
     if min_count > 1:

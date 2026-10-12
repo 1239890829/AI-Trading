@@ -127,6 +127,36 @@ def build_minute_points(rows: list, trade_date: str, fallback_date, symbol: str 
     return points
 
 
+def _mark_current_minute_observation(points: list[dict], fields, trade_date: str, code: str) -> None:
+    """同包报价证明尾桶为形成中的结束标签；历史标签与源钟各自保留。"""
+    if not points or not isinstance(fields, list) or len(fields) <= 36:
+        return
+    if not all(isinstance(fields[i], str) for i in (2, 3, 30, 36)):
+        return
+    if fields[2] != code[2:] or not re.fullmatch(r"\d{14}", fields[30]):
+        return
+    observed = _bj(fields[30])
+    if observed is None or observed.astimezone(BJ_TZ).strftime("%Y%m%d") != trade_date:
+        return
+    clock = observed.astimezone(BJ_TZ)
+    minute = clock.hour * 60 + clock.minute
+    # 09:30/13:00 的形成中分钟可以证明 09:31/13:01；午休及收盘源钟不推桶。
+    if not (9 * 60 + 30 <= minute < 11 * 60 + 30 or 13 * 60 <= minute < 15 * 60):
+        return
+    last = points[-1]
+    expected_label = observed.replace(second=0, microsecond=0) + timedelta(minutes=1)
+    if datetime.fromisoformat(last["ts"]) != expected_label:
+        return
+    price = _num(fields[3])
+    volume = volume_to_shares(code, _num(fields[36]))
+    if price is None or not math.isfinite(price) or price <= 0 or volume is None:
+        return
+    if price != last["price"] or volume != last.get("cum_volume"):
+        return
+    last["observation_ts"] = observed.isoformat()
+    last["time_label"] = "interval_end"
+
+
 def to_tencent_symbol(symbol: str) -> str:
     """转腾讯代码（sh/sz/bj + 6 位）。
 
@@ -476,6 +506,9 @@ class TencentProvider:
                 p["avg"] = None
         if not points:
             raise ProviderError(f"tencent minute line empty for {symbol}")
+        qt = payload.get("qt")
+        _mark_current_minute_observation(points, qt.get(code_sym) if isinstance(qt, dict) else None,
+                                         trade_date, code_sym)
         return points
 
     async def get_limit_up_pool(self, trade_date) -> list:

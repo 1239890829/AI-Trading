@@ -34,7 +34,7 @@ export function OpportunityEvidencePanel({date: requestedDate, onDateChange}: {d
   const [compared, setCompared] = useState<{date: string; card: OpportunityView["cards"][number]} | null>(null);
   const [limit, setLimit] = useState(10);
   const result = useResource(() => getOpportunities(date), { key: date, intervalMs: 60_000 });
-  const data = result.error ? undefined : result.data;
+  const data = result.data;
   const selected = data?.cards.find(card => card.symbol === selectedSymbol);
   const inspected = inspectionMode === "follow" ? selected && {date, card: selected} : pinned;
   function inspect(card: OpportunityView["cards"][number]) {
@@ -54,7 +54,7 @@ export function OpportunityEvidencePanel({date: requestedDate, onDateChange}: {d
     </div>
     <div className="evidence-toolbar mt-3 flex flex-wrap items-center gap-2" ><SelectionRail activeKey={inspectionMode} label="证据联动模式">{([["follow", "跟随"], ["pin", "固定版本"], ["compare", "对比"]] as const).map(([mode, label]) => <button key={mode} aria-pressed={inspectionMode === mode} onClick={() => { if (mode !== "follow" && selected) setPinned({date, card: selected}); setCompared(null); setInspectionMode(mode); }} className="evidence-mode">{label}</button>)}</SelectionRail><span className="evidence-help">选择“查看依据”核对；固定后保留当前版本。</span></div>
     <div className="evidence-workarea" data-inspecting={inspected ? "true" : "false"}><div className="evidence-records" tabIndex={0} role="region" aria-label="机会依据记录">
-    {!!result.error && <p role="alert" className="mt-2 text-amber-800 dark:text-amber-300">机会依据读取失败，请稍后重试。<button onClick={result.refresh}>重试读取</button></p>}
+    {!!result.error && <p role="alert" className="mt-2 text-amber-800 dark:text-amber-300">机会依据读取失败。{data ? "以下保留上次读取结果，当前状态待重试核实。" : "请稍后重试，未读到决定不代表没有机会。"}<button onClick={result.refresh}>重试读取</button></p>}
     {!data && !result.error && <p role="status" className="py-3">正在读取已有决定…</p>}
     {data && <>
       <p className="mt-2">{data.trade_date} · {data.cards.length} 只 · {data.disclaimer}</p>

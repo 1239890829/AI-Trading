@@ -13,14 +13,11 @@
  *    **不可互相解释**。
  * 3. 核验结论（`verification`）缺失时如实说"尚无核验产物"，不得留白让人以为已验证。
  */
-import { useEffect, useState } from "react";
+import { useResource } from "@/hooks/use-resource";
 
 import {
   getStrategyHealth,
   getStrategyRegistry,
-  type StrategyHealthItem,
-  type StrategyHealthPayload,
-  type StrategyRegistryItem,
 } from "@/lib/api";
 
 /** 有判定的状态（其余一律视为"判不出"） */
@@ -61,41 +58,18 @@ function StatusBadge({ status }: { status?: string }) {
 }
 
 export function StrategyHealthTab() {
-  const [items, setItems] = useState<StrategyHealthItem[]>([]);
-  const [registry, setRegistry] = useState<StrategyRegistryItem[]>([]);
-  const [counts, setCounts] = useState<StrategyHealthPayload["counts"]>(undefined);
-  const [caveat, setCaveat] = useState<string>("");
-  const [loaded, setLoaded] = useState(false);
-  const [failed, setFailed] = useState<string | null>(null);
-  const [nonce, setNonce] = useState(0);
-
-  // 取数写在 effect **内部**的 async IIFE：项目既有 tab 都这样写——
-  // 把 setState 放到 await 之后，避免 `react-hooks/set-state-in-effect`
-  // （该规则已由 P1-27 清零，不得重新引入）。
-  // 刷新通过 `nonce` 递增重跑；`alive` 防止快速切换时的竞态覆盖。
-  useEffect(() => {
-    let alive = true;
-    (async () => {
-      try {
-        const [health, reg] = await Promise.all([getStrategyHealth(), getStrategyRegistry()]);
-        if (!alive) return;
-        setItems(health.strategies ?? []);
-        setCounts(health.counts);
-        setCaveat(health.caveat ?? "");
-        setRegistry(reg);
-        setFailed(null);
-      } catch (exc) {
-        if (alive) setFailed(exc instanceof Error ? exc.message : "加载失败");
-      } finally {
-        if (alive) setLoaded(true);
-      }
-    })();
-    return () => {
-      alive = false;
-    };
-  }, [nonce]);
-
-  const refresh = () => setNonce((n) => n + 1);
+  // 健康窗口与离线核验产物按 strategy_key 关联，没有共同快照版本。
+  const health = useResource(getStrategyHealth, { marketHours: false });
+  const registryResource = useResource(getStrategyRegistry, { marketHours: false });
+  const items = health.data?.strategies ?? [];
+  const registry = registryResource.data ?? [];
+  const counts = health.data?.counts;
+  const caveat = health.data?.caveat ?? "";
+  const loaded = health.data !== undefined;
+  function refresh() {
+    health.refresh();
+    registryResource.refresh();
+  }
 
   // 登记册按 key 索引，取核验结论（S2-11：状态背后的可回查证据）
   const verifyByKey = new Map(registry.map((r) => [r.key, r.verification]));
@@ -104,7 +78,7 @@ export function StrategyHealthTab() {
     <div className="flex h-full min-h-0 flex-col gap-2 overflow-y-auto">
       <div className="flex flex-wrap items-center gap-2 text-[11px] text-zinc-600 dark:text-zinc-400">
         <span>
-          共 {counts?.total ?? items.length} 个策略键 · 可评估 {counts?.evaluable ?? "—"} ·
+          共 {loaded ? counts?.total ?? items.length : "—"} 个策略键 · 可评估 {counts?.evaluable ?? "—"} ·
           需关注 {counts?.attention ?? "—"}
         </span>
         <button data-action="secondary"
@@ -121,13 +95,11 @@ export function StrategyHealthTab() {
         </p>
       )}
 
-      {failed && (
-        <p className="rounded border border-rose-200 bg-rose-50 px-2 py-1 text-[11px] text-rose-700 dark:border-rose-900 dark:bg-rose-950/40 dark:text-rose-300">
-          加载失败：{failed}
-        </p>
+      {[{ label: "策略健康", resource: health }, { label: "核验登记册", resource: registryResource }].map(({ label, resource }) => resource.error != null &&
+        <p key={label} role="alert" className="rounded border border-rose-200 bg-rose-50 px-2 py-1 text-[11px] text-rose-700 dark:border-rose-900 dark:bg-rose-950/40 dark:text-rose-300">{label}加载失败：{resource.error instanceof Error ? resource.error.message : "接口异常"}。{resource.data !== undefined ? "保留上次读取结果，当前状态未确认。" : "当前状态未确认。"}</p>
       )}
 
-      {loaded && !failed && items.length === 0 && (
+      {loaded && !health.error && items.length === 0 && (
         <p className="text-[11px] text-zinc-600 dark:text-zinc-400">暂无策略键</p>
       )}
 
@@ -170,7 +142,9 @@ export function StrategyHealthTab() {
               )}
 
               <p className="mt-0.5 text-[10px] text-zinc-600 dark:text-zinc-400">
-                {v?.available ? (
+                {registryResource.data === undefined ? (
+                  <>核验：{registryResource.error ? "登记册读取失败，核验结论未知" : "登记册正在读取，核验结论未知"}</>
+                ) : v?.available ? (
                   <>
                     核验：<span className="font-mono">{v.verdict ?? "—"}</span>
                     {v.stale && <span className="ml-1 text-amber-600 dark:text-amber-400">（产物超期）</span>}

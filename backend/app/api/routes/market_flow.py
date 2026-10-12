@@ -190,7 +190,9 @@ async def market_board_fund_by_symbols(
                     return sym, None
             groups = profile.get("board_groups") or {}
             ref = main_board(groups, profile.get("board_codes") or {})
-            board_cache.set(sym, ref)
+            # A missing ref may be an optional F10 fetch failure. Suppress repeats
+            # across batches briefly, while keeping proven identities for 6h.
+            board_cache.set(sym, ref, ttl=60 if ref is None else None)
             return sym, ref
 
         pairs = await asyncio.gather(*[_main_board(s) for s in sym_list])

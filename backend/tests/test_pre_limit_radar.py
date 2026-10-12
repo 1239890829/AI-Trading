@@ -239,3 +239,110 @@ def test_sweep_reaches_board_reopen_once_for_registered_no_entry(monkeypatch):
 
     asyncio.run(radar.pre_limit_sweep(app))
     assert len(alerts) == 1, "同交易日开板重评只提醒一次"
+
+
+def _blocked_ledger_read(tmp_path, monkeypatch):
+    """Use the real repo and an isolated DB; the worker owns its Session."""
+    import threading
+    from sqlalchemy import create_engine
+    from sqlalchemy.orm import Session, sessionmaker
+    from app.models.watch_ledger import WatchLedger
+    from app.picks import watch_ledger
+
+    engine = create_engine(f"sqlite:///{tmp_path / 'ledger.db'}")
+    WatchLedger.__table__.create(engine)
+    started, release = threading.Event(), threading.Event()
+    events = []
+
+    class RecordedSession(Session):
+        def __enter__(self):
+            events.append(("opened", threading.get_ident()))
+            return super().__enter__()
+
+        def execute(self, *args, **kwargs):
+            events.append(("query", threading.get_ident()))
+            started.set()
+            release.wait(timeout=1)
+            result = super().execute(*args, **kwargs)
+            events.append(("queried", threading.get_ident()))
+            return result
+
+        def __exit__(self, *args):
+            result = super().__exit__(*args)
+            events.append(("closed", threading.get_ident()))
+            return result
+
+    sf = sessionmaker(bind=engine, class_=RecordedSession)
+    monkeypatch.setattr(watch_ledger, "get_session_factory", lambda: sf)
+    return started, release, events, engine
+
+
+def test_sweep_ledger_read_yields_loop_and_owns_session_in_worker(tmp_path, monkeypatch):
+    import asyncio
+    import threading
+    from types import SimpleNamespace
+    from app.picks import pre_limit_radar as radar
+
+    started, release, events, engine = _blocked_ledger_read(tmp_path, monkeypatch)
+    app = SimpleNamespace(state=SimpleNamespace(snapshot_service=SimpleNamespace(
+        snapshot=[], last_success=datetime.now(timezone.utc))))
+    main_thread = threading.get_ident()
+    # This timer only releases the RED baseline's blocking query. The candidate
+    # coroutine releases it earlier, after proving another loop task can run.
+    timer = threading.Timer(0.1, release.set)
+    timer.start()
+
+    async def scenario():
+        task = asyncio.create_task(radar.pre_limit_sweep(app))
+        while not started.is_set():
+            await asyncio.sleep(0)
+        events.append(("pulse", threading.get_ident()))
+        release.set()
+        assert await task == 0
+
+    try:
+        asyncio.run(scenario())
+        names = [event[0] for event in events]
+        assert names.index("pulse") < names.index("queried")
+        db_threads = {thread for name, thread in events if name != "pulse"}
+        assert len(db_threads) == 1 and main_thread not in db_threads
+        assert names[-1] == "closed"
+    finally:
+        release.set()
+        timer.cancel()
+        timer.join()
+        engine.dispose()
+
+
+def test_cancelled_sweep_waits_for_real_ledger_session_close(tmp_path, monkeypatch):
+    import asyncio
+    from types import SimpleNamespace
+    import pytest
+    from app.picks import pre_limit_radar as radar
+
+    started, release, events, engine = _blocked_ledger_read(tmp_path, monkeypatch)
+    app = SimpleNamespace(state=SimpleNamespace(snapshot_service=SimpleNamespace(
+        snapshot=[], last_success=datetime.now(timezone.utc))))
+
+    async def scenario():
+        task = asyncio.create_task(radar.pre_limit_sweep(app))
+        try:
+            while not started.is_set():
+                await asyncio.sleep(0)
+            assert not task.done()
+            task.cancel()
+            await asyncio.sleep(0)
+            assert not task.done()  # Cancellation must wait for the real read.
+            assert "closed" not in [name for name, _thread in events]
+            release.set()
+            with pytest.raises(asyncio.CancelledError):
+                await task
+            assert [name for name, _thread in events][-1] == "closed"
+        finally:
+            release.set()
+            await asyncio.gather(task, return_exceptions=True)
+
+    try:
+        asyncio.run(scenario())
+    finally:
+        engine.dispose()

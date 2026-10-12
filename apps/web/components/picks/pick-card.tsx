@@ -341,12 +341,15 @@ export function PickCard({
   positionLabel = null,
   dailyEvidence,
   onShowDailyEvidence,
+  readError = false,
 }: {
   item: TradingCard;
   /** 闭环「标签」：sim=已模拟持仓 / real=已真实持仓（持仓状态派生，卖出自动消失） */
   positionLabel?: "sim" | "real" | null;
   dailyEvidence?: {item: DailyPickItem; date: string; generatedAt: string | null; version: string | null};
   onShowDailyEvidence?: (item: DailyPickItem) => void;
+  /** Retained read-only snapshot after a failed refresh, never current eligibility. */
+  readError?: boolean;
 }) {
   // 整行点击跳工作台（2026-09-09 用户反馈：盘中跟踪条目标点击无响应——两卡现已统一）
   const stockNav = useStockRowNav();
@@ -359,7 +362,7 @@ export function PickCard({
         ? `空仓闸门日红线压制（禁买）：${item.followReasons.join("；") || "命中否决/异动风险"}`
         : `空仓闸门已触发：本条不给买入范围，仅供复盘与观察。${item.followReasons.join("；")}`;
 
-  const executionState = item.execution?.executable_snapshot.state ?? null;
+  const executionState = readError && item.execution ? "stale" : item.execution?.executable_snapshot.state ?? null;
   const executionStateText =
     executionState === "ready"
       ? "可判"
@@ -375,6 +378,7 @@ export function PickCard({
 
   return (
     <CardShell flow className={`stock-card-${item.origin}`} onClick={stockNav(item.symbol)}>
+      {readError && <p role="status" className="text-xs text-amber-800 dark:text-amber-300">上次读取结果 · 刷新失败，当前行情与参与条件待重新核实。原始依据仅供核对。</p>}
       {/* 头：名称代码（可点 → 工作台）+ 来源/持仓/T 档徽标 + 现价 + 涨跌幅 */}
       <CardHead
         name={item.name}
@@ -422,7 +426,9 @@ export function PickCard({
               <span
                 className="font-mono text-base font-semibold tabular-nums"
                 title={
-                  executionState === "ready"
+                  readError
+                    ? "上次读取的报价，当前行情未核实，不作为执行资格"
+                    : executionState === "ready"
                     ? "最新执行复核快照价（不是成交价）"
                     : item.origin === "picks"
                       ? item.execution
@@ -455,11 +461,13 @@ export function PickCard({
                 className="font-mono"
                 title={"动作时复核行情 · " + (item.execution.executable_snapshot.source ?? "来源未知") + " · " + item.execution.executable_snapshot.state}
               >
-                执行快照 {fmt(item.execution.executable_snapshot.price)}
+                {readError ? "上次执行快照" : "执行快照"} {fmt(item.execution.executable_snapshot.price)}
               </span>
               <Chip
                 text={
-                  executionState !== "ready"
+                  readError
+                    ? "执行复核·待读取"
+                    : executionState !== "ready"
                     ? `执行快照·${executionStateText}`
                     : item.execution.gate_decision === "passed"
                       ? "执行复核·通过"
@@ -492,15 +500,19 @@ export function PickCard({
         <div className="mt-1.5">
           <Chip
             text={
-              item.tradability.level === "可参与"
+              readError
+                ? "可参与性待重新核实"
+                : item.tradability.level === "可参与"
                 ? "可参与评估 · 当前未封板"
                 : item.tradability.level === "不可参与"
                   ? "当前不可参与"
                   : "可参与性未判定"
             }
-            title={`可参与性判定（候选资格，不代表成交保证）：${item.tradability.basis}`}
+            title={`${readError ? "上次读取的" : ""}可参与性判定（候选资格，不代表成交保证）：${item.tradability.basis}`}
             className={
-              item.tradability.level === "可参与"
+              readError
+                ? "border-amber-500/40 bg-amber-500/10 text-amber-800 dark:text-amber-300"
+                : item.tradability.level === "可参与"
                 ? "border-sky-500/50 bg-sky-500/10 text-sky-700 dark:text-sky-300"
                 : item.tradability.level === "不可参与"
                   ? "border-amber-500/40 bg-amber-500/10 text-amber-800 dark:text-amber-300"

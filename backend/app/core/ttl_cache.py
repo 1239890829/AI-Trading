@@ -20,6 +20,7 @@ from __future__ import annotations
 
 import asyncio
 import inspect
+import math
 import threading
 import weakref
 from collections import OrderedDict
@@ -42,7 +43,7 @@ class TTLCache:
         self.name = name
         self.ttl = float(ttl)
         self.maxsize = max(1, int(maxsize))
-        self._data: "OrderedDict[Any, tuple[float, Any]]" = OrderedDict()
+        self._data: "OrderedDict[Any, tuple[float, Any, float | None]]" = OrderedDict()
         self._locks: dict[Any, asyncio.Lock] = {}
         self._mu = threading.Lock()
         self.hits = 0
@@ -64,8 +65,9 @@ class TTLCache:
             if entry is None:
                 self.misses += 1
                 return False, None
-            ts, value = entry
-            if now - ts >= self.ttl:
+            ts, value, item_ttl = entry
+            lifetime = self.ttl if item_ttl is None else item_ttl
+            if now - ts >= lifetime:
                 del self._data[key]
                 self.misses += 1
                 return False, None
@@ -73,10 +75,18 @@ class TTLCache:
             self.hits += 1
             return True, value
 
-    def set(self, key: Any, value: Any) -> None:
+    def set(self, key: Any, value: Any, *, ttl: float | None = None) -> None:
+        """Use the instance TTL by default; a finite override applies to this item.
+
+        Overwriting resets both the timestamp and override. Default TTL validation
+        stays unchanged; finite zero/negative overrides expire on the next read.
+        """
+        item_ttl = None if ttl is None else float(ttl)
+        if item_ttl is not None and not math.isfinite(item_ttl):
+            raise ValueError("ttl override must be finite")
         now = monotonic()
         with self._mu:
-            self._data[key] = (now, value)
+            self._data[key] = (now, value, item_ttl)
             self._data.move_to_end(key)
             while len(self._data) > self.maxsize:
                 self._data.popitem(last=False)

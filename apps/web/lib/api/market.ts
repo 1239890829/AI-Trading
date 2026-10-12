@@ -332,6 +332,9 @@ export async function searchSymbols(q: string): Promise<SymbolSearchItem[]> {
 
 export interface MinutePoint {
   ts: string;
+  /** 同次源响应证明的当前尾桶观测钟；不替换原分钟标签 ts。 */
+  observation_ts?: string | null;
+  time_label?: "interval_end" | null;
   price: number;
   volume?: number | null;
   cum_amount?: number | null;

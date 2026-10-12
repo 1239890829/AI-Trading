@@ -35,7 +35,7 @@ describe("同版机会依据", () => {
     finish(payload("2026-09-30"));
     await waitFor(() => expect(screen.queryByText(/2026-09-30 · 0 只/)).toBeNull());
   });
-  it("keeps multiple hypotheses and unknowns without execution controls", async () => {
+  it("keeps multiple hypotheses and unknowns after a same-date refresh fails, without execution controls", async () => {
     const data = payload();
     data.cards = [{ symbol: "600127", name: "金健米业", hypotheses: ["农业", "独立事件"].map((theme, i) => ({
       opportunity_id: `op-${i}`, decision_id: "od", decision_version: `v${i}`, scenario: "new_path",
@@ -51,6 +51,18 @@ describe("同版机会依据", () => {
     expect(screen.getAllByText(/观察路径：公司独立事件 \/ 趋势强势/)).toHaveLength(2);
     expect(screen.getAllByText(/参考价 缺失，不是成交价/)).toHaveLength(2);
     expect(screen.queryByRole("button", { name: /建仓|买入/ })).toBeNull();
+    vi.mocked(getOpportunities).mockRejectedValue(new Error("offline"));
+    fireEvent(document, new Event("visibilitychange"));
+    expect(await screen.findByRole("alert")).toHaveProperty("textContent", expect.stringContaining("上次"));
+    expect(screen.getAllByText(/公司受益待核/)).toHaveLength(2);
+    expect(screen.getAllByText(/参考价 缺失，不是成交价/)).toHaveLength(2);
+    expect(screen.getByText(/2 条独立假设/)).toBeTruthy();
+    expect(screen.queryByRole("button", { name: /建仓|买入/ })).toBeNull();
+    vi.mocked(getOpportunities).mockResolvedValue(payload("2026-09-27"));
+    fireEvent.change(screen.getByLabelText("机会决定日期"), {target: {value: "2026-09-27"}});
+    expect(screen.queryByText(/2 条独立假设/)).toBeNull();
+    expect(await screen.findByText(/2026-09-27 · 0 只/)).toBeTruthy();
+    expect(screen.queryByRole("alert")).toBeNull();
   });
 });
 

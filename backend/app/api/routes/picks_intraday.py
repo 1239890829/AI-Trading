@@ -182,7 +182,7 @@ from app.picks.intraday_opportunity_runtime import (
 
 
 @router.get("/watch-ledger")
-async def watch_ledger(
+def watch_ledger(
     request: Request,
     date: str | None = Query(default=None, description="YYYY-MM-DD，缺省=北京今天"),
     days: int = Query(default=5, ge=1, le=30, description="历史天数"),
@@ -192,6 +192,8 @@ async def watch_ledger(
     当日全量行（tracking + settled，含入选说明与盈亏）+ 近 N 日历史 + 当日统计。
     数据源：盘中 watcher 确认/买点触发/机会候选**首见登记**，收盘复盘自动清算。
     """
+    # FastAPI runs this synchronous read handler in its worker pool. Each repo
+    # function creates and closes its own Session there, without crossing awaits.
     from app.picks.watch_ledger import day_stats, get_day, get_history
 
     target = date or beijing_now().date().isoformat()

@@ -7,7 +7,7 @@ const state = vi.hoisted(() => ({
   params: new URLSearchParams("symbol=600127&ct=minute&rt=info&from=%2Fmarket%3Ftab%3Devents"),
   push: vi.fn(), replace: vi.fn(),
   watch: [{symbol: "600127", group_name: "默认"}, {symbol: "603256", group_name: "材料观察"}],
-  quoteStream: {status: "closed", quotes: {
+  quoteStream: {status: "closed", quoteFeed: {subscribe: () => () => {}, getSnapshot: () => undefined}, quotes: {
     "600127": {symbol: "600127", name: "金健米业", price: 8.13, change_pct: 2.52, source: "fixture", quality: "high", quality_reasons: [], received_at: "2026-10-08T09:55:00+08:00", data_timestamp: "2026-10-08T09:55:00+08:00"},
   }},
   realPositions: {items: [{symbol: "600127"}]},
@@ -21,7 +21,7 @@ vi.mock("@/hooks/use-quote-stream", () => ({
 // Match the real hooks' stable data identity between network updates.
 // A fresh items array on every render repeatedly triggers the REST fallback effect.
 vi.mock("@/hooks/use-real-positions", () => ({useRealPositions: () => ({data: state.realPositions, error: null, reload: state.reloadReal})}));
-vi.mock("@/components/stock-detail", () => ({StockDetailPanel: ({symbol, chartTab, rightTab, active, realPositions}: {symbol: string; chartTab?: string; rightTab?: string; active?: boolean; realPositions?: {reload: () => Promise<void>}}) => <div data-testid="stock-detail" data-active={String(active)} data-shared-positions={String(realPositions?.reload === state.reloadReal)}>{symbol}/{chartTab}/{rightTab}</div>}));
+vi.mock("@/components/stock-detail", () => ({StockDetailPanel: ({symbol, chartTab, rightTab, active, realPositions, quoteFeed}: {symbol: string; chartTab?: string; rightTab?: string; active?: boolean; realPositions?: {reload: () => Promise<void>}; quoteFeed?: unknown}) => <div data-testid="stock-detail" data-active={String(active)} data-shared-positions={String(realPositions?.reload === state.reloadReal)} data-shared-quote-feed={String(quoteFeed === state.quoteStream.quoteFeed)}>{symbol}/{chartTab}/{rightTab}</div>}));
 vi.mock("@/components/index-cards", () => ({IndexCards: () => <div>指数摘要</div>}));
 vi.mock("@/components/detail/account-scope-panel", () => ({AccountScopePanel: ({account}: {account: string}) => <div>账户结果 {account}</div>}));
 vi.mock("@/components/picks/pick-detail-modal", () => ({PickDetailModal: ({target}: {target: {kind: string; item: {symbol: string}} | null}) => target ? <div role="dialog">{target.kind}/{target.item.symbol}</div> : null}));
@@ -58,6 +58,14 @@ async function selectList(name: string) {
 }
 
 describe("B+C workbench production consumers", () => {
+  it("passes the existing quote owner to selected detail while preserving list quotes", async () => {
+    render(<WorkbenchPage />);
+    expect(await screen.findByRole("button", {name: "查看 金健米业 600127"})).toBeTruthy();
+    expect(screen.getByTestId("stock-detail").dataset.sharedQuoteFeed).toBe("true");
+    expect(screen.getByRole("button", {name: "查看 金健米业 600127"}).textContent).toContain("8.13");
+    fireEvent.click(screen.getByRole("button", {name: "查看 603256 603256"}));
+    expect(screen.getByTestId("stock-detail").dataset.sharedQuoteFeed).toBe("true");
+  });
   it("shows the watchlist before the slow overview settles and isolates auxiliary errors", async () => {
     let finish!: (value: Awaited<ReturnType<typeof api.getMarketOverview>>) => void;
     vi.mocked(api.getMarketOverview).mockImplementationOnce(() => new Promise(resolve => {finish = resolve;}));

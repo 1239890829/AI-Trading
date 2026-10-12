@@ -3,8 +3,8 @@
  * 重点验证两件事：
  * 1. 有摘要数据时，重要度/情绪/关键数字/事实摘要都要渲染出来
  * 2. 老数据（无摘要字段）不能渲染出空白徽章——摘要字段全可选 */
-import { afterEach, describe, expect, it } from "vitest";
-import { cleanup, render, screen } from "@testing-library/react";
+import { afterEach, describe, expect, it, vi } from "vitest";
+import { cleanup, fireEvent, render, screen } from "@testing-library/react";
 import { InfoPanel, type InfoItem } from "./info-panel";
 
 afterEach(cleanup);
@@ -60,5 +60,24 @@ describe("InfoPanel", () => {
     render(<InfoPanel anns={[]} news={[]} />);
     expect(screen.getByText("暂无公告")).toBeTruthy();
     expect(screen.getByText("暂无新闻")).toBeTruthy();
+  });
+
+  it("source failures never masquerade as empty and only user retry invokes the callback", () => {
+    const retry = vi.fn();
+    const view = render(<InfoPanel anns={[]} news={null} annError="ann-offline" newsError="news-offline" onRetry={retry} />);
+    expect(screen.getAllByRole("alert")).toHaveLength(2);
+    expect(screen.queryByText("暂无公告")).toBeNull(); expect(screen.queryByText("暂无新闻")).toBeNull();
+    expect(retry).not.toHaveBeenCalled();
+    fireEvent.click(screen.getByRole("button", {name: "重试资讯"})); expect(retry).toHaveBeenCalledTimes(1);
+    view.rerender(<InfoPanel anns={[]} news={null} annError="ann-offline" newsError="news-offline" onRetry={retry} loading />);
+    fireEvent.click(screen.getByRole("button", {name: "重试中…"})); expect(retry).toHaveBeenCalledTimes(1);
+  });
+
+  it("retained raw rows preserve source/date/digest while the failed source is marked", () => {
+    render(<InfoPanel anns={[WITH_DIGEST]} news={[LEGACY]} annError="ann-offline" newsError="news-offline" />);
+    expect(screen.getByText(/保留上次读取的公告/)).toBeTruthy(); expect(screen.getByText(/保留上次读取的新闻/)).toBeTruthy();
+    expect(screen.getByText(/2026-08-15 · eastmoney/)).toBeTruthy(); expect(screen.getByText("2026-08-01 · eastmoney")).toBeTruthy();
+    expect(screen.getByText(WITH_DIGEST.title)).toBeTruthy(); expect(screen.getByText(LEGACY.title)).toBeTruthy();
+    expect(screen.getByTitle(/来源：正文/)).toHaveProperty("textContent", WITH_DIGEST.digest);
   });
 });

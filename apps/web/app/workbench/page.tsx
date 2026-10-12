@@ -150,7 +150,7 @@ function WorkbenchInner() {
   const activeSymbol = selected || "600519";
 
   // 列表消费侧 3s 节流（2026-09-02 用户反馈：1Hz 刷新整表闪烁跳动）。
-  // 详情面板是独立 hook 实例（不传 throttleMs），K线/分时合成不受影响。
+  // 详情通过同一 owner 的 quoteFeed 即时消费，不等待列表节流，也不另建连接。
   // 动态分组标的并入订阅：精选/跟踪标的的行情与自选同源同节奏。
   //
   // P1-5（2026-09-11）：订阅集**显式并入 activeSymbol**，详情面板因此可以复用这条
@@ -161,7 +161,7 @@ function WorkbenchInner() {
     () => [...new Set([...symbols, ...realSymbols, ...paperSymbols, ...picksSymbols, ...topSymbols, activeSymbol])],
     [symbols, realSymbols, paperSymbols, picksSymbols, topSymbols, activeSymbol],
   );
-  const { quotes, status } = useQuoteStream(streamSymbols, { throttleMs: 3000 });
+  const { quotes, status, quoteFeed } = useQuoteStream(streamSymbols, { throttleMs: 3000 });
   const [extra, setExtra] = useState<Record<string, Quote>>({});
   // WS 每 5s tick 全量替换 quotes：merged/列表查找都必须 memo 化，
   // 否则每次 tick 触发整列表 O(n²) 重算（评审 F2）
@@ -580,7 +580,7 @@ function WorkbenchInner() {
         <section className="bc-workbench-detail" aria-label="证券详情">
         {/* 边界跟随证券/scope重置，保留深链与共享真实详情的全部消费者。 */}
         <PanelBoundary key={`${activeSymbol}:${mode}:${account}`} label="个股详情">
-          <StockDetailPanel symbol={activeSymbol} chartTab={chartTab} rightTab={rightTab} onRightTabChange={switchRightTab} liveQuote={merged[activeSymbol]} streamStatus={status} active={detailActive} realPositions={realPositions} />
+          <StockDetailPanel symbol={activeSymbol} chartTab={chartTab} rightTab={rightTab} onRightTabChange={switchRightTab} liveQuote={merged[activeSymbol]} streamStatus={status} quoteFeed={quoteFeed} active={detailActive} realPositions={realPositions} />
         </PanelBoundary>
         </section>
       </div>

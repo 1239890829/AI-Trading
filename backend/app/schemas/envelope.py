@@ -14,7 +14,7 @@
 """
 from __future__ import annotations
 
-from typing import Any, Generic, TypeVar
+from typing import Any, Generic, Literal, TypeVar
 
 from pydantic import BaseModel, ConfigDict, Field
 
@@ -99,6 +99,9 @@ class MinutePointModel(BaseModel):
     """分钟分时点（与 /api/minute-line points 元素一致）。"""
 
     ts: str
+    # 仅同次源响应证明的当前尾桶观测钟；ts 始终保留源分钟标签。
+    observation_ts: str | None = None
+    time_label: Literal["interval_end"] | None = None
     price: float
     volume: float | None = None
     cum_amount: float | None = None

@@ -55,19 +55,23 @@ export function KbBrowserTab() {
   }, [content, anchor]);
 
   useEffect(() => {
+    let alive = true;
     (async () => {
       try {
         const tree = await getAgentKbTree();
+        if (!alive) return;
         setFiles(tree.files);
         // 默认打开知识库总索引（kb 目录优先）
         const first = tree.files.find((f) => f.path === "kb/00-INDEX.md") ?? tree.files[0];
         if (first) void openFile(first.path);
         setLoaded(true);
       } catch {
+        if (!alive) return;
         setFailed(true);
         setLoaded(true);
       }
     })();
+    return () => { alive = false; request.current += 1; };
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 

@@ -20,24 +20,32 @@ async function request<T>(
   timeoutMs: number,
 ): Promise<{ data: T; meta: Meta }> {
   const ctrl = new AbortController();
+  const started = performance.now();
   const timer = setTimeout(() => ctrl.abort(), timeoutMs);
-  let res: Response;
+  const expired = () => ctrl.signal.aborted || performance.now() - started >= timeoutMs;
+  const timeout = () => new ApiError(0, `${path}：请求超时（${timeoutMs}ms）`, "timeout");
   try {
-    res = await fetch(`${API_BASE}${path}`, { cache: "no-store", ...init, signal: ctrl.signal });
-  } catch (e) {
-    const aborted = e instanceof DOMException && e.name === "AbortError";
-    throw new ApiError(
-      0,
-      aborted ? `${path}：请求超时（${timeoutMs}ms）` : `${path}：网络错误（后端未启动或连接被拒）`,
-      aborted ? "timeout" : "network_error",
-    );
-  } finally {
-    clearTimeout(timer);
-  }
-  const body = (await res.json().catch(() => ({}))) as { data?: T; detail?: string; code?: string };
-  if (!res.ok) {
-    throw new ApiError(res.status, body.detail ?? `HTTP ${res.status}`, body.code ?? `http_${res.status}`);
-  }
+    let res: Response;
+    try {
+      res = await fetch(`${API_BASE}${path}`, { cache: "no-store", ...init, signal: ctrl.signal });
+    } catch (e) {
+      if (expired() || (e instanceof DOMException && e.name === "AbortError")) throw timeout();
+      throw new ApiError(0, `${path}：网络错误（后端未启动或连接被拒）`, "network_error");
+    }
+    let raw: unknown;
+    try {
+      raw = await res.json();
+    } catch (e) {
+      // 正文读取也受同一预算约束；中止不能被归为非 JSON 的 bad_envelope。
+      if (expired() || (e instanceof DOMException && e.name === "AbortError")) throw timeout();
+      raw = {};
+    }
+    // 同步 JSON 解析会占住主线程，计时器尚未运行也必须核对完整耗时。
+    if (expired()) throw timeout();
+    const body = (raw !== null && typeof raw === "object" ? raw : {}) as { data?: T; detail?: string; code?: string };
+    if (!res.ok) {
+      throw new ApiError(res.status, body.detail ?? `HTTP ${res.status}`, body.code ?? `http_${res.status}`);
+    }
   // 200 但没有 Envelope 的 `data` 键 = **契约破坏**（响应体不是合法 JSON，或请求落到了非 API 路由）。
   // 若不校验而直接 `return body`，调用方拿到的是 `undefined`：`.catch(() => [])` 兜得住「抛错」、
   // **兜不住「返回 undefined」**，于是崩溃点会漂到离根因很远的地方——实测表现为
@@ -45,14 +53,17 @@ async function request<T>(
   // `undefined is not an object (evaluating 'reviews.length')`（JSC），
   // 现场看像是页面自身逻辑出错，实际根因是接口响应不是 Envelope。
   // 三态纪律：契约破坏要**显式失败**，不能伪装成「成功且无数据」（KB-ENG-37）。
-  if (!("data" in body)) {
-    throw new ApiError(
-      res.status,
-      `${path}：响应缺少 data 字段（HTTP ${res.status} 但非 API Envelope）`,
-      "bad_envelope",
-    );
+    if (!("data" in body)) {
+      throw new ApiError(
+        res.status,
+        `${path}：响应缺少 data 字段（HTTP ${res.status} 但非 API Envelope）`,
+        "bad_envelope",
+      );
+    }
+    return body as { data: T; meta: Meta };
+  } finally {
+    clearTimeout(timer);
   }
-  return body as { data: T; meta: Meta };
 }
 
 async function getJsonArray<T>(path: string, timeoutMs?: number): Promise<T[]> {

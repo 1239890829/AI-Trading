@@ -81,10 +81,12 @@ export function IntradayThemeRow({
   t,
   expanded,
   onToggle,
+  readError = false,
 }: {
   t: OpportunityTheme;
   expanded: boolean;
   onToggle: () => void;
+  readError?: boolean;
 }) {
   const stage = t.stage ?? "未知";
   const detailsId = useId();
@@ -140,7 +142,7 @@ export function IntradayThemeRow({
             {t.has_succession === false && " · 梯队断层"}
           </span>
           <span className="ml-auto text-zinc-600 dark:text-zinc-400">
-            {expanded ? "收起 ▲" : `${t.participants?.length ?? 0} 只可参与候选 ▼`}
+            {expanded ? "收起 ▲" : `${t.participants?.length ?? 0} 只${readError ? "上次候选 · 待核" : "可参与候选"} ▼`}
           </span>
         </button>
         <JumpLink
@@ -186,13 +188,13 @@ export function IntradayThemeRow({
                 <p className="mb-1.5 flex flex-wrap items-baseline gap-2 text-[11px] text-zinc-600 dark:text-zinc-400">
                   <span className="font-medium text-zinc-700 dark:text-zinc-300">可参与候选</span>
                   <span>
-                    {t.participants?.length ?? 0} 只 · 当前未封板、可进入参与评估
+                    {t.participants?.length ?? 0} 只 · {readError ? "上次读取的候选，当前参与条件待核" : "当前未封板、可进入参与评估"}
                   </span>
                 </p>
                 {(t.participants?.length ?? 0) > 0 ? (
                   <MasonryColumns gap="gap-2">
                     {(t.participants ?? []).map((s) => (
-                      <PickCard key={s.symbol} item={fromIntradayStock(s)} />
+                      <PickCard key={s.symbol} item={fromIntradayStock(s)} readError={readError} />
                     ))}
                   </MasonryColumns>
                 ) : (
@@ -215,7 +217,7 @@ export function IntradayThemeRow({
                   </p>
                   <MasonryColumns gap="gap-2">
                     {t.stocks.map((s) => (
-                      <PickCard key={s.symbol} item={fromIntradayStock(s)} />
+                      <PickCard key={s.symbol} item={fromIntradayStock(s)} readError={readError} />
                     ))}
                   </MasonryColumns>
                 </div>
@@ -236,11 +238,13 @@ export function OpportunitySection({
   expanded,
   onToggle,
   showLedger = true,
+  readError = false,
 }: {
   opps: IntradayOpportunities;
   expanded: string | null;
   onToggle: (theme: string) => void;
   showLedger?: boolean;
+  readError?: boolean;
 }) {
   // 板块权限挡下的容器成分只数：>0 时口径行要说明——「候选为什么这么少」
   // 与「没有候选」是两件事，页面必须能区分（三态纪律）
@@ -249,18 +253,18 @@ export function OpportunitySection({
     <section className="space-y-2">
       <div className="flex flex-wrap items-baseline justify-between gap-2">
         <h2 className="text-xs font-medium text-zinc-600 dark:text-zinc-400">
-          当前机会（题材 → 个股，证据池 {opps.trade_date ?? "—"}）
+          {readError ? "上次题材机会" : "当前机会"}（题材 → 个股，证据池 {opps.trade_date ?? "—"}）
         </h2>
         {/* 涨停家数/最高板/人气榜警示已上移至「今日行情」概览带（2026-09-04） */}
       </div>
       {opps.themes.length === 0 ? (
         <div className="ui-card rounded-xl border border-zinc-200 p-4 text-xs text-zinc-600 dark:text-zinc-400 dark:border-zinc-800">
-          暂无题材机会（当日无涨停数据或题材未成形）。
+          {readError ? "上次读取未返回题材机会，当前状态待重新核实。" : "暂无题材机会（当日无涨停数据或题材未成形）。"}
         </div>
       ) : (
         <div className="space-y-2">
           {opps.themes.map((t) => (
-            <IntradayThemeRow key={t.theme} t={t} expanded={expanded === t.theme} onToggle={() => onToggle(t.theme)} />
+            <IntradayThemeRow key={t.theme} t={t} expanded={expanded === t.theme} onToggle={() => onToggle(t.theme)} readError={readError} />
           ))}
         </div>
       )}

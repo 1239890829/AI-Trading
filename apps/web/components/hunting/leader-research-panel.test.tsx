@@ -35,7 +35,7 @@ describe("持续研究", () => {
     finish(payload("2026-09-29"));
     await waitFor(() => expect(screen.queryByText(/2026-09-29 · 0 只/)).toBeNull());
   });
-  it("shows reasons, unknowns and no-entry without order controls", async () => {
+  it("retains every same-date research reason and outcome on refresh failure without order controls", async () => {
     const data = payload();
     data.cards = [{ symbol: "600127", name: "金健米业", state: "observing", routes: ["public_event"],
       first_seen: "2026-09-29T10:00:00", source_as_of: "2026-09-29T10:00:00", source: "fixture", pct: 10,
@@ -48,5 +48,17 @@ describe("持续研究", () => {
     expect(screen.getByText(/业务直接受益未验/)).toBeTruthy();
     expect(screen.getByText(/D1：缺收盘数据/)).toBeTruthy();
     expect(screen.queryByRole("button", { name: /建仓|买入/ })).toBeNull();
+    vi.mocked(getLeaderResearch).mockRejectedValue(new Error("offline"));
+    fireEvent(document, new Event("visibilitychange"));
+    expect(await screen.findByRole("alert")).toHaveProperty("textContent", expect.stringContaining("上次"));
+    expect(screen.getByText(/无法假定参与/)).toBeTruthy();
+    expect(screen.getByText(/业务直接受益未验/)).toBeTruthy();
+    expect(screen.getByText(/D1：缺收盘数据/)).toBeTruthy();
+    expect(screen.queryByRole("button", { name: /建仓|买入/ })).toBeNull();
+    vi.mocked(getLeaderResearch).mockResolvedValue(payload("2026-09-27"));
+    fireEvent.change(screen.getByLabelText("研究日期"), {target: {value: "2026-09-27"}});
+    expect(screen.queryByText(/无法假定参与/)).toBeNull();
+    expect(await screen.findByText(/2026-09-27 · 0 只/)).toBeTruthy();
+    expect(screen.queryByRole("alert")).toBeNull();
   });
 });

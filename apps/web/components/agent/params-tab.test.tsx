@@ -1,6 +1,6 @@
-import { afterEach, describe, expect, it, vi } from "vitest";
-import { cleanup, render, screen, fireEvent, waitFor } from "@testing-library/react";
-import { getAgentParamChanges, getAgentRollbackReasons, applyAgentParamChange, rollbackAgentParamChange, type AgentParamChange } from "@/lib/api";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { act, cleanup, render, screen, fireEvent, waitFor } from "@testing-library/react";
+import { getAgentParams, getAgentParamSurvival, getAgentParamChanges, getAgentRollbackReasons, applyAgentParamChange, rollbackAgentParamChange, type AgentParamChange } from "@/lib/api";
 import { ParamsTab } from "./params-tab";
 
 // 页面挂载即取数：把 api 层整体桩掉——本组测试只关心**容器与滚动的契约**，
@@ -33,6 +33,14 @@ afterEach(() => {
   vi.mocked(getAgentParamChanges).mockResolvedValue([]);
   vi.mocked(getAgentRollbackReasons).mockResolvedValue([]);
   vi.mocked(rollbackAgentParamChange).mockReset();
+});
+beforeEach(() => {
+  vi.mocked(getAgentParams).mockReset().mockResolvedValue([]);
+  vi.mocked(getAgentParamChanges).mockReset().mockResolvedValue([]);
+  vi.mocked(getAgentRollbackReasons).mockReset().mockResolvedValue([]);
+  vi.mocked(getAgentParamSurvival).mockReset().mockResolvedValue({ total_changes: 0, draft: 0, shadow: 0, decided: 0, applied: 0,
+    rolled_back: 0, superseded: 0, still_effective: 0, survival_rate: null, insufficient: true,
+    note: "", by_key: {}, rollback_reasons: {}, reason_labels: {} });
 });
 
 describe("参数配置页 · 滚动契约（2026-09-10 用户报「向下滚动不了」）", () => {
@@ -132,4 +140,68 @@ it("回滚原因菜单保留服务端代码，失败时保留归因草稿", asyn
   });
   expect(screen.getByRole("button", { name: "回滚原因：效果劣化" })).toBeTruthy();
   expect((screen.getByPlaceholderText("备注（可选）") as HTMLInputElement).value).toBe("复核实验结果");
+});
+
+describe("参数配置 · 独立读取", () => {
+  const param = { key: "picks_min_pick_score", label: "最低入选分", desc: "测试参数",
+    current: "50", default: "50", kind: "float" as const, risk: "L1", range: { min: 0, max: 100 } };
+  it("慢统计不阻塞白名单与变更历史", async () => {
+    vi.mocked(getAgentParamSurvival).mockReturnValueOnce(new Promise(() => {}));
+    vi.mocked(getAgentParams).mockResolvedValueOnce([param]);
+    vi.mocked(getAgentParamChanges).mockResolvedValueOnce([change("draft", true)]);
+    render(<ParamsTab />);
+    expect(await screen.findByText("最低入选分")).toBeTruthy();
+    expect(screen.getByRole("button", { name: "确认生效" })).toBeTruthy();
+  });
+
+  it("原因字典失败只标自身，不清已成功的白名单", async () => {
+    vi.mocked(getAgentParams).mockResolvedValueOnce([param]);
+    vi.mocked(getAgentRollbackReasons).mockRejectedValueOnce(new Error("reasons offline"));
+    render(<ParamsTab />);
+    expect(await screen.findByText("最低入选分")).toBeTruthy();
+    expect(screen.getByText(/回滚原因读取失败/)).toBeTruthy();
+    expect(screen.queryByText("参数加载失败。")).toBeNull();
+  });
+
+  it("统计首次失败只标统计来源，白名单和历史仍独立可读", async () => {
+    vi.mocked(getAgentParams).mockResolvedValueOnce([param]);
+    vi.mocked(getAgentParamChanges).mockResolvedValueOnce([change("draft", true)]);
+    vi.mocked(getAgentParamSurvival).mockRejectedValueOnce(new Error("survival offline"));
+    render(<ParamsTab />);
+    expect(await screen.findByText(/存活统计读取失败/)).toBeTruthy();
+    expect(screen.getByText("最低入选分")).toBeTruthy();
+    expect(screen.getByRole("button", { name: "确认生效" })).toBeTruthy();
+    expect(screen.queryByText("参数加载失败。")).toBeNull();
+  });
+
+  it("同范围重新读取失败保留编辑草稿和旧行，旧批准动作暂停，恢复后可用", async () => {
+    vi.mocked(getAgentParams).mockResolvedValueOnce([param]).mockRejectedValueOnce(new Error("params offline"))
+      .mockResolvedValue([param]);
+    vi.mocked(getAgentParamChanges).mockResolvedValueOnce([change("draft", true)])
+      .mockRejectedValueOnce(new Error("changes offline")).mockResolvedValue([change("draft", true)]);
+    render(<ParamsTab />);
+    fireEvent.click(await screen.findByRole("button", { name: "发起变更" }));
+    fireEvent.change(screen.getByRole("textbox", { name: "最低入选分的新值" }), { target: { value: "65" } });
+    fireEvent.click(screen.getByRole("button", { name: "重新读取" }));
+    expect(await screen.findByText(/白名单读取失败.*上次读取结果/)).toBeTruthy();
+    expect((screen.getByRole("textbox", { name: "最低入选分的新值" }) as HTMLTextAreaElement).value).toBe("65");
+    expect((screen.getByRole("button", { name: "确认生效" }) as HTMLButtonElement).disabled).toBe(true);
+    fireEvent.click(screen.getByRole("button", { name: "重新读取" }));
+    await waitFor(() => expect(screen.queryByText(/changes offline/)).toBeNull());
+    expect((screen.getByRole("button", { name: "确认生效" }) as HTMLButtonElement).disabled).toBe(false);
+    expect(applyAgentParamChange).not.toHaveBeenCalled();
+  });
+
+  it("旧字典请求晚回不污染人工重新读取后的字典", async () => {
+    let old!: (reasons: { code: string; label: string }[]) => void;
+    vi.mocked(getAgentParamChanges).mockResolvedValue([change("applied")]);
+    vi.mocked(getAgentRollbackReasons).mockReturnValueOnce(new Promise(resolve => { old = resolve; }))
+      .mockResolvedValue([{ code: "manual", label: "最新归因" }]);
+    render(<ParamsTab />);
+    fireEvent.click(await screen.findByRole("button", { name: "回滚" }));
+    fireEvent.click(screen.getByRole("button", { name: "重新读取" }));
+    expect(await screen.findByRole("button", { name: "回滚原因：最新归因" })).toBeTruthy();
+    await act(async () => old([{ code: "manual", label: "旧归因" }]));
+    expect(screen.getByRole("button", { name: "回滚原因：最新归因" })).toBeTruthy();
+  });
 });

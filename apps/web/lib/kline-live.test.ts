@@ -93,7 +93,72 @@ interface MinutePointFixture {
   avg: number | null;
   minute_amount?: number | null;
   source: string;
+  observation_ts?: string | null;
+  time_label?: "interval_end" | null;
 }
+
+describe("腾讯有源时刻证明的分钟结束桶", () => {
+  const tail = (label = "13:44", observed = "13:43:22"): MinutePointFixture => ({
+    ...point(label, 15.27, 1_000_000),
+    observation_ts: `${TODAY}T${observed}+08:00`, time_label: "interval_end",
+  });
+  const tick = (time: string, price = 15.28) => ({
+    ...quoteAt(time.slice(0, 5), price), data_timestamp: `${TODAY}T${time}+08:00`,
+  });
+  it("同桶新报价早于结束标签也原位更新，原始label和真实源时刻分别保留", () => {
+    const input = [tail()];
+    const out = mergeQuoteIntoMinutes(input, tick("13:43:50"));
+    expect(out).not.toBeNull();
+    expect(out).toHaveLength(1);
+    expect(out![0].price).toBe(15.28);
+    expect(out![0].ts).toBe(input[0].ts);
+    expect(out![0].observation_ts).toBe(`${TODAY}T13:43:50+08:00`);
+    expect(input[0].price).toBe(15.27);
+  });
+  it("拒绝较旧、跨日、午休、缺源时刻和跨源报价，不借接收时刻绕过", () => {
+    expect(mergeQuoteIntoMinutes([tail()], tick("13:43:20"))).toBeNull();
+    expect(mergeQuoteIntoMinutes([tail()], { ...tick("13:43:50"), source: "sina" })).toBeNull();
+    expect(mergeQuoteIntoMinutes([tail()], { ...tick("13:43:50"), data_timestamp: null, received_at: `${TODAY}T13:43:51+08:00` })).toBeNull();
+    expect(mergeQuoteIntoMinutes([tail()], { ...tick("13:43:50"), data_timestamp: `${YESTERDAY}T13:43:50+08:00` })).toBeNull();
+    expect(mergeQuoteIntoMinutes([tail("11:30", "11:29:50")], tick("12:30:00"))).toBeNull();
+  });
+  it("新桶继续保持结束标签，缺口留空且不继承分钟量额", () => {
+    const out = mergeQuoteIntoMinutes([tail()], tick("13:46:10"))!;
+    expect(out).toHaveLength(2);
+    expect(out[1].ts).toBe(`${TODAY}T05:47:00.000Z`);
+    expect(out[1].observation_ts).toBe(`${TODAY}T13:46:10+08:00`);
+    expect(out[1].time_label).toBe("interval_end");
+    expect(out[1].volume).toBeNull();
+    expect(out[1].minute_amount).toBeNull();
+  });
+  it("午收恰好封口后，下午新桶仍保持结束标签", () => {
+    const closed = mergeQuoteIntoMinutes([tail("11:30", "11:29:50")], tick("11:30:00"))!;
+    const afternoon = mergeQuoteIntoMinutes(closed, tick("13:00:01"))!;
+    expect(afternoon[1].ts).toBe(`${TODAY}T05:01:00.000Z`);
+    expect(afternoon[1].time_label).toBe("interval_end");
+    expect(afternoon[1].observation_ts).toBe(`${TODAY}T13:00:01+08:00`);
+  });
+  it("跨桶后再次更新不能把旧形成中累计额当作封口基准", () => {
+    const input = [{ ...tail(), cum_amount: 15_000_000 }];
+    const appended = mergeQuoteIntoMinutes(input, { ...tick("13:44:10"), amount: 15_001_000 })!;
+    const updated = mergeQuoteIntoMinutes(appended, { ...tick("13:44:20"), amount: 15_003_057 })!;
+    expect(updated[1].price).toBe(15.28);
+    expect(updated[1].minute_amount).toBeNull();
+    expect(updated[1].volume).toBeNull();
+    expect(getMinuteAmount({ ...updated[1], minute_amount: undefined }, input[0])).toBeNull();
+    const unmarkedAmount = { ...updated[1] };
+    delete unmarkedAmount.minute_amount;
+    expect(getMinuteAmount(unmarkedAmount, input[0])).toBeNull();
+  });
+  it.each([["09:31", "09:30:01", "09:30:50"], ["13:01", "13:00:01", "13:00:50"],
+    ["11:30", "11:29:50", "11:30:00"], ["15:00", "14:59:50", "15:00:00"]])(
+    "%s 桶接纳有证明的新源时刻，不推到非交易槽", (label, observed, latest) => {
+      const out = mergeQuoteIntoMinutes([tail(label, observed)], tick(latest))!;
+      expect(out).toHaveLength(1);
+      expect(out[0].ts).toBe(tail(label, observed).ts);
+      expect(out[0].price).toBe(15.28);
+    });
+});
 
 function point(bjHHMM: string, price: number, cumVolume: number): MinutePointFixture {
   // 北京时间 → UTC（小时补零：单数字小时的 ISO 串在 V8 是 Invalid Date）

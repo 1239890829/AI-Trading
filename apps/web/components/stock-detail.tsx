@@ -2,7 +2,7 @@
 
 import { SelectionRail } from "@/components/ui/selection-rail";
 
-import { useCallback, useEffect, memo, useId, useMemo, useRef, useState } from "react";
+import { useCallback, useEffect, memo, useId, useMemo, useRef, useState, useSyncExternalStore } from "react";
 import { MinuteChart } from "@/components/minute-chart";
 import { KlineChartPro } from "@/components/kline-chart-pro";
 import { priceLimitPct } from "@/lib/price-limit";
@@ -10,7 +10,7 @@ import { INDEX_DEFAULT_RIGHT_TAB, INDEX_RIGHT_TABS, rightTabsFor, type DetailRig
 import { Panel } from "@/components/panel";
 import { PriceFlash } from "@/components/price-flash";
 import { QualityBadge } from "@/components/quality-badge";
-import { useQuoteStream, STREAM_STATUS_LABEL, STREAM_ABNORMAL, type StreamStatus } from "@/hooks/use-quote-stream";
+import { useQuoteStream, STREAM_STATUS_LABEL, STREAM_ABNORMAL, type QuoteFeed, type StreamStatus } from "@/hooks/use-quote-stream";
 import { usePollingFetch } from "@/hooks/use-polling-fetch";
 import type { RealPositionsResource } from "@/hooks/use-real-positions";
 import { analyze } from "@/lib/technical-analysis";
@@ -113,19 +113,19 @@ export interface StockDetailTabs {
 export interface StockDetailStreamProps {
   liveQuote?: Quote;
   streamStatus?: StreamStatus;
+  quoteFeed?: QuoteFeed;
 }
 
 /** 空订阅集（引用恒定；`useQuoteStream([])` 的 hasSymbols=false ⇒ 不建连接）。 */
 const NO_SYMBOLS: string[] = [];
+const NO_QUOTE = () => undefined;
 
 /**
  * 个股详情面板（含 K 线/分时/盘口/逐笔/资金/财务多页签）。
  *
  * P1-1（2026-09-11）：包 `memo`。这是工作台里**最重的子树**（图表 + 多张表），
- * 而它的 props 全是原始值（symbol / chartTab / rightTab）——工作台因行情 3s tick
- * 重渲染时，这三个值不变 ⇒ 整棵子树可跳过。面板自身的行情更新来自它**自己**的
- * `useQuoteStream` 实例与内部 state，不依赖父级重渲染。
- * （切股走 `key={activeSymbol}` 重挂载，与 memo 不冲突。）
+ * 行情通过同一 owner 的选中证券订阅更新，不必等待工作台的 3s 列表刷新。
+ * 隐藏详情退订即时消费；同股状态与交易草稿仍保留。
  */
 export const StockDetailPanel = memo(function StockDetailPanel({
   symbol,
@@ -134,6 +134,7 @@ export const StockDetailPanel = memo(function StockDetailPanel({
   onRightTabChange,
   liveQuote: liveQuoteProp,
   streamStatus: streamStatusProp,
+  quoteFeed: quoteFeedProp,
   realPositions,
   active = true,
 }: { symbol: string; active?: boolean; realPositions?: RealPositionsResource } & StockDetailTabs & StockDetailStreamProps) {
@@ -203,9 +204,11 @@ export const StockDetailPanel = memo(function StockDetailPanel({
   // digest 数据源三态：非 null = 该侧降级（InfoPanel 显式提示，非静默空列表）
   const [annError, setAnnError] = useState<string | null>(null);
   const [newsError, setNewsError] = useState<string | null>(null);
+  const [digestLoading, setDigestLoading] = useState(false);
   const [company, setCompany] = useState<CompanyProfile | null>(null);
   const [fills, setFills] = useState<PaperFill[]>([]);
   const [paper, setPaper] = useState<PaperBundle | null | undefined>(undefined);
+  const [paperError, setPaperError] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [inWatchlist, setInWatchlist] = useState(false);
   // quote 三态：undefined=WS 快照/REST 均未到达（行情条渲染骨架）；null=两侧都
@@ -235,17 +238,18 @@ export const StockDetailPanel = memo(function StockDetailPanel({
     }
   }
 
-  // throttleMs=3000（审查 F5/R6）：详情面板价格闪烁与列表侧同口径——WS 仍 1Hz
-  // 全量接收（内部不丢数据），对外状态 3s 应用一次。1Hz PriceFlash 是每秒红绿
-  // 闪的体感噪音源（列表修过、详情漏了的不对称）。
-  //
-  // P1-5（2026-09-11）：上游传了 liveQuote 就不再自建 WS（见 StockDetailStreamProps）。
-  // 传空订阅集即可——`useQuoteStream` 在 hasSymbols=false 时直接 return，不建连接。
-  const ownsStream = liveQuoteProp !== undefined || streamStatusProp !== undefined;
+  // 上游 feed/连接态也是连接归属证据，未收到首帧时不另建 WS。
+  const ownsStream = quoteFeedProp !== undefined || liveQuoteProp !== undefined || streamStatusProp !== undefined;
   const own = useQuoteStream(!active || ownsStream ? NO_SYMBOLS : [symbol], { throttleMs: 3000 });
   const streamStatus = streamStatusProp ?? own.status;
-  // 行情单一来源：上游推送优先，否则用自带连接的结果
-  const live = liveQuoteProp ?? own.quotes[symbol];
+  const quoteFeed = quoteFeedProp ?? own.quoteFeed;
+  const subscribeQuote = useCallback((listener: () => void) => active && quoteFeed
+    ? quoteFeed.subscribe(symbol, listener) : () => {}, [active, quoteFeed, symbol]);
+  const snapshotQuote = useCallback(() => active ? quoteFeed?.getSnapshot(symbol) : undefined, [active, quoteFeed, symbol]);
+  const immediateQuote = useSyncExternalStore(subscribeQuote, snapshotQuote, NO_QUOTE);
+  // 未观察到首帧时可用旧接口的首屏报价；收到缺项帧（null）后不能回退慢 prop。
+  // 完整即时 Quote 保留源时间/质量/量额，慢列表 prop 不覆盖较新的详情报价。
+  const live = immediateQuote === undefined ? liveQuoteProp ?? own.quotes[symbol] : immediateQuote;
   // connecting 防抖（2026-09-09）：WS 秒连场景下"● 连接中"只闪现毫秒级——延迟 2s
   // 才认为真异常；期间离开 connecting 态则取消。
   const [connectingDebounced, setConnectingDebounced] = useState(false);
@@ -302,18 +306,17 @@ export const StockDetailPanel = memo(function StockDetailPanel({
         const q = await getQuote(symbol, "tencent");
         if (!scope.alive || scope !== detailReadScopeRef.current) return;
         setQuote((prev) => {
-          // 同股才合并：保留 WS 的最新价（腾讯 REST 可能滞后）。
-          // 旧实现无条件沿用 prev.price——切股后 prev 还是上一只股票的，
-          // 会把旧价格持续盖在新股票的报价上（串价主因）。
+          // 同股补估值；慢 REST 不覆盖已接纳报价的源钟、质量、量额与来源。
           if (!prev || prev.symbol !== q.symbol) return q;
           return {
             ...q,
-            price: prev.price,
-            change: prev.change,
-            change_pct: prev.change_pct,
-            data_timestamp: prev.data_timestamp,
-            quality: prev.quality,
-            quality_reasons: prev.quality_reasons,
+            ...prev,
+            pe_ttm: q.pe_ttm ?? prev.pe_ttm,
+            pb: q.pb ?? prev.pb,
+            total_mktcap_yi: q.total_mktcap_yi ?? prev.total_mktcap_yi,
+            float_mktcap_yi: q.float_mktcap_yi ?? prev.float_mktcap_yi,
+            limit_up_price: prev.limit_up_price ?? q.limit_up_price,
+            limit_down_price: prev.limit_down_price ?? q.limit_down_price,
           };
         });
       } catch {
@@ -333,9 +336,11 @@ export const StockDetailPanel = memo(function StockDetailPanel({
   // paper-changed 事件兜底（下单/撤单/重置都会派发）。
   // 轮询 10s → 30s（费率预估与持仓盈亏对实时性不敏感，原 10s 属过密）。
   // 2026-09-11（S2-5）：裸 setInterval → 统一入口。
+  const paperRequestRef = useRef(0);
   const loadPaper = useCallback(async () => {
     const scope = detailReadScopeRef.current;
     if (!scope?.alive || scope.symbol !== symbol) return;
+    const request = ++paperRequestRef.current;
     try {
       const [acc, positions, orders, fs] = await Promise.all([
         getPaperAccount(),
@@ -343,12 +348,14 @@ export const StockDetailPanel = memo(function StockDetailPanel({
         getPaperOrders(),
         getPaperFills(symbol),
       ]);
-      if (!scope.alive || scope !== detailReadScopeRef.current) return;
+      if (!scope.alive || scope !== detailReadScopeRef.current || request !== paperRequestRef.current) return;
       setPaper({ acc, positions, orders });
       setFills(fs);
-    } catch {
-      if (!scope.alive || scope !== detailReadScopeRef.current) return;
-      setPaper(null); // 拉取失败=确认不可用（渲染提示），与"加载中"分离
+      setPaperError(null);
+    } catch (e) {
+      if (!scope.alive || scope !== detailReadScopeRef.current || request !== paperRequestRef.current) return;
+      setPaper(prev => prev === undefined ? null : prev);
+      setPaperError(e instanceof Error ? e.message : "模拟账户读取失败");
     }
   }, [symbol]);
   // 手动刷新入口（下单/撤单后 onPaperChanged 触发）：保持 ref 指向最新闭包
@@ -356,6 +363,30 @@ export const StockDetailPanel = memo(function StockDetailPanel({
     loadPaperRef.current = loadPaper;
   }, [loadPaper]);
   usePollingFetch(loadPaper, 30_000, symbol, { enabled: active && !!symbol && rightTab === "trade" });
+
+  const digestRequestRef = useRef(0);
+  const loadDigest = useCallback(async () => {
+    const scope = detailReadScopeRef.current;
+    if (!scope?.alive || scope.symbol !== symbol) return;
+    const request = ++digestRequestRef.current;
+    setDigestLoading(true);
+    try {
+      const d = await getNewsDigest(symbol, 8);
+      if (!scope.alive || scope !== detailReadScopeRef.current || request !== digestRequestRef.current) return;
+      // 单侧失败返回的空数组不证明源确无；保留该侧原始日期、来源与正文。
+      setAnns(prev => d.announcements_error && d.announcements.length === 0 ? prev : d.announcements as unknown as InfoItem[]);
+      setNews(prev => d.news_error && d.news.length === 0 ? prev : d.news as unknown as InfoItem[]);
+      setAnnError(d.announcements_error);
+      setNewsError(d.news_error);
+    } catch (e) {
+      if (!scope.alive || scope !== detailReadScopeRef.current || request !== digestRequestRef.current) return;
+      const message = e instanceof Error ? e.message : "资讯读取失败";
+      setAnnError(message);
+      setNewsError(message);
+    } finally {
+      if (scope.alive && scope === detailReadScopeRef.current && request === digestRequestRef.current) setDigestLoading(false);
+    }
+  }, [symbol]);
 
   useEffect(() => {
     if (!active) return;
@@ -383,6 +414,13 @@ export const StockDetailPanel = memo(function StockDetailPanel({
   if (symbol !== prevResetSymbol) {
     setPrevResetSymbol(symbol);
     setFills([]);
+    setPaper(undefined);
+    setPaperError(null);
+    setAnns(null);
+    setNews(null);
+    setAnnError(null);
+    setNewsError(null);
+    setDigestLoading(false);
     setInWatchlist(false);
     setStockThemes(null);
   }
@@ -526,22 +564,14 @@ export const StockDetailPanel = memo(function StockDetailPanel({
         .catch(() => {});
       // 资讯走摘要端点：一次拿回公告+新闻 + 重要度/情绪/事实摘要；
       // 单侧数据源失败时后端降级（error 字段非 null），前端透出提示而非静默空
-      getNewsDigest(symbol, 8)
-        .then((d) => {
-          if (!alive) return;
-          setAnns(d.announcements as unknown as InfoItem[]);
-          setNews(d.news as unknown as InfoItem[]);
-          setAnnError(d.announcements_error);
-          setNewsError(d.news_error);
-        })
-        .catch(() => {});
+      void loadDigest();
     });
     return () => {
       alive = false;
       reads.alive = false;
       cancelIdle();
     };
-  }, [symbol, active]);
+  }, [symbol, active, loadDigest]);
 
   // ---- 盘中实时刷新（2026-08-31 修复"K线/分时/盘口/逐笔拉一次就死"）----
   // 此前所有图表数据只在切股时拉取一次，盘中永不更新——K 线最后一根
@@ -551,7 +581,8 @@ export const StockDetailPanel = memo(function StockDetailPanel({
   // ① K 线当日 bar 的秒级合成：渲染期派生（外部状态订阅的官方推荐模式），
   //    WS quote 更新 → 最后一根 bar 实时跟进；价格未动时 mergeQuoteIntoBars
   //    返回 null → 引用不变 → 下游图表不重渲染。
-  const liveQuote = active ? live : appliedLive ?? undefined;
+  const retainedLive = appliedLive?.symbol === symbol ? appliedLive : undefined;
+  const liveQuote = active ? live ?? retainedLive : retainedLive;
   const displayBars = useMemo(() => mergeQuoteIntoBars(bars, liveQuote) ?? bars, [bars, liveQuote]);
   // ①' 分时右端点秒级合成：同 K 线思路，WS quote 跟进最后一根分钟点
   //    （价格+累计量），与列表/K线保持同一 1s 节奏，不再干等 60s REST 校准
@@ -715,6 +746,8 @@ export const StockDetailPanel = memo(function StockDetailPanel({
           行情数据暂不可用（数据源失败，稍后自动重试）
         </div>
       )}
+
+      {active && immediateQuote === null && <p role="status" className="shrink-0 text-[10px] text-amber-800 dark:text-amber-300">最近行情帧缺少该证券，保留上次报价。当前时点待核实，恢复行情后再操作。</p>}
 
       {/* ①¼ 实时连接状态：只在异常态显示。2026-09-07 去掉"● 休市"常驻；2026-09-08
           用户反馈"● WS 实时推送"同样不该常驻（正常态都不留痕）——条件从
@@ -1042,7 +1075,8 @@ export const StockDetailPanel = memo(function StockDetailPanel({
                 fills={fills}
                 quote={quote ?? null}
                 onPaperChanged={() => loadPaperRef.current()}
-                active={active}
+                active={active && immediateQuote !== null}
+                readError={paperError}
               />
             ) : (
               <p className="px-3 py-10 text-center text-xs text-zinc-600 dark:text-zinc-400">模拟账户数据加载失败（稍后自动重试）</p>
@@ -1050,7 +1084,7 @@ export const StockDetailPanel = memo(function StockDetailPanel({
 
           {rightTab === "profile" && <ProfilePanel boardRows={boardRows} company={company} fins={fins} />}
 
-          {rightTab === "info" && <InfoPanel anns={anns} news={news} annError={annError} newsError={newsError} />}
+          {rightTab === "info" && <InfoPanel key={symbol} anns={anns} news={news} annError={annError} newsError={newsError} loading={digestLoading} onRetry={() => { void loadDigest(); }} />}
 
           {/* Only the two market-print perspectives own this consumer. */}
           {(rightTab === "book" || rightTab === "trades") && <BookTradesView book={book} trades={trades} showBook={rightTab === "book"} />}

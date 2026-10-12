@@ -20,7 +20,7 @@ export type PickDetailTarget =
   | { kind: "top"; item: IntradayTopStock }
   | null;
 
-export function PickDetailModal({ target, onClose }: { target: PickDetailTarget; onClose: () => void }) {
+export function PickDetailModal({ target, onClose, readError = false }: { target: PickDetailTarget; onClose: () => void; readError?: boolean }) {
   if (!target) return null;
   const title = target.kind === "pick" ? "每日精选 · 选股详情" : "盘中跟踪 · 入选详情";
 
@@ -40,9 +40,9 @@ export function PickDetailModal({ target, onClose }: { target: PickDetailTarget;
       }
     >
       {target.kind === "pick" ? (
-        <PickCard item={fromDailyPick(target.item)} />
+        <PickCard item={fromDailyPick(target.item)} readError={readError} />
       ) : (
-        <PickCard item={fromIntradayStock(target.item)} />
+        <PickCard item={fromIntradayStock(target.item)} readError={readError} />
       )}
     </ModalShell>
   );
