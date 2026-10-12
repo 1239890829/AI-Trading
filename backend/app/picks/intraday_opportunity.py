@@ -227,6 +227,7 @@ def assemble(
                 {
                     "symbol": sym,
                     "name": rung.get("name"),
+                    "reference_only": True,
                     "role": rung.get("role"),
                     "boards": rung.get("boards"),
                     "change_pct": rung.get("change_pct"),
