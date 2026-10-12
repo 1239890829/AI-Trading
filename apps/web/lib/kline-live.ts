@@ -17,6 +17,42 @@ function hhmmToMin(hhmm: string): number {
 // 与 market-hours 的宽松口径 09:15-11:35/12:55-15:15 构成「同一问题两个答案」。
 // 两者意图不同**不可合并**，但边界必须同源——现由 market-hours 单点持有。）
 
+interface MinuteLivePoint {
+  ts: string;
+  price: number;
+  source?: string;
+  volume?: number | null;
+  cum_volume?: number | null;
+  cum_amount?: number | null;
+  avg?: number | null;
+  minute_amount?: number | null;
+}
+
+function nonnegative(value: unknown): value is number {
+  return typeof value === "number" && Number.isFinite(value) && value >= 0;
+}
+
+function sameSource(a: { source?: string }, b: { source?: string }): boolean {
+  return typeof a.source === "string" && a.source.trim() !== "" && a.source === b.source;
+}
+
+function adjacentMinutes(previous: MinuteLivePoint | undefined, point: MinuteLivePoint): boolean {
+  if (!previous || !bjDate(point.ts) || bjDate(previous.ts) !== bjDate(point.ts)) return false;
+  return new Date(point.ts).getTime() - new Date(previous.ts).getTime() === 60_000
+    && isContinuousSession(hhmmToMin(bjHHMM(previous.ts)))
+    && isContinuousSession(hhmmToMin(bjHHMM(point.ts)));
+}
+
+/** 元；显式合成缺值不回落REST差分，午休/缺口/跨源差额也不当作分钟额。 */
+export function getMinuteAmount(point: MinuteLivePoint, previous?: MinuteLivePoint): number | null {
+  if (Object.prototype.hasOwnProperty.call(point, "minute_amount")) {
+    return nonnegative(point.minute_amount) ? point.minute_amount : null;
+  }
+  if (!adjacentMinutes(previous, point) || !previous || !sameSource(previous, point)) return null;
+  return nonnegative(point.cum_amount) && nonnegative(previous.cum_amount)
+    && point.cum_amount >= previous.cum_amount ? point.cum_amount - previous.cum_amount : null;
+}
+
 /**
  * 盘中 K 线实时合成：用 WS 最新 quote 更新最后一根日 K（当日 bar）。
  *
@@ -59,15 +95,16 @@ export function mergeQuoteIntoBars(bars: Kline[], quote: Quote | null | undefine
  * 一次，与 1s 的列表/K线不同步。价格与累计量（quote.volume 与 cum_volume 同为
  * 股，口径依据见 mergeQuoteIntoBars 注释）跟随 WS。
  *
- * 时间基座：优先 quote.data_timestamp（源报价时间）；**缺失/非法回退
+ * 时间基座：优先 quote.data_timestamp（源报价时间）；**缺失回退
  * received_at**（QuoteHub 收到时刻，盘中 ≈ 当前时间）——部分源/降级路径不带
  * 报价时间戳，没有回退时 merge 恒返回 null，分时在两次校准之间完全冻结。
  *
- * 同分钟：原地更新价格/累计量；均价线用 quote.amount/quote.volume 精算
- * （两者同为全日累计口径，实测与后端 avg 偏差 <0.01），不臆造。
+ * 股票均价只用同一quote的累计额/累计股数；指数没有这条均价线。
+ * 同分钟量额须有同源、同日相邻REST基准，尾量与原累计差配对；缺项留空。
  * 跨分钟（刚过整分、REST 还没补点）：**追加点**而不是放弃——原实现跨分钟
  * 返回 null，整分钟内右端点静止 50s+（2026-09-02 用户反馈"分时不及时"）。
- * 分钟量 = quote.volume − 上一点 cum_volume（负值截 0，源快照竞态防护）。
+ * 跨分钟旧尾没有封口身份，累计差可能包含上一分钟余量或整个缺口。
+ * 因此新点的分钟量/额留空，价格与全日累计仍更新，待REST校准恢复。
  *
  * 跨分钟追加门槛（2026-09-04 用户反馈"新线段等很久且与实际涨跌幅不对应"的
  * 根因修复）：原实现硬编码「quote 分钟 − 尾点分钟 > 2 → 放弃」——只要官方
@@ -82,13 +119,14 @@ export function mergeQuoteIntoBars(bars: Kline[], quote: Quote | null | undefine
  *
  * 返回新数组（不 mutate）；无需更新返回 null。
  */
-export function mergeQuoteIntoMinutes<T extends { ts: string; price: number; cum_volume?: number | null }>(
+export function mergeQuoteIntoMinutes<T extends MinuteLivePoint>(
   points: T[],
-  quote: Quote | null | undefined
+  quote: Quote | null | undefined,
+  isIndex = false,
 ): T[] | null {
   if (points.length === 0 || !quote) return null;
   const price = quote.price;
-  if (price == null || price <= 0) return null;
+  if (price == null || !Number.isFinite(price) || price <= 0) return null;
   const last = points[points.length - 1];
   const quoteTs = quote.data_timestamp || quote.received_at;
   const qHHMM = bjHHMM(quoteTs);
@@ -96,30 +134,48 @@ export function mergeQuoteIntoMinutes<T extends { ts: string; price: number; cum
   const qDate = bjDate(quoteTs);
   const lastDate = bjDate(last.ts);
   if (!qHHMM || !lastHHMM || !qDate || !lastDate || qDate !== lastDate) return null;
+  const qMin = hhmmToMin(qHHMM);
+  const lastMin = hhmmToMin(lastHHMM);
+  if (qMin < lastMin) return null;
+  if (!isContinuousSession(qMin) || !isContinuousSession(lastMin)) return null;
 
-  if (qHHMM === lastHHMM) {
-    const cumVolume = quote.volume ?? last.cum_volume;
-    if (last.price === price && last.cum_volume === cumVolume) return null; // 无变化不重渲染
-    const next = { ...last, price, cum_volume: cumVolume };
+  const comparable = sameSource(last, quote);
+  const cumVolume = nonnegative(quote.volume)
+    && (!comparable || !nonnegative(last.cum_volume) || quote.volume >= last.cum_volume) ? quote.volume : null;
+  const cumAmount = nonnegative(quote.amount)
+    && (!comparable || !nonnegative(last.cum_amount) || quote.amount >= last.cum_amount) ? quote.amount : null;
+  const ratio = !isIndex && cumVolume != null && cumVolume > 0 && cumAmount != null
+    ? cumAmount / cumVolume : null;
+  const avg = ratio != null && Number.isFinite(ratio) && ratio > 0 ? +ratio.toFixed(3) : null;
+  let volume: number | null = null;
+  let minuteAmount: number | null = null;
+  if (qMin === lastMin) {
+    const previous = points[points.length - 2];
+    if (previous && adjacentMinutes(previous, last) && sameSource(previous, last) && comparable) {
+      if (cumVolume != null && nonnegative(previous.cum_volume) && nonnegative(last.cum_volume)
+        && nonnegative(last.volume) && last.cum_volume >= previous.cum_volume
+        && last.volume === last.cum_volume - previous.cum_volume) {
+        volume = cumVolume - previous.cum_volume;
+      }
+      if (cumAmount != null && nonnegative(previous.cum_amount) && nonnegative(last.cum_amount)
+        && last.cum_amount >= previous.cum_amount) {
+        minuteAmount = cumAmount - previous.cum_amount;
+      }
+    }
+    if (last.price === price && (last.cum_volume ?? null) === cumVolume
+      && (last.cum_amount ?? null) === cumAmount && (last.avg ?? null) === avg
+      && (last.volume ?? null) === volume && getMinuteAmount(last, previous) === minuteAmount
+      && last.source === quote.source) return null;
+    const next = { ...last, price, volume, cum_volume: cumVolume, cum_amount: cumAmount,
+      avg, minute_amount: minuteAmount, source: quote.source };
     return [...points.slice(0, -1), next] as T[];
   }
 
-  // 跨分钟：同交易日 + 双方都落在连续交易时段内才追加。
-  // （旧门槛「间隔 >2 分钟放弃」在官方分时源滞后时把合成通道整个冻死——
-  // 2026-09-04 受控实验复现：WS quote 每 1s 正常推送，曲线静止 6 分钟不动。）
-  const qMin = hhmmToMin(qHHMM);
-  const lastMin = hhmmToMin(lastHHMM);
-  if (qMin <= lastMin) return null;
-  if (!isContinuousSession(qMin) || !isContinuousSession(lastMin)) return null;
-  const q = quote as Quote & { amount?: number | null };
-  const cumVolume = quote.volume ?? null;
-  const cumAmount = q.amount ?? null;
-  const avg = cumVolume != null && cumVolume > 0 && cumAmount != null && cumAmount > 0 ? +(cumAmount / cumVolume).toFixed(3) : (last as { avg?: number }).avg ?? null;
-  const prevCum = (last as { cum_volume?: number | null }).cum_volume ?? null;
-  const minuteVol = cumVolume != null && prevCum != null ? Math.max(cumVolume - prevCum, 0) : null;
-  const slotTs = new Date((quote.data_timestamp || quote.received_at) as string);
+  // 只追加最新观察点，缺口不填造价格或分钟量额。
+  const slotTs = new Date(quoteTs as string);
   if (isNaN(slotTs.getTime())) return null;
   slotTs.setSeconds(0, 0);
-  const next = { ...last, ts: slotTs.toISOString(), price, volume: minuteVol, cum_volume: cumVolume, avg } as unknown as T;
+  const next = { ...last, ts: slotTs.toISOString(), price, volume: null, cum_volume: cumVolume,
+    cum_amount: cumAmount, avg, minute_amount: null, source: quote.source } as T;
   return [...points, next];
 }

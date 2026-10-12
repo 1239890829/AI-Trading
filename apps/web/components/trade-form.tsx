@@ -12,6 +12,7 @@ export function TradeForm({
   limitUp,
   limitDown,
   onTraded,
+  active: visible = true,
 }: {
   symbol: string;
   price: number | null;
@@ -19,6 +20,7 @@ export function TradeForm({
   limitDown?: number | null;
   /** 下单成功（成交或挂单）后回调——父组件刷新模拟账户数据（2026-09-01：替代全局事件）。 */
   onTraded?: () => void;
+  active?: boolean;
 }) {
   const [side, setSide] = useState<"buy" | "sell">("buy");
   const [p, setP] = useState("");
@@ -36,7 +38,13 @@ export function TradeForm({
    * 故结果必须与它测的那张订单绑定：`sig` 是 `symbol|side|price|qty`，读取端只在
    * 签名与当前草稿一致时才认这份结果（失配 = 过期，等同"没检查过"），
    * 提交也只接受一致签名 —— 绝不拿 A 单的结论给 B 单放行。 */
-  const [riskCheck, setRiskCheck] = useState<{ sig: string; result: OrderCheckResult } | null>(null);
+  const [riskCheck, setRiskCheck] = useState<{ sig: string; activation: number; result: OrderCheckResult } | null>(null);
+  const [lastVisible, setLastVisible] = useState(visible);
+  const [activation, setActivation] = useState(0);
+  if (lastVisible !== visible) {
+    setLastVisible(visible);
+    setActivation(value => value + 1);
+  }
 
   /** 手填价草稿是否已被用户接管（R19）。
    *
@@ -79,15 +87,16 @@ export function TradeForm({
   /** 当前草稿的订单签名。任何一项变化即失效（含价格、方向、数量、标的）。 */
   const orderSig = `${symbol}|${side}|${pv}|${qv}`;
   /** 与当前草稿签名一致的预检结果；失配一律视为"尚无有效预检"。 */
-  const active = riskCheck && riskCheck.sig === orderSig ? riskCheck.result : null;
+  const active = visible && riskCheck && riskCheck.sig === orderSig && riskCheck.activation === activation ? riskCheck.result : null;
 
   // Refresh unchanged drafts too; identical A→B→A drafts still have distinct requests.
   const [checkEpoch, setCheckEpoch] = useState(0);
   const submitLock = useRef(false);
   useEffect(() => {
+    if (!visible) return;
     const timer = setInterval(() => { setNow(Date.now()); setCheckEpoch((v) => v + 1); }, 15_000);
     return () => clearInterval(timer);
-  }, []);
+  }, [visible]);
 
   // 输入无效 → 渲染期同步清掉旧检查结果（adjust-state 模式）
   if (pv <= 0 || qv <= 0) {
@@ -95,14 +104,14 @@ export function TradeForm({
   }
   useEffect(() => {
     let cancelled = false;
-    if (pv <= 0 || qv <= 0) return;
+    if (!visible || pv <= 0 || qv <= 0) return;
     const sig = orderSig;
     const t = setTimeout(() => {
       setChecking(true);
       void checkOrderRisk({ symbol, side, price: pv, quantity: qv })
         .then((r) => {
           if (cancelled) return; // 过期回包：丢弃，绝不写 state
-          setRiskCheck({ sig, result: r });
+          setRiskCheck({ sig, activation, result: r });
         })
         .catch(() => {
           // 失败即"无有效预检"（fail-closed）；同样只在仍是当前订单时才清，
@@ -114,7 +123,7 @@ export function TradeForm({
     return () => { cancelled = true; clearTimeout(t); };
     // orderSig 是这轮请求的身份；effect 体内实际读取 symbol/side/pv/qv，
     // 一并列出以满足 exhaustive-deps（四者恰好构成 orderSig）。
-  }, [orderSig, pv, qv, symbol, side, checkEpoch]);
+  }, [orderSig, pv, qv, symbol, side, checkEpoch, visible, activation]);
 
   /** 回到当前现价（显式动作，不会被 tick 自动触发）。 */
   function useCurrentPrice() {

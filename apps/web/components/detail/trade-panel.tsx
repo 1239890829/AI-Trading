@@ -21,6 +21,7 @@ export function TradePanel({
   fills,
   quote,
   onPaperChanged,
+  active = true,
 }: {
   symbol: string;
   paper: PaperBundle;
@@ -28,6 +29,7 @@ export function TradePanel({
   quote: Quote | null;
   /** 下单/撤单/重置后刷新模拟账户数据（壳内 loadPaper，2026-09-01 替代全局事件）。 */
   onPaperChanged: () => void;
+  active?: boolean;
 }) {
   const [cancelError, setCancelError] = useState<string | null>(null);
   const [cancelling, setCancelling] = useState<number | null>(null);
@@ -47,7 +49,7 @@ export function TradePanel({
           总盈亏 <span className="font-mono text-sm">{fmt(paper.acc.total_pnl)}（{fmt(paper.acc.total_pnl_pct)}%）</span>
         </span>
       </div>
-      <TradeForm symbol={symbol} price={quote?.price ?? null} limitUp={quote?.limit_up_price ?? null} limitDown={quote?.limit_down_price ?? null} onTraded={onPaperChanged} />
+      <TradeForm symbol={symbol} price={quote?.price ?? null} limitUp={quote?.limit_up_price ?? null} limitDown={quote?.limit_down_price ?? null} onTraded={onPaperChanged} active={active} />
       <h3 className="shrink-0 px-3 pb-1 pt-2 text-xs font-medium text-zinc-600 dark:text-zinc-300">持仓</h3>
       <div className="min-h-0 flex-1 overflow-y-auto">
         <table className="w-full text-sm">

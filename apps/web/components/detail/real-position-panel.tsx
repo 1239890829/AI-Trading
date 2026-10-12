@@ -10,7 +10,7 @@ import {
 } from "@/lib/api";
 import { bjToday } from "@/lib/market-hours";
 import { fmt, pctColor, pctText } from "@/lib/format";
-import { useRealPositions } from "@/hooks/use-real-positions";
+import { useRealPositions, type RealPositionsResource } from "@/hooks/use-real-positions";
 
 /**
  * 真实持仓面板（CONTEXT.md: Real Position 域；与模拟交易 tab 完全独立）。
@@ -23,9 +23,10 @@ import { useRealPositions } from "@/hooks/use-real-positions";
  * 市值 | 浮动盈亏(+%) | 已实现盈亏 | 状态（已手动修正/正常）。
  * 汇总行：总市值 / 总成本 / 总浮动盈亏 / 累计已实现盈亏。
  */
-export function RealPositionPanel({ symbol, currentPrice, currentName, className, readOnly = false }: { symbol?: string; currentPrice?: number | null; currentName?: string | null; className?: string; readOnly?: boolean }) {
-  // 聚合数据：共用 hook 一份轮询（评审 M3），reload 供表单提交后即时刷新
-  const { data, error: loadError, reload } = useRealPositions();
+export function RealPositionPanel({ symbol, currentPrice, currentName, className, readOnly = false, realPositions, active = true }: { symbol?: string; currentPrice?: number | null; currentName?: string | null; className?: string; readOnly?: boolean; realPositions?: RealPositionsResource; active?: boolean }) {
+  // 上游结果包括加载中/失败状态；不能因 data=null 回退成第二份读取。
+  const ownPositions = useRealPositions(15_000, { enabled: active && realPositions === undefined });
+  const { data, error: loadError, reload } = realPositions ?? ownPositions;
   // 表单错误与数据加载错误分开展示（原实现共用一个 state，评审 M3 抽 hook 时拆开）
   const [error, setError] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);

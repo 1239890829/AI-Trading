@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { FilterMenu } from "@/components/ui/filter-menu";
 import { usePollingFetch } from "@/hooks/use-polling-fetch";
 import {
@@ -21,7 +21,7 @@ import { fmt, pctColor, pctText } from "@/lib/format";
  * 交互：官方题材下拉（默认选中目录第一项）→ 榜内成分按涨速降序；
  * 30s 轮询让采样自然滚动积累。冷启动约 5 分钟后数据逐步可用。
  */
-export function SpeedPanel({ className }: { className?: string }) {
+export function SpeedPanel({ className, active = true }: { className?: string; active?: boolean }) {
   const [themes, setThemes] = useState<ThemeCatalogItem[]>([]);
   const [theme, setTheme] = useState<string>("");
   const [rows, setRows] = useState<SpeedRankRow[]>([]);
@@ -31,39 +31,52 @@ export function SpeedPanel({ className }: { className?: string }) {
   const [loading, setLoading] = useState(false);
 
   useEffect(() => {
+    if (!active) return;
     let alive = true;
     getThemesCatalog()
       .then((items) => {
         if (!alive) return;
         setThemes(items);
-        if (items.length > 0) setTheme((cur) => cur || items[0].code);
+        setTheme((cur) => items.some(item => item.code === cur) ? cur : items[0]?.code ?? "");
       })
       .catch(() => alive && setError("题材目录加载失败"));
     return () => {
       alive = false;
     };
-  }, []);
+  }, [active]);
+
+  const readScopeRef = useRef<{ alive: boolean } | null>(null);
+  useEffect(() => {
+    if (!active) return;
+    const scope = { alive: true };
+    readScopeRef.current = scope;
+    return () => { scope.alive = false; };
+  }, [theme, active]);
 
   // 2026-09-11（S2-5）：裸 setInterval → 统一入口（可见性暂停 + 盘外降频）。
   // `enabled` 表达原 `if (!theme) return` 门控：题材目录到达前不发请求。
   usePollingFetch(
     async () => {
+      const scope = readScopeRef.current;
+      if (!scope?.alive) return;
       setLoading(true);
       try {
         const d = await getSpeedRank(theme);
+        if (!scope.alive || scope !== readScopeRef.current) return;
         setRows(d.items);
         setThemeName(d.theme_name);
         setNote(d.note ?? null);
         setError(null);
       } catch (e) {
+        if (!scope.alive || scope !== readScopeRef.current) return;
         setError((e as Error).message);
       } finally {
-        setLoading(false);
+        if (scope.alive && scope === readScopeRef.current) setLoading(false);
       }
     },
     30_000,
     theme,
-    { enabled: !!theme }
+    { enabled: active && !!theme }
   );
 
   const sampled = rows.filter((r) => r.sampled).length;

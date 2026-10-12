@@ -104,8 +104,8 @@ def test_by_symbols_failed_profile_is_absent_not_fabricated(monkeypatch):
     assert payload["data"]["note"]
 
 
-def test_by_symbols_board_not_listed_is_absent(monkeypatch):
-    """主板块判出了但板块榜里没有该代码（如指数成分调整窗口）→ 缺省，不臆造。"""
+def test_by_symbols_board_not_listed_keeps_profile_identity(monkeypatch):
+    """资金榜缺行不抹掉已知归属；资金与榜单分类如实未知，不臆造 0。"""
     import asyncio
 
     _patch_board_list(monkeypatch, {"industry": [], "concept": []})
@@ -118,7 +118,88 @@ def test_by_symbols_board_not_listed_is_absent(monkeypatch):
             request=_request(), symbols="600519", hub=_hub(provider)
         )
     )
+    assert payload["data"]["boards"]["600519"] == {
+        "board_name": "白酒Ⅱ", "board_code": "BK1277", "level": "industry",
+        "kind": None, "change_pct": None, "main_net_yi": None,
+        "main_net_ratio": None, "streak": None,
+    }
+
+
+def test_by_symbols_missing_code_keeps_known_name_without_inventing_code(monkeypatch):
+    """资料有概念名称但无代码：保留明确口径，不按名字猜代码或资金。"""
+    import asyncio
+
+    _patch_board_list(monkeypatch, {
+        "concept": [{"board_code": "BK1071", "name": "跨境支付", "kind": "concept",
+                     "change_pct": 1.0, "main_net_yi": 2.0, "main_net_ratio": 3.0}],
+    })
+    provider = _ProfileProvider({"000001": {"concept": ["跨境支付"]}}, {})
+    payload = asyncio.run(flow_route.market_board_fund_by_symbols(
+        request=_request(), symbols="000001", hub=_hub(provider)
+    ))
+    assert payload["data"]["boards"]["000001"] == {
+        "board_name": "跨境支付", "board_code": None, "level": "concept",
+        "kind": None, "change_pct": None, "main_net_yi": None,
+        "main_net_ratio": None, "streak": None,
+    }
+
+
+def test_by_symbols_empty_board_ref_is_absent(monkeypatch):
+    """资料取到了但判不出主板块，仍缺省，不从资金榜补造归属。"""
+    import asyncio
+
+    _patch_board_list(monkeypatch, {"industry": [], "concept": []})
+    payload = asyncio.run(flow_route.market_board_fund_by_symbols(
+        request=_request(), symbols="600519", hub=_hub(_ProfileProvider({}, {}))
+    ))
     assert payload["data"]["boards"] == {}
+    assert payload["data"]["note"]
+
+
+def test_by_symbols_partial_fund_rows_keep_identity_and_reuse_cache(monkeypatch):
+    """同一批有效资金与缺资金归属并存；复查命中现有缓存，不追加资料或榜单请求。"""
+    import asyncio
+
+    from app.services import theme_service as ts
+
+    fund_calls = []
+
+    async def fake_rows(codes):
+        fund_calls.append(codes)
+        return {"BK0475": {"board_code": "BK0475", "name": "银行", "kind": "industry",
+                           "change_pct": 0.0, "main_net_yi": 0.0, "main_net_ratio": 0.0,
+                           "streak": 0}}
+
+    monkeypatch.setattr(ts, "board_rows_for_codes", fake_rows)
+    provider = _ProfileProvider(
+        {"600519": {"industry": ["食品饮料", "白酒Ⅱ"]},
+         "000001": {"industry": ["金融", "银行Ⅱ"]}},
+        {"600519": {"白酒Ⅱ": "1277"}, "000001": {"银行Ⅱ": "475"}},
+    )
+    request = _request()
+    hub = _hub(provider)
+
+    async def read_twice():
+        first = await flow_route.market_board_fund_by_symbols(
+            request=request, symbols="600519,000001,600000", hub=hub
+        )
+        second = await flow_route.market_board_fund_by_symbols(
+            request=request, symbols="600519,000001,600000", hub=hub
+        )
+        assert second["data"] == first["data"]  # 信封 generated_at 每次读取照常更新
+        return first
+
+    boards = asyncio.run(read_twice())["data"]["boards"]
+    assert set(boards) == {"600519", "000001"}  # 无 ref 的 600000 仍缺省
+    assert boards["600519"]["board_name"] == "白酒Ⅱ"
+    assert boards["600519"]["main_net_yi"] is None
+    assert boards["000001"] == {
+        "board_name": "银行", "board_code": "BK0475", "level": "industry",
+        "kind": "industry", "change_pct": 0.0, "main_net_yi": 0.0,
+        "main_net_ratio": 0.0, "streak": 0,
+    }
+    assert provider.calls == 3
+    assert fund_calls == [["BK1277", "BK0475"]]
 
 
 def test_by_symbols_rejects_empty_and_oversized():

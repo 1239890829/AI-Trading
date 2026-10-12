@@ -1,11 +1,14 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { cleanup, fireEvent, render, screen, waitFor } from "@testing-library/react";
+import { act, cleanup, fireEvent, render, screen, waitFor } from "@testing-library/react";
 import { RealPositionPanel } from "@/components/detail/real-position-panel";
+import { useRealPositions } from "@/hooks/use-real-positions";
 import { createRealTrade, deleteRealPosition, getRealPositions, overrideRealPosition, type RealPositionsPayload } from "@/lib/api";
 
 // vitest 未开 globals 时 RTL 自动 cleanup 不注册，必须手动（见 trade-form.test.tsx 注释）
 afterEach(() => {
   cleanup();
+  vi.useRealTimers();
+  vi.restoreAllMocks();
   vi.clearAllMocks(); // mock 调用计数跨测试累积，不清会把上一例的调用算到本例头上
 });
 
@@ -23,6 +26,11 @@ vi.mock("@/lib/api", async () => {
 
 const mockedGet = vi.mocked(getRealPositions);
 const mockedCreate = vi.mocked(createRealTrade);
+
+vi.mock("@/lib/market-hours", async (original) => ({
+  ...await original<typeof import("@/lib/market-hours")>(),
+  isTradingSession: () => true,
+}));
 
 const payload = (rows: Partial<RealPositionsPayload["items"][number]>[] = []): RealPositionsPayload => ({
   items: rows.map((r) => ({
@@ -116,4 +124,87 @@ it("an edited manual record keeps its symbol and actual price when detail select
   view.rerender(<RealPositionPanel symbol="000001" currentPrice={15} />);
   expect((screen.getByLabelText("代码") as HTMLInputElement).value).toBe("600127");
   expect((screen.getByLabelText("实际成交价") as HTMLInputElement).value).toBe("9.8");
+});
+
+function SharedOwner() {
+  const resource = useRealPositions();
+  return <><output data-testid="owner-count">{resource.data?.count ?? "pending"}</output><button onClick={() => void resource.reload()}>刷新所有者</button><RealPositionPanel symbol="603118" currentPrice={18.6} realPositions={resource} /></>;
+}
+async function flush() { await act(async () => {}); }
+async function advance(ms: number) { await act(async () => { await vi.advanceTimersByTimeAsync(ms); }); }
+function clock() { vi.useFakeTimers(); vi.setSystemTime(new Date("2026-10-09T10:00:00+08:00")); }
+
+describe("RealPositionPanel · 上游持仓读取复用", () => {
+  it("只有所有者首读及15s轮询，刷新失败保留旧持仓，后续恢复", async () => {
+    clock();
+    mockedGet.mockResolvedValueOnce(payload([{}])).mockRejectedValueOnce(new Error("持仓刷新失败")).mockResolvedValue(payload([]));
+    render(<SharedOwner />);
+    await flush();
+    expect(mockedGet).toHaveBeenCalledTimes(1);
+    expect(screen.getByTestId("owner-count").textContent).toBe("1");
+    await advance(15_000);
+    expect(mockedGet).toHaveBeenCalledTimes(2);
+    expect(screen.getByText("共进股份")).toBeTruthy();
+    expect(screen.getByText("持仓刷新失败")).toBeTruthy();
+    await advance(15_000);
+    expect(mockedGet).toHaveBeenCalledTimes(3);
+    expect(screen.getByTestId("owner-count").textContent).toBe("0");
+    expect(screen.queryByText("共进股份")).toBeNull();
+    expect(screen.queryByText("持仓刷新失败")).toBeNull();
+  });
+
+  it.each(["记账", "修正", "删除"])("%s后即时刷新同一所有者，左侧消费者与面板同步", async operation => {
+    clock();
+    mockedGet.mockResolvedValueOnce(payload([{}])).mockResolvedValue(payload([]));
+    mockedCreate.mockResolvedValue(undefined);
+    vi.mocked(overrideRealPosition).mockResolvedValue(undefined);
+    vi.mocked(deleteRealPosition).mockResolvedValue(undefined);
+    vi.spyOn(window, "confirm").mockReturnValue(true);
+    render(<SharedOwner />);
+    await flush();
+    expect(mockedGet).toHaveBeenCalledTimes(1);
+    if (operation === "记账") {
+      fireEvent.change(screen.getByLabelText("数量"), { target: { value: "100" } });
+      fireEvent.click(screen.getByRole("button", { name: "记账" }));
+    } else if (operation === "修正") {
+      fireEvent.click(screen.getByRole("button", { name: "改" }));
+      fireEvent.change(screen.getByLabelText("修正数量"), { target: { value: "200" } });
+      fireEvent.change(screen.getByLabelText("修正总成本"), { target: { value: "3600" } });
+      fireEvent.click(screen.getByRole("button", { name: "保存" }));
+    } else fireEvent.click(screen.getByRole("button", { name: "删" }));
+    await flush();
+    expect(operation === "记账" ? mockedCreate : operation === "修正" ? vi.mocked(overrideRealPosition) : vi.mocked(deleteRealPosition)).toHaveBeenCalledTimes(1);
+    expect(mockedGet).toHaveBeenCalledTimes(2);
+    expect(screen.getByTestId("owner-count").textContent).toBe("0");
+    expect(screen.queryByText("共进股份")).toBeNull();
+  });
+
+  it.each(["success", "failure"])("写后刷新先完成时，旧轮询晚到%s不能覆盖新结果或错误", async outcome => {
+    clock();
+    let resolve!: (data: RealPositionsPayload) => void;
+    let reject!: (error: Error) => void;
+    mockedGet.mockImplementationOnce(() => new Promise((done, fail) => {resolve = done; reject = fail;})).mockResolvedValue(payload([]));
+    render(<SharedOwner />);
+    fireEvent.click(screen.getByRole("button", { name: "刷新所有者" }));
+    await flush();
+    expect(screen.getByTestId("owner-count").textContent).toBe("0");
+    await act(async () => { if (outcome === "success") resolve(payload([{}])); else reject(new Error("旧轮询失败")); });
+    expect(screen.getByTestId("owner-count").textContent).toBe("0");
+    expect(screen.queryByText("共进股份")).toBeNull();
+    expect(screen.queryByText("旧轮询失败")).toBeNull();
+  });
+
+  it("上游加载/失败不启动备用读，取消上游后独立面板仍立即读取", async () => {
+    clock();
+    const realPositions = {data: null, error: "上游读取失败", reload: vi.fn(async () => {})};
+    mockedGet.mockResolvedValue(payload([{}]));
+    const view = render(<RealPositionPanel realPositions={realPositions} />);
+    await advance(30_000);
+    expect(mockedGet).not.toHaveBeenCalled();
+    expect(screen.getByText("上游读取失败")).toBeTruthy();
+    view.rerender(<RealPositionPanel />);
+    await flush();
+    expect(mockedGet).toHaveBeenCalledTimes(1);
+    expect(screen.getByText("共进股份")).toBeTruthy();
+  });
 });

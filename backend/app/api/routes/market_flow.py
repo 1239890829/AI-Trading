@@ -161,8 +161,8 @@ async def market_board_fund_by_symbols(
 
     **板块资金** = 东财 f62，经 `theme_service.board_rows_for_codes`（L3 映射 →
     复用 board_flow 盘中 30s 缓存，**零额外上游调用**）。连续流入天数只对落盘
-    Top 板块可判，其余 None（三态，区别于 0=今日净流出）。资料/板块取不到 →
-    该 symbol **不出现在返回里**，绝不臆造。
+    Top 板块可判，其余 None（三态，区别于 0=今日净流出）。资料无法判定主板块 →
+    该 symbol **不出现在返回里**；资金榜缺行时保留已知归属，资金字段为 None。
     """
     sym_list = [s.strip() for s in symbols.split(",") if s.strip()]
     if not sym_list:
@@ -199,14 +199,14 @@ async def market_board_fund_by_symbols(
         rows = await board_rows_for_codes([r["code"] for _, r in pairs if r and r.get("code")])
         boards: dict[str, dict] = {}
         for sym, ref in pairs:
-            row = rows.get(ref.get("code")) if ref else None
-            if not row:
-                continue  # 板块代码未在东财板块榜中 → 缺省，不臆造
+            if not ref:
+                continue  # 公司资料未证明归属，不从资金榜臆造
+            row = rows.get(ref.get("code")) or {}
             boards[sym] = {
-                "board_name": row.get("name") or (ref or {}).get("name"),
-                "board_code": row.get("board_code"),
+                "board_name": row.get("name") or ref.get("name"),
+                "board_code": row.get("board_code") or ref.get("code"),
                 "kind": row.get("kind"),
-                "level": (ref or {}).get("level"),
+                "level": ref.get("level"),
                 "change_pct": row.get("change_pct"),
                 "main_net_yi": row.get("main_net_yi"),
                 "main_net_ratio": row.get("main_net_ratio"),

@@ -1,21 +1,27 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { cleanup, fireEvent, render, screen, waitFor } from "@testing-library/react";
+import { act, cleanup, fireEvent, render, screen, waitFor } from "@testing-library/react";
 import WorkbenchPage from "@/app/workbench/page";
+import type { SymbolBoardFund } from "@/lib/api";
 
 const state = vi.hoisted(() => ({
   params: new URLSearchParams("symbol=600127&ct=minute&rt=info&from=%2Fmarket%3Ftab%3Devents"),
   push: vi.fn(), replace: vi.fn(),
   watch: [{symbol: "600127", group_name: "默认"}, {symbol: "603256", group_name: "材料观察"}],
+  quoteStream: {status: "closed", quotes: {
+    "600127": {symbol: "600127", name: "金健米业", price: 8.13, change_pct: 2.52, source: "fixture", quality: "high", quality_reasons: [], received_at: "2026-10-08T09:55:00+08:00", data_timestamp: "2026-10-08T09:55:00+08:00"},
+  }},
+  realPositions: {items: [{symbol: "600127"}]},
+  reloadReal: vi.fn(async () => undefined), mobile: false, mediaListeners: new Set<() => void>(),
 }));
 vi.mock("next/navigation", () => ({useRouter: () => ({push: state.push, replace: state.replace}), useSearchParams: () => state.params}));
 vi.mock("@/hooks/use-quote-stream", () => ({
   STREAM_STATUS_LABEL: {closed: {text: "休市", cls: ""}},
-  useQuoteStream: () => ({status: "closed", quotes: {
-    "600127": {symbol: "600127", name: "金健米业", price: 8.13, change_pct: 2.52, source: "fixture", quality: "high", quality_reasons: [], received_at: "2026-10-08T09:55:00+08:00", data_timestamp: "2026-10-08T09:55:00+08:00"},
-  }}),
+  useQuoteStream: () => state.quoteStream,
 }));
-vi.mock("@/hooks/use-real-positions", () => ({useRealPositions: () => ({data: {items: [{symbol: "600127"}]}, error: null})}));
-vi.mock("@/components/stock-detail", () => ({StockDetailPanel: ({symbol, chartTab, rightTab}: {symbol: string; chartTab?: string; rightTab?: string}) => <div data-testid="stock-detail">{symbol}/{chartTab}/{rightTab}</div>}));
+// Match the real hooks' stable data identity between network updates.
+// A fresh items array on every render repeatedly triggers the REST fallback effect.
+vi.mock("@/hooks/use-real-positions", () => ({useRealPositions: () => ({data: state.realPositions, error: null, reload: state.reloadReal})}));
+vi.mock("@/components/stock-detail", () => ({StockDetailPanel: ({symbol, chartTab, rightTab, active, realPositions}: {symbol: string; chartTab?: string; rightTab?: string; active?: boolean; realPositions?: {reload: () => Promise<void>}}) => <div data-testid="stock-detail" data-active={String(active)} data-shared-positions={String(realPositions?.reload === state.reloadReal)}>{symbol}/{chartTab}/{rightTab}</div>}));
 vi.mock("@/components/index-cards", () => ({IndexCards: () => <div>指数摘要</div>}));
 vi.mock("@/components/detail/account-scope-panel", () => ({AccountScopePanel: ({account}: {account: string}) => <div>账户结果 {account}</div>}));
 vi.mock("@/components/picks/pick-detail-modal", () => ({PickDetailModal: ({target}: {target: {kind: string; item: {symbol: string}} | null}) => target ? <div role="dialog">{target.kind}/{target.item.symbol}</div> : null}));
@@ -31,10 +37,19 @@ vi.mock("@/lib/api", () => ({
   createWatchlistGroup: vi.fn(async () => undefined), renameWatchlistGroup: vi.fn(async () => undefined), deleteWatchlistGroup: vi.fn(async () => undefined),
 }));
 const api = await import("@/lib/api");
-afterEach(() => {cleanup(); vi.clearAllMocks();});
+afterEach(() => {cleanup(); vi.clearAllMocks(); vi.unstubAllGlobals();});
 beforeEach(() => {
+  state.mobile = false;
+  state.mediaListeners.clear();
+  vi.stubGlobal("matchMedia", () => ({get matches() {return state.mobile;}, addEventListener: (_: string, listener: () => void) => state.mediaListeners.add(listener), removeEventListener: (_: string, listener: () => void) => state.mediaListeners.delete(listener)}));
   state.params = new URLSearchParams("symbol=600127&ct=minute&rt=info&from=%2Fmarket%3Ftab%3Devents");
   state.watch = [{symbol: "600127", group_name: "默认"}, {symbol: "603256", group_name: "材料观察"}];
+  vi.mocked(api.getBoardFundBySymbols).mockReset().mockResolvedValue({});
+});
+
+const industry = (board_name: string, main_net_yi = 1.25): SymbolBoardFund => ({
+  board_name, board_code: "BKfixture", level: "industry", kind: "industry",
+  change_pct: 1, main_net_yi, main_net_ratio: null, streak: null,
 });
 
 async function selectList(name: string) {
@@ -43,6 +58,118 @@ async function selectList(name: string) {
 }
 
 describe("B+C workbench production consumers", () => {
+  it("shows the watchlist before the slow overview settles and isolates auxiliary errors", async () => {
+    let finish!: (value: Awaited<ReturnType<typeof api.getMarketOverview>>) => void;
+    vi.mocked(api.getMarketOverview).mockImplementationOnce(() => new Promise(resolve => {finish = resolve;}));
+    vi.mocked(api.getWatchlistGroups).mockRejectedValueOnce(new Error("groups offline"));
+    render(<WorkbenchPage />);
+    expect(await screen.findByRole("button", {name: "查看 金健米业 600127"})).toBeTruthy();
+    expect(screen.queryByLabelText("正在读取证券列表")).toBeNull();
+    expect(screen.getByText(/分组读取失败/)).toBeTruthy();
+    await act(async () => {finish({indices: [], total_amount: null, total_amount_freshness: null} as Awaited<ReturnType<typeof api.getMarketOverview>>);});
+    expect(screen.getByRole("button", {name: "查看 金健米业 600127"})).toBeTruthy();
+  });
+
+  it("reports a failed watchlist immediately while auxiliary data is still pending", async () => {
+    let finish!: (value: Awaited<ReturnType<typeof api.getMarketOverview>>) => void;
+    vi.mocked(api.getMarketOverview).mockImplementationOnce(() => new Promise(resolve => {finish = resolve;}));
+    vi.mocked(api.getWatchlist).mockRejectedValueOnce(new Error("watch offline"));
+    render(<WorkbenchPage />);
+    expect(await screen.findByText(/自选读取失败/)).toBeTruthy();
+    expect(screen.getByText(/列表读取有缺项/)).toBeTruthy();
+    expect(screen.queryByLabelText("正在读取证券列表")).toBeNull();
+    await act(async () => {finish({indices: [], total_amount: null, total_amount_freshness: null} as Awaited<ReturnType<typeof api.getMarketOverview>>);});
+  });
+
+  it("discards old base reads after a manual retry supersedes them", async () => {
+    let finish!: (value: Awaited<ReturnType<typeof api.getWatchlist>>) => void;
+    vi.mocked(api.getWatchlist).mockImplementationOnce(() => new Promise(resolve => {finish = resolve;}));
+    vi.mocked(api.getWatchlistGroups).mockRejectedValueOnce(new Error("groups offline"));
+    render(<WorkbenchPage />);
+    await screen.findByText(/分组读取失败/);
+    state.watch = [{symbol: "002297", group_name: "默认"}];
+    fireEvent.click(screen.getByRole("button", {name: "重试读取"}));
+    await screen.findByRole("button", {name: "查看 002297 002297"});
+    await act(async () => {finish([{symbol: "600127", group_name: "默认", source: "manual", created_at: "2026-10-08T09:55:00+08:00", updated_at: "2026-10-08T09:55:00+08:00"}]);});
+    expect(screen.queryByRole("button", {name: "查看 金健米业 600127"})).toBeNull();
+    expect(screen.getByRole("button", {name: "查看 002297 002297"})).toBeTruthy();
+  });
+
+  it("pauses hidden mobile detail, resumes on reveal/desktop and shares the position owner", async () => {
+    state.mobile = true;
+    render(<WorkbenchPage />);
+    const detail = screen.getByTestId("stock-detail");
+    expect(detail.dataset.active).toBe("true");
+    expect(detail.dataset.sharedPositions).toBe("true");
+    fireEvent.click(screen.getByRole("button", {name: "指数与自选"}));
+    expect(detail.dataset.active).toBe("false");
+    fireEvent.click(screen.getByRole("button", {name: "图表"}));
+    expect(detail.dataset.active).toBe("true");
+    fireEvent.click(screen.getByRole("button", {name: "指数与自选"}));
+    act(() => {state.mobile = false; state.mediaListeners.forEach(listener => listener());});
+    expect(detail.dataset.active).toBe("true");
+  });
+  it("keeps the known industry after partial/empty refresh, never keeps the old cash value, and restores it on recovery", async () => {
+    vi.mocked(api.getBoardFundBySymbols).mockResolvedValue({"600127": industry("农产品加工")});
+    render(<WorkbenchPage />);
+    const select = await screen.findByRole("button", {name: "查看 金健米业 600127"});
+    await screen.findByText("行业 · 农产品加工");
+    const slot = select.querySelector(".bc-attention-fund")!;
+    expect(slot.textContent).toContain("+1.3亿");
+    expect(api.getBoardFundBySymbols).toHaveBeenCalledTimes(1);
+
+    vi.mocked(api.getBoardFundBySymbols).mockResolvedValue({});
+    fireEvent(document, new Event("visibilitychange"));
+    await screen.findByText("行业 · 农产品加工（上次）");
+    expect(select.querySelector(".bc-attention-fund")).toBe(slot);
+    expect(slot.textContent).toContain("未更新");
+    expect(slot.textContent).not.toContain("1.3亿");
+    expect(slot.getAttribute("title")).toContain("未沿用旧金额");
+
+    vi.mocked(api.getBoardFundBySymbols).mockResolvedValue({"600127": industry("农产品加工", 2.5)});
+    fireEvent(document, new Event("visibilitychange"));
+    await screen.findByText("行业 · 农产品加工");
+    expect(select.querySelector(".bc-attention-fund")).toBe(slot);
+    expect(slot.textContent).toContain("+2.5亿");
+    expect(slot.textContent).not.toContain("上次");
+  });
+
+  it("always provides an honest board slot and identifies concept fallback instead of calling it industry", async () => {
+    vi.mocked(api.getBoardFundBySymbols).mockResolvedValue({"600127": {...industry("粮食安全"), level: "concept"}});
+    render(<WorkbenchPage />);
+    await screen.findByText("概念 · 粮食安全");
+    const missing = screen.getByRole("button", {name: "查看 603256 603256"});
+    expect(missing.querySelector(".bc-attention-fund")?.textContent).toBe("所属板块待确认--");
+  });
+
+  it("does not let a late old collection replace the new collection's board identity", async () => {
+    let finish!: (rows: Record<string, SymbolBoardFund>) => void;
+    vi.mocked(api.getBoardFundBySymbols).mockImplementation(symbols => symbols.includes("002297")
+      ? Promise.resolve({"002297": industry("航空材料")})
+      : new Promise(resolve => {finish = resolve;}));
+    render(<WorkbenchPage />);
+    await screen.findByRole("button", {name: "查看 金健米业 600127"});
+    await waitFor(() => expect(api.getBoardFundBySymbols).toHaveBeenCalledTimes(1));
+    expect(api.getBoardFundBySymbols).toHaveBeenLastCalledWith(["600127", "603256"]);
+    state.watch = [{symbol: "002297", group_name: "默认"}];
+    fireEvent(document, new Event("visibilitychange"));
+    await screen.findByText("行业 · 航空材料");
+    await act(async () => {finish({"600127": industry("农产品加工")});});
+    expect(api.getBoardFundBySymbols).toHaveBeenCalledTimes(2);
+    expect(api.getBoardFundBySymbols).toHaveBeenLastCalledWith(["002297"]);
+    expect(screen.getByText("行业 · 航空材料")).toBeTruthy();
+    expect(screen.queryByText(/行业 · 农产品加工/)).toBeNull();
+  });
+
+  it("covers the 51st stock in a second API batch without duplicate initial calls", async () => {
+    state.watch = Array.from({length: 51}, (_, i) => ({symbol: String(600000 + i), group_name: "默认"}));
+    vi.mocked(api.getBoardFundBySymbols).mockImplementation(async symbols => Object.fromEntries(symbols.map(symbol => [symbol, industry(`板块${symbol}`)])));
+    render(<WorkbenchPage />);
+    await screen.findByText("行业 · 板块600050");
+    expect(api.getBoardFundBySymbols).toHaveBeenCalledTimes(2);
+    expect(vi.mocked(api.getBoardFundBySymbols).mock.calls.map(([symbols]) => symbols.length)).toEqual([50, 1]);
+  });
+
   it("keeps missing quotes visible and preserves object, chart, detail and return identity when selecting", async () => {
     render(<WorkbenchPage />);
     expect(await screen.findByRole("button", {name: "查看 603256 603256"})).toBeTruthy();

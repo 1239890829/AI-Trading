@@ -1,10 +1,10 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { cleanup, fireEvent, render, screen, waitFor } from "@testing-library/react";
+import { act, cleanup, fireEvent, render, screen, waitFor } from "@testing-library/react";
 import { SpeedPanel } from "@/components/detail/speed-panel";
 import { getSpeedRank, getThemesCatalog, type SpeedRankPayload } from "@/lib/api";
 
 // vitest 未开 globals 时 RTL 自动 cleanup 不注册，必须手动（见 trade-form.test.tsx 注释）
-afterEach(cleanup);
+afterEach(() => {cleanup(); vi.useRealTimers(); vi.clearAllMocks();});
 
 vi.mock("@/lib/api", async () => {
   const actual = await vi.importActual<typeof import("@/lib/api")>("@/lib/api");
@@ -73,4 +73,24 @@ describe("SpeedPanel 涨速榜", () => {
     render(<SpeedPanel />);
     await waitFor(() => expect(screen.getByText("题材成分尚未同步，稍后再试")).toBeTruthy());
   });
+});
+
+it("隐藏暂停涨速轮询，恢复保留仍有效的题材选择", async () => {
+  mockedCatalog.mockResolvedValue(catalog);
+  mockedSpeed.mockResolvedValue(payload([]));
+  const view = render(<SpeedPanel />);
+  const trigger = await screen.findByRole("button", {name: "选择题材：粮食概念"});
+  trigger.focus();
+  fireEvent.keyDown(trigger, {key: "ArrowDown"});
+  fireEvent.click(await screen.findByRole("menuitemradio", {name: "机器人概念"}));
+  await waitFor(() => expect(mockedSpeed).toHaveBeenLastCalledWith("885431.TI"));
+  vi.useFakeTimers();
+  view.rerender(<SpeedPanel active={false} />);
+  const count = mockedSpeed.mock.calls.length;
+  await act(async () => {await vi.advanceTimersByTimeAsync(300_000);});
+  expect(mockedSpeed).toHaveBeenCalledTimes(count);
+  view.rerender(<SpeedPanel active />);
+  await act(async () => {});
+  expect(screen.getByRole("button", {name: "选择题材：机器人概念"})).toBeTruthy();
+  expect(mockedSpeed).toHaveBeenLastCalledWith("885431.TI");
 });

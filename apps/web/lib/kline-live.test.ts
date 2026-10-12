@@ -1,6 +1,6 @@
 // @vitest-environment node
 import { describe, expect, it } from "vitest";
-import { mergeQuoteIntoBars, mergeQuoteIntoMinutes } from "@/lib/kline-live";
+import { getMinuteAmount, mergeQuoteIntoBars, mergeQuoteIntoMinutes } from "@/lib/kline-live";
 import type { Kline, Quote } from "@/types/market";
 
 const baseAudit = { source: "tencent", quality: "high" as const, quality_reasons: [], received_at: "t0" };
@@ -87,17 +87,18 @@ describe("mergeQuoteIntoBars", () => {
 interface MinutePointFixture {
   ts: string;
   price: number;
-  volume: number;
-  cum_amount: number;
+  volume: number | null;
+  cum_amount: number | null;
   cum_volume: number | null;
-  avg: number;
+  avg: number | null;
+  minute_amount?: number | null;
   source: string;
 }
 
 function point(bjHHMM: string, price: number, cumVolume: number): MinutePointFixture {
   // 北京时间 → UTC（小时补零：单数字小时的 ISO 串在 V8 是 Invalid Date）
   const ts = `${TODAY}T${String((Number(bjHHMM.slice(0, 2)) - 8 + 24) % 24).padStart(2, "0")}:${bjHHMM.slice(3)}:00+00:00`;
-  return { ts, price, volume: 100, cum_amount: 5_000_000, cum_volume: cumVolume, avg: 104.8, source: "tencent" };
+  return { ts, price, volume: 100_000, cum_amount: cumVolume * 104.8, cum_volume: cumVolume, avg: 104.8, source: "tencent" };
 }
 
 function minutesFixture(): MinutePointFixture[] {
@@ -117,18 +118,18 @@ function quoteAt(bjHHMM: string, price: number, volume: number | null = 1_100_00
 }
 
 describe("mergeQuoteIntoMinutes", () => {
-  it("同分钟 quote → 更新最后一点 price 与 cum_volume，前序点与 avg/source 原样", () => {
-    const out = mergeQuoteIntoMinutes(minutesFixture(), quoteAt("14:29", 105.3));
+  it("同分钟quote更新股/元统计，前序点与兼容source不变", () => {
+    const out = mergeQuoteIntoMinutes(minutesFixture(), quoteAt("14:29", 105.3, 1_100_000, 115_830_000));
     expect(out).not.toBeNull();
     expect(out![0]).toEqual(minutesFixture()[0]);
     expect(out![1].price).toBe(105.3);
     expect(out![1].cum_volume).toBe(1_100_000);
-    expect(out![1].avg).toBe(104.8); // 均价线由后端口径算出，端上不臆造
+    expect(out![1].avg).toBe(105.3);
     expect(out![1].source).toBe("tencent");
   });
 
-  it("价格与累计量都没动 → 返回 null（不触发重渲染）", () => {
-    expect(mergeQuoteIntoMinutes(minutesFixture(), quoteAt("14:29", 105.0, 1_000_000))).toBeNull();
+  it("完整显示字段都没动 → 返回null保持引用稳定", () => {
+    expect(mergeQuoteIntoMinutes(minutesFixture(), quoteAt("14:29", 105.0, 1_000_000, 104_800_000))).toBeNull();
   });
 
   it("跨分钟（刚跳到下一分钟、REST 未补点）→ 追加新点而非放弃（2026-09-02 及时性修复）", () => {
@@ -138,9 +139,10 @@ describe("mergeQuoteIntoMinutes", () => {
     const added = out![2];
     expect(added.price).toBe(105.3);
     expect(added.cum_volume).toBe(1_100_000);
-    // 分钟量 = cum 差；quote 无 amount → avg 回退继承最后点
-    expect((added as { volume?: number }).volume).toBe(100_000);
-    expect((added as { avg?: number }).avg).toBe(104.8);
+    // 旧尾未封口；新quote缺金额，不继承旧分钟量或旧均价。
+    expect(added.volume).toBeNull();
+    expect(added.avg).toBeNull();
+    expect(added.cum_amount).toBeNull();
     // 新点 ts 是 quote 时间截秒（14:30 北京 = 06:30 UTC）
     expect(added.ts.startsWith(`${TODAY}T06:30:00`)).toBe(true);
     // 前序点原样
@@ -201,10 +203,12 @@ describe("mergeQuoteIntoMinutes", () => {
     expect(mergeQuoteIntoMinutes(minutesFixture(), quoteAt("14:27", 105.3))).toBeNull();
   });
 
-  it("quote.volume 缺失 → 保留原 cum_volume", () => {
+  it("quote.volume缺失 → 不拿旧累计量配新价格/金额", () => {
     const out = mergeQuoteIntoMinutes(minutesFixture(), quoteAt("14:29", 105.3, null));
     expect(out![1].price).toBe(105.3);
-    expect(out![1].cum_volume).toBe(1_000_000);
+    expect(out![1].cum_volume).toBeNull();
+    expect(out![1].avg).toBeNull();
+    expect(out![1].volume).toBeNull();
   });
 
   it("无时间戳/无价/非正价 → 返回 null", () => {
@@ -224,5 +228,122 @@ describe("mergeQuoteIntoMinutes", () => {
     mergeQuoteIntoMinutes(src, quoteAt("14:29", 105.3));
     expect(src[1].price).toBe(105.0);
     expect(src[1].cum_volume).toBe(1_000_000);
+  });
+});
+
+describe("分时合成的股/元与分钟窗口回归", () => {
+  const snapshot = () => [
+    { ...point("14:28", 104.9, 900_000), volume: 100_000, cum_amount: 94_320_000 },
+    { ...point("14:29", 105, 1_000_000), volume: 100_000, cum_amount: 104_800_000 },
+  ];
+  const current = (time = "14:29") => quoteAt(time, 105.3, 1_100_000, 115_830_000);
+
+  it("同分钟均价、量和累计额来自最新报价，已有分钟量不丢失", () => {
+    const points = snapshot();
+    const out = mergeQuoteIntoMinutes(points, current())!;
+    expect(out[1]).toMatchObject({ price: 105.3, avg: 105.3, volume: 200_000,
+      cum_volume: 1_100_000, cum_amount: 115_830_000, minute_amount: 21_510_000 });
+    expect(points).toEqual(snapshot());
+  });
+
+  it("只有金额变化也更新均价和累计额", () => {
+    const out = mergeQuoteIntoMinutes(snapshot(), quoteAt("14:29", 105, 1_000_000, 105_000_000));
+    expect(out).not.toBeNull();
+    expect(out![1]).toMatchObject({ avg: 105, cum_amount: 105_000_000, volume: 100_000 });
+  });
+
+  it.each(["14:30", "14:35"])("旧尾未封口，%s新点不能把累计差当成分钟量", time => {
+    const out = mergeQuoteIntoMinutes(snapshot(), current(time))!;
+    expect(out[2]).toMatchObject({ price: 105.3, avg: 105.3, cum_amount: 115_830_000,
+      volume: null, minute_amount: null });
+  });
+
+  it("原REST已有缺口时，同分钟也没有可靠分钟量基准", () => {
+    const points = snapshot();
+    points[0].ts = point("14:26", 104.9, 900_000).ts;
+    expect(mergeQuoteIntoMinutes(points, current())![1].volume).toBeNull();
+  });
+
+  it("尾量与原累计差不配对时，不生成精确分钟量", () => {
+    const points = snapshot();
+    points[1].volume = 100;
+    expect(mergeQuoteIntoMinutes(points, current())![1].volume).toBeNull();
+  });
+
+  it("跨源累计覆盖不能相减，但同一报价均价仍可计算", () => {
+    const points = snapshot().map(p => ({ ...p, source: "tdx_m1" }));
+    expect(mergeQuoteIntoMinutes(points, current())![1]).toMatchObject({
+      avg: 105.3, volume: null, cum_amount: 115_830_000, source: "tencent",
+    });
+  });
+
+  it("指数累计额/量不生成指数点位均价，同分钟和跨分钟都保持空", () => {
+    const points = snapshot().map(p => ({ ...p, avg: null }));
+    expect(mergeQuoteIntoMinutes(points, current(), true)![1].avg).toBeNull();
+    expect(mergeQuoteIntoMinutes(points, current("14:30"), true)![2].avg).toBeNull();
+  });
+
+  it("同源累计倒退保持未知，不能用截零假装没有成交", () => {
+    const out = mergeQuoteIntoMinutes(snapshot(), quoteAt("14:29", 105.3, 950_000, 100_000_000))!;
+    expect(out[1]).toMatchObject({ price: 105.3, volume: null, cum_volume: null,
+      cum_amount: null, minute_amount: null, avg: null });
+  });
+
+  it("缺量时金额仍可独立归属，但不得拼旧量计算均价", () => {
+    const out = mergeQuoteIntoMinutes(snapshot(), quoteAt("14:29", 105.3, null, 115_830_000))!;
+    expect(out[1]).toMatchObject({ volume: null, cum_volume: null, avg: null,
+      cum_amount: 115_830_000, minute_amount: 21_510_000 });
+  });
+
+  it("零累计与零分钟量/额合法；均价不做除零", () => {
+    const points = snapshot().map(p => ({ ...p, volume: 0, cum_volume: 0, cum_amount: 0, avg: null }));
+    const out = mergeQuoteIntoMinutes(points, quoteAt("14:29", 105.3, 0, 0))!;
+    expect(out[1]).toMatchObject({ volume: 0, cum_volume: 0, cum_amount: 0, minute_amount: 0, avg: null });
+  });
+
+  it("累计没有增加不抹掉REST尾点已经发生的分钟量", () => {
+    const out = mergeQuoteIntoMinutes(snapshot(), quoteAt("14:29", 105.3, 1_000_000, 104_800_000))!;
+    expect(out[1].volume).toBe(100_000);
+  });
+
+  it("没有前一点基准，单尾点不能把全日累计当分钟量", () => {
+    const out = mergeQuoteIntoMinutes([snapshot()[1]], current())!;
+    expect(out[0]).toMatchObject({ price: 105.3, avg: 105.3, volume: null, minute_amount: null });
+  });
+
+  it("午休前后的累计差不归属下午一个分钟", () => {
+    const points = [point("11:29", 105, 900_000), point("11:30", 105, 1_000_000)];
+    const out = mergeQuoteIntoMinutes(points, current("13:00"))!;
+    expect(out[2]).toMatchObject({ price: 105.3, volume: null, minute_amount: null });
+  });
+
+  it.each([NaN, Infinity, -Infinity])("非有限价%s不得进入图表", price => {
+    expect(mergeQuoteIntoMinutes(snapshot(), quoteAt("14:29", price))).toBeNull();
+  });
+
+  it.each([NaN, Infinity, -1])("非法累计%s不污染均价、量柱及金额", value => {
+    const out = mergeQuoteIntoMinutes(snapshot(), quoteAt("14:29", 105.3, value, value))!;
+    expect(out[1]).toMatchObject({ avg: null, volume: null, cum_volume: null,
+      cum_amount: null, minute_amount: null });
+  });
+});
+
+describe("分钟额消费者的窗口与显式缺值", () => {
+  const before = () => point("14:28", 105, 900_000);
+  const tail = () => point("14:29", 105, 1_000_000);
+  it("REST同源相邻额差是元，零差额也保留", () => {
+    expect(getMinuteAmount(tail(), before())).toBe(10_480_000);
+    expect(getMinuteAmount({ ...tail(), cum_amount: before().cum_amount }, before())).toBe(0);
+  });
+  it("显式合成null不能回落到跨窗口累计额差", () => {
+    expect(getMinuteAmount({ ...tail(), minute_amount: null }, before())).toBeNull();
+    expect(getMinuteAmount({ ...tail(), minute_amount: 123 }, before())).toBe(123);
+  });
+  it("缺口、跨源、午休、倒退累计额均留空", () => {
+    expect(getMinuteAmount(point("14:35", 105, 1_100_000), before())).toBeNull();
+    expect(getMinuteAmount({ ...tail(), source: "tdx_m1" }, before())).toBeNull();
+    expect(getMinuteAmount(point("13:00", 105, 1_100_000), point("11:30", 105, 1_000_000))).toBeNull();
+    expect(getMinuteAmount({ ...tail(), cum_amount: 1 }, before())).toBeNull();
+    expect(getMinuteAmount(tail())).toBeNull();
   });
 });

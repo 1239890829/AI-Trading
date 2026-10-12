@@ -12,7 +12,7 @@ import Cancel01Icon from "@hugeicons/core-free-icons/Cancel01Icon";
 import Link from "next/link";
 import { AccountScopePanel } from "@/components/detail/account-scope-panel";
 import { patchWorkspaceUrl } from "@/lib/task-navigation";
-import { Suspense, useCallback, useEffect, useMemo, useState } from "react";
+import { Suspense, useCallback, useEffect, useMemo, useRef, useState, useSyncExternalStore } from "react";
 import { useRouter, useSearchParams } from "next/navigation";
 import { Panel } from "@/components/panel";
 import { parseChartTab, parseRightTab } from "@/lib/detail-tabs";
@@ -22,7 +22,7 @@ import { PriceFlash } from "@/components/price-flash";
 import { QualityBadge } from "@/components/quality-badge";
 import { PickDetailModal, type PickDetailTarget } from "@/components/picks/pick-detail-modal";
 import { useQuoteStream, STREAM_STATUS_LABEL } from "@/hooks/use-quote-stream";
-import { usePollingFetch } from "@/hooks/use-polling-fetch";
+import { usePollingFetch, useResource } from "@/hooks/use-polling-fetch";
 import { PageSkeletonFallback, Skeleton } from "@/components/ui/loading";
 import { PanelBoundary } from "@/components/ui/panel-boundary";
 import { useRealPositions } from "@/hooks/use-real-positions";
@@ -57,6 +57,14 @@ import { LAST_SYMBOL_KEY, originLabel } from "@/lib/routing";
 import type { Quote } from "@/types/market";
 
 const STATUS_LABEL = STREAM_STATUS_LABEL;
+const MOBILE_QUERY = "(max-width: 1023px)";
+function mobileSnapshot() { return typeof window.matchMedia === "function" && window.matchMedia(MOBILE_QUERY).matches; }
+function subscribeMobile(listener: () => void) {
+  if (typeof window.matchMedia !== "function") return () => {};
+  const query = window.matchMedia(MOBILE_QUERY);
+  query.addEventListener("change", listener);
+  return () => query.removeEventListener("change", listener);
+}
 
 // ?ct= / ?rt= 深链参数解析（2026-09-11 抽到 lib/detail-tabs.ts：这是与
 // lib/nav-targets.ts 构造器之间的跨模块契约，放在那里才能被交叉断言——
@@ -86,9 +94,16 @@ function WorkbenchInner() {
   const paperSymbols = useMemo(() => positions.map(p => p.symbol), [positions]);
   // 左栏列表 pending 哨兵（审查 F2/R2）：loadBase/dyn 首拉完成前渲染行骨架
   const [baseLoaded, setBaseLoaded] = useState(false);
+  const [paperLoaded, setPaperLoaded] = useState(false);
+  const [baseErrors, setBaseErrors] = useState<Record<string, string>>({});
+  const baseReadRef = useRef(0);
+  useEffect(() => () => { baseReadRef.current += 1; }, []);
   // 真实持仓（CONTEXT.md: Holdings Group）：共用 hook 一份轮询（评审 M3），
   // 标的列表派生进 WS 订阅，「持仓」分类共用
-  const { data: realData, error: realError } = useRealPositions();
+  const { data: realData, error: realError, reload: reloadRealPositions } = useRealPositions();
+  const realPositions = useMemo(() => ({data: realData, error: realError, reload: reloadRealPositions}), [realData, realError, reloadRealPositions]);
+  const isMobile = useSyncExternalStore(subscribeMobile, mobileSnapshot, () => false);
+  const detailActive = !isMobile || mobileView !== "list";
   const realSymbols = useMemo(() => realData?.items.map((i) => i.symbol) ?? [], [realData]);
   const [indices, setIndices] = useState<Quote[]>([]);
   const [totalAmount, setTotalAmount] = useState<number | null>(null);
@@ -187,35 +202,45 @@ function WorkbenchInner() {
   const backLabel = originLabel(backFrom);
 
   const loadBase = useCallback(async () => {
-    try {
-      // 原 groups 裸 fetch 从未被消费（gs 解构后无人用）——随收口一并删除
-      const [wl, overview, paperPositions, groupNames] = await Promise.allSettled([
-        getWatchlist(), getMarketOverview(), getPaperPositions(), getWatchlistGroups(),
-      ]);
-      const failures: string[] = [];
-      if (wl.status === "fulfilled") {
-        setGroupMap(Object.fromEntries(wl.value.map(i => [i.symbol, i.group_name ?? "默认"])));
-        setSymbols(wl.value.map(i => i.symbol));
-      } else failures.push("自选读取失败");
-      if (groupNames.status === "fulfilled") setAllGroupNames(["默认", ...groupNames.value]);
-      else failures.push("分组读取失败");
-      if (overview.status === "fulfilled") {
-        setIndices(overview.value.indices); setTotalAmount(overview.value.total_amount);
-        setAmountFreshness(overview.value.total_amount_freshness);
+    // Each result owns its display: a slow auxiliary endpoint must not hold the list.
+    // Manual refresh or a watchlist mutation supersedes every older in-flight read.
+    const version = ++baseReadRef.current;
+    const current = () => version === baseReadRef.current;
+    const report = (key: string, message?: string) => {
+      if (!current()) return;
+      setBaseErrors(previous => {
+        if (previous[key] === message || (!message && !(key in previous))) return previous;
+        const next = {...previous};
+        if (message) next[key] = message;
+        else delete next[key];
+        return next;
+      });
+    };
+    await Promise.allSettled([
+      getWatchlist().then(value => {
+        if (!current()) return;
+        setGroupMap(Object.fromEntries(value.map(i => [i.symbol, i.group_name ?? "默认"])));
+        setSymbols(value.map(i => i.symbol));
+        report("watch");
+      }, () => report("watch", "自选读取失败")).finally(() => { if (current()) setBaseLoaded(true); }),
+      getMarketOverview().then(value => {
+        if (!current()) return;
+        setIndices(value.indices); setTotalAmount(value.total_amount);
+        setAmountFreshness(value.total_amount_freshness);
         setUpdatedAt(new Date().toLocaleTimeString("zh-CN", {hour12: false}));
-      } else failures.push("行情概览读取失败");
-      if (paperPositions.status === "fulfilled") setPositions(paperPositions.value);
-      else failures.push("main 模拟持仓读取失败");
-      setError(failures.length ? `${failures.join("；")}。保留值仅为上次结果，不能判断当前为空。` : null);
-    } catch {
-      // ⚠️ 文案里禁止出现 `--reload`（AGENTS.md §6.1）：它与 SQLite 锁组合会反复挂死，
-      // 教用户照抄 = 复现已知事故。此前本行就是反例（IMP-001）。
-      setError("自选或行情读取失败，请稍后重试；保留数据只作上次结果参考。服务状态可在系统维护核对。");
-    } finally {
-      // pending 三态哨兵（审查 F2/R2）：首次拉取完成前左栏渲染行骨架，
-      // 不再抢跑「自选为空或行情未就绪」文案（加载中≠确认空）
-      setBaseLoaded(true);
-    }
+        report("overview");
+      }, () => report("overview", "行情概览读取失败")),
+      getPaperPositions().then(value => {
+        if (!current()) return;
+        setPositions(value);
+        report("paper");
+      }, () => report("paper", "main 模拟持仓读取失败")).finally(() => { if (current()) setPaperLoaded(true); }),
+      getWatchlistGroups().then(value => {
+        if (!current()) return;
+        setAllGroupNames(["默认", ...value]);
+        report("groups");
+      }, () => report("groups", "分组读取失败")),
+    ]);
   }, []);
 
   // 风控市场状态（评审 O2）：七档状态变化以日为尺度，独立 30s 轮询——
@@ -278,20 +303,28 @@ function WorkbenchInner() {
   // 资金 = 东财 f62 主力净额 + 连续流入天数。**口径与个股资金流（新浪 L4）不同，不可相加**。
   // 60s 与自选行情同节奏；F10 归属在后端有 6h 缓存（所属板块低频变更），轮询实际只刷新资金值。
   const symbolKey = symbols.join(",");
-  const [boardFund, setBoardFund] = useState<Record<string, SymbolBoardFund>>({});
-  if (symbols.length === 0 && Object.keys(boardFund).length > 0) {
-    setBoardFund({}); // 自选清空 → 渲染期同步清掉（防上一组残留）
+  const boardFund = useResource(async () => {
+    const result: Record<string, SymbolBoardFund> = {};
+    // 接口单批最多50只；串行批次覆盖完整集合，避免同时向资料源扇出。
+    for (let start = 0; start < symbols.length; start += 50) {
+      Object.assign(result, await getBoardFundBySymbols(symbols.slice(start, start + 50)));
+    }
+    return result;
+  }, {key: symbolKey, enabled: symbols.length > 0, intervalMs: 60_000});
+  // 只保留低频归属文字。资金值只消费本轮结果，缺项绝不沿用旧金额。
+  const [boardIdentity, setBoardIdentity] = useState<{
+    key: string; data: typeof boardFund.data;
+    known: Record<string, Pick<SymbolBoardFund, "board_name" | "level">>;
+  }>({key: symbolKey, data: undefined, known: {}});
+  if (boardIdentity.key !== symbolKey || boardIdentity.data !== boardFund.data) {
+    const known: typeof boardIdentity.known = {};
+    for (const symbol of symbols) {
+      const row = boardFund.data?.[symbol];
+      if (row?.board_name) known[symbol] = {board_name: row.board_name, level: row.level};
+      else if (boardIdentity.known[symbol]) known[symbol] = boardIdentity.known[symbol];
+    }
+    setBoardIdentity({key: symbolKey, data: boardFund.data, known});
   }
-  useEffect(() => {
-    if (symbols.length === 0) return;
-    getBoardFundBySymbols(symbols.slice(0, 50)).then(setBoardFund).catch(() => {});
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [symbolKey]);
-  usePollingFetch(async () => {
-    if (symbols.length === 0) return;
-    const m = await getBoardFundBySymbols(symbols.slice(0, 50)).catch(() => null);
-    if (m) setBoardFund(m);
-  }, 60_000);
 
   // 分组清单由 groupMap 派生（旧代码是独立的 groups 状态，从未被赋值，chips 永远只有「全部」）
   // 「猎场」是动态分组的保留名（2026-09-09 合并原「每日精选」「盘中跟踪」），用户分组里排除（防 chips 重名撞 key）
@@ -427,8 +460,9 @@ function WorkbenchInner() {
     { key: "猎场", label: "系统候选", count: new Set([...topSymbols, ...picksSymbols]).size, title: "盘中跟踪与每日精选；只读系统结果" },
     ...groups.map((group) => ({ key: group, label: group })),
   ];
-  const sourcePending = !baseLoaded || (isDynamicGroup && (!dynReady.picks || !dynReady.top));
-  const sourceError = error || (isDynamicGroup && (dynErrors.picks || dynErrors.top));
+  const sourcePending = isDynamicGroup ? !dynReady.picks || !dynReady.top : mode === "positions" ? account === "paper" ? !paperLoaded : account === "manual" ? !realData && !realError : false : !baseLoaded;
+  const sourceError = isDynamicGroup ? dynErrors.picks || dynErrors.top : mode === "positions" ? account === "paper" ? baseErrors.paper : account === "manual" ? realError : null : baseErrors.watch;
+  const readWarning = [error, ...Object.values(baseErrors)].filter(Boolean).join("；");
 
   return (
     <main data-workspace="workbench" className="task-page bc-workbench">
@@ -450,7 +484,7 @@ function WorkbenchInner() {
           ]} onChange={value => router.push(patchWorkspaceUrl("/workbench", sp.toString(), {account: value, rt: null}), {scroll: false})} />}
         </div>
       </header>
-      {error && <div role="alert" className="bc-read-warning bc-base-warning"><details><summary>部分数据读取失败 · 查看原因</summary><p className="data-scroll" tabIndex={0}>{error}</p></details><button onClick={() => void loadBase()}>重试读取</button></div>}
+      {readWarning && <div role="alert" className="bc-read-warning bc-base-warning"><details><summary>部分数据读取失败 · 查看原因</summary><p className="data-scroll" tabIndex={0}>{readWarning}。保留值仅为上次结果，不能判断当前为空。</p></details><button onClick={() => {setError(null); void loadBase();}}>重试读取</button></div>}
 
       <nav className="bc-mobile-views" aria-label="工作台内容">
         {([["list", "指数与自选"], ["chart", "图表"], ["check", "核对"]] as const).map(([key, label]) => <button key={key} type="button" aria-pressed={mobileView === key} onClick={() => setMobileView(key)}>{label}</button>)}
@@ -515,7 +549,9 @@ function WorkbenchInner() {
               const quote = merged[symbol];
               const pick = isDynamicGroup ? pickInfoBySymbol.get(symbol) : undefined;
               const top = isDynamicGroup ? topInfoBySymbol.get(symbol) : undefined;
-              const fund = boardFund[symbol];
+              const fund = boardFund.error ? undefined : boardFund.data?.[symbol];
+              const board = fund ?? boardIdentity.known[symbol];
+              const boardLabel = board ? `${board.level === "industry" ? "行业" : board.level === "concept" ? "概念" : "板块"} · ${board.board_name}` : boardFund.status === "pending" ? "所属板块读取中" : "所属板块待确认";
               return <article key={symbol} className="bc-attention-item" data-selected={activeSymbol === symbol}>
                 <button className="bc-attention-select" onClick={() => switchSymbol(symbol)} aria-pressed={activeSymbol === symbol} aria-label={`查看 ${quote?.name ?? symbol} ${symbol}`}>
                   <span className="bc-attention-identity"><strong title={quote?.name ?? symbol}>{quote?.name ?? symbol}</strong><span>{symbol}</span></span>
@@ -526,7 +562,9 @@ function WorkbenchInner() {
                     <span title={pick?.echelon_role ?? `确定性 ${triText(top?.certainty?.level)}；辨识度 ${triText(top?.distinctiveness?.level)}`}>{pick?.echelon_role ?? `确定性 ${triText(top?.certainty?.level)} · 辨识度 ${triText(top?.distinctiveness?.level)}`}</span>
                     {posLabels[symbol] && <span title="持仓状态派生标签；删除记录或退出后自动消失">{posLabels[symbol] === "real" ? "手工已记录" : "模拟已持仓"}</span>}
                   </span>}
-                  {fund && <span className="bc-attention-fund" title={`${fund.board_name}（东财${fund.level === "industry" ? "行业" : "概念"}）${signedYi(fund.main_net_yi)}${fund.streak != null && fund.streak >= 1 ? `，连续 ${fund.streak} 日净流入` : ""}；与个股资金流口径不同，不可相加`}><span className={fund.main_net_yi == null ? "" : fund.main_net_yi >= 0 ? "text-up-ink dark:text-up" : "text-down-ink dark:text-down"}>{signedYi(fund.main_net_yi)}</span><span>{fund.board_name}</span></span>}
+                  <span className="bc-attention-fund" title={fund ? `${boardLabel}（东财）${signedYi(fund.main_net_yi)}${fund.streak != null && fund.streak >= 1 ? `，连续 ${fund.streak} 日净流入` : ""}；板块与个股资金口径不同，不可相加` : board ? `${boardLabel}为上次确认的归属；本次资金未返回，未沿用旧金额` : boardFund.error ? "所属板块读取失败，可等待下一轮刷新；缺失不代表没有行业归属" : "数据源尚未返回所属板块，不推测行业或概念"}>
+                    <span>{boardLabel}{board && !fund ? "（上次）" : ""}</span><span className={fund?.main_net_yi == null ? "" : fund.main_net_yi >= 0 ? "text-up-ink dark:text-up" : "text-down-ink dark:text-down"}>{fund ? signedYi(fund.main_net_yi) : board ? "未更新" : "--"}</span>
+                  </span>
                 </button>
                 <div className="bc-attention-meta"><span title={quote ? `来源：${sourceLabel(quote.source)}；数据时间：${timeText(quote.data_timestamp)}；接收时间：${timeText(quote.received_at)}` : "已在列表，报价尚未返回"}>{quote ? sourceLabel(quote.source) : "等待行情"}</span><QualityBadge quality={quote?.quality} reasons={quote?.quality_reasons} />
                   {(pick || top) ? <span className="bc-candidate-details">{top && <button className="bc-item-detail" onClick={() => setDetailTarget({kind: "top", item: top})} aria-label={`查看 ${symbol} 盘中依据`}>{pick ? "盘中" : "依据"}</button>}{pick && <button className="bc-item-detail" onClick={() => setDetailTarget({kind: "pick", item: pick})} aria-label={`查看 ${symbol} 精选依据`}>{top ? "精选" : "依据"}</button>}</span> : mode === "watch" && <IconButton onClick={() => void remove(symbol)} className="bc-remove-watch" title="移出自选" aria-label={`移出自选 ${symbol}`}><HugeiconsIcon icon={Cancel01Icon} size={14} aria-hidden="true" /></IconButton>}
@@ -542,7 +580,7 @@ function WorkbenchInner() {
         <section className="bc-workbench-detail" aria-label="证券详情">
         {/* 边界跟随证券/scope重置，保留深链与共享真实详情的全部消费者。 */}
         <PanelBoundary key={`${activeSymbol}:${mode}:${account}`} label="个股详情">
-          <StockDetailPanel symbol={activeSymbol} chartTab={chartTab} rightTab={rightTab} onRightTabChange={switchRightTab} liveQuote={merged[activeSymbol]} streamStatus={status} />
+          <StockDetailPanel symbol={activeSymbol} chartTab={chartTab} rightTab={rightTab} onRightTabChange={switchRightTab} liveQuote={merged[activeSymbol]} streamStatus={status} active={detailActive} realPositions={realPositions} />
         </PanelBoundary>
         </section>
       </div>
