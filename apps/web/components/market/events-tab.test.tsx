@@ -25,7 +25,7 @@ describe("EventsTab judgement display", () => {
     ] };
     render(<EventsTab />);
     expect(screen.getByText("未明超时").getAttribute("title")).toContain("证据不足已超时");
-    expect(screen.getByText("利好假设")).toBeTruthy();
+    expect(screen.getByText("模型正向假设")).toBeTruthy();
     expect(screen.queryByText("利好")).toBeNull();
     expect(screen.queryByText("待判")).toBeNull();
     expect(screen.getByText(/不代表正在后台排队判读/)).toBeTruthy();

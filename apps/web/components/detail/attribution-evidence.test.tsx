@@ -19,10 +19,174 @@ const evidence: AttributionEvidenceItem = {
   pending_context: null, alternatives: ["成交变化还可能来自其他催化"], limitations: ["未核实业务受益"],
 };
 const payload = (symbol = "600825", item = evidence): StockAttributionPayload => ({schema_version: 1, symbol, count: 1, items: [item]});
+const secondEvidence: AttributionEvidenceItem = {...evidence, event_id: 21, title: "第二条：公司澄清业务范围", source_context: {...evidence.source_context!, summary: "澄清仅供核查，不构成受益证明。"}, interpretation_ref: {...evidence.interpretation_ref, event_id: 21}};
+const listPayload = (symbol = "600825"): StockAttributionPayload => ({schema_version: 1, symbol, count: 2, items: [evidence, secondEvidence]});
 beforeEach(() => {vi.mocked(getStockAttribution).mockResolvedValue(payload());});
-afterEach(() => {cleanup(); vi.clearAllMocks(); vi.useRealTimers();});
+afterEach(() => {cleanup(); vi.clearAllMocks(); vi.restoreAllMocks(); vi.useRealTimers();});
 
 describe("shared attribution evidence", () => {
+  it("starts with compact message buttons and opens only the selected detail without another read", async () => {
+    vi.mocked(getStockAttribution).mockResolvedValue(listPayload());
+    render(<StockAttributionPanel symbol="600825" defaultExpanded selectedAt="2026-10-12T09:30:00+08:00" />);
+    const first = await screen.findByRole("button", {name: `查看归因消息：${evidence.title}`});
+    expect(screen.getByRole("button", {name: `查看归因消息：${secondEvidence.title}`})).toBeTruthy();
+    expect(screen.queryByRole("article")).toBeNull();
+    expect(screen.queryByText(evidence.stock_relation.basis)).toBeNull();
+    fireEvent.click(first);
+    expect(screen.getAllByRole("article")).toHaveLength(1);
+    expect(screen.queryByText(secondEvidence.title)).toBeNull();
+    expect(screen.getByText(/尚属预案（拟）/)).toBeTruthy();
+    expect(screen.getByText(/消息可用时间晚于首次加入/)).toBeTruthy();
+    fireEvent.click(screen.getByText("核对原文与时点"));
+    expect(screen.getByText("尚未完成审计；不代表完成收购。")).toBeTruthy();
+    expect(getStockAttribution).toHaveBeenCalledTimes(1);
+    expect(getEventAttribution).not.toHaveBeenCalled();
+  });
+
+  it("returns focus to the original message and can then read a different message", async () => {
+    vi.mocked(getStockAttribution).mockResolvedValue(listPayload());
+    render(<StockAttributionPanel symbol="600825" defaultExpanded />);
+    fireEvent.click(await screen.findByRole("button", {name: `查看归因消息：${secondEvidence.title}`}));
+    expect(document.activeElement).toBe(screen.getByRole("button", {name: "返回消息列表"}));
+    fireEvent.click(screen.getByRole("button", {name: "返回消息列表"}));
+    expect(document.activeElement).toBe(screen.getByRole("button", {name: `查看归因消息：${secondEvidence.title}`}));
+    expect(screen.queryByRole("article")).toBeNull();
+    fireEvent.click(screen.getByRole("button", {name: `查看归因消息：${evidence.title}`}));
+    expect(screen.getByRole("article", {name: "事件归因 18"})).toBeTruthy();
+    expect(screen.queryByRole("article", {name: "事件归因 21"})).toBeNull();
+    expect(getStockAttribution).toHaveBeenCalledTimes(1);
+  });
+
+  it("returns to the compact list after closing and reopening", async () => {
+    render(<StockAttributionPanel symbol="600825" defaultExpanded />);
+    fireEvent.click(await screen.findByRole("button", {name: `查看归因消息：${evidence.title}`}));
+    fireEvent.click(screen.getByRole("button", {name: "驱动线索"}));
+    fireEvent.click(screen.getByRole("button", {name: "驱动线索"}));
+    await screen.findByRole("button", {name: `查看归因消息：${evidence.title}`});
+    expect(screen.queryByRole("article")).toBeNull();
+    expect(screen.queryByRole("button", {name: "返回消息列表"})).toBeNull();
+  });
+
+  it("never transfers the selected detail to another stock, even when the event ID is shared", async () => {
+    vi.mocked(getStockAttribution).mockResolvedValueOnce(payload()).mockResolvedValueOnce(payload("600127", {...evidence, title: "新股票线索"}));
+    const view = render(<StockAttributionPanel symbol="600825" defaultExpanded />);
+    fireEvent.click(await screen.findByRole("button", {name: `查看归因消息：${evidence.title}`}));
+    view.rerender(<StockAttributionPanel symbol="600127" defaultExpanded />);
+    await screen.findByRole("button", {name: "查看归因消息：新股票线索"});
+    expect(screen.queryByRole("article")).toBeNull();
+    expect(screen.queryByText(evidence.title)).toBeNull();
+    expect(getStockAttribution).toHaveBeenCalledTimes(2);
+  });
+
+  it("preserves the selected detail through a refresh failure", async () => {
+    render(<StockAttributionPanel symbol="600825" defaultExpanded />);
+    fireEvent.click(await screen.findByRole("button", {name: `查看归因消息：${evidence.title}`}));
+    vi.mocked(getStockAttribution).mockRejectedValueOnce(new Error("offline"));
+    fireEvent.click(screen.getByRole("button", {name: "刷新依据"}));
+    expect(await screen.findByRole("alert")).toHaveProperty("textContent", expect.stringContaining("保留上次读取内容"));
+    expect(screen.getByRole("article", {name: "事件归因 18"})).toBeTruthy();
+    expect(screen.getByRole("button", {name: "返回消息列表"})).toBeTruthy();
+  });
+
+  it("returns to the list when a successful refresh removes the selected message", async () => {
+    render(<StockAttributionPanel symbol="600825" defaultExpanded />);
+    fireEvent.click(await screen.findByRole("button", {name: `查看归因消息：${evidence.title}`}));
+    vi.mocked(getStockAttribution).mockResolvedValueOnce(payload("600825", secondEvidence));
+    fireEvent.click(screen.getByRole("button", {name: "刷新依据"}));
+    const remaining = await screen.findByRole("button", {name: `查看归因消息：${secondEvidence.title}`});
+    expect(screen.getByRole("status")).toHaveProperty("textContent", expect.stringContaining("所选消息已不在本次资料中，已返回列表"));
+    expect(screen.queryByRole("article")).toBeNull();
+    expect(document.activeElement).toBe(remaining);
+    vi.mocked(getStockAttribution).mockResolvedValueOnce(listPayload());
+    fireEvent.click(screen.getByRole("button", {name: "刷新依据"}));
+    await screen.findByRole("button", {name: `查看归因消息：${evidence.title}`});
+    expect(screen.queryByRole("article")).toBeNull();
+  });
+
+  it("keeps the selected message visible during an update and uses the refreshed interpretation", async () => {
+    render(<StockAttributionPanel symbol="600825" defaultExpanded />);
+    fireEvent.click(await screen.findByRole("button", {name: `查看归因消息：${evidence.title}`}));
+    let finish!: (value: StockAttributionPayload) => void;
+    vi.mocked(getStockAttribution).mockImplementationOnce(() => new Promise(resolve => {finish = resolve;}));
+    fireEvent.click(screen.getByRole("button", {name: "刷新依据"}));
+    expect(screen.getByRole("article", {name: "事件归因 18"})).toBeTruthy();
+    expect(screen.queryByRole("status", {name: "归因依据加载中"})).toBeNull();
+    await act(async () => {finish(payload("600825", {...evidence, title: "同条消息的新解释", qualifiers: [{kind: "pending", label: "审批尚未完成", matched_terms: []}]}));});
+    expect(screen.getByRole("article", {name: "事件归因 18"})).toBeTruthy();
+    expect(screen.getByText("同条消息的新解释")).toBeTruthy();
+    expect(screen.getByText(/审批尚未完成/)).toBeTruthy();
+    expect(screen.queryByRole("button", {name: /查看归因消息/})).toBeNull();
+  });
+
+  it("handles a refresh that removes every message without leaving an empty detail", async () => {
+    render(<StockAttributionPanel symbol="600825" defaultExpanded />);
+    fireEvent.click(await screen.findByRole("button", {name: `查看归因消息：${evidence.title}`}));
+    vi.mocked(getStockAttribution).mockResolvedValueOnce({schema_version: 1, symbol: "600825", count: 0, items: []});
+    fireEvent.click(screen.getByRole("button", {name: "刷新依据"}));
+    await screen.findByText(/所选消息已不在本次资料中/);
+    expect(screen.queryByRole("article")).toBeNull();
+    expect(screen.getByText(/不能据此认定没有驱动消息/)).toBeTruthy();
+    expect(document.activeElement).toBe(screen.getByRole("list", {name: "归因消息列表"}));
+  });
+
+  it("restores the bounded reader position on return without scrolling the page", async () => {
+    render(<StockAttributionPanel symbol="600825" defaultExpanded />);
+    const first = await screen.findByRole("button", {name: `查看归因消息：${evidence.title}`});
+    const reader = first.closest<HTMLElement>("[data-attribution-reader]")!;
+    reader.scrollTop = 120;
+    vi.spyOn(HTMLElement.prototype, "getBoundingClientRect").mockImplementation(function(this: HTMLElement) {
+      return new DOMRect(0, this.textContent === "返回消息列表" ? -120 : 0, 320, 44);
+    });
+    fireEvent.click(first);
+    expect(reader.scrollTop).toBe(0);
+    fireEvent.click(screen.getByRole("button", {name: "返回消息列表"}));
+    expect(reader.scrollTop).toBe(120);
+    expect(document.activeElement).toBe(screen.getByRole("button", {name: `查看归因消息：${evidence.title}`}));
+  });
+
+  it("positions the single detail within the actual drawer body and restores its original scroll", async () => {
+    const view = render(<div role="dialog"><div data-testid="drawer-reader" className="overflow-y-auto" style={{overflowY: "auto"}}><StockAttributionPanel symbol="600825" defaultExpanded bounded={false} /></div></div>);
+    const first = await screen.findByRole("button", {name: `查看归因消息：${evidence.title}`});
+    const drawer = screen.getByTestId("drawer-reader");
+    drawer.scrollTop = 240;
+    vi.spyOn(HTMLElement.prototype, "getBoundingClientRect").mockImplementation(function(this: HTMLElement) {
+      return new DOMRect(0, this.textContent === "返回消息列表" ? -120 : 0, 320, 44);
+    });
+    fireEvent.click(first);
+    expect(drawer.scrollTop).toBe(112);
+    fireEvent.click(screen.getByRole("button", {name: "返回消息列表"}));
+    expect(drawer.scrollTop).toBe(240);
+    expect(document.activeElement).toBe(screen.getByRole("button", {name: `查看归因消息：${evidence.title}`}));
+    view.unmount();
+  });
+
+  it("uses the inner stock context reader and leaves its outer scroll container untouched", async () => {
+    render(<div data-testid="outer-reader" className="overflow-auto" style={{overflow: "auto"}}><div data-testid="stock-context-reader" className="stock-context-brief" style={{overflowY: "auto"}}><StockAttributionPanel symbol="600825" defaultExpanded bounded={false} /></div></div>);
+    const first = await screen.findByRole("button", {name: `查看归因消息：${evidence.title}`});
+    const outer = screen.getByTestId("outer-reader");
+    const context = screen.getByTestId("stock-context-reader");
+    outer.scrollTop = 80;
+    context.scrollTop = 240;
+    vi.spyOn(HTMLElement.prototype, "getBoundingClientRect").mockImplementation(function(this: HTMLElement) {
+      return new DOMRect(0, this.textContent === "返回消息列表" ? -120 : 0, 320, 44);
+    });
+    fireEvent.click(first);
+    expect(context.scrollTop).toBe(112);
+    expect(outer.scrollTop).toBe(80);
+    fireEvent.click(screen.getByRole("button", {name: "返回消息列表"}));
+    expect(context.scrollTop).toBe(240);
+    expect(outer.scrollTop).toBe(80);
+    expect(document.activeElement).toBe(screen.getByRole("button", {name: `查看归因消息：${evidence.title}`}));
+  });
+
+  it("qualifies strong original interpretation wording without losing its source trace", () => {
+    render(<AttributionEvidence item={{...evidence, stock_relation: {...evidence.stock_relation, basis: "权威关联：收购标的", chain: "直接利好相关业务"}}} />);
+    expect(screen.getByText("来源收录不等于消息属实；关联与方向仍须核对。")).toBeTruthy();
+    expect(screen.getAllByText("原解释（待核）：")).toHaveLength(2);
+    expect(screen.getByText(/权威关联：收购标的/)).toBeTruthy();
+    expect(screen.getByText(/直接利好相关业务/)).toBeTruthy();
+  });
+
   it("waits for explicit expansion and adds no candidate timer", async () => {
     vi.useFakeTimers();
     render(<StockAttributionPanel symbol="600825" />);

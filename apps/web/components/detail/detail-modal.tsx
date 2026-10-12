@@ -23,7 +23,7 @@ import { getEventsForSymbol, getNewsContent, type ArticleBlock, type EventSummar
 import { StockAttributionPanel } from "./attribution-evidence";
 import { CapitalFlowPanel } from "@/components/detail/capital-flow-panel";
 import { bjDate, eventTimeText, fmt, pctText, timeTextBJ } from "@/lib/format";
-import { eventDetailPayload, eventDirectionView, eventJudgeView } from "@/lib/event-view";
+import { eventDetailPayload, eventDirectionForSymbol, eventDirectionView, eventJudgeView } from "@/lib/event-view";
 // 只依赖**零业务依赖**的 context 模块（不 import symbol-detail-modal）：
 // 否则形成 detail-modal → symbol-detail-modal → stock-detail → stock-events → detail-modal 的环
 import { useSymbolDetail } from "@/components/detail/symbol-detail-context";
@@ -232,8 +232,8 @@ function DetailModalBody({ payload, onClose }: { payload: DetailPayload; onClose
                 <div className="text-[11px] text-zinc-600 dark:text-zinc-400">关联事件 · {feedEvents.items.length} 条</div>
                 <ul className="mt-1 space-y-1">
                   {feedEvents.items.map((e) => {
-                    const d = e.directions?.[0];
-                    const dir = d ? eventDirectionView(d, e) : null;
+                    const d = eventDirectionForSymbol(e, payload.symbol);
+                    const dir = d ? eventDirectionView(d, e, payload.symbol) : null;
                     const judgement = eventJudgeView(e);
                     return (
                       <li key={e.id}>
@@ -241,7 +241,7 @@ function DetailModalBody({ payload, onClose }: { payload: DetailPayload; onClose
                           type="button"
                           onClick={() =>
                             open({
-                              ...eventDetailPayload(e),
+                              ...eventDetailPayload(e, payload.symbol),
                               symbol: payload.symbol ?? null,
                               theme: d?.target_type === "theme" ? d.target : payload.theme ?? null,
                             })
