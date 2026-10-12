@@ -63,7 +63,39 @@ async function mount() {
 beforeEach(() => {
   vi.clearAllMocks();
 });
-afterEach(cleanup);
+afterEach(() => {cleanup(); vi.useRealTimers(); vi.unstubAllGlobals();});
+
+it("history rows exit for 160ms, remain inert and reverse without remounting or fetching", async () => {
+  vi.stubGlobal("matchMedia", () => ({matches: false, addEventListener: vi.fn(), removeEventListener: vi.fn()}));
+  await mount();
+  vi.useFakeTimers();
+  fireEvent.click(toggle());
+  const row = screen.getByText("plan-review.md");
+  const list = historyList()!;
+  const fileReads = vi.mocked(getAgentKbFile).mock.calls.length;
+  fireEvent.click(toggle());
+  expect(toggle().getAttribute("aria-expanded")).toBe("false");
+  expect(list.getAttribute("data-open")).toBe("false");
+  expect(list.hasAttribute("inert")).toBe(true);
+  await act(async () => {await vi.advanceTimersByTimeAsync(100);});
+  expect(screen.getByText("plan-review.md")).toBe(row);
+  fireEvent.click(toggle());
+  await act(async () => {await vi.advanceTimersByTimeAsync(160);});
+  expect(screen.getByText("plan-review.md")).toBe(row);
+  expect(list.hasAttribute("inert")).toBe(false);
+  fireEvent.click(toggle());
+  await act(async () => {await vi.advanceTimersByTimeAsync(160);});
+  expect(screen.queryByText("plan-review.md")).toBeNull();
+  expect(getAgentKbTree).toHaveBeenCalledTimes(1);
+  expect(getAgentKbFile).toHaveBeenCalledTimes(fileReads);
+});
+
+it("reduced motion closes history rows immediately without retaining invisible controls", async () => {
+  vi.stubGlobal("matchMedia", () => ({matches: true, addEventListener: vi.fn(), removeEventListener: vi.fn()}));
+  await mount();
+  fireEvent.click(toggle()); expect(screen.getByText("plan-review.md")).toBeTruthy();
+  fireEvent.click(toggle()); expect(screen.queryByText("plan-review.md")).toBeNull();
+});
 
 describe("知识库面板 · 分层折叠（2026-09-12）", () => {
   it("关闭后目录晚回不再启动正文读取", async () => {

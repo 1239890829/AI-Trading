@@ -809,14 +809,19 @@ async def collect_beat_inputs(app, env_cache: dict, *, env_refresh_seconds: floa
     beat["pool_count"] = len(pool)
     themes = _beat_themes_from_pool(pool)
 
-    board_pct, board_count = await _board_pcts(hub)
+    # 同拍涨幅与资金同时读取，复用唯一入口的在途任务；源失败也只外采一次/kind。
+    # 失败仍为缺席，不缓存假成功或臆造 0；下一拍允许重新尝试。
+    async def board_flows():
+        try:
+            return await _board_flows(hub)
+        except Exception as exc:  # noqa: BLE001
+            log.warning("watcher beat: board flow failed: %s", exc)
+            return None
+
+    (board_pct, board_count), flows = await asyncio.gather(_board_pcts(hub), board_flows())
     beat["board_count"] = board_count
-    # 板块级资金（P1-1）：与涨幅同源（board_flow 唯一入口，命中 30s TTL 缓存）。
-    # 失败 → 键缺席，_step_board_flows 无输入（不臆造、不阻断其他判定）。
-    try:
-        beat["board_flows"] = await _board_flows(hub)
-    except Exception as exc:  # noqa: BLE001
-        log.warning("watcher beat: board flow failed: %s", exc)
+    if flows is not None:
+        beat["board_flows"] = flows
     for tag, st in themes.items():
         st["pct"] = match_board_pct(tag, board_pct)
 

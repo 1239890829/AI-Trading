@@ -376,8 +376,8 @@ def test_get_board_fund_flow_20d_from_store(monkeypatch):
     today = bf.beijing_now().date().isoformat()
     dates = [(bf.beijing_now().date() - timedelta(days=19 - i)).isoformat() for i in range(20)]
     store = {
-        "BK0001": {"bars": [[d, float(v), None] for d, v in zip(dates, range(1, 21))]},
-        "BK0002": {"bars": [[d, 2.0, None] for d in dates]},
+        "BK0001": {"kind": "concept", "name": "甲", "bars": [[d, float(v), None] for d, v in zip(dates, range(1, 21))]},
+        "BK0002": {"kind": "concept", "name": "乙", "bars": [[d, 2.0, None] for d in dates]},
     }
     monkeypatch.setattr(bf, "_load_dayk_store", lambda: store)
     monkeypatch.setattr(bf, "get_board_streaks", lambda f62: {"BK0001": 20, "BK0002": 20})
@@ -482,7 +482,7 @@ def test_snapshot_happy_path_and_idempotent(monkeypatch, fresh_memo):
         ]}
 
     async def fake_dayk(code):
-        return [["2026-09-05", 1.5, 1.1], ["2026-09-06", 2.5, -0.3]]
+        return [["2026-09-05", 1.5, 1.1], ["2026-09-07", 2.5, -0.3]]
 
     monkeypatch.setattr(bf, "get_board_list", fake_list)
     monkeypatch.setattr(bf, "get_board_members", fake_members)

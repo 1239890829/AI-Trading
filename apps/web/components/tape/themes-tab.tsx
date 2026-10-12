@@ -1,6 +1,7 @@
 "use client";
 
-import { useEffect, useId, useMemo, useState } from "react";
+import { useEffect, useId, useMemo, useState, useSyncExternalStore } from "react";
+import { useExitPresence } from "@/hooks/use-exit-presence";
 import Link from "next/link";
 import { useSurfaceScope } from "@/components/inspection/surface-scope";
 import { RankDelta, ThemeCardView } from "@/components/theme-card";
@@ -12,6 +13,15 @@ import { sortAuctionBenchmark } from "@/lib/auction";
 import { useResource } from "@/hooks/use-polling-fetch";
 import type { AuctionBenchmarkItem, SkyrocketRow, ThemeStrengthRow, ThemesHotPayload } from "@/lib/api";
 import type { ThemeBoardPayload } from "@/types/market";
+
+const CONTROL_QUERY = "(max-width: 767px)";
+function compactSnapshot() {return typeof window.matchMedia === "function" && window.matchMedia(CONTROL_QUERY).matches;}
+function subscribeCompact(listener: () => void) {
+  if (typeof window.matchMedia !== "function") return () => {};
+  const query = window.matchMedia(CONTROL_QUERY);
+  query.addEventListener("change", listener);
+  return () => query.removeEventListener("change", listener);
+}
 
 /**
  * 盘面页 · 题材梯队 tab（原 /themes 页迁移，2026-09-01 系统重构）。
@@ -68,6 +78,10 @@ export function ThemesTab() {
   const error = resource.error instanceof Error ? resource.error.message : resource.error ? "读取失败" : null;
   const [showCaveats, setShowCaveats] = useState(false);
   const [controlsOpen, setControlsOpen] = useState(false);
+  const compact = useSyncExternalStore(subscribeCompact, compactSnapshot, () => false);
+  const controlsVisible = !compact || controlsOpen;
+  const controlsPresence = useExitPresence(controlsVisible ? true : null);
+  const caveatsPresence = useExitPresence(showCaveats ? true : null);
   // 题材人气（B1 热股榜）：best-effort 增强，拉取失败静默降级（看板主体不依赖它）
   const [hot, setHot] = useState<ThemesHotPayload | null>(null);
   // 飙升榜（B1）：「正在变热」信号，与人气榜口径不同；best-effort 同上
@@ -195,7 +209,9 @@ export function ThemesTab() {
         <button className="theme-controls-toggle" aria-expanded={controlsOpen} aria-controls={controlId} onClick={() => setControlsOpen(value => !value)}>
           <span>筛选与市场参照</span><span>{controlsOpen ? "收起" : "展开"}</span>
         </button>
-        <div id={controlId} className="theme-control-body" data-open={controlsOpen}>
+        {controlsPresence.value && <div className="theme-controls-motion motion-disclosure" data-open={controlsVisible} aria-hidden={!controlsVisible || undefined} inert={!controlsVisible}>
+        <div className="motion-disclosure-body">
+        <div id={controlId} className="theme-control-body" data-open={controlsVisible}>
       {/* ── 固定头部：摘要 + 筛选 ────────────────────────────── */}
       <div className="mb-3 flex shrink-0 flex-wrap items-end justify-between gap-3">
         <p className="text-xs text-zinc-600 dark:text-zinc-400">
@@ -362,6 +378,8 @@ export function ThemesTab() {
       )}
 
         </div>
+        </div>
+        </div>}
       </aside>
       <div className="theme-main">
       {error && (
@@ -466,11 +484,12 @@ export function ThemesTab() {
         {/* ── 口径说明 ───────────────────────────────────────── */}
         {data?.caveats && data.caveats.length > 0 && (
           <div className="mb-4 mt-4 rounded-lg border border-zinc-200 px-4 py-2.5 text-xs text-zinc-600 dark:text-zinc-400 dark:border-zinc-800">
-            <button onClick={() => setShowCaveats((v) => !v)} className="flex items-center gap-1.5 hover:text-zinc-600 dark:hover:text-zinc-200">
+            <button onClick={() => setShowCaveats((v) => !v)} aria-expanded={showCaveats} className="flex items-center gap-1.5 hover:text-zinc-600 dark:hover:text-zinc-200">
               <span>{showCaveats ? "▾" : "▸"}</span>
               <span>口径与已知边界（{data.caveats.length} 条）</span>
             </button>
-            {showCaveats && (
+            {caveatsPresence.value && (
+              <div className="motion-disclosure" data-open={showCaveats} aria-hidden={!showCaveats || undefined} inert={!showCaveats}><div className="motion-disclosure-body">
               <ul className="mt-2 space-y-1">
                 {data.caveats.map((c) => (
                   <li key={c} className="flex gap-1.5">
@@ -479,6 +498,7 @@ export function ThemesTab() {
                   </li>
                 ))}
               </ul>
+              </div></div>
             )}
           </div>
         )}

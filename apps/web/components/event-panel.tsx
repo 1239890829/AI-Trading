@@ -40,21 +40,22 @@ const FOUR_STYLE: Record<string, string> = {
 const TOP_N = 4;
 
 /** 单个事件的标的池展开（E2/L9：事件 → 标的 → 详情）。market 事件 Tab 复用。 */
-export function StockPools({ eventId }: { eventId: number }) {
+export function StockPools({ eventId, active = true }: { eventId: number; active?: boolean }) {
   // 标的池里的个股：点击**就地弹窗**（2026-09-15 详情弹窗化，原先跳工作台）
   const { open: openSymbolDetail } = useSymbolDetail();
   const [pools, setPools] = useState<EventStockPool[] | null>(null);
   const [error, setError] = useState<string | null>(null);
 
   useEffect(() => {
+    if (!active) return;
     let alive = true;
     getEventStocks(eventId)
-      .then((p) => alive && setPools(p))
+      .then((p) => {if (alive) {setPools(p); setError(null);}})
       .catch((e: Error) => alive && setError(e.message));
     return () => {
       alive = false;
     };
-  }, [eventId]);
+  }, [active, eventId]);
 
   if (error) return <p className="text-[11px] text-amber-800 dark:text-amber-300">标的池加载失败：{error}</p>;
   if (pools === null) return <p className="text-[11px] text-zinc-600 dark:text-zinc-400">标的池加载中…</p>;

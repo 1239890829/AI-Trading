@@ -275,7 +275,7 @@
 .search-result-open:focus-visible {background:var(--ui-hover);outline-offset:-2px;}
 @media(max-width:767px),(pointer:coarse) {.market-stock-open,.sentiment-basis summary {min-height:44px;}}
 
-.navigation-marker {width:1px;transform-origin:left center;transition:transform 240ms var(--ease-out);}
+.navigation-marker {width:0;transform-origin:left center;transition:transform 200ms var(--ease-out),width 200ms var(--ease-out);}
 @media(prefers-reduced-motion:reduce) {.navigation-marker {transition:none;}}
 .index-disclosure,.turnover-link {min-height:28px;}
 @media(max-width:767px),(pointer:coarse) {.index-disclosure,.turnover-link {min-height:44px;}}

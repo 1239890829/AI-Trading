@@ -7,6 +7,7 @@ import { Panel } from "@/components/panel";
 import { Skeleton } from "@/components/ui/loading";
 import { useResource } from "@/hooks/use-polling-fetch";
 import { usePollingFetch } from "@/hooks/use-polling-fetch";
+import { useExitPresence } from "@/hooks/use-exit-presence";
 import { bjDate, fmtAmount, pctColor, pctText } from "@/lib/format";
 import {
   getFundFlowHistory,
@@ -125,23 +126,31 @@ function TierBars({ tier, maxAbs }: { tier: FlowTier; maxAbs: number }) {
 }
 
 /** 主力净额近 N 日 diverging 柱（hover 出五档明细）。 */
-function MainFlowHistoryChart({ days }: { days: FlowHistoryDay[] }) {
+export function MainFlowHistoryChart({ days }: { days: FlowHistoryDay[] }) {
+  const [selectedDate, setSelectedDate] = useState<string | null>(null);
+  const selected = days.find(day => day.date === selectedDate) ?? days[0];
   const maxAbs = Math.max(1, ...days.map((d) => Math.abs(d.main ?? 0)));
+  const tickCount = Math.min(5, days.length);
+  const tickSlots = new Set(Array.from({length: tickCount}, (_, i) => Math.round(i * (days.length - 1) / Math.max(1, tickCount - 1))));
   return (
-    <div className="flex h-28 items-stretch gap-1.5" data-testid="main-flow-history">
-      {days.map((d) => {
+    <div className="fund-history-chart" data-testid="main-flow-history">
+      {selected && <div className="fund-history-selection"><FilterMenu label="资金日期" value={selected.date} options={days.map(day => ({key: day.date, label: day.date}))} onChange={setSelectedDate} /><output>主力 <strong className={selected.main == null ? "" : selected.main >= 0 ? "text-up-ink dark:text-up" : "text-down-ink dark:text-down"}>{signedFmt(selected.main)}</strong></output></div>}
+      <div className="fund-history-plot" aria-label="每日主力净额，零线以上流入、以下流出">
+      {days.map((d, index) => {
         const v = d.main;
-        const h = v == null ? 0 : Math.max(2, (Math.abs(v) / maxAbs) * 46);
+        const h = v == null || v === 0 ? 0 : Math.max(2, (Math.abs(v) / maxAbs) * 46);
         const tip = `主力 ${signedFmt(v)}｜超大 ${signedFmt(d.super_)}｜大 ${signedFmt(d.big)}｜中 ${signedFmt(d.mid)}｜小 ${signedFmt(d.small)}`;
         return (
-          <div key={d.date} className="flex min-w-0 flex-1 flex-col items-center justify-center gap-0.5" title={tip}>
-            {v != null && v >= 0 && <div className="w-full rounded-t bg-up/80" style={{ height: h }} />}
-            <div className="h-px w-full bg-zinc-300 dark:bg-zinc-700" />
-            {v != null && v < 0 && <div className="w-full rounded-b bg-down/80" style={{ height: h }} />}
-            <span className="w-full truncate text-center text-[9px] text-zinc-600 dark:text-zinc-400">{d.date.slice(5)}</span>
-          </div>
+          <button type="button" key={d.date} className="fund-history-column" title={`${d.date}｜${tip}`} aria-label={`${d.date}｜${tip}`} aria-pressed={selected?.date === d.date} onMouseEnter={() => setSelectedDate(d.date)} onFocus={() => setSelectedDate(d.date)} onClick={() => setSelectedDate(d.date)}>
+            <span className="fund-history-axis" />
+            {v != null && v !== 0 && <i className={v > 0 ? "fund-history-bar bg-up/80" : "fund-history-bar bg-down/80"} data-sign={v > 0 ? "positive" : "negative"} style={{height: `${h}%`}} />}
+            {v == null && <span className="fund-history-missing" aria-hidden="true">·</span>}
+            <span className="fund-history-tick">{tickSlots.has(index) ? d.date.slice(5) : ""}</span>
+          </button>
         );
       })}
+      </div>
+      {selected && <p className="fund-history-detail">超大 {signedFmt(selected.super_)} · 大 {signedFmt(selected.big)} · 中 {signedFmt(selected.mid)} · 小 {signedFmt(selected.small)}</p>}
     </div>
   );
 }
@@ -386,6 +395,9 @@ export function FundTab() {
     [turnHist, todayStr],
   );
   const [analysisView, setAnalysisView] = useState<"current" | "history" | "seats">("current");
+  const currentPresence = useExitPresence(analysisView === "current" ? true : null);
+  const historyPresence = useExitPresence(analysisView === "history" ? true : null);
+  const seatsPresence = useExitPresence(analysisView === "seats" ? true : null);
   const estLabel =
     turnover?.est_method === "closed"
       ? "已收盘"
@@ -407,7 +419,8 @@ export function FundTab() {
         <div className="fund-view-switch" role="group" aria-label="资金阅读内容">
           {([{key: "current", label: "即时资金"}, {key: "history", label: "历史对照"}, {key: "seats", label: "公开席位"}] as const).map(view => <button key={view.key} aria-pressed={analysisView === view.key} onClick={() => setAnalysisView(view.key)}>{view.label}</button>)}
         </div>
-        <div className="fund-analysis-current" hidden={analysisView !== "current"}>
+        <div className="fund-analysis-readers">
+        <div className="fund-analysis-current" hidden={!currentPresence.value} inert={!currentPresence.active} aria-hidden={!currentPresence.active} data-exiting={!currentPresence.active}>
       {/* 第一行：成交额对比 + 实时五档净额 */}
       <div className="grid shrink-0 gap-2 lg:grid-cols-2">
         <Panel
@@ -529,10 +542,10 @@ export function FundTab() {
       </Panel>
 
       </div>
-      <div className="fund-analysis-history" hidden={analysisView !== "history"}>
+      <div className="fund-analysis-history" hidden={!historyPresence.value} inert={!historyPresence.active} aria-hidden={!historyPresence.active} data-exiting={!historyPresence.active}>
       {/* 第三行：历史回看 */}
-      <div className="grid min-h-[210px] shrink-0 gap-2 lg:grid-cols-2">
-        <Panel title="成交额历史（近 10 交易日，点击切换对比）" className="min-h-0 overflow-hidden">
+      <div className="fund-history-panels">
+        <Panel title="成交额历史（最近 10 条存档，点击对比）" className="min-h-0 overflow-hidden">
           <div className="flex h-full min-h-0 flex-col px-4 py-2.5">
             {turnHist.length > 0 ? (
               <>
@@ -573,16 +586,16 @@ export function FundTab() {
           </div>
         </Panel>
 
-        <Panel title="主力资金净额历史（近 20 交易日）" className="min-h-0 overflow-hidden">
+        <Panel title="主力资金净额历史（最近 20 条存档）" className="min-h-0 overflow-hidden">
           <div className="flex h-full min-h-0 flex-col px-4 py-2.5">
             {flowHist.length > 0 ? (
               <>
                 <MainFlowHistoryChart days={flowHist} />
-                <p className="mt-1.5 text-[10px] text-zinc-600 dark:text-zinc-400">
-                  柱上红=净流入、下绿=净流出；悬浮看五档明细。来源：东财日度资金流（本地落盘，回源失败时自动节流重试）。
+                <p className="fund-history-source" title="来源：东财日度资金流，本地存档。红=净流入、绿=净流出。悬浮、点击或选择日期查看五档明细。">
+                  东财 · 本地日度存档
                   {flowHist[0]?.close_pct != null && (
                     <span className="ml-2">
-                      最新日（{flowHist[0].date.slice(5)}）上证收盘 <span className={`font-mono ${pctColor(flowHist[0].close_pct)}`}>{pctText(flowHist[0].close_pct)}</span>
+                      {flowHist[0].date.slice(5)} 上证 <span className={`font-mono ${pctColor(flowHist[0].close_pct)}`}>{pctText(flowHist[0].close_pct)}</span>
                     </span>
                   )}
                 </p>
@@ -598,9 +611,10 @@ export function FundTab() {
       </div>
 
       </div>
-      <div className="fund-analysis-seats" hidden={analysisView !== "seats"}>
+      <div className="fund-analysis-seats" hidden={!seatsPresence.value} inert={!seatsPresence.active} aria-hidden={!seatsPresence.active} data-exiting={!seatsPresence.active}>
       {/* 第四行：机构/游资（龙虎榜日度） */}
       <LonghuFlowCard fallbackDates={lhbFallbackDates} />
+      </div>
       </div>
       </section>
       </div>
@@ -609,21 +623,28 @@ export function FundTab() {
 }
 
 /** 成交额历史柱（全日成交额，hover 出增减）。 */
-function MainTurnBars({ days }: { days: TurnoverHistoryDay[] }) {
+export function MainTurnBars({ days }: { days: TurnoverHistoryDay[] }) {
+  const [selectedDate, setSelectedDate] = useState<string | null>(null);
+  const selected = days.find(day => day.date === selectedDate) ?? days[0];
   const max = Math.max(1, ...days.map((d) => d.total_yi ?? 0));
+  const tickCount = Math.min(5, days.length);
+  const tickSlots = new Set(Array.from({length: tickCount}, (_, i) => Math.round(i * (days.length - 1) / Math.max(1, tickCount - 1))));
   return (
-    <div className="mt-2 flex h-24 items-end gap-1.5">
-      {days.map((d) => (
-        <div
+    <div className="fund-history-chart fund-turnover-history">
+      {selected && <p className="fund-history-detail">{selected.date} <strong>{fmtYi(selected.total_yi, 0)}亿</strong>{selected.diff_yi != null && <span className={selected.diff_yi >= 0 ? "text-up-ink dark:text-up" : "text-down-ink dark:text-down"}> · {selected.diff_yi >= 0 ? "增量" : "缩量"} {fmtYi(Math.abs(selected.diff_yi), 0)}亿</span>}</p>}
+      <div className="fund-history-plot">
+      {days.map((d, index) => (
+        <button type="button"
           key={d.date}
-          className="flex min-w-0 flex-1 flex-col items-center gap-0.5"
+          className="fund-history-column" aria-label={`${d.date}｜全日 ${fmtYi(d.total_yi, 0)}亿`} aria-pressed={selected?.date === d.date}
+          onMouseEnter={() => setSelectedDate(d.date)} onFocus={() => setSelectedDate(d.date)} onClick={() => setSelectedDate(d.date)}
           title={d.diff_yi != null ? `${d.date}｜全日 ${fmtYi(d.total_yi, 0)}亿｜${d.diff_yi >= 0 ? "增量" : "缩量"} ${fmtYi(Math.abs(d.diff_yi), 0)}亿` : `${d.date}｜全日 ${fmtYi(d.total_yi, 0)}亿`}
         >
-          <span className="text-[9px] tabular-nums text-zinc-600 dark:text-zinc-400">{fmtYi(d.total_yi, 0)}</span>
-          <div className="w-full rounded-t bg-sky-500/60" style={{ height: Math.max(2, ((d.total_yi ?? 0) / max) * 56) }} />
-          <span className="w-full truncate text-center text-[9px] text-zinc-600 dark:text-zinc-400">{d.date.slice(5)}</span>
-        </div>
+          {d.total_yi != null && d.total_yi > 0 && <i className="fund-history-bar bg-sky-500/60" style={{height: `${(d.total_yi / max) * 90}%`}} />}
+          <span className="fund-history-tick">{tickSlots.has(index) ? d.date.slice(5) : ""}</span>
+        </button>
       ))}
+      </div>
     </div>
   );
 }

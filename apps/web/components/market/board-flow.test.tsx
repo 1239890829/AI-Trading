@@ -143,6 +143,26 @@ describe("BoardFlowPanel", () => {
     expect(screen.queryByTestId("board-flow-table")).toBeNull();
   });
 
+  it("实时失败仅在用户选择后读存档，保留截止日及不可用的实时字段", async () => {
+    vi.mocked(getBoardFundFlow).mockImplementation(async (_kind, range) => range === "20d"
+      ? payload([row({change_pct: null, main_net_yi: null, main_net_ratio: null, super_net_yi: null, main_net_5d_yi: null, main_net_10d_yi: null, main_net_20d_yi: 250, rank_delta: null})], {range: "20d", historical: true, as_of: "2026-09-22", quality: "stale", coverage: 20, total_boards: 109, degraded: ["本地存档并非当前盘中资金"]})
+      : payload([], {available: false, reason: "双域不可用"}));
+    vi.mocked(getBoardFlowMinute).mockResolvedValue({available: false, board_code: "BK0001", items: [], daily_bars: [], delayed: true, updated_at: "", degraded: []});
+    vi.mocked(getBoardFlowMembers).mockResolvedValue({available: false, board_code: "BK0001", rows: [], delayed: true, updated_at: "", degraded: []});
+    await mount();
+    expect(getBoardFundFlow).toHaveBeenCalledTimes(1);
+    fireEvent.click(screen.getByRole("button", {name: "查看本地 20 日存档"}));
+    await act(async () => {});
+    expect(getBoardFundFlow).toHaveBeenLastCalledWith("concept", "20d");
+    expect(screen.getByText(/存档截至 2026-09-22/)).toBeTruthy();
+    expect(screen.getByRole("button", {name: /占比.*5%/}).hasAttribute("disabled")).toBe(true);
+    expect(screen.getByRole("button", {name: "排名上升"}).hasAttribute("disabled")).toBe(true);
+    fireEvent.click(screen.getByTestId("board-row-BK0001"));
+    await act(async () => {});
+    expect(screen.getByTestId("board-flow-drawer").textContent).toContain("存档榜位 #1（截至 2026-09-22）");
+    expect(screen.getByTestId("board-flow-drawer").textContent).toContain("本次独立读取");
+  });
+
   it("degraded 显式透传（主域不可达延迟口径）", async () => {
     vi.mocked(getBoardFundFlow).mockResolvedValue(
       payload([row({})], { degraded: ["主域不可达，使用延迟口径（push2delay）"] }),

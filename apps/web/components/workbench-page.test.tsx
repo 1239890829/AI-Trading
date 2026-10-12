@@ -2,6 +2,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { act, cleanup, fireEvent, render, screen, waitFor } from "@testing-library/react";
 import WorkbenchPage from "@/app/workbench/page";
 import type { SymbolBoardFund } from "@/lib/api";
+import {notifyWatchlistChanged} from "@/lib/watchlist-sync";
 
 const state = vi.hoisted(() => ({
   params: new URLSearchParams("symbol=600127&ct=minute&rt=info&from=%2Fmarket%3Ftab%3Devents"),
@@ -14,6 +15,7 @@ const state = vi.hoisted(() => ({
   reloadReal: vi.fn(async () => undefined), mobile: false, mediaListeners: new Set<() => void>(),
 }));
 vi.mock("next/navigation", () => ({useRouter: () => ({push: state.push, replace: state.replace}), useSearchParams: () => state.params}));
+vi.mock("@/lib/market-hours", () => ({isTradingSession: () => true}));
 vi.mock("@/hooks/use-quote-stream", () => ({
   STREAM_STATUS_LABEL: {closed: {text: "休市", cls: ""}},
   useQuoteStream: () => state.quoteStream,
@@ -37,7 +39,7 @@ vi.mock("@/lib/api", () => ({
   createWatchlistGroup: vi.fn(async () => undefined), renameWatchlistGroup: vi.fn(async () => undefined), deleteWatchlistGroup: vi.fn(async () => undefined),
 }));
 const api = await import("@/lib/api");
-afterEach(() => {cleanup(); vi.clearAllMocks(); vi.unstubAllGlobals();});
+afterEach(() => {cleanup(); vi.clearAllMocks(); vi.unstubAllGlobals(); vi.useRealTimers();});
 beforeEach(() => {
   state.mobile = false;
   state.mediaListeners.clear();
@@ -98,8 +100,40 @@ describe("B+C workbench production consumers", () => {
     state.watch = [{symbol: "002297", group_name: "默认"}];
     fireEvent.click(screen.getByRole("button", {name: "重试读取"}));
     await screen.findByRole("button", {name: "查看 002297 002297"});
+    expect(api.getWatchlist).toHaveBeenCalledTimes(2);
     await act(async () => {finish([{symbol: "600127", group_name: "默认", source: "manual", created_at: "2026-10-08T09:55:00+08:00", updated_at: "2026-10-08T09:55:00+08:00"}]);});
+    expect(api.getWatchlist).toHaveBeenCalledTimes(2);
     expect(screen.queryByRole("button", {name: "查看 金健米业 600127"})).toBeNull();
+    expect(screen.getByRole("button", {name: "查看 002297 002297"})).toBeTruthy();
+  });
+
+  it("keeps quotes/paper positions at 10s, static lists at 60s and mutation sync immediate", async () => {
+    vi.useFakeTimers();
+    render(<WorkbenchPage />);
+    await act(async () => {await vi.advanceTimersByTimeAsync(0);});
+    expect(api.getMarketOverview).toHaveBeenCalledTimes(1);
+    expect(api.getWatchlist).toHaveBeenCalledTimes(1);
+    expect(api.getWatchlistGroups).toHaveBeenCalledTimes(1);
+    expect(api.getPaperPositions).toHaveBeenCalledTimes(1);
+    await act(async () => {await vi.advanceTimersByTimeAsync(10_000);});
+    expect(api.getMarketOverview).toHaveBeenCalledTimes(2);
+    expect(api.getWatchlist).toHaveBeenCalledTimes(1);
+    expect(api.getWatchlistGroups).toHaveBeenCalledTimes(1);
+    expect(api.getPaperPositions).toHaveBeenCalledTimes(2);
+    await act(async () => {await vi.advanceTimersByTimeAsync(20_000);});
+    expect(api.getMarketOverview).toHaveBeenCalledTimes(4);
+    expect(api.getPaperPositions).toHaveBeenCalledTimes(4);
+    await act(async () => {await vi.advanceTimersByTimeAsync(30_000);});
+    expect(api.getMarketOverview).toHaveBeenCalledTimes(7);
+    expect(api.getWatchlist).toHaveBeenCalledTimes(2);
+    expect(api.getWatchlistGroups).toHaveBeenCalledTimes(2);
+    expect(api.getPaperPositions).toHaveBeenCalledTimes(7);
+    state.watch = [{symbol: "002297", group_name: "默认"}];
+    await act(async () => {notifyWatchlistChanged();});
+    expect(api.getWatchlist).toHaveBeenCalledTimes(3);
+    expect(api.getWatchlistGroups).toHaveBeenCalledTimes(3);
+    expect(api.getMarketOverview).toHaveBeenCalledTimes(7);
+    expect(api.getPaperPositions).toHaveBeenCalledTimes(7);
     expect(screen.getByRole("button", {name: "查看 002297 002297"})).toBeTruthy();
   });
 

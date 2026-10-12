@@ -3,6 +3,7 @@
 import { PickCard, SUB_LABELS, fromDailyPick, fromIntradayStock } from "@/components/picks/pick-card";
 import { ModalShell } from "@/components/ui/modal-shell";
 import type { DailyPickItem, IntradayTopStock } from "@/lib/api";
+import { useExitPresence } from "@/hooks/use-exit-presence";
 
 /**
  * 选股详情弹窗（2026-09-07 用户需求）：工作台「每日精选」「盘中跟踪」动态分组
@@ -21,11 +22,14 @@ export type PickDetailTarget =
   | null;
 
 export function PickDetailModal({ target, onClose, readError = false }: { target: PickDetailTarget; onClose: () => void; readError?: boolean }) {
-  if (!target) return null;
-  const title = target.kind === "pick" ? "每日精选 · 选股详情" : "盘中跟踪 · 入选详情";
+  const presence = useExitPresence(target);
+  const shown = presence.value;
+  if (!shown) return null;
+  const title = shown.kind === "pick" ? "每日精选 · 选股详情" : "盘中跟踪 · 入选详情";
 
   return (
     <ModalShell presentation="drawer"
+      open={presence.active}
       onClose={onClose}
       label={title}
       testid="pick-detail-modal"
@@ -34,16 +38,16 @@ export function PickDetailModal({ target, onClose, readError = false }: { target
       bodyClassName="overflow-y-auto px-4 py-3"
       bodyTestId="pick-detail-body"
       footer={
-        target.kind === "pick"
+        shown.kind === "pick"
           ? `六维评分：${SUB_LABELS.map(([, l]) => l).join(" / ")} · 一票否决后加权 · 数据仅供投研参考，不构成买卖建议`
           : "盘中实时口径 · 随盘面重算 · 数据仅供投研参考，不构成买卖建议"
       }
     >
-      {target.kind === "pick" ? (
-        <PickCard item={fromDailyPick(target.item)} readError={readError} />
+      {presence.active && (shown.kind === "pick" ? (
+        <PickCard key={shown.item.symbol} item={fromDailyPick(shown.item)} readError={readError} />
       ) : (
-        <PickCard item={fromIntradayStock(target.item)} readError={readError} />
-      )}
+        <PickCard key={shown.item.symbol} item={fromIntradayStock(shown.item)} readError={readError} />
+      ))}
     </ModalShell>
   );
 }

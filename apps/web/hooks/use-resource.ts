@@ -24,7 +24,9 @@ import { isTradingSession } from "@/lib/market-hours";
  *      （旧实现在 B 在途/失败时报 A 的数据，且三态被抹成 `ready`）。
  *      ⚠️ 这条**只影响直接消费 `useResource` 返回值的调用点**：薄壳 `usePollingFetch`
  *      "调用即忘"，读不到 `data`，行为不变。
- *    - **单飞**：同一 effect 实例内任何时刻最多一个在途请求。回可见时若已有请求在途，
+ *    - **自动单飞**：同一 effect 实例内自动轮询/回可见最多一个在途请求。
+ *      手动刷新立即重建读取 owner，丢弃旧回包；写后校准不能等待旧的慢 GET。
+ *      回可见时若当前 owner 已有请求在途，
  *      合并而非再发一次 —— 旧实现会并发两次，并因此排出**两条计时链**，
  *      之后每周期取数翻倍（实测 2→4→6）。
  *    刻意**不做网络层 abort**：那需要给 `fn` 加 `AbortSignal` 形参并改动 45 个调用点
@@ -120,9 +122,10 @@ export function useResource<T = unknown>(fn: () => Promise<T>, options: Resource
     data: undefined,
     error: null,
   }));
-  // 手动 refresh：自增 nonce 重跑 effect；refreshing 只由 refresh()（事件上下文）置位
-  const [refreshing, setRefreshing] = useState(false);
+  const [refreshing, setRefreshing] = useState<{key: unknown; active: boolean}>({key, active: false});
+  // 手动/写后刷新沿用立即重读契约；同一 React 批次内的刷新自然合并。
   const [nonce, setNonce] = useState(0);
+  const refreshEpoch = useRef(0);
 
   const refresh = useCallback(() => {
     // enabled=false 时**必须是 no-op**（2026-09-12 评审批次 2）：
@@ -130,16 +133,20 @@ export function useResource<T = unknown>(fn: () => Promise<T>, options: Resource
     // ⇒ 由于 `pending = refreshing || status === "pending"`，一次误调就会让 `pending`
     // **永久卡在 true**（实测确认）。关闭态本就不该发请求，直接返回语义也更正确。
     if (!enabled) return;
-    setRefreshing(true);
-    setNonce((n) => n + 1);
-  }, [enabled]);
+    // 同步失效旧代际：旧 promise 的 finally 可能早于 effect cleanup，不能清掉新 pending。
+    refreshEpoch.current += 1;
+    setRefreshing(previous => Object.is(previous.key, key) && previous.active ? previous : {key, active: true});
+    setNonce(n => n + 1);
+  }, [enabled, key]);
 
   useEffect(() => {
     if (!enabled) return;
     let alive = true;
     let timer: ReturnType<typeof setTimeout> | null = null;
-    /** 在途请求（**单飞**，R20）。同一 effect 实例内任何时刻最多一个。 */
+    /** 自动读取单飞；手动刷新会使旧实例失活，其网络请求仍可 drain。 */
     let inFlight: Promise<void> | null = null;
+    const epoch = refreshEpoch.current;
+    const isCurrent = () => alive && epoch === refreshEpoch.current;
 
     /** ⚠️ `key` 在本 effect 实例内是**常量**：key 变化会重跑 effect（它在依赖里），
      *  旧实例的 `alive` 随即为 false、其回包被丢弃。故 `run()` 里可以放心把
@@ -154,7 +161,7 @@ export function useResource<T = unknown>(fn: () => Promise<T>, options: Resource
     };
 
     const run = (): Promise<void> => {
-      if (!alive) return Promise.resolve();
+      if (!isCurrent() || isHidden()) return Promise.resolve();
       // **单飞**：已有在途请求时复用同一个 promise，不再发第二个请求。
       // 为什么必须有：`onVisibility`（回可见）与定时器回调可能在同一次取数在途期间
       // 先后触发；旧实现两处都直接 `run()` ⇒ 并发两次请求，且两条 `run().then(schedule)`
@@ -163,24 +170,23 @@ export function useResource<T = unknown>(fn: () => Promise<T>, options: Resource
       const p = (async () => {
         try {
           const next = await fnRef.current();
-          if (!alive) return;
+          if (!isCurrent()) return;
           setSnap({ key: dataKey, data: next, error: null });
         } catch (e) {
-          if (!alive) return;
-          // 保留 data：**同一 key 内**失败不清空旧值（既有契约）；
-          // 但 data 只在它也属于本 key 时才留 —— 否则就是拿别的 key 的值充数。
+          if (!isCurrent()) return;
           setSnap((s) => ({
             key: dataKey,
             data: Object.is(s.key, dataKey) ? s.data : undefined,
             error: e,
           }));
-        } finally {
-          if (alive) setRefreshing(false);
-          inFlight = null;
         }
       })();
-      inFlight = p;
-      return p;
+      // cleanup 放在 promise 回调中；fn 同步抛错时也不会留下已完成的 inFlight。
+      inFlight = p.finally(() => {
+        inFlight = null;
+        if (isCurrent()) setRefreshing(previous => Object.is(previous.key, dataKey) && !previous.active ? previous : {key: dataKey, active: false});
+      });
+      return inFlight;
     };
 
     /** 排定下一拍。**幂等**：先清掉已有计时器 —— 即便定时器回调与 visibilitychange
@@ -188,7 +194,7 @@ export function useResource<T = unknown>(fn: () => Promise<T>, options: Resource
     const schedule = () => {
       clear();
       const delay = nextDelay(intervalMs, marketHours);
-      if (delay == null || !alive) return;
+      if (delay == null || !isCurrent() || isHidden()) return;
       timer = setTimeout(() => {
         timer = null;
         if (!alive) return;
@@ -201,7 +207,7 @@ export function useResource<T = unknown>(fn: () => Promise<T>, options: Resource
      *  于是"排定下一拍"这件事在全模块只有一个出口。 */
     const tick = async () => {
       await run();
-      if (alive) schedule();
+      if (isCurrent()) schedule();
     };
 
     const onVisibility = () => {
@@ -237,5 +243,5 @@ export function useResource<T = unknown>(fn: () => Promise<T>, options: Resource
         ? "error"
         : "pending";
 
-  return { data, pending: refreshing || status === "pending", error, status, refresh };
+  return { data, pending: enabled && (status === "pending" || (Object.is(refreshing.key, key) && refreshing.active)), error, status, refresh };
 }

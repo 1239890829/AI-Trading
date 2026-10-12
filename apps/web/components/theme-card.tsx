@@ -1,6 +1,7 @@
 "use client";
 
 import { Fragment, useState } from "react";
+import { useExitPresence } from "@/hooks/use-exit-presence";
 import { fmt, fmtAmount, fmtHeat, pctColor, pctText, signedYi } from "@/lib/format";
 import type { HotTheme, ThemeStrengthRow } from "@/lib/api";
 import { tapeUrl } from "@/lib/routing";
@@ -192,8 +193,10 @@ export function ThemeCardView({
   const board = card.board;
   const stockNav = useStockRowNav();
   const [detailCode, setDetailCode] = useState<string | null>(null);
+  const detailPresence = useExitPresence(detailCode);
   /** 介入条件清单（P1-13）：展开哪只票的清单；null = 全部收起。按需请求，不参与轮询。 */
   const [checklistSymbol, setChecklistSymbol] = useState<string | null>(null);
+  const checklistPresence = useExitPresence(checklistSymbol);
 
   const ladderByBoard = new Map<number, typeof card.ladder>();
   for (const r of card.ladder) {
@@ -472,10 +475,10 @@ export function ThemeCardView({
                       </button>
                     </td>
                     </tr>
-                    {checklistSymbol === r.symbol && (
-                      <tr className="border-b border-zinc-100 last:border-0 bg-zinc-50/70 dark:border-zinc-800/60 dark:bg-zinc-900/40">
-                        <td colSpan={9} className="px-2 py-2">
-                          <EntryChecklist symbol={r.symbol} />
+                    {checklistPresence.value === r.symbol && (
+                      <tr aria-hidden={checklistSymbol !== r.symbol || undefined} inert={checklistSymbol !== r.symbol} className="border-b border-zinc-100 last:border-0 bg-zinc-50/70 dark:border-zinc-800/60 dark:bg-zinc-900/40">
+                        <td colSpan={9} className="px-2">
+                          <div className="motion-disclosure" data-open={checklistSymbol === r.symbol}><div className="motion-disclosure-body"><div className="py-2"><EntryChecklist symbol={r.symbol} active={checklistSymbol === r.symbol} /></div></div></div>
                         </td>
                       </tr>
                     )}
@@ -668,8 +671,8 @@ export function ThemeCardView({
         </div>
       </details>
 
-      {detailCode && (
-        <ConceptDetailModal code={detailCode} name={card.theme} onClose={() => setDetailCode(null)} />
+      {detailPresence.value && (
+        <ConceptDetailModal key={detailPresence.value} code={detailPresence.value} name={card.theme} active={detailPresence.active} onClose={() => setDetailCode(null)} />
       )}
     </section>
   );

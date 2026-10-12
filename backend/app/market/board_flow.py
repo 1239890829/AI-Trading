@@ -39,8 +39,11 @@
 from __future__ import annotations
 
 import asyncio
+from copy import deepcopy
+from datetime import date, timedelta
 import json
 import logging
+from math import isfinite
 import os
 from pathlib import Path
 
@@ -121,8 +124,10 @@ def _clean_str(v) -> str | None:
 
 # ---------------------------------------------------------------- clist（双域 failover）
 
-async def _clist_pages(fs: str, fields: str, fid: str = "f62", pz: int = 100) -> tuple[list[dict] | None, str | None]:
-    """全量翻页拉 clist（单页上限 100，按 total 翻页）。返回 (diff, 命中域名)，双域全败 (None, None)。"""
+async def _clist_pages(
+    fs: str, fields: str, fid: str = "f62", pz: int = 100, *, first_page_only: bool = False,
+) -> tuple[list[dict] | None, str | None]:
+    """板块榜按 total 翻页；服务端排序的成员 Top20 只取首页。双域全败返回 (None, None)。"""
     last_exc: Exception | None = None
     for host in _HOSTS:
         try:
@@ -143,7 +148,7 @@ async def _clist_pages(fs: str, fields: str, fid: str = "f62", pz: int = 100) ->
             total = int(first.get("total") or 0)
             diff = list(first.get("diff") or [])
             pages = max(1, (total + pz - 1) // pz)
-            if pages > 1:
+            if pages > 1 and not first_page_only:
                 rest = await asyncio.gather(
                     *[_page(p) for p in range(2, pages + 1)], return_exceptions=True
                 )
@@ -267,8 +272,8 @@ async def get_board_members(board_code: str) -> dict:
     """板块成员个股资金排行 Top20（fs=b:BKxxxx，fid=f62 服务端降序）。"""
     hit, cached = _MEMBERS_CACHE.get(board_code)
     if hit:
-        return cached
-    diff, host = await _clist_pages(f"b:{board_code}", _MEMBER_FIELDS, pz=20)
+        return deepcopy(cached)
+    diff, host = await _clist_pages(f"b:{board_code}", _MEMBER_FIELDS, pz=20, first_page_only=True)
     if diff is None:
         return {"available": False, "reason": "板块成员资金排行不可用（双域已重试）", "rows": [], "degraded": []}
     rows: list[dict] = []
@@ -298,7 +303,7 @@ async def get_board_members(board_code: str) -> dict:
     }
     if out["available"]:
         _MEMBERS_CACHE.set(board_code, out)
-    return out
+    return deepcopy(out)
 
 
 # ---------------------------------------------------------------- 落盘：读路径零外呼
@@ -410,6 +415,71 @@ _RANGE_SORT_KEY = {
 }
 
 
+def _local_board_history(kind: str) -> dict:
+    """独立读取同一截止日的已存资金日线；不要求实时榜可用，也不补猜缺失日。"""
+    now = beijing_now()
+    cutoff = now.date() if (now.hour, now.minute) >= (_SNAPSHOT_HOUR, _SNAPSHOT_MINUTE) else now.date() - timedelta(days=1)
+    store = _load_dayk_store()
+    records = {code: rec for code, rec in store.items()
+               if isinstance(rec, dict) and rec.get("kind") == kind and _clean_str(rec.get("name"))}
+    parsed: dict[str, list] = {}
+    for code, rec in records.items():
+        by_date: dict[str, list] = {}
+        for bar in rec.get("bars") or []:
+            if not isinstance(bar, list) or len(bar) < 2:
+                continue
+            try:
+                d = date.fromisoformat(str(bar[0]))
+            except ValueError:
+                continue
+            if d > cutoff:
+                continue  # 今日未收盘 / 未来 bar 不参与已完成日历史。
+            amount = _num(bar[1])
+            by_date[d.isoformat()] = [d.isoformat(), amount if amount is not None and isfinite(amount) else None]
+        if by_date:
+            parsed[code] = [by_date[d] for d in sorted(by_date)]
+    windows = {code: bars for code, bars in parsed.items()
+               if len(bars) >= 20 and all(b[1] is not None for b in bars[-20:])}
+    # 一条新但未形成完整窗口的记录不能遮住较早、仍可查看的已完成历史。
+    as_of = max((bars[-1][0] for bars in windows.values()), default=None)
+    enriched = []
+    for code, bars in windows.items():
+        # 旧板块不能在不同截止日混排；不足 20 条或窗口任一缺失均不凑数。
+        if bars[-1][0] != as_of:
+            continue
+        enriched.append({
+            "board_code": code, "name": records[code]["name"], "kind": kind,
+            "main_net_20d_yi": round(sum(b[1] for b in bars[-20:]), 2),
+            "change_pct": None, "main_net_yi": None, "main_net_ratio": None,
+            "super_net_yi": None, "main_net_5d_yi": None, "main_net_10d_yi": None,
+            "leader_name": None, "leader_symbol": None, "rank_delta": None,
+            "streak": _streak_from_bars(bars, None, as_of),
+        })
+    enriched.sort(key=lambda row: -row["main_net_20d_yi"])
+    for i, row in enumerate(enriched):
+        row["rank"] = i + 1
+    # 只读本地日历；覆盖不足时不猜最近已完成交易日，也不新增外采。
+    calendar = trade_calendar._load_persisted()
+    latest_completed = trade_calendar.last_trade_date(calendar, cutoff) if calendar and calendar[-1] >= now.date() else None
+    stale = bool(as_of and latest_completed and as_of < latest_completed.isoformat())
+    kind_label = "概念" if kind == "concept" else "行业"
+    degraded = [f"本地资金历史截至 {as_of or '未知'}；覆盖 {len(enriched)}/{len(records)} 个已沉淀{kind_label}板块，非全市场"]
+    degraded.append("按最后 20 条已保存的完成日记录汇总；缺日期不补齐，不宣称连续交易日覆盖")
+    if stale:
+        degraded.append(f"未覆盖最近已完成交易日 {latest_completed.isoformat()}，仅作历史查看")
+    elif latest_completed is None:
+        degraded.append("本地日历覆盖不足，无法核定最近已完成交易日")
+    return {
+        "available": bool(enriched),
+        **({"reason": "板块 20 日历史尚未沉淀完整同截止日窗口"} if not enriched else {}),
+        "kind": kind, "range": "20d", "rows": enriched[:50],
+        "total_boards": len(records), "coverage": len(enriched),
+        "historical": True, "as_of": as_of, "source": "eastmoney_local_daykline",
+        "quality": "stale" if stale or latest_completed is None else "medium",
+        "rank_basis_date": None, "degraded": degraded,
+    }
+
+
 async def get_board_fund_flow(kind: str, range_key: str) -> dict:
     """板块资金流榜（前端只切参数；排序/筛选纯内存）。
 
@@ -419,51 +489,13 @@ async def get_board_fund_flow(kind: str, range_key: str) -> dict:
     """
     if range_key not in ("intraday", "5d", "10d", "20d"):
         return {"available": False, "reason": f"range 非法：{range_key!r}", "rows": [], "degraded": []}
+    if kind not in _KIND_FS:
+        return {"available": False, "reason": f"kind 非法：{kind!r}", "rows": [], "degraded": []}
+    if range_key == "20d":
+        return _local_board_history(kind)
     rows, degraded = await get_board_list(kind)
     if rows is None:
         return {"available": False, "reason": degraded[0] if degraded else "数据源不可用", "rows": [], "degraded": degraded}
-
-    today_str = beijing_now().date().isoformat()
-
-    if range_key == "20d":
-        store = _load_dayk_store()
-        if not store:
-            return {
-                "available": False,
-                "reason": "板块 20 日历史尚未沉淀（每日收盘后自动累积 Top 板块）",
-                "rows": [],
-                "coverage": 0,
-                "degraded": degraded,
-            }
-        enriched: list[dict] = []
-        for r in rows:
-            bars = (store.get(r["board_code"]) or {}).get("bars") or []
-            s20 = _sum_n_yi(bars, 20, r.get("main_net_yi"), today_str)
-            if s20 is None:
-                continue
-            out = dict(r)
-            out["main_net_20d_yi"] = s20
-            enriched.append(out)
-        enriched.sort(key=lambda r: (r["main_net_20d_yi"] is None, -(r["main_net_20d_yi"] or 0)))
-        for i, r in enumerate(enriched):
-            r["rank"] = i + 1
-            r["rank_delta"] = None  # 20 日区间无昨日落盘基线
-        streaks = {r["board_code"]: None for r in enriched}
-        store_streaks = get_board_streaks({r["board_code"]: r.get("main_net_yi") for r in enriched})
-        streaks.update(store_streaks)
-        for r in enriched:
-            r["streak"] = streaks.get(r["board_code"])
-        return {
-            "available": True,
-            "kind": kind,
-            "range": range_key,
-            "rows": enriched[:50],
-            "total_boards": len(rows),
-            "coverage": len(store),
-            "updated_at": beijing_now().strftime("%H:%M:%S"),
-            "rank_basis_date": None,
-            "degraded": degraded + [f"20 日区间基于本地沉淀的 {len(store)} 个板块（每日收盘后自动扩充）"],
-        }
 
     sort_key = _RANGE_SORT_KEY[range_key]
     rows.sort(key=lambda r: (r.get(sort_key) is None, -(r.get(sort_key) or 0)))
@@ -559,11 +591,26 @@ async def _gather_bounded(coros, limit: int = 5):
             await asyncio.sleep(0.2)  # 连接间隔，防熔断
             return res
 
-    return await asyncio.gather(*[_wrap(c) for c in coros])
+    return await asyncio.gather(*[_wrap(c) for c in coros], return_exceptions=True)
+
+
+def _snapshot_kind_complete(snap: dict, boards: dict, kind: str, today: str) -> bool:
+    top = (snap.get("boards") or {}).get(kind) or []
+    ranks = (snap.get("ranks") or {}).get(kind) or {}
+    members = snap.get("members") or {}
+    return bool(top and ranks) and all(
+        members.get(row[0]) and _dayk_captured(boards.get(row[0]), today)
+        for row in top[:_TOP_MEMBER_BOARDS]
+    )
+
+
+def _dayk_captured(record: dict | None, today: str) -> bool:
+    return bool(record and record.get("bars") and record["bars"][-1][0] == today
+                and str(record.get("updated_at") or "").startswith(today))
 
 
 async def snapshot_daily_if_closed() -> bool:
-    """收盘后（≥15:05）**且当日为交易日**、且当日未落盘时沉淀：两 kind Top50 榜位/行 + Top20/kind 成员 Top20 + daykline。
+    """收盘后（≥15:05）且当日为交易日，沉淀榜位、成员及日线；部分失败只重试缺项。
 
     由 review_intraday 调度 tick 调用（15:00-23:00 窗口内每分钟尝试，当日幂等）。
     返回是否写入。任何子项失败只跳过该子项并 warning，不阻塞其余沉淀。
@@ -572,8 +619,7 @@ async def snapshot_daily_if_closed() -> bool:
       ① 日历已明确 ⇒ `_is_trade_day(today)` 为 `False`（周末 / 节假日）⇒ 直接跳过；
       ② 日历未覆盖今天（`None`）⇒ **不阻断**，改用「源数据自身的末日」反推：
          非交易日时源返回的是上一交易日终值 ⇒ 所有 daykline 末根日期都 < 今天。
-    判据 ② 取不到末日（dayk 全部拉取失败）时**放行** —— 宁可多写一行（下一分钟被
-    幂等挡住），也不因源抖动漏掉真实交易日的数据；调度每分钟重试，误跳过可自愈。
+    判据 ② 取不到末日时保留可用的部分榜位，但不会把缺项认作完成；下拍可以恢复。
     """
     now = beijing_now()
     if (now.hour, now.minute) < (_SNAPSHOT_HOUR, _SNAPSHOT_MINUTE):
@@ -582,46 +628,58 @@ async def snapshot_daily_if_closed() -> bool:
     trade_day = _is_trade_day(today_d)
     if trade_day is False:
         return False  # 周末 / 日历已明确今天休市 ⇒ 确定非交易日，不落盘
-    daily = _read_store_memo(_DAILY_STORE, "daily") or {"days": {}}
+    # 不能就地修改 memo：写盘失败后，内存中的假完成状态会阻断下一拍恢复。
+    daily = deepcopy(_read_store_memo(_DAILY_STORE, "daily")) or {"days": {}}
     days: dict = daily.get("days") or {}
     today = today_d.isoformat()
-    if today in days:
-        return False
-
-    dayk_store = _read_store_memo(_DAYK_STORE, "dayk") or {"boards": {}}
+    dayk_store = deepcopy(_read_store_memo(_DAYK_STORE, "dayk")) or {"boards": {}}
     boards_store: dict = dayk_store.get("boards") or {}
 
-    snap_day: dict = {"ranks": {}, "boards": {}, "members": {}}
+    snap_day: dict = days.get(today) or {"ranks": {}, "boards": {}, "members": {}}
+    for part in ("ranks", "boards", "members"):
+        snap_day.setdefault(part, {})
+    daily_changed = dayk_changed = False
     observed: str | None = None  # 源数据末日：各板块 dayk 末根日期取最大（判据 ②）
     for kind in ("concept", "industry"):
-        rows, _deg = await get_board_list(kind)
-        if not rows:
-            log.warning("boardflow snapshot: %s rows unavailable", kind)
+        if _snapshot_kind_complete(snap_day, boards_store, kind, today):
             continue
-        rows = sorted(rows, key=lambda r: (r.get("main_net_yi") is None, -(r.get("main_net_yi") or 0)))
-        top = rows[:_TOP_BOARD_ROWS]
-        snap_day["ranks"][kind] = {r["board_code"]: i + 1 for i, r in enumerate(top)}
-        snap_day["boards"][kind] = [
-            [r["board_code"], r["name"], r.get("main_net_yi"), r.get("main_net_ratio"), r.get("change_pct")]
-            for r in top
-        ]
-        member_codes = [r["board_code"] for r in top[:_TOP_MEMBER_BOARDS]]
+        top = snap_day["boards"].get(kind) or []
+        if not top or not snap_day["ranks"].get(kind):
+            rows, _deg = await get_board_list(kind)
+            if not rows:
+                log.warning("boardflow snapshot: %s rows unavailable", kind)
+                continue
+            rows = sorted(rows, key=lambda r: (r.get("main_net_yi") is None, -(r.get("main_net_yi") or 0)))
+            top = [
+                [r["board_code"], r["name"], r.get("main_net_yi"), r.get("main_net_ratio"), r.get("change_pct")]
+                for r in rows[:_TOP_BOARD_ROWS]
+            ]
+            snap_day["ranks"][kind] = {row[0]: i + 1 for i, row in enumerate(top)}
+            snap_day["boards"][kind] = top
+            daily_changed = True
+        member_codes = [row[0] for row in top[:_TOP_MEMBER_BOARDS]]
 
-        members = await _gather_bounded([get_board_members(c) for c in member_codes])
-        for code, m in zip(member_codes, members):
-            if m and m.get("available"):
+        missing_members = [c for c in member_codes if not snap_day["members"].get(c)]
+        members = await _gather_bounded([get_board_members(c) for c in missing_members])
+        for code, m in zip(missing_members, members):
+            if isinstance(m, dict) and m.get("available") and m.get("rows"):
                 snap_day["members"][code] = [
                     [x["symbol"], x["name"], x.get("main_net_yi"), x.get("main_net_ratio")] for x in m["rows"]
                 ]
+                daily_changed = True
+            else:
+                log.warning("boardflow snapshot: %s members unavailable", code)
 
-        dayks = await _gather_bounded([_fetch_board_dayk(c) for c in member_codes])
-        for code, bars in zip(member_codes, dayks):
-            if not bars:
+        missing_dayk = [c for c in member_codes if not _dayk_captured(boards_store.get(c), today)]
+        dayks = await _gather_bounded([_fetch_board_dayk(c) for c in missing_dayk])
+        for code, bars in zip(missing_dayk, dayks):
+            if not isinstance(bars, list) or not bars:
+                log.warning("boardflow snapshot: %s dayk unavailable", code)
                 continue
             d_max = max(b[0] for b in bars)
             if observed is None or d_max > observed:
                 observed = d_max
-            name = next((r["name"] for r in top if r["board_code"] == code), code)
+            name = next((row[1] for row in top if row[0] == code), code)
             old = (boards_store.get(code) or {}).get("bars") or []
             merged = {b[0]: b for b in old}
             for b in bars:
@@ -632,6 +690,7 @@ async def snapshot_daily_if_closed() -> bool:
                 "updated_at": now.isoformat(timespec="seconds"),
                 "bars": sorted(merged.values(), key=lambda b: b[0])[-_BARS_RETENTION:],
             }
+            dayk_changed = True
 
     if trade_day is None and observed is not None and observed < today:
         # 判据 ②：日历未覆盖，但源数据末日早于今天 ⇒ 今天不是交易日（源在非交易日
@@ -642,14 +701,16 @@ async def snapshot_daily_if_closed() -> bool:
         )
         return False
 
+    if not daily_changed and not dayk_changed:
+        return False  # 全败不写空快照；已完成或未有新事实也不重复写盘。
     days[today] = snap_day
     daily["days"] = {d: v for d, v in sorted(days.items())[-_DAYS_RETENTION:]}
     daily["updated_at"] = now.isoformat(timespec="seconds")
     dayk_store["boards"] = boards_store
     dayk_store["updated_at"] = now.isoformat(timespec="seconds")
 
-    ok1 = _write_json_atomic(_DAILY_STORE, daily)
-    ok2 = _write_json_atomic(_DAYK_STORE, dayk_store)
+    ok2 = _write_json_atomic(_DAYK_STORE, dayk_store) if dayk_changed else False
+    ok1 = _write_json_atomic(_DAILY_STORE, daily) if daily_changed else False
     if ok1 or ok2:
         _mem_memo["daily"] = (None, {})  # 强制下次重读
         _mem_memo["dayk"] = (None, {})

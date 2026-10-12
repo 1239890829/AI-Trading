@@ -47,6 +47,9 @@ const PHASE_STYLE: Record<string, string> = {
 };
 
 type ViewKey = "overview" | "fund" | "heatmap" | "events";
+const PRIMARY_INDICES = [
+  ["sh000001", "上证指数"], ["sh000688", "科创50"], ["sz399006", "创业板指"],
+] as const;
 
 function MarketInner() {
   const { open: inspect } = useInspection();
@@ -69,6 +72,13 @@ function MarketInner() {
   const sentimentResource = useResource(getSentiment, {intervalMs: 30_000, enabled});
   const historyResource = useResource(() => getSentimentHistory(10), {intervalMs: 60_000, enabled});
   const indices = overview.data?.value.indices ?? [];
+  const [indicesOpen, setIndicesOpen] = useState(false);
+  const primaryIndices = PRIMARY_INDICES.flatMap(([symbol]) => {
+    const quote = indices.find(q => indexDetailSymbol(q.symbol, q.market) === symbol);
+    return quote ? [quote] : [];
+  });
+  const extraIndices = indices.filter(q => !primaryIndices.includes(q));
+  const extraIndexPresence = useExitPresence(indicesOpen ? true : null);
   const totalAmount = overview.data?.value.total_amount ?? null;
   const amountFreshness = overview.data?.value.total_amount_freshness ?? null;
   const pool = poolResource.data?.slice(0, 10) ?? [];
@@ -94,6 +104,15 @@ function MarketInner() {
   const search = sp.toString();
   // Summary shortcuts keep the same date/object/return identity as the lens picker.
   const lensHref = (href: string) => marketLensUrl(href, search);
+  const indexQuote = (q: (typeof indices)[number]) => (
+    <button type="button" className="bc-index-quote" key={`${q.market}-${q.symbol}`}
+      onClick={() => openSymbolDetail({symbol: indexDetailSymbol(q.symbol, q.market)})}
+      title={`查看 ${q.name ?? q.symbol} 指数详情${q.quality_reasons?.length ? "｜" + q.quality_reasons.join("；") : ""}`}>
+      <span className="bc-index-name"><span>{q.name ?? q.symbol}</span><QualityBadge quality={q.quality} reasons={q.quality_reasons} /></span>
+      <span className="bc-index-value"><strong>{q.price == null ? "未开盘" : fmt(q.price)}</strong><span className={pctColor(q.change_pct)}>{pctText(q.change_pct)}</span></span>
+      <span className="bc-index-amount">成交额 {fmtAmount(q.amount)}</span>
+    </button>
+  );
 
   return (
     <main data-workspace="market" className="task-page bc-market-page mx-auto flex h-full w-full max-w-[1600px] flex-col overflow-hidden">
@@ -116,17 +135,20 @@ function MarketInner() {
             <div className="bc-market-dashboard" role="region" aria-label="市场环境、涨停与事件阅读区" tabIndex={0}>
             <div className="bc-market-context">
             <section className="bc-market-indices" aria-label="主要指数">
-              {indices.length === 0 && pending ? Array.from({length: 6}, (_, index) => (
+              <button type="button" className="market-indices-toggle" aria-expanded={indicesOpen} aria-controls="market-extra-indices" onClick={() => setIndicesOpen(open => !open)}>
+                <span>主要指数</span><span>{indicesOpen ? "收起" : "展开"}<svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.6" aria-hidden="true"><path d="m6 9 6 6 6-6" /></svg></span>
+              </button>
+              <div className="market-index-primary">
+              {indices.length === 0 && pending ? Array.from({length: 3}, (_, index) => (
                 <div className="bc-index-skeleton" key={index}><Skeleton className="h-3 w-16" /><Skeleton className="mt-2 h-5 w-20" /></div>
-              )) : indices.length === 0 ? <p className="bc-market-empty">暂无可用指数。请核对数据源状态。</p> : indices.map(q => (
-                <button type="button" className="bc-index-quote" key={`${q.market}-${q.symbol}`}
-                  onClick={() => openSymbolDetail({symbol: indexDetailSymbol(q.symbol, q.market)})}
-                  title={`查看 ${q.name ?? q.symbol} 指数详情${q.quality_reasons?.length ? "｜" + q.quality_reasons.join("；") : ""}`}>
-                  <span className="bc-index-name"><span>{q.name ?? q.symbol}</span><QualityBadge quality={q.quality} reasons={q.quality_reasons} /></span>
-                  <span className="bc-index-value"><strong>{q.price == null ? "未开盘" : fmt(q.price)}</strong><span className={pctColor(q.change_pct)}>{pctText(q.change_pct)}</span></span>
-                  <span className="bc-index-amount">成交额 {fmtAmount(q.amount)}</span>
-                </button>
-              ))}
+              )) : PRIMARY_INDICES.map(([symbol, name]) => {
+                const quote = primaryIndices.find(q => indexDetailSymbol(q.symbol, q.market) === symbol);
+                return quote ? indexQuote(quote) : <button type="button" className="bc-index-quote" disabled key={symbol} title={`${name} · 本轮未返回该指数`}><span className="bc-index-name">{name}</span><span className="bc-index-value">未返回</span><span className="bc-index-amount">成交额 --</span></button>;
+              })}
+              </div>
+              <div id="market-extra-indices" className="market-index-expansion" data-expanded={extraIndexPresence.active} inert={!extraIndexPresence.active} aria-hidden={!extraIndexPresence.active}>
+                <div>{extraIndexPresence.value && extraIndices.map(indexQuote)}</div>
+              </div>
             </section>
 
             <div className="bc-market-metrics">

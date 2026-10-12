@@ -1,5 +1,5 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { cleanup, render, screen, waitFor } from "@testing-library/react";
+import { act, cleanup, render, screen, waitFor } from "@testing-library/react";
 import { EventPanel, StockPools } from "./event-panel";
 import { getEventStocks, getImpactEvents, type ImpactEvent } from "@/lib/api";
 
@@ -54,6 +54,32 @@ function evt(over: Partial<ImpactEvent>): ImpactEvent {
 }
 
 describe("EventPanel（盘面相关性 Top4 摘要，2026-09-04 任务④）", () => {
+  it("inactive stock-pool shell starts no read and drops the previous activation's late reply", async () => {
+    mockedGetEventStocks.mockReset();
+    let finish!: (value: Awaited<ReturnType<typeof getEventStocks>>) => void;
+    mockedGetEventStocks.mockImplementationOnce(() => new Promise(resolve => {finish = resolve;})).mockResolvedValueOnce([{target:"重新读取的题材", direction:1, stocks:[]}]);
+    const view = render(<StockPools eventId={3} active={false} />);
+    expect(mockedGetEventStocks).not.toHaveBeenCalled();
+    view.rerender(<StockPools eventId={3} />);
+    view.rerender(<StockPools eventId={3} active={false} />);
+    await act(async () => finish([{target:"关闭前的晚到题材", direction:1, stocks:[]}]));
+    expect(screen.queryByText("关闭前的晚到题材")).toBeNull();
+    view.rerender(<StockPools eventId={3} />);
+    await screen.findByText(/重新读取的题材/);
+    expect(mockedGetEventStocks).toHaveBeenCalledTimes(2);
+  });
+
+  it("successful reactivation clears the previous stock-pool failure", async () => {
+    mockedGetEventStocks.mockReset();
+    mockedGetEventStocks.mockRejectedValueOnce(new Error("旧读取失败")).mockResolvedValueOnce([{target:"恢复的标的池", direction:1, stocks:[]}]);
+    const view = render(<StockPools eventId={3} />);
+    await screen.findByText(/旧读取失败/);
+    view.rerender(<StockPools eventId={3} active={false} />);
+    view.rerender(<StockPools eventId={3} />);
+    await screen.findByText(/恢复的标的池/);
+    expect(screen.queryByText(/旧读取失败/)).toBeNull();
+  });
+
   it("渲染相关性分数、排序依据首条、四级分类与方向 chip（题材聚焦链接）", async () => {
     mockedGetImpactEvents.mockResolvedValue({
       count: 1, countsAll: { L1: 0, L2: 1, L3: 0 }, fourCounts: { hot: 1 }, tagCounts: {},

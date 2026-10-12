@@ -5,6 +5,7 @@ import { HugeiconsIcon } from "@hugeicons/react";
 import ArrowDown01Icon from "@hugeicons/core-free-icons/ArrowDown01Icon";
 import { indexDetailSymbol } from "@/lib/api";
 import { QualityBadge } from "@/components/quality-badge";
+import { useExitPresence } from "@/hooks/use-exit-presence";
 import { fmt, pctColor, pctText, sourceLabel } from "@/lib/format";
 import type { Quote } from "@/types/market";
 
@@ -31,12 +32,30 @@ const COLLAPSED_INDICES = [
  *  `selected` 是字符串 ⇒ 3s tick 上本组件可整体跳过。 */
 export const IndexCards = memo(function IndexCards({ indices, selected, onSelect }: Props) {
   const [open, setOpen] = useState(false);
-  const cards = open
-    ? indices.map((quote) => ({ detail: indexDetailSymbol(quote.symbol, quote.market), name: quote.name ?? quote.symbol, quote }))
-    : COLLAPSED_INDICES.map((index) => ({
+  const extrasPresence = useExitPresence(open ? true : null);
+  const primary = COLLAPSED_INDICES.map((index) => ({
       ...index,
       quote: indices.find((quote) => indexDetailSymbol(quote.symbol, quote.market) === index.detail),
     }));
+  const extras = indices.map((quote) => ({detail: indexDetailSymbol(quote.symbol, quote.market), name: quote.name ?? quote.symbol, quote}))
+    .filter(index => !COLLAPSED_INDICES.some(primary => primary.detail === index.detail));
+  const renderCard = ({quote: q, detail, name}: {quote?: Quote; detail: string; name: string}) => {
+    const active = selected === detail;
+    return (
+      <button type="button" key={detail} disabled={!q} aria-pressed={active} onClick={() => onSelect?.(detail)}
+        title={q ? `${name} · 来源 ${sourceLabel(q.source)}${onSelect ? " · 点击查看详情" : ""}` : `${name} · 本轮未返回该指数`}
+        className={`rounded-lg px-2 py-1.5 text-left transition-colors ${active ? "bg-zinc-200/80 dark:bg-zinc-800" : "bg-zinc-100/60 hover:bg-zinc-200/60 dark:bg-zinc-900/60 dark:hover:bg-zinc-800/60"} ${q && onSelect ? "cursor-pointer" : "cursor-default"}`}>
+        <div className="flex min-w-0 items-center justify-between gap-1">
+          <span className="min-w-0 truncate text-[10px] text-zinc-600 dark:text-zinc-400">{name}</span>
+          <QualityBadge quality={q?.quality} reasons={q?.quality_reasons} />
+        </div>
+        <div className="whitespace-nowrap font-mono text-sm font-semibold tabular-nums">
+          {!q ? <span className="text-xs font-normal text-zinc-600 dark:text-zinc-400">未返回</span> : q.price == null ? <span className="text-xs font-normal text-zinc-600 dark:text-zinc-400">未开盘</span> : fmt(q.price)}
+        </div>
+        <div className={`whitespace-nowrap font-mono text-[11px] tabular-nums ${pctColor(q?.change_pct)}`}>{pctText(q?.change_pct)}</div>
+      </button>
+    );
+  };
 
   return (
     <div className="ui-card shrink-0 rounded-xl border border-zinc-200 p-2 dark:border-zinc-800">
@@ -44,37 +63,14 @@ export const IndexCards = memo(function IndexCards({ indices, selected, onSelect
         <span>指数{!open && indices.length > 0 ? `（${indices.length}）` : ""}</span>
         <span className="index-disclosure-action">{open ? "收起" : "展开"}<HugeiconsIcon icon={ArrowDown01Icon} size={14} strokeWidth={1.6} aria-hidden="true" /></span>
       </button>
-      <div className="grid grid-cols-3 gap-1" data-collapsed={!open}>
-        {cards.map(({ quote: q, detail, name }) => {
-          const active = selected === detail;
-          return (
-            <button
-              type="button"
-              key={detail}
-              disabled={!q}
-              aria-pressed={active}
-              onClick={() => onSelect?.(detail)}
-              title={q ? `${name} · 来源 ${sourceLabel(q.source)}${onSelect ? " · 点击查看详情" : ""}` : `${name} · 本轮未返回该指数`}
-              className={`rounded-lg px-2 py-1.5 text-left transition-colors ${
-                active
-                  ? "bg-zinc-200/80 dark:bg-zinc-800"
-                  : "bg-zinc-100/60 hover:bg-zinc-200/60 dark:bg-zinc-900/60 dark:hover:bg-zinc-800/60"
-              } ${q && onSelect ? "cursor-pointer" : "cursor-default"}`}
-            >
-              <div className="flex min-w-0 items-center justify-between gap-1">
-                <span className="min-w-0 truncate text-[10px] text-zinc-600 dark:text-zinc-400">{name}</span>
-                {/* 可见性策略单点在 QualityBadge 内部（shouldShowQualityBadge）：正常出静音灰「正常」，
-                    low/medium 瞬态不出（2026-09-02 闪烁修复），stale/invalid 常显。调用点不再自行判断。 */}
-                <QualityBadge quality={q?.quality} reasons={q?.quality_reasons} />
-              </div>
-              <div className="whitespace-nowrap font-mono text-sm font-semibold tabular-nums">
-                {!q ? <span className="text-xs font-normal text-zinc-600 dark:text-zinc-400">未返回</span> : q.price == null ? <span className="text-xs font-normal text-zinc-600 dark:text-zinc-400">未开盘</span> : fmt(q.price)}
-              </div>
-              <div className={`whitespace-nowrap font-mono text-[11px] tabular-nums ${pctColor(q?.change_pct)}`}>{pctText(q?.change_pct)}</div>
-            </button>
-          );
-        })}
+      <div className="grid grid-cols-3 gap-1" data-collapsed="true">
+        {primary.map(renderCard)}
       </div>
+      {extrasPresence.value && <div className="index-extras motion-disclosure" data-open={open} aria-hidden={!open || undefined} inert={!open}>
+        <div className="motion-disclosure-body">
+          <div className="index-extras-grid grid grid-cols-2 gap-1">{extras.map(renderCard)}</div>
+        </div>
+      </div>}
     </div>
   );
 });

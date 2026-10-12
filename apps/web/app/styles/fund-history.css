@@ -1,0 +1,90 @@
+/* Shared by market, board drawers and in-place inspection readers. */
+.fund-history-chart {min-width:0;margin-top:8px;font-variant-numeric:tabular-nums;}
+.fund-history-selection {display:flex;align-items:center;justify-content:space-between;flex-wrap:wrap;gap:6px 12px;font-size:12px;}
+.fund-history-selection .filter-trigger {min-height:30px;padding:4px 8px;font-size:12px;}
+.fund-history-selection output {white-space:nowrap;}
+.fund-history-selection strong,.fund-history-detail strong {font-weight:500;}
+.fund-history-plot {display:flex;gap:3px;height:132px;padding-bottom:24px;margin-top:6px;}
+.fund-history-column {position:relative;flex:1;min-width:0;height:108px;padding:0;border:0;border-radius:3px;background:transparent;color:var(--ui-muted);transition:background-color 120ms ease-out;}
+.fund-history-column[aria-pressed=true],.fund-history-column:hover {background:var(--ui-hover);}
+.fund-history-column:focus-visible {outline:2px solid var(--ui-accent);outline-offset:2px;}
+.fund-history-axis {position:absolute;top:50%;left:0;right:0;height:1px;background:var(--ui-line);}
+.fund-history-bar {position:absolute;left:18%;right:18%;bottom:50%;border-radius:3px 3px 0 0;}
+.fund-history-bar[data-sign=negative] {bottom:auto;top:50%;border-radius:0 0 3px 3px;}
+.fund-history-tick {position:absolute;left:50%;bottom:-21px;transform:translateX(-50%);font-size:11px;white-space:nowrap;line-height:16px;}
+.fund-history-column:first-child .fund-history-tick {left:0;transform:none;}
+.fund-history-column:last-child .fund-history-tick {left:auto;right:0;transform:none;}
+.fund-history-missing {position:absolute;top:calc(50% - 8px);left:50%;transform:translateX(-50%);color:var(--ui-muted);}
+.fund-history-detail,.fund-history-source {margin-top:8px;color:var(--ui-muted);font-size:11px;line-height:1.65;overflow-wrap:anywhere;}
+.fund-turnover-history .fund-history-bar {bottom:0;border-radius:3px 3px 0 0;}
+
+@media(prefers-reduced-motion:reduce) {.fund-history-column {transition:none;}}
+
+/* Fund analysis keeps all existing data consumers mounted while changing readers. */
+.fund-workspace {display:flex;flex-direction:column;height:100%;min-height:0;min-width:0;gap:12px;}
+.fund-notices:empty {display:none;}
+.fund-notices {flex:none;max-height:100px;overflow:auto;overscroll-behavior:contain;}
+.fund-columns {display:grid;grid-template-columns:minmax(0,1.2fr) minmax(0,1fr);flex:1 1 0%;min-height:0;min-width:0;gap:16px;}
+.fund-board-reader,.fund-analysis {min-height:0;min-width:0;}
+.fund-board-reader > .task-panel {height:100%;}
+/* Board density follows this reader's width, not the browser's viewport. */
+.board-flow-list {overscroll-behavior:contain;scrollbar-gutter:stable;}
+.board-flow-list:focus-visible {outline:2px solid var(--ui-accent);outline-offset:-2px;}
+.board-flow-list > .card-gallery {column-count:auto;column-width:248px;}
+:root .board-flow-card.stock-card-slot {padding:2px;}
+:root .board-flow-card .stock-card {padding:14px;}
+.board-flow-heading {flex-wrap:wrap;}
+.board-flow-identity {flex:1 1 auto;flex-wrap:wrap;}
+.board-flow-name {overflow-wrap:anywhere;}
+.board-flow-metrics > div {white-space:nowrap;}
+.fund-analysis {display:flex;flex-direction:column;gap:12px;}
+.fund-view-switch {display:flex;flex:none;align-items:center;gap:6px;}
+.fund-view-switch > button {min-height:34px;padding:6px 12px;border:1px solid transparent;border-radius:7px;font-size:13px;white-space:nowrap;color:var(--ui-muted);}
+.fund-view-switch > button[aria-pressed=true] {background:var(--ui-selected);color:var(--ui-ink);border-color:var(--glass-border);}
+.fund-view-switch > button:hover {background:var(--ui-hover);}
+.fund-view-switch > button:focus-visible {outline:2px solid var(--ui-accent);outline-offset:2px;}
+.fund-analysis-current {display:grid;grid-template-rows:minmax(0,1fr) minmax(0,1fr);min-height:0;min-width:0;flex:1 1 0%;gap:16px;}
+.fund-analysis-current > .grid {display:grid;grid-template-columns:repeat(2,minmax(0,1fr));min-height:0;gap:16px;}
+.fund-analysis-current > .grid > .task-panel,.fund-analysis-current > .task-panel {min-height:0;}
+.fund-analysis-history,.fund-analysis-seats {display:flex;min-height:0;min-width:0;flex:1 1 0%;}
+.fund-analysis-readers {position:relative;display:flex;flex:1 1 0%;min-height:0;min-width:0;}
+.fund-history-panels {display:grid;grid-template-rows:minmax(0,.95fr) minmax(0,1.05fr);width:100%;height:100%;min-height:0;gap:14px;}
+.fund-history-panels > .task-panel,.fund-analysis-seats > .task-panel {min-height:0;flex:1 1 0%;}
+.fund-analysis-readers > div {width:100%;opacity:1;transform:translateY(0);transition:opacity 150ms var(--ease-out),transform 150ms var(--ease-out);}
+.fund-analysis-readers > div[data-exiting=true]:not([hidden]) {position:absolute;inset:0;opacity:0;transform:translateY(4px);pointer-events:none;}
+@starting-style {.fund-analysis-readers > div:not([data-exiting=true]):not([hidden]) {opacity:0;transform:translateY(4px);}}
+.fund-analysis-history {container-type:inline-size;}
+@container(min-width:780px) {.fund-history-panels {grid-template-columns:repeat(2,minmax(0,1fr));grid-template-rows:minmax(0,1fr);}}
+.fund-history-panels .task-panel-header h2 {white-space:normal;line-height:1.5;}
+.fund-analysis-current[hidden],.fund-analysis-history[hidden],.fund-analysis-seats[hidden] {display:none;}
+
+
+@media(max-width:1180px) and (min-width:768px) {
+  .fund-columns {grid-template-columns:minmax(0,1.2fr) minmax(0,1fr);}
+  .fund-analysis-current > .grid {grid-template-columns:repeat(2,minmax(260px,1fr));gap:12px;overflow-x:auto;overscroll-behavior:contain;}
+}
+@media(max-width:767px) {
+  .fund-columns {grid-template-columns:repeat(2,100%);gap:12px;overflow-x:auto;overscroll-behavior:contain;scroll-snap-type:x proximity;padding-bottom:4px;}
+  .board-flow-controls {display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:6px;}
+  :root .board-flow-controls > .filter-trigger {width:100%;min-height:44px;height:44px;gap:4px;padding-inline:6px;}
+  .board-flow-controls .filter-label {display:none;}
+  .board-flow-controls > .flow-control-group {grid-column:1/-1;display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:4px;}
+  .board-flow-controls .flow-control-group > button {min-height:44px;padding-inline:6px;}
+  .fund-board-reader,.fund-analysis {scroll-snap-align:start;}
+  .fund-analysis-current > .grid {grid-template-columns:repeat(2,minmax(280px,1fr));gap:12px;overflow-x:auto;overscroll-behavior:contain;}
+  .fund-view-switch {gap:2px;}
+  .fund-view-switch > button {min-height:44px;padding:9px 10px;font-size:12px;}
+  .fund-columns {scroll-snap-type:x mandatory;}
+  .fund-history-selection .filter-trigger {min-height:44px;}
+}
+.fund-history-panels .task-panel-header {min-height:38px;padding:8px 14px;}
+.fund-history-panels .fund-history-plot {height:96px;}
+.fund-history-panels .fund-history-column {height:72px;}
+@container(min-width:780px) {.fund-history-panels .fund-history-plot {height:144px;}.fund-history-panels .fund-history-column {height:120px;}}
+@media(prefers-reduced-motion:reduce) {.fund-analysis-readers > div {transition:none;transform:none;}}
+
+.board-flow-unavailable .quiet-action {margin-top:14px;}
+.board-flow-controls button:disabled {opacity:.5;cursor:default;}
+
+/* Preserve the fixed market-reader shell against route-level >div defaults. */
+:root .bc-market-page .bc-market-view-fund > .fund-workspace {height:100%;min-height:0;gap:12px;padding:0;overflow:visible;}

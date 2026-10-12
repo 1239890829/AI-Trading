@@ -1,6 +1,7 @@
 "use client";
 
 import { SelectionRail } from "@/components/ui/selection-rail";
+import { useExitPresence, useReducedMotion } from "@/hooks/use-exit-presence";
 
 import { useCallback, useEffect, memo, useId, useMemo, useRef, useState, useSyncExternalStore } from "react";
 import { MinuteChart } from "@/components/minute-chart";
@@ -156,31 +157,45 @@ export const StockDetailPanel = memo(function StockDetailPanel({
   // 布局 #1：右列宽度可拖拽（localStorage 持久化；260-480px 防极限）
   const [rightW, setRightW] = useState(300);
   const rightColRef = useRef<HTMLDivElement>(null);
+  const chartColumnRef = useRef<HTMLDivElement>(null);
+  const previousChartTab = useRef(chartTab);
+  const reducedMotion = useReducedMotion();
+  useEffect(() => {
+    if (previousChartTab.current === chartTab) return;
+    previousChartTab.current = chartTab;
+    const column = chartColumnRef.current;
+    if (reducedMotion || typeof column?.animate !== "function") return;
+    // Animate the stable reading surface only on a deliberate tab change.
+    // Quote ticks and right-column resizing keep the existing chart instance.
+    const animation = column.animate([{opacity: 0.65}, {opacity: 1}], {duration: 160, easing: "ease-out"});
+    return () => animation.cancel();
+  }, [chartTab, reducedMotion]);
   // 模拟交易数据刷新（2026-09-01 简化：原 paperChanged 全局事件改为 ref 直调——
   // trade-form/trade-panel 都在本组件子树内，props 回调 + ref 即可，无需全局广播）
   const loadPaperRef = useRef<() => void>(() => {});
   // 布局方案 B（2026-09-04 用户拍板）：右列可整体收起，收起后 K 线/分时获得全宽
   const [rightCollapsed, setRightCollapsed] = useState(false);
+  const [exitingRightW, setExitingRightW] = useState(300);
+  const rightPresence = useExitPresence(rightCollapsed ? null : true);
+  const rightActive = active && !rightCollapsed;
   useEffect(() => {
-    // localStorage 恢复必须在 effect 里：渲染期读会把值带进首次 commit，
-    // 与 SSR 输出产生 hydration mismatch（宽度类 inline style 必比对）。
-    let saved = 0;
-    try { saved = Number(localStorage.getItem("ashare-right-w")); } catch {}
-    // ⚠️ 本行原有一条 `eslint-disable-next-line react-hooks/set-state-in-effect`。
-    // 2026-09-11（P1-1）本组件包上 `memo()` 后，React Compiler 的该规则**不再下探
-    // 组件体**——实测同一文件、同一行：不包 memo 时规则照常报（指令被使用），
-    // 包了 memo 后指令变成 "unused directive"（0-warn 门禁会拦）。
-    // 故删除指令。**代价**：本组件体内不再受 set-state-in-effect 约束，
-    // 后续改本组件时必须人工守住「不在 effect 体内同步 setState」。
-    if (saved >= 260 && saved <= 480) setRightW(saved);
-    // 右列收起状态同样持久化（字符串比较，避免 hydration 差异）
-    try { if (localStorage.getItem("ashare-right-collapsed") === "1") setRightCollapsed(true); } catch {}
+    // Read after hydration; defer state restoration instead of synchronously
+    // setting state in an effect or changing the server's initial layout.
+    let alive = true;
+    queueMicrotask(() => {
+      if (!alive) return;
+      try {
+        const saved = Number(localStorage.getItem("ashare-right-w"));
+        if (saved >= 260 && saved <= 480) setRightW(saved);
+        if (localStorage.getItem("ashare-right-collapsed") === "1") setRightCollapsed(true);
+      } catch {}
+    });
+    return () => { alive = false; };
   }, []);
   const toggleRightCollapsed = () => {
-    setRightCollapsed((v) => {
-      try { localStorage.setItem("ashare-right-collapsed", v ? "0" : "1"); } catch {}
-      return !v;
-    });
+    if (!rightCollapsed) setExitingRightW(rightColRef.current?.getBoundingClientRect().width || rightW);
+    setRightCollapsed(!rightCollapsed);
+    try { localStorage.setItem("ashare-right-collapsed", rightCollapsed ? "0" : "1"); } catch {}
   };
   // 核对标签与内容面板共用稳定的可访问标识。
   const perspectiveId = useId();
@@ -363,7 +378,7 @@ export const StockDetailPanel = memo(function StockDetailPanel({
   useEffect(() => {
     loadPaperRef.current = loadPaper;
   }, [loadPaper]);
-  usePollingFetch(loadPaper, 30_000, symbol, { enabled: active && !!symbol && rightTab === "trade" });
+  usePollingFetch(loadPaper, 30_000, symbol, { enabled: rightActive && !!symbol && rightTab === "trade" });
 
   const digestRequestRef = useRef(0);
   const loadDigest = useCallback(async () => {
@@ -647,7 +662,7 @@ export const StockDetailPanel = memo(function StockDetailPanel({
     },
     5_000,
     symbol,
-    { enabled: active && !!symbol && !isIndex && rightTab === "book" }
+    { enabled: rightActive && !!symbol && !isIndex && rightTab === "book" }
   );
   usePollingFetch(
     async () => {
@@ -665,7 +680,7 @@ export const StockDetailPanel = memo(function StockDetailPanel({
     },
     10_000,
     symbol,
-    { enabled: active && !!symbol && !isIndex && rightTab === "trades" }
+    { enabled: rightActive && !!symbol && !isIndex && rightTab === "trades" }
   );
 
   async function add() {
@@ -684,6 +699,8 @@ export const StockDetailPanel = memo(function StockDetailPanel({
     [displayBars]
   );
   const tech = useMemo(() => analyze(techInput), [techInput]);
+  const techVisible = chartTab === "kline" && techOpen && !!tech;
+  const techPresence = useExitPresence(techVisible ? true : null);
 
   // 当前个股的模拟持仓（用于 K 线成本线）
   const myPosition = paper?.positions.find((p) => p.symbol === symbol) ?? null;
@@ -823,6 +840,8 @@ export const StockDetailPanel = memo(function StockDetailPanel({
                 onClick={() => setTechOpen(!techOpen)}
                 className="shrink-0 text-zinc-600 dark:text-zinc-400 hover:text-zinc-600 dark:hover:text-zinc-200"
                 title={tech.signals.map((sg) => sg.name + "：" + sg.detail).join("\n")}
+                aria-expanded={techVisible}
+                aria-controls={`${perspectiveId}-technical-basis`}
               >
                 {techOpen ? "收起 ▴" : "依据 ▸"}
               </button>
@@ -832,8 +851,10 @@ export const StockDetailPanel = memo(function StockDetailPanel({
       </div>
 
       {/* 依据明细：正常文档流展开（打开时图表下移让位，不遮挡任何元素） */}
-      {chartTab === "kline" && techOpen && tech && (
-        <div className="tech-signal-details shrink-0 rounded-lg border border-zinc-200 bg-white/90 p-2 text-[11px] leading-relaxed shadow-sm dark:border-zinc-700 dark:bg-zinc-900/90" role="region" tabIndex={0} aria-label="技术评估依据">
+      {techPresence.value && tech && <div className="tech-basis-presence motion-disclosure shrink-0" data-open={techVisible} aria-hidden={!techVisible || undefined} inert={!techVisible}>
+      <div className="motion-disclosure-body">
+      {(
+        <div id={`${perspectiveId}-technical-basis`} className="tech-signal-details shrink-0 rounded-lg border border-zinc-200 bg-white/90 p-2 text-[11px] leading-relaxed shadow-sm dark:border-zinc-700 dark:bg-zinc-900/90" role="region" tabIndex={techVisible ? 0 : -1} aria-label="技术评估依据">
           <ul className="space-y-0.5">
             {tech.signals.map((sg) => (
               <li key={sg.name} className="flex items-start gap-1.5">
@@ -852,6 +873,8 @@ export const StockDetailPanel = memo(function StockDetailPanel({
           <p className="mt-1.5 text-[10px] text-zinc-600 dark:text-zinc-400">多因子技术信号汇总，不构成买卖建议</p>
         </div>
       )}
+      </div>
+      </div>}
 
 
       {/* ② 中部：左图表区 + 右盘口/逐笔（右列宽度可拖拽，--right-w 由 state 注入；
@@ -861,8 +884,9 @@ export const StockDetailPanel = memo(function StockDetailPanel({
           rightCollapsed ? "lg:grid-cols-[minmax(0,1fr),28px]" : "lg:grid-cols-[minmax(0,1fr),var(--right-w)]"
         }`}
         style={{ "--right-w": `${rightW}px` } as React.CSSProperties}
+        data-right-collapsed={rightCollapsed}
       >
-        <div className="detail-chart-column flex min-h-0 min-w-0 flex-col gap-1.5">
+        <div ref={chartColumnRef} className="detail-chart-column flex min-h-0 min-w-0 flex-col gap-1.5">
           {chartTab === "kline" && (
             /* 头部标题行（股票名 · 日 K 线（前复权）+ 来源）已移除：股票名在页面
                其它位置已展示，这行纯属重复占位，去掉后纵向多出约 41px 给 K 线
@@ -943,7 +967,8 @@ export const StockDetailPanel = memo(function StockDetailPanel({
 
         {/* 右列：盘口↔逐笔 + 资讯 tabs（左缘拖拽条调宽，宽度持久化 localStorage；
             方案 B：可整体收起） */}
-        {rightCollapsed ? (
+        <div className="detail-side-slot" data-collapsed={rightCollapsed}>
+        {rightCollapsed && (
           <button
             onClick={toggleRightCollapsed}
             className="detail-side-expand flex min-h-0 w-7 items-center justify-center rounded-lg border border-zinc-200 text-zinc-600 dark:text-zinc-400 transition-colors hover:text-zinc-900 dark:border-zinc-800 dark:hover:text-zinc-100"
@@ -952,8 +977,11 @@ export const StockDetailPanel = memo(function StockDetailPanel({
           >
             <span className="text-xs [writing-mode:vertical-lr] tracking-widest">◀ 展开右列</span>
           </button>
-        ) : (
-        <div ref={rightColRef} className="detail-side-column relative flex min-h-0 min-w-0 flex-col gap-2">
+        )}
+        {rightPresence.value !== null && (
+        <div ref={rightColRef} className="detail-side-column motion-float relative flex min-h-0 min-w-0 flex-col gap-2"
+          data-motion-state={rightPresence.active ? "open" : "closed"} aria-hidden={!rightPresence.active} inert={!rightPresence.active}
+          style={{"--side-reading-w": `${exitingRightW}px`} as React.CSSProperties}>
           <div
             role="separator"
             tabIndex={0}
@@ -1057,11 +1085,11 @@ export const StockDetailPanel = memo(function StockDetailPanel({
             ))}
           </div>
           <div id={`${perspectiveId}-panel`} role="tabpanel" aria-labelledby={`${perspectiveId}-${rightTab}`} className="min-h-0 flex-1 overflow-auto">
-          {rightTab === "speed" && <SpeedPanel className="h-full" active={active} />}
-          {rightTab === "boards" && <BoardRankPanel className="h-full" active={active} />}
+          {rightTab === "speed" && <SpeedPanel className="h-full" active={rightActive} />}
+          {rightTab === "boards" && <BoardRankPanel className="h-full" active={rightActive} />}
           {rightTab === "dt" && <MinuteDecisionPanel symbol={symbol} className="h-full" />}
           {rightTab === "real" && (
-            <RealPositionPanel symbol={symbol} currentPrice={quote?.price ?? null} currentName={quote?.name ?? null} realPositions={realPositions} active={active} className="h-full" />
+            <RealPositionPanel symbol={symbol} currentPrice={quote?.price ?? null} currentName={quote?.name ?? null} realPositions={realPositions} active={rightActive} className="h-full" />
           )}
           {rightTab === "trade" &&
             (paper === undefined ? (
@@ -1077,7 +1105,7 @@ export const StockDetailPanel = memo(function StockDetailPanel({
                 fills={fills}
                 quote={quote ?? null}
                 onPaperChanged={() => loadPaperRef.current()}
-                active={active && immediateQuote !== null}
+                active={rightActive && immediateQuote !== null}
                 readError={paperError}
               />
             ) : (
@@ -1094,6 +1122,7 @@ export const StockDetailPanel = memo(function StockDetailPanel({
         </Panel>
         </div>
         )}
+        </div>
       </div>
     </div>
   );

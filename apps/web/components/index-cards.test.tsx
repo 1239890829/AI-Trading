@@ -1,5 +1,5 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { cleanup, fireEvent, render, screen } from "@testing-library/react";
+import { act, cleanup, fireEvent, render, screen } from "@testing-library/react";
 import { IndexCards } from "@/components/index-cards";
 import type { Quote } from "@/types/market";
 
@@ -89,6 +89,27 @@ describe("IndexCards 指数点击交互", () => {
   it("未传 onSelect 时卡片渲染但不报错（静默降级为纯展示）", () => {
     render(<IndexCards indices={indices} />);
     expect(screen.getByText("3,300.50")).toBeTruthy(); // fmt 带千分位
+  });
+
+  it("展开与退出保留常用卡身份；收起的其它指数立刻退出操作范围，快速反向不被旧计时清掉", async () => {
+    vi.useFakeTimers();
+    try {
+      const {container} = render(<IndexCards indices={indices} />);
+      const primary = screen.getByTitle(/上证指数 · 来源/);
+      fireEvent.click(screen.getByRole("button", {name:/指数.*展开/}));
+      expect(screen.getByTitle(/上证指数 · 来源/)).toBe(primary);
+      expect(screen.getByRole("button", {name:/深证成指/})).toBeTruthy();
+      fireEvent.click(screen.getByRole("button", {name:/指数.*收起/}));
+      expect(screen.queryByRole("button", {name:/深证成指/})).toBeNull();
+      expect(container.querySelector(".index-extras")?.hasAttribute("inert")).toBe(true);
+      fireEvent.click(screen.getByRole("button", {name:/指数.*展开/}));
+      await act(async () => vi.advanceTimersByTime(200));
+      expect(screen.getByRole("button", {name:/深证成指/})).toBeTruthy();
+      expect(screen.getByTitle(/上证指数 · 来源/)).toBe(primary);
+      fireEvent.click(screen.getByRole("button", {name:/指数.*收起/}));
+      await act(async () => vi.advanceTimersByTime(160));
+      expect(container.querySelector(".index-extras")).toBeNull();
+    } finally {vi.useRealTimers();}
   });
 
   it("指数漏返回时保留旧价格，并明确显示过期及缺失原因", () => {

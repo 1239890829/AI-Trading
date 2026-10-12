@@ -583,6 +583,11 @@ export interface BoardFundFlowPayload {
   coverage?: number | null;
   updated_at?: string;
   rank_basis_date?: string | null;
+  /** Local day-K archive; never a replacement for today's board ranking. */
+  historical?: boolean;
+  as_of?: string | null;
+  source?: string;
+  quality?: "medium" | "stale";
   degraded: string[];
 }
 

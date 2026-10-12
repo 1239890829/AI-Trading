@@ -1,5 +1,5 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { cleanup, render, screen } from "@testing-library/react";
+import { act, cleanup, render, screen } from "@testing-library/react";
 import { EntryChecklist } from "@/components/entry-checklist";
 import type { EntryChecklist as EntryChecklistData } from "@/lib/api";
 
@@ -149,6 +149,32 @@ describe("介入条件清单 · 三层信号与三态（P1-13）", () => {
     getEntryChecklist.mockRejectedValue(new Error("network down"));
     render(<EntryChecklist symbol="600540" />);
     expect(await screen.findByText(/介入条件不可用：network down/)).toBeTruthy();
+  });
+
+  it("inactive shell starts no request; late evidence after close cannot populate it", async () => {
+    getEntryChecklist.mockReset();
+    let finish!: (value: EntryChecklistData) => void;
+    getEntryChecklist.mockImplementationOnce(() => new Promise(resolve => {finish = resolve;})).mockResolvedValueOnce(data());
+    const view = render(<EntryChecklist symbol="600540" active={false} />);
+    expect(getEntryChecklist).not.toHaveBeenCalled();
+    view.rerender(<EntryChecklist symbol="600540" />);
+    view.rerender(<EntryChecklist symbol="600540" active={false} />);
+    await act(async () => finish(data()));
+    expect(screen.queryByTestId("entry-checklist")).toBeNull();
+    view.rerender(<EntryChecklist symbol="600540" />);
+    await screen.findByTestId("entry-checklist");
+    expect(getEntryChecklist).toHaveBeenCalledTimes(2);
+  });
+
+  it("a valid reopened checklist clears the earlier failure", async () => {
+    getEntryChecklist.mockReset();
+    getEntryChecklist.mockRejectedValueOnce(new Error("上次失败")).mockResolvedValueOnce(data());
+    const view = render(<EntryChecklist symbol="600540" />);
+    await screen.findByText(/上次失败/);
+    view.rerender(<EntryChecklist symbol="600540" active={false} />);
+    view.rerender(<EntryChecklist symbol="600540" />);
+    await screen.findByTestId("entry-checklist");
+    expect(screen.queryByText(/上次失败/)).toBeNull();
   });
 
   it("红线 3：输出为条件陈述，不含确定性买卖措辞", async () => {

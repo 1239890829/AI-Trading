@@ -1,12 +1,12 @@
-import { describe, expect, it } from "vitest";
-import { fireEvent, render, screen } from "@testing-library/react";
+import { describe, expect, it, vi } from "vitest";
+import { act, fireEvent, render, screen } from "@testing-library/react";
 import { afterEach } from "vitest";
 import { cleanup } from "@testing-library/react";
 import { ThemeChipsRow } from "./theme-chips";
 import type { StockThemes } from "@/lib/api";
 
 // vitest 未开 globals 时 RTL 自动 cleanup 不注册，必须手动（见 trade-form.test.tsx 注释）
-afterEach(cleanup);
+afterEach(() => {cleanup(); vi.useRealTimers();});
 
 const fixture: StockThemes = {
   symbol: "000019",
@@ -80,5 +80,17 @@ describe("ThemeChipsRow", () => {
   it("themes 为 null（加载中/失败）同样零占用", () => {
     const { container } = render(<ThemeChipsRow themes={null} />);
     expect(container.textContent).toBe("");
+  });
+
+  it("expanded extra chips retain a collapse action and leave the keyboard/link scope immediately on close", () => {
+    vi.useFakeTimers();
+    const {container} = render(<ThemeChipsRow themes={{...fixture, attribution:[], official:Array.from({length:8}, (_, n) => ({theme_code:`88${n}`, theme_name:`题材${n}`, source:"ths_official"}))}} />);
+    fireEvent.click(screen.getByRole("button", {name:"＋2 个"}));
+    expect(screen.getByRole("link", {name:"题材7"})).toBeTruthy();
+    fireEvent.click(screen.getByRole("button", {name:"收起"}));
+    expect(screen.queryByRole("link", {name:"题材7"})).toBeNull();
+    expect(container.querySelector(".theme-chips-extras")?.hasAttribute("inert")).toBe(true);
+    act(() => vi.advanceTimersByTime(160));
+    expect(container.querySelector(".theme-chips-extras")).toBeNull();
   });
 });

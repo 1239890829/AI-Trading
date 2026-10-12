@@ -25,6 +25,16 @@ beforeEach(() => {vi.mocked(getStockAttribution).mockResolvedValue(payload());})
 afterEach(() => {cleanup(); vi.clearAllMocks(); vi.restoreAllMocks(); vi.useRealTimers();});
 
 describe("shared attribution evidence", () => {
+  it("opens source context only for the explicitly expanded reason path, while preserving the message list", async () => {
+    render(<StockAttributionPanel symbol="600825" defaultExpanded defaultSourceExpanded />);
+    expect(screen.queryByRole("article")).toBeNull();
+    fireEvent.click(await screen.findByRole("button", {name: `查看归因消息：${evidence.title}`}));
+    expect(screen.getAllByRole("article")).toHaveLength(1);
+    const disclosure = screen.getByText("核对原文与时点").closest("details");
+    expect(disclosure?.open).toBe(true);
+    expect(screen.getByText("尚未完成审计；不代表完成收购。")).toBeTruthy();
+    expect(getStockAttribution).toHaveBeenCalledTimes(1);
+  });
   it("starts with compact message buttons and opens only the selected detail without another read", async () => {
     vi.mocked(getStockAttribution).mockResolvedValue(listPayload());
     render(<StockAttributionPanel symbol="600825" defaultExpanded selectedAt="2026-10-12T09:30:00+08:00" />);

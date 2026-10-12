@@ -168,14 +168,13 @@ describe("shared security detail limit-up attribution", () => {
     expect(screen.queryByRole("dialog")).toBeNull();
   });
 
-  it("reads evidence only after expanding it inside the source-tag overlay", async () => {
+  it("opens the attribution body with the reason overlay and reads no evidence before opening", async () => {
     vi.mocked(getStockAttribution).mockResolvedValue({schema_version: 1, symbol: "600825", count: 0, items: []});
     render(<LimitReason symbol="600825" date="2026-10-09" reason="拟收购" compact />);
     expect(getStockAttribution).not.toHaveBeenCalled();
     fireEvent.click(screen.getByRole("button", {name: /涨停原因 · 查看原文/}));
-    expect(getStockAttribution).not.toHaveBeenCalled();
-    fireEvent.click(screen.getByRole("button", {name: "涨停归因 · 证据核对"}));
     await screen.findByText(/暂未找到关联事件/);
+    expect(screen.getByRole("button", {name: "涨停归因 · 证据核对"}).getAttribute("aria-expanded")).toBe("true");
     expect(getStockAttribution).toHaveBeenCalledTimes(1);
     expect(getStockAttribution).toHaveBeenCalledWith("600825");
   });

@@ -3,7 +3,7 @@
 import "./hunting.css";
 
 import { patchWorkspaceUrl } from "@/lib/task-navigation";
-import { Suspense, useCallback, useEffect, useMemo, useState } from "react";
+import { Suspense, useCallback, useEffect, useId, useMemo, useState } from "react";
 import Link from "next/link";
 import { inspectionClick, useInspection } from "@/components/inspection/inspection-context";
 
@@ -90,6 +90,8 @@ function HuntingInner() {
 
   const [dailyDetail, setDailyDetail] = useState<{item: DailyPickItem; date: string | null; version: string | null} | null>(null);
   const [referenceOpen, setReferenceOpen] = useState(false);
+  const referencePresence = useExitPresence(referenceOpen ? true : null);
+  const referenceId = useId();
 
   // —— URL 状态（深链为真相源）——
   // ?tag= 深链仍可解析（nav-targets 兼容）但不再分流视图——单一瀑布流（2026-09-09）
@@ -469,11 +471,20 @@ function HuntingInner() {
                 onShowDailyEvidence={showDailyDetail} positionLabel={(posLabels[it.symbol] as "sim" | "real" | undefined) ?? null} />)}</CandidateCollection>
             : <div className="hunting-empty">{topReadFailed ? "上次读取的名单为空，当前状态待重试核实。" : "当前没有可参与候选。题材尚未集中或条件未满足时，名单可以为空；系统不会凑满名额。"}</div>}
           {top?.criteria && <p className="hunting-source-note">{top.criteria}</p>}
-          {topRefItems.length > 0 && <details className="hunting-reference-fold" open={referenceOpen} onToggle={event => setReferenceOpen(event.currentTarget.open)}>
-            <summary>涨停梯队 {topRefItems.length} 只<span>参考集合，当前状态逐股核对</span></summary>
-            <p className="hunting-source-note">{top?.reference_criteria ?? "保留今日曾封板身份；当前仍封、已开板或未判，以卡片对应时点为准。仅用于观察资金集中方向。"}</p>
-            {referenceOpen && <CandidateCollection>{topRefItems.map(it => <PickCard key={it.symbol} item={fromIntradayStock(it)} readError={!!intraday.error} positionLabel={(posLabels[it.symbol] as "sim" | "real" | undefined) ?? null} />)}</CandidateCollection>}
-          </details>}
+          {topRefItems.length > 0 && <div className="hunting-reference-fold">
+            <button type="button" className="hunting-reference-trigger" aria-expanded={referenceOpen} aria-controls={referenceId} onClick={() => setReferenceOpen(value => !value)}>
+              <svg aria-hidden width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.6"><path d="m9 5 7 7-7 7" /></svg>
+              涨停梯队 {topRefItems.length} 只<span>参考集合，当前状态逐股核对</span>
+            </button>
+            <div id={referenceId} className="motion-disclosure" data-open={referencePresence.active} aria-hidden={!referencePresence.active} inert={!referencePresence.active}>
+              <div className="motion-disclosure-body">
+                {referencePresence.value !== null && <>
+                  <p className="hunting-source-note">{top?.reference_criteria ?? "保留今日曾封板身份；当前仍封、已开板或未判，以卡片对应时点为准。仅用于观察资金集中方向。"}</p>
+                  <CandidateCollection>{topRefItems.map(it => <PickCard key={it.symbol} item={fromIntradayStock(it)} readError={!!intraday.error} positionLabel={(posLabels[it.symbol] as "sim" | "real" | undefined) ?? null} />)}</CandidateCollection>
+                </>}
+              </div>
+            </div>
+          </div>}
         </section>
         <section id="sec-daily" className="hunting-daily space-y-3">
           <div className="hunting-section-heading"><div><h2 className="hunting-section-title">每日精选</h2><p>{data?.date ?? "组合日期待读取"} · 当日持久候选</p></div>{picksLoaded && !picksFailed && <span className="hunting-section-count">{pickTotal} 只</span>}</div>

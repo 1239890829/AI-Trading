@@ -162,6 +162,113 @@ it("one owner delivers complete selected quotes immediately while its list stays
   fast.unmount(); owner.unmount();
 });
 
+it("hidden WS retains its latest complete frame without React/feed delivery and resumes once", async () => {
+  const visibility = vi.spyOn(document, "visibilityState", "get");
+  const owner = renderHook(() => useQuoteStream(["600519"], {throttleMs: 3000}));
+  await settle();
+  const ws = FakeWS.instances[0];
+  const first = {...quote("600519", 100), source: "tencent", volume: 100, amount: 10_000, data_timestamp: "2026-10-12T01:00:00Z", received_at: "2026-10-12T01:00:01Z"};
+  await act(async () => {ws.readyState = FakeWS.OPEN; ws.onopen?.(); ws.onmessage?.({data: JSON.stringify({type: "quotes", data: [first]})});});
+  const before = owner.result.current.quotes;
+  const listener = vi.fn();
+  const unsubscribe = owner.result.current.quoteFeed.subscribe("600519", listener);
+  await act(async () => {visibility.mockReturnValue("hidden"); document.dispatchEvent(new Event("visibilitychange"));});
+  const latest = {...first, volume: 300, amount: 30_300, quality: "stale" as const, quality_reasons: ["refresh_failed"], data_timestamp: "2026-10-12T01:00:02Z", received_at: "2026-10-12T01:00:03Z"};
+  await act(async () => {
+    ws.onmessage?.({data: JSON.stringify({type: "quotes", data: [{...first, price: 101}]})});
+    ws.onmessage?.({data: JSON.stringify({type: "stale", data: [latest]})});
+    await vi.advanceTimersByTimeAsync(4000);
+  });
+  expect(listener).not.toHaveBeenCalled();
+  expect(owner.result.current.quotes).toBe(before);
+  expect(owner.result.current.quoteFeed.getSnapshot("600519")).toEqual(first);
+  expect(owner.result.current.status).toBe("live");
+  await act(async () => {visibility.mockReturnValue("visible"); document.dispatchEvent(new Event("visibilitychange"));});
+  expect(listener).toHaveBeenCalledTimes(1);
+  expect(owner.result.current.quotes["600519"]).toEqual(latest);
+  expect(owner.result.current.quoteFeed.getSnapshot("600519")).toEqual(latest);
+  expect(owner.result.current.status).toBe("stale");
+  expect(getQuotes).not.toHaveBeenCalled();
+  expect(FakeWS.instances).toHaveLength(1);
+  unsubscribe(); owner.unmount();
+});
+
+it.each([
+  {oldReason: "refresh_failed", newReason: null, expected: "live"},
+  {oldReason: "market_closed", newReason: null, expected: "live"},
+  {oldReason: "refresh_failed", newReason: "refresh_failed", expected: "stale"},
+  {oldReason: "market_closed", newReason: "market_closed", expected: "closed"},
+])("hidden reconnect restores $expected from its own snapshot after old $oldReason ($newReason)", async ({oldReason, newReason, expected}) => {
+  const visibility = vi.spyOn(document, "visibilityState", "get");
+  const owner = renderHook(() => useQuoteStream(["600519"], {throttleMs: 3000}));
+  await settle();
+  const oldSocket = FakeWS.instances[0];
+  const first = quote("600519", 100);
+  await act(async () => {
+    oldSocket.readyState = FakeWS.OPEN; oldSocket.onopen?.();
+    oldSocket.onmessage?.({data: JSON.stringify({type: "quotes", data: [first]})});
+  });
+  const before = owner.result.current.quotes;
+  const listener = vi.fn();
+  const unsubscribe = owner.result.current.quoteFeed.subscribe("600519", listener);
+  await act(async () => {visibility.mockReturnValue("hidden"); document.dispatchEvent(new Event("visibilitychange"));});
+  await act(async () => {
+    oldSocket.onmessage?.({data: JSON.stringify({type: "stale", data: [{...first, quality: "stale", quality_reasons: [oldReason]}]})});
+    oldSocket.close();
+    oldSocket.onclose?.();
+    await vi.advanceTimersByTimeAsync(2000);
+  });
+  expect(FakeWS.instances).toHaveLength(2);
+  const nextSocket = FakeWS.instances[1];
+  const latest = {...quote("600519", 102), quality: newReason ? "stale" : "high", quality_reasons: newReason ? [newReason] : [], volume: 300, amount: 30_600, data_timestamp: "2026-10-12T02:00:02Z"};
+  await act(async () => {
+    nextSocket.readyState = FakeWS.OPEN; nextSocket.onopen?.();
+    nextSocket.onmessage?.({data: JSON.stringify({type: "snapshot", data: [latest]})});
+  });
+  expect(owner.result.current.quotes).toBe(before);
+  expect(listener).not.toHaveBeenCalled();
+  await act(async () => {visibility.mockReturnValue("visible"); document.dispatchEvent(new Event("visibilitychange"));});
+  expect(owner.result.current.status).toBe(expected);
+  expect(owner.result.current.quotes["600519"]).toEqual(latest);
+  expect(owner.result.current.quoteFeed.getSnapshot("600519")).toEqual(latest);
+  expect(listener).toHaveBeenCalledTimes(1);
+  expect(getQuotes).not.toHaveBeenCalled();
+  unsubscribe(); owner.unmount();
+});
+
+it("a hidden trailing frame and explicit missing observation reconcile before the next WS tick", async () => {
+  const visibility = vi.spyOn(document, "visibilityState", "get");
+  const owner = renderHook(() => useQuoteStream(["600519"], {throttleMs: 3000}));
+  await settle(); const ws = FakeWS.instances[0];
+  await act(async () => {ws.readyState = FakeWS.OPEN; ws.onopen?.(); ws.onmessage?.({data: JSON.stringify({type: "quotes", data: [quote("600519", 100)]})});});
+  await act(async () => {await vi.advanceTimersByTimeAsync(1000); ws.onmessage?.({data: JSON.stringify({type: "quotes", data: [quote("600519", 101)]})});});
+  await act(async () => {visibility.mockReturnValue("hidden"); document.dispatchEvent(new Event("visibilitychange")); await vi.advanceTimersByTimeAsync(4000);});
+  expect(owner.result.current.quotes["600519"].price).toBe(100);
+  await act(async () => {ws.onmessage?.({data: JSON.stringify({type: "quotes", data: []})});});
+  await act(async () => {visibility.mockReturnValue("visible"); document.dispatchEvent(new Event("visibilitychange"));});
+  expect(owner.result.current.quotes).toEqual({});
+  expect(owner.result.current.quoteFeed.getSnapshot("600519")).toBeNull();
+  owner.unmount();
+});
+
+it("the authoritative full subscription frame preserves A when only B changed between hidden frames", async () => {
+  const visibility = vi.spyOn(document, "visibilityState", "get");
+  const owner = renderHook(() => useQuoteStream(["600519", "600127"]));
+  await settle(); const ws = FakeWS.instances[0];
+  await act(async () => {ws.readyState = FakeWS.OPEN; ws.onopen?.();});
+  await act(async () => {visibility.mockReturnValue("hidden"); document.dispatchEvent(new Event("visibilitychange"));});
+  await act(async () => {
+    ws.onmessage?.({data: JSON.stringify({type: "quotes", data: [quote("600519", 101), quote("600127", 8)]})});
+    ws.onmessage?.({data: JSON.stringify({type: "quotes", data: [quote("600519", 101), quote("600127", 8.1)]})});
+  });
+  expect(owner.result.current.quotes).toEqual({});
+  await act(async () => {visibility.mockReturnValue("visible"); document.dispatchEvent(new Event("visibilitychange"));});
+  expect(owner.result.current.quoteFeed.getSnapshot("600519")).toEqual(quote("600519", 101));
+  expect(owner.result.current.quoteFeed.getSnapshot("600127")).toEqual(quote("600127", 8.1));
+  expect(Object.keys(owner.result.current.quotes)).toHaveLength(2);
+  owner.unmount();
+});
+
 it("the immediate feed prunes removed subscriptions, rejects old frames and clears on stop", async () => {
   const owner = renderHook(({symbols}) => useQuoteStream(symbols, {throttleMs: 3000}), {initialProps: {symbols: ["600519"]}});
   await settle();

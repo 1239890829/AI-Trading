@@ -2,6 +2,7 @@
 
 import {memo, useId, useLayoutEffect, useRef, useState} from "react";
 import {useResource} from "@/hooks/use-resource";
+import {useExitPresence} from "@/hooks/use-exit-presence";
 import {getEventAttribution, getStockAttribution, type AttributionEvidenceItem, type AttributionSourceContext, type EventInterpretationRef} from "@/lib/api";
 import {bjDate, eventTimeText, sourceLabel, timeTextBJ} from "@/lib/format";
 import {Skeleton} from "@/components/ui/loading";
@@ -48,9 +49,10 @@ function SourceExcerpt({context, label}: {context: AttributionSourceContext | nu
 }
 
 /** The same explanation vocabulary serves source events, stock details and selection drawers. */
-export function AttributionEvidence({item, selectedAt, recordedRef, selectionContext = false}: {
-  item: AttributionEvidenceItem; selectedAt?: string | null; recordedRef?: EventInterpretationRef; selectionContext?: boolean;
+export function AttributionEvidence({item, selectedAt, recordedRef, selectionContext = false, defaultSourceExpanded = false}: {
+  item: AttributionEvidenceItem; selectedAt?: string | null; recordedRef?: EventInterpretationRef; selectionContext?: boolean; defaultSourceExpanded?: boolean;
 }) {
+  const [sourceExpanded, setSourceExpanded] = useState(defaultSourceExpanded);
   const available = clock(item.timing.available_at);
   const effective = clock(item.timing.interpretation_effective_at);
   const selected = clock(selectedAt);
@@ -79,7 +81,7 @@ export function AttributionEvidence({item, selectedAt, recordedRef, selectionCon
     {stageUnknown && <p role="note" className="text-amber-800 dark:text-amber-300">事件阶段尚未核实，不能按已落地事件解读。</p>}
     {(late || lateInterpretation || revised) && <p role="note" className="text-amber-800 dark:text-amber-300">{late ? "消息可用时间晚于首次加入，仅供后续复盘。" : lateInterpretation ? "当前解释形成晚于首次加入，仅供后续复盘。" : selectionContext ? "当前解释与选股记录引用的原版本不同。" : "当前解释与列表入口引用的版本不同。"}{selectionContext || selectedAt ? "不回填当时入选依据。" : "列表快照保留原记录。"}</p>}
     {selectedAt && (selected === null || available === null || effective === null) && <p className="text-zinc-600 dark:text-zinc-400">时点证据不完整，无法确认这条解释在首次加入时是否可用。</p>}
-    <details className="min-w-0">
+    <details className="min-w-0" open={sourceExpanded} onToggle={event => setSourceExpanded(event.currentTarget.open)}>
       <summary className={`w-fit cursor-pointer rounded py-1 font-medium ${styles.action}`}>核对原文与时点</summary>
       <div className="mt-2 space-y-3">
         <p className="text-zinc-600 dark:text-zinc-400">{item.fact_support.note} {item.market_response.basis}。市场响应不证明消息属实或涨停因果。</p>
@@ -103,9 +105,9 @@ export function AttributionEvidence({item, selectedAt, recordedRef, selectionCon
 }
 
 /** One local reading position; list navigation reuses the already loaded evidence. */
-function AttributionItems({items, selectedAt, recordedRefs, selectionContext}: {
+function AttributionItems({items, selectedAt, recordedRefs, selectionContext, defaultSourceExpanded}: {
   items: AttributionEvidenceItem[]; selectedAt?: string | null; recordedRefs?: EventInterpretationRef[];
-  selectionContext: boolean;
+  selectionContext: boolean; defaultSourceExpanded: boolean;
 }) {
   const [selection, setSelection] = useState<{id: number | null; removed: boolean}>({id: null, removed: false});
   const selectedItem = items.find(item => item.event_id === selection.id);
@@ -137,7 +139,7 @@ function AttributionItems({items, selectedAt, recordedRefs, selectionContext}: {
     {selection.removed && <p role="status" className="py-2 leading-relaxed text-zinc-600 dark:text-zinc-400">所选消息已不在本次资料中，已返回列表。</p>}
     {selectedItem ? <div className="anim-fade-in min-w-0">
       <button ref={backButton} type="button" data-action="quiet" className={`quiet-action ${styles.action}`} onClick={() => setSelection({id: null, removed: false})}><svg aria-hidden="true" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.5" className="mr-1"><path d="m14 6-6 6 6 6" /></svg>返回消息列表</button>
-      <AttributionEvidence item={selectedItem} selectedAt={selectedAt} recordedRef={recordedRefs?.find(ref => ref.event_id === selectedItem.event_id)} selectionContext={selectionContext} />
+      <AttributionEvidence item={selectedItem} selectedAt={selectedAt} recordedRef={recordedRefs?.find(ref => ref.event_id === selectedItem.event_id)} selectionContext={selectionContext} defaultSourceExpanded={defaultSourceExpanded} />
     </div> : <ul ref={list} tabIndex={-1} aria-label="归因消息列表" className="min-w-0 divide-y divide-zinc-200 dark:divide-zinc-700/60">
       {items.map(item => <li key={item.event_id} className="min-w-0"><button ref={button => {if (button) entryButtons.current.set(item.event_id, button); else entryButtons.current.delete(item.event_id);}} type="button" data-action="quiet" className={`quiet-action ${styles.entry}`} aria-label={`查看归因消息：${item.title}`} onClick={() => {
         returnFocus.current = item.event_id;
@@ -149,25 +151,29 @@ function AttributionItems({items, selectedAt, recordedRefs, selectionContext}: {
 }
 
 /** No polling or per-candidate reads: only an open detail requests current evidence. */
-export const StockAttributionPanel = memo(function StockAttributionPanel({symbol, eventId, active = true, title = "驱动线索", defaultExpanded = false, bounded = true, selectedAt, recordedRefs, selectionContext = false}: {
+export const StockAttributionPanel = memo(function StockAttributionPanel({symbol, eventId, active = true, title = "驱动线索", defaultExpanded = false, bounded = true, selectedAt, recordedRefs, selectionContext = false, defaultSourceExpanded = false}: {
   symbol?: string | null; eventId?: number | null; active?: boolean; title?: string; defaultExpanded?: boolean; bounded?: boolean;
   selectedAt?: string | null; recordedRefs?: EventInterpretationRef[];
-  selectionContext?: boolean;
+  selectionContext?: boolean; defaultSourceExpanded?: boolean;
 }) {
   const [open, setOpen] = useState(defaultExpanded);
+  const [readingCycle, setReadingCycle] = useState(0);
   const id = useId();
   const identity = `${symbol || ""}:${eventId || ""}`;
+  const presence = useExitPresence(open ? identity : null);
   const resource = useResource(() => eventId ? getEventAttribution(eventId, symbol) : getStockAttribution(symbol!), {key: identity, enabled: active && open && (!!eventId || /^\d{6}$/.test(symbol || "")), intervalMs: null, marketHours: false});
   const data = resource.data;
   return <section className="min-w-0 py-1 text-xs" aria-label={title}>
-    <div className="flex min-h-8 flex-wrap items-center justify-between gap-2"><button type="button" data-action="quiet" className={`quiet-action min-w-0 text-left ${styles.action} ${styles.panelToggle}`} aria-expanded={open} aria-controls={id} onClick={() => setOpen(value => !value)}><span>{title}</span><svg aria-hidden="true" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.5" className={`ml-1 shrink-0 transition-transform duration-150 motion-reduce:transition-none ${open ? "rotate-180" : ""}`}><path d="m6 9 6 6 6-6" /></svg></button>{open && <button type="button" data-action="quiet" className={`quiet-action shrink-0 ${styles.action}`} disabled={resource.pending} onClick={resource.refresh}>{resource.pending && data ? "更新中" : "刷新依据"}</button>}</div>
-    {open && <div data-attribution-reader={bounded || undefined} id={id} className={`min-w-0 ${bounded ? "data-scroll max-h-72 overflow-y-auto pr-1" : ""}`}>
+    <div className="flex min-h-8 flex-wrap items-center justify-between gap-2"><button type="button" data-action="quiet" className={`quiet-action min-w-0 text-left ${styles.action} ${styles.panelToggle}`} aria-expanded={open} aria-controls={id} onClick={() => {if (!open) setReadingCycle(value => value + 1); setOpen(value => !value);}}><span>{title}</span><svg aria-hidden="true" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.5" className={`ml-1 shrink-0 transition-transform duration-150 motion-reduce:transition-none ${open ? "rotate-180" : ""}`}><path d="m6 9 6 6 6-6" /></svg></button>{open && <button type="button" data-action="quiet" className={`quiet-action shrink-0 ${styles.action}`} disabled={resource.pending} onClick={resource.refresh}>{resource.pending && data ? "更新中" : "刷新依据"}</button>}</div>
+    <div className="motion-disclosure" data-open={open} aria-hidden={!open || undefined} inert={!open}><div className="motion-disclosure-body">
+    {presence.value === identity && <div data-attribution-reader={bounded || undefined} id={id} className={`min-w-0 ${bounded ? "data-scroll max-h-72 overflow-y-auto pr-1" : ""}`}>
       <p className="py-1 leading-relaxed text-zinc-600 dark:text-zinc-400">已采集消息可逐条查看；不改写首次入选记录。不构成买卖建议。</p>
       {!!recordedRefs?.length && <details className="py-1 text-zinc-600 dark:text-zinc-400"><summary className="w-fit cursor-pointer">{selectionContext ? "选股记录事件引用" : "列表入口事件引用"}</summary><ul className="mt-1 space-y-1 [overflow-wrap:anywhere]">{recordedRefs.map((ref, index) => <li key={`${ref.event_id}:${ref.version_id}:${index}`}>事件 #{ref.event_id} · {ref.version_id ? `原解释 #${ref.version_id}` : "原版本未知"} · {timeLabel(ref.available_at)}</li>)}</ul></details>}
       {resource.pending && !data && <div role="status" aria-label="归因依据加载中" className="space-y-2 py-3"><Skeleton className="h-3 w-3/4" /><Skeleton className="h-3 w-full" /><span className="sr-only">归因依据加载中</span></div>}
       {resource.error != null && <p role="alert" className="py-2 leading-relaxed text-amber-800 dark:text-amber-300">{data ? "依据刷新失败，保留上次读取内容。" : "归因依据读取失败，尚不能确认是否有相关消息。"}可使用上方“刷新依据”重试。</p>}
       {data?.items.length === 0 && <p className="py-3 leading-relaxed text-zinc-600 dark:text-zinc-400">已采集资料中暂未找到关联事件。覆盖不等于全市场，不能据此认定没有驱动消息。</p>}
-      {data && <AttributionItems key={identity} items={data.items} selectedAt={selectedAt} recordedRefs={recordedRefs} selectionContext={selectionContext} />}
+      {data && <AttributionItems key={`${identity}:${readingCycle}`} items={data.items} selectedAt={selectedAt} recordedRefs={recordedRefs} selectionContext={selectionContext} defaultSourceExpanded={defaultSourceExpanded} />}
     </div>}
+    </div></div>
   </section>;
 });

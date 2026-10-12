@@ -2,13 +2,23 @@
 
 /** 紧凑行情条（详情页顶部）：名称/代码/质量徽标/加自选 + 价格涨跌 + 关键指标带。手机可就地收起详细指标。
  *  hideWatchlist=true 时隐藏加自选区（指数无自选语义，防把 sh000001 之类加进自选）。 */
-import { useId, useState } from "react";
+import { useId, useState, useSyncExternalStore } from "react";
+import { useExitPresence } from "@/hooks/use-exit-presence";
 import { PriceFlash } from "@/components/price-flash";
 import { QualityBadge } from "@/components/quality-badge";
 import { SuspendedBadge } from "@/components/detail/suspended-badge";
 import { fmt, fmtAmount, fmtVolume, pctColor, pctText, sourceLabel, timeText } from "@/lib/format";
 import { isPositivePrice } from "@/lib/minute-axis";
 import type { Quote, TradingStatusInfo } from "@/types/market";
+
+const COMPACT_QUERY = "(max-width: 767px), (min-width: 1024px) and (max-height: 740px)";
+function compactSnapshot() {return typeof window.matchMedia === "function" && window.matchMedia(COMPACT_QUERY).matches;}
+function subscribeCompact(listener: () => void) {
+  if (typeof window.matchMedia !== "function") return () => {};
+  const query = window.matchMedia(COMPACT_QUERY);
+  query.addEventListener("change", listener);
+  return () => query.removeEventListener("change", listener);
+}
 
 export function QuoteStrip({
   quote,
@@ -25,6 +35,9 @@ export function QuoteStrip({
   tradingStatus?: TradingStatusInfo | null;
 }) {
   const [metricsOpen, setMetricsOpen] = useState(false);
+  const compact = useSyncExternalStore(subscribeCompact, compactSnapshot, () => false);
+  const metricsVisible = !compact || metricsOpen;
+  const metricsPresence = useExitPresence(metricsVisible ? true : null);
   const metricsId = useId();
   // PE 缺失原因文案：原版把"停牌"写进猜测清单，但那是**猜**的——PE 缺失
   // 绝大部分是数据源未提供（新股/亏损股），真正的停牌应由 tradingStatus 判定。
@@ -87,13 +100,17 @@ export function QuoteStrip({
           行情指标<svg aria-hidden="true" width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.5"><path d="m7 10 5 5 5-5" /></svg>
         </button>
       </div>
-      <div id={metricsId} className="quote-sheet-metrics text-[11px] text-zinc-600 dark:text-zinc-400" role="region" aria-label="行情详细指标" tabIndex={0}>
+      {metricsPresence.value && <div className="quote-metrics-presence motion-disclosure" data-open={metricsVisible} aria-hidden={!metricsVisible || undefined} inert={!metricsVisible}>
+      <div className="motion-disclosure-body">
+      <div id={metricsId} className="quote-sheet-metrics text-[11px] text-zinc-600 dark:text-zinc-400" role="region" aria-label="行情详细指标" tabIndex={metricsVisible ? 0 : -1}>
         {strip.map(([k, v, title]) => (
           <span className="quote-metric" key={k} title={title}>
             <span>{k}</span> <span className="font-mono tabular-nums text-zinc-800 dark:text-zinc-200">{v}</span>
           </span>
         ))}
       </div>
+      </div>
+      </div>}
     </div>
   );
 }

@@ -237,6 +237,7 @@ describe("StockDetailPanel · 即时报价复用", () => {
 });
 
 beforeEach(() => {
+  localStorage.clear();
   vi.useFakeTimers();
   vi.setSystemTime(new Date("2026-10-09T02:00:00Z"));
   vi.mocked(mergeQuoteIntoMinutes).mockClear();
@@ -418,7 +419,72 @@ describe("StockDetailPanel · 估值和模拟持仓回包归属", () => {
 afterEach(() => {
   cleanup();
   calls.symbols.length = 0;
+  localStorage.clear();
+  vi.unstubAllGlobals();
+  vi.restoreAllMocks();
   vi.useRealTimers();
+});
+
+describe("StockDetailPanel · 右列与图表过渡", () => {
+  it("collapse pauses book polling immediately, retains the exiting surface and keeps the chart instance/feed", async () => {
+    vi.stubGlobal("matchMedia", () => ({matches: false, addEventListener: vi.fn(), removeEventListener: vi.fn()}));
+    const feed = testQuoteFeed();
+    const first = {...audit, symbol: "600519", price: 20, data_timestamp: audit.received_at};
+    feed.publish("600519", first);
+    const view = render(<StockDetailPanel symbol="600519" chartTab="kline" quoteFeed={feed} />); await settle();
+    const chart = view.getByTestId("kline-price");
+    const side = view.container.querySelector(".detail-side-column")!;
+    const reads = api.getOrderBook.mock.calls.length;
+    fireEvent.click(view.getByRole("button", {name: "收起右列"}));
+    expect(side.getAttribute("data-motion-state")).toBe("closed");
+    expect(side.hasAttribute("inert")).toBe(true);
+    expect(view.getByTestId("kline-price")).toBe(chart);
+    await act(async () => {feed.publish("600519", {...first, price: 23, data_timestamp: "2026-10-09T02:00:30Z"});});
+    expect(chart.textContent).toBe("23");
+    await advance(159);
+    expect(view.container.querySelector(".detail-side-column")).toBe(side);
+    await advance(1);
+    expect(view.container.querySelector(".detail-side-column")).toBeNull();
+    await advance(10_000);
+    expect(api.getOrderBook).toHaveBeenCalledTimes(reads);
+    fireEvent.click(view.getByRole("button", {name: "展开右列"})); await settle();
+    expect(api.getOrderBook).toHaveBeenCalledTimes(reads + 1);
+    expect(view.getByTestId("kline-price")).toBe(chart);
+  });
+
+  it("only a real chart-tab change animates the stable column; quote ticks and right-column collapse do not", async () => {
+    vi.stubGlobal("matchMedia", () => ({matches: false, addEventListener: vi.fn(), removeEventListener: vi.fn()}));
+    const cancel = vi.fn();
+    const animate = vi.fn((_keyframes: Keyframe[], _options: KeyframeAnimationOptions) => ({cancel}));
+    const original = HTMLElement.prototype.animate;
+    HTMLElement.prototype.animate = animate as unknown as typeof original;
+    try {
+      const feed = testQuoteFeed();
+      const first = {...audit, symbol: "600519", price: 20}; feed.publish("600519", first);
+      const view = render(<StockDetailPanel symbol="600519" chartTab="kline" quoteFeed={feed} />); await settle();
+      const column = view.container.querySelector(".detail-chart-column");
+      expect(animate).not.toHaveBeenCalled();
+      fireEvent.click(view.getByRole("button", {name: "分时"})); await settle();
+      expect(view.container.querySelector(".detail-chart-column")).toBe(column);
+      expect(animate).toHaveBeenCalledTimes(1);
+      expect(animate.mock.calls[0][1]).toMatchObject({duration: 160});
+      await act(async () => {feed.publish("600519", {...first, price: 22});});
+      fireEvent.click(view.getByRole("button", {name: "收起右列"}));
+      expect(animate).toHaveBeenCalledTimes(1);
+      fireEvent.click(view.getByRole("button", {name: "K线"}));
+      expect(animate).toHaveBeenCalledTimes(2);
+      expect(cancel).toHaveBeenCalledTimes(1);
+      view.unmount(); expect(cancel).toHaveBeenCalledTimes(2);
+    } finally { HTMLElement.prototype.animate = original; }
+  });
+
+  it.each([[360, 360], [259, 300], [481, 300]])("restores a bounded saved width %s after hydration and preserves collapsed state", async (saved, expected) => {
+    localStorage.setItem("ashare-right-w", String(saved));
+    localStorage.setItem("ashare-right-collapsed", "1");
+    const view = render(<StockDetailPanel symbol="600519" chartTab="kline" />); await settle();
+    expect((view.container.querySelector(".detail-content-grid") as HTMLElement).style.getPropertyValue("--right-w")).toBe(`${expected}px`);
+    expect(view.getByRole("button", {name: "展开右列"})).toBeTruthy();
+  });
 });
 
 describe("StockDetailPanel · 资讯首次错误与旧结果保留", () => {

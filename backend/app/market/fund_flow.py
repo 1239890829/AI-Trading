@@ -39,6 +39,7 @@ from pathlib import Path
 from time import monotonic
 
 from app.core.ttl_cache import TTLCache
+from app.market import trade_calendar
 
 log = logging.getLogger(__name__)
 
@@ -367,6 +368,7 @@ _INTRADAY_CACHE = TTLCache("fundflow-intraday", ttl=60.0, maxsize=1)
 # 沪深分钟源由实时回退与市场分钟图共用；身份包含接口口径、日期和市场。
 _FFLOW_MIN_CACHE = TTLCache("fundflow-minute-source", ttl=60.0, maxsize=4)
 _FFLOW_MIN_READS: dict[tuple, asyncio.Task] = {}
+_AGGREGATE_READS: dict[tuple, asyncio.Task] = {}
 _MINUTE_EXPIRED_REASON = "分钟资金流源在读取期间过期，无法提供有效沪深合计"
 
 
@@ -375,6 +377,23 @@ class _MinuteRows(list):
     def __init__(self, rows: list, loaded_at: float):
         super().__init__((t, dict(vals)) for t, vals in rows)
         self.loaded_at = loaded_at
+
+
+async def _shared_aggregate(key: tuple, load) -> dict:
+    """同一轮冷读只聚合一次；失败只共享给本轮等待者，取消单个等待者不取消源读取。"""
+    task = _AGGREGATE_READS.get(key)
+    if task is None or task.done():
+        task = asyncio.create_task(load(key))
+        _AGGREGATE_READS[key] = task
+
+        def completed(done: asyncio.Task) -> None:
+            if _AGGREGATE_READS.get(key) is done:
+                _AGGREGATE_READS.pop(key, None)
+            if not done.cancelled():
+                done.exception()
+
+        task.add_done_callback(completed)
+    return deepcopy(await asyncio.shield(task))
 
 
 async def get_fund_flow_intraday() -> dict:
@@ -388,6 +407,10 @@ async def get_fund_flow_intraday() -> dict:
     hit, cached = _INTRADAY_CACHE.get(key)
     if hit and monotonic() < cached[1]:
         return deepcopy(cached[0])
+    return await _shared_aggregate(key, _fund_flow_intraday_uncached)
+
+
+async def _fund_flow_intraday_uncached(key: tuple) -> dict:
     degraded: list[str] = []
     source_times: list[float] = []
     series: dict[str, dict] = {}
@@ -524,6 +547,10 @@ async def get_fund_flow_realtime() -> dict:
     hit, cached = _FLOW_RT_CACHE.get(key)
     if hit and monotonic() < cached[1]:
         return deepcopy(cached[0])
+    return await _shared_aggregate(key, _fund_flow_realtime_uncached)
+
+
+async def _fund_flow_realtime_uncached(key: tuple) -> dict:
     source_times: list[float] = []
     out = await _fund_flow_rt_uncached(source_times=source_times)
     if out.get("available"):
@@ -545,6 +572,9 @@ def _snapshot_today_if_closed(rt: dict) -> None:
     try:
         today = beijing_now()
         if today.hour < 15 or (today.hour == 15 and today.minute < 5):
+            return
+        # 当前输出只有 HH:MM，不能自证源日期；日历未知时也不能造当天日线。
+        if _stored_trade_day(today.date(), trade_calendar.known_trade_days()) is not True:
             return
         store = _read_flow_store() or {"updated_at": None, "days": {}}
         d = today.date().isoformat()
@@ -680,6 +710,15 @@ async def _em_ulist() -> list[dict] | None:
 
 # ---------------------------------------------------------------- 历史资金流（落盘）
 
+def _stored_trade_day(d: date, calendar: list[date] | None) -> bool | None:
+    """只过滤确定的非交易日；日历首日之前/末日之后保留未知，不冒充覆盖。"""
+    if d.weekday() >= 5:
+        return False
+    if not calendar or d < calendar[0] or d > calendar[-1]:
+        return None
+    return trade_calendar.is_trade_day_on(d, calendar)
+
+
 _BACKFILL_MIN_INTERVAL_S = 300
 _last_backfill_ts: list[float] = [0.0]
 
@@ -702,12 +741,13 @@ async def get_fund_flow_history(hub, days: int = 30) -> dict:
     """
     hit, cached = _FLOW_HIST_CACHE.get(("hist", days))
     if hit:
-        return cached
+        return deepcopy(cached)
     store = _read_flow_store()
     store_days = set((store or {}).get("days") or {})
     degraded: list[str] = []
     refreshed = False
     prev_d: date | None = None
+    cal: list[date] | None = None
     try:
         from app.market.trade_calendar import last_trade_date, prev_trade_date, trading_days
 
@@ -734,13 +774,28 @@ async def get_fund_flow_history(hub, days: int = 30) -> dict:
             refreshed = True
 
     rows: list[dict] = []
+    filtered = unknown = 0
     for d in sorted(((store or {}).get("days") or {}), reverse=True):
+        try:
+            trade_day = _stored_trade_day(date.fromisoformat(d), cal)
+        except ValueError:
+            filtered += 1
+            continue
+        if trade_day is False:
+            filtered += 1
+            continue
+        if trade_day is None:
+            unknown += 1
         rec = store["days"][d]
         rows.append({"date": d, **_flow_total_yi(rec)})
+    if filtered:
+        degraded.append(f"已过滤 {filtered} 条确定非交易日或无效日期的旧存档，原文件保留")
+    if unknown:
+        degraded.append(f"{unknown} 条历史存档交易日归属未核定，不代表完整连续交易日序列")
     out = {"items": rows[:days], "updated_at": (store or {}).get("updated_at"),
            "refreshed": refreshed, "degraded": degraded}
     _FLOW_HIST_CACHE.set(("hist", days), out)
-    return out
+    return deepcopy(out)
 
 
 def _read_flow_store() -> dict | None:

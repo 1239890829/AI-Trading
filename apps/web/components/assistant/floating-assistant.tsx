@@ -18,6 +18,8 @@ import { inspectionRequestForHref, useInspection } from "@/components/inspection
  */
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { useRouter } from "next/navigation";
+import { useExitPresence } from "@/hooks/use-exit-presence";
+import { FadeSwap } from "@/components/ui/loading";
 import { API_BASE } from "@/lib/api";
 import { themesUrl } from "@/lib/routing";
 import { parseWorkbenchDetailUrl } from "@/lib/detail-tabs";
@@ -151,6 +153,7 @@ export function FloatingAssistant() {
   const { open: inspect } = useInspection();
   const [mounted, setMounted] = useState(false);
   const [open, setOpen] = useState(false);
+  const panelPresence = useExitPresence(open ? true : null);
   const [pos, setPos] = useState<{ x: number; y: number } | null>(null);
   const [viewport, setViewport] = useState({ w: 1280, h: 800 });
   const [messages, setMessages] = useState<ChatMsg[]>([]);
@@ -291,15 +294,27 @@ export function FloatingAssistant() {
   useEffect(() => {
     if (!open || dictTriedRef.current) return;
     dictTriedRef.current = true;
-    fetch(`${API_BASE}/api/assistant/entity-dict`)
+    const controller = new AbortController();
+    let alive = true;
+    let settled = false;
+    fetch(`${API_BASE}/api/assistant/entity-dict`, {signal: controller.signal})
       .then((r) => (r.ok ? r.json() : null))
       .then((j) => {
+        if (!alive) return;
+        settled = true;
         if (j?.data) setDict(j.data as EntityDict);
         else dictTriedRef.current = false;
       })
       .catch(() => {
+        if (!alive) return;
+        settled = true;
         dictTriedRef.current = false;
       });
+    return () => {
+      alive = false;
+      if (!settled) dictTriedRef.current = false;
+      controller.abort();
+    };
   }, [open]);
 
   const matcher = useMemo(() => createEntityMatcher(dict), [dict]);
@@ -741,17 +756,21 @@ export function FloatingAssistant() {
       </div>
 
       {/* 聊天窗 */}
-      {open && (
+      {panelPresence.value && (
         <div
           data-testid="assistant-panel"
+          data-motion-state={open ? "open" : "closed"}
+          aria-hidden={!open || undefined}
+          inert={!open}
           id="assistant-panel"
           data-ai-active={streaming || undefined}
           role="region"
           aria-label="AI 助手面板"
           onKeyDown={event => { if (event.key === "Escape" && !event.nativeEvent.isComposing) { event.preventDefault(); event.stopPropagation(); minimize(); } }}
-          className="ai-material ui-glass-overlay fixed z-50 flex flex-col overflow-hidden rounded-2xl border border-zinc-200 bg-white/95 shadow-2xl shadow-zinc-900/10 backdrop-blur dark:border-zinc-800 dark:bg-zinc-950/95 dark:shadow-black/50"
+          className="motion-float ai-material ui-glass-overlay fixed z-50 flex flex-col overflow-hidden rounded-2xl border border-zinc-200 bg-white/95 shadow-2xl shadow-zinc-900/10 backdrop-blur dark:border-zinc-800 dark:bg-zinc-950/95 dark:shadow-black/50"
           style={panelStyle}
         >
+          {open && <>
           {/* 头部：墨玉徽标 + 名称 + 模型（mono 弱化），按钮族统一次要级 */}
           <div className="flex items-center gap-2.5 border-b border-zinc-200/80 px-4 py-3 dark:border-zinc-800/80">
             {/* 与悬浮球同款墨玉反色，档位同步（P2-27） */}
@@ -812,6 +831,7 @@ export function FloatingAssistant() {
           {/* 会话历史列表（IMP-004）：**替换**消息区而不是另开一页 ——
               400px 浮窗里分页会割裂上下文，替换式列表能保留头部与输入区不动。
               列表本身不再另加弹层，省掉一套定位/边界计算。 */}
+          <FadeSwap swapKey={historyOpen ? "history" : "messages"} className="flex min-h-0 flex-1 flex-col">
           {historyOpen ? (
             <div
               data-testid="assistant-history"
@@ -979,6 +999,7 @@ export function FloatingAssistant() {
             )}
           </div>
           )}
+          </FadeSwap>
 
           {/* 输入区 */}
           <div className="border-t border-zinc-200 px-3 py-2.5 dark:border-zinc-800">
@@ -1027,6 +1048,7 @@ export function FloatingAssistant() {
               AI 生成内容仅供参考，不构成投资建议
             </div>
           </div>
+          </>}
         </div>
       )}
     </>

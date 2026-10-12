@@ -15,7 +15,7 @@ import { getEntryChecklist, type EntryChecklist as EntryChecklistData } from "@/
  *
  * 红线 3：全部为条件陈述，不构成买卖建议。
  */
-export function EntryChecklist({ symbol }: { symbol: string }) {
+export function EntryChecklist({ symbol, active = true }: { symbol: string; active?: boolean }) {
   // 三态：undefined=尚未拉到（加载中）/ null=拉取失败 / 有值=渲染
   const [data, setData] = useState<EntryChecklistData | null | undefined>(undefined);
   const [error, setError] = useState<string | null>(null);
@@ -30,10 +30,11 @@ export function EntryChecklist({ symbol }: { symbol: string }) {
   }
 
   useEffect(() => {
+    if (!active) return;
     let alive = true;
     getEntryChecklist(symbol)
       .then((d) => {
-        if (alive) setData(d);
+        if (alive) {setData(d); setError(null);}
       })
       .catch((e: unknown) => {
         if (!alive) return;
@@ -43,7 +44,7 @@ export function EntryChecklist({ symbol }: { symbol: string }) {
     return () => {
       alive = false;
     };
-  }, [symbol]);
+  }, [active, symbol]);
 
   if (data === undefined) {
     return <p className="text-[11px] text-zinc-600 dark:text-zinc-400">介入条件加载中…</p>;

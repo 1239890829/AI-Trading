@@ -3,6 +3,7 @@
 import Link from "next/link";
 import { inspectionClick, useInspection } from "@/components/inspection/inspection-context";
 import { useMemo, useState } from "react";
+import { useExitPresence } from "@/hooks/use-exit-presence";
 import type { StockThemeLink, StockThemes } from "@/lib/api";
 import { pctColor, pctText } from "@/lib/format";
 import { themesUrl } from "@/lib/routing";
@@ -36,6 +37,7 @@ const OFFICIAL_TOP_N = 6;
 export function ThemeChipsRow({ themes }: { themes: StockThemes | null }) {
   const { open: inspect } = useInspection();
   const [expanded, setExpanded] = useState(false);
+  const extrasPresence = useExitPresence(expanded ? true : null);
   const official: StockThemeLink[] = useMemo(() => {
     const list = [...(themes?.official ?? [])];
     // 主排序：与今日行情联动度降序（只看方向一致占比，不依赖涨跌幅数值）；
@@ -53,15 +55,11 @@ export function ThemeChipsRow({ themes }: { themes: StockThemes | null }) {
   if (!themes || (official.length === 0 && attribution.length === 0)) return null;
 
   const collapsedCount = official.length + attribution.length;
-  const showAll = expanded || collapsedCount <= OFFICIAL_TOP_N;
+  const showAll = collapsedCount <= OFFICIAL_TOP_N;
   const visibleOfficial = showAll ? official : official.slice(0, OFFICIAL_TOP_N);
   const visibleAttribution = showAll ? attribution : [];
   const hidden = collapsedCount - visibleOfficial.length - visibleAttribution.length;
-
-  return (
-    <div className="flex shrink-0 flex-wrap items-center gap-x-2 gap-y-1 text-xs">
-      <span className="shrink-0 text-zinc-600 dark:text-zinc-400">题材归属</span>
-      {visibleOfficial.map((t) => (
+  const renderOfficial = (t: StockThemeLink) => (
         <Link
           key={`o-${t.theme_code}`}
           href={themesUrl(t.theme_name)}
@@ -76,8 +74,8 @@ export function ThemeChipsRow({ themes }: { themes: StockThemes | null }) {
             </span>
           )}
         </Link>
-      ))}
-      {visibleAttribution.map((a) => (
+      );
+  const renderAttribution = (a: typeof attribution[number]) => (
         <Link
           key={`a-${a.theme_name}`}
           href={themesUrl(a.theme_name)}
@@ -90,15 +88,28 @@ export function ThemeChipsRow({ themes }: { themes: StockThemes | null }) {
             涨停归因
           </span>
         </Link>
-      ))}
+      );
+
+  return (
+    <div className="flex shrink-0 flex-wrap items-center gap-x-2 gap-y-1 text-xs">
+      <span className="shrink-0 text-zinc-600 dark:text-zinc-400">题材归属</span>
+      {visibleOfficial.map(renderOfficial)}
+      {visibleAttribution.map(renderAttribution)}
       {hidden > 0 && (
         <button data-action="quiet"
           onClick={() => setExpanded((v) => !v)}
+          aria-expanded={expanded}
           title={expanded ? "收起，只显示涨跌幅最相关的题材" : "展开全部归属题材"}
         >
           {expanded ? "收起" : `＋${hidden} 个`}
         </button>
       )}
+      {extrasPresence.value && hidden > 0 && <div className="theme-chips-extras motion-disclosure" data-open={expanded} aria-hidden={!expanded || undefined} inert={!expanded}>
+        <div className="motion-disclosure-body"><div className="flex flex-wrap gap-x-2 gap-y-1">
+          {official.slice(visibleOfficial.length).map(renderOfficial)}
+          {attribution.slice(visibleAttribution.length).map(renderAttribution)}
+        </div></div>
+      </div>}
     </div>
   );
 }

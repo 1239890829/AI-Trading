@@ -1,6 +1,6 @@
 /** 格式化工具测试：空值/边界/单位换算/红涨绿跌语义。 */
 import { describe, expect, it } from "vitest";
-import { fmt, fmtAmount, fmtHeat, fmtVolume, formatLegacyLimitDistance, isHardQuality, parseNum, pctColor, pctText, qualityLabel, shouldShowQualityBadge, sourceLabel, timeText, timeTextBJ, dateTimeTextBJ, bjDate, bjHHMM, bjMonthDay, triAmount, triText, winRateColor } from "./format";
+import { fmt, fmtYi, fmtAmount, fmtHeat, fmtVolume, formatLegacyLimitDistance, isHardQuality, parseNum, pctColor, pctText, qualityLabel, shouldShowQualityBadge, sourceLabel, timeText, timeTextBJ, dateTimeTextBJ, bjDate, bjHHMM, bjMonthDay, triAmount, triText, winRateColor } from "./format";
 
 describe("存量临板距离展示", () => {
   it.each(["2", "2.50", "+2.50", "-0.30", ".5"])("保留旧百分点差原值 %s", (value) => {
@@ -111,6 +111,24 @@ describe("shouldShowQualityBadge（徽标可见性策略的唯一决策点）", 
 });
 
 describe("fmt", () => {
+  it("复用格式器仍与原 Intl 输出逐字一致，保留边界与任意有效精度", () => {
+    for (const value of [-Infinity, -123456.789, -0, 0, 0.005, 1297.4, 1e30, Infinity]) {
+      for (const digits of [0, 1, 2, 3, 20, 21, 100, 1.9]) {
+        const original = value.toLocaleString("zh-CN", {minimumFractionDigits: digits, maximumFractionDigits: digits});
+        expect(fmt(value, digits)).toBe(original);
+        expect(fmtYi(value, digits)).toBe(original);
+      }
+    }
+  });
+
+  it("非法精度保持 RangeError，缺失数值仍直接显示 --", () => {
+    for (const digits of [-1, 101, NaN, Infinity]) {
+      expect(() => fmt(1, digits)).toThrow(RangeError);
+      expect(() => fmtYi(1, digits)).toThrow(RangeError);
+      expect(fmt(null, digits)).toBe("--");
+      expect(fmtYi(NaN, digits)).toBe("--");
+    }
+  });
   it("null/undefined/NaN → --", () => {
     expect(fmt(null)).toBe("--");
     expect(fmt(undefined)).toBe("--");

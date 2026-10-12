@@ -12,7 +12,6 @@ vi.mock("@/hooks/use-polling-fetch", () => ({ usePollingFetch: (fn: () => Promis
   useEffect(() => { latest.current = fn; });
   useEffect(() => { if (options?.enabled !== false) void latest.current(); }, [options?.enabled]);
 } }));
-vi.mock("@/hooks/use-exit-presence", () => ({ useExitPresence: () => ({ value: null, active: false }) }));
 vi.mock("@/components/ui/modal-shell", () => ({ ModalShell: () => null }));
 vi.mock("@/components/ui/candidate-collection", () => ({ CandidateCollection: ({children}: {children: React.ReactNode}) => <div>{children}</div> }));
 vi.mock("@/components/ui/loading", () => ({ FadeIn: ({children}: {children: React.ReactNode}) => <div>{children}</div>, CardListSkeleton: () => <div>读取候选中</div>, PageSkeletonFallback: () => null, StatGridSkeleton: () => null, StatsSkeleton: () => null, TableSkeleton: () => null }));
@@ -44,7 +43,7 @@ beforeEach(() => {
   vi.mocked(api.getPositionLabels).mockResolvedValue({});
   vi.mocked(api.getEventsForSymbol).mockImplementation(async symbol => ({symbol, themes: [], count: 0, items: []}));
   HTMLElement.prototype.scrollIntoView = vi.fn();
-  vi.stubGlobal("matchMedia", () => ({matches: true}));
+  vi.stubGlobal("matchMedia", () => ({matches: true, addEventListener: vi.fn(), removeEventListener: vi.fn()}));
 });
 afterEach(() => { cleanup(); vi.useRealTimers(); vi.clearAllMocks(); vi.unstubAllGlobals(); });
 
@@ -171,22 +170,49 @@ it("closed reference details keeps the full count but makes no per-stock presenc
   render(<HuntingPage />);
   await act(async () => {});
   const summary = screen.getByText(/涨停梯队 2 只/);
-  const fold = summary.closest("details")!;
   const refCalls = () => vi.mocked(api.getEventsForSymbol).mock.calls.filter(([symbol]) => ["600987", "600988"].includes(symbol));
   expect(refCalls()).toHaveLength(0);
   expect(screen.queryByText("候选 600987")).toBeNull();
-  fold.open = true; fireEvent(fold, new Event("toggle")); await act(async () => {});
+  fireEvent.click(summary); await act(async () => {});
   expect(screen.getByText("候选 600987")).toBeTruthy();
   expect(screen.getByText("候选 600988")).toBeTruthy();
   expect(refCalls()).toHaveLength(0);
   await act(async () => {await vi.advanceTimersByTimeAsync(30_000);});
   expect(refCalls()).toHaveLength(0);
-  fold.open = false; fireEvent(fold, new Event("toggle")); await act(async () => {});
+  fireEvent.click(summary); await act(async () => {});
   await act(async () => {await vi.advanceTimersByTimeAsync(60_000);});
   expect(refCalls()).toHaveLength(0);
   expect(screen.getByText(/涨停梯队 2 只/)).toBeTruthy();
   expect(screen.getByText("候选 002636")).toBeTruthy();
   expect(screen.getByText("候选 600127")).toBeTruthy();
+});
+
+it("reference disclosure keeps an inert exit for 160ms and a quick reversal preserves the same cards", async () => {
+  vi.useFakeTimers();
+  vi.stubGlobal("matchMedia", () => ({matches: false, addEventListener: vi.fn(), removeEventListener: vi.fn()}));
+  vi.mocked(api.getIntradayTop).mockResolvedValue({trade_date: "2026-10-08", items: [{symbol: "600127"}], reference_items: [{symbol: "600987"}]} as api.IntradayTopPayload);
+  render(<HuntingPage />); await act(async () => {});
+  const trigger = screen.getByRole("button", {name: /涨停梯队 1 只/});
+  expect(trigger.getAttribute("aria-expanded")).toBe("false");
+  fireEvent.click(trigger);
+  const card = screen.getByText("候选 600987");
+  const disclosure = card.closest(".motion-disclosure")!;
+  expect(disclosure.getAttribute("data-open")).toBe("true");
+  fireEvent.click(trigger);
+  expect(trigger.getAttribute("aria-expanded")).toBe("false");
+  expect(disclosure.getAttribute("data-open")).toBe("false");
+  expect(disclosure.hasAttribute("inert")).toBe(true);
+  await act(async () => {await vi.advanceTimersByTimeAsync(100);});
+  expect(screen.getByText("候选 600987")).toBe(card);
+  fireEvent.click(trigger);
+  await act(async () => {await vi.advanceTimersByTimeAsync(160);});
+  expect(screen.getByText("候选 600987")).toBe(card);
+  expect(disclosure.hasAttribute("inert")).toBe(false);
+  fireEvent.click(trigger);
+  await act(async () => {await vi.advanceTimersByTimeAsync(159);});
+  expect(screen.getByText("候选 600987")).toBe(card);
+  await act(async () => {await vi.advanceTimersByTimeAsync(1);});
+  expect(screen.queryByText("候选 600987")).toBeNull();
 });
 
 it("same-scope refresh failures preserve all candidates but remove current gate eligibility", async () => {

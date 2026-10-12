@@ -96,8 +96,11 @@ function WorkbenchInner() {
   const [baseLoaded, setBaseLoaded] = useState(false);
   const [paperLoaded, setPaperLoaded] = useState(false);
   const [baseErrors, setBaseErrors] = useState<Record<string, string>>({});
-  const baseReadRef = useRef(0);
-  useEffect(() => () => { baseReadRef.current += 1; }, []);
+  const baseReadRef = useRef({watch: 0, groups: 0, paper: 0, overview: 0});
+  useEffect(() => () => {
+    const reads = baseReadRef.current;
+    reads.watch += 1; reads.groups += 1; reads.paper += 1; reads.overview += 1;
+  }, []);
   // 真实持仓（CONTEXT.md: Holdings Group）：共用 hook 一份轮询（评审 M3），
   // 标的列表派生进 WS 订阅，「持仓」分类共用
   const { data: realData, error: realError, reload: reloadRealPositions } = useRealPositions();
@@ -201,47 +204,72 @@ function WorkbenchInner() {
   const backFrom = sp.get("from");
   const backLabel = originLabel(backFrom);
 
-  const loadBase = useCallback(async () => {
-    // Each result owns its display: a slow auxiliary endpoint must not hold the list.
-    // Manual refresh or a watchlist mutation supersedes every older in-flight read.
-    const version = ++baseReadRef.current;
-    const current = () => version === baseReadRef.current;
-    const report = (key: string, message?: string) => {
-      if (!current()) return;
-      setBaseErrors(previous => {
-        if (previous[key] === message || (!message && !(key in previous))) return previous;
-        const next = {...previous};
-        if (message) next[key] = message;
-        else delete next[key];
-        return next;
-      });
-    };
-    await Promise.allSettled([
-      getWatchlist().then(value => {
-        if (!current()) return;
-        setGroupMap(Object.fromEntries(value.map(i => [i.symbol, i.group_name ?? "默认"])));
-        setSymbols(value.map(i => i.symbol));
-        report("watch");
-      }, () => report("watch", "自选读取失败")).finally(() => { if (current()) setBaseLoaded(true); }),
-      getMarketOverview().then(value => {
-        if (!current()) return;
-        setIndices(value.indices); setTotalAmount(value.total_amount);
-        setAmountFreshness(value.total_amount_freshness);
-        setUpdatedAt(new Date().toLocaleTimeString("zh-CN", {hour12: false}));
-        report("overview");
-      }, () => report("overview", "行情概览读取失败")),
-      getPaperPositions().then(value => {
-        if (!current()) return;
-        setPositions(value);
-        report("paper");
-      }, () => report("paper", "main 模拟持仓读取失败")).finally(() => { if (current()) setPaperLoaded(true); }),
-      getWatchlistGroups().then(value => {
-        if (!current()) return;
-        setAllGroupNames(["默认", ...value]);
-        report("groups");
-      }, () => report("groups", "分组读取失败")),
-    ]);
+  const reportBase = useCallback((key: string, message?: string) => {
+    setBaseErrors(previous => {
+      if (previous[key] === message || (!message && !(key in previous))) return previous;
+      const next = {...previous};
+      if (message) next[key] = message;
+      else delete next[key];
+      return next;
+    });
   }, []);
+
+  // 四个读取分别拥有单飞/计时链，首屏自选不等待概览或分组。
+  // 自选/分组首次即读、写后即时失效，并以 60s 兜底同步其它客户端；
+  // 模拟持仓尚无跨组件写后事件，保留 10s 校准；行情概览也保持 10s。
+  // 这里沿用各自的状态与错误展示。
+  const {refresh: refreshWatch} = useResource(async () => {
+    const version = baseReadRef.current.watch;
+    const current = () => version === baseReadRef.current.watch;
+    try {
+      const value = await getWatchlist();
+      if (!current()) return;
+      setGroupMap(Object.fromEntries(value.map(i => [i.symbol, i.group_name ?? "默认"])));
+      setSymbols(value.map(i => i.symbol));
+      reportBase("watch");
+    } catch {if (current()) reportBase("watch", "自选读取失败");}
+    finally {if (current()) setBaseLoaded(true);}
+  }, {intervalMs: 60_000, marketHours: false});
+  const {refresh: refreshGroups} = useResource(async () => {
+    const version = baseReadRef.current.groups;
+    try {
+      const value = await getWatchlistGroups();
+      if (version !== baseReadRef.current.groups) return;
+      setAllGroupNames(["默认", ...value]);
+      reportBase("groups");
+    } catch {if (version === baseReadRef.current.groups) reportBase("groups", "分组读取失败");}
+  }, {intervalMs: 60_000, marketHours: false});
+  const {refresh: refreshOverview} = useResource(async () => {
+    const version = baseReadRef.current.overview;
+    try {
+      const value = await getMarketOverview();
+      if (version !== baseReadRef.current.overview) return;
+      setIndices(value.indices); setTotalAmount(value.total_amount);
+      setAmountFreshness(value.total_amount_freshness);
+      setUpdatedAt(new Date().toLocaleTimeString("zh-CN", {hour12: false}));
+      reportBase("overview");
+    } catch {if (version === baseReadRef.current.overview) reportBase("overview", "行情概览读取失败");}
+  }, {intervalMs: 10_000});
+  const {refresh: refreshPaper} = useResource(async () => {
+    const version = baseReadRef.current.paper;
+    const current = () => version === baseReadRef.current.paper;
+    try {
+      const value = await getPaperPositions();
+      if (!current()) return;
+      setPositions(value);
+      reportBase("paper");
+    } catch {if (current()) reportBase("paper", "main 模拟持仓读取失败");}
+    finally {if (current()) setPaperLoaded(true);}
+  }, {intervalMs: 10_000});
+  const refreshWatchlist = useCallback(() => {
+    baseReadRef.current.watch += 1; baseReadRef.current.groups += 1;
+    refreshWatch(); refreshGroups();
+  }, [refreshWatch, refreshGroups]);
+  const loadBase = useCallback(async () => {
+    refreshWatchlist();
+    baseReadRef.current.overview += 1; baseReadRef.current.paper += 1;
+    refreshOverview(); refreshPaper();
+  }, [refreshWatchlist, refreshOverview, refreshPaper]);
 
   // 风控市场状态（评审 O2）：七档状态变化以日为尺度，独立 30s 轮询——
   // 混在 loadBase 10s 里纯属浪费（state_classifier 本身走 60s 快照聚合）。
@@ -249,8 +277,6 @@ function WorkbenchInner() {
     const r = await getRiskState().catch(() => null);
     setRisk(r);
   }, 30_000);
-
-  usePollingFetch(loadBase, 10_000);
 
   // 成交额增减摘要（60s：后端 30s 缓存 + 新浪分钟K 300s 缓存，此频率零额外压力）
   usePollingFetch(async () => {
@@ -281,7 +307,7 @@ function WorkbenchInner() {
 
   // 自选集合变化（search-box 快捷加自选 / 详情面板 ＋自选）→ 立即刷新
   // （2026-09-01 简化：原 CustomEvent 契约改为 lib/watchlist-sync 模块通知）
-  useEffect(() => subscribeWatchlist(() => void loadBase()), [loadBase]);
+  useEffect(() => subscribeWatchlist(refreshWatchlist), [refreshWatchlist]);
 
   // 首帧行情兜底：WS 订阅切换窗口期里，动态分组标的与自选一起走 REST 补拉
   const feedSymbols = useMemo(
@@ -390,7 +416,7 @@ function WorkbenchInner() {
       setAddError(null);
       setAddResult(`已将 ${s} 加入自选`);
       setSymbols((prev) => (prev.includes(s) ? prev : [...prev, s]));
-      notifyWatchlistChanged(); // 其他订阅方同步（本页 loadBase 已被订阅回调覆盖）
+      notifyWatchlistChanged(); // 其他订阅方同步（本页静态集合由同一订阅即时更新）
     } catch {
       setAddError("添加失败，请确认后端已启动后重试；输入代码已保留。");
     } finally {
@@ -444,7 +470,6 @@ function WorkbenchInner() {
         setActiveGroup("全部");
         setGroupResult("已删除分组，成员已回到默认分组");
       }
-      await loadBase();
       notifyWatchlistChanged();
       setGroupAction(null);
     } catch (e) {

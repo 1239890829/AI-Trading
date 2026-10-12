@@ -44,7 +44,7 @@ const RANGE_CHIPS: { key: BoardFlowRange; label: string }[] = [
   { key: "intraday", label: "今日" },
   { key: "5d", label: "5日" },
   { key: "10d", label: "10日" },
-  { key: "20d", label: "20日" },
+  { key: "20d", label: "20日存档" },
 ];
 
 type SortKey = "main" | "chg" | "ratio" | "streak";
@@ -71,31 +71,37 @@ function rangeVal(r: BoardFlowRow, range: BoardFlowRange): number | null {
 }
 
 /** 板块日度主力净额 diverging 柱（近 20 bar，HTML 条非 SVG——定高纪律）。 */
-function BoardDailyBars({ bars }: { bars: { date: string; main_yi: number | null }[] }) {
+export function BoardDailyBars({ bars }: { bars: { date: string; main_yi: number | null }[] }) {
+  const [selectedDate, setSelectedDate] = useState<string | null>(null);
   const last = bars.slice(-20);
   if (last.length === 0) return null;
+  const selected = last.find(bar => bar.date === selectedDate) ?? last[last.length - 1];
   const maxAbs = Math.max(1, ...last.map((b) => Math.abs(b.main_yi ?? 0)));
+  const tickCount = Math.min(5, last.length);
+  const tickSlots = new Set(Array.from({length: tickCount}, (_, i) => Math.round(i * (last.length - 1) / Math.max(1, tickCount - 1))));
   return (
-    <div className="flex h-24 items-stretch gap-1" data-testid="board-daily-bars">
-      {last.map((b) => {
+    <div className="fund-history-chart" data-testid="board-daily-bars">
+      <p className="fund-history-detail">{selected.date} · 主力 {signedFmt(selected.main_yi)}</p>
+      <div className="fund-history-plot">
+      {last.map((b, index) => {
         const v = b.main_yi;
-        const h = v == null ? 0 : Math.max(2, (Math.abs(v) / maxAbs) * 40);
+        const h = v == null || v === 0 ? 0 : Math.max(2, (Math.abs(v) / maxAbs) * 46);
         return (
-          <div key={b.date} className="flex min-w-0 flex-1 flex-col items-center justify-center gap-0.5"
+          <button type="button" key={b.date} className="fund-history-column" aria-label={`${b.date}｜主力 ${signedFmt(v)}`} aria-pressed={selected.date === b.date} onMouseEnter={() => setSelectedDate(b.date)} onFocus={() => setSelectedDate(b.date)} onClick={() => setSelectedDate(b.date)}
             title={`${b.date}｜主力 ${signedFmt(v)}`}>
-            {v != null && v >= 0 && <div className="w-full rounded-t bg-up/80" style={{ height: h }} />}
-            <div className="h-px w-full bg-zinc-300 dark:bg-zinc-700" />
-            {v != null && v < 0 && <div className="w-full rounded-b bg-down/80" style={{ height: h }} />}
-            <span className="w-full truncate text-center text-[8px] text-zinc-600 dark:text-zinc-400">{b.date.slice(5)}</span>
-          </div>
+            <span className="fund-history-axis" />
+            {v != null && v !== 0 && <i className={v > 0 ? "fund-history-bar bg-up/80" : "fund-history-bar bg-down/80"} data-sign={v > 0 ? "positive" : "negative"} style={{height: `${h}%`}} />}
+            <span className="fund-history-tick">{tickSlots.has(index) ? b.date.slice(5) : ""}</span>
+          </button>
         );
       })}
+      </div>
     </div>
   );
 }
 
 /** 板块下钻抽屉：分钟五档累计（延迟口径）+ 日度主力净额柱 + 成员个股资金排行 Top20。 */
-function BoardFlowDrawer({ row, onClose, open }: { row: BoardFlowRow; onClose: () => void; open: boolean }) {
+function BoardFlowDrawer({ row, onClose, open, asOf }: { row: BoardFlowRow; onClose: () => void; open: boolean; asOf?: string }) {
   const stockNav = useStockRowNav();
   const minuteResult = useResource(() => getBoardFlowMinute(row.board_code), { key: row.board_code, intervalMs: 60_000, enabled: open });
   const memberResult = useResource(() => getBoardFlowMembers(row.board_code), { key: row.board_code, intervalMs: 60_000, enabled: open });
@@ -109,13 +115,13 @@ function BoardFlowDrawer({ row, onClose, open }: { row: BoardFlowRow; onClose: (
 
   return (
     <ModalShell open={open} presentation="drawer" onClose={onClose} label={`板块资金 ${row.name}`} testid="board-flow-drawer"
-      header={<div><p className="text-sm font-semibold">{row.name}</p><p className="text-xs text-zinc-600 dark:text-zinc-400">{row.board_code} · 榜位 #{row.rank} · 东财 f62口径，非成分股相加</p></div>}>
+      header={<div><p className="text-sm font-semibold">{row.name}</p><p className="text-xs text-zinc-600 dark:text-zinc-400">{row.board_code} · {asOf ? `存档榜位 #${row.rank}（截至 ${asOf}）` : `榜位 #${row.rank}`} · 东财 f62口径，非成分股相加</p></div>}>
         {!!(minuteResult.error || memberResult.error) && <p role="alert" className="text-xs text-amber-800 dark:text-amber-300">部分资金来源读取失败；保留值仅作上次结果参考。<button onClick={() => { minuteResult.refresh(); memberResult.refresh(); }}>重试</button></p>}
         <div className="space-y-4 px-4 py-3">
           {/* ① 板块分钟五档累计（延迟 ~15min 口径） */}
           <section>
             <p className="mb-1 text-[10px] text-zinc-600 dark:text-zinc-400">
-              分钟资金累计（五档）· 东财延迟约 15 分钟口径 · 悬停看明细
+              分钟资金累计（五档；本次独立读取）· 东财延迟约 15 分钟口径 · 悬停看明细
               {minute?.degraded.length ? <span className="ml-1 text-amber-800 dark:text-amber-500">⚠ {minute.degraded.join("；")}</span> : null}
             </p>
             {pending && items.length === 0 ? (
@@ -131,7 +137,7 @@ function BoardFlowDrawer({ row, onClose, open }: { row: BoardFlowRow; onClose: (
 
           {/* ② 日度主力净额柱（落盘沉淀板块才有，零外呼） */}
           <section>
-            <p className="mb-1 text-[10px] text-zinc-600 dark:text-zinc-400">日度主力净额（近 {Math.min(20, bars.length) || 20} 交易日；上红流入 / 下绿流出）</p>
+            <p className="mb-1 text-[10px] text-zinc-600 dark:text-zinc-400">日度主力净额（近 {Math.min(20, bars.length) || 20} 条存档；上红流入 / 下绿流出）</p>
             {bars.length > 0 ? (
               <BoardDailyBars bars={bars} />
             ) : (
@@ -142,7 +148,7 @@ function BoardFlowDrawer({ row, onClose, open }: { row: BoardFlowRow; onClose: (
           {/* ③ 成员个股资金排行 Top20 */}
           <section>
             <p className="mb-1 text-[10px] text-zinc-600 dark:text-zinc-400">
-              成员个股资金排行 Top20（东财成员口径）
+              成员个股资金排行 Top20（本次独立读取，东财成员口径）
               {members?.degraded.length ? <span className="ml-1 text-amber-800 dark:text-amber-500">⚠ {members.degraded.join("；")}</span> : null}
             </p>
             {pending && memRows.length === 0 ? (
@@ -265,7 +271,7 @@ export function BoardFlowPanel() {
   const [range, setRange] = useState<BoardFlowRange>("intraday");
   const [sortKey, setSortKey] = useState<SortKey>("main");
   const [filters, setFilters] = useState<Set<string>>(new Set());
-  const [drawer, setDrawer] = useState<BoardFlowRow | null>(null);
+  const [drawer, setDrawer] = useState<{row: BoardFlowRow; asOf?: string} | null>(null);
   const drawerPresence = useExitPresence(drawer);
   const resource = useResource(() => getBoardFundFlow(kind, range), {key: `${kind}/${range}`, intervalMs: 30_000});
   const payload = resource.data;
@@ -314,6 +320,14 @@ export function BoardFlowPanel() {
       return next;
     });
   }
+  function changeRange(next: BoardFlowRange) {
+    setRange(next);
+    if (next === "20d") {
+      // Today's ratio/rank filters have no meaning for an archived window.
+      setFilters(current => new Set([...current].filter(key => key !== "ratio5" && key !== "rising")));
+      if (sortKey === "chg" || sortKey === "ratio") setSortKey("main");
+    }
+  }
 
   return (
     <Panel
@@ -322,7 +336,7 @@ export function BoardFlowPanel() {
       bodyClassName="overflow-hidden"
       extra={
         <span className="text-[10px] text-zinc-600 dark:text-zinc-400">
-          {payload?.updated_at ? `更新 ${payload.updated_at}` : "--"}
+          {payload?.historical ? `存档截至 ${payload.as_of ?? "未知"}` : payload?.updated_at ? `更新 ${payload.updated_at}` : "--"}
           {payload?.kind === "concept" && payload.total_boards != null ? ` · 共 ${payload.total_boards} 个板块` : ""}
           {payload?.coverage != null ? ` · 沉淀 ${payload.coverage} 板块` : ""}
         </span>
@@ -333,13 +347,13 @@ export function BoardFlowPanel() {
         {/* 控制行：维度 / 区间 / 排序 / 筛选 */}
         <div className="board-flow-controls flex shrink-0 flex-wrap items-center gap-x-3 gap-y-1.5">
           <FilterMenu label="板块" value={kind} options={KIND_CHIPS} onChange={setKind} />
-          <FilterMenu label="区间" value={range} options={RANGE_CHIPS} onChange={setRange} />
-          <FilterMenu label="排序" value={sortKey} options={SORT_CHIPS} onChange={setSortKey} />
+          <FilterMenu label="区间" value={range} options={RANGE_CHIPS} onChange={changeRange} />
+          <FilterMenu label="排序" value={sortKey} options={range === "20d" ? SORT_CHIPS.filter(item => item.key === "main" || item.key === "streak") : SORT_CHIPS} onChange={setSortKey} />
           <div className="flow-control-group" title="多选叠加筛选">
             <button aria-pressed={filters.has("inflow")} onClick={() => toggleFilter("inflow")} className={`${CHIP} ${filters.has("inflow") ? CHIP_ON : CHIP_OFF}`}>净流入&gt;0</button>
-            <button aria-pressed={filters.has("ratio5")} onClick={() => toggleFilter("ratio5")} className={`${CHIP} ${filters.has("ratio5") ? CHIP_ON : CHIP_OFF}`}>主力占比&gt;5%</button>
+            <button disabled={range === "20d"} aria-pressed={filters.has("ratio5")} onClick={() => toggleFilter("ratio5")} className={`${CHIP} ${filters.has("ratio5") ? CHIP_ON : CHIP_OFF}`}>主力占比&gt;5%</button>
             <button aria-pressed={filters.has("streak3")} onClick={() => toggleFilter("streak3")} className={`${CHIP} ${filters.has("streak3") ? CHIP_ON : CHIP_OFF}`}>连续流入≥3</button>
-            <button aria-pressed={filters.has("rising")} onClick={() => toggleFilter("rising")} className={`${CHIP} ${filters.has("rising") ? CHIP_ON : CHIP_OFF}`}>排名上升</button>
+            <button disabled={range === "20d"} aria-pressed={filters.has("rising")} onClick={() => toggleFilter("rising")} className={`${CHIP} ${filters.has("rising") ? CHIP_ON : CHIP_OFF}`}>排名上升</button>
           </div>
         </div>
 
@@ -352,9 +366,12 @@ export function BoardFlowPanel() {
             {Array.from({ length: 8 }, (_, i) => <Skeleton key={i} className="h-6 w-full" />)}
           </div>
         ) : payload && !payload.available ? (
-          <p className="py-8 text-center text-sm text-zinc-600 dark:text-zinc-400">
+          <div className="board-flow-unavailable py-8 text-center text-sm text-zinc-600 dark:text-zinc-400">
+          <p>
             板块资金流暂不可用（{payload.reason ?? "数据源异常"}），下一拍自动重试。
           </p>
+          {range !== "20d" && <button type="button" className="quiet-action" onClick={() => changeRange("20d")}>查看本地 20 日存档</button>}
+          </div>
         ) : !payload ? (
           <p className="py-8 text-center text-sm text-zinc-600 dark:text-zinc-400">
             板块资金流加载失败（后端不可达或版本未更新），下一拍自动重试。
@@ -367,8 +384,8 @@ export function BoardFlowPanel() {
               ) : (
                 <MasonryColumns gap="gap-3">
                   {shown.map((r) => (
-                    <div key={r.board_code} data-testid={`board-row-${r.board_code}`} onClick={() => setDrawer(r)}>
-                      <BoardCard row={r} range={range} onClick={() => setDrawer(r)} />
+                    <div key={r.board_code} data-testid={`board-row-${r.board_code}`} onClick={() => setDrawer({row: r, asOf: payload?.historical ? payload.as_of ?? "未知" : undefined})}>
+                      <BoardCard row={r} range={range} onClick={() => setDrawer({row: r, asOf: payload?.historical ? payload.as_of ?? "未知" : undefined})} />
                     </div>
                   ))}
                 </MasonryColumns>              )}
@@ -388,7 +405,7 @@ export function BoardFlowPanel() {
         )}
       </div>
 
-      {drawerPresence.value && <BoardFlowDrawer row={drawerPresence.value} open={drawerPresence.active} onClose={() => setDrawer(null)} />}
+      {drawerPresence.value && <BoardFlowDrawer row={drawerPresence.value.row} asOf={drawerPresence.value.asOf} open={drawerPresence.active} onClose={() => setDrawer(null)} />}
     </Panel>
   );
 }

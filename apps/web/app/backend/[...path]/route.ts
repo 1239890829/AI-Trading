@@ -31,6 +31,9 @@ async function proxy(req: NextRequest) {
     method: req.method,
     headers,
     redirect: "manual",
+    // 普通请求的浏览器取消必须传到上游。SSE 同样响应断开，
+    // 但不套用行情 REST 的 8s 预算；其生成/流式预算仍由助手后端拥有。
+    signal: req.signal,
   };
   if (req.method !== "GET" && req.method !== "HEAD") {
     init.body = await req.arrayBuffer();
@@ -40,6 +43,9 @@ async function proxy(req: NextRequest) {
   try {
     upstream = await fetch(target, init);
   } catch (e) {
+    if (req.signal.aborted) {
+      return Response.json({detail: "请求已取消", code: "request_cancelled"}, {status: 499});
+    }
     return Response.json(
       { detail: `后端不可达（${backend}）：${(e as Error).message}`, code: "backend_unreachable" },
       { status: 502 },
