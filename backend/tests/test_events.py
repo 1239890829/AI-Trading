@@ -275,6 +275,9 @@ def test_generic_risk_disclaimer_does_not_erase_completed_order():
     "本次交易未涉及其它产品，原产品继续生产。",
     "本次交易不涉及关联交易，公司产品生产正常。",
     "本次交易不涉及关联交易\n公司产品生产正常。",
+    "公司没有重大财务变化，产品仍正常生产。",
+    "公司没有相关业务调整。",
+    "本次交易暂无其他业务，原业务持续执行。",
 ])
 def test_scope_description_does_not_deny_completed_order(scope):
     event = build_event("公司订单已签署公告", is_announcement=True,
@@ -290,6 +293,10 @@ def test_scope_description_does_not_deny_completed_order(scope):
     "公司不涉及相关芯片业务。",
     "公司未涉及相关芯片产品。",
     "公司不存在合作订单。",
+    "公司暂无相关芯片业务。",
+    "公司没有相关芯片产品。",
+    "公司暂无业务。",
+    "公司没有产品。",
 ])
 def test_explicit_business_denial_remains_unconfirmed(summary):
     event = build_event("公司回应订单合作消息", is_announcement=True,
@@ -297,6 +304,32 @@ def test_explicit_business_denial_remains_unconfirmed(summary):
     assert event["certainty"] == "unknown"
     assert event["directions"]
     assert all(row["direction"] == 0 for row in event["directions"])
+
+
+@pytest.mark.parametrize("summary", [
+    "此前网传订单不存在的说法不属实，公司已经签署订单。",
+    "A公司暂无相关芯片业务；B公司已签约合作。",
+])
+def test_complex_denial_keeps_conservative_object_boundary(summary):
+    event = build_event("公司回应芯片合作消息", is_announcement=True,
+                        source_symbols=["600001", "600002"], summary=summary)
+    assert event["certainty"] == "unknown"
+    assert all(row["direction"] == 0 for row in event["directions"])
+
+
+@pytest.mark.parametrize("summary", ["公司暂无相关芯片业务。", "公司没有相关芯片产品。"])
+def test_absent_business_stays_unconfirmed_in_current_attribution(tmp_path, summary):
+    from app.events.attribution import read_attribution
+
+    store = _isolated_store(tmp_path)
+    event = build_event("公司澄清芯片合作消息", is_announcement=True,
+                        source_symbol="600001", summary=summary)
+    row, _ = store.add_event(event)
+    result = read_attribution(store._sf, symbol="600001")
+    item = next(value for value in result["data"]["items"] if value["event_id"] == row.id)
+    assert item["certainty"] == "unknown"
+    assert item["stock_relation"]["direction"] is None
+    assert "denial" in {value["kind"] for value in item["qualifiers"]}
 
 
 def test_title_fingerprint_dedupes_punctuation():

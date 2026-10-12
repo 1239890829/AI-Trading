@@ -68,6 +68,10 @@ _BUSINESS_DENIAL = re.compile(
     # A transaction's scope can exclude other business without denying its
     # signed order. Do not borrow a business noun from the next clause either.
     r"|(?:不涉及|未涉及)(?!(?:其他|其它)(?:业务|产品))[^。；，,\n]{0,24}(?:业务|产品)"
+    # Absence must refer to the business/product itself, not a lack of change
+    # or a generic "没有" elsewhere. Keep the object within one short clause.
+    r"|(?:暂无|没有)(?:相关[^。；，,\n]{0,12}|上述|该项|该|此类)?(?:业务|产品)"
+    r"(?=[。；;，,\n\"'”’）)】\]]|$)"
 )
 #: 政策主体词（2026-09-09 补）：出现这些词才把「支持/推动/建设」类宽泛表述算作政策事件，
 #: 避免把普通公司新闻误判成政策利好（category 决定半衰期，误判会让短消息长期滞留）。

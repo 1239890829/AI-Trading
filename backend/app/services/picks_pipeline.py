@@ -31,6 +31,7 @@ from sqlalchemy import select
 from app.core.db import get_session_factory
 from app.services.selection_notifications import daily_selection_version, quote_audit, retry_daily_selection
 from app.events.store import EventStore
+from app.events.extract import classify_certainty
 from app.market import trade_calendar as tc
 from app.market.chip import get_chip_service
 from app.market.tech_score import score_stock, sma
@@ -598,6 +599,10 @@ def _build_event_hits_index(
     try:
         for row in rows:
             w = event_weight(row.source_tier, row.certainty)
+            source_title = getattr(row, "title", "") or ""
+            source_summary = getattr(row, "summary", None)
+            if (source_title or source_summary) and classify_certainty(source_title, source_summary)[1] == "unknown":
+                w = 0.0  # Current explicit denial; preserve the saved stage and original refs.
             for d in row.directions:
                 if getattr(d, "matched_by", None) == "llm_aux":
                     continue  # Unvalidated model hypotheses never supply message scores.

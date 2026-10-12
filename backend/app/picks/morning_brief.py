@@ -43,6 +43,7 @@ from pathlib import Path
 from typing import Any
 
 from app.market import trade_calendar as tc
+from app.events.extract import classify_certainty
 from app.picks.echelon import theme_ladder_health
 from app.picks.engine import event_weight
 from app.picks.intraday_rules import (
@@ -507,6 +508,10 @@ async def collect_evidence(app_state) -> dict:
             batch_refs: dict[str, list[dict]] = {}
             for row in _ev_rows:
                 w = event_weight(row.source_tier, row.certainty)
+                source_title = getattr(row, "title", "") or ""
+                source_summary = getattr(row, "summary", None)
+                if (source_title or source_summary) and classify_certainty(source_title, source_summary)[1] == "unknown":
+                    w = 0.0  # Consumption-only downgrade; never rewrite the saved interpretation.
                 row_themes: list[str] = []
                 row_syms: list[str] = []
                 for d in row.directions:

@@ -87,6 +87,23 @@ def test_event_producer_grades_reach_selection_consumer_in_correct_order():
     assert scores == pytest.approx([86.0, 78.8, 71.6, 64.4])
 
 
+@pytest.mark.parametrize("summary", ["公司暂无相关芯片业务。", "公司没有相关芯片产品。"])
+def test_absent_business_never_adds_selection_message_strength(summary):
+    from types import SimpleNamespace as NS
+    from app.events.extract import build_event
+    from app.picks.engine import score_news
+
+    data = build_event("公司澄清芯片合作消息", is_announcement=True,
+                       source_symbol="600001", summary=summary)
+    row = NS(id=1, **{key: value for key, value in data.items() if key != "directions"},
+             directions=[NS(**direction) for direction in data["directions"]])
+    bull, bear, title, direction, linked, refs = pl._build_event_hits_index([row])["600001"]
+    assert (bull, bear) == (0, 0)
+    assert title == row.title and direction is None
+    assert linked == 1 and refs == [{"event_id": 1, "version_id": None, "state": "unknown"}]
+    assert score_news(bull, bear, title, direction)[0] == 50
+
+
 def test_unknown_event_stage_keeps_reference_without_selection_score():
     from types import SimpleNamespace as NS
 
