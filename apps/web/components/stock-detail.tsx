@@ -548,7 +548,7 @@ export const StockDetailPanel = memo(function StockDetailPanel({
   const displayBars = useMemo(() => mergeQuoteIntoBars(bars, liveQuote) ?? bars, [bars, liveQuote]);
   // ①' 分时右端点秒级合成：同 K 线思路，WS quote 跟进最后一根分钟点
   //    （价格+累计量），与列表/K线保持同一 1s 节奏，不再干等 60s REST 校准
-  const displayMinutes = useMemo(() => mergeQuoteIntoMinutes(minutes, liveQuote) ?? minutes, [minutes, liveQuote]);
+  const displayMinutes = useMemo(() => mergeQuoteIntoMinutes(minutes, liveQuote, isIndex) ?? minutes, [minutes, liveQuote, isIndex]);
   // prev_close 只有在能证明与分钟点同一北京交易日时才可作为百分比轴基准。
   // data_timestamp 是源行情时刻；received_at 只是接收时刻，不能拿它替 stale 数据“补日期”。
   const minuteReferenceDate = quote?.data_timestamp ? bjDate(quote.data_timestamp) || null : null;

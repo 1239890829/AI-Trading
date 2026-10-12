@@ -335,6 +335,8 @@ export interface MinutePoint {
   price: number;
   volume?: number | null;
   cum_amount?: number | null;
+  /** 前端WS合成的分钟额（元）；显式null表示不能归属，禁止回落累计差。 */
+  minute_amount?: number | null;
   cum_volume?: number | null;
   avg?: number | null;
   source: string;

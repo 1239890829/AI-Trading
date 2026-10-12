@@ -22,7 +22,7 @@ import { PriceFlash } from "@/components/price-flash";
 import { QualityBadge } from "@/components/quality-badge";
 import { PickDetailModal, type PickDetailTarget } from "@/components/picks/pick-detail-modal";
 import { useQuoteStream, STREAM_STATUS_LABEL } from "@/hooks/use-quote-stream";
-import { usePollingFetch } from "@/hooks/use-polling-fetch";
+import { usePollingFetch, useResource } from "@/hooks/use-polling-fetch";
 import { PageSkeletonFallback, Skeleton } from "@/components/ui/loading";
 import { PanelBoundary } from "@/components/ui/panel-boundary";
 import { useRealPositions } from "@/hooks/use-real-positions";
@@ -278,20 +278,28 @@ function WorkbenchInner() {
   // 资金 = 东财 f62 主力净额 + 连续流入天数。**口径与个股资金流（新浪 L4）不同，不可相加**。
   // 60s 与自选行情同节奏；F10 归属在后端有 6h 缓存（所属板块低频变更），轮询实际只刷新资金值。
   const symbolKey = symbols.join(",");
-  const [boardFund, setBoardFund] = useState<Record<string, SymbolBoardFund>>({});
-  if (symbols.length === 0 && Object.keys(boardFund).length > 0) {
-    setBoardFund({}); // 自选清空 → 渲染期同步清掉（防上一组残留）
+  const boardFund = useResource(async () => {
+    const result: Record<string, SymbolBoardFund> = {};
+    // 接口单批最多50只；串行批次覆盖完整集合，避免同时向资料源扇出。
+    for (let start = 0; start < symbols.length; start += 50) {
+      Object.assign(result, await getBoardFundBySymbols(symbols.slice(start, start + 50)));
+    }
+    return result;
+  }, {key: symbolKey, enabled: symbols.length > 0, intervalMs: 60_000});
+  // 只保留低频归属文字。资金值只消费本轮结果，缺项绝不沿用旧金额。
+  const [boardIdentity, setBoardIdentity] = useState<{
+    key: string; data: typeof boardFund.data;
+    known: Record<string, Pick<SymbolBoardFund, "board_name" | "level">>;
+  }>({key: symbolKey, data: undefined, known: {}});
+  if (boardIdentity.key !== symbolKey || boardIdentity.data !== boardFund.data) {
+    const known: typeof boardIdentity.known = {};
+    for (const symbol of symbols) {
+      const row = boardFund.data?.[symbol];
+      if (row?.board_name) known[symbol] = {board_name: row.board_name, level: row.level};
+      else if (boardIdentity.known[symbol]) known[symbol] = boardIdentity.known[symbol];
+    }
+    setBoardIdentity({key: symbolKey, data: boardFund.data, known});
   }
-  useEffect(() => {
-    if (symbols.length === 0) return;
-    getBoardFundBySymbols(symbols.slice(0, 50)).then(setBoardFund).catch(() => {});
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [symbolKey]);
-  usePollingFetch(async () => {
-    if (symbols.length === 0) return;
-    const m = await getBoardFundBySymbols(symbols.slice(0, 50)).catch(() => null);
-    if (m) setBoardFund(m);
-  }, 60_000);
 
   // 分组清单由 groupMap 派生（旧代码是独立的 groups 状态，从未被赋值，chips 永远只有「全部」）
   // 「猎场」是动态分组的保留名（2026-09-09 合并原「每日精选」「盘中跟踪」），用户分组里排除（防 chips 重名撞 key）
@@ -515,7 +523,9 @@ function WorkbenchInner() {
               const quote = merged[symbol];
               const pick = isDynamicGroup ? pickInfoBySymbol.get(symbol) : undefined;
               const top = isDynamicGroup ? topInfoBySymbol.get(symbol) : undefined;
-              const fund = boardFund[symbol];
+              const fund = boardFund.error ? undefined : boardFund.data?.[symbol];
+              const board = fund ?? boardIdentity.known[symbol];
+              const boardLabel = board ? `${board.level === "industry" ? "行业" : board.level === "concept" ? "概念" : "板块"} · ${board.board_name}` : boardFund.status === "pending" ? "所属板块读取中" : "所属板块待确认";
               return <article key={symbol} className="bc-attention-item" data-selected={activeSymbol === symbol}>
                 <button className="bc-attention-select" onClick={() => switchSymbol(symbol)} aria-pressed={activeSymbol === symbol} aria-label={`查看 ${quote?.name ?? symbol} ${symbol}`}>
                   <span className="bc-attention-identity"><strong title={quote?.name ?? symbol}>{quote?.name ?? symbol}</strong><span>{symbol}</span></span>
@@ -526,7 +536,9 @@ function WorkbenchInner() {
                     <span title={pick?.echelon_role ?? `确定性 ${triText(top?.certainty?.level)}；辨识度 ${triText(top?.distinctiveness?.level)}`}>{pick?.echelon_role ?? `确定性 ${triText(top?.certainty?.level)} · 辨识度 ${triText(top?.distinctiveness?.level)}`}</span>
                     {posLabels[symbol] && <span title="持仓状态派生标签；删除记录或退出后自动消失">{posLabels[symbol] === "real" ? "手工已记录" : "模拟已持仓"}</span>}
                   </span>}
-                  {fund && <span className="bc-attention-fund" title={`${fund.board_name}（东财${fund.level === "industry" ? "行业" : "概念"}）${signedYi(fund.main_net_yi)}${fund.streak != null && fund.streak >= 1 ? `，连续 ${fund.streak} 日净流入` : ""}；与个股资金流口径不同，不可相加`}><span className={fund.main_net_yi == null ? "" : fund.main_net_yi >= 0 ? "text-up-ink dark:text-up" : "text-down-ink dark:text-down"}>{signedYi(fund.main_net_yi)}</span><span>{fund.board_name}</span></span>}
+                  <span className="bc-attention-fund" title={fund ? `${boardLabel}（东财）${signedYi(fund.main_net_yi)}${fund.streak != null && fund.streak >= 1 ? `，连续 ${fund.streak} 日净流入` : ""}；板块与个股资金口径不同，不可相加` : board ? `${boardLabel}为上次确认的归属；本次资金未返回，未沿用旧金额` : boardFund.error ? "所属板块读取失败，可等待下一轮刷新；缺失不代表没有行业归属" : "数据源尚未返回所属板块，不推测行业或概念"}>
+                    <span>{boardLabel}{board && !fund ? "（上次）" : ""}</span><span className={fund?.main_net_yi == null ? "" : fund.main_net_yi >= 0 ? "text-up-ink dark:text-up" : "text-down-ink dark:text-down"}>{fund ? signedYi(fund.main_net_yi) : board ? "未更新" : "--"}</span>
+                  </span>
                 </button>
                 <div className="bc-attention-meta"><span title={quote ? `来源：${sourceLabel(quote.source)}；数据时间：${timeText(quote.data_timestamp)}；接收时间：${timeText(quote.received_at)}` : "已在列表，报价尚未返回"}>{quote ? sourceLabel(quote.source) : "等待行情"}</span><QualityBadge quality={quote?.quality} reasons={quote?.quality_reasons} />
                   {(pick || top) ? <span className="bc-candidate-details">{top && <button className="bc-item-detail" onClick={() => setDetailTarget({kind: "top", item: top})} aria-label={`查看 ${symbol} 盘中依据`}>{pick ? "盘中" : "依据"}</button>}{pick && <button className="bc-item-detail" onClick={() => setDetailTarget({kind: "pick", item: pick})} aria-label={`查看 ${symbol} 精选依据`}>{top ? "精选" : "依据"}</button>}</span> : mode === "watch" && <IconButton onClick={() => void remove(symbol)} className="bc-remove-watch" title="移出自选" aria-label={`移出自选 ${symbol}`}><HugeiconsIcon icon={Cancel01Icon} size={14} aria-hidden="true" /></IconButton>}

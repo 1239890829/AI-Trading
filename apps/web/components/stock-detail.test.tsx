@@ -3,6 +3,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 import { StockDetailPanel, type ChartTab, type RightTab } from "@/components/stock-detail";
 import type { KlinePayload, MinutePoint, PaperAccountInfo, PaperFill, PaperPositionInfo } from "@/lib/api";
+import { mergeQuoteIntoMinutes } from "@/lib/kline-live";
 import type { Kline, OrderBook, Quote, Trade } from "@/types/market";
 
 /**
@@ -52,6 +53,11 @@ vi.mock("@/lib/market-hours", async (importOriginal) => ({
   isTradingSession: () => true,
 }));
 
+vi.mock("@/lib/kline-live", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("@/lib/kline-live")>();
+  return { ...actual, mergeQuoteIntoMinutes: vi.fn(actual.mergeQuoteIntoMinutes) };
+});
+
 vi.mock("@/hooks/use-quote-stream", async (importOriginal) => {
   const actual = await importOriginal<typeof import("@/hooks/use-quote-stream")>();
   return {
@@ -69,7 +75,7 @@ vi.mock("@/components/kline-chart-pro", () => ({
   KlineChartPro: ({ bars, costPrice, tradeMarks }: { bars: Kline[]; costPrice?: number | null; tradeMarks?: PaperFill[] }) => <div data-testid="kline-price" data-cost-price={costPrice ?? "none"} data-fill-count={tradeMarks?.length ?? 0}>{bars.at(-1)?.close}</div>,
 }));
 vi.mock("@/components/minute-chart", () => ({
-  MinuteChart: ({ points }: { points: MinutePoint[] }) => <div data-testid="minute-price">{points.at(-1)?.price}</div>,
+  MinuteChart: ({ points }: { points: MinutePoint[] }) => <div data-testid="minute-price" data-avg={points.at(-1)?.avg ?? "none"}>{points.at(-1)?.price}</div>,
 }));
 
 const audit = { source: "tdx", quality: "high" as const, quality_reasons: [], received_at: "2026-10-09T02:00:00Z" };
@@ -106,6 +112,7 @@ async function advance(ms: number) { await act(async () => { await vi.advanceTim
 beforeEach(() => {
   vi.useFakeTimers();
   vi.setSystemTime(new Date("2026-10-09T02:00:00Z"));
+  vi.mocked(mergeQuoteIntoMinutes).mockClear();
   for (const fn of Object.values(api)) fn.mockReset();
   api.getKlinePayload.mockImplementation(async (symbol: string) => kline(symbol));
   api.getOrderBook.mockImplementation(async (symbol: string) => book(symbol));
@@ -294,6 +301,27 @@ describe("StockDetailPanel · 核对视角入口", () => {
 });
 
 describe("StockDetailPanel · 每个端点只读取一次首屏", () => {
+  it.each([
+    { symbol: "sh000001", isIndex: true, price: 3500, expectedAvg: "none" },
+    { symbol: "600519", isIndex: false, price: 105.3, expectedAvg: "105.3" },
+  ])("$symbol 的分时调用传递指数身份，只给股票计算累计额/股均价", async ({ symbol, isIndex, price, expectedAvg }) => {
+    const points: MinutePoint[] = [
+      { ts: "2026-10-09T09:59:00+08:00", price, avg: null, volume: 100_000, cum_volume: 900_000, cum_amount: 94_320_000, source: "tencent" },
+      { ts: "2026-10-09T10:00:00+08:00", price, avg: null, volume: 100_000, cum_volume: 1_000_000, cum_amount: 104_800_000, source: "tencent" },
+    ];
+    const liveQuote: Quote = {
+      ...audit, symbol, price, source: "tencent", volume: 1_100_000, amount: 115_830_000,
+      data_timestamp: "2026-10-09T10:00:30+08:00",
+    };
+    api.getMinuteLineWithBaseline.mockResolvedValue({ points, vr_baseline_5m: null });
+    const view = render(<StockDetailPanel symbol={symbol} chartTab="minute" liveQuote={liveQuote} />);
+    await settle();
+
+    expect(mergeQuoteIntoMinutes).toHaveBeenLastCalledWith(points, liveQuote, isIndex);
+    expect(view.getByTestId("minute-price").textContent).toBe(String(price));
+    expect(view.getByTestId("minute-price").getAttribute("data-avg")).toBe(expectedAvg);
+  });
+
   it("默认 K线/盘口立即读取一次，非激活分时/逐笔仍在 idle 预取，页签切入继续立即轮询", async () => {
     const view = render(<StockDetailPanel symbol="600519" />);
     await settle();

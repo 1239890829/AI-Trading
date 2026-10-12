@@ -20,6 +20,7 @@ import {
 } from "@/lib/minute-axis";
 import { bjDate } from "@/lib/format";
 import { tradingSeqFromHHMM } from "@/lib/market-hours";
+import { getMinuteAmount } from "@/lib/kline-live";
 import { readChartTheme, useChartTheme, type ChartTheme } from "@/lib/chart-theme";
 import type { MinuteNewsEvent } from "@/lib/event-markers";
 
@@ -409,7 +410,7 @@ export function MinuteChart({
    * （X 轴固定 9:25-15:00 的视觉需求），series 内部"最后时间点"恒为 15:00——
    * update() 只允许写入不早于最后时间点的数据，盘中 update(当前分钟) 必抛
    * "Cannot update oldest data"（2026-09-02 实测把页面打进 error boundary）。
-   * setData 无顺序约束且是 Canvas 原位重绘（不重建图表、不闪）：243 槽 ×
+   * setData 使用已排序的全天槽并做 Canvas 原位重绘（不重建图表、不闪）：243 槽 ×
    * 4 序列在 1Hz 节奏下开销可忽略，且天然消除合成点与官方点同槽竞态。
    */
   function fillAll(s: SeriesBundle, pts: P[], base: number | null | undefined, palette: MinutePalette) {
@@ -747,14 +748,9 @@ export function MinuteChart({
       const avgDevPct = isPositivePrice(d.avg) && isPositivePrice(d.price) ? ((d.price - d.avg) / d.avg) * 100 : null;
       const lb = lbRef.current(d.cum_volume, bjIso);
       const pts = pointsRef.current;
-      const minuteAmount =
-        d.cum_amount != null
-          ? (() => {
-              const i = pts.indexOf(d);
-              const prev = i > 0 ? pts[i - 1].cum_amount : null;
-              return prev != null ? (d.cum_amount! - prev) / 1e4 : null; // 万
-            })()
-          : null;
+      const i = pts.indexOf(d);
+      const amount = getMinuteAmount(d, i > 0 ? pts[i - 1] : undefined);
+      const minuteAmount = amount != null ? amount / 1e4 : null; // 万
       const pctCls = (v: number | null) => (v == null ? "text-zinc-600 dark:text-zinc-400" : v > 0 ? "text-red-700 dark:text-red-500" : v < 0 ? "text-emerald-700 dark:text-emerald-500" : "text-zinc-600 dark:text-zinc-400");
       const lbCls = lb == null ? "text-zinc-600 dark:text-zinc-400" : lb >= 1.5 ? "text-red-700 dark:text-red-500" : lb >= 0.8 ? "text-amber-800 dark:text-amber-500" : "text-sky-700 dark:text-sky-500";
       // 事件行：光标分钟（±1 分钟容差）命中当日新闻时显示，长标题截断

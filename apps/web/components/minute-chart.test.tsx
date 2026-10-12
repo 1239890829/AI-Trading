@@ -2,6 +2,8 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { act, cleanup, fireEvent, render, screen } from "@testing-library/react";
 import { MinuteChart } from "./minute-chart";
 import type { MinutePoint } from "@/lib/api";
+import { mergeQuoteIntoMinutes } from "@/lib/kline-live";
+import type { Quote } from "@/types/market";
 
 const charts = vi.hoisted(() => [] as ReturnType<typeof makeChart>[]);
 type Options = Record<string, unknown> & { autoscaleInfoProvider?: () => { priceRange: { minValue: number; maxValue: number } } };
@@ -40,6 +42,96 @@ const point = (price: number, minute = "30", avg: number | null = null, day = "1
   ts: `2026-09-${day}T09:${minute}:00+08:00`, price, avg, source: "test_fixture",
 });
 const range = (s: ReturnType<typeof makeSeries>) => s.opts.autoscaleInfoProvider?.().priceRange;
+
+const restMinutes: MinutePoint[] = [
+  { ts: "2026-10-09T09:59:00+08:00", price: 104.8, avg: 104.8, volume: 100_000, cum_volume: 900_000, cum_amount: 94_320_000, source: "tencent" },
+  { ts: "2026-10-09T10:00:00+08:00", price: 104.8, avg: 104.8, volume: 100_000, cum_volume: 1_000_000, cum_amount: 104_800_000, source: "tencent" },
+];
+const liveMinuteQuote: Quote = {
+  symbol: "600519", price: 105.3, volume: 1_100_000, amount: 115_830_000,
+  data_timestamp: "2026-10-09T10:00:30+08:00", received_at: "2026-10-09T02:00:31Z", source: "tencent", quality: "high", quality_reasons: [],
+};
+
+describe("MinuteChart 消费真实 WS 合并结果", () => {
+  // lightweight-charts is a series recorder here; these checks cover data and DOM, not Canvas.
+  it("同分钟累计量额推导可信分钟值，原位刷新均价线、量柱与已悬停浮层", () => {
+    const view = render(<MinuteChart points={restMinutes} prevClose={104} referenceDate="2026-10-09" />);
+    const chart = charts[0];
+    const minuteTime = Date.UTC(2026, 9, 9, 10, 0) / 1000;
+    const move = chart.subscribeCrosshairMove.mock.calls[0][0] as (p: {time:number; point:{x:number;y:number}}) => void;
+    fireEvent.pointerEnter(view.container.querySelector('[data-chart-surface]')!);
+    act(() => move({ time: minuteTime, point: { x: 100, y: 100 } }));
+    const field = (name: string) => view.container.querySelector(`[data-f="${name}"]`)!;
+    const hoveredAvg = field("avg");
+    expect(hoveredAvg.textContent).toBe("104.80");
+    expect(field("vol").textContent).toBe("1,000 手");
+    expect(field("amt").textContent).toBe("1048 万");
+
+    const merged = mergeQuoteIntoMinutes(restMinutes, liveMinuteQuote);
+    expect(merged).not.toBeNull();
+    view.rerender(<MinuteChart points={merged!} prevClose={104} referenceDate="2026-10-09" />);
+
+    expect(charts).toHaveLength(1);
+    expect(chart.remove).not.toHaveBeenCalled();
+    expect(chart.series[0].values.find(value => value.time === minuteTime)?.value).toBe(105.3);
+    expect(chart.series[2].values.find(value => value.time === minuteTime)?.value).toBe(105.3);
+    expect(chart.series.find(series => series.kind === "volume")?.values.find(value => value.time === minuteTime)?.value).toBe(200_000);
+    expect(field("avg")).toBe(hoveredAvg);
+    expect(field("avg").textContent).toBe("105.30");
+    expect(field("vol").textContent).toBe("2,000 手");
+    expect(field("amt").textContent).toBe("2151 万");
+    expect(field("cum").textContent).toBe("1.16 亿");
+  });
+
+  it.each([1, 3])("WS 跨 %s 分钟只更新价格、累计额和均价，分钟量额留空；REST 校准后原位恢复", (nextMinute) => {
+    const view = render(<MinuteChart points={restMinutes} prevClose={104} referenceDate="2026-10-09" />);
+    const chart = charts[0];
+    const latestTime = Date.UTC(2026, 9, 9, 10, nextMinute) / 1000;
+    const gapQuote: Quote = {
+      ...liveMinuteQuote, price: 106.5, volume: 1_300_000, amount: 138_450_000,
+      data_timestamp: `2026-10-09T10:0${nextMinute}:20+08:00`, received_at: `2026-10-09T02:0${nextMinute}:21Z`,
+    };
+    const merged = mergeQuoteIntoMinutes(restMinutes, gapQuote);
+    expect(merged).not.toBeNull();
+    view.rerender(<MinuteChart points={merged!} prevClose={104} referenceDate="2026-10-09" />);
+
+    const volumes = chart.series.find(series => series.kind === "volume")!;
+    expect(volumes.values.find(value => value.time === latestTime)).toEqual({ time: latestTime });
+    for (let minute = 1; minute < nextMinute; minute++) {
+      const missingTime = Date.UTC(2026, 9, 9, 10, minute) / 1000;
+      expect(chart.series[0].values.find(value => value.time === missingTime)).toEqual({ time: missingTime });
+      expect(volumes.values.find(value => value.time === missingTime)).toEqual({ time: missingTime });
+    }
+    expect(chart.series[0].values.find(value => value.time === latestTime)?.value).toBe(106.5);
+    expect(chart.series[2].values.find(value => value.time === latestTime)?.value).toBe(106.5);
+    const move = chart.subscribeCrosshairMove.mock.calls[0][0] as (p: {time:number; point:{x:number;y:number}}) => void;
+    fireEvent.pointerEnter(view.container.querySelector('[data-chart-surface]')!);
+    act(() => move({ time: latestTime, point: { x: 100, y: 100 } }));
+    const field = (name: string) => view.container.querySelector(`[data-f="${name}"]`)!;
+    expect(field("avg").textContent).toBe("106.50");
+    expect(field("vol").textContent).toBe("--");
+    expect(field("amt").textContent).toBe("--");
+    expect(field("cum").textContent).toBe("1.38 亿");
+
+    const calibrated: MinutePoint[] = nextMinute === 1 ? [
+      ...restMinutes,
+      { ts: "2026-10-09T10:01:00+08:00", price: 106.5, avg: 106.5, volume: 300_000, cum_volume: 1_300_000, cum_amount: 138_450_000, source: "tencent" },
+    ] : [
+      ...restMinutes,
+      { ts: "2026-10-09T10:01:00+08:00", price: 105.3, avg: 105.3, volume: 100_000, cum_volume: 1_100_000, cum_amount: 115_830_000, source: "tencent" },
+      { ts: "2026-10-09T10:02:00+08:00", price: 106, avg: 106, volume: 100_000, cum_volume: 1_200_000, cum_amount: 127_200_000, source: "tencent" },
+      { ts: "2026-10-09T10:03:00+08:00", price: 106.5, avg: 106.5, volume: 100_000, cum_volume: 1_300_000, cum_amount: 138_450_000, source: "tencent" },
+    ];
+    view.rerender(<MinuteChart points={calibrated} prevClose={104} referenceDate="2026-10-09" />);
+
+    expect(charts).toHaveLength(1);
+    expect(chart.remove).not.toHaveBeenCalled();
+    expect(volumes.values.find(value => value.time === latestTime)?.value).toBe(nextMinute === 1 ? 300_000 : 100_000);
+    expect(field("vol").textContent).toBe(nextMinute === 1 ? "3,000 手" : "1,000 手");
+    expect(field("amt").textContent).toBe(nextMinute === 1 ? "3365 万" : "1125 万");
+    expect(field("cum").textContent).toBe("1.38 亿");
+  });
+});
 
 it("magnetic focus shows the exact selected minute price and hides on leaving", () => {
   const view = render(<MinuteChart points={[point(10), point(10.257, "31")]} prevClose={10} />);
