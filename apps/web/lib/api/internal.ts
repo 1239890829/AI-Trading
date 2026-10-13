@@ -2,8 +2,8 @@
  * 模块内助手：请求实现与三个 JSON 收发包装（**刻意不由门面转发**，对外可见面因此不变）
  *
  * `lib/api.ts` 的内部切片（IMP-005，2026-09-15 从 2751 行单文件按业务域拆出）。
- * **只搬位置、不重写**：声明正文与拆分前逐字符相同；对外仍由 `lib/api.ts` 统一转发，
- * 因此引用方（`@/lib/api`）**零改动**。
+ * 对外仍由 `lib/api.ts` 统一转发；并发复用只覆盖已核实的自选纯读取，
+ * 不缓存完成值，不合并模拟账户初始化、撮合、事件归档或模型类 GET。
  */
 
 import type {
@@ -14,22 +14,63 @@ import { API_BASE, ApiError } from "./client";
 
 const DEFAULT_TIMEOUT_MS = 8000;
 
-async function request<T>(
+export interface ReadOptions {
+  signal?: AbortSignal;
+  /** 人工/写后校准不能加入旧读取。 */
+  fresh?: boolean;
+}
+
+const SAFE_READ_PATHS = new Set(["/api/watchlist"]);
+const sharedReads = new Map<string, SharedRead>();
+const MAX_SHARED_READS = 32;
+let readEpoch = 0;
+type Envelope<T> = {data: T; meta: Meta};
+interface SharedRead {
+  controller: AbortController;
+  promise: Promise<Envelope<unknown>>;
+  owners: number;
+  settled: boolean;
+}
+
+function invalidateReads() {
+  readEpoch += 1;
+  // 旧消费者仍可收自己的回包；后续消费者只能加入新代际。
+  sharedReads.clear();
+}
+
+function canceled(path: string) {
+  return new ApiError(0, `${path}：请求已取消`, "canceled");
+}
+
+function readKey(path: string, init: RequestInit, timeoutMs: number): string | null {
+  // 不在 SSR 跨用户复用，也不推定外部 API 的 cookie/token 鉴权契约。
+  if (typeof window === "undefined" || API_BASE !== "/backend" || !SAFE_READ_PATHS.has(path.split("?")[0]) || init.body != null) return null;
+  const headers = [...new Headers(init.headers).entries()].sort(([a], [b]) => a.localeCompare(b));
+  return JSON.stringify([readEpoch, window.location.origin, `${API_BASE}${path}`, timeoutMs,
+    headers, init.credentials ?? "same-origin", document.cookie,
+    init.cache ?? "no-store", init.mode, init.redirect, init.referrer, init.referrerPolicy, init.integrity]);
+}
+
+async function performRequest<T>(
   path: string,
   init: RequestInit,
   timeoutMs: number,
 ): Promise<{ data: T; meta: Meta }> {
+  if (init.signal?.aborted) throw canceled(path);
   const ctrl = new AbortController();
+  const onCancel = () => ctrl.abort();
+  init.signal?.addEventListener("abort", onCancel, {once: true});
   const started = performance.now();
   const timer = setTimeout(() => ctrl.abort(), timeoutMs);
   const expired = () => ctrl.signal.aborted || performance.now() - started >= timeoutMs;
   const timeout = () => new ApiError(0, `${path}：请求超时（${timeoutMs}ms）`, "timeout");
+  const abortError = () => init.signal?.aborted ? canceled(path) : timeout();
   try {
     let res: Response;
     try {
       res = await fetch(`${API_BASE}${path}`, { cache: "no-store", ...init, signal: ctrl.signal });
     } catch (e) {
-      if (expired() || (e instanceof DOMException && e.name === "AbortError")) throw timeout();
+      if (expired() || (e instanceof DOMException && e.name === "AbortError")) throw abortError();
       throw new ApiError(0, `${path}：网络错误（后端未启动或连接被拒）`, "network_error");
     }
     let raw: unknown;
@@ -37,11 +78,11 @@ async function request<T>(
       raw = await res.json();
     } catch (e) {
       // 正文读取也受同一预算约束；中止不能被归为非 JSON 的 bad_envelope。
-      if (expired() || (e instanceof DOMException && e.name === "AbortError")) throw timeout();
+      if (expired() || (e instanceof DOMException && e.name === "AbortError")) throw abortError();
       raw = {};
     }
     // 同步 JSON 解析会占住主线程，计时器尚未运行也必须核对完整耗时。
-    if (expired()) throw timeout();
+    if (expired()) throw abortError();
     const body = (raw !== null && typeof raw === "object" ? raw : {}) as { data?: T; detail?: string; code?: string };
     if (!res.ok) {
       throw new ApiError(res.status, body.detail ?? `HTTP ${res.status}`, body.code ?? `http_${res.status}`);
@@ -63,16 +104,73 @@ async function request<T>(
     return body as { data: T; meta: Meta };
   } finally {
     clearTimeout(timer);
+    init.signal?.removeEventListener("abort", onCancel);
   }
 }
 
-async function getJsonArray<T>(path: string, timeoutMs?: number): Promise<T[]> {
-  const body = await getJson<T[] | null>(path, timeoutMs);
+function joinRead<T>(path: string, key: string, entry: SharedRead, signal?: AbortSignal | null): Promise<Envelope<T>> {
+  entry.owners += 1;
+  return new Promise((resolve, reject) => {
+    let released = false;
+    const release = () => {
+      if (released) return false;
+      released = true;
+      signal?.removeEventListener("abort", onCancel);
+      entry.owners -= 1;
+      if (entry.owners === 0 && !entry.settled) {
+        if (sharedReads.get(key) === entry) sharedReads.delete(key);
+        entry.controller.abort();
+      }
+      return true;
+    };
+    const onCancel = () => { if (release()) reject(canceled(path)); };
+    if (signal?.aborted) onCancel();
+    else signal?.addEventListener("abort", onCancel, {once: true});
+    // 不共享嵌套对象的可变引用；结果只含已解析 JSON。
+    entry.promise.then(value => {
+      if (!release()) return;
+      try { resolve(JSON.parse(JSON.stringify(value)) as Envelope<T>); }
+      catch (error) { reject(error); }
+    }, error => { if (release()) reject(error); });
+  });
+}
+
+async function request<T>(path: string, init: RequestInit, timeoutMs: number, options: ReadOptions = {}): Promise<Envelope<T>> {
+  const signal = options.signal ?? init.signal;
+  if (signal?.aborted) throw canceled(path);
+  const isRead = (init.method ?? "GET").toUpperCase() === "GET";
+  // 即使客户端看到失败/超时，写操作也可能已经提交。前后两侧都隔离旧读。
+  if (!isRead) invalidateReads();
+  try {
+    if (isRead && options.fresh) invalidateReads();
+    const key = isRead ? readKey(path, init, timeoutMs) : null;
+    if (key !== null) {
+      const existing = sharedReads.get(key);
+      if (existing) return await joinRead<T>(path, key, existing, signal);
+      if (sharedReads.size < MAX_SHARED_READS) {
+        const controller = new AbortController();
+        const promise = performRequest<unknown>(path, {...init, signal: controller.signal}, timeoutMs).finally(() => {
+          entry.settled = true;
+          if (sharedReads.get(key) === entry) sharedReads.delete(key);
+        });
+        const entry: SharedRead = {controller, owners: 0, settled: false, promise};
+        sharedReads.set(key, entry);
+        return await joinRead<T>(path, key, entry, signal);
+      }
+    }
+    return await performRequest<T>(path, {...init, signal}, timeoutMs);
+  } finally {
+    if (!isRead) invalidateReads();
+  }
+}
+
+async function getJsonArray<T>(path: string, timeoutMs?: number, options?: ReadOptions): Promise<T[]> {
+  const body = await getJson<T[] | null>(path, timeoutMs, options);
   return body.data ?? [];
 }
 
-async function getJson<T>(path: string, timeoutMs: number = DEFAULT_TIMEOUT_MS): Promise<{ data: T; meta: Meta }> {
-  return request<T>(path, {}, timeoutMs);
+async function getJson<T>(path: string, timeoutMs: number = DEFAULT_TIMEOUT_MS, options?: ReadOptions): Promise<{ data: T; meta: Meta }> {
+  return request<T>(path, {}, timeoutMs, options);
 }
 
 async function sendJson<T = unknown>(

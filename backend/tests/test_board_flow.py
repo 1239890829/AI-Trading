@@ -366,6 +366,10 @@ def test_get_board_fund_flow_20d_zero_store(monkeypatch):
 
 
 def test_get_board_fund_flow_20d_from_store(monkeypatch):
+    from datetime import datetime
+
+    # This case exercises completed bars, so its clock must be after the close.
+    monkeypatch.setattr(bf, "beijing_now", lambda: datetime(2026, 10, 12, 15, 6, tzinfo=BJ_TZ))
     async def fake_list(kind):
         return _rows_fixture(), []
 

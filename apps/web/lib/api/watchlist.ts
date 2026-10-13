@@ -10,10 +10,10 @@ import type {
   WatchlistItem,
 } from "@/types/market";
 
-import { getJsonArray, sendJson } from "./internal";
+import { getJsonArray, sendJson, type ReadOptions } from "./internal";
 
-export async function getWatchlist(): Promise<WatchlistItem[]> {
-  return getJsonArray<WatchlistItem>("/api/watchlist");
+export async function getWatchlist(options?: ReadOptions): Promise<WatchlistItem[]> {
+  return getJsonArray<WatchlistItem>("/api/watchlist", undefined, options);
 }
 
 export async function addToWatchlist(symbol: string, name?: string, group?: string): Promise<WatchlistItem> {
@@ -22,8 +22,8 @@ export async function addToWatchlist(symbol: string, name?: string, group?: stri
   ).data;
 }
 
-export async function getWatchlistGroups(): Promise<string[]> {
-  return getJsonArray<string>("/api/watchlist/groups");
+export async function getWatchlistGroups(options?: ReadOptions): Promise<string[]> {
+  return getJsonArray<string>("/api/watchlist/groups", undefined, options);
 }
 
 export async function createWatchlistGroup(name: string): Promise<void> {

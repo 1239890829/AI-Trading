@@ -33,6 +33,7 @@ import asyncio
 from copy import deepcopy
 import json
 import logging
+import math
 import os
 from datetime import date, datetime, time
 from pathlib import Path
@@ -133,10 +134,18 @@ def _sina_bar_seq(dt: datetime) -> int | None:
 
 async def _sina_mk_bars(symbol: str, datalen: int = 600) -> list[dict] | None:
     """新浪 5 分钟K → [{dt, seq, amount}]（amount 元/根）。失败返回 None 不缓存。"""
-    key = (symbol, datalen)
+    key = ("sina-bars", beijing_now().date().isoformat(), symbol, datalen)
     hit, cached = _SINA_CACHE.get(key)
     if hit:
-        return cached
+        return deepcopy(cached)
+
+    async def load(_key):
+        return await _sina_mk_bars_uncached(key, symbol, datalen)
+
+    return await _shared_aggregate(key, load)
+
+
+async def _sina_mk_bars_uncached(key: tuple, symbol: str, datalen: int) -> list[dict] | None:
     try:
         resp = await _http().get(
             "https://quotes.sina.cn/cn/api/json_v2.php/CN_MarketDataService.getKLineData",
@@ -185,16 +194,20 @@ async def get_turnover_today(hub) -> dict:
 
     所有子环节失败都显式降级（degraded 列表），绝不臆造；缓存 30s，失败不缓存。
     """
-    hit, cached = _TURNOVER_CACHE.get("today")
+    key = ("turnover-today", beijing_now().date().isoformat(),
+           id(_tencent_provider(hub)), id(_calendar_provider(hub)))
+    hit, cached = _TURNOVER_CACHE.get(key)
     if hit:
-        return cached
+        return deepcopy(cached)
 
-    degraded: list[str] = []
-    out = await _turnover_today_uncached(hub, degraded)
-    # 失败不缓存（腾讯/新浪瞬时故障下一拍重试）；成功才缓存
-    if not out.get("degraded") or out.get("today_amount") is not None:
-        _TURNOVER_CACHE.set("today", out)
-    return out
+    async def load(_key):
+        out = await _turnover_today_uncached(hub, [])
+        # Preserve the existing success-only cache policy and 30s budget.
+        if not out.get("degraded") or out.get("today_amount") is not None:
+            _TURNOVER_CACHE.set(key, out)
+        return out
+
+    return await _shared_aggregate(key, load)
 
 
 async def _turnover_today_uncached(hub, degraded: list[str]) -> dict:
@@ -373,13 +386,43 @@ _MINUTE_EXPIRED_REASON = "分钟资金流源在读取期间过期，无法提供
 
 
 class _MinuteRows(list):
-    """源数据副本携带实际获取时刻；该时刻只用于进程缓存，不进入 HTTP 输出。"""
-    def __init__(self, rows: list, loaded_at: float):
+    """Keep source wall clocks separate from the monotonic cache acquisition clock."""
+    def __init__(self, rows: list, loaded_at: float, source_timestamps: list | None = None):
         super().__init__((t, dict(vals)) for t, vals in rows)
         self.loaded_at = loaded_at
+        self.source_timestamps = list(source_timestamps if source_timestamps is not None
+                                      else getattr(rows, "source_timestamps", [None] * len(rows)))
 
 
-async def _shared_aggregate(key: tuple, load) -> dict:
+def _parse_source_clock(value) -> datetime | None:
+    if value in (None, "", "-"):
+        return None
+    try:
+        if isinstance(value, (int, float)) and not isinstance(value, bool):
+            return datetime.fromtimestamp(value, BJ_TZ)
+        stamp = value if isinstance(value, datetime) else datetime.fromisoformat(str(value))
+        return stamp.replace(tzinfo=BJ_TZ) if stamp.tzinfo is None else stamp.astimezone(BJ_TZ)
+    except (TypeError, ValueError, OverflowError, OSError):
+        return None
+
+
+def _minute_source_clock(rows: list, index: int) -> datetime | None:
+    stamps = getattr(rows, "source_timestamps", [])
+    return _parse_source_clock(stamps[index]) if index < len(stamps) else None
+
+
+def _source_clock_payload(clocks: dict) -> dict:
+    return {market: stamp.isoformat(timespec="seconds") if stamp else None
+            for market, stamp in clocks.items()}
+
+
+def _source_clock_label(stamp: datetime | None) -> str | None:
+    if stamp is None:
+        return None
+    return stamp.strftime("%H:%M:%S" if stamp.date() == beijing_now().date() else "%Y-%m-%d %H:%M:%S")
+
+
+async def _shared_aggregate(key: tuple, load):
     """同一轮冷读只聚合一次；失败只共享给本轮等待者，取消单个等待者不取消源读取。"""
     task = _AGGREGATE_READS.get(key)
     if task is None or task.done():
@@ -413,6 +456,8 @@ async def get_fund_flow_intraday() -> dict:
 async def _fund_flow_intraday_uncached(key: tuple) -> dict:
     degraded: list[str] = []
     source_times: list[float] = []
+    source_dates: set[date] = set()
+    unverified_dates = future_times = False
     series: dict[str, dict] = {}
     for i, (mkt, secid) in enumerate((("sh", "1.000001"), ("sz", "0.399107"))):
         rows = await _em_fflow_kline(secid)
@@ -422,36 +467,51 @@ async def _fund_flow_intraday_uncached(key: tuple) -> dict:
         loaded_at = getattr(rows, "loaded_at", None)
         if loaded_at is not None:
             source_times.append(loaded_at)
-        for t, vals in rows:
-            node = series.setdefault(t, {})
+        for index, (t, vals) in enumerate(rows):
+            stamp = _minute_source_clock(rows, index)
+            if stamp is None:
+                unverified_dates = True
+            else:
+                source_dates.add(stamp.date())
+                future_times = future_times or stamp > beijing_now()
+            identity = stamp.strftime("%Y-%m-%d %H:%M") if stamp else t
+            node = series.setdefault(identity, {"t": t})
             node[mkt] = vals
         if i == 0:
             await asyncio.sleep(1.5)  # 防熔断
     items: list[dict] = []
     if len(degraded) == 0:
-        for t in sorted(series):
-            sh, sz = series[t].get("sh"), series[t].get("sz")
+        for identity in sorted(series):
+            sh, sz = series[identity].get("sh"), series[identity].get("sz")
             if sh is None or sz is None:
                 continue
-            item = {"t": t}
+            item = {"t": series[identity]["t"]}
             for k in _FFLOW_MIN_KEYS:
                 a, b = sh.get(k), sz.get(k)
                 item[k] = round(a + b, 2) if (a is not None and b is not None) else None
             items.append(item)
+        if series and not items:
+            degraded.append("沪深分钟源日期或时点不一致，无法提供共同分钟合计")
+    if unverified_dates:
+        degraded.append("分钟资金流源日期未核定，不能认定为今日数据")
+    prior_dates = sorted(d.isoformat() for d in source_dates if d != beijing_now().date())
+    if prior_dates:
+        degraded.append(f"分钟资金流源日期不是今日（{', '.join(prior_dates)}），保留原来源时点")
+    if future_times:
+        degraded.append("分钟资金流源时点晚于读取时刻，完成状态未核定")
     out = {
         "items": items,  # [{t, main, super_, big, mid, small}]（亿元，累计口径）
         "updated_at": beijing_now().strftime("%H:%M:%S"),
         "degraded": degraded,
     }
-    if not out["degraded"]:
-        deadline = min(source_times) + _INTRADAY_CACHE.ttl if source_times else monotonic() + _INTRADAY_CACHE.ttl
-        if monotonic() >= deadline:
-            # 原一轮读取已耗尽源年龄预算；返回明确降级，不递归增加整轮回源。
-            _INTRADAY_CACHE.invalidate(key)
-            out["items"] = []
-            out["degraded"].append(_MINUTE_EXPIRED_REASON)
-        else:
-            _INTRADAY_CACHE.set(key, (out, deadline))  # 失败不缓存；不叠加输入/输出 TTL
+    deadline = min(source_times) + _INTRADAY_CACHE.ttl if source_times else monotonic() + _INTRADAY_CACHE.ttl
+    if out["items"] and monotonic() >= deadline:
+        # Source-date warnings must not bypass the original acquisition-age guard.
+        _INTRADAY_CACHE.invalidate(key)
+        out["items"] = []
+        out["degraded"].append(_MINUTE_EXPIRED_REASON)
+    elif not out["degraded"]:
+        _INTRADAY_CACHE.set(key, (out, deadline))  # 失败不缓存；不叠加输入/输出 TTL
     return deepcopy(out)
 
 
@@ -515,6 +575,7 @@ async def _em_fflow_kline_uncached(secid: str) -> list[tuple[str, dict]] | None:
             if not klines:
                 raise ValueError("empty klines")
             out: list[tuple[str, dict]] = []
+            stamps: list[datetime | None] = []
             for line in klines:
                 parts = line.split(",")
                 if len(parts) < 6:
@@ -522,7 +583,8 @@ async def _em_fflow_kline_uncached(secid: str) -> list[tuple[str, dict]] | None:
                 hm = parts[0].split(" ")[1][:5] if " " in parts[0] else parts[0]
                 vals = {k: _em_num_raw(parts[i + 1]) for i, k in enumerate(_FFLOW_MIN_KEYS)}
                 out.append((hm, vals))
-            return out
+                stamps.append(_parse_source_clock(parts[0]))
+            return _MinuteRows(out, monotonic(), stamps)
         except Exception as exc:  # noqa: BLE001
             log.warning("em fflow kline %s attempt %s failed: %s", secid, attempt + 1, exc)
             await asyncio.sleep(1.0)
@@ -573,18 +635,35 @@ def _snapshot_today_if_closed(rt: dict) -> None:
         today = beijing_now()
         if today.hour < 15 or (today.hour == 15 and today.minute < 5):
             return
-        # 当前输出只有 HH:MM，不能自证源日期；日历未知时也不能造当天日线。
+        if not rt.get("available"):
+            return
         if _stored_trade_day(today.date(), trade_calendar.known_trade_days()) is not True:
             return
+        stamps = rt.get("source_timestamps") or {}
+        clocks = [_parse_source_clock(stamps.get(mkt)) for mkt in ("sh", "sz")]
+        if any(stamp is None or stamp.date() != today.date() or stamp.time() < time(15)
+               or stamp > today for stamp in clocks):
+            return  # A receipt after 15:05 cannot certify yesterday's or an unfinished source.
         store = _read_flow_store() or {"updated_at": None, "days": {}}
         d = today.date().isoformat()
-        if d in (store.get("days") or {}):
+        existing = (store.get("days") or {}).get(d)
+        if _complete_flow_day(existing):
             return
         items = rt.get("items") or {}
         sh, sz = items.get("sh"), items.get("sz")
-        if not sh or not sz:
+        if not _complete_flow_day({"sh": sh, "sz": sz}):
             return
-        store["days"][d] = {"sh": sh, "sz": sz, "close_pct": None, "source": "snapshot"}
+        rec = dict(existing or {})
+        retained_stamps = rec.get("source_timestamps") or {}
+        merged_stamps = {market: retained_stamps.get(market) for market in ("sh", "sz")}
+        for market, values in (("sh", sh), ("sz", sz)):
+            if not _complete_flow_market(rec.get(market)):
+                rec[market] = deepcopy(values)
+                merged_stamps[market] = stamps.get(market)
+        rec.setdefault("close_pct", None)
+        rec.setdefault("source", "snapshot")
+        rec["source_timestamps"] = merged_stamps
+        store.setdefault("days", {})[d] = rec
         store["updated_at"] = today.isoformat(timespec="seconds")
         _write_store_atomic(store)
         _FLOW_HIST_CACHE.invalidate()
@@ -602,7 +681,7 @@ async def _fund_flow_rt_uncached(*, source_times: list[float] | None = None) -> 
     # 口径一致但延迟约 15 分钟，显式标注绝不冒充实时。
     fallback = await _rt_from_intraday_tail(source_times=source_times, degraded=degraded)
     if fallback is not None:
-        fallback["degraded"] = degraded + ["实时源不可用，采用 15 分钟延迟口径"]
+        fallback["degraded"] = degraded + fallback.get("degraded", []) + ["实时源不可用，采用 15 分钟延迟口径"]
         return fallback
     return {"available": False, "reason": degraded[-1] if degraded else "东财资金流源不可用（已重试）",
             "degraded": degraded + ["资金流实时数据不可用"]}
@@ -610,23 +689,39 @@ async def _fund_flow_rt_uncached(*, source_times: list[float] | None = None) -> 
 
 def _rt_from_ulist(diff: list[dict], degraded: list[str]) -> dict:
     by_mkt: dict[str, dict] = {}
+    clocks: dict[str, datetime | None] = {}
     for row in diff:
         code = str(row.get("f12", ""))
         mkt = "sh" if code == "000001" else ("sz" if code == "399107" else None)
         if mkt is None:
             continue
         by_mkt[mkt] = {k: _em_num(row.get(f)) for f, k in _FLOW_KEYS.items()}
+        clocks[mkt] = _parse_source_clock(row.get("f124"))
     if "sh" not in by_mkt or "sz" not in by_mkt:
         return {"available": False, "reason": "资金流响应缺沪深任一市场", "degraded": ["资金流实时数据不完整"]}
+    known = [stamp for stamp in clocks.values() if stamp is not None]
+    if len(known) == 2 and any(stamp.replace(second=0, microsecond=0) != known[0].replace(second=0, microsecond=0)
+                               for stamp in known[1:]):
+        return {"available": False, "reason": "沪深资金流源日期或分钟不一致",
+                "source_timestamps": _source_clock_payload(clocks),
+                "degraded": degraded + ["沪深资金流无法形成同日同刻合计"]}
+    notes = list(degraded)
+    if len(known) != 2:
+        notes.append("资金流源日期未核定，不能认定为当日完成数据")
+    elif known[0].date() != beijing_now().date():
+        notes.append("资金流源日期不是今日，显示原来源时点，不作为今日完成数据")
+    elif any(stamp > beijing_now() for stamp in known):
+        notes.append("资金流源时点晚于读取时刻，完成状态未核定")
     total = {k: _sum3(by_mkt["sh"].get(k), by_mkt["sz"].get(k)) for k in _FLOW_KEYS.values()}
-    ts = next((r.get("f124") for r in diff if r.get("f124")), None)
-    as_of = datetime.fromtimestamp(ts, BJ_TZ).strftime("%H:%M:%S") if ts else None
+    stamp = min(known) if known else None
+    as_of = _source_clock_label(stamp)
     return {
         "available": True,
         "as_of": as_of,
+        "source_timestamps": _source_clock_payload(clocks),
         # 亿元；self-check：main+mid+small ≈ 0（买卖对冲），前端可展示校验提示
         "items": {"total": total, "sh": by_mkt["sh"], "sz": by_mkt["sz"]},
-        "degraded": degraded,
+        "degraded": notes,
     }
 
 
@@ -658,18 +753,28 @@ async def _rt_from_intraday_tail(
         return None
     if source_times is not None:
         source_times.extend(rows.loaded_at for rows in (sh, sz) if hasattr(rows, "loaded_at"))
-    tail_sh, tail_sz = sh[-1], sz[-1]
-    if tail_sh[0] != tail_sz[0]:  # 两市末根分钟不一致时取较早者，保证合计口径同刻
-        idx_sh = next((i for i, p in enumerate(sh) if p[0] == tail_sz[0]), None)
-        idx_sz = next((i for i, p in enumerate(sz) if p[0] == tail_sh[0]), None)
-        if idx_sh is None and idx_sz is None:
-            return None
-        if idx_sh is not None:
-            tail_sh = sh[idx_sh]
-        else:
-            tail_sz = sz[idx_sz]
+    def identities(rows):
+        return {(stamp.strftime("%Y-%m-%d %H:%M") if stamp else row[0]): (row, stamp)
+                for index, row in enumerate(rows)
+                for stamp in [_minute_source_clock(rows, index)]}
+
+    by_sh, by_sz = identities(sh), identities(sz)
+    common = by_sh.keys() & by_sz.keys()
+    if not common:
+        if degraded is not None:
+            degraded.append("沪深分钟源日期或时点不一致，无法形成共同末根合计")
+        return None
+    identity = max(common)
+    (tail_sh, sh_stamp), (tail_sz, sz_stamp) = by_sh[identity], by_sz[identity]
+    notes = []
+    if sh_stamp is None or sz_stamp is None:
+        notes.append("分钟资金流源日期未核定，不能认定为当日完成数据")
+    elif sh_stamp.date() != beijing_now().date():
+        notes.append("分钟资金流源日期不是今日，保留原来源时点")
     total = {k: _sum3(tail_sh[1].get(k), tail_sz[1].get(k)) for k in _FLOW_KEYS.values()}
-    return {"available": True, "as_of": tail_sh[0] + " (延迟)",
+    return {"available": True, "as_of": (_source_clock_label(sh_stamp) or tail_sh[0]) + " (延迟)",
+            "source_timestamps": _source_clock_payload({"sh": sh_stamp, "sz": sz_stamp}),
+            "degraded": notes,
             "items": {"total": total,
                       "sh": dict(tail_sh[1]), "sz": dict(tail_sz[1])}}
 
@@ -725,9 +830,7 @@ _last_backfill_ts: list[float] = [0.0]
 
 def _backfill_throttled() -> bool:
     """回源失败时 5 分钟内不再重试，避免东财断连期被历史请求打爆。"""
-    import time
-
-    now = time.monotonic()
+    now = monotonic()
     if now - _last_backfill_ts[0] < _BACKFILL_MIN_INTERVAL_S:
         return True
     _last_backfill_ts[0] = now
@@ -739,13 +842,7 @@ async def get_fund_flow_history(hub, days: int = 30) -> dict:
     读本地 daily.json（读路径零外呼）；文件落后（缺最近完整交易日）时拉东财
     fflow daykline（lmt=40）合并落盘。今日进行中的数据不落盘（用实时端点）。
     """
-    hit, cached = _FLOW_HIST_CACHE.get(("hist", days))
-    if hit:
-        return deepcopy(cached)
-    store = _read_flow_store()
-    store_days = set((store or {}).get("days") or {})
     degraded: list[str] = []
-    refreshed = False
     prev_d: date | None = None
     cal: list[date] | None = None
     try:
@@ -761,17 +858,49 @@ async def get_fund_flow_history(hub, days: int = 30) -> dict:
     except Exception as exc:  # noqa: BLE001
         degraded.append(f"交易日历不可用({type(exc).__name__})")
 
-    if prev_d is not None and prev_d.isoformat() not in store_days:
+    if prev_d is None and not degraded:
+        degraded.append("最近完成交易日未核定，保留本地历史原记录")
+    key = ("hist", days, beijing_now().date().isoformat(), prev_d, tuple(cal or []))
+    hit, cached = _FLOW_HIST_CACHE.get(key)
+    if hit:
+        return deepcopy(cached)
+
+    async def load(_key):
+        return await _fund_flow_history_uncached(key, days, cal, prev_d, degraded)
+
+    return await _shared_aggregate(key, load)
+
+
+def _complete_flow_market(values: dict | None) -> bool:
+    return isinstance(values, dict) and all(
+        isinstance(values.get(key), (int, float)) and not isinstance(values[key], bool)
+        and math.isfinite(values[key]) for key in _FLOW_KEYS.values())
+
+
+def _complete_flow_day(record: dict | None) -> bool:
+    return isinstance(record, dict) and all(_complete_flow_market(record.get(market)) for market in ("sh", "sz"))
+
+
+async def _fund_flow_history_uncached(key: tuple, days: int, cal: list[date] | None,
+                                     prev_d: date | None, reasons: list[str]) -> dict:
+    store = _read_flow_store()
+    degraded = list(reasons)
+    refreshed = False
+    target = prev_d.isoformat() if prev_d else None
+    complete = _complete_flow_day(((store or {}).get("days") or {}).get(target)) if target else False
+    if target and not complete:
         if _backfill_throttled():
             degraded.append("东财历史回源节流中（本地库待积累）")
         else:
             pulled = await _pull_em_fflow_into_store()
             if pulled:
                 store = _read_flow_store()
-                store_days = set((store or {}).get("days") or {})
             else:
                 degraded.append("东财历史资金流拉取失败（使用本地已有）")
             refreshed = True
+        complete = _complete_flow_day(((store or {}).get("days") or {}).get(target))
+        if not complete:
+            degraded.append(f"{target} 沪深完成日数据未齐，缺项保留未知并等待回补")
 
     rows: list[dict] = []
     filtered = unknown = 0
@@ -794,7 +923,10 @@ async def get_fund_flow_history(hub, days: int = 30) -> dict:
         degraded.append(f"{unknown} 条历史存档交易日归属未核定，不代表完整连续交易日序列")
     out = {"items": rows[:days], "updated_at": (store or {}).get("updated_at"),
            "refreshed": refreshed, "degraded": degraded}
-    _FLOW_HIST_CACHE.set(("hist", days), out)
+    # Long cache is only for a view whose target day is complete. Failed/partial
+    # rounds share their running task; the existing 300s source throttle remains.
+    if complete:
+        _FLOW_HIST_CACHE.set(key, out)
     return deepcopy(out)
 
 
@@ -817,8 +949,8 @@ def _flow_total_yi(rec: dict) -> dict:
 
 async def _pull_em_fflow_into_store() -> bool:
     """拉东财 fflow daykline（沪深各一次，sleep 防熔断）合并落盘（跳过今日进行中 bar）。"""
-    store = _read_flow_store() or {"updated_at": None, "days": {}}
-    ok = False
+    updates: dict[str, dict] = {}
+    today = beijing_now().date()
     for i, (mkt, secid) in enumerate((("sh", "1.000001"), ("sz", "0.399107"))):
         try:
             resp = await _http().get(
@@ -836,31 +968,47 @@ async def _pull_em_fflow_into_store() -> bool:
                 parts = line.split(",")
                 if len(parts) < 13:
                     continue
-                d = parts[0]
-                if d == beijing_now().date().isoformat():
-                    continue  # 今日进行中数据不落盘
-                rec = store["days"].setdefault(d, {})
-                rec[mkt] = {
-                    "main": round(float(parts[1]) / YI, 2),
-                    "small": round(float(parts[2]) / YI, 2),
-                    "mid": round(float(parts[3]) / YI, 2),
-                    "big": round(float(parts[4]) / YI, 2),
-                    "super_": round(float(parts[5]) / YI, 2),
-                }
-                rec["close_pct"] = float(parts[12]) if parts[12] not in ("", "-") else None
-            ok = True
+                try:
+                    d = date.fromisoformat(parts[0])
+                    if d >= today:
+                        continue  # Today's unfinished bar and future dates are not history.
+                    values = {key: _em_num(parts[index + 1]) for index, key in enumerate(_FFLOW_MIN_KEYS)}
+                    if any(value is None or not math.isfinite(value) for value in values.values()):
+                        continue
+                    close_pct = float(parts[12]) if parts[12] not in ("", "-") else None
+                    if close_pct is not None and not math.isfinite(close_pct):
+                        close_pct = None
+                except (ValueError, TypeError):
+                    continue  # One malformed bar must not discard later valid bars.
+                rec = updates.setdefault(d.isoformat(), {})
+                rec[mkt] = values
+                rec["close_pct"] = close_pct
         except Exception as exc:  # noqa: BLE001
             log.warning("em fflow daykline %s failed: %s", secid, exc)
         if i == 0:
             await asyncio.sleep(2.0)  # 防熔断
-    if ok:
-        try:
-            store["updated_at"] = beijing_now().isoformat(timespec="seconds")
-            _write_store_atomic(store)
-            _FLOW_HIST_CACHE.invalidate()
-        except Exception:
-            log.warning("fundflow store persist failed", exc_info=True)
-    return ok
+    if not updates:
+        return False
+    # Read again after external waits, so a concurrent verified close snapshot
+    # cannot be overwritten by the stale pre-fetch file image.
+    store = _read_flow_store() or {"updated_at": None, "days": {}}
+    changed = False
+    for day, incoming in updates.items():
+        rec = store.setdefault("days", {}).setdefault(day, {})
+        for name, value in incoming.items():
+            if name not in rec or rec[name] != value:
+                rec[name] = value
+                changed = True
+    if not changed:
+        return False
+    try:
+        store["updated_at"] = beijing_now().isoformat(timespec="seconds")
+        _write_store_atomic(store)
+        _FLOW_HIST_CACHE.invalidate()
+        return True
+    except Exception:
+        log.warning("fundflow store persist failed", exc_info=True)
+        return False
 
 
 # ---------------------------------------------------------------- 历史成交额对比

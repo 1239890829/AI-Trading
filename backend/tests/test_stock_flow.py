@@ -2,7 +2,6 @@
 from __future__ import annotations
 
 import asyncio
-from types import SimpleNamespace
 from unittest.mock import AsyncMock, call
 
 from app.market import stock_flow
@@ -60,7 +59,7 @@ def test_get_stock_flow_all_failed(monkeypatch):
     fail = _FailClient()
     monkeypatch.setattr(stock_flow, "_http", lambda: fail)
     sleep = AsyncMock()
-    monkeypatch.setattr(stock_flow, "asyncio", SimpleNamespace(sleep=sleep))
+    monkeypatch.setattr(stock_flow.asyncio, "sleep", sleep)
     out = asyncio.run(stock_flow.get_stock_flow(["600519", "830799"]))
     assert out["items"] == {}
     assert out["degraded"] and "不可用" in out["degraded"][0]

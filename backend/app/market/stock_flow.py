@@ -18,9 +18,10 @@ from __future__ import annotations
 
 import asyncio
 import logging
+from copy import deepcopy
 from datetime import datetime
 
-from app.core.bjtime import BJ_TZ
+from app.core.bjtime import BJ_TZ, beijing_now
 from app.core.ttl_cache import TTLCache
 from app.market.fund_flow import _FLOW_KEYS, _em_num, _http
 
@@ -30,6 +31,7 @@ log = logging.getLogger(__name__)
 MAX_SYMBOLS = 60
 
 _CACHE = TTLCache("stock-flow", ttl=30.0, maxsize=8)
+_READS: dict[tuple, asyncio.Task] = {}
 
 #: f184 主力净占比（%）、f124 更新时间戳（秒）
 _STOCK_FIELDS = ("f12", "f14", "f62", "f66", "f72", "f78", "f84", "f184", "f124")
@@ -93,11 +95,56 @@ async def get_stock_flow(symbols: list[str]) -> dict:
     syms = syms[:MAX_SYMBOLS]
     if not syms:
         return {"items": {}, "no_data": [], "as_of": None, "degraded": ["symbols 为空"]}
+    if not any(stock_secid(s) is not None for s in syms):
+        return {"items": {}, "no_data": syms, "as_of": None,
+                "degraded": ["查询标的均无东财个股资金流覆盖"]}
 
-    key = tuple(syms)
+    # Truncate before canonicalizing: a different first 60 symbols is a different read.
+    key = (beijing_now().date().isoformat(), tuple(sorted(syms)), _STOCK_FIELDS)
     hit, cached = _CACHE.get(key)
     if hit:
-        return cached
+        return _stock_flow_copy(cached, syms)
+    task = _READS.get(key)
+    if task is None or task.done():
+        if len(_READS) >= 128:
+            try:
+                _, result = await _CACHE.get_or_set(key, lambda: _load_stock_flow(list(key[1])))
+            except _StockFlowUnavailable as exc:
+                result = exc.payload
+            return _stock_flow_copy(result, syms)
+        task = asyncio.create_task(_CACHE.get_or_set(key, lambda: _load_stock_flow(list(key[1]))))
+        _READS[key] = task
+
+        def completed(done: asyncio.Task) -> None:
+            if _READS.get(key) is done:
+                _READS.pop(key, None)
+            if not done.cancelled():
+                done.exception()
+
+        task.add_done_callback(completed)
+    try:
+        _, result = await asyncio.shield(task)
+    except _StockFlowUnavailable as exc:
+        result = exc.payload
+    return _stock_flow_copy(result, syms)
+
+
+def _stock_flow_copy(result: dict, syms: list[str]) -> dict:
+    out = deepcopy(result)
+    missing = set(out["no_data"])
+    # Preserve the caller's original missing-symbol order, including BSE first.
+    out["no_data"] = [s for s in syms if s in missing and stock_secid(s) is None]
+    out["no_data"] += [s for s in syms if s in missing and stock_secid(s) is not None]
+    return out
+
+
+class _StockFlowUnavailable(Exception):
+    def __init__(self, payload: dict):
+        super().__init__(payload["degraded"][0])
+        self.payload = payload
+
+
+async def _load_stock_flow(syms: list[str]) -> dict:
 
     secids = [(s, stock_secid(s)) for s in syms]
     query = ",".join(sec for _, sec in secids if sec is not None)
@@ -123,7 +170,7 @@ async def get_stock_flow(symbols: list[str]) -> dict:
     if rows is None:
         out = {"items": {}, "no_data": no_data, "as_of": None,
                "degraded": ["东财个股资金流不可用（已重试）"]}
-        return out  # 失败不缓存
+        raise _StockFlowUnavailable(out)  # 同一轮失败共享；下轮可恢复，不缓存失败。
 
     items = parse_stock_flow(rows)
     # 请求了但响应里没有的（除北交所等已知无数据外）也归入 no_data，可见性优先
@@ -131,5 +178,4 @@ async def get_stock_flow(symbols: list[str]) -> dict:
     no_data += [s for s, sec in secids if sec is not None and s not in returned]
     as_of = next((it["as_of"] for it in items.values() if it.get("as_of")), None)
     out = {"items": items, "no_data": no_data, "as_of": as_of, "degraded": []}
-    _CACHE.set(key, out)
     return out
