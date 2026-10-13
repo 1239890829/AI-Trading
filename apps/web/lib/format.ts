@@ -251,6 +251,7 @@ const QUALITY_REASON_LABELS: Record<string, string> = {
   timestamp_in_future: "数据时间戳在未来",
   time_regress: "数据时间倒退",
   source_time_regress_ignored: "源返回晚到旧行情，保留最近可信值；本轮刷新未接纳",
+  source_time_unknown: "源行情未提供数据时间，保留本次返回数值；无法确认时点与新鲜度",
   source_time_unknown_ignored: "源行情缺源时间，保留最近可信值",
   source_invalid_ignored: "源返回非法行情，保留最近可信值",
   source_missing_price_ignored: "源本轮缺最新价，保留最近可信值",

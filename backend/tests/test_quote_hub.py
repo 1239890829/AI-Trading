@@ -167,18 +167,17 @@ class _BatchProvider:
 
 @pytest.fixture
 def isolate_calendar(monkeypatch):
-    """把交易日历压成"不可用"→ `_refresh_closed_state` 不干预（verdict=None）。
+    """本组核盘中批次接纳/缺失/恢复，显式固定连续交易阶段。
 
-    不这样做，断言结果会被**宿主时钟**决定：本机持久化日历末日为最近交易日，
-    "今天"通常不在其中 ⇒ ``verdict=False`` ⇒ ``_mark_all_stale("market_closed")``
-    覆盖掉 ``batch_missing``，用例在盘后绿、盘中红。这与「时区是宿主的属性」
-    同族：**验证环境的属性会决定结论**，必须显式隔离，不能靠"跑的时候是盘后"。
+    只 stub 日历 HTTP 为空不能裁决阶段：Hub 还会读既有可信日历。
+    empty/error/跨日 unknown 在 pause-state 用例中单独测试，不能伪当开放。
     """
 
     async def _no_days(_provider, lookback_days: int = 120):
         return []
 
     monkeypatch.setattr(qh.tc, "trading_days", _no_days)
+    monkeypatch.setattr(qh.tc, "market_open_state", lambda *a, **k: qh.tc.MARKET_OPEN)
 
 
 def _hub_with(quotes: list[Quote]) -> tuple[QuoteHub, _BatchProvider]:
@@ -499,13 +498,8 @@ def test_lunch_break_marks_cached_quotes_market_closed(monkeypatch):
     assert all(q.quality_reasons == ["market_closed"] for q in hub.get_quotes())
 
 
-def test_market_closed_reason_overrides_batch_missing(monkeypatch):
-    """顺序被钉住：`_refresh_closed_state` 在 `_mark_batch_gaps` 之后执行，
-    以更贴近成因的 `market_closed` 覆盖逐标的归因；覆盖率取证仍保留。
-
-    若有人把 `_mark_batch_gaps` 挪到它之后，缺失标的会留着 `batch_missing`
-    归因，本用例变红——这是有意为之的**顺序守卫**。
-    """
+def test_market_closed_preserves_batch_missing(monkeypatch):
+    """闭市是阶段，缺项是源事实：保留缺项原因，正常已接纳行标闭市。"""
 
     async def _today_days(_provider, lookback_days: int = 120):
         return [beijing_today()]
@@ -517,11 +511,14 @@ def test_market_closed_reason_overrides_batch_missing(monkeypatch):
     b = make_q("600519", "贵州茅台", 100.0)
     hub, prov = _hub_with([a, b])
     asyncio.run(hub.refresh())
+    stamp = hub.quotes["600105"].data_timestamp
 
     prov.quotes = [b]  # 同时漏 A
     asyncio.run(hub.refresh())
 
     assert hub._closed_marked is True
     assert hub.quotes["600105"].quality == Quality.stale
-    assert hub.quotes["600105"].quality_reasons == ["market_closed"]
+    assert hub.quotes["600105"].quality_reasons == ["batch_missing"]
+    assert hub.quotes["600105"].data_timestamp == stamp
+    assert hub.quotes["600519"].quality_reasons == ["market_closed"]
     assert hub.last_missing_symbols == ["600105"]  # 取证面不受归因覆盖影响

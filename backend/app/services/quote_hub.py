@@ -111,6 +111,16 @@ def _mark_retained_rejected(q: Quote, reason: str) -> None:
     mark_stale(q, reason)
 
 
+def _mark_confirmed_closed(q: Quote) -> None:
+    """仅给正常行情落闭市上下文，不抹真实质量原因；缺源钟显式待核。"""
+    if q.quality is not Quality.high or any(r != "off_session" for r in q.quality_reasons):
+        return
+    if q.data_timestamp is None:
+        mark_stale(q, "source_time_unknown")
+        return
+    mark_stale(q, "market_closed")
+
+
 class QuoteHub:
     """行情缓存与广播中心。
 
@@ -298,6 +308,7 @@ class QuoteHub:
                 self._schedule_publish()
 
     def _accept_indices(self, new_indices: list[Quote]) -> None:
+        closed = tc.market_open_state(tc.known_trade_days(), beijing_now()) == tc.MARKET_CLOSED
         # 裸代码只有在市场也匹配且身份唯一时才进入校验；校验通过“接纳门”后才推进 current cache。
         # 上游晚到/非法观测不能覆盖最近可信值，否则 received-order 会反过来污染 source-time。
         counts = Counter((q.symbol, q.market) for q in new_indices)
@@ -323,11 +334,14 @@ class QuoteHub:
             if rejected is not None:
                 rejected_indices[q.symbol] = rejected
                 continue
+            if closed:
+                _mark_confirmed_closed(q)
             self.indices[q.symbol] = q
             accepted_indices.append(q)
         self._mark_index_gaps(accepted_indices, rejected_indices)
 
     def _accept_quotes(self, watchlist: list[str], new_quotes: list[Quote]) -> None:
+        closed = tc.market_open_state(tc.known_trade_days(), beijing_now()) == tc.MARKET_CLOSED
         quote_counts = Counter(q.symbol for q in new_quotes)
         returned_by_symbol = {q.symbol: q for q in new_quotes}
         accepted_by_symbol: dict[str, Quote] = {}
@@ -348,6 +362,8 @@ class QuoteHub:
             if rejected is not None:
                 rejected_quotes[symbol] = rejected
                 continue
+            if closed:
+                _mark_confirmed_closed(q)
             self.quotes[symbol] = q
             accepted_by_symbol[symbol] = q
             if q.price is not None and q.data_timestamp is not None:
@@ -371,17 +387,17 @@ class QuoteHub:
         - `open`   ⇒ 不干预，数据质量由 validator 定级；
         - `unknown`（处于交易时段内、但日历未覆盖今天）⇒ **不标休市**：既不能冒充休市、
           也不能冒充实时 —— 交给数据质量如实定级（KB 核心纪律「三态 > 二态」）。
-        日历不可用 / 为空 → 返回不干预（未知不判，保持原行为）。
+        日历不可用 / 为空 → 复用可信日历缓存；未覆盖今日仍是 unknown。
         """
         try:
-            now = beijing_now()
             days = await tc.trading_days(self.provider)
-            if not days:
-                return
-            state = tc.market_open_state(days, now)
         except Exception as exc:
             log.debug("market-open check unavailable: %s", exc)
-            return
+            days = None
+        now = beijing_now()  # 等待日历可跨竞价/午休边界，必须用完成时刻裁决。
+        # 空/异常日历仍可读取既有可信缓存；不覆盖今日时保留 unknown。
+        # 不能沿用旧 closed 跳过广播又清 pending；阶段须按当次时刻重新裁决。
+        state = tc.market_open_state(days or tc.known_trade_days(), now)
         if state == tc.MARKET_CLOSED:
             # 每轮重标（2026-09-01 修复：原沿触发只在首轮标 stale，之后 refresh()
             # 又把 validator 判定的新数据存回缓存——盘前质量在 stale/low/invalid
@@ -515,10 +531,12 @@ class QuoteHub:
         return sorted(symbols)
 
     def _mark_all_stale(self, reason: str = "refresh_failed") -> None:
-        for q in self.indices.values():
-            mark_stale(q, reason)
-        for q in self.quotes.values():
-            mark_stale(q, reason)
+        for cached in (self.indices, self.quotes):
+            for q in cached.values():
+                if reason == "market_closed":
+                    _mark_confirmed_closed(q)
+                else:
+                    mark_stale(q, reason)
         self._broadcast("stale")
 
     def freshness(self) -> Freshness:

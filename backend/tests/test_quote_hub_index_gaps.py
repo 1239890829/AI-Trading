@@ -35,6 +35,8 @@ def hub(monkeypatch):
 
     monkeypatch.setattr(qh.tc, "trading_days", no_calendar)
     monkeypatch.setattr(qh.tc, "in_trading_window", lambda: True)
+    # 本组核盘中指数缺失/接纳；专用 closed 用例在各自测试内覆盖此裁决。
+    monkeypatch.setattr(qh.tc, "market_open_state", lambda *a, **k: qh.tc.MARKET_OPEN)
     return qh.QuoteHub(Provider(), poll_interval=1)
 
 
@@ -115,16 +117,20 @@ def test_index_gap_logs_only_when_missing_set_changes(hub, caplog):
     assert len(caplog.records) == first
 
 
-def test_confirmed_closed_reason_overrides_index_gap(hub, monkeypatch):
+def test_confirmed_closed_preserves_index_gap(hub, monkeypatch):
     async def calendar(*args, **kwargs):
         return [qh.beijing_now().date()]
 
     refresh(hub)
+    stamp = hub.indices["000001"].data_timestamp
     monkeypatch.setattr(qh.tc, "trading_days", calendar)
     monkeypatch.setattr(qh.tc, "market_open_state", lambda *args: qh.tc.MARKET_CLOSED)
     hub.provider.indices = []
     refresh(hub)
-    assert hub.indices["000001"].quality_reasons == ["market_closed"]
+    assert hub.indices["000001"].quality_reasons == ["index_batch_missing"]
+    assert hub.indices["000001"].data_timestamp == stamp
+    assert hub.indices["000688"].quality_reasons == ["index_batch_missing"]
+    assert hub._closed_marked is True
     assert hub.last_missing_indices == ["000001", "000300", "000688", "000852", "399001", "399006"]
 
 

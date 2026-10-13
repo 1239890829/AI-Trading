@@ -51,7 +51,7 @@ describe("QualityBadge 可见性策略（唯一决策点）", () => {
     const stale = render(<QualityBadge quality="stale" reasons={["refresh_failed"]} />);
     expect(stale.container.textContent).toBe("刷新异常");
     stale.unmount();
-    const closed = render(<QualityBadge quality="stale" reasons={["market_closed"]} />);
+    const closed = render(<QualityBadge quality="stale" reasons={["market_closed"]} dataTimestamp="2026-10-13T15:00:00+08:00" session={{phase: "closed", trade_date: "2026-10-14", as_of: "2026-10-14T10:00:00+08:00", trade_day_result: false}} />);
     expect(closed.container.textContent).toBe("休市");
     closed.unmount();
     const invalid = render(<QualityBadge quality="invalid" reasons={["invalid_symbol"]} />);
@@ -66,8 +66,20 @@ describe("QualityBadge 可见性策略（唯一决策点）", () => {
 
   it("缓存事件时间超窗时明确提示展示的是最近可信值", () => {
     render(<QualityBadge quality="stale" reasons={["quote_age_exceeded"]} />);
-    const badge = screen.getByText("报价超时");
+    const badge = screen.getByText("报价未更新");
     expect(badge.getAttribute("title")).toContain("报价事件时间已超出实时窗口");
+  });
+
+  it("闭市首次报价缺源钟保留stale警告，说明本次数值而不假称旧可信值", () => {
+    const view = render(<QualityBadge quality="stale" reasons={["source_time_unknown", "market_closed"]} dataTimestamp={null} session={{phase: "closed", trade_date: "2026-10-13", as_of: "2026-10-13T19:34:00+08:00", trade_day_result: true}} />);
+    const badge = screen.getByText("时间待核");
+    expect(badge.getAttribute("data-quality")).toBe("stale");
+    expect(badge.getAttribute("title")).toContain("保留本次返回数值");
+    expect(badge.getAttribute("title")).toContain("无法确认时点与新鲜度");
+    expect(screen.queryByText("正常")).toBeNull();
+    expect(screen.queryByText("已收盘")).toBeNull();
+    view.rerender(<QualityBadge quality="stale" reasons={["source_time_unknown", "market_closed", "refresh_failed"]} dataTimestamp={null} />);
+    expect(screen.getByText("刷新异常").getAttribute("data-quality")).toBe("stale");
   });
 
   it("拒绝旧源值立即告知，恢复正常时保留同一宽度槽，low/medium也不产生布局空窗", () => {
@@ -93,11 +105,11 @@ describe("QualityBadge 可见性策略（唯一决策点）", () => {
     expect(screen.queryByText("正常")).toBeNull();
   });
 
-  it("reasons 同时含 market_closed 与其它原因时仍判「休市」（休市优先，不降级为故障红）", () => {
+  it("休市原因不能遮蔽真实刷新失败", () => {
     const { container } = render(
       <QualityBadge quality="stale" reasons={["refresh_failed", "market_closed"]} />,
     );
-    expect(container.textContent).toBe("休市");
+    expect(container.textContent).toBe("刷新异常");
   });
 });
 

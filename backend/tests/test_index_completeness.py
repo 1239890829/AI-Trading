@@ -39,6 +39,8 @@ def hub(monkeypatch):
         return []
 
     monkeypatch.setattr(qh.tc, "trading_days", no_calendar)
+    # high/覆盖恢复/health=ok 的断言明确针对连续交易，未把 calendar 失败当开放。
+    monkeypatch.setattr(qh.tc, "market_open_state", lambda *a, **k: qh.tc.MARKET_OPEN)
     monkeypatch.setattr(qh.tc, "in_trading_window", lambda: True)
 
     class Provider:

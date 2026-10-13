@@ -1,4 +1,5 @@
 import { bjDate, qualityReasonText, timeText } from "@/lib/format";
+import { isContinuousSession } from "@/lib/market-hours";
 import type { QuoteDisplaySession } from "@/types/market";
 
 export interface QuoteQualityInput {
@@ -27,6 +28,20 @@ function calendarPhase(session: QuoteDisplaySession | null | undefined): "auctio
   return null;
 }
 
+function calendarPause(session: QuoteDisplaySession | null | undefined): "未开盘" | "午间休息" | "已收盘" | "休市" | null {
+  if (!session || session.phase !== "closed" || (session.trade_day_result !== true && session.trade_day_result !== false)
+    || !/(?:Z|[+-]\d{2}:\d{2})$/.test(session.as_of) || bjDate(session.as_of) !== session.trade_date) return null;
+  const minute = beijingMinute(session.as_of);
+  if (minute === null) return null;
+  if (session.trade_day_result === false) return "休市";
+  // The calendar phase must agree with the existing continuous-session bounds.
+  if (isContinuousSession(minute)) return null;
+  if (minute < 555) return "未开盘";
+  if (minute > 690 && minute < 780) return "午间休息";
+  if (minute > 900) return "已收盘";
+  return null;
+}
+
 function isKnownIndex(symbol: string | undefined, market: string | null | undefined) {
   const identity = /^(sh|sz)\d{6}$/i.test(symbol ?? "")
     ? symbol!.toLowerCase() : `${market?.toLowerCase() ?? ""}${symbol ?? ""}`;
@@ -41,33 +56,51 @@ export function quoteQualityView(input: QuoteQualityInput) {
   let tone: "quiet" | "warning" | "danger" = quality === "invalid" ? "danger" : quality === "high" ? "quiet" : "warning";
   let context = "";
   if (quality === "stale") {
-    if (has("market_closed")) {label = "休市"; tone = "quiet";}
-    else if (has("refresh_failed")) label = "刷新异常";
+    // Actual failed or rejected reads outrank an age or pause explanation.
+    if (has("refresh_failed")) label = "刷新异常";
+    else if (has("source_time_regress_ignored")) label = "保留可信值";
+    else if (has("batch_missing") || has("index_batch_missing")) label = "本轮缺项";
+    else if (has("source_missing_price_ignored")) label = "缺最新价";
+    else if (has("source_invalid_ignored")) label = "源值异常";
+    else if (reasons.some(reason => reason.startsWith("source_identity_"))) label = "身份待核";
+    else if (has("source_time_unknown") || has("source_time_unknown_ignored")) label = "时间待核";
     else if (has("quote_age_exceeded")) {
-      label = "报价超时";
+      label = "报价未更新";
+      context = "源报价未更新，此提示不表示请求超时";
       // Calendar context explains pauses. It never upgrades a quote or overrides
       // a rejected/failed reply. Missing or contradictory context stays unknown.
       const phase = calendarPhase(session);
-      const onlyAge = reasons.every(reason => reason === "quote_age_exceeded" || reason === "off_session");
+      const onlyAge = reasons.every(reason => reason === "quote_age_exceeded" || reason === "off_session" || reason === "market_closed");
       const sourceDate = bjDate(dataTimestamp);
       const observedAt = dataTimestamp ? Date.parse(dataTimestamp) : NaN;
       const phaseAt = session ? Date.parse(session.as_of) : NaN;
       const sourceMinute = dataTimestamp ? beijingMinute(dataTimestamp) : null;
       const validTime = sourceDate && sourceDate <= (session?.trade_date ?? "") && observedAt <= phaseAt;
-      if (phase && onlyAge && validTime && isKnownIndex(input.symbol, input.market)) {
+      const pause = calendarPause(session);
+      const zonedSource = dataTimestamp && /(?:Z|[+-]\d{2}:\d{2})$/.test(dataTimestamp);
+      if (pause && onlyAge && validTime && zonedSource) {
+        label = pause;
+        context += `；日历确认${pause}，仍展示最近源观测，不声明源报价已更新`;
+      } else if (phase && onlyAge && validTime && isKnownIndex(input.symbol, input.market)) {
         label = phase === "auction" ? "竞价等待" : "开盘等待";
-        context = "交易日阶段：" + (phase === "auction" ? "集合竞价" : "开盘等待") + "；指数尚无较新的可信观测，不声明数据源必定更新";
+        context += "；交易日阶段：" + (phase === "auction" ? "集合竞价" : "开盘等待") + "；指数尚无较新的可信观测，不声明数据源必定更新";
       } else if (phase === "pre_open_gap" && onlyAge && validTime
         && sourceDate === session?.trade_date && sourceMinute !== null && sourceMinute >= 565) {
         label = "开盘等待";
-        context = "当前处于09:25–09:30开盘等待；保留本日09:25之后的源观测，不据此认定最终竞价结果";
+        context += "；当前处于09:25–09:30开盘等待；保留本日09:25之后的源观测，不据此认定最终竞价结果";
       }
-    } else if (has("source_time_regress_ignored")) label = "保留可信值";
-    else if (has("batch_missing") || has("index_batch_missing")) label = "本轮缺项";
-    else if (has("source_missing_price_ignored")) label = "缺最新价";
-    else if (has("source_time_unknown_ignored")) label = "时间待核";
-    else if (has("source_invalid_ignored")) label = "源值异常";
-    else if (reasons.some(reason => reason.startsWith("source_identity_"))) label = "身份待核";
+    } else if (has("market_closed") && reasons.every(reason => reason === "market_closed" || reason === "off_session")) {
+      const pause = calendarPause(session);
+      const observedAt = dataTimestamp ? Date.parse(dataTimestamp) : NaN;
+      if (pause && dataTimestamp && /(?:Z|[+-]\d{2}:\d{2})$/.test(dataTimestamp)
+        && observedAt <= Date.parse(session!.as_of)) {
+        label = pause;
+        context = `日历确认${pause}，仍展示最近源观测，不声明源报价已更新`;
+        tone = "quiet";
+      } else {
+        context = "已有休市标记，当前日历或源时点未确认";
+      }
+    }
   }
   const explanation = reasons.map(qualityReasonText).join("；");
   const sourceTime = dataTimestamp ? `${bjDate(dataTimestamp) || "未知日期"} ${timeText(dataTimestamp)}` : "未提供";
