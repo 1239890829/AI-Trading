@@ -47,8 +47,9 @@ const PHASE_STYLE: Record<string, string> = {
 };
 
 type ViewKey = "overview" | "fund" | "heatmap" | "events";
-const PRIMARY_INDICES = [
+const DISPLAY_INDICES = [
   ["sh000001", "上证指数"], ["sh000688", "科创50"], ["sz399006", "创业板指"],
+  ["sz399001", "深证成指"], ["sh000300", "沪深300"], ["sh000852", "中证1000"],
 ] as const;
 
 function MarketInner() {
@@ -72,13 +73,7 @@ function MarketInner() {
   const sentimentResource = useResource(getSentiment, {intervalMs: 30_000, enabled});
   const historyResource = useResource(() => getSentimentHistory(10), {intervalMs: 60_000, enabled});
   const indices = overview.data?.value.indices ?? [];
-  const [indicesOpen, setIndicesOpen] = useState(false);
-  const primaryIndices = PRIMARY_INDICES.flatMap(([symbol]) => {
-    const quote = indices.find(q => indexDetailSymbol(q.symbol, q.market) === symbol);
-    return quote ? [quote] : [];
-  });
-  const extraIndices = indices.filter(q => !primaryIndices.includes(q));
-  const extraIndexPresence = useExitPresence(indicesOpen ? true : null);
+  const extraIndices = indices.filter(q => !DISPLAY_INDICES.some(([symbol]) => indexDetailSymbol(q.symbol, q.market) === symbol));
   const totalAmount = overview.data?.value.total_amount ?? null;
   const amountFreshness = overview.data?.value.total_amount_freshness ?? null;
   const pool = poolResource.data?.slice(0, 10) ?? [];
@@ -135,19 +130,15 @@ function MarketInner() {
             <div className="bc-market-dashboard" role="region" aria-label="市场环境、涨停与事件阅读区" tabIndex={0}>
             <div className="bc-market-context">
             <section className="bc-market-indices" aria-label="主要指数">
-              <button type="button" className="market-indices-toggle" aria-expanded={indicesOpen} aria-controls="market-extra-indices" onClick={() => setIndicesOpen(open => !open)}>
-                <span>主要指数</span><span>{indicesOpen ? "收起" : "展开"}<svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.6" aria-hidden="true"><path d="m6 9 6 6 6-6" /></svg></span>
-              </button>
-              <div className="market-index-primary">
-              {indices.length === 0 && pending ? Array.from({length: 3}, (_, index) => (
+              <h2 className="market-indices-heading">主要指数</h2>
+              <div className="market-index-grid">
+              {indices.length === 0 && pending ? Array.from({length: DISPLAY_INDICES.length}, (_, index) => (
                 <div className="bc-index-skeleton" key={index}><Skeleton className="h-3 w-16" /><Skeleton className="mt-2 h-5 w-20" /></div>
-              )) : PRIMARY_INDICES.map(([symbol, name]) => {
-                const quote = primaryIndices.find(q => indexDetailSymbol(q.symbol, q.market) === symbol);
+              )) : DISPLAY_INDICES.map(([symbol, name]) => {
+                const quote = indices.find(q => indexDetailSymbol(q.symbol, q.market) === symbol);
                 return quote ? indexQuote(quote) : <button type="button" className="bc-index-quote" disabled key={symbol} title={`${name} · 本轮未返回该指数`}><span className="bc-index-name">{name}</span><span className="bc-index-value">未返回</span><span className="bc-index-amount"><span>成交额</span><span>--</span></span></button>;
               })}
-              </div>
-              <div id="market-extra-indices" className="market-index-expansion" data-expanded={extraIndexPresence.active} inert={!extraIndexPresence.active} aria-hidden={!extraIndexPresence.active}>
-                <div>{extraIndexPresence.value && extraIndices.map(indexQuote)}</div>
+              {extraIndices.map(indexQuote)}
               </div>
             </section>
 
