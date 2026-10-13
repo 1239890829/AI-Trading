@@ -7,7 +7,7 @@
  */
 import { useState } from "react";
 import {useResource, type Resource} from "@/hooks/use-resource";
-import {bjDate} from "@/lib/format";
+import {bjDate, dateTimeTextBJ} from "@/lib/format";
 import Link from "next/link";
 
 import { getLurkPool, getRelayRank, type LurkPoolPayload, type RelayRankItem } from "@/lib/api";
@@ -88,7 +88,7 @@ export function LurkTable({ s, date }: { s: State<LurkPoolPayload>; date: (ms: n
       {/* 陈旧披露（2026-09-11）：池按**库内最新 K 线**判定，停更时看着正常却是旧数据。
           新鲜时只标「数据截至」；滞后超阈值才显式告警——不降级、不隐藏，只摊开口径。 */}
       <div className="mb-1 text-[10px] text-zinc-600 dark:text-zinc-400">
-        确认日=缩量回踩不破位当日（最近 {items.length} 只） · 数据截至 {as_of}
+        确认日=缩量回踩不破位当日（最近 {items.length} 只） · 数据截至 {dateTimeTextBJ(as_of, {seconds:true})}
         {!stale && stale_days > 0 && `（滞后 ${stale_days} 个交易日，阈值内属正常）`}
       </div>
       {stale && (

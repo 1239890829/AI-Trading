@@ -51,6 +51,158 @@ def item(store, symbol="600001", **kwargs):
     return read_attribution(store._sf, symbol=symbol, now=NOW, **kwargs)["data"]["items"][0]
 
 
+def test_direct_source_survives_newer_theme_rows_before_limit(store):
+    direct = add(store, published=NOW - timedelta(minutes=30), source_item_id="direct-older",
+                 source_published=NOW - timedelta(minutes=30))
+    for i in range(13):
+        add(store, symbol=None, target_type="theme", target="算力", direction=0,
+            source_item_id=f"theme-new-{i}", published=NOW - timedelta(minutes=i + 1))
+    result = read_attribution(store._sf, symbol="600001", theme_names={"算力"}, limit=12, now=NOW)
+    data = result["data"]
+    assert data["items"][0]["event_id"] == direct.id
+    assert data["count"] == 12
+    assert data["evidence_counts"]["theme_only"] == 11
+    primary = data["primary_reason"]
+    assert primary["event_id"] == direct.id
+    assert primary["timing_relation"] == "response_time_unknown"
+    assert primary["causality_verified"] is False
+
+
+def test_primary_clue_binds_exact_summary_and_preserves_unfulfilled_conditions(store):
+    summary = "公司AIGC平台尚在建设完善中，相关项目尚未形成收入；影响存在不确定性。"
+    direct = add(store, title="公司回应AIGC平台进展", summary=summary, direction=0,
+                 certainty="done", source_item_id="conditional-clue",
+                 source_published=NOW - timedelta(minutes=10))
+    add(store, symbol=None, target_type="theme", target="AIGC", title="腾讯概念上涨",
+        summary="仅板块行情", direction=0, source_item_id="theme-price")
+    data = read_attribution(store._sf, symbol="600001", theme_names={"AIGC"}, now=NOW,
+                            pool_date="2026-10-12", response_as_of=NOW)["data"]
+    primary = data["primary_reason"]
+    bound = next(row for row in data["items"] if row["event_id"] == direct.id)
+    assert primary["status"] == "source_clue"
+    assert primary["version_id"] == bound["interpretation_ref"]["version_id"]
+    assert primary["observation_id"] == bound["source_context"]["observation_id"]
+    assert primary["excerpt"]["field"] == "summary"
+    assert primary["excerpt"]["quote"] in summary
+    assert "尚未形成收入" in primary["excerpt"]["quote"]
+    assert {q["kind"] for q in primary["qualifiers"]} >= {"incomplete", "scope"}
+    assert primary["timing_relation"] == "known_before_response"
+    assert primary["causality_verified"] is False
+
+
+def test_primary_later_direct_source_never_becomes_verified_cause(store):
+    add(store, source_item_id="later-direct", source_published=NOW - timedelta(minutes=10))
+    data = read_attribution(store._sf, symbol="600001", now=NOW,
+                            response_as_of=NOW - timedelta(minutes=20))["data"]
+    assert data["items"] == [] and len(data["later_items"]) == 1
+    primary = data["primary_reason"]
+    assert primary["status"] == "later_clue"
+    assert primary["timing_relation"] == "late_source_observation"
+    assert primary["causality_verified"] is False and primary["fact_verified"] is False
+
+
+def test_primary_missing_source_clock_stays_unconfirmed_without_response_context(store):
+    add(store, source_item_id="no-source-clock")
+    primary = read_attribution(store._sf, symbol="600001", now=NOW)["data"]["primary_reason"]
+    assert primary["status"] == "unconfirmed" and primary["timing_relation"] == "time_unknown"
+    assert primary["excerpt"]["quote"] in "尚需审批，标的规模较小"
+
+
+def test_auxiliary_foreign_input_version_is_not_a_bound_receipt(store):
+    own = add(store, source_item_id="own-auxiliary")
+    foreign = add(store, symbol="600002", source_item_id="foreign-input")
+    with store._sf() as db:
+        own_version = db.query(EventInterpretation).filter_by(event_id=own.id).one()
+        foreign_version = db.query(EventInterpretation).filter_by(event_id=foreign.id).one()
+        payload = json.loads(own_version.payload_json)
+        payload["llm_aux"] = {"event_id": own.id, "observation_id": own_version.observation_id,
+            "input_version_id": foreign_version.id, "direction": 0, "theme": None,
+            "reason": "无明确方向", "chain": "审批待核",
+            "evidence": {"field": "summary", "quote": "尚需审批，标的规模较小"},
+            "state": "no_direction", "verification": "unverified", "eligibility_changed": False}
+        db.add(EventInterpretation(event_id=own.id, observation_id=own_version.observation_id,
+            state="active", effective_at=NOW, payload_json=json.dumps(payload), review_note="LLM 辅助判读完成"))
+        db.commit()
+    projected = read_attribution(store._sf, event_id=own.id, symbol="600001", now=NOW)["data"]["items"][0]
+    assert projected["llm_aux"] is None
+    assert projected["source_context"]["summary"] == "尚需审批，标的规模较小"
+
+
+@pytest.mark.parametrize("title,summary,expected", [
+    ("新华传媒股价上涨10%", "今日成交额8亿元，换手率9%", "unconfirmed"),
+    ("宏和科技今日股价下跌5%", "成交量30万手，主力资金净流出1亿元", "unconfirmed"),
+    ("公司股价上涨10%", "供应短缺使材料涨价，供需变化仍需核查", "source_clue"),
+    ("公司股价上涨10%", "行业政策发布，具体支持条件见原文", "source_clue"),
+    ("公司股价下跌5%", "公司拟收购设备资产，尚待审批", "source_clue"),
+    ("厄尔尼诺加剧", "干旱使全球粮食减产，国际粮价上涨。", "source_clue"),
+    ("厄尔尼诺概念上涨5%", "题材成交额增加", "unconfirmed"),
+])
+def test_primary_trade_recap_filter_preserves_mixed_material_clues(store, title, summary, expected):
+    add(store, title=title, summary=summary, direction=0, source_item_id="trade-recap",
+        source_published=NOW - timedelta(minutes=5))
+    data = read_attribution(store._sf, symbol="600001", now=NOW, response_as_of=NOW)["data"]
+    assert data["primary_reason"]["status"] == expected
+    assert data["primary_reason"]["causality_verified"] is False
+    assert data["count"] == 1  # Filtering a headline does not erase its source record.
+
+
+@pytest.mark.parametrize("kind", ["rumor", "opinion"])
+def test_recorded_fact_survives_newer_active_nonfact_sources_before_limit(store, kind):
+    original = add(store, source_item_id="valid-recorded-fact", title="公司签署设备供货合同",
+        summary="合同已签署，具体收入影响尚待核查", certainty="done", half_life_hours=72,
+        published=NOW - timedelta(hours=10), source_published=NOW - timedelta(hours=10))
+    for i in range(13):
+        add(store, source_item_id=f"active-nonfact-{i}", title="公司业务观点或传闻待核",
+            certainty="rumor", fact_kind=kind, half_life_hours=24,
+            published=NOW - timedelta(hours=5, minutes=i),
+            source_published=NOW - timedelta(hours=5, minutes=i))
+    data=read_attribution(store._sf,symbol="600001",now=NOW,limit=12)["data"]
+    assert data["primary_reason"]["event_id"] == original.id
+    assert data["count"] == 12
+    assert sum(row["fact_support"]["status"] == kind for row in data["items"]) == 11
+    assert all(row["state"] == "active" for row in data["items"])
+
+
+def test_active_direct_source_survives_newer_expired_direct_rows_before_limit(store):
+    active = add(store, source_item_id="active-corporate", title="公司签署设备供货合同",
+        summary="合同已签署，具体收入影响尚待核查", certainty="done", half_life_hours=72,
+        published=NOW - timedelta(hours=10), source_published=NOW - timedelta(hours=10))
+    for i in range(13):
+        add(store, source_item_id=f"expired-rumor-{i}", title="公司业务传闻待核",
+            certainty="rumor", fact_kind="rumor", half_life_hours=2,
+            published=NOW - timedelta(hours=5, minutes=i),
+            source_published=NOW - timedelta(hours=5, minutes=i))
+    data = read_attribution(store._sf, symbol="600001", now=NOW, limit=12)["data"]
+    assert data["items"][0]["event_id"] == active.id
+    assert data["primary_reason"]["event_id"] == active.id
+    assert data["count"] == 12
+    assert sum(row["state"] == "expired" for row in data["items"]) == 11
+
+
+@pytest.mark.parametrize("kind", ["theme", "price", "unknown_time", "foreign_identity"])
+def test_primary_never_promotes_weak_or_unbound_evidence(store, kind):
+    if kind == "theme":
+        add(store, symbol=None, target_type="theme", target="算力", source_item_id="weak-theme")
+    elif kind == "price":
+        add(store, title="公司今日涨停", summary="全天上涨10%", direction=0, source_item_id="price-only")
+    else:
+        event = add(store, source_item_id=kind)
+        if kind == "foreign_identity":
+            with store._sf() as db:
+                version = db.query(EventInterpretation).filter_by(event_id=event.id).one()
+                payload = json.loads(version.payload_json)
+                payload["directions"][0]["observation_id"] = 999999
+                version.payload_json = json.dumps(payload)
+                db.commit()
+    data = read_attribution(store._sf, symbol="600001", theme_names={"算力"}, now=NOW,
+                            response_as_of=NOW)["data"]
+    primary = data["primary_reason"]
+    assert primary["status"] == "unconfirmed"
+    assert primary["causality_verified"] is False
+    if kind != "unknown_time":
+        assert primary["event_id"] is None and primary["excerpt"] is None
+
+
 def test_exact_context_distinguishes_source_relation_market_and_clocks(store):
     published = NOW - timedelta(hours=2)
     row = add(store, source_published=published)
@@ -179,7 +331,10 @@ def test_late_capture_future_versions_and_unknown_clock_are_distinct(store):
     assert future.id not in [data["event_id"] for data in result["data"]["items"]]
     assert result["data"]["items"][0]["timing"]["received_at"] != result["data"]["items"][0]["timing"]["source_published_at"]
     unknown = add(store, source_item_id="unknown")
-    data = item(store)
+    # This test checks the missing source clock, not latest-first ordering.
+    # Usable, known-clock evidence now precedes unconfirmed rows before LIMIT.
+    data = next(row for row in read_attribution(store._sf, symbol="600001", now=NOW)["data"]["items"]
+                if row["event_id"] == unknown.id)
     assert data["event_id"] == unknown.id
     assert data["timing"]["source_published_at"] is None
     assert data["timing"]["source_time_known"] is False

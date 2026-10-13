@@ -1,5 +1,7 @@
 "use client";
 
+import { eventTimeText } from "@/lib/format";
+
 import { FilterMenu } from "@/components/ui/filter-menu";
 
 import { useState } from "react";
@@ -200,7 +202,7 @@ export function EventsTab() {
                   </button>
                 )}
                 <span className="ml-auto shrink-0 text-[11px] text-zinc-600 dark:text-zinc-400">
-                  {e.published_at?.slice(5, 16) ?? ""} · {e.source}
+                  {eventTimeText(e.published_at)} · {e.source}
                 </span>
               </div>
               {/* 排序依据（最相关模式）：首条理由内联，全部理由悬浮 title 可追溯 */}

@@ -102,7 +102,6 @@ _DECLARED: dict[str, tuple[bool, str]] = {
     "market/fund_flow.py:_FLOW_STORE": (False, "由调度写（日频资金流），测试打源不落盘"),
     "market/minute_backfill.py:parquet_dir_default": (False, "只读 parquet 目录"),
     "market/minute_backfill.py:parquet_dir_tdx": (False, "只读 parquet 目录"),
-    "market/minute_decisions.py:SCAN_DIR": (False, "由调度写；用例 monkeypatch 到 tmp_path"),
     "market/trade_calendar.py:_PERSIST_PATH": (False, "写前有劣质备源守卫（<80% 不覆盖官方日历）"),
     "picks/position_engine.py:_PLAN_DIR": (True, "全量测试间接写出当日空计划；统一隔离，BUG-021"),
     "research/verify_registry.py:VERIFY_DIR": (False, "由核验 CLI 写，测试传 tmp 出参"),

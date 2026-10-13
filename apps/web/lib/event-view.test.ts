@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { eventDetailPayload, eventDirectionView, eventJudgeView, eventNewsItem } from "./event-view";
+import { eventDetailPayload, eventDirectionView, eventInterpretationText, eventJudgementExplanation, eventJudgeView, eventNewsItem } from "./event-view";
 import type { ImpactEvent } from "./api";
 
 const event: ImpactEvent = {
@@ -27,6 +27,16 @@ describe("event version at display entry", () => {
 
 describe("event direction and judgement boundaries", () => {
   const direction = { target_type: "theme", target: "存储芯片", direction: 0, strength: 1, chain: "", basis: "仅匹配关联" };
+
+  it("normalizes full record clocks without changing the source reference or judgement",()=>{
+    const e={...event,interpretation_ref:{event_id:event.id,version_id:32,observation_id:17,state:"active" as const,available_at:"2026-10-13T01:22:05Z"},llm_judged_at:"2026-10-13T09:23:05+08:00",judge_reason:"来源在2026-10-13T01:24:05Z修订，方向待核"};
+    const before=JSON.stringify(e);
+    expect(eventInterpretationText(e)).toContain("2026-10-13 09:22:05");
+    expect(eventJudgeView(e).title).toContain("2026-10-13 09:23:05");
+    expect(eventJudgeView(e).title).toContain("2026-10-13 09:24:05");
+    expect(eventJudgementExplanation(e)).not.toContain("+08:00");
+    expect(JSON.stringify(e)).toBe(before);
+  });
 
   it("does not treat a zero target as judged because another target has a direction", () => {
     const e = { ...event, judge_status: "judged" as const, directions: [direction, { ...direction, target: "AI", direction: 1 }] };

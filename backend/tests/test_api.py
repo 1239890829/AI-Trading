@@ -173,38 +173,6 @@ def test_paper_fills_and_reset(client):
     assert client.get("/api/paper/fills?symbol=600519").json()["data"] == []
 
 
-def test_minute_signals_and_decisions_contract(client):
-    """P1-24 做 T 决策库的读路径契约（结构 + 三态字段，不锁值——值随分时数据变）。
-
-    `degraded` 必须是**字符串列表**而非空值：缺昨日量/缺波动率时如实上报，
-    不假装满配（三态纪律）。`signals` 允许为空列表——那是「确无信号」的真信息。
-    """
-    sig = client.get("/api/market/minute-signals/600519")
-    assert sig.status_code == 200, sig.text
-    body = sig.json()["data"]
-    assert body["symbol"] == "600519"
-    assert isinstance(body["signals"], list)          # [] = 确无信号，不等于 None
-    assert isinstance(body["degraded"], list)
-    assert all(isinstance(d, str) for d in body["degraded"])
-    assert "observed" in body and "recorded" in body
-
-    dec = client.get("/api/market/minute-decisions?limit=5")
-    assert dec.status_code == 200, dec.text
-    payload = dec.json()["data"]
-    assert set(payload) >= {"items", "settled", "outcomes", "open_count", "note"}
-    assert isinstance(payload["items"], list)
-    assert isinstance(payload["outcomes"], dict)
-    # 有记录时逐字段核验（本文件共享进程状态，别的用例可能已落库）
-    if payload["items"]:
-        it = payload["items"][0]
-        for key in ("decision_id", "symbol", "trigger_ts", "signal_price", "bias",
-                    "score", "triggered", "outcome"):
-            assert key in it, key
-        assert it["outcome"] is None or it["outcome"] in (
-            "correct", "wrong", "invalid", "expired"
-        )
-
-
 def test_daily_picks_attach_latest_execution_is_read_only(monkeypatch):
     """IMP-006：每日精选只读挂最新执行事实，不自行生成 decision。"""
     from app.api.routes import picks as route

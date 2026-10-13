@@ -51,7 +51,7 @@ export const IndexCards = memo(function IndexCards({ indices, selected, onSelect
         </div>
         <div className={`whitespace-nowrap font-mono text-[11px] tabular-nums ${pctColor(q?.change_pct)}`}>{pctText(q?.change_pct)}</div>
         <div className="flex min-h-[20px] min-w-0 items-center text-[10px]">
-          <QualityBadge compact quality={q?.quality} reasons={q?.quality_reasons} symbol={detail} market={q?.market} dataTimestamp={q?.data_timestamp} session={q?.display_session} />
+          <QualityBadge compact align="start" quality={q?.quality} reasons={q?.quality_reasons} symbol={detail} market={q?.market} dataTimestamp={q?.data_timestamp} session={q?.display_session} />
         </div>
       </button>
     );

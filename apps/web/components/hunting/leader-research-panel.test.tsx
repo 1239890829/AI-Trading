@@ -105,7 +105,7 @@ it("separates event relationships, source metadata and real clocks without inven
   expect(within(screen.getByRole("region", {name:"事件来源"})).getByText("fixture-news")).toBeTruthy();
   const time = screen.getByRole("region", {name:"事件时点"});
   expect(time.textContent).toContain("来源发布时间未记录");
-  expect(time.textContent).toContain("2026-10-13T09:35:00+08:00");
+  expect(time.textContent).toContain("2026-10-13 09:35:00");
   expect(time.textContent).not.toContain("fixture-news");
   expect(screen.getByText("补贴仅限满足申报条件的企业；公司未确认获补，不代表直接受益。")).toBeTruthy();
   fireEvent.click(within(graph).getByRole("tab", {name:"未知关系材料"}));

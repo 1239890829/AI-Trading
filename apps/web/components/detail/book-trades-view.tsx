@@ -3,7 +3,7 @@
  *  null/[] =拉过且确认无 → 空态文案。此前切股重挂载窗口期把"加载中"渲染成
  *  "盘口数据不可用（免费源仅盘中提供）"——把"还没拉到"说成"不可用"是误导。 */
 import type { OrderBook, Trade } from "@/types/market";
-import { bjDate, fmt, sourceLabel, timeText } from "@/lib/format";
+import { bjDate, dateTimeTextBJ, fmt, sourceLabel, timeText } from "@/lib/format";
 import { Skeleton } from "@/components/ui/loading";
 import {QualityBadge} from "@/components/quality-badge";
 import {DetailReadStatus, type DetailReadState} from "./read-status";
@@ -48,15 +48,19 @@ function TradesSkeleton() {
   );
 }
 
-export function BookTradesView({book, trades, showBook, readState, onRetry, emptyReason, tradesSource}: {
+export function BookTradesView({book, trades, showBook, readState, onRetry, emptyReason, tradesSource, readIdentity, active = true}: {
   book: OrderBook | null | undefined; trades: Trade[] | undefined; showBook: boolean;
   readState?: DetailReadState; onRetry?: () => void; emptyReason?: string | null; tradesSource?: string | null;
+  readIdentity?: string; active?: boolean;
 }) {
-  const notice = readState && <DetailReadStatus label={showBook ? "盘口" : "成交"} state={readState} onRetry={onRetry}/>;
+  const lastTrade = trades?.at(-1);
+  const diagnostics = showBook ? <p>来源：{sourceLabel(book?.source)} · 源数据时间：{dateTimeTextBJ(book?.data_timestamp, {seconds: true})} · 质量 {book?.quality ?? "未提供"}</p>
+    : <><p>来源：{sourceLabel(lastTrade?.source || tradesSource)} · 最新成交时间：{dateTimeTextBJ(lastTrade?.ts, {seconds: true})} · 质量 {lastTrade?.quality ?? "未提供"}</p>{emptyReason && <p>本次空结果原因：{emptyReason}</p>}</>;
+  const notice = readState && <DetailReadStatus label={showBook ? "盘口" : "成交"} state={readState} onRetry={onRetry} diagnostics={diagnostics} identity={readIdentity} active={active}/>;
   if (showBook) {
     if (book === undefined) return <>{notice}{!readState?.error && <BookSkeleton />}</>;
     return <>{notice}{book ? <>
-      <p className="flex flex-wrap items-center gap-1 border-b border-zinc-100 px-3 py-1.5 text-xs text-zinc-600 dark:border-zinc-800 dark:text-zinc-400">{sourceLabel(book.source)} · 源时刻 {book.data_timestamp ? `${bjDate(book.data_timestamp)} ${timeText(book.data_timestamp)}` : "未提供"}<QualityBadge quality={book.quality} reasons={book.quality_reasons}/></p>
+      <p className="flex flex-wrap items-center gap-1 border-b border-zinc-100 px-3 py-1.5 text-xs text-zinc-600 dark:border-zinc-800 dark:text-zinc-400">{sourceLabel(book.source)}<QualityBadge quality={book.quality} reasons={book.quality_reasons}/></p>
       <table className="w-full text-sm">
         <tbody>
           {[...book.asks].reverse().map((lv, i) => (

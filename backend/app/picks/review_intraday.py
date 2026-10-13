@@ -948,16 +948,6 @@ async def intraday_review_scheduler(
                     await snapshot_daily_if_closed()
                 except Exception:
                     log.warning("boardflow daily snapshot failed", exc_info=True)
-                # 分钟决策库（P1-24）：盘后扫描当日跟踪标的 → 记录做 T 信号 → 结算。
-                # 自带当日幂等 + 台账为空则跳过；TDX 直连是阻塞调用故走线程池。
-                try:
-                    from app.market.minute_decisions import scan_and_settle_today
-
-                    scan = await asyncio.to_thread(scan_and_settle_today, app)
-                    if scan.get("recorded") or scan.get("settled"):
-                        log.info("minute decisions: %s", scan)
-                except Exception:
-                    log.warning("minute decisions scan failed", exc_info=True)
         except Exception:
             log.exception("intraday review scheduler failed")
         with contextlib.suppress(asyncio.TimeoutError):

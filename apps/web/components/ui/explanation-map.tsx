@@ -1,6 +1,7 @@
 "use client";
 
 import {createContext, useContext, useEffect, useId, useRef, useState, type KeyboardEvent, type ReactNode} from "react";
+import {dateTimesInTextBJ} from "@/lib/format";
 import {useExitPresence} from "@/hooks/use-exit-presence";
 import {readingClues, readingClueContext, firstSourceSentence, type ReadingClue} from "@/lib/reading-clues";
 import styles from "./explanation-map.module.css";
@@ -204,7 +205,7 @@ export function FactTimeline({label, items}: {label: string; items: FactItem[]})
   const timeLabel = /发布|发生|收到|收录|生效|更新|时点|时间|撤回|记录于|日期/;
   const time = items.filter(item => item.kind === "time" || (item.kind !== "fact" && timeLabel.test(item.label)));
   const facts = items.filter(item => !time.includes(item));
-  return <section className={styles.timeline} aria-label={label}><h4>{label}</h4>{time.length > 0 && <><p className={styles.orderNote}>按记录口径展示，位置不代表时间先后。</p><dl className={styles.timeTrack}>{time.map((item, index) => <div key={`${index}:${item.label}`} className={styles.timePoint}><dt><span className={styles.timeDot} aria-hidden="true"/><ReadingIcon kind="time"/>{item.label}</dt><dd>{item.value}</dd></div>)}</dl></>}{facts.length > 0 && <FactCards label={time.length ? "记录信息" : "资料信息"} items={facts}/>}</section>;
+  return <section className={styles.timeline} aria-label={label}><h4>{label}</h4>{time.length > 0 && <><p className={styles.orderNote}>按记录口径展示，位置不代表时间先后。</p><dl className={styles.timeTrack}>{time.map((item, index) => <div key={`${index}:${item.label}`} className={styles.timePoint}><dt><span className={styles.timeDot} aria-hidden="true"/><ReadingIcon kind="time"/>{item.label}</dt><dd>{typeof item.value === "string" ? dateTimesInTextBJ(item.value) : item.value}</dd></div>)}</dl></>}{facts.length > 0 && <FactCards label={time.length ? "记录信息" : "资料信息"} items={facts}/>}</section>;
 }
 
 export function SourceClueCards(props: {items: ReadingClue[]; label?: string; identity?: string}) {

@@ -3,7 +3,7 @@
 import { useState } from "react";
 import { useResource } from "@/hooks/use-polling-fetch";
 import { getLeaderResearch } from "@/lib/api/picks";
-import { pctColor, pctText } from "@/lib/format";
+import { dateTimeTextBJ, pctColor, pctText } from "@/lib/format";
 import { readingClues, readingExcerpt } from "@/lib/reading-clues";
 import { ConditionList, ExplanationMap, FactCards, FactTimeline, NarrativeText } from "@/components/ui/explanation-map";
 
@@ -37,7 +37,7 @@ export function LeaderResearchPanel({date: requestedDate, onDateChange}: {date?:
     {!data && !error && <p role="status" className="py-3">正在读取研究记录…</p>}
     {data && <>
       <p className="mt-2">{data.trade_date} · {data.cards.length} 只 · 当前采集：{HEALTH[data.collector.state] ?? "状态未知"}</p>
-      {data.collector.checked_at && <p className="mt-1">最近检查 {data.collector.checked_at}</p>}
+      {data.collector.checked_at && <p className="mt-1">最近检查 {dateTimeTextBJ(data.collector.checked_at, {seconds:true})}</p>}
       {data.collector.reason && <p className="mt-1 text-amber-800 dark:text-amber-300">{data.collector.reason}</p>}
       <p className="mt-1 text-zinc-600 dark:text-zinc-400">{data.disclaimer}</p>
       {data.cards.length === 0 && <p className="py-3">{data.state === "collected_empty" ? "本日有收盘对照，尚无盘中候选记录。" : "尚无该日期的研究观察；未采集不代表没有机会。"}</p>}

@@ -86,7 +86,7 @@ describe("account identity", () => {
     expect(screen.queryByText(/09:30–09:40/)).toBeNull();
   });
 
-  it("reading the four stages preserves raw receipt time and reason without fetching again or activating a runner", async () => {
+  it("reading the four stages formats the receipt clock and preserves its reason without fetching again or activating a runner", async () => {
     vi.mocked(internal.getJson).mockResolvedValueOnce({meta,data:{enabled:true,activation,runtime:{state:"degraded",as_of:"2026-10-09T09:34:12+08:00",reason:"quote_age_exceeded；限价未成交"},positions:[],recent_orders:[]}});
     render(<AccountScopePanel account="daily" />);
     expect(await screen.findByText("后台回执：运行失败，需核回执")).toBeTruthy();
@@ -94,7 +94,7 @@ describe("account identity", () => {
     fireEvent.click(screen.getByRole("tab", {name:"用途"}));
     expect(screen.getByRole("tabpanel").textContent).toContain("用途：验证每日精选通过执行闸门后的模拟表现。");
     fireEvent.click(screen.getByRole("tab", {name:"后台回执"}));
-    expect(screen.getByText("2026-10-09T09:34:12+08:00")).toBeTruthy();
+    expect(screen.getByText("2026-10-09 09:34:12")).toBeTruthy();
     expect(screen.getByText("quote_age_exceeded；限价未成交")).toBeTruthy();
     fireEvent.click(screen.getByRole("tab", {name:"用途"}));
     expect(screen.queryByText("quote_age_exceeded；限价未成交")).toBeNull();

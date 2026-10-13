@@ -1,4 +1,5 @@
 import type { DeliveryChannelState } from "@/lib/api";
+import {dateTimeTextBJ} from "@/lib/format";
 
 export function ChannelStatus({ channels }: {channels: DeliveryChannelState[] | null | undefined}) {
   if (channels === undefined || channels === null) return <span>外部渠道状态未知</span>;
@@ -23,10 +24,7 @@ export function ChannelStatus({ channels }: {channels: DeliveryChannelState[] | 
     acceptance_unconfirmed: "平台受理回执未确认",
     lease_lost_after_send_started: "发送已开始但回执丢失",
   };
-  const bjTime = (ms: number) => new Intl.DateTimeFormat("sv-SE", {
-    timeZone: "Asia/Shanghai", year: "numeric", month: "2-digit", day: "2-digit",
-    hour: "2-digit", minute: "2-digit", hour12: false,
-  }).format(new Date(ms));
+  const bjTime = (ms: number) => dateTimeTextBJ(new Date(ms).toISOString());
   return <span>{channels.map((c) => {
     const reason = ["unknown", "expired", "suppressed", "permanent_failed"].includes(c.state)
       ? `；原因：${reasonLabels[c.reason] ?? "未归类，请核对原记录"}` : "";

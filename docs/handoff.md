@@ -1,4 +1,4 @@
-# 当前交接：IMP-019 指数源龄与休市状态纠偏
+# 当前交接：IMP-019 系统质量与短阅读整改
 
 > 总方案v9.13；累计U01–U55。阅读与WS整改[W07/IMP-093](stages/w07-simplification.md#imp-093)已由PR #270发布并运行；直接上游单位反例按[W00/BUG-020](stages/w00-foundation.md#bug-020)既有同根回归条款止险，不启动第二个产品优化任务。
 
@@ -8,22 +8,22 @@
 
 - **当前主门**：G4
 - **主切片首选**：IMP-019
-- **候选顺位与执行边界**：IMP-019；扩大清理及稳定性读链已由PR #272发布并加载。本轮接续用户报障的指数“报价超时”，不重做已交付切片。
-- **基点与分支**：origin/master `a52418f1a15356364f76bf80e2a92ed058e61b2c`，`codex/quote-pause-state`；主树两份未跟踪evolution保留。
-- **获准范围**：源龄标签、当前日历休市解释、接纳至共享发布的状态空窗，以及日历空/异常时旧closed阻断发布的直接失败路径。保持原模型、源序、预算、时效、完整性、选股公式及通知资格；不恢复Jev/Decisions/KEV/REA。
-- **实际运行基线**：2026-10-13 19:23已激活PR #272/master a52418f1：8000单实例PID72810、3000生产构建E5xRZIqP3vcd_DjEyx7eU/PID72886。PR及post-master三job均成功；本轮纠偏尚未加载，准确HEAD发布和运行切换另录。
-- **证据状态**：19:33–19:37指数域完整覆盖、当时诊断累计腾讯方法120进入/120返回，错误和预算耗尽均0；六指数源时点16:14–16:15，display_session为closed但部分返回只有quote_age_exceeded。方法计数不是HTTP次数。接纳至5秒共享发布间状态空窗已隔离复现；空/异常日历旧closed丢帧仅隔离实证，不宣称实盘发生。详见[报告§13](system/runtime-performance.md#13-2026-10-13-指数源龄与休市状态纠偏)。前批清理和工程证据仍归§12。
+- **候选顺位与执行边界**：IMP-019；此前清理/读链/指数纠偏已由PR #272/273发布并加载。本轮用户明确扩展系统根因、DeepSeek、依赖积压、选股、原因/详情/通知及指数对齐。
+- **基点与分支**：origin/master `e4356ef63f3f6b5b804d0f057cbaec1119c9b8fb`，`codex/system-quality-fix`；主树两份未跟踪evolution保留。
+- **获准范围**：完整系统根因读查与已复现修补：归因主线索/neutral journal、详情驱动抽屉/右列Tab/做T退出、通知短阅读/正常BJ时钟/指数对齐，以及六依赖PR的兼容处置。保持原模型、源序、预算、时效、完整性、选股公式及通知资格；不恢复Jev/Decisions/KEV/REA。
+- **实际运行基线**：2026-10-13 20:27已激活PR #273/master e4356ef6：8000单实例PID83948、3000生产构建fOC5Y95YZY2NBhJiZBsft/PID84873。PR及post-master三job均成功、功能分支清理；本轮质量整改尚未加载，新准确HEAD发布和运行切换另录。
+- **证据状态**：20:51盘后纯读providers/health/metrics，指数完整覆盖且方法累计332进入/332返回/0fail，但不是新窗HTTP分母或新版效果。当前最终本地后端5278 passed/81 skipped/112.06s；前端默认/UTC各1510通过/134文件（98.11/101.23s），tsc、ESLint（0error/2既有warning）、Next16.3.8生产构建通过。真实组件桌面/390/320已验；准确HEAD CI/运行加载尚待发布回执。[报告§14](system/runtime-performance.md#14-2026-10-13-系统质量归因与阅读整批整改)保留各处根因/改法和未测条件。
 - **U50 降级授权回执**：2026-09-24 DEGRADED_FULL_CONTROL未撤销；作者自审和协作反证不冒充独立网页Review。每个PR准确HEAD另有DegradedRelease。
 
 ## 2. U49 主动审计回执 / Preflight
 
-本轮只修真实源龄提示与阶段状态：先读取现役Provider方法诊断、源钟、display_session、覆盖/失败，再隔离复现接纳到共享发布的闭市空窗。原版Impeccable沿clarify/harden核异常优先及简明提示；不用营销页规则或替换当前视觉。
+原版Impeccable按Operate/clarify/harden核信息、状态和触屏；Leon原版redesign按Scan→Diagnose→Fix核既有产品，不强套营销页；Interaction Design核焦点、退出、抽屉、不冒泡和阅读连续性。Governor区分工程、真实运行与前向效果，不用Stars或新依赖代替收益证据。
 
-作者与协作者交叉反证补齐三处直接边界：闭市不能覆盖batch_missing/index_batch_missing；日历等待跨宽交易时段按完成时刻裁决；首次缺源钟不能显示正常。真实源拒绝/刷新失败/low/invalid优先保留，known_trade_days零新增外呼。旧盘中fixture显式固定连续交易阶段，空/异常/跨日unknown另由真实helper用例验证；纠正两条固化“休市盖掉缺项”的坏断言，不减断言或放宽阈值。
+先核现役e435基线、纯读health/provider/metrics/库记录；不追加生产选股、模型、消息、WS或回补。明确LIMIT前有效资料/公司关系、来源与版本绑定、neutral理由留痕、窄否定反例及未知时间；右侧Tabs/抽屉保持图表空间，通知完整条件一次可读。退役T专属读写和导航，旧数据/迁移及通用日内功能保留。六旧PR全部为依赖，旧CI不当新准入；failed Tailwind4不盲合，采用当前消费者兼容patch并保留braces残余。
 
-验收区分离线行为、实际组件、完整门、CI和运行生效。unknown不推断开市，休市不晋级实时；无新增源/模型请求、WS订阅、消息写操作或调度。反证和作者自审不是独立网页Review；当前PR另走准确HEAD DegradedRelease。
+第一轮协作反证补齐foreign输入版本、纯价量/天气驱动边界、过期/传闻/观点挤占、触屏节选提示、非主neutral单条可见性、普通时间及右Tab旧display覆盖。关闭已复现反例不代表全量财经判读准确。工程完整门失败先改新时区fixture，保留原权威守卫，不贴豁免。作者及协作者检查不是独立网页Review，准确HEAD另走DegradedRelease。
 
-本批源龄纠偏完整门：后端5281 passed/81 skipped/119.87s、pyflakes通过；前端默认/UTC各1493通过/133文件、tsc、ESLint（0error/2个既有warning）、Next16.3.3生产构建通过。目标先红后绿及实际QualityBadge桌面/390/320另有证据，未冒充盘中SLO；准确PR/HEAD发布、post-master与运行核验另录。
+全批计划与长证据在忽略artifacts/runs/system-quality-20261013，现役根因及各位置见[报告§14](system/runtime-performance.md#14-2026-10-13-系统质量归因与阅读整批整改)。实际组件Canvas/桌面/320/390与全门/发布/运行分层取证。IMP-019真实新版交易窗、分段尾延迟/源龄/锁线程/设备trace与人工gold不伪写完成；当天下午错过且临时跟进已停用。
 
 ## 3. 验收与恢复
 
@@ -60,3 +60,13 @@ PR #271/075f49d0首次CI单项助手sources为空，其他5228 passed/81 skipped
 后端首次完整2失败的原日志保留；补真实schema fixture与长观察TTL登记后完整5263 passed/81 skipped/109.80s，4个既有warnings。前端最后默认/UTC各133文件1465项通过，tsc、ESLint（0error/2个既有warning）、生产构建通过；文档守卫、卫生和公开扫描全部通过。实际MinuteChart绘制十个Canvas，指数叠加可见；读取失败后保留画面、重读清告警；默认完整原文/限制与链接可读。桌面1280、390、320无横向页面溢出，320短节点标题经容器查询展开图标/标题布局后保持可读。数据是隔离合成夹具、connect-src none，非实盘、真机FPS或原文事实验证。Impeccable context→optimize/harden→mechanical detect→实际状态/窄屏验收沿原技能职责，不强套营销样式。
 
 恢复仅回退此PR源码及运行构建；进程内原因观察非持久历史，重启后缺失仍unknown。长期语义效果、源切换覆盖和开盘/断源浏览器SLO需同版本真实观察，不用有限行为测试造可用率或提速倍率。已有Dependencies PR仍独立维护，不混入本批源稳定性修补。
+
+## 8. 本批冻结、验收与恢复
+
+基点e4356ef6，本轮已授权工程整改完成。最终后端5278通过/81跳过/112.06s、pyflakes；前端默认/UTC各1510通过/134文件（98.11/101.23s）、tsc、ESLint（2个既有warning/0error）、Next16.3.8构建。首轮BE新测试自建时区失败、首轮FE两处旧ISO断言及漏分类展示失败均保留；复用BJ_TZ、正常展示时钟与恢复消息分类后完整复验，不放宽守卫。最终文档守卫/卫生/公开扫描另核，exactHEAD发布与激活单独回填运行回执，不能预写成功。
+
+实际组件使用合成数据/CSP connect-src none，驱动开关图表Canvas尺寸未变，图表实际绘制；右Tab旧flex覆盖经真实夹具改为五列两行。320/390无横向页面溢出，320通知286px宽/188.5px高，原因全文和后置否定一点击可达，关闭回原焦点。指数名/价格/涨幅/已收盘左轴一致。实际source时点、质量和失败保留；不是手机设备FPS、实盘时效或语义正确率。
+
+新neutral journal/来源主线索不改变选股评分或通知资格。旧方向潜在消费差异未见今日实际输出污染；两条未来标签写入钟来源未知，不删业务数据、不用全库总数证明效果。独立全市场趋势发现源仍需LAB增量证据。六旧PR按新兼容版本处置，official audit14→7 high，braces dev/build链尚无同链官方修复；production依赖子集0，现有Node/jsdom engine警告及实际CI另录。无新服务、模型、源/轮频/TTL/预算/权限或永久跟进。
+
+恢复仅本批Git差异和切换前正式构建；旧T表/迁移/档案及用户两份evolution原件保留。发布后核新单实例、准确版本、纯读取端点和真实源状态；不为验收触发选股/通知/摘要模型/新WS。

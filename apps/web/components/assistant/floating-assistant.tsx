@@ -1,5 +1,6 @@
 "use client";
 
+import { dateTimeTextBJ } from "@/lib/format";
 import { inspectionRequestForHref, useInspection } from "@/components/inspection/inspection-context";
 
 /**
@@ -975,7 +976,7 @@ export function FloatingAssistant() {
                         <span className="font-medium text-zinc-600 dark:text-zinc-400">数据来源</span>
                         {m.sources.map((s) => (
                           <span key={s.symbol} className="ml-1">
-                            · {s.name || s.symbol} {s.source} {s.as_of}
+                            · {s.name || s.symbol} {s.source} {dateTimeTextBJ(s.as_of, {seconds:true})}
                           </span>
                         ))}
                       </div>

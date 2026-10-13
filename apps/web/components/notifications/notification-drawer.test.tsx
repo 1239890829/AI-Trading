@@ -1,5 +1,5 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { act, cleanup, fireEvent, render, screen, waitFor } from "@testing-library/react";
+import { act, cleanup, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 
 import { getNotificationDiagnostics, getNotifications, type NotificationItem, type NotificationsPayload } from "@/lib/api";
 
@@ -144,6 +144,12 @@ describe("通知中心：未读计数与红点", () => {
       const target = action === "行情" ? screen.findByRole("link", {name: /行情/}) : screen.findByText("来源通知");
       await act(async () => resolveNotifications(payload));
       fireEvent.click(await target);
+      if (action === "通知正文") {
+        const original = await screen.findByRole("dialog", {name:"来源通知"});
+        expect(original.textContent).toContain("正文");
+        expect(screen.queryByTestId("notification-security-detail")).toBeNull();
+        fireEvent.click(within(original).getByRole("link", {name:"查看行情"}));
+      }
       expect((await screen.findByTestId("notification-security-detail")).textContent).toBe("600519");
       expect(screen.getByTestId("notification-drawer").getAttribute("data-motion-state")).toBe("open");
       expect(screen.getByTestId("notification-list").textContent).toContain("来源通知");
@@ -523,9 +529,13 @@ describe("通知事实与浏览状态分离（BUG-016）", () => {
     render(<NotificationBell />);
     await openDrawer();
     const facts = screen.getByTestId("notification-facts");
-    expect(facts.textContent).toContain("盘中买点判定");
-    expect(facts.textContent).toContain("渠道已受理（未确认送达）");
-    expect(facts.textContent).toContain("未读仅表示站内尚未点开");
+    expect(facts.textContent).toContain("渠道已受理，未确认送达");
+    fireEvent.click(screen.getByTestId("notification-judgment"));
+    const detail = await screen.findByRole("dialog", {name:"示例通知"});
+    expect(detail.textContent).toContain("盘中买点判定");
+    expect(detail.textContent).toContain("渠道已受理（未确认送达）");
+    expect(detail.textContent).toContain("未读仅表示站内尚未点开");
+    fireEvent.click(within(detail).getByRole("button", {name:"关闭"}));
     payload.diagnostics = {
       ...ranRejectedDiag,
       decisions: { ...ranRejectedDiag.decisions, latest: [{
@@ -572,10 +582,11 @@ it("user-defined reminders have their own category while stock opportunities, ri
   await openDrawer();
   expect(screen.getByRole("tab", {name: "个股提醒"}).getAttribute("title")).toContain("原入选/买点消息、真实持仓风险与自设条件提醒");
   const list = screen.getByTestId("notification-list");
-  for (const text of ["自设条件提醒", "自设提醒", "原个股消息", "个股机会", "原风险消息", "策略风险", "12:35", "用户条件规则", "原触发条件需重验"])
+  for (const text of ["自设条件提醒", "自设提醒", "原个股消息", "个股机会", "原风险消息", "策略风险", "2026-09-11 12:35", "当前条件需核对"])
     expect(list.textContent).toContain(text);
-  fireEvent.click(screen.getByTestId("notification-judgment"));
-  expect((await screen.findByRole("dialog", {name: "显式个股阈值"})).textContent).toContain("研究观察，不构成买卖建议");
+  fireEvent.click(within(screen.getByText("显式个股阈值").closest('[data-testid="notification-row"]') as HTMLElement).getByTestId("notification-judgment"));
+  const detail = await screen.findByRole("dialog", {name: "显式个股阈值"});
+  for (const text of ["研究观察，不构成买卖建议", "用户条件规则", "原触发条件需重验"]) expect(detail.textContent).toContain(text);
 });
 
 
@@ -594,13 +605,14 @@ it("shows the original evidence and both clocks without claiming current eligibi
   payload = makePayload([item({title: "原入选A", symbol: "600127", source_as_of: "2026-10-09T09:40:00+08:00", recorded_at: "2026-10-09T10:10:00+08:00", references: [{event_id: 9, kind: "selection", selection_source: "daily", trade_date: "2026-10-09", source_id: "daily:A", source_version: "version-A", source_as_of: "2026-10-09T09:40:00+08:00", recorded_at: "2026-10-09T10:10:00+08:00", evidence: {bases: {news: "原新闻依据A"}, invalidations: ["原失效条件A"]}}]})]);
   render(<DetailModalProvider><NotificationBell /></DetailModalProvider>);
   await openDrawer();
-  expect(screen.getByTestId("notification-facts").textContent).toContain("原观察：2026-10-09T09:40");
-  expect(screen.getByTestId("notification-facts").textContent).toContain("记录：2026-10-09T10:10");
-  fireEvent.click(screen.getByRole("tab", {name:"原入选 #9"}));
-  expect(screen.getByText("消息：原新闻依据A")).toBeTruthy();
-  expect(screen.getByRole("link", {name: "查看此版本复盘"}).getAttribute("href")).toBe("/hunting?view=review&date=2026-10-09&version=version-A");
+  expect(screen.getByTestId("notification-facts").textContent).toContain("当前条件需核对");
+  expect(screen.getByTestId("notification-row").textContent).not.toContain("version-A");
   fireEvent.click(screen.getByTestId("notification-judgment"));
   const original = await screen.findByRole("dialog", {name: "原入选A"});
+  expect(original.textContent).toContain("原观察：2026-10-09 09:40:00");
+  expect(original.textContent).toContain("记录：2026-10-09 10:10:00");
+  expect(within(original).getByText("消息：原新闻依据A")).toBeTruthy();
+  expect(within(original).getByRole("link", {name: "查看此版本复盘"}).getAttribute("href")).toBe("/hunting?view=review&date=2026-10-09&version=version-A");
   expect(original.textContent).toContain("version-A");
   expect(original.textContent).toContain("原失效条件A");
 });
@@ -614,25 +626,22 @@ it("shows incomplete holding checks without creating an opportunity or an unread
   expect(dots()).toHaveLength(0);
 });
 
-it("reading the complete long message and changing evidence references does not mark the notification read", async () => {
+it("one detail opening shows the entire message and all original references without refetching", async () => {
   const body = "原消息中的业务关联与交易条件需要分别验证。".repeat(30) + "最后条件：消息不等于当下买点。";
-  payload = makePayload([item({title: "长消息核对", body, references: [
-    {event_id: 11, kind: "selection", trade_date: "2026-10-09", source_id: "original-1", source_version: "v1", source_as_of: null, recorded_at: null, evidence: {invalidations: ["第一对象条件", "第二条件", "第三条件", "第四条件不能省略"]}},
-    {event_id: 12, kind: "decision", trade_date: "2026-10-09", source_id: "original-2", source_version: "v2", source_as_of: null, recorded_at: null, evidence: {invalidations: ["另一对象条件"]}},
+  payload = makePayload([item({title:"长消息核对", body, references:[
+    {event_id:11, kind:"selection", trade_date:"2026-10-09", source_id:"original-1", source_version:"v1", source_as_of:null, recorded_at:null, evidence:{invalidations:["第一对象条件", "第二条件", "第三条件", "第四条件不能省略"]}},
+    {event_id:12, kind:"decision", trade_date:"2026-10-09", source_id:"original-2", source_version:"v2", source_as_of:null, recorded_at:null, evidence:{invalidations:["另一对象条件"]}},
   ]})]);
-  render(<NotificationBell />);
-  await openDrawer();
-  expect(await screen.findByRole("tab", {name:"完整消息"})).toBeTruthy();
+  render(<NotificationBell />); await openDrawer();
+  expect(screen.getByTestId("notification-row").textContent).not.toContain("最后条件");
   expect(dots()).toHaveLength(1);
   const calls = vi.mocked(getNotifications).mock.calls.length;
-  expect(screen.queryByLabelText("消息原内容")).toBeNull();
-  fireEvent.click(screen.getByRole("tab", {name:"完整消息"}));
-  expect(screen.getByLabelText("消息原内容").textContent).toContain(body);
-  fireEvent.click(screen.getByRole("tab", {name: "原入选 #11"}));
-  expect(screen.getByText(/第四条件不能省略/)).toBeTruthy();
-  fireEvent.click(screen.getByRole("tab", {name: "原判定 #12"}));
-  expect(screen.getByText(/另一对象条件/)).toBeTruthy();
-  expect(screen.queryByText(/第四条件不能省略/)).toBeNull();
-  expect(dots()).toHaveLength(1);
+  fireEvent.click(screen.getByText("长消息核对"));
+  const detail = await screen.findByRole("dialog", {name:"长消息核对"});
+  expect(detail.textContent).toContain(body);
+  expect(detail.textContent).toContain("第四条件不能省略");
+  expect(detail.textContent).toContain("另一对象条件");
+  expect(within(detail).queryByRole("tab")).toBeNull();
+  expect(dots()).toHaveLength(0);
   expect(vi.mocked(getNotifications).mock.calls.length).toBe(calls);
 });

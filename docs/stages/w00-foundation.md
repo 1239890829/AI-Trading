@@ -122,6 +122,8 @@
 
 - **2026-10-03 UI审查新增正确性线索**：免费源隔离新库看做T触发2条minute_decisions；`api/routes/market_quotes.py` GET minute-signals记录、minute-decisions惰性结算仍在，现行“GET不制造业务样本”要求存在冲突。原数据库未变化；不用原型或禁用后台冒充无写入。另记录Tencent能力缺失raw错误/无限等待/空高度null及资金null颜色，详见[审查§2–3](../product/ui-audit-20261003.md#2-取证方法与真实边界)。本批仅证据与候选，不改策略/数据通道或已完成事实；实际整改范围与验收回原owner登记，OPS-003后续运行需隔离写语义。
 
+- **2026-10-13该线索处置**：用户明确退役做T；专属GET读时写/结算、engine/tool/closing调用及前台/nav由IMP-019本轮直接整改删除，旧ORM/迁移/记录及通用日内功能保留。历史UI线索不再产生T补建义务，数据源能力状态不因此重开；工程验收与发布归[报告§14](../system/runtime-performance.md#14-2026-10-13-系统质量归因与阅读整批整改)。
+
 ## IMP-079
 
 **行情口径修复与免费数据备路补强**

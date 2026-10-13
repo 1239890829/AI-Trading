@@ -13,6 +13,14 @@ import {
 } from "@/lib/nav-targets";
 import { parseChartTab, parseRightTab } from "@/lib/detail-tabs";
 
+it("does not revive retired T entries through a legacy alias, tab parameter or navigation target",()=>{
+  expect("stock_dt" in NAV_TARGETS).toBe(false);
+  expect(STOCK_TAB_ALIASES["做T"]).toBeUndefined();
+  expect(parseRightTab("dt")).toBeUndefined();
+  // @ts-expect-error A historic target must fail closed at runtime too.
+  expect(buildNav("stock_dt","600519")).toBeNull();
+});
+
 describe("isAllowedNav（站内白名单守卫）", () => {
   it("放行白名单内的站内路径（含 query）", () => {
     expect(isAllowedNav("/workbench?symbol=600519")).toBe(true);
@@ -177,7 +185,7 @@ describe("深链参数与 workbench 解析器对得上（防静默回落）", ()
   });
 
   it("每个个股右栏入口的 rt 都被 parseRightTab 认下", () => {
-    for (const key of ["stock_book", "stock_trades", "stock_dt", "stock_profile", "stock_info"] as const) {
+    for (const key of ["stock_book", "stock_trades", "stock_profile", "stock_info"] as const) {
       const url = buildNav(key, "600519")!;
       const rt = qs(url, "rt")!;
       expect(parseRightTab(rt), `${key} 产出的 rt=${rt} 解析不了`).toBe(rt);

@@ -17,6 +17,20 @@ const SOURCE_LABEL: Record<string, string> = {
 /** 官方成分默认展示条数（2026-09-01 用户反馈：全量展示会把分时/K线挤下去）。 */
 const OFFICIAL_TOP_N = 6;
 
+/** One link shape for source-labelled membership and existing company concepts. */
+export function ThemeLinkChip({name, title, attributed = false, children}: {name: string; title: string; attributed?: boolean; children?: React.ReactNode}) {
+  const {open: inspect} = useInspection();
+  return <Link href={themesUrl(name)} onClick={inspectionClick(inspect, {kind: "themes", focus: name})} title={title}
+    className={`inline-flex max-w-full items-center rounded border px-1.5 py-0.5 text-zinc-700 dark:text-zinc-200 [overflow-wrap:anywhere] ${attributed ? "border-amber-500/30 bg-amber-500/5 hover:border-amber-500/60 dark:border-amber-400/30 dark:bg-amber-400/5" : "border-sky-500/30 bg-sky-500/5 hover:border-sky-500/60 dark:border-sky-400/30 dark:bg-sky-400/5"}`}>
+    <span className="min-w-0">{name}</span>{children}
+  </Link>;
+}
+
+export function CompanyConceptChips({names, heading = true}: {names: string[]; heading?: boolean}) {
+  if (!names.length) return null;
+  return <div className="space-y-1.5 text-xs">{heading && <h3 className="text-zinc-600 dark:text-zinc-400">公司资料概念</h3>}<div className="flex flex-wrap gap-1">{names.map(name => <ThemeLinkChip key={name} name={name} title="公司资料中的概念标签；不证明今日涨停或业务受益，查看现有题材看板" />)}</div></div>;
+}
+
 // 本地 pctText 已删（2026-09-11，P2-20 / 冗余清理）：改用 lib/format.ts 的权威实现。
 // 原实现在 `pct == null` 时返回**空串**、而权威实现返回 `--`——违反项目三态纪律
 // （缺失必须显式标注，不用空白冒充）。之所以是**零可见变更**：唯一调用点外面有
@@ -35,7 +49,6 @@ const OFFICIAL_TOP_N = 6;
  * 双源并列展示、互不覆盖的原则不变；无归属时返回 null（零占用）。
  */
 export function ThemeChipsRow({ themes }: { themes: StockThemes | null }) {
-  const { open: inspect } = useInspection();
   const [expanded, setExpanded] = useState(false);
   const extrasPresence = useExitPresence(expanded ? true : null);
   const official: StockThemeLink[] = useMemo(() => {
@@ -60,34 +73,28 @@ export function ThemeChipsRow({ themes }: { themes: StockThemes | null }) {
   const visibleAttribution = showAll ? attribution : [];
   const hidden = collapsedCount - visibleOfficial.length - visibleAttribution.length;
   const renderOfficial = (t: StockThemeLink) => (
-        <Link
+        <ThemeLinkChip
           key={`o-${t.theme_code}`}
-          href={themesUrl(t.theme_name)}
-          onClick={inspectionClick(inspect, {kind: "themes", focus: t.theme_name})}
+          name={t.theme_name}
           title={`THS 官方概念成分（${t.theme_code}）· 排序：与今日大盘方向一致家数占比（联动度${t.theme_align_1d != null ? ` ${Math.round(t.theme_align_1d * 100)}%` : "不可得"}）· 点击查看该题材当下梯队`}
-          className="inline-flex items-center rounded border border-sky-500/30 bg-sky-500/5 px-1.5 py-0.5 text-zinc-700 hover:border-sky-500/60 dark:border-sky-400/30 dark:bg-sky-400/5 dark:text-zinc-200"
         >
-          {t.theme_name}
           {t.theme_chg_1d != null && (
             <span className={`ml-1 font-mono tabular-nums ${pctColor(t.theme_chg_1d)}`}>
               {pctText(t.theme_chg_1d)}
             </span>
           )}
-        </Link>
+        </ThemeLinkChip>
       );
   const renderAttribution = (a: typeof attribution[number]) => (
-        <Link
+        <ThemeLinkChip
           key={`a-${a.theme_name}`}
-          href={themesUrl(a.theme_name)}
-          onClick={inspectionClick(inspect, {kind: "themes", focus: a.theme_name})}
+          name={a.theme_name} attributed
           title={`${a.date} 涨停归因（来自涨停原因原文）· 点击查看该题材当下梯队`}
-          className="inline-flex items-center rounded border border-amber-500/30 bg-amber-500/5 px-1.5 py-0.5 text-zinc-700 hover:border-amber-500/60 dark:border-amber-400/30 dark:bg-amber-400/5 dark:text-zinc-200"
         >
-          {a.theme_name}
           <span className="ml-1 rounded bg-amber-500/10 px-1 text-[10px] text-amber-800 dark:text-amber-300">
             涨停归因
           </span>
-        </Link>
+        </ThemeLinkChip>
       );
 
   return (

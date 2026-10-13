@@ -7,13 +7,16 @@ profit beneficiaries, verify a claim, or change opportunity eligibility.
 from __future__ import annotations
 
 import json
+import re
+from calendar import timegm
 from datetime import datetime
 
-from sqlalchemy import func, or_, select
+from sqlalchemy import Integer, cast, case, func, or_, select
 from sqlalchemy.orm import joinedload
 
 from app.core.bjtime import BJ_TZ, beijing_now_naive
 from app.events.extract import classify_certainty, _positive_hit
+from app.events.llm_aux import _market_action_only
 from app.models.event import (
     EventCard, EventDirection, EventInterpretation, EventObservation, EventWithdrawalLink,
 )
@@ -111,6 +114,102 @@ def _tags(text: str, specifications: tuple) -> list[dict]:
             for key, label, terms in specifications if any(t.lower() in lowered for t in terms)]
 
 
+def _auxiliary_judgment(payload: dict, row: EventCard, observation: EventObservation | None,
+                        version: EventInterpretation | None, input_version) -> dict | None:
+    """Expose a saved, bound auxiliary receipt; never an effective direction."""
+    value = payload.get("llm_aux")
+    if not isinstance(value, dict) or observation is None or version is None or input_version is None:
+        return None
+    evidence = value.get("evidence")
+    if (type(value.get("event_id")) is not int or value["event_id"] != row.id
+            or type(value.get("observation_id")) is not int or value["observation_id"] != observation.id
+            or type(value.get("input_version_id")) is not int or value["input_version_id"] <= 0
+            or input_version["id"] != value["input_version_id"] or input_version["id"] >= version.id
+            or input_version["event_id"] != row.id or input_version["observation_id"] != observation.id
+            or input_version["effective_at"] > version.effective_at or input_version["state"] != "active"
+            or type(value.get("direction")) is not int or value["direction"] not in (-1, 0, 1)
+            or value.get("verification") != "unverified" or value.get("eligibility_changed") is not False
+            or not isinstance(evidence, dict) or evidence.get("field") not in {"title", "summary"}):
+        return None
+    theme = value.get("theme")
+    if (theme is not None and (not isinstance(theme, str) or len(theme) > 64)) or (value["direction"] and not theme):
+        return None
+    if any(not isinstance(value.get(key), str) or len(value[key]) > 512 for key in ("reason", "chain")):
+        return None
+    quote = evidence.get("quote")
+    source = getattr(observation, evidence["field"])
+    if not isinstance(quote, str) or not quote.strip() or len(quote) > 1024 or quote not in (source or ""):
+        return None
+    if value.get("state") != ("no_direction" if value["direction"] == 0 else "hypothesis"):
+        return None
+    return value
+
+
+def _trade_recap_only(title: str, summary: str | None) -> bool:
+    """Primary-clue display filter only; it does not change model candidates."""
+    text = title + "\n" + (summary or "")
+    if re.search(r"签约|签署|合同|订单|供货|供需|短缺|产能|量产|投产|涨价|降价|提价|政策|获批|预增|公告|澄清|调查|收购|重组|回购|项目|投资", text):
+        return False  # Preserve material disclosures even when price action is also reported.
+    return _market_action_only(title, summary) or bool(re.search(
+        r"股价|涨幅|跌幅|成交额|成交量|换手率|主力资金|资金净流入|资金净流出", text))
+
+
+def _primary_reason(items: list[dict]) -> dict:
+    """One exact source clue, not a causal verdict or a replacement for provider reason."""
+    out = {"status": "unconfirmed", "label": "线索未确认",
+           "reason": "仅题材命中、交易复述或未绑定来源不能确认该股触发原因。",
+           "event_id": None, "version_id": None, "observation_id": None, "relation": "unknown",
+           "timing_relation": "time_unknown", "excerpt": None, "qualifiers": [],
+           "causality_verified": False, "fact_verified": False, "interpretation_view": "current"}
+    candidates = []
+    for item in items:
+        ref, context, relation = item["interpretation_ref"], item["source_context"], item["stock_relation"]
+        if (item["state"] != "active" or item["fact_support"]["status"] != "source_recorded"
+                or relation["status"] not in {"direct_symbol", "source_association"}
+                or not ref["version_id"] or not ref["observation_id"]
+                or ref["observation_id"] != context["observation_id"]
+                or relation["observation_id"] != context["observation_id"]
+                or _trade_recap_only(context["title"], context["summary"])):
+            continue
+        timing = item.get("timing_relation", {}).get("status", "response_time_unknown")
+        if timing == "response_time_unknown" and not item["timing"]["source_time_known"]:
+            timing = "time_unknown"
+        priority = {"known_before_response": 0, "response_time_unknown": 1,
+                    "late_source_observation": 2, "interpretation_after_response": 2, "time_unknown": 3}[timing]
+        candidates.append((priority, item, timing))
+    if not candidates:
+        return out
+    _, item, timing = min(candidates, key=lambda value: value[0])
+    context = item["source_context"]
+    field = "summary" if context["summary"] and context["summary"].strip() else "title"
+    text = context[field]
+    # Prefer the sentence containing an explicit source condition. The full
+    # source_context remains the drilldown when a long sentence needs clipping.
+    terms = [term for q in item["qualifiers"] for term in q["matched_terms"] if term in text]
+    position = min((text.index(term) for term in terms), default=0)
+    start = max(text.rfind("。", 0, position), text.rfind("；", 0, position), text.rfind("\n", 0, position)) + 1
+    ends = [end for delimiter in ("。", "；", "\n") if (end := text.find(delimiter, position)) >= 0]
+    end = min(ends) + 1 if ends else len(text)
+    if end - start > 200:
+        start = max(start, position - 60)
+        end = min(end, start + 200)
+    quote = text[start:end]
+    status = "unconfirmed" if timing == "time_unknown" else "later_clue" if timing in {
+        "late_source_observation", "interpretation_after_response"} else "source_clue"
+    # A short status leaves room for the source excerpt in a 260px sidebar.
+    # The full reason, timing relation and false verification flags stay intact.
+    label = {"source_clue": "来源线索", "later_clue": "事后资料",
+             "unconfirmed": "时点待核"}[status]
+    return {**out, "status": status, "label": label,
+            "reason": "仅引用当前保存的来源；未核实为涨停主因。" if timing != "response_time_unknown" else
+                      "未提供市场响应时刻，仅展示当前直接关联资料，不确认触发先后。",
+            "event_id": item["event_id"], "version_id": item["interpretation_ref"]["version_id"],
+            "observation_id": context["observation_id"], "relation": item["stock_relation"]["status"],
+            "timing_relation": timing, "excerpt": {"field": field, "quote": quote,
+                                                   "truncated": start > 0 or end < len(text)},
+            "qualifiers": item["qualifiers"]}
+
+
 def _relation(symbol: str | None, row: EventCard, directions: list[dict],
               theme_names: set[str], state: str, observation_id: int | None) -> dict:
     direct = [d for d in directions if d.get("target_type") == "symbol" and d.get("target") == symbol]
@@ -153,7 +252,8 @@ def project_event_attribution(row: EventCard, version: EventInterpretation | Non
                               observation: EventObservation | None,
                               pending: EventObservation | None, *, symbol: str | None,
                               theme_names: set[str], now: datetime,
-                              withdrawal_context: dict | None = None) -> dict:
+                              withdrawal_context: dict | None = None,
+                              auxiliary_input_version=None) -> dict:
     """Pure projection; all supplied identities were read in one DB transaction."""
     payload = _payload(version)
     if observation is not None and observation.event_id != row.id:
@@ -287,6 +387,7 @@ def project_event_attribution(row: EventCard, version: EventInterpretation | Non
         "qualifiers": qualifiers, "source_context": context,
         "pending_context": _context(pending, row) if pending else None,
         "review_note": version.review_note if version else None,
+        "llm_aux": _auxiliary_judgment(payload, row, observation, version, auxiliary_input_version),
         "withdrawal_context": withdrawal_context,
         "alternatives": alternatives, "limitations": limitations,
     }
@@ -296,7 +397,7 @@ def read_attribution(session_factory, *, symbol: str | None = None,
                      theme_names: set[str] | None = None, event_id: int | None = None,
                      limit: int = 12, now: datetime | None = None,
                      pool_date: str | None = None, response_as_of: datetime | None = None) -> dict:
-    """Bounded, three-SELECT current view. Never fetch, sync, write, or notify."""
+    """Bounded current view. Never fetch, sync, write, or notify."""
     now = now or beijing_now_naive()
     if now.tzinfo is not None:
         now = now.astimezone(BJ_TZ).replace(tzinfo=None)
@@ -325,7 +426,34 @@ def read_attribution(session_factory, *, symbol: str | None = None,
             stmt = stmt.where(or_(EventCard.source_symbol == symbol, relevant_direction))
         stmt = stmt.where(EventCard.published_at <= now,
                           or_(EventInterpretation.id.is_(None), EventInterpretation.effective_at <= now))
-        ordered = stmt.order_by(EventCard.published_at.desc(), EventCard.id.desc())
+        # Exact, observation-bound stock directions precede source associations
+        # and theme-only discovery, before LIMIT. No name/substring inference.
+        direct_identity = select(EventDirection.id).where(
+            EventDirection.event_id == EventCard.id, EventDirection.target_type == "symbol",
+            EventDirection.target == symbol, EventDirection.matched_by != "llm_aux",
+            EventDirection.observation_id == EventInterpretation.observation_id,
+        ).exists()
+        relation_order = case((direct_identity, 0), (EventCard.source_symbol == symbol, 1), else_=2)
+        # Reuse is_active's exact microsecond / two-half-life boundary. Expired,
+        # pending or withdrawn direct rows must not evict a still-usable source.
+        now_us = timegm(now.timetuple()) * 1_000_000 + now.microsecond
+        published_us = (
+            cast(func.strftime("%s", func.substr(EventCard.published_at, 1, 19)), Integer) * 1_000_000
+            + cast(func.substr(EventCard.published_at, 21, 6), Integer)
+        )
+        visible_source = select(EventObservation.id).where(
+            EventObservation.id == EventInterpretation.observation_id,
+            EventObservation.event_id == EventCard.id, EventObservation.available_at <= now,
+            EventObservation.received_at <= now, EventObservation.source_published_at.is_not(None),
+            EventObservation.source_published_at <= now,
+        ).exists()
+        # Main-source eligibility also requires a recorded fact. Keep active
+        # rumor/opinion rows readable, but do not let them evict that source.
+        usable = (EventCard.fact_kind == "fact") & (EventCard.status == "active") & EventCard.revision_pending_at.is_(None) & (
+            EventInterpretation.state == "active") & (
+            published_us + EventCard.half_life_hours * 7_200_000_000 > now_us) & visible_source
+        ordered = stmt.order_by(case((usable, 0), else_=1), relation_order,
+                                EventCard.published_at.desc(), EventCard.id.desc())
         if response_as_of is None:
             pairs = db.execute(ordered.limit(limit)).unique().all()
         else:
@@ -345,7 +473,22 @@ def read_attribution(session_factory, *, symbol: str | None = None,
         observations = {}
         pending_by_event = {}
         withdrawals = {}
+        auxiliary_inputs = {}
+        input_by_version = {}
         if ids:
+            # A JSON number is not proof of an input interpretation's identity.
+            # Only returned auxiliary journals need this one bounded metadata read.
+            for _, version in pairs:
+                auxiliary = _payload(version).get("llm_aux")
+                identity = auxiliary.get("input_version_id") if isinstance(auxiliary, dict) else None
+                if version and type(identity) is int and identity > 0:
+                    input_by_version[version.id] = identity
+            if input_by_version:
+                inputs = db.execute(select(
+                    EventInterpretation.id, EventInterpretation.event_id, EventInterpretation.observation_id,
+                    EventInterpretation.effective_at, EventInterpretation.state,
+                ).where(EventInterpretation.id.in_(set(input_by_version.values())))).mappings().all()
+                auxiliary_inputs = {value["id"]: value for value in inputs}
             # At most one pending revision/variant per returned event, plus the
             # exact observation each immutable interpretation cites.
             pending_ids = select(func.max(EventObservation.id)).join(
@@ -387,7 +530,8 @@ def read_attribution(session_factory, *, symbol: str | None = None,
                 pending = None  # The pending version already cites this exact source context.
             items.append(project_event_attribution(row, version, observation, pending,
                                                    symbol=symbol, theme_names=themes, now=now,
-                                                   withdrawal_context=withdrawals.get(version.id) if version else None))
+                                                   withdrawal_context=withdrawals.get(version.id) if version else None,
+                                                   auxiliary_input_version=auxiliary_inputs.get(input_by_version.get(version.id)) if version else None))
     data = {"schema_version": 1, "symbol": symbol, "count": len(items), "items": items}
     if response_as_of is not None or pool_date is not None:
         data["response_context"] = {"pool_date": pool_date, "response_as_of": _clock(response_as_of),
@@ -410,6 +554,13 @@ def read_attribution(session_factory, *, symbol: str | None = None,
         data["items"] = [item for item in items if item["timing_relation"]["status"] == "known_before_response"]
         data["later_items"] = [item for item in items if item["timing_relation"]["status"] != "known_before_response"]
         data["count"] = len(data["items"])
+    data["primary_reason"] = _primary_reason(items)
+    data["evidence_counts"] = {
+        "scope": "returned_rows_only", "returned": len(items),
+        "theme_only": sum(item["stock_relation"]["status"] == "theme_only" for item in items),
+        "unknown": sum(item["stock_relation"]["status"] == "unknown" for item in items),
+        "source_time_unknown": sum(not item["timing"]["source_time_known"] for item in items),
+    }
     return {"data": data,
             "meta": {"view": "current_attribution", "historical_selection_basis": False,
                      "opportunity_eligibility_changed": False,

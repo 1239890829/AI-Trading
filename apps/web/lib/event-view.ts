@@ -20,6 +20,7 @@
 import type { EventDirectionRow, EventSummary, ImpactEvent } from "@/lib/api";
 import type { NewsModalItem } from "@/components/news-modal";
 import type { DetailPayload } from "@/components/detail/detail-modal";
+import {dateTimeTextBJ, dateTimesInTextBJ} from "@/lib/format";
 
 /** 四级分类配色（国际时事 / 国家政策 / 市场热点 / 原材料涨价） */
 export const FOUR_STYLE: Record<string, string> = {
@@ -60,7 +61,7 @@ export function eventInterpretationText(e: EventSummary): string {
   const ref = e.interpretation_ref;
   if (!ref?.version_id) return "历史解释版本未知";
   const state = { active: "生效", pending: "待复核", withdrawn: "已撤回", unknown: "未知" }[ref.state];
-  return `#${ref.version_id} · ${state} · ${ref.available_at ?? "时间未知"}`;
+  return `#${ref.version_id} · ${state} · ${ref.available_at ? dateTimeTextBJ(ref.available_at, {seconds:true}) : "时间未知"}`;
 }
 
 type EventJudgement = Pick<EventSummary, "judge_status" | "judge_status_label" | "judge_reason" | "llm_judged_at" | "llm_aux_note">;
@@ -90,9 +91,9 @@ export function eventJudgeView(e: EventJudgement): { text: string; cls: string; 
   return {
     text,
     cls: status === "pending" || status === "unknown" ? "text-amber-700 dark:text-amber-300" : MUTED_DIRECTION,
-    title: [e.judge_status_label, e.judge_reason, fallback,
-      e.llm_judged_at ? `AI辅助曾于 ${e.llm_judged_at} 尝试；不能据此确认当前方向。` : "",
-      e.llm_aux_note ? `AI有假设，未应用：${e.llm_aux_note}` : ""].filter(Boolean).join(" ｜ "),
+    title: dateTimesInTextBJ([e.judge_status_label, e.judge_reason, fallback,
+      e.llm_judged_at ? `AI辅助曾于 ${dateTimeTextBJ(e.llm_judged_at, {seconds:true})} 尝试；不能据此确认当前方向。` : "",
+      e.llm_aux_note ? `AI有假设，未应用：${e.llm_aux_note}` : ""].filter(Boolean).join(" ｜ ")),
   };
 }
 

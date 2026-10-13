@@ -19,9 +19,11 @@ export type DetailRightTab =
   | "real"
   | "profile"
   | "info"
+  | "themes"
+  | "events"
+  | "reason"
   | "speed"
-  | "boards"
-  | "dt";
+  | "boards";
 
 /** 图表区 tab 键（与 components/stock-detail 的 ChartTab 同域）。 */
 export type DetailChartTab = "kline" | "minute" | "flow";
@@ -47,9 +49,11 @@ export function parseRightTab(v: string | null): DetailRightTab | undefined {
     v === "real" ||
     v === "profile" ||
     v === "info" ||
+    v === "themes" ||
+    v === "events" ||
+    v === "reason" ||
     v === "speed" ||
-    v === "boards" ||
-    v === "dt"
+    v === "boards"
     ? v
     : undefined;
 }
@@ -120,12 +124,14 @@ export const INDEX_DEFAULT_RIGHT_TAB: DetailRightTab = "speed";
 const STOCK_RIGHT_TABS: readonly (readonly [DetailRightTab, string])[] = [
   ["book", "盘口"],
   ["trades", "逐笔"],
+  ["themes", "题材"],
+  ["events", "事件"],
+  ["reason", "原因"],
+  ["profile", "资料"],
+  ["info", "资讯"],
   ["trade", "模拟交易"],
   // 真实持仓：券商实际成交的手工账本，与模拟交易完全独立
   ["real", "手工记账"],
-  ["profile", "资料"],
-  ["dt", "做T"],
-  ["info", "资讯"],
 ] as const;
 
 /** 指数右列 tab 顺序。 */

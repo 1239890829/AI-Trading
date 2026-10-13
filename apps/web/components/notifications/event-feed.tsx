@@ -1,6 +1,7 @@
 "use client";
 
 import { useEffect, useRef, useState } from "react";
+import {eventTimeText} from "@/lib/format";
 import { inspectionClick, useInspection } from "@/components/inspection/inspection-context";
 
 import { getImpactEvents, type EventSort, type ImpactEvent } from "@/lib/api";
@@ -96,7 +97,7 @@ function EventRow({
           {e.four_label}
         </span>
         <span className="ml-auto shrink-0 font-mono text-[10px] text-zinc-600 dark:text-zinc-400">
-          {e.published_at?.slice(5, 16) ?? ""}
+          {eventTimeText(e.published_at)}
         </span>
       </div>
 

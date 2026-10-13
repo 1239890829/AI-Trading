@@ -4,6 +4,7 @@ import {
   INDEX_DEFAULT_RIGHT_TAB,
   INDEX_RIGHT_TABS,
   parseWorkbenchDetailUrl,
+  parseRightTab,
   rightTabsFor,
 } from "./detail-tabs";
 
@@ -18,9 +19,13 @@ describe("详情页右列 tab 口径（lib/detail-tabs）", () => {
     expect(keys).not.toContain("trade");
   });
 
-  it("个股：保留全量 tab（含模拟交易/真实持仓/资料/做T）", () => {
+  it("个股核对资料在右栏，做T入口与深链已退出", () => {
     const keys = rightTabsFor(false).map(([k]) => k);
-    expect(keys).toEqual(["book", "trades", "trade", "real", "profile", "dt", "info"]);
+    expect(keys).toEqual(["book", "trades", "themes", "events", "reason", "profile", "info", "trade", "real"]);
+    expect(parseRightTab("dt")).toBeUndefined();
+    expect(parseRightTab("themes")).toBe("themes");
+    expect(parseRightTab("events")).toBe("events");
+    expect(parseRightTab("reason")).toBe("reason");
   });
 
   it("INDEX_RIGHT_TABS 与 tab 列表同源（防两处漂移）", () => {

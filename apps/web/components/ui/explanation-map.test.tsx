@@ -3,6 +3,17 @@ import {cleanup,fireEvent,render,screen,within} from "@testing-library/react";
 import {ConditionList,ExplanationMap,FactCards,FactTimeline,NarrativeText,routeExplanationLink,type ExplanationStep,type ExplanationBounds} from "./explanation-map";
 
 afterEach(cleanup);
+it("renders source clocks as normal Beijing times without mutating evidence or inventing missing clocks",()=>{
+  const items=[{label:"UTC发布",value:"2026-10-13T01:21:03Z",kind:"time" as const},{label:"来源观察",value:"2026-10-13T09:21:05+08:00",kind:"time" as const},{label:"未知源钟",value:"来源未提供时刻",kind:"time" as const}];
+  const original=JSON.stringify(items);
+  render(<FactTimeline label="真实时点" items={items}/>);
+  const timeline=screen.getByRole("region",{name:"真实时点"});
+  expect(timeline.textContent).toContain("2026-10-13 09:21:03");
+  expect(timeline.textContent).toContain("2026-10-13 09:21:05");
+  expect(timeline.textContent).toContain("来源未提供时刻");
+  expect(timeline.textContent).not.toContain("+08:00");
+  expect(JSON.stringify(items)).toBe(original);
+});
 const steps:ExplanationStep[]=[
   {id:"source",label:"来源消息",summary:"公告记录",content:<p>公告仅提出收购意向。</p>,icon:"source"},
   {id:"relation",label:"个股关联",summary:"待核关联",content:<p>资产关联尚未核实。</p>,icon:"relation"},

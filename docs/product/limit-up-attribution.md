@@ -72,3 +72,11 @@ RSH-030继续拥有同输入基线、模型/提示版本、关键条件、调用
 `pool_date/response_as_of`仅为当前归因添加可靠首封语境。材料按实际available/effective时点分响应前与晚到/未知；返回`current_with_response_context`、`historical_replay=false`。晚到资料可旁览，不能成为首封前催化。仅HH:MM不伪造秒。用户选中一条消息后完整绑定来源直接可读，摘要限制、否定、条件与链接保留；不自动选弱关联第一条。
 
 未兑现且不确定条件中的“进展”不再产生新规则利好。旧记录保留原方向与版本，当前归因明确复核；不偷偷改写旧评分/归档或声称全库重算。
+
+### 2026-10-13 主线索与短阅读
+
+当前读层新增primary_reason及返回行evidence_counts，计数不代表全量覆盖。LIMIT前优先当前有效解释/明确公司关系；主投影排除纯行情复述、题材成员和未绑定来源。不从items[0]猜主原因。event/version/observation与来源原句一致；source_clue是来源主线索，later_clue明确晚到，未知源钟或无资格为unconfirmed，fact_verified/causality_verified恒false。旧资料和晚到材料可核，不倒填初次入选。
+
+驱动入口复用抽屉且默认不预取，不压图表。右列题材/事件/原因短Tabs复用既有资料，profile概念改现役ThemeLinkChip样式，不新增题材识别。供应商原因有值优先其原句；缺原因且原因Tab可见时懒读primary，不把普通股票强称已涨停。完整来源/所有限定/未验证辅助解释一次可读，其他关联资料收纳；换股/来源身份变化退休旧详情，读失败保留结果并显式待核。
+
+DeepSeek新neutral回执追加既有解释journal并保留reason/chain/原句/输入版本，不写非零方向或改变资格；读层核输入版本同事件同观察及先后。当前其他消费者仍遵循现役排除门；旧‘建设中/尚未收入’方向的潜在保守度差异没有回写。工程契约不代表语义准确率，效果条件归语义蓝图。

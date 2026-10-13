@@ -3,11 +3,23 @@
 import {memo, useId, useLayoutEffect, useRef, useState} from "react";
 import {useResource} from "@/hooks/use-resource";
 import {useExitPresence} from "@/hooks/use-exit-presence";
-import {getEventAttribution, getStockAttribution, type AttributionEvidenceItem, type AttributionSourceContext, type EventInterpretationRef} from "@/lib/api";
+import {getEventAttribution, getStockAttribution, type AttributionEvidenceItem, type AttributionSourceContext, type EventInterpretationRef, type StockAttributionPayload} from "@/lib/api";
 import {bjDate, eventTimeText, sourceLabel, timeTextBJ} from "@/lib/format";
 import {Skeleton} from "@/components/ui/loading";
 import styles from "./attribution-evidence.module.css";
 import {ConditionList, ExplanationMap, FactTimeline} from "@/components/ui/explanation-map";
+import {ModalShell} from "@/components/ui/modal-shell";
+
+/** A primary clue must bind a saved source and its exact interpretation. */
+function boundPrimaryItem(data: StockAttributionPayload): AttributionEvidenceItem | null {
+  const primary = data.primary_reason;
+  if (!primary?.event_id || !primary.version_id || !primary.observation_id || !primary.excerpt?.quote) return null;
+  return [...data.items, ...(data.later_items || [])].find(item => item.event_id === primary.event_id && item.interpretation_ref.event_id === primary.event_id
+    && item.interpretation_ref.version_id === primary.version_id && item.interpretation_ref.observation_id === primary.observation_id
+    && !!item.source_context && item.source_context.observation_id === primary.observation_id
+    && typeof item.source_context[primary.excerpt!.field] === "string"
+    && item.source_context[primary.excerpt!.field]!.includes(primary.excerpt!.quote)) ?? null;
+}
 
 function clock(value: string | null | undefined): number | null {
   if (!value || !/(?:Z|[+-]\d{2}:\d{2})$/.test(value)) return null;
@@ -50,8 +62,8 @@ function SourceExcerpt({context, label}: {context: AttributionSourceContext | nu
 }
 
 /** The same explanation vocabulary serves source events, stock details and selection drawers. */
-export function AttributionEvidence({item, symbol, selectedAt, recordedRef, selectionContext = false, defaultSourceExpanded = false}: {
-  item: AttributionEvidenceItem; symbol?: string | null; selectedAt?: string | null; recordedRef?: EventInterpretationRef; selectionContext?: boolean; defaultSourceExpanded?: boolean;
+export function AttributionEvidence({item, symbol, selectedAt, recordedRef, selectionContext = false, defaultSourceExpanded = false, complete = false}: {
+  item: AttributionEvidenceItem; symbol?: string | null; selectedAt?: string | null; recordedRef?: EventInterpretationRef; selectionContext?: boolean; defaultSourceExpanded?: boolean; complete?: boolean;
 }) {
   const available = clock(item.timing.available_at);
   const effective = clock(item.timing.interpretation_effective_at);
@@ -83,8 +95,21 @@ export function AttributionEvidence({item, symbol, selectedAt, recordedRef, sele
     {selectedAt && (selected === null || available === null || effective === null) && <p className="text-zinc-600 dark:text-zinc-400">时点证据不完整，无法确认这条解释在首次加入时是否可用。</p>}
     {defaultSourceExpanded ? <section className={styles.nodeContent} aria-label="完整来源核对"><p>{item.fact_support.note}</p><SourceExcerpt context={item.source_context} label={excerptLabel}/></section>
       : sourceSummary && <section className={styles.nodeContent} aria-label="来源要点摘录"><h4>{sourceBound ? "绑定来源要点 · 原文摘录" : "来源要点 · 绑定待核"}</h4><p className={styles.sourceCopy}>{preview(sourceSummary)}</p></section>}
-    {(relation.basis || relation.chain) && <section className={styles.nodeContent} aria-label="当前关联依据摘要"><h4>已记录依据 · 待核</h4>{relation.basis && <p className={styles.sourceCopy}>{preview(relation.basis)}</p>}{relation.chain && relation.chain !== relation.basis && <p className={styles.sourceCopy}>{preview(relation.chain)}</p>}</section>}
-    <ExplanationMap label="归因资料关系" identity={`${item.event_id}:${version ?? "unknown"}:${observation ?? "legacy"}`}
+    {!complete && (relation.basis || relation.chain) && <section className={styles.nodeContent} aria-label="当前关联依据摘要"><h4>已记录依据 · 待核</h4>{relation.basis && <p className={styles.sourceCopy}>{preview(relation.basis)}</p>}{relation.chain && relation.chain !== relation.basis && <p className={styles.sourceCopy}>{preview(relation.chain)}</p>}</section>}
+    {complete ? <div className={styles.nodeContent} aria-label="完整依据核对">
+      <section><h4>来源与解释引用</h4><p>事件 #{item.event_id} · 解释 {version ? `#${version}` : "未知"} · 来源观察 {observation ? `#${observation}` : "未知"}</p>
+        <dl className={styles.sourceFacts}><div><dt>原始发布者</dt><dd>{publisher || "未记录"}</dd></div><div><dt>采集平台</dt><dd>{item.source.collector ? sourceLabel(item.source.collector) : "未记录"}</dd></div><div><dt>来源等级</dt><dd>{item.source.source_tier_label}</dd></div><div><dt>来源绑定</dt><dd>{sourceBound ? "本解释引用的来源" : "待核，未补推"}</dd></div></dl>
+        {item.pending_context && <SourceExcerpt context={item.pending_context} label="来源已修订，待复核内容" />}
+        {item.withdrawal_context && <SourceExcerpt context={{...item.withdrawal_context, change_kind: "withdrawal"}} label="撤回依据" />}
+      </section>
+      <section aria-label="完整关联依据"><h4>{relationLabel} · {relation.label}</h4><p>关联与已记录方向不证明消息属实或个股受益。</p>
+        {relation.basis && <p className={styles.sourceCopy}>{relation.basis}</p>}{relation.chain && relation.chain !== relation.basis && <p className={styles.sourceCopy}>{relation.chain}</p>}
+        {!relation.basis && !relation.chain && <p>关联依据与传导线索未记录。</p>}
+        <p>方向原标记：{relation.direction === null ? "未知" : String(relation.direction)} · 匹配口径：{relation.matched_by || "未记录"}</p>
+        {relation.matched_themes.length > 0 && <ConditionList label="已记录关联题材" items={relation.matched_themes}/>}
+      </section>
+      <section><h4>市场响应 · 待核</h4><p className={styles.sourceCopy}>{item.market_response.basis}</p><p>市场响应不证明消息属实或涨停因果。</p><ConditionList label="其他解释与待核线索" items={item.alternatives} />{item.review_note && <p>{item.review_note}</p>}</section>
+    </div> : <ExplanationMap label="归因资料关系" identity={`${item.event_id}:${version ?? "unknown"}:${observation ?? "legacy"}`}
       center={{id: "interpretation", label: "事件解释", icon: "check", value: <span>{item.state_label}<span className={styles.identity}>{version ? `解释 #${version}` : "版本未知"}</span></span>}}
       links={[
         {from: "source", to: "interpretation", label: sourceBound ? "版本引用的来源" : "来源绑定待核", kind: sourceBound ? "recorded" : "unverified"},
@@ -97,7 +122,8 @@ export function AttributionEvidence({item, symbol, selectedAt, recordedRef, sele
         {id: "relation", label: relationLabel, icon: "relation", summary: <span>{relation.label}<span className={styles.nodeFact}>{symbol ? `个股 ${symbol}` : relation.matched_themes.length ? relation.matched_themes.join("、") : "关联对象未记录"}</span></span>, content: <div className={styles.nodeContent}><p>关联与已记录方向只是已有解释记录，不证明消息属实或个股受益。</p>{relation.matched_themes.length > 0 && <ConditionList label="已记录关联题材" items={relation.matched_themes}/>}<dl className={styles.sourceFacts}><div><dt>方向原标记</dt><dd>{relation.direction === null ? "未知" : String(relation.direction)}</dd></div><div><dt>匹配口径</dt><dd>{relation.matched_by || "未记录"}</dd></div></dl>{relation.basis && <section aria-label={/权威关联|直接利好/.test(relation.basis) ? "原解释（待核）" : "关联依据"}><h4>{/权威关联|直接利好/.test(relation.basis) ? "原解释（待核）" : "关联依据"}</h4><p className={styles.sourceCopy}>{relation.basis}</p></section>}{relation.chain && <section aria-label={/权威关联|直接利好/.test(relation.chain) ? "原解释（待核）" : "传导线索"}><h4>{/权威关联|直接利好/.test(relation.chain) ? "原解释（待核）" : "传导线索"}</h4><p className={styles.sourceCopy}>{relation.chain}</p></section>}{!relation.basis && !relation.chain && <p>关联依据与传导线索未记录。</p>}</div>},
         {id: "response", label: "市场观察", icon: "response", summary: item.market_response.status_label, content: <div className={styles.nodeContent}><p className={styles.sourceCopy}>{item.market_response.basis}</p><p>市场响应不证明消息属实或涨停因果。</p><ConditionList label="其他解释与待核线索" items={item.alternatives} />{item.review_note && <section><h4>复核记录</h4><p className={styles.sourceCopy}>{item.review_note}</p></section>}</div>},
         {id: "timing", label: "核对时点", icon: "time", summary: item.timing.source_time_known ? timeLabel(item.timing.source_published_at) : "来源时间未知", content: <div className={styles.nodeContent}><p>四个时点保留各自口径；系统收到不等于原始发布，解释生效也不等于事件已落地。</p>{selectedAt && <FactTimeline label="首次加入时点" items={[{label: "首次加入", value: timeLabel(selectedAt), kind: "time"}]}/>}<dl className={styles.sourceFacts}><div><dt>解释引用来源</dt><dd>{item.interpretation_ref.observation_id ? `#${item.interpretation_ref.observation_id}` : "未知"}</dd></div></dl></div>},
-      ]} />
+      ]} />}
+    {item.llm_aux && <section className={styles.nodeContent} aria-label="已保存辅助判读"><h4>{item.llm_aux.state === "no_direction" ? "辅助判读：无明确方向" : "辅助方向假设"}</h4><p>尚未验证，不影响选股资格。</p><p className={styles.sourceCopy}>{item.llm_aux.reason}</p>{item.llm_aux.chain && <p className={styles.sourceCopy}>{item.llm_aux.chain}</p>}<blockquote className={styles.sourceCopy}>{item.llm_aux.evidence.quote}</blockquote><p>输入解释 {item.llm_aux.input_version_id ? `#${item.llm_aux.input_version_id}` : "未知"} · 来源观察 {item.llm_aux.observation_id ? `#${item.llm_aux.observation_id}` : "未知"}</p></section>}
     <FactTimeline label="来源与解释时点" items={[
       {label: "来源发布", value: item.timing.source_time_known ? timeLabel(item.timing.source_published_at) : "未知，未用收录时间补填", kind: "time"},
       {label: "系统收到", value: timeLabel(item.timing.received_at), kind: "time"},
@@ -159,21 +185,46 @@ function AttributionItems({items, laterItems = [], responseContext = false, symb
   </div>;
 }
 
-/** No polling or per-candidate reads: only an open detail requests current evidence. */
-export const StockAttributionPanel = memo(function StockAttributionPanel({symbol, eventId, active = true, title = "驱动线索", defaultExpanded = false, bounded = true, selectedAt, recordedRefs, selectionContext = false, defaultSourceExpanded = false, poolDate, responseAsOf}: {
+/** Toolbar reads only on open; visible reason fallbacks read once, with no polling. */
+export const StockAttributionPanel = memo(function StockAttributionPanel({symbol, eventId, active = true, title = "驱动线索", defaultExpanded = false, bounded = true, selectedAt, recordedRefs, selectionContext = false, defaultSourceExpanded = false, poolDate, responseAsOf, primarySummary = false}: {
   symbol?: string | null; eventId?: number | null; active?: boolean; title?: string; defaultExpanded?: boolean; bounded?: boolean;
   selectedAt?: string | null; recordedRefs?: EventInterpretationRef[];
   selectionContext?: boolean; defaultSourceExpanded?: boolean;
-  poolDate?: string; responseAsOf?: string;
+  poolDate?: string; responseAsOf?: string; primarySummary?: boolean;
 }) {
   const [open, setOpen] = useState(defaultExpanded);
   const [readingCycle, setReadingCycle] = useState(0);
   const id = useId();
   const identity = `${symbol || ""}:${eventId || ""}:${poolDate || ""}:${responseAsOf || ""}`;
-  const presence = useExitPresence(open ? identity : null);
+  const presence = useExitPresence(active && open ? identity : null);
+  const [openedIdentity, setOpenedIdentity] = useState(identity);
+  if (openedIdentity !== identity) {setOpenedIdentity(identity); if (primarySummary) setOpen(false);}
+  if (primarySummary && !active && open) setOpen(false);
   const options = poolDate || responseAsOf ? {poolDate, responseAsOf} : undefined;
-  const resource = useResource(() => eventId ? options ? getEventAttribution(eventId, symbol, options) : getEventAttribution(eventId, symbol) : options ? getStockAttribution(symbol!, options) : getStockAttribution(symbol!), {key: identity, enabled: active && open && (!!eventId || /^\d{6}$/.test(symbol || "")), intervalMs: null, marketHours: false});
+  const resource = useResource(() => eventId ? options ? getEventAttribution(eventId, symbol, options) : getEventAttribution(eventId, symbol) : options ? getStockAttribution(symbol!, options) : getStockAttribution(symbol!), {key: identity, enabled: active && (open || primarySummary) && (!!eventId || /^\d{6}$/.test(symbol || "")), intervalMs: null, marketHours: false});
   const data = resource.data;
+  const primary = data?.primary_reason;
+  const primaryItem = data ? boundPrimaryItem(data) : null;
+  const otherItems = primaryItem ? data!.items.filter(item => item.event_id !== primaryItem.event_id) : data?.items || [];
+  const otherLater = primaryItem ? (data!.later_items || []).filter(item => item.event_id !== primaryItem.event_id) : data?.later_items || [];
+  const primaryReading = primary && <div className="min-w-0 space-y-3">
+    <p className="text-zinc-600 dark:text-zinc-400">{primary.label} · {primary.reason}。来源线索不是已核实因果，不回填入选与首封依据。</p>
+    {!!primary.event_id && !primaryItem && <p role="alert" className="text-amber-800 dark:text-amber-300">主线索来源绑定待核，未自动选择其他资料。</p>}
+    {primaryItem && <AttributionEvidence item={primaryItem} symbol={symbol} selectedAt={selectedAt} recordedRef={recordedRefs?.find(ref => ref.event_id === primaryItem.event_id)} selectionContext={selectionContext} defaultSourceExpanded complete />}
+    {(otherItems.length > 0 || otherLater.length > 0) && <details><summary className="cursor-pointer text-zinc-600 dark:text-zinc-400">其他关联资料 · {otherItems.length + otherLater.length} 条</summary><AttributionItems items={otherItems} laterItems={otherLater} responseContext={!!data?.response_context} symbol={symbol} selectedAt={selectedAt} recordedRefs={recordedRefs} selectionContext={selectionContext} defaultSourceExpanded={defaultSourceExpanded}/></details>}
+  </div>;
+  if (primarySummary) return <section aria-label={title} className="min-w-0 py-1 text-xs">
+    <div className="flex min-w-0 items-center gap-2">
+      {resource.error ? <p role="alert" className="min-w-0 text-amber-800 dark:text-amber-300">来源线索读取失败{data ? " · 保留结果" : ""}</p>
+        : resource.pending && !data ? <p role="status" className="text-zinc-600 dark:text-zinc-400">来源线索读取中…</p>
+          : <span className="min-w-0 flex-1 truncate" title={primary ? `${primary.label}：${primary.reason}；不证明因果` : "主线索未确认"}><span className="mr-1 text-zinc-600 dark:text-zinc-400">{primary?.label || "主线索未确认"}</span>{primaryItem ? primary?.excerpt?.quote : primary?.reason || "已保存资料尚不能建立主线索"}</span>}
+      {!!resource.error && <button type="button" data-action="secondary" disabled={resource.pending} onClick={resource.refresh}>重读</button>}
+      {data && <button type="button" data-action="secondary" className="shrink-0" aria-label="查看主线索完整依据" aria-haspopup="dialog" onClick={() => setOpen(true)}>核对全文</button>}
+    </div>
+    {presence.value === identity && <ModalShell presentation="drawer" open={presence.active} onClose={() => setOpen(false)} label={title} size="md" zIndex={60} header={<h2 className="text-sm font-medium">{title}</h2>} bodyTabIndex={0} bodyClassName="data-scroll overflow-y-auto px-4 py-3 text-xs [overflow-wrap:anywhere]">
+      {presence.active && <><button type="button" data-action="secondary" disabled={resource.pending} onClick={resource.refresh}>刷新依据</button>{data?.response_context && <p className="py-2 text-zinc-600 dark:text-zinc-400">响应时点 {timeLabel(data.response_context.response_as_of)} · 当前解释，非历史还原。</p>}{primaryReading || <><p className="py-2">主线索未记录，不能选第一条资料冒充原因。</p>{data && (otherItems.length > 0 || otherLater.length > 0) && <details><summary className="cursor-pointer">其他关联资料 · {otherItems.length + otherLater.length} 条</summary><AttributionItems items={otherItems} laterItems={otherLater} responseContext={!!data.response_context} symbol={symbol} selectedAt={selectedAt} recordedRefs={recordedRefs} selectionContext={selectionContext} defaultSourceExpanded /></details>}</>}<p className="py-2 text-zinc-600 dark:text-zinc-400">来源解释供核对，不构成买卖建议。</p></>}
+    </ModalShell>}
+  </section>;
   return <section className="min-w-0 py-1 text-xs" aria-label={title}>
     <div className="flex min-h-8 flex-wrap items-center justify-between gap-2"><button type="button" data-action="quiet" className={`quiet-action min-w-0 text-left ${styles.action} ${styles.panelToggle}`} aria-expanded={open} aria-controls={id} onClick={() => {if (!open) setReadingCycle(value => value + 1); setOpen(value => !value);}}><span>{title}</span><svg aria-hidden="true" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.5" className={`ml-1 shrink-0 transition-transform duration-150 motion-reduce:transition-none ${open ? "rotate-180" : ""}`}><path d="m6 9 6 6 6-6" /></svg></button>{open && <button type="button" data-action="quiet" className={`quiet-action shrink-0 ${styles.action}`} disabled={resource.pending} onClick={resource.refresh}>{resource.pending && data ? "更新中" : "刷新依据"}</button>}</div>
     <div className="motion-disclosure" data-open={open} aria-hidden={!open || undefined} inert={!open}><div className="motion-disclosure-body">
@@ -184,7 +235,7 @@ export const StockAttributionPanel = memo(function StockAttributionPanel({symbol
       {resource.error != null && <p role="alert" className="py-2 leading-relaxed text-amber-800 dark:text-amber-300">{data ? "依据刷新失败，保留上次读取内容。" : "归因依据读取失败，尚不能确认是否有相关消息。"}可使用上方“刷新依据”重试。</p>}
       {data?.items.length === 0 && !(data.later_items?.length) && <p className="py-3 leading-relaxed text-zinc-600 dark:text-zinc-400">已采集资料中暂未找到关联事件。覆盖不等于全市场，不能据此认定没有驱动消息。</p>}
       {data?.response_context && <p className="py-1 leading-relaxed text-zinc-600 dark:text-zinc-400">所查响应时点：{timeLabel(data.response_context.response_as_of)}。按已保存的来源时点分组；当前解释，非历史还原。晚到或时点未知资料不回填驱动与入选依据。</p>}
-      {data && <AttributionItems laterItems={data.later_items} responseContext={!!data.response_context} key={`${identity}:${readingCycle}`} items={data.items} symbol={symbol} selectedAt={selectedAt} recordedRefs={recordedRefs} selectionContext={selectionContext} defaultSourceExpanded={defaultSourceExpanded} />}
+      {primaryReading || (data && <AttributionItems laterItems={data.later_items} responseContext={!!data.response_context} key={`${identity}:${readingCycle}`} items={data.items} symbol={symbol} selectedAt={selectedAt} recordedRefs={recordedRefs} selectionContext={selectionContext} defaultSourceExpanded={defaultSourceExpanded} />)}
     </div>}
     </div></div>
   </section>;

@@ -5,6 +5,7 @@ import {NarrativeText} from "@/components/ui/explanation-map";
 import { fmt, pctColor, pctText } from "@/lib/format";
 import { Skeleton } from "@/components/ui/loading";
 import {DetailReadStatus, type DetailReadState} from "./read-status";
+import {CompanyConceptChips} from "./theme-chips";
 
 /** 公司资料（/api/company 返回的超集；类型随消费方窄化）。 */
 export interface CompanyProfile {
@@ -41,12 +42,16 @@ export function ProfilePanel({
   fins,
   readState,
   onRetry,
+  readIdentity,
+  active = true,
 }: {
   boardRows: BoardRows;
   company: CompanyProfile | null;
   fins: FinRow[] | null | undefined;
   readState?: DetailReadState;
   onRetry?: () => void;
+  readIdentity?: string;
+  active?: boolean;
 }) {
   return (
     <div className="px-3 py-2 text-xs">
@@ -56,7 +61,7 @@ export function ProfilePanel({
           <div key={label} className="mb-2.5">
             <div className="mb-1 text-zinc-600 dark:text-zinc-400">{label}</div>
             <div className="flex flex-wrap gap-1">
-              {items.map((b) => (
+              {label === "概念题材" ? <CompanyConceptChips names={items} heading={false} /> : items.map((b) => (
                 <span key={b} className={`rounded bg-zinc-100 px-1.5 py-0.5 dark:bg-zinc-800 ${tone}`}>
                   {b}
                 </span>
@@ -77,7 +82,7 @@ export function ProfilePanel({
         </div>
       )}
       <div className="mb-1 text-zinc-600 dark:text-zinc-400">最近财报</div>
-      {readState && <DetailReadStatus label="财报" state={readState} onRetry={onRetry}/>}
+      {readState && <DetailReadStatus label="财报" state={readState} onRetry={onRetry} identity={readIdentity} active={active}/>}
       {fins === undefined && !readState?.error ? (
         <div className="space-y-2" aria-hidden>
           <Skeleton className="h-12 w-full rounded-lg" />
