@@ -1,6 +1,7 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { getJson, request, sendJson } from "@/lib/api/internal";
 import { getWatchlist } from "@/lib/api/watchlist";
+import { getMarketOverview } from "@/lib/api/market";
 
 function pendingFetch(obeyAbort = true) {
   const calls: { url: string; init: RequestInit; finish: (data: unknown, status?: number) => void; fail: () => void }[] = [];
@@ -14,6 +15,21 @@ function pendingFetch(obeyAbort = true) {
 afterEach(() => { vi.useRealTimers(); vi.unstubAllGlobals(); vi.restoreAllMocks(); });
 
 describe("safe read in-flight ownership", () => {
+  it("workbench and chart overlay share a pure overview read without sharing mutable results", async () => {
+    const source = pendingFetch();
+    const workbench = getMarketOverview();
+    const overlay = getMarketOverview();
+    expect(source.fetcher).toHaveBeenCalledTimes(1);
+    source.calls[0].finish({indices: [{symbol: "sh000001", price: 4000, data_timestamp: "2026-10-13T14:29:00+08:00"}], total_amount: 100, total_amount_freshness: null});
+    const [left, right] = await Promise.all([workbench, overlay]);
+    left.indices[0].price = 1;
+    expect(right.indices[0].price).toBe(4000);
+    expect(right.indices[0].data_timestamp).toBe("2026-10-13T14:29:00+08:00");
+    const next = getMarketOverview();
+    expect(source.fetcher).toHaveBeenCalledTimes(2);
+    source.calls[1].finish({indices: [], total_amount: null, total_amount_freshness: null});
+    await next;
+  });
   it("three real watchlist getters share only an unfinished read and return independent nested values", async () => {
     const source = pendingFetch();
     const reads = [getWatchlist(), getWatchlist(), getWatchlist()];

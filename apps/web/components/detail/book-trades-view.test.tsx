@@ -113,7 +113,7 @@ describe("三态纪律", () => {
 
   it("[] = 拉过且确认无 ⇒ 空态文案，不渲染口径行", () => {
     render(<BookTradesView book={null} trades={[]} showBook={false} />);
-    expect(screen.getByText(/暂无逐笔/)).toBeTruthy();
+    expect(screen.getByText(/本次未返回成交记录/)).toBeTruthy();
     expect(screen.queryByText(/口径/)).toBeNull();
   });
 });
@@ -121,7 +121,7 @@ describe("三态纪律", () => {
 describe("盘口分支不受影响", () => {
   it("showBook + book=null ⇒ 原盘口空态文案（与逐笔无关）", () => {
     render(<BookTradesView book={null} trades={[trade()]} showBook />);
-    expect(screen.getByText(/盘口数据不可用/)).toBeTruthy();
+    expect(screen.getByText(/本次未返回盘口数据/)).toBeTruthy();
     expect(screen.queryByText(/口径/)).toBeNull();
   });
 });

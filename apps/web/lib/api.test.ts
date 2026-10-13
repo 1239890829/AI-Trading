@@ -1,6 +1,7 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { ApiError, getPickReviews, getPicksHistory } from "@/lib/api";
 import { DEFAULT_TIMEOUT_MS, getJson, sendJson } from "@/lib/api/internal";
+import {getTradesPayload} from "@/lib/api/market";
 
 /**
  * 回归（2026-09-10 实测事故）：`undefined is not an object (evaluating 'reviews.length')`。
@@ -28,6 +29,13 @@ afterEach(() => {
 });
 
 describe("api · Envelope 契约校验（2026-09-10 崩溃回归）", () => {
+  it("keeps a successful empty trades read separate from its source capability reason and source clock", async () => {
+    const meta = {trades_source: "tdx", trades_detail: "该源当前未提供逐笔", source_timestamp: "2026-10-13T10:00:00+08:00"};
+    stubFetch(200, JSON.stringify({data: [], meta}));
+    expect(await getTradesPayload("600127")).toEqual({items: [], source: "tdx", empty_reason: "该源当前未提供逐笔", meta});
+    stubFetch(502, JSON.stringify({detail: "源失败"}));
+    await expect(getTradesPayload("600127")).rejects.toThrow("源失败");
+  });
   it("正常 Envelope → 返回 data", async () => {
     stubFetch(200, JSON.stringify({ data: [{ date: "2026-09-10", symbol: "000785", name: "居然智家", verdict: "good", reason_category: "gone_well", excess_pct: -0.84, note: "" }], meta: {} }));
     const rows = await getPickReviews();

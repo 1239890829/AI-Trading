@@ -5,6 +5,8 @@
 import type { OrderBook, Trade } from "@/types/market";
 import { bjDate, fmt, sourceLabel, timeText } from "@/lib/format";
 import { Skeleton } from "@/components/ui/loading";
+import {QualityBadge} from "@/components/quality-badge";
+import {DetailReadStatus, type DetailReadState} from "./read-status";
 
 /** 逐笔**口径**表（2026-09-16 `IMP-038`）。
  *
@@ -46,10 +48,15 @@ function TradesSkeleton() {
   );
 }
 
-export function BookTradesView({ book, trades, showBook }: { book: OrderBook | null | undefined; trades: Trade[] | undefined; showBook: boolean }) {
+export function BookTradesView({book, trades, showBook, readState, onRetry, emptyReason, tradesSource}: {
+  book: OrderBook | null | undefined; trades: Trade[] | undefined; showBook: boolean;
+  readState?: DetailReadState; onRetry?: () => void; emptyReason?: string | null; tradesSource?: string | null;
+}) {
+  const notice = readState && <DetailReadStatus label={showBook ? "盘口" : "成交"} state={readState} onRetry={onRetry}/>;
   if (showBook) {
-    if (book === undefined) return <BookSkeleton />;
-    return book ? (
+    if (book === undefined) return <>{notice}{!readState?.error && <BookSkeleton />}</>;
+    return <>{notice}{book ? <>
+      <p className="flex flex-wrap items-center gap-1 border-b border-zinc-100 px-3 py-1.5 text-xs text-zinc-600 dark:border-zinc-800 dark:text-zinc-400">{sourceLabel(book.source)} · 源时刻 {book.data_timestamp ? `${bjDate(book.data_timestamp)} ${timeText(book.data_timestamp)}` : "未提供"}<QualityBadge quality={book.quality} reasons={book.quality_reasons}/></p>
       <table className="w-full text-sm">
         <tbody>
           {[...book.asks].reverse().map((lv, i) => (
@@ -68,15 +75,12 @@ export function BookTradesView({ book, trades, showBook }: { book: OrderBook | n
           ))}
         </tbody>
       </table>
-    ) : (
-      <p className="px-3 py-10 text-center text-xs text-zinc-600 dark:text-zinc-400">盘口数据不可用（免费源仅盘中提供）</p>
-    );
+      {book.asks.length === 0 && book.bids.length === 0 && !readState?.error && <p className="px-3 py-3 text-xs text-zinc-600 dark:text-zinc-400">本次盘口返回空档位。</p>}
+    </> : !readState?.error && <p className="px-3 py-10 text-center text-xs text-zinc-600 dark:text-zinc-400">本次未返回盘口数据。</p>}</>;
   }
-  if (trades === undefined) return <TradesSkeleton />;
+  if (trades === undefined) return <>{notice}{!readState?.error && <TradesSkeleton />}</>;
   if (trades.length === 0) {
-    return (
-      <p className="px-3 py-8 text-center text-xs text-zinc-600 dark:text-zinc-400">暂无逐笔（盘中看分时）</p>
-    );
+    return <>{notice}{!readState?.error && <p className="px-3 py-8 text-center text-xs text-zinc-600 dark:text-zinc-400">本次未返回成交记录。{emptyReason || "原因未提供。"}{tradesSource ? ` 来源：${sourceLabel(tradesSource)}` : ""}</p>}</>;
   }
   const src = trades[0]?.source;
   const latest = trades.at(-1);
@@ -84,6 +88,7 @@ export function BookTradesView({ book, trades, showBook }: { book: OrderBook | n
   const isStale = latest?.quality === "stale" || latest?.quality === "invalid";
   return (
     <>
+      {notice}
       <p className="border-b border-zinc-100 px-3 py-1.5 text-[10px] text-zinc-500 dark:border-zinc-800/60 dark:text-zinc-500">
         口径：{sourceLabel(src)} {TRADES_CALIBER[src] ?? "明细"} · {sourceDay} · 共 {trades.length} 笔（时间升序，量：手）{isStale ? " · 陈旧数据，仅供核对" : ""}
       </p>

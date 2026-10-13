@@ -66,6 +66,12 @@ export function eventInterpretationText(e: EventSummary): string {
 type EventJudgement = Pick<EventSummary, "judge_status" | "judge_status_label" | "judge_reason" | "llm_judged_at" | "llm_aux_note">;
 const MUTED_DIRECTION = "text-zinc-600 dark:text-zinc-400";
 
+/** A display filter only. Unvalidated model guesses and withdrawn interpretations are not direction records. */
+export function hasRecordedEventDirection(e: EventSummary): boolean {
+  if (e.interpretation_ref && e.interpretation_ref.state !== "active") return false;
+  return e.directions.some(d => (d.direction === 1 || d.direction === -1) && d.matched_by !== "llm_aux");
+}
+
 /** The event state and a target's direction are separate facts. */
 export function eventJudgeView(e: EventJudgement): { text: string; cls: string; title: string } {
   const labels = { judged: "已有方向记录", pending: "方向未明", neutral: "未明超时", expired: "已过期", unknown: "状态未知" };

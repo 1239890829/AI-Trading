@@ -54,6 +54,13 @@ def _match_theme(theme: str | None, theme_names: list[str]) -> str | None:
     return None
 
 
+def _market_action_only(title: str, summary: str | None) -> bool:
+    text = title + "\n" + (summary or "")
+    market = re.search(r"涨停|跌停|震荡反弹|低开高走|概念.{0,8}(?:上涨|下跌|走强)|ETF.{0,20}(?:涨|跌)[0-9]", text, re.I)
+    material = re.search(r"签约|中标|量产|政策|获批|预增|短缺|供需|产能|涨价|公告|澄清|调查|收购|重组|回购|订单|供货|项目|投资", text)
+    return bool(market and not material)
+
+
 def _pending_candidates(sf, *, theme_names: list[str], max_batch: int,
                         age_max_h: float) -> list[EventCard]:
     """候选：无复核记录的 active 解释、无非零方向、未调用过 LLM、近时发布。
@@ -83,6 +90,8 @@ def _pending_candidates(sf, *, theme_names: list[str], max_batch: int,
             .limit(max_batch * 4)  # 放大取数：下面还要过滤有方向行/超龄
         )
         for row, version_id in db.execute(stmt):
+            if _market_action_only(row.title, row.summary):
+                continue  # Price action alone cannot supply a new catalyst.
             if row.published_at is None:
                 continue
             age_h = (now - row.published_at).total_seconds() / 3600
@@ -172,25 +181,29 @@ def _apply_result(sf, cand: EventCard, hits: list[dict]) -> int:
         return n
 
 
-def _deepseek_items(cands: list[EventCard], session_factory=None) -> tuple[list[dict] | None, str | None]:
+def _deepseek_items(cands: list[EventCard], session_factory=None, *, theme_names: list[str] | None = None) -> tuple[list[dict] | None, str | None]:
     """让当前 DeepSeek 对指定事件做题材/方向判定；不写库。"""
     from app.core.config import settings
     from app.core.llm_client import LLMError, chat_completion, extract_json_object
 
-    titles = [c.title for c in cands]
+    inputs = [{"event_id": c.id, "title": c.title, "summary": c.summary} for c in cands]
     prompt = (
         "你是 A 股消息面判定器。对以下新闻批量判断其对 A 股题材的方向影响。\n"
-        "只输出 JSON，不要解释。格式：{\"items\":[{\"direction\":-1|0|1,"
+        "只输出 JSON，不要解释。格式：{\"items\":[{\"event_id\":整数,\"direction\":-1|0|1,"
         "\"theme\":\"受影响题材名(无则null)\",\"chain\":\"传导一句话(无则空)\","
-        "\"reason\":\"一句话依据\"}]}\n"
+        "\"reason\":\"一句话依据\",\"evidence\":{\"field\":\"title|summary\",\"quote\":\"当前输入逐字原句\"}}]}\n"
         "direction: 1=利好相关题材/标的, -1=利空, 0=中性(纯数据罗列/常规澄清/"
         "无题材驱动)。items 数量必须与输入条数一致，顺序对应。\n"
         "注意：龙虎榜/成交量/资金流向/限售解禁数据类、公司常规澄清通常为 0；"
         "政策定调/产业事件/海外映射等明确方向才非 0。"
+        "event_id必须原样返回且完整唯一；依据引用只能是对应输入原句。"
+        "纯板块/ETF涨跌、涨停和资金人气不是新产业催化，direction=0。"
+        "不得补出材料没有的放量、订单、收入、临床阶段；拟议、未兑现和公司自述必须保留。"
+        "只判断给定标题与摘要，缺失仅归本材料，不断言公司或全文未披露。"
     )
     messages = [
         {"role": "system", "content": prompt},
-        {"role": "user", "content": __import__("json").dumps(titles, ensure_ascii=False)},
+        {"role": "user", "content": __import__("json").dumps(inputs, ensure_ascii=False)},
     ]
     input_chars = sum(len(str(m.get("content") or "")) for m in messages)
     from app.services import agent_budget
@@ -210,11 +223,6 @@ def _deepseek_items(cands: list[EventCard], session_factory=None) -> tuple[list[
             timeout=180.0,
             usage_callback=lambda value: usage_box.__setitem__("value", value),
         )
-        agent_budget.record_unmetered(
-            purpose="event.llm_aux", provider=settings.llm_provider, model=settings.review_llm_model,
-            state="succeeded", usage=usage_box["value"], attempts=1, timeout_seconds=180.0,
-            input_chars=input_chars, output_chars=len(raw), session_factory=session_factory,
-        )
     except LLMError as exc:
         try:
             agent_budget.record_unmetered(
@@ -228,14 +236,68 @@ def _deepseek_items(cands: list[EventCard], session_factory=None) -> tuple[list[
         return None, f"LLM 调用失败：{exc}"
     except Exception as exc:
         return None, f"异常：{exc}"
+    def invalid(reason):
+        try:
+            agent_budget.record_unmetered(
+                purpose="event.llm_aux", provider=settings.llm_provider, model=settings.review_llm_model,
+                state="failed", usage=usage_box["value"], attempts=1, timeout_seconds=180.0,
+                input_chars=input_chars, output_chars=len(raw), error_kind="bad_response",
+                session_factory=session_factory,
+            )
+        except Exception:
+            log.warning("llm_aux invalid-output usage accounting failed", exc_info=False)
+        return None, reason
+
     try:
         parsed = extract_json_object(raw) or {}
         items = parsed.get("items") or []
-        if not isinstance(items, list) or len(items) != len(titles):
-            return None, f"输出条数不符（{len(items)}/{len(titles)}）"
-        return items, None
+        if not isinstance(items, list) or len(items) != len(inputs):
+            return invalid(f"输出条数不符（{len(items)}/{len(inputs)}）")
+        by_id = {}
+        source_by_id = {item["event_id"]: item for item in inputs}
+        for item in items:
+            if not isinstance(item, dict):
+                return invalid("模型条目格式无效")
+            identity = item.get("event_id")
+            direction = item.get("direction")
+            if type(identity) is not int or identity not in source_by_id or identity in by_id:
+                return invalid("模型事件身份缺失、重复或不符")
+            if type(direction) is not int or direction not in (-1, 0, 1):
+                return invalid("模型方向枚举非法")
+            theme = item.get("theme")
+            if ((theme is not None and (not isinstance(theme, str) or len(theme) > 64))
+                    or (direction != 0 and not theme)):
+                return invalid("模型影响对象无效")
+            if direction and theme_names is not None and _match_theme(theme, theme_names) is None:
+                return invalid("模型影响对象不在当前官方题材目录")
+            if any(not isinstance(item.get(field), str) for field in ("reason", "chain")):
+                return invalid("模型依据字段格式无效")
+            evidence = item.get("evidence")
+            if not isinstance(evidence, dict) or evidence.get("field") not in {"title", "summary"}:
+                return invalid("模型证据字段无效")
+            quote = evidence.get("quote")
+            source = source_by_id[identity]
+            if not isinstance(quote, str) or not quote.strip() or quote not in (source.get(evidence["field"]) or ""):
+                return invalid("模型引用不是当前条目逐字原句")
+            if direction and _market_action_only(source["title"], source["summary"]):
+                return invalid("纯行情不能变为新催化")
+            text = source["title"] + "\n" + (source["summary"] or "")
+            for word in ("放量", "多期临床", "已量产", "已交割"):
+                explanation = item["chain"] + "\n" + item["reason"]
+                allowed = [match.span() for match in re.finditer(
+                    rf"(?:^|[。；;\n，,])(?:(?:本材料未提供|不能确认|未见|没有){re.escape(word)}(?:信息|依据)?|{re.escape(word)}(?:情况|信息)?待核)", explanation)]
+                if word not in text and any(not any(start <= match.start() and match.end() <= end for start, end in allowed)
+                        for match in re.finditer(re.escape(word), explanation)):
+                    return invalid("模型解释补出输入未给的确定细节")
+            by_id[identity] = item
+        agent_budget.record_unmetered(
+            purpose="event.llm_aux", provider=settings.llm_provider, model=settings.review_llm_model,
+            state="succeeded", usage=usage_box["value"], attempts=1, timeout_seconds=180.0,
+            input_chars=input_chars, output_chars=len(raw), session_factory=session_factory,
+        )
+        return [by_id[item["event_id"]] for item in inputs], None
     except Exception as exc:
-        return None, f"解析失败：{exc}"
+        return invalid(f"解析失败：{exc}")
 
 
 def judge_pending_batch(sf=None, *, theme_names: list[str] | None = None,
@@ -265,11 +327,13 @@ def judge_pending_batch(sf=None, *, theme_names: list[str] | None = None,
 
     # All candidates use the existing batch model; an unavailable enhancement
     # cannot pre-classify neutral events or delay publication.
-    items, error = _deepseek_items(cands, sf)
+    items, error = _deepseek_items(cands, sf, theme_names=theme_names)
     if items is None:
         log.warning("llm_aux judge failed (batch skipped, retry next round): %s", error)
         return {"skipped": True, "reason": error or "LLM 判定失败"}
-    items_by_id = {cand.id: item for cand, item in zip(cands, items)}
+    if any(item["direction"] != 0 and _match_theme(item["theme"], theme_names) is None for item in items):
+        return {"skipped": True, "reason": "模型影响对象不在当前官方题材目录"}
+    items_by_id = {item["event_id"]: item for item in items}
 
     hit_count = mark_count = 0
     for cand in cands:
@@ -288,7 +352,7 @@ def judge_pending_batch(sf=None, *, theme_names: list[str] | None = None,
             "target": theme,
             "direction": direction,
             "chain": str(item.get("chain") or "")[:256],
-            "basis": f"LLM 辅助判定：{str(item.get('reason') or '')[:120]}"[:256],
+            "basis": f"LLM 辅助判定（待验证）：{item['reason'][:100]}；原句：{item['evidence']['quote'][:100]}"[:256],
         }] if actionable else []
         n = _apply_result(sf, cand, hits)
         hit_count += n

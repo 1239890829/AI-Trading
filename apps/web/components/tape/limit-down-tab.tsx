@@ -22,8 +22,8 @@ export function LimitDownTab() {
   const { searchParams, replaceSearch } = useSurfaceScope();
   const dateId = useId();
   const requestedDate = searchParams.get("date") || undefined;
-  const resource = useResource(() => getLimitDownPoolSnapshot(requestedDate), {key: requestedDate ?? "latest", intervalMs: null});
-  const records = resource.error ? [] : resource.data?.pool ?? [];
+  const resource = useResource(() => getLimitDownPoolSnapshot(requestedDate), {key: requestedDate ?? "latest", intervalMs: requestedDate ? null : 60_000});
+  const records = resource.data?.pool ?? [];
   const tradeDate = resource.data?.trade_date ?? requestedDate?.replace(/^(\d{4})(\d{2})(\d{2})$/, "$1-$2-$3") ?? "";
   const error = resource.error instanceof Error ? resource.error.message : resource.error ? "读取失败" : null;
   const loading = resource.pending;
@@ -59,6 +59,7 @@ export function LimitDownTab() {
       {error && (
         <div className="mb-4 shrink-0 rounded-lg border border-amber-500/40 bg-amber-500/10 px-4 py-3 text-sm text-amber-800 dark:text-amber-300">
           跌停池加载失败：{error}
+          {resource.data && <span>。保留上次成功观察，当前在池状态待核对。</span>}
           <button type="button" className="quiet-action ml-2" onClick={resource.refresh}>重试读取</button>
         </div>
       )}

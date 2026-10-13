@@ -32,8 +32,8 @@ export function LimitUpTab() {
   const { open: openInspection } = useInspection();
   const dateId = useId();
   const urlDate = searchParams.get("date") || undefined;
-  const resource = useResource(() => getLimitUpPoolSnapshot(urlDate), { key: urlDate ?? "latest", intervalMs: null });
-  const records = useMemo(() => resource.error ? [] : resource.data?.pool ?? [], [resource.error, resource.data]);
+  const resource = useResource(() => getLimitUpPoolSnapshot(urlDate), { key: urlDate ?? "latest", intervalMs: urlDate ? null : 60_000 });
+  const records = useMemo(() => resource.data?.pool ?? [], [resource.data]);
   const tradeDate = resource.data?.trade_date ?? urlDate?.replace(/^(\d{4})(\d{2})(\d{2})$/, "$1-$2-$3") ?? "";
   const error = resource.error instanceof Error ? resource.error.message : resource.error ? "读取失败" : null;
   const loading = resource.pending || (resource.data === undefined && !resource.error);
@@ -123,6 +123,7 @@ export function LimitUpTab() {
       {error && (
         <div className="mb-4 shrink-0 rounded-lg border border-amber-500/40 bg-amber-500/10 px-4 py-3 text-sm text-amber-800 dark:text-amber-300">
           涨停池加载失败：{error}
+          {resource.data && <span>。保留上次成功观察，当前在池状态待核对。</span>}
           <button type="button" className="quiet-action ml-2" onClick={resource.refresh}>重试读取</button>
         </div>
       )}
@@ -133,7 +134,7 @@ export function LimitUpTab() {
         title={error ? "数量待核对" : `共 ${shown.length} 只（按连板数排序${theme && !onlyMembers ? "，成员高亮" : ""}）`}
         source={records[0]?.source}
       >
-        {error ? (
+        {error && records.length === 0 ? (
           <p className="px-4 py-10 text-center text-sm text-zinc-600 dark:text-zinc-400">读取失败，无法确认涨停数量或题材成员。请稍后重试。</p>
         ) : records.length === 0 ? (
           loading ? (
@@ -151,7 +152,7 @@ export function LimitUpTab() {
           )
         ) : shown.length === 0 ? (
           <p className="px-4 py-10 text-center text-sm text-zinc-600 dark:text-zinc-400">
-            「{theme}」的梯队成员均不在 {tradeDate || "当日"} 的涨停池中
+            {error ? `上次观察未包含「${theme}」的梯队成员，当前状态待核对。` : `「${theme}」的梯队成员均不在 ${tradeDate || "当日"} 的涨停池中`}
           </p>
         ) : (
           <table className="data-table w-full text-sm" tabIndex={0} aria-label="涨停池，左右滚动查看全部列">

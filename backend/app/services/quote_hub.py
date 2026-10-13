@@ -46,6 +46,22 @@ class Subscriber:
     created_at: datetime = field(default_factory=utcnow)
 
 
+@dataclass
+class RefreshDomain:
+    """固定两条读取链的运行事实；源时间仍由 Quote 自身承载。"""
+
+    last_attempt: datetime | None = None
+    last_success: datetime | None = None
+    last_error: str | None = None
+    last_error_type: str | None = None
+    consecutive_failures: int = 0
+    generation: int = 0
+    succeeded: bool = False
+    requested: bool = True
+    requested_symbols: tuple[str, ...] = ()
+    started_at: float | None = None  # 仅供本轮合批截止点，非源钟或 loop-lag 测量。
+
+
 def offer(queue: asyncio.Queue, msg: dict) -> bool:
     """非阻塞投递到出站队列；队列满时**丢最旧、保最新**，返回本次是否发生了丢弃。
 
@@ -70,11 +86,6 @@ def offer(queue: asyncio.Queue, msg: dict) -> bool:
     except asyncio.QueueFull:  # pragma: no cover - 同上
         return False
     return True
-
-
-async def _empty() -> list:
-    """gather 分支占位：自选为空时无 quotes 请求（与旧串行行为一致）。"""
-    return []
 
 
 def _rejected_source_observation(q: Quote, prev: Quote | None = None) -> str | None:
@@ -148,39 +159,145 @@ class QuoteHub:
         self.last_index_rejections: dict[str, str] = {}
         # 休市状态沿触发（红线 2：休市日数据不得冒充实时）
         self._closed_marked = False
+        self._domains = {"indices": RefreshDomain(), "quotes": RefreshDomain(requested=False)}
+        self._domain_tasks: dict[str, asyncio.Task] = {}
+        self._complete_generations = {"indices": 0, "quotes": 0}
+        self._pending_domains: set[str] = set()
+        self._publish_task: asyncio.Task | None = None
+        self._publish_timer: asyncio.TimerHandle | None = None
+        self._running = False
+        self._last_publish_at: float | None = None
 
     # ---------- 刷新 ----------
 
     async def refresh(self) -> None:
-        self.last_attempt = utcnow()
+        """启动填充与手工刷新共用在飞读取；取消一个等待者不取消共享读取。"""
+        await asyncio.gather(self._read_domain("indices"), self._read_domain("quotes"))
+        await self._flush_pending()
+
+    async def _read_domain(self, domain: str) -> None:
+        task = self._domain_tasks.get(domain)
+        if task is None or task.done():
+            task = asyncio.create_task(self._refresh_domain(domain), name=f"quote-hub-{domain}")
+            self._domain_tasks[domain] = task
+        await asyncio.shield(task)
+
+    async def _refresh_domain(self, domain: str) -> None:
+        state = self._domains[domain]
+        state.last_attempt = self.last_attempt = utcnow()
+        state.started_at = asyncio.get_running_loop().time()
+        watchlist = self._poll_symbols() if domain == "quotes" else []
+        state.requested = domain == "indices" or bool(watchlist)
+        state.requested_symbols = tuple(INDEX_MARKETS) if domain == "indices" else tuple(watchlist)
         try:
-            # 指数与自选并行拉取（2026-09-01 秒级化）：串行两次 HTTP 会把
-            # 1s 固定节奏的实际周期拉长到 ~1.6s，并行后单周期 ≈ 最慢一路
-            watchlist = self._poll_symbols()
-            new_indices, new_quotes = await asyncio.gather(
-                self.provider.get_indices(),
-                self.provider.get_quotes(watchlist) if watchlist else _empty(),
-            )
+            if domain == "indices":
+                self._accept_indices(await self.provider.get_indices())
+            else:
+                rows = await self.provider.get_quotes(watchlist) if watchlist else []
+                self._accept_quotes(watchlist, rows)
         except Exception as exc:  # ProviderError、网络错误等一律降级
-            self.consecutive_failures += 1
-            self.last_error = str(exc)
+            state.consecutive_failures += 1
+            state.last_error, state.last_error_type = str(exc), type(exc).__name__
+            state.succeeded = False
             age = (
-                (utcnow() - self.last_success_refresh).total_seconds()
-                if self.last_success_refresh is not None
+                (utcnow() - state.last_success).total_seconds()
+                if state.last_success is not None
                 else float("inf")
             )
-            # 数据年龄超过 stale_after 才标 stale 并广播：瞬时失败（单次网络
-            # 抖动、源 5xx 一两轮）期间缓存数据仍远新于阈值，保持 live 语义；
-            # 启动后从未成功（age=inf）立即标，绝不无中生有（红线 2）。
             if age >= self.stale_after:
                 log.warning(
-                    "quote refresh failed (%s): %s — data age %.0fs >= stale_after, marking stale",
-                    type(exc).__name__, exc, age,
+                    "quote %s refresh failed (%s): %s — data age %.0fs >= stale_after, marking stale",
+                    domain, type(exc).__name__, exc, age,
                 )
-                self._mark_all_stale()
+                cached = self.indices if domain == "indices" else self.quotes
+                for q in cached.values():
+                    mark_stale(q, "refresh_failed")
+                self._pending_domains.add(domain)
             else:
-                log.warning("quote refresh failed (%s): %s — keeping last good data", type(exc).__name__, exc)
+                log.warning("quote %s refresh failed (%s): %s — keeping last good data", domain, type(exc).__name__, exc)
+        else:
+            state.last_success = utcnow()
+            state.last_error = state.last_error_type = None
+            state.consecutive_failures = 0
+            state.succeeded = True
+            self._pending_domains.add(domain)
+        state.generation += 1
+        self._sync_complete_state()
+        if self._running:
+            self._schedule_publish()
+
+    def _sync_complete_state(self) -> None:
+        self.consecutive_failures = max(s.consecutive_failures for s in self._domains.values())
+        self.last_error = next((s.last_error for s in self._domains.values() if s.last_error), None)
+        # 保留完整轮成功钟：两域都在上一完整轮之后成功才可推进，部分成功不背书整链。
+        if all(s.succeeded and s.generation > self._complete_generations[d]
+               for d, s in self._domains.items()):
+            self.last_success_refresh = min(s.last_success for s in self._domains.values())
+            self._complete_generations = {d: s.generation for d, s in self._domains.items()}
+
+    def _schedule_publish(self) -> None:
+        if not self._pending_domains:
             return
+        if self._publish_task is not None and not self._publish_task.done():
+            return
+        loop = asyncio.get_running_loop()
+        due = self._publish_due_at()
+        if self._publish_timer is not None:
+            # 另域已归或已失败：把等待同轮的 timer 提前，仍遵守原出版间隔。
+            if self._publish_timer.when() <= due:
+                return
+            self._publish_timer.cancel()
+        self._publish_timer = loop.call_at(max(loop.time(), due), self._start_publish)
+
+    def _publish_due_at(self) -> float:
+        loop = asyncio.get_running_loop()
+        interval = max(self.poll_interval, 5.0) if self._closed_marked else self.poll_interval
+        due = self._last_publish_at + interval if self._last_publish_at is not None else loop.time()
+        for domain, state in self._domains.items():
+            task = self._domain_tasks.get(domain)
+            if domain not in self._pending_domains and task is not None and not state.consecutive_failures:
+                # 健康异步源的小幅抖动要同轮合批；未知悬挂最多等到原周期结束。
+                # 已失败域不等待，不延长 Provider 预算，也不让其拖慢正常域轮询。
+                if not task.done() and state.started_at is not None:
+                    bound = state.started_at + self.poll_interval
+                else:
+                    # 另一内部循环的 tick 可能晚一个事件循环 turn 才开始。
+                    # 仍用已归域本轮起点，不能为每次观察反复续期。
+                    starts = [self._domains[d].started_at for d in self._pending_domains
+                              if self._domains[d].started_at is not None]
+                    bound = min(starts) + self.poll_interval if starts else loop.time()
+                due = max(due, bound)
+        return due
+
+    def _start_publish(self, *, force: bool = False) -> None:
+        self._publish_timer = None
+        if self._pending_domains and (self._publish_task is None or self._publish_task.done()):
+            if not force and self._publish_due_at() > asyncio.get_running_loop().time():
+                self._schedule_publish()
+                return
+            self._publish_task = asyncio.create_task(self._publish_pending(), name="quote-hub-publish")
+
+    async def _flush_pending(self) -> None:
+        if self._publish_timer is not None:
+            self._publish_timer.cancel()
+            self._publish_timer = None
+        self._start_publish(force=True)
+        if self._publish_task is not None:
+            await asyncio.shield(self._publish_task)
+
+    async def _publish_pending(self) -> None:
+        changed, self._pending_domains = self._pending_domains, set()
+        try:
+            await self._refresh_closed_state()
+            if not self._closed_marked:
+                self._broadcast("quotes", changed_domains=changed)
+            self._last_publish_at = asyncio.get_running_loop().time()
+        finally:
+            self._publish_task = None
+            if self._running:
+                self._schedule_publish()
+
+    def _accept_indices(self, new_indices: list[Quote]) -> None:
         # 裸代码只有在市场也匹配且身份唯一时才进入校验；校验通过“接纳门”后才推进 current cache。
         # 上游晚到/非法观测不能覆盖最近可信值，否则 received-order 会反过来污染 source-time。
         counts = Counter((q.symbol, q.market) for q in new_indices)
@@ -210,6 +327,7 @@ class QuoteHub:
             accepted_indices.append(q)
         self._mark_index_gaps(accepted_indices, rejected_indices)
 
+    def _accept_quotes(self, watchlist: list[str], new_quotes: list[Quote]) -> None:
         quote_counts = Counter(q.symbol for q in new_quotes)
         returned_by_symbol = {q.symbol: q for q in new_quotes}
         accepted_by_symbol: dict[str, Quote] = {}
@@ -235,15 +353,6 @@ class QuoteHub:
             if q.price is not None and q.data_timestamp is not None:
                 self.quote_history.append((q.symbol, q.data_timestamp, q.price))
         self._mark_batch_gaps(watchlist, accepted_by_symbol, rejected_quotes)
-        self.consecutive_failures = 0
-        self.last_error = None
-        self.last_success_refresh = utcnow()
-        await self._refresh_closed_state()
-        # 休市：_refresh_closed_state 已广播 stale（market_closed），不再补发
-        # quotes 消息——此前每周期 stale+quotes 连发两条，且 quotes 类型会把
-        # 前端状态从"休市"冲回"实时推送"（状态闪烁）。
-        if not self._closed_marked:
-            self._broadcast("quotes")
 
     async def _refresh_closed_state(self) -> None:
         """休市判定（红线 2）—— **只在「确定休市」时**把缓存标 stale。
@@ -422,6 +531,11 @@ class QuoteHub:
         """
         source = getattr(self.provider, "name", None)
         if self.last_success_refresh is None:
+            partial = [s.last_success for s in self._domains.values() if s.last_success is not None]
+            if partial:
+                return Freshness.degraded(
+                    reason="行情链仅部分读取域成功，完整轮尚未就绪", as_of=min(partial), source=source,
+                )
             return Freshness.unavailable(reason="行情链尚未成功刷新过", source=source)
         f = Freshness.from_age(
             as_of=self.last_success_refresh, fresh_within=self.stale_after,
@@ -434,6 +548,40 @@ class QuoteHub:
                 reason="已标记休市：当前为最近交易日数据，不冒充实时",
             )
         return f
+
+    def refresh_domains(self) -> dict:
+        """纯读两域诊断：完成钟、源钟、覆盖率与在飞状态分开，不冒充 HTTP 次数。"""
+        result = {}
+        for domain, state in self._domains.items():
+            cached = self.indices if domain == "indices" else self.quotes
+            rows = [cached[s] for s in state.requested_symbols if s in cached]
+            stamps = [q.data_timestamp for q in rows if q.data_timestamp is not None]
+            source_clock = min(stamps) if stamps else None
+            source_states = Counter(q.freshness(fresh_within=self.stale_after).state for q in rows)
+            if state.last_success is None:
+                fresh = Freshness.unavailable(reason="该行情读取域尚未成功", source=getattr(self.provider, "name", None))
+            else:
+                fresh = Freshness.from_age(as_of=state.last_success, fresh_within=self.stale_after,
+                                           source=getattr(self.provider, "name", None))
+            task = self._domain_tasks.get(domain)
+            result[domain] = {
+                "requested": state.requested,
+                "in_flight": task is not None and not task.done(),
+                "last_attempt": state.last_attempt.isoformat() if state.last_attempt else None,
+                "last_success_refresh": state.last_success.isoformat() if state.last_success else None,
+                "last_error": state.last_error,
+                "last_error_type": state.last_error_type,
+                "consecutive_failures": state.consecutive_failures,
+                "freshness": fresh.model_dump(mode="json"),
+                "source_oldest_as_of": source_clock.isoformat() if source_clock else None,
+                "source_stale_count": source_states["stale"],
+                "source_degraded_count": source_states["degraded"],
+                "source_time_unknown_count": sum(q.data_timestamp is None for q in rows),
+                "missing_count": len(self.last_missing_indices if domain == "indices" else self.last_missing_symbols),
+                "rejected_count": len(self.last_index_rejections if domain == "indices" else self.last_quote_rejections),
+                "coverage": self.last_index_coverage if domain == "indices" else self.last_batch_coverage,
+            }
+        return result
 
     def is_stale(self) -> bool:
         return not self.freshness().is_fresh()
@@ -549,26 +697,47 @@ class QuoteHub:
             "dropped_frames": self.dropped_frames,
         }
 
-    def _broadcast(self, msg_type: str) -> None:
+    def _broadcast(self, msg_type: str, *, changed_domains: set[str] | None = None) -> None:
         seq = self.next_seq()
         ts = utcnow().isoformat()
+        domain_details = self.refresh_domains()
         for sub in self._subscribers:
             symbols = sub.symbols
-            payload = self.get_quotes(sorted(symbols) if symbols is not None else None)
             index_subscribed = symbols is None or any(s.lower() in INDEX_SUBSCRIPTIONS for s in symbols)
-            has_rejection = bool(self.last_quote_rejections or self.last_index_rejections)
-            if not payload and not (index_subscribed and self.last_missing_indices) and not has_rejection:
+            quotes_subscribed = symbols is None or any(len(s) == 6 and s.isdigit() for s in symbols)
+            if changed_domains is not None and not (
+                (index_subscribed and "indices" in changed_domains)
+                or (quotes_subscribed and "quotes" in changed_domains)
+            ):
                 continue
+            # 帧仍包含该订阅的完整缓存；前端替换快照，不能仅投递成功域的增量。
+            payload = self.get_quotes(sorted(symbols) if symbols is not None else None)
+            has_rejection = bool((quotes_subscribed and self.last_quote_rejections)
+                                 or (index_subscribed and self.last_index_rejections))
+            incomplete_index = index_subscribed and bool(self.last_missing_indices)
+            incomplete_quotes = quotes_subscribed and bool(
+                self.last_missing_symbols if symbols is None else symbols.intersection(self.last_missing_symbols)
+            )
+            unavailable = any(
+                wanted and state.requested and state.last_attempt is not None and state.last_success is None
+                for wanted, state in ((index_subscribed, self._domains["indices"]),
+                                      (quotes_subscribed, self._domains["quotes"]))
+            )
+            if not payload and not (incomplete_index or incomplete_quotes or unavailable or has_rejection):
+                continue
+            visible_stale = any(q.quality in (Quality.stale, Quality.invalid) for q in payload)
+            frame_type = "stale" if visible_stale or incomplete_index or incomplete_quotes or unavailable else msg_type
             dropped = offer(
                 sub.queue,
                 {
-                    "type": msg_type,
+                    "type": frame_type,
                     "seq": seq,
                     "ts": ts,
                     "data": [q.model_dump(mode="json") for q in payload],
                     "meta": {
                         "index_batch": self.index_batch(),
                         "source_rejections": self.source_rejections(),
+                        "refresh_domains": domain_details,
                     },
                 },
             )
@@ -586,15 +755,16 @@ class QuoteHub:
 
     # ---------- 后台循环 ----------
 
-    async def run(self) -> None:
+    async def _run_domain(self, domain: str) -> None:
         while True:
-            started = utcnow()
-            await self.refresh()
-            elapsed = (utcnow() - started).total_seconds()
+            started = asyncio.get_running_loop().time()
+            await self._read_domain(domain)
+            elapsed = asyncio.get_running_loop().time() - started
             delay = self.poll_interval
-            if self.consecutive_failures > 0:
-                delay = min(self.poll_interval * (2 ** min(self.consecutive_failures, 4)), 60.0)
-                log.info("provider degraded, next refresh in %.0fs", delay)
+            failures = self._domains[domain].consecutive_failures
+            if failures > 0:
+                delay = min(self.poll_interval * (2 ** min(failures, 4)), 60.0)
+                log.info("provider %s degraded, next refresh in %.0fs", domain, delay)
             elif self._closed_marked:
                 # 休市/午休数据静止：降频到 5s 保活（省 Provider 配额/流量），
                 # 恢复检测延迟 ≤5s；竞价与连续竞价保持秒级节奏。
@@ -602,3 +772,28 @@ class QuoteHub:
             # 固定节奏：扣除本轮刷新耗时，保证推送周期 = poll_interval 而非
             # poll_interval + 网络耗时（1s 档位下串行耗时的稀释不可忽略）
             await asyncio.sleep(max(0.0, delay - elapsed))
+
+    async def run(self) -> None:
+        """注册表仍只有一个 Hub owner；两域独立轮询，共用原轮频、退避与广播批次。"""
+        if self._running:
+            raise RuntimeError("QuoteHub poller already running")
+        self._running = True
+        loops = [asyncio.create_task(self._run_domain(d), name=f"quote-hub-loop-{d}")
+                 for d in ("indices", "quotes")]
+        try:
+            await asyncio.gather(*loops)
+        finally:
+            self._running = False
+            if self._publish_timer is not None:
+                self._publish_timer.cancel()
+                self._publish_timer = None
+            owned = set(loops) | set(self._domain_tasks.values())
+            if self._publish_task is not None:
+                owned.add(self._publish_task)
+            for task in owned:
+                task.cancel()
+            await asyncio.gather(*owned, return_exceptions=True)
+            self._domain_tasks.clear()
+            self._publish_task = None
+            self._pending_domains.clear()
+            self._last_publish_at = None

@@ -48,11 +48,23 @@ class KlinePayload(BaseModel):
     trading_status: TradingStatusInfo | None = None
 
 
+class LimitReasonObservation(BaseModel):
+    """A prior source label, not proof of current pool membership or causality."""
+    symbol: str
+    trade_date: str
+    source: str
+    reason: str
+    content_hash: str
+    observed_at: str
+    received_at: str | None = None
+
+
 class LimitUpPoolPayload(BaseModel):
     """GET /limit-up 与 /limit-break 的 data。"""
 
     trade_date: str
     pool: list[LimitUpRecord]
+    reason_observations: dict[str, list[LimitReasonObservation]] = Field(default_factory=dict)
 
 
 class LimitDownPoolPayload(BaseModel):

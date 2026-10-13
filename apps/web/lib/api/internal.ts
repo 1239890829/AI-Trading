@@ -2,7 +2,7 @@
  * 模块内助手：请求实现与三个 JSON 收发包装（**刻意不由门面转发**，对外可见面因此不变）
  *
  * `lib/api.ts` 的内部切片（IMP-005，2026-09-15 从 2751 行单文件按业务域拆出）。
- * 对外仍由 `lib/api.ts` 统一转发；并发复用只覆盖已核实的自选纯读取，
+ * 对外仍由 `lib/api.ts` 统一转发；并发复用只覆盖已核实的行情/自选读取，
  * 不缓存完成值，不合并模拟账户初始化、撮合、事件归档或模型类 GET。
  */
 
@@ -20,7 +20,10 @@ export interface ReadOptions {
   fresh?: boolean;
 }
 
-const SAFE_READ_PATHS = new Set(["/api/watchlist"]);
+// Only unfinished reads share; source times and completed values are never cached here.
+// events/impact can build its leader archive, paper GET can settle/init, and digest
+// can generate a model summary. Those consumers deliberately remain outside this list.
+const SAFE_READ_PATHS = new Set(["/api/watchlist", "/api/watchlist/groups", "/api/market/overview", "/api/limit-up", "/api/limit-down"]);
 const sharedReads = new Map<string, SharedRead>();
 const MAX_SHARED_READS = 32;
 let readEpoch = 0;

@@ -25,19 +25,46 @@ beforeEach(() => {vi.mocked(getStockAttribution).mockResolvedValue(payload());})
 afterEach(() => {cleanup(); vi.clearAllMocks(); vi.restoreAllMocks(); vi.useRealTimers();});
 
 describe("shared attribution evidence", () => {
-  it("shows source essentials in the selected overview and opens its bound original only on demand", async () => {
+  it("defaultSourceExpanded保留超过摘录上限的完整来源，不自动选择弱关联首项", async () => {
+    const text = "明确为合成夹具的来源段落。".repeat(40);
+    vi.mocked(getStockAttribution).mockResolvedValue(payload("600825", {...evidence, source_context: {...evidence.source_context!, summary: text}}));
+    render(<StockAttributionPanel symbol="600825" defaultExpanded defaultSourceExpanded />);
+    const entry = await screen.findByRole("button", {name: `查看归因消息：${evidence.title}`});
+    expect(screen.queryByLabelText("完整来源核对")).toBeNull();
+    fireEvent.click(entry);
+    expect(screen.getByLabelText("解释版本绑定的来源内容").textContent).toBe(text);
+  });
+
+  it("响应前与晚到资料只按服务端分组，时间身份变化重取并回列表", async () => {
+    const before = {...evidence, timing_relation: {status: "known_before_response" as const, label: "响应前已有"}};
+    const late = {...secondEvidence, timing_relation: {status: "time_unknown" as const, label: "来源时点未知"}};
+    vi.mocked(getStockAttribution).mockResolvedValue({...payload("600825", before), later_items: [late],
+      response_context: {pool_date: "2026-10-12", response_as_of: "2026-10-12T09:32:00+08:00", view: "current_with_response_context", historical_replay: false}});
+    const view = render(<StockAttributionPanel symbol="600825" defaultExpanded poolDate="2026-10-12" responseAsOf="2026-10-12T09:32:00+08:00" />);
+    await screen.findByText("响应时点前已有记录 · 1 条");
+    expect(screen.getByText("晚到或时点未明资料 · 1 条")).toBeTruthy();
+    expect(screen.queryByRole("article")).toBeNull();
+    fireEvent.click(screen.getByRole("button", {name: `查看归因消息：${late.title}`}));
+    expect(screen.getByRole("article", {name: "事件归因 21"})).toBeTruthy();
+    expect(screen.getByText(/当前解释，非历史还原/)).toBeTruthy();
+    view.rerender(<StockAttributionPanel symbol="600825" defaultExpanded poolDate="2026-10-12" responseAsOf="2026-10-12T09:33:00+08:00" />);
+    await screen.findByRole("button", {name: `查看归因消息：${before.title}`});
+    expect(screen.queryByRole("article")).toBeNull();
+    expect(getStockAttribution).toHaveBeenLastCalledWith("600825", {poolDate: "2026-10-12", responseAsOf: "2026-10-12T09:33:00+08:00"});
+  });
+  it("opens the full bound source by default only after an explicit message selection", async () => {
     render(<StockAttributionPanel symbol="600825" defaultExpanded defaultSourceExpanded />);
     expect(screen.queryByRole("article")).toBeNull();
     fireEvent.click(await screen.findByRole("button", {name: `查看归因消息：${evidence.title}`}));
     expect(screen.getAllByRole("article")).toHaveLength(1);
     expect(screen.queryByRole("tabpanel")).toBeNull();
-    expect(within(screen.getByLabelText("来源要点摘录")).getByText(evidence.source_context!.summary!)).toBeTruthy();
-    expect(screen.queryByLabelText("解释版本绑定的来源内容")).toBeNull();
-    expect(screen.queryByRole("link", {name: "解释版本绑定的来源内容原文"})).toBeNull();
+    const full = within(screen.getByLabelText("完整来源核对"));
+    expect(full.getByLabelText("解释版本绑定的来源内容").textContent).toBe(evidence.source_context!.summary);
+    expect(full.getByRole("link", {name: "解释版本绑定的来源内容原文"}).getAttribute("href")).toBe(evidence.source_context!.url);
     fireEvent.click(screen.getByRole("tab", {name: "消息证据"}));
     const source = within(screen.getByRole("tabpanel", {name: "消息证据"}));
-    expect(source.getByLabelText("解释版本绑定的来源内容").textContent).toBe(evidence.source_context!.summary);
-    expect(source.getByRole("link", {name: "解释版本绑定的来源内容原文"}).getAttribute("href")).toBe(evidence.source_context!.url);
+    expect(source.queryByLabelText("解释版本绑定的来源内容")).toBeNull();
+    expect(screen.getAllByLabelText("解释版本绑定的来源内容")).toHaveLength(1);
     expect(getStockAttribution).toHaveBeenCalledTimes(1);
     expect(getEventAttribution).not.toHaveBeenCalled();
   });

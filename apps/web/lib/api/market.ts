@@ -9,6 +9,7 @@
 import type {
   Kline,
   LimitDownRecord,
+  LimitReasonObservation,
   LimitUpRecord,
   LongHuRecord,
   OrderBook,
@@ -16,6 +17,7 @@ import type {
   SymbolSearchItem,
   Trade,
   TradingStatusInfo,
+  Meta,
 } from "@/types/market";
 
 import type { Freshness } from "./client";
@@ -64,14 +66,25 @@ export async function getOrderBook(symbol: string): Promise<OrderBook> {
   return (await getJson<OrderBook>(`/api/order-book/${symbol}`)).data;
 }
 
-export async function getTrades(symbol: string, limit = 50): Promise<Trade[]> {
-  return getJsonArray<Trade>(`/api/trades/${symbol}?limit=${limit}`);
+export interface TradesPayload {
+  items: Trade[];
+  source: string | null;
+  empty_reason: string | null;
+  meta: Meta;
 }
 
-export interface LimitPoolSnapshot<T> { trade_date: string; pool: T[] }
+export async function getTradesPayload(symbol: string, limit = 50): Promise<TradesPayload> {
+  const body = await getJson<Trade[] | null>(`/api/trades/${symbol}?limit=${limit}`);
+  const meta = body.meta as Meta & {trades_source?: unknown; trades_detail?: unknown};
+  return {items: body.data ?? [], source: typeof meta?.trades_source === "string" ? meta.trades_source : null,
+    empty_reason: typeof meta?.trades_detail === "string" ? meta.trades_detail : null, meta};
+}
 
-// 只共享最新池的在途请求，不留跨日缓存。持久 TTL / 单飞由后端已有缓存负责。
-let latestLimitUpRequest: Promise<LimitPoolSnapshot<LimitUpRecord>> | null = null;
+export async function getTrades(symbol: string, limit = 50): Promise<Trade[]> {
+  return (await getTradesPayload(symbol, limit)).items;
+}
+
+export interface LimitPoolSnapshot<T> { trade_date: string; pool: T[]; reason_observations?: Record<string, LimitReasonObservation[]> }
 
 async function readLimitPool<T extends {trade_date: string}>(path: string, dateStr?: string): Promise<LimitPoolSnapshot<T>> {
   const qs = dateStr ? `?date=${encodeURIComponent(dateStr)}` : "";
@@ -85,11 +98,8 @@ async function readLimitPool<T extends {trade_date: string}>(path: string, dateS
 }
 
 export function getLimitUpPoolSnapshot(dateStr?: string): Promise<LimitPoolSnapshot<LimitUpRecord>> {
-  if (dateStr) return readLimitPool<LimitUpRecord>("/api/limit-up", dateStr);
-  if (!latestLimitUpRequest) {
-    latestLimitUpRequest = readLimitPool<LimitUpRecord>("/api/limit-up").finally(() => { latestLimitUpRequest = null; });
-  }
-  return latestLimitUpRequest;
+  // The audited network layer owns auth/params/epoch identity and clones results.
+  return readLimitPool<LimitUpRecord>("/api/limit-up", dateStr);
 }
 
 export async function getLimitUpPool(dateStr?: string): Promise<LimitUpRecord[]> {

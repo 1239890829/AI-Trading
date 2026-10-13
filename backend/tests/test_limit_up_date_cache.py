@@ -10,6 +10,7 @@ from fastapi.testclient import TestClient
 from app.api.deps import get_hub
 from app.api.routes import market_pools
 from app.market import trade_calendar
+from app.schemas.market import LimitUpRecord
 
 DAY = date(2026, 10, 9)
 
@@ -66,13 +67,6 @@ def test_default_date_and_explicit_date_share_source_without_mutating_evidence(m
     calls = []
     metadata_calls = []
 
-    class Row:
-        consecutive_boards = 2
-        trade_date = DAY
-
-        def model_dump(self, mode):
-            return {"symbol": "600000", "reason": "来源原文", "source": "ths"}
-
     async def calendar(_provider):
         return [DAY]
 
@@ -82,7 +76,8 @@ def test_default_date_and_explicit_date_share_source_without_mutating_evidence(m
     async def pool(day):
         calls.append(day)
         await asyncio.sleep(0)
-        return [Row()]
+        return [LimitUpRecord(symbol="600000", source="ths", reason="来源原文",
+                              trade_date=DAY, consecutive_boards=2)]
 
     async def metadata(_hub, day):
         metadata_calls.append(day)
@@ -101,10 +96,18 @@ def test_default_date_and_explicit_date_share_source_without_mutating_evidence(m
         )
         assert first["data"]["trade_date"] == DAY.isoformat()
         assert second["data"]["pool"][0]["reason"] == "来源原文"
+        observation = second["data"]["reason_observations"]["600000"][0]
+        assert observation["trade_date"] == DAY.isoformat()
+        assert observation["source"] == "ths"
+        assert observation["reason"] == "来源原文"
+        observed_at = observation["observed_at"]
         first["data"]["pool"][0]["reason"] = "caller mutation"
+        first["data"]["reason_observations"]["600000"][0]["reason"] = "caller observation"
         first["meta"]["generated_at"] = "caller time"
         third = await market_pools.limit_up(request, date_str=None, hub=hub)
         assert third["data"]["pool"][0]["reason"] == "来源原文"
+        assert third["data"]["reason_observations"]["600000"][0]["reason"] == "来源原文"
+        assert third["data"]["reason_observations"]["600000"][0]["observed_at"] == observed_at
         assert third["meta"]["generated_at"] == "2026-10-10T08:00:00+08:00"
         assert third["meta"]["cached"] is True
 

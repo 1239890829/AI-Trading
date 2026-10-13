@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useId, useMemo, useState, useSyncExternalStore } from "react";
+import { useId, useMemo, useState, useSyncExternalStore } from "react";
 import { useExitPresence } from "@/hooks/use-exit-presence";
 import Link from "next/link";
 import { useSurfaceScope } from "@/components/inspection/surface-scope";
@@ -11,7 +11,6 @@ import { workbenchUrlWithBack } from "@/lib/routing";
 import { symbolDetailClick, useSymbolDetail } from "@/components/detail/symbol-detail-context";
 import { sortAuctionBenchmark } from "@/lib/auction";
 import { useResource } from "@/hooks/use-polling-fetch";
-import type { AuctionBenchmarkItem, SkyrocketRow, ThemeStrengthRow, ThemesHotPayload } from "@/lib/api";
 import type { ThemeBoardPayload } from "@/types/market";
 
 const CONTROL_QUERY = "(max-width: 767px)";
@@ -71,9 +70,9 @@ export function ThemesTab() {
   const minBoards = Number(searchParams.get("min_boards")) || 0;
   const minCount = Number(searchParams.get("min_count")) || 2;
   const resource = useResource(() => getThemes({date: date || undefined, sort, minBoards: minBoards || undefined, minCount, limit: 60}), {
-    key: `${date}:${sort}:${minBoards}:${minCount}`, intervalMs: null,
+    key: `${date}:${sort}:${minBoards}:${minCount}`, intervalMs: date ? null : 60_000,
   });
-  const data: ThemeBoardPayload | null = resource.error ? null : resource.data ?? null;
+  const data: ThemeBoardPayload | null = resource.data ?? null;
   const loading = resource.pending;
   const error = resource.error instanceof Error ? resource.error.message : resource.error ? "读取失败" : null;
   const [showCaveats, setShowCaveats] = useState(false);
@@ -83,55 +82,20 @@ export function ThemesTab() {
   const controlsPresence = useExitPresence(controlsVisible ? true : null);
   const caveatsPresence = useExitPresence(showCaveats ? true : null);
   // 题材人气（B1 热股榜）：best-effort 增强，拉取失败静默降级（看板主体不依赖它）
-  const [hot, setHot] = useState<ThemesHotPayload | null>(null);
+  const hotRead = useResource(getThemesHot, {intervalMs: 60_000, enabled: !date});
+  const hot = date ? null : hotRead.data ?? null;
   // 飙升榜（B1）：「正在变热」信号，与人气榜口径不同；best-effort 同上
-  const [sky, setSky] = useState<SkyrocketRow[] | null>(null);
-  const [strength, setStrength] = useState<Map<string, ThemeStrengthRow> | null>(null);
+  const skyRead = useResource(() => getSkyrocket("day"), {intervalMs: 60_000, enabled: !date});
+  const sky = !date && skyRead.data?.length ? skyRead.data : null;
+  const strengthRead = useResource(getThemeStrength, {intervalMs: 60_000, enabled: !date});
+  const strength = useMemo(() => !date && strengthRead.data ? new Map(Object.values(strengthRead.data).map(row => [row.name, row])) : null, [date, strengthRead.data]);
   // 聚焦题材（L4 联动：详情页题材 chip → /tape?tab=themes&focus=名称）
   const focus = searchParams.get("focus") ?? "";
   // 竞价标杆（ths 短线风向标）：best-effort，非交易日/无数据后端返回 502 → 静默不显示。
   // 把 date 一并存进 state：切日期时新数据到达前，靠 date 比对拒绝渲染上一日的榜单
   // （不同步 setBenchmark(null) 清空，避免 effect 内同步 setState 触发级联渲染）。
-  const [benchmark, setBenchmark] = useState<{
-    date: string;
-    rows: AuctionBenchmarkItem[];
-  } | null>(null);
-
-  useEffect(() => {
-    // 人气榜独立拉取（实时口径，不看 date 参数——历史日期没有人气数据）
-    getThemesHot()
-      .then(setHot)
-      .catch(() => setHot(null));
-    // 飙升榜（B1）：同实时口径独立拉取；空榜/失败静默不显示
-    getSkyrocket("day")
-      .then((rows) => setSky(rows.length ? rows : null))
-      .catch(() => setSky(null));
-    // 资金合力（P1-5）：官方成分批量快照聚合，按题材名匹配卡片；60s 后端缓存
-    getThemeStrength()
-      .then((s) => {
-        const byName = new Map<string, ThemeStrengthRow>();
-        for (const row of Object.values(s)) byName.set(row.name, row);
-        setStrength(byName);
-      })
-      .catch(() => setStrength(null));
-  }, []);
-
-  // 竞价标杆随 date 联动——与人气榜不同，竞价基准**有**历史数据：
-  // 2026-09-01 实测 date 参数真实有效（08-31 / 08-28 / 07-15 内容各不相同，非静默回退），
-  // 故这里跟随日期筛选；非交易日后端返回 502，catch 后静默不显示。
-  useEffect(() => {
-    let alive = true;
-    getAuctionBenchmark(date || undefined)
-      .then((rows) => {
-        if (alive) setBenchmark(rows.length > 0 ? { date, rows } : null);
-      })
-      .catch(() => {
-        if (alive) setBenchmark(null);
-      });
-    return () => {
-      alive = false;
-    };
-  }, [date]);
+  const benchmarkRead = useResource(() => getAuctionBenchmark(date || undefined), {key: date, intervalMs: date ? null : 60_000});
+  const benchmark = benchmarkRead.data?.length ? {date, rows: benchmarkRead.data} : null;
 
   function updateUrl(
     d?: string,
@@ -293,6 +257,7 @@ export function ThemesTab() {
       <p className="mb-3 shrink-0 text-[11px] text-zinc-600 dark:text-zinc-400" title="分级规则由后端 strength_tier 规则化判定，鼠标悬停卡片分级徽标可看判定依据">
         分级：{TIER_LEGEND}
       </p>
+      {Boolean((!date && (hotRead.error || skyRead.error || strengthRead.error)) || benchmarkRead.error) && <p role="status" className="mb-3 text-xs text-amber-800 dark:text-amber-300">部分参照读取失败；已保留结果属于上次观察，不代表当前排名或资金状态。</p>}
 
       {/* ── 竞价标杆条：ths 短线风向标竞价基准（B2 数据面 → UI 消费）──
           按竞价涨幅降序；非交易日/无数据后端 502，此时不渲染本条 ── */}

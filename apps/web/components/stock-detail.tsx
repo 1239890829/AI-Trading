@@ -12,11 +12,11 @@ import { Panel } from "@/components/panel";
 import { PriceFlash } from "@/components/price-flash";
 import { QualityBadge } from "@/components/quality-badge";
 import { useQuoteStream, STREAM_STATUS_LABEL, STREAM_ABNORMAL, type QuoteFeed, type StreamStatus } from "@/hooks/use-quote-stream";
-import { usePollingFetch } from "@/hooks/use-polling-fetch";
+import { usePollingFetch, useResource } from "@/hooks/use-polling-fetch";
 import type { RealPositionsResource } from "@/hooks/use-real-positions";
 import { analyze } from "@/lib/technical-analysis";
 import { buildEventMarks, buildMinuteNewsEvents } from "@/lib/event-markers";
-import { mergeQuoteIntoBars, mergeQuoteIntoMinutes } from "@/lib/kline-live";
+import { hasTrustedQuoteObservation, mergeQuoteIntoBars, mergeQuoteIntoMinutes } from "@/lib/kline-live";
 import { isIndexSymbol } from "@/lib/api";
 import { notifyWatchlistChanged, subscribeWatchlist } from "@/lib/watchlist-sync";
 import { ThemeChipsRow } from "@/components/detail/theme-chips";
@@ -28,7 +28,6 @@ import {
   addToWatchlist,
   cancelPaperOrder,
   getAuction,
-  getAnnouncements,
   getCapitalFlow,
   getCompanyProfile,
   getFinancials,
@@ -36,7 +35,6 @@ import {
   getMarketOverview,
   getMinuteLine,
   getMinuteLineWithBaseline,
-  getNews,
   getOrderBook,
   getPaperAccount,
   getPaperFills,
@@ -46,20 +44,21 @@ import {
   getQuotes,
   getNewsDigest,
   getStockThemes,
-  getTrades,
+  getTradesPayload,
   getWatchlist,
   type AuctionData,
   type MinutePoint,
   type PaperFill,
   type StockThemes,
 } from "@/lib/api";
-import { bjDate, fmt, pctColor, pctText } from "@/lib/format";
+import { bjDate, fmt, pctColor, pctText, sourceLabel, timeTextBJ } from "@/lib/format";
 import type { Kline, OrderBook, Quote, Trade, TradingStatusInfo } from "@/types/market";
 import { QuoteStrip } from "@/components/detail/quote-strip";
 import { TradePanel, type PaperBundle } from "@/components/detail/trade-panel";
 import { ProfilePanel, type CompanyProfile, type FinRow, type BoardRows } from "@/components/detail/profile-panel";
 import { InfoPanel, type InfoItem } from "@/components/detail/info-panel";
 import { BookTradesView } from "@/components/detail/book-trades-view";
+import {DetailReadStatus, type DetailReadState} from "@/components/detail/read-status";
 import { Skeleton } from "@/components/ui/loading";
 import { FlowChart, type CapitalFlow } from "@/components/detail/flow-chart";
 import { SpeedPanel } from "@/components/detail/speed-panel";
@@ -121,6 +120,12 @@ export interface StockDetailStreamProps {
 /** 空订阅集（引用恒定；`useQuoteStream([])` 的 hasSymbols=false ⇒ 不建连接）。 */
 const NO_SYMBOLS: string[] = [];
 const NO_QUOTE = () => undefined;
+type DetailReadKind = "kline" | "minute" | "book" | "trades" | "financials" | "flow";
+const emptyReadState = (): DetailReadState => ({pending: false, loaded: false, error: null, readAt: null});
+const emptyDetailReads = (): Record<DetailReadKind, DetailReadState> => ({
+  kline: emptyReadState(), minute: emptyReadState(), book: emptyReadState(),
+  trades: emptyReadState(), financials: emptyReadState(), flow: emptyReadState(),
+});
 
 /**
  * 个股详情面板（含 K 线/分时/盘口/逐笔/资金/财务多页签）。
@@ -213,6 +218,9 @@ export const StockDetailPanel = memo(function StockDetailPanel({
   const [trades, setTrades] = useState<Trade[] | undefined>(undefined);
   const [minutes, setMinutes] = useState<MinutePoint[]>([]);
   const [flow, setFlow] = useState<CapitalFlow | null>(null);
+  const [readStates, setReadStates] = useState(emptyDetailReads);
+  const [tradeEmptyReason, setTradeEmptyReason] = useState<string | null>(null);
+  const [tradeSource, setTradeSource] = useState<string | null>(null);
   // fins 三态：undefined=加载中（ProfilePanel 骨架），null=确认无/拉取失败
   const [fins, setFins] = useState<FinRow[] | null | undefined>(undefined);
   const [anns, setAnns] = useState<InfoItem[] | null>(null);
@@ -426,14 +434,6 @@ export const StockDetailPanel = memo(function StockDetailPanel({
     };
   }, [symbol, active]);
 
-  // 大盘叠加（分时图 P1）：上证分时 + 昨收。当日不变，随切股在次屏 idle 拉取
-  // （评审 O1：不占首屏关键路径；指数详情页不叠加——自己叠自己纯噪音）。
-  const [indexOverlay, setIndexOverlay] = useState<{
-    points: MinutePoint[];
-    prevClose: number;
-    referenceDate: string | null;
-  } | null>(null);
-
   // 题材归属（L4 联动）：官方成分 + 当日涨停归因，chip 点击跳题材看板聚焦。
   // 独立请求 + 静默失败：归属缺失只影响这一行，不拖垮详情页。
   const [stockThemes, setStockThemes] = useState<StockThemes | null>(null);
@@ -452,9 +452,12 @@ export const StockDetailPanel = memo(function StockDetailPanel({
     setDigestLoading(false);
     setInWatchlist(false);
     setStockThemes(null);
+    setFins(undefined); setCompany(null); setFlow(null); setAuction(null);
+    setQuote(undefined); setAppliedLive(null);
+    setReadStates(emptyDetailReads()); setTradeEmptyReason(null); setTradeSource(null);
   }
   useEffect(() => {
-    if (!active || !symbol) return;
+    if (!active || !symbol || isIndex) return;
     let alive = true;
     getStockThemes(symbol)
       .then((t) => alive && setStockThemes(t))
@@ -462,7 +465,7 @@ export const StockDetailPanel = memo(function StockDetailPanel({
     return () => {
       alive = false;
     };
-  }, [symbol, active]);
+  }, [symbol, active, isIndex]);
 
   // ---- 切股数据分级加载（2026-09-01 评审 O1）----
   // 此前切股一次并发 ~14 个请求（Promise.all 8 个 + 竞价/题材/大盘叠加/paper 等），
@@ -494,113 +497,92 @@ export const StockDetailPanel = memo(function StockDetailPanel({
     alive: boolean;
     minuteRequested: boolean;
     tradesRequested: boolean;
-    kline: () => ReturnType<typeof getKlinePayload>;
-    book: () => ReturnType<typeof getOrderBook>;
-    minute: () => ReturnType<typeof getMinuteLineWithBaseline>;
-    trades: () => ReturnType<typeof getTrades>;
+    financialsRequested: boolean;
+    flowRequested: boolean;
+    kline: (fresh?: boolean) => ReturnType<typeof getKlinePayload>;
+    book: (fresh?: boolean) => ReturnType<typeof getOrderBook>;
+    minute: (fresh?: boolean) => ReturnType<typeof getMinuteLineWithBaseline>;
+    trades: (fresh?: boolean) => ReturnType<typeof getTradesPayload>;
+    financials: (fresh?: boolean) => Promise<FinRow[]>;
+    flow: (fresh?: boolean) => Promise<CapitalFlow>;
   } | null>(null);
 
   useEffect(() => {
     if (!active || !symbol) return;
-    let alive = true;
-    // 预取仍在途时切入页签，轮询复用同一请求；完成后下一拍可再次读取。
-    // 仅当前标的实例的四个端点各保留一个 Promise，不建立跨组件缓存。
-    const reuseInFlight = <T,>(load: () => Promise<T>) => {
-      let inFlight: Promise<T> | null = null;
-      return () => {
-        if (inFlight) return inFlight;
-        const next = load();
-        inFlight = next;
-        void next.then(() => { inFlight = null; }, () => { inFlight = null; });
+    // Prefetch and a visible perspective share one application of each result.
+    // A manual retry owns a new generation, so a slow old read cannot overwrite it.
+    const managedRead = <T,>(kind: DetailReadKind, load: () => Promise<T>, apply: (value: T) => void) => {
+      let flight: Promise<T> | null = null;
+      let generation = 0;
+      return (fresh = false): Promise<T> => {
+        if (flight && !fresh) return flight;
+        const request = ++generation;
+        const current = () => reads.alive && reads === dataReadsRef.current && request === generation;
+        const next = Promise.resolve().then(async () => {
+          if (current()) setReadStates(previous => ({...previous, [kind]: {...previous[kind], pending: true}}));
+          try {
+            const value = await load();
+            if (current()) {
+              apply(value);
+              setReadStates(previous => ({...previous, [kind]: {pending: false, loaded: true, error: null, readAt: new Date().toISOString()}}));
+            }
+            return value;
+          } catch (error) {
+            if (current()) setReadStates(previous => ({...previous, [kind]: {...previous[kind], pending: false, error: error instanceof Error ? error.message : "读取失败"}}));
+            throw error;
+          }
+        });
+        flight = next;
+        const clear = () => {if (flight === next) flight = null;};
+        void next.then(clear, clear);
         return next;
       };
     };
-    const reads = {
-      alive: true,
-      minuteRequested: false,
-      tradesRequested: false,
-      kline: reuseInFlight(() => getKlinePayload(symbol, "1d", 120)),
-      book: reuseInFlight(() => getOrderBook(symbol)),
-      minute: reuseInFlight(() => getMinuteLineWithBaseline(symbol)),
-      trades: reuseInFlight(() => getTrades(symbol, 30)),
+    const reads: NonNullable<typeof dataReadsRef.current> = {
+      alive: true, minuteRequested: false, tradesRequested: false, financialsRequested: false, flowRequested: false,
+      kline: managedRead("kline", () => getKlinePayload(symbol, "1d", 120), payload => {
+        if (payload.symbol !== symbol || payload.timeframe !== "1d" || payload.bars.some(row => row.symbol !== symbol)) throw new Error("K线证券身份不匹配");
+        setBars(payload.bars); setTradingStatus(payload.trading_status);
+      }),
+      book: managedRead("book", () => getOrderBook(symbol), value => {
+        if (value.symbol !== symbol) throw new Error("盘口证券身份不匹配");
+        setBook(value);
+      }),
+      minute: managedRead("minute", () => getMinuteLineWithBaseline(symbol), value => {
+        if ("symbol" in value && value.symbol !== symbol) throw new Error("分钟证券身份不匹配");
+        setMinutes(value.points);
+        setVrBaseline(previous => {
+          const next = value.vr_baseline_5m;
+          return previous && next && previous.length === next.length && previous.every((item, index) => item === next[index]) ? previous : next;
+        });
+      }),
+      trades: managedRead("trades", () => getTradesPayload(symbol, 30), value => {
+        if (value.items.some(row => row.symbol !== symbol)) throw new Error("成交证券身份不匹配");
+        setTrades(value.items); setTradeEmptyReason(value.empty_reason); setTradeSource(value.source);
+      }),
+      financials: managedRead("financials", () => getFinancials<FinRow>(symbol, 8), value => {
+        if (value !== null && !Array.isArray(value)) throw new Error("财报响应缺少报告列表");
+        setFins(value ?? []);
+      }),
+      flow: managedRead("flow", () => getCapitalFlow<CapitalFlow>(symbol, 30), value => setFlow(value)),
     };
     dataReadsRef.current = reads;
-    const skipStockOnly = isIndexSymbol(symbol); // 指数无盘口/逐笔/资金流，跳过省失败请求
-    if (dataTabsRef.current.chartTab !== "kline") {
-      void reads.kline()
-        .then((p) => {
-          if (!alive) return;
-          setBars(p.bars);
-          setTradingStatus(p.trading_status);
-        })
-        .catch(() => {});
-    }
-    if (!skipStockOnly && dataTabsRef.current.rightTab !== "book") {
-      reads.book()
-        .then((ob) => alive && setBook(ob))
-        // 首拉失败 = 确认拉不到（切股窗口结束），渲染"不可用"文案而非永远骨架；
-        // 同股恢复/刷新失败保留上次快照，不把失败解释成当前无盘口。
-        .catch(() => alive && setBook(prev => prev === undefined ? null : prev));
-    }
-    // 指数分支的「确认空」已在渲染期置好，此处不再 setState
+    const ignoreFailure = () => {};
+    const stock = !isIndexSymbol(symbol);
+    if (dataTabsRef.current.chartTab !== "kline") void reads.kline().catch(ignoreFailure);
+    if (stock && dataTabsRef.current.rightTab !== "book") void reads.book().catch(ignoreFailure);
     const cancelIdle = scheduleIdle(() => {
-      if (!alive) return;
-      if (!reads.minuteRequested) {
-        reads.minuteRequested = true;
-        reads.minute()
-          .then((r) => {
-            if (!alive) return;
-            setVrBaseline(r.vr_baseline_5m);
-            setMinutes(r.points);
-          })
-          .catch(() => {});
-      }
-      if (!skipStockOnly) {
-        if (!reads.tradesRequested) {
-          reads.tradesRequested = true;
-          reads.trades()
-            .then((tr) => alive && setTrades(tr))
-            .catch(() => alive && setTrades(prev => prev === undefined ? [] : prev)); // 首拉失败结束骨架，恢复失败保留上次结果
-        }
-        getCapitalFlow<CapitalFlow>(symbol, 30)
-          .then((cf) => alive && cf && setFlow(cf))
-          .catch(() => {});
-        // 大盘叠加（分时图）：上证分时 + 昨收（当日不变）
-        getMinuteLine("sh000001")
-          .catch(() => [] as MinutePoint[])
-          .then(async (idxPoints) => {
-            if (!alive) return;
-            const overview = await getMarketOverview().catch(() => null);
-            const sh = overview?.indices.find((i) => i.symbol === "000001");
-            if (alive && idxPoints.length > 0 && sh?.prev_close) {
-              setIndexOverlay({
-                points: idxPoints,
-                prevClose: sh.prev_close,
-                referenceDate: sh.data_timestamp ? bjDate(sh.data_timestamp) || null : null,
-              });
-            }
-          });
-        // 集合竞价（09:25 终态）：分时图竞价点 + 角标（当日不变）
-        getAuction(symbol)
-          .then((a) => alive && setAuction(a))
-          .catch(() => {});
-      }
-      getFinancials<FinRow>(symbol, 8)
-        .then((f) => alive && setFins(f)) // f=null = 后端确认无财报 → "确认空"态
-        .catch(() => alive && setFins(prev => prev === undefined ? null : prev));
-      getCompanyProfile<CompanyProfile>(symbol)
-        .then((cp) => alive && cp && setCompany(cp))
-        .catch(() => {});
-      // 资讯走摘要端点：一次拿回公告+新闻 + 重要度/情绪/事实摘要；
-      // 单侧数据源失败时后端降级（error 字段非 null），前端透出提示而非静默空
-      void loadDigest();
+      if (!reads.alive) return;
+      if (!reads.minuteRequested) {reads.minuteRequested = true; void reads.minute().catch(ignoreFailure);}
+      if (!stock) return;
+      if (!reads.tradesRequested) {reads.tradesRequested = true; void reads.trades().catch(ignoreFailure);}
+      if (!reads.flowRequested) {reads.flowRequested = true; void reads.flow().catch(ignoreFailure);}
+      if (!reads.financialsRequested) {reads.financialsRequested = true; void reads.financials().catch(ignoreFailure);}
+      getAuction(symbol).then(value => reads.alive && setAuction(value)).catch(ignoreFailure);
+      getCompanyProfile<CompanyProfile>(symbol).then(value => reads.alive && value && setCompany(value)).catch(ignoreFailure);
     });
-    return () => {
-      alive = false;
-      reads.alive = false;
-      cancelIdle();
-    };
-  }, [symbol, active, loadDigest]);
+    return () => {reads.alive = false; cancelIdle();};
+  }, [symbol, active]);
 
   // ---- 盘中实时刷新（2026-08-31 修复"K线/分时/盘口/逐笔拉一次就死"）----
   // 此前所有图表数据只在切股时拉取一次，盘中永不更新——K 线最后一根
@@ -611,7 +593,8 @@ export const StockDetailPanel = memo(function StockDetailPanel({
   //    WS quote 更新 → 最后一根 bar 实时跟进；价格未动时 mergeQuoteIntoBars
   //    返回 null → 引用不变 → 下游图表不重渲染。
   const retainedLive = appliedLive?.symbol === symbol ? appliedLive : undefined;
-  const liveQuote = active ? live ?? retainedLive : retainedLive;
+  const candidateLive = active ? live ?? retainedLive : retainedLive;
+  const liveQuote = candidateLive?.symbol === symbol ? candidateLive : undefined;
   const displayBars = useMemo(() => mergeQuoteIntoBars(bars, liveQuote) ?? bars, [bars, liveQuote]);
   // ①' 分时右端点秒级合成：同 K 线思路，WS quote 跟进最后一根分钟点
   //    （价格+累计量），与列表/K线保持同一 1s 节奏，不再干等 60s REST 校准
@@ -619,82 +602,43 @@ export const StockDetailPanel = memo(function StockDetailPanel({
   // prev_close 只有在能证明与分钟点同一北京交易日时才可作为百分比轴基准。
   // data_timestamp 是源行情时刻；received_at 只是接收时刻，不能拿它替 stale 数据“补日期”。
   const minuteReferenceDate = quote?.data_timestamp ? bjDate(quote.data_timestamp) || null : null;
-  // ② 图表 60s REST 校准（评审 O2：绑定 chartTab——不在 K线/分时 tab 时不校准，
-  //    切入 tab 时立即拉一次再启轮询）。2026-09-11（S2-5）：裸 setInterval → 统一入口，
-  //    原「两个 if + timers 数组 + 手动清理」的样板由 enabled 表达。
-  usePollingFetch(
-    async () => {
-      const reads = dataReadsRef.current;
-      if (!reads?.alive) return;
-      const p = await reads.kline().catch(() => null);
-      if (!reads.alive || reads !== dataReadsRef.current || !p) return;
-      setBars(p.bars);
-      setTradingStatus(p.trading_status);
-    },
-    60_000,
-    symbol,
-    { enabled: active && !!symbol && chartTab === "kline" }
-  );
-  usePollingFetch(
-    async () => {
-      const reads = dataReadsRef.current;
-      if (!reads?.alive) return;
-      reads.minuteRequested = true;
-      const r = await reads.minute().catch(() => null);
-      if (!reads.alive || reads !== dataReadsRef.current || !r) return;
-      setMinutes(r.points);
-      // 基线内容守卫：数组内容没变就保留旧引用——vrBaseline 是
-      // MinuteChart 创建 effect 的依赖，每 60s 换新引用会把整图
-      // 销毁重建一次（悬停中十字线丢失 + 图表闪跳）。
-      setVrBaseline((prev) => {
-        const next = r.vr_baseline_5m;
-        if (prev && next && prev.length === next.length && prev.every((v, i) => v === next[i])) return prev;
-        return next;
-      });
-    },
-    60_000,
-    symbol,
-    { enabled: active && !!symbol && chartTab === "minute" }
-  );
+  // One current-symbol owner applies a result once, including its error state.
+  usePollingFetch(async () => {await dataReadsRef.current?.kline().catch(() => {});}, 60_000, symbol,
+    {enabled: active && !!symbol && chartTab === "kline"});
+  usePollingFetch(async () => {
+    const reads = dataReadsRef.current; if (!reads?.alive) return;
+    reads.minuteRequested = true; await reads.minute().catch(() => {});
+  }, 60_000, symbol, {enabled: active && !!symbol && chartTab === "minute"});
+  usePollingFetch(async () => {await dataReadsRef.current?.book().catch(() => {});}, 5_000, symbol,
+    {enabled: rightActive && !!symbol && !isIndex && rightTab === "book"});
+  usePollingFetch(async () => {
+    const reads = dataReadsRef.current; if (!reads?.alive) return;
+    reads.tradesRequested = true; await reads.trades().catch(() => {});
+  }, 10_000, symbol, {enabled: rightActive && !!symbol && !isIndex && rightTab === "trades"});
+  usePollingFetch(async () => {
+    const reads = dataReadsRef.current; if (!reads?.alive) return;
+    reads.flowRequested = true; await reads.flow().catch(() => {});
+  }, 60_000, symbol, {enabled: active && !isIndex && chartTab === "flow"});
+  usePollingFetch(async () => {
+    const reads = dataReadsRef.current; if (!reads?.alive) return;
+    reads.financialsRequested = true; await reads.financials().catch(() => {});
+  }, null, symbol, {enabled: rightActive && !isIndex && rightTab === "profile", marketHours: false});
+  // Model summaries are requested by their visible consumer, never by chart prefetch.
+  usePollingFetch(loadDigest, null, symbol, {enabled: rightActive && !isIndex && rightTab === "info", marketHours: false});
 
-  // ④ 盘口 5s / 逐笔 10s 轮询（评审 O2：绑定 rightTab——各自页签激活才轮询，
-  //    切入时立即拉一次；失败静默保留上一次快照；指数无此数据源跳过）
-  //    2026-09-11（S2-5）：裸 setInterval → 统一入口。
-  usePollingFetch(
-    async () => {
-      const reads = dataReadsRef.current;
-      if (!reads?.alive) return;
-      try {
-        const b = await reads.book();
-        if (reads.alive && reads === dataReadsRef.current) setBook(b);
-      } catch {
-        if (reads.alive && reads === dataReadsRef.current) {
-          setBook((prev) => prev === undefined ? null : prev);
-        }
-      }
-    },
-    5_000,
-    symbol,
-    { enabled: rightActive && !!symbol && !isIndex && rightTab === "book" }
-  );
-  usePollingFetch(
-    async () => {
-      const reads = dataReadsRef.current;
-      if (!reads?.alive) return;
-      reads.tradesRequested = true;
-      try {
-        const t = await reads.trades();
-        if (reads.alive && reads === dataReadsRef.current) setTrades(t);
-      } catch {
-        if (reads.alive && reads === dataReadsRef.current) {
-          setTrades((prev) => prev === undefined ? [] : prev);
-        }
-      }
-    },
-    10_000,
-    symbol,
-    { enabled: rightActive && !!symbol && !isIndex && rightTab === "trades" }
-  );
+  const indexResource = useResource(async () => {
+    const [points, overview] = await Promise.all([getMinuteLine("sh000001"), getMarketOverview()]);
+    const sh = overview.indices.find(value => value.symbol === "000001" || value.symbol === "sh000001");
+    if (!hasTrustedQuoteObservation(sh) || !sh.prev_close || sh.prev_close <= 0 || !Number.isFinite(sh.prev_close)) throw new Error("指数基准质量或来源时刻未确认");
+    const referenceDate = bjDate(sh.data_timestamp);
+    if (!referenceDate || points.some(point => bjDate(point.ts) !== referenceDate)) throw new Error("指数分钟与基准非同一交易日");
+    return {points, prevClose: sh.prev_close, referenceDate};
+  }, {key: `${symbol}:${minutes[0]?.ts ? bjDate(minutes[0].ts) : "unknown"}`, intervalMs: 60_000,
+    enabled: active && !isIndex && chartTab === "minute" && minutes.length > 0});
+  const indexOverlay = indexResource.data ?? null;
+  const retryRead = (kind: DetailReadKind) => {
+    const reads = dataReadsRef.current; if (reads?.alive) void reads[kind](true).catch(() => {});
+  };
 
   async function add() {
     if (isIndex) return; // 指数不入自选（sh000001 不是合法自选股代码）
@@ -804,7 +748,7 @@ export const StockDetailPanel = memo(function StockDetailPanel({
       {/* ①¾ 相关事件（E2/L9）：方向题材命中归属 或 事件源自该股。
           指数不渲染——/api/events/symbol/{code} 只接受 6 位个股代码，指数段
           （sh000001 等）会返回 400，此前表现为常驻「加载失败 [重试]」（2026-09-11）。 */}
-      <StockEventsRow symbol={symbol} isIndex={isIndex} />
+      <StockEventsRow symbol={symbol} isIndex={isIndex} active={active} />
       <StockAttributionPanel symbol={symbol} active={active} bounded={false} />
       </details>}
       </div>
@@ -904,9 +848,12 @@ export const StockDetailPanel = memo(function StockDetailPanel({
             /* 头部标题行（股票名 · 日 K 线（前复权）+ 来源）已移除：股票名在页面
                其它位置已展示，这行纯属重复占位，去掉后纵向多出约 41px 给 K 线
                （2026-09-02 用户要求） */
-            <Panel bodyClassName="overflow-hidden" className="detail-chart-panel min-h-0 flex-1">
+            <Panel bodyClassName="overflow-hidden flex flex-col" className="detail-chart-panel min-h-0 flex-1">
+              <DetailReadStatus label="K线" state={readStates.kline} onRetry={() => retryRead("kline")}/>
+              {bars.at(-1) && <p className="px-3 pb-1 text-xs text-zinc-600 dark:text-zinc-400">REST基座：{sourceLabel(bars.at(-1)?.source)} · 尾记录 {bars.at(-1)?.ts} · 质量 {bars.at(-1)?.quality}{liveQuote && hasTrustedQuoteObservation(liveQuote) && <span> · 报价观察 {sourceLabel(liveQuote.source)} {timeTextBJ(liveQuote.data_timestamp)}</span>}</p>}
+              {liveQuote && !hasTrustedQuoteObservation(liveQuote) && <p role="status" className="px-3 pb-1 text-xs text-amber-800 dark:text-amber-300">报价质量或源时刻待核，未推进图表尾点；保留原图。</p>}
               {displayBars.length > 0 ? (
-                <div className="flex h-full min-h-0 flex-col">
+                <div className="flex min-h-0 flex-1 flex-col">
                   {/* 停牌提示条：日K 缺 bar 推导，判据随附（UI 缺陷 #1） */}
                   <SuspendedNotice status={tradingStatus} />
                   {/* 技术评估条已移至图表工具栏（与依据同行，2026-09-04 用户
@@ -916,7 +863,7 @@ export const StockDetailPanel = memo(function StockDetailPanel({
                   </div>
                 </div>
               ) : (
-                <p className="px-4 py-10 text-center text-sm text-zinc-600 dark:text-zinc-400">等待 K 线数据…</p>
+                !readStates.kline.error && <p className="px-4 py-10 text-center text-sm text-zinc-600 dark:text-zinc-400">{readStates.kline.loaded ? "本次未返回 K 线记录。" : "等待 K 线数据…"}</p>
               )}
             </Panel>
           )}
@@ -926,9 +873,14 @@ export const StockDetailPanel = memo(function StockDetailPanel({
                股票名在页面其它位置已展示，这行纯属重复占位，去掉后纵向多出约
                41px 给分时图；两个图表 tab 也不再有「一个有头一个无头」的高度跳动
                （2026-09-02 用户要求） */
-            <Panel bodyClassName="overflow-hidden" className="detail-chart-panel min-h-0 flex-1">
+            <Panel bodyClassName="overflow-hidden flex flex-col" className="detail-chart-panel min-h-0 flex-1">
+              <DetailReadStatus label="分钟" state={readStates.minute} onRetry={() => retryRead("minute")}/>
+              {minutes.at(-1) && <p className="px-3 pb-1 text-xs text-zinc-600 dark:text-zinc-400">REST基座：{sourceLabel(minutes.at(-1)?.source)} · 源分钟 {minutes.at(-1)?.ts}{liveQuote && hasTrustedQuoteObservation(liveQuote) && <span> · 报价观察 {sourceLabel(liveQuote.source)} {timeTextBJ(liveQuote.data_timestamp)}</span>}</p>}
+              {liveQuote && !hasTrustedQuoteObservation(liveQuote) && <p role="status" className="px-3 pb-1 text-xs text-amber-800 dark:text-amber-300">报价质量或源时刻待核，未推进图表尾点；保留原图。</p>}
+              {!!indexResource.error && <p role="alert" className="px-3 pb-1 text-xs text-amber-800 dark:text-amber-300">指数叠加校准失败，{indexOverlay ? "保留上次曲线，仅作参考。" : "当前叠加未确认。"}<button type="button" data-action="secondary" className="ml-2" disabled={indexResource.pending} onClick={indexResource.refresh}>重新读取指数叠加</button></p>}
+              {indexOverlay?.points.at(-1) && <p className="px-3 pb-1 text-xs text-zinc-600 dark:text-zinc-400">指数叠加截至 {indexOverlay.points.at(-1)?.ts}</p>}
               {minutes.length > 0 ? (
-                <div className="relative h-full">
+                <div className="relative min-h-0 flex-1">
                   {/* 停牌遮罩：分时是当日数据，停牌股当日无成交，
                       空图会被误读成"数据源挂了"，必须显式说明原因 */}
                   {isSuspended(tradingStatus) && (
@@ -956,10 +908,10 @@ export const StockDetailPanel = memo(function StockDetailPanel({
                 />
                 </div>
               ) : (
-                <p className="px-4 py-10 text-center text-sm text-zinc-600 dark:text-zinc-400">
+                !readStates.minute.error && <p className="px-4 py-10 text-center text-sm text-zinc-600 dark:text-zinc-400">
                   {isSuspended(tradingStatus)
                     ? `该股当前停牌，当日无分时数据（${tradingStatus?.reason ?? ""}）`
-                    : "暂无分时数据"}
+                    : readStates.minute.loaded ? "本次未返回分钟记录。" : "正在读取分钟数据…"}
                 </p>
               )}
             </Panel>
@@ -968,11 +920,12 @@ export const StockDetailPanel = memo(function StockDetailPanel({
           {chartTab === "flow" && (
             /* 头部标题行已移除（图名 + 近 N 日口径改为图内灰标签，见 flow-chart.tsx），
                与 K 线/分时两个 tab 统一，纵向多出约 41px 给资金图（2026-09-02） */
-            <Panel bodyClassName="overflow-hidden" className="detail-chart-panel min-h-0 flex-1">
+            <Panel bodyClassName="overflow-hidden flex flex-col" className="detail-chart-panel min-h-0 flex-1">
+              <DetailReadStatus label="资金" state={readStates.flow} onRetry={() => retryRead("flow")}/>
               {!flow || flow.flow.length === 0 ? (
-                <p className="px-4 py-10 text-center text-sm text-zinc-600 dark:text-zinc-400">暂无资金流数据</p>
+                !readStates.flow.error && <p className="px-4 py-10 text-center text-sm text-zinc-600 dark:text-zinc-400">{readStates.flow.loaded ? "本次未返回资金流记录。" : "正在读取资金数据…"}</p>
               ) : (
-                <FlowChart flow={flow} />
+                <div className="min-h-0 flex-1"><FlowChart flow={flow} /></div>
               )}
             </Panel>
           )}
@@ -1125,12 +1078,12 @@ export const StockDetailPanel = memo(function StockDetailPanel({
               <p className="px-3 py-10 text-center text-xs text-zinc-600 dark:text-zinc-400">模拟账户数据加载失败（稍后自动重试）</p>
             ))}
 
-          {rightTab === "profile" && <ProfilePanel boardRows={boardRows} company={company} fins={fins} />}
+          {rightTab === "profile" && <ProfilePanel boardRows={boardRows} company={company} fins={fins} readState={readStates.financials} onRetry={() => retryRead("financials")}/>}
 
           {rightTab === "info" && <InfoPanel key={symbol} anns={anns} news={news} annError={annError} newsError={newsError} loading={digestLoading} onRetry={() => { void loadDigest(); }} />}
 
           {/* Only the two market-print perspectives own this consumer. */}
-          {(rightTab === "book" || rightTab === "trades") && <BookTradesView book={book} trades={trades} showBook={rightTab === "book"} />}
+          {(rightTab === "book" || rightTab === "trades") && <BookTradesView book={book} trades={trades} showBook={rightTab === "book"} readState={readStates[rightTab]} onRetry={() => retryRead(rightTab)} emptyReason={tradeEmptyReason} tradesSource={tradeSource}/>}
           </div>
         </Panel>
         </div>

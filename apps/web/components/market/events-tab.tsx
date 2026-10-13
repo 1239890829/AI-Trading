@@ -18,6 +18,7 @@ import {
   eventNewsItem,
   eventDirectionView,
   eventJudgeView,
+  hasRecordedEventDirection,
   levelTitle,
 } from "@/lib/event-view";
 import { themesUrl, workbenchUrl } from "@/lib/routing";
@@ -73,6 +74,7 @@ export function EventsTab() {
   const [target, setTarget] = useState(() => searchParams.get("target") ?? "");
   const [modalItem, setModalItem] = useState<NewsModalItem | null>(null);
   const [l1Only, setL1Only] = useState(() => searchParams.get("l1") === "1");
+  const [directionOnly, setDirectionOnly] = useState(false);
   const [expanded, setExpanded] = useState<number | null>(null);
   const expandedPresence = useExitPresence(expanded);
   const { open: openDetail } = useDetailModal();
@@ -88,6 +90,7 @@ export function EventsTab() {
       (four === "all" || e.four_category === four) &&
       (tag === "all" || e.tags.includes(tag)) &&
       (!l1Only || e.impact_level === "L1") &&
+      (!directionOnly || hasRecordedEventDirection(e)) &&
       (!target || e.source_symbol === target || e.directions.some(direction => direction.target === target)),
   );
 
@@ -95,7 +98,7 @@ export function EventsTab() {
   // directions/tags 嵌套渲染，一次性铺开 DOM 明显偏重。筛选条件变化时重置到首页
   // （resetKey），避免"筛完只剩 3 条却仍渲染第 90 条起"的错位。
   const { shown: shownPage, visible, sentinelRef } = useIncremental(shown, {
-    resetKey: `${four}/${tag}/${sort}/${l1Only}/${target}`,
+    resetKey: `${four}/${tag}/${sort}/${l1Only}/${target}/${directionOnly}`,
   });
 
   return (
@@ -114,6 +117,7 @@ export function EventsTab() {
         {/* 第一行：排序 tag 切换 + 只看 L1 */}
         <div className="flex shrink-0 flex-wrap items-center gap-1.5 border-b border-zinc-100 px-3 py-2 dark:border-zinc-800/60">
           <FilterMenu label="排序" value={sort} options={SORTS} onChange={setSort} />
+          <button type="button" aria-pressed={directionOnly} onClick={() => setDirectionOnly(value => !value)} className={`ui-filter whitespace-nowrap px-2 py-1 text-xs ${directionOnly ? "ui-filter-selected" : ""}`}>仅看方向记录</button>
           <label className="ml-auto flex cursor-pointer items-center gap-1 text-xs text-zinc-600 dark:text-zinc-400">
             <input type="checkbox" checked={l1Only} onChange={(e) => setL1Only(e.target.checked)} />
             只看 L1
@@ -125,7 +129,7 @@ export function EventsTab() {
           <FilterMenu label="分类" value={four} options={FOUR_FILTERS} onChange={setFour} />
           <FilterMenu label="事件标签" value={tag} options={[{key: "all", label: "全部标签"}, ...TAGS.map(t => ({key:t, label:t, count: tagCounts?.[t], title: `${t}类事件（规则派生）`}))]} onChange={setTag} />
         </div>
-        <p className="shrink-0 px-3 py-1.5 text-[11px] text-zinc-600 dark:text-zinc-400">方向未明表示证据不足，不代表正在后台排队判读。</p>
+        <p className="shrink-0 px-3 py-1.5 text-[11px] text-zinc-600 dark:text-zinc-400">{directionOnly ? `显示 ${shown.length} / ${items?.length ?? 0} 条。方向记录仍需核实；未明与模型假设保留在全部列表。` : "方向未明表示证据不足，不代表正在后台排队判读。"}</p>
 
         {error && (
           <p role="alert" className="shrink-0 px-4 py-2 text-xs text-amber-800 dark:text-amber-300">{error} <button type="button" className="quiet-action" onClick={resource.refresh}>重试读取</button></p>

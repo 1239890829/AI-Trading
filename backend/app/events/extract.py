@@ -233,6 +233,20 @@ def _name_stem(name: str) -> str:
     return stem if len(stem) >= 2 else ""
 
 
+def _positive_hit(text: str):
+    """Ignore progress used only as an uncertain future-impact disclaimer."""
+    for hit in _POSITIVE.finditer(text):
+        if hit.group(0) == "进展":
+            start = max(text.rfind(separator, 0, hit.start()) for separator in "。；;！!?？\n") + 1
+            end = min([i for separator in "。；;！!?？\n" if (i := text.find(separator, hit.end())) >= 0] or [len(text)])
+            clause = text[start:end]
+            bounded = clause[:256].replace("不存在不确定", "").replace("没有不确定", "")
+            if re.search(r"进展(?:及|与|和)[^。；;]{0,96}影响[^。；;]{0,48}不确定|(?:未来|后续|相关业务|相关项目)[^。；;]{0,16}进展[^。；;]{0,32}不确定", bounded) or re.search(r"(?:尚未|未)(?:披露|取得|出现)[^。；;]{0,12}进展", bounded):
+                continue
+        return hit
+    return None
+
+
 def extract_directions(title: str, theme_names: list[str], summary: str | None = None) -> list[dict]:
     """标题+摘要 → 方向映射行（纯函数）。
 
@@ -262,7 +276,7 @@ def extract_directions(title: str, theme_names: list[str], summary: str | None =
             matched[name] = {"target": name, "matched_by": "alias", "hit": keyword}
 
     negative = _NEGATIVE.search(text)
-    positive = _POSITIVE.search(text)
+    positive = _positive_hit(text)
     rows: list[dict] = []
     for name, info in matched.items():
         direction, strength = 0, 1
@@ -316,7 +330,7 @@ def extract_symbol_direction(title: str, symbol: str, summary: str | None = None
         return None
     text = _judge_text(title, summary)
     negative = _NEGATIVE.search(text)
-    positive = _POSITIVE.search(text)
+    positive = _positive_hit(text)
     direction, strength = 0, 1
     chain = ""
     if negative:
@@ -355,7 +369,7 @@ def extract_board_direction(
     """
     text = _judge_text(title, summary)
     negative = _NEGATIVE.search(text)
-    positive = _POSITIVE.search(text)
+    positive = _positive_hit(text)
     direction, strength = 0, 1
     chain = ""
     if negative:

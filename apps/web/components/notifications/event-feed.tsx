@@ -12,6 +12,7 @@ import {
   eventNewsItem,
   eventDirectionView,
   eventJudgeView,
+  hasRecordedEventDirection,
 } from "@/lib/event-view";
 import { NewsModal, type NewsModalItem } from "@/components/news-modal";
 import { useDetailModal } from "@/components/detail/detail-modal";
@@ -161,6 +162,7 @@ function EventRow({
 export function EventFeed({ active, refreshToken = 0 }: { active: boolean; refreshToken?: number }) {
   const [sort, setSort] = useState<EventSort>("relevance");
   const [l1Only, setL1Only] = useState(false);
+  const [directionOnly, setDirectionOnly] = useState(false);
   const [newsItem, setNewsItem] = useState<NewsModalItem | null>(null);
 
   // 数据身份是排序；手动刷新只校准同一身份，保留已有内容并丢弃旧请求。
@@ -179,9 +181,9 @@ export function EventFeed({ active, refreshToken = 0 }: { active: boolean; refre
   const countsAll = events.data?.countsAll ?? null;
   const error = events.error ? (events.error instanceof Error ? events.error.message : "资讯加载失败") : null;
 
-  const shown = (items ?? []).filter((e) => !l1Only || e.impact_level === "L1");
+  const shown = (items ?? []).filter(e => (!l1Only || e.impact_level === "L1") && (!directionOnly || hasRecordedEventDirection(e)));
   const { shown: shownPage, visible, sentinelRef } = useIncremental(shown, {
-    resetKey: `${sort}/${l1Only}`,
+    resetKey: `${sort}/${l1Only}/${directionOnly}`,
   });
 
   return (
@@ -199,11 +201,13 @@ export function EventFeed({ active, refreshToken = 0 }: { active: boolean; refre
             {s.label}
           </button>
         ))}
+        <button type="button" aria-pressed={directionOnly} onClick={() => setDirectionOnly(value => !value)} className={CHIP + " " + (directionOnly ? CHIP_ON : CHIP_OFF)}>仅看方向记录</button>
         <label className="ml-auto flex cursor-pointer items-center gap-1 text-[11px] text-zinc-600 dark:text-zinc-400">
           <input type="checkbox" checked={l1Only} onChange={(e) => setL1Only(e.target.checked)} />
           只看 L1
         </label>
       </div>
+      {directionOnly && <p role="status" className="shrink-0 px-4 pt-2 text-[11px] text-zinc-600 dark:text-zinc-400">显示 {shown.length} / {items?.length ?? 0} 条。方向记录仍需核实；其余保留在全部列表。</p>}
 
       <div className="min-h-0 flex-1 space-y-2 overflow-y-auto px-4 py-3" data-testid="event-feed-list">
         {error && (

@@ -19,6 +19,23 @@ const base: ImpactEvent = {
 };
 
 describe("EventsTab judgement display", () => {
+  it("filters recorded directions without promoting model guesses or deleting the original list", () => {
+    const direction = {target_type: "theme" as const, target: "存储芯片", direction: 1, strength: 1, chain: "", basis: "原文线索"};
+    resource.data = {countsAll: {}, tagCounts: {}, items: [
+      {...base, title: "规则线索", directions: [{...direction, matched_by: "chain"}]},
+      {...base, id: 2, title: "无明确方向"},
+      {...base, id: 3, title: "模型假设", directions: [{...direction, matched_by: "llm_aux"}]},
+      {...base, id: 4, title: "已撤回线索", directions: [direction], interpretation_ref: {version_id: 4, state: "withdrawn"}},
+    ]};
+    render(<EventsTab />);
+    fireEvent.click(screen.getByRole("button", {name: "仅看方向记录"}));
+    expect(screen.getByText("规则线索")).toBeTruthy();
+    for (const title of ["无明确方向", "模型假设", "已撤回线索"]) expect(screen.queryByText(title)).toBeNull();
+    expect(screen.getByText(/显示 1 \/ 4 条/)).toBeTruthy();
+    fireEvent.click(screen.getByRole("button", {name: "仅看方向记录"}));
+    expect(screen.getByText("无明确方向")).toBeTruthy();
+    expect(screen.getByText("模型假设")).toBeTruthy();
+  });
   it("keeps pool expansion, pool content and related links separate from the title action", () => {
     resource.data = {countsAll: {}, tagCounts: {}, items: [{...base, rank_score: 55, directions: [
       {target_type: "theme", target: "存储芯片", direction: 1, strength: 1, chain: "供需变化", basis: "公开公告"},
