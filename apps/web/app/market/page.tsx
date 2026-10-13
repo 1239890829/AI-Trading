@@ -1,6 +1,6 @@
 "use client";
 
-import {ConditionList, ExplanationMap, FactTimeline, NarrativeText} from "@/components/ui/explanation-map";
+import {ConditionList, ExplanationMap, FactCards, NarrativeText} from "@/components/ui/explanation-map";
 import Link from "next/link";
 import { inspectionClick, useInspection } from "@/components/inspection/inspection-context";
 
@@ -207,9 +207,13 @@ function MarketInner() {
       {basisPresence.value && <ModalShell open={basisPresence.active} onClose={() => setBasisOpen(false)} label="市场情绪依据与失效条件" size="md" header={<div><h2>市场情绪依据与失效条件</h2><p className="mt-1 text-xs text-zinc-600 dark:text-zinc-400">{basisPresence.value.phase} · 情绪温度 {basisPresence.value.temperature} / 100 · 置信度 {basisPresence.value.confidence}</p></div>}>
         <div className="bc-market-evidence-copy">
           <ConditionList label="误判风险" items={basisPresence.value.misjudge_caveats} tone="warning"/>
-          <ExplanationMap label="盘面判断核对" identity={basisPresence.value.phase} steps={[
+          <ExplanationMap label="盘面判断核对" identity={basisPresence.value.phase} center={{label:"当前相位记录", value: basisPresence.value.phase}} links={[
+            {from:"center",to:"basis",label:"记录依据",kind:"recorded"},
+            {from:"center",to:"metrics",label:"观测读数 · 非胜率",kind:"context"},
+            {from:"center",to:"switch",label:"相位切换条件",kind:"context"},
+          ]} steps={[
             {id:"basis", label:"观测依据", icon:"source", content:<ConditionList label="原始依据" items={basisPresence.value.reasons.length ? basisPresence.value.reasons : ["未提供"]}/>},
-            {id:"metrics", label:"指标读数", icon:"response", content:<FactTimeline label="已返回指标" items={basisPresence.value.indicators.map(indicator => ({label:indicator.name, value:indicator.value ?? "--"}))}/>},
+            {id:"metrics", label:"指标读数", icon:"response", summary:`${basisPresence.value.indicators.length} 项已返回读数`, content:<FactCards label="已返回指标" items={basisPresence.value.indicators.map(indicator => ({label:indicator.name, value:indicator.value ?? "--"}))}/>},
             {id:"switch", label:"切换条件", icon:"risk", content:<NarrativeText label="切换条件" text={basisPresence.value.switch_conditions || "未提供"}/>},
           ]}/>
 

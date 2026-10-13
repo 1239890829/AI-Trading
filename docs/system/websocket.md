@@ -1,11 +1,12 @@
 # WebSocket 协议
 
-## ⚠️ 部署关键：WS 必须直连后端，不能走 Next 代理
+## 默认同源接入与直接连接
 
-`app/backend/[...path]/route.ts` 是 fetch 型代理，**不支持 WebSocket 升级**。
-前端必须配置 `NEXT_PUBLIC_WS_BASE`（如 `ws://127.0.0.1:8000`）绕过代理直连后端，
-否则 WS 握手失败/假成功，前端全部实时数据冻结（2026-09-01 实测事故，修复 `650d34c`）。
-开发环境配置在 `apps/web/.env.local`（模板见 `.env.local.example`）；改 env 后需清 `.next` 重启。
+前端默认连接同源 `/backend/ws/quotes`。Next 16 的 `apps/web/proxy.ts` 仅对该精确路径的 WebSocket 升级做运行时外部 rewrite，目标沿既有 `BACKEND_ORIGIN`；普通 HTTP 仍使用 fetch 型 Route Handler。后端端口可继续只监听回环地址。
+
+子协议凭据原样透传，代理不注入访问密钥。后端仍是认证事实源：已配置 token 时拒绝无/错凭据，合法 local 无token模式保留；shared 缺token仍拒绝启动。`NEXT_PUBLIC_WS_BASE` 可覆盖为可达的直接地址，但手机会忽略旧 localhost 覆盖，HTTPS 页面不能连接不安全的 ws 地址。
+
+历史事故 `650d34c` 对应 fetch 型 Route Handler 不能升级的旧实现，不能据此认定所有 Next 代理方式均不支持 WS。当前源码与真实握手、子协议、pong/行情连续帧分别验收；未加载新产物前，旧3000仍可能握手失败。
 
 ## `/ws/quotes`（已实现）
 

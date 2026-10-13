@@ -10,7 +10,7 @@
  * 聊天文本量级（几 KB）下开销可忽略。
  */
 import { Fragment, memo, useMemo, useState, type ReactNode } from "react";
-import {ExplanationMap} from "@/components/ui/explanation-map";
+import {NarrativeText} from "@/components/ui/explanation-map";
 import type { EntityMatch, EntityMatcher } from "@/lib/entity-links";
 import { NAV_LABELS, isAllowedNav, type NavKey } from "@/lib/nav-targets";
 
@@ -242,9 +242,11 @@ interface RichTextProps {
   onNavigate: (m: EntityMatch) => void;
   /** 覆盖根节点排版类（默认 text-sm）。资讯弹窗等调用方用 13px 正文时传入。 */
   className?: string;
+  /** A caller has already opened an original document; never put another reading menu inside. */
+  plainDocument?: boolean;
 }
 
-export const RichText = memo(function RichText({ text, matcher, onNavigate, className }: RichTextProps) {
+export const RichText = memo(function RichText({ text, matcher, onNavigate, className, plainDocument = false }: RichTextProps) {
   const [view, setView] = useState({text, complete:false});
   const complete = view.text === text && view.complete;
   // P1-2（2026-09-11）：`text` 不变就不重解析。
@@ -253,7 +255,7 @@ export const RichText = memo(function RichText({ text, matcher, onNavigate, clas
   // 打字明显拖慢。memo + useMemo 后，只有正在追加的那一条会重新解析。
   const blocks = useMemo(() => parseBlocks(text), [text]);
   const inline = (t: string) => renderInline({ text: t, match: matcher, onNavigate });
-  const rendered = blocks.map((b, i) => {
+  const renderBlock = (b: Block, i: number) => {
         switch (b.kind) {
           case "code":
             return (
@@ -345,19 +347,32 @@ export const RichText = memo(function RichText({ text, matcher, onNavigate, clas
               </p>
             );
         }
-      });
-  const sections: {label:string; nodes:ReactNode[]}[] = [];
-  const hasHeadings = blocks.some(block=>block.kind === "heading");
+      };
+  const rendered = blocks.map(renderBlock);
+  const sections: {label:string; indices:number[]}[] = [];
   blocks.forEach((block,index)=>{
-    const boundary = block.kind === "heading" || !hasHeadings && ["list","table"].includes(block.kind);
-    if (boundary || !sections.length) sections.push({label:block.kind === "heading" ? block.text : block.kind === "table" ? "回复表格" : block.kind === "list" ? "回复列表" : "开篇",nodes:[]});
-    sections[sections.length-1].nodes.push(rendered[index]);
+    if (block.kind === "heading" || !sections.length) sections.push({label:block.kind === "heading" ? block.text : "回复原句",indices:[]});
+    sections[sections.length-1].indices.push(index);
   });
-  const size = Math.ceil(sections.length / 6);
-  const groups = size > 1 ? Array.from({length:Math.ceil(sections.length/size)},(_,index)=>({label:sections[index*size].label,nodes:sections.slice(index*size,(index+1)*size).flatMap(section=>section.nodes)})) : sections;
-  const structured = text.length > 1200 && groups.length > 1;
+  const adaptive = !plainDocument && text.length > 1200;
   return <div className={`${className ?? "space-y-2 text-sm leading-relaxed"} min-w-0 [overflow-wrap:anywhere]`}>
-    {structured && <div className="flex flex-wrap items-center justify-between gap-2 text-xs text-[var(--ui-muted)]"><span>仅按回复已有结构分组，不推断因果。</span><button type="button" data-action="quiet" className="quiet-action" onClick={()=>setView({text,complete:!complete})}>{complete ? "分章节阅读" : "完整回复"}</button></div>}
-    {structured && !complete ? <ExplanationMap label="回复目录" identity={text} steps={groups.map((section,index)=>({id:`section-${index}`,label:section.label,icon:"source",content:<div className="space-y-2 min-w-0">{section.nodes}</div>}))}/> : rendered}
+    {adaptive && <div className="flex flex-wrap items-center justify-between gap-2 text-xs text-[var(--ui-muted)]"><span>按回复原有内容阅读，原句措辞不代表已核实。</span><button type="button" data-action="quiet" className="quiet-action" onClick={()=>setView({text,complete:!complete})}>{complete ? "返回要点阅读" : "完整回复"}</button></div>}
+    {adaptive && !complete ? sections.map((section,index)=>{
+      const proseIndices=section.indices.filter(position=>["para","list","quote"].includes(blocks[position].kind));
+      const prose=proseIndices.map(position=>{
+        const block=blocks[position];
+        return block.kind === "list" ? block.items.join("\n") : block.kind === "para" || block.kind === "quote" ? block.lines.join("\n") : "";
+      }).join("\n\n");
+      return <section key={index} aria-label={`回复章节：${section.label}`} className="min-w-0 space-y-2 border-b border-[var(--ui-line)] pb-3 last:border-0">
+        <h4 className="text-xs font-semibold">{inline(section.label)}</h4>
+        {prose.length > 120 ? <NarrativeText text={prose} label={`${section.label}原句`} identity={`${text}:${index}`}/> : proseIndices.map(position=>rendered[position])}
+        {section.indices.map(position=>{
+          const block=blocks[position];
+          if(block.kind === "code") return <div key={`material-${position}`} aria-label="回复原有代码预览">{renderBlock({...block,content:block.content.split("\n").slice(0,8).join("\n")},position)}{block.content.split("\n").length > 8 && <p className="text-[11px] text-[var(--ui-muted)]">仅预览前 8 行，完整回复保留全部代码。</p>}</div>;
+          if(block.kind === "table") return <div key={`material-${position}`} aria-label="回复原有表格预览">{renderBlock({...block,rows:block.rows.slice(0,3)},position)}{block.rows.length > 3 && <p className="text-[11px] text-[var(--ui-muted)]">仅预览前 3 行，完整回复保留其余 {block.rows.length - 3} 行。</p>}</div>;
+          return null;
+        })}
+      </section>;
+    }) : rendered}
   </div>;
 });

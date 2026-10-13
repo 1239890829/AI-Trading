@@ -13,6 +13,11 @@ import type { DailyPickItem, IntradayTopStock, OpportunityStock, StandAsideGate 
 // vitest 未开 globals 时 RTL 自动 cleanup 不注册，必须手动（见 event-panel.test.tsx 注释）
 afterEach(cleanup);
 
+function readBasis(label: string) {
+  const graph = screen.getByRole("region", {name:"入选依据核对"});
+  fireEvent.click(within(graph).getByRole("tab", {name:label}));
+}
+
 /** 盘前名单：收盘产出，六维评分 / 估值 / 买入区间 / 失效条件齐备。 */
 const base: DailyPickItem = {
   symbol: "002396",
@@ -133,7 +138,7 @@ describe("PickCard · 盘前名单（fromDailyPick）", () => {
   it("展示买入参考区间、止损参考位与失效条件", () => {
     render(<PickCard item={fromDailyPick(base)} />);
     expect(screen.getByText(/买入参考区间/)).toBeTruthy();
-    expect(screen.getByText(/止损参考/)).toBeTruthy();
+    expect(screen.getByText("止损参考")).toBeTruthy();
     expect(screen.getByText("回落 8%")).toBeTruthy();
     expect(screen.getByText("+10%→减半仓；+20%→再减半")).toBeTruthy();
     expect(screen.getByText(/收盘跌破 5 日线/)).toBeTruthy();
@@ -145,7 +150,7 @@ describe("PickCard · 盘前名单（fromDailyPick）", () => {
     expect(screen.getByText("仅观察")).toBeTruthy();
     expect(screen.getByText(/不给出买入参考区间/)).toBeTruthy();
     // 止损与失效条件仍在（观察也要有退出依据）
-    expect(screen.getByText(/止损参考/)).toBeTruthy();
+    expect(screen.getByText("止损参考")).toBeTruthy();
   });
 
   it("盘前名单不缺维度：不渲染口径注记", () => {
@@ -187,7 +192,8 @@ describe("PickCard · 盘前名单（fromDailyPick）", () => {
     expect(screen.queryByText("可参与评估 · 当前未封板")).toBeNull();
     expect(screen.getByText("执行复核·待读取").getAttribute("title")).toContain("ODV-demo");
     expect(screen.getByText(/上次执行快照 40.88/).getAttribute("title")).toContain("sina_market");
-    expect(screen.getByText(/涨停池精确判定/)).toBeTruthy();
+    readBasis("梯队");
+    expect(within(screen.getByRole("tabpanel")).getByText(/涨停池精确判定/)).toBeTruthy();
     expect(withExecution.execution!.gate_decision).toBe("passed");
     expect(withExecution.execution!.executable_snapshot.state).toBe("ready");
     page.rerender(<PickCard item={item} readError={false} />);
@@ -321,10 +327,12 @@ describe("PickCard · 盘中名单（fromIntradayStock）", () => {
     const top: IntradayTopStock = { ...topPath, pick_basis: basis, linkage };
     const accordion: OpportunityStock = { ...accordionPath, basis, linkage };
     const { rerender } = render(<PickCard item={fromIntradayStock(top)} />);
+    readBasis("入选");
     expect(screen.getByText(displayed)).toBeTruthy();
     expect(screen.getByText("联动确定性·高").getAttribute("title")).toContain(displayed);
 
     rerender(<PickCard item={fromIntradayStock(accordion)} />);
+    readBasis("联动");
     expect(screen.getByText(displayed)).toBeTruthy();
     expect(screen.getByText("联动确定性·高").getAttribute("title")).toContain(displayed);
     expect(top.pick_basis).toBe(basis);
@@ -338,13 +346,14 @@ describe("PickCard · 盘中名单（fromIntradayStock）", () => {
     expect(screen.getByText("涨停原因")).toBeTruthy();
     expect(screen.getByText("T2 跟踪档")).toBeTruthy();
     fireEvent.click(screen.getByRole("tab", {name: "涨停原因"}));
-    fireEvent.click(screen.getByRole("button", {name: /涨停原因 · 查看原文/}));
-    expect(screen.getByRole("dialog", {name: "涨停原因原文"}).textContent).toContain("商业航天+军工+机器人");
+    expect(screen.getByRole("region", {name:"数据源归因原文"}).textContent).toContain("商业航天+军工+机器人");
+    expect(screen.getByRole("region", {name:"归因边界"}).textContent).toContain("非已核实的涨停因果");
   });
 
   it("手风琴路径没有「入选」这一行：整行不出现（不许拿「入选 —」冒充缺失）", () => {
     const { container } = render(<PickCard item={fromIntradayStock(accordionPath)} />);
     expect(container.textContent).toContain("涨停原因");
+    readBasis("涨停原因");
     expect(container.textContent).toContain("存储芯片+稀土永磁");
     // 标题行「入选原因」两侧统一；但**行标签**「入选」只在分层名单（pick_basis）出现
     expect(screen.getByText("入选原因")).toBeTruthy();
@@ -384,7 +393,7 @@ describe("PickCard · 盘中名单（fromIntradayStock）", () => {
   it("现价/止损/出场纪律与盘前同构渲染（补全单点收口在 attach_risk_fields）", () => {
     render(<PickCard item={fromIntradayStock(topPath)} />);
     expect(screen.getByText("5.42")).toBeTruthy();
-    expect(screen.getByText(/止损参考/)).toBeTruthy();
+    expect(screen.getByText("止损参考")).toBeTruthy();
     expect(screen.getByText(/4\.99/)).toBeTruthy();
     expect(screen.getByText("跟踪止盈")).toBeTruthy();
   });
@@ -462,6 +471,7 @@ describe("适配器归一：4 组异名同义字段", () => {
 
     const { container } = render(<PickCard item={card} />);
     expect(container.textContent).not.toContain("入选 —");
+    readBasis("涨停原因");
     expect(container.textContent).toContain("数据源未提供涨停原因");
     expect(screen.getByRole("button", {name: "依据"})).toBeTruthy();
     expect(card.basisRows.some(row => row.label === "入选")).toBe(false);
@@ -738,7 +748,8 @@ describe("PickCard · 可参与性三态（2026-09-15 猎场口径）", () => {
     expect(screen.getByText(/联动确定性·高/)).toBeTruthy();
     // 依据行：分层名单走 pick_basis（"为什么排在这一档"）
     expect(screen.getByText("入选")).toBeTruthy();
-    expect(screen.getByText(/题材内涨停 3 家形成集中/)).toBeTruthy();
+    readBasis("入选");
+    expect(within(screen.getByRole("tabpanel")).getByText(/题材内涨停 3 家形成集中/)).toBeTruthy();
     // current 未封板候选 ⇒ 不臆造当前梯队语义字段（角色/连板/辨识度/确定性都不渲染）
     expect(screen.queryByText(/辨识度/)).toBeNull();
     expect(screen.queryByText(/中军|龙头|首板/)).toBeNull();
@@ -764,7 +775,8 @@ describe("PickCard · 可参与性三态（2026-09-15 猎场口径）", () => {
     };
     render(<PickCard item={fromIntradayStock(acc)} />);
     expect(screen.getByText("联动")).toBeTruthy();
-    expect(screen.getByText(/本股当前未封板/)).toBeTruthy();
+    readBasis("联动");
+    expect(within(screen.getByRole("tabpanel")).getByText(/本股当前未封板/)).toBeTruthy();
   });
 
   it("参考区梯队：渲染当前不可参与 + 首封时间证据", () => {
@@ -800,7 +812,8 @@ describe("PickCard · 可参与性三态（2026-09-15 猎场口径）", () => {
       />,
     );
     expect(screen.getByText("来源")).toBeTruthy();
-    expect(screen.getByText(/本股当前未封板/)).toBeTruthy();
+    readBasis("来源");
+    expect(within(screen.getByRole("tabpanel")).getByText(/本股当前未封板/)).toBeTruthy();
     expect(screen.getByText("可参与评估 · 当前未封板")).toBeTruthy();
   });
 });
@@ -845,3 +858,15 @@ it("retains the original daily evidence behind one intraday card", () => {
   expect(screen.getByLabelText("失效条件").textContent).toContain("第4条：条件未成立");
   expect(screen.getByLabelText("失效条件").textContent).toContain("第5条：原判断失效");
  });
+
+
+it("shows selection source excerpts and complete negative qualifications before opening any node", () => {
+  const basis = "原消息记录了材料报价和需求变化。".repeat(8) + "公司尚未确认新增订单；仅为题材关联，不代表实际受益。";
+  render(<PickCard item={fromIntradayStock({...topPath, pick_basis:basis})} />);
+  const overview = screen.getByRole("tab", {name:"入选"});
+  expect(overview.textContent).toContain("原消息记录了材料报价和需求变化。");
+  expect(overview.textContent).toContain("公司尚未确认新增订单；仅为题材关联，不代表实际受益。");
+  expect(screen.queryByRole("tabpanel")).toBeNull();
+  fireEvent.click(overview);
+  expect(screen.getByRole("tabpanel").textContent).toContain(basis);
+});

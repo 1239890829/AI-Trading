@@ -92,6 +92,7 @@ describe("NewsModal 正文块渲染（2026-09-04 排版升级）", () => {
     render(<NewsModal item={item} onClose={() => {}} />);
 
     const body = await screen.findByTestId("news-modal-body");
+    fireEvent.click(await screen.findByRole("button", {name:"完整原文"}));
     const table = body.querySelector("table");
     expect(table).toBeTruthy();
     expect(table!.querySelectorAll("thead th").length).toBe(3);
@@ -111,6 +112,7 @@ describe("NewsModal 正文块渲染（2026-09-04 排版升级）", () => {
     );
     render(<NewsModal item={item} onClose={() => {}} />);
     const body = await screen.findByTestId("news-modal-body");
+    // The actual table preview is readable immediately, including column alignment.
     await waitFor(() => expect(body.querySelector("table")).toBeTruthy());
     const rows = body.querySelectorAll("tbody tr");
     expect((rows[0]!.children[1] as HTMLElement).className).toContain("font-mono");

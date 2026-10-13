@@ -1,6 +1,6 @@
 "use client";
 
-import {ConditionList, ExplanationMap, NarrativeText, FactTimeline} from "@/components/ui/explanation-map";
+import {ConditionList, ExplanationMap, NarrativeText, FactCards, FactTimeline} from "@/components/ui/explanation-map";
 import type { ReactNode } from "react";
 
 import { CardHead, CardShell } from "@/components/picks/card-shell";
@@ -10,6 +10,7 @@ import { useStockRowNav } from "@/components/stock-link";
 import { bjDate, fmt, formatLegacyLimitDistance, pctColor, pctText, timeTextBJ, triText } from "@/lib/format";
 import { clockOf, compareGates, gateActive, type GateComparison } from "@/lib/picks-gate";
 import { roleClass } from "@/lib/role-style";
+import { readingClues, readingExcerpt } from "@/lib/reading-clues";
 import type {
   DailyPickItem,
   ExecutionDecisionContract,
@@ -53,6 +54,14 @@ export const SUB_LABELS: [string, string][] = [
   ["capital", "资金"],
   ["echelon", "梯队"],
 ];
+
+/** Source excerpts orient the overview; qualification sentences remain intact and visible. */
+function BasisPreview({value, missing}: {value: string; missing: string}) {
+  if (!value.trim()) return <span>{missing}</span>;
+  const excerpt = readingExcerpt(value, 90);
+  const limits = value.trim().length > 90 ? [...new Set(readingClues(value).filter(clue => clue.kind === "qualification").map(clue => clue.sourceText.trim()))].filter(line => !excerpt.includes(line)) : [];
+  return <span className="block space-y-1"><span className="block">原文摘录：{excerpt}</span>{limits.map((line, index) => <span key={index} className="block text-amber-800 dark:text-amber-300">原文限定：{line}</span>)}</span>;
+}
 
 /** 梯队地位配色：唯一权威表在 `@/lib/role-style`（S2-10 合并，跨端由后端测试守卫）。 */
 
@@ -611,7 +620,7 @@ export function PickCard({
         </div>
       )}
       {item.themeSources && item.themeSources.length > 1 && (
-        <ExplanationMap label={`${item.themeSources.length} 个题材来源 · 同股只占一个名额`} identity={item.symbol} steps={item.themeSources.map((source, index) => ({id: String(index), label: source.theme ?? "题材未记录", icon: "relation", summary: source.strength_tier ?? "强度未记录", content: <NarrativeText text={source.pick_basis || source.linkage?.basis || "来源依据未记录"} label="原始题材依据"/>}))}/>
+        <ExplanationMap label={`${item.themeSources.length} 个题材来源 · 同股只占一个名额`} identity={item.symbol} center={{label: "名单对象", value: `${item.name || ""} ${item.symbol}`}} links={item.themeSources.map((_, index) => ({from: "center", to: String(index), label: "原题材来源 · 受益须核验", kind: "recorded"}))} steps={item.themeSources.map((source, index) => ({id: String(index), label: source.theme ?? "题材未记录", icon: "relation", summary: <span className="block space-y-1"><span className="block">{source.strength_tier ?? "强度未记录"}</span><BasisPreview value={source.pick_basis || source.linkage?.basis || ""} missing="来源依据未记录" /></span>, content: <NarrativeText text={source.pick_basis || source.linkage?.basis || "来源依据未记录"} label="原始题材依据"/>}))}/>
 
       )}
 
@@ -703,7 +712,7 @@ export function PickCard({
       {(item.basisRows.length > 0 || item.vetoes.length > 0) && (
         <div className="stock-card-basis text-[11px] leading-relaxed">
           <div className="text-[10px] font-medium text-zinc-600 dark:text-zinc-400">入选原因</div>
-          <ExplanationMap label="入选依据核对" identity={item.symbol} steps={item.basisRows.map((row, index) => ({id: `${index}:${row.label}`, label: row.label, summary: row.label === "首封" ? row.value : undefined, icon: row.label === "涨停原因" ? "source" : "relation", content: row.label === "涨停原因" ? <LimitReason symbol={item.symbol} reason={row.value} source={row.source} date={row.date} compact/> : <NarrativeText text={row.value} label={row.label}/>}))}/>
+          <ExplanationMap label="入选依据核对" identity={item.symbol} center={{label: "名单对象", value: `${item.name || ""} ${item.symbol}`}} links={item.basisRows.map((row, index) => ({from: "center", to: `${index}:${row.label}`, label: row.label === "涨停原因" ? "原记录归因 · 待核" : "原记录依据", kind: row.label === "涨停原因" ? "unverified" : "recorded"}))} steps={item.basisRows.map((row, index) => ({id: `${index}:${row.label}`, label: row.label, summary: row.label === "首封" ? row.value : <BasisPreview value={row.value} missing={row.label === "涨停原因" ? "数据源未提供涨停原因" : "原依据未记录"} />, icon: row.label === "涨停原因" ? "source" : "relation", content: row.label === "涨停原因" ? <LimitReason symbol={item.symbol} reason={row.value} source={row.source} date={row.date} compact/> : <NarrativeText text={row.value} label={row.label}/>}))}/>
           <ConditionList label="否决条件" items={item.vetoes} tone="warning"/>
 
         </div>
@@ -810,7 +819,9 @@ function SelectionEntryRow({ entry, scope, referenceOnly = false }: {
     </> : <span className="min-w-0 [overflow-wrap:anywhere]">{scopeName}{referenceOnly ? " · 当前仅参考，未查到已归档入选依据" : "首次入选依据未记录"}</span>}
     <div className="w-full" onClick={event => event.stopPropagation()} onKeyDown={event => event.stopPropagation()}>
       <FactTimeline label="时点依据" items={[
-        {label: quoteClockLabel, value: quoteClock ?? "原记录缺少有效时间"},
+        {label: quoteClockLabel, value: quoteClock ?? "原记录缺少有效时间", kind: "time"},
+      ]}/>
+      <FactCards label="记录身份" items={[
         {label: "记录来源", value: !usable ? (entry?.source ? "来源不匹配，不能作为本名单依据" : "未记录") : scope === "daily" ? "每日组合生成" : "盘中入选归档"},
         {label: "原版本", value: usable && entry?.source_version ? entry.source_version : "版本缺项"},
       ]}/>

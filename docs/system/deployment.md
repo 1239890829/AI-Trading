@@ -44,13 +44,13 @@ npm run dev   # http://localhost:3000
 ```bash
 docker compose -f docker-compose.prod.yml up -d --build
 # web: http://localhost:3000（同源 /backend 反代 → backend:8000）
-# backend 仅本机暴露 127.0.0.1:8000（巡检/WS 直连）
+# backend 仅本机暴露 127.0.0.1:8000（巡检；WS默认经前端同源代理）
 ```
 
 - 数据持久化：挂载宿主 `./data` → 容器内 `/data`（`REPO_ROOT` 在容器内推导为 `/`，
   SQLite/Parquet 默认路径都落在 `/data`）。**不要挂 `/app/data`，不生效。**
 - API Key：`env_file: backend/.env` 注入，绝不进镜像层。
-- WS：Route Handler 不代理升级，默认 5s 轮询降级；要实时 WS 见下文「前端如何连后端」。
+- WS：默认通过 Next 16 `proxy.ts` 对精确升级路径同源转发；认证与失败后的既有轮询降级保留。
 
 **开发容器**（源码挂载 + npm dev）：`docker compose up --build`。
 
@@ -72,7 +72,7 @@ docker compose -f docker-compose.prod.yml up -d --build
 | ASHARE_AUTH_MODE | `local`（默认）/ `shared`。`shared` 表示"会有回环之外的访客"⇒ **必须配 token**（未配则**拒绝启动**）。取值拼错同样拒绝启动（否则静默退回 `local`＝全放行）。⚠️ **2026-09-15 R22 新增** |
 | ASHARE_API_TOKEN | 访问鉴权；**R22 起为默认拒绝**——配了之后**所有** HTTP 路由都要 `X-API-Token`（写接口与 GET 一视同仁），唯一豁免 `GET /api/health`。**部署到公网/NAS 必须配置随机值**（`openssl rand -hex 32`）。backend 从 `backend/.env` 读，**web 容器需经 compose 透传同一值**（代理层运行时给**全部**请求附加请求头），见「鉴权凭据的传递路径」。⚠️ 前缀**绝不能**是 `NEXT_PUBLIC_` |
 | NEXT_PUBLIC_API_BASE | 前端 REST 基址；**留空即同源 `/backend`**（推荐） |
-| NEXT_PUBLIC_WS_BASE | 前端 WebSocket 基址；留空时同源尝试，失败自动降级 5s 轮询 |
+| NEXT_PUBLIC_WS_BASE | 可选直接 WebSocket 基址；留空走同源升级代理，失败保留既有5s轮询降级；手机忽略旧回环覆盖 |
 | BACKEND_ORIGIN | **服务端**变量，前端反代的目标后端地址（默认 `http://127.0.0.1:8000`），运行时生效 |
 
 > 完整清单与说明见 `.env.example`（由 `backend/tests/test_env_docs.py` 守护与 `config.py` 不漂移）。
@@ -89,9 +89,7 @@ docker compose -f docker-compose.prod.yml up -d --build
 2. `apps/web/app/backend/[...path]/route.ts` 在服务端把它转发到 `BACKEND_ORIGIN`
 3. `BACKEND_ORIGIN` 不是 `NEXT_PUBLIC_*`，**运行时读取，改了重启即生效，无需重新构建**
 
-WebSocket 例外：Route Handler 不代理 WS 升级。生产环境要么前置 nginx 反代并放开
-`Upgrade` 头，要么显式设置 `NEXT_PUBLIC_WS_BASE`；两者都不做时 `useQuoteStream`
-自动降级为 5s 轮询，功能完整只是不够实时。开发环境由 `.env.development` 直连后端。
+WebSocket 默认连接同源 `/backend/ws/quotes`，由 Next 16 `apps/web/proxy.ts` 在运行时做精确升级路径的外部 rewrite，沿同一个 `BACKEND_ORIGIN` 转发。普通 HTTP 仍走 Route Handler。可选 nginx 或 `NEXT_PUBLIC_WS_BASE` 直接连接，不再是同源实时推送的必需项；既有重连和5s轮询降级保留。手机不能使用访问者自己的 localhost 作为后端，HTTPS页面只接受wss。
 启用鉴权后 WS 还需带**子协议凭据**（经同源 `/api/ws-credential` 下发），
 nginx 反代时**不要剥掉 `Sec-WebSocket-Protocol`**；详见下文「WebSocket 面」。
 
@@ -161,8 +159,7 @@ docker compose -f docker-compose.prod.yml exec web printenv ASHARE_API_TOKEN | w
 - 未启用鉴权时 `/api/ws-credential` 返回 `{"subprotocol": null}`，前端**不传第二个参数**
   （注意 `new WebSocket(url, [])` 与 `new WebSocket(url)` 在浏览器里**不等价**）
   ⇒ 与加固前行为逐字一致。
-- WS **不走** Next 代理（Route Handler 不代理升级），故此凭据对 nginx 反代场景同样适用：
-  nginx 只要不剥掉 `Sec-WebSocket-Protocol` 即可。
+- 同源 WS 由 Next `proxy.ts` 精确升级 rewrite 原样转交子协议；代理不注入服务密钥，认证仍由后端完成。nginx 同样不能剥掉 `Sec-WebSocket-Protocol`。
 
 ## 运维工具：全 GET 端点巡检
 
@@ -279,8 +276,8 @@ node scripts/api-sweep.js http://127.0.0.1:8000
 
 ### 7. WS 与降级
 
-- Route Handler 不代理 WebSocket 升级 → 默认 5s HTTP 轮询自动降级，**功能不受影响**；
-- 要实时 WS：前置 nginx 放开 Upgrade 头，或设 `NEXT_PUBLIC_WS_BASE`
+- Route Handler 处理普通 HTTP；Next 16 `proxy.ts` 对同源 WebSocket 精确升级路径做运行时转发，原子协议/鉴权与失败降级保留；
+- 可选直接 WS：前置 nginx 放开 Upgrade 头，或设 `NEXT_PUBLIC_WS_BASE`
   （**构建期内联**，改了必须 `--build` 重构 web 镜像）。
 
 ### 8. 已知边界

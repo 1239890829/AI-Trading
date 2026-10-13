@@ -22,6 +22,7 @@ it.each([["贵州茅台", ""], ["贵州茅台分时图", "minute"]])("工作台�
   vi.stubGlobal("fetch", vi.fn(async () => ({ok: true, json: async () => ({data: {stocks: [{name: "贵州茅台", code: "600519"}], themes: []}})})));
   vi.mocked(getNewsContent).mockResolvedValue({kind: "news", title: source.title, source_label: "来源", published: source.date, paragraphs: [text], blocks: [{type: "p", text}], truncated: false, url: source.url});
   render(<SourceHost />);
+  fireEvent.click(await screen.findByRole("button", {name:"完整原文"}));
   const entity = await screen.findByRole("button", {name: "贵州茅台"});
   if (tab) expect(entity.getAttribute("title")).toContain("分时图");
   fireEvent.click(entity);

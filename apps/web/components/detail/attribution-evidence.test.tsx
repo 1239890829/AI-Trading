@@ -1,4 +1,4 @@
-import {act, cleanup, fireEvent, render, screen} from "@testing-library/react";
+import {act, cleanup, fireEvent, render, screen, within} from "@testing-library/react";
 import {afterEach, beforeEach, describe, expect, it, vi} from "vitest";
 import {getEventAttribution, getStockAttribution, type AttributionEvidenceItem, type StockAttributionPayload} from "@/lib/api";
 import {AttributionEvidence, StockAttributionPanel} from "./attribution-evidence";
@@ -25,14 +25,21 @@ beforeEach(() => {vi.mocked(getStockAttribution).mockResolvedValue(payload());})
 afterEach(() => {cleanup(); vi.clearAllMocks(); vi.restoreAllMocks(); vi.useRealTimers();});
 
 describe("shared attribution evidence", () => {
-  it("opens source context only for the explicitly expanded reason path, while preserving the message list", async () => {
+  it("shows source essentials in the selected overview and opens its bound original only on demand", async () => {
     render(<StockAttributionPanel symbol="600825" defaultExpanded defaultSourceExpanded />);
     expect(screen.queryByRole("article")).toBeNull();
     fireEvent.click(await screen.findByRole("button", {name: `查看归因消息：${evidence.title}`}));
     expect(screen.getAllByRole("article")).toHaveLength(1);
-    expect(screen.getByRole("tab", {name: "消息证据"}).getAttribute("aria-selected")).toBe("true");
-    expect(screen.getByText("尚未完成审计；不代表完成收购。")).toBeTruthy();
+    expect(screen.queryByRole("tabpanel")).toBeNull();
+    expect(within(screen.getByLabelText("来源要点摘录")).getByText(evidence.source_context!.summary!)).toBeTruthy();
+    expect(screen.queryByLabelText("解释版本绑定的来源内容")).toBeNull();
+    expect(screen.queryByRole("link", {name: "解释版本绑定的来源内容原文"})).toBeNull();
+    fireEvent.click(screen.getByRole("tab", {name: "消息证据"}));
+    const source = within(screen.getByRole("tabpanel", {name: "消息证据"}));
+    expect(source.getByLabelText("解释版本绑定的来源内容").textContent).toBe(evidence.source_context!.summary);
+    expect(source.getByRole("link", {name: "解释版本绑定的来源内容原文"}).getAttribute("href")).toBe(evidence.source_context!.url);
     expect(getStockAttribution).toHaveBeenCalledTimes(1);
+    expect(getEventAttribution).not.toHaveBeenCalled();
   });
   it("starts with compact message buttons and opens only the selected detail without another read", async () => {
     vi.mocked(getStockAttribution).mockResolvedValue(listPayload());
@@ -46,8 +53,10 @@ describe("shared attribution evidence", () => {
     expect(screen.queryByText(secondEvidence.title)).toBeNull();
     expect(screen.getByText(/尚属预案（拟）/)).toBeTruthy();
     expect(screen.getByText(/消息可用时间晚于首次加入/)).toBeTruthy();
+    expect(within(screen.getByLabelText("来源要点摘录")).getByText(evidence.source_context!.summary!)).toBeTruthy();
+    expect(screen.queryByRole("tabpanel")).toBeNull();
     fireEvent.click(screen.getByRole("tab", {name: "消息证据"}));
-    expect(screen.getByText("尚未完成审计；不代表完成收购。")).toBeTruthy();
+    expect(within(screen.getByRole("tabpanel", {name: "消息证据"})).getByLabelText("解释版本绑定的来源内容").textContent).toBe(evidence.source_context!.summary);
     expect(getStockAttribution).toHaveBeenCalledTimes(1);
     expect(getEventAttribution).not.toHaveBeenCalled();
   });
@@ -189,12 +198,17 @@ describe("shared attribution evidence", () => {
   });
 
   it("qualifies strong original interpretation wording without losing its source trace", () => {
-    render(<AttributionEvidence item={{...evidence, stock_relation: {...evidence.stock_relation, basis: "权威关联：收购标的", chain: "直接利好相关业务"}}} />);
+    render(<AttributionEvidence symbol="600825" item={{...evidence, stock_relation: {...evidence.stock_relation, basis: "权威关联：收购标的", chain: "直接利好相关业务"}}} />);
     expect(screen.getByText("来源收录不等于消息属实；关联与方向仍须核对。")).toBeTruthy();
+    const summary = within(screen.getByLabelText("当前关联依据摘要"));
+    expect(summary.getByText("已记录依据 · 待核")).toBeTruthy();
+    expect(summary.getByText("权威关联：收购标的")).toBeTruthy();
+    expect(summary.getByText("直接利好相关业务")).toBeTruthy();
     fireEvent.click(screen.getByRole("tab", {name: "个股关联"}));
-    expect(screen.getAllByLabelText("原解释（待核）")).toHaveLength(2);
-    expect(screen.getByText(/权威关联：收购标的/)).toBeTruthy();
-    expect(screen.getByText(/直接利好相关业务/)).toBeTruthy();
+    const relation = within(screen.getByRole("tabpanel", {name: "个股关联"}));
+    expect(relation.getAllByLabelText("原解释（待核）")).toHaveLength(2);
+    expect(relation.getByText("权威关联：收购标的")).toBeTruthy();
+    expect(relation.getByText("直接利好相关业务")).toBeTruthy();
   });
 
   it("waits for explicit expansion and adds no candidate timer", async () => {
@@ -251,9 +265,11 @@ describe("shared attribution evidence", () => {
     expect(screen.getByText("来源内容待核")).toBeTruthy();
     expect(screen.getByText("市场响应待核")).toBeTruthy();
     expect(screen.getByText(/尚属预案（拟）/)).toBeTruthy();
+    expect(within(screen.getByLabelText("来源要点摘录")).getByText(evidence.source_context!.summary!)).toBeTruthy();
     fireEvent.click(screen.getByRole("tab", {name: "消息证据"}));
-    expect(screen.getByText("尚未完成审计；不代表完成收购。")).toBeTruthy();
-    expect(screen.getByRole("link", {name: "解释版本绑定的来源内容原文"}).getAttribute("href")).toBe("https://example.com/18");
+    const source = within(screen.getByRole("tabpanel", {name: "消息证据"}));
+    expect(source.getByLabelText("解释版本绑定的来源内容").textContent).toBe(evidence.source_context!.summary);
+    expect(source.getByRole("link", {name: "解释版本绑定的来源内容原文"}).getAttribute("href")).toBe("https://example.com/18");
     fireEvent.click(screen.getByRole("tab", {name: "核对时点"}));
     expect(screen.getByText(/未知，未用收录时间补填/)).toBeTruthy();
     expect(screen.queryByText(/置信度|上涨概率|已确认涨停原因/)).toBeNull();
@@ -261,11 +277,15 @@ describe("shared attribution evidence", () => {
 
   it("marks legacy card excerpts without inventing a source observation binding", () => {
     render(<AttributionEvidence item={{...evidence, source: {...evidence.source, source_tier: null, source_tier_label: "来源等级未知"}, source_context: {...evidence.source_context!, observation_id: null}, interpretation_ref: {...evidence.interpretation_ref, observation_id: null}}} />);
+    const preview = within(screen.getByLabelText("来源要点摘录"));
+    expect(preview.getByText("来源要点 · 绑定待核")).toBeTruthy();
+    expect(preview.getByText(evidence.source_context!.summary!)).toBeTruthy();
     fireEvent.click(screen.getByRole("tab", {name: "消息证据"}));
-    expect(screen.getByText("旧卡片摘录 · 来源观察身份未记录")).toBeTruthy();
-    expect(screen.queryByText("解释版本绑定的来源内容")).toBeNull();
-    expect(screen.getByText("尚未完成审计；不代表完成收购。")).toBeTruthy();
-    expect(screen.getByText(/来源等级未知/)).toBeTruthy();
+    const source = within(screen.getByRole("tabpanel", {name: "消息证据"}));
+    expect(source.getByText("旧卡片摘录 · 来源观察身份未记录")).toBeTruthy();
+    expect(source.queryByLabelText("解释版本绑定的来源内容")).toBeNull();
+    expect(source.getByLabelText("旧卡片摘录 · 来源观察身份未记录").textContent).toBe(evidence.source_context!.summary);
+    expect(source.getByText(/来源等级未知/)).toBeTruthy();
   });
 
   it("keeps a mismatching source observation distinct from the interpretation binding", () => {
@@ -319,5 +339,66 @@ describe("shared attribution evidence", () => {
     expect(screen.getByText("来源已修订，待复核内容")).toBeTruthy();
     expect(screen.getByText("公司澄清不涉及相关业务")).toBeTruthy();
     expect(screen.queryByRole("link", {name: "来源已修订，待复核内容原文"})).toBeNull();
+  });
+
+  it("renders recorded relationships, readable essentials and all four clocks without opening a detail node", () => {
+    render(<AttributionEvidence item={evidence}/>);
+    const graph = screen.getByLabelText("归因资料关系");
+    expect(within(graph).getByText("事件解释")).toBeTruthy();
+    expect(within(graph).getByText("解释 #22")).toBeTruthy();
+    expect(within(graph).getByText("版本引用的来源")).toBeTruthy();
+    expect(within(graph).getByText("题材成员关联 · 待核")).toBeTruthy();
+    expect(within(graph).getByText("市场观察 · 非因果")).toBeTruthy();
+    expect(within(graph).getByText("传媒")).toBeTruthy();
+    expect(screen.queryByRole("tabpanel")).toBeNull();
+    expect(within(screen.getByLabelText("来源要点摘录")).getByText(evidence.source_context!.summary!)).toBeTruthy();
+    const summary = within(screen.getByLabelText("当前关联依据摘要"));
+    expect(summary.getByText("已记录依据 · 待核")).toBeTruthy();
+    expect(summary.getByText(evidence.stock_relation.basis)).toBeTruthy();
+    expect(summary.getByText(evidence.stock_relation.chain)).toBeTruthy();
+    expect(screen.queryByLabelText("关联依据")).toBeNull();
+    expect(screen.queryByLabelText("传导线索")).toBeNull();
+    const timeline = screen.getByLabelText("来源与解释时点");
+    expect([...timeline.querySelectorAll("dt")].map(node => node.textContent)).toEqual(["来源发布", "系统收到", "消息可用", "解释生效"]);
+    expect(within(timeline).getByText("未知，未用收录时间补填")).toBeTruthy();
+    expect(timeline.textContent).not.toContain("解释 #22");
+  });
+
+  it("keeps every qualifier and negative boundary visible through opening and closing a relationship node", () => {
+    const item = {...evidence, qualifiers: [
+      {kind: "proposed", label: "尚属预案", matched_terms: ["拟"]},
+      {kind: "not_completed", label: "尚未审议", matched_terms: ["未完成"]},
+      {kind: "amount", label: "金额不超过 12.36 亿元", matched_terms: []},
+    ], limitations: ["本年度不改主业。", "没有借壳计划。", "不代表直接受益。"]};
+    render(<AttributionEvidence item={item}/>);
+    expect(within(screen.getByLabelText("关键条件")).getAllByRole("listitem").map(node => node.textContent)).toEqual(["尚属预案（拟）", "尚未审议（未完成）", "金额不超过 12.36 亿元"]);
+    expect(within(screen.getByLabelText("解读边界")).getAllByRole("listitem").map(node => node.textContent)).toEqual(item.limitations);
+    fireEvent.click(screen.getByRole("tab", {name: "题材关联"}));
+    const relation = within(screen.getByRole("tabpanel", {name: "题材关联"}));
+    expect(within(relation.getByLabelText("关联依据")).getByText(evidence.stock_relation.basis)).toBeTruthy();
+    expect(within(relation.getByLabelText("传导线索")).getByText(evidence.stock_relation.chain)).toBeTruthy();
+    fireEvent.keyDown(screen.getByRole("tabpanel"), {key: "Escape"});
+    expect(screen.queryByRole("tabpanel")).toBeNull();
+    expect(screen.getByText("没有借壳计划。")).toBeTruthy();
+  });
+
+  it("does not draw a recorded source binding or invented stock for legacy evidence", () => {
+    render(<AttributionEvidence item={{...evidence, source_context: {...evidence.source_context!, observation_id: null}, interpretation_ref: {...evidence.interpretation_ref, observation_id: null}, stock_relation: {...evidence.stock_relation, matched_themes: []}}}/>);
+    expect(screen.getByText("来源绑定待核")).toBeTruthy();
+    expect(screen.queryByText("版本引用的来源")).toBeNull();
+    expect(screen.getByText("关联对象未记录")).toBeTruthy();
+    expect(screen.queryByText(/个股 600825/)).toBeNull();
+    fireEvent.click(screen.getByRole("tab", {name: "消息证据"}));
+    expect(screen.getByText("旧卡片摘录 · 来源观察身份未记录")).toBeTruthy();
+  });
+
+  it("does not claim a known source observation is bound to an unknown interpretation version", () => {
+    render(<AttributionEvidence item={{...evidence, interpretation_ref: {...evidence.interpretation_ref, version_id: null}}}/>);
+    expect(screen.getByText("版本未知")).toBeTruthy();
+    expect(screen.getByText("来源绑定待核")).toBeTruthy();
+    expect(screen.queryByText("版本引用的来源")).toBeNull();
+    fireEvent.click(screen.getByRole("tab", {name: "消息证据"}));
+    expect(screen.getByText("来源观察内容 · 解释绑定待核")).toBeTruthy();
+    expect(screen.queryByText("解释版本绑定的来源内容")).toBeNull();
   });
 });

@@ -1,5 +1,5 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { act, cleanup, fireEvent, render, screen, waitFor } from "@testing-library/react";
+import { act, cleanup, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import { ReviewTab } from "./review-tab";
 import type { ReviewReportDetail, ReviewReportSummary } from "@/lib/api";
 
@@ -94,10 +94,12 @@ it("keeps observations, judgments and every gap condition distinct without chang
   vi.mocked(mocked.getReviewReport).mockResolvedValue(report);
   render(<ReviewTab allowDispose/>);
   expect(await screen.findByText("仅取得 12.36 亿元的单源记录。")).toBeTruthy();
-  fireEvent.click(screen.getByRole("tab",{name:"报告判断"}));
-  expect(screen.getByText("尚不能判断可靠性。")).toBeTruthy();
-  fireEvent.click(screen.getByRole("tab",{name:"已列缺口"}));
+  expect(screen.getByText("原判断摘录：尚不能判断可靠性。")).toBeTruthy();
   expect(screen.getByText(/发布时间未知.*不能回填时点.*P0/)).toBeTruthy();
+  fireEvent.click(screen.getByRole("tab",{name:"报告判断"}));
+  expect(within(screen.getByRole("tabpanel",{name:"报告判断"})).getByText("尚不能判断可靠性。")).toBeTruthy();
+  fireEvent.click(screen.getByRole("tab",{name:"已列缺口"}));
+  expect(within(screen.getByRole("tabpanel",{name:"已列缺口"})).getByText(/发布时间未知.*不能回填时点.*P0/)).toBeTruthy();
   expect(screen.getByRole("button",{name:"确认"})).toBeTruthy();
   expect(mocked.updateActionItemStatus).not.toHaveBeenCalled();
 });

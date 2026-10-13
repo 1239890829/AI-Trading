@@ -26,7 +26,8 @@ it("opens each rung cause for reading without adding a wide table column", async
   fireEvent.click(screen.getByRole("button", {name: /涨停原因 · 查看原文/}));
   const dialog = await screen.findByRole("dialog", {name: "涨停原因原文"});
   expect(within(dialog).getByText("拟收购财联社+重大资产重组")).toBeTruthy();
-  expect(within(dialog).getByText(/2026-10-09 · 同花顺/)).toBeTruthy();
+  expect(within(dialog).getByText("2026-10-09")).toBeTruthy();
+  expect(within(dialog).getByText("同花顺 · 数据源归因 · 因果待核")).toBeTruthy();
   expect(container.querySelectorAll("thead th")).toHaveLength(9);
 });
 

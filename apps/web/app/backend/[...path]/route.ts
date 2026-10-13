@@ -11,8 +11,8 @@ import { buildUpstreamHeaders } from "@/lib/proxy-headers";
  * 构建期默认的 8000 端口。那意味着换后端主机必须重新构建，部署场景不可接受。
  *
  * Route Handler 每次请求都在服务端求值，改环境变量重启即生效。
- * 唯一代价：Next 的 rewrite 不代理 WebSocket 升级，WS 需要显式配
- * NEXT_PUBLIC_WS_BASE 或用前置反代（连接失败时 useQuoteStream 自动降级轮询）。
+ * 普通 Route Handler 不处理 WebSocket 升级；该路径由根 proxy.ts 在路由前
+ * 读取同一个 BACKEND_ORIGIN，运行时外部 rewrite 给 Next 的 Upgrade 代理。
  * ⚠️ WS 走**子协议凭据**（R22），其投递路径见 `app/api/ws-credential/route.ts`。
  */
 const DEFAULT_BACKEND = "http://127.0.0.1:8000";

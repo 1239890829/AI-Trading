@@ -423,7 +423,7 @@ export function TaskCenter() {
                 </p>
               )}
 
-              <FactTimeline label="任务时点" items={[{label:"创建",value:detail.created_at ? timeText(detail.created_at) : "未记录"},{label:"开始",value:detail.started_at ? timeText(detail.started_at) : "未记录"},{label:"结束",value:detail.finished_at ? timeText(detail.finished_at) : "未记录"}]}/>
+              <FactTimeline label="任务时点" items={[{label:"创建",value:detail.created_at ? timeText(detail.created_at) : "未记录",kind:"time"},{label:"开始",value:detail.started_at ? timeText(detail.started_at) : "未记录",kind:"time"},{label:"结束",value:detail.finished_at ? timeText(detail.finished_at) : "未记录",kind:"time"}]}/>
               {detail.steps.length === 0 ? (
                 <p className="text-[11px] text-zinc-600 dark:text-zinc-400">暂无步骤（任务刚创建，等待执行）。</p>
               ) : (

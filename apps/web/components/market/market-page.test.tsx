@@ -41,6 +41,7 @@ it("closes failed sentiment evidence and requires a fresh user click after recov
   render(<MarketPage />);
   await act(async () => {});
   fireEvent.click(screen.getByRole("button", {name: "依据与失效条件"}));
+  fireEvent.click(screen.getByRole("tab", {name:"观测依据"}));
   expect(within(screen.getByRole("dialog", {name: "市场情绪依据与失效条件"})).getByText(/涨跌宽度修复/)).toBeTruthy();
 
   vi.mocked(api.getSentiment).mockRejectedValueOnce(new Error("offline"));
@@ -52,6 +53,7 @@ it("closes failed sentiment evidence and requires a fresh user click after recov
   expect(screen.queryByRole("dialog")).toBeNull();
   expect(screen.getByRole("button", {name: "依据与失效条件"}).getAttribute("aria-expanded")).toBe("false");
   fireEvent.click(screen.getByRole("button", {name: "依据与失效条件"}));
+  fireEvent.click(screen.getByRole("tab", {name:"观测依据"}));
   expect(within(screen.getByRole("dialog", {name: "市场情绪依据与失效条件"})).getByText(/涨跌宽度修复/)).toBeTruthy();
   expect(api.getSentiment).toHaveBeenCalledTimes(3);
 });
@@ -116,7 +118,8 @@ it("shows attribution from the same pool row in the market leaders preview", asy
   fireEvent.click(screen.getByRole("button", {name: /涨停原因 · 查看原文/}));
   const dialog = screen.getByRole("dialog", {name: "涨停原因原文"});
   expect(within(dialog).getByText("拟收购财联社+重大资产重组")).toBeTruthy();
-  expect(within(dialog).getByText(/2026-10-09 · 同花顺/)).toBeTruthy();
+  expect(within(dialog).getByText("2026-10-09")).toBeTruthy();
+  expect(within(dialog).getByText("同花顺 · 数据源归因 · 因果待核")).toBeTruthy();
 });
 
 it.each(["fund", "heatmap", "events"])("%s lens never starts overview polling, switching back fetches every overview source immediately", async lens => {

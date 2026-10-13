@@ -14,7 +14,8 @@ import { useRouter } from "next/navigation";
 import { HugeiconsIcon } from "@hugeicons/react";
 import ArrowUpRight01Icon from "@hugeicons/core-free-icons/ArrowUpRight01Icon";
 
-import { API_BASE, getNewsContent, type ArticleContent, type EventInterpretationRef } from "@/lib/api";
+import { API_BASE, getNewsContent, type ArticleContent, type EventInterpretationRef, type EventSummary } from "@/lib/api";
+import {EventOverview} from "@/components/events/event-overview";
 import { StockAttributionPanel } from "@/components/detail/attribution-evidence";
 import { withFrom } from "@/lib/routing";
 import { parseWorkbenchDetailUrl } from "@/lib/detail-tabs";
@@ -39,6 +40,7 @@ export interface NewsModalItem {
   judgement?: string;
   eventId?: number;
   eventRef?: EventInterpretationRef | null;
+  eventSnapshot?: EventSummary;
   symbol?: string | null;
 }
 
@@ -191,7 +193,7 @@ export function NewsModal({ item, onClose }: { item: NewsModalItem | null; onClo
             {shownItem.kindLabel && <span className="rounded bg-zinc-100 px-1 py-px dark:bg-zinc-800">{shownItem.kindLabel}</span>}
             {shownSource && <span>{shownSource}</span>}
             {shownTime && <span>{shownTime}</span>}
-            {shownItem.evidence && <span>{shownItem.evidence}</span>}
+            {shownItem.evidence && !shownItem.eventSnapshot && <span>{shownItem.evidence}</span>}
             {content?.cached && <span className="text-zinc-600 dark:text-zinc-400">缓存</span>}
             {content?.truncated && <span className="text-amber-800 dark:text-amber-500">长文已截断，完整内容见原文</span>}
           </div>
@@ -214,7 +216,8 @@ export function NewsModal({ item, onClose }: { item: NewsModalItem | null; onClo
       bodyClassName="overflow-y-auto px-5 py-4"
       bodyTestId="news-modal-body"
     >
-          {shownItem.judgement && (
+          {shownItem.eventSnapshot && <EventOverview event={shownItem.eventSnapshot} symbol={shownItem.symbol} />}
+          {shownItem.judgement && !shownItem.eventSnapshot && (
             <div role="note" className="mb-4 border-b border-zinc-200 pb-3 text-xs leading-relaxed text-zinc-600 dark:border-zinc-700 dark:text-zinc-300">
               <NarrativeText text={shownItem.judgement} label="方向说明" identity={shownItem.url}/>
             </div>
@@ -231,9 +234,9 @@ export function NewsModal({ item, onClose }: { item: NewsModalItem | null; onClo
           {!loading && content && (
             // blocks 为空（旧缓存/公告旧响应）时回退 paragraphs，绝不满屏空白
             content.blocks?.length > 0 ? (
-              <ArticleBlocks identity={shownItem.url} blocks={content.blocks} matcher={matcher} onNavigate={onNavigate} />
+              <ArticleBlocks identity={shownItem.url} title={shownTitle} alreadyShownExcerpt={shownItem.eventSnapshot?.summary ?? undefined} blocks={content.blocks} matcher={matcher} onNavigate={onNavigate} />
             ) : (
-              <ArticleBlocks identity={shownItem.url} blocks={content.paragraphs.map(text => ({type: "p", text}))} matcher={matcher} onNavigate={onNavigate} />
+              <ArticleBlocks identity={shownItem.url} title={shownTitle} alreadyShownExcerpt={shownItem.eventSnapshot?.summary ?? undefined} blocks={content.paragraphs.map(text => ({type: "p", text}))} matcher={matcher} onNavigate={onNavigate} />
             )
           )}
 

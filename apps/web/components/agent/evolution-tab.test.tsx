@@ -32,7 +32,8 @@ it("separates original evidence, proposed actions and validation plans while kee
   agenda.items[0].evidence={amount:12.36,condition:"尚需审阅，不构成批准"};
   vi.mocked(getAgentAgenda).mockResolvedValue(agenda);
   render(<EvolutionTab/>);
-  const raw=await screen.findByLabelText("议程原始依据 JSON");
+  fireEvent.click(await screen.findByRole("tab",{name:"原始依据"}));
+  const raw=screen.getByLabelText("议程原始依据 JSON");
   expect(raw.textContent).toContain("尚需审阅，不构成批准");
   fireEvent.click(screen.getByRole("tab",{name:"预期与验证"}));
   expect(screen.getByText("验证：隔离测试")).toBeTruthy();

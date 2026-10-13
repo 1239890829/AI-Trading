@@ -67,7 +67,8 @@ describe("shared security detail limit-up attribution", () => {
     fireEvent.click(await screen.findByRole("button",{name:"查看全文"}));
     expect(screen.getByRole("dialog")).toBeTruthy();
     await refreshPool();
-    expect(screen.queryByText("涨停原因")).toBeNull();
+    // An inert exit image may retain its graphic title; no active source or action survives.
+    expect(screen.queryByRole("button", {name: "查看全文"})).toBeNull();
     expect(screen.queryByRole("dialog")).toBeNull();
     await refreshPool();
     await screen.findByRole("button",{name:"查看全文"});
@@ -79,7 +80,8 @@ describe("shared security detail limit-up attribution", () => {
     fireEvent.click(await screen.findByRole("button",{name:"查看全文"}));
     const dialog = await screen.findByRole("dialog",{name:"涨停原因 600825"});
     expect(within(dialog).getByText("拟收购财联社+重大资产重组")).toBeTruthy();
-    expect(within(dialog).getByText(/2026-10-09 · 同花顺/)).toBeTruthy();
+    expect(within(dialog).getByLabelText("交易日记录").textContent).toContain("2026-10-09");
+    expect(within(dialog).getByText(/同花顺 · 数据源归因 · 因果待核/)).toBeTruthy();
     fireEvent.click(within(dialog).getByRole("button",{name:"关闭"}));
     await vi.waitFor(() => expect(screen.queryByRole("dialog",{name:"涨停原因 600825"})).toBeNull());
     expect(within(container).getByText("拟收购财联社+重大资产重组")).toBeTruthy();
@@ -101,7 +103,7 @@ describe("shared security detail limit-up attribution", () => {
     expect(screen.getByRole("dialog", {name:"涨停原因 600825"})).toBeTruthy();
     rerender(<LimitUpReasonPanel symbol="600127" quote={quote("600127")} />);
     await act(async () => {});
-    expect(screen.queryByText("涨停原因")).toBeNull();
+    expect(screen.queryByRole("button", {name: "查看全文"})).toBeNull();
     rerender(<LimitUpReasonPanel symbol="600825" quote={quote()} />);
     await screen.findByRole("button", {name:"查看全文"});
     expect(screen.queryByRole("dialog")).toBeNull();
@@ -112,7 +114,7 @@ describe("shared security detail limit-up attribution", () => {
     fireEvent.click(await screen.findByRole("button",{name:"查看全文"}));
     expect(screen.getByRole("dialog")).toBeTruthy();
     await refreshPool();
-    expect(screen.queryByText("涨停原因")).toBeNull();
+    expect(screen.queryByRole("button", {name: "查看全文"})).toBeNull();
     expect(screen.queryByRole("dialog")).toBeNull();
     await refreshPool();
     await screen.findByRole("button",{name:"查看全文"});
@@ -171,8 +173,11 @@ describe("shared security detail limit-up attribution", () => {
     const {container} = render(<LimitReason reason={reason} compact />);
     fireEvent.click(screen.getByRole("button", {name: /涨停原因 · 查看原文/}));
     const dialog = await screen.findByRole("dialog", {name: "涨停原因原文"});
-    expect(within(dialog).getByText(reason)).toBeTruthy();
-    expect(within(dialog).getByText(/来源未记录/)).toBeTruthy();
+    expect(within(dialog).queryByRole("tabpanel")).toBeNull();
+    fireEvent.click(within(dialog).getByRole("button", {name:"完整原文"}));
+    expect(within(dialog).getByLabelText("数据源归因原文完整原文").textContent).toContain(reason);
+    expect(within(within(dialog).getByLabelText("数据源归因原文完整原文")).getByText(reason).textContent).toBe(reason);
+    expect(within(dialog).getByText(/来源未记录 · 数据源归因 · 因果待核/)).toBeTruthy();
     expect(container.querySelector(".truncate")).toBeNull();
   });
 

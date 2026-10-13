@@ -2,6 +2,49 @@
   min-height: 44px;
 }
 
+.evidence {
+  display: grid;
+  min-width: 0;
+  gap: 18px;
+  padding: 12px 0;
+  font-size: .75rem;
+  line-height: 1.7;
+  color: var(--ui-ink);
+  overflow-wrap: anywhere;
+}
+
+.evidenceHeader {min-width: 0;}
+.evidenceHeader h3 {margin: 0;font-size: .875rem;font-weight: 600;line-height: 1.6;text-wrap: pretty;}
+.dimensions {display: flex;flex-wrap: wrap;gap: 4px 12px;margin: 7px 0 0;padding: 0;list-style: none;color: var(--ui-muted);font-size: .6875rem;}
+.boundary {margin: 0;color: var(--ui-muted);font-size: .6875rem;}
+.identity,.nodeFact {display: block;margin-top: 3px;font-size: .6875rem;color: var(--ui-muted);}
+.nodeContent {display: grid;gap: 14px;min-width: 0;}
+.nodeContent p {margin: 0;}
+.nodeContent h4 {margin: 0 0 6px;font-size: .75rem;font-weight: 600;}
+.sourceCopy {min-width: 0;max-width: 72ch;margin: 0;white-space: pre-wrap;overflow-wrap: anywhere;}
+.sourceCopy p {margin: 0 0 8px;}
+.sourceFacts {display: grid;grid-template-columns: repeat(2,minmax(0,1fr));gap: 8px 18px;margin: 0;}
+.sourceFacts > div {min-width: 0;}
+.sourceFacts dt {font-size: .6875rem;color: var(--ui-muted);}
+.sourceFacts dd {margin: 3px 0 0;min-width: 0;font-variant-numeric: tabular-nums;overflow-wrap: anywhere;}
+.conditionArea {display: grid;gap: 18px;min-width: 0;}
+
+.reasonOverview {display: grid;gap: 14px;min-width: 0;font-size: .75rem;line-height: 1.7;color: var(--ui-ink);}
+.reasonMeta {display: flex;flex-wrap: wrap;gap: 5px 14px;margin: 0;font-size: .6875rem;color: var(--ui-muted);font-variant-numeric: tabular-nums;}
+.reasonUnknown {display: flex;align-items: flex-start;gap: 9px;min-width: 0;padding: 10px 0;color: var(--ui-muted);}
+.reasonUnknown svg {flex: none;margin-top: 2px;}
+.reasonUnknown p {margin: 0;}
+.reasonUnknown small {display: block;margin-top: 4px;font-size: .6875rem;}
+.reasonEntry {display: grid;grid-template-columns: minmax(0,1fr) auto;align-items: center;gap: 8px;width: 100%;min-width: 0;text-align: left;}
+.reasonEntry span {min-width: 0;}
+.reasonEntry svg {flex: none;}
+
+@media(max-width:480px) {
+  .evidence {gap: 14px;}
+  .sourceFacts {column-gap: 12px;}
+  .reasonEntry {min-height: 44px;}
+}
+
 .panelToggle.panelToggle {
   flex-shrink: 1;
   white-space: normal;

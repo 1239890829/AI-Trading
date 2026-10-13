@@ -19,11 +19,31 @@ export interface Freshness {
 }
 
 export function wsBase(): string {
-  if (process.env.NEXT_PUBLIC_WS_BASE) return process.env.NEXT_PUBLIC_WS_BASE;
-  if (API_BASE.startsWith("http")) return API_BASE.replace(/^http/, "ws");
+  const usable = (value: string): string | null => {
+    try {
+      const target = new URL(value);
+      if (!["ws:", "wss:"].includes(target.protocol) || target.username || target.password || target.search || target.hash) return null;
+      if (typeof window !== "undefined") {
+        if (window.location.protocol === "https:" && target.protocol !== "wss:") return null;
+        const loopback = (host: string) => /^(?:localhost|127(?:\.\d{1,3}){3}|\[::1\]|0\.0\.0\.0)$/i.test(host);
+        const page = new URL(`${window.location.protocol}//${window.location.host}`);
+        // A LAN phone's localhost is the phone, never this machine's backend.
+        if (loopback(target.hostname) && !loopback(page.hostname)) return null;
+      }
+      return value.replace(/\/$/, "");
+    } catch {return null;}
+  };
+  const configured = process.env.NEXT_PUBLIC_WS_BASE && usable(process.env.NEXT_PUBLIC_WS_BASE);
+  if (configured) return configured;
+  if (API_BASE.startsWith("http")) {
+    const direct = usable(API_BASE.replace(/^http/, "ws"));
+    if (direct) return direct;
+  }
   if (typeof window === "undefined") return "";
   const proto = window.location.protocol === "https:" ? "wss:" : "ws:";
-  return `${proto}//${window.location.host}${API_BASE}`;
+  const relative = API_BASE.startsWith("http") || API_BASE.startsWith("//") ? "/backend" : API_BASE;
+  const path = relative.replace(/^\/+|\/+$/g, "");
+  return `${proto}//${window.location.host}${path ? `/${path}` : ""}`;
 }
 
 export class ApiError extends Error {

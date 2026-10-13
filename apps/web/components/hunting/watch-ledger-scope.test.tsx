@@ -63,6 +63,7 @@ it("keeps an undated inspection read-only even when today's row has an entry pri
   await screen.findByText("记录 600127");
   expect(getWatchLedger).toHaveBeenCalledWith(undefined, 5);
   expect(screen.queryByRole("button", {name: "模拟建仓"})).toBeNull();
+  fireEvent.click(screen.getByRole("tab", {name:"参考跟踪"}));
   expect(screen.getByText(/此旁览只读核对，不提交模拟委托/)).toBeTruthy();
   expect(placePaperOrder).not.toHaveBeenCalled();
 });

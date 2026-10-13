@@ -1,7 +1,7 @@
 import {act, cleanup, fireEvent, render, screen} from "@testing-library/react";
 import {afterEach, expect, it, vi} from "vitest";
 import {DetailModalProvider, useDetailModal} from "./detail-modal";
-import {getEventsForSymbol, getStockAttribution, type EventSummary} from "@/lib/api";
+import {getEventsForSymbol, getNewsContent, getStockAttribution, type EventSummary} from "@/lib/api";
 
 vi.mock("@/lib/api", () => ({getEventsForSymbol: vi.fn(), getNewsContent: vi.fn(), getStockAttribution: vi.fn()}));
 vi.mock("@/components/ui/modal-shell", () => ({ModalShell: ({children, open, onClose}: {children: React.ReactNode; open: boolean; onClose: () => void}) => <section aria-hidden={!open || undefined} inert={!open} data-testid="detail-shell">{open && <button onClick={onClose}>关闭详情</button>}{children}</section>}));
@@ -31,7 +31,8 @@ it("feed direction remains scoped to the requested stock across the click into d
   await screen.findByText("规则负向线索");
   expect(screen.queryByText("规则正向线索")).toBeNull();
   fireEvent.click(screen.getByRole("button", {name: /上游涨价，公司成本上升/}));
-  await screen.findByText("方向记录");
+  expect(screen.queryByRole("tabpanel")).toBeNull();
+  fireEvent.click(screen.getByRole("tab", {name: "个股 · 600519"}));
   expect(screen.getByText("规则负向线索")).toBeTruthy();
   expect(screen.getByText(/#20 · 生效/)).toBeTruthy();
   expect(JSON.stringify(event)).toBe(original);
@@ -93,4 +94,17 @@ it("selection evidence keeps original entry facts beside current explanations", 
   expect(screen.getByText(/原解释 #20/)).toBeTruthy();
   expect(screen.queryByText(/原文链接缺失/)).toBeNull();
   expect(getEventsForSymbol).not.toHaveBeenCalled();
+});
+
+
+it("keeps legacy paragraph-only source responses readable from the new material overview", async () => {
+  vi.mocked(getNewsContent).mockResolvedValue({kind:"news",title:"原报道",source_label:"来源",published:null,paragraphs:["政策尚未落地，最高补贴30%，需完成注册。"],blocks:[],truncated:false,url:"https://example.com/news"});
+  function NewsOpener(){const {open}=useDetailModal();return <button onClick={()=>open({kind:"news",title:"原报道",url:"https://example.com/news"})}>打开旧格式原文</button>;}
+  render(<DetailModalProvider><NewsOpener/></DetailModalProvider>);
+  fireEvent.click(screen.getByRole("button",{name:"打开旧格式原文"}));
+  await screen.findByRole("button",{name:"完整原文"});
+  expect(screen.queryByText("正文抓取为空（源站未返回内容）")).toBeNull();
+  fireEvent.click(screen.getByRole("button",{name:"完整原文"}));
+  expect(screen.getByLabelText("完整原文").textContent).toContain("政策尚未落地，最高补贴30%，需完成注册。");
+  expect(getNewsContent).toHaveBeenCalledTimes(1);
 });
