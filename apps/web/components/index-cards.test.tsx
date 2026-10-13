@@ -83,7 +83,7 @@ describe("IndexCards 指数点击交互", () => {
       ...indices[0], quality: "stale", quality_reasons: ["index_batch_missing"],
     }]} />);
     expect(screen.getByText("3,300.50")).toBeTruthy();
-    expect(screen.getByTitle("本轮未返回该指数，展示旧行情").textContent).toBe("过期");
+    expect(screen.getByTitle(/本轮未返回该指数，展示旧行情/).textContent).toBe("本轮缺项");
   });
 
   it("未传 onSelect 时卡片渲染但不报错（静默降级为纯展示）", () => {
@@ -117,7 +117,7 @@ describe("IndexCards 指数点击交互", () => {
       ...indices[0], quality: "stale", quality_reasons: ["index_batch_missing"],
     }]} />);
     expect(screen.getByText("3,300.50")).toBeTruthy();
-    expect(screen.getByTitle("本轮未返回该指数，展示旧行情").textContent).toBe("过期");
+    expect(screen.getByTitle(/本轮未返回该指数，展示旧行情/).textContent).toBe("本轮缺项");
     expect(screen.queryByText("正常")).toBeNull();
   });
 
@@ -142,6 +142,6 @@ describe("IndexCards 指数点击交互", () => {
     low.unmount();
     // 持久 stale（过期）必须显示，让用户知道数据陈旧
     const stale = render(<IndexCards indices={[mk("stale", ["refresh_failed"])]} />);
-    expect(stale.container.textContent).toContain("过期");
+    expect(stale.container.textContent).toContain("刷新异常");
   });
 });

@@ -1,6 +1,7 @@
 /** 资料页签：板块标签分组 + 主营业务 + 公司简介 + 最近财报。纯展示。
  *  fins 三态（审查 F2/R2）：undefined=加载中 → 骨架；null=确认无 → 文案；
  *  数组=渲染。此前加载中与确认空同显「暂无财报数据」抢跑。 */
+import {NarrativeText} from "@/components/ui/explanation-map";
 import { fmt, pctColor, pctText } from "@/lib/format";
 import { Skeleton } from "@/components/ui/loading";
 
@@ -61,15 +62,13 @@ export function ProfilePanel({
       {company?.main_business && (
         <div className="mb-2">
           <div className="mb-1 text-zinc-600 dark:text-zinc-400">主营业务</div>
-          <div className="leading-relaxed text-zinc-800 dark:text-zinc-200">{company.main_business}</div>
+          <NarrativeText text={company.main_business} label="主营业务" identity={company.name ?? company.main_business}/>
         </div>
       )}
       {company?.profile && (
         <div className="mb-3">
           <div className="mb-1 text-zinc-600 dark:text-zinc-400">公司简介</div>
-          <div className="line-clamp-5 leading-relaxed text-zinc-600 dark:text-zinc-400" title={company.profile}>
-            {company.profile}
-          </div>
+          <NarrativeText text={company.profile} label="公司简介" identity={company.name ?? company.profile}/>
         </div>
       )}
       <div className="mb-1 text-zinc-600 dark:text-zinc-400">最近财报</div>

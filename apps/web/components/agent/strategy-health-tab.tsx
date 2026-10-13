@@ -14,6 +14,7 @@
  * 3. 核验结论（`verification`）缺失时如实说"尚无核验产物"，不得留白让人以为已验证。
  */
 import { useResource } from "@/hooks/use-resource";
+import {ConditionList, ExplanationMap, NarrativeText} from "@/components/ui/explanation-map";
 
 import {
   getStrategyHealth,
@@ -90,9 +91,7 @@ export function StrategyHealthTab() {
       </div>
 
       {caveat && (
-        <p className="rounded border border-zinc-200 px-2 py-1 text-[10px] leading-relaxed text-zinc-600 dark:border-zinc-700 dark:text-zinc-400">
-          {caveat}
-        </p>
+        <ConditionList label="健康判读边界" items={[caveat]} tone="warning"/>
       )}
 
       {[{ label: "策略健康", resource: health }, { label: "核验登记册", resource: registryResource }].map(({ label, resource }) => resource.error != null &&
@@ -136,9 +135,11 @@ export function StrategyHealthTab() {
               </div>
 
               {it.note && (
-                <p className="mt-0.5 text-[10px] leading-relaxed text-zinc-600 dark:text-zinc-400">
-                  {it.note}
-                </p>
+                <ExplanationMap label="健康依据" identity={it.strategy_key} steps={[
+                  {id:"note",label:"判读说明",icon:"source",content:<NarrativeText text={it.note} label="原始判读说明"/>},
+                  {id:"window",label:"样本与口径",icon:"response",content:<ConditionList label="采样事实" items={[`口径：${it.basis || "未记录"}`,`窗口：${w?.groups ?? "未记录"} 组合日；${w?.total_picks ?? "未记录"} 笔；胜率 ${winRate}。`,"market_neutral 测 alpha 衰减；absolute 测策略自身变差，两者不可互相解释。"]}/>},
+                  {id:"limit",label:"核验边界",icon:"risk",tone:"warning",content:<ConditionList label="不能混同的结论" tone="warning" items={["状态为判不出，既不代表健康，也不代表失效。","健康窗口与离线核验按策略键关联，不是共同版本的同一快照。",...(v?.headline ? [v.headline] : [])]}/>},
+                ]}/>
               )}
 
               <p className="mt-0.5 text-[10px] text-zinc-600 dark:text-zinc-400">

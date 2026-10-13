@@ -27,6 +27,19 @@ function fixture(cls: AgentAgendaItem["class"], status: AgentAgendaItem["status"
   };
 }
 
+it("separates original evidence, proposed actions and validation plans while keeping the actual proposal outcome visible",async()=>{
+  const agenda=fixture("C","proposed");
+  agenda.items[0].evidence={amount:12.36,condition:"尚需审阅，不构成批准"};
+  vi.mocked(getAgentAgenda).mockResolvedValue(agenda);
+  render(<EvolutionTab/>);
+  const raw=await screen.findByLabelText("议程原始依据 JSON");
+  expect(raw.textContent).toContain("尚需审阅，不构成批准");
+  fireEvent.click(screen.getByRole("tab",{name:"预期与验证"}));
+  expect(screen.getByText("验证：隔离测试")).toBeTruthy();
+  expect(screen.getByText("补丁未应用，未运行宿主测试")).toBeTruthy();
+  expect(runAgentAgenda).not.toHaveBeenCalled();
+});
+
 describe("IMP-046 · 代码提案不冒充实际执行", () => {
   it("新提案显示待审，议程完成仅表示已处理", async () => {
     vi.mocked(getAgentAgenda).mockResolvedValue(fixture("C", "proposed"));

@@ -56,7 +56,7 @@ export const STREAM_STATUS_LABEL: Record<StreamStatus, { text: string; cls: stri
   live: { text: "WS 实时推送", cls: "text-sky-700 dark:text-sky-400" },
   polling: { text: "WS 断线 · REST 轮询", cls: "text-amber-800 dark:text-amber-400" },
   closed: { text: "休市 · 展示最近交易日数据", cls: "text-zinc-600 dark:text-zinc-400" },
-  stale: { text: "数据过期 · 后端刷新异常", cls: "text-amber-800 dark:text-amber-400" },
+  stale: { text: "行情待核 · 具体原因见质量提示", cls: "text-amber-800 dark:text-amber-400" },
   error: { text: "连接失败", cls: "text-red-700 dark:text-red-400" },
 };
 

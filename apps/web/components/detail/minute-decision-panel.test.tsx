@@ -1,5 +1,5 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { act, cleanup, fireEvent, render, screen, waitFor } from "@testing-library/react";
+import { act, cleanup, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import { MinuteDecisionPanel } from "@/components/detail/minute-decision-panel";
 import {
   getMinuteDecisions,
@@ -139,6 +139,41 @@ describe("MinuteDecisionPanel 做 T 决策", () => {
     mockedDecisions.mockResolvedValue(decisions([]));
     render(<MinuteDecisionPanel symbol="600519" />);
     await waitFor(() => expect(screen.getByText(/1 项输入缺失导致降级/)).toBeTruthy());
+    expect(screen.getByRole("region", {name:/1 项输入缺失导致降级/}).querySelector("details")).toBeNull();
+  });
+
+  it("keeps full trigger conditions, negations and input omissions while reading time or raw basis without extra requests", async () => {
+    const evidence = "偏离均价 -2.20% 后 3 分钟未创新低；尚未突破，不保证继续上涨。";
+    const invalidate = "跌破均价 3% 或报价失效时，不再沿用此偏向。";
+    const omission = "avg_dev: 缺近 5 日波动率，偏离阈值未做自适应";
+    mockedSignals.mockResolvedValue(signals([{...SIGNAL, triggered:[{...SIGNAL.triggered[0], evidence}], invalidate_condition:invalidate, basis:"使用本次可得成交量，不回填昨日缺失。"}], {degraded:[omission], basis:{volume_unit:"hand", previous_volume:null}}));
+    mockedDecisions.mockResolvedValue(decisions([]));
+    render(<MinuteDecisionPanel symbol="600519" />);
+    expect(await screen.findByText(evidence)).toBeTruthy();
+    expect(screen.getByText("规则 avg_dev · 触发值 -2.2 · 阈值 -1.5")).toBeTruthy();
+    expect(screen.getByText("权重 0.3 · 方向 -1")).toBeTruthy();
+    const reader = screen.getByRole("region", {name:"分钟信号依据"});
+    fireEvent.click(within(reader).getByRole("tab", {name:"信号时点"}));
+    expect(screen.getByText(SIGNAL.ts)).toBeTruthy();
+    expect(screen.queryByText(evidence)).toBeNull();
+    expect(screen.getByText(invalidate)).toBeTruthy();
+    expect(screen.getByText(omission)).toBeTruthy();
+    fireEvent.click(within(reader).getByRole("tab", {name:"记录口径"}));
+    expect(screen.getByText("使用本次可得成交量，不回填昨日缺失。")).toBeTruthy();
+    expect(screen.getByLabelText("信号输入口径原始值").textContent).toContain('"previous_volume": null');
+    expect(mockedSignals).toHaveBeenCalledTimes(1);
+    expect(mockedDecisions).toHaveBeenCalledTimes(1);
+  });
+
+  it("missing trigger and invalidation are explicit and never replaced by a passing status", async () => {
+    mockedSignals.mockResolvedValue(signals([{...SIGNAL,triggered:[],invalidate_condition:""}]));
+    mockedDecisions.mockResolvedValue(decisions([]));
+    render(<MinuteDecisionPanel symbol="600519" />);
+    await screen.findByText("低吸偏向");
+    const reader = screen.getByRole("region", {name:"分钟信号依据"});
+    fireEvent.click(within(reader).getByRole("tab", {name:"信号时点"}));
+    expect(screen.getByText("触发条件未记录，不能补推触发原因。")).toBeTruthy();
+    expect(screen.getByText("失效条件未记录，不能据此判断信号仍然有效。")).toBeTruthy();
   });
 
   it("outcome=null 显示「待结算」而非错误结论；expired 明确「未判定」", async () => {

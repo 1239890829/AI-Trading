@@ -1,5 +1,5 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { cleanup, fireEvent, render, screen } from "@testing-library/react";
+import { cleanup, fireEvent, render, screen, within } from "@testing-library/react";
 import { AccountScopePanel } from "./account-scope-panel";
 vi.mock("@/lib/api", () => ({getPaperAccount: vi.fn(async () => ({total: 100})), getPaperOrders: vi.fn(async () => [])}));
 vi.mock("@/lib/api/internal", () => ({getJson: vi.fn(async () => ({data: {enabled:false, note:"未启用精选影子"}}))}));
@@ -43,10 +43,13 @@ describe("account identity", () => {
     vi.mocked(internal.getJson).mockResolvedValueOnce({meta, data:{enabled:true,activation,runtime:{state:"unknown",as_of:null},scope:"shadow",cash:1000,executed_today:false,positions:[],recent_orders:[]}});
     render(<AccountScopePanel account="daily" />);
     expect(await screen.findByText(/09:30–09:40/)).toBeTruthy();
-    expect(screen.getByText(/运行状态未知/)).toBeTruthy();
+    expect(screen.getByText("后台回执：运行状态未知")).toBeTruthy();
     expect(screen.getByText(/今日尚无买入委托/)).toBeTruthy();
-    fireEvent.click(screen.getByText("什么时候需要启用"));
+    fireEvent.click(screen.getByRole("tab", {name:"执行时机"}));
     expect(screen.getByText(/后台检查间隔 60 秒/)).toBeTruthy();
+    expect(screen.getByText(/错过晨窗不追价/)).toBeTruthy();
+    fireEvent.click(screen.getByRole("tab", {name:"资格条件"}));
+    expect(screen.getByText(/T\+1、涨跌停、整手、费用与停牌限制/)).toBeTruthy();
     expect(screen.queryByText(/09:26/)).toBeNull();
     expect(screen.queryByRole("button", {name:/启动|启用/})).toBeNull();
     expect(api.getPaperAccount).not.toHaveBeenCalled();
@@ -64,20 +67,37 @@ describe("account identity", () => {
   it("leaves missing window and runtime unknown instead of inferring readiness from enabled", async () => {
     vi.mocked(internal.getJson).mockResolvedValueOnce({meta,data:{enabled:true}});
     render(<AccountScopePanel account="daily" />);
-    expect(await screen.findByText(/当前晨窗配置尚未返回/)).toBeTruthy();
-    expect(screen.getByText(/运行状态尚未返回/)).toBeTruthy();
+    const missing = await screen.findByRole("region", {name:"仍需核对"});
+    expect(within(missing).getByText("当前晨窗配置尚未返回")).toBeTruthy();
+    expect(screen.getByText("后台回执：运行状态尚未返回")).toBeTruthy();
     expect(screen.queryByText(/最近一轮已完成/)).toBeNull();
   });
 
   it("explains the opportunity shadow's qualified trigger and distinguishes paused runtime from completed evidence", async () => {
     vi.mocked(internal.getJson).mockResolvedValueOnce({meta,data:{enabled:true,activation:{...activation,mode:"qualified_buy_point",start_time:null,end_time:null,quote_recheck_seconds:60,poll_seconds:30},note:"只消费现有获准买点规则",trade_date:"2026-10-09",status:"incomplete",opportunities:0,independent_decisions:0,closed_fills:0,counts:{},net_return_pct:null,net_median_pct:null,win_rate:null,issues:[],runtime:{state:"paused",as_of:null},records:[]}});
     render(<AccountScopePanel account="hunting" />);
-    expect(await screen.findByText(/决定须在 60 秒内有效/)).toBeTruthy();
-    expect(screen.getByText(/调度已暂停/)).toBeTruthy();
-    fireEvent.click(screen.getByText("什么时候需要启用"));
-    expect(screen.getByText(/仅入选或出现在题材参考区不会自动触发/)).toBeTruthy();
+    await screen.findByRole("tab", {name:"执行时机"});
+    expect(screen.getByText("后台回执：调度已暂停")).toBeTruthy();
+    fireEvent.click(screen.getByRole("tab", {name:"执行时机"}));
+    expect(screen.getByText(/决定须在 60 秒内有效/)).toBeTruthy();
     expect(screen.getByText(/后台检查间隔 30 秒/)).toBeTruthy();
+    fireEvent.click(screen.getByRole("tab", {name:"资格条件"}));
+    expect(screen.getByText(/仅入选或出现在题材参考区不会自动触发/)).toBeTruthy();
     expect(screen.queryByText(/09:30–09:40/)).toBeNull();
+  });
+
+  it("reading the four stages preserves raw receipt time and reason without fetching again or activating a runner", async () => {
+    vi.mocked(internal.getJson).mockResolvedValueOnce({meta,data:{enabled:true,activation,runtime:{state:"degraded",as_of:"2026-10-09T09:34:12+08:00",reason:"quote_age_exceeded；限价未成交"},positions:[],recent_orders:[]}});
+    render(<AccountScopePanel account="daily" />);
+    expect(await screen.findByText("后台回执：运行失败，需核回执")).toBeTruthy();
+    expect(screen.getByRole("tabpanel").textContent).toContain("用途：验证每日精选通过执行闸门后的模拟表现。");
+    fireEvent.click(screen.getByRole("tab", {name:"后台回执"}));
+    expect(screen.getByText("2026-10-09T09:34:12+08:00")).toBeTruthy();
+    expect(screen.getByText("quote_age_exceeded；限价未成交")).toBeTruthy();
+    fireEvent.click(screen.getByRole("tab", {name:"用途"}));
+    expect(screen.queryByText("quote_age_exceeded；限价未成交")).toBeNull();
+    expect(internal.getJson).toHaveBeenCalledTimes(1);
+    expect(api.getPaperAccount).not.toHaveBeenCalled();
   });
 
 });

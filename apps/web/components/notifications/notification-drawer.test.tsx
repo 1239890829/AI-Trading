@@ -165,6 +165,7 @@ describe("通知中心：未读计数与红点", () => {
     payload = makePayload([item({ title: "距离通知", body, symbol: "600519" })]);
     render(<DetailModalProvider><NotificationBell /></DetailModalProvider>);
     await openDrawer();
+    await screen.findByText("距离通知");
     expect(screen.getByTestId("notification-list").textContent).toContain(displayed);
 
     fireEvent.click(screen.getByTestId("notification-judgment"));
@@ -604,4 +605,26 @@ it("shows incomplete holding checks without creating an opportunity or an unread
   expect(screen.getByTestId("notification-monitor-state").textContent).toContain("未完整完成（1 只）：成本缺失");
   expect(badge()).toBeNull();
   expect(dots()).toHaveLength(0);
+});
+
+it("reading the complete long message and changing evidence references does not mark the notification read", async () => {
+  const body = "原消息中的业务关联与交易条件需要分别验证。".repeat(30) + "最后条件：消息不等于当下买点。";
+  payload = makePayload([item({title: "长消息核对", body, references: [
+    {event_id: 11, kind: "selection", trade_date: "2026-10-09", source_id: "original-1", source_version: "v1", source_as_of: null, recorded_at: null, evidence: {invalidations: ["第一对象条件", "第二条件", "第三条件", "第四条件不能省略"]}},
+    {event_id: 12, kind: "decision", trade_date: "2026-10-09", source_id: "original-2", source_version: "v2", source_as_of: null, recorded_at: null, evidence: {invalidations: ["另一对象条件"]}},
+  ]})]);
+  render(<NotificationBell />);
+  await openDrawer();
+  await screen.findByText("长消息核对");
+  expect(dots()).toHaveLength(1);
+  const calls = vi.mocked(getNotifications).mock.calls.length;
+  fireEvent.click(screen.getByRole("button", {name: "完整原文"}));
+  expect(screen.getByLabelText("消息原内容完整原文").textContent).toContain(body);
+  fireEvent.click(screen.getByRole("tab", {name: "原入选 #11"}));
+  expect(screen.getByText(/第四条件不能省略/)).toBeTruthy();
+  fireEvent.click(screen.getByRole("tab", {name: "原判定 #12"}));
+  expect(screen.getByText(/另一对象条件/)).toBeTruthy();
+  expect(screen.queryByText(/第四条件不能省略/)).toBeNull();
+  expect(dots()).toHaveLength(1);
+  expect(vi.mocked(getNotifications).mock.calls.length).toBe(calls);
 });

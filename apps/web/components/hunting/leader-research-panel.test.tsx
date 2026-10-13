@@ -14,6 +14,24 @@ const payload = (date = "2026-09-29"): LeaderResearchPayload => ({
 });
 
 describe("持续研究", () => {
+  it("selects one research object at a time while retaining every condition and starting no extra read", async () => {
+    const data = payload();
+    const first = { symbol: "600127", name: "金健米业", state: "observing", routes: ["public_event"],
+      first_seen: "2026-09-29T10:00:00", source_as_of: "2026-09-29T10:00:00", source: "fixture", pct: 10,
+      stale: true, expired: false, reasons: ["第一依据", "第二依据", "第三依据", "第四依据不得省略"], unknowns: ["业务直接受益未验"],
+      entry_state: "无法假定参与", invalidation: "事件撤回", next_check: "续强", event_refs: [], outcomes: {} };
+    data.cards = [first, {...first, symbol: "600825", name: "新华传媒", reasons: ["第二对象原依据"]}];
+    vi.mocked(getLeaderResearch).mockResolvedValue(data);
+    render(<LeaderResearchPanel />);
+    expect(await screen.findByText("第四依据不得省略")).toBeTruthy();
+    expect(screen.queryByText("第二对象原依据")).toBeNull();
+    fireEvent.click(screen.getByRole("tab", {name: "新华传媒 600825"}));
+    expect(screen.getByText("第二对象原依据")).toBeTruthy();
+    expect(screen.queryByText("第四依据不得省略")).toBeNull();
+    expect(screen.getByText("业务直接受益未验")).toBeTruthy();
+    expect(getLeaderResearch).toHaveBeenCalledTimes(1);
+  });
+
   it("uncollected and failed data cannot appear as zero misses", async () => {
     vi.mocked(getLeaderResearch).mockResolvedValue(payload());
     render(<LeaderResearchPanel />);

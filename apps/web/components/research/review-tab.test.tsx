@@ -85,6 +85,23 @@ function setup(itemId = "42", status = "pending") {
   });
 }
 
+it("keeps observations, judgments and every gap condition distinct without changing management permissions",async()=>{
+  setup();
+  const report=detailWith("42");
+  // Historical report payloads can contain structured gaps despite the string-only current API type.
+  const legacyGap = {field:"source_time",reason:"发布时间未知",impact:"不能回填时点",severity:"P0"} as unknown as string;
+  report.dimensions=[{key:"data",title:"数据窗口",status:"blocked",findings:["仅取得 12.36 亿元的单源记录。"],judgements:["尚不能判断可靠性。"],gaps:[legacyGap]}];
+  vi.mocked(mocked.getReviewReport).mockResolvedValue(report);
+  render(<ReviewTab allowDispose/>);
+  expect(await screen.findByText("仅取得 12.36 亿元的单源记录。")).toBeTruthy();
+  fireEvent.click(screen.getByRole("tab",{name:"报告判断"}));
+  expect(screen.getByText("尚不能判断可靠性。")).toBeTruthy();
+  fireEvent.click(screen.getByRole("tab",{name:"已列缺口"}));
+  expect(screen.getByText(/发布时间未知.*不能回填时点.*P0/)).toBeTruthy();
+  expect(screen.getByRole("button",{name:"确认"})).toBeTruthy();
+  expect(mocked.updateActionItemStatus).not.toHaveBeenCalled();
+});
+
 describe("ReviewTab 改进项处置闭环", () => {
   it("可见性重读期间保持草稿但暂停处置，失败后恢复仍保留同身份草稿", async () => {
     setup();

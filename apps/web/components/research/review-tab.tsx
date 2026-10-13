@@ -3,6 +3,7 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 import { Panel } from "@/components/panel";
 import { useResource } from "@/hooks/use-polling-fetch";
+import {ConditionList, ExplanationMap, NarrativeText} from "@/components/ui/explanation-map";
 import "./review-layout.css";
 import {
   ApiError,
@@ -68,21 +69,15 @@ function gapText(g: unknown): string {
       o.field ? String(o.field) : null,
       o.reason ? String(o.reason) : null,
       o.impact ? `影响 ${o.impact}` : null,
+      o.severity ? `严重度 ${o.severity}` : null,
     ].filter(Boolean);
     return parts.join("：") || JSON.stringify(o);
   }
   return String(g);
 }
 
-/**
- * 报告文本内嵌 6 位代码 → 详情链接（联动切片 F P2）。
- * 复盘判据/缺口文本里提到的标的（如「600519 冲高回落」）此前无法跳转查看；
- * 自由文本不具备证券实体身份，金额/日期片段保持原文，不猜测链接。
- */
-function ReviewText({ text }: { text: string }) {
-  // A free-text number has no verified entity identity. Explicit stock links live in source records.
-  return <>{text}</>;
-}
+// Free-text numbers have no verified entity identity. Readers preserve them as text;
+// explicit stock links remain in their source records.
 
 // Visibility reads do not set Resource.pending. Disposition also needs to wait
 // for those reads; keep this owner fact local to the two sources it consumes.
@@ -273,12 +268,14 @@ function ReportDetail({
         </span>
       </div>
 
-      <p><ReviewText text={report.summary} /></p>
+      <NarrativeText text={report.summary} label="复盘摘要原文" identity={report.review_id}/>
       {report.meta_insights.length > 0 && <section aria-label="复盘观察与建议" className="space-y-2">
         {report.meta_insights.map((insight, i) => <div key={i} className="border-b border-zinc-300 pb-3 last:border-0 dark:border-zinc-700">
-          <p>{insight.dimension} · <ReviewText text={insight.observation} /></p>
-          <p className="text-xs text-zinc-600 dark:text-zinc-400">依据：{insight.evidence} · 有效性：{insight.effectiveness}</p>
-          <p className="text-xs">待核建议：{insight.suggestion}</p>
+          <ExplanationMap label={insight.dimension} identity={`${report.review_id}:insight:${i}`} steps={[
+            {id:"observation",label:"报告观察",icon:"source",content:<NarrativeText text={insight.observation} label="观察原文"/>},
+            {id:"evidence",label:"依据与有效性",icon:"response",content:<ConditionList label="报告已列依据" items={[`依据：${insight.evidence}`,`有效性：${insight.effectiveness}`]}/>},
+            {id:"suggestion",label:"待核建议",icon:"risk",content:<NarrativeText text={insight.suggestion} label="建议原文"/>},
+          ]}/>
         </div>)}
       </section>}
 
@@ -288,37 +285,11 @@ function ReportDetail({
             {d.title}
             <span className="ml-2 font-normal text-zinc-600 dark:text-zinc-400">{d.status}</span>
           </div>
-          {/* findings（事实层，2026-09-04 补渲染）：含 picks 维度的失误逐股归因 */}
-          {d.findings.length > 0 && (
-            <ul className="mt-1 list-disc space-y-0.5 pl-4 text-xs text-zinc-600 dark:text-zinc-300">
-              {d.findings.map((f, i) => (
-                <li key={i}>
-                  <ReviewText text={f} />
-                </li>
-              ))}
-            </ul>
-          )}
-          {d.judgements.length > 0 && (
-            <ul className="mt-1 list-disc space-y-0.5 pl-4 text-xs text-zinc-600 dark:text-zinc-400">
-              {d.judgements.map((j, i) => (
-                <li key={i}>
-                  <ReviewText text={j} />
-                </li>
-              ))}
-            </ul>
-          )}
-          {d.gaps.length > 0 && (
-            <div className="mt-1 text-xs text-amber-800 dark:text-amber-400">
-              缺口：
-              <ul className="list-disc pl-4">
-                {d.gaps.map((g, i) => (
-                  <li key={i}>
-                    <ReviewText text={gapText(g)} />
-                  </li>
-                ))}
-              </ul>
-            </div>
-          )}
+          <ExplanationMap label="维度依据" identity={`${report.review_id}:${d.key}`} steps={[
+            {id:"findings",label:"报告观察",icon:"source",content:d.findings.length ? <ConditionList label="原始观察记录" items={d.findings}/> : <p>本报告未列观察，不补填事实。</p>},
+            {id:"judgements",label:"报告判断",icon:"check",content:d.judgements.length ? <ConditionList label="原始判断" items={d.judgements}/> : <p>本报告未列判断。</p>},
+            {id:"gaps",label:"已列缺口",icon:"risk",tone:"warning",content:d.gaps.length ? <ConditionList label="缺口与限制" items={d.gaps.map(gapText)} tone="warning"/> : <p>本报告未列缺口，不等于已完整验证。</p>},
+          ]} footer="报告字段分类不代表独立验证，判断仍需核对来源。"/>
         </div>
       ))}
 
@@ -336,10 +307,10 @@ function ReportDetail({
                   <span className="text-zinc-900 dark:text-zinc-100">{a.title}</span>
                   <span className="text-zinc-600 dark:text-zinc-400">[{CATEGORY_LABEL[a.category] ?? a.category}]</span>
                 </div>
-                <div className="mt-0.5 text-[11px] text-zinc-600 dark:text-zinc-400">{a.expected_impact}</div>
+                <NarrativeText text={a.expected_impact} label="预期影响原文"/>
                 {a.proposed_change && (
                   <div className="mt-0.5 text-[11px] text-zinc-600 dark:text-zinc-400">
-                    建议：{a.proposed_change}
+                    建议：<NarrativeText text={a.proposed_change} label="拟议变更原文"/>
                     {a.target && <span className="ml-1 text-zinc-600 dark:text-zinc-400">（{a.target}）</span>}
                   </div>
                 )}

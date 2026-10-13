@@ -1,9 +1,12 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { cleanup, render, screen } from "@testing-library/react";
+import { cleanup, fireEvent, render, screen } from "@testing-library/react";
 import type { ImpactEvent } from "@/lib/api";
 import { EventsTab } from "./events-tab";
 
-afterEach(cleanup);
+afterEach(() => {cleanup(); detail.open.mockClear();});
+const detail = vi.hoisted(() => ({open: vi.fn()}));
+vi.mock("@/components/detail/detail-modal", () => ({useDetailModal: () => detail}));
+vi.mock("@/components/event-panel", () => ({StockPools: () => <div>独立标的池内容</div>}));
 const resource = vi.hoisted(() => ({ data: null as unknown }));
 vi.mock("@/hooks/use-polling-fetch", () => ({ useResource: () => ({ data: resource.data, error: null, refresh: vi.fn() }) }));
 vi.mock("@/components/inspection/surface-scope", () => ({ useSurfaceScope: () => ({ searchParams: new URLSearchParams() }) }));
@@ -16,6 +19,26 @@ const base: ImpactEvent = {
 };
 
 describe("EventsTab judgement display", () => {
+  it("keeps pool expansion, pool content and related links separate from the title action", () => {
+    resource.data = {countsAll: {}, tagCounts: {}, items: [{...base, rank_score: 55, directions: [
+      {target_type: "theme", target: "存储芯片", direction: 1, strength: 1, chain: "供需变化", basis: "公开公告"},
+    ]}]};
+    const ancestor = vi.fn();
+    render(<div onClick={ancestor}><EventsTab /></div>);
+    fireEvent.click(screen.getByText("55分"));
+    expect(detail.open).toHaveBeenCalledTimes(1);
+    const poolButton = screen.getByRole("button", {name: "标的池 ↗"});
+    fireEvent.click(poolButton);
+    expect(poolButton.getAttribute("aria-expanded")).toBe("true");
+    expect(poolButton.getAttribute("aria-controls")).toBe("event-pool-1");
+    fireEvent.click(screen.getByText("独立标的池内容"));
+    fireEvent.click(screen.getByText("存储芯片"));
+    expect(detail.open).toHaveBeenCalledTimes(1);
+    expect(ancestor).not.toHaveBeenCalled();
+    fireEvent.click(screen.getByRole("button", {name: "收起标的池"}));
+    expect(poolButton.getAttribute("aria-expanded")).toBe("false");
+  });
+
   it("keeps status visible with no direction and marks unvalidated model rows", () => {
     resource.data = { countsAll: {}, tagCounts: {}, items: [
       { ...base, judge_status: "neutral", judge_reason: "证据不足已超时" },

@@ -18,6 +18,7 @@ import { symbolDetailClick, useSymbolDetail } from "@/components/detail/symbol-d
 import { usePollingFetch } from "@/hooks/use-polling-fetch";
 import { Skeleton } from "@/components/ui/loading";
 import { eventDetailPayload, eventDirectionView, eventJudgeView } from "@/lib/event-view";
+import { ReadingRow, readingRowClasses } from "@/components/ui/reading-row";
 
 /**
  * 事件驱动面板（总览底部，2026-09-04 任务④重设计）。
@@ -92,9 +93,10 @@ export function StockPools({ eventId, active = true }: { eventId: number; active
                 {stocks.slice(0, 12).map((s) => (
                   <Link
                     key={s.symbol}
+                    data-reading-action
                     href={workbenchUrlWithBack(s.symbol)}
                     onClick={symbolDetailClick(openSymbolDetail, { symbol: s.symbol })}
-                    className="rounded bg-zinc-100 px-1 py-0.5 font-mono text-zinc-600 hover:bg-zinc-200 dark:bg-zinc-800 dark:text-zinc-300 dark:hover:bg-zinc-700"
+                    className={`${readingRowClasses.action} rounded bg-zinc-100 px-1 py-0.5 font-mono text-zinc-600 hover:bg-zinc-200 dark:bg-zinc-800 dark:text-zinc-300 dark:hover:bg-zinc-700`}
                     title={`${s.symbol} ${s.name} · 查看详情`}
                   >
                     {s.symbol} {s.name}
@@ -172,7 +174,7 @@ export function EventPanel() {
       {items !== null && items.length > 0 && (
         <ul className="divide-y divide-zinc-100 dark:divide-zinc-800">
           {items.map((e) => (
-            <li key={e.id} className="px-4 py-2">
+            <ReadingRow as="li" key={e.id} className="px-4 py-2">
               <div className="flex items-baseline gap-2">
                 {e.rank_score != null && (
                   <span
@@ -188,8 +190,10 @@ export function EventPanel() {
                 {/* 2026-09-09：无 url 也可点（与 stock-events 同款缺陷修复），
                     统一走通用详情弹窗；时间与列表同一字段同一格式。 */}
                 <button
+                  type="button"
+                  data-reading-primary
                   onClick={() => open(eventDetailPayload(e))}
-                  className="truncate text-left text-sm text-zinc-800 transition-colors hover:bg-zinc-100 hover:text-zinc-900 dark:text-zinc-100 dark:hover:bg-zinc-800 dark:hover:text-zinc-50"
+                  className={`${readingRowClasses.primary} truncate text-sm text-zinc-800 dark:text-zinc-100`}
                   title={e.title}
                 >
                   {e.title}
@@ -212,6 +216,7 @@ export function EventPanel() {
                   return (
                     <Link
                       key={`${d.target_type}-${d.target}`}
+                      data-reading-action
                       href={d.target_type === "symbol" ? workbenchUrlWithBack(d.target) : themesUrl(d.target)}
                       onClick={
                         d.target_type === "symbol"
@@ -219,7 +224,7 @@ export function EventPanel() {
                           : inspectionClick(inspect, {kind: "themes", focus: d.target})
                       }
                       title={title || `关联${d.target_type === "symbol" ? "个股" : "题材"} ${d.target}`}
-                      className="inline-flex items-center gap-1 rounded border border-zinc-200 px-1.5 py-0.5 text-[11px] text-zinc-700 hover:border-zinc-400 dark:border-zinc-700 dark:text-zinc-200"
+                      className={`${readingRowClasses.action} inline-flex items-center gap-1 rounded border border-zinc-200 px-1.5 py-0.5 text-[11px] text-zinc-700 hover:border-zinc-400 dark:border-zinc-700 dark:text-zinc-200`}
                     >
                       <span className="text-zinc-600 dark:text-zinc-400">{d.target_type === "symbol" ? "个股" : "题材"}</span>
                       <span>{d.target}</span>
@@ -228,7 +233,7 @@ export function EventPanel() {
                   );
                 })}
               </div>
-            </li>
+            </ReadingRow>
           ))}
         </ul>
       )}

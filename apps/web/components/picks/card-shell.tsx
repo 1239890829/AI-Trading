@@ -35,7 +35,11 @@ export function CardShell({
 }) {
   return (
     <SpatialSurface
-      onClick={onClick}
+      onClick={event => {
+        if ((event.target as Element).closest("button,a,input,select,textarea,summary,[role=tab],[role=button]")) return;
+        if (event.defaultPrevented || event.metaKey || event.ctrlKey || event.shiftKey || event.altKey || window.getSelection()?.isCollapsed === false) return;
+        onClick?.();
+      }}
       className={`stock-card-slot ${flow ? "break-inside-avoid" : ""} ${onClick ? "cursor-pointer" : ""} ${className}`}
       faceClassName="ui-card stock-card"
     >

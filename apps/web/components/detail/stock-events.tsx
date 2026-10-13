@@ -4,6 +4,7 @@ import { useEffect, useState } from "react";
 import { getEventsForSymbol, type EventSummary } from "@/lib/api";
 import { useDetailModal } from "@/components/detail/detail-modal";
 import { eventDetailPayload, eventDirectionForSymbol, eventDirectionView, eventJudgeView } from "@/lib/event-view";
+import { ReadingButton } from "@/components/ui/reading-row";
 
 const CATEGORY_LABEL: Record<string, string> = {
   policy: "政策",
@@ -108,7 +109,7 @@ export function StockEventsRow({ symbol, isIndex = false }: { symbol: string; is
         const judgement = eventJudgeView(e);
         const title = (
           <>
-            <span className="text-zinc-700 dark:text-zinc-200">{e.title.slice(0, 30)}</span>
+            <span className="line-clamp-2 text-zinc-700 dark:text-zinc-200">{e.title}</span>
             {dir && <span className={`ml-1 font-medium ${dir.cls}`}>{dir.text}</span>}
             <span title={judgement.title} className={`ml-1 whitespace-nowrap ${judgement.cls}`}>{judgement.text}</span>
           </>
@@ -123,8 +124,9 @@ export function StockEventsRow({ symbol, isIndex = false }: { symbol: string; is
         // 2026-09-09：无 url 也能点（此前渲染成 span → 点击无响应）；
         // 弹窗内由 DetailModal 统一处理「原文链接缺失」兜底。
         return (
-          <button
+          <ReadingButton
             key={e.id}
+            aria-label={`查看事件：${e.title}${dir ? `，${dir.text}` : ""}，${judgement.text}`}
             onClick={() =>
               open(eventDetailPayload(e, symbol))
             }
@@ -132,7 +134,7 @@ export function StockEventsRow({ symbol, isIndex = false }: { symbol: string; is
             className="min-w-0 max-w-full rounded border border-zinc-200 px-1.5 py-0.5 text-left [overflow-wrap:anywhere] hover:border-zinc-400 dark:border-zinc-700"
           >
             {title}
-          </button>
+          </ReadingButton>
         );
       })}
     </div>

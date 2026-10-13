@@ -1,7 +1,7 @@
 import fs from "node:fs";
 import path from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
-import { cleanup, render } from "@testing-library/react";
+import { cleanup, fireEvent, render, screen } from "@testing-library/react";
 
 import { MarkdownView } from "./markdown-view";
 
@@ -94,6 +94,7 @@ describe("MarkdownView · 真实知识库文档可渲染", () => {
     // 端到端守卫：合成输入守住**机制**，这一条守住**事故现场**（面板首屏即这份文件）。
     const content = fs.readFileSync(path.join(DOCS_DIR, "kb/00-INDEX.md"), "utf8");
     const c = renderDoc(content);
+    fireEvent.click(screen.getByRole("button",{name:"完整文档"}));
     expect(c.querySelectorAll("table").length).toBeGreaterThan(0);
     expect(c.textContent).toContain("KB-ENG-68");
   });
@@ -119,4 +120,17 @@ describe("MarkdownView · 真实知识库文档可渲染", () => {
       cleanup();
     }
   }, 15_000);
+});
+
+it("a long document keeps local KB navigation and code while offering its exact Markdown source",()=>{
+  const navigate=(target:string)=>targets.push(target); const targets:string[]=[];
+  const content="# 约束\n\n"+"不得把模型推断当作已证实事实。".repeat(90)+"\n\n## 依据\n\n[[KB-ENG-68]]\n\n```\nconst amount = 12.36;\n```\n\n## 条件\n\n- 尚未审议\n- 不改主业";
+  render(<MarkdownView content={content} onNavigate={navigate}/>);
+  expect(screen.getAllByRole("tab").length).toBeLessThanOrEqual(6);
+  fireEvent.click(screen.getByRole("tab",{name:"依据"}));
+  fireEvent.click(screen.getByRole("button",{name:"KB-ENG-68"}));
+  expect(targets).toEqual(["KB-ENG-68"]);
+  expect(document.querySelector("pre")?.textContent).toContain("12.36");
+  fireEvent.click(screen.getByRole("button",{name:"原始 Markdown"}));
+  expect(screen.getByLabelText("原始 Markdown").textContent).toBe(content);
 });

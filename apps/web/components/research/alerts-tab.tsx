@@ -9,6 +9,7 @@ import { HugeiconsIcon } from "@hugeicons/react";
 import Tick02Icon from "@hugeicons/core-free-icons/Tick02Icon";
 import { StockLink } from "@/components/stock-link";
 import { useResource } from "@/hooks/use-resource";
+import {ConditionList, ExplanationMap, FactTimeline} from "@/components/ui/explanation-map";
 import {
   createAlertRule,
   deleteAlertRule,
@@ -21,7 +22,7 @@ import {
   type AlertRuleCreate,
   type AlertScope,
 } from "@/lib/api";
-import { pctColor } from "@/lib/format";
+import { dateTimeTextBJ, pctColor } from "@/lib/format";
 
 /** 研究页 · 预警 tab（原 /alerts 页迁移，2026-09-01 系统重构）。 */
 
@@ -358,33 +359,10 @@ export function AlertsTab() {
                 只列出 verdict=ignore 的（notify 已在悬浮球、escalate 另见任务中心）；
                 `llm_fallback` 单独标出，不伪装成 AI 判断。 */}
             {blocked.length > 0 && (
-              <details className="border-t border-zinc-100 dark:border-zinc-800/60">
-                <summary className="cursor-pointer select-none px-3 py-2 text-xs text-zinc-600 dark:text-zinc-400 hover:text-zinc-700 dark:hover:text-zinc-300">
-                  本次读取中已挡事件（{blocked.length}）· 展开核对降噪依据
-                </summary>
-                <ul className="space-y-1 px-3 pb-3 text-[11px]">
-                  {blocked.map((e) => (
-                    <li
-                      key={e.id}
-                      className="flex flex-wrap items-baseline gap-x-2 gap-y-0.5 rounded bg-zinc-50 px-2 py-1 dark:bg-zinc-900/60"
-                    >
-                      <span className="font-mono text-zinc-600 dark:text-zinc-400">
-                        {new Date(e.triggered_at).toLocaleTimeString("zh-CN")}
-                      </span>
-                      <span className="font-mono">{e.symbol}</span>
-                      <span className="text-zinc-600 dark:text-zinc-400">
-                        {rules.find((r) => r.id === e.rule_id)?.name ?? e.rule_id}
-                      </span>
-                      <span className="text-zinc-600 dark:text-zinc-300">{e.triage?.reason || "（无理由记录）"}</span>
-                      {e.triage?.model === "llm_fallback" && (
-                        <span className="rounded bg-amber-500/15 px-1 text-[10px] text-amber-800 dark:text-amber-400">
-                          判读降级
-                        </span>
-                      )}
-                    </li>
-                  ))}
-                </ul>
-              </details>
+              <div className="border-t border-zinc-100 p-3 dark:border-zinc-800/60"><ExplanationMap label={`本次读取中已挡事件（${blocked.length}）`} steps={Array.from({length:Math.ceil(blocked.length / Math.ceil(blocked.length / 6))},(_,index)=>{
+                const size=Math.ceil(blocked.length / 6); const group=blocked.slice(index*size,(index+1)*size);
+                return {id:`blocked-${group[0].id}`,label:`${group[0].symbol}${group.length > 1 ? `等 ${group.length} 条` : ""}`,icon:"risk" as const,content:<div className="space-y-3">{group.map(event=><section key={event.id}><h4 className="text-xs font-medium">{event.symbol} · {rules.find(rule=>rule.id === event.rule_id)?.name ?? event.rule_id}</h4><FactTimeline label="触发时点" items={[{label:"触发",value:event.triggered_at ? dateTimeTextBJ(event.triggered_at) : "未记录"}]}/><ConditionList label="原始降噪依据" items={[event.triage?.reason || "（无理由记录）",`判读来源：${event.triage?.model === "llm_fallback" ? "判读降级，规则回退" : event.triage?.model || "未记录"}`]}/><ChannelStatus channels={event.channel_states}/></section>)}</div>};
+              })} footer="只核对已读取记录；被挡数量不是全天统计，判读理由不等于交易结论。"/></div>
             )}
           </Panel>
         </div>

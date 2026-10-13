@@ -30,6 +30,18 @@ it("opens each rung cause for reading without adding a wide table column", async
   expect(container.querySelectorAll("thead th")).toHaveLength(9);
 });
 
+it("keeps ladder space and independent controls from activating an enclosing card", () => {
+  const enclosing = vi.fn();
+  render(<div onClick={enclosing}><ThemeCardView card={card({ladder: [rung()]})} rank={1} /></div>);
+  fireEvent.click(screen.getByText("09:35"));
+  expect(enclosing).not.toHaveBeenCalled();
+  fireEvent.click(screen.getByRole("link", {name: /新赛股份/}));
+  expect(enclosing).not.toHaveBeenCalled();
+  fireEvent.click(screen.getByRole("button", {name: "查看"}));
+  expect(screen.getByTestId("stub-checklist").textContent).toBe("600540");
+  expect(enclosing).not.toHaveBeenCalled();
+});
+
 function card(over: Partial<ThemeCard> = {}): ThemeCard {
   return {
     theme: "商业航天",

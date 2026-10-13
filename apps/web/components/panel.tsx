@@ -75,7 +75,7 @@ export function Panel({ title, children, source, dataTimestamp, quality, quality
             {/* 直接渲染，不加门控——可见性策略单点在 QualityBadge 内部
                 （2026-09-14 口径统一；此前 `{quality && …}` 这类门控散在各调用点，
                 正是「盘面显示正常 / 工作台不显示」漂移的成因）。 */}
-            <QualityBadge quality={quality} reasons={qualityReasons} />
+            <QualityBadge quality={quality} reasons={qualityReasons} dataTimestamp={dataTimestamp} />
             {source && <span className="shrink-0 whitespace-nowrap" title="数据来源">{sourceLabel(source)}</span>}
             {dataTimestamp && <span className="shrink-0 whitespace-nowrap" title="数据时间">{timeText(dataTimestamp)}</span>}
           </div>

@@ -44,6 +44,8 @@ import { useSymbolDetail } from "@/components/detail/symbol-detail-context";
 import { NewsModal, type NewsModalItem } from "@/components/news-modal";
 import { EventFeed } from "@/components/notifications/event-feed";
 import { formatLegacyLimitDistance } from "@/lib/format";
+import { ConditionList, ExplanationMap, FactTimeline, NarrativeText } from "@/components/ui/explanation-map";
+import { ReadingRow, readingRowClasses } from "@/components/ui/reading-row";
 
 /**
  * 站内通知中心（2026-09-07 用户需求③）：导航栏铃铛 → 右侧抽屉。
@@ -293,10 +295,8 @@ function ShapeCounts({ shapes }: { shapes: Record<string, number> }) {
         <p className="text-zinc-600 dark:text-zinc-400">
           其余来源记录 {restTotal} 条（不计入原入选/买点合计）：
           {rest
-            .slice(0, 4)
             .map(([k, v]) => `${SHAPE_LABEL[k] ?? k} ${v}`)
             .join("、")}
-          {rest.length > 4 ? ` 等 ${rest.length} 种` : ""}
           。普通临板/开板、大单与板块异动仅供观察，不因此取得机会消息资格。
         </p>
       )}
@@ -324,7 +324,7 @@ function NotificationDiagnosis({ diag }: { diag: NotificationDiagnostics }) {
       <p className="text-[11px] text-zinc-600 dark:text-zinc-400">
         仅汇总今日已归档买点判定；不代表全部每日或盘中入选结果，也不代表全部通知链。
       </p>
-      <p className="text-zinc-600 dark:text-zinc-400">{plainNote(diag.note)}</p>
+      <NarrativeText text={plainNote(diag.note)} label="通知链诊断说明" identity={`${diag.trade_date}:${diag.as_of}`} />
       {diag.state !== "unavailable" && <p className="text-[11px] text-zinc-600 dark:text-zinc-400">
         候选 {ps.count} 只 · 最高档 {d.top_tier ?? "无"} · 判定 {d.polls} 拍
         {diag.trade_date ? ` · ${diag.trade_date}` : ""}
@@ -336,10 +336,6 @@ function NotificationDiagnosis({ diag }: { diag: NotificationDiagnostics }) {
         {diag.selection.daily.receipt && <p>消息投影：{selectionState(diag.selection.daily.receipt.state ?? "unknown")} · 新记录 {diag.selection.daily.receipt.created ?? "未记录"} 条</p>}
         <p>盘中入选链：{selectionState(diag.selection.intraday.state)} · 归档候选 {diag.selection.intraday.ranked_count ?? "未记录"} 只 · 原入选消息 {diag.selection.intraday.message_count ?? "未记录"} 条</p>
       </div>}
-      {diag.shapes && <details className="border-t border-zinc-200 pt-2 text-[11px] dark:border-zinc-700">
-        <summary className="cursor-pointer text-zinc-600 dark:text-zinc-400">查看来源核对信息</summary>
-        <div className="mt-1"><ShapeCounts shapes={diag.shapes} /></div>
-      </details>}
       {reasons.length > 0 && (
         <ul className="space-y-1 border-t border-zinc-200 pt-2 dark:border-zinc-700">
           {reasons.map((r) => (
@@ -353,20 +349,16 @@ function NotificationDiagnosis({ diag }: { diag: NotificationDiagnostics }) {
           ))}
         </ul>
       )}
-      {(d.latest?.length ?? 0) > 0 && (
-        <details className="border-t border-zinc-200 pt-2 dark:border-zinc-700">
-          <summary className="cursor-pointer text-zinc-600 dark:text-zinc-400">查看逐股原决定与版本</summary>
-          <ul className="mt-1 space-y-1">
-            {d.latest?.map((row) => <li key={row.snapshot_id} className="text-zinc-700 dark:text-zinc-300">
-              <StockLink symbol={row.symbol} className="text-sky-700 dark:text-sky-400">{row.name || row.symbol} {row.symbol}</StockLink>
+      {(diag.shapes || (d.latest?.length ?? 0) > 0) && <ExplanationMap label="来源与逐股原决定" identity={`${diag.trade_date}:${diag.as_of}`} steps={[
+        ...(diag.shapes ? [{id: "shapes", label: "查看来源核对信息", icon: "source" as const, content: <ShapeCounts shapes={diag.shapes} />}] : []),
+        ...(d.latest ?? []).map(row => ({id: `decision-${row.snapshot_id}`, label: `原决定 ${row.name || row.symbol}`, icon: "check" as const, summary: decisionLabels[row.decision] ?? "状态未知", content: <div className="text-zinc-700 dark:text-zinc-300">
+              <StockLink symbol={row.symbol} className={`${readingRowClasses.action} rounded px-1 text-sky-700 dark:text-sky-400`}>{row.name || row.symbol} {row.symbol}</StockLink>
               {` · ${decisionLabels[row.decision] ?? "状态未知"} · ${row.as_of} · ${row.reason || "原因未记录"}`}
               <span className="block break-all text-[10px] text-zinc-600 dark:text-zinc-400">
                 记录 {row.snapshot_id} · 决定 {row.decision_id || "未记录"} · 版本 {row.decision_version || "未记录"} · 数据 {row.data_state || "未知"}
               </span>
-            </li>)}
-          </ul>
-        </details>
-      )}
+            </div>})),
+      ]} />}
     </div>
   );
 }
@@ -440,10 +432,11 @@ function NotificationRow({
     // 2026-09-16 用户要求「行情与判读一体化，放标签下方右边」——两者必须与主体并列
     // 落在**同一张卡片内**，而 `<button>` 嵌 `<button>`/`<a>` 是非法 HTML
     // （浏览器会拆标签、点击语义互相吞掉）。故改成"卡片容器 + 内层主体按钮 + 尾部操作组"。
-    <div className={shell} data-testid="notification-row">
+    <ReadingRow className={shell} data-testid="notification-row">
       <button
         type="button"
-        className={`block w-full text-left ${clickable ? "cursor-pointer" : ""}`}
+        data-reading-primary
+        className={`${readingRowClasses.primary} block w-full text-left ${clickable ? "cursor-pointer" : ""}`}
         onClick={openLanding}
       >
         <div className="flex flex-wrap items-center gap-1.5">
@@ -469,16 +462,16 @@ function NotificationRow({
         来源：{item.source ?? "历史事件，来源未标注"} · 原观察：{item.source_as_of ?? item.ts ?? "时间未知"} · 记录：{item.recorded_at ?? "历史记录钟未提供"} · {item.validity ?? "条件与时效未记录，须重新核验"}
         <br />站内记录可见；<ChannelStatus channels={item.channels} />。未读仅表示站内尚未点开。
       </p>
-      {(item.references?.length ?? 0) > 0 && <details className="mt-2 text-xs leading-relaxed text-zinc-600 dark:text-zinc-400">
-        <summary className="cursor-pointer">原入选与判定依据（{item.references?.length} 条）</summary>
-        <ul className="mt-2 space-y-3">{item.references?.map(ref => <li key={ref.event_id} className="min-w-0 break-words">
+      {((item.references?.length ?? 0) > 0 || item.body.length > 360) && <div data-reading-action className="mt-2 cursor-auto text-xs leading-relaxed text-zinc-600 dark:text-zinc-400"><ExplanationMap label={`原入选与判定依据（${item.references?.length ?? 0} 条）`} identity={item.id} steps={[
+        ...(item.body.length > 360 ? [{id: "message", label: "完整消息", icon: "source" as const, content: <NarrativeText text={formatLegacyLimitDistance(item.body)} label="消息原内容" identity={item.id} />}] : []),
+        ...(item.references ?? []).map(ref => ({id: `ref-${ref.event_id}`, label: `${ref.kind === "selection" ? "原入选" : "原判定"} #${ref.event_id}`, icon: "source" as const, summary: ref.source_version ?? "未绑定版本", content: <div className="min-w-0 space-y-2 break-words">
           <p>{ref.kind === "selection" ? "原入选" : "原判定"} · {ref.source_as_of ?? "原时点未记录"}</p>
           <p className="break-all">版本：{ref.source_version ?? "未绑定"}{ref.run_id ? ` · 归档 ${ref.run_id}` : ""}</p>
-          {ref.selection_source === "daily" && ref.source_version && ref.trade_date && <a className="quiet-action mt-1 inline-flex" onClick={inspectionClick(inspect, {kind: "selection-review", date: ref.trade_date, version: ref.source_version})} href={`/hunting?${new URLSearchParams({view: "review", date: ref.trade_date, version: ref.source_version})}`}>查看此版本复盘</a>}
-          {evidenceLines(ref.evidence).map((line, index) => <p key={index}>{line}</p>)}
-        </li>)}</ul>
-        {item.symbol && <a href="/hunting?view=discover&sec=candidates" onClick={inspectionClick(inspect, {kind: "selection-preview", section: "candidates"})} className="quiet-action mt-2 inline-flex">查看当前选股条件</a>}
-      </details>}
+          <FactTimeline label="引用时点" items={[{label: "原观察", value: ref.source_as_of ?? "原时点未记录"}, {label: "记录", value: ref.recorded_at ?? "记录时点未提供"}]} />
+          {ref.selection_source === "daily" && ref.source_version && ref.trade_date && <a data-reading-action className={`${readingRowClasses.action} quiet-action mt-1 inline-flex`} onClick={inspectionClick(inspect, {kind: "selection-review", date: ref.trade_date, version: ref.source_version})} href={`/hunting?${new URLSearchParams({view: "review", date: ref.trade_date, version: ref.source_version})}`}>查看此版本复盘</a>}
+          <ConditionList label="原依据与条件" items={evidenceLines(ref.evidence)} />
+        </div>})),
+      ]} footer={item.symbol && <a data-reading-action href="/hunting?view=discover&sec=candidates" onClick={inspectionClick(inspect, {kind: "selection-preview", section: "candidates"})} className={`${readingRowClasses.action} quiet-action mt-2 inline-flex`}>查看当前选股条件</a>} /></div>}
       {/* 标签行：左侧仍是分类/评分；右侧 = **一体化的操作组**（行情 + 判读） */}
       <div className="mt-1 flex items-center gap-2 text-[10px] text-zinc-600 dark:text-zinc-400">
         <span className="rounded bg-zinc-100 px-1 py-px dark:bg-zinc-800">{CATEGORY_LABEL[item.category]}</span>
@@ -492,13 +485,14 @@ function NotificationRow({
             而不是两个各自带框、飘在卡片外的按钮。无代码条目不渲染（点了会弹一只空股）。 */}
         {item.symbol && (
           <div
+            data-reading-action
             data-testid="notification-actions"
             className="ml-auto flex items-stretch overflow-hidden rounded border border-zinc-200 text-[10px] dark:border-zinc-700"
           >
             <StockLink
               symbol={item.symbol}
               preferModal
-              className="px-1.5 py-0.5 text-zinc-600 dark:text-zinc-400"
+              className={`${readingRowClasses.action} px-1.5 py-0.5 text-zinc-600 dark:text-zinc-400`}
               title={`查看 ${item.symbol} 行情详情`}
             >
               行情 ↗
@@ -508,7 +502,7 @@ function NotificationRow({
               type="button"
               data-testid="notification-judgment"
               title="查看提醒依据与判读；未生成 AI 判读时仅显示原事件内容"
-              className="px-1.5 py-0.5 text-zinc-600 transition-colors hover:bg-zinc-100 dark:text-zinc-400 dark:hover:bg-zinc-800"
+              className={`${readingRowClasses.action} px-1.5 py-0.5 text-zinc-600 dark:text-zinc-400`}
               onClick={() => {
                 onRead();
                 openDetail(judgmentPayload(item));
@@ -519,7 +513,7 @@ function NotificationRow({
           </div>
         )}
       </div>
-    </div>
+    </ReadingRow>
   );
 }
 

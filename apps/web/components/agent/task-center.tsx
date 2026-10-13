@@ -14,6 +14,7 @@ import {
   type AgentTaskType,
 } from "@/lib/api";
 import { dateTimeTextBJ } from "@/lib/format";
+import {ConditionList, ExplanationMap, FactTimeline, NarrativeText} from "@/components/ui/explanation-map";
 
 /**
  * AI 控制台 · 任务中心（docs/summary/ai-evolution.md P0）。
@@ -196,6 +197,8 @@ export function TaskCenter() {
   const resolveReceipt = detail ? resolveReceipts[detail.id] : undefined;
   const actionable = needsDisposition && !taskReading && !taskPending && taskError == null && !resolving && !resolveReceipt;
   const receiptCalibrated = resolveReceipt && detail && !taskReading && !taskPending && taskError == null && detail.status !== "needs_confirm" && detail.status === resolveReceipt.task.status;
+  const traceSize = Math.max(1, Math.ceil((detail?.steps.length ?? 0) / 6));
+  const traceGroups = detail ? Array.from({length:Math.ceil(detail.steps.length / traceSize)},(_,index)=>detail.steps.slice(index*traceSize,(index+1)*traceSize)) : [];
 
   return (
     <div className="task-center-layout h-full min-h-0">
@@ -396,14 +399,14 @@ export function TaskCenter() {
                   已处理点「已处置」，判定无需处理点「忽略」，结论留痕在审计里。
                 </p>
               )}
-              {detail.outcome?.note && <p className="mb-2 text-[11px] text-zinc-600 dark:text-zinc-400">{detail.outcome.note}</p>}
+              {detail.outcome?.note && <NarrativeText text={detail.outcome.note} label="已记录任务范围" identity={detail.id}/>}
               {paramRows.length > 0 && (
                 <dl className="mb-3 rounded-lg border border-zinc-100 px-2 py-1.5 text-[11px] dark:border-zinc-800">
                   {paramRows.map(([k, v]) => (
                     <div key={k} className="flex gap-2 py-0.5">
                       <dt className="w-[72px] shrink-0 text-zinc-600 dark:text-zinc-400">{PARAM_LABEL[k] ?? k}</dt>
                       <dd className="min-w-0 flex-1 break-words text-zinc-700 dark:text-zinc-200">
-                        {String(v)}
+                        <NarrativeText text={String(v)} label={PARAM_LABEL[k] ?? k} identity={`${detail.id}:${k}`}/>
                       </dd>
                     </div>
                   ))}
@@ -420,36 +423,11 @@ export function TaskCenter() {
                 </p>
               )}
 
-              <h4 className="mb-1.5 text-[11px] font-medium text-zinc-600 dark:text-zinc-300">执行轨迹</h4>
+              <FactTimeline label="任务时点" items={[{label:"创建",value:detail.created_at ? timeText(detail.created_at) : "未记录"},{label:"开始",value:detail.started_at ? timeText(detail.started_at) : "未记录"},{label:"结束",value:detail.finished_at ? timeText(detail.finished_at) : "未记录"}]}/>
               {detail.steps.length === 0 ? (
                 <p className="text-[11px] text-zinc-600 dark:text-zinc-400">暂无步骤（任务刚创建，等待执行）。</p>
               ) : (
-                <ol className="space-y-1.5">
-                  {detail.steps.map((s) => (
-                    <li key={s.index} className="rounded-lg border border-zinc-100 px-2 py-1.5 dark:border-zinc-800">
-                      <div className="flex items-center justify-between gap-2">
-                        <span className="text-[11px] font-medium text-zinc-800 dark:text-zinc-100">
-                          {s.index}. {s.name}
-                        </span>
-                        <span className="shrink-0 font-mono text-[10px] text-zinc-600 dark:text-zinc-400">
-                          {s.ok ? "✓" : "✗"} {s.duration_ms}ms
-                        </span>
-                      </div>
-                      {s.input_summary && (
-                        <p className="mt-0.5 text-[10px] text-zinc-600 dark:text-zinc-400">输入：{s.input_summary}</p>
-                      )}
-                      {s.output_summary && (
-                        <p className="text-[10px] text-zinc-600 dark:text-zinc-300">输出：{s.output_summary}</p>
-                      )}
-                      {s.llm && (
-                        <p className="mt-0.5 text-[10px] text-zinc-600 dark:text-zinc-400">
-                          模型：{s.llm.model || "rules"}
-                          {s.llm.enhanced ? " · LLM 增强" : ""}
-                        </p>
-                      )}
-                    </li>
-                  ))}
-                </ol>
+                <ExplanationMap label="执行轨迹" identity={detail.id} steps={traceGroups.map(group=>({id:`step-${group[0].index}`,label:`${group[0].index}. ${group[0].name}${group.length > 1 ? `等 ${group.length} 步` : ""}`,icon:"check",content:<div className="space-y-3">{group.map(step=><section key={step.index}><h4 className="text-xs font-medium">{step.index}. {step.name}</h4><ConditionList label="步骤记录" items={[`步骤状态：${typeof step.ok === "boolean" ? step.ok ? "通过" : "未通过" : "未记录"}；耗时：${step.duration_ms ?? "未记录"}ms。`,...(step.llm ? [`模型：${step.llm.model || "rules"}${step.llm.enhanced ? " · LLM 增强" : ""}`] : [])]}/>{step.input_summary && <NarrativeText text={step.input_summary} label="输入原记录"/>}{step.output_summary && <NarrativeText text={step.output_summary} label="输出原记录"/>}</section>)}</div>}))}/>
               )}
             </>
           )}

@@ -29,6 +29,8 @@ import type {
   OpportunityTheme,
   WatcherState,
 } from "@/lib/api";
+import { ConditionList, ExplanationMap, NarrativeText } from "@/components/ui/explanation-map";
+import { ReadingRow, readingRowClasses } from "@/components/ui/reading-row";
 
 /**
  * 猎场「盘中跟踪」侧的全部展示区块（2026-09-08 猎场批次③从 /intraday/page.tsx 迁出）。
@@ -95,10 +97,10 @@ export function IntradayThemeRow({
   const bodyPresence = useExitPresence(expanded ? true : null);
   const { open: openInspection } = useInspection();
   return (
-    <div className="ui-card rounded-xl border border-zinc-200 p-3 text-xs transition-colors hover:bg-zinc-50 dark:border-zinc-800 dark:hover:bg-zinc-900/50">
+    <ReadingRow className="ui-card rounded-xl border border-zinc-200 p-3 text-xs dark:border-zinc-800">
       {/* L10（切片 E）：题材页 ↗ 与展开按钮同级（button 内不能嵌 a），点题材名仍是展开/收起 */}
       <div className="flex w-full items-center gap-2">
-        <button type="button" onClick={onToggle} aria-expanded={expanded} aria-controls={expanded ? detailsId : undefined} className="flex min-w-0 flex-1 flex-wrap items-center gap-2 text-left">
+        <button type="button" data-reading-primary onClick={onToggle} aria-expanded={expanded} aria-controls={expanded ? detailsId : undefined} className={`${readingRowClasses.primary} flex min-w-0 flex-1 flex-wrap items-center gap-2 text-left`}>
           <span className="text-sm font-semibold text-zinc-900 dark:text-zinc-50">{t.theme}</span>
           {/* 机会三层（需求 4）：今日最强/悄悄启动/孕育待发酵——择时先分层再定档 */}
           {t.opportunity_layer && (
@@ -147,17 +149,19 @@ export function IntradayThemeRow({
             {expanded ? "收起 ▲" : `${t.participants?.length ?? 0} 只${readError ? "上次候选 · 待核" : "可参与候选"} ▼`}
           </span>
         </button>
-        <JumpLink
+        <span data-reading-action><JumpLink
           href={themesUrl(t.theme)}
           title="在当前页核对该题材的市场梯队"
           onClick={inspectionClick(openInspection, {kind: "themes", focus: t.theme})}
         >
           市场梯队
-        </JumpLink>
+        </JumpLink></span>
         {t.catalog_code && (
           <button
+            type="button"
+            data-reading-action
             onClick={() => setDetailOpen(true)}
-            className={JUMP_PILL_CLASS}
+            className={`${readingRowClasses.action} ${JUMP_PILL_CLASS}`}
             title="查看官方成分全量（与同花顺逐符号一致）与涨停细分"
           >
             官方成分
@@ -167,13 +171,9 @@ export function IntradayThemeRow({
       {detailPresence.value && (
         <ConceptDetailModal key={detailPresence.value} code={detailPresence.value} name={t.theme} active={detailPresence.active} onClose={() => setDetailOpen(false)} />
       )}
-      {t.risks.length > 0 && !expanded && (
-        <p className="mt-1 text-[11px] text-amber-800 dark:text-amber-300" title={t.risks.join("；")}>
-          ⚠ {t.risks[0]}
-        </p>
-      )}
+      {!expanded && <ConditionList label="题材风险" items={t.risks} tone="warning" />}
       {bodyPresence.value && (
-        <div className="motion-disclosure" data-open={expanded} aria-hidden={!expanded || undefined} inert={!expanded}>
+        <div data-reading-action className="motion-disclosure cursor-auto" data-open={expanded} aria-hidden={!expanded || undefined} inert={!expanded}>
         <div className="motion-disclosure-body" id={detailsId}>
           {t.stage_basis.length > 0 && (
             <p className="mt-1.5 text-[11px] text-zinc-600 dark:text-zinc-400">阶段依据：{t.stage_basis.join("；")}</p>
@@ -232,7 +232,7 @@ export function IntradayThemeRow({
         </div>
         </div>
       )}
-    </div>
+    </ReadingRow>
   );
 }
 
@@ -275,14 +275,11 @@ export function OpportunitySection({
       {opps.caveats.length > 0 && (
         <p className="text-[10px] text-zinc-600 dark:text-zinc-400">口径：{opps.caveats.join("；")}</p>
       )}
-      <p className="text-[10px] text-zinc-600 dark:text-zinc-400">
-        板块权限：账户只开沪深主板（创业板/科创板/北交所/B 股不进候选与参考区）
-        {boardBlocked > 0 ? `，本日已挡下 ${boardBlocked} 只容器成分` : ""}；
-        可参与候选＝题材内当前未封板、通过资格门的联动个股（不保证成交）（联动确定性＝题材基座×距封板跑道）；
-        涨停梯队仅作题材集中度与曾封板身份参考；当前封板/开板状态以带版本快照为准。
-        辨识度＝人气×高度×角色，确定性＝题材阶段基座×封板质量修正，两者独立判定不合并打分；
-        判定依据悬停可见、等级可回放。仅模拟跟踪，不构成买卖建议。
-      </p>
+      <ExplanationMap label="机会范围与口径" identity={opps.trade_date ?? undefined} steps={[
+        {id: "scope", label: "账户范围", icon: "risk", tone: "warning", content: <p>板块权限：账户只开沪深主板（创业板/科创板/北交所/B 股不进候选与参考区）{boardBlocked > 0 ? `，本日已挡下 ${boardBlocked} 只容器成分` : ""}。</p>},
+        {id: "candidate", label: "候选与参考", icon: "relation", content: <p>可参与候选＝题材内当前未封板、通过资格门的联动个股（不保证成交）（联动确定性＝题材基座×距封板跑道）；涨停梯队仅作题材集中度与曾封板身份参考；当前封板/开板状态以带版本快照为准。</p>},
+        {id: "basis", label: "判定定义", icon: "source", content: <p>辨识度＝人气×高度×角色，确定性＝题材阶段基座×封板质量修正，两者独立判定不合并打分；判定依据悬停可见、等级可回放。</p>},
+      ]} footer="仅模拟跟踪，不构成买卖建议。" />
       {/* 跟踪台账（猎场批次 A）：入选即登记、收盘清算、逐股判定与历史统计 */}
       {showLedger && <WatchLedgerPanel />}
     </section>
@@ -424,7 +421,7 @@ export function DailyPlanBlock({ plan }: { plan: MorningBrief["daily_plan"] }) {
       <div className="font-medium text-zinc-700 dark:text-zinc-200">今日条件计划 · 依据 {plan.based_on}</div>
       <div>
         <span className="text-zinc-600 dark:text-zinc-400">复盘：</span>
-        {status("review", "该日无复盘报告") ?? plan.review?.summary ?? "报告无摘要"}
+        <NarrativeText text={status("review", "该日无复盘报告") ?? plan.review?.summary ?? "报告无摘要"} label="复盘摘要" identity={plan.based_on} />
       </div>
       {sources.review === "available" && plan.review?.findings.length ? (
         <ul className="list-inside list-disc text-zinc-600 dark:text-zinc-400">
@@ -451,7 +448,7 @@ export function MacroCalendar({ brief }: { brief: MorningBrief }) {
   if (!note && !events) return null;
   return (
     <div className="space-y-1 rounded-lg border border-sky-500/25 bg-sky-500/5 px-2.5 py-2 text-[11px] leading-5">
-      {note && <div className="text-sky-700 dark:text-sky-300">{note}</div>}
+      {note && <NarrativeText text={note} label="宏观日历说明" />}
       {events && events.length > 0 && (
         <>
           <div className="text-[10px] text-zinc-600 dark:text-zinc-400">
@@ -562,14 +559,7 @@ export function OvernightBiasBlock({ bias }: { bias?: OvernightBias | null }) {
         </div>
       )}
       <div className="text-[10px] text-zinc-600 dark:text-zinc-400">{bias.horizon_note}</div>
-      <details className="text-[10px] text-zinc-600 dark:text-zinc-400">
-        <summary className="cursor-pointer select-none">失效条件（{bias.invalidation.length}）</summary>
-        <ul className="mt-0.5 list-disc space-y-0.5 pl-4">
-          {bias.invalidation.map((s) => (
-            <li key={s}>{s}</li>
-          ))}
-        </ul>
-      </details>
+      <ConditionList label={`失效条件（${bias.invalidation.length}）`} items={bias.invalidation} tone="warning" />
       <div className="text-[10px] text-zinc-600 dark:text-zinc-400">{bias.disclaimer}</div>
     </div>
   );
@@ -660,10 +650,7 @@ export function ClimateBlock({ climate }: { climate?: Climate | null }) {
         </div>
       )}
       <div className="text-[10px] text-zinc-600 dark:text-zinc-400">{climate.timing_note}</div>
-      <details className="text-[10px] text-zinc-600 dark:text-zinc-400">
-        <summary className="cursor-pointer select-none">实证判读（人工链未获支持）</summary>
-        <div className="mt-0.5 pl-4">{climate.empirical_verdict}</div>
-      </details>
+      <section aria-label="实证判读（人工链未获支持）"><h5>实证判读（人工链未获支持）</h5><NarrativeText text={climate.empirical_verdict} label="气候假设实证" identity={climate.as_of} /></section>
       <div className="text-[10px] text-zinc-600 dark:text-zinc-400">{climate.disclaimer}</div>
     </div>
   );
@@ -704,7 +691,11 @@ export function DirectionCard({ d }: { d: BriefDirection }) {
           </span>
         )}
       </div>
-      <p className="mt-1.5 text-zinc-600 dark:text-zinc-400">{d.logic}</p>
+      <ExplanationMap label={`${d.direction}判断资料`} identity={d.direction} steps={[
+        {id: "logic", label: "方向逻辑", icon: "source", content: <div className="space-y-2"><NarrativeText text={d.logic} label="方向原逻辑" /><p>规则依据：{d.basis || "未提供"}</p><p>参与方式依据：{d.entry_basis || "未提供"}</p></div>},
+        {id: "trigger", label: "触发条件", icon: "check", summary: `${d.trigger_conditions.length} 条`, content: d.trigger_conditions.length ? <ConditionList label="确认" items={d.trigger_conditions} /> : <p>未提供触发条件。</p>},
+        {id: "falsify", label: "证伪条件", icon: "risk", tone: "warning", summary: `${d.falsify_conditions.length} 条`, content: d.falsify_conditions.length ? <ConditionList label="证伪" items={d.falsify_conditions} tone="warning" /> : <p>未提供证伪条件。</p>},
+      ]} />
       {rv && (
         <p className="mt-1 text-[11px] text-zinc-600 dark:text-zinc-400">
           实际：板块 {rv.actual_pct == null ? "unknown" : `${pctText(rv.actual_pct)}`}
@@ -731,17 +722,6 @@ export function DirectionCard({ d }: { d: BriefDirection }) {
           ))}
         </div>
       )}
-      <details className="mt-2 text-[11px] text-zinc-600 dark:text-zinc-400">
-        <summary className="cursor-pointer select-none text-zinc-600 dark:text-zinc-400">触发 / 证伪条件</summary>
-        <ul className="mt-1 space-y-0.5">
-          {d.trigger_conditions.map((c) => (
-            <li key={c}>确认 · {c}</li>
-          ))}
-          {d.falsify_conditions.map((c) => (
-            <li key={c}>证伪 · {c}</li>
-          ))}
-        </ul>
-      </details>
     </div>
   );
 }
@@ -781,9 +761,7 @@ export function AlertItem({ a }: { a: BriefAlert }) {
           </span>
         )}
       </div>
-      <pre className="mt-1.5 whitespace-pre-wrap font-sans text-[11px] leading-relaxed text-zinc-600 dark:text-zinc-300">
-        {a.text}
-      </pre>
+      <NarrativeText text={a.text} label="原提醒说明" identity={`${a.symbol ?? ""}:${a.at}`} />
     </div>
   );
 }

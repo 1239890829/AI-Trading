@@ -9,7 +9,8 @@
  * 解析是纯函数（parseBlocks），行内渲染是组件——流式追加时全量重解析，
  * 聊天文本量级（几 KB）下开销可忽略。
  */
-import { Fragment, memo, useMemo, type ReactNode } from "react";
+import { Fragment, memo, useMemo, useState, type ReactNode } from "react";
+import {ExplanationMap} from "@/components/ui/explanation-map";
 import type { EntityMatch, EntityMatcher } from "@/lib/entity-links";
 import { NAV_LABELS, isAllowedNav, type NavKey } from "@/lib/nav-targets";
 
@@ -84,14 +85,14 @@ export function parseBlocks(text: string): Block[] {
       continue;
     }
     const para: string[] = [];
-    while (
+    do {
+      para.push(lines[i].trim());
+      i += 1;
+    } while (
       i < lines.length
       && lines[i].trim()
       && !/^(#{1,4}\s|[-*]\s|\d+[.、)]\s|>|\||```)/.test(lines[i].trim())
-    ) {
-      para.push(lines[i].trim());
-      i += 1;
-    }
+    );
     blocks.push({ kind: "para", lines: para });
   }
   return blocks;
@@ -142,7 +143,8 @@ function renderInline({ text, match, onNavigate }: InlineProps): ReactNode[] {
             type="button"
             title={`${h.name} — 点击跳转到${NAV_LABELS[h.key as NavKey] ?? "对应功能"}`}
             className="mx-0.5 rounded bg-emerald-500/10 px-1 font-medium text-emerald-700 transition-colors hover:bg-emerald-500/20 dark:text-emerald-400"
-            onClick={() => onNavigate(h)}
+            data-reading-action="true"
+            onClick={event => {event.stopPropagation(); onNavigate(h);}}
           >
             {h.text}
             <span aria-hidden className="ml-0.5 text-[0.7em]">↗</span>
@@ -159,7 +161,8 @@ function renderInline({ text, match, onNavigate }: InlineProps): ReactNode[] {
               type="button"
               title={`${h.name}（${h.code}）— 点击打开${stockLabel}`}
               className="mx-0.5 rounded bg-sky-500/10 px-1 font-medium text-sky-700 underline decoration-dotted underline-offset-2 hover:bg-sky-500/20 dark:text-sky-400"
-              onClick={() => onNavigate(h)}
+              data-reading-action="true"
+            onClick={event => {event.stopPropagation(); onNavigate(h);}}
             >
               {h.text}
             </button>
@@ -169,7 +172,8 @@ function renderInline({ text, match, onNavigate }: InlineProps): ReactNode[] {
               type="button"
               title={`${h.name} — 点击查看题材梯队`}
               className="mx-0.5 rounded bg-violet-500/10 px-1 font-medium text-violet-700 transition-colors hover:bg-violet-500/20 dark:text-violet-400"
-              onClick={() => onNavigate(h)}
+              data-reading-action="true"
+            onClick={event => {event.stopPropagation(); onNavigate(h);}}
             >
               {h.text}
             </button>
@@ -202,7 +206,9 @@ function renderInline({ text, match, onNavigate }: InlineProps): ReactNode[] {
           <a
             key={`l${key++}`}
             href={lm[2]}
+            data-reading-action="true"
             onClick={event => {
+              event.stopPropagation();
               if (event.defaultPrevented || event.button !== 0 || event.metaKey || event.ctrlKey || event.shiftKey || event.altKey) return;
               event.preventDefault();
               onNavigate({type: "nav", text: lm[1] || lm[2], name: lm[1] || lm[2], url: lm[2]});
@@ -239,21 +245,21 @@ interface RichTextProps {
 }
 
 export const RichText = memo(function RichText({ text, matcher, onNavigate, className }: RichTextProps) {
+  const [view, setView] = useState({text, complete:false});
+  const complete = view.text === text && view.complete;
   // P1-2（2026-09-11）：`text` 不变就不重解析。
   // 流式回复每个 SSE delta 都会 setMessages → 消息列表整体重渲染 ⇒ 原实现让
   // **每条历史消息**都重跑一遍分块 + 正则 + 实体词典匹配，累积几十条长回答后
   // 打字明显拖慢。memo + useMemo 后，只有正在追加的那一条会重新解析。
   const blocks = useMemo(() => parseBlocks(text), [text]);
   const inline = (t: string) => renderInline({ text: t, match: matcher, onNavigate });
-  return (
-    <div className={className ?? "space-y-2 text-sm leading-relaxed"}>
-      {blocks.map((b, i) => {
+  const rendered = blocks.map((b, i) => {
         switch (b.kind) {
           case "code":
             return (
               <pre
                 key={i}
-                className="overflow-x-auto rounded-lg bg-zinc-900 p-3 font-mono text-xs text-zinc-900 dark:text-zinc-100 dark:bg-black/60"
+                className="overflow-x-auto rounded-lg bg-zinc-900 p-3 font-mono text-xs text-zinc-100 dark:bg-black/60"
               >
                 <code>{b.content}</code>
               </pre>
@@ -339,7 +345,19 @@ export const RichText = memo(function RichText({ text, matcher, onNavigate, clas
               </p>
             );
         }
-      })}
-    </div>
-  );
+      });
+  const sections: {label:string; nodes:ReactNode[]}[] = [];
+  const hasHeadings = blocks.some(block=>block.kind === "heading");
+  blocks.forEach((block,index)=>{
+    const boundary = block.kind === "heading" || !hasHeadings && ["list","table"].includes(block.kind);
+    if (boundary || !sections.length) sections.push({label:block.kind === "heading" ? block.text : block.kind === "table" ? "回复表格" : block.kind === "list" ? "回复列表" : "开篇",nodes:[]});
+    sections[sections.length-1].nodes.push(rendered[index]);
+  });
+  const size = Math.ceil(sections.length / 6);
+  const groups = size > 1 ? Array.from({length:Math.ceil(sections.length/size)},(_,index)=>({label:sections[index*size].label,nodes:sections.slice(index*size,(index+1)*size).flatMap(section=>section.nodes)})) : sections;
+  const structured = text.length > 1200 && groups.length > 1;
+  return <div className={`${className ?? "space-y-2 text-sm leading-relaxed"} min-w-0 [overflow-wrap:anywhere]`}>
+    {structured && <div className="flex flex-wrap items-center justify-between gap-2 text-xs text-[var(--ui-muted)]"><span>仅按回复已有结构分组，不推断因果。</span><button type="button" data-action="quiet" className="quiet-action" onClick={()=>setView({text,complete:!complete})}>{complete ? "分章节阅读" : "完整回复"}</button></div>}
+    {structured && !complete ? <ExplanationMap label="回复目录" identity={text} steps={groups.map((section,index)=>({id:`section-${index}`,label:section.label,icon:"source",content:<div className="space-y-2 min-w-0">{section.nodes}</div>}))}/> : rendered}
+  </div>;
 });
