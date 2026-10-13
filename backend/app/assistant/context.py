@@ -23,19 +23,20 @@ log = logging.getLogger(__name__)
 
 MAX_SYMBOLS = 6
 
-_TOKEN_RE_CACHE: dict[int, re.Pattern[str]] = {}
+_TOKEN_RE_CACHE: tuple[list[dict[str, str]], re.Pattern[str]] | None = None
 
 
 def _token_regex(stocks: list[dict[str, str]]) -> re.Pattern[str]:
-    """股票名 alternation + 6 位代码。按 stocks 对象 id 缓存（entity-dict 本身有 TTL）。"""
-    cached = _TOKEN_RE_CACHE.get(id(stocks))
-    if cached is not None:
-        return cached
+    """股票名 alternation + 6 位代码。entity-dict 每次刷新生成新列表。"""
+    global _TOKEN_RE_CACHE
+    cached = _TOKEN_RE_CACHE
+    # 保留并核验真实对象；只存 id 会因短命空列表地址复用而误命中。
+    if cached is not None and cached[0] is stocks:
+        return cached[1]
     names = sorted((s["name"] for s in stocks if len(s["name"]) >= 2), key=len, reverse=True)
     escaped = "|".join(re.escape(n) for n in names)
     re_obj = re.compile(rf"(?<![0-9A-Za-z])(?:[0-9]{{6}}|{escaped})(?![0-9A-Za-z])")
-    _TOKEN_RE_CACHE.clear()  # 只保留最新一份（entity-dict 刷新后旧正则作废）
-    _TOKEN_RE_CACHE[id(stocks)] = re_obj
+    _TOKEN_RE_CACHE = (stocks, re_obj)  # 只保留最新一份字典与正则。
     return re_obj
 
 

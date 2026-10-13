@@ -1,4 +1,4 @@
-# 当前交接：BUG-020 单位纠偏工程交付与发布核验
+# 当前交接：BUG-020 源单位与助手缓存身份回归核验
 
 > 总方案v9.13；累计U01–U55。阅读与WS整改[W07/IMP-093](stages/w07-simplification.md#imp-093)已由PR #270发布并运行；直接上游单位反例按[W00/BUG-020](stages/w00-foundation.md#bug-020)既有同根回归条款止险，不启动第二个产品优化任务。
 
@@ -8,11 +8,11 @@
 
 - **当前主门**：G4
 - **主切片首选**：IMP-019
-- **候选顺位与执行边界**：IMP-019；BUG-020单位工程整改关闭，本轮只完成其准确HEAD发布/单实例运行核验，不领取下一业务任务。
+- **候选顺位与执行边界**：IMP-019；BUG-020源单位与缓存身份工程关闭，本轮只完成新HEAD发布和单实例生效，不领取下一业务任务。
 - **基点与分支**：origin/master `ea1e376ccdcbe313361e58d1040f6294f6a586d4`，`codex/limit-pool-unit-fix`；2026-10-13 fetch无漂移。主树未跟踪evolution与业务数据保留。
-- **获准范围**：PR #270阅读与WS产出保留；当前仅纠正东方财富ZT价格单位、真实字段回归、429回退消费者与旧单位说明，不改选股/通知、TTL、轮频、源优先级或归档。
+- **获准范围**：PR #270阅读与WS产出保留；当前纠正东方财富ZT价格单位、真实字段回归、429回退消费者与旧单位说明，补发布门揭露的助手名单缓存身份校验，不改选股/通知、TTL、轮频、源优先级或归档。
 - **运行基线（可变）**：3000运行PR #270构建pjXxp4V2Z0WlEgJ4WGHPj/PID89120；8000现役单实例PID94616尚未加载单位修复，无reload。正式WS45秒三次pong且无中途断线；收盘stale保留。不为验收新增模型、通知或模拟交易。
-- **当前证据**：PR #270准确HEAD 59f8fd7637a95c97c7cfea41b8bab0b6285b6f61、合并ea1e376c和post-master三job成功；阅读PC/320/390与实际原因弹层已验。新ZT反例真实provider及归一化先红2项；修后针对性46项通过。单位完整后端5229 passed/81 skipped、pyflakes与前端默认/UTC各1428 passed、tsc/ESLint/生产构建通过；准确HEAD发布与后端加载单独待验。
+- **当前证据**：PR #270准确HEAD 59f8fd7637a95c97c7cfea41b8bab0b6285b6f61、合并ea1e376c和post-master三job成功；阅读PC/320/390与实际原因弹层已验。新ZT反例真实provider及归一化先红2项；修后针对性46项通过。源单位及助手缓存身份最终完整后端5232 passed/81 skipped（4worker）、pyflakes，前端默认/UTC各1428 passed、tsc/ESLint/生产构建通过；新准确HEAD发布与后端加载单独待验。
 - **U50 降级授权回执**：2026-09-24 DEGRADED_FULL_CONTROL未撤销；作者自审和协作反证不冒充独立网页Review。每个PR准确HEAD另有DegradedRelease。
 
 ## 2. U49 主动审计回执 / Preflight
@@ -40,3 +40,7 @@
 PR #270已精确HEAD发布、post-master三job成功；3000已加载pjXxp4V2Z0WlEgJ4WGHPj，后端94616未重启。正式3000/本机LAN HTTP200，WS45秒三次pong/快照及源状态帧，无中途断线，无凭据403；收盘stale保留，不证明盘中SLO。
 
 15:49:56 THS429→EM揭露旧ZT价格/100错：官方15:53:16 qdate20261013的002343 p7360应7.36，原输出73.60；THS/腾讯缓存一致7.36。代码与错误说明/测试同步修正/1000；来源工具输出摘录及实际provider failover回归先红2项，修后46项和完整门通过，准确HEAD发布/单实例后端激活待验；摘录不是完整upstream raw，不伪造rawhash。现有UI/WS保留，不回填旧归档或把行业补成原因；EM缺原因与67/70池差明确unknown。
+
+PR #271/075f49d0首次CI单项助手sources为空，其他5228 passed/81 skipped；本地同HEAD助手4worker56项通过。只读反例确证base id(stocks)缓存不保留名单引用，空名单地址被复用可漏识别新名单；CI未记录id，无法锁定唯一因果，不能冒称纯环境波动。改真实缓存身份并保留原断言，新HEAD另跑完整门与CI；旧075f49d0发布回执不得用于新版本。
+
+缓存身份新增3项先红；修后连原助手59项通过，最终完整5232 passed/81 skipped/187.63s，前端默认/UTC各1428（171.13/153.30s）及构建通过。单份真实名单缓存用is核验，新名单退休旧名单；无O(n)内容副本。只读团队反证无新增阻塞，新HEAD另走准确CI/DegradedRelease/post-master与后端激活，不将旧回执转借。
