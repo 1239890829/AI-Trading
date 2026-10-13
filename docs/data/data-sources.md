@@ -63,7 +63,7 @@
 
 ## 3. 东方财富（专项源）
 
-- **涨停池** `push2ex.eastmoney.com/getTopicZTPool`：p=价格×100、fbt/lbt=HHMMSS、fund=封单额(元)、zbc=炸板、lbc=连板、zttj={days,ct}（"7天7板"）。实测 2026-08-28：82 只。
+- **涨停池** `push2ex.eastmoney.com/getTopicZTPool`：p=价格×1000、fbt/lbt=HHMMSS、fund=封单额(元)、zbc=炸板、lbc=连板、zttj={days,ct}（"7天7板"）。实测 2026-08-28：82 只。 2026-10-13单位复核：官方ZT原始`002343 p=7360`→7.36元，与同日THS及腾讯缓存一致；原×100说明及归一化已被真实降级反例否定。原字段`hybk`是行业，未提供涨停原因时不能补造。
 - **炸板池** `push2ex.eastmoney.com/getTopicZBPool`（同 ut/dpt 参数）：实测 2026-08-28：16 只。炸板率 = 炸板 ÷（涨停＋炸板）。
 - **板块列表** `push2delay.eastmoney.com/api/qt/clist/get`：本机 `push2` 主域被 WAF 拦截，只有 `push2delay` 延迟域可用。单页上限 **100 条**（即使传 `pz=600` 也只回 100），必须按 `total` 分页。板块名体系与 ths 涨停原因标签不同（如 ths「黄金珠宝」↔ 东财「黄金概念」），精确匹配命中率极低，需做剥离后缀 + 双向包含模糊匹配。
 - **龙虎榜** `datacenter-web.eastmoney.com/api/data/v1/get` (RPT_DAILYBILLBOARD_DETAILSNEW)：SECURITY_CODE / BILLBOARD_* / **EXPLAIN**(上榜原因)。

@@ -2,7 +2,7 @@
 
 字段缩放是本实现的核心风险点（同 test_eastmoney_zbpool.py 的教训）：
 DTPool 的 p 为 **×1000**（集泰股份 p=7210 ↔ 收盘 7.21、传智教育 p=9720 ↔ 9.72，
-2026-09-04 实测样本并与 zdp=-10% 交叉验证），与 ZTPool 的 ×100 不同——
+2026-09-04 实测样本并与 zdp=-10% 交叉验证）；ZTPool 的 p 同为 ×1000，其他字段分开解析。
 缩放错了不会报错，只会静默产出错误价格，必须有单测锁死。
 
 另锁死实测行为：**不带 date 参数接口返回 rc:102 data:null**（与 ZT/ZB 池不同），
@@ -64,7 +64,7 @@ def test_parse_scales_price_by_1000(monkeypatch: pytest.MonkeyPatch):
     assert len(rows) == 2
     r = rows[0]
     assert r.symbol == "002909"
-    assert r.price == 7.21, "DTPool 的 p 是 ×1000（ZTPool 是 ×100，不可混用）"
+    assert r.price == 7.21, "DTPool 的 p 是 ×1000（ZTPool 的 p 也为 ×1000，其他字段仍分开解析）"
     assert rows[1].price == 9.72
     assert r.change_pct == pytest.approx(-9.987516, abs=1e-4)
     assert r.consecutive_days == 1

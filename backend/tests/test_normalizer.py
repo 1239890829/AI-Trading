@@ -91,13 +91,32 @@ def test_normalize_limit_up():
 
     rec = normalize_limit_up(raw, date(2026, 8, 28))
     assert rec.symbol == "000712"
-    assert rec.price == 118.0  # p ×100
+    assert rec.price == 11.8  # p ×1000
     assert rec.first_seal_time == "09:25:00"
     assert rec.last_seal_time == "09:25:00"
     assert rec.consecutive_boards == 3
     assert rec.boards_stat == "3天3板"
     assert rec.break_count == 0
     assert rec.seal_amount == 237252275
+
+
+def test_normalize_limit_up_official_price_contract_preserves_source_fields():
+    """2026-10-13 15:53 BJ 官方 ZTPool 摘录；同日 THS/腾讯均为 7.36 元。"""
+    from datetime import date
+
+    raw = {"c": "002343", "n": "慈文传媒", "p": 7360,
+           "zdp": 10.014947891235352, "fbt": 92500, "lbt": 92500,
+           "hybk": "影视院线"}
+    rec = normalize_limit_up(raw, date(2026, 10, 13))
+    assert rec is not None
+    assert rec.symbol == "002343" and rec.name == "慈文传媒"
+    assert rec.price == 7.36  # 官方 p=价格×1000；不是 73.60 元。
+    assert rec.change_pct == raw["zdp"]  # 已是百分数，不随价格缩放。
+    assert rec.trade_date == date(2026, 10, 13)
+    assert rec.first_seal_time == rec.last_seal_time == "09:25:00"
+    assert rec.industry_board == "影视院线"
+    assert rec.reason is None  # 行业字段不能冒充缺失的涨停原因。
+    assert rec.source == "eastmoney"
 
 
 def test_normalize_longhu():

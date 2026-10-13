@@ -277,9 +277,9 @@ class EastmoneyProvider:
     async def get_limit_break_pool(self, trade_date: date) -> list[LimitUpRecord]:
         """炸板池备源（数据源方案 B5）：push2ex getTopicZBPool，消除炸板率单点。
 
-        ⚠️ 字段缩放与涨停池（getTopicZTPool）**不同**，不能复用 normalize_limit_up：
+        字段语义与涨停池（getTopicZTPool）不同，不能复用 normalize_limit_up：
         - p / ztp 为 **×1000**：600103 p=3850 ↔ 实际收盘 3.85（已与 TDX 日K交叉验证，
-          而 ZT 池是 ×100）
+          ZT 池 p 同为 ×1000；2026-10-13 实测 p=7360 ↔ 7.36）
         - zdp 已是百分数（0.785 ≈ +0.79%）
         - zbc=炸板次数、hs=换手率%、amount=成交额(元)、ltsz/tshare=市值(元)、fbt=首次封板时间
 

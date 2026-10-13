@@ -1,9 +1,10 @@
 """Eastmoney 行情字段 → 统一 schema 的 Normalizer。
 
-字段口径实测于 2026-08-28（详见 docs/data/data-sources.md）：
+基础字段口径实测于 2026-08-28，涨停池价格单位于 2026-10-13 复核更正
+（详见 docs/data/data-sources.md）：
 - ulist/clist 族：f2 价、f3 涨幅%、f4 涨跌、f5 成交量(手)、f6 成交额(元)、
   f8 换手率、f15/16/17/18 = 高/低/开/昨收、f12/13/14 = 代码/市场/名称、f124 时间戳
-- 涨停池 getTopicZTPool：p=价格×100、fbt/lbt=HHMMSS、fund=封单额(元)、zbc=炸板次数
+- 涨停池 getTopicZTPool：p=价格×1000、fbt/lbt=HHMMSS、fund=封单额(元)、zbc=炸板次数
 - 龙虎榜 RPT_DAILYBILLBOARD_DETAILSNEW：SECURITY_CODE/BILLBOARD_* 等
 """
 from __future__ import annotations
@@ -168,7 +169,8 @@ def normalize_limit_up(raw: dict, trade_date: date) -> LimitUpRecord | None:
     if not symbol:
         return None
     raw_price = _num(raw.get("p"))
-    price = raw_price / 100 if raw_price is not None else None
+    # getTopicZTPool: 2026-10-13 p=7360 ↔ THS/腾讯同日 7.36 元，单位为千分之一元。
+    price = raw_price / 1000 if raw_price is not None else None
     stat = raw.get("zttj") or {}
     days, count = stat.get("days"), stat.get("ct")
     boards_stat = f"{days}天{count}板" if days is not None and count is not None else None
@@ -196,7 +198,7 @@ def normalize_limit_up(raw: dict, trade_date: date) -> LimitUpRecord | None:
 def normalize_limit_down(raw: dict, trade_date: date) -> LimitDownRecord | None:
     """跌停池 getTopicDTPool（2026-09-04 实测 9 只样本）。
 
-    ⚠️ 字段缩放与涨停池（ZT 池 p×100）**不同**：DTPool 的 p 为 **×1000**
+    DTPool 的 p 为 **×1000**（ZT 池同为千分之一元，其他字段语义仍分开解析）
     （集泰股份 p=7210 ↔ 收盘 7.21、传智教育 p=9720 ↔ 9.72，已与涨跌幅 -10% 交叉验证）；
     zdp 已是百分数；days=连续跌停天数、oc=开板次数、fba=封单额(元)、
     fund=封单量（口径存疑不采）、lbt=最后封住时间 HHMMSS。

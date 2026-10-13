@@ -1,7 +1,7 @@
 """东财炸板池备源（数据源方案 B5）解析测试。
 
 字段缩放是本实现的核心风险点：ZBPool 的 p 为 ×1000（已用 600103 青山纸业
-2026-08-28 收盘 3.85 与 TDX 日K交叉验证），与 ZTPool 的 ×100 不同——
+2026-08-28 收盘 3.85 与 TDX 日K交叉验证）；ZTPool 的 p 同为 ×1000，其他字段分开解析。
 缩放错了不会报错，只会静默产出错误价格，所以必须有单测锁死。
 """
 from __future__ import annotations
@@ -51,7 +51,7 @@ def test_parse_scales_price_by_1000(monkeypatch: pytest.MonkeyPatch):
     assert len(rows) == 1
     r = rows[0]
     assert r.symbol == "600103"
-    assert r.price == 3.85, "ZBPool 的 p 是 ×1000（ZTPool 是 ×100，不可混用）"
+    assert r.price == 3.85, "ZBPool 的 p 是 ×1000（ZTPool 的 p 也为 ×1000，其他字段仍分开解析）"
     assert r.change_pct == pytest.approx(0.7853402, abs=1e-6)
     assert r.break_count == 1
     assert r.turnover_rate == pytest.approx(33.795787, abs=1e-4)
