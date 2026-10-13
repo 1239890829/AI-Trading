@@ -21,6 +21,12 @@ from app.services import quote_hub as qh
 from app.services.quote_hub import QuoteHub
 
 
+@pytest.fixture(autouse=True)
+def open_stage(monkeypatch):
+    # 本文件核盘中轮频；闭市 fake 与真实阶段边界由各自专用用例裁决。
+    monkeypatch.setattr(qh.tc, "market_open_state", lambda *a, **k: qh.tc.MARKET_OPEN)
+
+
 def _q(symbol: str, price: float) -> Quote:
     return Quote(
         symbol=symbol,

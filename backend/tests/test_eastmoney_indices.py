@@ -98,6 +98,8 @@ def test_real_provider_and_hub_preserve_missing_cached_value_then_recover(monkey
 
     monkeypatch.setattr(qh.tc, "trading_days", no_calendar)
     monkeypatch.setattr(qh.tc, "in_trading_window", lambda: True)
+    # 本用例验证盘中源批次的缺失/恢复；空日历不充当阶段裁决。
+    monkeypatch.setattr(qh.tc, "market_open_state", lambda *a, **k: qh.tc.MARKET_OPEN)
 
     async def run():
         complete = [{**row, "f124": int(utcnow().timestamp())} for row in rows()]

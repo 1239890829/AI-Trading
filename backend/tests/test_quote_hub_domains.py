@@ -65,6 +65,8 @@ def hub(monkeypatch):
         return []
     monkeypatch.setattr(qh.tc, "trading_days", no_calendar)
     monkeypatch.setattr(qh.tc, "in_trading_window", lambda: True)
+    # 双域正常轮询/源钟行为以盘中为前提；空日历不是 open 的替代证据。
+    monkeypatch.setattr(qh.tc, "market_open_state", lambda *a, **k: qh.tc.MARKET_OPEN)
     return qh.QuoteHub(Provider(), poll_interval=0.5,
                        get_watchlist=lambda: ["600519"], stale_after=10)
 
