@@ -1,6 +1,6 @@
-# 当前交接：IMP-019 冷读复用、时效与无感刷新
+# 当前交接：IMP-019 真实交易观测与市场全部指数展示
 
-> 总方案v9.13；累计U01–U55；状态只归[W06/IMP-019](stages/w06-performance.md#imp-019)。2026-10-13用户续派剩余性能项，不恢复REA/Jev/Decisions/KEV，不改选股/消息规则。
+> 总方案v9.13；累计U01–U55；状态只归[W06/IMP-019](stages/w06-performance.md#imp-019)。2026-10-13用户续派真实交易时段性能观测，并要求市场指数全部展示、不带滚动条。工作台默认收起不变；不恢复REA/Jev/Decisions/KEV，不改选股/消息规则。
 
 现役语义蓝图[semantic-decisions](ai/semantic-decisions.md)；外部能力依[开放世界持续演进](ai/continuous-evolution.md)筛选。
 
@@ -9,21 +9,32 @@
 - **当前主门**：G4
 - **主切片首选**：IMP-019
 - **调度**：ledger运行选择一致，不另领业务任务。
-- **基点**：已运行PR #266/master e5b0f77b30521c1d6b77868fda770ffa4eff0e60；最新fetch后建codex/quote-read-performance，独立worktree施工，不开第二后端调度。原未跟踪evolution记录保留。
-- **范围**：21候选逐项处置，10族实施、11项保留或测量。源日期/年龄、历史完整/失败恢复、股票/板块/新闻/新浪/turnover冷读共享、精选DB所有权、题材冷同步竞态、自选取消/写后/人工刷新/失败保留。
+- **基点**：PR #267已合并并运行master `359fe2109066784f6b76f275747a3159987424b8`；本批fetch与origin/master一致，建`codex/market-all-indices`独立worktree，只改市场展示，不开第二后端调度。原未跟踪evolution记录保留。
+- **当前切片**：取消市场指数展开收起，既有六项和真实返回的额外指数均完整展示，每行三项；缺源标未返回，不通过隐藏/裁切伪装无滚动。指数自然高度，成交/情绪保持可达。行情读取、质量标记和点击详情复用不变。
+- **本批实屏**：首轮仅去滚动仍被auto轨道压小，1280×720指数208/224与成交卡重叠；未放行。纠正为max-content指数轨道+成交/情绪叶子阅读组，再验1280×720、1024×768、768×600、1280×500、390×900、320×800，六项三列皆可见，指数高度/内容高度224或252相等，卡片无横溢出、文档宽等于视口；1280×720下方阅读组326/326无滚动，短高/较窄桌面仅该组可滚。短高键盘到依据按钮后阅读组scrollTop206，指数scrollTop0。视口模拟不是真机/FPS。
+- **前批范围**：21候选逐项处置，10族实施、11项保留或测量。源日期/年龄、历史完整/失败恢复、股票/板块/新闻/新浪/turnover冷读共享、精选DB所有权、题材冷同步竞态、自选取消/写后/人工刷新/失败保留。
 - **不变条件**：成功TTL/行情轮频/预算/源优先级、选股/消息资格、去重/推送/撮合硬门不变；部分历史/失败不扩为成功缓存。manual立即校准，源时间不改成命中时刻。
-- **门禁**：后端5209 passed / 81 skipped / 187.02s、pyflakes通过。前端默认/UTC各1324 passed（123文件，84.07/162.11s），tsc/ESLint零错误（仅原生图片夹具1 warning），生产build通过，编译13.6s/类型17.2s不当总耗时；文档合同191 passed，doc-health/hygiene/public scan通过。首次handoff精简丢失6项机器入口，修回原约定后3个合同失败复绿，未放宽守卫。定向真实组件及源时间/冷读/历史恢复反例判红再精确恢复。
-- **实测限度**：8并发冷读8→1；精选120ms等待ticker最大150.16→5.69ms；两窗口三题材来源6→3、冲突3→0，输出一致但总延迟未改善。真实组件/CSS20Hz桌面/390px夹具零50ms长任务、17 Canvas保留，无横向溢出；非真机/实盘SLO。
+- **本批最终门禁**：后端5209 passed / 81 skipped / 361.60s、pyflakes通过；前端默认/UTC各1325 passed（123文件，194.35/215.65s）、tsc/ESLint/build通过，doc-health/hygiene/public scan通过。首轮实屏失败后重跑完整门禁，不复用整改前绿色；Impeccable最终layout scan无发现。
+- **前批门禁**：PR #267后端5209 passed / 81 skipped / 187.02s、pyflakes通过；前端默认/UTC各1324 passed（123文件），tsc/ESLint/build通过，文档合同191 passed；准确HEAD发布与合并后CI三项成功。前批证据不当本次市场纠偏门禁。
+- **前批实测限度**：8并发冷读8→1；精选120ms等待ticker最大150.16→5.69ms；两窗口三题材来源6→3、冲突3→0，输出一致但总延迟未改善。真实组件/CSS20Hz桌面/390px夹具零50ms长任务、17 Canvas保留，无横向溢出；非真机/实盘SLO。
 - **U50 降级授权回执**：2026-09-24 DEGRADED_FULL_CONTROL未撤销，作者=发布操作者；准确HEAD DegradedRelease、本地/CI/release_check/postmerge/运行生效分开核，不称独立网页Review。
 
 ## 2. U49 主动审计回执 / Preflight 作者反证与传播
 
-核冷读/最后退订/旧finally、写前后代际、manual立即新读、失败不当真空、副本、先截断集合、日期/采集年龄、五字段/原子写/部分失败/同期存档、GET副作用、Session取消worker自然drain、题材失败和关闭生命周期。根反证发现新校准失败误清membership，修复并注回判红；协作子代理交叉核查不是独立网页Review。
+本次先复现市场真实1280×720：展开六项后指数clientHeight208、scrollHeight275、overflow:auto；下排bottom421超容器bottom354。核指数市场身份/缺源/额外项、自然高度、成交和情绪可达、手机/短高、同轮读取与点击复用；不改工作台或源预算。前批冷读/代际/时效反证保留在报告§10，不重复当本批新发现；协作子代理交叉核查不是独立网页Review。
 
-events覆盖未过滤过期override是既有资格风险，保留事件owner候选，不在性能片静默改入选。report §10、W06、INDEX传播；AGENTS/skill/总方案/权限与产品语义不变，无新增业务页面/模型/数据源/生产依赖，无需新重大方案准入。
+临时预览首启未转发原后端凭据，401按缺源显示；核鉴权并只在服务端进程内转发已有凭据后重验实源，没有关闭鉴权、复制密钥文件或把占位图当通过。最终仅前端激活，原8000调度不重启。
+
+events覆盖未过滤过期override是既有资格风险，保留事件owner候选，不在性能片静默改入选。report §11、W06与handoff原位传播；INDEX既有FN11入口适用、无新增文档；AGENTS/skill/总方案/权限与产品语义不变，无新增业务页面/模型/数据源/生产依赖，无需新重大方案准入。
 
 ## 3. 发布、恢复与剩余证据
 
-本段记录发布前施工与完整本地门禁；准确PR/HEAD发布结果从本批DegradedRelease、release_check与GitHub CI核对，服务实际版本从本机artifacts/runs/quote-read-performance-20261013/runtime-activation.json核对，不由本地工程通过推定。每项差异可Git独立回退，切换前保存现有构建，后端no-reload且单实例；隔离测试没有重启8000/3000。
+本段记录发布前施工与完整本地门禁；准确PR/HEAD发布结果从本批DegradedRelease、release_check与GitHub CI核对，服务实际版本从本机artifacts/runs/market-all-indices-20261013/runtime-activation.json核对，不由本地工程通过推定。每项差异可Git独立回退，切换前保存现有构建，后端no-reload且单实例；隔离测试没有重启8000/3000。
 
 [报告§10](system/runtime-performance.md#10-2026-10-13-剩余候选逐项验证与读链优化)逐项列位置、原因、处置与不变条件。IMP-019长期SLO仍部分完成：真实交易尾延迟/源龄/错误attempt分母、生产DB规模/锁等待、真机/GPU/研究竞争需实际窗口；不重复已修点，不为形式优化扩大重构。
+
+## 4. 交易时段跟进边界
+
+本机官方交易日历覆盖2026-10-13，盘前不能当连续交易证据。用户授权下建立仅当天09:35/13:35两次的线程跟进，每窗先冻结实际运行版本/负载，再只读观察5分钟；本机应用与前后端需在线。参数/脚本哈希与现场证据在忽略的`artifacts/runs/live-performance-20261013`，状态仍归W06；第二次后停用，不产生永久ping。
+
+现有health/metrics/caches/providers/schedulers读面已盘前实发5次200，没有触发采集/模型；交易窗collector盘前拒绝且0请求。使用Hub批报价不主动回源/新增订阅；同股分钟/日K有界读取。保留额外观测请求、失败和unknown。滑动1h分位/count不能直接差分成窗口分母；缓存factory不等于供应商HTTP；图表meta属Hub，日K日期不是秒级源钟。StockDetail冷读可能自动调用摘要模型，不为测试额外激活。没有浏览器性能trace就不宣称刷新无卡顿。确认问题后再按完整工程/发布门最小修复，不改TTL/轮频/freshness、选股或通知规则。

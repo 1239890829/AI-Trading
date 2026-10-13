@@ -4,11 +4,11 @@ import MarketPage from "@/app/market/page";
 import * as api from "@/lib/api";
 import type { Quote } from "@/types/market";
 
-const state = vi.hoisted(() => ({ search: "" }));
+const state = vi.hoisted(() => ({ search: "", openSymbol: vi.fn() }));
 vi.mock("next/navigation", () => ({useSearchParams: () => new URLSearchParams(state.search)}));
 vi.mock("@/lib/market-hours", () => ({isTradingSession: () => true}));
 vi.mock("@/components/ui/workspace-deck", () => ({ MarketLensPicker: () => null }));
-vi.mock("@/components/detail/symbol-detail-context", () => ({ useSymbolDetail: () => ({open: vi.fn()}) }));
+vi.mock("@/components/detail/symbol-detail-context", () => ({ useSymbolDetail: () => ({open: state.openSymbol}) }));
 vi.mock("@/components/event-panel", () => ({ EventPanel: () => null }));
 vi.mock("@/components/market/heatmap-tab", () => ({ HeatmapTab: () => null }));
 vi.mock("@/components/market/events-tab", () => ({ EventsTab: () => null }));
@@ -58,26 +58,53 @@ it("closes failed sentiment evidence and requires a fresh user click after recov
 
 const overviewReaders = () => [api.getMarketOverview, api.getLimitUpPool, api.getBreadth, api.getSentiment, api.getSentimentHistory];
 
-it("keeps the three index identities collapsed by default and expands without another read", async () => {
+it("shows every index immediately and preserves market identity when opening details", async () => {
   const indices = [
     {symbol: "399001", market: "SZ", name: "深证成指"},
     {symbol: "399006", market: "SZ", name: "创业板指"},
     {symbol: "000001", market: "SH", name: "上证指数"},
     {symbol: "000688", market: "SH", name: "科创50"},
+    {symbol: "000300", market: "SH", name: "沪深300"},
+    {symbol: "000852", market: "SH", name: "中证1000"},
+    {symbol: "000001", market: "SZ", name: "同代码不同市场指数"},
   ].map(q => ({...q, price: 100, amount: 1e8, change_pct: 1} as Quote));
   vi.mocked(api.getMarketOverview).mockResolvedValue({indices, total_amount: null, total_amount_freshness: null});
   render(<MarketPage />);
   await act(async () => {});
   const region = within(screen.getByRole("region", {name: "主要指数"}));
-  expect(region.getByRole("button", {name: /上证指数/})).toBeTruthy();
-  expect(region.getByRole("button", {name: /科创50/})).toBeTruthy();
-  expect(region.getByRole("button", {name: /创业板指/})).toBeTruthy();
-  expect(region.queryByRole("button", {name: /深证成指/})).toBeNull();
-  fireEvent.click(region.getByRole("button", {name: /主要指数.*展开/}));
-  expect(region.getByRole("button", {name: /深证成指/})).toBeTruthy();
-  fireEvent.click(region.getByRole("button", {name: /主要指数.*收起/}));
-  expect(region.queryByRole("button", {name: /深证成指/})).toBeNull();
+  expect(region.getAllByRole("button")).toHaveLength(indices.length);
+  for (const quote of indices) {
+    const card = within(region.getByRole("button", {name: new RegExp(quote.name!)}));
+    expect(card.getByText("100.00")).toBeTruthy();
+    expect(card.getByText("+1.00%")).toBeTruthy();
+    expect(card.getByText("1.00 亿")).toBeTruthy();
+  }
+  expect(region.queryByRole("button", {name: /展开|收起/})).toBeNull();
+  fireEvent.click(region.getByRole("button", {name: /上证指数/}));
+  expect(state.openSymbol).toHaveBeenLastCalledWith({symbol: "sh000001"});
+  fireEvent.click(region.getByRole("button", {name: /同代码不同市场指数/}));
+  expect(state.openSymbol).toHaveBeenLastCalledWith({symbol: "sz000001"});
   expect(api.getMarketOverview).toHaveBeenCalledTimes(1);
+});
+
+it("keeps missing configured indices visible as unavailable without invented quotes", async () => {
+  vi.mocked(api.getMarketOverview).mockResolvedValue({
+    indices: [{symbol: "000001", market: "SH", name: "上证指数", price: 3000, quality: "stale", quality_reasons: ["refresh_failed"]} as Quote],
+    total_amount: null, total_amount_freshness: null,
+  });
+  render(<MarketPage />);
+  await act(async () => {});
+  const region = within(screen.getByRole("region", {name: "主要指数"}));
+  expect(region.getAllByRole("button")).toHaveLength(6);
+  expect(within(region.getByRole("button", {name: /上证指数/})).getByText("过期")).toBeTruthy();
+  for (const name of ["科创50", "创业板指", "深证成指", "沪深300", "中证1000"]) {
+    const card = region.getByRole("button", {name: new RegExp(name)});
+    expect(card.hasAttribute("disabled")).toBe(true);
+    expect(within(card).getByText("未返回")).toBeTruthy();
+    expect(within(card).getByText("--")).toBeTruthy();
+    fireEvent.click(card);
+  }
+  expect(state.openSymbol).not.toHaveBeenCalled();
 });
 
 it("shows attribution from the same pool row in the market leaders preview", async () => {
