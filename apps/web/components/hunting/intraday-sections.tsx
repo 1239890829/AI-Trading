@@ -275,7 +275,11 @@ export function OpportunitySection({
       {opps.caveats.length > 0 && (
         <p className="text-[10px] text-zinc-600 dark:text-zinc-400">口径：{opps.caveats.join("；")}</p>
       )}
-      <ExplanationMap label="机会范围与口径" identity={opps.trade_date ?? undefined} steps={[
+      <ExplanationMap label="机会范围与口径" identity={opps.trade_date ?? undefined} center={{label:"题材联动候选",value:"仅模拟跟踪"}} links={[
+        {from:"center",to:"scope",label:"账户资格范围",kind:"context"},
+        {from:"scope",to:"candidate",label:"资格通过后核对",kind:"sequence"},
+        {from:"candidate",to:"basis",label:"两项独立判定",kind:"context"},
+      ]} steps={[
         {id: "scope", label: "账户范围", icon: "risk", tone: "warning", content: <p>板块权限：账户只开沪深主板（创业板/科创板/北交所/B 股不进候选与参考区）{boardBlocked > 0 ? `，本日已挡下 ${boardBlocked} 只容器成分` : ""}。</p>},
         {id: "candidate", label: "候选与参考", icon: "relation", content: <p>可参与候选＝题材内当前未封板、通过资格门的联动个股（不保证成交）（联动确定性＝题材基座×距封板跑道）；涨停梯队仅作题材集中度与曾封板身份参考；当前封板/开板状态以带版本快照为准。</p>},
         {id: "basis", label: "判定定义", icon: "source", content: <p>辨识度＝人气×高度×角色，确定性＝题材阶段基座×封板质量修正，两者独立判定不合并打分；判定依据悬停可见、等级可回放。</p>},
@@ -691,7 +695,11 @@ export function DirectionCard({ d }: { d: BriefDirection }) {
           </span>
         )}
       </div>
-      <ExplanationMap label={`${d.direction}判断资料`} identity={d.direction} steps={[
+      <ExplanationMap label={`${d.direction}判断资料`} identity={d.direction} center={{label:"方向假设",value:d.direction}} links={[
+        {from:"center",to:"logic",label:"已记录逻辑",kind:"recorded"},
+        {from:"center",to:"trigger",label:"成立须满足",kind:"context"},
+        {from:"center",to:"falsify",label:"出现则重评",kind:"context"},
+      ]} steps={[
         {id: "logic", label: "方向逻辑", icon: "source", content: <div className="space-y-2"><NarrativeText text={d.logic} label="方向原逻辑" /><p>规则依据：{d.basis || "未提供"}</p><p>参与方式依据：{d.entry_basis || "未提供"}</p></div>},
         {id: "trigger", label: "触发条件", icon: "check", summary: `${d.trigger_conditions.length} 条`, content: d.trigger_conditions.length ? <ConditionList label="确认" items={d.trigger_conditions} /> : <p>未提供触发条件。</p>},
         {id: "falsify", label: "证伪条件", icon: "risk", tone: "warning", summary: `${d.falsify_conditions.length} 条`, content: d.falsify_conditions.length ? <ConditionList label="证伪" items={d.falsify_conditions} tone="warning" /> : <p>未提供证伪条件。</p>},

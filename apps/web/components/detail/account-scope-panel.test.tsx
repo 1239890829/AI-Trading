@@ -90,6 +90,8 @@ describe("account identity", () => {
     vi.mocked(internal.getJson).mockResolvedValueOnce({meta,data:{enabled:true,activation,runtime:{state:"degraded",as_of:"2026-10-09T09:34:12+08:00",reason:"quote_age_exceeded；限价未成交"},positions:[],recent_orders:[]}});
     render(<AccountScopePanel account="daily" />);
     expect(await screen.findByText("后台回执：运行失败，需核回执")).toBeTruthy();
+    expect(screen.queryByRole("tabpanel")).toBeNull();
+    fireEvent.click(screen.getByRole("tab", {name:"用途"}));
     expect(screen.getByRole("tabpanel").textContent).toContain("用途：验证每日精选通过执行闸门后的模拟表现。");
     fireEvent.click(screen.getByRole("tab", {name:"后台回执"}));
     expect(screen.getByText("2026-10-09T09:34:12+08:00")).toBeTruthy();

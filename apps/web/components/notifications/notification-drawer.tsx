@@ -349,7 +349,10 @@ function NotificationDiagnosis({ diag }: { diag: NotificationDiagnostics }) {
           ))}
         </ul>
       )}
-      {(diag.shapes || (d.latest?.length ?? 0) > 0) && <ExplanationMap label="来源与逐股原决定" identity={`${diag.trade_date}:${diag.as_of}`} steps={[
+      {(diag.shapes || (d.latest?.length ?? 0) > 0) && <ExplanationMap label="来源与逐股原决定" identity={`${diag.trade_date}:${diag.as_of}`} center={{label:"本次通知诊断",value:NOTIF_STATE_HEADLINE[diag.state] ?? diag.state}} links={[
+        ...(diag.shapes ? [{from:"center",to:"shapes",label:"读取窗口来源计数",kind:"context" as const}] : []),
+        ...(d.latest ?? []).map(row => ({from:"center",to:`decision-${row.snapshot_id}`,label:"窗口内原判定 · 非全天覆盖",kind:"recorded" as const})),
+      ]} steps={[
         ...(diag.shapes ? [{id: "shapes", label: "查看来源核对信息", icon: "source" as const, content: <ShapeCounts shapes={diag.shapes} />}] : []),
         ...(d.latest ?? []).map(row => ({id: `decision-${row.snapshot_id}`, label: `原决定 ${row.name || row.symbol}`, icon: "check" as const, summary: decisionLabels[row.decision] ?? "状态未知", content: <div className="text-zinc-700 dark:text-zinc-300">
               <StockLink symbol={row.symbol} className={`${readingRowClasses.action} rounded px-1 text-sky-700 dark:text-sky-400`}>{row.name || row.symbol} {row.symbol}</StockLink>
@@ -462,12 +465,15 @@ function NotificationRow({
         来源：{item.source ?? "历史事件，来源未标注"} · 原观察：{item.source_as_of ?? item.ts ?? "时间未知"} · 记录：{item.recorded_at ?? "历史记录钟未提供"} · {item.validity ?? "条件与时效未记录，须重新核验"}
         <br />站内记录可见；<ChannelStatus channels={item.channels} />。未读仅表示站内尚未点开。
       </p>
-      {((item.references?.length ?? 0) > 0 || item.body.length > 360) && <div data-reading-action className="mt-2 cursor-auto text-xs leading-relaxed text-zinc-600 dark:text-zinc-400"><ExplanationMap label={`原入选与判定依据（${item.references?.length ?? 0} 条）`} identity={item.id} steps={[
+      {((item.references?.length ?? 0) > 0 || item.body.length > 360) && <div data-reading-action className="mt-2 cursor-auto text-xs leading-relaxed text-zinc-600 dark:text-zinc-400"><ExplanationMap label={`原入选与判定依据（${item.references?.length ?? 0} 条）`} identity={item.id} center={{label:"站内消息",value:item.title}} links={[
+        ...(item.body.length > 360 ? [{from:"center",to:"message",label:"原消息全文",kind:"context" as const}] : []),
+        ...(item.references ?? []).map(ref => ({from:"center",to:`ref-${ref.event_id}`,label:ref.kind === "selection" ? "已绑定原入选" : "已绑定原判定",kind:"recorded" as const})),
+      ]} steps={[
         ...(item.body.length > 360 ? [{id: "message", label: "完整消息", icon: "source" as const, content: <NarrativeText text={formatLegacyLimitDistance(item.body)} label="消息原内容" identity={item.id} />}] : []),
         ...(item.references ?? []).map(ref => ({id: `ref-${ref.event_id}`, label: `${ref.kind === "selection" ? "原入选" : "原判定"} #${ref.event_id}`, icon: "source" as const, summary: ref.source_version ?? "未绑定版本", content: <div className="min-w-0 space-y-2 break-words">
           <p>{ref.kind === "selection" ? "原入选" : "原判定"} · {ref.source_as_of ?? "原时点未记录"}</p>
           <p className="break-all">版本：{ref.source_version ?? "未绑定"}{ref.run_id ? ` · 归档 ${ref.run_id}` : ""}</p>
-          <FactTimeline label="引用时点" items={[{label: "原观察", value: ref.source_as_of ?? "原时点未记录"}, {label: "记录", value: ref.recorded_at ?? "记录时点未提供"}]} />
+          <FactTimeline label="引用时点" items={[{label: "原观察", value: ref.source_as_of ?? "原时点未记录", kind:"time"}, {label: "记录", value: ref.recorded_at ?? "记录时点未提供", kind:"time"}]} />
           {ref.selection_source === "daily" && ref.source_version && ref.trade_date && <a data-reading-action className={`${readingRowClasses.action} quiet-action mt-1 inline-flex`} onClick={inspectionClick(inspect, {kind: "selection-review", date: ref.trade_date, version: ref.source_version})} href={`/hunting?${new URLSearchParams({view: "review", date: ref.trade_date, version: ref.source_version})}`}>查看此版本复盘</a>}
           <ConditionList label="原依据与条件" items={evidenceLines(ref.evidence)} />
         </div>})),

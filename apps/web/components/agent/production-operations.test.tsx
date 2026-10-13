@@ -10,6 +10,7 @@ describe("maintenance command boundary", () => {
     render(<ProductionOperations/>);
     expect(await screen.findByText("运行标记：未运行")).toBeTruthy();
     expect(screen.getByText("启用开关：已启用")).toBeTruthy();
+    fireEvent.click(screen.getByRole("tab",{name:"运行与开关"}));
     expect(screen.getByLabelText("运行时点").textContent).toContain("未记录");
     fireEvent.click(screen.getByRole("tab",{name:"原始 JSON"}));
     expect(screen.getByLabelText("节拍原始 JSON").textContent).toContain('"brief_exists": false');

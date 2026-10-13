@@ -23,6 +23,12 @@ export function ProductionOperations() {
   const lock = useRef(false);
   const [busy, setBusy] = useState<string | null>(null);
   const [receipt, setReceipt] = useState<string | null>(null);
+  const stateRecords = watcher.data ? [
+    `运行标记：${typeof watcher.data.active === "boolean" ? watcher.data.active ? "运行中" : "未运行" : "未记录"}`,
+    `启用开关：${typeof watcher.data.enabled === "boolean" ? watcher.data.enabled ? "已启用" : "未启用" : "未记录"}`,
+    `简报记录：${typeof watcher.data.brief_exists === "boolean" ? watcher.data.brief_exists ? "存在" : "不存在" : "未记录"}`,
+    `节拍计数：${watcher.data.beat_count ?? "未记录"}`,
+  ] : [];
   async function execute(command: typeof COMMANDS[number]) {
     if (lock.current || !window.confirm(`${command.label}：${command.note} 确认执行？`)) return;
     lock.current = true;
@@ -46,13 +52,8 @@ export function ProductionOperations() {
       <h2 id="watcher-heading">节拍持久状态</h2>
       <p>自动调度取决于服务和各项开关。机器关闭或服务未启动时不会继续生产。</p>
       {watcher.error ? <div role="alert" className="status-feedback"><p>状态读取失败，不能据此判断调度正常。</p><button data-action="secondary" className="command-action" onClick={watcher.refresh}>重新读取</button></div> : watcher.pending ? <p role="status" className="status-feedback">正在读取持久状态…</p> : watcher.data ? <ExplanationMap label="节拍记录" identity="watcher-state" steps={[
-        {id:"state",label:"运行与开关",icon:"check",content:<><ConditionList label="后端已记录状态" items={[
-          `运行标记：${typeof watcher.data.active === "boolean" ? watcher.data.active ? "运行中" : "未运行" : "未记录"}`,
-          `启用开关：${typeof watcher.data.enabled === "boolean" ? watcher.data.enabled ? "已启用" : "未启用" : "未记录"}`,
-          `简报记录：${typeof watcher.data.brief_exists === "boolean" ? watcher.data.brief_exists ? "存在" : "不存在" : "未记录"}`,
-          `节拍计数：${watcher.data.beat_count ?? "未记录"}`,
-        ]}/>{watcher.data.note && <NarrativeText text={watcher.data.note} label="运行说明"/>}<FactTimeline label="运行时点" items={[{label:"开始时间",value:watcher.data.started_at ? dateTimeTextBJ(watcher.data.started_at) : "未记录"}]}/></>},
-        {id:"trackers",label:"方向跟踪",icon:"response",content:watcher.data.trackers?.length ? <div className="space-y-3">{watcher.data.trackers.map((tracker,index)=><section key={`${index}:${tracker.direction}`}><h4 className="text-xs font-medium">{tracker.direction}</h4><ConditionList label="跟踪记录" items={[`采样 ${tracker.beats ?? "未记录"} 次；缺失 ${tracker.missing_beats ?? "未记录"} 次。`,`峰值涨幅：${tracker.peak_pct == null ? "未知" : `${tracker.peak_pct}%`}`,...(tracker.falsify_triggers ?? []).map(trigger=>`${trigger.key}：${trigger.detail}`)]}/><p className="text-xs text-[var(--ui-muted)]">确认标记：{String(tracker.confirmed)}；证伪标记：{String(tracker.falsified)}。标记不代表收益证明。</p></section>)}</div> : <p>没有已记录的方向跟踪；不能据此判断市场没有机会。</p>},
+        {id:"state",label:"运行与开关",icon:"check",summary:<span className="block space-y-1">{stateRecords.map(line=><span key={line} className="block">{line}</span>)}</span>,content:<><ConditionList label="后端已记录状态" items={stateRecords}/>{watcher.data.note && <NarrativeText text={watcher.data.note} label="运行说明"/>}<FactTimeline label="运行时点" items={[{label:"开始时间",value:watcher.data.started_at ? dateTimeTextBJ(watcher.data.started_at) : "未记录",kind:"time"}]}/></>},
+        {id:"trackers",label:"方向跟踪",icon:"response",summary:watcher.data.trackers?.length ? <span className="block space-y-1">{watcher.data.trackers.map((tracker,index)=><span key={index} className="block">{tracker.direction} · 原采样 {tracker.beats ?? "未记录"} 次 · 缺失 {tracker.missing_beats ?? "未记录"} 次</span>)}</span> : "没有已记录的方向跟踪，不等于市场无机会",content:watcher.data.trackers?.length ? <div className="space-y-3">{watcher.data.trackers.map((tracker,index)=><section key={`${index}:${tracker.direction}`}><h4 className="text-xs font-medium">{tracker.direction}</h4><ConditionList label="跟踪记录" items={[`采样 ${tracker.beats ?? "未记录"} 次；缺失 ${tracker.missing_beats ?? "未记录"} 次。`,`峰值涨幅：${tracker.peak_pct == null ? "未知" : `${tracker.peak_pct}%`}`,...(tracker.falsify_triggers ?? []).map(trigger=>`${trigger.key}：${trigger.detail}`)]}/><p className="text-xs text-[var(--ui-muted)]">确认标记：{String(tracker.confirmed)}；证伪标记：{String(tracker.falsified)}。标记不代表收益证明。</p></section>)}</div> : <p>没有已记录的方向跟踪；不能据此判断市场没有机会。</p>},
         {id:"raw",label:"原始 JSON",icon:"source",content:<pre className="data-scroll whitespace-pre-wrap [overflow-wrap:anywhere]" aria-label="节拍原始 JSON">{JSON.stringify(watcher.data,null,2)}</pre>},
       ]}/> : <p>状态未记录，不能判断调度是否正常。</p>}
     </section>

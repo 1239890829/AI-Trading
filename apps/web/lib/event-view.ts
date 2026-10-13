@@ -147,6 +147,7 @@ export function eventNewsItem(e: ImpactEvent): NewsModalItem {
     judgement: eventJudgementExplanation(e),
     eventId: e.id,
     eventRef: e.interpretation_ref,
+    eventSnapshot: e,
     symbol: e.directions.find(d => d.target_type === "symbol")?.target || e.source_symbol,
   };
 }
@@ -166,6 +167,7 @@ export function eventDetailPayload(e: EventSummary, symbol?: string | null): Det
     url: e.url ?? null,
     eventId: e.id,
     eventRefs: e.interpretation_ref ? [e.interpretation_ref] : undefined,
+    eventSnapshot: e,
     symbol: symbol || (d?.target_type === "symbol" ? d.target : null),
     theme: d?.target_type === "theme" ? d.target : null,
     source: e.source ?? null,

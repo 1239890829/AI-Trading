@@ -29,7 +29,8 @@ import { eventDetailPayload, eventDirectionForSymbol, eventDirectionView, eventJ
 import { useSymbolDetail } from "@/components/detail/symbol-detail-context";
 import { ModalShell } from "@/components/ui/modal-shell";
 import {ArticleBlocks} from "@/components/ui/article-blocks";
-import {FactTimeline, NarrativeText} from "@/components/ui/explanation-map";
+import {FactCards, NarrativeText} from "@/components/ui/explanation-map";
+import {EventOverview} from "@/components/events/event-overview";
 import {ReadingButton} from "@/components/ui/reading-row";
 import { useExitPresence } from "@/hooks/use-exit-presence";
 
@@ -47,6 +48,8 @@ export interface DetailPayload {
   eventId?: number | null;
   /** Exact references from the source list or original selection record, not new inferred history. */
   eventRefs?: EventInterpretationRef[];
+  /** Original list snapshot, including every target; never reconstructed from flattened text. */
+  eventSnapshot?: EventSummary;
   selectionEntry?: SelectionEntry | null;
   source?: string | null;
   date?: string | null;
@@ -98,7 +101,7 @@ function DetailModalBody({ payload, active, onClose }: { payload: DetailPayload;
   // 「查看个股详情」→ 标的详情弹窗（2026-09-15 详情弹窗化，原先跳工作台）
   const { open: openSymbolDetail } = useSymbolDetail();
   // 客户端挂载标志与 portal 目标由 `ModalShell` 统一处理（2026-09-15 弹窗外壳统一）
-  const [state, setState] = useState<{ status: "idle" | "loading" | "error" | "empty"; blocks?: ArticleBlock[]; msg?: string }>(
+  const [state, setState] = useState<{ status: "idle" | "loading" | "error" | "empty"; blocks?: ArticleBlock[]; truncated?: boolean; msg?: string }>(
     { status: "idle" },
   );
   const [attempt, setAttempt] = useState(0);
@@ -164,8 +167,8 @@ function DetailModalBody({ payload, active, onClose }: { payload: DetailPayload;
     getNewsContent(payload.url)
       .then((c) => {
         if (!alive) return;
-        const blocks = (c?.blocks ?? []) as ArticleBlock[];
-        setState(blocks.length > 0 ? { status: "idle", blocks } : { status: "empty", msg: "正文抓取为空（源站未返回内容）" });
+        const blocks: ArticleBlock[] = c?.blocks?.length ? c.blocks : (c?.paragraphs ?? []).map(text => ({type: "p", text}));
+        setState(blocks.length > 0 ? { status: "idle", blocks, truncated: !!c.truncated } : { status: "empty", msg: "正文抓取为空（源站未返回内容）" });
       })
       .catch((e: unknown) => {
         if (!alive) return;
@@ -201,9 +204,7 @@ function DetailModalBody({ payload, active, onClose }: { payload: DetailPayload;
     >
       {active && <>
         {/* 元信息（判定结果/方向/板块等，跨模块透传） */}
-        {payload.meta && payload.meta.length > 0 && (
-          <FactTimeline label="判读记录" items={payload.meta}/>
-        )}
+        {payload.eventSnapshot ? <EventOverview event={payload.eventSnapshot} symbol={payload.symbol} /> : payload.meta && payload.meta.length > 0 && <FactCards label="判读记录" items={payload.meta}/>}
 
         {payload.kind === "attribution" && <div className="min-w-0 border-b border-zinc-200 pb-2 text-xs dark:border-zinc-700/60" aria-label="原首次加入依据">
           <h3 className="font-medium">原首次加入记录</h3>
@@ -280,7 +281,7 @@ function DetailModalBody({ payload, active, onClose }: { payload: DetailPayload;
         )}
 
         {/* 正文/摘要文本（无 url 内容的主载体，如通知类快讯） */}
-        {payload.body && (
+        {payload.body && !payload.eventSnapshot && (
           <NarrativeText text={payload.body} label="原始说明" identity={`${payload.kind}:${payload.eventId ?? payload.title}`}/>
         )}
 
@@ -302,7 +303,7 @@ function DetailModalBody({ payload, active, onClose }: { payload: DetailPayload;
           {state.status === "empty" && <p className="text-xs text-zinc-600 dark:text-zinc-400">{state.msg ?? "暂无正文"}</p>}
           {/* 正文自渲染（不嵌套 NewsModal——它自带 portal 遮罩，嵌套会双层弹窗） */}
           {state.status === "idle" && (state.blocks?.length ?? 0) > 0 && (
-            <ArticleBlocks blocks={state.blocks!} identity={payload.url ?? payload.title}/>
+            <><p className="text-[11px] text-amber-800 dark:text-amber-300" role={state.truncated ? "note" : undefined}>{state.truncated ? "源正文已截断，完整内容请查看原文。" : ""}</p><ArticleBlocks blocks={state.blocks!} identity={payload.url ?? payload.title} title={payload.title} alreadyShownExcerpt={payload.eventSnapshot?.summary ?? undefined}/></>
           )}
         </div>}
 

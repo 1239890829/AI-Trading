@@ -116,6 +116,7 @@ describe("MinuteDecisionPanel 做 T 决策", () => {
     mockedDecisions.mockResolvedValue(decisions([]));
     render(<MinuteDecisionPanel symbol="600519" />);
     await waitFor(() => expect(screen.getByText("低吸偏向")).toBeTruthy());
+    fireEvent.click(screen.getByRole("tab", {name:"触发依据"}));
     const t = document.body.textContent ?? "";
     expect(t).toContain("偏离均价 -2.20%");
     expect(t).toContain("跌破均价 3%");
@@ -149,7 +150,12 @@ describe("MinuteDecisionPanel 做 T 决策", () => {
     mockedSignals.mockResolvedValue(signals([{...SIGNAL, triggered:[{...SIGNAL.triggered[0], evidence}], invalidate_condition:invalidate, basis:"使用本次可得成交量，不回填昨日缺失。"}], {degraded:[omission], basis:{volume_unit:"hand", previous_volume:null}}));
     mockedDecisions.mockResolvedValue(decisions([]));
     render(<MinuteDecisionPanel symbol="600519" />);
-    expect(await screen.findByText(evidence)).toBeTruthy();
+    const overview = await screen.findByRole("tab", {name:"触发依据"});
+    expect(overview.textContent).toContain(evidence);
+    expect(overview.textContent).toContain("触发值 -2.2 · 原阈值 -1.5");
+    expect(screen.queryByRole("tabpanel")).toBeNull();
+    fireEvent.click(overview);
+    expect(screen.getByText(evidence)).toBeTruthy();
     expect(screen.getByText("规则 avg_dev · 触发值 -2.2 · 阈值 -1.5")).toBeTruthy();
     expect(screen.getByText("权重 0.3 · 方向 -1")).toBeTruthy();
     const reader = screen.getByRole("region", {name:"分钟信号依据"});
@@ -159,7 +165,7 @@ describe("MinuteDecisionPanel 做 T 决策", () => {
     expect(screen.getByText(invalidate)).toBeTruthy();
     expect(screen.getByText(omission)).toBeTruthy();
     fireEvent.click(within(reader).getByRole("tab", {name:"记录口径"}));
-    expect(screen.getByText("使用本次可得成交量，不回填昨日缺失。")).toBeTruthy();
+    expect(within(screen.getByRole("tabpanel")).getByText("使用本次可得成交量，不回填昨日缺失。")).toBeTruthy();
     expect(screen.getByLabelText("信号输入口径原始值").textContent).toContain('"previous_volume": null');
     expect(mockedSignals).toHaveBeenCalledTimes(1);
     expect(mockedDecisions).toHaveBeenCalledTimes(1);

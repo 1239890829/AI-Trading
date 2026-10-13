@@ -4,19 +4,13 @@ import {useState} from "react";
 import type {ArticleBlock} from "@/lib/api";
 import type {EntityMatcher, EntityMatch} from "@/lib/entity-links";
 import {RichText} from "@/components/assistant/rich-text";
-import {ArticleReader} from "./article-reader";
+import {ArticleReader, isSourceNumericColumn} from "./article-reader";
 
 /** 表格块：数据类文章的排行榜/涨跌榜按真表格渲染（横向可滚，斑马纹，小字号）。 */
 function TableBlock({ block }: { block: Extract<ArticleBlock, { type: "table" }> }) {
   if (block.rows.length === 0) return null;
   const [head, ...body] = block.header ? [block.rows[0], ...block.rows.slice(1)] : [null, ...block.rows];
-  // 数字列右对齐：表头或数据列里数字占比过半则判定
-  const isNumericCol = (col: number) => {
-    const cells = body.map((r) => r[col]).filter(Boolean);
-    if (cells.length === 0) return false;
-    const numCount = cells.filter((c) => /^[-+]?[\d,.%]+$/.test(c)).length;
-    return numCount / cells.length > 0.5;
-  };
+  const isNumericCol = (col: number) => isSourceNumericColumn(block, col);
   const colCount = Math.max(...block.rows.map((r) => r.length));
   return (
     <div className="max-w-full overflow-x-auto rounded-lg border border-zinc-200 dark:border-zinc-800">
@@ -90,16 +84,20 @@ function ImageBlock({ src }: { src: string }) {
 export function ArticleBlocks({
   blocks,
   identity,
+  title,
+  alreadyShownExcerpt,
   matcher,
   onNavigate,
 }: {
   blocks: ArticleBlock[];
   identity: string;
+  title?: string;
+  alreadyShownExcerpt?: string;
   matcher?: EntityMatcher | null;
   onNavigate?: (m: EntityMatch) => void;
 }) {
   return (
-    <ArticleReader blocks={blocks} identity={identity} renderBlock={(b, i) => {
+    <ArticleReader blocks={blocks} identity={identity} title={title} alreadyShownExcerpt={alreadyShownExcerpt} renderBlock={(b, i) => {
         if (b.type === "p") {
           // 正文段落经实体匹配渲染：个股/题材命中 → 可点击跳转（识别失败降级纯文本）
           if (matcher && onNavigate) {
@@ -109,6 +107,7 @@ export function ArticleBlocks({
                 text={b.text}
                 matcher={matcher}
                 onNavigate={onNavigate}
+                plainDocument
                 className="space-y-3 text-[13px] leading-relaxed text-zinc-700 dark:text-zinc-300"
               />
             );

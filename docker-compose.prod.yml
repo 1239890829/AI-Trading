@@ -12,9 +12,9 @@
 #   `export ASHARE_API_TOKEN="$(sed -n 's/^ASHARE_API_TOKEN=//p' backend/.env)"`
 #   `export ASHARE_AUTH_MODE="$(sed -n 's/^ASHARE_AUTH_MODE=//p' backend/.env)"`（shared 时）
 #   ⚠️ 后端配了 token 而 web 没拿到 ⇒ **全部接口 401**（R22 前只有写接口会 401）。
-# WebSocket：Route Handler 不代理 WS 升级——默认 5s 轮询降级可用；
-#   要实时 WS，要么前置 nginx 放开 Upgrade 头，要么设 NEXT_PUBLIC_WS_BASE
-#   （注意：该项是构建期内联，改了要 --build 重构 web 镜像）。
+# WebSocket：默认同源 /backend/ws/quotes，由 Next16 proxy.ts 精确升级 rewrite
+#   按运行时 BACKEND_ORIGIN 转发；子协议原样交后端，代理不注入访问密钥。
+#   NEXT_PUBLIC_WS_BASE 仅为可选直接连接覆盖（构建期内联，改后需重构）。
 #   ⚠️ 启用鉴权后 WS 另需**子协议凭据** ashare-token.<base64url>（经同源
 #   GET /api/ws-credential 运行时下发）⇒ 反代/WAF 不要剥掉 Sec-WebSocket-Protocol 头。
 services:

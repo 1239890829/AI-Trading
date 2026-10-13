@@ -5,7 +5,7 @@ import { getPaperAccount, getPaperOrders } from "@/lib/api";
 import { getJson } from "@/lib/api/internal";
 import { Panel } from "@/components/panel";
 import { fmt } from "@/lib/format";
-import { ConditionList, ExplanationMap, FactTimeline } from "@/components/ui/explanation-map";
+import { ConditionList, ExplanationMap, FactCards, FactTimeline } from "@/components/ui/explanation-map";
 
 type Activation = {
   configured: boolean;
@@ -55,11 +55,16 @@ function ShadowUse({kind, enabled, activation, runtime}: {kind: "daily" | "hunti
     <p className="font-medium">启用状态：{enabled === false ? "未启用，已有记录保留" : enabled !== true ? "尚未返回" : !activation ? "已启用，运行配置尚未返回" : activation.runner_loaded === false ? "已配置，但运行器未加载" : "已配置启用"}</p>
     <p className="text-zinc-600 dark:text-zinc-400">后台回执：{runtimeState}</p>
     <ConditionList label="仍需核对" items={missing} tone="warning" />
-    <ExplanationMap label="影子账户使用说明" identity={kind} steps={[
+    <ExplanationMap label="影子账户使用说明" identity={kind} center={{label:kind === "daily" ? "每日精选影子" : "机会影子",value:"独立模拟账户"}} links={[
+      {from:"center",to:"purpose",label:"验证用途",kind:"context"},
+      {from:"center",to:"qualification",label:"启用前条件",kind:"context"},
+      {from:"qualification",to:"timing",label:"资格通过后执行",kind:"sequence"},
+      {from:"timing",to:"receipt",label:"结果以回执为准",kind:"sequence"},
+    ]} steps={[
       {id:"purpose", label:"用途", icon:"source", summary:"独立模拟验证", content:<p>{purpose}</p>},
       {id:"timing", label:"执行时机", icon:"time", summary:kind === "daily" ? window ?? "晨窗尚未返回" : "已有获准买点", content:<ConditionList label="执行时机原说明" items={[timing, ...(activation?.poll_seconds != null ? [`后台检查间隔 ${activation.poll_seconds} 秒；打开此面板只读取结果。`] : ["后台检查间隔尚未返回。"])]} />},
       {id:"qualification", label:"资格条件", icon:"check", summary:"何时需要启用", content:<ConditionList label="什么时候需要启用" items={[qualification]} />},
-      {id:"receipt", label:"后台回执", icon:"response", summary:runtimeState, content:<><FactTimeline label="回执记录" items={[{label:"运行状态",value:runtimeState},{label:"记录时间",value:runtime?.as_of ?? "未记录"}]} />{runtime?.reason && <ConditionList label="回执原因" items={[runtime.reason]} tone="warning" />}</>},
+      {id:"receipt", label:"后台回执", icon:"response", summary:runtimeState, content:<><FactCards label="回执状态" items={[{label:"运行状态",value:runtimeState}]} /><FactTimeline label="回执时点" items={[{label:"记录时间",value:runtime?.as_of ?? "未记录",kind:"time"}]} />{runtime?.reason && <ConditionList label="回执原因" items={[runtime.reason]} tone="warning" />}</>},
     ]} />
   </div>;
 }

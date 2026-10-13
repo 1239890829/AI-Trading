@@ -211,7 +211,11 @@ export function WatchLedgerPanel({ date, readOnly = false }: { date?: string; re
         </div>
       )}
 
-      <ExplanationMap label="台账怎么看" identity={readOnly ? "readonly" : "default"} steps={[
+      <ExplanationMap label="台账怎么看" identity={readOnly ? "readonly" : "default"} center={{label:"参考台账",value:"参考价 ≠ 成交价"}} links={[
+        {from:"center",to:"reference",label:"使用范围",kind:"context"},
+        {from:"center",to:"record",label:"登记与清算流程",kind:"context"},
+        {from:"record",to:"verdict",label:"清算后对照",kind:"sequence"},
+      ]} steps={[
         {id: "reference", label: "参考跟踪", icon: "risk", tone: "warning", content: <p>参考跟踪、非持仓：参考价不是成交价，收盘变化不代表模拟交易收益。{readOnly ? "此旁览只读核对，不提交模拟委托。" : "手工模拟建仓仍须经后端撮合与风险校验。"}</p>},
         {id: "record", label: "记录与清算", icon: "time", content: <p>入选即登记（当日唯一，盘中不移除）→ 收盘清算（入选价 vs 收盘价）→ 逐股判定与统计。</p>},
         {id: "verdict", label: "判定口径", icon: "check", content: <p>收盘 ≥ 入选 = 成功、亏 ≤2% = 持平、否则失败。历史记录收盘后可查。</p>},

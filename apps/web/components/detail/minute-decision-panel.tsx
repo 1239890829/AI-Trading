@@ -8,7 +8,7 @@ import {
   type MinuteSignalsPayload,
 } from "@/lib/api";
 import { bjHHMM, bjMonthDay, fmt, pctColor, pctText } from "@/lib/format";
-import { ConditionList, ExplanationMap, FactTimeline, NarrativeText } from "@/components/ui/explanation-map";
+import { ConditionList, ExplanationMap, FactCards, FactTimeline, NarrativeText } from "@/components/ui/explanation-map";
 
 /**
  * 做 T 决策（个股详情右列「做T」标签，P1-24 前端消费）。
@@ -38,6 +38,10 @@ function biasCls(bias: string): string {
 }
 
 type ReadState<T> = { data: T | null; error: string | null; pending: boolean };
+
+function TriggerOverview({items}: {items: MinuteSignalsPayload["signals"][number]["triggered"]}) {
+  return <span className="block space-y-1">{items.length ? items.map((hit, index) => <span key={`${index}:${hit.key}`} className="block"><span className="block tabular-nums">{hit.name} · 触发值 {hit.trigger_value} · 原阈值 {hit.threshold}</span><span className="block">原条件：{hit.evidence || "触发说明未记录，不能补推"}</span></span>) : <span>原触发条件未记录</span>}</span>;
+}
 
 function TriggerConditions({items}: {items: MinuteSignalsPayload["signals"][number]["triggered"]}) {
   return items.length ? <div className="space-y-3">{items.map((hit, index) => <section key={`${index}:${hit.key}`}>
@@ -139,10 +143,14 @@ export function MinuteDecisionPanel({
               </div>
               <ConditionList label="失效条件" tone="warning" items={[latest.invalidate_condition || "失效条件未记录，不能据此判断信号仍然有效。"]} />
               {!latest.triggered.length && <p className="text-amber-800 dark:text-amber-300">触发条件未记录，不能补推触发原因。</p>}
-              <ExplanationMap label="分钟信号依据" identity={`${symbol}:${latest.ts}`} steps={[
-                {id:"trigger",label:"触发依据",icon:"check",summary:`${latest.triggered.length} 项原始条件`,content:<TriggerConditions items={latest.triggered} />},
-                {id:"time",label:"信号时点",icon:"time",summary:bjHHMM(latest.ts),content:<FactTimeline label="信号原始记录" items={[{label:"触发时间",value:latest.ts},{label:"信号参考价",value:fmt(latest.signal_price)},{label:"原始分值",value:String(latest.score)},{label:"置信标记",value:latest.confidence}]} />},
-                {id:"basis",label:"记录口径",icon:"source",summary:"原始输入与说明",content:<>{latest.basis && <NarrativeText label="信号口径原说明" text={latest.basis} />}<p className="text-[11px] text-zinc-600 dark:text-zinc-400">置信标记是引擎输出，不是正确率或盈利概率。以下仅展示本次返回的输入口径。</p>{Object.keys(sig.basis).length ? <pre className="whitespace-pre-wrap [overflow-wrap:anywhere] text-[11px]" aria-label="信号输入口径原始值">{JSON.stringify(sig.basis, null, 2)}</pre> : <p>输入口径未返回，不补填数据。</p>}</>},
+              <ExplanationMap label="分钟信号依据" identity={`${symbol}:${latest.ts}`} center={{label:"已记录信号",value:`${symbol} · ${bjHHMM(latest.ts)}`}} links={[
+                {from:"center",to:"trigger",label:"原触发条件",kind:"recorded"},
+                {from:"center",to:"time",label:"原时点与数值",kind:"context"},
+                {from:"center",to:"basis",label:"输入口径",kind:"context"},
+              ]} steps={[
+                {id:"trigger",label:"触发依据",icon:"check",summary:<TriggerOverview items={latest.triggered} />,content:<TriggerConditions items={latest.triggered} />},
+                {id:"time",label:"信号时点",icon:"time",summary:bjHHMM(latest.ts),content:<><FactTimeline label="信号原始时点" items={[{label:"触发时间",value:latest.ts,kind:"time"}]} /><FactCards label="信号原始数值" items={[{label:"信号参考价",value:fmt(latest.signal_price)},{label:"原始分值",value:String(latest.score)},{label:"置信标记",value:latest.confidence}]} /></>},
+                {id:"basis",label:"记录口径",icon:"source",summary:latest.basis || "原输入说明未记录",content:<>{latest.basis && <NarrativeText label="信号口径原说明" text={latest.basis} />}<p className="text-[11px] text-zinc-600 dark:text-zinc-400">置信标记是引擎输出，不是正确率或盈利概率。以下仅展示本次返回的输入口径。</p>{Object.keys(sig.basis).length ? <pre className="whitespace-pre-wrap [overflow-wrap:anywhere] text-[11px]" aria-label="信号输入口径原始值">{JSON.stringify(sig.basis, null, 2)}</pre> : <p>输入口径未返回，不补填数据。</p>}</>},
               ]} />
             </div>
           ) : (
@@ -207,9 +215,12 @@ export function MinuteDecisionPanel({
                       )}
                     </div>
                     <ConditionList label="记录失效条件" tone="warning" items={[d.invalidate_condition || "该记录失效条件未记录。"]} />
-                    <ExplanationMap label="决策条件核对" identity={d.decision_id} steps={[
-                      {id:"conditions",label:"原触发条件",icon:"check",summary:`${d.triggered.length} 项`,content:<TriggerConditions items={d.triggered} />},
-                      {id:"receipt",label:"原始回执",icon:"time",summary:d.executed ? "执行标记已记录" : "未标记执行",content:<FactTimeline label="决策记录口径" items={[{label:"决定标识",value:d.decision_id},{label:"交易日",value:d.trade_date},{label:"触发原时点",value:d.trigger_ts},{label:"原始分值",value:String(d.score)},{label:"置信标记",value:d.confidence},{label:"最佳价",value:d.best_price == null ? "未记录" : fmt(d.best_price)},{label:"最差价",value:d.worst_price == null ? "未记录" : fmt(d.worst_price)}]} />},
+                    <ExplanationMap label="决策条件核对" identity={d.decision_id} center={{label:"原决定记录",value:d.decision_id}} links={[
+                      {from:"center",to:"conditions",label:"原触发条件",kind:"recorded"},
+                      {from:"center",to:"receipt",label:"已返回回执",kind:"context"},
+                    ]} steps={[
+                      {id:"conditions",label:"原触发条件",icon:"check",summary:<TriggerOverview items={d.triggered} />,content:<TriggerConditions items={d.triggered} />},
+                      {id:"receipt",label:"原始回执",icon:"time",summary:d.executed ? "执行标记已记录" : "未标记执行",content:<><FactTimeline label="决策原时点" items={[{label:"交易日",value:d.trade_date,kind:"time"},{label:"触发原时点",value:d.trigger_ts,kind:"time"}]} /><FactCards label="决策记录口径" items={[{label:"决定标识",value:d.decision_id},{label:"原始分值",value:String(d.score)},{label:"置信标记",value:d.confidence},{label:"最佳价",value:d.best_price == null ? "未记录" : fmt(d.best_price)},{label:"最差价",value:d.worst_price == null ? "未记录" : fmt(d.worst_price)}]} /></>},
                     ]} />
                     {att?.counter_evidence && (
                       <div className="mt-0.5 text-[10px] text-zinc-600 dark:text-zinc-400">

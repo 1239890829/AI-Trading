@@ -401,7 +401,8 @@ describe("通知中心：空态形状计数（2026-09-16）", () => {
     render(<NotificationBell />);
     await openDrawer();
 
-    const shapes = await screen.findByTestId("notification-empty-shapes");
+    fireEvent.click(await screen.findByRole("tab", {name:"查看来源核对信息"}));
+    const shapes = screen.getByTestId("notification-empty-shapes");
     // 机器可读的口径，供 e2e/其它断言复用（别只靠文案匹配）
     expect(shapes.dataset.stockLevel).toBe("0");
     expect(shapes.textContent).toContain("买点 0");
@@ -422,7 +423,8 @@ describe("通知中心：空态形状计数（2026-09-16）", () => {
     render(<NotificationBell />);
     await openDrawer();
 
-    const shapes = await screen.findByTestId("notification-empty-shapes");
+    fireEvent.click(await screen.findByRole("tab", {name:"查看来源核对信息"}));
+    const shapes = screen.getByTestId("notification-empty-shapes");
     expect(shapes.dataset.stockLevel).toBe("0");
     expect(shapes.textContent).toContain("临板预警 121");
     expect(shapes.textContent).toContain("仅供观察");
@@ -435,7 +437,8 @@ describe("通知中心：空态形状计数（2026-09-16）", () => {
     payload = diagPayload({ ...ranRejectedDiag, shapes: { selection: 2, buy_point: 3, pre_limit: 121, real_exit_alert: 1 } });
     render(<NotificationBell />);
     await openDrawer();
-    const shapes = await screen.findByTestId("notification-empty-shapes");
+    fireEvent.click(await screen.findByRole("tab", {name:"查看来源核对信息"}));
+    const shapes = screen.getByTestId("notification-empty-shapes");
     expect(shapes.dataset.stockLevel).toBe("5");
     expect(shapes.textContent).toContain("入选 2");
     expect(shapes.textContent).toContain("买点 3");
@@ -450,7 +453,8 @@ describe("通知中心：空态形状计数（2026-09-16）", () => {
     render(<NotificationBell />);
     await openDrawer();
 
-    const shapes = await screen.findByTestId("notification-empty-shapes");
+    fireEvent.click(await screen.findByRole("tab", {name:"查看来源核对信息"}));
+    const shapes = screen.getByTestId("notification-empty-shapes");
     expect(shapes.dataset.stockLevel).toBe("unknown");
     expect(shapes.textContent).toContain("来源形状计数未提供");
     expect(shapes.textContent).toContain("无法判断规则是否运行");
@@ -461,7 +465,8 @@ describe("通知中心：空态形状计数（2026-09-16）", () => {
     payload = diagPayload({ ...ranRejectedDiag, shapes: { buy_point: 0 } });
     render(<NotificationBell />);
     await openDrawer();
-    const shapes = await screen.findByTestId("notification-empty-shapes");
+    fireEvent.click(await screen.findByRole("tab", {name:"查看来源核对信息"}));
+    const shapes = screen.getByTestId("notification-empty-shapes");
     expect(shapes.dataset.stockLevel).toBe("unknown");
     expect(shapes.textContent).toContain("入选 未提供");
     expect(shapes.textContent).toContain("原入选/买点计数未完整提供");
@@ -532,6 +537,7 @@ describe("通知事实与浏览状态分离（BUG-016）", () => {
     fireEvent.click(screen.getByTestId("notification-explain"));
     await waitFor(() => expect(vi.mocked(getNotificationDiagnostics)).toHaveBeenCalled());
     const diagnosis = await screen.findByTestId("notification-empty-diagnosis");
+    fireEvent.click(screen.getByRole("tab", {name:"原决定 测试股"}));
     expect(diagnosis.textContent).toContain("置信档不足");
     expect(diagnosis.textContent).toContain("记录 snap-1");
     expect(diagnosis.textContent).toContain("版本 未记录");
@@ -590,6 +596,7 @@ it("shows the original evidence and both clocks without claiming current eligibi
   await openDrawer();
   expect(screen.getByTestId("notification-facts").textContent).toContain("原观察：2026-10-09T09:40");
   expect(screen.getByTestId("notification-facts").textContent).toContain("记录：2026-10-09T10:10");
+  fireEvent.click(screen.getByRole("tab", {name:"原入选 #9"}));
   expect(screen.getByText("消息：原新闻依据A")).toBeTruthy();
   expect(screen.getByRole("link", {name: "查看此版本复盘"}).getAttribute("href")).toBe("/hunting?view=review&date=2026-10-09&version=version-A");
   fireEvent.click(screen.getByTestId("notification-judgment"));
@@ -615,11 +622,12 @@ it("reading the complete long message and changing evidence references does not 
   ]})]);
   render(<NotificationBell />);
   await openDrawer();
-  await screen.findByText("长消息核对");
+  expect(await screen.findByRole("tab", {name:"完整消息"})).toBeTruthy();
   expect(dots()).toHaveLength(1);
   const calls = vi.mocked(getNotifications).mock.calls.length;
-  fireEvent.click(screen.getByRole("button", {name: "完整原文"}));
-  expect(screen.getByLabelText("消息原内容完整原文").textContent).toContain(body);
+  expect(screen.queryByLabelText("消息原内容")).toBeNull();
+  fireEvent.click(screen.getByRole("tab", {name:"完整消息"}));
+  expect(screen.getByLabelText("消息原内容").textContent).toContain(body);
   fireEvent.click(screen.getByRole("tab", {name: "原入选 #11"}));
   expect(screen.getByText(/第四条件不能省略/)).toBeTruthy();
   fireEvent.click(screen.getByRole("tab", {name: "原判定 #12"}));

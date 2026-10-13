@@ -4,6 +4,7 @@ import { useCallback, useEffect, useRef, useState } from "react";
 import { Panel } from "@/components/panel";
 import { useResource } from "@/hooks/use-polling-fetch";
 import {ConditionList, ExplanationMap, NarrativeText} from "@/components/ui/explanation-map";
+import {readingExcerpt} from "@/lib/reading-clues";
 import "./review-layout.css";
 import {
   ApiError,
@@ -272,9 +273,9 @@ function ReportDetail({
       {report.meta_insights.length > 0 && <section aria-label="复盘观察与建议" className="space-y-2">
         {report.meta_insights.map((insight, i) => <div key={i} className="border-b border-zinc-300 pb-3 last:border-0 dark:border-zinc-700">
           <ExplanationMap label={insight.dimension} identity={`${report.review_id}:insight:${i}`} steps={[
-            {id:"observation",label:"报告观察",icon:"source",content:<NarrativeText text={insight.observation} label="观察原文"/>},
-            {id:"evidence",label:"依据与有效性",icon:"response",content:<ConditionList label="报告已列依据" items={[`依据：${insight.evidence}`,`有效性：${insight.effectiveness}`]}/>},
-            {id:"suggestion",label:"待核建议",icon:"risk",content:<NarrativeText text={insight.suggestion} label="建议原文"/>},
+            {id:"observation",label:"报告观察",icon:"source",summary:readingExcerpt(insight.observation, 84) || "本报告未列观察",content:<NarrativeText text={insight.observation} label="观察原文"/>},
+            {id:"evidence",label:"依据与有效性",icon:"response",summary:`报告有效性：${insight.effectiveness || "未记录"}；原依据摘录：${readingExcerpt(insight.evidence, 64) || "未记录"}`,content:<ConditionList label="报告已列依据" items={[`依据：${insight.evidence}`,`有效性：${insight.effectiveness}`]}/>},
+            {id:"suggestion",label:"待核建议",icon:"risk",summary:`原建议摘录：${readingExcerpt(insight.suggestion, 84) || "未记录"}`,content:<NarrativeText text={insight.suggestion} label="建议原文"/>},
           ]}/>
         </div>)}
       </section>}
@@ -286,9 +287,9 @@ function ReportDetail({
             <span className="ml-2 font-normal text-zinc-600 dark:text-zinc-400">{d.status}</span>
           </div>
           <ExplanationMap label="维度依据" identity={`${report.review_id}:${d.key}`} steps={[
-            {id:"findings",label:"报告观察",icon:"source",content:d.findings.length ? <ConditionList label="原始观察记录" items={d.findings}/> : <p>本报告未列观察，不补填事实。</p>},
-            {id:"judgements",label:"报告判断",icon:"check",content:d.judgements.length ? <ConditionList label="原始判断" items={d.judgements}/> : <p>本报告未列判断。</p>},
-            {id:"gaps",label:"已列缺口",icon:"risk",tone:"warning",content:d.gaps.length ? <ConditionList label="缺口与限制" items={d.gaps.map(gapText)} tone="warning"/> : <p>本报告未列缺口，不等于已完整验证。</p>},
+            {id:"findings",label:"报告观察",icon:"source",summary:d.findings.length ? <span className="block"><span className="block">{readingExcerpt(d.findings[0], 84)}</span>{d.findings.length > 1 && <span className="block">共 {d.findings.length} 条原观察，完整记录见节点</span>}</span> : "本报告未列观察，不补填事实",content:d.findings.length ? <ConditionList label="原始观察记录" items={d.findings}/> : <p>本报告未列观察，不补填事实。</p>},
+            {id:"judgements",label:"报告判断",icon:"check",summary:d.judgements.length ? `原判断摘录：${readingExcerpt(d.judgements[0], 84)}` : "本报告未列判断",content:d.judgements.length ? <ConditionList label="原始判断" items={d.judgements}/> : <p>本报告未列判断。</p>},
+            {id:"gaps",label:"已列缺口",icon:"risk",tone:"warning",summary:d.gaps.length ? <span className="block space-y-1">{d.gaps.map((gap, index)=><span key={index} className="block">{gapText(gap)}</span>)}</span> : "本报告未列缺口，不等于已完整验证",content:d.gaps.length ? <ConditionList label="缺口与限制" items={d.gaps.map(gapText)} tone="warning"/> : <p>本报告未列缺口，不等于已完整验证。</p>},
           ]} footer="报告字段分类不代表独立验证，判断仍需核对来源。"/>
         </div>
       ))}
