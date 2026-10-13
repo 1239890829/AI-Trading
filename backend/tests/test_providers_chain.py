@@ -211,6 +211,60 @@ def test_composite_skips_empty_results():
     assert pool == [{"ok": True}]
 
 
+def test_limit_up_failover_keeps_official_eastmoney_price_unit_and_missing_reason():
+    """主源 429 后仍经真实东财解析；冻结官方字段，不触网或伪造归因。"""
+    import httpx
+
+    from app.data_providers.eastmoney import EastmoneyProvider
+
+    trade_date = date(2026, 10, 13)
+    # 2026-10-13 15:53 BJ getTopicZTPool 实抓字段的最小子集；
+    # 原完整池 tc=67，此测试仅保留慈文传媒一条，tc 显式同步为 1。
+    payload = {"rc": 0, "data": {"tc": 1, "qdate": 20261013, "pool": [
+        {"c": "002343", "n": "慈文传媒", "p": 7360,
+         "zdp": 10.014947891235352, "fbt": 92500, "lbt": 92500,
+         "hybk": "影视院线"},
+    ]}}
+    calls = []
+
+    class RateLimitedThs:
+        name = "ths"
+
+        async def get_limit_up_pool(self, requested_date):
+            assert requested_date == trade_date
+            calls.append("ths")
+            raise ProviderError("ths limit-up pool HTTP 429")
+
+    def response(request: httpx.Request) -> httpx.Response:
+        assert request.url.host == "push2ex.eastmoney.com"
+        assert request.url.path == "/getTopicZTPool"
+        assert request.url.params["date"] == "20261013"
+        calls.append("eastmoney")
+        return httpx.Response(200, json=payload)
+
+    async def read():
+        provider = EastmoneyProvider()
+        await provider.aclose()
+        provider._client = httpx.AsyncClient(transport=httpx.MockTransport(response))
+        try:
+            chain = CompositeProvider([RateLimitedThs(), provider])
+            return await chain.get_limit_up_pool(trade_date)
+        finally:
+            await provider.aclose()
+
+    rows = asyncio.run(read())
+    assert calls == ["ths", "eastmoney"]
+    assert len(rows) == 1
+    row = rows[0]
+    assert row.price == 7.36
+    assert row.model_dump(mode="json")["price"] == 7.36
+    assert row.symbol == "002343" and row.trade_date == trade_date
+    assert row.change_pct == 10.014947891235352
+    assert row.first_seal_time == row.last_seal_time == "09:25:00"
+    assert row.industry_board == "影视院线" and row.reason is None
+    assert row.source == "eastmoney"
+
+
 FIXED_CLOCK = lambda: datetime(2026, 8, 28, 10, 30, 45)  # noqa: E731
 
 
