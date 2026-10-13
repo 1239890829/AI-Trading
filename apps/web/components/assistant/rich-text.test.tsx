@@ -123,3 +123,36 @@ describe("RichText", () => {
     expect(screen.queryByRole("link", {name: "外链"})).toBeNull();
   });
 });
+
+it("long structured replies retain entities, tables, code and the complete reply without inventing a causal path",()=>{
+  const onNav=vi.fn();
+  const text="## 观察\n"+"尚未核实公司关联，不构成确定性判断。".repeat(90)+"\n\n## 核对\n贵州茅台\n\n| 金额 | 条件 |\n| --- | --- |\n| 12.36 | 尚未审议 |\n\n```\n600519 未确认\n```\n\n## 限制\n没有借壳计划。";
+  render(<RichText text={text} matcher={matcher} onNavigate={onNav}/>);
+  fireEvent.click(screen.getByRole("tab",{name:"核对"}));
+  fireEvent.click(screen.getByRole("button",{name:"贵州茅台"}));
+  expect(onNav).toHaveBeenCalledWith(expect.objectContaining({type:"stock",code:"600519"}));
+  expect(document.querySelector("table")?.textContent).toContain("12.36尚未审议");
+  expect(document.querySelector("pre")?.textContent).toBe("600519 未确认");
+  fireEvent.click(screen.getByRole("button",{name:"完整回复"}));
+  expect(screen.getByText("没有借壳计划。")).toBeTruthy();
+  expect(screen.queryByRole("tabpanel")).toBeNull();
+});
+
+it("an indented heading cannot trap the fallback parser without consuming input",()=>{
+  expect(parseBlocks("  ## 尚未核实\n\n正文")).toEqual([{kind:"para",lines:["## 尚未核实"]},{kind:"para",lines:["正文"]}]);
+});
+
+it("a new reply resets the reading position and full-reply mode without retaining the prior text",()=>{
+  const onNav=vi.fn();
+  const first="## 旧观察\n"+"此前尚未核实。".repeat(200)+"\n\n## 旧限制\n旧限制不能丢。";
+  const second="## 新观察\n"+"当前金额 12.36，尚未审议。".repeat(100)+"\n\n## 新限制\n新限制不能省略。";
+  const {rerender}=render(<RichText text={first} matcher={matcher} onNavigate={onNav}/>);
+  fireEvent.click(screen.getByRole("tab",{name:"旧限制"}));
+  fireEvent.click(screen.getByRole("button",{name:"完整回复"}));
+  rerender(<RichText text={second} matcher={matcher} onNavigate={onNav}/>);
+  expect(screen.getByRole("tab",{name:"新观察"}).getAttribute("aria-selected")).toBe("true");
+  expect(screen.queryByText("旧限制不能丢。")).toBeNull();
+  expect(screen.queryByText("新限制不能省略。")).toBeNull();
+  fireEvent.click(screen.getByRole("button",{name:"完整回复"}));
+  expect(screen.getByText("新限制不能省略。")).toBeTruthy();
+});

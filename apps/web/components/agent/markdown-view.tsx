@@ -10,7 +10,8 @@
  * [[KB-XXX]] 与 .md 相对链接 → onNavigate 回调（浏览器面板内跳转，不离开页面）。
  * 安全：纯文本解析后逐节点 React 渲染，无 dangerouslySetInnerHTML，无 XSS 面。
  */
-import { ReactNode, useMemo } from "react";
+import { isValidElement, ReactNode, useMemo, useState } from "react";
+import {ExplanationMap} from "@/components/ui/explanation-map";
 
 type Props = {
   content: string;
@@ -34,7 +35,8 @@ function inline(text: string, onNavigate?: Props["onNavigate"], keyBase = ""): R
       nodes.push(
         <button
           key={key}
-          onClick={() => onNavigate?.(id)}
+          type="button" data-reading-action="true"
+          onClick={event => {event.stopPropagation(); onNavigate?.(id);}}
           className="mx-0.5 rounded bg-sky-500/10 px-1 align-baseline text-[11px] font-medium text-sky-700 transition-colors hover:bg-sky-500/20 dark:text-sky-300"
           title={`跳转：${id}`}
         >
@@ -57,8 +59,9 @@ function inline(text: string, onNavigate?: Props["onNavigate"], keyBase = ""): R
           nodes.push(
             <button
               key={key}
-              onClick={() => onNavigate?.(href)}
-              className="text-sky-600 hover:underline dark:text-sky-300"
+              type="button" data-reading-action="true"
+              onClick={event => {event.stopPropagation(); onNavigate?.(href);}}
+              className="rounded px-1 text-[var(--ui-accent)] hover:bg-[var(--ui-hover)]"
             >
               {label}
             </button>,
@@ -76,6 +79,9 @@ function inline(text: string, onNavigate?: Props["onNavigate"], keyBase = ""): R
 }
 
 export function MarkdownView({ content, onNavigate }: Props) {
+  const [view, setView] = useState({content, mode:"sections" as "sections" | "all" | "source"});
+  if (view.content !== content) setView({content, mode:"sections"});
+  const mode = view.content === content ? view.mode : "sections";
   const blocks = useMemo(() => {
     const lines = content.split("\n");
     const out: ReactNode[] = [];
@@ -119,7 +125,7 @@ export function MarkdownView({ content, onNavigate }: Props) {
           i += 1;
         }
         out.push(
-          <div key={kb()} className="my-2 overflow-x-auto">
+          <div key={kb()} data-read-title="原文表格" className="data-scroll my-2 overflow-x-auto">
             <table className="w-full border-collapse text-[11px]">
               <thead>
                 <tr className="border-b border-zinc-200 dark:border-zinc-800">
@@ -154,6 +160,7 @@ export function MarkdownView({ content, onNavigate }: Props) {
         out.push(
           <div
             key={kb()}
+            data-read-title={hm[2]}
             data-md-anchor={hm[2].toLowerCase().replace(/[^\p{L}\p{N}\s_-]/gu, "").trim().replace(/\s+/g, "-")}
             className={`mt-3 mb-1 ${size} text-zinc-900 dark:text-zinc-50`}
           >
@@ -175,6 +182,7 @@ export function MarkdownView({ content, onNavigate }: Props) {
         out.push(
           <ListTag
             key={kb()}
+            data-read-title={ordered ? "原文有序列表" : "原文列表"}
             className={`my-1.5 space-y-1 pl-4 text-xs leading-relaxed text-zinc-700 dark:text-zinc-200 ${
               ordered ? "list-decimal" : "list-disc"
             }`}
@@ -254,5 +262,20 @@ export function MarkdownView({ content, onNavigate }: Props) {
     return out;
   }, [content, onNavigate]);
 
-  return <div className="max-w-none">{blocks}</div>;
+  const sections: {label:string; nodes:ReactNode[]}[] = [];
+  const hasHeadings = blocks.some(node => isValidElement<{"data-md-anchor"?:string}>(node) && node.props["data-md-anchor"] !== undefined);
+  for (const node of blocks) {
+    const props = isValidElement<{"data-read-title"?:string; "data-md-anchor"?:string}>(node) ? node.props : null;
+    const title = props?.["data-read-title"];
+    const boundary = title && (!hasHeadings || props?.["data-md-anchor"] !== undefined);
+    if (boundary || !sections.length) sections.push({label:boundary ? title! : "开篇",nodes:[]});
+    sections[sections.length-1].nodes.push(node);
+  }
+  const size = Math.ceil(sections.length / 6);
+  const groups = size > 1 ? Array.from({length:Math.ceil(sections.length/size)},(_,index)=>({label:sections[index*size].label,nodes:sections.slice(index*size,(index+1)*size).flatMap(section=>section.nodes)})) : sections;
+  const structured = content.length > 1200 && groups.length > 1;
+  return <div className="max-w-none min-w-0">
+    {structured && <div className="mb-2 flex flex-wrap items-center justify-between gap-2 text-xs text-[var(--ui-muted)]"><span>按原文标题、列表与表格阅读，未自动改写。</span><span className="flex flex-wrap gap-1"><button type="button" data-action="quiet" className="quiet-action" onClick={()=>setView({content,mode:mode === "all" ? "sections" : "all"})}>{mode === "all" ? "分章节阅读" : "完整文档"}</button><button type="button" data-action="quiet" className="quiet-action" onClick={()=>setView({content,mode:mode === "source" ? "sections" : "source"})}>{mode === "source" ? "返回阅读" : "原始 Markdown"}</button></span></div>}
+    {structured && mode === "source" ? <pre className="data-scroll whitespace-pre-wrap [overflow-wrap:anywhere] text-xs" aria-label="原始 Markdown">{content}</pre> : structured && mode === "sections" ? <ExplanationMap label="文档目录" identity={content} steps={groups.map((section,index)=>({id:`section-${index}`,label:section.label,icon:"source",content:<div className="min-w-0">{section.nodes}</div>}))}/> : blocks}
+  </div>;
 }

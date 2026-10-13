@@ -10,6 +10,7 @@ import {
   runAgentAgenda,
 } from "@/lib/api";
 import { timeTextBJ } from "@/lib/format";
+import {ConditionList, ExplanationMap, NarrativeText} from "@/components/ui/explanation-map";
 
 /**
  * AI 控制台 · 进化 tab（AI 大脑 v2，docs/summary/ai-evolution.md）。
@@ -166,18 +167,12 @@ export function EvolutionTab() {
                     </span>
                     <span className={`ml-auto rounded px-1.5 py-0.5 text-[10px] ${sm.cls}`}>{it.outcome?.label ?? sm.label}</span>
                   </div>
-                  {it.evidence && Object.keys(it.evidence).length > 0 && (
-                    <p className="mt-1 text-[10px] text-zinc-600 dark:text-zinc-400">
-                      依据：{JSON.stringify(it.evidence)}
-                    </p>
-                  )}
-                  {it.action && (
-                    <p className="mt-0.5 text-[11px] text-zinc-600 dark:text-zinc-300">动作：{it.action}</p>
-                  )}
-                  {it.expected_effect && (
-                    <p className="mt-0.5 text-[10px] text-zinc-600 dark:text-zinc-400">预期：{it.expected_effect} · 验证：{it.verification || "—"}</p>
-                  )}
-                  {it.outcome?.note && <p className="mt-1 text-[11px] text-zinc-600 dark:text-zinc-400">{it.outcome.note}</p>}
+                  {(it.evidence || it.action || it.expected_effect) && <ExplanationMap label="议程依据与计划" identity={`${agenda.id}:${idx}:${it.finding}`} steps={[
+                    {id:"evidence",label:"原始依据",icon:"source",content:it.evidence && Object.keys(it.evidence).length ? <pre className="data-scroll whitespace-pre-wrap [overflow-wrap:anywhere] text-xs" aria-label="议程原始依据 JSON">{JSON.stringify(it.evidence,null,2)}</pre> : <p>依据未记录；不能据此确认发现已被验证。</p>},
+                    {id:"action",label:"拟议动作",icon:"relation",content:it.action ? <NarrativeText text={it.action} label="原始动作描述"/> : <p>动作未记录。</p>},
+                    {id:"verify",label:"预期与验证",icon:"check",content:<ConditionList label="原始计划条件" items={[`预期：${it.expected_effect || "未记录"}`,`验证：${it.verification || "未记录"}`,"预期和验证计划不代表实际效果，实际处理结果见下方记录。"]}/>},
+                  ]}/>}
+                  {it.outcome?.note && <NarrativeText text={it.outcome.note} label="已记录处理范围"/>}
                   {it.result && (
                     <p className={`mt-1 rounded px-1.5 py-1 text-[10px] ${
                       it.status === "executed" && it.class === "B"

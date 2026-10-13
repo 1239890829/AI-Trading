@@ -134,6 +134,9 @@ EXEMPT = {
     # 数据源名：后端 provider 标识散落各处（四源链写在配置与各 provider 内），
     # 无集中枚举源可做闭包，故只由前端维护。
     ("format.ts", "SOURCE_LABELS"),
+    # 行情原因是自由字符串：validator/Hub 分散且含动态 tick_jump_gt_* key，
+    # 无集中枚举闭包；展示表只翻译已知 key，未知 key 保留原样，不推断质量。
+    ("format.ts", "QUALITY_REASON_LABELS"),
     # 路由来源标签：键是**前端路由路径**（/hunting、/agent…），不是后端枚举。
     ("routing.ts", "labels"),
 }

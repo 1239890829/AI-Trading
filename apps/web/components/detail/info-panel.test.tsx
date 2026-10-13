@@ -3,11 +3,17 @@
  * 重点验证两件事：
  * 1. 有摘要数据时，重要度/情绪/关键数字/事实摘要都要渲染出来
  * 2. 老数据（无摘要字段）不能渲染出空白徽章——摘要字段全可选 */
-import { afterEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { cleanup, fireEvent, render, screen } from "@testing-library/react";
 import { InfoPanel, type InfoItem } from "./info-panel";
+import { getNewsContent } from "@/lib/api";
 
 afterEach(cleanup);
+vi.mock("@/lib/api", async () => ({
+  ...await vi.importActual<typeof import("@/lib/api")>("@/lib/api"),
+  getNewsContent: vi.fn(),
+}));
+beforeEach(() => { vi.mocked(getNewsContent).mockReset().mockResolvedValue({kind: "news", title: "测试原文", source_label: "公开来源", published: null, url: "https://example.com/1", paragraphs: [], blocks: [], truncated: false}); });
 
 const WITH_DIGEST: InfoItem = {
   title: "贵州茅台2026年半年度报告摘要",
@@ -33,6 +39,22 @@ const LEGACY: InfoItem = {
 };
 
 describe("InfoPanel", () => {
+  it("long digest controls stay beside the native title button and never open the article", async () => {
+    const digest = Array.from({length: 12}, (_, index) => `第${index + 1}项条件：成交金额922.78亿元，增长1.30%，该数据为过去报告期数据，不代表未来结果。`).join("\n\n");
+    const ancestor = vi.fn();
+    const {container} = render(<div onClick={ancestor}><InfoPanel anns={[{...WITH_DIGEST, digest}]} news={[]} /></div>);
+    expect(container.querySelector("button button")).toBeNull();
+    fireEvent.click(screen.getByRole("button", {name: "完整原文"}));
+    expect(screen.getByLabelText("事实摘要完整原文").textContent).toContain(digest);
+    expect(screen.queryByRole("dialog")).toBeNull();
+    expect(getNewsContent).not.toHaveBeenCalled();
+    expect(ancestor).not.toHaveBeenCalled();
+    fireEvent.click(screen.getByText(/2026-08-15 · eastmoney/));
+    expect(await screen.findByRole("dialog")).toBeTruthy();
+    expect(getNewsContent).toHaveBeenCalledTimes(1);
+    expect(ancestor).not.toHaveBeenCalled();
+  });
+
   it("渲染重要度/情绪/关键数字与事实摘要", () => {
     render(<InfoPanel anns={[WITH_DIGEST]} news={[]} />);
     expect(screen.getByText("高")).toBeTruthy();
@@ -41,6 +63,13 @@ describe("InfoPanel", () => {
     // 用 /922\.78亿元/ 会命中多个元素，必须分开精确断言
     expect(screen.getByTitle("1.30% 922.78亿元")).toBeTruthy();
     expect(screen.getByText(/营业总收入为922\.78亿元/)).toBeTruthy();
+    expect(screen.getByText("摘要取自：正文")).toBeTruthy();
+  });
+
+  it("keeps the fourth numeric fact visible instead of leaving it only in a hover title", () => {
+    render(<InfoPanel anns={[{...WITH_DIGEST, numbers: ["1.30%", "922.78亿元", "2026年", "第四项：2.80%"], digest_source: undefined}]} news={[]} />);
+    expect(screen.getByText("1.30% 922.78亿元 2026年 第四项：2.80%")).toBeTruthy();
+    expect(screen.getByText("摘要取自：未知")).toBeTruthy();
   });
 
   it("摘要依据进 title，可解释而非黑箱", () => {

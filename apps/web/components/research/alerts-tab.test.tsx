@@ -55,6 +55,20 @@ const event: AlertEvent = {
   snapshot: null,
 };
 
+it("retains each blocked event's original reason and rule fallback without emitting any operation",async()=>{
+  vi.mocked(mocked.listAlertRules).mockResolvedValue([rule]);
+  vi.mocked(mocked.listAlertEvents).mockResolvedValue(Array.from({length:15},(_,index)=>({...event,id:index,triage:{verdict:"ignore",reason:`理由 ${index}：未确认关联，不是买入机会。`,model:"llm_fallback"}})));
+  vi.mocked(mocked.getAlertChannels).mockResolvedValue({available:["in_app"],default:["in_app"]});
+  render(<AlertsTab/>);
+  const tabs=await screen.findAllByRole("tab");
+  expect(tabs.length).toBeLessThanOrEqual(6);
+  const reasons=tabs.map(tab=>{fireEvent.click(tab);return screen.getByRole("tabpanel").textContent;}).join("");
+  expect(reasons).toContain("理由 14：未确认关联，不是买入机会。");
+  expect(reasons).toContain("判读降级，规则回退");
+  expect(mocked.createAlertRule).not.toHaveBeenCalled();
+  expect(mocked.updateAlertRule).not.toHaveBeenCalled();
+});
+
 describe("AlertsTab 触发记录跳转（切片 C）", () => {
   it("触发记录的标的是指向 workbench 详情页的链接", async () => {
     vi.mocked(mocked.listAlertRules).mockResolvedValue([rule]);

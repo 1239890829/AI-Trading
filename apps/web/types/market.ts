@@ -7,6 +7,14 @@ export interface AuditFields {
   received_at: string;
 }
 
+/** Backend calendar-backed display context. It does not establish quote freshness. */
+export interface QuoteDisplaySession {
+  phase: "auction" | "pre_open_gap" | "continuous" | "closed" | "unknown";
+  trade_date: string;
+  as_of: string;
+  trade_day_result: boolean | null;
+}
+
 export interface Quote extends AuditFields {
   symbol: string;
   name?: string | null;
@@ -28,6 +36,7 @@ export interface Quote extends AuditFields {
   limit_up_price?: number | null;
   limit_down_price?: number | null;
   data_timestamp?: string | null;
+  display_session?: QuoteDisplaySession | null;
 }
 
 export interface OrderBookLevel {

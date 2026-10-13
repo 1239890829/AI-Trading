@@ -76,6 +76,18 @@ async function renderWithTodo() {
   return item;
 }
 
+it("groups a long execution trace without losing step conditions or changing disposition eligibility",async()=>{
+  vi.mocked(getAgentTasks).mockResolvedValue([{...ESCALATION_TODO,steps:Array.from({length:20},(_,index)=>({index,name:`步骤 ${index}`,input_summary:`输入：尚未审议 ${index}.25 亿元`,output_summary:`输出：未执行交易 ${index}`,duration_ms:index,ok:index % 2 === 0}))}]);
+  await renderWithTodo();
+  const tabs=screen.getAllByRole("tab");
+  expect(tabs.length).toBeLessThanOrEqual(6);
+  const rendered=tabs.map(tab=>{fireEvent.click(tab);return screen.getByRole("tabpanel").textContent;}).join("");
+  expect(rendered).toContain("尚未审议 19.25 亿元");
+  expect(rendered).toContain("未执行交易 19");
+  expect(screen.getByRole("button",{name:"已处置"})).toBeTruthy();
+  expect(resolveAgentTask).not.toHaveBeenCalled();
+});
+
 describe("任务中心 · 告警升级待办（P1-36）", () => {
   it("登记类条目用本地标签，不显示裸 type 名", async () => {
     await renderWithTodo();

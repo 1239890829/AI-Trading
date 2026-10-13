@@ -7,6 +7,7 @@ import {getEventAttribution, getStockAttribution, type AttributionEvidenceItem, 
 import {bjDate, eventTimeText, sourceLabel, timeTextBJ} from "@/lib/format";
 import {Skeleton} from "@/components/ui/loading";
 import styles from "./attribution-evidence.module.css";
+import {ConditionList, ExplanationMap, FactTimeline, NarrativeText} from "@/components/ui/explanation-map";
 
 function clock(value: string | null | undefined): number | null {
   if (!value || !/(?:Z|[+-]\d{2}:\d{2})$/.test(value)) return null;
@@ -42,17 +43,16 @@ function SourceExcerpt({context, label}: {context: AttributionSourceContext | nu
   const href = sourceUrl(context?.url);
   return <div className="min-w-0 space-y-1">
     <div className="flex flex-wrap items-center justify-between gap-2"><h4 className="min-w-0 font-medium [overflow-wrap:anywhere]">{label}</h4>{href && <a data-action="quiet" href={href} target="_blank" rel="noopener noreferrer" className={`quiet-action shrink-0 ${styles.action}`} aria-label={`${label}原文`}>查看原文</a>}</div>
-    {context ? <blockquote className="space-y-1 whitespace-pre-wrap [overflow-wrap:anywhere] text-zinc-700 dark:text-zinc-300"><p>{context.title}</p>{context.summary && <p>{context.summary}</p>}</blockquote> : <p className="text-zinc-600 dark:text-zinc-400">原始内容未记录，不能核对完整语境。</p>}
+    {context ? <blockquote className="text-zinc-700 dark:text-zinc-300"><p>{context.title}</p>{context.summary && <NarrativeText text={context.summary} label={label} identity={`${context.observation_id ?? "legacy"}:${context.title}`}/>}</blockquote> : <p className="text-zinc-600 dark:text-zinc-400">原始内容未记录，不能核对完整语境。</p>}
     {context && !context.summary && <p className="text-zinc-600 dark:text-zinc-400">仅保存标题；正文条件尚未核对。</p>}
     {!href && <p className="text-zinc-600 dark:text-zinc-400">原文链接未记录。</p>}
   </div>;
 }
 
 /** The same explanation vocabulary serves source events, stock details and selection drawers. */
-export function AttributionEvidence({item, selectedAt, recordedRef, selectionContext = false, defaultSourceExpanded = false}: {
+export function AttributionEvidence({item, selectedAt, recordedRef, selectionContext = false}: {
   item: AttributionEvidenceItem; selectedAt?: string | null; recordedRef?: EventInterpretationRef; selectionContext?: boolean; defaultSourceExpanded?: boolean;
 }) {
-  const [sourceExpanded, setSourceExpanded] = useState(defaultSourceExpanded);
   const available = clock(item.timing.available_at);
   const effective = clock(item.timing.interpretation_effective_at);
   const selected = clock(selectedAt);
@@ -66,41 +66,26 @@ export function AttributionEvidence({item, selectedAt, recordedRef, selectionCon
   const hasSourceIdentity = typeof observation === "number" && Number.isInteger(observation) && observation > 0;
   const excerptLabel = !item.source_context ? "来源内容未记录" : !hasSourceIdentity ? "旧卡片摘录 · 来源观察身份未记录" : observation === item.interpretation_ref.observation_id ? "解释版本绑定的来源内容" : "来源观察内容 · 解释绑定待核";
   const stageUnknown = !["done", "proposed", "rumor"].some(value => value === item.certainty);
-  return <article className="min-w-0 space-y-2 border-b border-zinc-200 py-3 text-xs leading-relaxed last:border-b-0 dark:border-zinc-700/60" aria-label={`事件归因 ${item.event_id}`}>
-    <div className="space-y-1"><h3 className="min-w-0 font-medium [overflow-wrap:anywhere] text-zinc-900 dark:text-zinc-100">{item.title}</h3><p className="text-zinc-600 [overflow-wrap:anywhere] dark:text-zinc-400">{item.state_label} · {version ? `解释 #${version}` : "版本未知"}</p></div>
-    {!!item.dimensions.length && <p className="text-zinc-600 dark:text-zinc-400" title="来源内容中的线索维度；规则识别不证明各维度的涨停贡献">{item.dimensions.map(value => value.label).join(" · ")}</p>}
-    <dl className="grid grid-cols-1 gap-x-5 gap-y-1 min-[480px]:grid-cols-3">
-      <div className="min-w-0"><dt className="text-zinc-600 dark:text-zinc-400">消息证据</dt><dd className="[overflow-wrap:anywhere]" title={item.fact_support.note}>{item.fact_support.label}</dd></div>
-      <div className="min-w-0"><dt className="text-zinc-600 dark:text-zinc-400">个股关联</dt><dd className="[overflow-wrap:anywhere]" title="关联与已记录方向只是已有解释记录，不证明消息属实或个股受益">{relation.label}</dd></div>
-      <div className="min-w-0"><dt className="text-zinc-600 dark:text-zinc-400">市场响应</dt><dd className="[overflow-wrap:anywhere]">{item.market_response.status_label}</dd></div>
-    </dl>
+  const qualifiers = item.qualifiers.map(value => `${value.label}${value.matched_terms.length ? `（${value.matched_terms.join("、")}）` : ""}`);
+  return <article className="min-w-0 space-y-4 py-3 text-xs leading-relaxed" aria-label={`事件归因 ${item.event_id}`}>
+    <header className="space-y-2"><h3 className="min-w-0 text-sm font-semibold [overflow-wrap:anywhere] text-zinc-900 dark:text-zinc-100">{item.title}</h3><p className="text-zinc-600 [overflow-wrap:anywhere] dark:text-zinc-400">{item.state_label} · {version ? `解释 #${version}` : "版本未知"}</p>
+      {!!item.dimensions.length && <ul className="flex flex-wrap gap-2" aria-label="来源线索维度">{item.dimensions.map(value => <li key={value.label} className="rounded bg-zinc-100 px-2 py-1 dark:bg-zinc-800">{value.label}</li>)}</ul>}
+    </header>
     <p className="text-zinc-600 dark:text-zinc-400">来源收录不等于消息属实；关联与方向仍须核对。</p>
-    {relation.basis && <p className="[overflow-wrap:anywhere]"><span className="text-zinc-600 dark:text-zinc-400">{/权威关联|直接利好/.test(relation.basis) ? "原解释（待核）：" : "关联依据："}</span>{relation.basis}</p>}
-    {relation.chain && <p className="[overflow-wrap:anywhere]"><span className="text-zinc-600 dark:text-zinc-400">{/权威关联|直接利好/.test(relation.chain) ? "原解释（待核）：" : "传导线索："}</span>{relation.chain}</p>}
-    {!!item.qualifiers.length && <p className="[overflow-wrap:anywhere] text-amber-800 dark:text-amber-300"><span className="font-medium">关键条件：</span>{item.qualifiers.map(value => `${value.label}${value.matched_terms.length ? `（${value.matched_terms.join("、")}）` : ""}`).join("；")}</p>}
+    <ConditionList label="关键条件" items={qualifiers} tone="warning" /><ConditionList label="解读边界" items={item.limitations} tone="warning" />
     {stageUnknown && <p role="note" className="text-amber-800 dark:text-amber-300">事件阶段尚未核实，不能按已落地事件解读。</p>}
     {(late || lateInterpretation || revised) && <p role="note" className="text-amber-800 dark:text-amber-300">{late ? "消息可用时间晚于首次加入，仅供后续复盘。" : lateInterpretation ? "当前解释形成晚于首次加入，仅供后续复盘。" : selectionContext ? "当前解释与选股记录引用的原版本不同。" : "当前解释与列表入口引用的版本不同。"}{selectionContext || selectedAt ? "不回填当时入选依据。" : "列表快照保留原记录。"}</p>}
     {selectedAt && (selected === null || available === null || effective === null) && <p className="text-zinc-600 dark:text-zinc-400">时点证据不完整，无法确认这条解释在首次加入时是否可用。</p>}
-    <details className="min-w-0" open={sourceExpanded} onToggle={event => setSourceExpanded(event.currentTarget.open)}>
-      <summary className={`w-fit cursor-pointer rounded py-1 font-medium ${styles.action}`}>核对原文与时点</summary>
-      <div className="mt-2 space-y-3">
-        <p className="text-zinc-600 dark:text-zinc-400">{item.fact_support.note} {item.market_response.basis}。市场响应不证明消息属实或涨停因果。</p>
-        <SourceExcerpt context={item.source_context} label={excerptLabel} />
-        {item.pending_context && <SourceExcerpt context={item.pending_context} label="来源已修订，待复核内容" />}
-        {item.withdrawal_context && <SourceExcerpt context={{...item.withdrawal_context, change_kind: "withdrawal"}} label="撤回依据" />}
-        {item.review_note && <p className="[overflow-wrap:anywhere] text-zinc-600 dark:text-zinc-400">复核记录：{item.review_note}</p>}
-        <dl className="space-y-1 [overflow-wrap:anywhere] text-zinc-600 dark:text-zinc-400">
-          <div><dt className="inline">原始发布者：</dt><dd className="inline">{publisher || "未记录"} · 采集 {item.source.collector ? sourceLabel(item.source.collector) : "未记录"} · {item.source.source_tier_label}</dd></div>
-          <div><dt className="inline">来源发布时间：</dt><dd className="inline">{item.timing.source_time_known ? timeLabel(item.timing.source_published_at) : "未知，未用收录时间补填"}</dd></div>
-          <div><dt className="inline">系统收到：</dt><dd className="inline">{timeLabel(item.timing.received_at)}</dd></div>
-          <div><dt className="inline">消息可用：</dt><dd className="inline">{timeLabel(item.timing.available_at)}</dd></div>
-          <div><dt className="inline">解释生效：</dt><dd className="inline">{timeLabel(item.timing.interpretation_effective_at)}</dd></div>
-          <div><dt className="inline">来源记录：</dt><dd className="inline">{item.interpretation_ref.observation_id ? `#${item.interpretation_ref.observation_id}` : "未知"}</dd></div>
-        </dl>
-        {!!item.alternatives.length && <div><h4 className="font-medium">其他解释与待核线索</h4><ul className="mt-1 list-disc space-y-1 pl-4 [overflow-wrap:anywhere]">{item.alternatives.map(value => <li key={value}>{value}</li>)}</ul></div>}
-        {!!item.limitations.length && <ul className="space-y-1 [overflow-wrap:anywhere] text-zinc-600 dark:text-zinc-400">{item.limitations.map(value => <li key={value}>{value}</li>)}</ul>}
-      </div>
-    </details>
+    <ExplanationMap label="归因资料关系" identity={`${item.event_id}:${version ?? "unknown"}:${observation ?? "legacy"}`} steps={[
+      {id: "source", label: "消息证据", icon: "source", summary: item.fact_support.label, content: <div className="space-y-4"><p>{item.fact_support.note}</p><SourceExcerpt context={item.source_context} label={excerptLabel} />{item.pending_context && <SourceExcerpt context={item.pending_context} label="来源已修订，待复核内容" />}{item.withdrawal_context && <SourceExcerpt context={{...item.withdrawal_context, change_kind: "withdrawal"}} label="撤回依据" />}<p className="text-zinc-600 dark:text-zinc-400">原始发布者：{publisher || "未记录"} · 采集 {item.source.collector ? sourceLabel(item.source.collector) : "未记录"} · {item.source.source_tier_label}</p></div>},
+      {id: "relation", label: "个股关联", icon: "relation", summary: relation.label, content: <div className="space-y-4"><p>关联与已记录方向只是已有解释记录，不证明消息属实或个股受益。</p>{relation.basis && <NarrativeText label={/权威关联|直接利好/.test(relation.basis) ? "原解释（待核）" : "关联依据"} text={relation.basis} />}{relation.chain && <NarrativeText label={/权威关联|直接利好/.test(relation.chain) ? "原解释（待核）" : "传导线索"} text={relation.chain} />}{!relation.basis && !relation.chain && <p>关联依据与传导线索未记录。</p>}</div>},
+      {id: "response", label: "市场响应", icon: "response", summary: item.market_response.status_label, content: <div className="space-y-4"><p>{item.market_response.basis}。市场响应不证明消息属实或涨停因果。</p><ConditionList label="其他解释与待核线索" items={item.alternatives} />{item.review_note && <NarrativeText label="复核记录" text={item.review_note} />}</div>},
+      {id: "timing", label: "核对时点", icon: "time", summary: item.timing.source_time_known ? timeLabel(item.timing.source_published_at) : "来源时间未知", content: <FactTimeline label="来源与解释时点" items={[
+        {label:"来源发布时间", value:item.timing.source_time_known ? timeLabel(item.timing.source_published_at) : "未知，未用收录时间补填"},
+        {label:"系统收到", value:timeLabel(item.timing.received_at)}, {label:"消息可用", value:timeLabel(item.timing.available_at)},
+        {label:"解释生效", value:timeLabel(item.timing.interpretation_effective_at)}, {label:"来源记录", value:item.interpretation_ref.observation_id ? `#${item.interpretation_ref.observation_id}` : "未知"},
+      ]} />},
+    ]} />
   </article>;
 }
 

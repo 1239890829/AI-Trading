@@ -12,7 +12,7 @@ from app.core.freshness import Freshness
 from app.data_quality.validator import mark_stale, validate_quote
 from app.market import trade_calendar as tc
 from app.market.indices import INDEX_MARKETS, INDEX_SUBSCRIPTIONS
-from app.schemas.market import Quality, Quote, utcnow
+from app.schemas.market import Quality, Quote, QuoteDisplaySession, utcnow
 
 log = logging.getLogger(__name__)
 
@@ -440,25 +440,51 @@ class QuoteHub:
 
     # ---------- 读取 ----------
 
-    def _visible_quote(self, quote: Quote) -> Quote:
+    def _display_session(self) -> QuoteDisplaySession:
+        """现有日历与北京时刻的只读展示上下文；不取数、不影响交易资格。"""
+        now = beijing_now()
+        trade_day = tc.is_trade_day_on(now.date())
+        minute = now.hour * 60 + now.minute
+        if trade_day is None:
+            phase = "unknown"
+        elif not trade_day:
+            phase = "closed"
+        elif 9 * 60 + 15 <= minute < 9 * 60 + 25:
+            phase = "auction"
+        elif 9 * 60 + 25 <= minute < 9 * 60 + 30:
+            phase = "pre_open_gap"
+        elif (9 * 60 + 30 <= minute <= 11 * 60 + 30
+              or 13 * 60 <= minute <= 15 * 60):
+            phase = "continuous"
+        else:
+            phase = "closed"
+        return QuoteDisplaySession(phase=phase, trade_date=now.date(), as_of=now,
+                                   trade_day_result=trade_day)
+
+    def _visible_quote(self, quote: Quote, session: QuoteDisplaySession | None = None) -> Quote:
         """返回消费侧视图；缓存未被继续轮询时也不能无限保持 high。
 
         current cache 保存最后被接纳的事实，不因为时间过去就原地篡改。
         但 REST/WS 读取必须同时反映 source event time 的年龄；超过
         stale_after 时返回 stale 副本，直到下一条可信观测推进 current。
         """
-        if quote.quality in (Quality.stale, Quality.invalid):
-            return quote
-        if quote.freshness(fresh_within=self.stale_after).state != "stale":
-            return quote
-        visible = quote.model_copy(deep=True)
-        mark_stale(visible, "quote_age_exceeded")
+        # Quote 的行情数值与源时点均为标量/不可变值；仅复制可变展示成员，
+        # 避免每秒为每条正常行情递归深复制全部字段。
+        visible = quote.model_copy(update={
+            "quality_reasons": list(quote.quality_reasons),
+            "display_session": (session or self._display_session()).model_copy(),
+        })
+        if (quote.quality not in (Quality.stale, Quality.invalid)
+                and quote.freshness(fresh_within=self.stale_after).state == "stale"):
+            mark_stale(visible, "quote_age_exceeded")
         return visible
 
     def get_indices(self) -> list[Quote]:
-        return [self._visible_quote(q) for q in self.indices.values()]
+        session = self._display_session()
+        return [self._visible_quote(q, session) for q in self.indices.values()]
 
     def get_quotes(self, symbols: list[str] | None = None) -> list[Quote]:
+        session = self._display_session()
         # 指数兜底：带前缀查询（sh000001，指数详情链路的规范形态）归一化成裸代码查
         # indices，并以查询形态返回（model_copy 不变异共享缓存对象）。
         # ⚠️ 裸 6 位代码**绝不**回退 indices（2026-09-01 P0 修复）：000001 平安银行
@@ -474,9 +500,9 @@ class QuoteHub:
                     q = (q.model_copy(update={"symbol": s})
                          if q is not None and q.market == s[:2].upper() else None)
                 if q is not None:
-                    out.append(self._visible_quote(q))
+                    out.append(self._visible_quote(q, session))
             return out
-        return [self._visible_quote(q) for q in self.quotes.values()]
+        return [self._visible_quote(q, session) for q in self.quotes.values()]
 
     def next_seq(self) -> int:
         self._seq += 1

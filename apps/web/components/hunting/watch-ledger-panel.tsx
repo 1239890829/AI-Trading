@@ -16,6 +16,8 @@ import { useResource } from "@/hooks/use-resource";
 import { getWatchLedger, placePaperOrder } from "@/lib/api";
 import { fmt, pctColor, pctText, winRateColor } from "@/lib/format";
 import { bjToday } from "@/lib/market-hours";
+import { ExplanationMap, NarrativeText } from "@/components/ui/explanation-map";
+import { readingRowClasses } from "@/components/ui/reading-row";
 
 export function WatchLedgerPanel({ date, readOnly = false }: { date?: string; readOnly?: boolean } = {}) {
   const scopeDate = date?.replace(/^(\d{4})(\d{2})(\d{2})$/, "$1-$2-$3");
@@ -27,6 +29,11 @@ export function WatchLedgerPanel({ date, readOnly = false }: { date?: string; re
   const historyPresence = useExitPresence(showHistory ? true : null);
   const evidencePresence = useExitPresence(evidenceOpen ? true : null);
   const [orderNote, setOrderNote] = useState<string | null>(null);
+  const readingScope = scopeDate ?? "today";
+  const [readingReason, setReadingReason] = useState<{scope: string; date: string; id: number} | null>(null);
+  const reasonRow = data && readingReason && data.trade_date === readingReason.date ? data.rows.find(row => row.id === readingReason.id) : undefined;
+  // Retire a removed object before commit; a failed refresh keeps the readable last result.
+  if (readingReason && (readingReason.scope !== readingScope || (data && resource.error == null && !reasonRow))) setReadingReason(null);
 
   const load = resource.refresh;
 
@@ -155,6 +162,7 @@ export function WatchLedgerPanel({ date, readOnly = false }: { date?: string; re
                     <span className="line-clamp-2" title={reasonText(r)}>
                       {reasonText(r)}
                     </span>
+                    <button type="button" className={`${readingRowClasses.action} mt-1 rounded px-1 py-0.5`} aria-expanded={reasonRow?.id === r.id} onClick={() => setReadingReason({scope: readingScope, date: data.trade_date, id: r.id})}>阅读 {r.symbol} 入选说明</button>
                   </td>
                 </tr>
               ))}
@@ -162,6 +170,8 @@ export function WatchLedgerPanel({ date, readOnly = false }: { date?: string; re
           </table>
         </div>
       )}
+
+      {reasonRow && <section aria-label="台账入选说明" className="mt-2 rounded border border-zinc-200 p-3 dark:border-zinc-700"><h5>{reasonRow.name || reasonRow.symbol} {reasonRow.symbol}</h5><NarrativeText text={reasonText(reasonRow)} label="完整入选说明" identity={`${data?.trade_date}:${reasonRow.id}`} /><button type="button" className={readingRowClasses.action} onClick={() => setReadingReason(null)}>关闭入选说明</button></section>}
 
       </div><aside className="hunting-ledger-side" tabIndex={0} aria-label="历史统计、依据与研究">
       {historyPresence.value && (
@@ -201,9 +211,11 @@ export function WatchLedgerPanel({ date, readOnly = false }: { date?: string; re
         </div>
       )}
 
-      <p className="mt-2 text-[11px] leading-relaxed text-zinc-600 dark:text-zinc-400">
-        参考跟踪、非持仓：参考价不是成交价，收盘变化不代表模拟交易收益。{readOnly ? "此旁览只读核对，不提交模拟委托。" : "手工模拟建仓仍须经后端撮合与风险校验。"}台账说明：入选即登记（当日唯一，盘中不移除）→ 收盘清算（入选价 vs 收盘价）→ 逐股判定与统计；判定口径 收盘 ≥ 入选 = 成功、亏 ≤2% = 持平、否则失败。历史记录收盘后可查。
-      </p>
+      <ExplanationMap label="台账怎么看" identity={readOnly ? "readonly" : "default"} steps={[
+        {id: "reference", label: "参考跟踪", icon: "risk", tone: "warning", content: <p>参考跟踪、非持仓：参考价不是成交价，收盘变化不代表模拟交易收益。{readOnly ? "此旁览只读核对，不提交模拟委托。" : "手工模拟建仓仍须经后端撮合与风险校验。"}</p>},
+        {id: "record", label: "记录与清算", icon: "time", content: <p>入选即登记（当日唯一，盘中不移除）→ 收盘清算（入选价 vs 收盘价）→ 逐股判定与统计。</p>},
+        {id: "verdict", label: "判定口径", icon: "check", content: <p>收盘 ≥ 入选 = 成功、亏 ≤2% = 持平、否则失败。历史记录收盘后可查。</p>},
+      ]} />
       <details className="mt-3" onToggle={e => setEvidenceOpen(e.currentTarget.open)}>
         <summary className="min-h-11 cursor-pointer py-2 text-xs focus-visible:outline-2 focus-visible:outline-sky-500">查看同版机会依据</summary>
         {evidencePresence.value && <div aria-hidden={!evidenceOpen || undefined} inert={!evidenceOpen}><OpportunityEvidencePanel date={scopeDate} active={evidenceOpen} /></div>}
@@ -219,7 +231,7 @@ function reasonText(r: { reason: Record<string, unknown>; source_theme: string }
   if (r.source_theme) parts.push(`题材 ${r.source_theme}`);
   const reason = r.reason ?? {};
   if (reason.role) parts.push(`角色 ${String(reason.role)}`);
-  if (reason.text) parts.push(String(reason.text).slice(0, 80));
+  if (reason.text) parts.push(String(reason.text));
   if (reason.stage) parts.push(`阶段 ${String(reason.stage)}`);
   return parts.join("；") || "（首见登记）";
 }

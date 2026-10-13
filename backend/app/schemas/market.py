@@ -3,6 +3,7 @@ from __future__ import annotations
 import math
 from datetime import date, datetime, timezone
 from enum import Enum
+from typing import Literal
 
 from pydantic import BaseModel, Field
 
@@ -34,6 +35,15 @@ class AuditFields(BaseModel):
     received_at: datetime = Field(default_factory=utcnow)
 
 
+class QuoteDisplaySession(BaseModel):
+    """只读展示时段；不升级报价质量，也不代表某个源已产生新观测。"""
+
+    phase: Literal["auction", "pre_open_gap", "continuous", "closed", "unknown"]
+    trade_date: date
+    as_of: datetime
+    trade_day_result: bool | None
+
+
 class Quote(AuditFields):
     symbol: str
     name: str | None = None
@@ -55,6 +65,7 @@ class Quote(AuditFields):
     limit_up_price: float | None = None
     limit_down_price: float | None = None
     data_timestamp: datetime | None = None
+    display_session: QuoteDisplaySession | None = None
 
     def model_post_init(self, __context) -> None:
         for f in ("price", "open", "high", "low", "prev_close", "change", "change_pct",

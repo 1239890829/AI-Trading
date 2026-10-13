@@ -8,6 +8,7 @@ import { fmt, fmtAmount, pctColor, pctText } from "@/lib/format";
 import { useResource } from "@/hooks/use-polling-fetch";
 import { useSurfaceScope } from "@/components/inspection/surface-scope";
 import { bjMinuteOfDay, bjToday } from "@/lib/market-hours";
+import { readingRowClasses } from "@/components/ui/reading-row";
 
 /** 盘面页 · 龙虎榜 tab（原 /longhu 页迁移，2026-09-01 系统重构）。 */
 
@@ -170,7 +171,7 @@ export function LonghuTab() {
             <tbody>
               {sorted.map((r, i) => (
                 // 同股多榜并存，key 必须带 range_days，否则 React 复用错行
-                <tr key={`${r.symbol}-${r.range_days ?? "na"}-${i}`} onClick={stockNav(r.symbol)} className="cursor-pointer border-b border-zinc-100 last:border-0 hover:bg-zinc-50 dark:border-zinc-800/60 dark:hover:bg-zinc-900">
+                <tr key={`${r.symbol}-${r.range_days ?? "na"}-${i}`} onClick={stockNav(r.symbol)} className={`${readingRowClasses.row} border-b border-zinc-100 last:border-0 dark:border-zinc-800/60`}>
                   <td className="px-2 py-2 font-mono text-xs text-zinc-600 dark:text-zinc-400">
                     <StockLink symbol={r.symbol}>
                       {r.symbol}

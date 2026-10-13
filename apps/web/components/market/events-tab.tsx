@@ -27,6 +27,7 @@ import { inspectionClick, useInspection } from "@/components/inspection/inspecti
 import { Skeleton } from "@/components/ui/loading";
 import { IncrementalSentinel } from "@/components/ui/incremental-sentinel";
 import { useIncremental } from "@/hooks/use-incremental";
+import { ReadingRow, readingRowClasses } from "@/components/ui/reading-row";
 
 /**
  * 事件 Tab（§六.4 用户拍板 2026-09-04）：云图之后独立视图。
@@ -151,7 +152,7 @@ export function EventsTab() {
 
         <ul className="min-h-0 flex-1 divide-y divide-zinc-100 overflow-y-auto dark:divide-zinc-800">
           {shownPage.map((e) => (
-            <li key={e.id} className="px-4 py-2.5">
+            <ReadingRow as="li" key={e.id} className="px-4 py-2.5">
               <div className="flex items-baseline gap-2">
                 {sort === "relevance" && e.rank_score != null && (
                   <span
@@ -174,8 +175,10 @@ export function EventsTab() {
                 </span>
                 {e.url ? (
                   <button
+                    type="button"
+                    data-reading-primary
                     onClick={() => setModalItem(eventNewsItem(e))}
-                    className="text-left text-sm text-zinc-800 transition-colors hover:bg-zinc-100 hover:text-zinc-900 dark:text-zinc-100 dark:hover:bg-zinc-800 dark:hover:text-zinc-50"
+                    className={`${readingRowClasses.primary} text-sm text-zinc-800 dark:text-zinc-100`}
                   >
                     {e.title}
                   </button>
@@ -184,8 +187,10 @@ export function EventsTab() {
                   // 此前渲染成死 span 点不动。改为走通用详情弹窗，展示判定状态 +
                   // 方向/依据/传导链 + 正文摘要（summary）或判定理由。
                   <button
+                    type="button"
+                    data-reading-primary
                     onClick={() => openDetail(eventDetailPayload(e))}
-                    className="text-left text-sm text-zinc-800 transition-colors hover:bg-zinc-100 hover:text-zinc-900 dark:text-zinc-100 dark:hover:bg-zinc-800 dark:hover:text-zinc-50"
+                    className={`${readingRowClasses.primary} text-sm text-zinc-800 dark:text-zinc-100`}
                   >
                     {e.title}
                   </button>
@@ -222,10 +227,11 @@ export function EventsTab() {
                   return (
                     <a
                       key={`${d.target_type}-${d.target}`}
+                      data-reading-action
                       href={isStock ? workbenchUrl(d.target) : themesUrl(d.target)}
                       onClick={isStock ? symbolDetailClick(openSymbolDetail, { symbol: d.target }) : inspectionClick(openInspection, { kind: "themes", focus: d.target })}
                       title={tip || `关联${isStock ? "个股" : "题材"} ${d.target}（${d.basis || "入选理由见标的池"}）`}
-                      className="inline-flex items-center gap-1 rounded border border-zinc-200 px-1.5 py-0.5 text-[11px] text-zinc-700 hover:border-zinc-400 dark:border-zinc-700 dark:text-zinc-200"
+                      className={`${readingRowClasses.action} inline-flex items-center gap-1 rounded border border-zinc-200 px-1.5 py-0.5 text-[11px] text-zinc-700 hover:border-zinc-400 dark:border-zinc-700 dark:text-zinc-200`}
                     >
                       <span className="text-zinc-600 dark:text-zinc-400">{isStock ? "个股" : "题材"}</span>
                       <span>{d.target}</span>
@@ -234,10 +240,12 @@ export function EventsTab() {
                   );
                 })}
                 {e.directions.length > 0 && <button
+                  type="button"
+                  data-reading-action
                   onClick={() => setExpanded(expanded === e.id ? null : e.id)}
                   aria-expanded={expanded === e.id}
                   aria-controls={`event-pool-${e.id}`}
-                  className="rounded border border-zinc-200 px-1.5 py-0.5 text-[11px] text-zinc-600 hover:text-zinc-800 dark:border-zinc-700 dark:text-zinc-400 dark:hover:text-zinc-100"
+                  className={`${readingRowClasses.action} rounded border border-zinc-200 px-1.5 py-0.5 text-[11px] text-zinc-600 hover:text-zinc-800 dark:border-zinc-700 dark:text-zinc-400 dark:hover:text-zinc-100`}
                 >
                   {expanded === e.id ? "收起标的池" : "标的池 ↗"}
                 </button>}
@@ -256,7 +264,7 @@ export function EventsTab() {
                 ) : null;
               })()}
               {expandedPresence.value === e.id && (
-                <div className="motion-disclosure" data-open={expanded === e.id} aria-hidden={expanded !== e.id || undefined} inert={expanded !== e.id}>
+                <div data-reading-action className="motion-disclosure" data-open={expanded === e.id} aria-hidden={expanded !== e.id || undefined} inert={expanded !== e.id}>
                 <div className="motion-disclosure-body">
                 <div className="mt-2" id={`event-pool-${e.id}`}>
                   <StockPools eventId={e.id} active={expanded === e.id} />
@@ -264,7 +272,7 @@ export function EventsTab() {
                 </div>
                 </div>
               )}
-            </li>
+            </ReadingRow>
           ))}
           {/* 哨兵必须在滚动容器（本 <ul>）内部：放在外面它不随列表滚动，
               getBoundingClientRect 恒定落在视口内 → 首帧补载一页后永不触发。

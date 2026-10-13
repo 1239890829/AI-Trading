@@ -96,7 +96,9 @@ it("keeps missing configured indices visible as unavailable without invented quo
   await act(async () => {});
   const region = within(screen.getByRole("region", {name: "主要指数"}));
   expect(region.getAllByRole("button")).toHaveLength(6);
-  expect(within(region.getByRole("button", {name: /上证指数/})).getByText("过期")).toBeTruthy();
+  const failedRefresh = within(region.getByRole("button", {name: /上证指数/})).getByText("刷新异常");
+  expect(failedRefresh.getAttribute("data-quality")).toBe("stale");
+  expect(failedRefresh.title).toContain("尚未恢复实时数据");
   for (const name of ["科创50", "创业板指", "深证成指", "沪深300", "中证1000"]) {
     const card = region.getByRole("button", {name: new RegExp(name)});
     expect(card.hasAttribute("disabled")).toBe(true);

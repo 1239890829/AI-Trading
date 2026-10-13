@@ -72,7 +72,7 @@ export function QuoteStrip({
           {/* 可见性策略单点在 QualityBadge 内部（shouldShowQualityBadge）：正常出静音灰「正常」，
               low/medium 瞬态不出（2026-09-02 闪烁修复），stale/invalid 常显。
               2026-09-14 口径统一：此前调用点各自判断，导致同一数据在盘面/工作台表现相反。 */}
-          <QualityBadge quality={quote.quality} reasons={quote.quality_reasons} />
+          <QualityBadge quality={quote.quality} reasons={quote.quality_reasons} symbol={quote.symbol} market={quote.market} dataTimestamp={quote.data_timestamp} session={quote.display_session} />
           <SuspendedBadge status={tradingStatus} />
           {!hideWatchlist &&
             (inWatchlist ? (

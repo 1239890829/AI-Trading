@@ -252,7 +252,7 @@ describe("首次加入记录的来源与参考身份", () => {
     expect(entry.textContent).toContain("加入参考价 ¥5.10");
     expect(entry.textContent).not.toContain("未查到");
     fireEvent.click(within(entry).getByText("时点依据"));
-    expect(entry.textContent).toContain("行情快照时间 2026-10-09T10:11:58+08:00");
+    expect(within(entry).getByText("行情快照时间").nextElementSibling?.textContent).toBe("2026-10-09T10:11:58+08:00");
     expect(entry.textContent).not.toContain("报价源时间");
     expect(entry.textContent).toContain("intraday-original");
   });
@@ -337,6 +337,7 @@ describe("PickCard · 盘中名单（fromIntradayStock）", () => {
     expect(screen.getByText("入选")).toBeTruthy();
     expect(screen.getByText("涨停原因")).toBeTruthy();
     expect(screen.getByText("T2 跟踪档")).toBeTruthy();
+    fireEvent.click(screen.getByRole("tab", {name: "涨停原因"}));
     fireEvent.click(screen.getByRole("button", {name: /涨停原因 · 查看原文/}));
     expect(screen.getByRole("dialog", {name: "涨停原因原文"}).textContent).toContain("商业航天+军工+机器人");
   });
@@ -770,7 +771,9 @@ describe("PickCard · 可参与性三态（2026-09-15 猎场口径）", () => {
     render(<PickCard item={fromIntradayStock(ladder)} />);
     expect(screen.getByText("当前不可参与")).toBeTruthy();
     expect(screen.getByText("首封")).toBeTruthy();
-    expect(screen.getByText("09:25:00")).toBeTruthy();
+    expect(screen.getByRole("tab", {name: "首封"}).textContent).toContain("09:25:00");
+    fireEvent.click(screen.getByRole("tab", {name: "首封"}));
+    expect(screen.getByRole("tabpanel").textContent).toContain("09:25:00");
     // 参考区不该出现「可参与」——两种口径不能混用同一个徽标
     expect(screen.queryByText("可参与评估 · 当前未封板")).toBeNull();
   });
@@ -836,3 +839,9 @@ it("retains the original daily evidence behind one intraday card", () => {
   expect(show.mock.calls[0][0].buy_range).toEqual(base.buy_range);
   expect(screen.getByText(/每日 2026-10-09/).getAttribute("title")).toBe("version-A");
 });
+
+ it("keeps every invalidation visible, including fourth and fifth conditions", () => {
+  render(<PickCard item={fromDailyPick({...base, invalidations:["风险1","风险2","风险3","第4条：条件未成立","第5条：原判断失效"]})}/>);
+  expect(screen.getByLabelText("失效条件").textContent).toContain("第4条：条件未成立");
+  expect(screen.getByLabelText("失效条件").textContent).toContain("第5条：原判断失效");
+ });

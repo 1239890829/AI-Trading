@@ -1,6 +1,6 @@
-import { act, cleanup, render, screen } from "@testing-library/react";
+import { act, cleanup, fireEvent, render, screen } from "@testing-library/react";
 import { afterEach, expect, it, vi } from "vitest";
-import { OpportunitySection } from "./intraday-sections";
+import { IntradayThemeRow, OpportunitySection } from "./intraday-sections";
 import type { IntradayOpportunities, OpportunityTheme } from "@/lib/api";
 
 vi.mock("@/components/picks/pick-card", () => ({
@@ -18,6 +18,18 @@ const theme: OpportunityTheme = {
 };
 const opps: IntradayOpportunities = { trade_date: "2026-10-09", themes: [theme], caveats: [], hot_available: false,
   summary: { limit_up_total: 1, market_max_boards: 2, top_theme: "固定题材" } };
+
+it("keeps all collapsed theme risks visible and internal inspection does not toggle the row", () => {
+  const toggle = vi.fn(), ancestor = vi.fn();
+  render(<div onClick={ancestor}><IntradayThemeRow t={{...theme, risks: ["第一风险", "第二风险", "第三风险", "第四风险不能省略"]}} expanded={false} onToggle={toggle} /></div>);
+  expect(screen.getByText("第四风险不能省略")).toBeTruthy();
+  fireEvent.click(screen.getByText("市场梯队"));
+  expect(toggle).not.toHaveBeenCalled();
+  expect(ancestor).not.toHaveBeenCalled();
+  fireEvent.click(screen.getByText("第一风险"));
+  expect(toggle).toHaveBeenCalledTimes(1);
+  expect(ancestor).not.toHaveBeenCalled();
+});
 
 it("题材来源失效同时降级参与组与梯队组，恢复后再显示当前资格", () => {
   const view = render(<OpportunitySection opps={opps} expanded="固定题材" onToggle={() => {}} showLedger={false} readError />);

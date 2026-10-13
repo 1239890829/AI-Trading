@@ -234,12 +234,49 @@ export function qualityLabel(q: string): string {
   return map[q] ?? q;
 }
 
+/** 展示文案单点；quality_reasons 为后端自由字符串，未知 key 原样保留。 */
+const QUALITY_REASON_LABELS: Record<string, string> = {
+  off_session: "非交易时段",
+  market_closed: "休市——展示最近交易日数据",
+  refresh_failed: "行情刷新失败，展示最近可信值；尚未恢复实时数据",
+  batch_missing: "本轮行情批次缺少该证券，展示最近可信值；请核对数据时间",
+  quote_age_exceeded: "报价事件时间已超出实时窗口，展示最近可信值；不属于实时数据",
+  index_batch_missing: "本轮未返回该指数，展示旧行情",
+  missing_price: "缺最新价",
+  non_positive_price: "价格非正",
+  high_below_low: "最高价低于最低价",
+  price_above_high: "价格高于最高价",
+  price_below_low: "价格低于最低价",
+  change_pct_mismatch: "涨跌幅与昨收不匹配",
+  timestamp_in_future: "数据时间戳在未来",
+  time_regress: "数据时间倒退",
+  source_time_regress_ignored: "源返回晚到旧行情，保留最近可信值；本轮刷新未接纳",
+  source_time_unknown_ignored: "源行情缺源时间，保留最近可信值",
+  source_invalid_ignored: "源返回非法行情，保留最近可信值",
+  source_missing_price_ignored: "源本轮缺最新价，保留最近可信值",
+  source_identity_duplicate_ignored: "源返回重复标的身份，本轮未接纳",
+  source_identity_market_mismatch_ignored: "源返回标的市场身份不一致，本轮未接纳",
+  source_identity_unexpected_ignored: "源返回未登记指数身份，本轮未接纳",
+  source_identity_unrequested_ignored: "源返回未请求标的，本轮未接纳",
+  negative_volume: "成交量为负",
+  negative_amount: "成交额为负",
+  invalid_symbol: "代码非法",
+  unset_high_low: "最高/最低未建立（开盘初源形态，降级观察）",
+  empty_order_book: "盘口为空",
+};
+
+export function qualityReasonText(reason: string): string {
+  return QUALITY_REASON_LABELS[reason] ?? reason;
+}
+
+
 /**
  * 是否值得渲染质量徽标的"硬"质量问题（2026-09-02 用户反馈"偶尔弹出可疑标签"）：
  * low（可疑）/medium（延迟）来自盘中源字段瞬时不同步（如价格已更新而涨跌幅
  * 滞后一拍触发 change_pct_mismatch 判 low），下一个 tick 即恢复 high——徽标
- * 一秒弹现又消失，正是闪烁来源。这两档不再上界面；stale（过期/休市）与
- * invalid（非法）是持久态，稳定显示不闪。
+ * 一秒弹现又消失，正是闪烁来源。这两档不再上界面。stale/invalid 则必须
+ * 立即告知真实问题；源拒旧后下一拍也可能恢复，不能用防抖掩盖。QualityBadge
+ * 保留固定槽位，并按具体原因说明，避免状态变化带来的布局跳动。
  *
  * ⚠️ **本函数不回答"要不要渲染徽标"**——那是 `shouldShowQualityBadge` 的职责。
  * 09-02 的降噪目标只是 `low`/`medium` 两档，`high`（正常）**从未被决策过**；
@@ -262,7 +299,7 @@ export function isHardQuality(q: string): boolean {
  * |---|---|---|
  * | `high` | ✅ 渲染为**静音灰**「正常」 | 隐藏它会让「正常」与「字段缺失」不可辨——三态必须可辨；且 `QualityBadge` 本为 `high` 定义了最静音样式（不加底色） |
  * | `medium` / `low` | ❌ 不渲染 | 盘中瞬态，下一拍即恢复 ⇒ 闪烁来源（09-02 修复对象） |
- * | `stale` / `invalid` | ✅ 常显 | 持久态 |
+ * | `stale` / `invalid` | ✅ 常显 | 真实异常立即告知，恢复后使用同一槽位 |
  * | 未知档位 | ✅ 渲染 | 宁可多显示异常，不可静默吞掉（新增档位不至于在界面消失） |
  *
  * 门控**由 `components/quality-badge.tsx` 内部承担**，调用点一律直接渲染

@@ -1,10 +1,13 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { act, cleanup, render, screen, waitFor } from "@testing-library/react";
+import { act, cleanup, fireEvent, render, screen, waitFor } from "@testing-library/react";
 import { EventPanel, StockPools } from "./event-panel";
 import { getEventStocks, getImpactEvents, type ImpactEvent } from "@/lib/api";
 
 // vitest 未开 globals 时 RTL 自动 cleanup 不注册，必须手动（见 trade-form.test.tsx 注释）
-afterEach(cleanup);
+afterEach(() => { cleanup(); detail.open.mockClear(); });
+
+const detail = vi.hoisted(() => ({open: vi.fn()}));
+vi.mock("@/components/detail/detail-modal", () => ({useDetailModal: () => detail}));
 
 vi.mock("@/lib/api", async () => {
   const actual = await vi.importActual<typeof import("@/lib/api")>("@/lib/api");
@@ -54,6 +57,21 @@ function evt(over: Partial<ImpactEvent>): ImpactEvent {
 }
 
 describe("EventPanel（盘面相关性 Top4 摘要，2026-09-04 任务④）", () => {
+  it("opens main row space once while direction controls remain independent", async () => {
+    mockedGetImpactEvents.mockResolvedValue({count: 1, countsAll: {}, fourCounts: {}, tagCounts: {}, items: [evt({})]});
+    const ancestor = vi.fn();
+    render(<div onClick={ancestor}><EventPanel /></div>);
+    const title = await screen.findByRole("button", {name: "长鑫 LPDDR6 全球首发量产"});
+    fireEvent.click(screen.getByText("61分"));
+    expect(detail.open).toHaveBeenCalledTimes(1);
+    expect(detail.open.mock.calls[0][0]).toMatchObject({eventId: 3, title: "长鑫 LPDDR6 全球首发量产"});
+    expect(document.activeElement).toBe(title);
+    fireEvent.click(screen.getByText("存储芯片"));
+    expect(detail.open).toHaveBeenCalledTimes(1);
+    expect(ancestor).not.toHaveBeenCalled();
+    expect(title.closest("li")?.getAttribute("role")).toBeNull();
+  });
+
   it("inactive stock-pool shell starts no read and drops the previous activation's late reply", async () => {
     mockedGetEventStocks.mockReset();
     let finish!: (value: Awaited<ReturnType<typeof getEventStocks>>) => void;

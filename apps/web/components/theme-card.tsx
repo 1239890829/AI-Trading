@@ -13,6 +13,8 @@ import { JUMP_PILL_CLASS, JumpLink } from "@/components/ui/jump-link";
 import { inspectionClick, useInspection } from "@/components/inspection/inspection-context";
 import { roleClass } from "@/lib/role-style";
 import type { ThemeCard as ThemeCardType } from "@/types/market";
+import { ConditionList, ExplanationMap, NarrativeText } from "@/components/ui/explanation-map";
+import { readingRowClasses } from "@/components/ui/reading-row";
 
 /**
  * 题材卡片 —— 看板的主容器。
@@ -20,7 +22,7 @@ import type { ThemeCard as ThemeCardType } from "@/types/market";
  * 结构约定（2026-08-29 重构）：
  * - 顶部：强弱分级 + 题材名 + 当日涨跌幅 + 成建制/阶段 + 强度分 + 排序依据
  * - 底部：个股梯队列表（层级 = 连板档位，角色 = 龙头/中军/反包/补涨/首板…；配色见 `@/lib/role-style`）
- * - 重指标收进 <details>：可扫读性优先，默认折叠不打扰
+ * - 核对资料按对象阅读：主指标可扫读，原始依据与条件完整保留
  *
  * 归属口径：梯队成员已由后端按「当日联动」唯一归属（assign_primary_themes），
  * 同一只票不会出现在两张卡片里；other_themes 仅作信息展示。
@@ -366,19 +368,8 @@ export function ThemeCardView({
 
       {/* ── 健康度一句话 + 风险点 ──────────────────────────────── */}
       <div className="border-b border-zinc-200 bg-zinc-50 px-4 py-2 dark:border-zinc-800 dark:bg-zinc-900/40">
-        <p className="text-[13px] leading-5 text-zinc-700 dark:text-zinc-200">{card.health_note}</p>
-        {card.risks.length > 0 && (
-          <div className="mt-1.5 flex flex-wrap gap-1">
-            {card.risks.map((r) => (
-              <span
-                key={r}
-                className="rounded border border-amber-500/30 bg-amber-500/10 px-1.5 py-0.5 text-[11px] text-amber-800 dark:text-amber-300"
-              >
-                {r}
-              </span>
-            ))}
-          </div>
-        )}
+        <NarrativeText text={card.health_note} label="题材状态说明" identity={card.theme} />
+        <ConditionList label="风险点" items={card.risks} tone="warning" />
       </div>
 
       {/* ── 梯队列表（卡片主体）：层级 + 角色 ───────────────────── */}
@@ -412,8 +403,15 @@ export function ThemeCardView({
                 ladderByBoard.get(lv)!.map((r, i) => (
                   <Fragment key={r.symbol}>
                     <tr
-                      onClick={stockNav(r.symbol)}
-                      className="cursor-pointer border-b border-zinc-100 last:border-0 hover:bg-zinc-50 dark:border-zinc-800/60 dark:hover:bg-zinc-900/50"
+                      onClick={event => {
+                        event.stopPropagation();
+                        const target = event.target;
+                        if (target instanceof Element && target.closest("a,button,input,select,textarea,[data-reading-action]")) return;
+                        if (window.getSelection()?.isCollapsed === false) return;
+                        stockNav(r.symbol)(event);
+                      }}
+                      onKeyDown={event => {if (event.key === "Enter" || event.key === " ") event.stopPropagation();}}
+                      className={`${readingRowClasses.row} border-b border-zinc-100 last:border-0 dark:border-zinc-800/60`}
                     >
                     <td className="py-1.5 align-middle">
                       <LevelBadge boards={lv} sameLevel={i > 0} />
@@ -422,7 +420,7 @@ export function ThemeCardView({
                       <Badge className={roleClass(r.role)}>{r.role}</Badge>
                     </td>
                     <td className="theme-ladder-security py-1.5 align-middle">
-                      <StockLink symbol={r.symbol}>
+                      <span data-reading-action><StockLink symbol={r.symbol}>
                         <span className="text-zinc-800 dark:text-zinc-100">{r.name ?? r.symbol}</span>
                         <span className="font-mono text-[11px] text-zinc-600 dark:text-zinc-400">{r.symbol}</span>
                         {r.official && (
@@ -433,14 +431,13 @@ export function ThemeCardView({
                             官方成分
                           </span>
                         )}
-                      </StockLink>
+                      </StockLink></span>
                       {r.other_themes.length > 0 && (
                         <div className="theme-ladder-tags mt-0.5 text-[11px] text-zinc-600 dark:text-zinc-400" title={`同时具有标签：${r.other_themes.join("、")}`}>
-                          {r.other_themes.slice(0, 3).join("、")}
-                          {r.other_themes.length > 3 && ` 等 ${r.other_themes.length} 个`}
+                          {r.other_themes.join("、")}
                         </div>
                       )}
-                      <LimitReason symbol={r.symbol} reason={r.reason} source={r.source} date={r.trade_date ?? tradeDate} compact />
+                      <div data-reading-action className="cursor-auto"><LimitReason symbol={r.symbol} reason={r.reason} source={r.source} date={r.trade_date ?? tradeDate} compact /></div>
                     </td>
                     <td className="py-1.5 text-right align-middle font-mono text-zinc-700 dark:text-zinc-200">
                       {fmtAmount(r.seal_amount)}
@@ -463,13 +460,14 @@ export function ThemeCardView({
                     <td className="py-1.5 text-right align-middle">
                       <button
                         type="button"
+                        data-reading-action
                         onClick={(e) => {
                           // 行本身是跳转详情，展开按钮必须阻断冒泡
                           e.stopPropagation();
                           setChecklistSymbol((cur) => (cur === r.symbol ? null : r.symbol));
                         }}
                         aria-expanded={checklistSymbol === r.symbol}
-                        className="rounded border border-zinc-200 px-1.5 py-px text-[10px] text-zinc-600 transition-colors hover:border-sky-400 hover:text-sky-600 dark:border-zinc-700 dark:text-zinc-400 dark:hover:border-sky-500 dark:hover:text-sky-300"
+                        className={`${readingRowClasses.action} rounded border border-zinc-200 px-1.5 py-px text-[10px] text-zinc-600 hover:border-sky-400 dark:border-zinc-700 dark:text-zinc-400 dark:hover:border-sky-500`}
                       >
                         {checklistSymbol === r.symbol ? "收起" : "查看"}
                       </button>
@@ -490,12 +488,9 @@ export function ThemeCardView({
         </div>
       </div>
 
-      {/* ── 重指标折叠区：默认收起，需要核对时展开 ───────────────── */}
-      <details className="border-t border-zinc-200 dark:border-zinc-800">
-        <summary className="cursor-pointer select-none px-4 py-2 text-xs text-zinc-600 dark:text-zinc-400 hover:text-zinc-600 dark:hover:text-zinc-300">
-          强度指标与板块表现
-        </summary>
-        <div className="space-y-3 px-4 pb-3">
+      {/* ── 核对目录：一次阅读一类资料，完整保留指标与原始依据 ─────── */}
+      <div className="border-t border-zinc-200 px-4 py-3 dark:border-zinc-800"><ExplanationMap label="题材核对资料" identity={`${tradeDate}:${card.theme}`} steps={[
+        {id: "metrics", label: "强度指标与板块表现", icon: "response", content: <div className="space-y-3">
           {board && (
             <div className="grid grid-cols-2 gap-x-4 gap-y-2 sm:grid-cols-3 lg:grid-cols-6">
               <Stat label="板块涨幅" value={<span className={pctColor(board.change_pct)}>{pctText(board.change_pct)}</span>} />
@@ -591,16 +586,11 @@ export function ThemeCardView({
               <TrendBars counts={p.daily_limit_up_counts} />
             </div>
           </div>
-        </div>
-      </details>
-
-      <details className="border-t border-zinc-200 dark:border-zinc-800">
-        <summary className="cursor-pointer select-none px-4 py-2 text-xs text-zinc-600 dark:text-zinc-400 hover:text-zinc-600 dark:hover:text-zinc-300">
-          阶段依据 / 龙头与候选 / 原始标签
-        </summary>
-        <div className="grid grid-cols-1 gap-4 px-4 pb-3 lg:grid-cols-2">
+        </div>},
+        {id: "basis", label: "阶段依据 / 龙头与候选 / 原始标签", icon: "source", content: <div className="grid grid-cols-1 gap-4 lg:grid-cols-2">
           <div className="min-w-0">
             <h4 className="mb-1 text-xs font-medium text-zinc-600 dark:text-zinc-400">阶段判断依据</h4>
+            <ConditionList label="强弱分级依据" items={[card.tier_basis || "未提供强弱分级依据。"]} />
             {card.stage_basis.length ? (
               <ul className="space-y-0.5 text-[13px] text-zinc-600 dark:text-zinc-300">
                 {card.stage_basis.map((b) => (
@@ -614,14 +604,11 @@ export function ThemeCardView({
               <p className="text-[13px] text-zinc-600 dark:text-zinc-400">无额外依据（按默认规则判定）</p>
             )}
             <div className="mt-2 flex flex-wrap gap-1">
-              {(card.raw_tags ?? []).slice(0, 8).map((t) => (
+              {(card.raw_tags ?? []).map((t) => (
                 <span key={t} className="rounded bg-zinc-100 px-1.5 py-0.5 text-[11px] text-zinc-600 dark:bg-zinc-800 dark:text-zinc-400">
                   {t}
                 </span>
               ))}
-              {(card.raw_tags ?? []).length > 8 && (
-                <span className="text-[11px] text-zinc-600 dark:text-zinc-400">等 {card.raw_tags.length} 个标签</span>
-              )}
             </div>
           </div>
 
@@ -631,7 +618,7 @@ export function ThemeCardView({
               {card.leaders.main ? (
                 <div className="flex items-center gap-2">
                   <Badge className={roleClass(card.leaders.main.role)}>龙头</Badge>
-                  <StockLink symbol={card.leaders.main.symbol} className="text-zinc-800 dark:text-zinc-100">
+                  <StockLink symbol={card.leaders.main.symbol} className={`${readingRowClasses.action} rounded px-1 text-zinc-800 dark:text-zinc-100`}>
                     {card.leaders.main.name ?? card.leaders.main.symbol}
                   </StockLink>
                   <span className="font-mono text-xs text-zinc-600 dark:text-zinc-400">{card.leaders.main.boards} 板</span>
@@ -643,7 +630,7 @@ export function ThemeCardView({
                 <div className="flex flex-wrap items-center gap-2">
                   <Badge className={roleClass("中军")}>中军</Badge>
                   {card.leaders.middle_weights.map((m) => (
-                    <StockLink key={m.symbol} symbol={m.symbol} className="text-zinc-700 dark:text-zinc-300">
+                    <StockLink key={m.symbol} symbol={m.symbol} className={`${readingRowClasses.action} rounded px-1 text-zinc-700 dark:text-zinc-300`}>
                       {m.name ?? m.symbol}
                       <span className="ml-1 font-mono text-xs text-zinc-600 dark:text-zinc-400">{m.boards}板</span>
                     </StockLink>
@@ -658,7 +645,7 @@ export function ThemeCardView({
                       key={c.symbol}
                       symbol={c.symbol}
                       title={c.reason}
-                      className="text-zinc-700 dark:text-zinc-300"
+                      className={`${readingRowClasses.action} rounded px-1 text-zinc-700 dark:text-zinc-300`}
                     >
                       {c.name ?? c.symbol}
                       <span className="ml-1 font-mono text-xs text-zinc-600 dark:text-zinc-400">{c.boards}板</span>
@@ -668,8 +655,8 @@ export function ThemeCardView({
               )}
             </div>
           </div>
-        </div>
-      </details>
+        </div>},
+      ]} /></div>
 
       {detailPresence.value && (
         <ConceptDetailModal key={detailPresence.value} code={detailPresence.value} name={card.theme} active={detailPresence.active} onClose={() => setDetailCode(null)} />

@@ -5,6 +5,7 @@ import { getPaperAccount, getPaperOrders } from "@/lib/api";
 import { getJson } from "@/lib/api/internal";
 import { Panel } from "@/components/panel";
 import { fmt } from "@/lib/format";
+import { ConditionList, ExplanationMap, FactTimeline } from "@/components/ui/explanation-map";
 
 type Activation = {
   configured: boolean;
@@ -40,17 +41,26 @@ const RUNTIME_STATES: Record<string, string> = {ready: "最近一轮已完成", 
 
 function ShadowUse({kind, enabled, activation, runtime}: {kind: "daily" | "hunting"; enabled?: boolean; activation?: Activation; runtime?: Runtime}) {
   const window = activation?.start_time && activation.end_time ? `${activation.start_time}–${activation.end_time}` : null;
+  const purpose = kind === "daily" ? "用途：验证每日精选通过执行闸门后的模拟表现。" : "用途：验证已通过买点规则的机会能否模拟成交并合法退出。";
+  const timing = kind === "daily" ? `执行时机：${window ? `交易日晨窗 ${window}（北京时间）` : "当前晨窗配置尚未返回"}。读取最新已保存精选，组合日以执行回执为准。只处理通过执行闸门的计划，错过晨窗不追价。` : `执行时机：交易时段内，已有买点通过资格门后再核行情与价格范围${activation?.quote_recheck_seconds != null ? `；决定须在 ${activation.quote_recheck_seconds} 秒内有效` : ""}。`;
+  const qualification = kind === "daily" ? "当每日精选、交易日历和行情能够稳定核验，需要持续积累执行对照时，由后台配置启用。旧持仓按可卖规则轮动，撮合仍受 T+1、涨跌停、整手、费用与停牌限制。" : "当需要积累已获准买点的真实模拟成交、拒绝与退出证据时，由后台配置启用。仅入选或出现在题材参考区不会自动触发；决定过期、报价不可信、价格越界或容量不足会拒绝。";
+  const runtimeState = runtime ? RUNTIME_STATES[runtime.state] ?? "状态未识别，待核对" : "运行状态尚未返回";
+  const missing = [
+    ...(!activation ? ["运行配置尚未返回，不能由启用状态推断运行器已加载。"] : []),
+    ...(kind === "daily" && !window ? ["当前晨窗配置尚未返回"] : []),
+    ...(kind === "hunting" && activation?.quote_recheck_seconds == null ? ["决定有效时限尚未返回；此处不补默认值。"] : []),
+    ...(!runtime || runtime.state === "unknown" ? [runtimeState] : []),
+  ];
   return <div className="space-y-2 leading-5">
-    <p>{kind === "daily" ? "用途：验证每日精选通过执行闸门后的模拟表现。" : "用途：验证已通过买点规则的机会能否模拟成交并合法退出。"}</p>
-    <p className="font-medium">启用状态：{enabled === false ? "未启用，已有记录保留" : enabled !== true ? "尚未返回" : activation?.runner_loaded === false ? "已配置，但运行器未加载" : "已配置启用"}</p>
-    {kind === "daily" ? <p>执行时机：{window ? `交易日晨窗 ${window}（北京时间）` : "当前晨窗配置尚未返回"}。读取最新已保存精选，组合日以执行回执为准。只处理通过执行闸门的计划，错过晨窗不追价。</p> : <p>执行时机：交易时段内，已有买点通过资格门后再核行情与价格范围{activation?.quote_recheck_seconds != null ? `；决定须在 ${activation.quote_recheck_seconds} 秒内有效` : ""}。</p>}
-    <details>
-      <summary className="cursor-pointer py-1">什么时候需要启用</summary>
-      <p className="mt-1">{kind === "daily" ? "当每日精选、交易日历和行情能够稳定核验，需要持续积累执行对照时，由后台配置启用。旧持仓按可卖规则轮动，撮合仍受 T+1、涨跌停、整手、费用与停牌限制。" : "当需要积累已获准买点的真实模拟成交、拒绝与退出证据时，由后台配置启用。仅入选或出现在题材参考区不会自动触发；决定过期、报价不可信、价格越界或容量不足会拒绝。"}</p>
-      {activation?.poll_seconds != null && <p className="mt-1">后台检查间隔 {activation.poll_seconds} 秒；打开此面板只读取结果。</p>}
-    </details>
-    <p className="text-zinc-600 dark:text-zinc-400">后台回执：{runtime ? RUNTIME_STATES[runtime.state] ?? "状态未识别，待核对" : "运行状态尚未返回"}{runtime?.as_of ? ` · ${runtime.as_of}` : ""}</p>
-    {runtime?.reason && <p className="text-zinc-600 dark:text-zinc-400">回执原因：{runtime.reason}</p>}
+    <p className="font-medium">启用状态：{enabled === false ? "未启用，已有记录保留" : enabled !== true ? "尚未返回" : !activation ? "已启用，运行配置尚未返回" : activation.runner_loaded === false ? "已配置，但运行器未加载" : "已配置启用"}</p>
+    <p className="text-zinc-600 dark:text-zinc-400">后台回执：{runtimeState}</p>
+    <ConditionList label="仍需核对" items={missing} tone="warning" />
+    <ExplanationMap label="影子账户使用说明" identity={kind} steps={[
+      {id:"purpose", label:"用途", icon:"source", summary:"独立模拟验证", content:<p>{purpose}</p>},
+      {id:"timing", label:"执行时机", icon:"time", summary:kind === "daily" ? window ?? "晨窗尚未返回" : "已有获准买点", content:<ConditionList label="执行时机原说明" items={[timing, ...(activation?.poll_seconds != null ? [`后台检查间隔 ${activation.poll_seconds} 秒；打开此面板只读取结果。`] : ["后台检查间隔尚未返回。"])]} />},
+      {id:"qualification", label:"资格条件", icon:"check", summary:"何时需要启用", content:<ConditionList label="什么时候需要启用" items={[qualification]} />},
+      {id:"receipt", label:"后台回执", icon:"response", summary:runtimeState, content:<><FactTimeline label="回执记录" items={[{label:"运行状态",value:runtimeState},{label:"记录时间",value:runtime?.as_of ?? "未记录"}]} />{runtime?.reason && <ConditionList label="回执原因" items={[runtime.reason]} tone="warning" />}</>},
+    ]} />
   </div>;
 }
 

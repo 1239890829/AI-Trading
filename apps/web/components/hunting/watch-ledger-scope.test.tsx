@@ -75,3 +75,49 @@ it("retains the default current-day explicit simulation action and submits only 
   await waitFor(() => expect(placePaperOrder).toHaveBeenCalledWith("600127", "buy", 7.15, 100));
   expect((await screen.findByRole("status")).textContent).toContain("模拟买单已提交");
 });
+
+it("reads the full recorded rationale past 80 characters without a simulation action or extra read", async () => {
+  const data = ledger("2026-10-08");
+  const reason = "已公开事项与原始条件需要核对。".repeat(40) + "末尾关键条件：原参考价格不是成交价格。";
+  data.rows[0].reason = {text: reason};
+  vi.mocked(getWatchLedger).mockResolvedValue(data);
+  render(<WatchLedgerPanel date="2026-10-08" readOnly />);
+  fireEvent.click(await screen.findByRole("button", {name: "阅读 600127 入选说明"}));
+  fireEvent.click(screen.getByRole("button", {name: "完整原文"}));
+  expect(screen.getByLabelText("台账入选说明").textContent).toContain(reason);
+  expect(getWatchLedger).toHaveBeenCalledTimes(1);
+  expect(placePaperOrder).not.toHaveBeenCalled();
+});
+
+it("retires a removed or changed-date reading selection without clearing it after a failed refresh", async () => {
+  const data = ledger("2026-10-09");
+  const page = render(<WatchLedgerPanel readOnly />);
+  fireEvent.click(await screen.findByRole("button", {name: "阅读 600127 入选说明"}));
+  expect(screen.getByLabelText("台账入选说明")).toBeTruthy();
+
+  vi.mocked(getWatchLedger).mockRejectedValueOnce(new Error("暂时读取失败"));
+  await act(async () => { document.dispatchEvent(new Event("visibilitychange")); });
+  await screen.findByRole("alert");
+  expect(screen.getByLabelText("台账入选说明")).toBeTruthy();
+
+  vi.mocked(getWatchLedger).mockResolvedValueOnce({...data, rows: [], stats: {...data.stats, total: 0, tracking: 0}});
+  await act(async () => { document.dispatchEvent(new Event("visibilitychange")); });
+  await screen.findByText(/今日暂无跟踪记录/);
+  expect(screen.queryByLabelText("台账入选说明")).toBeNull();
+
+  vi.mocked(getWatchLedger).mockResolvedValueOnce(data);
+  await act(async () => { document.dispatchEvent(new Event("visibilitychange")); });
+  const returned = await screen.findByRole("button", {name: "阅读 600127 入选说明"});
+  expect(returned.getAttribute("aria-expanded")).toBe("false");
+  expect(screen.queryByLabelText("台账入选说明")).toBeNull();
+
+  fireEvent.click(returned);
+  vi.mocked(getWatchLedger).mockResolvedValueOnce(ledger("2026-10-08"));
+  page.rerender(<WatchLedgerPanel date="2026-10-08" readOnly />);
+  await screen.findByRole("button", {name: "阅读 600127 入选说明"});
+  vi.mocked(getWatchLedger).mockResolvedValueOnce(data);
+  page.rerender(<WatchLedgerPanel readOnly />);
+  expect((await screen.findByRole("button", {name: "阅读 600127 入选说明"})).getAttribute("aria-expanded")).toBe("false");
+  expect(screen.queryByLabelText("台账入选说明")).toBeNull();
+  expect(placePaperOrder).not.toHaveBeenCalled();
+});

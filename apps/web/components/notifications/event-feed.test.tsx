@@ -5,12 +5,15 @@ import { EventFeed } from "./event-feed";
 
 vi.mock("@/lib/api", () => ({ getImpactEvents: vi.fn() }));
 vi.mock("@/components/news-modal", () => ({ NewsModal: () => null }));
-vi.mock("@/components/detail/detail-modal", () => ({ useDetailModal: () => ({ open: vi.fn() }) }));
-vi.mock("@/components/detail/symbol-detail-context", () => ({
-  useSymbolDetail: () => ({ open: vi.fn() }), symbolDetailClick: () => undefined,
+const detail = vi.hoisted(() => ({open: vi.fn()}));
+vi.mock("@/components/detail/detail-modal", () => ({ useDetailModal: () => detail }));
+vi.mock("@/components/detail/symbol-detail-context", async () => ({
+  ...await vi.importActual<typeof import("@/components/detail/symbol-detail-context")>("@/components/detail/symbol-detail-context"),
+  useSymbolDetail: () => ({ open: vi.fn() }),
 }));
-vi.mock("@/components/inspection/inspection-context", () => ({
-  useInspection: () => ({ open: vi.fn() }), inspectionClick: () => undefined,
+vi.mock("@/components/inspection/inspection-context", async () => ({
+  ...await vi.importActual<typeof import("@/components/inspection/inspection-context")>("@/components/inspection/inspection-context"),
+  useInspection: () => ({ open: vi.fn() }),
 }));
 
 type Result = Awaited<ReturnType<typeof getImpactEvents>>;
@@ -34,6 +37,7 @@ async function flush(ms = 0) {
 }
 
 beforeEach(() => {
+  detail.open.mockReset();
   vi.useFakeTimers();
   vi.mocked(getImpactEvents).mockReset().mockResolvedValue(result("默认事件"));
   Object.defineProperty(document, "visibilityState", { configurable: true, value: "visible" });
@@ -41,6 +45,23 @@ beforeEach(() => {
 afterEach(() => { cleanup(); vi.useRealTimers(); });
 
 describe("资讯事件 · 请求身份与无感刷新", () => {
+  it("row metadata opens the same article once; direction links do not open it or count as notification reads", async () => {
+    const payload = result("独立的财经事件");
+    payload.items[0].directions = [{target_type: "theme", target: "存储芯片", direction: 1, strength: 1, basis: "公开消息", chain: ""}];
+    vi.mocked(getImpactEvents).mockResolvedValue(payload);
+    const ancestor = vi.fn();
+    render(<div onClick={ancestor}><EventFeed active /></div>);
+    await flush();
+    fireEvent.click(screen.getByText("国家政策"));
+    expect(detail.open).toHaveBeenCalledTimes(1);
+    expect(detail.open.mock.calls[0][0]).toMatchObject({eventId: 1, title: "独立的财经事件"});
+    fireEvent.click(screen.getByText("存储芯片"));
+    expect(detail.open).toHaveBeenCalledTimes(1);
+    expect(ancestor).not.toHaveBeenCalled();
+    expect(getImpactEvents).toHaveBeenCalledTimes(1);
+    expect(screen.getByTestId("event-feed-row").getAttribute("role")).toBeNull();
+  });
+
   it("旧排序晚回不能覆盖新排序，切换期间不拿旧排序充数", async () => {
     const old = deferred();
     vi.mocked(getImpactEvents).mockReturnValueOnce(old.promise).mockResolvedValueOnce(result("最新排序"));

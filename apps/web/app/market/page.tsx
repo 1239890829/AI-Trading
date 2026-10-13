@@ -1,5 +1,6 @@
 "use client";
 
+import {ConditionList, ExplanationMap, FactTimeline, NarrativeText} from "@/components/ui/explanation-map";
 import Link from "next/link";
 import { inspectionClick, useInspection } from "@/components/inspection/inspection-context";
 
@@ -104,7 +105,7 @@ function MarketInner() {
       onClick={() => openSymbolDetail({symbol: indexDetailSymbol(q.symbol, q.market)})}
       title={`查看 ${q.name ?? q.symbol} 指数详情${q.quality_reasons?.length ? "｜" + q.quality_reasons.join("；") : ""}`}>
       <span className="bc-index-name"><span>{q.name ?? q.symbol}</span></span>
-      <span className="bc-index-value"><strong>{q.price == null ? "未开盘" : fmt(q.price)}</strong><span className="bc-index-status"><span className={pctColor(q.change_pct)}>{pctText(q.change_pct)}</span><QualityBadge quality={q.quality} reasons={q.quality_reasons} /></span></span>
+      <span className="bc-index-value"><strong>{q.price == null ? "未开盘" : fmt(q.price)}</strong><span className="bc-index-status"><span className={pctColor(q.change_pct)}>{pctText(q.change_pct)}</span><QualityBadge quality={q.quality} reasons={q.quality_reasons} symbol={q.symbol} market={q.market} dataTimestamp={q.data_timestamp} session={q.display_session} /></span></span>
       <span className="bc-index-amount"><span>成交额</span><span>{fmtAmount(q.amount)}</span></span>
     </button>
   );
@@ -205,10 +206,13 @@ function MarketInner() {
       </FadeSwap>
       {basisPresence.value && <ModalShell open={basisPresence.active} onClose={() => setBasisOpen(false)} label="市场情绪依据与失效条件" size="md" header={<div><h2>市场情绪依据与失效条件</h2><p className="mt-1 text-xs text-zinc-600 dark:text-zinc-400">{basisPresence.value.phase} · 情绪温度 {basisPresence.value.temperature} / 100 · 置信度 {basisPresence.value.confidence}</p></div>}>
         <div className="bc-market-evidence-copy">
-          <p><strong>依据</strong> {basisPresence.value.reasons.join("；") || "未提供"}</p>
-          <p><strong>误判风险</strong> {basisPresence.value.misjudge_caveats.join("；") || "未提供"}</p>
-          <p><strong>切换条件</strong> {basisPresence.value.switch_conditions || "未提供"}</p>
-          {basisPresence.value.indicators.length > 0 && <p><strong>指标</strong> {basisPresence.value.indicators.slice(0, 6).map(indicator => `${indicator.name} ${indicator.value ?? "--"}`).join("；")}</p>}
+          <ConditionList label="误判风险" items={basisPresence.value.misjudge_caveats} tone="warning"/>
+          <ExplanationMap label="盘面判断核对" identity={basisPresence.value.phase} steps={[
+            {id:"basis", label:"观测依据", icon:"source", content:<ConditionList label="原始依据" items={basisPresence.value.reasons.length ? basisPresence.value.reasons : ["未提供"]}/>},
+            {id:"metrics", label:"指标读数", icon:"response", content:<FactTimeline label="已返回指标" items={basisPresence.value.indicators.map(indicator => ({label:indicator.name, value:indicator.value ?? "--"}))}/>},
+            {id:"switch", label:"切换条件", icon:"risk", content:<NarrativeText label="切换条件" text={basisPresence.value.switch_conditions || "未提供"}/>},
+          ]}/>
+
         </div>
       </ModalShell>}
     </main>

@@ -20,6 +20,7 @@ import { IncrementalSentinel } from "@/components/ui/incremental-sentinel";
 import { useIncremental } from "@/hooks/use-incremental";
 import { useResource } from "@/hooks/use-resource";
 import { themesUrl, workbenchUrl } from "@/lib/routing";
+import { ReadingRow, readingRowClasses } from "@/components/ui/reading-row";
 
 /**
  * 通知中心「资讯 / 事件」tab（2026-09-16 用户需求①）。
@@ -68,9 +69,9 @@ function EventRow({
   const clickable = Boolean(e.url);
 
   return (
-    <div
+    <ReadingRow
       data-testid="event-feed-row"
-      className="rounded-lg border border-zinc-100 p-2.5 text-left transition-colors hover:bg-zinc-50 dark:border-zinc-800/60 dark:hover:bg-zinc-800/40"
+      className="rounded-lg border border-zinc-100 p-2.5 text-left dark:border-zinc-800/60"
     >
       <div className="flex flex-wrap items-center gap-1">
         {showRank && e.rank_score != null && (
@@ -102,10 +103,11 @@ function EventRow({
           与盘面页事件标签**同一口径**（`lib/event-view.ts`），不静默失败。 */}
       <button
         type="button"
+        data-reading-primary
         onClick={() =>
           clickable ? onOpenNews(eventNewsItem(e)) : openDetail(eventDetailPayload(e))
         }
-        className="mt-1 block w-full text-left text-xs font-medium leading-relaxed text-zinc-900 transition-colors hover:text-sky-700 dark:text-zinc-50 dark:hover:text-sky-400"
+        className={`${readingRowClasses.primary} mt-1 block w-full text-xs font-medium leading-relaxed text-zinc-900 dark:text-zinc-50`}
       >
         {e.title}
       </button>
@@ -130,6 +132,7 @@ function EventRow({
           return (
             <a
               key={`${d.target_type}-${d.target}`}
+              data-reading-action
               href={isStock ? workbenchUrl(d.target) : themesUrl(d.target)}
               onClick={
                 isStock
@@ -137,7 +140,7 @@ function EventRow({
                   : inspectionClick(inspect, {kind: "themes", focus: d.target})
               }
               title={title || `关联${isStock ? "个股" : "题材"} ${d.target}`}
-              className="inline-flex items-center gap-1 rounded border border-zinc-200 px-1 py-px text-[10px] text-zinc-700 hover:border-zinc-400 dark:border-zinc-700 dark:text-zinc-200"
+              className={`${readingRowClasses.action} inline-flex items-center gap-1 rounded border border-zinc-200 px-1 py-px text-[10px] text-zinc-700 hover:border-zinc-400 dark:border-zinc-700 dark:text-zinc-200`}
             >
               <span className="text-zinc-500 dark:text-zinc-400">{isStock ? "个股" : "题材"}</span>
               <span>{d.target}</span>
@@ -151,7 +154,7 @@ function EventRow({
           </span>
         ))}
       </div>
-    </div>
+    </ReadingRow>
   );
 }
 

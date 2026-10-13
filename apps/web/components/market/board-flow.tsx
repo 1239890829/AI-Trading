@@ -23,6 +23,7 @@ import {
   type BoardFlowRow,
 } from "@/lib/api";
 import { FlowIntradayChart, signedFmt } from "@/components/market/flow-intraday-chart";
+import { ReadingRow, readingRowClasses } from "@/components/ui/reading-row";
 
 /**
  * 板块资金流（L2 主视图 + 下钻抽屉，docs/summary/architecture-design.md §2）。
@@ -168,7 +169,7 @@ function BoardFlowDrawer({ row, onClose, open, asOf }: { row: BoardFlowRow; onCl
                 </thead>
                 <tbody>
                   {memRows.map((m) => (
-                    <tr key={m.symbol} onClick={stockNav(m.symbol)} className="cursor-pointer border-b border-zinc-100 last:border-0 hover:bg-zinc-50 dark:border-zinc-800/60 dark:hover:bg-zinc-900/50">
+                    <tr key={m.symbol} onClick={stockNav(m.symbol)} className={`${readingRowClasses.row} border-b border-zinc-100 last:border-0 dark:border-zinc-800/60`}>
                       <td className="py-1 font-mono text-zinc-600 dark:text-zinc-400">
                         <StockLink symbol={m.symbol} className="font-mono text-zinc-600 dark:text-zinc-400">{m.symbol}</StockLink>
                       </td>
@@ -204,11 +205,11 @@ function BoardCard({
   const v = rangeVal(row, range);
   const rangeLabel = range === "intraday" ? "净流入" : `${range}净流入`;
   return (
-    <div role="button" tabIndex={0} aria-label={`查看 ${row.name} 资金详情`} onClick={onClick} onKeyDown={event => { if (event.key === "Enter" || event.key === " ") { event.preventDefault(); onClick(); } }}>
+    <ReadingRow data-testid={`board-row-${row.board_code}`}>
       <CardShell flow className="board-flow-card cursor-pointer transition-colors hover:border-zinc-300 dark:hover:border-zinc-700">
       <div className="board-flow-heading flex items-baseline justify-between gap-2">
         <div className="board-flow-identity flex min-w-0 items-center gap-1.5">
-          <span className="board-flow-name text-sm font-semibold">{row.name}</span>
+          <button type="button" data-reading-primary aria-label={`查看 ${row.name} 资金详情`} onClick={onClick} className={`${readingRowClasses.primary} board-flow-name text-sm font-semibold`}>{row.name}</button>
           <span className="shrink-0 font-mono text-[9px] text-zinc-600 dark:text-zinc-400">{row.board_code.replace(/^BK/, "")}</span>
         </div>
         <div className="flex shrink-0 items-center gap-1">
@@ -262,7 +263,7 @@ function BoardCard({
         </div>
       </div>
       </CardShell>
-    </div>
+    </ReadingRow>
   );
 }
 
@@ -384,9 +385,7 @@ export function BoardFlowPanel() {
               ) : (
                 <MasonryColumns gap="gap-3">
                   {shown.map((r) => (
-                    <div key={r.board_code} data-testid={`board-row-${r.board_code}`} onClick={() => setDrawer({row: r, asOf: payload?.historical ? payload.as_of ?? "未知" : undefined})}>
-                      <BoardCard row={r} range={range} onClick={() => setDrawer({row: r, asOf: payload?.historical ? payload.as_of ?? "未知" : undefined})} />
-                    </div>
+                    <BoardCard key={r.board_code} row={r} range={range} onClick={() => setDrawer({row: r, asOf: payload?.historical ? payload.as_of ?? "未知" : undefined})} />
                   ))}
                 </MasonryColumns>              )}
               <IncrementalSentinel

@@ -28,6 +28,9 @@ import { eventDetailPayload, eventDirectionForSymbol, eventDirectionView, eventJ
 // 否则形成 detail-modal → symbol-detail-modal → stock-detail → stock-events → detail-modal 的环
 import { useSymbolDetail } from "@/components/detail/symbol-detail-context";
 import { ModalShell } from "@/components/ui/modal-shell";
+import {ArticleBlocks} from "@/components/ui/article-blocks";
+import {FactTimeline, NarrativeText} from "@/components/ui/explanation-map";
+import {ReadingButton} from "@/components/ui/reading-row";
 import { useExitPresence } from "@/hooks/use-exit-presence";
 
 export type DetailKind = "news" | "event" | "feed" | "attribution" | "theme" | "capital" | "echelon" | "generic";
@@ -199,14 +202,7 @@ function DetailModalBody({ payload, active, onClose }: { payload: DetailPayload;
       {active && <>
         {/* 元信息（判定结果/方向/板块等，跨模块透传） */}
         {payload.meta && payload.meta.length > 0 && (
-          <dl className="mt-2 grid grid-cols-1 gap-x-3 gap-y-1 text-[11px] min-[480px]:grid-cols-2">
-            {payload.meta.map((m) => (
-              <div key={m.label} className="flex gap-1">
-                <dt className="shrink-0 text-zinc-600 dark:text-zinc-400">{m.label}</dt>
-                <dd className="min-w-0 [overflow-wrap:anywhere] text-zinc-700 dark:text-zinc-200">{m.value}</dd>
-              </div>
-            ))}
-          </dl>
+          <FactTimeline label="判读记录" items={payload.meta}/>
         )}
 
         {payload.kind === "attribution" && <div className="min-w-0 border-b border-zinc-200 pb-2 text-xs dark:border-zinc-700/60" aria-label="原首次加入依据">
@@ -241,8 +237,7 @@ function DetailModalBody({ payload, active, onClose }: { payload: DetailPayload;
                     const judgement = eventJudgeView(e);
                     return (
                       <li key={e.id}>
-                        <button
-                          type="button"
+                        <ReadingButton
                           onClick={() =>
                             open({
                               ...eventDetailPayload(e, payload.symbol),
@@ -262,7 +257,7 @@ function DetailModalBody({ payload, active, onClose }: { payload: DetailPayload;
                             </span>
                           )}
                           <span title={judgement.title} className={`ml-1 whitespace-nowrap ${judgement.cls}`}>{judgement.text}</span>
-                        </button>
+                        </ReadingButton>
                       </li>
                     );
                   })}
@@ -286,9 +281,7 @@ function DetailModalBody({ payload, active, onClose }: { payload: DetailPayload;
 
         {/* 正文/摘要文本（无 url 内容的主载体，如通知类快讯） */}
         {payload.body && (
-          <p className="mt-2 whitespace-pre-wrap [overflow-wrap:anywhere] text-xs leading-relaxed text-zinc-700 dark:text-zinc-300">
-            {payload.body}
-          </p>
+          <NarrativeText text={payload.body} label="原始说明" identity={`${payload.kind}:${payload.eventId ?? payload.title}`}/>
         )}
 
         {/* 三态：加载 / 错误（可重试）/ 空（显式说明） */}
@@ -309,29 +302,7 @@ function DetailModalBody({ payload, active, onClose }: { payload: DetailPayload;
           {state.status === "empty" && <p className="text-xs text-zinc-600 dark:text-zinc-400">{state.msg ?? "暂无正文"}</p>}
           {/* 正文自渲染（不嵌套 NewsModal——它自带 portal 遮罩，嵌套会双层弹窗） */}
           {state.status === "idle" && (state.blocks?.length ?? 0) > 0 && (
-            <div className="space-y-2 text-xs leading-relaxed text-zinc-700 dark:text-zinc-300">
-              {state.blocks!.map((b, i) =>
-                b.type === "p" ? (
-                  <p key={i}>{b.text}</p>
-                ) : b.type === "table" ? (
-                  <div key={i} className="overflow-x-auto">
-                    <table className="w-full border-collapse text-[11px]">
-                      <tbody>
-                        {b.rows.map((row, ri) => (
-                          <tr key={ri} className={ri % 2 ? "bg-zinc-50 dark:bg-zinc-800/50" : ""}>
-                            {row.map((cell, ci) => (
-                              <td key={ci} className="border border-zinc-200 px-1.5 py-1 dark:border-zinc-700">
-                                {cell}
-                              </td>
-                            ))}
-                          </tr>
-                        ))}
-                      </tbody>
-                    </table>
-                  </div>
-                ) : null,
-              )}
-            </div>
+            <ArticleBlocks blocks={state.blocks!} identity={payload.url ?? payload.title}/>
           )}
         </div>}
 

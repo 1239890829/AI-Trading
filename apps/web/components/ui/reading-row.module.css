@@ -1,0 +1,61 @@
+.row,
+.surface {
+  transition: background-color 160ms ease, box-shadow 160ms ease;
+}
+
+.row {
+  cursor: pointer;
+}
+
+/* CSS hover does not follow event propagation. The independent action owns its feedback. */
+.row:has([data-reading-primary]:focus-visible):not(:has([data-reading-action]:hover,button:not([data-reading-primary]):hover,a:hover,input:hover,select:hover,textarea:hover)),
+.row:active:not(:has([data-reading-action]:active,button:not([data-reading-primary]):active,a:active,input:active,select:active,textarea:active)),
+.surface:active {
+  background-color: var(--ui-hover, rgba(128, 145, 164, 0.12));
+}
+
+@media (hover: hover) and (pointer: fine) {
+  .row:hover:not(:has([data-reading-action]:hover,button:not([data-reading-primary]):hover,a:hover,input:hover,select:hover,textarea:hover)),
+  .surface:hover,
+  .action:hover {
+    background-color: var(--ui-hover, rgba(128, 145, 164, 0.12));
+  }
+}
+
+.primary {
+  min-width: 0;
+  min-height: 0;
+  padding: 0;
+  border: 0;
+  border-radius: 5px;
+  background: transparent;
+  box-shadow: none;
+  color: inherit;
+  cursor: pointer;
+  text-align: left;
+}
+
+.primary:focus-visible,
+.surface:focus-visible,
+.action:focus-visible {
+  outline: 2px solid var(--ui-accent, #84a8bc);
+  outline-offset: 3px;
+}
+
+.action {
+  cursor: pointer;
+  transition: background-color 160ms ease, border-color 160ms ease;
+}
+
+.action:active,
+.action:focus-visible {
+  background-color: var(--ui-hover, rgba(128, 145, 164, 0.16));
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .row,
+  .surface,
+  .action {
+    transition: none;
+  }
+}

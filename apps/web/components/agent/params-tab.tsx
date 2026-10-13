@@ -1,6 +1,7 @@
 "use client";
 
 import { useResource } from "@/hooks/use-resource";
+import {ExplanationMap, FactTimeline, NarrativeText} from "@/components/ui/explanation-map";
 import { FilterMenu } from "@/components/ui/filter-menu";
 import { useState } from "react";
 
@@ -270,13 +271,15 @@ export function ParamsTab() {
                     </span>
                     <span className={`shrink-0 rounded px-1 py-0.5 text-[10px] ${meta.cls}`}>{c.outcome?.label ?? (c.status === "rolled_back" ? "历史回滚结果待核实" : c.status === "applied" ? "已登记生效" : meta.label)}</span>
                   </div>
-                  {c.evidence && Object.keys(c.evidence).length > 0 && (
-                    <p className="mt-0.5 text-[10px] text-zinc-600 dark:text-zinc-400">依据：{pretty(c.evidence)}</p>
-                  )}
+                  <ExplanationMap label="变更记录" identity={`${c.id}:${c.key}:${c.created_at}`} steps={[
+                    {id:"values",label:"变更内容",icon:"relation",content:<dl className="grid grid-cols-[auto,minmax(0,1fr)] gap-x-3 gap-y-2 text-xs"><dt>记录原值</dt><dd className="min-w-0 whitespace-pre-wrap [overflow-wrap:anywhere]">{c.before === undefined ? "未记录" : pretty(c.before)}</dd><dt>记录新值</dt><dd className="min-w-0 whitespace-pre-wrap [overflow-wrap:anywhere]">{c.after === undefined ? "未记录" : pretty(c.after)}</dd></dl>},
+                    {id:"evidence",label:"原始依据",icon:"source",content:c.evidence && Object.keys(c.evidence).length ? <pre className="data-scroll whitespace-pre-wrap [overflow-wrap:anywhere] text-xs" aria-label="变更原始依据 JSON">{JSON.stringify(c.evidence,null,2)}</pre> : <p>未记录依据，不代表已核实效果。</p>},
+                    {id:"time",label:"记录时点",icon:"time",content:<FactTimeline label="已记录时间" items={[{label:"创建",value:c.created_at ? fmtTime(c.created_at) : "未记录"},{label:"生效",value:c.applied_at ? fmtTime(c.applied_at) : "未记录"},{label:"回滚",value:c.rolled_back_at ? fmtTime(c.rolled_back_at) : "未记录"}]}/>},
+                  ]}/>
                   {c.apply_block_reason && c.status !== "applied" && c.status !== "rolled_back" && (
                     <p className="mt-0.5 text-[10px] text-amber-800 dark:text-amber-300">{c.apply_block_reason}</p>
                   )}
-                  {c.outcome?.note && <p className="mt-1 text-[10px] text-zinc-600 dark:text-zinc-400">{c.outcome.note}</p>}
+                  {c.outcome?.note && <NarrativeText text={c.outcome.note} label="实际处理范围"/>}
                   {c.rollback_reason && (
                     <p className="mt-0.5 text-[10px] text-zinc-600 dark:text-zinc-400">
                       回滚归因：{survival?.reason_labels?.[c.rollback_reason.code] ?? c.rollback_reason.code}

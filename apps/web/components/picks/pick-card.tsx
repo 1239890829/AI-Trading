@@ -1,5 +1,6 @@
 "use client";
 
+import {ConditionList, ExplanationMap, NarrativeText, FactTimeline} from "@/components/ui/explanation-map";
 import type { ReactNode } from "react";
 
 import { CardHead, CardShell } from "@/components/picks/card-shell";
@@ -597,14 +598,11 @@ export function PickCard({
 
       {item.sub_scores && !item.dimensionEvidence && <p className="mt-2 text-xs text-zinc-600 dark:text-zinc-400">历史记录未保存各维读取状态；评分数字不能证明依据齐全。</p>}
       {item.dimensionEvidence && Object.entries(item.dimensionEvidence).some(([, e]) => ["missing", "error", "partial"].includes(e.state)) && (
-        <details className="mt-2 text-xs leading-relaxed text-zinc-600 dark:text-zinc-400" onClick={event => event.stopPropagation()}>
-          <summary className="cursor-pointer">依据有缺项 · 查看读取状态</summary>
-          <ul className="mt-1 space-y-1">{SUB_LABELS.map(([key, label]) => {
-            const evidence = item.dimensionEvidence?.[key];
-            if (!evidence || !["missing", "error", "partial"].includes(evidence.state)) return null;
-            return <li key={key}>{label}：{evidence.reason}；当前计分 {item.sub_scores?.[key] ?? "未知"}{evidence.state !== "partial" ? " 为计算占位，不代表实测中性" : " 仅依据已取得部分"}。</li>;
-          })}</ul>
-        </details>
+        <ConditionList label="依据缺项" tone="warning" items={SUB_LABELS.flatMap(([key, label]) => {
+          const evidence = item.dimensionEvidence?.[key];
+          return evidence && ["missing", "error", "partial"].includes(evidence.state) ? [`${label}：${evidence.reason}；当前计分 ${item.sub_scores?.[key] ?? "未知"}${evidence.state !== "partial" ? " 为计算占位，不代表实测中性" : " 仅依据已取得部分"}。`] : [];
+        })}/>
+
       )}
       {dailyEvidence && onShowDailyEvidence && (
         <div className="mt-2 flex flex-wrap items-center justify-between gap-2 text-xs text-zinc-600 dark:text-zinc-400" onClick={event => event.stopPropagation()}>
@@ -613,10 +611,8 @@ export function PickCard({
         </div>
       )}
       {item.themeSources && item.themeSources.length > 1 && (
-        <details className="mt-2 text-xs leading-relaxed text-zinc-600 dark:text-zinc-400" onClick={event => event.stopPropagation()}>
-          <summary className="cursor-pointer">{item.themeSources.length} 个题材来源 · 同股只占一个名额</summary>
-          <ul className="mt-1 space-y-1">{item.themeSources.map((source, index) => <li key={`${source.theme}/${index}`}>{source.theme ?? "题材未记录"} · {source.strength_tier ?? "强度未记录"}：{source.pick_basis || source.linkage?.basis || "来源依据未记录"}</li>)}</ul>
-        </details>
+        <ExplanationMap label={`${item.themeSources.length} 个题材来源 · 同股只占一个名额`} identity={item.symbol} steps={item.themeSources.map((source, index) => ({id: String(index), label: source.theme ?? "题材未记录", icon: "relation", summary: source.strength_tier ?? "强度未记录", content: <NarrativeText text={source.pick_basis || source.linkage?.basis || "来源依据未记录"} label="原始题材依据"/>}))}/>
+
       )}
 
       {/* 标的画像 chips：梯队地位 / 题材·阶段 / 题材强度档 / 风险档位（两源归一，有则渲染） */}
@@ -707,14 +703,9 @@ export function PickCard({
       {(item.basisRows.length > 0 || item.vetoes.length > 0) && (
         <div className="stock-card-basis text-[11px] leading-relaxed">
           <div className="text-[10px] font-medium text-zinc-600 dark:text-zinc-400">入选原因</div>
-          <dl className="basis-ledger">{item.basisRows.map((r) => (
-            <div key={r.label}><dt>{r.label}</dt><dd>{r.label === "涨停原因" ? <LimitReason symbol={item.symbol} reason={r.value} source={r.source} date={r.date} compact /> : r.value}</dd></div>
-          ))}</dl>
-          {item.vetoes.map((v) => (
-            <div key={v} className="text-red-700 dark:text-red-300">
-              ⚠ {v}
-            </div>
-          ))}
+          <ExplanationMap label="入选依据核对" identity={item.symbol} steps={item.basisRows.map((row, index) => ({id: `${index}:${row.label}`, label: row.label, summary: row.label === "首封" ? row.value : undefined, icon: row.label === "涨停原因" ? "source" : "relation", content: row.label === "涨停原因" ? <LimitReason symbol={item.symbol} reason={row.value} source={row.source} date={row.date} compact/> : <NarrativeText text={row.value} label={row.label}/>}))}/>
+          <ConditionList label="否决条件" items={item.vetoes} tone="warning"/>
+
         </div>
       )}
 
@@ -726,7 +717,7 @@ export function PickCard({
             <span className="text-zinc-600 dark:text-zinc-400">买入参考区间</span>{" "}
             <span className="font-mono font-medium tabular-nums">
               {fmt(item.buyRange.low)} – {fmt(item.buyRange.high)}
-            </span>
+            </span>{item.buyRange.basis && <NarrativeText text={item.buyRange.basis} label="区间依据"/>}
           </div>
         ) : (
           <div
@@ -750,7 +741,7 @@ export function PickCard({
               <span className="shrink-0 text-zinc-600 dark:text-zinc-400">止损参考</span>
               <span className="font-mono tabular-nums text-red-700 dark:text-red-300">
                 {fmt(item.stopLoss.price)}（-{item.stopLoss.pct}%）
-              </span>
+              </span>{item.stopLoss.basis && <NarrativeText text={item.stopLoss.basis} label="止损参考依据"/>}
             </div>
           )}
           {item.exit?.trailing_pct != null && (
@@ -764,14 +755,7 @@ export function PickCard({
           )}
           {item.exit?.note && <Row k="纪律" v={item.exit.note} />}
           {item.invalidations.length > 0 && (
-            <div className="stock-card-invalidations">
-              <span className="text-zinc-600 dark:text-zinc-400">失效条件</span>
-              {item.invalidations.slice(0, 3).map((v) => (
-                <div key={v} className="text-zinc-600 dark:text-zinc-400">
-                  · {v}
-                </div>
-              ))}
-            </div>
+            <ConditionList label="失效条件" items={item.invalidations} tone="warning"/>
           )}
         </div>
       )}
@@ -779,12 +763,7 @@ export function PickCard({
       {/* 关联消息（仅盘前名单有） */}
       {item.relatedEvents.length > 0 && (
         <div className="stock-card-events text-[11px]">
-          <span className="text-zinc-600 dark:text-zinc-400">关联消息：</span>
-          {item.relatedEvents.map((e) => (
-            <div key={e} className="text-zinc-600 dark:text-zinc-300">
-              · {e}
-            </div>
-          ))}
+          <ConditionList label="关联消息" items={item.relatedEvents}/>
         </div>
       )}
 
@@ -829,11 +808,14 @@ function SelectionEntryRow({ entry, scope, referenceOnly = false }: {
       <span className="whitespace-nowrap text-[10px]">非成交价</span>
       {(entry?.state === "partial" || !knownTime || price == null) && <span className="whitespace-nowrap text-[10px] text-amber-800 dark:text-amber-400">依据不完整</span>}
     </> : <span className="min-w-0 [overflow-wrap:anywhere]">{scopeName}{referenceOnly ? " · 当前仅参考，未查到已归档入选依据" : "首次入选依据未记录"}</span>}
-    <details className="w-full" onClick={event => event.stopPropagation()} onKeyDown={event => event.stopPropagation()}>
-      <summary className="w-fit cursor-pointer text-[10px]">时点依据</summary>
-      {hasFacts && <p className="mt-1 [overflow-wrap:anywhere]">{quoteClockLabel} {quoteClock ?? "原记录缺少有效时间"} · {scope === "daily" ? "每日组合生成" : "盘中入选归档"}{entry?.source_version ? ` · 原版本 ${entry.source_version}` : " · 版本缺项"}</p>}
-      {(!hasFacts || entry?.reason) && <p className="mt-1 [overflow-wrap:anywhere]">{reason}</p>}
-    </details>
+    <div className="w-full" onClick={event => event.stopPropagation()} onKeyDown={event => event.stopPropagation()}>
+      <FactTimeline label="时点依据" items={[
+        {label: quoteClockLabel, value: quoteClock ?? "原记录缺少有效时间"},
+        {label: "记录来源", value: !usable ? (entry?.source ? "来源不匹配，不能作为本名单依据" : "未记录") : scope === "daily" ? "每日组合生成" : "盘中入选归档"},
+        {label: "原版本", value: usable && entry?.source_version ? entry.source_version : "版本缺项"},
+      ]}/>
+      {(!hasFacts || entry?.reason) && <NarrativeText text={reason} label="记录限制"/>}
+    </div>
   </div>;
 }
 

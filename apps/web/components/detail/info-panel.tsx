@@ -5,6 +5,8 @@
 import { useState } from "react";
 
 import { NewsModal, type NewsModalItem } from "@/components/news-modal";
+import { NarrativeText } from "@/components/ui/explanation-map";
+import { ReadingRow, readingRowClasses } from "@/components/ui/reading-row";
 
 export interface InfoItem {
   title: string;
@@ -43,7 +45,7 @@ function DigestRow({ item }: { item: InfoItem }) {
   if (!item.digest && item.importance === undefined) return null;
   return (
     <div className="mt-1 space-y-0.5">
-      <div className="flex items-center gap-1.5">
+      <div className="flex flex-wrap items-center gap-1.5">
         {item.importance && (
           <span
             className={`rounded px-1 py-px text-[10px] font-medium ${IMPORTANCE_STYLE[item.importance] ?? ""}`}
@@ -69,16 +71,19 @@ function DigestRow({ item }: { item: InfoItem }) {
           </span>
         )}
         {item.numbers && item.numbers.length > 0 && (
-          <span className="truncate font-mono text-[10px] text-zinc-600 dark:text-zinc-400" title={item.numbers.join(" ")}>
-            {item.numbers.slice(0, 3).join(" ")}
+          <span className="break-words font-mono text-[10px] text-zinc-600 dark:text-zinc-400" title={item.numbers.join(" ")}>
+            {item.numbers.join(" ")}
           </span>
         )}
       </div>
       {item.digest && (
         // digest_source 说明摘要取自正文还是标题（表格型正文会被丢弃）
-        <p className="line-clamp-2 text-[11px] leading-snug text-zinc-600 dark:text-zinc-400" title={`${item.digest}（来源：${item.digest_source ?? "未知"}）`}>
-          {item.digest}
-        </p>
+        <>
+          <div data-reading-action style={{ cursor: "auto" }} title={`${item.digest}（来源：${item.digest_source ?? "未知"}）`}>
+            <NarrativeText text={item.digest} label="事实摘要" identity={`${item.url}:${item.date}`} />
+          </div>
+          <p className="text-[10px] text-zinc-600 dark:text-zinc-400">摘要取自：{item.digest_source ?? "未知"}</p>
+        </>
       )}
     </div>
   );
@@ -113,17 +118,18 @@ export function InfoPanel({
         </p>
       )}
       {(anns ?? []).map((a, i) => (
-        <button
+        <ReadingRow
           key={i}
-          onClick={() => openModal(a, "公告")}
-          className="block w-full border-b border-zinc-100 px-3 py-1.5 text-left hover:bg-zinc-50 dark:border-zinc-800/60 dark:hover:bg-zinc-900"
+          className="block w-full border-b border-zinc-100 px-3 py-1.5 text-left dark:border-zinc-800/60"
         >
-          <div className="truncate text-xs text-zinc-900 dark:text-zinc-200">{a.title}</div>
+          <button type="button" data-reading-primary onClick={() => openModal(a, "公告")} className={`${readingRowClasses.primary} block w-full text-xs text-zinc-900 dark:text-zinc-200`}>
+            {a.title}
+          </button>
           <div className="text-[11px] text-zinc-600 dark:text-zinc-400">
             {a.date} · {a.source} {a.type ? `· ${a.type}` : ""}
           </div>
           <DigestRow item={a} />
-        </button>
+        </ReadingRow>
       ))}
       {!annError && anns && anns.length === 0 && <p className="px-3 py-3 text-xs text-zinc-600 dark:text-zinc-400">暂无公告</p>}
       <h3 className="border-t border-zinc-100 px-3 py-1.5 text-xs font-medium text-zinc-600 dark:border-zinc-800/60 dark:text-zinc-300">相关新闻</h3>
@@ -133,15 +139,16 @@ export function InfoPanel({
         </p>
       )}
       {(news ?? []).map((n, i) => (
-        <button
+        <ReadingRow
           key={i}
-          onClick={() => openModal(n, "新闻")}
-          className="block w-full border-b border-zinc-100 px-3 py-1.5 text-left hover:bg-zinc-50 dark:border-zinc-800/60 dark:hover:bg-zinc-900"
+          className="block w-full border-b border-zinc-100 px-3 py-1.5 text-left dark:border-zinc-800/60"
         >
-          <div className="truncate text-xs text-zinc-900 dark:text-zinc-200">{n.title}</div>
+          <button type="button" data-reading-primary onClick={() => openModal(n, "新闻")} className={`${readingRowClasses.primary} block w-full text-xs text-zinc-900 dark:text-zinc-200`}>
+            {n.title}
+          </button>
           <div className="text-[11px] text-zinc-600 dark:text-zinc-400">{n.date} · {n.source}</div>
           <DigestRow item={n} />
-        </button>
+        </ReadingRow>
       ))}
       {!newsError && news && news.length === 0 && <p className="px-3 py-3 text-xs text-zinc-600 dark:text-zinc-400">暂无新闻</p>}
       <NewsModal item={modalItem} onClose={() => setModalItem(null)} />

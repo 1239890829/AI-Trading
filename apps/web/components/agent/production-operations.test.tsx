@@ -5,6 +5,17 @@ vi.mock("@/lib/api", () => ({getWatcherState: vi.fn(async () => ({})), generateP
 const api = await import("@/lib/api");
 afterEach(() => {cleanup(); vi.restoreAllMocks(); vi.clearAllMocks();});
 describe("maintenance command boundary", () => {
+  it("reads switches separately from running state and retains unknown timing plus raw audit without producing writes",async()=>{
+    vi.mocked(api.getWatcherState).mockResolvedValueOnce({active:false,enabled:true,brief_exists:false,beat_count:2,note:"未启动，不代表开关关闭。"});
+    render(<ProductionOperations/>);
+    expect(await screen.findByText("运行标记：未运行")).toBeTruthy();
+    expect(screen.getByText("启用开关：已启用")).toBeTruthy();
+    expect(screen.getByLabelText("运行时点").textContent).toContain("未记录");
+    fireEvent.click(screen.getByRole("tab",{name:"原始 JSON"}));
+    expect(screen.getByLabelText("节拍原始 JSON").textContent).toContain('"brief_exists": false');
+    expect(api.generatePicks).not.toHaveBeenCalled();
+    expect(api.runWatcherBeat).not.toHaveBeenCalled();
+  });
   it("reading and canceling confirmation never produce writes", async () => {
     vi.spyOn(window, "confirm").mockReturnValue(false);
     render(<ProductionOperations />);

@@ -8,6 +8,7 @@ import {
   type MinuteSignalsPayload,
 } from "@/lib/api";
 import { bjHHMM, bjMonthDay, fmt, pctColor, pctText } from "@/lib/format";
+import { ConditionList, ExplanationMap, FactTimeline, NarrativeText } from "@/components/ui/explanation-map";
 
 /**
  * 做 T 决策（个股详情右列「做T」标签，P1-24 前端消费）。
@@ -37,6 +38,17 @@ function biasCls(bias: string): string {
 }
 
 type ReadState<T> = { data: T | null; error: string | null; pending: boolean };
+
+function TriggerConditions({items}: {items: MinuteSignalsPayload["signals"][number]["triggered"]}) {
+  return items.length ? <div className="space-y-3">{items.map((hit, index) => <section key={`${index}:${hit.key}`}>
+    <h5 className="text-xs font-medium">{hit.name}</h5>
+    <ConditionList label={`${hit.name}原始条件`} items={[
+      hit.evidence || "触发说明未记录。",
+      `规则 ${hit.key} · 触发值 ${hit.trigger_value} · 阈值 ${hit.threshold}`,
+      `权重 ${hit.weight} · 方向 ${hit.direction}`,
+    ]} />
+  </section>)}</div> : <p className="text-amber-800 dark:text-amber-300">触发条件未记录，不能补推触发原因。</p>;
+}
 
 export function MinuteDecisionPanel({
   symbol,
@@ -115,7 +127,7 @@ export function MinuteDecisionPanel({
         {sig &&
           (latest ? (
             <div className="space-y-1.5">
-              <div className="flex items-baseline gap-2">
+              <div className="flex flex-wrap items-baseline gap-x-2 gap-y-1">
                 <span className="font-mono text-[10px] text-zinc-600 dark:text-zinc-400">{bjHHMM(latest.ts)}</span>
                 <span className={`font-medium ${biasCls(latest.bias)}`}>{latest.bias}</span>
                 <span className="font-mono tabular-nums text-zinc-600 dark:text-zinc-400">
@@ -125,23 +137,13 @@ export function MinuteDecisionPanel({
                   置信 {latest.confidence} · 参考价 {fmt(latest.signal_price)}
                 </span>
               </div>
-              <dl className="space-y-0.5 rounded bg-zinc-50 px-2 py-1.5 dark:bg-zinc-800/40">
-                <dt className="text-[10px] text-zinc-600 dark:text-zinc-400">触发依据</dt>
-                {latest.triggered.map((h) => (
-                  <dd key={`${h.key}-${h.evidence}`} className="text-[11px] text-zinc-600 dark:text-zinc-300">
-                    <span className="font-medium">{h.name}</span>
-                    <span className="ml-1 text-zinc-600 dark:text-zinc-400">{h.evidence}</span>
-                  </dd>
-                ))}
-                {latest.invalidate_condition && (
-                  <>
-                    <dt className="pt-1 text-[10px] text-zinc-600 dark:text-zinc-400">失效条件</dt>
-                    <dd className="text-[11px] text-zinc-600 dark:text-zinc-300">
-                      {latest.invalidate_condition}
-                    </dd>
-                  </>
-                )}
-              </dl>
+              <ConditionList label="失效条件" tone="warning" items={[latest.invalidate_condition || "失效条件未记录，不能据此判断信号仍然有效。"]} />
+              {!latest.triggered.length && <p className="text-amber-800 dark:text-amber-300">触发条件未记录，不能补推触发原因。</p>}
+              <ExplanationMap label="分钟信号依据" identity={`${symbol}:${latest.ts}`} steps={[
+                {id:"trigger",label:"触发依据",icon:"check",summary:`${latest.triggered.length} 项原始条件`,content:<TriggerConditions items={latest.triggered} />},
+                {id:"time",label:"信号时点",icon:"time",summary:bjHHMM(latest.ts),content:<FactTimeline label="信号原始记录" items={[{label:"触发时间",value:latest.ts},{label:"信号参考价",value:fmt(latest.signal_price)},{label:"原始分值",value:String(latest.score)},{label:"置信标记",value:latest.confidence}]} />},
+                {id:"basis",label:"记录口径",icon:"source",summary:"原始输入与说明",content:<>{latest.basis && <NarrativeText label="信号口径原说明" text={latest.basis} />}<p className="text-[11px] text-zinc-600 dark:text-zinc-400">置信标记是引擎输出，不是正确率或盈利概率。以下仅展示本次返回的输入口径。</p>{Object.keys(sig.basis).length ? <pre className="whitespace-pre-wrap [overflow-wrap:anywhere] text-[11px]" aria-label="信号输入口径原始值">{JSON.stringify(sig.basis, null, 2)}</pre> : <p>输入口径未返回，不补填数据。</p>}</>},
+              ]} />
             </div>
           ) : (
             <p className="py-4 text-center text-[11px] text-zinc-600 dark:text-zinc-400">
@@ -151,18 +153,7 @@ export function MinuteDecisionPanel({
 
         {/* ---- 降级如实标注 ---- */}
         {degraded.length > 0 && (
-          <details className="mt-2 rounded border border-zinc-200 px-2 py-1 dark:border-zinc-800">
-            <summary className="cursor-pointer text-[10px] text-zinc-600 dark:text-zinc-400">
-              {degraded.length} 项输入缺失导致降级（如实标注，未用别家口径顶替）
-            </summary>
-            <ul className="mt-1 space-y-0.5">
-              {degraded.map((d) => (
-                <li key={d} className="text-[10px] text-zinc-600 dark:text-zinc-400">
-                  {d}
-                </li>
-              ))}
-            </ul>
-          </details>
+          <ConditionList label={`${degraded.length} 项输入缺失导致降级（如实标注，未用别家口径顶替）`} items={degraded} tone="warning" />
         )}
 
         {/* ---- 决策记录 ---- */}
@@ -187,7 +178,7 @@ export function MinuteDecisionPanel({
                     key={d.decision_id}
                     className="rounded border border-zinc-100 px-2 py-1 dark:border-zinc-800/60"
                   >
-                    <div className="flex items-center gap-2">
+                    <div className="flex flex-wrap items-center gap-x-2 gap-y-1">
                       <span className="font-mono text-[10px] text-zinc-600 dark:text-zinc-400">
                         {bjMonthDay(d.trigger_ts)} {bjHHMM(d.trigger_ts)}
                       </span>
@@ -201,7 +192,7 @@ export function MinuteDecisionPanel({
                         {o ? o.text : "待结算"}
                       </span>
                     </div>
-                    <div className="mt-0.5 flex items-center gap-2 text-[10px] text-zinc-600 dark:text-zinc-400">
+                    <div className="mt-0.5 flex flex-wrap items-center gap-x-2 gap-y-1 text-[10px] text-zinc-600 dark:text-zinc-400">
                       <span>信号价 {fmt(d.signal_price)}</span>
                       {d.executed && d.executed_price != null && (
                         <span>
@@ -215,10 +206,15 @@ export function MinuteDecisionPanel({
                         </span>
                       )}
                     </div>
+                    <ConditionList label="记录失效条件" tone="warning" items={[d.invalidate_condition || "该记录失效条件未记录。"]} />
+                    <ExplanationMap label="决策条件核对" identity={d.decision_id} steps={[
+                      {id:"conditions",label:"原触发条件",icon:"check",summary:`${d.triggered.length} 项`,content:<TriggerConditions items={d.triggered} />},
+                      {id:"receipt",label:"原始回执",icon:"time",summary:d.executed ? "执行标记已记录" : "未标记执行",content:<FactTimeline label="决策记录口径" items={[{label:"决定标识",value:d.decision_id},{label:"交易日",value:d.trade_date},{label:"触发原时点",value:d.trigger_ts},{label:"原始分值",value:String(d.score)},{label:"置信标记",value:d.confidence},{label:"最佳价",value:d.best_price == null ? "未记录" : fmt(d.best_price)},{label:"最差价",value:d.worst_price == null ? "未记录" : fmt(d.worst_price)}]} />},
+                    ]} />
                     {att?.counter_evidence && (
                       <div className="mt-0.5 text-[10px] text-zinc-600 dark:text-zinc-400">
                         {att.pivotal && att.primary_name ? `主因「${att.primary_name}」：` : ""}
-                        {att.counter_evidence}
+                        <NarrativeText label="记录反证原文" text={att.counter_evidence} />
                       </div>
                     )}
                   </li>
@@ -226,7 +222,7 @@ export function MinuteDecisionPanel({
               })}
             </ul>
           ) : null}
-          {note && <p className="mt-1.5 text-[10px] leading-relaxed text-zinc-600 dark:text-zinc-400">{note}</p>}
+          {note && <div className="mt-1.5"><NarrativeText label="决策记录原说明" text={note} /></div>}
         </div>
       </div>
 

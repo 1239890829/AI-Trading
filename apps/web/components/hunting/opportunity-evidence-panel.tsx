@@ -6,6 +6,8 @@ import { useExitPresence } from "@/hooks/use-exit-presence";
 import { useResource } from "@/hooks/use-polling-fetch";
 import { getOpportunities, type OpportunityView } from "@/lib/api/picks";
 import { bjDate } from "@/lib/format";
+import { ConditionList, ExplanationMap, FactTimeline, NarrativeText } from "@/components/ui/explanation-map";
+import { ReadingRow, readingRowClasses } from "@/components/ui/reading-row";
 
 const STATES: Record<string, string> = {
   observing: "观察", priority: "重点观察", waiting: "等待", triggered: "条件触发",
@@ -22,6 +24,31 @@ const SCENARIOS: Record<string, string> = {
 const ROUTES: Record<string, string> = {
   public_event: "公共事件", company_event: "公司独立事件", trend: "趋势强势",
 };
+
+function OpportunityCardReading({card, date}: {card: OpportunityView["cards"][number]; date: string}) {
+  return <ExplanationMap label={`${card.name || card.symbol}机会假设`} identity={`${date}:${card.symbol}:${card.hypotheses.map(h => h.decision_version ?? h.opportunity_id).join(":")}`} steps={card.hypotheses.map(h => ({
+    id: h.opportunity_id,
+    label: h.source_theme || SCENARIOS[h.scenario] || h.scenario,
+    summary: <span className="opportunity-state" data-state={h.state}>{STATES[h.state] ?? h.state}</span>,
+    icon: "relation",
+    content: <div className="space-y-3">
+      <p><span className="opportunity-state" data-state={h.state}>{STATES[h.state] ?? h.state}</span> · {h.decision_version ?? `研究观察 ${h.observation_id ?? "身份待核"}`}</p>
+      {!!h.routes?.length && <p>观察路径：{h.routes.map(route => ROUTES[route] ?? route).join(" / ")}</p>}
+      <ConditionList label="已记录依据" items={h.reasons.length ? h.reasons : ["尚无已记录依据"]} />
+      <ConditionList label="还缺什么" tone="warning" items={h.unknowns.length ? h.unknowns : ["请核对原始证据及动作前条件"]} />
+      <NarrativeText text={h.execution_blocker} label="执行限制" identity={h.opportunity_id} />
+      <FactTimeline label="观察与来源" items={[
+        {label: "首次观察", value: h.first_seen}, {label: "本版来源时间", value: h.as_of},
+        {label: "来源", value: h.source}, {label: "版本", value: h.decision_version ?? `研究观察 ${h.observation_id ?? "身份待核"}`},
+      ]} />
+      <p>参考价 {h.reference.price ?? "缺失"}，不是成交价。</p>
+      <details><summary className={`${readingRowClasses.action} cursor-pointer rounded px-2 py-1`}>来源与反证记录</summary><pre className="whitespace-pre-wrap break-all text-xs">{JSON.stringify({
+        事件引用: h.event_refs ?? [], 知识依据: h.kb_refs ?? {}, 反证: h.counterevidence ?? [],
+        原始证据: h.evidence ?? {}, 进入条件: h.entry_conditions ?? {},
+      }, null, 2)}</pre></details>
+    </div>,
+  }))} />;
+}
 
 /** One read-only consumer for versioned decisions, without new rankings or actions. */
 export function OpportunityEvidencePanel({date: requestedDate, onDateChange, active = true}: {date?: string; onDateChange?: (date: string) => void; active?: boolean} = {}) {
@@ -63,29 +90,11 @@ export function OpportunityEvidencePanel({date: requestedDate, onDateChange, act
       <p className="mt-1 text-zinc-600 dark:text-zinc-400">{data.coverage}</p>
       {data.cards.length === 0 && <p className="py-3">{data.state === "collected_empty" ? "本轮已记录，候选为空。" : data.state === "unavailable" ? "已有运行记录，但来源未就绪，不能据此判断没有机会。" : "该日期尚无已归档决定，不能据此判断没有机会。"}</p>}
       <div className="mt-3 divide-y divide-zinc-200 dark:divide-zinc-800">
-        {data.cards.slice(0, limit).map(card => <details key={card.symbol} className="py-2">
-          <summary className="min-h-11 cursor-pointer py-2 font-medium focus-visible:outline-2 focus-visible:outline-sky-500">
-            {card.name} {card.symbol} · {card.hypotheses.length} 条独立假设
-          </summary>
-          <button onClick={event => { inspectOrigin.current = event.currentTarget; inspect(card); }} className="min-h-11 rounded border border-zinc-300 px-3 dark:border-zinc-600">查看 {card.symbol} 依据</button>
-          {card.hypotheses.map(h => <div key={h.opportunity_id} className="max-w-prose space-y-1 py-2 leading-relaxed">
-            <p className="font-medium"><span className="opportunity-state" data-state={h.state}>{STATES[h.state] ?? h.state}</span> · {h.source_theme || SCENARIOS[h.scenario] || h.scenario}</p>
-            {!!h.routes?.length && <p>观察路径：{h.routes.map(route => ROUTES[route] ?? route).join(" / ")}</p>}
-            <p>依据：{h.reasons.join("；") || "尚无已记录依据"}</p>
-            <p>还缺什么：{h.unknowns.join("；") || "请核对原始证据及动作前条件"}</p>
-            <p className="text-amber-800 dark:text-amber-300">{h.execution_blocker}</p>
-            <p>首次观察 {h.first_seen}；本版来源时间 {h.as_of}</p>
-            <p className="break-all text-zinc-600 dark:text-zinc-400">{h.source} · {h.decision_version ?? `研究观察 ${h.observation_id ?? "身份待核"}`}</p>
-            <p>参考价 {h.reference.price ?? "缺失"}，不是成交价。</p>
-            <details>
-              <summary className="min-h-11 cursor-pointer py-2 focus-visible:outline-2 focus-visible:outline-sky-500">来源与反证记录</summary>
-              <pre className="whitespace-pre-wrap break-all text-xs">{JSON.stringify({
-                事件引用: h.event_refs ?? [], 知识依据: h.kb_refs ?? {}, 反证: h.counterevidence ?? [],
-                原始证据: h.evidence ?? {}, 进入条件: h.entry_conditions ?? {},
-              }, null, 2)}</pre>
-            </details>
-          </div>)}
-        </details>)}
+        {data.cards.slice(0, limit).map(card => <ReadingRow key={card.symbol} className="py-2">
+          <p className="font-medium">{card.name} {card.symbol} · {card.hypotheses.length} 条独立假设</p>
+          <button type="button" data-reading-primary onClick={event => { inspectOrigin.current = event.currentTarget; inspect(card); }} className={`${readingRowClasses.primary} min-h-11 py-2`}>查看 {card.symbol} 依据</button>
+          <p className="text-zinc-600 dark:text-zinc-400">{card.hypotheses.map(h => `${h.source_theme || SCENARIOS[h.scenario] || h.scenario} · ${STATES[h.state] ?? h.state}`).join(" / ")}</p>
+        </ReadingRow>)}
       </div>
       {data.cards.length > limit && <button onClick={() => setLimit(n => n + 10)} className="mt-2 min-h-11 rounded border border-zinc-300 px-3 dark:border-zinc-600 focus-visible:outline-2 focus-visible:outline-sky-500">再显示 10 只</button>}
       {data.runs.map(run => <div key={run.run_id} className="mt-2 leading-relaxed">
@@ -94,7 +103,7 @@ export function OpportunityEvidencePanel({date: requestedDate, onDateChange, act
       </div>)}
     </>}
     </div>
-    {inspectionPresence.value && <aside aria-label="当前证据侧栏" data-motion-state={active && inspected ? "open" : "closed"} aria-hidden={!active || !inspected || undefined} inert={!active || !inspected} className="motion-float evidence-inspection grid gap-3 rounded-lg border border-zinc-300 p-3 dark:border-zinc-600" tabIndex={0}>{[inspectionPresence.value, ...(inspectionMode === "compare" && compared ? [compared] : [])].map((item, index) => <div key={index}><h5 className="font-semibold">{item.card.name} {item.card.symbol} · {item.date}{inspectionMode !== "follow" && index === 0 ? "（固定快照）" : ""}</h5>{item.card.hypotheses.map(h => <div key={h.opportunity_id} className="mt-2 space-y-1 break-words"><p><span className="opportunity-state" data-state={h.state}>{STATES[h.state] ?? h.state}</span> · {h.decision_version ?? `研究观察 ${h.observation_id ?? "身份待核"}`}</p><p>来源 {h.source} · {h.as_of}</p><p>依据 {h.reasons.join("；") || "未记录"}</p><p>等待 {h.unknowns.join("；") || "须核动作前条件"}</p><p>{h.execution_blocker}</p><p>参考 {h.reference.price ?? "缺失"}，非成交。</p></div>)}</div>)}{inspectionMode === "compare" && !compared && <p>请选择第二个对象／日期／版本。不同 scope 不合并收益。</p>}<button onClick={() => { setSelectedSymbol(null); setPinned(null); setCompared(null); const origin = inspectOrigin.current; if (origin?.isConnected && !origin.closest("details:not([open])")) origin.focus(); else dateInput.current?.focus(); }}>关闭侧栏</button></aside>}
+    {inspectionPresence.value && <aside aria-label="当前证据侧栏" data-motion-state={active && inspected ? "open" : "closed"} aria-hidden={!active || !inspected || undefined} inert={!active || !inspected} className="motion-float evidence-inspection grid gap-3 rounded-lg border border-zinc-300 p-3 dark:border-zinc-600" tabIndex={0}>{[inspectionPresence.value, ...(inspectionMode === "compare" && compared ? [compared] : [])].map((item, index) => <div key={index}><h5 className="font-semibold">{item.card.name} {item.card.symbol} · {item.date}{inspectionMode !== "follow" && index === 0 ? "（固定快照）" : ""}</h5><OpportunityCardReading card={item.card} date={item.date} /></div>)}{inspectionMode === "compare" && !compared && <p>请选择第二个对象／日期／版本。不同 scope 不合并收益。</p>}<button onClick={() => { setSelectedSymbol(null); setPinned(null); setCompared(null); const origin = inspectOrigin.current; if (origin?.isConnected) origin.focus(); else dateInput.current?.focus(); }}>关闭侧栏</button></aside>}
     </div>
   </section>;
 }

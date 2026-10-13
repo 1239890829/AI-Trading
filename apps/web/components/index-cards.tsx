@@ -45,14 +45,14 @@ export const IndexCards = memo(function IndexCards({ indices, selected, onSelect
       <button type="button" key={detail} disabled={!q} aria-pressed={active} onClick={() => onSelect?.(detail)}
         title={q ? `${name} · 来源 ${sourceLabel(q.source)}${onSelect ? " · 点击查看详情" : ""}` : `${name} · 本轮未返回该指数`}
         className={`rounded-lg px-2 py-1.5 text-left transition-colors ${active ? "bg-zinc-200/80 dark:bg-zinc-800" : "bg-zinc-100/60 hover:bg-zinc-200/60 dark:bg-zinc-900/60 dark:hover:bg-zinc-800/60"} ${q && onSelect ? "cursor-pointer" : "cursor-default"}`}>
-        <div className="flex min-w-0 items-center justify-between gap-1">
-          <span className="min-w-0 truncate text-[10px] text-zinc-600 dark:text-zinc-400">{name}</span>
-          <QualityBadge quality={q?.quality} reasons={q?.quality_reasons} />
-        </div>
+        <div className="min-w-0 whitespace-nowrap text-[10px] text-zinc-600 dark:text-zinc-400">{name}</div>
         <div className="whitespace-nowrap font-mono text-sm font-semibold tabular-nums">
           {!q ? <span className="text-xs font-normal text-zinc-600 dark:text-zinc-400">未返回</span> : q.price == null ? <span className="text-xs font-normal text-zinc-600 dark:text-zinc-400">未开盘</span> : fmt(q.price)}
         </div>
         <div className={`whitespace-nowrap font-mono text-[11px] tabular-nums ${pctColor(q?.change_pct)}`}>{pctText(q?.change_pct)}</div>
+        <div className="flex min-h-[20px] min-w-0 items-center text-[10px]">
+          <QualityBadge compact quality={q?.quality} reasons={q?.quality_reasons} symbol={detail} market={q?.market} dataTimestamp={q?.data_timestamp} session={q?.display_session} />
+        </div>
       </button>
     );
   };

@@ -11,6 +11,7 @@ import { LimitReason } from "@/components/detail/limit-reason";
 import { tapeUrl } from "@/lib/routing";
 import { StockLink, useStockRowNav } from "@/components/stock-link";
 import { useResource } from "@/hooks/use-polling-fetch";
+import { readingRowClasses } from "@/components/ui/reading-row";
 
 /**
  * 盘面页 · 涨停生态 tab（原 /limit-up 页迁移，2026-09-01 系统重构）。
@@ -170,7 +171,7 @@ export function LimitUpTab() {
                   <tr
                     key={r.symbol}
                     onClick={stockNav(r.symbol)}
-                    className={`cursor-pointer border-b border-zinc-100 last:border-0 hover:bg-zinc-50 dark:border-zinc-800/60 dark:hover:bg-zinc-900 ${
+                    className={`${readingRowClasses.row} border-b border-zinc-100 last:border-0 dark:border-zinc-800/60 ${
                       isMember ? "bg-rose-500/[0.07]" : ""
                     }`}
                   >

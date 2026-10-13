@@ -47,9 +47,9 @@ describe("QualityBadge 可见性策略（唯一决策点）", () => {
     expect(medium.container.textContent).toBe("");
   });
 
-  it("stale/invalid 常显；stale 带 market_closed 时是「休市」而非「过期」（常态 vs 故障）", () => {
+  it("stale/invalid 常显；真实刷新失败与休市分别展示，不隐藏异常", () => {
     const stale = render(<QualityBadge quality="stale" reasons={["refresh_failed"]} />);
-    expect(stale.container.textContent).toBe("过期");
+    expect(stale.container.textContent).toBe("刷新异常");
     stale.unmount();
     const closed = render(<QualityBadge quality="stale" reasons={["market_closed"]} />);
     expect(closed.container.textContent).toBe("休市");
@@ -60,14 +60,37 @@ describe("QualityBadge 可见性策略（唯一决策点）", () => {
 
   it("源时间被拒绝时 stale 徽标把降级原因翻译成人话", () => {
     render(<QualityBadge quality="stale" reasons={["source_time_regress_ignored"]} />);
-    const badge = screen.getByText("过期");
+    const badge = screen.getByText("保留可信值");
     expect(badge.getAttribute("title")).toContain("源返回晚到旧行情");
   });
 
   it("缓存事件时间超窗时明确提示展示的是最近可信值", () => {
     render(<QualityBadge quality="stale" reasons={["quote_age_exceeded"]} />);
-    const badge = screen.getByText("过期");
+    const badge = screen.getByText("报价超时");
     expect(badge.getAttribute("title")).toContain("报价事件时间已超出实时窗口");
+  });
+
+  it("拒绝旧源值立即告知，恢复正常时保留同一宽度槽，low/medium也不产生布局空窗", () => {
+    const view = render(<QualityBadge quality="stale" reasons={["source_time_regress_ignored"]} />);
+    const slot = view.container.firstElementChild;
+    const widthClass = slot?.className;
+    expect(slot?.textContent).toBe("保留可信值");
+    expect(slot?.getAttribute("data-quality")).toBe("stale");
+    view.rerender(<QualityBadge quality="high" reasons={[]} />);
+    expect(view.container.firstElementChild).toBe(slot);
+    expect(slot?.textContent).toBe("正常");
+    expect(slot?.className).toContain("w-[6.4em]");
+    expect(widthClass).toContain("w-[6.4em]");
+    view.rerender(<QualityBadge quality="low" reasons={["change_pct_mismatch"]} />);
+    expect(view.container.firstElementChild).toBe(slot);
+    expect(slot?.textContent).toBe("");
+    expect(slot?.getAttribute("aria-hidden")).toBe("true");
+  });
+
+  it.each(["batch_missing", "index_batch_missing"])("%s 直接显示本轮缺项而非报价超时", reason => {
+    render(<QualityBadge quality="stale" reasons={[reason]} />);
+    expect(screen.getByText("本轮缺项")).toBeTruthy();
+    expect(screen.queryByText("正常")).toBeNull();
   });
 
   it("reasons 同时含 market_closed 与其它原因时仍判「休市」（休市优先，不降级为故障红）", () => {
