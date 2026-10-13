@@ -43,6 +43,7 @@ export interface AttributionEvidenceItem {
   pending_context: AttributionSourceContext | null;
   review_note?: string | null;
   withdrawal_context?: (Omit<AttributionSourceContext, "change_kind"> & {event_id: number; source: string; source_item_id: string | null; available_at: string | null; linked_at: string | null; review_note: string | null}) | null;
+  timing_relation?: {status: "known_before_response" | "late_source_observation" | "interpretation_after_response" | "time_unknown"; label: string};
   alternatives: string[];
   limitations: string[];
 }
@@ -52,21 +53,31 @@ export interface StockAttributionPayload {
   symbol: string | null;
   count: number;
   items: AttributionEvidenceItem[];
+  later_items?: AttributionEvidenceItem[];
+  response_context?: {pool_date: string | null; response_as_of: string | null; view: "current_with_response_context"; historical_replay: false};
 }
 
-export async function getStockAttribution(symbol: string): Promise<StockAttributionPayload> {
-  const result = (await getJson<StockAttributionPayload>(`/api/events/symbol/${encodeURIComponent(symbol)}/attribution?limit=12`)).data;
+export interface AttributionOptions {poolDate?: string; responseAsOf?: string}
+function contextQuery(options?: AttributionOptions): string {
+  const params = new URLSearchParams();
+  if (options?.poolDate) params.set("pool_date", options.poolDate);
+  if (options?.responseAsOf) params.set("response_as_of", options.responseAsOf);
+  return params.size ? `&${params}` : "";
+}
+
+export async function getStockAttribution(symbol: string, options?: AttributionOptions): Promise<StockAttributionPayload> {
+  const result = (await getJson<StockAttributionPayload>(`/api/events/symbol/${encodeURIComponent(symbol)}/attribution?limit=12${contextQuery(options)}`)).data;
   // A response identity mismatch must never put another security's evidence under this title.
-  if (result.symbol !== symbol || result.schema_version !== 1 || !Array.isArray(result.items)) {
+  if (result.symbol !== symbol || result.schema_version !== 1 || !Array.isArray(result.items) || (result.later_items !== undefined && !Array.isArray(result.later_items))) {
     throw new Error("归因资料身份不匹配，请重新读取");
   }
   return result;
 }
 
-export async function getEventAttribution(eventId: number, symbol?: string | null): Promise<StockAttributionPayload> {
-  const query = symbol ? `?symbol=${encodeURIComponent(symbol)}` : "";
+export async function getEventAttribution(eventId: number, symbol?: string | null, options?: AttributionOptions): Promise<StockAttributionPayload> {
+  const query = `?${symbol ? `symbol=${encodeURIComponent(symbol)}&` : ""}limit=12${contextQuery(options)}`;
   const result = (await getJson<StockAttributionPayload>(`/api/events/${eventId}/attribution${query}`)).data;
-  if (result.symbol !== (symbol || null) || result.schema_version !== 1 || !Array.isArray(result.items) || result.items.some(item => item.event_id !== eventId)) {
+  if (result.symbol !== (symbol || null) || result.schema_version !== 1 || !Array.isArray(result.items) || (result.later_items !== undefined && !Array.isArray(result.later_items)) || [...result.items, ...(result.later_items || [])].some(item => item.event_id !== eventId)) {
     throw new Error("事件归因资料身份不匹配，请重新读取");
   }
   return result;

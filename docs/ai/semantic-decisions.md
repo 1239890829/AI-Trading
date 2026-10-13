@@ -142,3 +142,10 @@ LAB校验版本`news-classification-validator-v1.1`，提示仍为`news-classifi
 遵守现行v9.13、U49主动反证与Preflight、U50 `DEGRADED_FULL_CONTROL`和`DegradedRelease`准确HEAD回执；正常独立Review与作者自审不可互相冒充。只退出Jev专属评分调用，不退出其余完整门禁、独立审核、发布或恢复能力。跨模块变化按[重大决策传播](../plan-registry.md#11-重大决策传播契约防遗漏)核对总方案/INDEX/AGENTS/Skills/stage/handoff。
 
 [持续演进](continuous-evolution.md)负责候选/实验/采用边界；本页不另建任务账本或生产参数登记册。用户已确认项目接入与本机插件、skill一起清理。Jev Review/Guard经官方入口卸载；专属MCP、四个skill、CLI、Keychain注入服务、环境hook及只供旧Jev浏览器的8777桥退出。全局配置先备份且解析对照无关字段；现有生成模型配置hash不变。历史使用量/路由元数据只保留在私有恢复包，不删除业务数据或人工gold。恢复包位于忽略artifacts，仅人工受控恢复，不能重新产生自动调用义务。
+
+
+### 2026-10-13 既有辅助分类的输入与契约修补
+
+既有`llm_aux`仍用原模型/预算/候选门，不接Jev、Decisions或KEV。修补标题孤立判断：输入使用已保存标题和摘要，输出新增稳定event_id及逐字evidence，原direction/theme/chain/reason四字段保留。方向只接受-1/0/1；身份、目录与引用不符失败关闭，不写已判。纯价格涨跌不作为新的催化候选；实际供需/政策/公司材料仍可处理。有限词法守卫不冒充通用语义核验。
+
+这一项不是LAB context-v2整体晋级，也不构成目标域人工gold/准确率验证。所有llm_aux方向仍是未验证模型假设，选股、晨报、板块通知的排除边界保持；失败不能阻断规则和行情。未运行新的真实模型评估或历史回补，不修改生产旧解释。工程反例与完整门禁随稳定性PR交付，效果仍按既有独立标签/消费者准入。

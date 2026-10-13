@@ -199,7 +199,7 @@ describe("shared security detail limit-up attribution", () => {
     await screen.findByText(/暂未找到关联事件/);
     expect(screen.getByRole("button", {name: "涨停归因 · 证据核对"}).getAttribute("aria-expanded")).toBe("true");
     expect(getStockAttribution).toHaveBeenCalledTimes(1);
-    expect(getStockAttribution).toHaveBeenCalledWith("600825");
+    expect(getStockAttribution).toHaveBeenCalledWith("600825", {poolDate:"2026-10-09",responseAsOf:undefined});
   });
 });
 
@@ -235,4 +235,28 @@ it("隐藏不能清掉源失败而复活旧原因，恢复的新读取完成前�
   expect(screen.queryByText("涨停原因")).toBeNull();
   await act(async () => {finish(pool());});
   expect(screen.getByText("涨停原因")).toBeTruthy();
+});
+
+it("keeps a previous same-day source label separate from a new pool without a reason", async () => {
+  const snapshot = {...pool(null), pool:[{...pool(null).pool[0], source:"eastmoney"}], reason_observations:{"600825":[{symbol:"600825",trade_date:"2026-10-09",source:"ths",reason:"此前原句",content_hash:"hash",observed_at:"2026-10-09T13:33:00+08:00",received_at:"2026-10-09T13:33:00+08:00"}]}};
+  vi.mocked(getLimitUpPoolSnapshot).mockResolvedValue(snapshot);
+  render(<LimitUpReasonPanel symbol="600825" quote={quote()} />);
+  expect(await screen.findByText("此前原句")).toBeTruthy();
+  expect(screen.getByText(/此前来源观察.*不证明当前在板/)).toBeTruthy();
+  fireEvent.click(screen.getByRole("button",{name:"查看全文"}));
+  expect(await screen.findByRole("dialog")).toBeTruthy();
+  expect(within(screen.getByRole("dialog")).getByText("此前原句")).toBeTruthy();
+});
+
+it("shows a retained source label without claiming current membership", async () => {
+  vi.mocked(getLimitUpPoolSnapshot).mockResolvedValue({...emptyPool(),reason_observations:{"600825":[{symbol:"600825",trade_date:"2026-10-09",source:"ths",reason:"离池后的旧原句",content_hash:"hash",observed_at:"2026-10-09T13:33:00+08:00",received_at:null}]}});
+  render(<LimitUpReasonPanel symbol="600825" quote={quote()} />);
+  expect(await screen.findByText("离池后的旧原句")).toBeTruthy();
+  expect(screen.getByText(/不证明当前在板/)).toBeTruthy();
+});
+
+it("does not borrow a retained label from another date or security", async () => {
+  vi.mocked(getLimitUpPoolSnapshot).mockResolvedValue({...emptyPool(),reason_observations:{"600825":[{symbol:"600127",trade_date:"2026-10-08",source:"ths",reason:"不应借用",content_hash:"hash",observed_at:"2026-10-08T13:33:00+08:00",received_at:null}]}});
+  await act(async () => {render(<LimitUpReasonPanel symbol="600825" quote={quote()} />);});
+  expect(screen.queryByText("不应借用")).toBeNull();
 });

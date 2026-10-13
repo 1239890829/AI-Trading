@@ -54,6 +54,23 @@ const liveMinuteQuote: Quote = {
 };
 
 describe("MinuteChart 实际轴域更新", () => {
+  it("指数叠加晚到、同日推进和撤回均原位更新，主图与十字线订阅不重建", () => {
+    const points = [point(100), point(101, "31")];
+    const view = render(<MinuteChart points={points} prevClose={100} />);
+    const chart = charts[0];
+    const overlay = {points: [point(3000)], prevClose: 3000, referenceDate: "2026-09-17"};
+    view.rerender(<MinuteChart points={points} prevClose={100} index={overlay} />);
+    const series = chart.series.find(series => series.kind === "line" && series.opts.lineStyle === 3)!;
+    expect(series.values.some(value => value.value === 0)).toBe(true);
+    view.rerender(<MinuteChart points={points} prevClose={100} index={{...overlay, points: [point(3000), point(3030, "31")]}} />);
+    expect(series.values.find(value => value.time === Date.UTC(2026, 8, 17, 9, 31) / 1000)?.value).toBe(1);
+    view.rerender(<MinuteChart points={points} prevClose={100} index={{...overlay, referenceDate: "2026-09-18"}} />);
+    expect(series.values.every(value => value.value === undefined)).toBe(true);
+    expect(charts).toHaveLength(1);
+    expect(chart.remove).not.toHaveBeenCalled();
+    expect(chart.subscribeCrosshairMove).toHaveBeenCalledTimes(1);
+    expect(chart.series[0].values.some(value => value.value === 101)).toBe(true);
+  });
   it("经源时刻证明的结束标签原位跟价，浮层区分桶结束与实际报价钟", () => {
     const source: MinutePoint[] = [{ ...restMinutes[1], ts: "2026-10-09T10:01:00+08:00",
       time_label: "interval_end", observation_ts: "2026-10-09T10:00:30+08:00" }];
@@ -293,7 +310,9 @@ describe("MinuteChart 轴契约", () => {
     );
     expect(screen.getByText("叠加指数与主图非同一交易日")).toBeTruthy();
     const latest = charts.at(-1)!;
-    expect(latest.series.filter(x => x.opts.priceScaleId === "left")).toHaveLength(1);
+    const indexSeries = latest.series.find(x => x.opts.priceScaleId === "left" && x.opts.lineStyle === 3)!;
+    expect(indexSeries.values.every(value => value.value === undefined)).toBe(true);
+    expect(charts).toHaveLength(1);
 
     view.rerender(
       <MinuteChart

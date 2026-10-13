@@ -441,3 +441,33 @@ def test_new_get_routes_are_authenticated_and_validate_bounds(store, monkeypatch
     headers = {"X-API-Token": "attribution-test-token"}
     assert client.get(paths[0] + "?limit=31", headers=headers).status_code == 422
     assert client.get("/api/events/symbol/not-a-symbol/attribution", headers=headers).status_code == 400
+
+
+def test_response_context_is_not_historical_replay_and_keeps_late_evidence(store):
+    before = NOW - timedelta(hours=1)
+    late = add(store, source_published=before, source_item_id='late-response')
+    response = read_attribution(store._sf, symbol='600001', now=NOW,
+                               pool_date='2026-10-12', response_as_of=before)
+    assert response['data']['response_context']['historical_replay'] is False
+    assert response['data']['items'] == []
+    item = response['data']['later_items'][0]
+    assert item['event_id'] == late.id
+    assert item['timing_relation']['status'] == 'late_source_observation'
+    assert item['stock_relation']['direction'] == 1
+
+
+def test_current_display_retains_old_version_but_does_not_confirm_qualified_progress(store):
+    row = add(store, title='AIGC平台尚在建设完善中', summary='相关业务进展及财务影响均存在不确定性，尚未形成收入。',
+              matched_by='source', source_item_id='legacy-progress')
+    with store._sf() as db:
+        version = db.query(EventInterpretation).filter_by(event_id=row.id).one()
+        payload = json.loads(version.payload_json)
+        payload['directions'][0]['basis'] = '命中利好词「进展」→ 利好'
+        version.payload_json = json.dumps(payload, ensure_ascii=False)
+        db.commit()
+        saved = version.payload_json
+    data = item(store)
+    assert data['stock_relation']['recorded_direction'] == 1
+    assert data['stock_relation']['direction'] is None
+    with store._sf() as db:
+        assert db.get(EventInterpretation, version.id).payload_json == saved

@@ -45,6 +45,22 @@ beforeEach(() => {
 afterEach(() => { cleanup(); vi.useRealTimers(); });
 
 describe("资讯事件 · 请求身份与无感刷新", () => {
+  it("local direction filtering does not request data or change notification eligibility", async () => {
+    const payload = result("方向未明事件");
+    payload.items.push({...payload.items[0], id: 2, title: "人工方向记录", directions: [{target_type: "symbol", target: "600127", direction: -1, strength: 1, chain: "", basis: "原文", matched_by: "manual"}]});
+    payload.items.push({...payload.items[0], id: 3, title: "未经验证的模型方向", directions: [{target_type: "symbol", target: "600127", direction: 1, strength: 1, chain: "", basis: "假设", matched_by: "llm_aux"}]});
+    vi.mocked(getImpactEvents).mockResolvedValue(payload);
+    render(<EventFeed active />);
+    await flush();
+    fireEvent.click(screen.getByRole("button", {name: "仅看方向记录"}));
+    expect(screen.getByText("人工方向记录")).toBeTruthy();
+    expect(screen.queryByText("方向未明事件")).toBeNull();
+    expect(screen.queryByText("未经验证的模型方向")).toBeNull();
+    expect(getImpactEvents).toHaveBeenCalledTimes(1);
+    fireEvent.click(screen.getByRole("button", {name: "仅看方向记录"}));
+    expect(screen.getByText("方向未明事件")).toBeTruthy();
+    expect(getImpactEvents).toHaveBeenCalledTimes(1);
+  });
   it("row metadata opens the same article once; direction links do not open it or count as notification reads", async () => {
     const payload = result("独立的财经事件");
     payload.items[0].directions = [{target_type: "theme", target: "存储芯片", direction: 1, strength: 1, basis: "公开消息", chain: ""}];

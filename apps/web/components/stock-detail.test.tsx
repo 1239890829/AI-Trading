@@ -25,6 +25,7 @@ const api = vi.hoisted(() => ({
   getOrderBook: vi.fn(),
   getMinuteLineWithBaseline: vi.fn(),
   getTrades: vi.fn(),
+  getTradesPayload: vi.fn(),
   getQuote: vi.fn(),
   getWatchlist: vi.fn(),
   getStockThemes: vi.fn(),
@@ -81,7 +82,7 @@ vi.mock("@/components/kline-chart-pro", () => ({
   KlineChartPro: ({ bars, costPrice, tradeMarks }: { bars: Kline[]; costPrice?: number | null; tradeMarks?: PaperFill[] }) => <div data-testid="kline-price" data-cost-price={costPrice ?? "none"} data-fill-count={tradeMarks?.length ?? 0}>{bars.at(-1)?.close}</div>,
 }));
 vi.mock("@/components/minute-chart", () => ({
-  MinuteChart: ({ points }: { points: MinutePoint[] }) => <div data-testid="minute-price" data-avg={points.at(-1)?.avg ?? "none"}>{points.at(-1)?.price}</div>,
+  MinuteChart: ({ points, index }: { points: MinutePoint[]; index?: {points: MinutePoint[]} | null }) => <div data-testid="minute-price" data-index-last={index?.points.at(-1)?.price ?? "none"} data-avg={points.at(-1)?.avg ?? "none"}>{points.at(-1)?.price}</div>,
 }));
 
 const audit = { source: "tdx", quality: "high" as const, quality_reasons: [], received_at: "2026-10-09T02:00:00Z" };
@@ -133,6 +134,46 @@ function testQuoteFeed() {
 }
 
 describe("StockDetailPanel · 即时报价复用", () => {
+  it.each(["low", "stale", "invalid"] as const)("%s报价可作为保留读数但不能推进K线或分钟", async (quality) => {
+    const quote = {...audit, quality, symbol: "600519", price: 88, data_timestamp: "2026-10-09T02:01:30Z"};
+    const view = render(<StockDetailPanel symbol="600519" chartTab="kline" liveQuote={quote} />);
+    await settle();
+    expect(view.getByTestId("kline-price").textContent).toBe("20");
+    expect(view.getByText(/未推进图表尾点/)).toBeTruthy();
+    fireEvent.click(view.getByRole("button", {name: "分时"}));
+    await settle();
+    expect(view.getByTestId("minute-price").textContent).toBe("20");
+    expect(view.getByText(/未推进图表尾点/)).toBeTruthy();
+  });
+
+  it("K线首取失败可重试，后续失败保留旧图且不显示确认空态", async () => {
+    api.getKlinePayload.mockRejectedValueOnce(new Error("synthetic_failure"));
+    const view = render(<StockDetailPanel symbol="600519" chartTab="kline" />);
+    await settle();
+    expect(view.getByRole("alert").textContent).toContain("K线读取失败");
+    expect(view.queryByText(/本次未返回 K 线/)).toBeNull();
+    fireEvent.click(view.getByRole("button", {name: "重新读取K线"}));
+    await settle();
+    expect(view.getByTestId("kline-price").textContent).toBe("20");
+    api.getKlinePayload.mockRejectedValueOnce(new Error("synthetic_refresh_failure"));
+    await advance(60_000);
+    expect(view.getByRole("alert").textContent).toContain("保留上次结果");
+    expect(view.getByTestId("kline-price").textContent).toBe("20");
+  });
+
+  it("财报首次失败不冒充缺数据，重试成功后有报告可读", async () => {
+    api.getFinancials.mockRejectedValueOnce(new Error("synthetic_financial_failure"));
+    const view = render(<StockDetailPanel symbol="600519" chartTab="kline" rightTab="profile" />);
+    await settle();
+    const panel = within(view.getByRole("tabpanel"));
+    expect(panel.getByRole("alert").textContent).toContain("财报读取失败");
+    expect(panel.queryByText("本次未返回财报数据。")).toBeNull();
+    api.getFinancials.mockResolvedValueOnce([{report_date: "2026-06-30", revenue: 123, source: "synthetic_fixture"}]);
+    fireEvent.click(panel.getByRole("button", {name: "重新读取财报"}));
+    await settle();
+    expect(panel.getByText("报告期 2026-06-30")).toBeTruthy();
+    expect(panel.queryByRole("alert")).toBeNull();
+  });
   it.each(["kline", "minute"] as const)("%s follows the selected feed immediately and never regresses to the delayed list prop", async (chartTab) => {
     const feed = testQuoteFeed();
     const first = {...audit, symbol: "600519", price: 20, volume: 100, amount: 2000, data_timestamp: "2026-10-09T02:00:00Z"};
@@ -248,10 +289,14 @@ beforeEach(() => {
   api.getOrderBook.mockImplementation(async (symbol: string) => book(symbol));
   api.getMinuteLineWithBaseline.mockResolvedValue(minute());
   api.getTrades.mockResolvedValue([]);
+  api.getTradesPayload.mockImplementation(async (symbol: string, limit: number) => ({
+    items: await api.getTrades(symbol, limit), source: null, empty_reason: null,
+    meta: {provider: "synthetic_fixture", is_realtime: false, is_stale: false, last_success_refresh: null, generated_at: "2026-10-09T02:00:00Z"},
+  }));
   api.getQuote.mockImplementation(async (symbol: string) => ({ ...audit, symbol, price: 20 }));
   api.getWatchlist.mockResolvedValue([]);
   api.getStockThemes.mockResolvedValue(null);
-  api.getEventsForSymbol.mockResolvedValue({ items: [] });
+  api.getEventsForSymbol.mockImplementation(async (symbol: string) => ({ symbol, themes: [], count: 0, items: [] }));
   api.getMinuteLine.mockResolvedValue([]);
   api.getMarketOverview.mockResolvedValue({ indices: [] });
   api.getCapitalFlow.mockResolvedValue(null);
@@ -607,10 +652,10 @@ describe("StockDetailPanel · 核对视角入口", () => {
     expect(within(view.getByRole("tabpanel")).getByText("买1")).toBeTruthy();
     fireEvent.click(view.getByRole("tab", {name:"逐笔"}));
     await settle();
-    expect(within(view.getByRole("tabpanel")).getByText("暂无逐笔（盘中看分时）")).toBeTruthy();
+    expect(within(view.getByRole("tabpanel")).getByText(/本次未返回成交记录/)).toBeTruthy();
     fireEvent.click(view.getByRole("tab", {name:"资料"}));
     expect(view.queryByText("买1")).toBeNull();
-    expect(view.queryByText("暂无逐笔（盘中看分时）")).toBeNull();
+    expect(view.queryByText(/本次未返回成交记录/)).toBeNull();
     fireEvent.click(view.getByRole("tab", {name:"资讯"}));
     expect(view.queryByText("买1")).toBeNull();
     expect(view.queryByText("暂无逐笔（盘中看分时）")).toBeNull();
@@ -740,17 +785,20 @@ describe("StockDetailPanel · 每个端点只读取一次首屏", () => {
     const view = render(<StockDetailPanel symbol="600519" chartTab="flow" />);
     await settle();
     const panel = within(view.getByRole("tabpanel"));
-    expect(panel.getByText("盘口数据不可用（免费源仅盘中提供）")).toBeTruthy();
+    expect(panel.getByRole("alert").textContent).toContain("盘口读取失败");
+    expect(panel.queryByText(/本次未返回盘口/)).toBeNull();
     expect(api.getOrderBook).toHaveBeenCalledTimes(1);
     await advance(5000);
     expect(panel.getByText("买1")).toBeTruthy();
     api.getOrderBook.mockRejectedValueOnce(new Error("refresh unavailable"));
     await advance(5000);
     expect(panel.getByText("买1")).toBeTruthy();
+    expect(panel.getByRole("alert").textContent).toContain("保留上次结果");
     api.getOrderBook.mockResolvedValueOnce({ ...book(), asks: [], bids: [] });
     await advance(5000);
     expect(panel.getByRole("table").querySelectorAll("tr")).toHaveLength(0);
-    expect(panel.queryByText("盘口数据不可用（免费源仅盘中提供）")).toBeNull();
+    expect(panel.getByText("本次盘口返回空档位。")).toBeTruthy();
+    expect(panel.queryByRole("alert")).toBeNull();
   });
 
   it("逐笔首取失败立即结束骨架，成功空数组也保持确认空态", async () => {
@@ -758,9 +806,11 @@ describe("StockDetailPanel · 每个端点只读取一次首屏", () => {
     const view = render(<StockDetailPanel symbol="600519" chartTab="minute" rightTab="trades" />);
     await settle();
     const panel = within(view.getByRole("tabpanel"));
-    expect(panel.getByText("暂无逐笔（盘中看分时）")).toBeTruthy();
+    expect(panel.getByRole("alert").textContent).toContain("成交读取失败");
+    expect(panel.queryByText(/本次未返回成交记录/)).toBeNull();
     await advance(10_000);
-    expect(panel.getByText("暂无逐笔（盘中看分时）")).toBeTruthy();
+    expect(panel.getByText(/本次未返回成交记录/)).toBeTruthy();
+    expect(panel.queryByRole("alert")).toBeNull();
     expect(api.getTrades).toHaveBeenCalledTimes(2);
   });
 
@@ -793,6 +843,10 @@ describe("StockDetailPanel · 每个端点只读取一次首屏", () => {
     await advance(900);
     expect(api.getOrderBook).not.toHaveBeenCalled();
     expect(api.getTrades).not.toHaveBeenCalled();
+    expect(api.getFinancials).not.toHaveBeenCalled();
+    expect(api.getNewsDigest).not.toHaveBeenCalled();
+    expect(api.getCompanyProfile).not.toHaveBeenCalled();
+    expect(api.getStockThemes).not.toHaveBeenCalled();
     expect(api.getKlinePayload).toHaveBeenCalledTimes(1);
     expect(api.getMinuteLineWithBaseline).toHaveBeenCalledTimes(1);
   });
@@ -949,15 +1003,31 @@ describe("StockDetailPanel · 每个端点只读取一次首屏", () => {
     expect(within(view.getByRole("tabpanel")).getByText(result)).toBeTruthy();
   });
 
-  it("指数叠加首段在隐藏后完成，不接着启动概览读取", async () => {
+  it("指数叠加仅在分时可见时读取，隐藏晚包无效，恢复与同日定时校准使用新结果", async () => {
     const old = deferred<MinutePoint[]>();
     api.getMinuteLine.mockReturnValueOnce(old.promise);
     const view = render(<StockDetailPanel symbol="600519" />);
     await advance(900);
+    expect(api.getMinuteLine).not.toHaveBeenCalled();
+    expect(api.getMarketOverview).not.toHaveBeenCalled();
+    api.getMarketOverview.mockResolvedValue({indices: [{...audit, symbol: "sh000001", price: 3000, prev_close: 2990, data_timestamp: "2026-10-09T02:00:00Z"}]});
+    fireEvent.click(view.getByRole("button", {name: "分时"}));
+    await settle();
     expect(api.getMinuteLine).toHaveBeenCalledTimes(1);
-    expect(api.getMarketOverview).not.toHaveBeenCalled();
-    view.rerender(<StockDetailPanel symbol="600519" active={false} />);
-    await act(async () => {old.resolve(minute().points);});
-    expect(api.getMarketOverview).not.toHaveBeenCalled();
+    expect(api.getMarketOverview).toHaveBeenCalledTimes(1);
+    view.rerender(<StockDetailPanel symbol="600519" chartTab="minute" active={false} />);
+    await act(async () => {old.resolve(minute(111).points);});
+    expect(view.getByTestId("minute-price").getAttribute("data-index-last")).toBe("none");
+    api.getMinuteLine.mockResolvedValue(minute(3000).points);
+    view.rerender(<StockDetailPanel symbol="600519" chartTab="minute" active />);
+    await settle();
+    expect(view.getByTestId("minute-price").getAttribute("data-index-last")).toBe("3000");
+    api.getMinuteLine.mockResolvedValue(minute(3030).points);
+    await advance(60_000);
+    expect(view.getByTestId("minute-price").getAttribute("data-index-last")).toBe("3030");
+    api.getMinuteLine.mockRejectedValueOnce(new Error("synthetic_index_failure"));
+    await advance(60_000);
+    expect(view.getByTestId("minute-price").getAttribute("data-index-last")).toBe("3030");
+    expect(view.getByRole("alert").textContent).toContain("指数叠加校准失败");
   });
 });

@@ -87,6 +87,16 @@ export interface Kline extends AuditFields {
   turnover_rate?: number | null;
 }
 
+export interface LimitReasonObservation {
+  symbol: string;
+  trade_date: string;
+  source: string;
+  reason: string;
+  content_hash: string;
+  observed_at: string;
+  received_at: string | null;
+}
+
 export interface LimitUpRecord extends AuditFields {
   symbol: string;
   name?: string | null;

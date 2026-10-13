@@ -39,6 +39,15 @@ function sameSource(a: { source?: string }, b: { source?: string }): boolean {
   return typeof a.source === "string" && a.source.trim() !== "" && a.source === b.source;
 }
 
+/** A receive clock and a retained quote cannot establish a new source observation. */
+export function hasTrustedQuoteObservation(quote: Quote | null | undefined): quote is Quote & {data_timestamp: string; price: number} {
+  return !!quote && (quote.quality === "high" || quote.quality === "medium")
+    && typeof quote.source === "string" && quote.source.trim().length > 0
+    && typeof quote.data_timestamp === "string" && /(?:Z|[+-]\d{2}:\d{2})$/.test(quote.data_timestamp)
+    && Number.isFinite(Date.parse(quote.data_timestamp))
+    && typeof quote.price === "number" && Number.isFinite(quote.price) && quote.price > 0;
+}
+
 function adjacentMinutes(previous: MinuteLivePoint | undefined, point: MinuteLivePoint): boolean {
   if (!previous || !bjDate(point.ts) || bjDate(previous.ts) !== bjDate(point.ts)) return false;
   // A forming end-labelled point is not a sealed cumulative baseline. This
@@ -76,10 +85,10 @@ export function getMinuteAmount(point: MinuteLivePoint, previous?: MinuteLivePoi
  * 返回新数组（不 mutate）；无需更新（盘后价格未动/跨日/无价）返回 null。
  */
 export function mergeQuoteIntoBars(bars: Kline[], quote: Quote | null | undefined): Kline[] | null {
-  if (bars.length === 0 || !quote) return null;
+  if (bars.length === 0 || !hasTrustedQuoteObservation(quote)) return null;
   const price = quote.price;
-  if (price == null || price <= 0) return null;
   const last = bars[bars.length - 1];
+  if (last.symbol !== quote.symbol || !["high", "medium"].includes(last.quality)) return null;
   // quote 与最后一根 bar 不是同一交易日（隔夜/停牌/新交易日尚未出 bar）不合成，
   // 否则会把今天的价画到上一根 bar 上
   const qDate = bjDate(quote.data_timestamp);
@@ -102,9 +111,8 @@ export function mergeQuoteIntoBars(bars: Kline[], quote: Quote | null | undefine
  * 一次，与 1s 的列表/K线不同步。价格与累计量（quote.volume 与 cum_volume 同为
  * 股，口径依据见 mergeQuoteIntoBars 注释）跟随 WS。
  *
- * 时间基座：优先 quote.data_timestamp（源报价时间）；**缺失回退
- * received_at**（QuoteHub 收到时刻，盘中 ≈ 当前时间）——部分源/降级路径不带
- * 报价时间戳，没有回退时 merge 恒返回 null，分时在两次校准之间完全冻结。
+ * 时间基座只使用 quote.data_timestamp（带时区的真实源观察钟）。
+ * 低质量、陈旧、无效或缺源时刻时保留已有分钟；received_at 不补造当前分钟。
  *
  * 股票均价只用同一quote的累计额/累计股数；指数没有这条均价线。
  * 同分钟量额须有同源、同日相邻REST基准，尾量与原累计差配对；缺项留空。
@@ -131,11 +139,11 @@ export function mergeQuoteIntoMinutes<T extends MinuteLivePoint>(
   quote: Quote | null | undefined,
   isIndex = false,
 ): T[] | null {
-  if (points.length === 0 || !quote) return null;
+  if (points.length === 0 || !hasTrustedQuoteObservation(quote)) return null;
   const price = quote.price;
   if (price == null || !Number.isFinite(price) || price <= 0) return null;
   const last = points[points.length - 1];
-  const quoteTs = quote.data_timestamp || quote.received_at;
+  const quoteTs = quote.data_timestamp;
   const qHHMM = bjHHMM(quoteTs);
   const lastHHMM = bjHHMM(last.ts);
   const qDate = bjDate(quoteTs);

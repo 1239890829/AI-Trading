@@ -130,9 +130,15 @@ function HuntingInner() {
   const options = {intervalMs: 60_000, enabled: isDiscovery};
   const discoveryOptions = {...options, enabled: isDiscoverView};
   const daily = useResource(getTodayPicks, options);
-  const historyResource = useResource(() => getPicksHistory(10), options);
-  const reviewsResource = useResource(() => getPickReviews(reviewDate, reviewVersion), {...options, key: `${reviewDate ?? ""}/${reviewVersion ?? ""}`});
-  const metaResource = useResource(getPicksMeta, options);
+  // Closed review panels do not poll archives. Current gates keep their own live read.
+  const reviewOptions = {...options, enabled: isDiscovery && (view === "review" || reviewOpen)};
+  const historyResource = useResource(() => getPicksHistory(10), {...reviewOptions,
+    enabled: reviewOptions.enabled && (daily.data !== undefined || !!daily.error), intervalMs: null,
+    key: `${daily.data?.date ?? ""}/${daily.data?.meta?.selection_version ?? ""}`});
+  const reviewsResource = useResource(() => getPickReviews(reviewDate, reviewVersion), {...reviewOptions,
+    // A selected version identifies its basis, not a sealed outcome: D1/D3/D5 can arrive later.
+    intervalMs: 60_000, key: `${reviewDate ?? ""}/${reviewVersion ?? ""}`});
+  const metaResource = useResource(getPicksMeta, reviewOptions);
   const healthResource = useResource(getSignalHealth, discoveryOptions);
   const briefResource = useResource(async () => {
     try { return await getMorningBriefToday(); }

@@ -30,6 +30,15 @@ async def health(request: Request, hub: QuoteHub = Depends(get_hub)) -> dict:
     rejected = bool(source_rejections and (
         source_rejections["quotes"]["count"] or source_rejections["indices"]["count"]
     ))
+    refresh_domains = hub.refresh_domains() if hasattr(hub, "refresh_domains") else None
+    domain_degraded = bool(refresh_domains and any(
+        d["requested"] and (
+            d["consecutive_failures"] > 0 or d["freshness"]["state"] != "ready"
+            or d["source_stale_count"] or d["source_degraded_count"] or d["source_time_unknown_count"]
+            or d["missing_count"] or d["rejected_count"]
+        )
+        for d in refresh_domains.values()
+    ))
     snapshot_service = getattr(request.app.state, "snapshot_service", None)
     snapshot_health = snapshot_service.breadth_payload() if snapshot_service is not None else None
     snapshot_degraded = bool(snapshot_health and (
@@ -37,7 +46,7 @@ async def health(request: Request, hub: QuoteHub = Depends(get_hub)) -> dict:
         or int(snapshot_health.get("consecutive_save_failures") or 0) > 0
     ))
     return {
-        "status": "degraded" if stale or incomplete or rejected or snapshot_degraded else "ok",
+        "status": "degraded" if stale or incomplete or rejected or domain_degraded or snapshot_degraded else "ok",
         "app": settings.app_name,
         "version": settings.version,
         "provider": hub.provider.name,
@@ -49,6 +58,7 @@ async def health(request: Request, hub: QuoteHub = Depends(get_hub)) -> dict:
         "is_stale": stale,
         "index_batch": index_batch,
         "source_rejections": source_rejections,
+        "refresh_domains": refresh_domains,
         "market_snapshot": snapshot_health,
     }
 

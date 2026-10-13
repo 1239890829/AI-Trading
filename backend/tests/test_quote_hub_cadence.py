@@ -93,8 +93,11 @@ def test_failure_beyond_stale_after_marks_stale():
     asyncio.run(hub.refresh())
     q.get_nowait()
 
-    # 把"最后成功时间"拨回 11s 前 → 本次失败时数据年龄已越界
+    # 两域拆开后，陈旧证据须落在实际域钟/源钟；完整轮钟不再误伤仍新鲜的另一域。
     hub.last_success_refresh = _utcnow_shifted(-11.0)
+    for state in hub._domains.values():
+        state.last_success = hub.last_success_refresh
+    hub.quotes["600519"].data_timestamp = hub.last_success_refresh
     src.fail = True
     asyncio.run(hub.refresh())
     assert hub.is_stale()

@@ -41,6 +41,11 @@ REALTIME_BUDGET_SECONDS = 4.0
 class BudgetExhausted(TimeoutError):
     """单源调用被**请求级预算**掐断（与"源自己超时"区分开，便于归因与记账）。"""
 
+    def __init__(self, message: str, *, phase: str = "method_budget_exhausted", method_started: bool = True):
+        super().__init__(message)
+        self.phase = phase
+        self.method_started = method_started
+
 
 #: 秒级实时方法：Hub 以 1Hz 轮询这些方法，走 realtime_rank 排序——
 #: 免费高频源（腾讯）优先，付费/慢源（ths 配额+8s 超时）不挡在秒级链路上。
@@ -77,6 +82,15 @@ class CompositeProvider:
         self._last_good: dict[str, str] = {}
         self._failures: dict[tuple[str, str], int] = {}   # (method, provider) → 连续失败次数
         self._cooldown_until: dict[tuple[str, str], float] = {}  # (method, provider) → 解禁时间戳
+        # 键只来自固定方法面与现有源；方法进入可能命中源内缓存，绝不称为 HTTP 次数。
+        self._method_attempts = {
+            (method, p.name): {
+                "method_started": 0, "method_returned": 0, "provider_method_error": 0,
+                "deadline_before_method": 0, "method_budget_exhausted": 0, "method_cancelled": 0,
+                "last_phase": None, "last_error_type": None,
+            }
+            for p in providers for method in _OBSERVABLE_METHODS if hasattr(p, method)
+        }
 
     # ---- 熔断（circuit breaker）----
 
@@ -142,6 +156,7 @@ class CompositeProvider:
             "breakers": breakers,
             "last_good": dict(self._last_good),
             "switch_log": list(self.switch_log[-20:]),
+            "method_attempts": {f"{m}@{p}": dict(row) for (m, p), row in sorted(self._method_attempts.items())},
             # 预算值可观测（S2-3）：否则"为什么这个请求 4s 就失败了"只能靠读代码
             "budget_seconds": {
                 "realtime": REALTIME_BUDGET_SECONDS,
@@ -209,19 +224,45 @@ class CompositeProvider:
         if deadline is not None:
             left = deadline - time.monotonic()
             if left <= 0:
-                return p, None, BudgetExhausted("请求预算已耗尽（未发起）")
+                self._observe_attempt(method, p.name, "deadline_before_method", "BudgetExhausted")
+                log.debug("provider %s %s phase=deadline_before_method error_type=BudgetExhausted", p.name, method)
+                return p, None, BudgetExhausted("请求预算已耗尽（未发起）",
+                                               phase="deadline_before_method", method_started=False)
         else:
             left = None
+        scope = None
         try:
-            call = getattr(p, method)(*args)
+            fn = getattr(p, method)
+            self._observe_attempt(method, p.name, "method_started")
+            call = fn(*args)
             if left is None:
-                return p, await call, None
-            return p, await asyncio.wait_for(call, timeout=left), None
-        except (asyncio.TimeoutError, TimeoutError):
-            return p, None, BudgetExhausted(f"请求预算耗尽（剩余 {left:.2f}s 未应答）")
+                result = await call
+            else:
+                # expired() 只报告本地预算取消；源自己提前抛 TimeoutError 保留其身份。
+                scope = asyncio.timeout(left)
+                async with scope:
+                    result = await call
+            self._observe_attempt(method, p.name, "method_returned")
+            return p, result, None
+        except asyncio.CancelledError:
+            self._observe_attempt(method, p.name, "method_cancelled", "CancelledError")
+            log.debug("provider %s %s phase=method_cancelled error_type=CancelledError", p.name, method)
+            raise
         except Exception as exc:
-            log.warning("provider %s %s failed: %s", p.name, method, exc)
+            if scope is not None and scope.expired():
+                self._observe_attempt(method, p.name, "method_budget_exhausted", "BudgetExhausted")
+                log.warning("provider %s %s phase=method_budget_exhausted error_type=BudgetExhausted", p.name, method)
+                return p, None, BudgetExhausted(f"请求预算耗尽（剩余 {left:.2f}s 未应答）")
+            self._observe_attempt(method, p.name, "provider_method_error", type(exc).__name__)
+            log.warning("provider %s %s phase=provider_method_error error_type=%s: %s",
+                        p.name, method, type(exc).__name__, exc)
             return p, None, exc
+
+    def _observe_attempt(self, method: str, name: str, phase: str, error_type: str | None = None) -> None:
+        row = self._method_attempts.get((method, name))
+        if row is not None:
+            row[phase] += 1
+            row["last_phase"], row["last_error_type"] = phase, error_type
 
     def _note_failure(self, method: str, name: str, exc: Exception | None, errors: list[str]) -> None:
         errors.append(f"{name}: {'empty' if exc is None else exc}")
@@ -250,6 +291,7 @@ class CompositeProvider:
                 # 预算已光：剩下的源连问都不问，也**不记它们失败**——
                 # 没发起过请求不是它们的责任，记了会误伤熔断统计。
                 errors.append(f"{p.name}: 请求预算已耗尽，未发起")
+                self._observe_attempt(method, p.name, "deadline_before_method", "BudgetExhausted")
                 break
             _, result, exc = await self._attempt(method, p, args, deadline)
             if exc is None and not self._is_empty(result):
@@ -274,51 +316,56 @@ class CompositeProvider:
         """
         primary, backup = live[0], live[1]
         p_task = asyncio.create_task(self._attempt(method, primary, args, deadline))
-        done, _ = await asyncio.wait({p_task}, timeout=HEDGE_DELAY)
-        if done:
-            _, result, exc = p_task.result()
-            if exc is None and not self._is_empty(result):
-                self._settle_last_good(method, primary.name)
-                return result
-            self._note_failure(method, primary.name, exc, errors)
-            return await self._call_serial(method, args, live[1:], errors, deadline)
-
-        b_task = asyncio.create_task(self._attempt(method, backup, args, deadline))
-        tasks = {p_task: primary, b_task: backup}
-        while tasks:
-            done, _ = await asyncio.wait(set(tasks), return_when=asyncio.FIRST_COMPLETED)
-            for t in done:
-                p = tasks.pop(t)
-                _, result, exc = t.result()
+        b_task = None
+        try:
+            done, _ = await asyncio.wait({p_task}, timeout=HEDGE_DELAY)
+            if done:
+                _, result, exc = p_task.result()
                 if exc is None and not self._is_empty(result):
-                    # 另一路仍在飞：若它是主源（被备源超车），放弃并记一次失败
-                    # （连续挂起 3 次同样进熔断，不会无限挂账）；若是备源被超车，
-                    # cancel 即可，不算它的失败。
-                    other = p_task if t is b_task else b_task
-                    if not other.done():
-                        other.cancel()
-                        with contextlib.suppress(asyncio.CancelledError):
-                            await other
-                        if other is p_task:
-                            self._note_failure(
-                                method, primary.name,
-                                TimeoutError(f"超 {HEDGE_DELAY:.2f}s 未应答（备源已接手）"), errors,
-                            )
-                    self._settle_last_good(method, p.name)
+                    self._settle_last_good(method, primary.name)
                     return result
-                self._note_failure(method, p.name, exc, errors)
-            if tasks == {p_task: primary}:
-                # 只剩挂起的主源：备源已败、主源远超宽限仍未归——放弃，串行下沉
-                p_task.cancel()
-                with contextlib.suppress(asyncio.CancelledError):
-                    await p_task
-                self._note_failure(
-                    method, primary.name,
-                    TimeoutError(f"超 {HEDGE_DELAY:.2f}s 未应答（备源未接住）"), errors,
-                )
-                break
-        # 两路都不可用：继续串行剩余源（共享同一 deadline）
-        return await self._call_serial(method, args, live[2:], errors, deadline)
+                self._note_failure(method, primary.name, exc, errors)
+                return await self._call_serial(method, args, live[1:], errors, deadline)
+
+            b_task = asyncio.create_task(self._attempt(method, backup, args, deadline))
+            tasks = {p_task: primary, b_task: backup}
+            while tasks:
+                done, _ = await asyncio.wait(set(tasks), return_when=asyncio.FIRST_COMPLETED)
+                for t in done:
+                    p = tasks.pop(t)
+                    _, result, exc = t.result()
+                    if exc is None and not self._is_empty(result):
+                        # 主源被超车仍按原策略记失败；放弃备源不计失败。
+                        other = p_task if t is b_task else b_task
+                        if not other.done():
+                            other.cancel()
+                            with contextlib.suppress(asyncio.CancelledError):
+                                await other
+                            if other is p_task:
+                                self._note_failure(
+                                    method, primary.name,
+                                    TimeoutError(f"超 {HEDGE_DELAY:.2f}s 未应答（备源已接手）"), errors,
+                                )
+                        self._settle_last_good(method, p.name)
+                        return result
+                    self._note_failure(method, p.name, exc, errors)
+                if tasks == {p_task: primary}:
+                    p_task.cancel()
+                    with contextlib.suppress(asyncio.CancelledError):
+                        await p_task
+                    self._note_failure(
+                        method, primary.name,
+                        TimeoutError(f"超 {HEDGE_DELAY:.2f}s 未应答（备源未接住）"), errors,
+                    )
+                    break
+            return await self._call_serial(method, args, live[2:], errors, deadline)
+        finally:
+            # owner 取消时也收口两条对冲协程；不声称能终止源内部不可中断线程。
+            owned = [p_task] + ([b_task] if b_task is not None else [])
+            for task in owned:
+                if not task.done():
+                    task.cancel()
+            await asyncio.gather(*owned, return_exceptions=True)
 
     async def get_indices(self) -> list:
         return await self._call("get_indices")

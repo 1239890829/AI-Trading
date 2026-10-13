@@ -34,7 +34,7 @@ from pydantic import BaseModel, Field
 from app.api.deps import normalize_symbol, require_write_token
 from app.core.db import get_session_factory
 from app.events.store import EventStore
-from app.core.bjtime import beijing_now, beijing_now_naive  # S2-8 时区收敛
+from app.core.bjtime import BJ_TZ, beijing_now, beijing_now_naive  # S2-8 时区收敛
 
 log = logging.getLogger(__name__)
 
@@ -630,7 +630,8 @@ async def events_for_symbol(
 
 
 def _read_attribution(store: EventStore, catalog, *, symbol: str | None = None,
-                      event_id: int | None = None, limit: int = 12, now: datetime) -> dict:
+                      event_id: int | None = None, limit: int = 12, now: datetime,
+                      pool_date: str | None = None, response_as_of: datetime | None = None) -> dict:
     from app.events.attribution import read_attribution
 
     # This only reads cached relations. It never calls get_stocks/sync_members,
@@ -638,10 +639,27 @@ def _read_attribution(store: EventStore, catalog, *, symbol: str | None = None,
     # the event loop; reuse the injected EventStore's session factory.
     themes = {row["theme_name"] for row in catalog.get_official_for_symbol(symbol)} if catalog and symbol else set()
     result = read_attribution(store._sf, symbol=symbol, theme_names=themes,
-                              event_id=event_id, limit=limit, now=now)
+                              event_id=event_id, limit=limit, now=now,
+                              pool_date=pool_date, response_as_of=response_as_of)
     if event_id is not None and not result["data"]["items"] and store.get_event(event_id) is None:
         raise HTTPException(status_code=404, detail="事件不存在")
     return result
+
+
+def _validate_response_context(pool_date, response_as_of, now):
+    if pool_date is not None:
+        try:
+            parsed = datetime.strptime(pool_date, "%Y-%m-%d")
+            if parsed.date().isoformat() != pool_date:
+                raise ValueError("noncanonical date")
+        except ValueError as exc:
+            raise HTTPException(status_code=422, detail="池日必须为YYYY-MM-DD") from exc
+    if response_as_of is not None:
+        if response_as_of.tzinfo is None:
+            raise HTTPException(status_code=422, detail="市场响应时点必须带时区")
+        cutoff = response_as_of.astimezone(BJ_TZ).replace(tzinfo=None)
+        if cutoff > now or (pool_date and cutoff.date().isoformat() != pool_date):
+            raise HTTPException(status_code=422, detail="市场响应时点未来或与池日不一致")
 
 
 @router.get("/events/symbol/{symbol}/attribution")
@@ -649,22 +667,28 @@ async def stock_attribution(
     symbol: str, request: Request,
     limit: int = Query(default=12, ge=1, le=30),
     store: EventStore = Depends(get_store),
+    pool_date: str | None = None, response_as_of: datetime | None = None,
 ) -> dict:
+    now = beijing_now_naive()
+    _validate_response_context(pool_date, response_as_of, now)
     return await asyncio.to_thread(
         _read_attribution, store, getattr(request.app.state, "theme_catalog", None),
-        symbol=normalize_symbol(symbol), limit=limit, now=beijing_now_naive(),
+        symbol=normalize_symbol(symbol), limit=limit, now=now,
+        pool_date=pool_date, response_as_of=response_as_of,
     )
-
 
 @router.get("/events/{event_id}/attribution")
 async def event_attribution(
     event_id: int, request: Request, symbol: str | None = Query(default=None),
     store: EventStore = Depends(get_store),
+    pool_date: str | None = None, response_as_of: datetime | None = None,
 ) -> dict:
+    now = beijing_now_naive()
+    _validate_response_context(pool_date, response_as_of, now)
     return await asyncio.to_thread(
         _read_attribution, store, getattr(request.app.state, "theme_catalog", None),
         symbol=normalize_symbol(symbol) if symbol is not None else None,
-        event_id=event_id, now=beijing_now_naive(),
+        event_id=event_id, now=now, pool_date=pool_date, response_as_of=response_as_of,
     )
 
 

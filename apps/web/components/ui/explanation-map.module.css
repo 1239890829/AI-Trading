@@ -2,6 +2,7 @@
   min-width:0;max-width:100%;color:var(--ui-ink);font-family:inherit;font-size:.8125rem;line-height:1.75;overflow-wrap:anywhere;
 }
 .heading,.narrativeToolbar,.detailToolbar {display:flex;align-items:center;justify-content:space-between;flex-wrap:wrap;gap:6px 12px;}
+.map {container-type:inline-size;}
 .heading h4,.conditions h4,.timeline h4,.facts h4,.fullText h4 {margin:0;font-size:.8125rem;font-weight:600;line-height:1.6;}
 .position {color:var(--ui-muted);font-size:.6875rem;font-variant-numeric:tabular-nums;white-space:nowrap;}
 .orderNote {margin:4px 0 10px;color:var(--ui-muted);font-size:.6875rem;line-height:1.65;}
@@ -134,6 +135,10 @@
   .timeDot {top:6px;}
   .timePoint dd {margin:0;}
   .timePoint dt > svg {display:none;}
+}
+@container (max-width:300px) {
+  .nodeTop {flex-wrap:wrap;gap:5px;}
+  .nodeLabel {order:3;flex-basis:100%;}
 }
 @media(prefers-reduced-motion:reduce) {
   .reading,.fullText,.clueDetail,.fullTable {animation:none;}

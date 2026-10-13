@@ -91,6 +91,15 @@ _TTL_CARRIERS: dict[str, int] = {
 #: 登记的门槛不是"TTL 长"本身，而是必须说清：**为什么它不会因跨日而陈旧**。
 #: 判据锚点 = 2026-09-14 的根因——「时效语义是**必须覆盖今天**，却用固定时长表达」。
 LONG_TTL_REGISTRY: dict[tuple[str, str], str] = {
+    ("app/api/routes/market_pools.py", "market.limit_up_reasons"): (
+        "缓存内容是已收到的同日、同股、原来源原因观察，日键为请求且已核验的 trade_date；"
+        "最多保留 2 个日键，每日最多 4096 条，86400s 仅限制进程内观察证据的保留期。"
+        "它独立于当前涨停池成员与当前记录，不参与交易日判断，不补写当前池行 reason。"
+        "响应保留原 observed_at/received_at/source；重复读取不会推进原观察时点，"
+        "前端只匹配同日同股，明确显示先前来源及其时点，不能据此证明当前在板或源已更新。"
+        "当前成员仍由原 market.limit_up 的 60s 缓存与响应 meta 描述，未修改其 TTL。"
+        "跨日观察不会替代今天的数据；进程重启或过期后缺失明确保留，不恢复或伪造观察。"
+    ),
     ("app/api/routes/market_flow.py", "market.board-fund.main-board"): (
         "**不适用「覆盖今天」判据**：缓存内容 = 个股的所属板块/行业归属"
         "（`get_company_profile` 的 board_groups），语义是「这只股是做什么的」，"

@@ -139,7 +139,7 @@ it("binds original review links to their date and version and discards an older 
   expect(screen.getByText(/该日期或版本尚无复盘记录/)).toBeTruthy();
 });
 
-it("review reads only its six real sources on entry and refresh", async () => {
+it("review keeps outcome polling but rereads the history catalogue only on explicit refresh", async () => {
   vi.useFakeTimers();
   search = new URLSearchParams({view: "review", date: "2026-10-09", version: "v1"});
   vi.mocked(api.getTodayPicks).mockResolvedValue({date: "2026-10-08", items: [], stale: true, note: "原daily来源说明"});
@@ -156,11 +156,33 @@ it("review reads only its six real sources on entry and refresh", async () => {
   for (const text of ["原对照 农业", "原历史 2026-10-07", "复盘版本 v1", "test-fixture", "原跟踪统计来源", "原daily来源说明"]) expect(screen.getByText(text)).toBeTruthy();
   await act(async () => {await vi.advanceTimersByTimeAsync(60_000);});
   for (const fn of unused) expect(fn).not.toHaveBeenCalled();
-  for (const fn of retained) expect(fn).toHaveBeenCalledTimes(2);
+  for (const fn of retained.filter(fn => fn !== api.getPicksHistory)) expect(fn).toHaveBeenCalledTimes(2);
+  expect(api.getPicksHistory).toHaveBeenCalledTimes(1);
   expect(screen.getByText(/原记录复盘：2026-10-09 · 版本 v1/)).toBeTruthy();
   for (const text of ["原对照 农业", "原历史 2026-10-07", "复盘版本 v1", "test-fixture", "原跟踪统计来源", "原daily来源说明"]) expect(screen.getByText(text)).toBeTruthy();
   expect(screen.getByText(/保留上次读取的对照/)).toBeTruthy();
   expect(screen.getByText(/统计读取失败/)).toBeTruthy();
+});
+
+it("closed review does not read archives; opening it preserves current candidate and gate polling", async () => {
+  vi.useFakeTimers();
+  render(<HuntingPage />);
+  await act(async () => {});
+  const archives = [api.getPicksHistory, api.getPickReviews, api.getPicksMeta];
+  for (const fn of archives) expect(fn).not.toHaveBeenCalled();
+  fireEvent.click(screen.getByText("当日对照与精选复盘"));
+  await act(async () => {});
+  // jsdom does not apply the browser's native details toggle.
+  const details = screen.getByText("当日对照与精选复盘").closest("details")!;
+  details.open = true;
+  fireEvent(details, new Event("toggle"));
+  await act(async () => {});
+  for (const fn of archives) expect(fn).toHaveBeenCalledTimes(1);
+  await act(async () => {await vi.advanceTimersByTimeAsync(60_000);});
+  expect(api.getPicksHistory).toHaveBeenCalledTimes(1);
+  expect(api.getPickReviews).toHaveBeenCalledTimes(2);
+  expect(api.getTodayPicks).toHaveBeenCalledTimes(2);
+  expect(screen.getByText("候选 002636")).toBeTruthy();
 });
 
 it("closed reference details keeps the full count but makes no per-stock presence reads", async () => {

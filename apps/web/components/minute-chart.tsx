@@ -44,7 +44,8 @@ import type { MinuteNewsEvent } from "@/lib/event-markers";
  *
  * 创建/数据分离（2026-09-02 用户反馈"刷新闪烁"）：原实现 effect 依赖 points——
  * 每次行情 tick（WS 合成/60s 校准）整个 chart 销毁重建，闪烁且丢十字光标。
- * 现在 chart/series 只随低频配置（prevClose/叠加/竞价/基线/事件晚到）重建，
+ * 现在 chart/series 只随低频配置（prevClose/竞价/基线/事件晚到）重建，
+ * 上证叠加数据独立原位写入已有系列，晚到和同日校准均不重建图表。
  * points 高频变化走 setData 全量原位重灌（不销毁图表、不闪）。⚠️ 不能用
  * series.update()：槽位以全天 whitespace 占位，series 最后时间点恒为 15:00，
  * update(当前分钟) 必抛 "Cannot update oldest data"（实测崩溃，见 fillAll 注释）。
@@ -376,6 +377,8 @@ export function MinuteChart({
   useEffect(() => {
     pointsRef.current = points;
   }, [points]);
+  const indexRef = useRef(usableIndex);
+  useEffect(() => {indexRef.current = usableIndex;}, [usableIndex]);
   const lbRef = useRef(computeLB);
   useEffect(() => {
     lbRef.current = computeLB;
@@ -452,11 +455,23 @@ export function MinuteChart({
     }
   }
 
+  const fillIndex = useCallback((s: SeriesBundle, value = indexRef.current) => {
+    if (!s.index) return;
+    const byMinute = new Map<string, P>();
+    for (const point of value?.points ?? []) byMinute.set(bjHHMM(point), point);
+    s.index.setData(s.slots.map(second => {
+      const point = byMinute.get(new Date(second * 1000).toISOString().slice(11, 16));
+      return value && point && isPositivePrice(point.price)
+        ? {time: second as Time, value: ((point.price - value.prevClose) / value.prevClose) * 100}
+        : {time: second as Time};
+    }) as never);
+  }, []);
+
   // 多交易日/非法时间戳输入直接 fail-closed：不把两天相同 HH:MM 压进同一槽位。
   // 警示仍保留在组件上方，价格数据本身不丢弃/改写。
   const hasPoints = points.length > 0 && sessionDate !== null;
   const pointDate = hasPoints ? sessionDate : "";
-  // 低频配置（晚到即整图重建一次，次数 ≤3）：昨收/大盘叠加/竞价/量比基线/事件点
+  // 结构配置：昨收/竞价/量比基线/事件点；叠加数据单独更新。
   useEffect(() => {
     if (!ref.current || !hasPoints) return;
     const cur = pointsRef.current;
@@ -616,7 +631,7 @@ export function MinuteChart({
       }
 
       // ---- 大盘叠加：上证归一化 % 曲线（可见，左轴同刻度）----
-      if (usableIndex) {
+      {
         const idxSeries = chart.addLineSeries({
           priceScaleId: "left",
           color: p.index,
@@ -627,18 +642,8 @@ export function MinuteChart({
           crosshairMarkerVisible: false,
           priceFormat: { type: "custom", formatter: formatMinutePercentTick, minMove: 0.01 },
         });
-        const idxByHHMM = new Map<string, P>();
-        for (const q of usableIndex.points) idxByHHMM.set(bjHHMM(q), q);
-        const slotHHMM = (sec: number) => new Date(sec * 1000).toISOString().slice(11, 16);
-        idxSeries.setData(
-          slots.map((sec) => {
-            const i = idxByHHMM.get(slotHHMM(sec));
-            return i && isPositivePrice(i.price)
-              ? ({ time: sec as Time, value: ((i.price - usableIndex.prevClose) / usableIndex.prevClose) * 100 } as LineData)
-              : ({ time: sec as Time } as LineData);
-          }) as never
-        );
         s.index = idxSeries; // 留引用：主题切换换色用（P2-26）
+        fillIndex(s);
       }
     }
 
@@ -872,7 +877,7 @@ export function MinuteChart({
     chart.timeScale().fitContent();
     chart.timeScale().setVisibleLogicalRange({ from: -1.5, to: slots.length + 0.5 });
 
-    // 图表低频重建（基线/叠加/竞价晚到）后：若指针仍悬停，恢复十字线与浮层，
+    // 图表低频重建（基线/竞价晚到）后：若指针仍悬停，恢复十字线与浮层，
     // 否则重建后十字线消失、浮层停留旧数据，直到下次鼠标移动。
     if (insideRef.current && lastParamRef.current) {
       const lp = lastParamRef.current;
@@ -907,7 +912,10 @@ export function MinuteChart({
       void unsub;
     };
     // 低频配置变化才重建；points 走增量 effect（下）。evByHHMM 供 crosshair 闭包。
-  }, [hasPoints, pointDate, effectivePrevClose, usableIndex, auction, exactBaseline, newsEvents, limitPct, upperPrice, lowerPrice, limitState]);
+  }, [hasPoints, pointDate, effectivePrevClose, auction, exactBaseline, newsEvents, limitPct, upperPrice, lowerPrice, limitState, fillIndex]);
+
+  // An index observation changes series data, never the chart or reading position.
+  useEffect(() => {fillIndex(seriesRef.current, usableIndex);}, [usableIndex, hasPoints, pointDate, effectivePrevClose, fillIndex]);
 
   // 用最终价格域逐端派生左轴，均价/竞价/事件/指数不再各自撑大某一侧。
   // 更新 provider 会使库原位重算坐标；高频行情不重建 chart 或重置时间缩放。

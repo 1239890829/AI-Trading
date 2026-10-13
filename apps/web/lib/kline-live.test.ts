@@ -256,12 +256,10 @@ describe("mergeQuoteIntoMinutes", () => {
     expect(mergeQuoteIntoMinutes(yesterdayTail, quoteAt("14:29", 105.3))).toBeNull();
   });
 
-  it("data_timestamp 缺失 → 回退 received_at 合成（无时间戳源不再冻结分时）", () => {
+  it("缺源时刻不能用 received_at 补造当前分钟", () => {
     const q = { ...quoteAt("14:29", 105.3), data_timestamp: null, received_at: `${TODAY}T06:29:59+00:00` };
     const out = mergeQuoteIntoMinutes(minutesFixture(), q);
-    expect(out).not.toBeNull();
-    expect(out![1].price).toBe(105.3);
-    expect(out![1].cum_volume).toBe(1_100_000);
+    expect(out).toBeNull();
   });
 
   it("quote 分钟早于最后点（快照竞态）→ 不合成", () => {
@@ -293,6 +291,39 @@ describe("mergeQuoteIntoMinutes", () => {
     mergeQuoteIntoMinutes(src, quoteAt("14:29", 105.3));
     expect(src[1].price).toBe(105.0);
     expect(src[1].cum_volume).toBe(1_000_000);
+  });
+});
+
+describe("图表合成只采用可信源观察", () => {
+  it.each(["low", "stale", "invalid", undefined] as const)("质量 %s 即使源钟前移也不能推进K线/分钟", quality => {
+    const rejected = {...quoteAt("14:30", 107.5), quality} as Quote;
+    expect(mergeQuoteIntoBars(barsToday(), rejected)).toBeNull();
+    expect(mergeQuoteIntoMinutes(minutesFixture(), rejected)).toBeNull();
+  });
+
+  it.each([null, "2026-08-31T14:30:00", "2026-08-31", "invalid"])("源钟 %s 不能由接收钟补造", timestamp => {
+    const rejected = {...quoteAt("14:30", 107.5), data_timestamp: timestamp, received_at: `${TODAY}T14:30:01+08:00`};
+    expect(mergeQuoteIntoBars(barsToday(), rejected)).toBeNull();
+    expect(mergeQuoteIntoMinutes(minutesFixture(), rejected)).toBeNull();
+  });
+
+  it.each([NaN, Infinity, -Infinity, 0])("非有效现价 %s 不进入图表", price => {
+    const rejected = quoteAt("14:30", price);
+    expect(mergeQuoteIntoBars(barsToday(), rejected)).toBeNull();
+    expect(mergeQuoteIntoMinutes(minutesFixture(), rejected)).toBeNull();
+  });
+
+  it("缺来源或另一证券报价不能形成当前Kbar", () => {
+    expect(mergeQuoteIntoBars(barsToday(), {...quote(107.5, TODAY), source: ""})).toBeNull();
+    expect(mergeQuoteIntoBars(barsToday(), {...quote(107.5, TODAY), symbol: "600000"})).toBeNull();
+    expect(mergeQuoteIntoMinutes(minutesFixture(), {...quoteAt("14:30", 107.5), source: " "})).toBeNull();
+  });
+
+  it("medium使用其真实源钟，但不能升级陈旧Kbar基座", () => {
+    expect(mergeQuoteIntoBars(barsToday(), {...quote(107.5, TODAY), quality: "medium"})?.at(-1)?.close).toBe(107.5);
+    const staleBars = barsToday().map(row => ({...row, quality: "stale" as const}));
+    expect(mergeQuoteIntoBars(staleBars, quote(107.5, TODAY))).toBeNull();
+    expect(mergeQuoteIntoMinutes(minutesFixture(), {...quoteAt("14:30", 107.5), quality: "medium"})?.at(-1)?.price).toBe(107.5);
   });
 });
 

@@ -7,6 +7,8 @@
 from __future__ import annotations
 
 from copy import deepcopy
+import hashlib
+import re
 from datetime import date
 from fastapi import APIRouter, Depends, HTTPException, Query, Request
 from app.api.deps import get_hub
@@ -18,6 +20,7 @@ from app.schemas.envelope import (
     LimitUpPoolPayload,
 )
 from app.services.quote_hub import QuoteHub
+from app.core.bjtime import beijing_now
 from app.services.market_snapshot import (
     PoolDateError,
     default_trade_date,
@@ -31,6 +34,37 @@ from app.api.routes.market_envelope import (
     meta_payload,
     dated_meta,
 )
+
+
+def _reason_observations(holder, trade_date: date, rows) -> dict:
+    """Process-local source observations; never overwrite current pool facts."""
+    cache = cache_on(holder, "market.limit_up_reasons", 86400, maxsize=2)
+    _, saved = cache.get(trade_date)
+    observations = deepcopy(saved or {})
+    observed_at = beijing_now().isoformat()
+    for row in rows:
+        reason = row.reason
+        if (row.trade_date != trade_date or not re.fullmatch(r"[0-9]{6}", row.symbol)
+                or not row.source or not isinstance(reason, str) or not reason.strip()
+                or len(reason) > 8192 or getattr(row.quality, "value", row.quality) == "invalid"):
+            continue
+        key = (row.symbol, row.source)
+        digest = hashlib.sha256(reason.encode("utf-8")).hexdigest()
+        if key in observations and observations[key]["content_hash"] == digest:
+            continue  # A repeated read cannot move the original evidence clock.
+        observations.pop(key, None)
+        observations[key] = {
+            "symbol": row.symbol, "trade_date": trade_date.isoformat(), "source": row.source,
+            "reason": reason, "content_hash": digest, "observed_at": observed_at,
+            "received_at": row.received_at.isoformat() if row.received_at else None,
+        }
+    while len(observations) > 4096:
+        observations.pop(next(iter(observations)))
+    cache.set(trade_date, observations)
+    result = {}
+    for (symbol, _source), observation in observations.items():
+        result.setdefault(symbol, []).append(deepcopy(observation))
+    return result
 
 
 @router.get("/limit-up", response_model=Envelope[LimitUpPoolPayload])
@@ -60,7 +94,8 @@ async def limit_up(
             raise HTTPException(status_code=502, detail="涨停池记录日期与请求不一致，拒绝混日数据")
         rows = sorted(records, key=lambda r: (r.consecutive_boards or 0), reverse=True)
         return {
-            "data": {"trade_date": trade_date.isoformat(), "pool": [r.model_dump(mode="json") for r in rows]},
+            "data": {"trade_date": trade_date.isoformat(), "pool": [r.model_dump(mode="json") for r in rows],
+                     "reason_observations": _reason_observations(request.app.state, trade_date, rows)},
             "meta": await dated_meta(hub, trade_date),
         }
 

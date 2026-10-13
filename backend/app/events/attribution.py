@@ -13,7 +13,7 @@ from sqlalchemy import func, or_, select
 from sqlalchemy.orm import joinedload
 
 from app.core.bjtime import BJ_TZ, beijing_now_naive
-from app.events.extract import classify_certainty
+from app.events.extract import classify_certainty, _positive_hit
 from app.models.event import (
     EventCard, EventDirection, EventInterpretation, EventObservation, EventWithdrawalLink,
 )
@@ -231,6 +231,11 @@ def project_event_attribution(row: EventCard, version: EventInterpretation | Non
     if business_denial:
         relation["direction"] = None
         limitations.append("原文含否认或澄清；原始方向记录保留，但此视图不据此确认个股受益。")
+    if (relation["direction"] == 1 and relation["matched_by"] in {"source", "name", "name-stem", "alias", "board"}
+            and "「进展」" in relation["basis"] and _positive_hit(text) is None):
+        relation["direction"] = None
+        relation["label"] = "原规则方向与来源条件冲突，待复核"
+        limitations.append("原规则的进展方向与未兑现条件冲突，保留原记录但当前方向需复核。")
     if relation["status"] == "theme_only":
         limitations.append("题材归属只用于发现线索，尚未核实公司业务受益或成本压力。")
     if relation["status"] == "unverified_model":
@@ -289,11 +294,14 @@ def project_event_attribution(row: EventCard, version: EventInterpretation | Non
 
 def read_attribution(session_factory, *, symbol: str | None = None,
                      theme_names: set[str] | None = None, event_id: int | None = None,
-                     limit: int = 12, now: datetime | None = None) -> dict:
+                     limit: int = 12, now: datetime | None = None,
+                     pool_date: str | None = None, response_as_of: datetime | None = None) -> dict:
     """Bounded, three-SELECT current view. Never fetch, sync, write, or notify."""
     now = now or beijing_now_naive()
     if now.tzinfo is not None:
         now = now.astimezone(BJ_TZ).replace(tzinfo=None)
+    if response_as_of is not None and response_as_of.tzinfo is not None:
+        response_as_of = response_as_of.astimezone(BJ_TZ).replace(tzinfo=None)
     themes = theme_names or set()
     limit = max(1, min(limit, 30))
     with session_factory() as db:
@@ -317,7 +325,22 @@ def read_attribution(session_factory, *, symbol: str | None = None,
             stmt = stmt.where(or_(EventCard.source_symbol == symbol, relevant_direction))
         stmt = stmt.where(EventCard.published_at <= now,
                           or_(EventInterpretation.id.is_(None), EventInterpretation.effective_at <= now))
-        pairs = db.execute(stmt.order_by(EventCard.published_at.desc(), EventCard.id.desc()).limit(limit)).unique().all()
+        ordered = stmt.order_by(EventCard.published_at.desc(), EventCard.id.desc())
+        if response_as_of is None:
+            pairs = db.execute(ordered.limit(limit)).unique().all()
+        else:
+            # Current versions, grouped by response timing. This is not historical replay.
+            before = select(EventObservation.id).where(
+                EventObservation.id == EventInterpretation.observation_id,
+                EventInterpretation.effective_at <= response_as_of,
+                EventObservation.available_at <= response_as_of,
+                EventObservation.received_at <= response_as_of,
+                EventObservation.source_published_at.is_not(None),
+                EventObservation.source_published_at <= response_as_of,
+            ).correlate(EventInterpretation).exists()
+            prior_pairs = db.execute(ordered.where(before).limit(limit)).unique().all()
+            later_pairs = db.execute(ordered.where(~before).limit(limit)).unique().all()
+            pairs = prior_pairs + later_pairs
         ids = [row.id for row, _ in pairs]
         observations = {}
         pending_by_event = {}
@@ -365,7 +388,29 @@ def read_attribution(session_factory, *, symbol: str | None = None,
             items.append(project_event_attribution(row, version, observation, pending,
                                                    symbol=symbol, theme_names=themes, now=now,
                                                    withdrawal_context=withdrawals.get(version.id) if version else None))
-    return {"data": {"schema_version": 1, "symbol": symbol, "count": len(items), "items": items},
+    data = {"schema_version": 1, "symbol": symbol, "count": len(items), "items": items}
+    if response_as_of is not None or pool_date is not None:
+        data["response_context"] = {"pool_date": pool_date, "response_as_of": _clock(response_as_of),
+                                    "view": "current_with_response_context", "historical_replay": False}
+    if response_as_of is not None:
+        for item in items:
+            timing = item["timing"]
+            clocks = {key: datetime.fromisoformat(value).astimezone(BJ_TZ).replace(tzinfo=None)
+                      if value else None for key, value in timing.items()
+                      if key in {"source_published_at", "available_at", "received_at", "interpretation_effective_at"}}
+            if any(value is None for value in clocks.values()):
+                status, label = "time_unknown", "时间证据不完整，首封前是否可用待核"
+            elif max(clocks["available_at"], clocks["received_at"], clocks["source_published_at"]) > response_as_of:
+                status, label = "late_source_observation", "市场响应后才留存的来源，仅供后续核对"
+            elif clocks["interpretation_effective_at"] > response_as_of:
+                status, label = "interpretation_after_response", "当前解释形成晚于市场响应"
+            else:
+                status, label = "known_before_response", "响应前已留存材料与解释，因果仍未核实"
+            item["timing_relation"] = {"status": status, "label": label}
+        data["items"] = [item for item in items if item["timing_relation"]["status"] == "known_before_response"]
+        data["later_items"] = [item for item in items if item["timing_relation"]["status"] != "known_before_response"]
+        data["count"] = len(data["items"])
+    return {"data": data,
             "meta": {"view": "current_attribution", "historical_selection_basis": False,
                      "opportunity_eligibility_changed": False,
                      "coverage": "已采集事件与已缓存题材关系，非全市场因果覆盖",

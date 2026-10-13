@@ -4,6 +4,7 @@
 import {NarrativeText} from "@/components/ui/explanation-map";
 import { fmt, pctColor, pctText } from "@/lib/format";
 import { Skeleton } from "@/components/ui/loading";
+import {DetailReadStatus, type DetailReadState} from "./read-status";
 
 /** 公司资料（/api/company 返回的超集；类型随消费方窄化）。 */
 export interface CompanyProfile {
@@ -38,10 +39,14 @@ export function ProfilePanel({
   boardRows,
   company,
   fins,
+  readState,
+  onRetry,
 }: {
   boardRows: BoardRows;
   company: CompanyProfile | null;
   fins: FinRow[] | null | undefined;
+  readState?: DetailReadState;
+  onRetry?: () => void;
 }) {
   return (
     <div className="px-3 py-2 text-xs">
@@ -72,7 +77,8 @@ export function ProfilePanel({
         </div>
       )}
       <div className="mb-1 text-zinc-600 dark:text-zinc-400">最近财报</div>
-      {fins === undefined ? (
+      {readState && <DetailReadStatus label="财报" state={readState} onRetry={onRetry}/>}
+      {fins === undefined && !readState?.error ? (
         <div className="space-y-2" aria-hidden>
           <Skeleton className="h-12 w-full rounded-lg" />
           <Skeleton className="h-12 w-full rounded-lg" />
@@ -96,7 +102,7 @@ export function ProfilePanel({
               </div>
             </div>
           ))}
-          {(fins ?? []).length === 0 && <p className="text-zinc-600 dark:text-zinc-400">暂无财报数据</p>}
+          {fins !== undefined && (fins ?? []).length === 0 && !readState?.error && <p className="text-zinc-600 dark:text-zinc-400">本次未返回财报数据。</p>}
         </>
       )}
     </div>

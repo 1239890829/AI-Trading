@@ -105,6 +105,7 @@ async def quotes_ws(websocket: WebSocket):
             "meta": {
                 "index_batch": hub.index_batch() if hasattr(hub, "index_batch") else None,
                 "source_rejections": hub.source_rejections() if hasattr(hub, "source_rejections") else None,
+                "refresh_domains": hub.refresh_domains() if hasattr(hub, "refresh_domains") else None,
             },
         }
 

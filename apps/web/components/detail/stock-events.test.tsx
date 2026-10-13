@@ -1,5 +1,5 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { cleanup, fireEvent, render, screen } from "@testing-library/react";
+import { act, cleanup, fireEvent, render, screen } from "@testing-library/react";
 import { StockEventsRow } from "./stock-events";
 import { DetailModalProvider, useDetailModal } from "./detail-modal";
 import type { EventSummary } from "@/lib/api";
@@ -137,8 +137,31 @@ describe("StockEventsRow", () => {
   it("加载失败显示失败态与重试（不再是静默消失）", async () => {
     mockedGet.mockRejectedValue(new Error("boom"));
     renderWithProvider(<StockEventsRow symbol="600519" />);
-    await screen.findByText("加载失败");
+    await screen.findByText(/加载失败/);
     expect(screen.getByText("重试")).toBeTruthy();
+  });
+
+  it("可见时校准并保留失败前事件；隐藏和切股不把旧资料当作当前结果", async () => {
+    vi.useFakeTimers();
+    try {
+      mockedGet.mockReset();
+      mockedGet.mockResolvedValueOnce({symbol: "600519", themes: [], count: 1, items: [event]})
+        .mockRejectedValueOnce(new Error("synthetic_offline"));
+      const view = renderWithProvider(<StockEventsRow symbol="600519" />);
+      await act(async () => {});
+      expect(screen.getByRole("button", {name: /沃什鹰派/})).toBeTruthy();
+      await act(async () => {await vi.advanceTimersByTimeAsync(60_000);});
+      expect(screen.getByRole("alert").textContent).toContain("保留上次结果");
+      expect(screen.getByRole("button", {name: /沃什鹰派/})).toBeTruthy();
+      view.rerender(<DetailModalProvider><StockEventsRow symbol="600519" active={false} /></DetailModalProvider>);
+      await act(async () => {await vi.advanceTimersByTimeAsync(120_000);});
+      expect(mockedGet).toHaveBeenCalledTimes(2);
+      mockedGet.mockRejectedValueOnce(new Error("synthetic_unknown"));
+      view.rerender(<DetailModalProvider><StockEventsRow symbol="000001" /></DetailModalProvider>);
+      await act(async () => {});
+      expect(screen.queryByRole("button", {name: /沃什鹰派/})).toBeNull();
+      expect(screen.getByRole("alert").textContent).toContain("尚不能确认");
+    } finally {vi.useRealTimers();}
   });
 
   it("无 url 的事件也可点开（弹窗内给原文缺失兜底）", async () => {

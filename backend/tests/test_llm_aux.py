@@ -81,7 +81,11 @@ def _mock_llm(monkeypatch, items=None, *, fail: bool = False):
     def _fake(*a, **kw):
         import json
 
-        return json.dumps({"items": items or []}, ensure_ascii=False)
+        inputs = json.loads(kw["messages"][-1]["content"])
+        rows = [{"chain": "", **item, "event_id": source["event_id"],
+                 "evidence": {"field": "title", "quote": source["title"]}}
+                for item, source in zip(items or [], inputs)]
+        return json.dumps({"items": rows}, ensure_ascii=False)
 
     monkeypatch.setattr(lc, "chat_completion", _fake)
     monkeypatch.setattr(lc, "extract_json_object",
@@ -209,10 +213,10 @@ def test_theme_mismatch_no_write(tmp_path, monkeypatch):
         {"direction": 1, "theme": None, "chain": "", "reason": "x"},
     ])
     out = la.judge_pending_batch(sf, theme_names=["半导体概念"])
-    assert out["directions_written"] == 0
+    assert out["skipped"] is True
     with sf() as db:
         marked = [r for r in db.query(EventCard).all() if r.llm_judged_at is not None]
-        assert len(marked) == 2  # 题材不匹配仍标记——已试过，不重试
+        assert len(marked) == 0  # Invalid object is runtime unknown, never a neutral success.
 
 
 def test_llm_failure_no_mark_retryable(tmp_path, monkeypatch):
@@ -263,7 +267,7 @@ def test_stale_model_result_cannot_write_after_revision(
                 payload_json="{}",
             ))
             db.commit()
-        return [{"direction": direction, "theme": "半导体概念", "reason": "旧判断"}], None
+        return [{"event_id":ev.id,"direction": direction, "theme": "半导体概念", "chain":"", "reason": "旧判断", "evidence":{"field":"title","quote":ev.title}}], None
 
     monkeypatch.setattr(la, "_deepseek_items", fake_deepseek)
     out = la.judge_pending_batch(sf, theme_names=["半导体概念"])
@@ -293,7 +297,7 @@ def test_current_version_result_uses_its_observation(tmp_path, monkeypatch):
         db.commit()
         observation_id = obs.id
     monkeypatch.setattr(la, "_deepseek_items", lambda *_a, **_k: ([
-        {"direction": 1, "theme": "半导体概念", "reason": "政策传导"}
+        {"event_id":ev.id,"direction": 1, "theme": "半导体概念", "chain":"", "reason": "政策传导", "evidence":{"field":"title","quote":ev.title}}
     ], None))
 
     out = la.judge_pending_batch(sf, theme_names=["半导体概念"])
@@ -395,7 +399,7 @@ def test_human_neutral_revision_is_not_rejudged_by_llm(
     prior_judged_at = None
     if judged_before_review:
         monkeypatch.setattr(la, "_deepseek_items", lambda *_a, **_k: ([
-            {"direction": 0, "theme": None, "reason": "证据不足"}
+            {"event_id":event.id,"direction": 0, "theme": None, "chain":"", "reason": "证据不足", "evidence":{"field":"title","quote":first["title"]}}
         ], None))
         assert la.judge_pending_batch(sf, theme_names=["半导体概念"])["skipped"] is False
         with sf() as db:
@@ -473,3 +477,50 @@ def test_below_min_batch_skips(tmp_path, monkeypatch):
     out = la.judge_pending_batch(sf, theme_names=["半导体概念"])
     assert out["skipped"] is True
     assert "攒批下限" in out["reason"]
+
+
+def test_invalid_direction_and_unbound_evidence_do_not_mark_success(tmp_path, monkeypatch):
+    import json
+    import app.core.llm_client as client
+    sf = _factory(tmp_path)
+    _settings(monkeypatch)
+    a = _event(sf, '公司签约大单', age_min=1)
+    b = _event(sf, '公司发布另一消息', age_min=2)
+    monkeypatch.setattr(client, 'chat_completion', lambda *args, **kw: json.dumps({'items':[
+        {'event_id':a.id,'direction':2,'theme':'半导体概念','chain':'','reason':'签约','evidence':{'field':'title','quote':'公司签约大单'}},
+        {'event_id':b.id,'direction':0,'theme':None,'chain':'','reason':'未知','evidence':{'field':'title','quote':'外部伪引用'}},
+    ]},ensure_ascii=False))
+    result = la.judge_pending_batch(sf, theme_names=['半导体概念'])
+    assert result['skipped'] is True
+    with sf() as db:
+        assert db.query(EventDirection).filter_by(matched_by='llm_aux').count() == 0
+        assert all(r.llm_judged_at is None for r in db.query(EventCard))
+
+
+@pytest.mark.parametrize('reason,accepted', [('本材料未提供放量依据',True),('不是没有放量',False),('本材料未提供放量依据，但放量上涨已确认',False)])
+def test_absent_fact_disclaimer_is_narrow_and_invalid_receipt_is_not_success(tmp_path,monkeypatch,reason,accepted):
+    import json
+    import app.core.llm_client as client
+    sf=_factory(tmp_path)
+    _settings(monkeypatch,min_batch=1)
+    event=_event(sf,'芯片产能扩张',age_min=1)
+    monkeypatch.setattr(client,'chat_completion',lambda *a,**k:json.dumps({'items':[{
+        'event_id':event.id,'direction':0,'theme':None,'chain':'','reason':reason,
+        'evidence':{'field':'title','quote':'芯片产能扩张'}}]},ensure_ascii=False))
+    result=la.judge_pending_batch(sf,theme_names=['半导体概念'])
+    assert result['skipped'] is not accepted
+    with sf() as db:
+        receipt=db.query(AgentResourceUsage).one()
+        assert receipt.state == ('succeeded' if accepted else 'failed')
+        assert bool(db.get(EventCard,event.id).llm_judged_at) is accepted
+
+
+def test_price_action_candidates_do_not_invoke_model_but_material_shortage_remains(tmp_path,monkeypatch):
+    sf=_factory(tmp_path)
+    _settings(monkeypatch)
+    _event(sf,'CPO概念震荡反弹 华盛昌涨停',age_min=1)
+    _event(sf,'算力链低开高走 创业板算力ETF易方达涨2.30%',age_min=2)
+    material=_event(sf,'DDR4现货三个月涨24% 供应短缺',age_min=3)
+    monkeypatch.setattr(la,'_deepseek_items',lambda *a,**k:pytest.fail('pure price action cannot create model demand'))
+    assert la.judge_pending_batch(sf,theme_names=['半导体概念'])['skipped'] is True
+    assert [row.id for row in la._pending_candidates(sf,theme_names=['半导体概念'],max_batch=12,age_max_h=5)] == [material.id]
