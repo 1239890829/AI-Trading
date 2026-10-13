@@ -1,4 +1,4 @@
-"""行情与 K 线：快照/单票、K 线、盘口、成交、分时、火花线与盘中信号/决策。
+"""行情与 K 线：快照/单票、K 线、盘口、成交、分时、火花线。
 
 （自 `market.py` 切出，2026-09-15 IMP-005 批 3。**只搬位置，未改逻辑**：
 分片正文与原文件对应定义逐字相同。跨分片共用的信封辅助在 `market_envelope`。）
@@ -7,7 +7,6 @@
 from __future__ import annotations
 
 import asyncio
-import contextlib
 import logging
 from datetime import date
 from fastapi import APIRouter, Depends, HTTPException, Query, Request
@@ -17,9 +16,7 @@ from app.data_quality.validator import validate_order_book
 from app.schemas.envelope import (
     Envelope,
     KlinePayload,
-    MinuteDecisionsPayload,
     MinuteLinePayload,
-    MinuteSignalsPayload,
     SparklineItem,
     SparklinePayload,
 )
@@ -32,7 +29,6 @@ from app.schemas.market import (
     Trade,
     TradingStatus,
     TradingStatusInfo,
-    utcnow,
 )
 from app.services.quote_hub import QuoteHub
 from app.core.bjtime import beijing_now
@@ -342,86 +338,3 @@ async def minute_line(symbol: str, hub: QuoteHub = Depends(get_hub)) -> dict:
     except Exception as exc:
         log.warning("vr baseline failed for %s: %s", symbol, exc)
     return {"data": {"symbol": symbol, "points": points, "vr_baseline_5m": baseline}, "meta": meta_payload(hub)}
-
-
-@router.get("/market/minute-signals/{symbol}", response_model=Envelope[MinuteSignalsPayload])
-async def minute_signals(symbol: str, hub: QuoteHub = Depends(get_hub)) -> dict:
-    """做 T 偏向信号（分钟级）+ **触发即记录**到决策库（P1-24 接线）。
-
-    记录是**幂等日志副作用**：引擎前缀稳定 ⇒ 同一根 bar 重算结果相同，
-    去重键 ``(symbol, trigger_ts)`` 保证重复请求不产生第二条 —— 因此这里
-    用 GET 读写同一资源是可接受的（原模块 docstring 的设计即如此：
-    "触发即记录：signals 接口产出越过阈值的信号时落库"）。
-
-    ``degraded`` 如实透传降级原因（缺昨日量 → 量比条件降级；缺波动率 →
-    阈值不自适应）。**不补假数据**：宁可降级并标注，不用别的口径顶上。
-    """
-    from app.core.db import get_session_factory
-    from app.market import minute_decisions as md
-    from app.market.minute_signals import compute_minute_signals
-
-    try:
-        points = await hub.provider.get_minute_line(symbol)
-    except Exception as exc:
-        raise HTTPException(status_code=502, detail=f"分时数据源失败：{exc}") from exc
-
-    out = compute_minute_signals(points)
-    signals = list(out["signals"])  # 引擎已 dump 成 dict，勿再 .model_dump()（2026-09-10 实测踩坑）
-    # 只在信号非空时才动库（空列表不会产生写入，省一次连接与事务）
-    recorded = (
-        await asyncio.to_thread(md.record_signals, get_session_factory(), symbol, signals)
-        if signals
-        else 0
-    )
-    return {
-        "data": {
-            "symbol": symbol,
-            "signals": signals,
-            "observed": out.get("observed", 0),
-            "degraded": list(out.get("degraded") or []),
-            "recorded": recorded,
-            "basis": out.get("basis") or {},
-        },
-        "meta": meta_payload(hub),
-    }
-
-
-@router.get("/market/minute-decisions", response_model=Envelope[MinuteDecisionsPayload])
-async def minute_decisions(
-    symbol: str | None = Query(None, description="按标的过滤；缺省=全部"),
-    limit: int = Query(50, ge=1, le=200),
-) -> dict:
-    """做 T 决策库（记录 → 结算 → 错误归因）。读时**惰性结算**到期的 open 记录。
-
-    惰性结算的口径：只在读取时推进，不另起常驻任务（原模块设计如此）；
-    盘后还有一次批量结算挂在 15:35 复调度的收盘分支（`scan_and_settle_today`），
-    保证"没人看页面时样本也会累积"。
-    """
-    from app.core.db import get_session_factory
-    from app.market import minute_decisions as md
-
-    sf = get_session_factory()
-    settled = 0
-    # 收盘后才有完整窗口可结算；盘中也允许（到期的那部分能算）
-    if beijing_now().hour >= 12:
-        with contextlib.suppress(Exception):
-            settled = await asyncio.to_thread(md.settle_due, sf, md.tdx_points, symbol)
-    items = await asyncio.to_thread(md.list_decisions, sf, symbol, limit)
-    outcomes: dict[str, int] = {}
-    for it in items:
-        key = it.get("outcome") or "open"
-        outcomes[key] = outcomes.get(key, 0) + 1
-    return {
-        "data": {
-            "items": items,
-            "settled": settled,
-            "outcomes": outcomes,
-            "open_count": outcomes.get("open", 0),
-            "note": (
-                "结算门槛 8bp（≈2×交易成本）；correct=偏向方向最优价差达标，"
-                "wrong=反向不利价差达标，invalid=窗口内未达任何阈值（消耗注意力但没钱），"
-                "expired=窗口数据不足不判定。错误归因用 leave-one-out（剔除哪个指标会翻转结论）。"
-            ),
-        },
-        "meta": {"generated_at": utcnow().isoformat()},
-    }

@@ -1,6 +1,6 @@
 /** 格式化工具测试：空值/边界/单位换算/红涨绿跌语义。 */
 import { describe, expect, it } from "vitest";
-import { fmt, fmtYi, fmtAmount, fmtHeat, fmtVolume, formatLegacyLimitDistance, isHardQuality, parseNum, pctColor, pctText, qualityLabel, shouldShowQualityBadge, sourceLabel, timeText, timeTextBJ, dateTimeTextBJ, bjDate, bjHHMM, bjMonthDay, triAmount, triText, winRateColor } from "./format";
+import { fmt, fmtYi, fmtAmount, fmtHeat, fmtVolume, eventTimeText, dateTimesInTextBJ, formatLegacyLimitDistance, isHardQuality, parseNum, pctColor, pctText, qualityLabel, shouldShowQualityBadge, sourceLabel, timeText, timeTextBJ, dateTimeTextBJ, bjDate, bjHHMM, bjMonthDay, triAmount, triText, winRateColor } from "./format";
 
 describe("存量临板距离展示", () => {
   it.each(["2", "2.50", "+2.50", "-0.30", ".5"])("保留旧百分点差原值 %s", (value) => {
@@ -364,10 +364,16 @@ describe("triAmount（成交额三态渲染）", () => {
 
 /** agent 域时间戳 2026-09-12 方案 A 起存**北京 naive**——naive 串必须按 +08:00 显式解释。 */
 describe("timeTextBJ / dateTimeTextBJ", () => {
+  it("normal display keeps the full Beijing date, converts UTC and omits the offset", () => {
+    expect(dateTimeTextBJ("2026-10-13T01:32:45Z")).toBe("2026-10-13 09:32");
+    expect(dateTimeTextBJ("2026-10-13 09:32:45.123456")).toBe("2026-10-13 09:32");
+    expect(dateTimeTextBJ("2026-12-31T16:05:00Z")).toBe("2027-01-01 00:05");
+    expect(timeText("2026-10-13T01:32:45Z")).toBe("09:32:45");
+  });
   it("把北京 naive 串原样显示（15:45 就是 15:45，不再 +8h）", () => {
     // 若错误沿用「补 Z 按 UTC 解释」的旧语义，会把已迁移的北京值再偏成次日 23:45
     expect(timeTextBJ("2026-09-11T15:45:06.541226")).toContain("15:45");
-    expect(dateTimeTextBJ("2026-09-11T15:45:06.541226")).toContain("09/11");
+    expect(dateTimeTextBJ("2026-09-11T15:45:06.541226")).toContain("2026-09-11");
   });
 
   it("已带 Z 的串不受影响（按 UTC 解释，不会被二次偏移）", () => {
@@ -380,8 +386,8 @@ describe("timeTextBJ / dateTimeTextBJ", () => {
   });
 
   it("跨零点正确（带 Z 的 UTC 16:00 → 北京次日 00:00，日期进位）", () => {
-    // 注意：zh-CN 的 toLocaleString 用斜杠分隔（09/12），与后端日期串的短横线不同
-    expect(dateTimeTextBJ("2026-09-11T16:00:00Z")).toContain("09/12");
+    // 固定完整日期，避免跨日与跨年提醒混淆。
+    expect(dateTimeTextBJ("2026-09-11T16:00:00Z")).toContain("2026-09-12");
   });
 
   it("空值与非法值返回 --", () => {
@@ -397,5 +403,24 @@ describe("timeTextBJ / dateTimeTextBJ", () => {
     expect(out).toContain("15:45");
     expect(out).not.toContain("07:45");
     expect(out).not.toContain("23:45");
+  });
+});
+
+
+describe("display clocks without storage syntax", () => {
+  it("keeps source precision in detail, compact event dates, and date-only records", () => {
+    expect(dateTimeTextBJ("2026-10-13T01:32:45.123456Z", {seconds:true})).toBe("2026-10-13 09:32:45");
+    expect(eventTimeText("2026-10-12T16:32:00Z")).toBe("10-13 00:32");
+    expect(dateTimeTextBJ("2026-10-13")).toBe("2026-10-13");
+  });
+  it("does not roll an invalid calendar day into a seemingly valid source clock", () => {
+    for (const value of ["2026-02-29T09:00:00+08:00", "2026-10-13T24:00:00Z", "源时点未记录"]) expect(dateTimeTextBJ(value)).toBe("--");
+    expect(dateTimeTextBJ("2024-02-29T09:00:00+08:00")).toBe("2024-02-29 09:00");
+  });
+  it("formats timestamps in prose while retaining all conditions and missing-time explanations", () => {
+    const original = "原报价 2026-10-13T01:32:45Z；若消息撤回则失效。源时间未提供。";
+    expect(dateTimesInTextBJ(original)).toBe("原报价 2026-10-13 09:32:45；若消息撤回则失效。源时间未提供。");
+    expect(original).toContain("T01:32:45Z");
+    expect(dateTimesInTextBJ("2026-02-30T09:00:00Z 不能确认时间")).toBe("2026-02-30T09:00:00Z 不能确认时间");
   });
 });

@@ -54,7 +54,6 @@ from .picks import (
     _t_anomaly,
     _t_backtest,
     _t_factor_profile,
-    _t_minute_decisions,
     _t_picks,
 )
 from .themes import (
@@ -101,11 +100,6 @@ TOOL_SPECS: dict[str, ToolSpec] = {
                               "无参数", _t_param_changes),
     "agent_tasks": ToolSpec("agent_tasks", "任务中心：最近任务与状态（最近 20 条）",
                             "无参数", _t_agent_tasks),
-    # P2-28① 最后一项（2026-09-11）：做T决策库。惰性结算与 /api/market/minute-decisions 同口径。
-    "minute_decisions": ToolSpec("minute_decisions",
-                                 "做T决策库（记录→结算→错误归因；open=未到结算窗口，非失败）",
-                                 "symbol=可选，按标的代码过滤｜limit=条数（1~50，默认 20）",
-                                 _t_minute_decisions),
     # P2-28① 清单外补登记（2026-09-11）：预警触发记录。走 AlertRepository，不自己拼 SQL。
     "alert_events": ToolSpec("alert_events", "预警触发记录（时间为北京时间）",
                              "symbol=可选｜limit=条数（1~50，默认 20）", _t_alert_events),
@@ -213,7 +207,6 @@ TOOL_LABELS: dict[str, str] = {
     "factor_profile": "因子档案",
     "param_changes": "参数变更",
     "agent_tasks": "任务中心",
-    "minute_decisions": "做T决策",
     "alert_events": "预警记录",
     "boards": "板块排行",
     "hot": "人气热榜",
@@ -270,7 +263,7 @@ def tool_manifest(allowed_names: set[str] | None = None) -> str:
 
 
 # Availability describes installed dependencies, not data freshness or upstream health.
-_DB_TOOLS = {"positions", "watchlist", "picks", "minute_decisions", "events",
+_DB_TOOLS = {"positions", "watchlist", "picks", "events",
              "sentiment", "alert_events", "review", "param_changes", "agent_tasks"}
 
 

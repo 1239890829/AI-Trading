@@ -8,7 +8,7 @@ import { Skeleton } from "@/components/ui/loading";
 import { useResource } from "@/hooks/use-polling-fetch";
 import { usePollingFetch } from "@/hooks/use-polling-fetch";
 import { useExitPresence } from "@/hooks/use-exit-presence";
-import { bjDate, fmtAmount, pctColor, pctText } from "@/lib/format";
+import { bjDate, dateTimeTextBJ, fmtAmount, pctColor, pctText } from "@/lib/format";
 import {
   getFundFlowHistory,
   getFundFlowIntraday,
@@ -426,7 +426,7 @@ export function FundTab() {
         <Panel
           title="两市成交额（沪深）"
           className="min-h-0 overflow-hidden"
-          extra={<span className="text-[10px] text-zinc-600 dark:text-zinc-400">更新 {turnover?.updated_at || "--"}</span>}
+          extra={<span className="text-[10px] text-zinc-600 dark:text-zinc-400">更新 {dateTimeTextBJ(turnover?.updated_at, {seconds:true})}</span>}
         >
           {turnoverPending ? (
             <div className="space-y-2 px-4 py-3">
@@ -465,7 +465,7 @@ export function FundTab() {
         <Panel
           title="实时资金净额（五档）"
           className="min-h-0 overflow-hidden"
-          extra={<span className="text-[10px] text-zinc-600 dark:text-zinc-400">截至 {flowRt?.as_of ?? "--"}</span>}
+          extra={<span className="text-[10px] text-zinc-600 dark:text-zinc-400">截至 {dateTimeTextBJ(flowRt?.as_of, {seconds:true})}</span>}
         >
           {flowRtPending ? (
             <div className="space-y-2 px-4 py-3">

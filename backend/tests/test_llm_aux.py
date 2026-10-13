@@ -65,6 +65,71 @@ def _settings(monkeypatch, **kw):
     monkeypatch.setattr(settings, "review_llm_model", "m")
 
 
+def test_versioned_neutral_keeps_full_bounded_judgment_without_direction_change(tmp_path, monkeypatch):
+    import json
+    from app.events.store import EventStore
+    from app.events.attribution import read_attribution
+
+    sf = _factory(tmp_path)
+    _settings(monkeypatch, min_batch=1)
+    source = "公司相关业务尚未形成收入，影响仍待核。"
+    store = EventStore(sf)
+    ev, _ = store.add_event({"fingerprint": "neutral-proof", "title": "公司回应业务情况",
+        "summary": source, "source": "东财快讯", "source_item_id": "neutral-proof",
+        "source_symbol": "600001", "published_at": beijing_now_naive() - timedelta(minutes=2),
+        "directions": [{"target_type": "symbol", "target": "600001", "direction": 0,
+                        "matched_by": "source", "chain": "来源关联", "basis": "来源关联，方向待核"}]})
+    before = store.interpretations_of(ev.id)[0]
+    reason = "材料明确尚未形成收入，方向证据不足。" * 12
+    judgment = {"event_id": ev.id, "direction": 0, "theme": None,
+        "reason": reason, "chain": "公司回应 → 未兑现条件 → 无明确方向",
+        "evidence": {"field": "summary", "quote": source}}
+    monkeypatch.setattr(la, "_deepseek_items", lambda *_a, **_k: ([judgment], None))
+    assert la.judge_pending_batch(sf, theme_names=["人工智能"])["directions_written"] == 0
+    versions = store.interpretations_of(ev.id)
+    assert len(versions) == 2
+    assert versions[0].payload_json == before.payload_json
+    payload = json.loads(versions[-1].payload_json)
+    auxiliary = payload["llm_aux"]
+    assert auxiliary["reason"] == reason and auxiliary["chain"] == judgment["chain"]
+    assert auxiliary["evidence"] == judgment["evidence"]
+    assert auxiliary["input_version_id"] == before.id
+    assert auxiliary["observation_id"] == before.observation_id
+    assert auxiliary["state"] == "no_direction" and auxiliary["verification"] == "unverified"
+    assert payload["directions"] == json.loads(before.payload_json)["directions"]
+    assert read_attribution(sf, symbol="600001")["data"]["items"][0]["llm_aux"] == auxiliary
+
+
+@pytest.mark.parametrize("summary,chain,accepted", [
+    ("公司尚未形成订单或收入。", "公司已形成订单与收入。", False),
+    ("公司此前尚未形成收入，现在已形成收入。", "公司已形成收入。", True),
+    ("公司此前尚未形成收入，现在已形成订单。", "公司已形成收入。", False),
+    ("公司拟收购设备，尚待审批。", "公司拟收购设备，审批结果待核。", True),
+    ("公司尚未形成订单或收入。", "公司尚未形成订单或收入，方向待核。", True),
+    ("本公司尚未形成收入。", "同行公司已形成收入，本公司影响待核。", True),
+])
+def test_narrow_same_subject_unfulfilled_claim_conflict(tmp_path, monkeypatch, summary, chain, accepted):
+    import json
+    from app.core import llm_client
+    sf = _factory(tmp_path)
+    _settings(monkeypatch, min_batch=1)
+    event = _event(sf, "公司回应相关项目进展", age_min=1)
+    with sf() as db:
+        db.get(EventCard, event.id).summary = summary
+        db.commit()
+    candidate = la._pending_candidates(sf, theme_names=["人工智能"], max_batch=1, age_max_h=5)[0]
+    monkeypatch.setattr(llm_client, "chat_completion", lambda *_a, **_k: json.dumps({"items": [{
+        "event_id": event.id, "direction": 1, "theme": "人工智能", "chain": chain,
+        "reason": chain, "evidence": {"field": "summary", "quote": summary}}]}, ensure_ascii=False))
+    items, error = la._deepseek_items([candidate], sf, theme_names=["人工智能"])
+    assert (items is not None) is accepted
+    if not accepted:
+        assert "未兑现条件" in error
+    with sf() as db:
+        receipt = db.query(AgentResourceUsage).one()
+        assert receipt.state == ("succeeded" if accepted else "failed")
+
+
 def _mock_llm(monkeypatch, items=None, *, fail: bool = False):
     """mock chat_completion 与 extract_json_object。"""
     import app.core.llm_client as lc
@@ -348,7 +413,12 @@ def test_same_theme_model_hypothesis_preserves_rule_zero_and_records_non_applica
     assert json.loads(versions[0].payload_json)["directions"][0]["direction"] == 0
     latest_direction = json.loads(versions[-1].payload_json)["directions"][0]
     assert latest_direction["matched_by"] == "name" and latest_direction["direction"] == 0
-    assert versions[-1].payload_json == original_payload
+    latest_payload = json.loads(versions[-1].payload_json)
+    auxiliary = latest_payload.pop("llm_aux")
+    assert latest_payload == json.loads(original_payload)
+    assert auxiliary["state"] == "hypothesis" and auxiliary["verification"] == "unverified"
+    assert auxiliary["input_version_id"] == original.id
+    assert auxiliary["evidence"]["quote"] == event.title
     assert association.observation_id == versions[-1].observation_id
     from app.api.routes.events import _serialize
     presented = _serialize(current)

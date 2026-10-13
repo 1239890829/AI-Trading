@@ -17,6 +17,7 @@ from __future__ import annotations
 import asyncio
 import logging
 import re
+import json
 
 from sqlalchemy import and_, or_, select, update
 from sqlalchemy.orm import aliased
@@ -59,6 +60,36 @@ def _market_action_only(title: str, summary: str | None) -> bool:
     market = re.search(r"涨停|跌停|震荡反弹|低开高走|概念.{0,8}(?:上涨|下跌|走强)|ETF.{0,20}(?:涨|跌)[0-9]", text, re.I)
     material = re.search(r"签约|中标|量产|政策|获批|预增|短缺|供需|产能|涨价|公告|澄清|调查|收购|重组|回购|订单|供货|项目|投资", text)
     return bool(market and not material)
+
+
+def _unfulfilled_claim_conflict(source: dict, explanation: str) -> bool:
+    """One literal same-subject conflict; not a general entailment check."""
+    subject = r"(?<![\w\u4e00-\u9fff])(?P<subject>本公司|该公司|公司|本项目|该项目|相关项目)"
+    bridge = r"(?P<bridge>[^。；;\n，,]{0,18}?)"
+    tail = r"(?P<objects>[^。；;\n，,]{0,20})"
+    negative = re.compile(subject + bridge + r"(?:尚未|暂未|未)(?:形成|获得|产生|实现|兑现)" + tail)
+    positive = re.compile(subject + bridge + r"(?:已经|已)(?:形成|获得|产生|实现|兑现)" + tail)
+    positive_claims = []
+    for claim in positive.finditer(explanation):
+        words = claim["bridge"] + claim["objects"]
+        if any(term in words for term in ("是否", "不能确认", "未确认", "待核", "拟", "计划")):
+            continue
+        positive_claims.append((claim["subject"], {term for term in ("订单", "收入") if term in words}))
+    for field in ("title", "summary"):
+        text = source.get(field) or ""
+        for claim in negative.finditer(text):
+            objects = {term for term in ("订单", "收入") if term in claim["bridge"] + claim["objects"]}
+            # A clause can describe prior non-realization and a current change,
+            # eliding its subject after the comma. Preserve that counterexample.
+            end = text.find("。", claim.start())
+            clause = text[claim.start():end if end >= 0 else len(text)]
+            transition = re.search(r"(?:现在|现已|如今|目前)(?:已经|已)?(?:形成|获得|产生|实现|兑现)([^。；;\n，,]{0,20})", clause)
+            if (any(term in claim["bridge"] for term in ("此前", "过去", "曾"))
+                    and transition and any(term in transition[1] for term in objects)):
+                continue
+            if any(who == claim["subject"] and objects & obj for who, obj in positive_claims):
+                return True
+    return False
 
 
 def _pending_candidates(sf, *, theme_names: list[str], max_batch: int,
@@ -107,7 +138,7 @@ def _pending_candidates(sf, *, theme_names: list[str], max_batch: int,
     return rows
 
 
-def _apply_result(sf, cand: EventCard, hits: list[dict]) -> int:
+def _apply_result(sf, cand: EventCard, hits: list[dict], *, judgment: dict | None = None) -> int:
     """Atomically mark and write only against the model's source interpretation."""
     with sf() as db:
         latest_id = (select(EventInterpretation.id)
@@ -171,12 +202,26 @@ def _apply_result(sf, cand: EventCard, hits: list[dict]) -> int:
             db.add(added)
             existing[key] = added
             n += 1
-        if (n or unapplied) and observation_id is not None:
+        journal = judgment is not None and version is not None
+        if (n or unapplied or journal) and observation_id is not None:
             db.flush()
             db.expire(row, ["directions"])
-            note = (LLM_AUX_UNAPPLIED_PREFIX + "；".join(unapplied)) if unapplied else "LLM 辅助方向，待验证假设"
-            record_interpretation(db, row, observation_id, state="active",
-                                  effective_at=beijing_now_naive(), note=note)
+            note = (LLM_AUX_UNAPPLIED_PREFIX + "；".join(unapplied)) if unapplied else (
+                "LLM 辅助判读完成：无明确方向，未经验证" if journal and judgment["direction"] == 0 else
+                "LLM 辅助方向，待验证假设")
+            saved = record_interpretation(db, row, observation_id, state="active",
+                                         effective_at=beijing_now_naive(), note=note)
+            if journal:
+                payload = json.loads(saved.payload_json)
+                payload["llm_aux"] = {
+                    "event_id": cand.id, "input_version_id": expected, "observation_id": observation_id,
+                    "direction": judgment["direction"], "theme": judgment["theme"],
+                    "reason": judgment["reason"], "chain": judgment["chain"],
+                    "evidence": dict(judgment["evidence"]),
+                    "state": "no_direction" if judgment["direction"] == 0 else "hypothesis",
+                    "verification": "unverified", "eligibility_changed": False,
+                }
+                saved.payload_json = json.dumps(payload, ensure_ascii=False, sort_keys=True)
         db.commit()
         return n
 
@@ -272,13 +317,17 @@ def _deepseek_items(cands: list[EventCard], session_factory=None, *, theme_names
                 return invalid("模型影响对象不在当前官方题材目录")
             if any(not isinstance(item.get(field), str) for field in ("reason", "chain")):
                 return invalid("模型依据字段格式无效")
+            if any(len(item[field]) > 512 for field in ("reason", "chain")):
+                return invalid("模型依据超出保存边界")
             evidence = item.get("evidence")
             if not isinstance(evidence, dict) or evidence.get("field") not in {"title", "summary"}:
                 return invalid("模型证据字段无效")
             quote = evidence.get("quote")
             source = source_by_id[identity]
-            if not isinstance(quote, str) or not quote.strip() or quote not in (source.get(evidence["field"]) or ""):
+            if not isinstance(quote, str) or not quote.strip() or len(quote) > 1024 or quote not in (source.get(evidence["field"]) or ""):
                 return invalid("模型引用不是当前条目逐字原句")
+            if _unfulfilled_claim_conflict(source, item["chain"] + "\n" + item["reason"]):
+                return invalid("模型解释与同一主体原句的未兑现条件冲突")
             if direction and _market_action_only(source["title"], source["summary"]):
                 return invalid("纯行情不能变为新催化")
             text = source["title"] + "\n" + (source["summary"] or "")
@@ -354,7 +403,7 @@ def judge_pending_batch(sf=None, *, theme_names: list[str] | None = None,
             "chain": str(item.get("chain") or "")[:256],
             "basis": f"LLM 辅助判定（待验证）：{item['reason'][:100]}；原句：{item['evidence']['quote'][:100]}"[:256],
         }] if actionable else []
-        n = _apply_result(sf, cand, hits)
+        n = _apply_result(sf, cand, hits, judgment=item)
         hit_count += n
         mark_count += int(n > 0)
 

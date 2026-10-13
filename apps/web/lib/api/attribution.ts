@@ -9,6 +9,36 @@ export interface AttributionSourceContext {
   change_kind: string | null;
 }
 
+export interface PrimaryAttributionReason {
+  status: "source_clue" | "later_clue" | "unconfirmed";
+  label: string;
+  reason: string;
+  event_id: number | null;
+  version_id: number | null;
+  observation_id: number | null;
+  relation: "direct_symbol" | "source_association" | "unknown";
+  timing_relation: "known_before_response" | "late_source_observation" | "interpretation_after_response" | "time_unknown" | "response_time_unknown";
+  excerpt: {field: "title" | "summary"; quote: string; truncated: boolean} | null;
+  qualifiers: AttributionEvidenceItem["qualifiers"];
+  causality_verified: false;
+  fact_verified: false;
+  interpretation_view: "current";
+}
+
+export interface AttributionAuxJudgment {
+  event_id: number;
+  input_version_id: number | null;
+  observation_id: number | null;
+  direction: number;
+  theme: string | null;
+  reason: string;
+  chain: string;
+  evidence: {field: "title" | "summary"; quote: string};
+  state: "no_direction" | "hypothesis";
+  verification: "unverified";
+  eligibility_changed: false;
+}
+
 /** Current, evidence-bound explanation. It never replaces an archived selection basis. */
 export interface AttributionEvidenceItem {
   event_id: number;
@@ -46,6 +76,7 @@ export interface AttributionEvidenceItem {
   timing_relation?: {status: "known_before_response" | "late_source_observation" | "interpretation_after_response" | "time_unknown"; label: string};
   alternatives: string[];
   limitations: string[];
+  llm_aux?: AttributionAuxJudgment | null;
 }
 
 export interface StockAttributionPayload {
@@ -54,6 +85,8 @@ export interface StockAttributionPayload {
   count: number;
   items: AttributionEvidenceItem[];
   later_items?: AttributionEvidenceItem[];
+  primary_reason?: PrimaryAttributionReason;
+  evidence_counts?: {scope: "returned_rows_only"; returned: number; theme_only: number; unknown: number; source_time_unknown: number};
   response_context?: {pool_date: string | null; response_as_of: string | null; view: "current_with_response_context"; historical_replay: false};
 }
 

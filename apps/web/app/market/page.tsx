@@ -105,7 +105,7 @@ function MarketInner() {
       onClick={() => openSymbolDetail({symbol: indexDetailSymbol(q.symbol, q.market)})}
       title={`查看 ${q.name ?? q.symbol} 指数详情${q.quality_reasons?.length ? "｜" + q.quality_reasons.join("；") : ""}`}>
       <span className="bc-index-name"><span>{q.name ?? q.symbol}</span></span>
-      <span className="bc-index-value"><strong>{q.price == null ? "未开盘" : fmt(q.price)}</strong><span className="bc-index-status"><span className={pctColor(q.change_pct)}>{pctText(q.change_pct)}</span><QualityBadge quality={q.quality} reasons={q.quality_reasons} symbol={q.symbol} market={q.market} dataTimestamp={q.data_timestamp} session={q.display_session} /></span></span>
+      <span className="bc-index-value"><strong>{q.price == null ? "未开盘" : fmt(q.price)}</strong><span className="bc-index-status"><span className={pctColor(q.change_pct)}>{pctText(q.change_pct)}</span><QualityBadge align="start" quality={q.quality} reasons={q.quality_reasons} symbol={q.symbol} market={q.market} dataTimestamp={q.data_timestamp} session={q.display_session} /></span></span>
       <span className="bc-index-amount"><span>成交额</span><span>{fmtAmount(q.amount)}</span></span>
     </button>
   );

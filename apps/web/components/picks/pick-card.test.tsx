@@ -258,7 +258,7 @@ describe("首次加入记录的来源与参考身份", () => {
     expect(entry.textContent).toContain("加入参考价 ¥5.10");
     expect(entry.textContent).not.toContain("未查到");
     fireEvent.click(within(entry).getByText("时点依据"));
-    expect(within(entry).getByText("行情快照时间").nextElementSibling?.textContent).toBe("2026-10-09T10:11:58+08:00");
+    expect(within(entry).getByText("行情快照时间").nextElementSibling?.textContent).toBe("2026-10-09 10:11:58");
     expect(entry.textContent).not.toContain("报价源时间");
     expect(entry.textContent).toContain("intraday-original");
   });

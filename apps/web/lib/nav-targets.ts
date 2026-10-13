@@ -34,12 +34,11 @@ export const NAV_TARGETS = {
   stock_kline: (symbol: string) => workbenchTabUrl(symbol, { chartTab: "kline" }),
   stock_minute: (symbol: string) => workbenchTabUrl(symbol, { chartTab: "minute" }),
   stock_flow: (symbol: string) => workbenchTabUrl(symbol, { chartTab: "flow" }),
-  // 右栏 tab（rt 与 RightTab 同域：book|trades|trade|real|profile|info|speed|boards|dt）
+  // 右栏 tab（rt 与 RightTab 同域：book|trades|trade|real|profile|info|speed|boards|themes|events|reason）
   // 口径：只登记**个股研究面**的页签。刻意不登记 trade / real（模拟交易、真实持仓
   // 是账户面，不是"看这只票"，助手回复里也不该引导去下单）与 speed / boards（指数专属）。
   stock_book: (symbol: string) => workbenchTabUrl(symbol, { rightTab: "book" }),
   stock_trades: (symbol: string) => workbenchTabUrl(symbol, { rightTab: "trades" }),
-  stock_dt: (symbol: string) => workbenchTabUrl(symbol, { rightTab: "dt" }),
   stock_profile: (symbol: string) => workbenchTabUrl(symbol, { rightTab: "profile" }),
   stock_info: (symbol: string) => workbenchTabUrl(symbol, { rightTab: "info" }),
   theme_ladder: (focus?: string) => themesUrl(focus),
@@ -113,7 +112,6 @@ const PARAM_KEYS: ReadonlySet<NavKey> = new Set<NavKey>([
   "stock_flow",
   "stock_book",
   "stock_trades",
-  "stock_dt",
   "stock_profile",
   "stock_info",
   "intraday_theme",
@@ -132,7 +130,7 @@ const PARAM_KEYS: ReadonlySet<NavKey> = new Set<NavKey>([
  * （不再单独成链），产出带参深链。见 `lib/entity-links.ts`。
  *
  * **收录口径**：词必须来自**页签真实标签**（图表区 K线/分时/资金图；
- * 右栏 盘口/逐笔/资料/资讯/做T）或它的常见同义说法，且"说了就该能点进那个页签"。
+ * 右栏 盘口/逐笔/资料/资讯）或它的常见同义说法，且"说了就该能点进那个页签"。
  * 刻意不收：模拟交易 / 真实持仓（账户面）、涨速 / 板块（指数专属）、
  * 单字词（会与正文抢匹配）。
  */
@@ -163,7 +161,6 @@ export const STOCK_TAB_ALIASES: Record<string, NavKey> = {
   个股资讯: "stock_info",
   公告: "stock_info",
   资讯: "stock_info",
-  做T: "stock_dt",
 };
 
 /** 页签别名按长度降序（最长匹配优先："资金流向图" 先于 "资金流向"）。 */
@@ -214,7 +211,6 @@ export const NAV_LABELS: Record<NavKey, string> = {
   stock_flow: "资金流向图",
   stock_book: "盘口",
   stock_trades: "逐笔成交",
-  stock_dt: "做T",
   stock_profile: "财务资料",
   stock_info: "公告新闻",
   theme_ladder: "题材梯队",

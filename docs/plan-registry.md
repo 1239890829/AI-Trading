@@ -345,3 +345,7 @@ IMP-059由最新用户直接授权；总方案、产品§16.3、细功能§28、
 用户直派性能深查和UI纠偏沿既有IMP-019，不增加任务/业务页面。runtime-performance§9记录当前问题、源码候选与同输入结果；W06和handoff承接当前状态/门禁/运行；data-sources记录20d本地历史与实时范围分离、交易日guard，feature-closure-audit§45记录静态读取、隐藏/取消和交互消费。保留IMP-092逐条阅读和现有评分/通知门。implementation-plan、INDEX、AGENTS、Skills、semantic-decisions、协作/CI/模型规则不适用：没有新增文档权威、源/模型/机会准入、发布角色或门序。工程绿色不替代真实交易时段SLO，任务仍部分完成。
 
 PR #265发布后，用户追加市场指数三列和弹窗双向过渡纠偏。原transition属性不足以证明退出画面，补键盘/无效来源/Esc及正文卸载反例、共享视觉所有权和独立入口检查，事实同步报告§9、W06、handoff及细功能§45。未改交易/选股/通知资格、后台数据或时效契约；其它权威面仍不适用，不以UI机制修补增建业务注册表或依赖。
+
+### 2026-10-13用户T退出与既有阅读修订传播
+
+用户明确退役做T、收敛原因/通知并复用详情右列；最新用户修订优先旧T实现与规划。implementation-plan现役头注、hunting-decision-design/product-closure-design/feature-closure-audit、semantic-decisions、runtime-performance、W00原线索owner/W06主任务、INDEX与handoff同步；旧迁移/ORM/研究档案不删、不恢复新生产。没有新源/模型/评分/推送资格/权限/一级页面或调度频率改变，data-sources/AGENTS/Skills不适用规则升级。依赖是现有消费者兼容安全patch，不新设工具/服务准入。工程门、exactHEAD回执与实盘/语义效果仍分开，不能将有限构建或合成夹具写成全域SLO和选股收益证明。

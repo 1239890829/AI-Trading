@@ -7,6 +7,7 @@ import { mergeQuoteIntoMinutes } from "@/lib/kline-live";
 import { getWatchlist as readActualWatchlist } from "@/lib/api/watchlist";
 import { notifyWatchlistChanged } from "@/lib/watchlist-sync";
 import type { Kline, OrderBook, Quote, Trade } from "@/types/market";
+import {DetailModalProvider} from "@/components/detail/detail-modal";
 
 /**
  * P1-5（2026-09-11）：同一只股票不再被两条 WS 订阅。
@@ -48,6 +49,8 @@ const api = vi.hoisted(() => ({
   getLimitUpPoolSnapshot: vi.fn(),
   getSpeedRank: vi.fn(),
   getBoards: vi.fn(),
+  getStockAttribution: vi.fn(),
+  getEventAttribution: vi.fn(),
 }));
 
 vi.mock("@/lib/api", async (importOriginal) => ({
@@ -134,16 +137,32 @@ function testQuoteFeed() {
 }
 
 describe("StockDetailPanel · 即时报价复用", () => {
+  it("REST基座尾记录按北京时间显示，保留原始bar身份", async () => {
+    const original = kline(); original.bars[0].ts = "2026-10-09T10:00:12+08:00";
+    api.getKlinePayload.mockResolvedValue(original);
+    const quote = {...audit, quality: "stale" as const, symbol: "600519", price: 88, data_timestamp: "2026-10-09T02:01:30Z"};
+    const view = render(<StockDetailPanel symbol="600519" liveQuote={quote} />); await settle();
+    fireEvent.click(view.getByRole("button", {name: "K线诊断"}));
+    const drawer = within(view.getByRole("dialog"));
+    expect(drawer.getByText(/REST基座/).textContent).toContain("尾记录 2026-10-09 10:00:12");
+    expect(drawer.getByText(/REST基座/).textContent).not.toContain("T10:00:12+08:00");
+    expect(original.bars[0].ts).toBe("2026-10-09T10:00:12+08:00");
+  });
   it.each(["low", "stale", "invalid"] as const)("%s报价可作为保留读数但不能推进K线或分钟", async (quality) => {
     const quote = {...audit, quality, symbol: "600519", price: 88, data_timestamp: "2026-10-09T02:01:30Z"};
     const view = render(<StockDetailPanel symbol="600519" chartTab="kline" liveQuote={quote} />);
     await settle();
     expect(view.getByTestId("kline-price").textContent).toBe("20");
-    expect(view.getByText(/未推进图表尾点/)).toBeTruthy();
+    expect(view.queryByText(/未推进图表尾点/)).toBeNull();
+    fireEvent.click(view.getByRole("button", {name: "K线诊断"}));
+    expect(within(view.getByRole("dialog")).getByText(/未推进图表尾点/)).toBeTruthy();
+    fireEvent.click(within(view.getByRole("dialog")).getByRole("button", {name: "关闭"}));
     fireEvent.click(view.getByRole("button", {name: "分时"}));
     await settle();
     expect(view.getByTestId("minute-price").textContent).toBe("20");
-    expect(view.getByText(/未推进图表尾点/)).toBeTruthy();
+    expect(view.queryByText(/未推进图表尾点/)).toBeNull();
+    fireEvent.click(view.getByRole("button", {name: "分钟诊断"}));
+    expect(within(view.getByRole("dialog")).getByText(/未推进图表尾点/)).toBeTruthy();
   });
 
   it("K线首取失败可重试，后续失败保留旧图且不显示确认空态", async () => {
@@ -157,7 +176,7 @@ describe("StockDetailPanel · 即时报价复用", () => {
     expect(view.getByTestId("kline-price").textContent).toBe("20");
     api.getKlinePayload.mockRejectedValueOnce(new Error("synthetic_refresh_failure"));
     await advance(60_000);
-    expect(view.getByRole("alert").textContent).toContain("保留上次结果");
+    expect(view.getByRole("alert").textContent).toContain("保留结果");
     expect(view.getByTestId("kline-price").textContent).toBe("20");
   });
 
@@ -230,7 +249,12 @@ describe("StockDetailPanel · 即时报价复用", () => {
     view.rerender(<StockDetailPanel {...props} liveQuote={{...old, price: 21}} />);
     expect(view.getByTestId("kline-price").textContent).toBe("22");
     expect(view.container.querySelector(".quote-sheet")?.textContent).toContain("22.00");
-    expect(view.getByText(/最近行情帧缺少该证券/)).toBeTruthy();
+    expect(view.getByRole("status").textContent).toBe("报价待恢复");
+    expect(view.queryByText(/最近行情帧缺少该证券/)).toBeNull();
+    fireEvent.click(view.getByRole("button", {name: "K线诊断"}));
+    expect(within(view.getByRole("dialog")).getByText(/最近行情帧缺少该证券/)).toBeTruthy();
+    fireEvent.click(within(view.getByRole("dialog")).getByRole("button", {name: "关闭"}));
+    await advance(200);
     await act(async () => {feed.publish("600519", {...latest, price: 23});});
     expect(view.getByTestId("kline-price").textContent).toBe("23");
     expect(view.queryByText(/最近行情帧缺少该证券/)).toBeNull();
@@ -309,6 +333,7 @@ beforeEach(() => {
   api.getLimitUpPoolSnapshot.mockResolvedValue({trade_date: "2026-10-09", pool: []});
   api.getSpeedRank.mockResolvedValue({theme: "881156.TI", theme_name: "粮食概念", window: "5m", basis: "最近5分钟", items: []});
   api.getBoards.mockResolvedValue([]);
+  api.getStockAttribution.mockImplementation(async (symbol: string) => ({schema_version: 1, symbol, count: 0, items: []}));
   api.getPaperAccount.mockResolvedValue(account());
   api.getPaperPositions.mockResolvedValue([]);
   api.getPaperOrders.mockResolvedValue([]);
@@ -646,6 +671,60 @@ describe("StockDetailPanel · WS 订阅复用（P1-5）", () => {
 
 
 describe("StockDetailPanel · 核对视角入口", () => {
+  it("题材读取错误可恢复，错股资料不冒充确认空集或当前归属", async () => {
+    api.getStockThemes.mockResolvedValueOnce({symbol: "000001", official: [], attribution: []});
+    const view = render(<StockDetailPanel symbol="600519" />); await settle();
+    fireEvent.click(view.getByRole("tab", {name: "题材归属"}));
+    const panel = within(view.getByRole("tabpanel"));
+    expect(panel.getByRole("alert").textContent).toContain("题材读取失败");
+    expect(panel.queryByText("本次资料未返回题材归属。")).toBeNull();
+    api.getStockThemes.mockResolvedValueOnce({symbol: "600519", official: [{theme_code: "fixture", theme_name: "恢复题材", source: "ths_official"}], attribution: []});
+    fireEvent.click(panel.getByRole("button", {name: "重新读取题材"})); await settle();
+    expect(panel.getByRole("link", {name: "恢复题材"})).toBeTruthy();
+    expect(panel.queryByRole("alert")).toBeNull();
+    expect(api.getStockThemes).toHaveBeenCalledTimes(2);
+  });
+  it("驱动线索进入既有抽屉，图表上方不展开长解释，也不伪造首次加入记录", async () => {
+    const view = render(<DetailModalProvider><StockDetailPanel symbol="600519" /></DetailModalProvider>);
+    await settle();
+    const chart = view.getByTestId("kline-price");
+    expect(view.container.querySelector(".detail-context-disclosure")).toBeNull();
+    expect(api.getStockAttribution).not.toHaveBeenCalled();
+    const opener = view.getByRole("button", {name: "驱动线索"}); opener.focus();
+    fireEvent.click(opener);
+    await settle();
+    const drawer = view.getByRole("dialog", {name: "驱动线索"});
+    expect(drawer.className).toContain("motion-drawer");
+    expect(drawer.contains(chart)).toBe(false);
+    expect(view.getByTestId("kline-price")).toBe(chart);
+    expect(within(drawer).queryByText("原首次加入记录")).toBeNull();
+    expect(api.getStockAttribution).toHaveBeenCalledTimes(1);
+    fireEvent.click(within(drawer).getByText(/不改写首次入选记录/));
+    expect(view.getByRole("dialog", {name: "驱动线索"})).toBe(drawer);
+    fireEvent.click(within(drawer).getByRole("button", {name: "关闭"}));
+    expect(view.queryByRole("dialog")).toBeNull();
+    expect(document.activeElement).toBe(opener);
+  });
+
+  it("题材、事件与原因只在右栏可读，资料概念复用已有题材链接，做T已移除", async () => {
+    api.getStockThemes.mockResolvedValue({symbol: "600519", official: [{theme_code: "fixture", theme_name: "合成题材", source: "ths_official"}], attribution: []});
+    api.getCompanyProfile.mockResolvedValue({source: "synthetic_fixture", board_groups: {industry: ["合成行业"], region: [], concept: ["资料概念"], style_index: []}});
+    const view = render(<StockDetailPanel symbol="600519" />);
+    await advance(900);
+    expect(view.queryByRole("tab", {name: "做T"})).toBeNull();
+    expect(view.queryByText("合成题材")).toBeNull();
+    const tabs = view.getByRole("tablist", {name: "核对视角"});
+    expect(tabs.getAttribute("style")).toContain("repeat(5");
+    fireEvent.click(view.getByRole("tab", {name: "题材归属"}));
+    const panel = within(view.getByRole("tabpanel"));
+    expect(panel.getByRole("link", {name: "合成题材"})).toBeTruthy();
+    expect(panel.getByRole("link", {name: "资料概念"})).toBeTruthy();
+    fireEvent.click(view.getByRole("tab", {name: "资料"}));
+    expect(within(view.getByRole("tabpanel")).getByRole("link", {name: "资料概念"}).getAttribute("href")).toContain("tab=themes");
+    expect(view.getByRole("tab", {name: "相关事件"})).toBeTruthy();
+    expect(view.getByRole("tab", {name: "涨停原因"})).toBeTruthy();
+    expect(api.getStockThemes).toHaveBeenCalledTimes(1);
+  });
   it("only mounts market prints in their own perspective", async () => {
     const view = render(<StockDetailPanel symbol="600519" chartTab="flow" />);
     await settle();
@@ -670,9 +749,9 @@ describe("StockDetailPanel · 核对视角入口", () => {
     fireEvent.keyDown(controls.getByRole("tab", { name: "资料" }), { key: "Home" });
     expect(onRightTabChange).toHaveBeenLastCalledWith("book");
     fireEvent.keyDown(controls.getByRole("tab", { name: "盘口" }), { key: "ArrowLeft" });
-    expect(onRightTabChange).toHaveBeenLastCalledWith("info");
-    expect(document.activeElement).toBe(controls.getByRole("tab", { name: "资讯" }));
-    expect(controls.getAllByRole("tab")).toHaveLength(7);
+    expect(onRightTabChange).toHaveBeenLastCalledWith("real");
+    expect(document.activeElement).toBe(controls.getByRole("tab", { name: "手工记账" }));
+    expect(controls.getAllByRole("tab")).toHaveLength(9);
   });
 
   it("指数只提供适用视角，不能从入口进入股票交易", () => {
@@ -793,7 +872,7 @@ describe("StockDetailPanel · 每个端点只读取一次首屏", () => {
     api.getOrderBook.mockRejectedValueOnce(new Error("refresh unavailable"));
     await advance(5000);
     expect(panel.getByText("买1")).toBeTruthy();
-    expect(panel.getByRole("alert").textContent).toContain("保留上次结果");
+    expect(panel.getByRole("alert").textContent).toContain("保留结果");
     api.getOrderBook.mockResolvedValueOnce({ ...book(), asks: [], bids: [] });
     await advance(5000);
     expect(panel.getByRole("table").querySelectorAll("tr")).toHaveLength(0);
@@ -1028,6 +1107,6 @@ describe("StockDetailPanel · 每个端点只读取一次首屏", () => {
     api.getMinuteLine.mockRejectedValueOnce(new Error("synthetic_index_failure"));
     await advance(60_000);
     expect(view.getByTestId("minute-price").getAttribute("data-index-last")).toBe("3030");
-    expect(view.getByRole("alert").textContent).toContain("指数叠加校准失败");
+    expect(view.getByRole("alert").textContent).toContain("指数叠加读取失败");
   });
 });

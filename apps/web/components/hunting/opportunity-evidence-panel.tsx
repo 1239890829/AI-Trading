@@ -5,7 +5,7 @@ import { useMemo, useRef, useState } from "react";
 import { useExitPresence } from "@/hooks/use-exit-presence";
 import { useResource } from "@/hooks/use-polling-fetch";
 import { getOpportunities, type OpportunityView } from "@/lib/api/picks";
-import { bjDate } from "@/lib/format";
+import { bjDate, dateTimeTextBJ } from "@/lib/format";
 import { readingClues, readingExcerpt } from "@/lib/reading-clues";
 import { ConditionList, ExplanationMap, FactCards, FactTimeline, NarrativeText } from "@/components/ui/explanation-map";
 import { ReadingRow, readingRowClasses } from "@/components/ui/reading-row";
@@ -108,7 +108,7 @@ export function OpportunityEvidencePanel({date: requestedDate, onDateChange, act
       </div>
       {data.cards.length > limit && <button onClick={() => setLimit(n => n + 10)} className="mt-2 min-h-11 rounded border border-zinc-300 px-3 dark:border-zinc-600 focus-visible:outline-2 focus-visible:outline-sky-500">再显示 10 只</button>}
       {data.runs.map(run => <div key={run.run_id} className="mt-2 leading-relaxed">
-        <p>{run.scenario} · 来源状态 {run.data_state} · {run.as_of}</p>
+        <p>{run.scenario} · 来源状态 {run.data_state} · {dateTimeTextBJ(run.as_of, {seconds:true})}</p>
         {run.gate_counts && Object.entries(run.gate_counts).map(([key, count]) => <span key={key} className="mr-3">{GATES[key] ?? key} {count} 个题材</span>)}
       </div>)}
     </>}

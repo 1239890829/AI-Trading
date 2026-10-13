@@ -54,50 +54,6 @@ async def _t_factor_profile(ctx: ToolContext, **kw) -> str:
     return "\n".join(parts)
 
 
-async def _t_minute_decisions(ctx: ToolContext, **kw) -> str:
-    """做 T 决策库（记录 → 结算 → 错误归因），P2-28① 最后一项。
-
-    只读取既有记录；结算归既有 minute-decisions 维护流程，助手查询不写库。
-
-    纪律：**outcome=open 表示"还没到结算窗口"，不是失败**——
-    展示时必须给出各 outcome 的计数，避免模型把一堆 open 读成"决策全错"。
-    """
-    if ctx.session_factory is None:
-        return "做T决策：无数据源（session_factory 未提供）"
-    symbol = (kw.get("symbol") or "").strip() or None
-    try:
-        limit = int(kw.get("limit") or 20)
-    except (TypeError, ValueError):
-        return "参数不合法：limit 必须是整数"
-    limit = max(1, min(limit, 50))
-
-    try:
-        from app.market import minute_decisions as md
-
-        items = await asyncio.to_thread(md.list_decisions, ctx.session_factory,
-                                       symbol, limit)
-    except Exception as exc:  # noqa: BLE001
-        return f"做T决策：读取失败（{exc}）"
-
-    if not items:
-        return f"做T决策：暂无记录（symbol={symbol or '全部'}）"
-
-    counts: dict[str, int] = {}
-    for it in items:
-        k = it.get("outcome") or "open"
-        counts[k] = counts.get(k, 0) + 1
-    head = "、".join(f"{k} {v}" for k, v in sorted(counts.items()))
-    body = _fmt_rows(
-        f"做T决策（{symbol or '全部'}，最近 {len(items)} 条 · {head}）",
-        items,
-        [("symbol", ""), ("trigger_ts", "触发"), ("bias", "方向"),
-         ("signal_price", "信号价"), ("realized_spread_pct", "已实现%"),
-         ("outcome", "结果")],
-        total=len(items),
-    )
-    return body + "\n注：outcome=open 表示尚未到结算窗口，不是失败。"
-
-
 async def _t_anomaly(ctx: ToolContext, **kw) -> str:
     """当日异动原因（ths 独占，today-only）：全市场榜或按代码查「为什么异动」。"""
     syms_raw = (kw.get("symbols") or "").strip()

@@ -98,65 +98,56 @@ export function winRateColor(rate: number | null | undefined, scale: "01" | "pct
   return v >= 50 ? "text-up-ink dark:text-up" : "text-down-ink dark:text-down";
 }
 
-/**
- * 事件/快讯时间统一显示（2026-09-09 修「列表时间与详情时间不一致」）。
- *
- * 后端 event_card.published_at 全库统一为北京时间字符串
- * "YYYY-MM-DD HH:MM:SS.ffffff"（实测 400/400 条同格式，故按字符串排序即时间序）。
- * 这里**不 new Date() 解析**：非 ISO 字符串在各浏览器/时区下解析结果不一，
- * 正是列表与详情对不上的根源之一。纯字符串截取，列表与详情共用同一函数。
- */
-export function eventTimeText(iso: string | null | undefined): string {
-  if (!iso) return "--";
-  const s = String(iso).replace("T", " ").trim();
-  const m = s.match(/^\d{4}-(\d{2}-\d{2})[ ](\d{2}:\d{2})/);
-  if (m) return `${m[1]} ${m[2]}`;
-  return s.slice(0, 16) || "--";
-}
-
-export function timeText(iso: string | null | undefined): string {
-  if (!iso) return "--";
-  const d = new Date(iso);
-  if (Number.isNaN(d.getTime())) return "--";
-  return d.toLocaleTimeString("zh-CN", { hour12: false });
-}
-
-/**
- * **agent 域专用**：把北京 naive 时间戳正确显示为北京时间。
- *
- * 背景（2026-09-12 方案 A 起）：agent 域 `agent_task` / `agent_agenda` /
- * `agent_param_change` 等表的事件时间已统一存**北京 naive**（`beijing_now_naive()`，
- * 与全系统事件时间口径一致；原 UTC naive 存量已一次性 +8h 迁移）。
- * 无时区标记的串 `new Date("...")` 会按**运行环境时区**解释 ⇒ 在海外/CI
- * 机器上错位，因此 naive 串必须补 `+08:00` 显式声明。
- *
- * 与 `timeText` 的两点差异（都不可省）：
- * 1. 无 `Z`/偏移的串**补 `+08:00` 按北京解释**；已带时区的原样处理，两种输入都安全；
- * 2. 输出**固定 `Asia/Shanghai`**，不再依赖运行环境时区（`timeText` 没指定
- *    timeZone，在 CI/海外机器上同样会错，属既有隐患）。
- */
-/** 把 agent 域的时间串解析成 Date（naive 按北京解释）；非法返回 null。 */
+/** Display only: timezone-free event clocks are Beijing; ISO offsets retain their meaning. */
 function parseBjNaive(iso: string | null | undefined): Date | null {
   if (!iso) return null;
-  const s = String(iso).trim();
-  const hasZone = /(?:Z|[+-]\d{2}:?\d{2})$/.test(s);
-  const d = new Date(hasZone ? s : `${s}+08:00`);
+  const s = String(iso).trim().replace(" ", "T");
+  const parts = s.match(/^(\d{4})-(\d{2})-(\d{2})(?:T(\d{2}):(\d{2})(?::(\d{2})(?:\.\d+)?)?(?:Z|[+-]\d{2}:?\d{2})?)?$/i);
+  if (!parts) return null;
+  const [, year, month, day, hour, minute, second] = parts;
+  const calendar = new Date(Date.UTC(Number(year), Number(month) - 1, Number(day)));
+  if (calendar.getUTCFullYear() !== Number(year) || calendar.getUTCMonth() + 1 !== Number(month) || calendar.getUTCDate() !== Number(day)
+    || Number(hour ?? 0) > 23 || Number(minute ?? 0) > 59 || Number(second ?? 0) > 59) return null;
+  const hasZone = /(?:Z|[+-]\d{2}:?\d{2})$/i.test(s);
+  const normalized = hour === undefined ? `${s}T00:00:00+08:00` : hasZone ? s : `${s}+08:00`;
+  const d = new Date(normalized);
   return Number.isNaN(d.getTime()) ? null : d;
 }
 
-export function timeTextBJ(iso: string | null | undefined): string {
+const displayTimeBJ = new Intl.DateTimeFormat("sv-SE", {timeZone:"Asia/Shanghai", hour:"2-digit", minute:"2-digit", second:"2-digit", hourCycle:"h23"});
+const displayDateBJ = new Intl.DateTimeFormat("sv-SE", {timeZone:"Asia/Shanghai", year:"numeric", month:"2-digit", day:"2-digit"});
+
+/** A time-only label is for a surface that already identifies its date. */
+export function timeText(iso: string | null | undefined): string {
   const d = parseBjNaive(iso);
-  if (!d) return "--";
-  return d.toLocaleTimeString("zh-CN", { hour12: false, timeZone: "Asia/Shanghai" });
+  return d ? displayTimeBJ.format(d) : "--";
 }
 
-/** 同上，但带月日：`MM-DD HH:mm`（任务中心用的是这个格式）。 */
-export function dateTimeTextBJ(iso: string | null | undefined): string {
+export function timeTextBJ(iso: string | null | undefined): string {
+  return timeText(iso);
+}
+
+/** Normal UI text retains the date and never exposes storage syntax or timezone suffixes. */
+export function dateTimeTextBJ(iso: string | null | undefined, options: {seconds?: boolean} = {}): string {
   const d = parseBjNaive(iso);
   if (!d) return "--";
-  return d.toLocaleString("zh-CN", {
-    hour12: false, timeZone: "Asia/Shanghai",
-    month: "2-digit", day: "2-digit", hour: "2-digit", minute: "2-digit",
+  const date = displayDateBJ.format(d);
+  if (/^\d{4}-\d{2}-\d{2}$/.test(String(iso).trim())) return date;
+  const time = displayTimeBJ.format(d);
+  return `${date} ${options.seconds ? time : time.slice(0, 5)}`;
+}
+
+/** Compact event lists still show a calendar date; an absolute clock is converted first. */
+export function eventTimeText(iso: string | null | undefined): string {
+  const full = dateTimeTextBJ(iso);
+  return full === "--" ? full : full.slice(5);
+}
+
+/** Format clocks embedded in visible prose, without changing API values or identity fields. */
+export function dateTimesInTextBJ(text: string): string {
+  return text.replace(/\b\d{4}-\d{2}-\d{2}[T ]\d{2}:\d{2}(?::\d{2}(?:\.\d+)?)?(?:Z|[+-]\d{2}:?\d{2})?\b/g, original => {
+    const formatted = dateTimeTextBJ(original, {seconds:true});
+    return formatted === "--" ? original : formatted;
   });
 }
 

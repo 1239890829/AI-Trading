@@ -206,7 +206,7 @@ function DetailModalBody({ payload, active, onClose }: { payload: DetailPayload;
         {/* 元信息（判定结果/方向/板块等，跨模块透传） */}
         {payload.eventSnapshot ? <EventOverview event={payload.eventSnapshot} symbol={payload.symbol} /> : payload.meta && payload.meta.length > 0 && <FactCards label="判读记录" items={payload.meta}/>}
 
-        {payload.kind === "attribution" && <div className="min-w-0 border-b border-zinc-200 pb-2 text-xs dark:border-zinc-700/60" aria-label="原首次加入依据">
+        {payload.kind === "attribution" && payload.selectionEntry && <div className="min-w-0 border-b border-zinc-200 pb-2 text-xs dark:border-zinc-700/60" aria-label="原首次加入依据">
           <h3 className="font-medium">原首次加入记录</h3>
           <div className="mt-1 flex flex-wrap gap-x-3 gap-y-1 text-zinc-600 dark:text-zinc-400">
             <span>加入时间 {selectedAt ? <time dateTime={selectedAt}>{bjDate(selectedAt)} {timeTextBJ(selectedAt)}</time> : "未记录"}</span>
@@ -215,7 +215,7 @@ function DetailModalBody({ payload, active, onClose }: { payload: DetailPayload;
             <span>非成交记录</span>
           </div>
         </div>}
-        {(payload.kind === "attribution" || payload.kind === "event") && (payload.symbol || payload.eventId) && <StockAttributionPanel key={`${payload.symbol || ""}:${payload.eventId || ""}`} symbol={payload.symbol} eventId={payload.eventId} defaultExpanded bounded={false} selectedAt={selectedAt} recordedRefs={payload.eventRefs} selectionContext={payload.kind === "attribution"} title={payload.kind === "event" ? "事件依据核对" : "驱动线索"} />}
+        {(payload.kind === "attribution" || payload.kind === "event") && (payload.symbol || payload.eventId) && <StockAttributionPanel key={`${payload.symbol || ""}:${payload.eventId || ""}`} symbol={payload.symbol} eventId={payload.eventId} defaultExpanded defaultSourceExpanded bounded={false} selectedAt={selectedAt} recordedRefs={payload.eventRefs} selectionContext={payload.kind === "attribution" && !!payload.selectionEntry} title={payload.kind === "event" ? "事件依据核对" : "驱动线索"} />}
 
         {/* feed（消息+事件合并）：列表 → 点条目切到单条详情 */}
         {isFeed && (

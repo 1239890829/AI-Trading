@@ -149,3 +149,11 @@ LAB校验版本`news-classification-validator-v1.1`，提示仍为`news-classifi
 既有`llm_aux`仍用原模型/预算/候选门，不接Jev、Decisions或KEV。修补标题孤立判断：输入使用已保存标题和摘要，输出新增稳定event_id及逐字evidence，原direction/theme/chain/reason四字段保留。方向只接受-1/0/1；身份、目录与引用不符失败关闭，不写已判。纯价格涨跌不作为新的催化候选；实际供需/政策/公司材料仍可处理。有限词法守卫不冒充通用语义核验。
 
 这一项不是LAB context-v2整体晋级，也不构成目标域人工gold/准确率验证。所有llm_aux方向仍是未验证模型假设，选股、晨报、板块通知的排除边界保持；失败不能阻断规则和行情。未运行新的真实模型评估或历史回补，不修改生产旧解释。工程反例与完整门禁随稳定性PR交付，效果仍按既有独立标签/消费者准入。
+
+### 2026-10-13 neutral回执和限定冲突
+
+既有辅助模型direction=0的成功响应追加EventInterpretation journal，保存稳定event_id、input_version_id、同来源observation、reason/chain及逐字引用。方向保持0，eligibility_changed=false，state=no_direction、verification=unverified；失败/旧版本漂移/引用不符不写成功，新回执不回填旧解释。归因读层有界批核输入版本的event/observation/生效先后，foreign版本不投影。
+
+只增加同来源同对象明确‘尚未/未形成订单或收入’与‘已形成/已兑现’冲突拒绝；正确保留否定、此前未/现已同对象进展、拟议待审批和不同对象对照分别测试。逐字引用及限定词法不构成通用蕴涵验证，不改变候选门、预算、调度、评分或通知资格。neutral的‘未明确方向’不是未排队的待判，也不是已证无影响。
+
+当日只读event.llm_aux 10 succeeded/2 timeout，最新14:51，发生于本轮部署之前；不能作为此合同的真实财经效果。未新调用模型、回补或使用规则/模型预测充当人工gold。旧进展方向在当前归因与潜在picks/晨报消费存在保守度差异；当前可见今日精选与晨报未引用该反例。结果表未来created_at来源未知，未清理、不用全库总数宣称前向成效。目标域独立评价、消费者效果与实际资源收益保持未验证。

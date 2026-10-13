@@ -17,6 +17,7 @@
  */
 import { createContext, useContext } from "react";
 import { motionOrigin, type MotionOrigin } from "@/lib/surface-motion";
+import type {DetailChartTab, DetailRightTab} from "@/lib/detail-tabs";
 
 export interface SymbolDetailRequest {
   motionOrigin?: MotionOrigin;
@@ -25,18 +26,9 @@ export interface SymbolDetailRequest {
   /** 标的代码：6 位个股（`600519`）或带市场前缀的指数（`sh000001`）。 */
   symbol: string;
   /** 图表区初始 tab（来自深链 `ct=`，见 lib/detail-tabs.ts）。 */
-  chartTab?: "kline" | "minute" | "flow";
+  chartTab?: DetailChartTab;
   /** 右列初始 tab（来自深链 `rt=`）。 */
-  rightTab?:
-    | "book"
-    | "trades"
-    | "trade"
-    | "real"
-    | "profile"
-    | "info"
-    | "speed"
-    | "boards"
-    | "dt";
+  rightTab?: DetailRightTab;
 }
 
 export interface SymbolDetailCtx {

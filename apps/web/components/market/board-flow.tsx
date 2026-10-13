@@ -10,7 +10,7 @@ import { StockLink, useStockRowNav } from "@/components/stock-link";
 import { Skeleton } from "@/components/ui/loading";
 import { IncrementalSentinel } from "@/components/ui/incremental-sentinel";
 import { useIncremental } from "@/hooks/use-incremental";
-import { pctColor, pctText } from "@/lib/format";
+import { dateTimeTextBJ, pctColor, pctText } from "@/lib/format";
 import { CardHead, CardShell } from "@/components/picks/card-shell";
 import { MasonryColumns } from "@/components/masonry-columns";
 import { useMemo, useState } from "react";
@@ -337,7 +337,7 @@ export function BoardFlowPanel() {
       bodyClassName="overflow-hidden"
       extra={
         <span className="text-[10px] text-zinc-600 dark:text-zinc-400">
-          {payload?.historical ? `存档截至 ${payload.as_of ?? "未知"}` : payload?.updated_at ? `更新 ${payload.updated_at}` : "--"}
+          {payload?.historical ? `存档截至 ${dateTimeTextBJ(payload.as_of, {seconds:true})}` : payload?.updated_at ? `更新 ${dateTimeTextBJ(payload.updated_at, {seconds:true})}` : "--"}
           {payload?.kind === "concept" && payload.total_boards != null ? ` · 共 ${payload.total_boards} 个板块` : ""}
           {payload?.coverage != null ? ` · 沉淀 ${payload.coverage} 板块` : ""}
         </span>

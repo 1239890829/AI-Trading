@@ -83,7 +83,6 @@ from .picks import (
     _t_anomaly,
     _t_backtest,
     _t_factor_profile,
-    _t_minute_decisions,
     _t_picks,
 )
 
@@ -161,7 +160,6 @@ __all__ = [
     "_t_longhu",
     "_t_market_overview",
     "_t_minute",
-    "_t_minute_decisions",
     "_t_news",
     "_t_orderbook",
     "_t_paper",

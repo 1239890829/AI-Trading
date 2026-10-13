@@ -1,22 +1,10 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { cleanup, fireEvent, render, screen, waitFor } from "@testing-library/react";
+import { cleanup, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 
 import type { NotificationItem, NotificationsPayload } from "@/lib/api";
 import { SymbolDetailCtx } from "@/components/detail/symbol-detail-context";
 
-/**
- * 提醒**落点统一**（2026-09-16 `IMP-033`）。
- *
- * 缺口：同一个个股提醒，**点行体**开的是通用判读弹窗、**点「行情 ↗」**开的是该股详情弹窗
- * —— 一行里两个入口落到两个不同地方；而悬浮球（`openSymbolDetail`）与猎场（`StockLink`）
- * 早已统一到**个股详情弹窗**（[[KB-ENG-92]]「详情弹窗化」）。
- *
- * 本文件钉三件事：
- *  ① **有代码** ⇒ 行体开**该股详情弹窗**（与另两处同落点），**且不再开判读弹窗**；
- *  ② **判读全文没有因此丢失** ⇒ 行右侧「判读」入口仍能打开它
- *     （纪律来源：`IMP-031`「收敛主按钮不得以丢失能力为代价」）；
- *  ③ **反向对照** ⇒ 无代码的条目（如消息面）行体仍走通用弹窗，**不静默失败**。
- */
+/** Notification content opens in one reading surface; quote navigation stays independent. */
 
 const spies = vi.hoisted(() => ({ detailOpen: vi.fn(), symbolOpen: vi.fn() }));
 
@@ -128,75 +116,44 @@ afterEach(() => {
   vi.clearAllMocks();
 });
 
-describe("通知中心：个股提醒的落点统一（IMP-033）", () => {
-  it("点行体 ⇒ 开**该股详情弹窗**，且不再开判读弹窗", async () => {
-    payload = makePayload([item()]);
-    renderBell();
-    await openDrawer();
-
+describe("通知中心：原提醒与独立行情落点", () => {
+  it("行体直接打开原提醒全文，不隐式打开当前行情", async () => {
+    payload = makePayload([item()]); renderBell(); await openDrawer();
     fireEvent.click(screen.getByText("示例个股提醒"));
-
-    expect(spies.symbolOpen).toHaveBeenCalledTimes(1);
-    expect(spies.symbolOpen).toHaveBeenCalledWith({ symbol: SYMBOL, preferModal: true });
-    // 关键：行体**不再**落到判读弹窗——否则「点正文与点股票码弹出不同内容」依旧成立
-    expect(spies.detailOpen).not.toHaveBeenCalled();
+    const detail = await screen.findByRole("dialog", {name:"示例个股提醒"});
+    expect(detail.textContent).toContain("AI 判读（建议关注）：放量突破前高，量比 2.3");
+    expect(spies.symbolOpen).not.toHaveBeenCalled();
   });
 
-  it("行体与「行情 ↗」**同落点**：两次点击都开该股，payload 形态相同", async () => {
-    payload = makePayload([item()]);
-    renderBell();
-    await openDrawer();
-
+  it("行情保留原证券落点，点击它不打开通知全文或改变未读", async () => {
+    payload = makePayload([item()]); renderBell(); await openDrawer();
     fireEvent.click(screen.getByText(/行情/));
-    expect(spies.symbolOpen).toHaveBeenNthCalledWith(1, { symbol: SYMBOL, preferModal: true });
-
-    fireEvent.click(screen.getByText("示例个股提醒"));
-    expect(spies.symbolOpen).toHaveBeenNthCalledWith(2, { symbol: SYMBOL, preferModal: true });
-    expect(spies.symbolOpen).toHaveBeenCalledTimes(2);
-    expect(spies.detailOpen).not.toHaveBeenCalled();
+    expect(spies.symbolOpen).toHaveBeenCalledTimes(1);
+    expect(spies.symbolOpen).toHaveBeenCalledWith({symbol:SYMBOL, preferModal:true});
+    expect(screen.queryByRole("dialog", {name:"示例个股提醒"})).toBeNull();
+    expect(dots()).toHaveLength(1);
   });
 
-  it("判读全文**仍然可达**：点「判读」开判读弹窗（带分类与评分），且不开个股弹窗", async () => {
-    payload = makePayload([item()]);
-    renderBell();
-    await openDrawer();
-
+  it("详情保留旧记录正文、分类与评分，不假装重新生成AI", async () => {
+    payload = makePayload([item()]); renderBell(); await openDrawer();
     fireEvent.click(screen.getByTestId("notification-judgment"));
-
-    expect(spies.detailOpen).toHaveBeenCalledTimes(1);
-    const arg = spies.detailOpen.mock.calls[0][0] as {
-      kind: string;
-      symbol: string | null;
-      body: string | null;
-      meta: { label: string; value: string }[];
-    };
-    expect(arg.kind).toBe("generic");
-    expect(arg.symbol).toBe(SYMBOL);
-    expect(arg.body).toContain("AI 判读");
-    expect(arg.meta).toEqual([
-      { label: "分类", value: "确认" },
-      { label: "评分", value: "78" },
-    ]);
+    const detail = await screen.findByRole("dialog", {name:"示例个股提醒"});
+    expect(detail.textContent).toContain("AI 判读");
+    expect(detail.textContent).toContain("确认");
+    expect(detail.textContent).toContain("原事件评分：78（不是胜率）");
     expect(spies.symbolOpen).not.toHaveBeenCalled();
   });
 
-  it("【反向对照】无代码的条目 ⇒ 行体仍走通用弹窗，不静默失败", async () => {
-    payload = makePayload([
-      item({ symbol: null, category: "news", label: "快讯", title: "某条快讯" }),
-    ]);
-    renderBell();
-    await openDrawer();
-
+  it("无代码条目仍可读完整记录，不能打开空证券", async () => {
+    payload = makePayload([item({symbol:null, category:"news", label:"快讯", title:"某条快讯"})]); renderBell(); await openDrawer();
     fireEvent.click(screen.getByText("某条快讯"));
-
-    expect(spies.detailOpen).toHaveBeenCalledTimes(1);
-    expect((spies.detailOpen.mock.calls[0][0] as { kind: string }).kind).toBe("event");
+    const detail = await screen.findByRole("dialog", {name:"某条快讯"});
+    expect(detail.textContent).toContain("AI 判读");
+    expect(within(detail).queryByRole("link", {name:"查看行情"})).toBeNull();
     expect(spies.symbolOpen).not.toHaveBeenCalled();
-    // 无代码 ⇒ 不该出现依赖 symbol 的「判读」入口（否则点了会弹一只空股）
-    expect(screen.queryByTestId("notification-judgment")).toBeNull();
   });
 
-  it("「判读」入口同样计入已读（点完红点消失，未读不作为代价）", async () => {
+  it("「详情」入口同样计入已读（点完红点消失，未读不作为代价）", async () => {
     payload = makePayload([item()]);
     renderBell();
     await waitFor(() => expect(screen.getByTestId("notification-badge")?.textContent).toBe("1"));

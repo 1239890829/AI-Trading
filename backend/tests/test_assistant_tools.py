@@ -659,13 +659,3 @@ def test_dispatch_receipts_distinguish_rejection_execution_and_cache(monkeypatch
     assert receipts[0]["tool"] is None
     assert hits == ["x", "error"]
     assert "symbol" not in str(receipts) and "secret_name" not in str(receipts)
-
-
-def test_minute_decisions_assistant_read_never_settles(monkeypatch):
-    from app.market import minute_decisions as md
-    monkeypatch.setattr(md, "settle_due", lambda *a, **k: pytest.fail("assistant read must not write"))
-    monkeypatch.setattr(md, "list_decisions", lambda *a, **k: [{"symbol": "600519", "outcome": "open"}])
-    ctx = _ctx()
-    ctx.session_factory = object()
-    out = _run(run_tool(ToolCall("minute_decisions"), ctx, cache=None))
-    assert "open" in out and "尚未到结算" in out
