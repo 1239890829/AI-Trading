@@ -6,7 +6,7 @@ from concurrent.futures import ThreadPoolExecutor
 from datetime import datetime, timedelta
 import json
 from pathlib import Path
-from threading import Event
+from threading import Event, get_ident
 import time
 from types import SimpleNamespace
 
@@ -34,12 +34,14 @@ def sqlite_rig(tmp_path):
     def trace(conn, _):
         conn.set_trace_callback(lambda sql: traces.append({
             "sql": sql, "time": time.perf_counter(), "in_transaction": conn.in_transaction,
+            "thread_id": get_ident(),
         }))
     # The seed connection predates the connect listener.
     with engine.connect() as conn:
         raw = conn.connection.driver_connection
         raw.set_trace_callback(lambda sql: traces.append({
             "sql": sql, "time": time.perf_counter(), "in_transaction": raw.in_transaction,
+            "thread_id": get_ident(),
         }))
         journal = conn.scalar(text("PRAGMA journal_mode"))
         busy = conn.scalar(text("PRAGMA busy_timeout"))
@@ -106,8 +108,9 @@ def test_calendar_wait_does_not_hold_a_real_sqlite_write_lock(sqlite_rig, monkey
     assert any(row["sql"] == "COMMIT" for row in traces)
 
 
+@pytest.mark.parametrize("startup_delay", [0, .30], ids=["immediate", "delayed-start"])
 @pytest.mark.parametrize("stage", ["reconcile", "claim", "finish"])
-def test_alert_sqlite_lock_wait_keeps_event_loop_responsive(sqlite_rig, monkeypatch, stage):
+def test_alert_sqlite_lock_wait_keeps_event_loop_responsive(sqlite_rig, monkeypatch, stage, startup_delay):
     engine, sf, traces, settings = sqlite_rig
     repo = AlertRepository(sf)
     rule = repo.create_rule(name="offline", channels=["feishu"], enabled=True)
@@ -116,37 +119,71 @@ def test_alert_sqlite_lock_wait_keeps_event_loop_responsive(sqlite_rig, monkeypa
     expires = now - 1 if stage == "reconcile" else now + 60_000
     repo.record_trigger(rule.id, "600000", 11, 10, outbox_target="offline", now_ms=now, expires_at_ms=expires)
     monkeypatch.setattr(service, "_delivery_block", lambda *_: None)
-    lock_ready = Event()
-    lock_done = Event()
-    timings = {}
+    lock_ready, lock_done, sql_observed, release = Event(), Event(), Event(), Event()
+    target_done, sql_done = Event(), Event()
+    timings = {"stage": stage, "startup_delay_seconds": startup_delay}
+    futures = []
     def lock_writer():
         with sf() as db:
             db.execute(text("BEGIN IMMEDIATE"))
             db.execute(text("UPDATE alert_rule SET name=name"))
+            timings["lock_acquired_at"] = time.perf_counter()
             lock_ready.set()
-            time.sleep(.25)
+            # Start the unchanged 250ms hold only after the loop sees the real
+            # target SQLite statement. A sync regression cannot signal this;
+            # the independent writer still releases within 2s instead of hanging.
+            observed = sql_observed.wait(2)
+            timings["watchdog_released"] = not observed
+            if observed and not release.is_set():
+                timings["fixed_hold_started_at"] = time.perf_counter()
+                time.sleep(.25)
+                timings["fixed_hold_finished_at"] = time.perf_counter()
             db.commit()
+            timings["lock_released_at"] = time.perf_counter()
         lock_done.set()
     pool = ThreadPoolExecutor(max_workers=1)
-    def start_lock():
-        future = pool.submit(lock_writer)
-        assert lock_ready.wait(2)
-        return future
+    method = getattr(repo.outbox, stage)
+    def target(*args, **kwargs):
+        timings["target_entered_at"] = time.perf_counter()
+        timings["target_thread_id"] = get_ident()
+        timings["target_trace_offset"] = len(traces)
+        futures.append(pool.submit(lock_writer))
+        try:
+            assert lock_ready.wait(2), "test writer did not acquire its SQLite lock"
+            return method(*args, **kwargs)
+        finally:
+            timings["target_returned_at"] = time.perf_counter()
+            target_done.set()
+    monkeypatch.setattr(repo.outbox, stage, target)
+    def target_sql():
+        return next((row for row in traces[timings.get("target_trace_offset", len(traces)):]
+                     if row["thread_id"] == timings.get("target_thread_id")
+                     and row["sql"].lstrip().upper().startswith("UPDATE NOTIFICATION_OUTBOX ")), None)
+    def sql_returned(_conn, _cursor, statement, _parameters, _context, _many):
+        if (get_ident() == timings.get("target_thread_id") and not target_done.is_set()
+                and not sql_done.is_set()
+                and statement.lstrip().upper().startswith("UPDATE NOTIFICATION_OUTBOX ")):
+            timings["sql_returned_at"] = time.perf_counter()
+            sql_done.set()
+    event.listen(engine, "after_cursor_execute", sql_returned)
     sent = []
     async def send_result(*_):
         sent.append(True)
-        if stage == "finish":
-            start_lock()
         return SimpleNamespace(outcome="accepted", reason="offline_accepted")
     service._registry = SimpleNamespace(get=lambda _channel: SimpleNamespace(send_result=send_result))
-    if stage != "finish":
-        start_lock()
     async def run():
+        await asyncio.sleep(startup_delay)
         beats = []
         finished = False
         async def heartbeat():
             while not finished:
-                beats.append(time.perf_counter())
+                beat = time.perf_counter()
+                beats.append(beat)
+                row = target_sql()
+                if (row is not None and not sql_done.is_set() and not target_done.is_set()
+                        and lock_ready.is_set() and not lock_done.is_set() and not release.is_set()):
+                    timings.setdefault("sql_observed_at", beat)
+                    sql_observed.set()
                 await asyncio.sleep(.01)
         task = asyncio.create_task(heartbeat())
         await asyncio.sleep(0)
@@ -157,19 +194,45 @@ def test_alert_sqlite_lock_wait_keeps_event_loop_responsive(sqlite_rig, monkeypa
             timings["delivery_seconds"] = time.perf_counter() - started
             finished = True
             await task
-            timings["heartbeat_count"] = len(beats)
-            timings["heartbeat_during_lock"] = sum(started <= beat <= started + .20 for beat in beats)
+            timings["heartbeat_times"] = beats
     try:
         asyncio.run(run())
     finally:
-        pool.shutdown(wait=True)
+        release.set()
+        sql_observed.set()  # Wake the writer if setup or delivery failed.
+        try:
+            pool.shutdown(wait=True)
+            for future in futures:
+                future.result()
+        finally:
+            event.remove(engine, "after_cursor_execute", sql_returned)
+    # The target transaction can return before the writer has recorded its
+    # post-COMMIT timestamp. Derive overlap only after both workers drain.
+    row = target_sql()
+    timings["target_sql_trace_at"] = row["time"] if row else None
+    beats = timings["heartbeat_times"]
+    timings["heartbeat_count"] = len(beats)
+    # Count only the original first 200ms, inside both real driver SQL execution
+    # and the actual writer lock; setup/idle beats never count.
+    lower = max(row["time"], timings["lock_acquired_at"]) if row else float("inf")
+    upper = min(row["time"] + .20, timings.get("sql_returned_at", 0),
+                timings.get("lock_released_at", 0), timings.get("target_returned_at", 0)) if row else 0
+    overlap = [beat for beat in beats if lower <= beat <= upper]
+    timings["heartbeat_during_lock_times"] = overlap
+    timings["heartbeat_during_lock"] = len(overlap)
     with sf() as db:
         state = db.query(NotificationOutbox).one().state
-    _receipt(f"alert-{stage}", {**settings, **timings, "state": state, "sent_count": len(sent), "trace": traces})
-    assert lock_done.is_set()
-    assert state == ("expired" if stage == "reconcile" else "accepted")
-    assert len(sent) == (0 if stage == "reconcile" else 1)
-    assert timings["heartbeat_during_lock"] >= 5
+    evidence = {**settings, **timings, "state": state, "sent_count": len(sent)}
+    _receipt(f"alert-{stage}-startup-{startup_delay:g}", {**evidence, "trace": traces})
+    # Pytest includes captured output on failure even when opt-in receipts are off.
+    print("SQLITE_CONTENTION_TIMING", json.dumps(evidence, sort_keys=True))
+    assert lock_done.is_set(), evidence
+    assert state == ("expired" if stage == "reconcile" else "accepted"), evidence
+    assert len(sent) == (0 if stage == "reconcile" else 1), evidence
+    assert timings["heartbeat_during_lock"] >= 5, evidence
+    assert not timings["watchdog_released"], evidence
+    assert timings["fixed_hold_finished_at"] - timings["fixed_hold_started_at"] >= .25, evidence
+    assert timings["sql_returned_at"] >= timings["fixed_hold_finished_at"], evidence
 
 
 @pytest.mark.parametrize("stage", ["claim", "finish"])

@@ -1,5 +1,7 @@
 # 当前交接：IMP-019 剩余请求、锁竞争与电脑验证
 
+> 摘要：G4/IMP-019继续。PR #285后置CI失败正在本批纠偏；仅前端切换须等新PR完整发布通过，后端保持。实际运行看§1的verified回执；15日两次真实交易跟进与未测项见§4。
+
 > 总方案v9.13；累计U01–U55。阅读与WS整改[W07/IMP-093](stages/w07-simplification.md#imp-093)已由PR #270发布并运行；直接上游单位反例按[W00/BUG-020](stages/w00-foundation.md#bug-020)既有同根回归条款止险，不启动第二个产品优化任务。
 
 现役语义判断依[semantic-decisions](ai/semantic-decisions.md)；外部能力依[开放世界持续演进](ai/continuous-evolution.md)筛选。
@@ -8,16 +10,19 @@
 
 - **当前主门**：G4
 - **主切片首选**：IMP-019
-- **候选顺位与执行边界**：仅IMP-019；PR #284已准确HEAD发布、post-master三job成功并于21:34仅更新后端。用户继续要求换方法处理首次建图、查清板块断连及同口径免费备源；10月15日两次真实交易跟进保留，手机暂缓。
-- **基点与分支**：最新origin/master `0227720bbd32d1e9ff6ddf4ce86fa9913409ff51`，本批`codex/chart-first-paint-board-sources`；复用干净隔离树。主树三份未跟踪evolution保留；前批分支均已清理。
+- **候选顺位与执行边界**：仅IMP-019；PR #285已准确HEAD发布并合入4539a9b0；post-master首次5565通过/82跳过/1失败（锁竞争心跳0），尚未激活前端。继续修同一性能验证的测试时序，保留原判据；10月15日两次真实交易跟进、免费来源独立LAB及手机暂缓不变。
+- **基点与分支**：最新origin/master `4539a9b0ae3a0d1988c5afda837f44ec7f1b418a`，本批`codex/sqlite-contention-test-sync`；从最新master创建，前端344文件仍与gCR构建相同。主树三份未跟踪evolution保留；PR #285分支待本次后置CI与运行切换完成后清理。
 - **获准范围**：同步首次建图的重复灌数/标记为新LAB候选，不恢复已否决的RO等待；以实际首次有效draw和可见画面核收益。隔离核板块断连链路和免费候选的分类、字段、单位、源钟及覆盖；夜间有限成功不构成盘中稳定/时效准入。若有同口径且实测更稳的来源才考虑替换，否则保留基线。不改TTL/轮频/预算/freshness及选股/通知资格。用户追加首次详情假恢复提示归同一直接消费者修补，首次缺项且从未见过该股live报价不称恢复，真实失败保留。
-- **当前正式运行**：PR #284/master0227720b；8000 PID52079/21:34:25，3000 PID18512/20:14:50、Next16.3.8/build w84AjqUszLM_XM6Y14QeS。169路径源码一致，原前端未重启；actual回执见artifacts/runs/long-task-board-20261014/release/runtime-identity.json。自然刷新assessment=expected_pause且raw stale保留，只解释请求报价域；板块响应前断连仍真实存在。
+- **施工前正式运行**：PR #284/master0227720b；8000 PID52079/21:34:25，3000 PID18512/20:14:50、Next16.3.8/build w84AjqUszLM_XM6Y14QeS。169路径源码一致，原前端未重启；actual回执见artifacts/runs/long-task-board-20261014/release/runtime-identity.json。自然刷新assessment=expected_pause且raw stale保留，只解释请求报价域；板块响应前断连仍真实存在。本轮实际运行权威为artifacts/runs/chart-first-paint-board-sources-20261014/release/runtime-identity.json及其激活回执；必须实际verified才生效，缺失/失败仍按施工前现场核查，不能把合并当加载。
 - **上一批本地验收（不当本轮候选通过）**：后端5566通过/82跳过（pytest224.99s、外层230.58s）、pyflakes通过；新增module owner的纯unit隔离反例已修3处fixture，原业务断言不变。撤回K线候选后，原前端默认/UTC各1676通过/138文件（外层117.85/126.64s）、tsc、ESLint0error/2既有warning及build Tpqd5WOyjZetXb46hBf37通过（23.94s）；659后端、343前端源/测试哈希无漂移，next-env按已知生成差异还原并重验tsc。该新构建仅门禁，不替换正式前端。实验各1683项/被中断红批只留历史，不当本批最终证据。
 - **电脑证据状态**：唯一原生Chrome专用工作台已核候选真实K线、量/MA、缩放与指标开关，无模型探测/通知操作。3次RO首建无同步Layout，但输入到首次库draw回调均比改前晚：59.297/43.572/75.158ms对45.989/34.596/38.891ms；因此撤回候选，保留负面证据。3105/PID37820正常TERM退出，页面回正式3000；最终不改前端源码/构建/进程。75ms归因已查清，端到端图表改进及分时55.569/72.109ms仍待查，不宣称完成。准确HEAD发布、实际BE加载及连续交易另验。
-- **本批验收**：后端5566通过/82跳过（198.73s，外层203.24s）、pyflakes；FE默认/UTC各1702通过/139文件（外层95.28/95.42s），tsc、ESLint0error/2既有warning。344前端源码与已测Next16.3.8/build gCR78igTpBCF3LAzv3fJQ逐一一致，生成next-env已恢复后重验tsc；不是复用旧门禁。K线九series初次setData27→9、输入CPU中位16.304→13.271ms；首库draw中位24.675→24.940ms，分时40.200→40.224ms，端到端结果混合，不声称提速或75ms消失。24次未见候选新增空图；完整原生AB/BA、逐样本及异常候选退出保留于新证据根。详情首null假恢复真实组件117项通过，不把初始未见误称恢复，真实故障/交易硬门保留。完整docs/准确HEAD发布/实际加载另验。
+- **PR #285验收**：后端5566通过/82跳过（198.73s，外层203.24s）、pyflakes；FE默认/UTC各1702通过/139文件（外层95.28/95.42s），tsc、ESLint0error/2既有warning。344前端源码与已测Next16.3.8/build gCR78igTpBCF3LAzv3fJQ逐一一致，生成next-env已恢复后重验tsc；不是复用旧门禁。K线九series初次setData27→9、输入CPU中位16.304→13.271ms；首库draw中位24.675→24.940ms，分时40.200→40.224ms，端到端结果混合，不声称提速或75ms消失。24次未见候选新增空图；完整原生AB/BA、逐样本及异常候选退出保留于新证据根。详情首null假恢复真实组件117项通过，不把初始未见误称恢复，真实故障/交易硬门保留。该PR后置CI失败及后续整改分别记账，实际加载另验。
+- **锁竞争整改批验收**：后端5569通过/82跳过（pytest195.30s，外层199.76s）、pyflakes；FE默认/UTC各1702通过/139文件（外层95.37/95.51s）、tsc、ESLint0error/2既有warning。712后端与344前端文件在本轮完整门前后无漂移；344前端仍逐一匹配已成功构建并原生实测的gCR，不重建或借用不同源码的构建。最终文档门和本PR准确HEAD/CI/post-master/激活分开确认，证据为新根ci-contention-repair。
 - **U50 降级授权回执**：2026-09-24 DEGRADED_FULL_CONTROL未撤销；作者自审和协作反证不冒充独立网页Review。每个PR准确HEAD另有DegradedRelease。
 
 ## 2. U49 主动审计回执 / Preflight
+
+2026-10-14 PR #285后置CI暴露test_sqlite_loop_contention的测量时序缺口；原日志没有具体锁/线程时点，不定性纯环境。新分支仅修测试同步与错误时序，保持原5次心跳、200ms计数窗口及250ms锁持有长度，以SQLite实际目标SQL与持锁重叠为依据，注入同步DB错误实现必须判红。无backend/app改动，前端构建与业务规则不变；激活helper只精确允许这一测试文件，并继续校验全部运行app的旧SHA，不能泛化backend豁免。完整门与本PR准确HEAD回执另核。
 
 2026-10-14本批从0227720b继续。图表检查同一提交多次fill/markers、主题DOM权威与hydration、指标重建/空非空、后续报价不重建、成本/事件清除、缩放/followLatest与Canvas实际首次可见；不新增RO/rAF等待。当前8GB机器存在竞争/压缩换页，AB/BA配对冻结负载，不把全部延迟归到前端。来源检查curl/HTTPX与当前代理边界、官方公开实现、字段异义/分类不一致/缺源钟和旧默认板块，不把净流入当主力或组装时间当源钟；静态研究/额外诊断/生产分母分开。最多两批无增量即复审方法，不能不停换参数重复探测。作者团队反证不是独立Review；本轮如采用代码须新准确HEAD完整发布。
 
