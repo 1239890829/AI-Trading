@@ -24,6 +24,23 @@ function quote(limitUp: number | null): Quote {
 afterEach(() => {cleanup(); vi.unstubAllGlobals(); vi.useRealTimers();});
 
 describe("QuoteStrip 限价展示", () => {
+  it("真实质量与恢复共用固定槽，异常入口复用诊断抽屉，正常不留诊断按钮", () => {
+    const raw = {...quote(4344.9), quality: "stale" as const, quality_reasons: ["source_time_regress_ignored"]};
+    const before = JSON.stringify(raw);
+    const view = render(<QuoteStrip quote={raw} inWatchlist={false} onAdd={() => {}} connectionStatus="live" issue={{label: "保留可信值", title: "旧快照已忽略，保留较新报价"}} diagnostics={<p>原源钟与拒旧依据</p>}/>);
+    const slot = view.container.querySelector("[data-quote-status-slot]");
+    expect(slot?.className).toContain("w-[6.4em]");
+    expect(screen.getByText("已连接").title).toContain("WebSocket");
+    expect(screen.getByRole("button", {name: "查看行情问题"}).getAttribute("data-quality")).toBe("stale");
+    fireEvent.click(screen.getByRole("button", {name: "查看行情问题"}));
+    expect(screen.getByRole("dialog", {name: "行情诊断"}).textContent).toContain("原源钟与拒旧依据");
+    view.rerender(<QuoteStrip quote={{...raw, quality: "high", quality_reasons: []}} inWatchlist={false} onAdd={() => {}} connectionStatus="live"/>);
+    expect(view.container.querySelector("[data-quote-status-slot]")).toBe(slot);
+    expect(screen.queryByRole("button", {name: "查看行情问题"})).toBeNull();
+    expect(screen.getByText("正常")).toBeTruthy();
+    expect(JSON.stringify(raw)).toBe(before);
+  });
+
   it.each([-1, 0, null])("无效涨停价 %s 显示 --，不把占位值冒充真实价格", (limitUp) => {
     render(<QuoteStrip quote={quote(limitUp)} inWatchlist={false} onAdd={() => {}} hideWatchlist />);
     expect(screen.getByText("涨停").parentElement?.textContent).toContain("--");

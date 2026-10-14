@@ -141,6 +141,87 @@ function useFastQuote(feed: TestFeed | undefined, symbol: string, fallback?: Quo
   return useSyncExternalStore(subscribe, snapshot, snapshot);
 }
 
+describe("connection recovery contracts", () => {
+  it("a handshake without a market frame is not a ready quote connection", async () => {
+    const owner = renderHook(() => useQuoteStream(["600519"]));
+    await settle(); const ws = FakeWS.instances[0];
+    await act(async () => {ws.readyState = FakeWS.OPEN; ws.onopen?.();});
+    expect(owner.result.current.status).toBe("connecting");
+    expect(owner.result.current.quoteFeed.getSnapshot("600519")).toBeUndefined();
+    expect(getQuotes).not.toHaveBeenCalled();
+    owner.unmount();
+  });
+
+  it("mixed symbol failures and closed phases preserve raw quality without changing the connection", async () => {
+    const owner = renderHook(() => useQuoteStream(["600519", "600127"]));
+    await settle(); const ws = FakeWS.instances[0];
+    const current = {...quote("600519", 100), source: "tencent", data_timestamp: "2026-10-14T05:33:00Z"};
+    const paused = {...quote("600127", 8), quality: "stale", quality_reasons: ["market_closed", "refresh_failed"], source: "ths", data_timestamp: "2026-10-14T03:30:00Z"};
+    await act(async () => {ws.readyState = FakeWS.OPEN; ws.onopen?.(); ws.onmessage?.({data: JSON.stringify({type: "stale", data: [current, paused]})});});
+    expect(owner.result.current.status).toBe("live");
+    expect(owner.result.current.quoteFeed.getSnapshot("600519")).toEqual(current);
+    expect(owner.result.current.quoteFeed.getSnapshot("600127")).toEqual(paused);
+    const failed = {...current, quality: "stale", quality_reasons: ["refresh_failed"]};
+    await act(async () => {ws.onmessage?.({data: JSON.stringify({type: "snapshot", data: [failed]})});});
+    expect(owner.result.current.status).toBe("live");
+    expect(owner.result.current.quoteFeed.getSnapshot("600519")).toEqual(failed);
+    expect(owner.result.current.quoteFeed.getSnapshot("600127")).toBeNull();
+    owner.unmount();
+  });
+
+  it("REST success after a failed fallback read recovers its transport state and preserves source facts", async () => {
+    const recovered = {...quote("600519", 101), quality: "stale", quality_reasons: ["quote_age_exceeded"], source: "tencent", data_timestamp: "2026-10-14T05:33:00Z"} as Quote;
+    vi.mocked(getQuotes).mockRejectedValueOnce(new Error("synthetic read failure")).mockResolvedValueOnce([recovered]);
+    const owner = renderHook(() => useQuoteStream(["600519"]));
+    await degrade();
+    expect(owner.result.current.status).toBe("error");
+    await act(async () => {await vi.advanceTimersByTimeAsync(5000);});
+    expect(owner.result.current.status).toBe("polling");
+    expect(owner.result.current.quoteFeed.getSnapshot("600519")).toEqual(recovered);
+    expect(getQuotes).toHaveBeenCalledTimes(2);
+    owner.unmount();
+  });
+
+  it("opening and closing without a quote frame cannot reset the fallback failure count", async () => {
+    const owner = renderHook(() => useQuoteStream(["600519"]));
+    await settle();
+    for (const delay of [2000, 4000, 0]) {
+      const ws = FakeWS.instances.at(-1)!;
+      await act(async () => {
+        ws.readyState = FakeWS.OPEN; ws.onopen?.(); ws.onclose?.();
+        if (delay) await vi.advanceTimersByTimeAsync(delay);
+      });
+    }
+    expect(owner.result.current.status).toBe("polling");
+    expect(getQuotes).toHaveBeenCalledTimes(1);
+    expect(FakeWS.instances).toHaveLength(3);
+    owner.unmount();
+  });
+
+  it("pong traffic without market frames does not renew the existing quote watchdog", async () => {
+    const owner = renderHook(() => useQuoteStream(["600519"]));
+    await settle(); const ws = FakeWS.instances[0];
+    await act(async () => {ws.readyState = FakeWS.OPEN; ws.onopen?.();});
+    for (let i = 0; i < 3; i += 1) {
+      await act(async () => {ws.onmessage?.({data: JSON.stringify({type: "pong"})}); await vi.advanceTimersByTimeAsync(15_000);});
+    }
+    expect(ws.readyState).toBe(3);
+    expect(owner.result.current.quoteFeed.getSnapshot("600519")).toBeUndefined();
+    expect(getQuotes).not.toHaveBeenCalled();
+    owner.unmount();
+  });
+
+  it("a valid full empty snapshot proves transport delivery but keeps each subscribed observation missing", async () => {
+    const owner = renderHook(() => useQuoteStream(["600519"]));
+    await settle(); const ws = FakeWS.instances[0];
+    await act(async () => {ws.readyState = FakeWS.OPEN; ws.onopen?.(); ws.onmessage?.({data: JSON.stringify({type: "stale", data: []})});});
+    expect(owner.result.current.status).toBe("live");
+    expect(owner.result.current.quoteFeed.getSnapshot("600519")).toBeNull();
+    expect(owner.result.current.quotes).toEqual({});
+    owner.unmount();
+  });
+});
+
 it("one owner delivers complete selected quotes immediately while its list stays throttled", async () => {
   const owner = renderHook(() => useQuoteStream(["600519", "000001"], {throttleMs: 3000}));
   await settle();
@@ -155,7 +236,7 @@ it("one owner delivers complete selected quotes immediately while its list stays
   expect(fast.result.current).toEqual(second);
   expect(owner.result.current.quotes).toBe(slow);
   expect(owner.result.current.quotes["600519"].price).toBe(100);
-  expect(owner.result.current.status).toBe("stale");
+  expect(owner.result.current.status).toBe("live");
   expect(FakeWS.instances).toHaveLength(1);
   await act(async () => {await vi.advanceTimersByTimeAsync(2000);});
   expect(owner.result.current.quotes["600519"]).toEqual(second);
@@ -187,7 +268,7 @@ it("hidden WS retains its latest complete frame without React/feed delivery and 
   expect(listener).toHaveBeenCalledTimes(1);
   expect(owner.result.current.quotes["600519"]).toEqual(latest);
   expect(owner.result.current.quoteFeed.getSnapshot("600519")).toEqual(latest);
-  expect(owner.result.current.status).toBe("stale");
+  expect(owner.result.current.status).toBe("live");
   expect(getQuotes).not.toHaveBeenCalled();
   expect(FakeWS.instances).toHaveLength(1);
   unsubscribe(); owner.unmount();
@@ -196,8 +277,8 @@ it("hidden WS retains its latest complete frame without React/feed delivery and 
 it.each([
   {oldReason: "refresh_failed", newReason: null, expected: "live"},
   {oldReason: "market_closed", newReason: null, expected: "live"},
-  {oldReason: "refresh_failed", newReason: "refresh_failed", expected: "stale"},
-  {oldReason: "market_closed", newReason: "market_closed", expected: "closed"},
+  {oldReason: "refresh_failed", newReason: "refresh_failed", expected: "live"},
+  {oldReason: "market_closed", newReason: "market_closed", expected: "live"},
 ])("hidden reconnect restores $expected from its own snapshot after old $oldReason ($newReason)", async ({oldReason, newReason, expected}) => {
   const visibility = vi.spyOn(document, "visibilityState", "get");
   const owner = renderHook(() => useQuoteStream(["600519"], {throttleMs: 3000}));

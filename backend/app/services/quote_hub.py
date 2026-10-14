@@ -10,6 +10,7 @@ from typing import Callable
 
 from app.core.bjtime import BJ_TZ, beijing_now  # S2-8 时区收敛
 from app.core.freshness import Freshness
+from app.data_providers.composite import RecoveryRejection
 from app.data_quality.validator import mark_stale, validate_quote
 from app.market import trade_calendar as tc
 from app.market.indices import INDEX_MARKETS, INDEX_SUBSCRIPTIONS
@@ -178,6 +179,7 @@ class QuoteHub:
         self._publish_timer: asyncio.Handle | None = None
         self._publish_deadline: float | None = None
         self._running = False
+        self._stopping = False
         self._last_publish_at: float | None = None
 
     # ---------- 刷新 ----------
@@ -198,7 +200,7 @@ class QuoteHub:
         state = self._domains[domain]
         state.last_attempt = self.last_attempt = utcnow()
         state.started_at = asyncio.get_running_loop().time()
-        watchlist = self._poll_symbols() if domain == "quotes" else []
+        watchlist = await self._poll_symbols_for_refresh() if domain == "quotes" else []
         state.requested = domain == "indices" or bool(watchlist)
         state.requested_symbols = tuple(INDEX_MARKETS) if domain == "indices" else tuple(watchlist)
         try:
@@ -275,7 +277,7 @@ class QuoteHub:
         if not rejected:
             return []
 
-        def validate_recovery(q: Quote, key: tuple[str, str]) -> Quote | None:
+        def validate_recovery(q: Quote, key: tuple[str, str]) -> Quote | RecoveryRejection | None:
             # Do not let validate_quote's recomputation launder a stale provider cache.
             if q.quality in {Quality.invalid, Quality.stale} or q.data_timestamp is None:
                 return None
@@ -283,17 +285,20 @@ class QuoteHub:
             if q.market != prev.market:
                 return None
             checked = validate_quote(q.model_copy(deep=True), prev)
-            if _rejected_source_observation(checked, prev) is not None:
+            rejection = _rejected_source_observation(checked, prev)
+            if checked.price is None or rejection not in {None, "source_time_regress_ignored"}:
                 return None
             now = utcnow()
             previous_time = prev.data_timestamp
             if previous_time.tzinfo is None:
                 previous_time = previous_time.replace(tzinfo=timezone.utc)
             source_time = checked.data_timestamp
-            if (source_time <= previous_time or source_time > now
+            if (source_time > now
                     or source_time.astimezone(BJ_TZ).date() != now.astimezone(BJ_TZ).date()
                     or checked.freshness(fresh_within=self.stale_after).state not in {"ready", "degraded"}):
                 return None
+            if source_time <= previous_time:
+                return RecoveryRejection.not_newer
             return checked
 
         try:
@@ -308,7 +313,8 @@ class QuoteHub:
         # Another trusted update may have advanced current while a source was in
         # flight. Recheck now and never replay the normal rows or their history.
         return [checked for key, row in replacements.items()
-                if key in rejected and (checked := validate_recovery(row, key)) is not None]
+                if key in rejected and isinstance(row, Quote)
+                and isinstance(checked := validate_recovery(row, key), Quote)]
 
     def _sync_complete_state(self) -> None:
         self.consecutive_failures = max(s.consecutive_failures for s in self._domains.values())
@@ -320,7 +326,7 @@ class QuoteHub:
             self._complete_generations = {d: s.generation for d, s in self._domains.items()}
 
     def _schedule_publish(self) -> None:
-        if not self._pending_domains:
+        if self._stopping or not self._pending_domains:
             return
         if self._publish_task is not None and not self._publish_task.done():
             return
@@ -359,6 +365,8 @@ class QuoteHub:
     def _start_publish(self, *, force: bool = False) -> None:
         self._publish_timer = None
         self._publish_deadline = None
+        if self._stopping:
+            return
         if self._pending_domains and (self._publish_task is None or self._publish_task.done()):
             if not force and self._publish_due_at() > asyncio.get_running_loop().time():
                 self._schedule_publish()
@@ -611,6 +619,29 @@ class QuoteHub:
             log.exception("watchlist lookup failed; keeping previous watchlist")
             return list(self.quotes.keys())
 
+    async def _poll_symbols_for_refresh(self) -> list[str]:
+        # The repository owns its Session. Only its blocking read enters a worker;
+        # fallback cache access and current subscriptions stay on the event loop.
+        # The existing quotes-domain singleflight owns this read until it drains.
+        read = asyncio.create_task(asyncio.to_thread(self.get_watchlist))
+        try:
+            watchlist = await asyncio.shield(read)
+        except asyncio.CancelledError:
+            while not read.done():
+                try:
+                    await asyncio.shield(read)
+                except asyncio.CancelledError:
+                    continue
+                except Exception:
+                    break
+            if not read.cancelled():
+                read.exception()
+            raise
+        except Exception:
+            log.exception("watchlist lookup failed; keeping previous watchlist")
+            watchlist = list(self.quotes.keys())
+        return self._merge_poll_symbols(watchlist)
+
     def _poll_symbols(self) -> list[str]:
         """轮询池 = 自选 ∪ 各订阅者订阅集中的裸 6 位代码。
 
@@ -622,7 +653,10 @@ class QuoteHub:
         前缀形态）不进池——指数由 get_indices 单独维护，get_quotes 里有
         前缀回退逻辑兜底。订阅集每轮从 _subscribers 现算，零额外状态；
         订阅者断开（unsubscribe）后自动移出。"""
-        symbols = set(self._safe_watchlist())
+        return self._merge_poll_symbols(self._safe_watchlist())
+
+    def _merge_poll_symbols(self, watchlist: list[str]) -> list[str]:
+        symbols = set(watchlist)
         for sub in self._subscribers:
             if sub.symbols:
                 symbols.update(s for s in sub.symbols if len(s) == 6 and s.isdigit())
@@ -894,12 +928,15 @@ class QuoteHub:
         if self._running:
             raise RuntimeError("QuoteHub poller already running")
         self._running = True
+        self._stopping = False
         loops = [asyncio.create_task(self._run_domain(d), name=f"quote-hub-loop-{d}")
                  for d in ("indices", "quotes")]
         try:
             await asyncio.gather(*loops)
         finally:
-            self._running = False
+            # Keep the owner occupied while its worker drains, but do not let
+            # a cancelled publisher's finally create a new unowned publisher.
+            self._stopping = True
             if self._publish_timer is not None:
                 self._publish_timer.cancel()
                 self._publish_timer = None
@@ -909,8 +946,16 @@ class QuoteHub:
                 owned.add(self._publish_task)
             for task in owned:
                 task.cancel()
-            await asyncio.gather(*owned, return_exceptions=True)
+            drained = asyncio.gather(*owned, return_exceptions=True)
+            while not drained.done():
+                try:
+                    await asyncio.shield(drained)
+                except asyncio.CancelledError:
+                    continue
+            drained.result()
             self._domain_tasks.clear()
             self._publish_task = None
             self._pending_domains.clear()
             self._last_publish_at = None
+            self._running = False
+            self._stopping = False

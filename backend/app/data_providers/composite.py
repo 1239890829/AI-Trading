@@ -18,6 +18,7 @@ import time
 import logging
 from collections import Counter
 from datetime import date, datetime
+from enum import Enum
 from typing import Callable
 
 from app.data_providers.eastmoney import ProviderError
@@ -48,6 +49,12 @@ class BudgetExhausted(TimeoutError):
         super().__init__(message)
         self.phase = phase
         self.method_started = method_started
+
+
+class RecoveryRejection(Enum):
+    """Hub verdict: a trusted fresh observation cannot advance its current value."""
+
+    not_newer = "not_newer"
 
 
 #: 秒级实时方法：Hub 以 1Hz 轮询这些方法，走 realtime_rank 排序——
@@ -379,7 +386,7 @@ class CompositeProvider:
 
     async def recover_quote_regressions(
         self, method: str, rejected: dict[tuple[str, str], str], *, deadline: float,
-        validate: Callable[[Quote, tuple[str, str]], Quote | None], idle_limited: bool = False,
+        validate: Callable[[Quote, tuple[str, str]], Quote | RecoveryRejection | None], idle_limited: bool = False,
     ) -> dict[tuple[str, str], Quote]:
         """Retry only Hub-confirmed clock regressions within the original deadline.
 
@@ -404,6 +411,8 @@ class CompositeProvider:
             args = ([key[0] for key in remaining if key in targets],) if method == "get_quotes" else ()
             _, rows, exc = await self._attempt(method, p, args, deadline)
             accepted = {}
+            nonadvancing = set()
+            invalid_result = False
             if exc is None and isinstance(rows, list):
                 identities = Counter(
                     q.symbol if method == "get_quotes" else (q.symbol, q.market)
@@ -411,14 +420,22 @@ class CompositeProvider:
                 )
                 for q in rows:
                     if not isinstance(q, Quote):
+                        invalid_result = True
                         continue
                     key = (q.symbol, q.market)
                     identity = q.symbol if method == "get_quotes" else key
-                    if key not in targets or identities[identity] != 1 or q.source != p.name:
+                    if key not in targets:
+                        continue
+                    if identities[identity] != 1 or q.source != p.name:
+                        invalid_result = True
                         continue
                     checked = validate(q, key)
-                    if checked is not None:
+                    if isinstance(checked, Quote):
                         accepted[key] = checked
+                    elif checked is RecoveryRejection.not_newer:
+                        nonadvancing.add(key)
+                    else:
+                        invalid_result = True
             if accepted:
                 recovered.update(accepted)
                 for key in accepted:
@@ -429,9 +446,16 @@ class CompositeProvider:
             else:
                 if exc is None:
                     self._observe_attempt(method, p.name, "source_observation_rejected", "SourceObservationRejected")
+                # A source can return a trusted fresh quote that is older than
+                # another source's retained value. That is no repair, not a
+                # transport/format failure. Preserve any real failure history;
+                # neither trip nor clear the normal method circuit breaker.
+                trusted_nonadvancing = nonadvancing == targets and not invalid_result
                 # Spending a short spare poll slot says nothing about the
                 # backup's health under its normal full request budget.
-                if not (isinstance(exc, BudgetExhausted) and (idle_limited or not exc.method_started)):
+                if not trusted_nonadvancing and not (
+                    isinstance(exc, BudgetExhausted) and (idle_limited or not exc.method_started)
+                ):
                     self._note_failure(method, p.name, exc or ProviderError("no trusted recovery observation"), errors)
             if isinstance(exc, BudgetExhausted):
                 break

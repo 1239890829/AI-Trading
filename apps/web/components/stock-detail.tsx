@@ -144,8 +144,10 @@ export const StockDetailPanel = memo(function StockDetailPanel({
   streamStatus: streamStatusProp,
   quoteFeed: quoteFeedProp,
   realPositions,
+  watchlistMembership,
+  onWatchlistAdded,
   active = true,
-}: { symbol: string; active?: boolean; realPositions?: RealPositionsResource } & StockDetailTabs & StockDetailStreamProps) {
+}: { symbol: string; active?: boolean; realPositions?: RealPositionsResource; watchlistMembership?: boolean | null; onWatchlistAdded?: (symbol: string) => void } & StockDetailTabs & StockDetailStreamProps) {
   const {open: openDetail} = useDetailModal();
   const [chartTab, setChartTab] = useState<ChartTab>(chartTabInit ?? "kline");
   const [rightTab, setRightTab] = useState<RightTab>(rightTabInit ?? "book");
@@ -276,19 +278,6 @@ export const StockDetailPanel = memo(function StockDetailPanel({
   // 未观察到首帧时可用旧接口的首屏报价；收到缺项帧（null）后不能回退慢 prop。
   // 完整即时 Quote 保留源时间/质量/量额，慢列表 prop 不覆盖较新的详情报价。
   const live = immediateQuote === undefined ? liveQuoteProp ?? own.quotes[symbol] : immediateQuote;
-  // connecting 防抖（2026-09-09）：WS 秒连场景下"● 连接中"只闪现毫秒级——延迟 2s
-  // 才认为真异常；期间离开 connecting 态则取消。
-  const [connectingDebounced, setConnectingDebounced] = useState(false);
-  // 离开 connecting 态 → 渲染期当帧清掉防抖标志（adjust-state 模式，与下方 live 合并
-  // 同款；原写法在 effect 内同步 setState，触发 react-hooks/set-state-in-effect，P1-27）
-  if (streamStatus !== "connecting" && connectingDebounced) {
-    setConnectingDebounced(false);
-  }
-  useEffect(() => {
-    if (!active || streamStatus !== "connecting") return;
-    const t = setTimeout(() => setConnectingDebounced(true), 2000);
-    return () => clearTimeout(t);
-  }, [streamStatus, active]);
   // WS 推送 → 渲染期合并进 quote（adjust-state 模式）：live 引用每拍必变，
   // 哨兵 appliedLive 保证同一帧只合并一次，语义与原 effect 版完全等价。
   // （live 的来源见上方 P1-5：上游 prop 优先，否则自带连接）
@@ -415,7 +404,7 @@ export const StockDetailPanel = memo(function StockDetailPanel({
   }, [symbol]);
 
   useEffect(() => {
-    if (!active) return;
+    if (!active || watchlistMembership !== undefined) return;
     let alive = true;
     let generation = 0;
     let controller: AbortController | undefined;
@@ -434,7 +423,7 @@ export const StockDetailPanel = memo(function StockDetailPanel({
       controller?.abort();
       unsubscribe();
     };
-  }, [symbol, active]);
+  }, [symbol, active, watchlistMembership]);
 
   // 题材归属（L4 联动）：官方成分 + 当日涨停归因，chip 点击跳题材看板聚焦。
   // 复用原一次读取，按symbol绑定数据；右栏可显式重试，失败不拖垮图表。
@@ -599,10 +588,28 @@ export const StockDetailPanel = memo(function StockDetailPanel({
   const retainedLive = appliedLive?.symbol === symbol ? appliedLive : undefined;
   const candidateLive = active ? live ?? retainedLive : retainedLive;
   const liveQuote = candidateLive?.symbol === symbol ? candidateLive : undefined;
-  const displayBars = useMemo(() => mergeQuoteIntoBars(bars, liveQuote) ?? bars, [bars, liveQuote]);
+  const projectedBars = useMemo(() => mergeQuoteIntoBars(bars, liveQuote), [bars, liveQuote]);
   // ①' 分时右端点秒级合成：同 K 线思路，WS quote 跟进最后一根分钟点
   //    （价格+累计量），与列表/K线保持同一 1s 节奏，不再干等 60s REST 校准
-  const displayMinutes = useMemo(() => mergeQuoteIntoMinutes(minutes, liveQuote, isIndex) ?? minutes, [minutes, liveQuote, isIndex]);
+  const projectedMinutes = useMemo(() => mergeQuoteIntoMinutes(minutes, liveQuote, isIndex), [minutes, liveQuote, isIndex]);
+  // Rejected frames do not write a new point and must not undo an already
+  // displayed trusted point. Each formal REST replacement resets its own view;
+  // symbol/day/period changes cannot borrow a prior projection or its volume.
+  const chartContext = `${symbol}:1d`;
+  const quoteClock = liveQuote?.data_timestamp;
+  const sourceDate = quoteClock && /(?:Z|[+-]\d{2}:\d{2})$/.test(quoteClock) && Number.isFinite(Date.parse(quoteClock)) ? bjDate(quoteClock) : null;
+  const [acceptedChart, setAcceptedChart] = useState(() => ({context: chartContext, sourceDate, bars, minutes, quote: liveQuote,
+    displayBars: projectedBars ?? bars, displayMinutes: projectedMinutes ?? minutes}));
+  let chartView = acceptedChart;
+  if (acceptedChart.context !== chartContext || acceptedChart.bars !== bars || acceptedChart.minutes !== minutes || acceptedChart.quote !== liveQuote) {
+    const rejected = !hasTrustedQuoteObservation(liveQuote);
+    const sameContext = acceptedChart.context === chartContext && (!sourceDate || !acceptedChart.sourceDate || sourceDate === acceptedChart.sourceDate);
+    chartView = {context: chartContext, sourceDate: sourceDate || (acceptedChart.context === chartContext ? acceptedChart.sourceDate : null), bars, minutes, quote: liveQuote,
+      displayBars: projectedBars ?? (rejected && sameContext && acceptedChart.bars === bars ? acceptedChart.displayBars : bars),
+      displayMinutes: projectedMinutes ?? (rejected && sameContext && acceptedChart.minutes === minutes ? acceptedChart.displayMinutes : minutes)};
+    setAcceptedChart(chartView);
+  }
+  const {displayBars, displayMinutes} = chartView;
   // prev_close 只有在能证明与分钟点同一北京交易日时才可作为百分比轴基准。
   // data_timestamp 是源行情时刻；received_at 只是接收时刻，不能拿它替 stale 数据“补日期”。
   const minuteReferenceDate = quote?.data_timestamp ? bjDate(quote.data_timestamp) || null : null;
@@ -646,6 +653,7 @@ export const StockDetailPanel = memo(function StockDetailPanel({
     try {
       await addToWatchlist(symbol);
       setInWatchlist(true);
+      onWatchlistAdded?.(symbol);
       notifyWatchlistChanged(); // 工作台左栏立即出现新自选（此前详情面板加自选不通知）
     } catch (error) { setError(`加入自选失败：${error instanceof Error ? error.message : "请重试"}`); }
   }
@@ -700,16 +708,13 @@ export const StockDetailPanel = memo(function StockDetailPanel({
   const qualityView = liveQuote ? quoteQualityView({quality: liveQuote.quality, reasons: liveQuote.quality_reasons,
     symbol, market: liveQuote.market, dataTimestamp: liveQuote.data_timestamp, session: liveQuote.display_session}) : null;
   const pausedLabel = qualityView && ["已收盘", "午间休息", "未开盘", "休市", "竞价等待", "开盘等待"].includes(qualityView.label);
-  const chartStatus = streamStatus === "error" ? {label: "行情连接异常", warning: true}
-    : active && immediateQuote === null ? {label: "报价待恢复", warning: true, quality: "stale"}
-    : liveQuote && !hasTrustedQuoteObservation(liveQuote) && !pausedLabel ? {label: qualityView?.label === "正常" ? "时间待核" : qualityView?.label || "报价待核", warning: true, quality: liveQuote.quality}
-      : streamStatus === "polling" ? {label: "备用读取", warning: true}
-        : connectingDebounced && streamStatus === "connecting" ? {label: "行情连接中", warning: true} : null;
+  const quoteIssue = active && immediateQuote === null ? {label: "报价待恢复", title: "本轮未返回该证券，保留上次报价；当前状态待核。"}
+    : liveQuote && !hasTrustedQuoteObservation(liveQuote) && !pausedLabel ? {label: qualityView?.label === "正常" ? "时间待核" : qualityView?.label || "报价待核", title: qualityView?.title} : null;
   const quoteDiagnostics = <>
     {active && immediateQuote === null && <p>最近行情帧缺少该证券，保留上次报价。当前时点待核实，恢复行情后再操作。</p>}
     {liveQuote && <p>报价来源：{sourceLabel(liveQuote.source)} · 源数据时间：{dateTimeTextBJ(liveQuote.data_timestamp, {seconds: true})} · 质量 {liveQuote.quality}{qualityView?.title ? `。${qualityView.title}` : ""}</p>}
     {liveQuote && !hasTrustedQuoteObservation(liveQuote) && <p>报价质量或源时刻待核，未推进图表尾点；保留原图。</p>}
-    {STREAM_ABNORMAL.includes(streamStatus) && (streamStatus !== "connecting" || connectingDebounced) && <p>行情连接：{STREAM_STATUS_LABEL[streamStatus].text}；断线时使用既有读取通道。</p>}
+    {STREAM_ABNORMAL.includes(streamStatus) && <p>行情连接：{STREAM_STATUS_LABEL[streamStatus].text}；连接状态不代表源报价时效。</p>}
   </>;
   const klineDiagnostics = <>{quoteDiagnostics}{bars.at(-1) && <p>REST基座：{sourceLabel(bars.at(-1)?.source)} · 尾记录 {dateTimeTextBJ(bars.at(-1)?.ts, {seconds: true})} · 质量 {bars.at(-1)?.quality}</p>}</>;
   const minuteDiagnostics = <>{quoteDiagnostics}{minutes.at(-1) && <p>REST基座：{sourceLabel(minutes.at(-1)?.source)} · 源分钟 {dateTimeTextBJ(minutes.at(-1)?.ts, {seconds: true})}</p>}{indexOverlay?.points.at(-1) && <p>指数叠加截至 {dateTimeTextBJ(indexOverlay.points.at(-1)?.ts, {seconds: true})}</p>}{indexResource.error instanceof Error && <p>指数叠加：{indexResource.error.message}</p>}</>;
@@ -733,7 +738,7 @@ export const StockDetailPanel = memo(function StockDetailPanel({
           </div>
         </div>
       ) : quote ? (
-        <QuoteStrip quote={quote} inWatchlist={inWatchlist} onAdd={() => void add()} hideWatchlist={isIndex} tradingStatus={tradingStatus} />
+        <QuoteStrip quote={quote} inWatchlist={watchlistMembership === undefined ? inWatchlist : watchlistMembership} onAdd={() => void add()} hideWatchlist={isIndex} tradingStatus={tradingStatus} active={active} connectionStatus={streamStatus} issue={quoteIssue} diagnostics={chartTab === "kline" ? klineDiagnostics : chartTab === "minute" ? minuteDiagnostics : quoteDiagnostics}/>
       ) : (
         <div className="shrink-0 rounded-xl border border-amber-500/40 bg-amber-500/10 px-4 py-1.5 text-xs text-amber-800 dark:text-amber-300">
           行情数据暂不可用（数据源失败，稍后自动重试）
@@ -839,7 +844,7 @@ export const StockDetailPanel = memo(function StockDetailPanel({
                其它位置已展示，这行纯属重复占位，去掉后纵向多出约 41px 给 K 线
                （2026-09-02 用户要求） */
             <Panel bodyClassName="overflow-hidden flex flex-col" className="detail-chart-panel min-h-0 flex-1">
-              <DetailReadStatus label="K线" state={readStates.kline} onRetry={() => retryRead("kline")} diagnostics={klineDiagnostics} status={chartStatus} identity={`${symbol}:kline`} active={active}/>
+              <DetailReadStatus label="K线" state={readStates.kline} onRetry={() => retryRead("kline")} diagnostics={klineDiagnostics} identity={`${symbol}:kline`} active={active}/>
               {displayBars.length > 0 ? (
                 <div className="flex min-h-0 flex-1 flex-col">
                   {/* 停牌提示条：日K 缺 bar 推导，判据随附（UI 缺陷 #1） */}
@@ -862,7 +867,7 @@ export const StockDetailPanel = memo(function StockDetailPanel({
                41px 给分时图；两个图表 tab 也不再有「一个有头一个无头」的高度跳动
                （2026-09-02 用户要求） */
             <Panel bodyClassName="overflow-hidden flex flex-col" className="detail-chart-panel min-h-0 flex-1">
-              <DetailReadStatus label="分钟" state={readStates.minute} onRetry={() => retryRead("minute")} diagnostics={minuteDiagnostics} diagnosticIssue={!!indexResource.error} status={chartStatus} identity={`${symbol}:minute`} active={active}/>
+              <DetailReadStatus label="分钟" state={readStates.minute} onRetry={() => retryRead("minute")} diagnostics={minuteDiagnostics} diagnosticIssue={!!indexResource.error} identity={`${symbol}:minute`} active={active}/>
               {indexOverlay?.mode === "historical" && <p className="px-3 pb-1 text-xs text-zinc-600 dark:text-zinc-400">上证叠加 · {indexOverlay.referenceDate} · 非实时</p>}
               {!!indexResource.error && <div className="flex flex-wrap items-center gap-2 px-3 pb-1 text-xs"><p role="alert" className="text-amber-800 dark:text-amber-300">指数叠加读取失败{indexOverlay ? " · 保留结果" : ""}</p><button type="button" data-action="secondary" disabled={indexResource.pending} onClick={indexResource.refresh}>重新读取指数叠加</button></div>}
               {minutes.length > 0 ? (
@@ -907,7 +912,7 @@ export const StockDetailPanel = memo(function StockDetailPanel({
             /* 头部标题行已移除（图名 + 近 N 日口径改为图内灰标签，见 flow-chart.tsx），
                与 K 线/分时两个 tab 统一，纵向多出约 41px 给资金图（2026-09-02） */
             <Panel bodyClassName="overflow-hidden flex flex-col" className="detail-chart-panel min-h-0 flex-1">
-              <DetailReadStatus label="资金" state={readStates.flow} onRetry={() => retryRead("flow")} diagnostics={quoteDiagnostics} status={chartStatus} identity={`${symbol}:flow`} active={active}/>
+              <DetailReadStatus label="资金" state={readStates.flow} onRetry={() => retryRead("flow")} diagnostics={quoteDiagnostics} identity={`${symbol}:flow`} active={active}/>
               {!flow || flow.flow.length === 0 ? (
                 !readStates.flow.error && <p className="px-4 py-10 text-center text-sm text-zinc-600 dark:text-zinc-400">{readStates.flow.loaded ? "本次未返回资金流记录。" : "正在读取资金数据…"}</p>
               ) : (

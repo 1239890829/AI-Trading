@@ -137,6 +137,76 @@ function testQuoteFeed() {
 }
 
 describe("StockDetailPanel · 即时报价复用", () => {
+  it.each(["kline", "minute"] as const)("%s拒旧帧保留已显示的可信尾点，不能退回更旧REST基座再弹回", async chartTab => {
+    const feed = testQuoteFeed();
+    const first: Quote = {...audit, symbol: "600519", price: 22, data_timestamp: "2026-10-09T02:00:30Z"};
+    feed.publish("600519", first);
+    const view = render(<StockDetailPanel symbol="600519" chartTab={chartTab} quoteFeed={feed} streamStatus="live"/>); await settle();
+    const chart = view.getByTestId(chartTab === "kline" ? "kline-price" : "minute-price");
+    expect(chart.textContent).toBe("22");
+    await act(async () => {feed.publish("600519", {...first, quality: "stale", quality_reasons: ["source_time_regress_ignored"]});});
+    expect(chart.textContent).toBe("22");
+    expect(view.container.querySelector("[data-quality=stale]")).toBeTruthy();
+    await act(async () => {feed.publish("600519", {...first, price: 23, data_timestamp: "2026-10-09T02:00:31Z"});});
+    expect(chart.textContent).toBe("23");
+    expect(api.getNewsDigest).not.toHaveBeenCalled();
+  });
+
+  it.each(["kline", "minute"] as const)("%s正式新REST基座和换日不会借用旧的可信尾点", async chartTab => {
+    const feed = testQuoteFeed();
+    const first: Quote = {...audit, symbol: "600519", price: 22, data_timestamp: "2026-10-09T02:00:30Z"};
+    feed.publish("600519", first);
+    const view = render(<StockDetailPanel symbol="600519" chartTab={chartTab} quoteFeed={feed} streamStatus="live"/>); await settle();
+    const chart = view.getByTestId(chartTab === "kline" ? "kline-price" : "minute-price");
+    expect(chart.textContent).toBe("22");
+    await act(async () => {feed.publish("600519", {...first, quality: "stale", quality_reasons: ["source_time_regress_ignored"]});});
+    if (chartTab === "kline") api.getKlinePayload.mockResolvedValueOnce(kline("600519", 25));
+    else api.getMinuteLineWithBaseline.mockResolvedValueOnce(minute(25));
+    await advance(60_000);
+    expect(chart.textContent).toBe("25");
+    await act(async () => {feed.publish("600519", {...first, price: 26, data_timestamp: "2026-10-09T02:00:31Z"});});
+    expect(chart.textContent).toBe("26");
+    await act(async () => {feed.publish("600519", {...first, price: 40, data_timestamp: "2026-10-10T02:00:31Z", quality: "stale", quality_reasons: ["refresh_failed"]});});
+    expect(chart.textContent).toBe("25");
+    expect(api.getNewsDigest).not.toHaveBeenCalled();
+  });
+
+  it.each(["kline", "minute"] as const)("%s无源钟的拒绝帧不臆造新日期，也不抹掉已显示可信尾点", async chartTab => {
+    const feed = testQuoteFeed();
+    const first: Quote = {...audit, symbol: "600519", price: 22, data_timestamp: "2026-10-09T02:00:30Z"};
+    feed.publish("600519", first);
+    const view = render(<StockDetailPanel symbol="600519" chartTab={chartTab} quoteFeed={feed} streamStatus="live"/>); await settle();
+    const chart = view.getByTestId(chartTab === "kline" ? "kline-price" : "minute-price");
+    expect(chart.textContent).toBe("22");
+    await act(async () => {feed.publish("600519", {...first, data_timestamp: null, quality: "stale", quality_reasons: ["source_time_unknown_ignored"]});});
+    expect(chart.textContent).toBe("22");
+    expect(view.getByRole("button", {name: "查看行情问题"}).textContent).toBe("时间待核");
+    expect(view.container.querySelector("[data-quality=stale]")).toBeTruthy();
+  });
+
+  it("质量和缺项只更新头部固定槽，图内不重复挂载报价提示或挤压图表", async () => {
+    const feed = testQuoteFeed();
+    const first: Quote = {...audit, symbol: "600519", price: 22, data_timestamp: "2026-10-09T02:00:30Z"};
+    feed.publish("600519", first);
+    const props = {symbol: "600519", quoteFeed: feed, streamStatus: "live" as const};
+    const view = render(<StockDetailPanel {...props}/>); await settle();
+    const chart = view.container.querySelector(".detail-chart-column")!;
+    expect(within(chart as HTMLElement).queryByRole("status")).toBeNull();
+    await act(async () => {feed.publish("600519", {...first, quality: "stale", quality_reasons: ["refresh_failed"]});});
+    const header = view.container.querySelector(".quote-sheet") as HTMLElement;
+    expect(within(header).getByRole("button", {name: "查看行情问题"}).textContent).toContain("刷新异常");
+    expect(within(chart as HTMLElement).queryByText("刷新异常")).toBeNull();
+    fireEvent.click(within(header).getByRole("button", {name: "查看行情问题"}));
+    expect(within(view.getByRole("dialog", {name: "行情诊断"})).getByText(/源数据时间/)).toHaveProperty("textContent", expect.stringContaining("2026-10-09 10:00:30"));
+    fireEvent.click(view.getByRole("button", {name: "关闭"}));
+    await advance(200);
+    await act(async () => {feed.publish("600519", null);});
+    expect(within(header).getByRole("button", {name: "查看行情问题"}).textContent).toContain("报价待恢复");
+    expect(within(chart as HTMLElement).queryByText("报价待恢复")).toBeNull();
+    expect(view.getByTestId("kline-price").textContent).toBe("22");
+    expect(api.getNewsDigest).not.toHaveBeenCalled();
+  });
+
   it.each(["kline", "minute", "flow"] as const)("%s正常休市状态只在行情头部显示，连接和源读取异常仍可见", async chartTab => {
     vi.setSystemTime(new Date("2026-10-14T08:00:00+08:00"));
     const quote: Quote = {...audit, symbol: "600519", price: 88, quality: "stale", quality_reasons: ["market_closed"],
@@ -147,11 +217,11 @@ describe("StockDetailPanel · 即时报价复用", () => {
     expect(view.getAllByText("未开盘")).toHaveLength(1);
     expect(within(view.container.querySelector(".quote-sheet") as HTMLElement).getByText("未开盘")).toBeTruthy();
     view.rerender(<StockDetailPanel {...props} streamStatus="polling" />); await settle();
-    expect(view.getByRole("status").textContent).toBe("备用读取");
+    expect(view.getByText("备用读取")).toBeTruthy();
     view.rerender(<StockDetailPanel {...props} streamStatus="error" />); await settle();
-    expect(view.getByRole("status").textContent).toBe("行情连接异常");
+    expect(view.getByText("备用读取失败")).toBeTruthy();
     view.rerender(<StockDetailPanel {...props} streamStatus="live" liveQuote={{...quote, quality_reasons: ["market_closed", "refresh_failed"]}} />); await settle();
-    expect(view.getByRole("status").textContent).toBe("刷新异常");
+    expect(view.getByRole("button", {name: "查看行情问题"}).textContent).toBe("刷新异常");
     expect(api.getNewsDigest).not.toHaveBeenCalled();
   });
 
@@ -160,7 +230,7 @@ describe("StockDetailPanel · 即时报价复用", () => {
     api.getKlinePayload.mockResolvedValue(original);
     const quote = {...audit, quality: "stale" as const, symbol: "600519", price: 88, data_timestamp: "2026-10-09T02:01:30Z"};
     const view = render(<StockDetailPanel symbol="600519" liveQuote={quote} />); await settle();
-    fireEvent.click(view.getByRole("button", {name: "K线诊断"}));
+    fireEvent.click(view.getByRole("button", {name: "查看行情问题"}));
     const drawer = within(view.getByRole("dialog"));
     expect(drawer.getByText(/REST基座/).textContent).toContain("尾记录 2026-10-09 10:00:12");
     expect(drawer.getByText(/REST基座/).textContent).not.toContain("T10:00:12+08:00");
@@ -172,14 +242,15 @@ describe("StockDetailPanel · 即时报价复用", () => {
     await settle();
     expect(view.getByTestId("kline-price").textContent).toBe("20");
     expect(view.queryByText(/未推进图表尾点/)).toBeNull();
-    fireEvent.click(view.getByRole("button", {name: "K线诊断"}));
+    fireEvent.click(view.getByRole("button", {name: "查看行情问题"}));
     expect(within(view.getByRole("dialog")).getByText(/未推进图表尾点/)).toBeTruthy();
     fireEvent.click(within(view.getByRole("dialog")).getByRole("button", {name: "关闭"}));
+    await advance(200);
     fireEvent.click(view.getByRole("button", {name: "分时"}));
     await settle();
     expect(view.getByTestId("minute-price").textContent).toBe("20");
     expect(view.queryByText(/未推进图表尾点/)).toBeNull();
-    fireEvent.click(view.getByRole("button", {name: "分钟诊断"}));
+    fireEvent.click(view.getByRole("button", {name: "查看行情问题"}));
     expect(within(view.getByRole("dialog")).getByText(/未推进图表尾点/)).toBeTruthy();
   });
 
@@ -267,9 +338,9 @@ describe("StockDetailPanel · 即时报价复用", () => {
     view.rerender(<StockDetailPanel {...props} liveQuote={{...old, price: 21}} />);
     expect(view.getByTestId("kline-price").textContent).toBe("22");
     expect(view.container.querySelector(".quote-sheet")?.textContent).toContain("22.00");
-    expect(view.getByRole("status").textContent).toBe("报价待恢复");
+    expect(view.getByRole("button", {name: "查看行情问题"}).textContent).toBe("报价待恢复");
     expect(view.queryByText(/最近行情帧缺少该证券/)).toBeNull();
-    fireEvent.click(view.getByRole("button", {name: "K线诊断"}));
+    fireEvent.click(view.getByRole("button", {name: "查看行情问题"}));
     expect(within(view.getByRole("dialog")).getByText(/最近行情帧缺少该证券/)).toBeTruthy();
     fireEvent.click(within(view.getByRole("dialog")).getByRole("button", {name: "关闭"}));
     await advance(200);
@@ -516,6 +587,48 @@ afterEach(() => {
 });
 
 describe("StockDetailPanel · 自选读取真实请求边界", () => {
+  it.each([null, false, true])("父owner的membership=%s替代子详情GET和写后订阅，切股/手机恢复仍不重复读", async membership => {
+    const props = {symbol: "600519", chartTab: "flow" as const, liveQuote: {...audit, symbol: "600519", price: 20}, watchlistMembership: membership};
+    const view = render(<StockDetailPanel {...props}/>); await settle();
+    expect(api.getWatchlist).not.toHaveBeenCalled();
+    if (membership === null) {
+      expect(view.getByText("自选待确认")).toBeTruthy();
+      expect(view.getByRole("button", {name: "＋ 自选"})).toBeTruthy();
+    } else expect(!!view.queryByText("已在自选")).toBe(membership);
+    act(() => notifyWatchlistChanged()); await settle();
+    view.rerender(<StockDetailPanel {...props} symbol="000001" liveQuote={{...audit, symbol: "000001", price: 10}}/>); await settle();
+    view.rerender(<StockDetailPanel {...props} active={false}/>); await settle();
+    view.rerender(<StockDetailPanel {...props} active/>); await settle();
+    expect(api.getWatchlist).not.toHaveBeenCalled();
+  });
+
+  it.each([null, false])("父owner的membership=%s时，加自选成功回执先交给同一owner，再由原写后事件校准", async membership => {
+    const confirmed = vi.fn();
+    vi.stubGlobal("fetch", vi.fn(async () => new Response(JSON.stringify({data: {symbol: "600519"}, meta: {}}))));
+    const props = {symbol: "600519", chartTab: "flow" as const, liveQuote: {...audit, symbol: "600519", price: 20}, watchlistMembership: membership, onWatchlistAdded: confirmed};
+    const view = render(<StockDetailPanel {...props}/>); await settle();
+    fireEvent.click(view.getByRole("button", {name: "＋ 自选"})); await settle();
+    expect(confirmed).toHaveBeenCalledExactlyOnceWith("600519");
+    expect(api.getWatchlist).not.toHaveBeenCalled();
+    view.rerender(<StockDetailPanel {...props} watchlistMembership/>); await settle();
+    expect(view.getByText("已在自选")).toBeTruthy();
+  });
+
+  it("父owner未知时仍可尝试添加，POST失败保持未知且不增加子详情GET", async () => {
+    const confirmed = vi.fn();
+    const fetcher = vi.fn<typeof fetch>().mockResolvedValue(new Response(JSON.stringify({detail: "write unavailable"}), {status: 503}));
+    vi.stubGlobal("fetch", fetcher);
+    const view = render(<StockDetailPanel symbol="600519" chartTab="flow" liveQuote={{...audit, symbol: "600519", price: 20}} watchlistMembership={null} onWatchlistAdded={confirmed}/>); await settle();
+    fireEvent.click(view.getByRole("button", {name: "＋ 自选"})); await settle();
+    expect(fetcher).toHaveBeenCalledTimes(1);
+    expect(fetcher.mock.calls[0]?.[1]).toMatchObject({method: "POST"});
+    expect(view.getByText(/加入自选失败/)).toBeTruthy();
+    expect(view.getByText("自选待确认")).toBeTruthy();
+    expect(view.queryByText("已在自选")).toBeNull();
+    expect(confirmed).not.toHaveBeenCalled();
+    expect(api.getWatchlist).not.toHaveBeenCalled();
+  });
+
   it("post-add failed calibration retains confirmed membership, while a later successful empty list removes it", async () => {
     api.getWatchlist.mockResolvedValueOnce([]).mockRejectedValueOnce(new Error("unavailable")).mockResolvedValueOnce([]);
     vi.stubGlobal("fetch", vi.fn(async () => new Response(JSON.stringify({data: {symbol: "600519"}, meta: {}}))));
@@ -1047,7 +1160,7 @@ describe("StockDetailPanel · 每个端点只读取一次首屏", () => {
     const counts = coreReads().map(read => read.mock.calls.length);
     const renders = calls.symbols.length;
     await advance(120_000);
-    view.rerender(<StockDetailPanel symbol="600519" active={false} liveQuote={{...audit, symbol: "600519", price: 333}} streamStatus="stale" />);
+    view.rerender(<StockDetailPanel symbol="600519" active={false} liveQuote={{...audit, symbol: "600519", price: 333, quality: "stale", quality_reasons: ["quote_age_exceeded"]}} streamStatus="live" />);
     expect(calls.symbols.length).toBe(renders);
     expect(coreReads().map(read => read.mock.calls.length)).toEqual(counts);
     expect(view.getByTestId("kline-price").textContent).toBe("20");

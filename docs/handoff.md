@@ -8,18 +8,18 @@
 
 - **当前主门**：G4
 - **主切片首选**：IMP-019
-- **候选顺位与执行边界**：仅IMP-019；14日AM观察已完成，13:35独立观察仍待执行。用户追加的详情阅读整改已由PR #277发布；激活后确证行情计时器兼容缺陷，本批只作该同根故障修补。
-- **基点与分支**：master `1c812758424e6c39ce3f66b7b7e5a2d2d327228a`，`codex/quote-timer-compat`；主树两份未跟踪evolution保留。
-- **获准范围**：保留PR #277的原因直接阅读、入口去重与有界恢复；只修立即发布句柄不支持when导致两域轮询退出。不改原源序、TTL、轮频、预算、时效、选股或通知资格，不恢复退出服务。
-- **发布前运行冻结**：PR #277准确HEAD 1c32bf3e已合并1c812758，required/post-master三job成功。11:08加载Next16.3.8/build jkLAAevCzzsniOMqUkryb/PID89759；后端原PID89713在uvloop下反复退出行情循环，11:15:34经零活动守卫单独重启为PID92927、临时显式--loop asyncio，前端不重启。永久补丁只动后端；后续实际版本与默认loop加载结果只按artifacts/runs/live-performance-20261014/quote-timer-compat-release/runtime-identity.json及准确发布回执核对，不能把这里的施工冻结值当之后现场。
-- **证据状态**：09:35:11–09:40:11五分钟57次观察请求全200；120报价中1条源钟倒退拒绝，非HTTP超时。没有原生trace/手机真机/内置浏览器帧耗时证据。11:09额外读取确证6条真实过期；11:08:14起生产堆栈及真实uvloop离线反例定位立即Handle无when，两域取消后按30/60/120秒退避重启。额外恢复诊断不计AM/PM窗口。详见[报告§17](system/runtime-performance.md#17-2026-10-14-行情发布计时器运行纠错)。
+- **候选顺位与执行边界**：仅IMP-019；14日AM/PM两次五分钟观察均已完成，既有imp-019已暂停。用户确认详情与工作台两处状态跳变；本批验证既有四源短窗表现，修已证连接状态、可信图表保留和恢复熔断错误。全项目SLO仍部分完成。
+- **基点与分支**：master `aea8c799db9cb956d49b14608ae2d5802fffc0a8`，`codex/quote-state-recovery`；主树两份未跟踪evolution保留。
+- **获准范围**：保留PR #277阅读整改与PR #278真实uvloop修补；区分连接、单股质量和市场阶段，REST成功恢复备用读取态，图表拒旧期间保留原可信尾点；恢复所见有效但不更新的备源不误记传输故障。同步自选DB读取及八个无await的自选路由隔离到自有Session工作线程，嵌入详情复用父名单、失败域独立重试。不改原源序、底层输入TTL、轮频、预算、时效、报价质量、选股或通知资格；只移除重复包裹动态板块资金的外层60秒缓存，不恢复退出服务。
+- **切换前运行冻结**：PR #278准确HEAD 105b84e1已合并aea8c799，required/post-master三job成功。11:49:45后端PID8455、默认auto/uvloop0.22.1；前端PID89759、Next16.3.8/build jkLAAevCzzsniOMqUkryb未变。本批源码验收与正式切换分别记录，不能把工作区改动当运行生效；切换完成后的实际source/build/PID以artifacts/runs/live-performance-20261014/quote-state-recovery-release/runtime-identity.json及runtime-source-manifest.json核对。
+- **证据状态**：14日AM/PM各五分钟57观察HTTP200，报价分别119high/1stale、115high/5stale，均腾讯，异常均为源钟倒退拒绝；PM指数覆盖两次仅2/6，health4次degraded，不能以200称全正常。13:52–13:54四源隔离五轮实际40方法/41HTTP发送hook，腾讯/新浪/THS完整、东财10错误、THS45行无源钟。无浏览器/手机原生trace，原专用页已丢弃且未恢复。两窗后imp-019已PAUSED。全系统读链审计和已复现修补见[报告§18](system/runtime-performance.md#18-2026-10-14-双窗口收尾与状态恢复反证)及[§19](system/runtime-performance.md#19-全系统请求归属重复读取与缓存年龄审计)。
 - **U50 降级授权回执**：2026-09-24 DEGRADED_FULL_CONTROL未撤销；作者自审和协作反证不冒充独立网页Review。每个PR准确HEAD另有DegradedRelease。
 
 ## 2. U49 主动审计回执 / Preflight
 
-本轮原版Impeccable先context，再harden/craft-floor，作用于现有工作台的历史/错误/重试，不重设计页面、不恢复旧融合技能。Governor区分工程、历史回放、真实运行与前向效果，不把盘前样本写成盘中SLO。
+本轮原版Impeccable按distill/harden处理既有通信/质量槽和错误出口，不重设计页面、不恢复旧融合技能。先核实际源版本、构建、PID、交易日历与两个已采窗口，再做全页面/资源/API/路由/缓存/供应商归属图；逻辑调用、入站HTTP和供应商回源分别记账。
 
-先核最新master/eef60f02、当前构建/PID与日历；指数叠加故障取两个既有读面并按额外观察请求独立记账。反证核旧closed冻结到开盘、来源/身份/时区、同日与未来分钟、真实失败混入闭市、空结果、保留旧图/重试和隐藏晚回；实时helper与原频率/质量不变。源数据/生产库/选股/消息不改，不为测试触发模型或新WS客户端。两次实盘窗口前重冻准确运行版本，未测项保留未知。
+反证核连接与单股质量分工、握手与首帧、空快照与缺项、仅pong、不恢复REST状态、可信图尾跨股/日/基座、同目标nonadvancing与真实故障史、SQL阻塞/线程取消排空、读owner未知/失败/写后归属、fresh精确键隔离、嵌套缓存年龄与原输入回源次数。缺源钟/真stale/失败保留；不改源序、行情轮频、原时效、评分/通知与交易硬门。
 
 作者及协作反证不是独立Review；本轮走准确HEAD的DegradedRelease/完整门/required CI/release_check/post-master及运行切换。此前13日下午错过不补造；14日只执行两次后停用跟进。
 
@@ -102,3 +102,18 @@ PR #275已准确HEAD发布、合并master 69820808，post-master三job成功。0
 最终首次全量发现能力反射门遗漏组合编排方法登记：5402通过/81跳过、1失败（380.10s）。按既有显式登记协议将恢复方法列为Composite自有编排（实际仅调用已登记get_quotes/get_indices），没有给源伪造同名能力；补未知/非报价方法零调用反例，相关41项通过。保留原门禁与真实失败日志，最终全量另跑。
 
 最终隔离后端5406 passed/81 skipped/303.31s，pyflakes通过；前端两时区1596/138文件、tsc/ESLint/build同上。本批51个文件，生产源码未在测试期间变化；能力登记仅补组合层显式归属和非报价请求拒绝反例，不给源增加虚假接口。正常源/备用恢复/取消/轮期及原文条件的作者协作反证闭合；不能冒充独立Review或真实效果。文档最终守卫、精确HEAD DegradedRelease/CI/release_check/post-master与实际单实例切换继续分别留证。
+
+
+## 13. 14日双窗口与全系统请求审计批次
+
+当前施工codex/quote-state-recovery，基点aea8c799。两真实窗口已完成并停用跟进；四源额外试验只为当前机器短窗对照，不建立长期排名。前端175源/101hook声明、公共层132HTTP函数、后端198路由/149GET的静态映射是入口覆盖，不是网络分母；16组消费者与6条后端热链的保护、候选和具体位置见性能报告§19。
+
+本批已完成有界先红后绿的通信/图点/恢复熔断、Hub自选查库与八路由worker、父级membership、失败域重试、fresh精确身份以及板块资金叠缓存整改；完整门与发布分别核。旧BE全量主动SIGINT的3641/79跳过不是全过；FE首tsc遗留fixture类型已修，次批1618通过/1未改RichText超时保留，单file16/16未改阈值，最终标准优先级完整重跑不能省。
+
+本轮仍未证全项目/真机/原生浏览器SLO；SQLite锁持有者、其余可能重复的独立业务owner与未实现源能力按候选记录，不为宣称完整覆盖盲合归档/模型/模拟GET。没有生产业务写、额外模型或新增行情连接取证；实际加载必须完成准确HEAD/CI/post-master及单实例配对切换后另填。恢复仅本批Git差异/旧构建，业务记录与两份evolution原件保留。
+
+停止期补丁前后端全量5445通过/81跳过/490.03s，pyflakes通过；该回执不覆盖后续Hub/测试修改。前端曾默认/UTC各1619通过/138文件、tsc/ESLint/build通过，发布反证发现首次名单未知被取消添加入口，再最小修补，四目标文件139通过；完整前端重新核验，不转借修补前结果。未提高测试超时或更改未改RichText断言；先前失败日志保留。
+
+发布反证另实证停止期publisher重建，新增_stopping只在真实drain期间抑制schedule/start，不提前释放_running。新生命周期反例先红，最终后端需在新源码重新完整核验；先前5445为旧批事实，不转借。作者/团队反证仍不是独立Review。
+
+本批最终源码验收：后端5446 passed/81 skipped/385.43s、pyflakes通过；前端默认/UTC各1622 passed/138文件（245.41/200.91s），tsc、ESLint（0error/2既有warning）、Next16.3.8/build cWt2nukX_aJqrXLFLW7UQ通过。19个源码/测试SHA均与对应完整门冻结一致；文档收尾另核体检/守卫/卫生/公开扫描。两处发布反证均已关闭，当前仍须准确HEAD DegradedRelease、required CI、release_check、post-master及实际配对切换回执；不能把源码验收写成运行生效或全域SLO达标。

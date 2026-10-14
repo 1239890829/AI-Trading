@@ -90,6 +90,10 @@ function WorkbenchInner() {
     setMobileView(preferredMobileView);
   }
   const [symbols, setSymbols] = useState<string[]>([]);
+  const [watchConfirmed, setWatchConfirmed] = useState(false);
+  const confirmWatchlistAdded = useCallback((symbol: string) => {
+    setSymbols(previous => previous.includes(symbol) ? previous : [...previous, symbol]);
+  }, []);
   const [positions, setPositions] = useState<PaperPositionInfo[]>([]);
   const paperSymbols = useMemo(() => positions.map(p => p.symbol), [positions]);
   // 左栏列表 pending 哨兵（审查 F2/R2）：loadBase/dyn 首拉完成前渲染行骨架
@@ -233,6 +237,7 @@ function WorkbenchInner() {
       if (!current()) return;
       setGroupMap(Object.fromEntries(value.map(i => [i.symbol, i.group_name ?? "默认"])));
       setSymbols(value.map(i => i.symbol));
+      setWatchConfirmed(true);
       reportBase("watch");
     } catch {if (current()) reportBase("watch", "自选读取失败");}
     finally {if (current()) setBaseLoaded(true);}
@@ -277,11 +282,21 @@ function WorkbenchInner() {
     watchReadsRef.current.fresh = true;
     refreshWatch(); refreshGroups();
   }, [refreshWatch, refreshGroups]);
-  const loadBase = useCallback(async () => {
-    refreshWatchlist();
-    baseReadRef.current.overview += 1; baseReadRef.current.paper += 1;
-    refreshOverview(); refreshPaper();
-  }, [refreshWatchlist, refreshOverview, refreshPaper]);
+  const retryFailedBase = useCallback(() => {
+    if (baseErrors.watch) {
+      baseReadRef.current.watch += 1;
+      watchReadsRef.current.watch?.abort();
+      watchReadsRef.current.fresh = true;
+      refreshWatch();
+    }
+    if (baseErrors.groups) {
+      baseReadRef.current.groups += 1;
+      watchReadsRef.current.groups?.abort();
+      refreshGroups();
+    }
+    if (baseErrors.overview) {baseReadRef.current.overview += 1; refreshOverview();}
+    if (baseErrors.paper) {baseReadRef.current.paper += 1; refreshPaper();}
+  }, [baseErrors, refreshWatch, refreshGroups, refreshOverview, refreshPaper]);
 
   // 风控市场状态（评审 O2）：七档状态变化以日为尺度，独立 30s 轮询——
   // 混在 loadBase 10s 里纯属浪费（state_classifier 本身走 60s 快照聚合）。
@@ -508,7 +523,7 @@ function WorkbenchInner() {
         <div className="bc-workbench-title">
           {backLabel && backFrom && <button className="bc-back-button" onClick={() => router.push(backFrom)} title={`返回${backLabel}（跳转前状态已保留）`}>返回{backLabel}</button>}
           <h2>关注与核对</h2>
-          <span className="bc-connection" title="WebSocket 连接异常时自动降级轮询"><span className={STATUS_LABEL[status].cls}>{STATUS_LABEL[status].text}</span></span>
+          <span className="bc-connection inline-flex w-[8.4em] shrink-0" data-transport={status} title={STATUS_LABEL[status].title}><span className={STATUS_LABEL[status].cls}>{STATUS_LABEL[status].text}</span></span>
         </div>
         <div className="bc-workbench-objects">
           <nav aria-label="个人对象" className="bc-object-switch">
@@ -521,7 +536,7 @@ function WorkbenchInner() {
           ]} onChange={value => router.push(patchWorkspaceUrl("/workbench", sp.toString(), {account: value, rt: null}), {scroll: false})} />}
         </div>
       </header>
-      {readWarning && <div role="alert" className="bc-read-warning bc-base-warning"><details><summary>部分数据读取失败 · 查看原因</summary><p className="data-scroll" tabIndex={0}>{readWarning}。保留值仅为上次结果，不能判断当前为空。</p></details><button onClick={() => {setError(null); void loadBase();}}>重试读取</button></div>}
+      {readWarning && <div role="alert" className="bc-read-warning bc-base-warning"><details><summary>部分数据读取失败 · 查看原因</summary><p className="data-scroll" tabIndex={0}>{readWarning}。保留值仅为上次结果，不能判断当前为空。</p></details>{Object.keys(baseErrors).length > 0 && <button onClick={retryFailedBase}>重试读取</button>}</div>}
 
       <nav className="bc-mobile-views" aria-label="工作台内容">
         {([["list", "指数与自选"], ["chart", "图表"], ["check", "核对"]] as const).map(([key, label]) => <button key={key} type="button" aria-pressed={mobileView === key} onClick={() => setMobileView(key)}>{label}</button>)}
@@ -617,7 +632,7 @@ function WorkbenchInner() {
         <section className="bc-workbench-detail" aria-label="证券详情">
         {/* 边界跟随证券/scope重置，保留深链与共享真实详情的全部消费者。 */}
         <PanelBoundary key={`${activeSymbol}:${mode}:${account}`} label="个股详情">
-          <StockDetailPanel symbol={activeSymbol} chartTab={chartTab} rightTab={rightTab} onRightTabChange={switchRightTab} liveQuote={merged[activeSymbol]} streamStatus={status} quoteFeed={quoteFeed} active={detailActive} realPositions={realPositions} />
+          <StockDetailPanel symbol={activeSymbol} chartTab={chartTab} rightTab={rightTab} onRightTabChange={switchRightTab} liveQuote={merged[activeSymbol]} streamStatus={status} quoteFeed={quoteFeed} active={detailActive} realPositions={realPositions} watchlistMembership={symbols.includes(activeSymbol) ? true : watchConfirmed ? false : null} onWatchlistAdded={confirmWatchlistAdded} />
         </PanelBoundary>
         </section>
       </div>
