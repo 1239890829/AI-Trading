@@ -85,7 +85,7 @@ vi.mock("@/components/kline-chart-pro", () => ({
   KlineChartPro: ({ bars, costPrice, tradeMarks }: { bars: Kline[]; costPrice?: number | null; tradeMarks?: PaperFill[] }) => <div data-testid="kline-price" data-cost-price={costPrice ?? "none"} data-fill-count={tradeMarks?.length ?? 0}>{bars.at(-1)?.close}</div>,
 }));
 vi.mock("@/components/minute-chart", () => ({
-  MinuteChart: ({ points, index }: { points: MinutePoint[]; index?: {points: MinutePoint[]} | null }) => <div data-testid="minute-price" data-index-last={index?.points.at(-1)?.price ?? "none"} data-avg={points.at(-1)?.avg ?? "none"}>{points.at(-1)?.price}</div>,
+  MinuteChart: ({ points, index }: { points: MinutePoint[]; index?: {points: MinutePoint[]; prevClose?: number} | null }) => <div data-testid="minute-price" data-index-last={index?.points.at(-1)?.price ?? "none"} data-index-clock={index?.points.at(-1)?.ts ?? "none"} data-index-prev-close={index?.prevClose ?? "none"} data-avg={points.at(-1)?.avg ?? "none"}>{points.at(-1)?.price}</div>,
 }));
 
 const audit = { source: "tdx", quality: "high" as const, quality_reasons: [], received_at: "2026-10-09T02:00:00Z" };
@@ -1372,5 +1372,161 @@ describe("StockDetailPanel · 每个端点只读取一次首屏", () => {
     expect(view.getByTestId("minute-price").getAttribute("data-index-last")).toBe("none");
     expect(view.queryByText(/上证叠加 · .*非实时/)).toBeNull();
     expect(api.getNewsDigest).not.toHaveBeenCalled();
+  });
+});
+
+describe("StockDetailPanel · 已有指数观察驱动一次恢复校准", () => {
+  function indexQuote(clock = "2026-10-09T10:00:02+08:00"): Quote {
+    return {...audit, symbol: "000001", market: "SH", price: 3000, prev_close: 2990,
+      data_timestamp: "2026-10-09T10:00:00+08:00",
+      display_session: {phase: "continuous", trade_date: "2026-10-09", as_of: clock, trade_day_result: true}};
+  }
+  const missing = (): Quote => ({...indexQuote("2026-10-09T10:00:01+08:00"), quality: "stale", quality_reasons: ["index_batch_missing"]});
+  beforeEach(() => {
+    vi.stubGlobal("fetch", vi.fn(() => {throw new Error("offline recovery test: unexpected fetch");}));
+    api.getMinuteLine.mockResolvedValue(minute(3000).points);
+  });
+
+  it("新成功父观察只校准一次；同引用和后续同状态新对象不循环", async () => {
+    api.getMarketOverview.mockResolvedValueOnce({indices: [missing()]}).mockResolvedValue({indices: [{...indexQuote(), prev_close: 3020}]});
+    api.getMinuteLine.mockResolvedValueOnce(minute(3000).points).mockResolvedValue([{ts: "2026-10-09T02:00:01Z", price: 3030, source: "tencent"}]);
+    const view = render(<StockDetailPanel symbol="600519" chartTab="minute" indexQuote={null}/>);
+    await settle();
+    expect(view.getByRole("alert").textContent).toContain("指数叠加读取失败");
+    const recovered = indexQuote();
+    view.rerender(<StockDetailPanel symbol="600519" chartTab="minute" indexQuote={recovered}/>);
+    await settle();
+    expect(api.getMinuteLine).toHaveBeenCalledTimes(2);
+    expect(api.getMarketOverview).toHaveBeenCalledTimes(2);
+    expect(view.queryByText(/指数叠加读取失败/)).toBeNull();
+    expect(view.getByTestId("minute-price").getAttribute("data-index-last")).toBe("3030");
+    expect(view.getByTestId("minute-price").getAttribute("data-index-clock")).toBe("2026-10-09T02:00:01Z");
+    expect(view.getByTestId("minute-price").getAttribute("data-index-prev-close")).toBe("3020");
+    view.rerender(<StockDetailPanel symbol="600519" chartTab="minute" indexQuote={recovered}/>);
+    view.rerender(<StockDetailPanel symbol="600519" chartTab="minute" indexQuote={indexQuote("2026-10-09T10:00:03+08:00")}/>);
+    await settle();
+    expect(api.getMinuteLine).toHaveBeenCalledTimes(2);
+    expect(api.getNewsDigest).not.toHaveBeenCalled();
+    expect(fetch).not.toHaveBeenCalled();
+  });
+
+  it("收盘后缺批恢复为严格closed历史观察才校准，仍显示非实时且不升级stale", async () => {
+    vi.setSystemTime(new Date("2026-10-09T17:15:00+08:00"));
+    const recovered: Quote = {...indexQuote("2026-10-09T17:14:54+08:00"), quality: "stale", quality_reasons: ["market_closed"],
+      display_session: {phase: "closed", trade_date: "2026-10-09", as_of: "2026-10-09T17:14:54+08:00", trade_day_result: true}};
+    const before = JSON.stringify(recovered);
+    api.getMarketOverview.mockResolvedValueOnce({indices: [{...recovered, quality_reasons: ["market_closed", "index_batch_missing"], display_session: {...recovered.display_session!, as_of: "2026-10-09T17:14:45+08:00"}}]}).mockResolvedValue({indices: [recovered]});
+    const view = render(<StockDetailPanel symbol="600519" chartTab="minute" indexQuote={null}/>); await settle();
+    expect(view.getByRole("alert")).toBeTruthy();
+    view.rerender(<StockDetailPanel symbol="600519" chartTab="minute" indexQuote={recovered}/>); await settle();
+    expect(api.getMinuteLine).toHaveBeenCalledTimes(2);
+    expect(view.queryByText(/指数叠加读取失败/)).toBeNull();
+    expect(view.getByText("上证叠加 · 2026-10-09 · 非实时")).toBeTruthy();
+    expect(JSON.stringify(recovered)).toBe(before);
+  });
+
+  it.each(["failure", "success"])("慢请求跨恢复，原请求%s后只在真正结束时决定是否补读", async outcome => {
+    const old = deferred<MinutePoint[]>();
+    api.getMinuteLine.mockReturnValueOnce(old.promise);
+    api.getMarketOverview.mockResolvedValue({indices: [indexQuote()]});
+    const view = render(<StockDetailPanel symbol="600519" chartTab="minute" indexQuote={null}/>);
+    await settle();
+    view.rerender(<StockDetailPanel symbol="600519" chartTab="minute" indexQuote={indexQuote("2026-10-09T10:00:03+08:00")}/>);
+    await settle();
+    expect(api.getMinuteLine).toHaveBeenCalledTimes(1);
+    await act(async () => {if (outcome === "failure") old.reject(new Error("old request failed")); else old.resolve(minute(3000).points);});
+    await settle();
+    expect(api.getMinuteLine).toHaveBeenCalledTimes(outcome === "failure" ? 2 : 1);
+    expect(view.queryByText(/指数叠加读取失败/)).toBeNull();
+  });
+
+  it("后台flight的pending未置位也不并发补读，补读失败后同状态新对象不循环", async () => {
+    api.getMarketOverview.mockResolvedValue({indices: [indexQuote()]});
+    const view = render(<StockDetailPanel symbol="600519" chartTab="minute" indexQuote={null}/>);
+    await settle();
+    const old = deferred<MinutePoint[]>(); api.getMinuteLine.mockReturnValueOnce(old.promise);
+    await advance(60_000);
+    const recovered = indexQuote("2026-10-09T10:00:03+08:00");
+    view.rerender(<StockDetailPanel symbol="600519" chartTab="minute" indexQuote={recovered}/>); await settle();
+    expect(api.getMinuteLine).toHaveBeenCalledTimes(2);
+    api.getMinuteLine.mockRejectedValue(new Error("recovery still failed"));
+    await act(async () => {old.reject(new Error("background failure"));}); await settle();
+    expect(api.getMinuteLine).toHaveBeenCalledTimes(3);
+    expect(view.getByRole("alert").textContent).toContain("指数叠加读取失败 · 保留结果");
+    for (let second = 3; second < 6; second++) {
+      view.rerender(<StockDetailPanel symbol="600519" chartTab="minute" indexQuote={indexQuote(`2026-10-09T10:00:0${second}+08:00`)}/>); await settle();
+    }
+    expect(api.getMinuteLine).toHaveBeenCalledTimes(3);
+  });
+
+  it("手动换代不会冒充旧flight已排空，旧成功不能清新失败或并发第三次恢复读", async () => {
+    api.getMarketOverview.mockResolvedValue({indices: [indexQuote()]});
+    const view = render(<StockDetailPanel symbol="600519" chartTab="minute" indexQuote={null}/>); await settle();
+    api.getMinuteLine.mockRejectedValueOnce(new Error("earlier failure"));
+    await advance(60_000);
+    const old = deferred<MinutePoint[]>(), manual = deferred<MinutePoint[]>(), recovery = deferred<MinutePoint[]>();
+    api.getMinuteLine.mockReturnValueOnce(old.promise).mockReturnValueOnce(manual.promise).mockReturnValueOnce(recovery.promise);
+    await advance(60_000);
+    fireEvent.click(view.getByRole("button", {name: "重新读取指数叠加"})); await settle();
+    expect(api.getMinuteLine).toHaveBeenCalledTimes(4);
+    await act(async () => {manual.reject(new Error("new manual failure"));}); await settle();
+    view.rerender(<StockDetailPanel symbol="600519" chartTab="minute" indexQuote={indexQuote("2026-10-09T10:00:03+08:00")}/>); await settle();
+    expect(api.getMinuteLine).toHaveBeenCalledTimes(4); // old is still physically unresolved.
+    await act(async () => {old.resolve(minute(2999).points);}); await settle();
+    expect(api.getMinuteLine).toHaveBeenCalledTimes(5);
+    expect(view.getByRole("alert").textContent).toContain("指数叠加读取失败");
+    expect(view.getByTestId("minute-price").getAttribute("data-index-last")).toBe("3000");
+    await act(async () => {recovery.resolve(minute(3030).points);}); await settle();
+    expect(view.queryByText(/指数叠加读取失败/)).toBeNull();
+    expect(view.getByTestId("minute-price").getAttribute("data-index-last")).toBe("3030");
+  });
+
+  it("一个输入先失败也须等另一个真实读取结束，仍按原时机显示失败", async () => {
+    const overview = deferred<{indices: Quote[]}>();
+    api.getMinuteLine.mockRejectedValueOnce(new Error("minute failed early"));
+    api.getMarketOverview.mockReturnValueOnce(overview.promise).mockResolvedValue({indices: [indexQuote()]});
+    const view = render(<StockDetailPanel symbol="600519" chartTab="minute" indexQuote={null}/>); await settle();
+    expect(view.getByRole("alert").textContent).toContain("指数叠加读取失败");
+    view.rerender(<StockDetailPanel symbol="600519" chartTab="minute" indexQuote={indexQuote("2026-10-09T10:00:03+08:00")}/>); await settle();
+    expect(api.getMinuteLine).toHaveBeenCalledTimes(1);
+    await act(async () => {overview.resolve({indices: [indexQuote()]});}); await settle();
+    expect(api.getMinuteLine).toHaveBeenCalledTimes(2);
+    expect(view.queryByText(/指数叠加读取失败/)).toBeNull();
+  });
+
+  it.each(["index_batch_missing", "source_time_regress_ignored", "quote_age_exceeded"])("父观察的%s不能触发恢复，冻结旧as_of也不触发", async reason => {
+    api.getMarketOverview.mockResolvedValue({indices: [missing()]});
+    const view = render(<StockDetailPanel symbol="600519" chartTab="minute" indexQuote={null}/>); await settle();
+    view.rerender(<StockDetailPanel symbol="600519" chartTab="minute" indexQuote={{...indexQuote(), quality: "stale", quality_reasons: [reason]}}/>); await settle();
+    view.rerender(<StockDetailPanel symbol="600519" chartTab="minute" indexQuote={indexQuote("2026-10-09T10:00:00+08:00")}/>); await settle();
+    expect(api.getMinuteLine).toHaveBeenCalledTimes(1);
+    expect(view.getByRole("alert")).toBeTruthy();
+  });
+
+  it.each(["inactive", "other_tab", "document_hidden", "standalone"])("%s不因父恢复观察额外读取", async mode => {
+    api.getMarketOverview.mockResolvedValue({indices: [missing()]});
+    const view = render(<StockDetailPanel symbol="600519" chartTab="minute" indexQuote={mode === "standalone" ? undefined : null}/>); await settle();
+    const before = api.getMinuteLine.mock.calls.length;
+    if (mode === "document_hidden") vi.spyOn(document, "visibilityState", "get").mockReturnValue("hidden");
+    view.rerender(<StockDetailPanel symbol="600519" chartTab={mode === "other_tab" ? "kline" : "minute"} active={mode !== "inactive"} indexQuote={mode === "standalone" ? undefined : indexQuote()}/>); await settle();
+    expect(api.getMinuteLine).toHaveBeenCalledTimes(before);
+  });
+
+  it("切股/跨日让旧慢包和其恢复候选失效；新owner只正常首读", async () => {
+    const old = deferred<MinutePoint[]>(); api.getMinuteLine.mockReturnValueOnce(old.promise);
+    api.getMarketOverview.mockResolvedValue({indices: [indexQuote()]});
+    const view = render(<StockDetailPanel symbol="600519" chartTab="minute" indexQuote={null}/>); await settle();
+    view.rerender(<StockDetailPanel symbol="600519" chartTab="minute" indexQuote={indexQuote()}/>); await settle();
+    view.rerender(<StockDetailPanel symbol="600127" chartTab="minute" indexQuote={indexQuote()}/>); await settle();
+    expect(api.getMinuteLine).toHaveBeenCalledTimes(2);
+    await act(async () => {old.reject(new Error("old symbol failed late"));}); await settle();
+    expect(api.getMinuteLine).toHaveBeenCalledTimes(2);
+    expect(view.queryByText(/指数叠加读取失败/)).toBeNull();
+    api.getMinuteLineWithBaseline.mockResolvedValue({points: [{ts: "2026-10-12T10:00:00+08:00", price: 22, source: "tdx"}], vr_baseline_5m: null});
+    await advance(60_000);
+    const reads = api.getMinuteLine.mock.calls.length;
+    view.rerender(<StockDetailPanel symbol="600127" chartTab="minute" indexQuote={indexQuote("2026-10-12T10:00:02+08:00")}/>); await settle();
+    expect(api.getMinuteLine).toHaveBeenCalledTimes(reads);
+    expect(view.getByRole("alert")).toBeTruthy();
   });
 });

@@ -5,6 +5,7 @@ import type { SymbolBoardFund } from "@/lib/api";
 import {notifyWatchlistChanged} from "@/lib/watchlist-sync";
 import {getWatchlist as readActualWatchlist} from "@/lib/api/watchlist";
 import {SymbolDetailStateCtx} from "@/components/detail/symbol-detail-context";
+import type {Quote} from "@/types/market";
 
 const state = vi.hoisted(() => ({
   params: new URLSearchParams("symbol=600127&ct=minute&rt=info&from=%2Fmarket%3Ftab%3Devents"),
@@ -25,7 +26,7 @@ vi.mock("@/hooks/use-quote-stream", () => ({
 // Match the real hooks' stable data identity between network updates.
 // A fresh items array on every render repeatedly triggers the REST fallback effect.
 vi.mock("@/hooks/use-real-positions", () => ({useRealPositions: () => ({data: state.realPositions, error: null, reload: state.reloadReal})}));
-vi.mock("@/components/stock-detail", () => ({StockDetailPanel: ({symbol, chartTab, rightTab, active, realPositions, quoteFeed, watchlistMembership, onWatchlistAdded}: {symbol: string; chartTab?: string; rightTab?: string; active?: boolean; realPositions?: {reload: () => Promise<void>}; quoteFeed?: unknown; watchlistMembership?: boolean | null; onWatchlistAdded?: (symbol: string) => void}) => <><div data-testid="stock-detail" data-active={String(active)} data-shared-positions={String(realPositions?.reload === state.reloadReal)} data-shared-quote-feed={String(quoteFeed === state.quoteStream.quoteFeed)} data-membership={String(watchlistMembership)}>{symbol}/{chartTab}/{rightTab}</div><button onClick={() => onWatchlistAdded?.(symbol)}>确认加入回执</button></>}));
+vi.mock("@/components/stock-detail", () => ({StockDetailPanel: ({symbol, chartTab, rightTab, active, realPositions, quoteFeed, watchlistMembership, onWatchlistAdded, indexQuote}: {symbol: string; chartTab?: string; rightTab?: string; active?: boolean; realPositions?: {reload: () => Promise<void>}; quoteFeed?: unknown; watchlistMembership?: boolean | null; onWatchlistAdded?: (symbol: string) => void; indexQuote?: Quote | null}) => <><div data-testid="stock-detail" data-active={String(active)} data-shared-positions={String(realPositions?.reload === state.reloadReal)} data-shared-quote-feed={String(quoteFeed === state.quoteStream.quoteFeed)} data-membership={String(watchlistMembership)} data-index-source={indexQuote === null ? "missing" : indexQuote?.source ?? "no-owner"}>{symbol}/{chartTab}/{rightTab}</div><button onClick={() => onWatchlistAdded?.(symbol)}>确认加入回执</button></>}));
 vi.mock("@/components/index-cards", () => ({IndexCards: () => <div>指数摘要</div>}));
 vi.mock("@/components/detail/account-scope-panel", () => ({AccountScopePanel: ({account}: {account: string}) => <div>账户结果 {account}</div>}));
 vi.mock("@/components/picks/pick-detail-modal", () => ({PickDetailModal: ({target}: {target: {kind: string; item: {symbol: string}} | null}) => target ? <div role="dialog">{target.kind}/{target.item.symbol}</div> : null}));
@@ -62,6 +63,22 @@ async function selectList(name: string) {
 }
 
 describe("B+C workbench production consumers", () => {
+  it("详情复用已有概览的上证观察，空成功明确缺项而非新建指数读取", async () => {
+    const sh: Quote = {symbol: "000001", market: "SH", source: "tencent", quality: "high", quality_reasons: [], received_at: "2026-10-14T15:00:01+08:00", data_timestamp: "2026-10-14T15:00:00+08:00", price: 3000, prev_close: 2990};
+    vi.mocked(api.getMarketOverview).mockResolvedValueOnce({indices: [sh], total_amount: null, total_amount_freshness: null});
+    render(<WorkbenchPage/>);
+    await waitFor(() => expect(screen.getByTestId("stock-detail").dataset.indexSource).toBe("tencent"));
+    expect(api.getMarketOverview).toHaveBeenCalledTimes(1);
+  });
+  it("父概览未成功时指数观察为unknown，成功空批才明确缺项", async () => {
+    vi.mocked(api.getMarketOverview).mockRejectedValueOnce(new Error("overview not read"));
+    render(<WorkbenchPage/>);
+    await screen.findByText(/行情概览读取失败/);
+    expect(screen.getByTestId("stock-detail").dataset.indexSource).toBe("no-owner");
+    fireEvent.click(screen.getByRole("button", {name: "重试读取"}));
+    await waitFor(() => expect(screen.getByTestId("stock-detail").dataset.indexSource).toBe("missing"));
+    expect(api.getMarketOverview).toHaveBeenCalledTimes(2);
+  });
   it("证券详情弹窗打开时暂停背景私有读取，关闭立即恢复且保留父报价owner", async () => {
     const view = render(<SymbolDetailStateCtx.Provider value={null}><WorkbenchPage/></SymbolDetailStateCtx.Provider>);
     await screen.findByRole("button", {name: "查看 金健米业 600127"});
