@@ -829,3 +829,7 @@ PR #280已按准确HEAD发布并激活：mastera53100be、后端43284、前端43
 恢复补丁目标178项通过，原缺陷、手动旧代与Promise.all兄弟输入均有判红日志。一个输入早失败时仍按原时机显示错误；每个输入Promise独立计数至真实结束，不能拿factory提前reject或最新代标志冒充排空。旧代成功不清新失败，完成脉冲在状态确定后发出。恢复观察不得早于失败已知as_of，缺批/回退/旧日/未知父观察与明确缺项保持拒绝。最终完整门和实际加载仍待新准确HEAD验收。
 
 本恢复补丁提交前门禁：BE5500 passed/82 skipped/427.28s、pyflakes通过；6个FE文件冻结后默认/UTC各1664 passed/138文件，tsc、ESLint0error/2既有warning、Next16.3.8构建wP0d-ezOZdMnVuVYWd5bS通过。首次门禁发现新增effect依赖warning，解构相同稳定字段后完整重跑前端，后端全跟踪源码hash未变；不重复用模型或请求生产取证。82跳过延续80个import-lint“装配层/其他”参数及2个指数后端不适用，不当覆盖增强。现役源码和测试未调低质量、轮频、预算、通知或选股门。发布/正式加载/盘后工作台只读验收与后续安全清理、skill安装分别以本PR交付回执记录；连续交易与手机仍未测。
+
+PR281已通过准确HEAD及PR三job并合入08381776；post-master38548786782首次BE/docs成功、FE1663通过/1失败。limit-up-reason.test等待的是父供应商文字，随后直接计数子归因API；子hook的passive effect并不由该DOM完成条件保证。相关生产组件/hook/原测试与此前PR树完全相同。当前只将两处同型计数改为await waitFor，仍精确1次，未增加timeout、删除断言或改生产调度；首次CI具体调度无trace，保留未知，不能把失败泛称环境抖动。未激活新前端；后续完整前端/文档门、exact-HEAD和post-master CI、实际工作台及清理分别验收。
+
+异步等待修正提交前验收：默认/UTC全量各1664 passed/138文件，tsc、ESLint0error/2既有warning、Next16.3.8生产构建_5Mxn-ggCg7JkHp9oXpYa通过；全跟踪前端与后端哈希无漂移，后端5500/82与pyflakes证据保持相同源码。两处断言仍精确1次，只等待被断言的异步事实，没有改生产调度或提高超时。隔离probe配置误合并include，已终止并移除仅临时依赖链接；执行数未知、无有效竞态复现，不计为测试通过。原CI失败与无效实验日志保留。准确HEAD发布、post-master CI、工作台实际验收和清理/skill安装事实由后续交付回执记录，未在提交前预写。

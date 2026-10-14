@@ -1,4 +1,4 @@
-import {act, cleanup, fireEvent, render, screen, within} from "@testing-library/react";
+import {act, cleanup, fireEvent, render, screen, within, waitFor} from "@testing-library/react";
 import {afterEach, describe, expect, it, vi} from "vitest";
 import {getLimitUpPoolSnapshot, getStockAttribution, type LimitPoolSnapshot} from "@/lib/api";
 import type {LimitUpRecord, Quote} from "@/types/market";
@@ -21,7 +21,7 @@ describe("shared security detail limit-up attribution", () => {
     expect(await screen.findByText("覆铜板涨价")).toBeTruthy();
     expect(screen.getByText("拟收购欧康诺，交易尚需审批且未完成审计")).toBeTruthy();
     expect(screen.getByText("该业务收入不足总收入1%，预计暂不贡献利润")).toBeTruthy();
-    expect(getStockAttribution).toHaveBeenCalledTimes(1);
+    await waitFor(() => expect(getStockAttribution).toHaveBeenCalledTimes(1));
     expect(screen.queryByRole("button", {name: "查看全文"})).toBeNull();
   });
   it("right-tab reading distinguishes first error, retry and valid missing coverage", async () => {
@@ -40,7 +40,7 @@ describe("shared security detail limit-up attribution", () => {
     vi.mocked(getStockAttribution).mockResolvedValue({schema_version: 1, symbol: "600825", count: 0, items: [], primary_reason: {status: "unconfirmed", label: "暂无主要来源线索", reason: "来源未绑定", event_id: null, version_id: null, observation_id: null, relation: "unknown", timing_relation: "time_unknown", excerpt: null, qualifiers: [], fact_verified: false, causality_verified: false, interpretation_view: "current"}});
     render(<LimitUpReasonPanel symbol="600825" quote={quote()} standalone />);
     await screen.findByText("拟收购财联社+重大资产重组");
-    expect(getStockAttribution).toHaveBeenCalledTimes(1);
+    await waitFor(() => expect(getStockAttribution).toHaveBeenCalledTimes(1));
     expect(getLimitUpPoolSnapshot).toHaveBeenCalledTimes(1);
     await refreshPool();
     await screen.findByText(/暂无可核对的直接来源线索/);
