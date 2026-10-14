@@ -3,7 +3,9 @@ from __future__ import annotations
 from fastapi import APIRouter, Depends, Request
 
 from app.api.deps import get_hub
+from app.core.bjtime import BJ_TZ
 from app.core.config import settings
+from app.schemas.market import Quality
 from app.services.quote_hub import QuoteHub
 
 router = APIRouter(tags=["system"])
@@ -19,6 +21,129 @@ router = APIRouter(tags=["system"])
 #: 实际开了一组。由 `tests/test_auth_boundary.py` 的行为式门禁抓出（它遍历
 #: OpenAPI 逐条发无凭据请求，只有逐条探测才看得见"同 router 的邻居被一起放开"）。
 liveness_router = APIRouter(tags=["system"])
+
+
+def _market_health_assessment(hub, stale, domains, snapshot, index_batch, rejections) -> dict:
+    """Explain already observed facts; never upgrade freshness or collect new data."""
+    reasons: list[dict] = []
+
+    def note(state: str, domain: str, code: str, message: str) -> None:
+        if not any(item["domain"] == domain and item["code"] == code for item in reasons):
+            reasons.append({"state": state, "domain": domain, "code": code, "message": message})
+
+    session_reader = getattr(hub, "_display_session", None)
+    session = session_reader() if callable(session_reader) else None
+    clock = getattr(session, "as_of", None)
+    valid_clock = bool(clock is not None and clock.tzinfo is not None
+                       and clock.astimezone(BJ_TZ).date() == getattr(session, "trade_date", None))
+    minute = clock.astimezone(BJ_TZ).hour * 60 + clock.astimezone(BJ_TZ).minute if valid_clock else None
+    trade_day = getattr(session, "trade_day_result", None)
+    phase = getattr(session, "phase", None)
+    pause = valid_clock and phase == "closed" and (
+        trade_day is False or trade_day is True and (minute < 555 or 690 < minute < 780 or minute > 900)
+    )
+    active = valid_clock and trade_day is True and (
+        phase == "continuous" and (570 <= minute <= 690 or 780 <= minute <= 900)
+        or phase == "auction" and 555 <= minute < 565
+        or phase == "pre_open_gap" and 565 <= minute < 570
+    )
+    expected_date = getattr(session, "expected_source_date", None)
+    expected_after = getattr(session, "expected_source_after", None)
+    valid_tail = bool(valid_clock and expected_after is not None and expected_after.tzinfo is not None
+                      and expected_after <= clock and expected_after.astimezone(BJ_TZ).date() == expected_date)
+    if not (pause or active) or expected_date is None:
+        note("unknown", "session", "session_unconfirmed", "交易阶段或应有源日期未确认，不能认定正常休市数据")
+    if pause and not valid_tail:
+        note("unknown", "session", "source_tail_unconfirmed", "尚未确认应有收尾边界，不能把同日旧价归为正常暂停")
+    if getattr(hub, "consecutive_failures", 0) or getattr(hub, "last_error", None):
+        note("fault", "hub", "refresh_failed", "行情读取已有失败证据，休市不覆盖该故障")
+    if index_batch and index_batch.get("missing_symbols"):
+        note("fault", "indices", "batch_incomplete", "已完成指数批次存在缺项")
+    for name, summary in (rejections or {}).items():
+        if summary.get("count"):
+            note("fault", name, "source_rejected", "最新完成批次存在被拒绝的源观测")
+    if not domains:
+        note("unknown", "hub", "domain_observation_missing", "行情读取域事实尚未提供")
+    for name, observed in (domains or {}).items():
+        if not observed.get("requested"):
+            continue
+        if observed.get("consecutive_failures") or observed.get("last_error"):
+            note("fault", name, "refresh_failed", "该行情读取域已有失败证据")
+        if observed.get("missing_count") or (observed.get("coverage") is not None and observed["coverage"] < 1):
+            note("fault", name, "batch_incomplete", "已完成行情批次覆盖不完整")
+        if observed.get("rejected_count"):
+            note("fault", name, "source_rejected", "该行情读取域存在被拒绝的源观测")
+        unknown_count = observed.get("source_time_unknown_count") or 0
+        if unknown_count:
+            note("unknown", name, "source_time_unknown", "部分报价缺完整源时间，接收时间不能替代源时间")
+        if (observed.get("source_degraded_count") or 0) > unknown_count:
+            note("fault", name, "source_degraded", "该行情读取域包含降级质量的源报价")
+        completion = (observed.get("freshness") or {}).get("state")
+        if not observed.get("last_success_refresh") or completion in {"unavailable", "unknown", None}:
+            note("unknown", name, "read_unavailable", "该读取域尚未就绪，不能据此断言请求超时")
+            continue
+        if completion != "ready":
+            note("unknown", name, "read_completion_stale", "读取完成钟已超原新鲜窗口；这不等于已确认请求超时")
+        owner = getattr(hub, "_domains", {}).get(name)
+        requested = getattr(owner, "requested_symbols", None)
+        cached = getattr(hub, name, {})
+        if requested is None or observed.get("coverage") is None:
+            note("unknown", name, "requested_coverage_unknown", "请求目录或批次覆盖率尚未确认")
+            continue
+        for symbol in requested:
+            quote = cached.get(symbol)
+            if quote is None or quote.price is None or quote.price <= 0:
+                note("fault", name, "source_value_missing", "已完成请求缺少有效报价，不能归为正常暂停")
+                continue
+            row_reasons = set(quote.quality_reasons or [])
+            if quote.quality in {Quality.low, Quality.medium, Quality.invalid}:
+                note("fault", name, "source_quality_issue", "已有低质量或非法源值，休市不覆盖该问题")
+            if row_reasons - {"off_session", "market_closed", "quote_age_exceeded", "source_time_unknown"}:
+                note("fault", name, "source_quality_issue", "报价保留真实失败或拒绝原因，不能归为正常暂停")
+            source_time = quote.data_timestamp
+            if source_time is None or source_time.tzinfo is None:
+                note("unknown", name, "source_time_unknown", "报价缺完整源时间，接收时间不能替代源时间")
+                continue
+            if valid_clock and source_time > clock:
+                note("unknown", name, "source_clock_future", "源时间晚于当前展示时刻，不能认定正常暂停")
+                continue
+            if expected_date is None or source_time.astimezone(BJ_TZ).date() != expected_date:
+                note("unknown", name, "source_date_unconfirmed", "源日期与应有交易日未对齐，不能只按休市解释")
+            if pause:
+                if valid_tail and source_time < expected_after:
+                    note("unknown", name, "source_tail_unconfirmed", "源时间尚未达到应有收尾边界；停牌等原因仍待核，不能只按休市解释")
+                if quote.quality is Quality.stale and not row_reasons:
+                    note("unknown", name, "source_stale_unexplained", "报价已标过期但未给出原因，不能认定正常暂停")
+            elif active and (quote.quality is Quality.stale or valid_clock and (
+                    clock - source_time).total_seconds() > hub.stale_after):
+                if phase == "continuous":
+                    note("fault", name, "source_quote_stale", "连续交易阶段源报价未达到原新鲜度要求")
+                else:
+                    note("unknown", name, "awaiting_observation", "竞价或开盘等待阶段尚无较新可信观测，不能只按源龄认定故障")
+    if snapshot is None:
+        note("unknown", "snapshot", "snapshot_unobserved", "未提供全市场快照事实")
+    else:
+        if snapshot.get("consecutive_failures") or snapshot.get("last_error"):
+            note("fault", "snapshot", "snapshot_read_failed", "全市场快照存在读取失败")
+        if snapshot.get("consecutive_save_failures") or snapshot.get("last_save_error"):
+            note("fault", "snapshot", "snapshot_save_failed", "全市场快照存在持久化失败")
+        snapshot_state = (snapshot.get("freshness") or {}).get("state")
+        if snapshot_state == "degraded" or snapshot.get("snapshot_source") == "quote_fallback":
+            note("fault", "snapshot", "snapshot_degraded", "全市场快照处于降级路径，不因休市升级")
+        elif snapshot_state != "ready" or not snapshot.get("rows"):
+            note("unknown", "snapshot", "snapshot_not_ready", "全市场快照尚未就绪或读取完成钟不新鲜")
+    if stale and not pause:
+        note("unknown", "hub", "hub_not_realtime", "完整行情链尚不能声明实时，不据此推断具体请求超时")
+    state = "fault" if any(item["state"] == "fault" for item in reasons) else (
+        "unknown" if reasons else "expected_pause" if pause else "ready"
+    )
+    if state == "expected_pause":
+        note("expected_pause", "session", "scheduled_pause", "所请求报价域符合正常暂停条件；快照仅核读取完成钟，源时点未验证；原过期标记保留")
+    return {"state": state, "reasons": reasons,
+            "session": session.model_dump(mode="json") if session is not None else None,
+            "raw_stale_preserved": True, "read_completion_is_source_time": False,
+            "pause_scope": "requested_quote_domains", "snapshot_clock": "batch_read_completed_at",
+            "snapshot_source_clock": "unverified"}
 
 
 @liveness_router.get("/health")
@@ -60,6 +185,8 @@ async def health(request: Request, hub: QuoteHub = Depends(get_hub)) -> dict:
         "source_rejections": source_rejections,
         "refresh_domains": refresh_domains,
         "market_snapshot": snapshot_health,
+        "assessment": _market_health_assessment(hub, stale, refresh_domains, snapshot_health,
+                                                index_batch, source_rejections),
     }
 
 

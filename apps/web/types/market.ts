@@ -13,6 +13,10 @@ export interface QuoteDisplaySession {
   trade_date: string;
   as_of: string;
   trade_day_result: boolean | null;
+  /** Calendar-confirmed latest source date expected for this display phase. */
+  expected_source_date?: string | null;
+  /** Server-derived minimum source clock for a normal paused display. */
+  expected_source_after?: string | null;
 }
 
 export interface Quote extends AuditFields {

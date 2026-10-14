@@ -833,3 +833,24 @@ PR #280已按准确HEAD发布并激活：mastera53100be、后端43284、前端43
 PR281已通过准确HEAD及PR三job并合入08381776；post-master38548786782首次BE/docs成功、FE1663通过/1失败。limit-up-reason.test等待的是父供应商文字，随后直接计数子归因API；子hook的passive effect并不由该DOM完成条件保证。相关生产组件/hook/原测试与此前PR树完全相同。当前只将两处同型计数改为await waitFor，仍精确1次，未增加timeout、删除断言或改生产调度；首次CI具体调度无trace，保留未知，不能把失败泛称环境抖动。未激活新前端；后续完整前端/文档门、exact-HEAD和post-master CI、实际工作台及清理分别验收。
 
 异步等待修正提交前验收：默认/UTC全量各1664 passed/138文件，tsc、ESLint0error/2既有warning、Next16.3.8生产构建_5Mxn-ggCg7JkHp9oXpYa通过；全跟踪前端与后端哈希无漂移，后端5500/82与pyflakes证据保持相同源码。两处断言仍精确1次，只等待被断言的异步事实，没有改生产调度或提高超时。隔离probe配置误合并include，已终止并移除仅临时依赖链接；执行数未知、无有效竞态复现，不计为测试通过。原CI失败与无效实验日志保留。准确HEAD发布、post-master CI、工作台实际验收和清理/skill安装事实由后续交付回执记录，未在提交前预写。
+
+
+## 22. 2026-10-14 行情健康分因与无消费者逐笔
+
+### 当前事实与缺口
+
+在master562bd398、8000/PID43284、3000/PID83525/build _5Mxn-ggCg7JkHp9oXpYa的19:35盘后现场，原health为degraded/is_stale=true；完整指数6/6，两域完成钟ready、缺项/拒收/连续失败均0，源日期为当日、源钟约16:14。原health将正常_closed_marked、源龄stale和真实失败共同折成degraded，单看这个标签不能断言宕机。工作台没有消费health.status，实际提示沿逐证券质量/源钟/display_session；选股与通知同样消费原Quote/Snapshot门，不能靠改健康标签放行。snapshot.ready只是整批读取完成钟，完整源钟仍未核实。
+
+### 已证实的窄修补
+
+1. health只新增assessment及短原因，保留全部原字段。ready/expected_pause/fault/unknown区分当前请求报价域的实时合格、日历可解释暂停、明确故障及缺证据；完成钟过原阈值但无真实失败保留unknown，不臆造请求超时。缺项、拒收、低质量、失败与落盘异常不被休市覆盖。竞价/开盘等待仅源龄旧不直接判源故障；snapshot明确source_clock=unverified。
+2. display_session新增expected_source_date/expected_source_after。只有日历覆盖才给应有日；周末须已知最近周五，旧日历不猜。暂停前尾点以11:30或15:00减既有stale_after，不改原阈值；旧日、同日早停、无时区/未来/缺钟不再安静标“已收盘”。仍保留raw stale，不把收盘数冒充实时。Hub原“当前为最近交易日数据”文案改为保留源报价、交易日单独核对。
+3. StockDetail在盘口视角idle预取trades但BookTradesView及分时/K线均不消费，原生可靠导航内确有600105/600127两次该读取。仅去掉这个预取；进入逐笔立即读、原10秒轮询、在途复用/旧回包隔离与失败保留均不变。未因日志的所有熔断都归本页，也不改其余有消费者读链。
+
+### 桌面证据与验收边界
+
+原生Chrome工作台记录94.013秒，可靠重新加载后48个API全部HTTP200、0失败/0未完，耗时中位610.572ms、最大1139.38ms；17个首次可靠导航前请求单列unknown。原生INP149ms、LCP不可用；可靠导航区间未见>50ms主任务，另有2个导航前长任务不混入。HTTP200不证明行情语义/完整性；此短窗、盘后负载不构成未来交易时段或全系统SLO。原trace不含资源正文/源码映射，离线按实际主frame和导航解析。
+
+日期/尾界缺陷有先红后绿，健康有真实失败/未知/竞价反例，逐笔有闲置0次/可见首读和晚回/恢复反例；最终完整门、发布和实际运行另以本PR交付回执核对。原版Impeccable按scoped optimize/harden核事实与状态，没有新视觉世界/诊断面板，也不把作者团队反证冒充独立Review。手机暂缓、连续交易验收保持部分完成，双窗自动跟进仍PAUSED。恢复只回退本PR源码和激活前构建，保留业务数据、旧源时间和原规则。
+
+最终源码门：后端5556 passed/82 skipped/246.35s、pyflakes通过；FE默认/UTC各1676 passed/138文件（111.47/124.00s）、tsc、ESLint0error/2既有warning与Next16.3.8生产构建w84AjqUszLM_XM6Y14QeS通过。首轮5538通过/18失败/82跳过保留：旧展示测试用单参fake替代实际二参日历接口；固定确定日历并调用真实函数后，原18条业务/日期断言原样保留，相关138项及全量通过。新增pause/health/逐笔边界均先判红；不提高超时或放宽质量。next-env自动生成引用已按冻结hash还原并复验类型门。准确HEAD发布、post-master、正式加载与改后原生工作台证据另存本PR交付回执；此处不预写未来结果。

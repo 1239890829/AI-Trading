@@ -211,7 +211,7 @@ describe("StockDetailPanel · 即时报价复用", () => {
     vi.setSystemTime(new Date("2026-10-14T08:00:00+08:00"));
     const quote: Quote = {...audit, symbol: "600519", price: 88, quality: "stale", quality_reasons: ["market_closed"],
       data_timestamp: "2026-10-13T15:00:00+08:00",
-      display_session: {phase: "closed", trade_date: "2026-10-14", as_of: "2026-10-14T08:00:00+08:00", trade_day_result: true}};
+      display_session: {phase: "closed", trade_date: "2026-10-14", as_of: "2026-10-14T08:00:00+08:00", trade_day_result: true, expected_source_date: "2026-10-13", expected_source_after: "2026-10-13T14:59:50+08:00"}};
     const props = {symbol: "600519", chartTab, liveQuote: quote};
     const view = render(<StockDetailPanel {...props} streamStatus="live" />); await settle();
     expect(view.getAllByText("未开盘")).toHaveLength(1);
@@ -1005,7 +1005,7 @@ describe("StockDetailPanel · 每个端点只读取一次首屏", () => {
     expect(view.getByTestId("minute-price").getAttribute("data-avg")).toBe(expectedAvg);
   });
 
-  it("默认 K线/盘口立即读取一次，非激活分时/逐笔仍在 idle 预取，页签切入继续立即轮询", async () => {
+  it("默认 K线/盘口立即读取，分时保留预取，逐笔仅在页签可见时首读及轮询", async () => {
     const view = render(<StockDetailPanel symbol="600519" />);
     await settle();
     expect(api.getKlinePayload).toHaveBeenCalledTimes(1);
@@ -1016,17 +1016,18 @@ describe("StockDetailPanel · 每个端点只读取一次首屏", () => {
     expect(api.getTrades).not.toHaveBeenCalled();
     await advance(900);
     expect(api.getMinuteLineWithBaseline).toHaveBeenCalledTimes(1);
-    expect(api.getTrades).toHaveBeenCalledTimes(1);
+    expect(api.getTrades).not.toHaveBeenCalled();
     await advance(4100);
     expect(api.getOrderBook).toHaveBeenCalledTimes(2);
     expect(api.getKlinePayload).toHaveBeenCalledTimes(1);
+    expect(api.getTrades).not.toHaveBeenCalled();
     fireEvent.click(view.getByRole("tab", { name: "逐笔" }));
     fireEvent.click(view.getByRole("button", { name: "分时" }));
     await settle();
-    expect(api.getTrades).toHaveBeenCalledTimes(2);
+    expect(api.getTrades).toHaveBeenCalledTimes(1);
     expect(api.getMinuteLineWithBaseline).toHaveBeenCalledTimes(2);
     await advance(10_000);
-    expect(api.getTrades).toHaveBeenCalledTimes(3);
+    expect(api.getTrades).toHaveBeenCalledTimes(2);
     expect(api.getOrderBook).toHaveBeenCalledTimes(2);
   });
 
@@ -1055,7 +1056,6 @@ describe("StockDetailPanel · 每个端点只读取一次首屏", () => {
     { endpoint: "getKlinePayload" as const, chartTab: "kline" as const, rightTab: "profile" as const, result: kline("600519", 77), interval: 60_000 },
     { endpoint: "getOrderBook" as const, chartTab: "flow" as const, rightTab: "book" as const, result: book("600519", 77), interval: 5_000 },
     { endpoint: "getMinuteLineWithBaseline" as const, chartTab: "minute" as const, rightTab: "profile" as const, result: minute(77), interval: 60_000 },
-    { endpoint: "getTrades" as const, chartTab: "flow" as const, rightTab: "trades" as const, result: trades("600519", 77), interval: 10_000 },
   ])("$endpoint 非激活预取仍在途时，切入复用首取，完成后恢复轮询", async ({ endpoint, chartTab, rightTab, result, interval }) => {
     const pending = deferred<typeof result>();
     api[endpoint].mockReturnValueOnce(pending.promise);
@@ -1074,6 +1074,33 @@ describe("StockDetailPanel · 每个端点只读取一次首屏", () => {
     }
     await advance(interval);
     expect(api[endpoint]).toHaveBeenCalledTimes(2);
+  });
+
+  it("逐笔可见首读在途时切走再切入只复用一次，晚回不替换盘口，后续进入即时校准", async () => {
+    const pending = deferred<Trade[]>();
+    api.getTrades.mockReturnValueOnce(pending.promise).mockResolvedValue(trades("600519", 20));
+    const view = render(<StockDetailPanel symbol="600519" chartTab="minute" rightTab="book" />);
+    await advance(900);
+    expect(api.getTrades).not.toHaveBeenCalled();
+    fireEvent.click(view.getByRole("tab", {name: "逐笔"}));
+    await settle();
+    expect(api.getTrades).toHaveBeenCalledTimes(1);
+    fireEvent.click(view.getByRole("tab", {name: "盘口"}));
+    await advance(20_000);
+    expect(api.getTrades).toHaveBeenCalledTimes(1);
+    fireEvent.click(view.getByRole("tab", {name: "逐笔"}));
+    await settle();
+    expect(api.getTrades).toHaveBeenCalledTimes(1);
+    fireEvent.click(view.getByRole("tab", {name: "盘口"}));
+    await act(async () => {pending.resolve(trades("600519", 77));});
+    expect(within(view.getByRole("tabpanel")).getByText("买1")).toBeTruthy();
+    expect(within(view.getByRole("tabpanel")).queryByText("77.00")).toBeNull();
+    fireEvent.click(view.getByRole("tab", {name: "逐笔"}));
+    await settle();
+    expect(api.getTrades).toHaveBeenCalledTimes(2);
+    expect(within(view.getByRole("tabpanel")).getByText("20.00")).toBeTruthy();
+    await advance(10_000);
+    expect(api.getTrades).toHaveBeenCalledTimes(3);
   });
 
   it("盘口首取失败结束骨架，后续恢复；刷新失败保留快照，合法空档位不会变成加载中", async () => {
@@ -1164,7 +1191,7 @@ describe("StockDetailPanel · 每个端点只读取一次首屏", () => {
     expect(api.getStockThemes).toHaveBeenCalledTimes(1);
     await advance(900);
     expect(api.getMinuteLineWithBaseline).toHaveBeenCalledTimes(1);
-    expect(api.getTrades).toHaveBeenCalledTimes(1);
+    expect(api.getTrades).not.toHaveBeenCalled();
   });
 
   it("已有streamStatus即认定上游所有者，不为尚缺的首帧quote再订阅", () => {
@@ -1280,7 +1307,6 @@ describe("StockDetailPanel · 每个端点只读取一次首屏", () => {
  describe("StockDetailPanel · 恢复失败保留既有结果", () => {
   it.each([
     {endpoint: "getOrderBook" as const, tab: "盘口", result: "66.00"},
-    {endpoint: "getTrades" as const, tab: "逐笔", result: "77.00"},
     {endpoint: "getFinancials" as const, tab: "资料", result: "报告期 2026-06-30"},
   ])("恢复时$endpoint预取失败保留同股上次结果", async ({endpoint, tab, result}) => {
     api.getOrderBook.mockResolvedValue(book("600519", 66));
@@ -1297,6 +1323,27 @@ describe("StockDetailPanel · 每个端点只读取一次首屏", () => {
     fireEvent.click(view.getByRole("tab", {name: tab}));
     await settle();
     expect(within(view.getByRole("tabpanel")).getByText(result)).toBeTruthy();
+  });
+
+  it("逐笔成功首读后隐藏暂停，恢复失败保留同股结果并按原间隔重试", async () => {
+    api.getTrades.mockResolvedValue(trades("600519", 77));
+    const view = render(<StockDetailPanel symbol="600519" chartTab="minute" rightTab="trades" />);
+    await settle();
+    expect(api.getTrades).toHaveBeenCalledTimes(1);
+    expect(within(view.getByRole("tabpanel")).getByText("77.00")).toBeTruthy();
+    view.rerender(<StockDetailPanel symbol="600519" chartTab="minute" rightTab="trades" active={false} />);
+    await advance(60_000);
+    expect(api.getTrades).toHaveBeenCalledTimes(1);
+    api.getTrades.mockRejectedValue(new Error("恢复读取失败"));
+    view.rerender(<StockDetailPanel symbol="600519" chartTab="minute" rightTab="trades" active />);
+    await settle();
+    expect(api.getTrades).toHaveBeenCalledTimes(2);
+    const panel = within(view.getByRole("tabpanel"));
+    expect(panel.getByText("77.00")).toBeTruthy();
+    expect(panel.getByRole("alert").textContent).toContain("成交读取失败");
+    await advance(10_000);
+    expect(api.getTrades).toHaveBeenCalledTimes(3);
+    expect(panel.getByText("77.00")).toBeTruthy();
   });
 
   it("指数叠加仅在分时可见时读取，隐藏晚包无效，恢复与同日定时校准使用新结果", async () => {

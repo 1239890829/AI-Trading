@@ -467,8 +467,9 @@ export const StockDetailPanel = memo(function StockDetailPanel({
   // 此前切股一次并发 ~14 个请求（Promise.all 8 个 + 竞价/题材/大盘叠加/paper 等），
   // 首屏 K 线被最慢的财务/新闻拖住（东财慢时 2-4s 白屏）。按可见性分级：
   //   首屏（立即）：K 线（左图默认 tab）+ 五档盘口（右列默认 tab）+ 题材 chips（首屏行）
-  //   次屏（idle ≤2.5s）：分时/逐笔/资金流/财务/公司/新闻/竞价/大盘叠加——
+  //   次屏（idle ≤2.5s）：分时/资金流/财务/公司/竞价——
   //     切到对应 tab 时通常已就绪；不在首屏路径上，晚到不阻塞交互。
+  //   逐笔仅供右列逐笔页签使用，进入时立即读取，不在盘口/图表后台预取。
   // 激活页签的轮询负责立即首取；预取只补其余页签，避免同端点首挂请求两次。
   // 预取和轮询共用本次 symbol 的 alive 身份；复用组件切股时同样丢弃旧回包。
   // 指数无盘口/逐笔数据源 → 当帧置「确认空」，不留加载中转圈。
@@ -492,7 +493,6 @@ export const StockDetailPanel = memo(function StockDetailPanel({
   const dataReadsRef = useRef<{
     alive: boolean;
     minuteRequested: boolean;
-    tradesRequested: boolean;
     financialsRequested: boolean;
     flowRequested: boolean;
     kline: (fresh?: boolean) => ReturnType<typeof getKlinePayload>;
@@ -539,7 +539,7 @@ export const StockDetailPanel = memo(function StockDetailPanel({
       };
     };
     const reads: NonNullable<typeof dataReadsRef.current> = {
-      alive: true, minuteRequested: false, tradesRequested: false, financialsRequested: false, flowRequested: false,
+      alive: true, minuteRequested: false, financialsRequested: false, flowRequested: false,
       kline: managedRead("kline", () => getKlinePayload(symbol, "1d", 120), payload => {
         if (payload.symbol !== symbol || payload.timeframe !== "1d" || payload.bars.some(row => row.symbol !== symbol)) throw new Error("K线证券身份不匹配");
         setBars(payload.bars); setTradingStatus(payload.trading_status);
@@ -575,7 +575,6 @@ export const StockDetailPanel = memo(function StockDetailPanel({
       if (!reads.alive) return;
       if (!reads.minuteRequested) {reads.minuteRequested = true; void reads.minute().catch(ignoreFailure);}
       if (!stock) return;
-      if (!reads.tradesRequested) {reads.tradesRequested = true; void reads.trades().catch(ignoreFailure);}
       if (!reads.flowRequested) {reads.flowRequested = true; void reads.flow().catch(ignoreFailure);}
       if (!reads.financialsRequested) {reads.financialsRequested = true; void reads.financials().catch(ignoreFailure);}
       getAuction(symbol).then(value => reads.alive && setAuction(value)).catch(ignoreFailure);
@@ -631,7 +630,7 @@ export const StockDetailPanel = memo(function StockDetailPanel({
     {enabled: rightActive && !!symbol && !isIndex && rightTab === "book"});
   usePollingFetch(async () => {
     const reads = dataReadsRef.current; if (!reads?.alive) return;
-    reads.tradesRequested = true; await reads.trades().catch(() => {});
+    await reads.trades().catch(() => {});
   }, 10_000, symbol, {enabled: rightActive && !!symbol && !isIndex && rightTab === "trades"});
   usePollingFetch(async () => {
     const reads = dataReadsRef.current; if (!reads?.alive) return;

@@ -5,7 +5,7 @@ import logging
 import time
 from collections import Counter, deque
 from dataclasses import dataclass, field
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from typing import Callable
 
 from app.core.bjtime import BJ_TZ, beijing_now  # S2-8 时区收敛
@@ -692,10 +692,10 @@ class QuoteHub:
             source=source, missing_reason="无成功刷新时间，无法判定新鲜度",
         )
         if self._closed_marked and f.state == "ready":
-            # 休市：数据是最近交易日的，绝不冒充实时（红线 2）
+            # 休市标记不证明源日期就是最近交易日，更不能冒充实时（红线 2）。
             return Freshness.stale(
                 as_of=f.as_of, age_seconds=f.age_seconds, source=source,
-                reason="已标记休市：当前为最近交易日数据，不冒充实时",
+                reason="已标记休市：保留源报价，源交易日需单独核对，不冒充实时",
             )
         return f
 
@@ -741,7 +741,8 @@ class QuoteHub:
     def _display_session(self) -> QuoteDisplaySession:
         """现有日历与北京时刻的只读展示上下文；不取数、不影响交易资格。"""
         now = beijing_now()
-        trade_day = tc.is_trade_day_on(now.date())
+        days = tc.known_trade_days()
+        trade_day = tc.is_trade_day_on(now.date(), days)
         minute = now.hour * 60 + now.minute
         if trade_day is None:
             phase = "unknown"
@@ -756,8 +757,26 @@ class QuoteHub:
             phase = "continuous"
         else:
             phase = "closed"
+        # 尾随日历在周末通常只到周五。只有周五确实在已知日历中才补足周末覆盖；
+        # 更早的旧日历（包括无法确认的假期）保持未知，不能随便取最后一天当“最新”。
+        weekend_covered = bool(now.weekday() >= 5 and days and
+                               days[-1] == now.date() - timedelta(days=now.weekday() - 4))
+        covered = bool(days and (days[-1] >= now.date() or weekend_covered))
+        expected = None
+        if covered and trade_day is not None:
+            expected = (now.date() if trade_day and minute >= 9 * 60 + 15
+                        else tc.prev_trade_date(days, now.date()))
+        tail = None
+        if expected is not None and phase == "closed":
+            # 日期相同仍可能是上午就停止更新；沿用原 stale_after 容差核对暂停前尾点。
+            hour = 11 if trade_day and 11 * 60 + 30 < minute < 13 * 60 else 15
+            end_minute = 30 if hour == 11 else 0
+            tail = now.replace(year=expected.year, month=expected.month, day=expected.day,
+                               hour=hour, minute=end_minute, second=0, microsecond=0)
+            tail -= timedelta(seconds=self.stale_after)
         return QuoteDisplaySession(phase=phase, trade_date=now.date(), as_of=now,
-                                   trade_day_result=trade_day)
+                                   trade_day_result=trade_day, expected_source_date=expected,
+                                   expected_source_after=tail)
 
     def _visible_quote(self, quote: Quote, session: QuoteDisplaySession | None = None) -> Quote:
         """返回消费侧视图；缓存未被继续轮询时也不能无限保持 high。

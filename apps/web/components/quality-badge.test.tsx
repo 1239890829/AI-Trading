@@ -62,11 +62,27 @@ describe("QualityBadge 可见性策略（唯一决策点）", () => {
     const stale = render(<QualityBadge quality="stale" reasons={["refresh_failed"]} />);
     expect(stale.container.textContent).toBe("刷新异常");
     stale.unmount();
-    const closed = render(<QualityBadge quality="stale" reasons={["market_closed"]} dataTimestamp="2026-10-13T15:00:00+08:00" session={{phase: "closed", trade_date: "2026-10-14", as_of: "2026-10-14T10:00:00+08:00", trade_day_result: false}} />);
+    const closed = render(<QualityBadge quality="stale" reasons={["market_closed"]} dataTimestamp="2026-09-30T15:00:00+08:00" session={{phase: "closed", trade_date: "2026-10-01", as_of: "2026-10-01T10:00:00+08:00", trade_day_result: false, expected_source_date: "2026-09-30", expected_source_after: "2026-09-30T14:59:50+08:00"}} />);
     expect(closed.container.textContent).toBe("休市");
     closed.unmount();
     const invalid = render(<QualityBadge quality="invalid" reasons={["invalid_symbol"]} />);
     expect(invalid.container.textContent).toBe("非法");
+  });
+
+  it("收盘日历不能把上个交易日的源故障降成静音休市", () => {
+    const session = {phase: "closed" as const, trade_date: "2026-10-14", as_of: "2026-10-14T19:34:00+08:00", trade_day_result: true, expected_source_date: "2026-10-14", expected_source_after: "2026-10-14T14:59:50+08:00"};
+    const view = render(<QualityBadge quality="stale" reasons={["market_closed"]} dataTimestamp="2026-10-13T15:00:00+08:00" session={session} />);
+    const warning = screen.getByText("时点待核");
+    expect(warning.className).toContain("bg-");
+    expect(warning.getAttribute("data-quality")).toBe("stale");
+    expect(warning.title).toContain("2026-10-13");
+    view.rerender(<QualityBadge quality="stale" reasons={["market_closed"]} dataTimestamp="2026-10-14T10:00:00+08:00" session={session} />);
+    expect(screen.getByText("时点待核").className).toContain("bg-");
+    expect(screen.getByText("时点待核").title).toContain("10:00:00");
+    view.rerender(<QualityBadge quality="stale" reasons={["market_closed"]} dataTimestamp="2026-10-14T15:00:00+08:00" session={session} />);
+    const closed = screen.getByText("已收盘");
+    expect(closed.className).not.toContain("bg-");
+    expect(closed.getAttribute("data-quality")).toBe("stale");
   });
 
   it("源时间被拒绝时 stale 徽标把降级原因翻译成人话", () => {
