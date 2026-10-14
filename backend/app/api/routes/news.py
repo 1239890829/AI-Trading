@@ -12,6 +12,7 @@ from fastapi import APIRouter, Depends, HTTPException, Query, Request
 from app.api.deps import get_hub
 from app.core.config import settings
 from app.core.ttl_cache import cache_on
+from app.services.source_reads import read_news_input
 from app.news.llm import LLMSummarizer
 from app.news.router import SummaryRouter
 from app.schemas.envelope import Envelope
@@ -54,8 +55,7 @@ async def news_digest(
         # announcements_error 非空 = 该侧已降级），绝不静默空列表。双侧都挂才 502。
         async def _read(method: str):
             try:
-                read_rows = getattr(hub.provider, method)
-                return await read_rows(symbol, limit), None
+                return await read_news_input(hub.provider, method, symbol, limit), None
             except Exception as exc:
                 return [], str(exc)
 

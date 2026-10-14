@@ -70,7 +70,11 @@ class AppServices:
         import asyncio
 
         with contextlib.suppress(Exception, TimeoutError):
-            await asyncio.wait_for(self.provider.aclose(), timeout=SHUTDOWN_GRACE_SECONDS)
+            from app.core.inflight_reads import close_inflight_reads
+            try:
+                await close_inflight_reads(self.provider)
+            finally:
+                await asyncio.wait_for(self.provider.aclose(), timeout=SHUTDOWN_GRACE_SECONDS)
         if self.theme_catalog is not None:
             with contextlib.suppress(Exception, TimeoutError):
                 await asyncio.wait_for(

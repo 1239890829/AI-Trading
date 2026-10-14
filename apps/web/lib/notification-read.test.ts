@@ -12,7 +12,10 @@ import {
   loadReadState,
   mergeReadState,
   parseTs,
+  READ_KEY,
+  CLEAR_KEY,
   setPrefs,
+  subscribePrefs,
   withAllRead,
   withRead,
   type ReadState,
@@ -250,6 +253,77 @@ describe("服务端持久化：hydration", () => {
     read_ids: readIds,
     clear_before: clearBefore,
     updated_at: "2026-09-12 10:00:00",
+  });
+
+  it("连续已读保存仅一个在途writer，后继合并完整最新状态且旧失败不吞更新", async () => {
+    vi.mocked(getNotificationReadState).mockResolvedValue(remote(0));
+    await hydratePrefsFromServer();
+    const pending: {body: Parameters<typeof saveNotificationReadState>[0]; resolve: (value: Awaited<ReturnType<typeof saveNotificationReadState>>) => void; reject: (reason: Error) => void}[] = [];
+    vi.mocked(saveNotificationReadState).mockImplementation(body => new Promise((resolve, reject) => {pending.push({body, resolve, reject});}));
+    setPrefs({read: {seenBefore: 10, readIds: ["one"]}, clearBefore: 0});
+    setPrefs({read: {seenBefore: 20, readIds: ["one", "two"]}, clearBefore: 10});
+    setPrefs({read: {seenBefore: 30, readIds: ["one", "two", "three"]}, clearBefore: 20});
+    expect(saveNotificationReadState).toHaveBeenCalledTimes(1);
+    expect(getPrefsSyncSnapshot()).toBe("syncing");
+    pending[0].reject(new Error("first save failed"));
+    await vi.waitFor(() => expect(saveNotificationReadState).toHaveBeenCalledTimes(2));
+    expect(getPrefsSyncSnapshot()).toBe("syncing");
+    expect(pending[1].body).toEqual({seen_before: 30, read_ids: ["one", "two", "three"], clear_before: 20});
+    pending[1].resolve({...pending[1].body, updated_at: "2026-10-14 10:30:00"});
+    await vi.waitFor(() => expect(getPrefsSyncSnapshot()).toBe("synced"));
+    expect(getPrefsSnapshot().read.readIds).toEqual(["one", "two", "three"]);
+  });
+
+  it.each(["success", "failure"])("跨窗口非超集快照不丢待发已读 ID，首写 %s 后仍完整保存", async (firstResult) => {
+    vi.mocked(getNotificationReadState).mockResolvedValue(remote(0));
+    await hydratePrefsFromServer();
+    const unsubscribe = subscribePrefs(() => {});
+    const pending: {body: Parameters<typeof saveNotificationReadState>[0]; resolve: (value: Awaited<ReturnType<typeof saveNotificationReadState>>) => void; reject: (reason: Error) => void}[] = [];
+    vi.mocked(saveNotificationReadState).mockImplementation(body => new Promise((resolve, reject) => {pending.push({body, resolve, reject});}));
+    try {
+      setPrefs({read: {seenBefore: 100, readIds: ["a"]}, clearBefore: 10});
+      setPrefs({read: {seenBefore: 200, readIds: ["a", "b"]}, clearBefore: 20});
+
+      // Another tab can replace localStorage with a non-superset while B is queued.
+      localStorage.setItem(READ_KEY, JSON.stringify({seenBefore: 50, readIds: ["c"]}));
+      localStorage.setItem(CLEAR_KEY, "5");
+      window.dispatchEvent(new StorageEvent("storage", {key: READ_KEY}));
+      expect(getPrefsSnapshot().read.readIds).toEqual(["c"]);
+      setPrefs({read: withRead(getPrefsSnapshot().read, {id: "d", ts: BJ("12:35:00")}), clearBefore: 5});
+      expect(saveNotificationReadState).toHaveBeenCalledTimes(1);
+
+      if (firstResult === "success") pending[0].resolve({...pending[0].body, updated_at: "2026-10-14 10:30:00"});
+      else pending[0].reject(new Error("first save failed"));
+      await vi.waitFor(() => expect(saveNotificationReadState).toHaveBeenCalledTimes(2));
+      expect(pending[1].body).toEqual({seen_before: 200, read_ids: ["a", "b", "c", "d"], clear_before: 20});
+      expect(getPrefsSyncSnapshot()).toBe("syncing");
+      pending[1].resolve({...pending[1].body, updated_at: "2026-10-14 10:30:01"});
+      await vi.waitFor(() => expect(getPrefsSyncSnapshot()).toBe("synced"));
+      expect(getPrefsSnapshot()).toEqual({read: {seenBefore: 200, readIds: ["c", "d", "a", "b"]}, clearBefore: 20});
+    } finally {
+      unsubscribe();
+    }
+  });
+
+  it("原样保存回执仍与跨窗口更新后的本地快照合并", async () => {
+    vi.mocked(getNotificationReadState).mockResolvedValue(remote(0));
+    await hydratePrefsFromServer();
+    const unsubscribe = subscribePrefs(() => {});
+    let finish!: (value: Awaited<ReturnType<typeof saveNotificationReadState>>) => void;
+    vi.mocked(saveNotificationReadState).mockImplementation(() => new Promise(resolve => {finish = resolve;}));
+    try {
+      setPrefs({read: {seenBefore: 100, readIds: ["a"]}, clearBefore: 10});
+      localStorage.setItem(READ_KEY, JSON.stringify({seenBefore: 50, readIds: ["c"]}));
+      localStorage.setItem(CLEAR_KEY, "5");
+      window.dispatchEvent(new StorageEvent("storage", {key: READ_KEY}));
+      expect(getPrefsSnapshot().read.readIds).toEqual(["c"]);
+      finish({seen_before: 100, read_ids: ["a"], clear_before: 10, updated_at: "2026-10-14 10:30:00"});
+      await vi.waitFor(() => expect(getPrefsSyncSnapshot()).toBe("synced"));
+      expect(getPrefsSnapshot()).toEqual({read: {seenBefore: 100, readIds: ["c", "a"]}, clearBefore: 10});
+      expect(saveNotificationReadState).toHaveBeenCalledTimes(1);
+    } finally {
+      unsubscribe();
+    }
   });
 
   it("服务端领先（换了 origin / 清了站点数据）→ 本地采纳，徽标归零", async () => {

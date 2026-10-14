@@ -26,6 +26,7 @@ import { themesUrl } from "@/lib/routing";
 import { parseWorkbenchDetailUrl } from "@/lib/detail-tabs";
 import { useSymbolDetail } from "@/components/detail/symbol-detail-context";
 import { createEntityMatcher, type EntityDict, type EntityMatch } from "@/lib/entity-links";
+import {loadEntityDict} from "@/lib/entity-dict";
 import { isAllowedNav } from "@/lib/nav-targets";
 import { RichText } from "@/components/assistant/rich-text";
 import { AssistantMark } from "@/components/assistant/assistant-mark";
@@ -298,12 +299,11 @@ export function FloatingAssistant() {
     const controller = new AbortController();
     let alive = true;
     let settled = false;
-    fetch(`${API_BASE}/api/assistant/entity-dict`, {signal: controller.signal})
-      .then((r) => (r.ok ? r.json() : null))
-      .then((j) => {
+    loadEntityDict(controller.signal)
+      .then((dictionary) => {
         if (!alive) return;
         settled = true;
-        if (j?.data) setDict(j.data as EntityDict);
+        if (dictionary) setDict(dictionary);
         else dictTriedRef.current = false;
       })
       .catch(() => {

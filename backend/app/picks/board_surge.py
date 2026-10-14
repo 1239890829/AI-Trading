@@ -18,6 +18,8 @@
 """
 from __future__ import annotations
 
+from app.services.source_reads import read_pool_input
+
 import asyncio
 import json
 import logging
@@ -525,7 +527,7 @@ async def _beat(app, detector: BoardSurgeDetector, index_cache: ThemeIndexCache)
     pool: list[dict] = []
     if td == now.date() and provider is not None:
         try:
-            pool = await provider.get_limit_up_pool(td) or []
+            pool = await read_pool_input(provider, "get_limit_up_pool", td) or []
         except Exception:  # noqa: BLE001
             pool = []
     alert_at = now.replace(tzinfo=None)

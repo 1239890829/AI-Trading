@@ -6,6 +6,8 @@
 """
 from __future__ import annotations
 
+from app.services.source_reads import read_pool_input
+
 import asyncio
 import logging
 from datetime import date
@@ -165,14 +167,14 @@ async def compute_market_sentiment(
 
     async def _pool(d: date) -> list:
         try:
-            return await hub.provider.get_limit_up_pool(d)
+            return await read_pool_input(hub.provider, "get_limit_up_pool", d)
         except Exception as exc:
             log.warning("sentiment pool %s failed: %s", d, exc)
             return []
 
     async def _breaks(d: date) -> list:
         try:
-            return await hub.provider.get_limit_break_pool(d)
+            return await read_pool_input(hub.provider, "get_limit_break_pool", d)
         except Exception as exc:
             log.warning("sentiment break pool %s failed: %s", d, exc)
             return []

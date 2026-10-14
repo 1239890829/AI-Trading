@@ -37,6 +37,8 @@
 """
 from __future__ import annotations
 
+from app.services.source_reads import read_pool_input
+
 import asyncio
 import contextlib
 import logging
@@ -802,7 +804,7 @@ async def collect_beat_inputs(app, env_cache: dict, *, env_refresh_seconds: floa
         return beat
 
     try:
-        pool = await hub.provider.get_limit_up_pool(td) or []
+        pool = await read_pool_input(hub.provider, "get_limit_up_pool", td) or []
     except Exception as exc:
         log.warning("watcher beat: limit-up pool failed: %s", exc)
         pool = []

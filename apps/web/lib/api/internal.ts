@@ -23,19 +23,29 @@ export interface ReadOptions {
 // Only unfinished reads share; source times and completed values are never cached here.
 // events/impact can build its leader archive, paper GET can settle/init, and digest
 // can generate a model summary. Those consumers deliberately remain outside this list.
-const SAFE_READ_PATHS = new Set(["/api/watchlist", "/api/watchlist/groups", "/api/market/overview", "/api/limit-up", "/api/limit-down"]);
+const SAFE_READ_PATHS = new Set(["/api/watchlist", "/api/watchlist/groups", "/api/market/overview", "/api/limit-up", "/api/limit-down", "/api/minute-line/sh000001"]);
 const sharedReads = new Map<string, SharedRead>();
 const MAX_SHARED_READS = 32;
 let readEpoch = 0;
 type Envelope<T> = {data: T; meta: Meta};
 interface SharedRead {
+  path: string;
   controller: AbortController;
   promise: Promise<Envelope<unknown>>;
   owners: number;
   settled: boolean;
 }
 
-function invalidateReads() {
+function invalidateReads(writePath: string) {
+  // These local writes have verified, narrow consumers. Unknown commands keep
+  // the broad isolation below, including failures with an unknown commit state.
+  if (writePath === "/api/notifications/read-state") return;
+  if (/^\/api\/watchlist(?:\/|$)/.test(writePath)) {
+    for (const [key, entry] of sharedReads) {
+      if (/^\/api\/watchlist(?:[/?]|$)/.test(entry.path)) sharedReads.delete(key);
+    }
+    return;
+  }
   readEpoch += 1;
   // 旧消费者仍可收自己的回包；后续消费者只能加入新代际。
   sharedReads.clear();
@@ -143,7 +153,7 @@ async function request<T>(path: string, init: RequestInit, timeoutMs: number, op
   if (signal?.aborted) throw canceled(path);
   const isRead = (init.method ?? "GET").toUpperCase() === "GET";
   // 即使客户端看到失败/超时，写操作也可能已经提交。前后两侧都隔离旧读。
-  if (!isRead) invalidateReads();
+  if (!isRead) invalidateReads(path);
   try {
     const key = isRead ? readKey(path, init, timeoutMs) : null;
     if (key !== null) {
@@ -157,14 +167,14 @@ async function request<T>(path: string, init: RequestInit, timeoutMs: number, op
           entry.settled = true;
           if (sharedReads.get(key) === entry) sharedReads.delete(key);
         });
-        const entry: SharedRead = {controller, owners: 0, settled: false, promise};
+        const entry: SharedRead = {path, controller, owners: 0, settled: false, promise};
         sharedReads.set(key, entry);
         return await joinRead<T>(path, key, entry, signal);
       }
     }
     return await performRequest<T>(path, {...init, signal}, timeoutMs);
   } finally {
-    if (!isRead) invalidateReads();
+    if (!isRead) invalidateReads(path);
   }
 }
 

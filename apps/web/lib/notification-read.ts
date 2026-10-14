@@ -328,6 +328,7 @@ export function __resetPrefsCache(): void {
   hydrating = false;
   syncStatus = "local_only";
   syncRevision = 0;
+  remoteWriter = null;
   syncListeners.clear();
 }
 
@@ -430,9 +431,43 @@ function applyState(next: RemoteReadState): void {
   }
 }
 
-async function pushRemote(snapshot: PrefsSnapshot): Promise<void> {
-  const revision = ++syncRevision;
+interface RemoteWriter {
+  pending: {snapshot: PrefsSnapshot; revision: number} | null;
+  running: Promise<void> | null;
+}
+let remoteWriter: RemoteWriter | null = null;
+
+function pushRemote(snapshot: PrefsSnapshot): Promise<void> {
+  const owner: RemoteWriter = remoteWriter ??= {pending: null, running: null};
+  // A storage event can replace the local cache with a non-superset. Keep
+  // unsent IDs and watermarks when replacing an already queued snapshot.
+  let next = snapshot;
+  if (owner.pending) {
+    const merged = mergeReadState(localState(owner.pending.snapshot), localState(snapshot));
+    next = {read: {seenBefore: merged.seenBefore, readIds: merged.readIds}, clearBefore: merged.clearBefore};
+  }
+  owner.pending = {snapshot: next, revision: ++syncRevision};
   setSyncStatus("syncing");
+  return drainRemote(owner);
+}
+
+function drainRemote(owner: RemoteWriter): Promise<void> {
+  if (owner.running) return owner.running;
+  const run = async () => {
+    while (owner === remoteWriter && owner.pending) {
+      const next = owner.pending;
+      owner.pending = null;
+      await writeRemote(next.snapshot, next.revision, owner);
+    }
+  };
+  owner.running = run().finally(() => {
+    owner.running = null;
+    if (owner === remoteWriter && owner.pending) void drainRemote(owner);
+  });
+  return owner.running;
+}
+
+async function writeRemote(snapshot: PrefsSnapshot, revision: number, owner: RemoteWriter): Promise<void> {
   try {
     const sent = localState(snapshot);
     // 线上载荷是 snake_case（与本文件其余通知接口一致）→ 在边界显式转换
@@ -441,21 +476,21 @@ async function pushRemote(snapshot: PrefsSnapshot): Promise<void> {
       read_ids: sent.readIds,
       clear_before: sent.clearBefore,
     });
+    if (owner !== remoteWriter) return;
     const back: RemoteReadState = {
       seenBefore: saved.seen_before,
       readIds: saved.read_ids,
       clearBefore: saved.clear_before,
     };
-    // 服务端可能更靠前（另一标签页推进过）→ 采纳一次即可，不再回推
-    if (!sameState(back, sent)) {
-      const cur = getPrefsSnapshot();
-      const merged = mergeReadState(localState(cur), back);
-      if (!sameState(merged, localState(cur))) applyState(merged);
-    }
+    // Even an exact echo can be ahead of a local cache replaced by another tab.
+    // Merge the confirmed state once without triggering another remote write.
+    const cur = getPrefsSnapshot();
+    const merged = mergeReadState(localState(cur), back);
+    if (!sameState(merged, localState(cur))) applyState(merged);
     if (revision === syncRevision) setSyncStatus("synced");
   } catch {
     // 保留本机状态，但必须明确它没有获得服务端确认。
-    if (revision === syncRevision) setSyncStatus("local_only");
+    if (owner === remoteWriter && revision === syncRevision) setSyncStatus("local_only");
   }
 }
 

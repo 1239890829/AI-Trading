@@ -745,3 +745,71 @@ market非当前view、tape非当前tab、已关闭inspection/agent抽屉的读�
 ### 发布反证补充：停止期不重建推送任务
 
 本批把Hub自选读取移入worker并保留owner直到真实排空后，作者团队反证发现取消publisher的finally仍见_running=True，可在pending存在时重建未纳入owned集合的新timer/publisher。离线受控线程/日历Event实证：drain期第二次日历调用1次、停止后孤立publisher1个且广播1帧；原实现判红，不能因先前完整门绿而放行。最小修补仅在真实drain区间置_stopping，schedule/start两个入口拒绝新发布，原_running仍占用至drain完成；末尾回收标记以保留同实例再run及停后手工flush。原行情源序、频率、总预算/质量与业务规则不变。新生命周期反例先红后5项通过，停后广播/残留均0；同实例重启和手工flush保留。最终完整后端5446通过/81跳过/385.43s、pyflakes通过；最新前端默认/UTC各1622通过/138文件（245.41/200.91s）、tsc/ESLint（0error/2既有warning）及Next16.3.8构建通过。旧5445及1619回执不适用于后续修改，最终19个源码/测试sha分别绑定最新门禁；准确HEAD发布和实际运行仍另核。
+
+
+## 20. 2026-10-14 剩余请求、SQLite 与电脑交互验证
+
+本轮从PR #279/master `744ed820` 继续IMP-019；用户明确先测电脑，手机真机暂缓。此前PR #279的准确HEAD/三项CI/15:29运行切换已经完成，不再把旧修复算本轮收益。既有双交易窗跟进已暂停，不新建永久监控；本轮实际电脑记录发生于收盘后。
+
+### 请求候选逐项结果
+
+| 位置 | 证据、成因 | 最小处理与保留边界 |
+|---|---|---|
+| workbench/page 首帧补报价 | 同一证券集合的新数组引用可再次触发未完成GET | 规范化集合键；淘汰旧owner回包，只采纳请求集合中的证券；不缓存行情、不降低WS频率 |
+| Workbench 与 SymbolDetailModal | 弹窗覆盖背景详情，但背景私有图表/盘口仍活跃 | 复用已有详情Context暂停背景私有读；列表报价/真实消费者继续运行，关闭后立即按原active恢复 |
+| board-flow 抽屉 | 一域失败后的重试重复读取已成功域 | 仅重试失败域；首次并行读取、成功数据及真实失败提示保留 |
+| fund-tab/LonghuFlowCard | fallbackDates到达改变key，当天GET仍未结束却再发一次 | 同日期仅共享未完成读取，日期改变独立，完成后不缓存/延寿 |
+| StockDetail 财务idle预取 | 同active生命周期已成功预取，打开资料再次读取 | 仅复用本owner同日成功值；隐藏恢复、换股、失败与显式fresh重新读，不把它推广为行情缓存 |
+| api/internal 写失效 | 通知已读PUT和自选写使无关概览owner失效 | 已知通知已读不影响行情；自选写只隔离自选读；未知写仍在前后全局隔离，保留提交结果未知的保护 |
+| notification-read 保存 | 连续本地已读操作并发写SQLite | 一个真实writer加一份有界待写并集，保持单调合并/失败local_only/跨标签页确认；不改通知筛选、生成、资格或投递 |
+| news-modal/FloatingAssistant 实体词典 | 两个独立loader并发请求同一静态词典 | 共用已有成功缓存及60秒失败冷却；独立取消，最后owner取消中止HTTP，旧finally不清新owner |
+| 上证分钟/整日池 | 上证纯读并发可共享；增强池已具exact日期/schema在途保护 | 仅上证分钟加入现有安全读清单；整日池确认已有保护，不重复实现。完成后跨scope重新校准仍读，保留日期/来源/源钟 |
+| 后端K线/分时/盘口/逐笔 | 三个同参数并发读分别执行三次完整factory；主链失败后还可能各执行TDX | 仅同Hub/日期/参数/供应商策略/原预算共享未完成全链，3→1；原source/as_of/stale/完整输出保持；跨Hub/预算/参数独立，完成后再读 |
+| 题材冷看板 | manual get→await→set冷读三个build | 复用原60秒TTLCache.get_or_set与有界在途owner，三个build→一个；失败不固化，缓存副本隔离，未续旧输入时效 |
+| 池路由与scheduler输入 | HTTP缓存没有覆盖选股/背景使用的同一原始池输入 | 仅明确消费者opt-in共享相同method/date/原策略预算的未完成原料，2→1；独立哨兵/probe仍直接读，不改变选股规则或池完整性 |
+| raw资讯与规则摘要输入 | 相同证券/limit并发新闻或公告原料各读两次 | 只共用获准原料在途读，2→1；模型摘要全链沿原有owner/预算，不额外调用模型、不缓存新完成值 |
+| THS源钟恢复 | 当前显式thscodes快照合同没有逐行源钟，不能满足recover门 | 仅这两个已核实method/mode声明不可承担source-clock recovery；未知能力仍尝试，普通fallback照常，未按源名称全禁，也不拿接收钟补源钟 |
+| events/impact、paper、digest、signals | GET可能建归档、结算/初始化或启动语义工作 | 不塞纯读共享白名单；保留真实消费者。低调用量/名称为GET不是可删依据 |
+| sparklines | 当前无非测试前端消费者；period共享槽的时钟反例仍存在 | 记录为未活跃潜在缺陷，本轮不改TTL或把它当当前桌面卡顿根因 |
+
+上述计数来自同输入离线行为探针，不是线上HTTP总请求减少比例，更不是供应商实网SLA。完整输入、异常、输出摘要和源字段保留；目标测试批有重叠，不相加为独立总数。所有在途表有界；容量满时回到原调用方直接await，不新增“busy”拒读。取消不伪称已杀to_thread；共享owner真实完成后释放，关闭等待其拥有的工作真实排空。
+
+### SQLite：真实写锁与反例
+
+使用当前SQLAlchemy/pysqlite、临时文件库、两个独立连接、原delete journal及5000ms busy_timeout；没有读写生产数据库。
+
+1. `paper/engine.py::place_order` 新账户INSERT/flush原先发生在日历await前，真实第二writer被锁住。账户读取/初始化后移至原日历与风控await之后，余额仍在同一个Session读改提交；不改T+1、模拟撮合或资金规则。罕见新账户同时解冻旧仓情形多一次UPDATE，没有额外SELECT或事务。
+2. `alert_engine.py::_tick/_deliver_pending` 的同步仓库事务在约250ms真实写锁等待中使事件循环前200ms心跳为0。完整事务移入自有Session worker后心跳18次；reconcile SQL23→23，claim/finish各36→36（含相同seed/check）。锁等待本身仍约0.27秒，不能称数据库竞争消失。
+3. `begin_send` 写锁等待可跨越原通知有效期，旧SQL因使用等待前now仍放行。真实返回后、通知I/O前再次核原expires_at和lease_until；过期沿原expired出口收口，不延期限、不新增资格规则。追加真实红例又确认源龄9→12秒、规则停用、价格失去条件、health来源变unknown期间仍会错误发送。取得原写锁并提交发送准备标记后，复用原_delivery_block只读核验；明确拒绝才在begin_send内部、返回调用者前以id/leased/token/本次精确send_started做CAS清标记，恢复原defer；回调异常或CAS竞争保守unknown且不进入I/O。默认无回调bool合同保持。
+4. 团队反证确认受支持的:memory:+StaticPool会共享同一物理连接；旧“commit前嵌套只读Session”版本返回True却被内层close回滚标记，租约后错误变pending。该版本已撤回，先commit再核验使标记真实持久；新增红例及CAS竞争/异常/取消与正常file库共同验证，最新3文件76项通过。异常保留unknown，不能再称异常全部rollback。
+5. 竞争解释：`settle_t1` 日历await前只有SELECT，当前legacy pysqlite实际没有开启SQLite写事务；第二独立连接可完成BEGIN IMMEDIATE/UPDATE/COMMIT。因此“Session跨await必持写锁”不成立。其他paper同步commit仍可能等待writer，没有全量改造成线程，也没有定位生产事故唯一锁持有者。
+
+先红4项/通过1反例，再加末刻过期1红；修后7文件115项通过。重复取消时claim真实排空后可由原租约回收，accepted finish真实持久后不得重发。这是可复现机制修复，不是生产锁事故唯一因果证明。
+
+### 电脑真实浏览器证据
+
+原生Chrome Performance录制并由DevTools导出，没有注入浏览器脚本。同一专用市场页面及上证指数共享详情/Canvas，记录行情加载、分时/K线切换、指标/缩放、右列展开收起和辅助弹窗开关；避开股票摘要、选股生成、通知操作和模拟账户页面。暂停本任务目标测试/编译后取得基线；用户其他浏览器窗口未改。
+
+- 页面加载trace 5.416秒，最后LCP候选2412.923ms；8个本地API读尝试全部保留。先前DevTools实时栏4.46秒是另一轮未导出观察，不和本次混作对照。
+- 连续交互trace 85.037秒，9个非零interactionId，最大EventTiming 265.321ms，与面板INP265ms一致；5个>50ms主线程RunTask，其中一个128ms任务包含117ms CpuProfiler启动，另4个53–99ms含真实点击工作。剖析开销保留并单列；加载记录中860ms墙钟/90ms线程CPU的大任务尚不能归因，不删样本或称全为业务计算。
+- `SelectionRail` 的useLayoutEffect及ResizeObserver先写样式再读几何，在切换中触发强制style/layout（所见23ms style）；源码bundle定位到真实组件。改为同帧先批读所有rail、再写marker，取消卸载任务；图表按钮原本以CSS永久隐藏marker，现显式关闭该marker，连同其观察器和测量一并停用；其他可见marker保留尺寸、键盘焦点和指示条过渡。新行为反例证明提交时0次几何读取、多实例先4读后2写、同一帧只留最新状态；改前失败，修后初批3项通过；团队反证补无选中resize、真实ResizeObserver回调、StrictMode/单实例卸载与无marker模式，最终6项通过。
+- 本次记录处于收盘后，不能证明连续交易报价FPS、全站P95/P99或手机性能。手机真机按用户要求暂缓；桌面窄视口也不替代手机设备。源码修复、本地完整门、PR/CI、正式加载及改后trace分别验收。
+
+发布前作者团队反证发现待写“只留最新”不保证跨窗口超集：A在途、B待发、storage采纳C后D覆盖B，新增3项判红。现在pending先按原mergeReadState合并，成功回执始终与当前本地单调合并；原样echo也不会留下漏ID的synced状态。31项通知专项及图表/指示条共130项目标通过。先前1640双时区及构建属于追加反证前的树，不能作为最终源码门禁。
+
+本地证据：`artifacts/runs/request-contention-20261014/{browser,db-lock,gates}`、`artifacts/runs/request-contention-validation/frontend-candidate-results.*`及`artifacts/runs/live-performance-20261014/request-contention-validation/verification-receipt.json`。改后性能与最终门禁/运行版本在本节后续回填，不借用PR #279旧门禁。现役语义、源优先级、报价时效、选股/通知规则与价格完整性保持；不是新架构或新服务准入，INDEX已有入口及原owner不变。
+
+
+### 工作台验收纠正与实际失败
+
+用户指出市场页不能替代工作台，已据此纠正测量范围。此前市场两组trace只能证明市场/共享图表，不能当工作台通过。改后市场加载约1.54秒为另一个前端端口、同一旧后端的一次观察，不报提升百分比；用户切到工作台的混合记录保留为interrupted，不纳入配对。
+
+正式3000工作台、同一已选证券/盘口视角的原生Performance记录已导出；页面实际出现K线15000ms超时、盘口读取失败和指数刷新异常，不能因某些交互分数好而称图表流畅。该窗后端有get_indices/get_order_book预算耗尽及盘口502；同花顺同股日K构造请求至响应头一次约6.15秒，其他样本约0.19–0.26秒。两次额外纯health读分别10.38/15.747ms、HTTP200，仅说明那个时点后端/代理可达，另列不并入页面分母。日志无请求起点/关联id，不能把某次后端200精确配成浏览器15000ms，也不能据此唯一归因SQLite、代理或数据源。已保留全部失败和未完成读取；修补正式加载后继续核工作台，行情时效阈值不改。
+
+### 最终源码门与已知测量限制
+
+最终后端5500 passed/82 skipped/453.38s，pyflakes通过；新增core/inflight_reads.py落在既有导入方向守卫“其他”范围，增加一项skip，不算覆盖增强。前端默认/UTC各1646 passed/138文件（命令244.21/266.66s），tsc、ESLint（0error/2既有warning）及Next16.3.8/build J5Ag_oYn_LpFdUsUgw_98通过。最终源码manifest无漂移；next-env构建生成引用已恢复原稿并补tsc。先前1640或前置76/115/326目标批不转借为最终完整门，也不叠加。当前修复尚未正式加载，PR准确HEAD/CI/发布和工作台改后记录单独验收。
+
+离线分析另发现旧解析器只取第一个CrRendererMain、只匹配3000端口；同一主frame跨reload可能换renderer，3105请求会漏计。因此旧解析中after“0请求”、跨导航最大EventTiming/长任务分母不作结论，按frame、进程与导航区间重新解析；原生DevTools面板观察与导出推导分开保留，不把任意最大EventTiming称为INP。工作台首次useResource并发和idle六端点突发是静态事实；已有timing字段可分发送至响应头，缺socket-pool排队证据不能断言HTTP连接队列或SQLite是本窗唯一根因。未对无证据首读实施统一限流或推迟刷新。
+
+用户新增缓存/测试残留清理及技能固化依GOV-026在修复验收之后执行；先盘点归属、allocated大小和活引用，保留本轮紧凑证据、真实业务数据、运行构建与未稳定恢复副本。清理不修改行情有效期/轮频或选股/通知规则，不能把释放空间写成已证实提速。

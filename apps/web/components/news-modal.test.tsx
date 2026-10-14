@@ -179,6 +179,37 @@ describe("实体词典加载：瞬时失败不得变成永久失败", () => {
     return (await import("./news-modal")).loadEntityDict;
   }
 
+  it("并发实体词典消费者只发一个在途请求", async () => {
+    const pending: ((value: ReturnType<typeof okJson>) => void)[] = [];
+    const fetcher = vi.fn(() => new Promise(resolve => {pending.push(resolve);}));
+    vi.stubGlobal("fetch", fetcher);
+    const load = await loadFresh();
+    const first = load(), second = load();
+    const count = fetcher.mock.calls.length;
+    pending.forEach(finish => finish(okJson({data: DICT})));
+    await Promise.all([first, second]);
+    expect(count).toBe(1);
+  });
+
+  it("一个词典消费者退出不取消另一位；最后退出才中止且立即重开可读", async () => {
+    const pending: {signal: AbortSignal; finish: (value: ReturnType<typeof okJson>) => void}[] = [];
+    const fetcher = vi.fn((_url: string, options: RequestInit) => new Promise(resolve => {pending.push({signal: options.signal as AbortSignal, finish: resolve});}));
+    vi.stubGlobal("fetch", fetcher);
+    const load = await loadFresh();
+    const first = new AbortController(), second = new AbortController();
+    const a = load(first.signal), b = load(second.signal);
+    first.abort(); expect(await a).toBeNull();
+    expect(pending[0].signal.aborted).toBe(false);
+    second.abort(); expect(await b).toBeNull();
+    expect(pending[0].signal.aborted).toBe(true);
+    const reopened = load();
+    expect(fetcher).toHaveBeenCalledTimes(2);
+    pending[0].finish(okJson({data: {stocks: [], themes: ["取消的旧词典"]}}));
+    pending[1].finish(okJson({data: DICT}));
+    expect(await reopened).toEqual(DICT);
+    expect(await load()).toEqual(DICT);
+  });
+
   it("失败只开冷却窗：冷却期内不重打，过期后自动重试并拿到词典", async () => {
     let calls = 0;
     vi.stubGlobal(

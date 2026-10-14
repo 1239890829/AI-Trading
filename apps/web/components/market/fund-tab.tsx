@@ -188,6 +188,7 @@ function aggregateLonghu(records: LongHuRecord[]) {
 export function LonghuFlowCard({ fallbackDates }: { fallbackDates: string[] }) {
   const fallbackKey = fallbackDates.join(",");
   const scope = useRef(0);
+  const currentFlight = useRef<{date: string; promise: Promise<LongHuRecord[]>} | null>(null);
   useEffect(() => {
     scope.current += 1;
     return () => { scope.current += 1; };
@@ -198,7 +199,15 @@ export function LonghuFlowCard({ fallbackDates }: { fallbackDates: string[] }) {
   const resource = useResource(async () => {
       const generation = scope.current;
       try {
-        const records = await getLonghu();
+        const date = bjDate(new Date().toISOString());
+        let flight = currentFlight.current;
+        if (!flight || flight.date !== date) {
+          flight = {date, promise: getLonghu()};
+          currentFlight.current = flight;
+          const clear = () => {if (currentFlight.current === flight) currentFlight.current = null;};
+          void flight.promise.then(clear, clear);
+        }
+        const records = await flight.promise;
         return { date: records[0]?.trade_date ?? "", records };
       } catch {
         /* 当日读取失败，尝试已声明的历史日期。 */

@@ -4,6 +4,7 @@ import WorkbenchPage from "@/app/workbench/page";
 import type { SymbolBoardFund } from "@/lib/api";
 import {notifyWatchlistChanged} from "@/lib/watchlist-sync";
 import {getWatchlist as readActualWatchlist} from "@/lib/api/watchlist";
+import {SymbolDetailStateCtx} from "@/components/detail/symbol-detail-context";
 
 const state = vi.hoisted(() => ({
   params: new URLSearchParams("symbol=600127&ct=minute&rt=info&from=%2Fmarket%3Ftab%3Devents"),
@@ -61,6 +62,37 @@ async function selectList(name: string) {
 }
 
 describe("B+C workbench production consumers", () => {
+  it("证券详情弹窗打开时暂停背景私有读取，关闭立即恢复且保留父报价owner", async () => {
+    const view = render(<SymbolDetailStateCtx.Provider value={null}><WorkbenchPage/></SymbolDetailStateCtx.Provider>);
+    await screen.findByRole("button", {name: "查看 金健米业 600127"});
+    expect(screen.getByTestId("stock-detail").dataset.active).toBe("true");
+    view.rerender(<SymbolDetailStateCtx.Provider value={{symbol: "600127", preferModal: true}}><WorkbenchPage/></SymbolDetailStateCtx.Provider>);
+    expect(screen.getByTestId("stock-detail").dataset.active).toBe("false");
+    expect(screen.getByTestId("stock-detail").dataset.sharedQuoteFeed).toBe("true");
+    view.rerender(<SymbolDetailStateCtx.Provider value={null}><WorkbenchPage/></SymbolDetailStateCtx.Provider>);
+    expect(screen.getByTestId("stock-detail").dataset.active).toBe("true");
+    expect(api.getWatchlist).toHaveBeenCalledTimes(1);
+  });
+
+  it("首帧补报价在同一证券集合的新数组到达时只保留一次读取", async () => {
+    const previousRead = vi.mocked(api.getQuotes).getMockImplementation();
+    const previousPositions = state.realPositions;
+    vi.mocked(api.getQuotes).mockImplementation(() => new Promise(() => {}));
+    try {
+      const view = render(<WorkbenchPage/>);
+      await screen.findByRole("button", {name: "查看 金健米业 600127"});
+      const reads = vi.mocked(api.getQuotes).mock.calls.length;
+      expect(reads).toBeGreaterThan(0);
+      state.realPositions = {items: previousPositions.items.map(item => ({...item}))};
+      view.rerender(<WorkbenchPage/>);
+      await act(async () => {});
+      expect(api.getQuotes).toHaveBeenCalledTimes(reads);
+    } finally {
+      state.realPositions = previousPositions;
+      vi.mocked(api.getQuotes).mockImplementation(previousRead!);
+    }
+  });
+
   it("父列表未知时加入成功只确认该股，后续成功全表空可校准为不在自选", async () => {
     vi.mocked(api.getWatchlist).mockRejectedValueOnce(new Error("first read unavailable"));
     const view = render(<WorkbenchPage/>);

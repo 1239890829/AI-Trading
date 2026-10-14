@@ -19,6 +19,8 @@
 """
 from __future__ import annotations
 
+from app.services.source_reads import read_pool_input
+
 import asyncio
 import json
 import logging
@@ -159,7 +161,7 @@ async def _fetch_limit_up_pool(hub: QuoteHub) -> tuple[date | None, list]:
         td = tc.last_trade_date(days)
         if not td:
             return None, []
-        return td, list(await hub.provider.get_limit_up_pool(td))
+        return td, list(await read_pool_input(hub.provider, "get_limit_up_pool", td))
     except Exception as exc:
         log.warning("picks: limit-up pool failed: %s", exc)
         return None, []
@@ -1272,7 +1274,7 @@ async def generate_picks_pipeline(
     break_rate = None
     try:
         if td:
-            breaks = await hub.provider.get_limit_break_pool(td)
+            breaks = await read_pool_input(hub.provider, "get_limit_break_pool", td)
             n_zt, n_br = len(lu_ctx["records"]), len(breaks or [])
             break_rate = round(n_br / max(n_zt + n_br, 1), 3)
     except Exception as exc:

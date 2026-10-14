@@ -54,6 +54,19 @@ it("keeps dense histories readable when the plot height changes", () => {
 });
 
 describe("龙虎榜回退读取生命周期", () => {
+  it("回退日期到达时复用仍在途的同日读取，不再重拉当前日", async () => {
+    let finish!: (value: Awaited<ReturnType<typeof getLonghu>>) => void;
+    vi.mocked(getLonghu).mockImplementationOnce(() => new Promise(resolve => {finish = resolve;}));
+    const view = render(<LonghuFlowCard fallbackDates={[]} />);
+    await waitFor(() => expect(getLonghu).toHaveBeenCalledTimes(1));
+    view.rerender(<LonghuFlowCard fallbackDates={["2026-10-09"]} />);
+    await act(async () => {});
+    expect(getLonghu).toHaveBeenCalledTimes(1);
+    await act(async () => finish([]));
+    expect(getLonghu).toHaveBeenCalledTimes(1);
+    expect(screen.getByText(/此次读取未返回可计入当日/)).toBeTruthy();
+  });
+
   it("退出后不继续启动下一历史日请求", async () => {
     let fail!: (reason: Error) => void;
     vi.mocked(getLonghu).mockImplementationOnce(() => new Promise((_resolve, reject) => { fail = reject; }))
@@ -64,16 +77,26 @@ describe("龙虎榜回退读取生命周期", () => {
     await act(async () => fail(new Error("offline")));
     expect(getLonghu).toHaveBeenCalledTimes(1);
   });
-  it("同数量日期替换也建立新读取身份，旧失败链不能继续", async () => {
+  it("同数量日期替换复用在途当前日，失败后只沿新日期链读取", async () => {
     let fail!: (reason: Error) => void;
     vi.mocked(getLonghu).mockImplementationOnce(() => new Promise((_resolve, reject) => { fail = reject; }))
       .mockResolvedValueOnce([]);
     const view = render(<LonghuFlowCard fallbackDates={["2026-10-08"]} />);
     await waitFor(() => expect(getLonghu).toHaveBeenCalledTimes(1));
     view.rerender(<LonghuFlowCard fallbackDates={["2026-10-09"]} />);
-    await waitFor(() => expect(getLonghu).toHaveBeenCalledTimes(2));
-    await screen.findByText(/此次读取未返回可计入当日/);
+    await act(async () => {});
+    expect(getLonghu).toHaveBeenCalledTimes(1);
     await act(async () => fail(new Error("offline")));
     expect(getLonghu).toHaveBeenCalledTimes(2);
+    expect(getLonghu).toHaveBeenLastCalledWith("2026-10-09");
+    expect(getLonghu).not.toHaveBeenCalledWith("2026-10-08");
+  });
+
+  it("成功读取不形成完成值缓存，后续校准仍重新读取当前日", async () => {
+    vi.mocked(getLonghu).mockResolvedValue([]);
+    const view = render(<LonghuFlowCard fallbackDates={[]} />);
+    await screen.findByText(/此次读取未返回可计入当日/);
+    view.rerender(<LonghuFlowCard fallbackDates={["2026-10-09"]} />);
+    await waitFor(() => expect(getLonghu).toHaveBeenCalledTimes(2));
   });
 });

@@ -1,7 +1,7 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { getJson, request, sendJson } from "@/lib/api/internal";
 import { getWatchlist } from "@/lib/api/watchlist";
-import { getMarketOverview } from "@/lib/api/market";
+import { getLimitUpPoolSnapshot, getMarketOverview, getMinuteLine, getMinuteLineWithBaseline } from "@/lib/api/market";
 
 function pendingFetch(obeyAbort = true) {
   const calls: { url: string; init: RequestInit; finish: (data: unknown, status?: number) => void; fail: () => void }[] = [];
@@ -15,6 +15,51 @@ function pendingFetch(obeyAbort = true) {
 afterEach(() => { vi.useRealTimers(); vi.unstubAllGlobals(); vi.restoreAllMocks(); });
 
 describe("safe read in-flight ownership", () => {
+  it("上证叠加与同指数主图复用在途分钟原包，完成后仍重新校准", async () => {
+    const source = pendingFetch();
+    const overlay = getMinuteLine("sh000001");
+    const chart = getMinuteLineWithBaseline("sh000001");
+    const dispatched = source.fetcher.mock.calls.length;
+    const points = [{ts: "2026-10-14T10:30:00+08:00", price: 4000, source: "tencent"}];
+    source.calls.forEach(call => call.finish({symbol: "sh000001", points, vr_baseline_5m: [1]}));
+    expect(await overlay).toEqual(points);
+    expect((await chart).points).toEqual(points);
+    expect(dispatched).toBe(1);
+    const next = getMinuteLine("sh000001");
+    expect(source.fetcher).toHaveBeenCalledTimes(2);
+    source.calls[1].finish({symbol: "sh000001", points}); await next;
+  });
+
+  it("整日增强资格池已有在途单飞，默认池与不同交易日不串包", async () => {
+    const source = pendingFetch();
+    const one = getLimitUpPoolSnapshot("2026-10-14", {includeBreaks: true});
+    const two = getLimitUpPoolSnapshot("2026-10-14", {includeBreaks: true});
+    const plain = getLimitUpPoolSnapshot("2026-10-14");
+    const old = getLimitUpPoolSnapshot("2026-10-13", {includeBreaks: true});
+    const dispatched = source.fetcher.mock.calls.length;
+    source.calls.forEach(call => call.finish({trade_date: call.url.includes("2026-10-13") ? "2026-10-13" : "2026-10-14", pool: [], break_pool: [], coverage: {limit_up: {state: "success", error: null}, limit_break: {state: "success", error: null}}}));
+    const result = await Promise.all([one, two, plain, old]);
+    expect(dispatched).toBe(3);
+    expect(result[0]).toEqual(result[1]);
+    expect(result[3].trade_date).toBe("2026-10-13");
+  });
+
+  it.each(["/api/watchlist/600127", "/api/notifications/read-state"])("known write %s preserves an unrelated overview flight before and after completion", async path => {
+    const source = pendingFetch();
+    const first = getMarketOverview();
+    const write = sendJson(path, path.includes("watchlist") ? "DELETE" : "PUT", {});
+    const during = getMarketOverview();
+    const duringCount = source.fetcher.mock.calls.length;
+    source.calls[1].finish({}); await write;
+    const after = getMarketOverview();
+    const afterCount = source.fetcher.mock.calls.length;
+    source.calls.filter(call => call.url.includes("/market/overview")).forEach(call => call.finish({indices: [], total_amount: 100, total_amount_freshness: null}));
+    expect(await first).toEqual(await during);
+    expect(await after).toEqual(await during);
+    expect(duringCount).toBe(2);
+    expect(afterCount).toBe(2);
+  });
+
   it("workbench and chart overlay share a pure overview read without sharing mutable results", async () => {
     const source = pendingFetch();
     const workbench = getMarketOverview();
