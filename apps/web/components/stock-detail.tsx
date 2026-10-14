@@ -786,10 +786,13 @@ export const StockDetailPanel = memo(function StockDetailPanel({
   const qualityView = liveQuote ? quoteQualityView({quality: liveQuote.quality, reasons: liveQuote.quality_reasons,
     symbol, market: liveQuote.market, dataTimestamp: liveQuote.data_timestamp, session: liveQuote.display_session}) : null;
   const pausedLabel = qualityView && ["已收盘", "午间休息", "未开盘", "休市", "竞价等待", "开盘等待"].includes(qualityView.label);
-  const quoteIssue = active && immediateQuote === null ? {label: "报价待恢复", title: "本轮未返回该证券，保留上次报价；当前状态待核。"}
+  // 首个Hub缓存快照可能尚无新订阅证券；从未见过该证券报价时不能称“恢复/保留上次”。
+  // 首报仍由原REST加载/失败及Quote自身质量呈现，不把REST补价当作live恢复。
+  const missingObservedQuote = active && immediateQuote === null && retainedLive !== undefined;
+  const quoteIssue = missingObservedQuote ? {label: "报价待恢复", title: "本轮未返回该证券，保留上次报价；当前状态待核。"}
     : liveQuote && !hasTrustedQuoteObservation(liveQuote) && !pausedLabel ? {label: qualityView?.label === "正常" ? "时间待核" : qualityView?.label || "报价待核", title: qualityView?.title} : null;
   const quoteDiagnostics = <>
-    {active && immediateQuote === null && <p>最近行情帧缺少该证券，保留上次报价。当前时点待核实，恢复行情后再操作。</p>}
+    {missingObservedQuote && <p>最近行情帧缺少该证券，保留上次报价。当前时点待核实，恢复行情后再操作。</p>}
     {liveQuote && <p>报价来源：{sourceLabel(liveQuote.source)} · 源数据时间：{dateTimeTextBJ(liveQuote.data_timestamp, {seconds: true})} · 质量 {liveQuote.quality}{qualityView?.title ? `。${qualityView.title}` : ""}</p>}
     {liveQuote && !hasTrustedQuoteObservation(liveQuote) && <p>报价质量或源时刻待核，未推进图表尾点；保留原图。</p>}
     {STREAM_ABNORMAL.includes(streamStatus) && <p>行情连接：{STREAM_STATUS_LABEL[streamStatus].text}；连接状态不代表源报价时效。</p>}

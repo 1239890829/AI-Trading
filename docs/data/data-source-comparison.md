@@ -1,7 +1,7 @@
 # 数据源能力对比与选型
 
 > 实测日期：2026-08-29（周六，最近交易日 2026-08-28）
-> §0–§11 是不同日期的历史取证，不可拼成当前能力表；现役消费者处置见 §13。
+> §0–§11 是不同日期的历史取证，不可拼成当前能力表；现役消费者处置见 §13，当前机器及板块复核见 §15–§16。
 > 后续状态唯一入口：`docs/retro-and-gaps.md` §6.0 `BUG-020` / `IMP-040`。
 > 每次改动数据源前必读；改完请把新结论回填本文。
 > **同族**：**接入面清单与使用度审计 → `data-sources.md` §8（2026-09-16）** —— 它按「源 × 已接/未接 × 调用点」逐项点清，
@@ -569,3 +569,17 @@ marketdb 离线导出是三个运行入口，分属各自预算/错误/恢复链
 本窗不改生产优先级、熔断阈值、TTL、轮频或4秒预算；也不测试分钟K、涨停原因、全市场覆盖或选股效果。腾讯/新浪按功能保留主备，先修客户端连接状态混用与恢复流程误熔断；没有证据支持统一换一家。N=5不足以排名长期稳定性、报P95/P99或承诺SLA。历史§10/§11小样本与本窗分别保留，不能混合成同条件实验。
 
 完整逐次失败/unknown/价格/量额/源钟与sha256在忽略artifacts/runs/live-performance-20261014/source-comparison；manifest绑定实际主树aea8c799及原Provider源码，非原始供应商body。数据源顺序仍以代码和data-sources现役路由为准。
+
+## 16. 板块资金备源复核（2026-10-14盘后）
+
+本节是公开源码与22:20–22:34隔离小样本，未接生产、未安装包装库。它不覆盖盘中连续服务，也不与§15报价、此前clist诊断或生产日志混算成功率。
+
+| 来源 | 当前原始证据 | 取舍与未证部分 |
+|---|---|---|
+| 东财原clist | [资金官网](https://data.eastmoney.com/bkzj/hy.html)HTML200；显式direct的curl与HTTPX同URL各一次仍在HTTP响应前断开，curl已完成TLS校验 | 不是8秒等待超时，也不能定性WAF/IP封禁。`trust_env=False`或显式不走代理不能排除VPN/TUN；网页可读不证明资金接口可读。 |
+| 新浪板块MoneyFlow | [原站JS](https://n.sinaimg.cn/finance/cnstock/pc/zjlx.z.js?ver=1.1)证明ID为`cate_type/category`；`0/new_dlhy`电力行业历史返回`opendate=2026-10-14`及`r0_net`。两批各2请求均200 | 列表`netamount`为全部净流入，不是主力。[官方帮助](https://finance.sina.com.cn/temp/guest4377.shtml)说明Level-1、通常延迟5–10分钟、主力单笔≥100万元；非东财超大＋大单同义字段。旧默认`hangye_ZA`仅该样本末日2019，不能泛化新浪历史均过期；当天日期也不能证明盘中秒级时效。 |
+| 东财push2ex `getAllBKChanges` | [官方页面](https://quote.eastmoney.com/changes/boardlist.html)及[原站JS](https://quote.eastmoney.com/newstatic/build/changes_boardlist.js)标`zjl`为主力净流入（万元）。一次1条、随后官方50容量首/尾页共3次200（137/1493/159ms），`dt=20261014150000`、`tc=1003`，首50/尾3；53行BK/名称/涨幅/主力值均有值 | 同一东财的另一服务候选，不算独立供应商。官方UI收到`allbk`后再过滤`ydl`，不能由此断定API只有异动子集；`ct`为异动次数，`m`未核。原官网SSR目录665个BK（行业128/概念506/地域31），观察行45个精确匹配，其余8个类型/层级未知；中间页未读，不能声称全集排名。 |
+
+push2ex保留核心补源价值，不能因超大单、占比、5/10日等非核心字段缺失一票否决；相应能力缺口仍须显式保留。现阶段不接生产：同BK0596的既有fflow交叉读仍断连，尚无与f62精确同刻同值的证据；`dt`只是官方批次时刻，未证每行完整源钟、盘中推进/延迟与稳定性。三个盘后成功请求不构成SLA。新浪是异口径独立视角，现役THS板块目录/价格与新浪涨跌榜也不能自动接管资金字段；AKShare东财包装仍是相同上游。
+
+原始证据在忽略的`artifacts/runs/chart-first-paint-board-sources-20261014/`：`source/transport-observations.json`和`source/official-board-page.body`；`source-contract/`内的`candidate-contract.json`、`sina-current-id-probe.json`、`sina-help-receipt.json`、`em-changes-one-shot-probe.json`、`em-changes-boundary-pages-probe.json`、`em-public-board-directory.json`及静态JS回执保留参数、字段、源日期与原body哈希。后续只按独立LAB预算核盘中时效与上述口径/覆盖缺口，不改原生产TTL、轮频、时效门、源序或选股/通知资格。

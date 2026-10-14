@@ -385,6 +385,7 @@ export function MinuteChart({
   }, [computeLB]);
 
   const seriesRef = useRef<SeriesBundle>(emptyBundle());
+  const appliedThemeRef = useRef<{ chart: IChartApi; palette: MinutePalette; baseline: boolean } | null>(null);
   // 已灌数据的最后槽（HHMM 游标）：""=需要全量
   const cursorRef = useRef("");
   // 创建 effect 最近一次灌入的 points 引用（增量 effect 去重，避免同帧重复灌）
@@ -890,6 +891,7 @@ export function MinuteChart({
       renderTip(lp.time, lp.point);
     }
 
+    appliedThemeRef.current = { chart, palette: p, baseline: hasBase };
     return () => {
       try {
         chart.unsubscribeCrosshairMove(onMove);
@@ -909,6 +911,7 @@ export function MinuteChart({
       seriesRef.current = emptyBundle();
       cursorRef.current = "";
       lastPointsRef.current = null;
+      appliedThemeRef.current = null;
       void unsub;
     };
     // 低频配置变化才重建；points 走增量 effect（下）。evByHHMM 供 crosshair 闭包。
@@ -1006,9 +1009,14 @@ export function MinuteChart({
   // 色值一律经 readChartTheme() 读 DOM（theme 仅作触发）：hydration 首帧 state 可能
   // 仍是服务端快照 "dark" 而实际 class 已是 light，用 state 取值会闪一帧深色画布。
   useEffect(() => {
+    const chart = seriesRef.current.chart;
+    if (!chart) return;
     const p = MINUTE_PALETTE[readChartTheme()];
-    applyTheme(p, isPositivePrice(effectivePrevClose));
+    const baseline = isPositivePrice(effectivePrevClose);
+    if (appliedThemeRef.current?.chart === chart && appliedThemeRef.current.palette === p && appliedThemeRef.current.baseline === baseline) return;
+    applyTheme(p, baseline);
     fillAll(seriesRef.current, pointsRef.current, effectivePrevClose, p);
+    appliedThemeRef.current = { chart, palette: p, baseline };
   }, [theme, effectivePrevClose, applyTheme]);
 
   return (

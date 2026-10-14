@@ -170,7 +170,6 @@ export function KlineChartPro({ bars, className, tradeMarks, costPrice, eventMar
   // 画布配色随主题走（P2-26）：theme 变化 → 下面的 applyTheme 把新色套到既有 series 上，
   // **不重建图表**（重建会丢缩放/平移位置）。
   const theme = useChartTheme();
-  const pal = KLINE_PALETTE[theme];
   // events 默认**关闭**（2026-09-02 改）：新闻/公告圆点逐日刷屏、遮挡 K 线形体，
   // 且多数条目与走势无关——对标通达信"信息地雷"，做成可开关且默认不打扰。
   // 需要对照事件与价格时再在工具栏打开（下方工具栏"事件"按钮）。
@@ -211,15 +210,21 @@ export function KlineChartPro({ bars, className, tradeMarks, costPrice, eventMar
     macd: { hist: ISeriesApi<"Histogram"> | null; dif: ISeriesApi<"Line"> | null; dea: ISeriesApi<"Line"> | null };
   }>({ candle: null, ma: [], boll: { up: null, low: null, mid: null }, vol: null, vma: [], amt: null, macd: { hist: null, dif: null, dea: null } });
   const priceLineRef = useRef<IPriceLine | null>(null);
+  // 只跳过已成功应用到同一图表的相同输入；不跨实例复用。
+  const filledInputsRef = useRef<readonly unknown[] | null>(null);
+  const markedInputsRef = useRef<readonly unknown[] | null>(null);
+  const appliedThemeRef = useRef<{ chart: IChartApi; palette: KlinePalette } | null>(null);
 
   // fill：把当前 props 数据灌入已存在的 series（幂等，全量 setData；bars 只有 120 根，成本低）。
   // 存进 ref 供创建 effect 调用最新版本，避免把 bars 放进创建依赖导致整图重建。
   // 2026-09-02：markers 与成本线拆到独立 effect——原实现每次 WS 合成 tick（每秒）
   // 都 setMarkers + removePriceLine/createPriceLine，高频重设造成视觉扰动。
-  const fill = () => {
+  const fill = (palette: KlinePalette) => {
     const chart = chartRef.current;
     const s = seriesRef.current;
     if (!chart || !s.candle || bars.length === 0) return;
+    const inputs = [chart, bars, palette, followLatest] as const;
+    if (filledInputsRef.current?.length === inputs.length && filledInputsRef.current.every((value, index) => Object.is(value, inputs[index]))) return;
 
     const data: CandlestickData[] = bars
       .filter((b) => b.open != null && b.close != null)
@@ -256,7 +261,7 @@ export function KlineChartPro({ bars, className, tradeMarks, costPrice, eventMar
     if (s.vol) {
       const vd: HistogramData[] = bars
         .filter((b) => b.volume != null)
-        .map((b) => ({ time: b.ts.slice(0, 10) as Time, value: b.volume as number, color: (b.close ?? 0) >= (b.open ?? 0) ? pal.volUp : pal.volDown }));
+        .map((b) => ({ time: b.ts.slice(0, 10) as Time, value: b.volume as number, color: (b.close ?? 0) >= (b.open ?? 0) ? palette.volUp : palette.volDown }));
       s.vol.setData(vd);
       const vols = vd.map((d) => d.value as number);
       const volTimes = vd.map((d) => d.time);
@@ -274,7 +279,7 @@ export function KlineChartPro({ bars, className, tradeMarks, costPrice, eventMar
       s.amt.setData(
         bars
           .filter((b) => b.amount != null)
-          .map((b) => ({ time: b.ts.slice(0, 10) as Time, value: b.amount as number, color: (b.close ?? 0) >= (b.open ?? 0) ? pal.volUp : pal.volDown }))
+          .map((b) => ({ time: b.ts.slice(0, 10) as Time, value: b.amount as number, color: (b.close ?? 0) >= (b.open ?? 0) ? palette.volUp : palette.volDown }))
       );
     }
 
@@ -284,7 +289,7 @@ export function KlineChartPro({ bars, className, tradeMarks, costPrice, eventMar
       const ema26 = calcEMA(closes, 26);
       const dif = closes.map((_, i) => ema12[i] - ema26[i]);
       const dea = calcEMA(dif, 9);
-      s.macd.hist.setData(data.map((d, i) => ({ time: d.time, value: (dif[i] - dea[i]) * 2, color: dif[i] > dea[i] ? pal.macdUp : pal.macdDown })));
+      s.macd.hist.setData(data.map((d, i) => ({ time: d.time, value: (dif[i] - dea[i]) * 2, color: dif[i] > dea[i] ? palette.macdUp : palette.macdDown })));
       s.macd.dif.setData(data.map((d, i) => ({ time: d.time, value: dif[i] })));
       s.macd.dea.setData(data.map((d, i) => ({ time: d.time, value: dea[i] })));
     }
@@ -293,13 +298,16 @@ export function KlineChartPro({ bars, className, tradeMarks, costPrice, eventMar
       const n = data.length;
       chart.timeScale().setVisibleLogicalRange({ from: Math.max(0, n - 20), to: n + 2 });
     }
+    filledInputsRef.current = inputs;
   };
   // markers 与成本线：只随标记/开关/成本变化重设（低频），不进每秒的 fill 路径。
   // 总是重设（含空数组）——数据切换后旧标记必须清掉，原实现只在非空时 set 会残留上一标的的标记。
-  const applyMarks = () => {
+  const applyMarks = (palette: KlinePalette) => {
     const chart = chartRef.current;
     const s = seriesRef.current;
     if (!chart || !s.candle || bars.length === 0) return;
+    const inputs = [chart, bars.length, tradeMarks, costPrice, eventMarks, ind.bs, ind.events, palette] as const;
+    if (markedInputsRef.current?.length === inputs.length && markedInputsRef.current.every((value, index) => Object.is(value, inputs[index]))) return;
     const markers: SeriesMarker<Time>[] = [];
     if (ind.bs) {
       for (const t of tradeMarks ?? []) {
@@ -307,7 +315,7 @@ export function KlineChartPro({ bars, className, tradeMarks, costPrice, eventMar
         markers.push({
           time: t.date as Time,
           position: t.side === "buy" ? "belowBar" : "aboveBar",
-          color: t.side === "buy" ? pal.markBuy : pal.markSell,
+          color: t.side === "buy" ? palette.markBuy : palette.markSell,
           shape: t.side === "buy" ? "arrowUp" : "arrowDown",
           text: `${t.side === "buy" ? "B" : "S"} ${t.quantity}股`,
         });
@@ -320,7 +328,7 @@ export function KlineChartPro({ bars, className, tradeMarks, costPrice, eventMar
         markers.push({
           time: m.date as Time,
           position: isAnn ? "aboveBar" : "belowBar",
-          color: isAnn ? pal.markAnn : pal.markNews,
+          color: isAnn ? palette.markAnn : palette.markNews,
           shape: "circle",
           // 只在重要度「高」的条目上标 "!"；普通条目画成**纯色小点不带文字**。
           // 原实现每个点都渲染"公告/新闻"字样，逐日刷屏且压住 K 线形体（用户反馈太丑）。
@@ -340,18 +348,19 @@ export function KlineChartPro({ bars, className, tradeMarks, costPrice, eventMar
     if (costPrice != null && costPrice > 0) {
       priceLineRef.current = s.candle.createPriceLine({
         price: costPrice,
-        color: pal.cost,
+        color: palette.cost,
         lineWidth: 1,
         lineStyle: LineStyle.Dashed,
         axisLabelVisible: true,
         title: "成本",
       });
     }
+    markedInputsRef.current = inputs;
   };
   // fill / applyMarks 的引用经 effect 同步到 ref（渲染期写 ref 会被 react-hooks 规则拦截）；
   // 本 effect 声明在创建 effect 之前，保证创建 effect 每次跑时拿到的是最新版本
-  const fillRef = useRef<() => void>(() => {});
-  const marksRef = useRef<() => void>(() => {});
+  const fillRef = useRef<(palette: KlinePalette) => void>(() => {});
+  const marksRef = useRef<(palette: KlinePalette) => void>(() => {});
   useEffect(() => {
     fillRef.current = fill;
     marksRef.current = applyMarks;
@@ -409,8 +418,9 @@ export function KlineChartPro({ bars, className, tradeMarks, costPrice, eventMar
       s.macd = { hist: null, dif: null, dea: null };
     }
 
-    fillRef.current();
-    marksRef.current();
+    fillRef.current(p);
+    marksRef.current(p);
+    appliedThemeRef.current = { chart, palette: p };
     // 首次聚焦最近 20 根（followLatest 时 fill 内每次都会重设，这里不必重复）
     if (!followLatest) {
       const n = Math.min(20, bars.length);
@@ -433,6 +443,9 @@ export function KlineChartPro({ bars, className, tradeMarks, costPrice, eventMar
       chartRef.current = null;
       seriesRef.current = { candle: null, ma: [], boll: { up: null, low: null, mid: null }, vol: null, vma: [], amt: null, macd: { hist: null, dif: null, dea: null } };
       priceLineRef.current = null;
+      filledInputsRef.current = null;
+      markedInputsRef.current = null;
+      appliedThemeRef.current = null;
     };
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [ind, hasBars]);
@@ -441,7 +454,7 @@ export function KlineChartPro({ bars, className, tradeMarks, costPrice, eventMar
   // 标记/成本线独立 effect（低频）——不进每秒的 fill 路径
   useEffect(() => {
     if (!chartRef.current) return;
-    fillRef.current();
+    fillRef.current(KLINE_PALETTE[readChartTheme()]);
   }, [bars]);
 
   /**
@@ -479,15 +492,19 @@ export function KlineChartPro({ bars, className, tradeMarks, costPrice, eventMar
   // 服务端快照 "dark" 而实际 class 已是 light——若用 state 取值，会把创建 effect 刚按
   // 亮色建好的图**覆盖回深色档**（哪怕只有一帧，也是可见的闪跳）。
   useEffect(() => {
-    if (!chartRef.current) return;
-    applyTheme(KLINE_PALETTE[readChartTheme()]);
-    fillRef.current();
-    marksRef.current();
+    const chart = chartRef.current;
+    if (!chart) return;
+    const palette = KLINE_PALETTE[readChartTheme()];
+    if (appliedThemeRef.current?.chart === chart && appliedThemeRef.current.palette === palette) return;
+    applyTheme(palette);
+    fillRef.current(palette);
+    marksRef.current(palette);
+    appliedThemeRef.current = { chart, palette };
   }, [theme, applyTheme]);
 
   useEffect(() => {
     if (!chartRef.current) return;
-    marksRef.current();
+    marksRef.current(KLINE_PALETTE[readChartTheme()]);
   }, [bars.length, tradeMarks, costPrice, eventMarks, ind.bs, ind.events]);
 
   // 布局 #2：副图高度变化 → applyOptions 动态调整（不重建 chart），主图 bottom 随之让位
