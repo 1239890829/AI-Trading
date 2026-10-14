@@ -1,5 +1,5 @@
 import {afterEach, beforeEach, describe, expect, it, vi} from "vitest";
-import {buildIndexOverlay} from "./index-overlay";
+import {buildIndexOverlay, indexQuoteReference} from "./index-overlay";
 import {hasTrustedQuoteObservation} from "./kline-live";
 import type {MinutePoint} from "./api";
 import type {Quote, QuoteDisplaySession} from "@/types/market";
@@ -18,6 +18,16 @@ beforeEach(() => {
 afterEach(() => vi.unstubAllGlobals());
 
 describe("index overlay historical display is separate from live eligibility", () => {
+  it("recovery quote reference uses the same live/historical gate without borrowing stock minutes", () => {
+    const quote = closedQuote(), before = JSON.stringify(quote);
+    expect(indexQuoteReference(quote, "2026-10-13", now)).toEqual({referenceDate: "2026-10-13", mode: "historical"});
+    expect(indexQuoteReference({...quote, quality: "high", quality_reasons: []}, "2026-10-13", now).mode).toBe("live");
+    expect(JSON.stringify(quote)).toBe(before);
+    for (const reason of ["index_batch_missing", "source_time_regress_ignored", "quote_age_exceeded"])
+      expect(() => indexQuoteReference({...quote, quality_reasons: ["market_closed", reason]}, "2026-10-13", now)).toThrow(/基准/);
+    expect(() => indexQuoteReference(quote, "2026-10-14", now)).toThrow(/交易日/);
+    expect(() => indexQuoteReference({...quote, source: "unknown"}, "2026-10-13", now)).toThrow(/基准/);
+  });
   it("closed-only stale same-day data can be displayed with its date without upgrading quality", () => {
     const quote = closedQuote(), before = JSON.stringify({quote, points});
     const result = buildIndexOverlay(points, quote, "2026-10-13", now);

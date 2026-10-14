@@ -17,7 +17,7 @@ import type { RealPositionsResource } from "@/hooks/use-real-positions";
 import { analyze } from "@/lib/technical-analysis";
 import { buildEventMarks, buildMinuteNewsEvents } from "@/lib/event-markers";
 import { hasTrustedQuoteObservation, mergeQuoteIntoBars, mergeQuoteIntoMinutes } from "@/lib/kline-live";
-import {buildIndexOverlay} from "@/lib/index-overlay";
+import {buildIndexOverlay, indexQuoteReference} from "@/lib/index-overlay";
 import {limitQualification} from "@/lib/limit-qualification";
 import { isIndexSymbol } from "@/lib/api";
 import { notifyWatchlistChanged, subscribeWatchlist } from "@/lib/watchlist-sync";
@@ -116,6 +116,8 @@ export interface StockDetailStreamProps {
   liveQuote?: Quote;
   streamStatus?: StreamStatus;
   quoteFeed?: QuoteFeed;
+  /** Existing overview owner's observation; null is an explicit missing index. */
+  indexQuote?: Quote | null;
 }
 
 /** 空订阅集（引用恒定；`useQuoteStream([])` 的 hasSymbols=false ⇒ 不建连接）。 */
@@ -143,6 +145,7 @@ export const StockDetailPanel = memo(function StockDetailPanel({
   liveQuote: liveQuoteProp,
   streamStatus: streamStatusProp,
   quoteFeed: quoteFeedProp,
+  indexQuote,
   realPositions,
   watchlistMembership,
   onWatchlistAdded,
@@ -641,12 +644,84 @@ export const StockDetailPanel = memo(function StockDetailPanel({
   // Model summaries are requested by their visible consumer, never by chart prefetch.
   usePollingFetch(loadDigest, null, symbol, {enabled: rightActive && !isIndex && rightTab === "info", marketHours: false});
 
+  const indexDate = minutes[0]?.ts ? bjDate(minutes[0].ts) : "unknown";
+  const indexKey = `${symbol}:${indexDate}`;
+  const indexEnabled = active && !isIndex && chartTab === "minute" && minutes.length > 0;
+  const parentIndexRef = useRef(indexQuote);
+  useEffect(() => {parentIndexRef.current = indexQuote;}, [indexQuote]);
+  const [indexCompletion, setIndexCompletion] = useState(0);
+  const indexRecoveryRef = useRef<{
+    alive: boolean; request: number; inFlight: number; failed: boolean; used: boolean;
+    parentAtStart: Quote | null | undefined; candidate: Quote | null; failureAsOf: number;
+  } | null>(null);
+  useEffect(() => {
+    if (!indexEnabled) return;
+    const owner = {alive: true, request: 0, inFlight: 0, failed: false, used: false,
+      parentAtStart: parentIndexRef.current, candidate: null, failureAsOf: NaN};
+    indexRecoveryRef.current = owner;
+    return () => {owner.alive = false; owner.candidate = null;};
+  }, [indexKey, indexEnabled]);
   const indexResource = useResource(async () => {
-    const [points, overview] = await Promise.all([getMinuteLine("sh000001"), getMarketOverview()]);
-    const sh = overview.indices.find(value => value.symbol === "000001" || value.symbol === "sh000001");
-    return buildIndexOverlay(points, sh, bjDate(minutes[0]?.ts));
-  }, {key: `${symbol}:${minutes[0]?.ts ? bjDate(minutes[0].ts) : "unknown"}`, intervalMs: 60_000,
-    enabled: active && !isIndex && chartTab === "minute" && minutes.length > 0});
+    const owner = indexRecoveryRef.current;
+    const request = owner ? ++owner.request : 0;
+    const current = () => owner?.alive && owner === indexRecoveryRef.current && owner.request === request;
+    if (owner) {owner.parentAtStart = parentIndexRef.current; owner.candidate = null;}
+    let sourceQuote: Quote | undefined;
+    let settled = false;
+    const noteFailureClock = () => {
+      const asOf = Date.parse(sourceQuote?.display_session?.as_of ?? "");
+      if (current() && Number.isFinite(asOf)) owner!.failureAsOf = Math.max(Number.isFinite(owner!.failureAsOf) ? owner!.failureAsOf : -Infinity, asOf);
+    };
+    const track = <T,>(load: () => Promise<T>): Promise<T> => {
+      if (owner) owner.inFlight += 1;
+      return Promise.resolve().then(load).finally(() => {
+        // A fail-fast pair or manual refresh can leave a sibling/old input
+        // unresolved. Count each real input until its own promise settles.
+        if (owner) {
+          owner.inFlight -= 1;
+          if (current() && owner.failed) noteFailureClock();
+          if (settled && owner.alive && owner === indexRecoveryRef.current) setIndexCompletion(value => value + 1);
+        }
+      });
+    };
+    try {
+      const [points] = await Promise.all([track(() => getMinuteLine("sh000001")), track(async () => {
+        const overview = await getMarketOverview();
+        sourceQuote = overview.indices.find(value => value.symbol === "000001" || value.symbol === "sh000001");
+        return overview;
+      })]);
+      const value = buildIndexOverlay(points, sourceQuote, indexDate);
+      if (current()) {owner!.failed = false; owner!.used = false; owner!.candidate = null; owner!.failureAsOf = NaN;}
+      return value;
+    } catch (error) {
+      if (current()) {
+        owner!.failed = true;
+        noteFailureClock();
+      }
+      throw error;
+    } finally {
+      settled = true;
+      if (owner?.alive && owner === indexRecoveryRef.current) setIndexCompletion(value => value + 1);
+    }
+  }, {key: indexKey, intervalMs: 60_000, enabled: indexEnabled});
+  const {refresh: refreshIndexOverlay, error: indexReadError, data: indexReadData} = indexResource;
+  useEffect(() => {
+    const owner = indexRecoveryRef.current;
+    if (!indexEnabled || !owner?.alive || owner.used) return;
+    owner.candidate = null;
+    if (!indexQuote || document.visibilityState === "hidden") return;
+    if (indexQuote !== owner.parentAtStart) {
+      try {
+        indexQuoteReference(indexQuote, indexDate);
+        const asOf = Date.parse(indexQuote.display_session?.as_of ?? "");
+        if (!Number.isFinite(owner.failureAsOf) || (Number.isFinite(asOf) && asOf > owner.failureAsOf)) owner.candidate = indexQuote;
+      } catch {owner.candidate = null;}
+    }
+    if (owner.failed && !owner.inFlight && owner.candidate) {
+      owner.used = true; owner.candidate = null;
+      refreshIndexOverlay();
+    }
+  }, [indexEnabled, indexDate, indexQuote, indexCompletion, indexReadError, indexReadData, refreshIndexOverlay]);
   const indexOverlay = indexResource.data ?? null;
   const retryRead = (kind: DetailReadKind) => {
     const reads = dataReadsRef.current; if (reads?.alive) void reads[kind](true).catch(() => {});

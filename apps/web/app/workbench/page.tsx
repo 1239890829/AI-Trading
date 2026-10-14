@@ -116,7 +116,7 @@ function WorkbenchInner() {
   const symbolDetail = useContext(SymbolDetailStateCtx);
   const detailActive = (!isMobile || mobileView !== "list") && !symbolDetail;
   const realSymbols = useMemo(() => realData?.items.map((i) => i.symbol) ?? [], [realData]);
-  const [indices, setIndices] = useState<Quote[]>([]);
+  const [indices, setIndices] = useState<Quote[] | undefined>();
   const [totalAmount, setTotalAmount] = useState<number | null>(null);
   // 成交额的三态判据（S2-1 契约）。**必须与数值分开存**：`null` 有「上游尚未就绪」
   // 与「真的没有数据」两种成因，只凭数值无法区分（2026-09-14 报障根因）。
@@ -545,7 +545,7 @@ function WorkbenchInner() {
       <div className="bc-workbench-layout" data-mobile-view={mobileView}>
         <aside className="bc-workbench-sidebar" data-account-view={mode === "positions"} aria-label="指数与证券列表">
         <div className="bc-market-context">
-          <div className="bc-index-strip"><IndexCards indices={indices} selected={activeSymbol} onSelect={switchSymbol} /></div>
+          <div className="bc-index-strip"><IndexCards indices={indices ?? []} selected={activeSymbol} onSelect={switchSymbol} /></div>
           <div className="bc-market-summary">
             <button className="bc-turnover" onClick={inspectionClick(inspect, {kind: "fund"})} title="查看实时对比、全日估算与资金流">
               <span>两市成交额</span><strong title={amountFreshness?.reason ?? undefined}>{triAmount(totalAmount, amountFreshness?.state)}</strong>
@@ -633,7 +633,7 @@ function WorkbenchInner() {
         <section className="bc-workbench-detail" aria-label="证券详情">
         {/* 边界跟随证券/scope重置，保留深链与共享真实详情的全部消费者。 */}
         <PanelBoundary key={`${activeSymbol}:${mode}:${account}`} label="个股详情">
-          <StockDetailPanel symbol={activeSymbol} chartTab={chartTab} rightTab={rightTab} onRightTabChange={switchRightTab} liveQuote={merged[activeSymbol]} streamStatus={status} quoteFeed={quoteFeed} active={detailActive} realPositions={realPositions} watchlistMembership={symbols.includes(activeSymbol) ? true : watchConfirmed ? false : null} onWatchlistAdded={confirmWatchlistAdded} />
+          <StockDetailPanel symbol={activeSymbol} chartTab={chartTab} rightTab={rightTab} onRightTabChange={switchRightTab} liveQuote={merged[activeSymbol]} streamStatus={status} quoteFeed={quoteFeed} indexQuote={indices === undefined ? undefined : indices.find(q => q.symbol === "sh000001" || (q.symbol === "000001" && q.market === "SH")) ?? null} active={detailActive} realPositions={realPositions} watchlistMembership={symbols.includes(activeSymbol) ? true : watchConfirmed ? false : null} onWatchlistAdded={confirmWatchlistAdded} />
         </PanelBoundary>
         </section>
       </div>
