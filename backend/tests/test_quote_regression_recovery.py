@@ -409,6 +409,84 @@ def test_three_short_idle_timeouts_cannot_trip_backup_breaker(monkeypatch):
     asyncio.run(check())
 
 
+@pytest.mark.parametrize("indices", [False, True])
+@pytest.mark.parametrize("backup_age", [2, 2.5])
+def test_nonadvancing_trusted_recovery_does_not_disable_normal_fallback(indices, backup_age):
+    async def check():
+        method = "get_indices" if indices else "get_quotes"
+        if indices:
+            primary_rows = [quote(s, market=m, age=3 if s == "000001" else 1)
+                            for s, m in INDEX_MARKETS.items()]
+            backup_rows = [quote(s, market=m, source="backup", age=backup_age)
+                           for s, m in INDEX_MARKETS.items()]
+        else:
+            primary_rows = [quote(age=3), quote("600002")]
+            backup_rows = [quote(source="backup", age=backup_age)]
+        hub, primary, backup = hub_for(primary_rows, backup_rows, indices=indices)
+        domain = "indices" if indices else "quotes"
+        symbol = "000001" if indices else "600105"
+        current = hub.indices if indices else hub.quotes
+        original = current[symbol].model_dump()
+        for _ in range(cp.FAILURE_THRESHOLD):
+            await hub._refresh_domain(domain)
+            assert current[symbol].data_timestamp == original["data_timestamp"]
+            assert current[symbol].price == original["price"]
+            assert current[symbol].quality_reasons == ["source_time_regress_ignored"]
+
+        async def unavailable(method, symbols):
+            raise RuntimeError("real primary transport failure")
+        primary.rows = unavailable
+        backup.rows = ([quote(s, market=m, source="backup", age=0.5)
+                        for s, m in INDEX_MARKETS.items()] if indices
+                       else [quote(source="backup", age=0.5)])
+        rows = await (hub.provider.get_indices() if indices
+                      else hub.provider.get_quotes(["600105"]))
+        assert rows and all(row.source == "backup" for row in rows)
+        assert backup.calls[method] == cp.FAILURE_THRESHOLD + 1
+        metrics = hub.provider.provider_health()["method_attempts"][f"{method}@backup"]
+        assert metrics["source_observation_rejected"] == cp.FAILURE_THRESHOLD
+    asyncio.run(check())
+
+
+def test_nonadvancing_recovery_preserves_real_failure_history_without_incrementing_it():
+    async def check():
+        hub, _, backup = hub_for([quote(age=3), quote("600002")],
+                                 [quote(source="backup", age=2)])
+        hub.provider._record_failure("get_quotes", "backup")
+        hub.provider._record_failure("get_quotes", "backup")
+        await hub._refresh_domain("quotes")
+        assert backup.calls == {"get_quotes": 1}
+        assert hub.provider._failures["get_quotes", "backup"] == 2
+        assert not hub.provider._in_cooldown("get_quotes", "backup")
+        assert "get_quotes" not in hub.provider._last_good or hub.provider._last_good["get_quotes"] != "backup"
+    asyncio.run(check())
+
+
+@pytest.mark.parametrize("change", [
+    {"price": None}, {"price": -1}, {"quality": Quality.stale},
+    {"quality": Quality.invalid}, {"data_timestamp": None}, {"volume": -1},
+])
+def test_nonadvancing_but_untrusted_recovery_still_counts_as_source_failure(change):
+    async def check():
+        hub, _, _ = hub_for([quote(age=3), quote("600002")],
+                            [quote(source="backup", age=2, **change)])
+        await hub._refresh_domain("quotes")
+        assert hub.provider._failures["get_quotes", "backup"] == 1
+        assert hub.quotes["600105"].quality_reasons == ["source_time_regress_ignored"]
+    asyncio.run(check())
+
+
+def test_nonadvancing_row_does_not_hide_another_invalid_recovery_target():
+    async def check():
+        hub, _, _ = hub_for([quote(age=3), quote("600002", age=3)],
+                            [quote(source="backup", age=2),
+                             quote("600002", source="backup", age=2, price=None)])
+        await hub._refresh_domain("quotes")
+        assert hub.provider._failures["get_quotes", "backup"] == 1
+        assert all(q.quality_reasons == ["source_time_regress_ignored"] for q in hub.quotes.values())
+    asyncio.run(check())
+
+
 @pytest.mark.parametrize("method", ["get_kline", "get_news", "unknown_method"])
 def test_recovery_orchestration_cannot_expand_provider_capabilities(method):
     async def check():

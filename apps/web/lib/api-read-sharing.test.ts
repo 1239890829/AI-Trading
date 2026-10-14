@@ -82,6 +82,59 @@ describe("safe read in-flight ownership", () => {
     source.calls[0].finish([{symbol: "old"}]); expect(await old).toEqual([{symbol: "old"}]);
   });
 
+  it("fresh watchlist read preserves an unrelated overview owner", async () => {
+    const source = pendingFetch();
+    const overviewA = getMarketOverview();
+    const oldWatch = getWatchlist();
+    const freshWatch = getWatchlist({fresh: true});
+    const overviewB = getMarketOverview();
+    const dispatched = source.fetcher.mock.calls.length;
+    source.calls.forEach((call, i) => call.finish(call.url.includes("/market/overview")
+      ? {indices: [], total_amount: 100, total_amount_freshness: null}
+      : [{symbol: i === 1 ? "old" : "new"}]));
+    const [left, old, current, right] = await Promise.all([overviewA, oldWatch, freshWatch, overviewB]);
+    expect(dispatched).toBe(3);
+    expect(left).toEqual(right);
+    expect(old).toEqual([{symbol: "old"}]);
+    expect(current).toEqual([{symbol: "new"}]);
+  });
+
+  it("fresh nonshared read does not discard an unrelated shared owner", async () => {
+    const source = pendingFetch();
+    const before = getMarketOverview();
+    const ordinary = getJson("/api/notifications", 8000, {fresh: true});
+    const after = getMarketOverview();
+    const dispatched = source.fetcher.mock.calls.length;
+    source.calls.forEach(call => call.finish(call.url.includes("/market/overview")
+      ? {indices: [], total_amount: 100, total_amount_freshness: null} : {items: []}));
+    await Promise.all([before, ordinary, after]);
+    expect(dispatched).toBe(2);
+  });
+
+  it("fresh owner survives old owner cancellation and completion without crossing replies", async () => {
+    const source = pendingFetch();
+    const oldAbort = new AbortController(), freshAbort = new AbortController();
+    const old = getWatchlist({signal: oldAbort.signal}).catch(e => e);
+    const oldFollower = getWatchlist();
+    const current = getWatchlist({fresh: true, signal: freshAbort.signal}).catch(e => e);
+    const currentFollower = getWatchlist();
+    expect(source.fetcher).toHaveBeenCalledTimes(2);
+    oldAbort.abort();
+    expect(await old).toMatchObject({code: "canceled"});
+    expect(source.calls[0].init.signal?.aborted).toBe(false);
+    expect(source.calls[1].init.signal?.aborted).toBe(false);
+    source.calls[0].finish([{symbol: "old"}]);
+    expect(await oldFollower).toEqual([{symbol: "old"}]);
+    const lateFollower = getWatchlist();
+    expect(source.fetcher).toHaveBeenCalledTimes(2);
+    freshAbort.abort();
+    expect(await current).toMatchObject({code: "canceled"});
+    expect(source.calls[1].init.signal?.aborted).toBe(false);
+    source.calls[1].finish([{symbol: "new"}]);
+    expect(await currentFollower).toEqual([{symbol: "new"}]);
+    expect(await lateFollower).toEqual([{symbol: "new"}]);
+  });
+
   it.each(["failed", "timed out"] as const)("write %s isolates reads at start and at completion, even when commit is unknown", async outcome => {
     vi.useFakeTimers();
     const source = pendingFetch();

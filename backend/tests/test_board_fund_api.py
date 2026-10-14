@@ -275,7 +275,7 @@ def test_unknown_ref_short_cache_is_shared_across_symbol_batches(monkeypatch):
 
 
 def test_by_symbols_partial_fund_rows_keep_identity_and_reuse_cache(monkeypatch):
-    """同一批有效资金与缺资金归属并存；复查命中现有缓存，不追加资料或榜单请求。"""
+    """同一批有效资金与缺资金归属并存；身份复用，动态读取原资金缓存入口。"""
     import asyncio
 
     from app.services import theme_service as ts
@@ -317,7 +317,8 @@ def test_by_symbols_partial_fund_rows_keep_identity_and_reuse_cache(monkeypatch)
         "main_net_ratio": 0.0, "streak": 0,
     }
     assert provider.calls == 3
-    assert fund_calls == [["BK1277", "BK0475"]]
+    # Each response reads the original board cache; the route adds no second TTL.
+    assert fund_calls == [["BK1277", "BK0475"], ["BK1277", "BK0475"]]
 
 
 def test_by_symbols_rejects_empty_and_oversized():

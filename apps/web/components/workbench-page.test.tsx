@@ -9,7 +9,7 @@ const state = vi.hoisted(() => ({
   params: new URLSearchParams("symbol=600127&ct=minute&rt=info&from=%2Fmarket%3Ftab%3Devents"),
   push: vi.fn(), replace: vi.fn(),
   watch: [{symbol: "600127", group_name: "默认"}, {symbol: "603256", group_name: "材料观察"}],
-  quoteStream: {status: "closed", quoteFeed: {subscribe: () => () => {}, getSnapshot: () => undefined}, quotes: {
+  quoteStream: {status: "live", quoteFeed: {subscribe: () => () => {}, getSnapshot: () => undefined}, quotes: {
     "600127": {symbol: "600127", name: "金健米业", price: 8.13, change_pct: 2.52, source: "fixture", quality: "high", quality_reasons: [], received_at: "2026-10-08T09:55:00+08:00", data_timestamp: "2026-10-08T09:55:00+08:00"},
   }},
   realPositions: {items: [{symbol: "600127"}]},
@@ -18,13 +18,13 @@ const state = vi.hoisted(() => ({
 vi.mock("next/navigation", () => ({useRouter: () => ({push: state.push, replace: state.replace}), useSearchParams: () => state.params}));
 vi.mock("@/lib/market-hours", () => ({isTradingSession: () => true}));
 vi.mock("@/hooks/use-quote-stream", () => ({
-  STREAM_STATUS_LABEL: {closed: {text: "休市", cls: ""}},
+  STREAM_STATUS_LABEL: {live: {text: "已连接", cls: "", title: "通信夹具，不证明源报价已更新"}},
   useQuoteStream: () => state.quoteStream,
 }));
 // Match the real hooks' stable data identity between network updates.
 // A fresh items array on every render repeatedly triggers the REST fallback effect.
 vi.mock("@/hooks/use-real-positions", () => ({useRealPositions: () => ({data: state.realPositions, error: null, reload: state.reloadReal})}));
-vi.mock("@/components/stock-detail", () => ({StockDetailPanel: ({symbol, chartTab, rightTab, active, realPositions, quoteFeed}: {symbol: string; chartTab?: string; rightTab?: string; active?: boolean; realPositions?: {reload: () => Promise<void>}; quoteFeed?: unknown}) => <div data-testid="stock-detail" data-active={String(active)} data-shared-positions={String(realPositions?.reload === state.reloadReal)} data-shared-quote-feed={String(quoteFeed === state.quoteStream.quoteFeed)}>{symbol}/{chartTab}/{rightTab}</div>}));
+vi.mock("@/components/stock-detail", () => ({StockDetailPanel: ({symbol, chartTab, rightTab, active, realPositions, quoteFeed, watchlistMembership, onWatchlistAdded}: {symbol: string; chartTab?: string; rightTab?: string; active?: boolean; realPositions?: {reload: () => Promise<void>}; quoteFeed?: unknown; watchlistMembership?: boolean | null; onWatchlistAdded?: (symbol: string) => void}) => <><div data-testid="stock-detail" data-active={String(active)} data-shared-positions={String(realPositions?.reload === state.reloadReal)} data-shared-quote-feed={String(quoteFeed === state.quoteStream.quoteFeed)} data-membership={String(watchlistMembership)}>{symbol}/{chartTab}/{rightTab}</div><button onClick={() => onWatchlistAdded?.(symbol)}>确认加入回执</button></>}));
 vi.mock("@/components/index-cards", () => ({IndexCards: () => <div>指数摘要</div>}));
 vi.mock("@/components/detail/account-scope-panel", () => ({AccountScopePanel: ({account}: {account: string}) => <div>账户结果 {account}</div>}));
 vi.mock("@/components/picks/pick-detail-modal", () => ({PickDetailModal: ({target}: {target: {kind: string; item: {symbol: string}} | null}) => target ? <div role="dialog">{target.kind}/{target.item.symbol}</div> : null}));
@@ -61,6 +61,60 @@ async function selectList(name: string) {
 }
 
 describe("B+C workbench production consumers", () => {
+  it("父列表未知时加入成功只确认该股，后续成功全表空可校准为不在自选", async () => {
+    vi.mocked(api.getWatchlist).mockRejectedValueOnce(new Error("first read unavailable"));
+    const view = render(<WorkbenchPage/>);
+    await screen.findByText(/自选读取失败/);
+    expect(screen.getByTestId("stock-detail").dataset.membership).toBe("null");
+    fireEvent.click(screen.getByRole("button", {name: "确认加入回执"}));
+    expect(screen.getByTestId("stock-detail").dataset.membership).toBe("true");
+    expect(api.getWatchlist).toHaveBeenCalledTimes(1);
+    state.params.set("symbol", "603256");
+    view.rerender(<WorkbenchPage/>);
+    expect(screen.getByTestId("stock-detail").dataset.membership).toBe("null");
+    state.params.set("symbol", "600127");
+    view.rerender(<WorkbenchPage/>);
+    expect(screen.getByTestId("stock-detail").dataset.membership).toBe("true");
+    state.watch = [];
+    fireEvent.click(screen.getByRole("button", {name: "重试读取"}));
+    await waitFor(() => expect(screen.getByTestId("stock-detail").dataset.membership).toBe("false"));
+    expect(screen.queryByText(/自选读取失败/)).toBeNull();
+  });
+  it("父自选首读失败保持unknown，成功后保留确认值；单次写后只有父owner一读", async () => {
+    vi.mocked(api.getWatchlist).mockRejectedValueOnce(new Error("first read unavailable"));
+    render(<WorkbenchPage/>);
+    await screen.findByText(/自选读取失败/);
+    expect(screen.getByTestId("stock-detail").dataset.membership).toBe("null");
+    fireEvent.click(screen.getByRole("button", {name: "重试读取"}));
+    await waitFor(() => expect(screen.getByTestId("stock-detail").dataset.membership).toBe("true"));
+    const reads = vi.mocked(api.getWatchlist).mock.calls.length;
+    vi.mocked(api.getWatchlist).mockRejectedValueOnce(new Error("later unavailable"));
+    act(() => notifyWatchlistChanged());
+    await screen.findByText(/自选读取失败/);
+    expect(api.getWatchlist).toHaveBeenCalledTimes(reads + 1);
+    expect(screen.getByTestId("stock-detail").dataset.membership).toBe("true");
+  });
+
+  it("分组单失败的重试只读分组，未成功前保留原失败，不重读成功域", async () => {
+    vi.mocked(api.getWatchlistGroups).mockRejectedValueOnce(new Error("group unavailable"));
+    render(<WorkbenchPage/>);
+    await screen.findByText(/分组读取失败/);
+    expect(api.getWatchlist).toHaveBeenCalledTimes(1);
+    expect(api.getMarketOverview).toHaveBeenCalledTimes(1);
+    expect(api.getPaperPositions).toHaveBeenCalledTimes(1);
+    vi.mocked(api.getWatchlistGroups).mockRejectedValueOnce(new Error("still unavailable"));
+    fireEvent.click(screen.getByRole("button", {name: "重试读取"}));
+    await waitFor(() => expect(api.getWatchlistGroups).toHaveBeenCalledTimes(2));
+    expect(screen.getByText(/分组读取失败/)).toBeTruthy();
+    expect(api.getWatchlist).toHaveBeenCalledTimes(1);
+    expect(api.getMarketOverview).toHaveBeenCalledTimes(1);
+    expect(api.getPaperPositions).toHaveBeenCalledTimes(1);
+    fireEvent.click(screen.getByRole("button", {name: "重试读取"}));
+    await waitFor(() => expect(screen.queryByText(/分组读取失败/)).toBeNull());
+    expect(api.getWatchlistGroups).toHaveBeenCalledTimes(3);
+    expect(api.getWatchlist).toHaveBeenCalledTimes(1);
+  });
+
   it("shares the real initial GET but manual calibration bypasses the old owner without flashing or accepting its late result", async () => {
     const previous = vi.mocked(api.getWatchlist).getMockImplementation()!;
     vi.mocked(api.getWatchlist).mockImplementation(readActualWatchlist);
@@ -127,20 +181,18 @@ describe("B+C workbench production consumers", () => {
     await act(async () => {finish({indices: [], total_amount: null, total_amount_freshness: null} as Awaited<ReturnType<typeof api.getMarketOverview>>);});
   });
 
-  it("discards old base reads after a manual retry supersedes them", async () => {
+  it("leaves an unrelated pending watchlist read intact when retrying failed groups", async () => {
     let finish!: (value: Awaited<ReturnType<typeof api.getWatchlist>>) => void;
     vi.mocked(api.getWatchlist).mockImplementationOnce(() => new Promise(resolve => {finish = resolve;}));
     vi.mocked(api.getWatchlistGroups).mockRejectedValueOnce(new Error("groups offline"));
     render(<WorkbenchPage />);
     await screen.findByText(/分组读取失败/);
-    state.watch = [{symbol: "002297", group_name: "默认"}];
     fireEvent.click(screen.getByRole("button", {name: "重试读取"}));
-    await screen.findByRole("button", {name: "查看 002297 002297"});
-    expect(api.getWatchlist).toHaveBeenCalledTimes(2);
+    await waitFor(() => expect(api.getWatchlistGroups).toHaveBeenCalledTimes(2));
+    expect(api.getWatchlist).toHaveBeenCalledTimes(1);
     await act(async () => {finish([{symbol: "600127", group_name: "默认", source: "manual", created_at: "2026-10-08T09:55:00+08:00", updated_at: "2026-10-08T09:55:00+08:00"}]);});
-    expect(api.getWatchlist).toHaveBeenCalledTimes(2);
-    expect(screen.queryByRole("button", {name: "查看 金健米业 600127"})).toBeNull();
-    expect(screen.getByRole("button", {name: "查看 002297 002297"})).toBeTruthy();
+    expect(api.getWatchlist).toHaveBeenCalledTimes(1);
+    expect(screen.getByRole("button", {name: "查看 金健米业 600127"})).toBeTruthy();
   });
 
   it("keeps quotes/paper positions at 10s, static lists at 60s and mutation sync immediate", async () => {

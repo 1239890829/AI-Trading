@@ -41,23 +41,23 @@ def _serialize(item) -> dict:
 
 
 @router.get("/watchlist")
-async def list_watchlist(repo: WatchlistRepository = Depends(get_watchlist_repository)) -> dict:
+def list_watchlist(repo: WatchlistRepository = Depends(get_watchlist_repository)) -> dict:
     return {"data": [_serialize(i) for i in repo.list_items()]}
 
 
 @router.post("/watchlist", status_code=201, dependencies=[Depends(require_write_token)])
-async def add_watchlist(body: WatchlistAdd, repo: WatchlistRepository = Depends(get_watchlist_repository)) -> dict:
+def add_watchlist(body: WatchlistAdd, repo: WatchlistRepository = Depends(get_watchlist_repository)) -> dict:
     item = repo.add(body.symbol, body.name, body.note, body.group)
     return {"data": _serialize(item)}
 
 
 @router.get("/watchlist/groups")
-async def list_groups(repo: WatchlistRepository = Depends(get_watchlist_repository)) -> dict:
+def list_groups(repo: WatchlistRepository = Depends(get_watchlist_repository)) -> dict:
     return {"data": repo.list_groups()}
 
 
 @router.post("/watchlist/groups", status_code=201, dependencies=[Depends(require_write_token)])
-async def create_group(body: GroupCreate, repo: WatchlistRepository = Depends(get_watchlist_repository)) -> dict:
+def create_group(body: GroupCreate, repo: WatchlistRepository = Depends(get_watchlist_repository)) -> dict:
     row = repo.create_group(body.name)
     if row is None:
         raise HTTPException(status_code=409, detail=f"分组「{body.name}」已存在或名称无效")
@@ -65,7 +65,7 @@ async def create_group(body: GroupCreate, repo: WatchlistRepository = Depends(ge
 
 
 @router.put("/watchlist/groups/{name}", dependencies=[Depends(require_write_token)])
-async def rename_group(name: str, body: GroupRename, repo: WatchlistRepository = Depends(get_watchlist_repository)) -> dict:
+def rename_group(name: str, body: GroupRename, repo: WatchlistRepository = Depends(get_watchlist_repository)) -> dict:
     result = repo.rename_group(name, body.new_name)
     if result == "protected":
         raise HTTPException(status_code=400, detail=f"分组「{name}」是保留分组，不可重命名")
@@ -77,7 +77,7 @@ async def rename_group(name: str, body: GroupRename, repo: WatchlistRepository =
 
 
 @router.delete("/watchlist/groups/{name}", dependencies=[Depends(require_write_token)])
-async def delete_group(name: str, repo: WatchlistRepository = Depends(get_watchlist_repository)) -> dict:
+def delete_group(name: str, repo: WatchlistRepository = Depends(get_watchlist_repository)) -> dict:
     result = repo.delete_group(name)
     if result == "protected":
         raise HTTPException(status_code=400, detail=f"分组「{name}」是保留分组，不可删除")
@@ -87,14 +87,14 @@ async def delete_group(name: str, repo: WatchlistRepository = Depends(get_watchl
 
 
 @router.put("/watchlist/{symbol}/group", dependencies=[Depends(require_write_token)])
-async def update_group(symbol: str, body: GroupUpdate, repo: WatchlistRepository = Depends(get_watchlist_repository)) -> dict:
+def update_group(symbol: str, body: GroupUpdate, repo: WatchlistRepository = Depends(get_watchlist_repository)) -> dict:
     if not repo.update_group(symbol, body.group):
         raise HTTPException(status_code=404, detail=f"{symbol} 不在自选中")
     return {"data": {"symbol": symbol, "group": body.group}}
 
 
 @router.delete("/watchlist/{symbol}", dependencies=[Depends(require_write_token)])
-async def remove_watchlist(symbol: str, repo: WatchlistRepository = Depends(get_watchlist_repository)) -> dict:
+def remove_watchlist(symbol: str, repo: WatchlistRepository = Depends(get_watchlist_repository)) -> dict:
     if not repo.remove(symbol):
         raise HTTPException(status_code=404, detail=f"{symbol} 不在自选中")
     return {"data": {"symbol": symbol, "removed": True}}

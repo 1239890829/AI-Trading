@@ -170,56 +170,56 @@ async def market_board_fund_by_symbols(
     if len(sym_list) > 50:
         raise HTTPException(status_code=422, detail="单批最多 50 个代码")
 
-    cache = cache_on(request.app.state, "market.board-fund.by-symbols", 60, maxsize=64)
-    key = (tuple(sym_list),)
+    # Cache stable identities only. A second completed-payload TTL would keep
+    # dynamic fund values after the original board-list cache has expired.
+    board_cache = cache_on(request.app.state, "market.board-fund.main-board", 6 * 3600, maxsize=512)
+    sem = asyncio.Semaphore(8)
 
-    async def _build() -> dict:
-        # 所属板块是**低频变更**数据（成分调整才变）→ 6h 缓存，避免自选轮询反复打 F10。
-        board_cache = cache_on(request.app.state, "market.board-fund.main-board", 6 * 3600, maxsize=512)
-        sem = asyncio.Semaphore(8)
-
-        async def _main_board(sym: str) -> tuple[str, dict | None]:
-            hit, cached = board_cache.get(sym)
-            if hit:
-                return sym, cached
+    async def _main_board(sym: str) -> tuple[str, dict | None]:
+        async def load() -> dict | None:
             async with sem:
                 try:
                     profile = await hub.provider.get_company_profile(sym)
                 except Exception as exc:  # noqa: BLE001 单只失败不影响其余
                     log.debug("board-fund: profile %s failed: %s", sym, exc)
-                    return sym, None
+                    board_cache.set(sym, None, ttl=60)
+                    return None
             groups = profile.get("board_groups") or {}
             ref = main_board(groups, profile.get("board_codes") or {})
             # A missing ref may be an optional F10 fetch failure. Suppress repeats
             # across batches briefly, while keeping proven identities for 6h.
-            board_cache.set(sym, ref, ttl=60 if ref is None else None)
-            return sym, ref
+            if ref is None:
+                board_cache.set(sym, None, ttl=60)
+            return ref
 
-        pairs = await asyncio.gather(*[_main_board(s) for s in sym_list])
-        from app.services.theme_service import board_rows_for_codes
+        # cache_none=False preserves the explicit short None entry above;
+        # successful identities get the original 6h TTL and in-flight sharing.
+        _, ref = await board_cache.get_or_set(sym, load)
+        return sym, ref
 
-        rows = await board_rows_for_codes([r["code"] for _, r in pairs if r and r.get("code")])
-        boards: dict[str, dict] = {}
-        for sym, ref in pairs:
-            if not ref:
-                continue  # 公司资料未证明归属，不从资金榜臆造
-            row = rows.get(ref.get("code")) or {}
-            boards[sym] = {
-                "board_name": row.get("name") or ref.get("name"),
-                "board_code": row.get("board_code") or ref.get("code"),
-                "kind": row.get("kind"),
-                "level": ref.get("level"),
-                "change_pct": row.get("change_pct"),
-                "main_net_yi": row.get("main_net_yi"),
-                "main_net_ratio": row.get("main_net_ratio"),
-                "streak": row.get("streak"),
-            }
-        return {
-            "boards": boards,
-            "note": None if boards else "所属板块资金暂不可用（公司资料或板块列表取不到）",
+    pairs = await asyncio.gather(*[_main_board(s) for s in sym_list])
+    from app.services.theme_service import board_rows_for_codes
+
+    rows = await board_rows_for_codes([r["code"] for _, r in pairs if r and r.get("code")])
+    boards: dict[str, dict] = {}
+    for sym, ref in pairs:
+        if not ref:
+            continue  # 公司资料未证明归属，不从资金榜臆造
+        row = rows.get(ref.get("code")) or {}
+        boards[sym] = {
+            "board_name": row.get("name") or ref.get("name"),
+            "board_code": row.get("board_code") or ref.get("code"),
+            "kind": row.get("kind"),
+            "level": ref.get("level"),
+            "change_pct": row.get("change_pct"),
+            "main_net_yi": row.get("main_net_yi"),
+            "main_net_ratio": row.get("main_net_ratio"),
+            "streak": row.get("streak"),
         }
-
-    _, payload = await cache.get_or_set(key, _build)
+    payload = {
+        "boards": boards,
+        "note": None if boards else "所属板块资金暂不可用（公司资料或板块列表取不到）",
+    }
     return {"data": payload, "meta": meta_payload(hub)}
 
 

@@ -145,9 +145,10 @@ async function request<T>(path: string, init: RequestInit, timeoutMs: number, op
   // 即使客户端看到失败/超时，写操作也可能已经提交。前后两侧都隔离旧读。
   if (!isRead) invalidateReads();
   try {
-    if (isRead && options.fresh) invalidateReads();
     const key = isRead ? readKey(path, init, timeoutMs) : null;
     if (key !== null) {
+      // Fresh bypasses this exact identity; unrelated reads keep their owners.
+      if (options.fresh) sharedReads.delete(key);
       const existing = sharedReads.get(key);
       if (existing) return await joinRead<T>(path, key, existing, signal);
       if (sharedReads.size < MAX_SHARED_READS) {

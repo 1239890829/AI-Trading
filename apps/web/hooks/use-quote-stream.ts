@@ -5,7 +5,8 @@ import { getQuotes, wsBase } from "@/lib/api";
 import { wsSubprotocols } from "@/lib/ws-credential";
 import type { Quote } from "@/types/market";
 
-export type StreamStatus = "connecting" | "live" | "polling" | "closed" | "stale" | "error";
+/** Communication only. Quote quality and trading phase belong to each Quote. */
+export type StreamStatus = "connecting" | "live" | "polling" | "error";
 
 /** One stream owner's immediate, symbol-scoped view. null means a received
  * frame omitted that subscribed symbol; undefined means no observation yet. */
@@ -51,19 +52,15 @@ function createQuoteFeed(symbols: string[]) {
 }
 
 /** 连接状态 → 界面文案（共享：工作台与个股详情同一套，避免两处文案漂移）。 */
-export const STREAM_STATUS_LABEL: Record<StreamStatus, { text: string; cls: string }> = {
-  connecting: { text: "连接中", cls: "text-zinc-600 dark:text-zinc-400" },
-  live: { text: "WS 实时推送", cls: "text-sky-700 dark:text-sky-400" },
-  polling: { text: "WS 断线 · REST 轮询", cls: "text-amber-800 dark:text-amber-400" },
-  closed: { text: "休市 · 展示最近交易日数据", cls: "text-zinc-600 dark:text-zinc-400" },
-  stale: { text: "行情待核 · 具体原因见质量提示", cls: "text-amber-800 dark:text-amber-400" },
-  error: { text: "连接失败", cls: "text-red-700 dark:text-red-400" },
+export const STREAM_STATUS_LABEL: Record<StreamStatus, { text: string; cls: string; title: string }> = {
+  connecting: { text: "连接中", cls: "text-zinc-600 dark:text-zinc-400", title: "正在建立WebSocket行情通道或等待第一帧；不代表已有新报价" },
+  live: { text: "已连接", cls: "text-zinc-600 dark:text-zinc-400", title: "WebSocket行情通道已收到市场帧；不代表源报价已更新" },
+  polling: { text: "备用读取", cls: "text-amber-800 dark:text-amber-400", title: "WebSocket尚未恢复，使用REST备用通道；源报价时效仍须单独核对" },
+  error: { text: "备用读取失败", cls: "text-red-700 dark:text-red-400", title: "REST备用读取失败，正在自动重试；保留已有报价，不声明时效已恢复" },
 };
 
-/** 需要常驻可见的异常态。live/closed 是"一切正常"的正常态，消费方不得常驻渲染
- * （2026-09-07 去掉休市提示、2026-09-08 用户反馈 live 同样去掉——正常态不留痕，
- * 数据过期已有 QuoteStrip 质量徽标兜底）。 */
-export const STREAM_ABNORMAL: readonly StreamStatus[] = ["connecting", "polling", "stale", "error"];
+/** Read quality never changes this transport label. */
+export const STREAM_ABNORMAL: readonly StreamStatus[] = ["connecting", "polling", "error"];
 
 /**
  * 行情流：优先 WebSocket（/ws/quotes），断线自动重连；
@@ -190,7 +187,10 @@ export function useQuoteStream(symbols: string[], opts?: { throttleMs?: number }
       pollInFlight = (async () => {
         try {
           const list = await getQuotes(requestedSymbols);
-          if (current()) apply(list);
+          if (current()) {
+            apply(list);
+            setStatus("polling");
+          }
         } catch {
           if (current()) setStatus("error");
         } finally {
@@ -284,23 +284,22 @@ export function useQuoteStream(symbols: string[], opts?: { throttleMs?: number }
       }, 6000);
       // 半死连接防御（2026-09-01 实测：后端 pong 与推送并发写曾致 writer 静默死亡，
       // 连接 open、ping 有应答、但推送为零——列表冻结在初始值。后端已改为单点发送；
-      // 这里再加客户端自愈：32s（2 个心跳周期）内没收到任何消息就主动断开重连，
+      // 这里再加客户端自愈：32s（2 个心跳周期）内没有合法行情帧就断开重连，pong 不续命；
       // 重连失败 3 次自然落入 REST 轮询兜底）
-      let lastMsgAt = Date.now();
+      let lastFrameAt = Date.now();
+      let receivedMarketFrame = false;
+      const openingKey = [...symbolsRef.current].sort().join(",");
       ws.onopen = () => {
         if (closed || wsRef.current !== ws) return;
         clearOpenTimer();
-        retry = 0;
-        stopPolling();
-        lastMsgAt = Date.now();
-        setSentKey(""); // 新 socket 允许下一次 key 变化时重发订阅
-        // A new connection supersedes the previous socket's deferred label.
-        // Its first snapshot does not itself emit a live status.
-        if (hidden()) deferredStatus = "live";
-        else { deferredStatus = null; setStatus("live"); }
+        lastFrameAt = Date.now();
+        // The URL already subscribed this set. A set changed while connecting
+        // is reconciled by the existing subscription effect, on this socket.
+        setSentKey(openingKey);
+        // A handshake alone neither proves market delivery nor recovers REST.
         pingTimer = setInterval(() => {
           if (wsRef.current && wsRef.current.readyState === WebSocket.OPEN) {
-            if (Date.now() - lastMsgAt > 32_000) {
+            if (Date.now() - lastFrameAt > 32_000) {
               wsRef.current.close(); // 触发 onclose 重连
               return;
             }
@@ -310,27 +309,23 @@ export function useQuoteStream(symbols: string[], opts?: { throttleMs?: number }
       };
       ws.onmessage = (ev) => {
         if (closed || wsRef.current !== ws) return;
-        lastMsgAt = Date.now();
         try {
           const msg = JSON.parse(ev.data as string) as { type: string; data?: Quote[] };
-          // stale：后端推送 quality=stale 的缓存数据（休市 market_closed / 刷新失败），
-          // 必须覆盖渲染以显示过期标识。注意这与"WS 断线"无关——消息本身说明连接是通的：
-          // 休市显示"休市"，刷新失败显示"数据过期"；恢复 quotes 推送时切回 live
-          // （2026-09-01 修复：原实现把 stale 误标成 polling，且开盘后永不恢复 live）。
-          if ((msg.type === "snapshot" || msg.type === "quotes" || msg.type === "stale") && msg.data) {
+          // All three frames prove communication, including an explicit empty
+          // full snapshot. Per-symbol stale/closed/missing facts stay in the feed.
+          if ((msg.type === "snapshot" || msg.type === "quotes" || msg.type === "stale") && Array.isArray(msg.data)) {
             const selected = new Set(symbolsRef.current);
             const currentData = msg.data.filter(quote => selected.has(quote.symbol));
             if (msg.data.length && !currentData.length) return;
-            apply(currentData);
-            const closedData = currentData.some((q) => q.quality_reasons?.includes("market_closed"));
-            // A reconnect snapshot may itself contain a failed-refresh cache.
-            // Its real quality must supersede the transport's onopen=live.
-            const staleSnapshot = msg.type === "snapshot" && currentData.some(q => q.quality === "stale");
-            const nextStatus = closedData ? "closed" : msg.type === "stale" || staleSnapshot ? "stale" : msg.type === "quotes" ? "live" : null;
-            if (nextStatus !== null) {
-              if (hidden()) deferredStatus = nextStatus;
-              else {deferredStatus = null; setStatus(nextStatus);}
+            lastFrameAt = Date.now();
+            if (!receivedMarketFrame) {
+              receivedMarketFrame = true;
+              retry = 0;
+              stopPolling();
             }
+            apply(currentData);
+            if (hidden()) deferredStatus = "live";
+            else {deferredStatus = null; setStatus("live");}
           }
         } catch {}
       };
@@ -343,6 +338,10 @@ export function useQuoteStream(symbols: string[], opts?: { throttleMs?: number }
         if (closed) return;
         retry += 1;
         if (retry >= 3) startPolling();
+        else if (!polling) {
+          if (hidden()) deferredStatus = "connecting";
+          else setStatus("connecting");
+        }
         reconnectTimer = setTimeout(() => void connect(), Math.min(1000 * 2 ** retry, 10000));
       };
       ws.onerror = () => {
