@@ -85,7 +85,7 @@ vi.mock("@/components/kline-chart-pro", () => ({
   KlineChartPro: ({ bars, costPrice, tradeMarks }: { bars: Kline[]; costPrice?: number | null; tradeMarks?: PaperFill[] }) => <div data-testid="kline-price" data-cost-price={costPrice ?? "none"} data-fill-count={tradeMarks?.length ?? 0}>{bars.at(-1)?.close}</div>,
 }));
 vi.mock("@/components/minute-chart", () => ({
-  MinuteChart: ({ points, index }: { points: MinutePoint[]; index?: {points: MinutePoint[]; prevClose?: number} | null }) => <div data-testid="minute-price" data-index-last={index?.points.at(-1)?.price ?? "none"} data-index-clock={index?.points.at(-1)?.ts ?? "none"} data-index-prev-close={index?.prevClose ?? "none"} data-avg={points.at(-1)?.avg ?? "none"}>{points.at(-1)?.price}</div>,
+  MinuteChart: ({ points, index, prevClose, referenceDate, upperPrice, lowerPrice }: { points: MinutePoint[]; index?: {points: MinutePoint[]; prevClose?: number} | null; prevClose?: number | null; referenceDate?: string | null; upperPrice?: number | null; lowerPrice?: number | null }) => <div data-testid="minute-price" data-index-last={index?.points.at(-1)?.price ?? "none"} data-index-clock={index?.points.at(-1)?.ts ?? "none"} data-index-prev-close={index?.prevClose ?? "none"} data-avg={points.at(-1)?.avg ?? "none"} data-prev-close={prevClose ?? "none"} data-reference-date={referenceDate ?? "none"} data-upper-price={upperPrice ?? "none"} data-lower-price={lowerPrice ?? "none"}>{points.at(-1)?.price}</div>,
 }));
 
 const audit = { source: "tdx", quality: "high" as const, quality_reasons: [], received_at: "2026-10-09T02:00:00Z" };
@@ -1575,5 +1575,121 @@ describe("StockDetailPanel · 已有指数观察驱动一次恢复校准", () =>
     view.rerender(<StockDetailPanel symbol="600127" chartTab="minute" indexQuote={indexQuote("2026-10-12T10:00:02+08:00")}/>); await settle();
     expect(api.getMinuteLine).toHaveBeenCalledTimes(reads);
     expect(view.getByRole("alert")).toBeTruthy();
+  });
+});
+
+
+describe("StockDetailPanel · 首次报价与真实恢复", () => {
+  const firstQuote = (symbol = "600519"): Quote => ({...audit, symbol, source: "tencent", name: "首报证券", price: 22, data_timestamp: "2026-10-09T02:00:30Z"});
+
+  it("空首帧后REST成功不假称已有报价待恢复，收到真实live后缺帧仍提醒", async () => {
+    const feed = testQuoteFeed(); feed.publish("600519", null);
+    api.getQuote.mockResolvedValue(firstQuote());
+    const view = render(<StockDetailPanel symbol="600519" quoteFeed={feed} streamStatus="live"/>);
+    await settle();
+    expect(view.container.querySelector(".quote-sheet")?.textContent).toContain("22.00");
+    expect(view.queryByRole("button", {name: "查看行情问题"})).toBeNull();
+    expect(api.getQuote).toHaveBeenCalledTimes(1);
+    await act(async () => {feed.publish("600519", {...firstQuote(), price: 23});});
+    await act(async () => {feed.publish("600519", null);});
+    expect(view.getByRole("button", {name: "查看行情问题"}).textContent).toBe("报价待恢复");
+    expect(view.container.querySelector(".quote-sheet")?.textContent).toContain("23.00");
+    expect(api.getQuote).toHaveBeenCalledTimes(1);
+    expect(api.getNewsDigest).not.toHaveBeenCalled();
+  });
+
+  it("首报REST仍在途时保留加载态，失败后保留真实不可用", async () => {
+    const request = deferred<Quote>(); api.getQuote.mockReturnValueOnce(request.promise);
+    const feed = testQuoteFeed(); feed.publish("600519", null);
+    const view = render(<StockDetailPanel symbol="600519" quoteFeed={feed} streamStatus="live"/>);
+    await settle();
+    expect(view.queryByText(/行情数据暂不可用/)).toBeNull();
+    expect(view.queryByText("报价待恢复")).toBeNull();
+    await act(async () => {request.reject(new Error("isolated initial quote failure"));});
+    expect(view.getByText(/行情数据暂不可用/)).toBeTruthy();
+    expect(api.getQuote).toHaveBeenCalledTimes(1);
+    expect(api.getNewsDigest).not.toHaveBeenCalled();
+  });
+
+  it("同一证券第一次空快照和第二次暖快照不会虚构不同故障状态", async () => {
+    const current = firstQuote(); api.getQuote.mockResolvedValue(current);
+    const cold = testQuoteFeed(); cold.publish("600519", null);
+    const first = render(<StockDetailPanel symbol="600519" quoteFeed={cold} streamStatus="live"/>);
+    await settle();
+    expect(first.queryByRole("button", {name: "查看行情问题"})).toBeNull();
+    first.unmount();
+    const warm = testQuoteFeed(); warm.publish("600519", current);
+    const second = render(<StockDetailPanel symbol="600519" quoteFeed={warm} streamStatus="live"/>);
+    await settle();
+    expect(second.queryByRole("button", {name: "查看行情问题"})).toBeNull();
+    expect(second.container.querySelector(".quote-sheet")?.textContent).toContain("22.00");
+    expect(api.getQuote).toHaveBeenCalledTimes(2);
+    expect(api.getNewsDigest).not.toHaveBeenCalled();
+  });
+
+  it("另一证券首次空帧不借用上一证券的恢复状态", async () => {
+    const feed = testQuoteFeed(); feed.publish("600519", firstQuote());
+    api.getQuote.mockImplementation(async (symbol: string) => firstQuote(symbol));
+    const view = render(<StockDetailPanel symbol="600519" quoteFeed={feed} streamStatus="live"/>);
+    await settle();
+    feed.publish("000001", null);
+    view.rerender(<StockDetailPanel symbol="000001" quoteFeed={feed} streamStatus="live"/>);
+    await settle();
+    expect(view.queryByRole("button", {name: "查看行情问题"})).toBeNull();
+    expect(view.container.querySelector(".quote-sheet")?.textContent).toContain("000001");
+    expect(api.getQuote).toHaveBeenCalledTimes(2);
+    expect(api.getNewsDigest).not.toHaveBeenCalled();
+  });
+
+  it.each(["missing", "unobserved"])("切股后%s首帧与REST在途/失败均不保留旧证券报价和限价", async frame => {
+    const request = deferred<Quote>();
+    const first = {...firstQuote(), prev_close: 20, limit_up_price: 22, limit_down_price: 18};
+    api.getQuote.mockImplementation((symbol: string) => symbol === "600519" ? Promise.resolve(first) : request.promise);
+    const feed = testQuoteFeed(); feed.publish("600519", first);
+    const view = render(<StockDetailPanel symbol="600519" chartTab="minute" quoteFeed={feed} streamStatus="live"/>);
+    await settle();
+    expect(view.container.querySelector(".quote-sheet")?.textContent).toContain("600519");
+    if (frame === "missing") feed.publish("000001", null);
+    view.rerender(<StockDetailPanel symbol="000001" chartTab="minute" quoteFeed={feed} streamStatus="live"/>);
+    await settle();
+    expect(view.container.querySelector(".quote-sheet")).toBeNull();
+    expect(view.queryByText(/行情数据暂不可用/)).toBeNull();
+    expect(view.queryByText("报价待恢复")).toBeNull();
+    const chart = view.getByTestId("minute-price");
+    for (const name of ["prev-close", "reference-date", "upper-price", "lower-price"]) expect(chart.getAttribute(`data-${name}`)).toBe("none");
+    await act(async () => {request.reject(new Error("isolated next symbol quote failure"));});
+    expect(view.getByText(/行情数据暂不可用/)).toBeTruthy();
+    expect(api.getQuote).toHaveBeenCalledTimes(2);
+    expect(api.getNewsDigest).not.toHaveBeenCalled();
+  });
+
+  it("A→B→A复用同一缓存报价对象仍重新接纳A，不继承B的在途或失败状态", async () => {
+    const pendingB = deferred<Quote>();
+    const currentA = firstQuote();
+    api.getQuote.mockImplementation((symbol: string) => symbol === "600519" ? Promise.resolve(currentA) : pendingB.promise);
+    const feed = testQuoteFeed(); feed.publish("600519", currentA); feed.publish("000001", null);
+    const view = render(<StockDetailPanel symbol="600519" quoteFeed={feed} streamStatus="live"/>);
+    await settle();
+    view.rerender(<StockDetailPanel symbol="000001" quoteFeed={feed} streamStatus="live"/>);
+    await settle();
+    view.rerender(<StockDetailPanel symbol="600519" quoteFeed={feed} streamStatus="live"/>);
+    await settle();
+    expect(view.container.querySelector(".quote-sheet")?.textContent).toContain("600519");
+    expect(view.container.querySelector(".quote-sheet")?.textContent).toContain("22.00");
+    await act(async () => {pendingB.reject(new Error("old B failure"));});
+    expect(view.queryByText(/行情数据暂不可用/)).toBeNull();
+    expect(view.queryByText("报价待恢复")).toBeNull();
+    expect(api.getQuote).toHaveBeenCalledTimes(3);
+    expect(api.getNewsDigest).not.toHaveBeenCalled();
+  });
+
+  it.each(["stale", "invalid"] as const)("首次真实%s行情保留质量问题，不能当成正常首报", async quality => {
+    const feed = testQuoteFeed();
+    feed.publish("600519", {...firstQuote(), quality, quality_reasons: [quality === "stale" ? "refresh_failed" : "price_nonpositive"]});
+    const view = render(<StockDetailPanel symbol="600519" quoteFeed={feed} streamStatus="live"/>);
+    await settle();
+    expect(view.container.querySelector(`[data-quality=${quality}]`)).toBeTruthy();
+    expect(view.getByRole("button", {name: "查看行情问题"}).textContent).not.toBe("报价待恢复");
+    expect(api.getNewsDigest).not.toHaveBeenCalled();
   });
 });

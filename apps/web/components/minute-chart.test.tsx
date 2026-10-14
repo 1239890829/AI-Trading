@@ -1,5 +1,7 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { act, cleanup, fireEvent, render, screen } from "@testing-library/react";
+import { hydrateRoot } from "react-dom/client";
+import { renderToString } from "react-dom/server";
 import { MinuteChart } from "./minute-chart";
 import type { MinutePoint } from "@/lib/api";
 import { mergeQuoteIntoMinutes } from "@/lib/kline-live";
@@ -7,17 +9,19 @@ import type { Quote } from "@/types/market";
 
 const charts = vi.hoisted(() => [] as ReturnType<typeof makeChart>[]);
 type Options = Record<string, unknown> & { autoscaleInfoProvider?: () => { priceRange: { minValue: number; maxValue: number } } };
+type SeriesPoint = { time: number; value?: number; color?: string };
 function makeSeries(kind: string, options: Options) {
   const opts = { ...options };
   return {
-    kind, opts, values: [] as { time: number; value?: number }[],
+    kind, opts, values: [] as SeriesPoint[],
     applyOptions: vi.fn((next: Options) => { Object.assign(opts, next); }),
-    setData(values: { time: number; value?: number }[]) { this.values = values; },
+    setData: vi.fn(function(this: { values: SeriesPoint[] }, values: SeriesPoint[]) { this.values = values; }),
     createPriceLine: vi.fn((opts: Options) => ({ opts, applyOptions: vi.fn() })),
   };
 }
 function makeChart(opts: Options) {
   const series: ReturnType<typeof makeSeries>[] = [];
+  const timeScale = { fitContent: vi.fn(), setVisibleLogicalRange: vi.fn() };
   const add = (kind: string, opts: Options) => {
     const s = makeSeries(kind, opts); series.push(s); return s;
   };
@@ -28,7 +32,7 @@ function makeChart(opts: Options) {
     addLineSeries: (opts: Options) => add("line", opts),
     addHistogramSeries: (opts: Options) => add("volume", opts),
     priceScale: () => ({ applyOptions: vi.fn(), width: () => 68 }),
-    timeScale: () => ({ fitContent: vi.fn(), setVisibleLogicalRange: vi.fn() }),
+    timeScale: () => timeScale,
     subscribeCrosshairMove: vi.fn(), unsubscribeCrosshairMove: vi.fn(),
     clearCrosshairPosition: vi.fn(), setCrosshairPosition: vi.fn(),
   };
@@ -43,6 +47,102 @@ const point = (price: number, minute = "30", avg: number | null = null, day = "1
   ts: `2026-09-${day}T09:${minute}:00+08:00`, price, avg, source: "test_fixture",
 });
 const range = (s: ReturnType<typeof makeSeries>) => s.opts.autoscaleInfoProvider?.().priceRange;
+
+describe("MinuteChart 首提交主题工作", () => {
+  beforeEach(() => document.documentElement.classList.remove("dark"));
+  afterEach(() => document.documentElement.classList.remove("dark"));
+  const core = (chart: ReturnType<typeof makeChart>) => chart.series.filter(series => series.opts.lineStyle !== 3);
+
+  it.each([{ theme: "dark", base: 10 }, { theme: "light", base: 10 }, { theme: "light", base: null }])(
+    "$theme／参考价$base首建直接完整填入，只跳过已应用的同主题工作", ({ theme, base }) => {
+      document.documentElement.classList.toggle("dark", theme === "dark");
+      render(<MinuteChart points={[{ ...point(10), volume: 1000 }, { ...point(11, "31", 10.5), volume: 2000 }]} prevClose={base} />);
+      expect(charts).toHaveLength(1);
+      expect(charts[0].opts).toMatchObject({ autoSize: true });
+      for (const series of core(charts[0])) expect(series.setData).toHaveBeenCalledOnce();
+      expect(charts[0].series[0].values.some(value => value.value === 11)).toBe(true);
+      expect(charts[0].applyOptions).not.toHaveBeenCalled();
+    },
+  );
+
+  it("真实换主题仍重染量柱、主线、指数、竞价、事件和三条价格线，保留缩放", async () => {
+    document.documentElement.classList.add("dark");
+    render(<MinuteChart
+      points={[{ ...point(10), volume: 1000 }, { ...point(11, "31", 10.5), volume: 2000 }]}
+      prevClose={10} upperPrice={11} lowerPrice={9}
+      auction={{ price: 9.5, pct: -5 }}
+      index={{ prevClose: 3000, points: [point(3000), point(3030, "31")] }}
+      newsEvents={[{ hhmm: "09:31", title: "fixture", count: 1, important: true }]}
+    />);
+    const chart = charts[0];
+    for (const series of chart.series) series.setData.mockClear();
+    chart.timeScale().setVisibleLogicalRange.mockClear();
+    await act(async () => { document.documentElement.classList.remove("dark"); });
+    expect(charts).toHaveLength(1);
+    expect(chart.remove).not.toHaveBeenCalled();
+    expect(chart.applyOptions).toHaveBeenCalledExactlyOnceWith(expect.objectContaining({ layout: { textColor: "#52525b" } }));
+    expect(chart.series[0].opts.topLineColor).toBe("#dc2626");
+    expect(chart.series.find(series => series.kind === "volume")?.values).toEqual(expect.arrayContaining([expect.objectContaining({ value: 2000, color: "rgba(220,38,38,0.8)" })]));
+    expect(chart.series.find(series => series.opts.lineStyle === 3)?.opts.color).toBe("#7c3aed");
+    expect(chart.series.find(series => series.opts.pointMarkersRadius === 4)?.opts.color).toBe("#b45309");
+    expect(chart.series.find(series => series.opts.pointMarkersRadius === 3.5)?.opts.color).toBe("#0369a1");
+    const priceLines = chart.series[0].createPriceLine.mock.results.map(result => result.value);
+    expect(priceLines).toHaveLength(3);
+    expect(priceLines[0].applyOptions).toHaveBeenCalledExactlyOnceWith({ color: "rgba(113,113,122,0.8)" });
+    expect(priceLines[1].applyOptions).toHaveBeenCalledExactlyOnceWith({ color: "rgba(220,38,38,0.85)" });
+    expect(priceLines[2].applyOptions).toHaveBeenCalledExactlyOnceWith({ color: "rgba(4,120,87,0.85)" });
+    expect(chart.timeScale().setVisibleLogicalRange).not.toHaveBeenCalled();
+  });
+
+  it("无基准、基准晚到、基准变化、跨日和日期失效均为新图完整首填", () => {
+    const points = [point(10), point(11, "31")];
+    const view = render(<MinuteChart points={points} prevClose={null} referenceDate="2026-09-17" />);
+    view.rerender(<MinuteChart points={points} prevClose={10} referenceDate="2026-09-17" />);
+    view.rerender(<MinuteChart points={points} prevClose={11} referenceDate="2026-09-17" />);
+    const tomorrow = [point(12, "30", null, "18")];
+    view.rerender(<MinuteChart points={tomorrow} prevClose={11} referenceDate="2026-09-18" />);
+    view.rerender(<MinuteChart points={tomorrow} prevClose={11} referenceDate={null} />);
+    expect(charts).toHaveLength(5);
+    for (const chart of charts) for (const series of core(chart)) expect(series.setData).toHaveBeenCalledOnce();
+    expect(charts[1].series[0].opts.baseValue).toEqual({ type: "price", price: 10 });
+    expect(charts[2].series[0].opts.baseValue).toEqual({ type: "price", price: 11 });
+    expect(charts[3].series[0].values.some(value => value.value === 12)).toBe(true);
+    expect(charts[4].series[0].opts.baseValue).toBeUndefined();
+    for (const chart of charts.slice(0, -1)) expect(chart.remove).toHaveBeenCalledOnce();
+  });
+
+  it("后续数据与迟到指数继续原位更新，旧主题记录不抑制数据更新", () => {
+    const initial = [point(10)];
+    const view = render(<MinuteChart points={initial} prevClose={10} />);
+    const chart = charts[0];
+    for (const series of chart.series) series.setData.mockClear();
+    chart.timeScale().setVisibleLogicalRange.mockClear();
+    const next = [point(10), point(10.5, "31")];
+    view.rerender(<MinuteChart points={next} prevClose={10} />);
+    for (const series of core(chart)) expect(series.setData).toHaveBeenCalledOnce();
+    view.rerender(<MinuteChart points={next} prevClose={10} index={{ prevClose: 3000, points: [point(3030, "31")] }} />);
+    expect(charts).toHaveLength(1);
+    expect(chart.series[0].values.some(value => value.value === 10.5)).toBe(true);
+    expect(chart.series.find(series => series.opts.lineStyle === 3)?.values.some(value => value.value === 1)).toBe(true);
+    for (const series of core(chart)) expect(series.setData).toHaveBeenCalledOnce();
+    expect(chart.timeScale().setVisibleLogicalRange).not.toHaveBeenCalled();
+  });
+
+  it("浅色DOM hydration首次填色即正确，不为服务端主题快照再次重灌", async () => {
+    const element = <MinuteChart points={[point(10), { ...point(11, "31", 10.5), volume: 2000 }]} prevClose={10} />;
+    const container = document.createElement("div");
+    container.innerHTML = renderToString(element); document.body.appendChild(container);
+    let root: ReturnType<typeof hydrateRoot> | undefined;
+    try {
+      await act(async () => { root = hydrateRoot(container, element); });
+      expect(charts).toHaveLength(1);
+      for (const series of core(charts[0])) expect(series.setData).toHaveBeenCalledOnce();
+      expect(charts[0].series.find(series => series.kind === "volume")?.setData.mock.calls[0][0]).toEqual(expect.arrayContaining([expect.objectContaining({ color: "rgba(220,38,38,0.8)" })]));
+    } finally {
+      await act(async () => { root?.unmount(); }); container.remove();
+    }
+  });
+});
 
 const restMinutes: MinutePoint[] = [
   { ts: "2026-10-09T09:59:00+08:00", price: 104.8, avg: 104.8, volume: 100_000, cum_volume: 900_000, cum_amount: 94_320_000, source: "tencent" },
