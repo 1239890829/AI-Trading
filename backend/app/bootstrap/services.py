@@ -69,17 +69,24 @@ class AppServices:
         from app.core.scheduler import SHUTDOWN_GRACE_SECONDS
         import asyncio
 
-        with contextlib.suppress(Exception, TimeoutError):
-            from app.core.inflight_reads import close_inflight_reads
+        from app.core.inflight_reads import close_inflight_reads
+        from app.market import board_flow
+
+        try:
+            await close_inflight_reads(board_flow)
+        finally:
             try:
-                await close_inflight_reads(self.provider)
+                with contextlib.suppress(Exception, TimeoutError):
+                    try:
+                        await close_inflight_reads(self.provider)
+                    finally:
+                        await asyncio.wait_for(self.provider.aclose(), timeout=SHUTDOWN_GRACE_SECONDS)
             finally:
-                await asyncio.wait_for(self.provider.aclose(), timeout=SHUTDOWN_GRACE_SECONDS)
-        if self.theme_catalog is not None:
-            with contextlib.suppress(Exception, TimeoutError):
-                await asyncio.wait_for(
-                    self.theme_catalog.aclose(), timeout=SHUTDOWN_GRACE_SECONDS
-                )
+                if self.theme_catalog is not None:
+                    with contextlib.suppress(Exception, TimeoutError):
+                        await asyncio.wait_for(
+                            self.theme_catalog.aclose(), timeout=SHUTDOWN_GRACE_SECONDS
+                        )
 
 
 def build_services(app: FastAPI) -> AppServices:
@@ -88,6 +95,9 @@ def build_services(app: FastAPI) -> AppServices:
     ⚠️ 本函数只做「构造 + 挂 state」。常驻任务的声明在 `schedulers.py`，
     两者分开是为了让"进程里有哪些服务"与"跑着哪些循环"各自可读。
     """
+    from app.market import board_flow
+
+    board_flow.start_board_read_lifecycle()
     session_factory = get_session_factory()
 
     # schema 唯一归 alembic 管（B5）：三态 stamp-or-upgrade 替代裸 create_all

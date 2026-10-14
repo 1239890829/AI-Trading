@@ -36,6 +36,7 @@ from collections.abc import Iterable
 from datetime import date, timedelta
 
 from app.core.bjtime import beijing_today
+from app.core.inflight_reads import read_inflight
 from app.market import board_flow
 from app.services.dragon_service import (
     dragon_score,
@@ -866,6 +867,14 @@ def match_board(theme: str, index: dict[str, dict]) -> dict | None:
 
 
 async def _board_index() -> dict[str, dict]:
+    # Sharing each kind separately misses a fast industry failure while the
+    # same index construction is still waiting for concept. Retain that entire
+    # active cohort only; completion (including failure) is never cached here.
+    identity = tuple(board_flow.board_list_read_identity(kind) for kind in ("industry", "concept"))
+    return await read_inflight(board_flow, ("theme-board-index", identity), _load_board_index)
+
+
+async def _load_board_index() -> dict[str, dict]:
     """板块指标索引：题材名 → 板块指标。行业优先占位，概念补足。
 
     走 board_flow 唯一入口（板块数据治理规则：任何模块不得自行请求东财板块

@@ -750,6 +750,7 @@ def test_market_break_rate_zero_limit_up_is_none():
 def _patch_boards(monkeypatch, industry, concept, streaks):
     """桩掉 board_flow 的板块列表与落盘 streak（L3 层只依赖这两个出口）。"""
     from app.market import board_flow as bf
+    monkeypatch.setattr(bf, "_inflight_source_reads", None, raising=False)
 
     async def fake_list(kind):
         return (industry if kind == "industry" else concept), []
