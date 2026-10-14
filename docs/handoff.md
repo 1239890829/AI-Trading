@@ -8,22 +8,20 @@
 
 - **当前主门**：G4
 - **主切片首选**：IMP-019
-- **候选顺位与执行边界**：IMP-019；此前清理/读链/指数纠偏已由PR #272/273发布并加载。本轮用户明确扩展系统根因、DeepSeek、依赖积压、选股、原因/详情/通知及指数对齐。
-- **基点与分支**：origin/master `e4356ef63f3f6b5b804d0f057cbaec1119c9b8fb`，`codex/system-quality-fix`；主树两份未跟踪evolution保留。
-- **获准范围**：完整系统根因读查与已复现修补：归因主线索/neutral journal、详情驱动抽屉/右列Tab/做T退出、通知短阅读/正常BJ时钟/指数对齐，以及六依赖PR的兼容处置。保持原模型、源序、预算、时效、完整性、选股公式及通知资格；不恢复Jev/Decisions/KEV/REA。
-- **实际运行基线**：2026-10-13 20:27已激活PR #273/master e4356ef6：8000单实例PID83948、3000生产构建fOC5Y95YZY2NBhJiZBsft/PID84873。PR及post-master三job均成功、功能分支清理；本轮质量整改尚未加载，新准确HEAD发布和运行切换另录。
-- **证据状态**：20:51盘后纯读providers/health/metrics，指数完整覆盖且方法累计332进入/332返回/0fail，但不是新窗HTTP分母或新版效果。当前最终本地后端5278 passed/81 skipped/164.56s；前端默认/UTC各1510通过/134文件（102.52/96.91s），tsc、ESLint（0error/2既有warning）、Next16.3.8生产构建通过。真实组件桌面/390/320已验；准确HEAD CI/运行加载尚待发布回执。[报告§14](system/runtime-performance.md#14-2026-10-13-系统质量归因与阅读整批整改)保留各处根因/改法和未测条件。
+- **候选顺位与执行边界**：仅IMP-019；用户授权2026-10-14两次真实交易观察，并追加指数叠加读取失败。前批PR #274质量整改已发布，旧e435/PID字段是历史，当前以本节与§9为准。
+- **基点与分支**：origin/master `eef60f026792658de7b0701f312c3be2fb9f380e`，`codex/index-overlay-session-fix`；主树两份未跟踪evolution保留。
+- **获准范围**：09:35/13:35各五分钟、单专用Chrome页/原生Performance、所有失败与未知如实计量；已实源复现的休市历史叠加误拒做最小前端修补。保持模型、源序、预算、时效、完整性、选股公式及通知资格；不恢复Jev/Decisions/KEV/REA。
+- **发布前运行基线**：2026-10-14 07:32正常重启后：8000单实例PID4059，3000生产构建g5bssMRRQPHLj5gZeS37G/PID4090，Next16.3.8；PR #274/master eef60f02及post-master三job已成功。叠加修补的准确HEAD发布、仅前端单实例切换和窗口实际身份以本批激活回执另录，不把源码HEAD当运行版本。
+- **证据状态**：08:08:35两GET200与原loader冻结实源回放证实休市stale基准误拒；不是供应商超时。修补最终后端5278通过/81跳过，前端默认/UTC各1557通过，tsc/ESLint/build通过；完整门不替代准确HEAD发布或两窗。前批5278/81跳过、前端默认/UTC各1510及build只属于PR #274，不能借作当前门。证据与限制见[报告§15](system/runtime-performance.md#15-2026-10-14-真实交易验证与指数历史叠加)。
 - **U50 降级授权回执**：2026-09-24 DEGRADED_FULL_CONTROL未撤销；作者自审和协作反证不冒充独立网页Review。每个PR准确HEAD另有DegradedRelease。
 
 ## 2. U49 主动审计回执 / Preflight
 
-原版Impeccable按Operate/clarify/harden核信息、状态和触屏；Leon原版redesign按Scan→Diagnose→Fix核既有产品，不强套营销页；Interaction Design核焦点、退出、抽屉、不冒泡和阅读连续性。Governor区分工程、真实运行与前向效果，不用Stars或新依赖代替收益证据。
+本轮原版Impeccable先context，再harden/craft-floor，作用于现有工作台的历史/错误/重试，不重设计页面、不恢复旧融合技能。Governor区分工程、历史回放、真实运行与前向效果，不把盘前样本写成盘中SLO。
 
-先核现役e435基线、纯读health/provider/metrics/库记录；不追加生产选股、模型、消息、WS或回补。明确LIMIT前有效资料/公司关系、来源与版本绑定、neutral理由留痕、窄否定反例及未知时间；右侧Tabs/抽屉保持图表空间，通知完整条件一次可读。退役T专属读写和导航，旧数据/迁移及通用日内功能保留。六旧PR全部为依赖，旧CI不当新准入；failed Tailwind4不盲合，采用当前消费者兼容patch并保留braces残余。
+先核最新master/eef60f02、当前构建/PID与日历；指数叠加故障取两个既有读面并按额外观察请求独立记账。反证核旧closed冻结到开盘、来源/身份/时区、同日与未来分钟、真实失败混入闭市、空结果、保留旧图/重试和隐藏晚回；实时helper与原频率/质量不变。源数据/生产库/选股/消息不改，不为测试触发模型或新WS客户端。两次实盘窗口前重冻准确运行版本，未测项保留未知。
 
-第一轮协作反证补齐foreign输入版本、纯价量/天气驱动边界、过期/传闻/观点挤占、触屏节选提示、非主neutral单条可见性、普通时间及右Tab旧display覆盖。关闭已复现反例不代表全量财经判读准确。工程完整门失败先改新时区fixture，保留原权威守卫，不贴豁免。作者及协作者检查不是独立网页Review，准确HEAD另走DegradedRelease。
-
-全批计划与长证据在忽略artifacts/runs/system-quality-20261013，现役根因及各位置见[报告§14](system/runtime-performance.md#14-2026-10-13-系统质量归因与阅读整批整改)。实际组件Canvas/桌面/320/390与全门/发布/运行分层取证。IMP-019真实新版交易窗、分段尾延迟/源龄/锁线程/设备trace与人工gold不伪写完成；当天下午错过且临时跟进已停用。
+作者及协作反证不是独立Review；本轮走准确HEAD的DegradedRelease/完整门/required CI/release_check/post-master及运行切换。此前13日下午错过不补造；14日只执行两次后停用跟进。
 
 ## 3. 验收与恢复
 
@@ -72,3 +70,15 @@ PR #271/075f49d0首次CI单项助手sources为空，其他5228 passed/81 skipped
 恢复仅本批Git差异和切换前正式构建；旧T表/迁移/档案及用户两份evolution原件保留。发布后核新单实例、准确版本、纯读取端点和真实源状态；不为验收触发选股/通知/摘要模型/新WS。
 
 首轮PR #274 npm10安装失败已隔离复现并最小整改：统一parser7.1.6覆盖、lock不变、原两消费者兼容差分继续成立。npm10/11锁校验与npm10隔离实际安装通过；正常安装与最终完整门/新准确HEAD CI另录，不复用首轮HEAD回执。
+
+
+## 9. 2026-10-14 接续与盘前实源反例
+
+本节以Git、07:32重启回执和实际监听纠正§1的旧现场：当前origin/master eef60f026792658de7b0701f312c3be2fb9f380e，PR #274及post-master三job已成功；运行8000 PID4059、3000 PID4090，Next16.3.8/build g5bssMRRQPHLj5gZeS37G。两份用户evolution未跟踪原件保留。本轮施工分支codex/index-overlay-session-fix；准确HEAD发布/仅前端激活须有单独回执，不把源码工作树当运行版本。
+
+用户授权今天两次连续交易验证与单专用Chrome页，要求两次后汇总发现、根因、修复和未测；复用原imp-019，仅14日09:35/13:35，每窗五分钟，结束停用，不新增永久ping。采样和原生Performance准备已完成但尚无今天交易窗/trace；后台观察与页面流量分别记账，手机/内置浏览器没有真实记录则未测。collector SHA256及边界归artifacts/runs/live-performance-20261014/plan.md；不删除claim求重跑，版本变化重冻分段。
+
+08:08:35用户指数叠加报错的独立盘前诊断：两GET200，腾讯报价和242分钟点均10月13日，质量仅market_closed且服务closed；原loader实源回放在实时quality门误拒历史基准。修补仅狭窄历史叠加/明确日期与非实时，不改实时helper、质量、TTL/轮频、选股和通知。真实失败仍告警，旧closed上下文不能在竞价/连续交易放行，详见[报告§15](system/runtime-performance.md#15-2026-10-14-真实交易验证与指数历史叠加)。原版Impeccable scoped harden及工程/视觉/发布/运行验收分别留证，未取得不预写成功。
+
+
+本批最终本地工程证据：隔离后端5278/81跳过/312.08s、pyflakes，前端默认/UTC各1557/135文件（193.46/185.57s），tsc、ESLint（0error/2既有warning）、Next16.3.8构建。主树首个401测试与隔离同测通过对照保留，不放宽鉴权。作者/协作反证两边界已闭；前端辅助切换四条隔离故障模拟通过，不是生产执行或独立审核。最终文档/准确HEAD发布/运行/真实两窗仍逐层确认。
