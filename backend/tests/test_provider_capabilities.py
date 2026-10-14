@@ -47,12 +47,14 @@ def test_composite_public_methods_covered_by_every_source():
     UNSUPPORTED 也要列（"链上不会调它"本身是信息，盲区不是）；
     get_limit_up_ladder 是链外直调，允许是注册表多出的键。
     """
-    # composite 自有生命周期/观测面/本地配置面：不向数据源分发，不属于能力消费面。
+    # composite 自有生命周期/观测面/配置或组合编排面：不是同名上游数据接口。
     # - aclose / breaker_state / provider_health：喂 /api/system/providers
     # - budget_for（S2-3）：读本模块常量，纯本地计算，与"哪个源会什么"无关
+    # - recover_quote_regressions：组合层有界恢复，只复用已登记的get_quotes/get_indices；
+    #   各源不实现带Hub validator回调的同名接口，不能将它伪装为一项新源能力。
     # 新增公共方法时**必须在此显式登记或补进注册表**——这条断言就是为此存在的，
     # 别改成 `startswith("_")` 之外的通配（那会放过真正的漏登记）。
-    composite_own = {"aclose", "breaker_state", "provider_health", "budget_for"}
+    composite_own = {"aclose", "breaker_state", "provider_health", "budget_for", "recover_quote_regressions"}
     public = {
         name
         for name, obj in vars(CompositeProvider).items()

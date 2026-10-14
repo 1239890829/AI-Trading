@@ -17,7 +17,7 @@ export function QualityBadge(props: QuoteQualityInput & {compact?: boolean; alig
       data-quality={props.quality}
       title={visible ? view.title : undefined}
       aria-hidden={!visible || undefined}
-      className={`inline-flex w-[6.4em] max-w-full shrink-0 items-center whitespace-nowrap rounded py-0.5 ${props.align === "start" ? "justify-start px-0" : `justify-center ${props.compact ? "px-1" : "px-1.5"}`} ${props.compact ? "text-[10px]" : "text-xs"} ${visible ? TONES[view.tone] : ""}`}
+      className={`inline-flex w-[6.4em] max-w-full shrink-0 items-center whitespace-nowrap rounded py-0.5 ${props.align === "start" ? "justify-start px-0" : `justify-center ${props.compact ? "px-1" : "px-1.5"}`} ${props.compact ? "text-[10px]" : "text-xs"} ${visible ? view.expectedSession ? "text-amber-800 dark:text-amber-400" : TONES[view.tone] : ""}`}
     >
       {visible ? view.label : null}
     </span>

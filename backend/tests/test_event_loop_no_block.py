@@ -374,9 +374,9 @@ GUARDED_ROUTES: list[tuple[str, str, str, str]] = [
     ),
     (
         "app/api/routes/events.py",
-        "asyncio.to_thread(store.list_events, active_only=True, limit=300)",
+        "asyncio.to_thread(store.list_events, active_only=True, limit=limit,",
         "store.list_events",
-        "个股关联事件（limit 固定 300）——个股详情热路径，实测 21ms",
+        "个股关联事件（SQL先过滤该股关系及直接优先，再取有界页数）——个股详情热路径",
     ),
     (
         "app/api/routes/events.py",

@@ -1,6 +1,6 @@
 import {act, cleanup, fireEvent, render, screen, within} from "@testing-library/react";
 import {afterEach, beforeEach, describe, expect, it, vi} from "vitest";
-import {getEventAttribution, getStockAttribution, type AttributionEvidenceItem, type StockAttributionPayload} from "@/lib/api";
+import {getEventAttribution, getStockAttribution, type AttributionEvidenceItem, type StockAttributionPayload, type PrimaryAttributionReason} from "@/lib/api";
 import {AttributionEvidence, StockAttributionPanel} from "./attribution-evidence";
 
 vi.mock("@/lib/api", () => ({getStockAttribution: vi.fn(), getEventAttribution: vi.fn()}));
@@ -25,6 +25,68 @@ beforeEach(() => {vi.mocked(getStockAttribution).mockResolvedValue(payload());})
 afterEach(() => {cleanup(); vi.clearAllMocks(); vi.restoreAllMocks(); vi.useRealTimers();});
 
 describe("shared attribution evidence", () => {
+  it("inline原因默认展示绑定的已保存解读、全部关键条件与必要限制，不二跳、不默认铺弱关联", async () => {
+    const item: AttributionEvidenceItem = {...evidence, stock_relation: {...evidence.stock_relation, status: "direct_symbol", label: "直接关联"}, llm_aux: {event_id: 18, input_version_id: 21, observation_id: 19, direction: 0, theme: null, reason: "合成已保存解读：收购仍需审批", chain: "合成来源传导，尚未证实", evidence: {field: "summary", quote: "尚未完成审计"}, state: "no_direction", verification: "unverified", eligibility_changed: false}};
+    const primary: PrimaryAttributionReason = {status: "source_clue", label: "来源线索", reason: "直接关联待核", event_id: 18, version_id: 22, observation_id: 19, relation: "direct_symbol", timing_relation: "known_before_response", excerpt: {field: "summary", quote: "尚未完成审计", truncated: false}, qualifiers: [{kind: "approval", label: "需审批", matched_terms: []}], causality_verified: false, fact_verified: false, interpretation_view: "current"};
+    vi.mocked(getStockAttribution).mockResolvedValue({...payload("600825", item), primary_reason: {...primary, qualifiers: [...primary.qualifiers]}, items: [secondEvidence, item]});
+    render(<StockAttributionPanel symbol="600825" inlinePrimary sourceReason="拟收购"/>);
+    expect(await screen.findByText("合成已保存解读：收购仍需审批")).toBeTruthy();
+    expect(screen.getByText("合成来源传导，尚未证实")).toBeTruthy();
+    expect(screen.getByLabelText("原因与依据关系")).toBeTruthy();
+    expect(screen.queryByText(/尚属预案（拟）/)).toBeNull();
+    expect(screen.getByText("拟收购")).toBeTruthy();
+    expect(screen.getByText("需审批")).toBeTruthy();
+    expect(screen.getAllByText("未核实业务受益").length).toBeGreaterThan(0);
+    expect(screen.queryByText(secondEvidence.title)).toBeNull();
+    expect(screen.queryByRole("dialog")).toBeNull();
+    expect(screen.queryByRole("button", {name: "查看主线索完整依据"})).toBeNull();
+    expect(getStockAttribution).toHaveBeenCalledTimes(1);
+  });
+
+  it("原因首屏先判读和关系，再单列去重完整条件，审计与时点只在同一原文展开后出现", async () => {
+    const sentence = "拟收购欧康诺，交易尚需审批且未完成审计";
+    const item: AttributionEvidenceItem = {...evidence, stock_relation: {...evidence.stock_relation, status: "direct_symbol"}, source_context: {...evidence.source_context!, title: "收购进展", summary: `${sentence}。该业务收入不足总收入1%，预计暂不贡献利润。`}};
+    const primary: PrimaryAttributionReason = {status: "source_clue", label: "来源线索", reason: "待核", event_id: 18, version_id: 22, observation_id: 19, relation: "direct_symbol", timing_relation: "known_before_response", excerpt: {field: "summary", quote: sentence, truncated: false}, qualifiers: item.qualifiers, causality_verified: false, fact_verified: false, interpretation_view: "current"};
+    vi.mocked(getStockAttribution).mockResolvedValue({...payload("600825", item), primary_reason: primary});
+    render(<StockAttributionPanel symbol="600825" inlinePrimary sourceReason={`收购欧康诺；${sentence}。`} sourceAudit={<p>供应商完整原句与接收时点</p>}/>);
+    await screen.findByLabelText("原因与依据关系");
+    const conditions = screen.getByLabelText("必要条件");
+    expect(conditions.querySelector("ul")?.className).toContain("reasonConditions");
+    expect(within(conditions).getAllByText(sentence)).toHaveLength(1);
+    expect(within(conditions).getByText("该业务收入不足总收入1%，预计暂不贡献利润")).toBeTruthy();
+    expect(screen.getByLabelText("原因与依据关系").compareDocumentPosition(conditions) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
+    expect(screen.queryByText(/当前保存解释/)).toBeNull();
+    expect(screen.queryByText(/仅作展示关联核对/)).toBeNull();
+    expect(screen.queryByLabelText("关键来源时点")).toBeNull();
+    expect(screen.queryByText("供应商完整原句与接收时点")).toBeNull();
+    const details = screen.getByText("来源原文与完整核对").closest("details")!;
+    expect(document.querySelectorAll("details")).toHaveLength(1);
+    details.open = true;
+    fireEvent(details, new Event("toggle"));
+    expect(await screen.findByText("供应商完整原句与接收时点")).toBeTruthy();
+    expect(screen.getByLabelText("关键来源时点")).toBeTruthy();
+  });
+
+  it("inline绑定不匹配或仅题材关联时不把第一条新闻当原因", async () => {
+    vi.mocked(getStockAttribution).mockResolvedValue({...payload(), primary_reason: {status: "source_clue", label: "来源线索", reason: "待核", event_id: 18, version_id: 22, observation_id: 19, relation: "unknown", timing_relation: "time_unknown", excerpt: {field: "summary", quote: "尚未完成审计", truncated: false}, qualifiers: [], causality_verified: false, fact_verified: false, interpretation_view: "current"}});
+    render(<StockAttributionPanel symbol="600825" inlinePrimary sourceReason="拟收购"/>);
+    expect(await screen.findByText(/暂无可核对的直接来源线索/)).toBeTruthy();
+    expect(screen.queryByRole("article")).toBeNull();
+    expect(screen.queryByText(evidence.title)).toBeNull();
+  });
+
+  it.each([
+    {input_version_id: 22}, {event_id: 99}, {observation_id: 99},
+    {evidence: {field: "summary" as const, quote: "来源没有这句话"}},
+  ])("inline拒绝没有真实旧输入到新输出journal绑定的辅助回执 %j", async patch => {
+    const item: AttributionEvidenceItem = {...evidence, stock_relation: {...evidence.stock_relation, status: "direct_symbol"}, llm_aux: {event_id: 18, input_version_id: 21, observation_id: 19, direction: 0, theme: null, reason: "合成无效辅助判读", chain: "", evidence: {field: "summary", quote: "尚未完成审计"}, state: "no_direction", verification: "unverified", eligibility_changed: false, ...patch}};
+    const primary: PrimaryAttributionReason = {status: "source_clue", label: "来源线索", reason: "待核", event_id: 18, version_id: 22, observation_id: 19, relation: "direct_symbol", timing_relation: "known_before_response", excerpt: {field: "summary", quote: "尚未完成审计", truncated: false}, qualifiers: [], causality_verified: false, fact_verified: false, interpretation_view: "current"};
+    vi.mocked(getStockAttribution).mockResolvedValue({...payload("600825", item), primary_reason: primary});
+    render(<StockAttributionPanel symbol="600825" inlinePrimary sourceReason="拟收购"/>);
+    await screen.findByLabelText("原因与依据关系");
+    expect(screen.queryByText("合成无效辅助判读")).toBeNull();
+    expect(screen.getByText("不代表完成收购")).toBeTruthy();
+  });
   it("主动选择其他资料后可读保存的中性辅助原句，默认列表不铺判读", async () => {
     const item = {...evidence, llm_aux: {event_id: 18, input_version_id: 21, observation_id: 19, direction: 0, theme: null, reason: "合成中性判读：来源仍需审批", chain: "合成辅助传导线索", evidence: {field: "summary" as const, quote: "尚未完成审计"}, state: "no_direction" as const, verification: "unverified" as const, eligibility_changed: false as const}};
     vi.mocked(getStockAttribution).mockResolvedValue(payload("600825", item));

@@ -283,8 +283,8 @@ class EastmoneyProvider:
         - zdp 已是百分数（0.785 ≈ +0.79%）
         - zbc=炸板次数、hs=换手率%、amount=成交额(元)、ltsz/tshare=市值(元)、fbt=首次封板时间
 
-        池子很小（8/28 全市场 16 只），pagesize=500 一页足够；
-        若未来 tc > 500 需翻页，此处以日志暴露而不是静默截断。
+        当前请求一页 500 条；成功码、总数、全条目身份均有效才返回。
+        缺失、损坏或截断不能冒充合法空池；qdate 也不能证明历史请求日。
         """
         payload = await self._get_json(
             "https://push2ex.eastmoney.com/getTopicZBPool",
@@ -297,17 +297,22 @@ class EastmoneyProvider:
                 "date": trade_date.strftime("%Y%m%d"),
             },
         )
-        data = payload.get("data") or {}
-        pool = data.get("pool") or []
-        total = _int(data.get("tc")) or 0
-        if total > len(pool):
-            log.warning("limit-break pool truncated: tc=%s got=%d", total, len(pool))
+        if not isinstance(payload, dict) or type(payload.get("rc")) is not int or payload["rc"] != 0:
+            raise ProviderError("eastmoney limit-break business response failed")
+        data = payload.get("data")
+        if not isinstance(data, dict) or not isinstance(data.get("pool"), list):
+            raise ProviderError("eastmoney limit-break pool missing or malformed")
+        pool = data["pool"]
+        if type(data.get("tc")) is not int or data["tc"] != len(pool):
+            raise ProviderError("eastmoney limit-break pool incomplete")
+        symbols = [r.get("c") if isinstance(r, dict) else None for r in pool]
+        if (any(not isinstance(s, str) or len(s) != 6 or not s.isascii() or not s.isdigit() for s in symbols)
+                or len(set(symbols)) != len(symbols)):
+            raise ProviderError("eastmoney limit-break pool has invalid or duplicate symbols")
 
         out: list[LimitUpRecord] = []
         for r in pool:
-            symbol = str(r.get("c") or "")
-            if not symbol:
-                continue
+            symbol = r["c"]
             raw_price = _num(r.get("p"))
             out.append(
                 LimitUpRecord(

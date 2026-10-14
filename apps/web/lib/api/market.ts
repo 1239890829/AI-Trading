@@ -84,7 +84,14 @@ export async function getTrades(symbol: string, limit = 50): Promise<Trade[]> {
   return (await getTradesPayload(symbol, limit)).items;
 }
 
-export interface LimitPoolSnapshot<T> { trade_date: string; pool: T[]; reason_observations?: Record<string, LimitReasonObservation[]> }
+export interface LimitPoolCoverage {state: "success" | "unknown" | "error"; error: string | null}
+export interface LimitQualificationObservation {symbol: string; trade_date: string; kind: "limit_up" | "limit_break"; source: string; observed_at: string}
+export interface LimitPoolSnapshot<T> {
+  trade_date: string; pool: T[]; reason_observations?: Record<string, LimitReasonObservation[]>;
+  break_pool?: T[] | null;
+  coverage?: {limit_up: LimitPoolCoverage; limit_break: LimitPoolCoverage};
+  qualification_observations?: Record<string, LimitQualificationObservation[]>;
+}
 
 async function readLimitPool<T extends {trade_date: string}>(path: string, dateStr?: string): Promise<LimitPoolSnapshot<T>> {
   const qs = dateStr ? `?date=${encodeURIComponent(dateStr)}` : "";
@@ -97,9 +104,19 @@ async function readLimitPool<T extends {trade_date: string}>(path: string, dateS
   return data;
 }
 
-export function getLimitUpPoolSnapshot(dateStr?: string): Promise<LimitPoolSnapshot<LimitUpRecord>> {
-  // The audited network layer owns auth/params/epoch identity and clones results.
-  return readLimitPool<LimitUpRecord>("/api/limit-up", dateStr);
+export async function getLimitUpPoolSnapshot(dateStr?: string, options?: {includeBreaks?: boolean}): Promise<LimitPoolSnapshot<LimitUpRecord>> {
+  if (!options?.includeBreaks) return readLimitPool<LimitUpRecord>("/api/limit-up", dateStr);
+  const query = new URLSearchParams({include_breaks: "true"});
+  if (dateStr) query.set("date", dateStr);
+  const data = (await getJson<LimitPoolSnapshot<LimitUpRecord>>(`/api/limit-up?${query}`, 20_000)).data;
+  const coverage = data?.coverage;
+  if (!data || !/^\d{4}-\d{2}-\d{2}$/.test(data.trade_date) || (dateStr && data.trade_date !== dateStr)
+    || !Array.isArray(data.pool) || !(data.break_pool === null || Array.isArray(data.break_pool))
+    || !coverage || ![coverage.limit_up, coverage.limit_break].every(side => side && ["success", "unknown", "error"].includes(side.state))
+    || [...data.pool, ...(data.break_pool || [])].some(row => row.trade_date !== data.trade_date)) {
+    throw new Error("涨停与炸板资格响应身份或覆盖状态未确认");
+  }
+  return data;
 }
 
 export async function getLimitUpPool(dateStr?: string): Promise<LimitUpRecord[]> {

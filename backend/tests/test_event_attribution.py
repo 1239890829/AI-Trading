@@ -68,6 +68,47 @@ def test_direct_source_survives_newer_theme_rows_before_limit(store):
     assert primary["causality_verified"] is False
 
 
+def test_stock_events_filter_before_global_window_and_prefer_direct_company(store):
+    direct = add(store, published=NOW - timedelta(hours=1), source_item_id="company-older")
+    for index in range(305):
+        add(store, symbol=None, target_type="theme", target="算力", direction=0,
+            published=NOW - timedelta(seconds=index + 1), source_item_id=f"background-{index}")
+    request = NS(app=NS(state=NS(theme_catalog=NS(
+        get_official_for_symbol=lambda _: [{"theme_name": "算力"}]))))
+    result = asyncio.run(routes.events_for_symbol("600001", request, limit=5, store=store))
+    assert result["data"]["items"][0]["id"] == direct.id
+    assert result["data"]["items"][0]["match_reason"] == "source"
+    assert len(result["data"]["items"]) == 5
+
+
+def test_material_primary_survives_newer_direct_trade_recaps_before_limit(store):
+    direct = add(store, published=NOW - timedelta(hours=1), source_item_id="contract-older",
+                 source_published=NOW - timedelta(hours=1), title="公司签署设备供货合同",
+                 summary="公司已签署合同，收入确认以交付为准")
+    for index in range(13):
+        add(store, title="公司股价上涨10%", summary="今日成交额8亿元，换手率9%",
+            published=NOW - timedelta(minutes=index + 1), source_published=NOW - timedelta(minutes=index + 1),
+            direction=0, source_item_id=f"direct-recap-{index}")
+    data = read_attribution(store._sf, symbol="600001", limit=12, now=NOW)["data"]
+    assert data["primary_reason"]["event_id"] == direct.id
+    assert data["count"] == 12
+
+
+@pytest.mark.parametrize("title,summary,expected", [
+    ("公司股价上涨10%", "投资者关注后市表现", "unconfirmed"),
+    ("公司股票交易异常波动公告", "公司股价上涨10%，没有新增重大事项", "unconfirmed"),
+    ("公司股价上涨10%", "公司签署设备采购合同，具体收入影响待核", "source_clue"),
+    ("公司股价上涨10%", "原材料供应短缺导致涨价", "source_clue"),
+    ("公司股价上涨10%", "公司拟投资2亿元建设生产基地，尚待审批", "source_clue"),
+])
+def test_primary_recap_material_exception_requires_real_action(store, title, summary, expected):
+    add(store, title=title, summary=summary, direction=0, source_item_id="bounded-material",
+        source_published=NOW - timedelta(minutes=5))
+    result = read_attribution(store._sf, symbol="600001", now=NOW)["data"]
+    assert result["primary_reason"]["status"] == expected
+    assert result["primary_reason"]["causality_verified"] is False
+
+
 def test_primary_clue_binds_exact_summary_and_preserves_unfulfilled_conditions(store):
     summary = "公司AIGC平台尚在建设完善中，相关项目尚未形成收入；影响存在不确定性。"
     direct = add(store, title="公司回应AIGC平台进展", summary=summary, direction=0,
@@ -88,6 +129,52 @@ def test_primary_clue_binds_exact_summary_and_preserves_unfulfilled_conditions(s
     assert {q["kind"] for q in primary["qualifiers"]} >= {"incomplete", "scope"}
     assert primary["timing_relation"] == "known_before_response"
     assert primary["causality_verified"] is False
+
+
+def test_primary_title_denial_is_not_replaced_by_price_only_summary(store):
+    title = "公司澄清尚未签署算力订单"
+    summary = "公司昨日股价上涨10%，今日换手率较高。"
+    add(store, title=title, summary=summary, direction=0, certainty="unknown",
+        source_item_id="title-denial", source_published=NOW - timedelta(minutes=5))
+    primary = read_attribution(store._sf, symbol="600001", now=NOW)["data"]["primary_reason"]
+    assert primary["excerpt"]["field"] == "title"
+    assert primary["excerpt"]["quote"] in title and "尚未签署" in primary["excerpt"]["quote"]
+    assert {q["kind"] for q in primary["qualifiers"]} >= {"denial", "incomplete"}
+    assert primary["fact_verified"] is False and primary["causality_verified"] is False
+
+
+def test_primary_business_denial_precedes_unfulfilled_price_target_in_other_field(store):
+    title = "公司澄清不存在合作订单"
+    summary = "公司股价尚未突破前期高点，换手率较高。"
+    add(store, title=title, summary=summary, direction=0, certainty="unknown",
+        source_item_id="denial-versus-price-condition", source_published=NOW - timedelta(minutes=5))
+    primary = read_attribution(store._sf, symbol="600001", now=NOW)["data"]["primary_reason"]
+    assert primary["excerpt"]["field"] == "title"
+    assert primary["excerpt"]["quote"] in title and "不存在合作订单" in primary["excerpt"]["quote"]
+    assert primary["fact_verified"] is False and primary["causality_verified"] is False
+
+
+@pytest.mark.parametrize("summary", [
+    "公司股价上涨10%，回购概念受到投资者关注。",
+    "公司股价上涨10%，股份回购概念受到投资者关注。",
+    "公司股价上涨10%，回购受到投资者关注。",
+])
+def test_repurchase_noun_does_not_turn_trade_recap_into_material_event(store, summary):
+    add(store, title="公司股价上涨10%", summary=summary, direction=0,
+        source_item_id="repurchase-noun", source_published=NOW - timedelta(minutes=5))
+    data = read_attribution(store._sf, symbol="600001", now=NOW)["data"]
+    assert data["primary_reason"]["status"] == "unconfirmed"
+    assert data["primary_reason"]["excerpt"] is None
+    assert data["count"] == 1
+
+
+@pytest.mark.parametrize("title", ["公司拟回购股份", "公司已完成股份回购", "公司披露回购进展"])
+def test_reported_repurchase_action_is_kept_when_summary_only_reports_price(store, title):
+    add(store, title=title, summary="公司股价上涨10%，换手率较高。", direction=0,
+        source_item_id="repurchase-action", source_published=NOW - timedelta(minutes=5))
+    primary = read_attribution(store._sf, symbol="600001", now=NOW)["data"]["primary_reason"]
+    assert primary["status"] == "source_clue"
+    assert primary["excerpt"]["field"] == "title" and primary["excerpt"]["quote"] in title
 
 
 def test_primary_later_direct_source_never_becomes_verified_cause(store):

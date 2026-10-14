@@ -16,9 +16,12 @@ import contextlib
 import time
 
 import logging
+from collections import Counter
 from datetime import date, datetime
+from typing import Callable
 
 from app.data_providers.eastmoney import ProviderError
+from app.schemas.market import Quote
 
 log = logging.getLogger(__name__)
 
@@ -87,6 +90,7 @@ class CompositeProvider:
             (method, p.name): {
                 "method_started": 0, "method_returned": 0, "provider_method_error": 0,
                 "deadline_before_method": 0, "method_budget_exhausted": 0, "method_cancelled": 0,
+                "source_observation_rejected": 0,
                 "last_phase": None, "last_error_type": None,
             }
             for p in providers for method in _OBSERVABLE_METHODS if hasattr(p, method)
@@ -373,6 +377,66 @@ class CompositeProvider:
     async def get_quotes(self, symbols: list[str]) -> list:
         return await self._call("get_quotes", symbols)
 
+    async def recover_quote_regressions(
+        self, method: str, rejected: dict[tuple[str, str], str], *, deadline: float,
+        validate: Callable[[Quote, tuple[str, str]], Quote | None], idle_limited: bool = False,
+    ) -> dict[tuple[str, str], Quote]:
+        """Retry only Hub-confirmed clock regressions within the original deadline.
+
+        The Hub owns source-time/quality validation and merges once before accepting.
+        This reader has no independent budget, cache, or normal-path invocation.
+        """
+        if method not in {"get_quotes", "get_indices"}:
+            raise ValueError("regression recovery only supports quote batches")
+        sources = {p.name for p in self._pick(method)}
+        remaining = {key: source for key, source in rejected.items() if source in sources}
+        for source in set(remaining.values()):
+            self._observe_attempt(method, source, "source_observation_rejected", "SourceTimeRegression")
+        recovered = {}
+        errors: list[str] = []
+        for p in self._pick(method):
+            targets = {key for key, source in remaining.items() if source != p.name}
+            if not targets or self._in_cooldown(method, p.name):
+                continue
+            if time.monotonic() >= deadline:
+                self._observe_attempt(method, p.name, "deadline_before_method", "BudgetExhausted")
+                break
+            args = ([key[0] for key in remaining if key in targets],) if method == "get_quotes" else ()
+            _, rows, exc = await self._attempt(method, p, args, deadline)
+            accepted = {}
+            if exc is None and isinstance(rows, list):
+                identities = Counter(
+                    q.symbol if method == "get_quotes" else (q.symbol, q.market)
+                    for q in rows if isinstance(q, Quote)
+                )
+                for q in rows:
+                    if not isinstance(q, Quote):
+                        continue
+                    key = (q.symbol, q.market)
+                    identity = q.symbol if method == "get_quotes" else key
+                    if key not in targets or identities[identity] != 1 or q.source != p.name:
+                        continue
+                    checked = validate(q, key)
+                    if checked is not None:
+                        accepted[key] = checked
+            if accepted:
+                recovered.update(accepted)
+                for key in accepted:
+                    remaining.pop(key)
+                self._settle_last_good(method, p.name)
+                if not remaining:
+                    break
+            else:
+                if exc is None:
+                    self._observe_attempt(method, p.name, "source_observation_rejected", "SourceObservationRejected")
+                # Spending a short spare poll slot says nothing about the
+                # backup's health under its normal full request budget.
+                if not (isinstance(exc, BudgetExhausted) and (idle_limited or not exc.method_started)):
+                    self._note_failure(method, p.name, exc or ProviderError("no trusted recovery observation"), errors)
+            if isinstance(exc, BudgetExhausted):
+                break
+        return recovered
+
     async def get_quote(self, symbol: str):
         quotes = await self.get_quotes([symbol])
         return quotes[0] if quotes else None
@@ -406,7 +470,10 @@ class CompositeProvider:
         多源仍取第一个非空，否则使用首个合法空池；全部失败或预算耗尽均抛错。
         与通用链共享 deadline、熔断与成功来源统计，合法空池也能恢复健康状态。
         """
-        method = "get_limit_down_pool"
+        return await self._call_pool_allow_empty("get_limit_down_pool", trade_date)
+
+    async def _call_pool_allow_empty(self, method: str, trade_date: date) -> list:
+        """Validated list pools share the existing default budget, including empty lists."""
         deadline = time.monotonic() + self.budget_for(method)
         errors: list[str] = []
         empty_source = None
@@ -492,7 +559,7 @@ class CompositeProvider:
         return await self._call("get_financials", symbol, periods)
 
     async def get_limit_break_pool(self, trade_date) -> list:
-        return await self._call("get_limit_break_pool", trade_date)
+        return await self._call_pool_allow_empty("get_limit_break_pool", trade_date)
 
     async def get_trading_days(self) -> list:
         return await self._call("get_trading_days")

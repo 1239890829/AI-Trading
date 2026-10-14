@@ -689,10 +689,74 @@ describe("StockDetailPanel · WS 订阅复用（P1-5）", () => {
 
 
 describe("StockDetailPanel · 核对视角入口", () => {
+  const currentQuote = {...audit, symbol: "600519", price: 20, data_timestamp: "2026-10-09T10:00:00+08:00"};
+  const qualifiedPool = () => ({trade_date: "2026-10-09", pool: [{...audit, symbol: "600519", trade_date: "2026-10-09", reason: "拟收购+需审批"}], break_pool: [],
+    coverage: {limit_up: {state: "success", error: null}, limit_break: {state: "success", error: null}}, qualification_observations: {}});
+
+  it("只给真实同日涨停或炸板成员显示原因，详情与原因共用一次资格读取", async () => {
+    api.getLimitUpPoolSnapshot.mockResolvedValue(qualifiedPool());
+    const view = render(<StockDetailPanel symbol="600519" chartTab="flow" liveQuote={currentQuote}/>); await settle();
+    expect(api.getLimitUpPoolSnapshot).toHaveBeenCalledTimes(1);
+    expect(api.getLimitUpPoolSnapshot).toHaveBeenCalledWith("2026-10-09", {includeBreaks: true});
+    expect(api.getStockAttribution).not.toHaveBeenCalled();
+    fireEvent.click(view.getByRole("tab", {name: "涨停原因"})); await settle();
+    const panel = within(view.getByRole("tabpanel"));
+    expect(panel.getByText("拟收购+需审批")).toBeTruthy();
+    expect(panel.queryByRole("button", {name: "查看全文"})).toBeNull();
+    expect(view.queryByRole("dialog")).toBeNull();
+    expect(api.getStockAttribution).toHaveBeenCalledTimes(1);
+    expect(api.getLimitUpPoolSnapshot).toHaveBeenCalledTimes(1);
+    expect(api.getNewsDigest).not.toHaveBeenCalled();
+  });
+
+  it("仅high触及价格或资格源失败均不创造原因入口，普通股也不另留原因Tab", async () => {
+    api.getLimitUpPoolSnapshot.mockRejectedValue(new Error("synthetic coverage failure"));
+    const view = render(<StockDetailPanel symbol="600519" chartTab="flow" rightTab="reason" liveQuote={{...currentQuote, high: 22, limit_up_price: 22}}/>); await settle();
+    expect(view.queryByRole("tab", {name: "涨停原因"})).toBeNull();
+    expect(view.getByRole("alert").textContent).toContain("资格待恢复");
+    expect(view.getByRole("button", {name: "重试资格"})).toBeTruthy();
+    expect(api.getStockAttribution).not.toHaveBeenCalled();
+  });
+
+  it.each(["stale", "low"])("首次%s池行带原因原句也不能绕过资格门", async quality => {
+    const snapshot = qualifiedPool();
+    api.getLimitUpPoolSnapshot.mockResolvedValue({...snapshot, pool: [{...snapshot.pool[0], quality}], coverage: {...snapshot.coverage, limit_up: {state: "unknown", error: null}},
+      reason_observations: {"600519": [{symbol: "600519", trade_date: "2026-10-09", reason: "拟收购+需审批", source: "ths", content_hash: "fixture", observed_at: "2026-10-09T10:00:00+08:00", received_at: null}]}});
+    const view = render(<StockDetailPanel symbol="600519" chartTab="flow" liveQuote={currentQuote}/>); await settle();
+    expect(view.queryByRole("tab", {name: "涨停原因"})).toBeNull();
+    expect(api.getStockAttribution).not.toHaveBeenCalled();
+  });
+
+  it("旧events深链落在资讯父项的事件子项，切父项不误触新闻摘要", async () => {
+    const view = render(<StockDetailPanel symbol="600519" chartTab="flow" rightTab="events"/>); await settle();
+    const outer = within(view.getByRole("tablist", {name: "核对视角"}));
+    expect(outer.getByRole("tab", {name: "资讯", selected: true})).toBeTruthy();
+    expect(outer.queryByRole("tab", {name: "相关事件"})).toBeNull();
+    expect(view.getByRole("tab", {name: "相关事件", selected: true})).toBeTruthy();
+    expect(api.getEventsForSymbol).toHaveBeenCalledTimes(1);
+    expect(api.getNewsDigest).not.toHaveBeenCalled();
+    fireEvent.click(outer.getByRole("tab", {name: "资讯"})); await settle();
+    expect(api.getNewsDigest).not.toHaveBeenCalled();
+    fireEvent.click(view.getByRole("tab", {name: "新闻公告"})); await settle();
+    expect(api.getNewsDigest).toHaveBeenCalledTimes(1);
+  });
+
+  it("旧themes深链复用资料概念区域，只出现一个同名入口且不请求新闻", async () => {
+    api.getStockThemes.mockResolvedValue({symbol: "600519", official: [{theme_code: "fixture", theme_name: "同名概念", source: "ths_official", theme_chg_1d: 2}], attribution: [{theme_name: "同名概念", date: "2026-10-09"}]});
+    api.getCompanyProfile.mockResolvedValue({source: "synthetic_fixture", board_groups: {industry: [], region: [], concept: ["同名概念"], style_index: []}});
+    const view = render(<StockDetailPanel symbol="600519" chartTab="flow" rightTab="themes"/>); await advance(900);
+    const panel = within(view.getByRole("tabpanel"));
+    expect(panel.getAllByRole("link", {name: "同名概念"})).toHaveLength(1);
+    expect(panel.getByText("官方 / 归因 / 资料")).toBeTruthy();
+    expect(panel.getByText("+2.00%")).toBeTruthy();
+    expect(view.getByRole("tab", {name: "资料", selected: true})).toBeTruthy();
+    expect(api.getNewsDigest).not.toHaveBeenCalled();
+  });
+
   it("题材读取错误可恢复，错股资料不冒充确认空集或当前归属", async () => {
     api.getStockThemes.mockResolvedValueOnce({symbol: "000001", official: [], attribution: []});
     const view = render(<StockDetailPanel symbol="600519" />); await settle();
-    fireEvent.click(view.getByRole("tab", {name: "题材归属"}));
+    fireEvent.click(view.getByRole("tab", {name: "资料"}));
     const panel = within(view.getByRole("tabpanel"));
     expect(panel.getByRole("alert").textContent).toContain("题材读取失败");
     expect(panel.queryByText("本次资料未返回题材归属。")).toBeNull();
@@ -732,15 +796,17 @@ describe("StockDetailPanel · 核对视角入口", () => {
     expect(view.queryByRole("tab", {name: "做T"})).toBeNull();
     expect(view.queryByText("合成题材")).toBeNull();
     const tabs = view.getByRole("tablist", {name: "核对视角"});
-    expect(tabs.getAttribute("style")).toContain("repeat(5");
-    fireEvent.click(view.getByRole("tab", {name: "题材归属"}));
+    expect(tabs.getAttribute("style")).toContain("repeat(3");
+    fireEvent.click(view.getByRole("tab", {name: "资料"}));
     const panel = within(view.getByRole("tabpanel"));
     expect(panel.getByRole("link", {name: "合成题材"})).toBeTruthy();
     expect(panel.getByRole("link", {name: "资料概念"})).toBeTruthy();
     fireEvent.click(view.getByRole("tab", {name: "资料"}));
     expect(within(view.getByRole("tabpanel")).getByRole("link", {name: "资料概念"}).getAttribute("href")).toContain("tab=themes");
+    expect(view.queryByRole("tab", {name: "题材归属"})).toBeNull();
+    expect(view.queryByRole("tab", {name: "涨停原因"})).toBeNull();
+    fireEvent.click(view.getByRole("tab", {name: "资讯"}));
     expect(view.getByRole("tab", {name: "相关事件"})).toBeTruthy();
-    expect(view.getByRole("tab", {name: "涨停原因"})).toBeTruthy();
     expect(api.getStockThemes).toHaveBeenCalledTimes(1);
   });
   it("only mounts market prints in their own perspective", async () => {
@@ -769,7 +835,7 @@ describe("StockDetailPanel · 核对视角入口", () => {
     fireEvent.keyDown(controls.getByRole("tab", { name: "盘口" }), { key: "ArrowLeft" });
     expect(onRightTabChange).toHaveBeenLastCalledWith("real");
     expect(document.activeElement).toBe(controls.getByRole("tab", { name: "手工记账" }));
-    expect(controls.getAllByRole("tab")).toHaveLength(9);
+    expect(controls.getAllByRole("tab")).toHaveLength(6);
   });
 
   it("指数只提供适用视角，不能从入口进入股票交易", () => {

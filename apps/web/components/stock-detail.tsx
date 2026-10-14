@@ -18,9 +18,9 @@ import { analyze } from "@/lib/technical-analysis";
 import { buildEventMarks, buildMinuteNewsEvents } from "@/lib/event-markers";
 import { hasTrustedQuoteObservation, mergeQuoteIntoBars, mergeQuoteIntoMinutes } from "@/lib/kline-live";
 import {buildIndexOverlay} from "@/lib/index-overlay";
+import {limitQualification} from "@/lib/limit-qualification";
 import { isIndexSymbol } from "@/lib/api";
 import { notifyWatchlistChanged, subscribeWatchlist } from "@/lib/watchlist-sync";
-import { ThemeChipsRow, CompanyConceptChips } from "@/components/detail/theme-chips";
 import { LimitUpReasonPanel } from "@/components/detail/limit-up-reason";
 import {useDetailModal} from "@/components/detail/detail-modal";
 import {quoteQualityView} from "@/lib/quote-quality-view";
@@ -34,6 +34,7 @@ import {
   getFinancials,
   getKlinePayload,
   getMarketOverview,
+  getLimitUpPoolSnapshot,
   getMinuteLine,
   getMinuteLineWithBaseline,
   getOrderBook,
@@ -462,6 +463,13 @@ export const StockDetailPanel = memo(function StockDetailPanel({
     return result;
   }, {key: symbol, enabled: active && !!symbol && !isIndex, intervalMs: null, marketHours: false});
   const stockThemes = themesResource.data ?? null;
+  const quoteDate = quote?.symbol === symbol && quote.data_timestamp && /(?:Z|[+-]\d{2}:\d{2})$/.test(quote.data_timestamp) ? bjDate(quote.data_timestamp) : null;
+  const reasonResource = useResource(() => getLimitUpPoolSnapshot(quoteDate || undefined, {includeBreaks: true}), {
+    key: `${symbol}:${quoteDate || "unknown"}`, enabled: rightActive && !isIndex && !!quoteDate, intervalMs: 60_000,
+  });
+  const qualification = limitQualification(reasonResource.data, symbol, quoteDate);
+  const viewRightTab = rightTab === "reason" && !qualification.eligible ? "profile" : rightTab;
+  const parentRightTab = viewRightTab === "themes" ? "profile" : viewRightTab === "events" ? "info" : viewRightTab;
 
   // ---- 切股数据分级加载（2026-09-01 评审 O1）----
   // 此前切股一次并发 ~14 个请求（Promise.all 8 个 + 竞价/题材/大盘叠加/paper 等），
@@ -618,7 +626,7 @@ export const StockDetailPanel = memo(function StockDetailPanel({
   usePollingFetch(async () => {
     const reads = dataReadsRef.current; if (!reads?.alive) return;
     reads.financialsRequested = true; await reads.financials().catch(() => {});
-  }, null, symbol, {enabled: rightActive && !isIndex && rightTab === "profile", marketHours: false});
+  }, null, symbol, {enabled: rightActive && !isIndex && (viewRightTab === "profile" || viewRightTab === "themes"), marketHours: false});
   // Model summaries are requested by their visible consumer, never by chart prefetch.
   usePollingFetch(loadDigest, null, symbol, {enabled: rightActive && !isIndex && rightTab === "info", marketHours: false});
 
@@ -854,7 +862,7 @@ export const StockDetailPanel = memo(function StockDetailPanel({
                41px 给分时图；两个图表 tab 也不再有「一个有头一个无头」的高度跳动
                （2026-09-02 用户要求） */
             <Panel bodyClassName="overflow-hidden flex flex-col" className="detail-chart-panel min-h-0 flex-1">
-              <DetailReadStatus label="分钟" state={readStates.minute} onRetry={() => retryRead("minute")} diagnostics={minuteDiagnostics} status={chartStatus} identity={`${symbol}:minute`} active={active}/>
+              <DetailReadStatus label="分钟" state={readStates.minute} onRetry={() => retryRead("minute")} diagnostics={minuteDiagnostics} diagnosticIssue={!!indexResource.error} status={chartStatus} identity={`${symbol}:minute`} active={active}/>
               {indexOverlay?.mode === "historical" && <p className="px-3 pb-1 text-xs text-zinc-600 dark:text-zinc-400">上证叠加 · {indexOverlay.referenceDate} · 非实时</p>}
               {!!indexResource.error && <div className="flex flex-wrap items-center gap-2 px-3 pb-1 text-xs"><p role="alert" className="text-amber-800 dark:text-amber-300">指数叠加读取失败{indexOverlay ? " · 保留结果" : ""}</p><button type="button" data-action="secondary" disabled={indexResource.pending} onClick={indexResource.refresh}>重新读取指数叠加</button></div>}
               {minutes.length > 0 ? (
@@ -969,33 +977,33 @@ export const StockDetailPanel = memo(function StockDetailPanel({
 
         <Panel
           title={
-            rightTab === "book"
+            viewRightTab === "book"
               ? "五档盘口"
-              : rightTab === "trades"
+              : viewRightTab === "trades"
                 ? "逐笔成交"
-                : rightTab === "trade"
+                : viewRightTab === "trade"
                   ? "模拟交易"
-                  : rightTab === "real"
+                  : viewRightTab === "real"
                     ? "手工记录（用户录入，非券商核验）"
-                    : rightTab === "profile"
+                    : viewRightTab === "profile"
                       ? "公司资料"
-                      : rightTab === "speed"
+                      : viewRightTab === "speed"
                         ? "题材涨速榜（5 分钟）"
-                        : rightTab === "boards"
+                        : viewRightTab === "boards"
                           ? "板块涨幅"
-                          : rightTab === "themes" ? "题材归属"
-                            : rightTab === "events" ? "相关事件"
-                              : rightTab === "reason" ? "涨停原因" : "资讯"
+                          : viewRightTab === "themes" ? "公司资料"
+                            : viewRightTab === "events" ? "资讯与事件"
+                              : viewRightTab === "reason" ? "涨停原因" : "资讯"
           }
           bodyClassName="flex flex-col overflow-hidden"
-          source={rightTab === "book" ? book?.source : undefined}
-          dataTimestamp={rightTab === "book" ? book?.data_timestamp : null}
+          source={viewRightTab === "book" ? book?.source : undefined}
+          dataTimestamp={viewRightTab === "book" ? book?.data_timestamp : null}
           className="min-h-0 flex-1 overflow-hidden"
-          // D-3：本 Panel 是**同一实例换内容**（rightTab 决定 title/children）。
+          // D-3：本 Panel 是**同一实例换内容**（viewRightTab 决定 title/children）。
           // 2026-09-13 起 title 变化已由默认行为覆盖（label 变 ⇒ 清错误态）；
           // resetKey 保留为显式声明——行为等价，且不依赖 title 恰为字符串形态。
           // 判据与反例见 panel-boundary.test.tsx「Panel.resetKey（D-3）」组。
-          resetKey={rightTab}
+          resetKey={viewRightTab}
           extra={
             /* 收起按钮走 Panel 头部 extra 槽位（正常文档流）——原 absolute 悬浮
                定位正好压在头部右侧「数据来源/数据时间」徽标上（2026-09-04 用户反馈） */
@@ -1009,7 +1017,7 @@ export const StockDetailPanel = memo(function StockDetailPanel({
             </button>
           }
         >
-          <div className="detail-perspective-tabs" style={{display: "grid", gridTemplateColumns: `repeat(${isIndex ? 2 : 5}, minmax(0, 1fr))`}} data-index={isIndex} role="tablist" aria-label="核对视角"
+          <div className="detail-perspective-tabs" style={{display: "grid", gridTemplateColumns: `repeat(${isIndex ? 2 : qualification.eligible ? 4 : 3}, minmax(0, 1fr))`}} data-index={isIndex} role="tablist" aria-label="核对视角"
             onKeyDown={(event) => {
               if (!["ArrowLeft", "ArrowRight", "Home", "End"].includes(event.key)) return;
               const buttons = Array.from(event.currentTarget.querySelectorAll<HTMLButtonElement>("button"));
@@ -1021,28 +1029,33 @@ export const StockDetailPanel = memo(function StockDetailPanel({
               buttons[next].focus();
               buttons[next].click();
             }}>
-            {rightTabsFor(isIndex).map(([key, label]) => (
-              <button key={key} type="button" role="tab" aria-label={key === "themes" ? "题材归属" : key === "events" ? "相关事件" : key === "reason" ? "涨停原因" : label} style={rightTab === key ? {color: "var(--ui-ink)", borderBottomColor: "var(--ui-accent)", fontWeight: 600} : undefined} id={`${perspectiveId}-${key}`} aria-controls={`${perspectiveId}-panel`} aria-selected={rightTab === key} tabIndex={rightTab === key ? 0 : -1}
-                onClick={() => { if (onRightTabChange) onRightTabChange(key); else setRightTab(key); }}>
+            {rightTabsFor(isIndex, qualification.eligible).map(([key, label]) => (
+              <button key={key} type="button" role="tab" aria-label={key === "themes" ? "题材归属" : key === "events" ? "相关事件" : key === "reason" ? "涨停原因" : label} style={parentRightTab === key ? {color: "var(--ui-ink)", borderBottomColor: "var(--ui-accent)", fontWeight: 600} : undefined} id={`${perspectiveId}-${key}`} aria-controls={`${perspectiveId}-panel`} aria-selected={parentRightTab === key} tabIndex={parentRightTab === key ? 0 : -1}
+                onClick={() => { const next = parentRightTab === key ? viewRightTab : key; if (onRightTabChange) onRightTabChange(next); else setRightTab(next); }}>
                 {key === "trade" ? "模拟" : key === "real" ? "记账" : label}
               </button>
             ))}
           </div>
-          <div id={`${perspectiveId}-panel`} role="tabpanel" aria-labelledby={`${perspectiveId}-${rightTab}`} className="min-h-0 flex-1 overflow-auto">
-          {rightTab === "speed" && <SpeedPanel className="h-full" active={rightActive} />}
-          {rightTab === "boards" && <BoardRankPanel className="h-full" active={rightActive} />}
-          {rightTab === "themes" && <div className="space-y-4 px-3 py-2 text-xs">
-            <DetailReadStatus label="题材" state={{pending: themesResource.pending, loaded: themesResource.data !== undefined, error: themesResource.error ? "题材读取失败" : null, readAt: null}} onRetry={themesResource.refresh} identity={`${symbol}:themes`} active={rightActive}/>
-            <ThemeChipsRow themes={stockThemes} />
-            <CompanyConceptChips names={boardGroups?.concept ?? []} />
-            {themesResource.data !== undefined && !themesResource.error && !stockThemes?.official.length && !stockThemes?.attribution.length && !(boardGroups?.concept?.length) && <p className="text-zinc-600 dark:text-zinc-400">本次资料未返回题材归属。</p>}
+          <div id={`${perspectiveId}-panel`} role="tabpanel" aria-labelledby={`${perspectiveId}-${parentRightTab}`} className="min-h-0 flex-1 overflow-auto">
+          {viewRightTab === "speed" && <SpeedPanel className="h-full" active={rightActive} />}
+          {viewRightTab === "boards" && <BoardRankPanel className="h-full" active={rightActive} />}
+          {(viewRightTab === "info" || viewRightTab === "events") && <div role="tablist" aria-label="资讯内容" className="flex gap-1 border-b border-zinc-200 px-3 py-2 dark:border-zinc-800" onKeyDown={event => {
+            if (!["ArrowLeft", "ArrowRight", "Home", "End"].includes(event.key)) return;
+            const buttons = Array.from(event.currentTarget.querySelectorAll<HTMLButtonElement>("button"));
+            const current = buttons.indexOf(event.target as HTMLButtonElement); if (current < 0) return;
+            event.preventDefault();
+            const next = event.key === "Home" ? 0 : event.key === "End" ? buttons.length - 1 : (current + (event.key === "ArrowRight" ? 1 : -1) + buttons.length) % buttons.length;
+            buttons[next].focus(); buttons[next].click();
+          }}>
+            {([["info", "新闻公告"], ["events", "相关事件"]] as const).map(([key, label]) => <button key={key} type="button" role="tab" tabIndex={viewRightTab === key ? 0 : -1} aria-selected={viewRightTab === key} aria-controls={`${perspectiveId}-information`} data-action={viewRightTab === key ? "secondary" : "quiet"} onClick={() => {if (onRightTabChange) onRightTabChange(key); else setRightTab(key);}}>{label}</button>)}
           </div>}
-          {rightTab === "events" && <div className="px-3 py-2"><StockEventsRow symbol={symbol} active={rightActive} /></div>}
-          {rightTab === "reason" && <div className="px-3 py-2"><LimitUpReasonPanel symbol={symbol} quote={quote} active={rightActive} standalone /></div>}
-          {rightTab === "real" && (
+          {viewRightTab === "events" && <div id={`${perspectiveId}-information`} className="px-3 py-2"><StockEventsRow symbol={symbol} active={rightActive} /></div>}
+          {viewRightTab === "reason" && <div className="px-3 py-2"><LimitUpReasonPanel symbol={symbol} quote={quote} active={rightActive} sharedResource={reasonResource} standalone /></div>}
+          {rightTab === "reason" && !qualification.eligible && (!!reasonResource.error || reasonResource.data?.coverage && Object.values(reasonResource.data.coverage).some(side => side.state !== "success")) && <div className="flex flex-wrap items-center gap-2 px-3 py-2 text-xs"><p role="alert" className="text-amber-800 dark:text-amber-300">涨停与炸板资格待恢复，暂未展示原因。</p><button type="button" data-action="secondary" onClick={reasonResource.refresh}>重试资格</button></div>}
+          {viewRightTab === "real" && (
             <RealPositionPanel symbol={symbol} currentPrice={quote?.price ?? null} currentName={quote?.name ?? null} realPositions={realPositions} active={rightActive} className="h-full" />
           )}
-          {rightTab === "trade" &&
+          {viewRightTab === "trade" &&
             (paper === undefined ? (
               <div className="space-y-2 p-1" aria-hidden>
                 <Skeleton className="h-8 w-full rounded-lg" />
@@ -1063,12 +1076,12 @@ export const StockDetailPanel = memo(function StockDetailPanel({
               <p className="px-3 py-10 text-center text-xs text-zinc-600 dark:text-zinc-400">模拟账户数据加载失败（稍后自动重试）</p>
             ))}
 
-          {rightTab === "profile" && <ProfilePanel boardRows={boardRows} company={company} fins={fins} readState={readStates.financials} onRetry={() => retryRead("financials")} readIdentity={`${symbol}:financials`} active={rightActive}/>}
+          {(viewRightTab === "profile" || viewRightTab === "themes") && <ProfilePanel themes={stockThemes} themesState={{pending: themesResource.pending, loaded: themesResource.data !== undefined, error: themesResource.error ? "题材读取失败" : null, readAt: null}} onThemesRetry={themesResource.refresh} boardRows={boardRows} company={company} fins={fins} readState={readStates.financials} onRetry={() => retryRead("financials")} readIdentity={`${symbol}:financials`} active={rightActive}/>}
 
-          {rightTab === "info" && <InfoPanel key={symbol} anns={anns} news={news} annError={annError} newsError={newsError} loading={digestLoading} onRetry={() => { void loadDigest(); }} />}
+          {viewRightTab === "info" && <div id={`${perspectiveId}-information`}><InfoPanel key={symbol} anns={anns} news={news} annError={annError} newsError={newsError} loading={digestLoading} onRetry={() => { void loadDigest(); }} /></div>}
 
           {/* Only the two market-print perspectives own this consumer. */}
-          {(rightTab === "book" || rightTab === "trades") && <BookTradesView book={book} trades={trades} showBook={rightTab === "book"} readState={readStates[rightTab]} onRetry={() => retryRead(rightTab)} emptyReason={tradeEmptyReason} tradesSource={tradeSource} readIdentity={`${symbol}:${rightTab}`} active={rightActive}/>}
+          {(viewRightTab === "book" || viewRightTab === "trades") && <BookTradesView book={book} trades={trades} showBook={viewRightTab === "book"} readState={readStates[viewRightTab]} onRetry={() => retryRead(viewRightTab)} emptyReason={tradeEmptyReason} tradesSource={tradeSource} readIdentity={`${symbol}:${viewRightTab}`} active={rightActive}/>}
           </div>
         </Panel>
         </div>

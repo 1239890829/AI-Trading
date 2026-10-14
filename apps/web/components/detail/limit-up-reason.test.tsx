@@ -13,28 +13,44 @@ const emptyPool = (): LimitPoolSnapshot<LimitUpRecord> => ({trade_date:"2026-10-
 const refreshPool = async () => {await act(async () => {fireEvent(document, new Event("visibilitychange"));});};
 
 describe("shared security detail limit-up attribution", () => {
+  it("长供应商原因也默认保留核心与完整否定条件，已保存解读仍会读取", async () => {
+    const reason = `覆铜板涨价，${"供应链说明".repeat(50)}。拟收购欧康诺，交易尚需审批且未完成审计。该业务收入不足总收入1%，预计暂不贡献利润。`;
+    vi.mocked(getLimitUpPoolSnapshot).mockResolvedValue(pool(reason));
+    vi.mocked(getStockAttribution).mockResolvedValue({schema_version: 1, symbol: "600825", count: 0, items: []});
+    render(<LimitUpReasonPanel symbol="600825" quote={quote()} standalone/>);
+    expect(await screen.findByText("覆铜板涨价")).toBeTruthy();
+    expect(screen.getByText("拟收购欧康诺，交易尚需审批且未完成审计")).toBeTruthy();
+    expect(screen.getByText("该业务收入不足总收入1%，预计暂不贡献利润")).toBeTruthy();
+    expect(getStockAttribution).toHaveBeenCalledTimes(1);
+    expect(screen.queryByRole("button", {name: "查看全文"})).toBeNull();
+  });
   it("right-tab reading distinguishes first error, retry and valid missing coverage", async () => {
     vi.mocked(getStockAttribution).mockResolvedValue({schema_version: 1, symbol: "600825", count: 0, items: []});
     vi.mocked(getLimitUpPoolSnapshot).mockRejectedValueOnce(new Error("synthetic_failure")).mockResolvedValueOnce(emptyPool());
     render(<LimitUpReasonPanel symbol="600825" quote={quote()} standalone />);
-    expect(await screen.findByRole("alert")).toHaveProperty("textContent", "涨停原因读取失败");
+    expect(await screen.findByRole("alert")).toHaveProperty("textContent", "原因资料读取不完整，资格尚待确认");
     expect(screen.queryByText(/本次资料未收录/)).toBeNull();
     fireEvent.click(screen.getByRole("button", {name: "重新读取涨停原因"}));
-    expect(await screen.findByText(/未收录不表示未触板/)).toBeTruthy();
+    expect(await screen.findByText(/尚无可确认的涨停或炸板记录/)).toBeTruthy();
     expect(screen.queryByRole("alert")).toBeNull();
     expect(getLimitUpPoolSnapshot).toHaveBeenCalledTimes(2);
   });
-  it("supplier原句优先；只有原因为空才读既有来源主线索", async () => {
+  it("supplier原句与既有来源解读直接可读，原句非空也不阻断已保存解读", async () => {
     vi.mocked(getLimitUpPoolSnapshot).mockResolvedValueOnce(pool()).mockResolvedValueOnce(pool(null));
     vi.mocked(getStockAttribution).mockResolvedValue({schema_version: 1, symbol: "600825", count: 0, items: [], primary_reason: {status: "unconfirmed", label: "暂无主要来源线索", reason: "来源未绑定", event_id: null, version_id: null, observation_id: null, relation: "unknown", timing_relation: "time_unknown", excerpt: null, qualifiers: [], fact_verified: false, causality_verified: false, interpretation_view: "current"}});
     render(<LimitUpReasonPanel symbol="600825" quote={quote()} standalone />);
     await screen.findByText("拟收购财联社+重大资产重组");
-    expect(getStockAttribution).not.toHaveBeenCalled();
-    await refreshPool();
-    await screen.findByText("暂无主要来源线索");
     expect(getStockAttribution).toHaveBeenCalledTimes(1);
+    expect(getLimitUpPoolSnapshot).toHaveBeenCalledTimes(1);
+    await refreshPool();
+    await screen.findByText(/暂无可核对的直接来源线索/);
+    // One initial read plus one visibility-return calibration for each owner.
+    expect(getStockAttribution).toHaveBeenCalledTimes(2);
+    expect(getLimitUpPoolSnapshot).toHaveBeenCalledTimes(2);
     expect(getStockAttribution).toHaveBeenCalledWith("600825", {poolDate: "2026-10-09", responseAsOf: undefined});
     expect(screen.queryByText("数据源未提供涨停原因")).toBeNull();
+    expect(screen.queryByRole("button", {name: "查看全文"})).toBeNull();
+    expect(screen.queryByRole("dialog")).toBeNull();
   });
   it("shows the source original with actual pool date and does not use concepts as fallback", async () => {
     vi.mocked(getLimitUpPoolSnapshot).mockResolvedValue(pool());

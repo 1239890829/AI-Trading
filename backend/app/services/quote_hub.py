@@ -2,12 +2,13 @@ from __future__ import annotations
 
 import asyncio
 import logging
+import time
 from collections import Counter, deque
 from dataclasses import dataclass, field
-from datetime import datetime
+from datetime import datetime, timezone
 from typing import Callable
 
-from app.core.bjtime import beijing_now  # S2-8 时区收敛
+from app.core.bjtime import BJ_TZ, beijing_now  # S2-8 时区收敛
 from app.core.freshness import Freshness
 from app.data_quality.validator import mark_stale, validate_quote
 from app.market import trade_calendar as tc
@@ -200,11 +201,24 @@ class QuoteHub:
         state.requested = domain == "indices" or bool(watchlist)
         state.requested_symbols = tuple(INDEX_MARKETS) if domain == "indices" else tuple(watchlist)
         try:
+            read_started = time.monotonic()
             if domain == "indices":
-                self._accept_indices(await self.provider.get_indices())
+                rows = await self.provider.get_indices()
+                self._accept_indices(rows)
             else:
                 rows = await self.provider.get_quotes(watchlist) if watchlist else []
                 self._accept_quotes(watchlist, rows)
+            # A slow recovery must not hold already returned normal source rows.
+            # The rejected rows are already retained as stale by the original gate.
+            self._pending_domains.add(domain)
+            if self._running:
+                self._schedule_publish()
+            recovered = await self._recover_regressions(domain, rows, state.requested_symbols, read_started)
+            if recovered:
+                if domain == "indices":
+                    self._accept_indices(recovered, recovery=True)
+                else:
+                    self._accept_quotes(watchlist, recovered, recovery=True)
         except Exception as exc:  # ProviderError、网络错误等一律降级
             state.consecutive_failures += 1
             state.last_error, state.last_error_type = str(exc), type(exc).__name__
@@ -235,6 +249,65 @@ class QuoteHub:
         self._sync_complete_state()
         if self._running:
             self._schedule_publish()
+
+    async def _recover_regressions(
+        self, domain: str, rows: list[Quote], requested: tuple[str, ...], read_started: float,
+    ) -> list[Quote]:
+        recover = getattr(self.provider, "recover_quote_regressions", None)
+        if not callable(recover):
+            return []
+        method = "get_indices" if domain == "indices" else "get_quotes"
+        current = self.indices if domain == "indices" else self.quotes
+        rejections = self.last_index_rejections if domain == "indices" else self.last_quote_rejections
+        rejected = {}
+        for q in rows:
+            if rejections.get(q.symbol) != "source_time_regress_ignored":
+                continue
+            prev = current.get(q.symbol)
+            if (q.symbol not in requested or prev is None
+                    or not q.market or q.market != prev.market
+                    or (domain == "indices" and q.market != INDEX_MARKETS.get(q.symbol))):
+                continue
+            checked = validate_quote(q.model_copy(deep=True), prev)
+            if _rejected_source_observation(checked, prev) == "source_time_regress_ignored":
+                rejected[q.symbol, q.market] = q.source
+        if not rejected:
+            return []
+
+        def validate_recovery(q: Quote, key: tuple[str, str]) -> Quote | None:
+            # Do not let validate_quote's recomputation launder a stale provider cache.
+            if q.quality in {Quality.invalid, Quality.stale} or q.data_timestamp is None:
+                return None
+            prev = current[key[0]]
+            if q.market != prev.market:
+                return None
+            checked = validate_quote(q.model_copy(deep=True), prev)
+            if _rejected_source_observation(checked, prev) is not None:
+                return None
+            now = utcnow()
+            previous_time = prev.data_timestamp
+            if previous_time.tzinfo is None:
+                previous_time = previous_time.replace(tzinfo=timezone.utc)
+            source_time = checked.data_timestamp
+            if (source_time <= previous_time or source_time > now
+                    or source_time.astimezone(BJ_TZ).date() != now.astimezone(BJ_TZ).date()
+                    or checked.freshness(fresh_within=self.stale_after).state not in {"ready", "degraded"}):
+                return None
+            return checked
+
+        try:
+            method_budget = self.provider.budget_for(method)
+            replacements = await recover(
+                method, rejected, deadline=read_started + min(method_budget, self.poll_interval),
+                idle_limited=self.poll_interval < method_budget, validate=validate_recovery,
+            )
+        except Exception as exc:
+            log.warning("source clock regression recovery unavailable (%s)", type(exc).__name__)
+            return []
+        # Another trusted update may have advanced current while a source was in
+        # flight. Recheck now and never replay the normal rows or their history.
+        return [checked for key, row in replacements.items()
+                if key in rejected and (checked := validate_recovery(row, key)) is not None]
 
     def _sync_complete_state(self) -> None:
         self.consecutive_failures = max(s.consecutive_failures for s in self._domains.values())
@@ -307,7 +380,7 @@ class QuoteHub:
             if self._running:
                 self._schedule_publish()
 
-    def _accept_indices(self, new_indices: list[Quote]) -> None:
+    def _accept_indices(self, new_indices: list[Quote], *, recovery: bool = False) -> None:
         closed = tc.market_open_state(tc.known_trade_days(), beijing_now()) == tc.MARKET_CLOSED
         # 裸代码只有在市场也匹配且身份唯一时才进入校验；校验通过“接纳门”后才推进 current cache。
         # 上游晚到/非法观测不能覆盖最近可信值，否则 received-order 会反过来污染 source-time。
@@ -338,9 +411,12 @@ class QuoteHub:
                 _mark_confirmed_closed(q)
             self.indices[q.symbol] = q
             accepted_indices.append(q)
-        self._mark_index_gaps(accepted_indices, rejected_indices)
+        if recovery:
+            self._resolve_recovery_gaps("indices", {q.symbol for q in accepted_indices}, len(INDEX_MARKETS))
+        else:
+            self._mark_index_gaps(accepted_indices, rejected_indices)
 
-    def _accept_quotes(self, watchlist: list[str], new_quotes: list[Quote]) -> None:
+    def _accept_quotes(self, watchlist: list[str], new_quotes: list[Quote], *, recovery: bool = False) -> None:
         closed = tc.market_open_state(tc.known_trade_days(), beijing_now()) == tc.MARKET_CLOSED
         quote_counts = Counter(q.symbol for q in new_quotes)
         returned_by_symbol = {q.symbol: q for q in new_quotes}
@@ -368,7 +444,23 @@ class QuoteHub:
             accepted_by_symbol[symbol] = q
             if q.price is not None and q.data_timestamp is not None:
                 self.quote_history.append((q.symbol, q.data_timestamp, q.price))
-        self._mark_batch_gaps(watchlist, accepted_by_symbol, rejected_quotes)
+        if recovery:
+            self._resolve_recovery_gaps("quotes", set(accepted_by_symbol), len(watchlist))
+        else:
+            self._mark_batch_gaps(watchlist, accepted_by_symbol, rejected_quotes)
+
+    def _resolve_recovery_gaps(self, domain: str, accepted: set[str], expected_count: int) -> None:
+        """Only successful target updates can resolve the preceding batch's gaps."""
+        if not accepted:
+            return
+        if domain == "indices":
+            self.last_index_rejections = {s: reason for s, reason in self.last_index_rejections.items() if s not in accepted}
+            self.last_missing_indices = [s for s in self.last_missing_indices if s not in accepted]
+            self.last_index_coverage = (expected_count - len(self.last_missing_indices)) / expected_count
+        else:
+            self.last_quote_rejections = {s: reason for s, reason in self.last_quote_rejections.items() if s not in accepted}
+            self.last_missing_symbols = [s for s in self.last_missing_symbols if s not in accepted]
+            self.last_batch_coverage = (expected_count - len(self.last_missing_symbols)) / expected_count if expected_count else None
 
     async def _refresh_closed_state(self) -> None:
         """休市判定（红线 2）—— **只在「确定休市」时**把缓存标 stale。

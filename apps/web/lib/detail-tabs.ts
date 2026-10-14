@@ -124,8 +124,6 @@ export const INDEX_DEFAULT_RIGHT_TAB: DetailRightTab = "speed";
 const STOCK_RIGHT_TABS: readonly (readonly [DetailRightTab, string])[] = [
   ["book", "盘口"],
   ["trades", "逐笔"],
-  ["themes", "题材"],
-  ["events", "事件"],
   ["reason", "原因"],
   ["profile", "资料"],
   ["info", "资讯"],
@@ -141,6 +139,6 @@ const INDEX_TABS: readonly (readonly [DetailRightTab, string])[] = [
 ] as const;
 
 /** 按标的是否为指数返回右列 tab 列表（纯函数）。 */
-export function rightTabsFor(isIndex: boolean): readonly (readonly [DetailRightTab, string])[] {
-  return isIndex ? INDEX_TABS : STOCK_RIGHT_TABS;
+export function rightTabsFor(isIndex: boolean, reasonEligible = false): readonly (readonly [DetailRightTab, string])[] {
+  return isIndex ? INDEX_TABS : STOCK_RIGHT_TABS.filter(([key]) => key !== "reason" || reasonEligible);
 }

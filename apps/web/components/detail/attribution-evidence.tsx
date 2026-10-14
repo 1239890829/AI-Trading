@@ -1,6 +1,6 @@
 "use client";
 
-import {memo, useId, useLayoutEffect, useRef, useState} from "react";
+import {memo, useId, useLayoutEffect, useRef, useState, type ReactNode} from "react";
 import {useResource} from "@/hooks/use-resource";
 import {useExitPresence} from "@/hooks/use-exit-presence";
 import {getEventAttribution, getStockAttribution, type AttributionEvidenceItem, type AttributionSourceContext, type EventInterpretationRef, type StockAttributionPayload} from "@/lib/api";
@@ -8,6 +8,7 @@ import {bjDate, eventTimeText, sourceLabel, timeTextBJ} from "@/lib/format";
 import {Skeleton} from "@/components/ui/loading";
 import styles from "./attribution-evidence.module.css";
 import {ConditionList, ExplanationMap, FactTimeline} from "@/components/ui/explanation-map";
+import {limitReasonView, matchSourceReason} from "@/lib/limit-reason-view";
 import {ModalShell} from "@/components/ui/modal-shell";
 
 /** A primary clue must bind a saved source and its exact interpretation. */
@@ -186,14 +187,17 @@ function AttributionItems({items, laterItems = [], responseContext = false, symb
 }
 
 /** Toolbar reads only on open; visible reason fallbacks read once, with no polling. */
-export const StockAttributionPanel = memo(function StockAttributionPanel({symbol, eventId, active = true, title = "驱动线索", defaultExpanded = false, bounded = true, selectedAt, recordedRefs, selectionContext = false, defaultSourceExpanded = false, poolDate, responseAsOf, primarySummary = false}: {
+export const StockAttributionPanel = memo(function StockAttributionPanel({symbol, eventId, active = true, title = "驱动线索", defaultExpanded = false, bounded = true, selectedAt, recordedRefs, selectionContext = false, defaultSourceExpanded = false, poolDate, responseAsOf, primarySummary = false, inlinePrimary = false, sourceReason, sourceCore, sourceAudit}: {
   symbol?: string | null; eventId?: number | null; active?: boolean; title?: string; defaultExpanded?: boolean; bounded?: boolean;
   selectedAt?: string | null; recordedRefs?: EventInterpretationRef[];
   selectionContext?: boolean; defaultSourceExpanded?: boolean;
-  poolDate?: string; responseAsOf?: string; primarySummary?: boolean;
+  poolDate?: string; responseAsOf?: string; primarySummary?: boolean; inlinePrimary?: boolean; sourceReason?: string | null;
+  /** Inline cause readers keep their already-visible source core and full audit in one reading flow. */
+  sourceCore?: string; sourceAudit?: ReactNode;
 }) {
   const [open, setOpen] = useState(defaultExpanded);
   const [readingCycle, setReadingCycle] = useState(0);
+  const [auditFor, setAuditFor] = useState<string | null>(null);
   const id = useId();
   const identity = `${symbol || ""}:${eventId || ""}:${poolDate || ""}:${responseAsOf || ""}`;
   const presence = useExitPresence(active && open ? identity : null);
@@ -201,12 +205,67 @@ export const StockAttributionPanel = memo(function StockAttributionPanel({symbol
   if (openedIdentity !== identity) {setOpenedIdentity(identity); if (primarySummary) setOpen(false);}
   if (primarySummary && !active && open) setOpen(false);
   const options = poolDate || responseAsOf ? {poolDate, responseAsOf} : undefined;
-  const resource = useResource(() => eventId ? options ? getEventAttribution(eventId, symbol, options) : getEventAttribution(eventId, symbol) : options ? getStockAttribution(symbol!, options) : getStockAttribution(symbol!), {key: identity, enabled: active && (open || primarySummary) && (!!eventId || /^\d{6}$/.test(symbol || "")), intervalMs: null, marketHours: false});
+  const resource = useResource(() => eventId ? options ? getEventAttribution(eventId, symbol, options) : getEventAttribution(eventId, symbol) : options ? getStockAttribution(symbol!, options) : getStockAttribution(symbol!), {key: identity, enabled: active && (open || primarySummary || inlinePrimary) && (!!eventId || /^\d{6}$/.test(symbol || "")), intervalMs: null, marketHours: false});
   const data = resource.data;
   const primary = data?.primary_reason;
-  const primaryItem = data ? boundPrimaryItem(data) : null;
+  const boundItem = data ? boundPrimaryItem(data) : null;
+  const sourceMatch = boundItem ? matchSourceReason(boundItem, sourceReason) : null;
+  const primaryItem = inlinePrimary && boundItem && (!["direct_symbol", "source_association"].includes(boundItem.stock_relation.status) || !sourceMatch) ? null : boundItem;
   const otherItems = primaryItem ? data!.items.filter(item => item.event_id !== primaryItem.event_id) : data?.items || [];
   const otherLater = primaryItem ? (data!.later_items || []).filter(item => item.event_id !== primaryItem.event_id) : data?.later_items || [];
+  if (inlinePrimary) {
+    const aux = primaryItem?.llm_aux;
+    const auxSource = aux && primaryItem?.source_context?.[aux.evidence.field];
+    const boundAux = aux && primaryItem && aux.event_id === primaryItem.event_id
+      && Number.isInteger(aux.input_version_id) && aux.input_version_id! > 0
+      && Number.isInteger(primaryItem.interpretation_ref.version_id) && aux.input_version_id! < primaryItem.interpretation_ref.version_id!
+      && aux.observation_id === primaryItem.interpretation_ref.observation_id
+      && !!aux.evidence.quote && typeof auxSource === "string" && auxSource.includes(aux.evidence.quote) ? aux : null;
+    const sourceText = [sourceReason, primaryItem?.source_context?.title, primaryItem?.source_context?.summary].filter(Boolean).join("\n");
+    const sourceConditions = limitReasonView(sourceText).conditions;
+    const conditionKey = (value: string) => value.replace(/\s+/g, "").replace(/[。；;！？!?]+$/, "");
+    const fullConditions = sourceConditions.map(conditionKey).join("\n");
+    // A complete source sentence carries its own qualifiers. Keep a label only
+    // when the saved qualifier has no corresponding visible source wording.
+    const qualifiers = [...(primaryItem ? primary?.qualifiers || [] : []), ...(primaryItem?.qualifiers || [])].filter(value =>
+      value.matched_terms.length ? !value.matched_terms.every(term => fullConditions.includes(conditionKey(term))) : !fullConditions.includes(conditionKey(value.label))
+    ).map(value => `${value.label}${value.matched_terms.length ? `（${value.matched_terms.join("、")}）` : ""}`);
+    const seen = new Set(sourceCore ? [conditionKey(sourceCore)] : []);
+    const conditions = [...sourceConditions, ...qualifiers, ...(primaryItem?.limitations || [])].filter(value => {
+      const key = conditionKey(value);
+      if (!key || seen.has(key)) return false;
+      seen.add(key);
+      return true;
+    });
+    const auditIdentity = `${identity}:${sourceReason || ""}:${primaryItem?.interpretation_ref.version_id || ""}:${primaryItem?.interpretation_ref.observation_id || ""}`;
+    return <section aria-label={title} className="min-w-0 space-y-3 py-2 text-xs">
+      <div className="flex items-center justify-between gap-2"><h3 className="font-medium">已保存解读{boundAux?.state === "no_direction" ? " · 无明确方向" : ""}</h3>{!!resource.error && <button type="button" data-action="secondary" disabled={resource.pending} onClick={resource.refresh}>重试解读</button>}</div>
+      {resource.error ? <p role="alert" className="text-amber-800 dark:text-amber-300">解读读取失败{data ? " · 保留已有内容" : "，暂不能核对"}</p> : resource.pending && !data && <p role="status" className="text-zinc-600 dark:text-zinc-400">读取已保存解读…</p>}
+      {data && !primaryItem && <p className="text-zinc-600 dark:text-zinc-400">暂无可核对的直接来源线索，不用题材标签补填原因。</p>}
+      {primaryItem && <>
+        <p className="font-medium leading-relaxed [overflow-wrap:anywhere]">{boundAux?.reason || primary?.excerpt?.quote}</p>
+        <ol aria-label="原因与依据关系" className={styles.reasonFlow}>
+          <li><span>来源</span><strong>{primaryItem.source.original_publisher || sourceLabel(primaryItem.source.collector)}</strong></li>
+          <li><span>个股关联</span><strong>{primaryItem.stock_relation.label}</strong></li>
+          <li><span>证据状态</span><strong>{primaryItem.fact_support.label}</strong></li>
+        </ol>
+        {(boundAux?.chain || primaryItem.stock_relation.chain || primaryItem.stock_relation.basis) && <p aria-label="传导线索" className="leading-relaxed [overflow-wrap:anywhere]">{boundAux?.chain || primaryItem.stock_relation.chain || primaryItem.stock_relation.basis}</p>}
+      </>}
+      {!!conditions.length && <section aria-label="必要条件"><h4 className="mb-2 font-medium">必要条件</h4><ul className={styles.reasonConditions}>{conditions.map(value => <li key={conditionKey(value)}>{value}</li>)}</ul></section>}
+      <p className="text-zinc-600 dark:text-zinc-400">来源归因，非因果证明。</p>
+      {(sourceAudit || primaryItem) && <details key={auditIdentity} onToggle={event => setAuditFor(event.currentTarget.open ? auditIdentity : null)}><summary className="cursor-pointer text-zinc-600 dark:text-zinc-400">来源原文与完整核对</summary>{auditFor === auditIdentity && <div className="min-w-0 space-y-3 py-2">
+        {sourceAudit}
+        {primaryItem && <>
+          <p className="text-zinc-600 dark:text-zinc-400">{primary?.label} · 当前保存解释，不回填首封或入选依据。</p>
+          <p className="text-zinc-600 dark:text-zinc-400">与来源原因交叉：{sourceMatch}，仅作展示关联核对。</p>
+          {boundAux && <p className="text-zinc-600 dark:text-zinc-400">已保存辅助判读 · {boundAux.state === "no_direction" ? "无明确方向" : "待验证假设"}，尚未验证，不改变选股资格。</p>}
+          {primaryItem.timing_relation && <p className="text-zinc-600 dark:text-zinc-400">{primaryItem.timing_relation.label}，不回填首封时的原因。</p>}
+          <FactTimeline label="关键来源时点" items={[{label: "消息发布", value: primaryItem.timing.source_time_known ? timeLabel(primaryItem.timing.source_published_at) : "未知", kind: "time"}, {label: "解释生效", value: timeLabel(primaryItem.timing.interpretation_effective_at), kind: "time"}]}/>
+          <AttributionEvidence item={primaryItem} symbol={symbol} selectedAt={selectedAt} selectionContext={selectionContext} defaultSourceExpanded complete/>
+        </>}
+      </div>}</details>}
+    </section>;
+  }
   const primaryReading = primary && <div className="min-w-0 space-y-3">
     <p className="text-zinc-600 dark:text-zinc-400">{primary.label} · {primary.reason}。来源线索不是已核实因果，不回填入选与首封依据。</p>
     {!!primary.event_id && !primaryItem && <p role="alert" className="text-amber-800 dark:text-amber-300">主线索来源绑定待核，未自动选择其他资料。</p>}

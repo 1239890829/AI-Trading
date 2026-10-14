@@ -349,3 +349,7 @@ PR #265发布后，用户追加市场指数三列和弹窗双向过渡纠偏。�
 ### 2026-10-13用户T退出与既有阅读修订传播
 
 用户明确退役做T、收敛原因/通知并复用详情右列；最新用户修订优先旧T实现与规划。implementation-plan现役头注、hunting-decision-design/product-closure-design/feature-closure-audit、semantic-decisions、runtime-performance、W00原线索owner/W06主任务、INDEX与handoff同步；旧迁移/ORM/研究档案不删、不恢复新生产。没有新源/模型/评分/推送资格/权限/一级页面或调度频率改变，data-sources/AGENTS/Skills不适用规则升级。依赖是现有消费者兼容安全patch，不新设工具/服务准入。工程门、exactHEAD回执与实盘/语义效果仍分开，不能将有限构建或合成夹具写成全域SLO和选股收益证明。
+
+### 2026-10-14 详情收拢与既有来源正确性传播
+
+用户直派沿IMP-019，事实与反例归runtime-performance§16，状态归W06/handoff，原因交互归limit-up-attribution，炸板/实时源钟恢复契约归data-sources，保存辅助与不持久化归semantic-decisions。仍为既有来源/既有模型的正确性修补，源优先级、TTL、采集/模型频率、4秒实时/12秒炸板预算、选股/通知资格不改。主方案v9.13、AGENTS与Skills无需新准入规则；INDEX无需新增文档入口，既有产品细功能同步原消费者。没有新服务、数据库、调度、一级页面或权限制，不以协作作者反证冒充独立Review；全门/精确HEAD/运行加载和未来效果仍分别验收。

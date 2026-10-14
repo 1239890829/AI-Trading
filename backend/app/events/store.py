@@ -13,7 +13,7 @@ import logging
 from calendar import timegm
 from datetime import datetime
 
-from sqlalchemy import Integer, cast, func, or_, select, update
+from sqlalchemy import Integer, case, cast, func, or_, select, update
 from sqlalchemy.exc import IntegrityError
 
 from app.core.db import get_session_factory
@@ -486,7 +486,9 @@ class EventStore:
                     published_since: datetime | None = None,
                     visible_at: datetime | None = None,
                     status: str | None = None,
-                    exclude_pending: bool = False) -> list[EventCard]:
+                    exclude_pending: bool = False,
+                    symbol: str | None = None,
+                    theme_names: set[str] | None = None) -> list[EventCard]:
         # 卡片、方向与最新解释须来自同一条 SELECT。分次读取时，修订可在方向与
         # 版本查询之间提交，使旧方向错误地绑定到新的 pending/active 版本。
         from sqlalchemy.orm import joinedload
@@ -499,6 +501,22 @@ class EventStore:
             stmt = select(EventCard, EventInterpretation).outerjoin(
                 EventInterpretation, EventInterpretation.id == latest_id
             ).options(joinedload(EventCard.directions))
+            ordering = [EventCard.published_at.desc()]
+            if symbol is not None:
+                direct = select(EventDirection.id).where(
+                    EventDirection.event_id == EventCard.id,
+                    EventDirection.target_type == "symbol", EventDirection.target == symbol,
+                ).exists()
+                background = select(EventDirection.id).where(
+                    EventDirection.event_id == EventCard.id,
+                    EventDirection.target_type == "theme",
+                    EventDirection.target.in_(sorted(theme_names or set())),
+                ).exists()
+                source = or_(EventCard.source_symbol == symbol, direct)
+                # Only the stock reader opts into this relation window. Apply
+                # relevance before LIMIT; global news cannot evict its company.
+                stmt = stmt.where(or_(source, background))
+                ordering.insert(0, case((source, 0), else_=1))
             # Non-active consumers can request an evidence window without
             # half-life filtering. Apply it before LIMIT so future/withdrawn
             # cards cannot crowd out older visible evidence.
@@ -537,7 +555,7 @@ class EventStore:
                         EventInterpretation.effective_at <= now),
                 )
             pairs = db.execute(
-                stmt.order_by(EventCard.published_at.desc()).limit(limit * 3)
+                stmt.order_by(*ordering).limit(limit * 3)
             ).unique().all()
             rows = []
             for row, version in pairs:
