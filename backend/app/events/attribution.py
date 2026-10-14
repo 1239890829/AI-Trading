@@ -16,7 +16,6 @@ from sqlalchemy.orm import joinedload
 
 from app.core.bjtime import BJ_TZ, beijing_now_naive
 from app.events.extract import classify_certainty, _positive_hit
-from app.events.llm_aux import _market_action_only
 from app.models.event import (
     EventCard, EventDirection, EventInterpretation, EventObservation, EventWithdrawalLink,
 )
@@ -47,6 +46,17 @@ _STATE_LABELS = {
     "active": "当前解释", "pending": "来源修订待复核", "withdrawn": "解释已撤回",
     "expired": "观察窗口已过", "unknown": "历史身份未记录", "unavailable": "证据尚未可见",
 }
+_MATERIAL_ACTION = (
+    r"签约|签署|合同|订单|供货|供需|短缺|产能|量产|投产|涨价|降价|提价|政策|获批|预增|"
+    r"澄清|调查|收购|重组|扩产|增资|"
+    r"(?:拟|计划|实施|完成|启动|宣布|披露|审议|终止)[^。；;，,\n]{0,12}回购(?!概念|题材)|"
+    r"回购(?:股份|股票|金额|计划|方案|进展|注销|完成|[0-9一二三四五六七八九十])|"
+    r"投资(?!者)[^。；;，,\n]{0,24}(?:建设|设立|扩建|新建|成立|生产|研发)"
+)
+_TRADE_RECAP = (
+    r"(?i)涨停|跌停|震荡反弹|低开高走|概念.{0,8}(?:上涨|下跌|走强)|ETF.{0,20}(?:涨|跌)[0-9]|"
+    r"股价|涨幅|跌幅|成交额|成交量|换手率|主力资金|资金净流入|资金净流出"
+)
 
 
 def _clock(value: datetime | None) -> str | None:
@@ -148,10 +158,9 @@ def _auxiliary_judgment(payload: dict, row: EventCard, observation: EventObserva
 def _trade_recap_only(title: str, summary: str | None) -> bool:
     """Primary-clue display filter only; it does not change model candidates."""
     text = title + "\n" + (summary or "")
-    if re.search(r"签约|签署|合同|订单|供货|供需|短缺|产能|量产|投产|涨价|降价|提价|政策|获批|预增|公告|澄清|调查|收购|重组|回购|项目|投资", text):
+    if re.search(_MATERIAL_ACTION, text):
         return False  # Preserve material disclosures even when price action is also reported.
-    return _market_action_only(title, summary) or bool(re.search(
-        r"股价|涨幅|跌幅|成交额|成交量|换手率|主力资金|资金净流入|资金净流出", text))
+    return bool(re.search(_TRADE_RECAP, text))
 
 
 def _primary_reason(items: list[dict]) -> dict:
@@ -181,7 +190,18 @@ def _primary_reason(items: list[dict]) -> dict:
         return out
     _, item, timing = min(candidates, key=lambda value: value[0])
     context = item["source_context"]
-    field = "summary" if context["summary"] and context["summary"].strip() else "title"
+    fields = [name for name in ("summary", "title") if context[name] and context[name].strip()]
+
+    def excerpt_priority(name):
+        value = context[name]
+        condition = min(({"incomplete": 0, "proposal": 1, "scope": 2}.get(q["kind"], 3)
+                         for q in item["qualifiers"] if any(term in value for term in q["matched_terms"])), default=3)
+        # Keep explicit conditions in either source field. Without conditions,
+        # prefer the reported action to a summary consisting only of price data.
+        business_denial = classify_certainty(value)[1] == "unknown"
+        return not business_denial, condition, False if condition < 3 else not bool(re.search(_MATERIAL_ACTION, value))
+
+    field = min(fields, key=excerpt_priority)
     text = context[field]
     # Prefer the sentence containing an explicit source condition. The full
     # source_context remains the drilldown when a long sentence needs clipping.
@@ -452,7 +472,13 @@ def read_attribution(session_factory, *, symbol: str | None = None,
         usable = (EventCard.fact_kind == "fact") & (EventCard.status == "active") & EventCard.revision_pending_at.is_(None) & (
             EventInterpretation.state == "active") & (
             published_us + EventCard.half_life_hours * 7_200_000_000 > now_us) & visible_source
+        # Use the same bounded lexical contract as the final primary picker.
+        # Recent price reports remain readable, but cannot fill the candidate
+        # window before an older direct material source.
+        source_text = EventCard.title + "\n" + func.coalesce(EventCard.summary, "")
+        recap_only = source_text.regexp_match(_TRADE_RECAP) & ~source_text.regexp_match(_MATERIAL_ACTION)
         ordered = stmt.order_by(case((usable, 0), else_=1), relation_order,
+                                case((recap_only, 1), else_=0),
                                 EventCard.published_at.desc(), EventCard.id.desc())
         if response_as_of is None:
             pairs = db.execute(ordered.limit(limit)).unique().all()

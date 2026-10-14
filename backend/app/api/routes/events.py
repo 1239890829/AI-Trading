@@ -597,11 +597,10 @@ async def events_for_symbol(
         theme_names = {m["theme_name"] for m in svc.get_official_for_symbol(sym)}
 
     matched = []
-    # 2026-09-09：limit 50 → 300。此前每轮快讯新增几十条会把半天前的关键事件
-    # （如 15:42 的北京商业航天）挤出 50 条窗口，个股关联"突然变 0"。
-    # 另：row.directions 已由 list_events selectinload 预加载，直接用，免 N+1。
-    # 同步 SQLite 读搬线程池（2026-09-12）：limit=300 实测约 21ms（个股详情热路径）。
-    _rows = await asyncio.to_thread(store.list_events, active_only=True, limit=300)
+    # SQL先按该股关系过滤、直接公司关联优先，再取本页上限；全市场近期快讯
+    # 和泛题材不能挤掉公司消息。关系与当前解释在同一读取中加载，免N+1。
+    _rows = await asyncio.to_thread(store.list_events, active_only=True, limit=limit,
+                                   symbol=sym, theme_names=theme_names)
     for row in _rows:
         dirs = row.directions
         if row.source_symbol == sym or any(

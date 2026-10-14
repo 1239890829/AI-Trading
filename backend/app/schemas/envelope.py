@@ -59,12 +59,29 @@ class LimitReasonObservation(BaseModel):
     received_at: str | None = None
 
 
+class PoolReadCoverage(BaseModel):
+    state: Literal["success", "unknown", "error"]
+    error: str | None = None
+
+
+class LimitQualificationObservation(BaseModel):
+    symbol: str
+    trade_date: str
+    kind: Literal["limit_up", "limit_break"]
+    source: str
+    observed_at: str
+
+
 class LimitUpPoolPayload(BaseModel):
     """GET /limit-up 与 /limit-break 的 data。"""
 
     trade_date: str
     pool: list[LimitUpRecord]
     reason_observations: dict[str, list[LimitReasonObservation]] = Field(default_factory=dict)
+    # Only include_breaks=true sets these fields. Null is never a valid empty pool.
+    break_pool: list[LimitUpRecord] | None = None
+    coverage: dict[Literal["limit_up", "limit_break"], PoolReadCoverage] | None = None
+    qualification_observations: dict[str, list[LimitQualificationObservation]] | None = None
 
 
 class LimitDownPoolPayload(BaseModel):

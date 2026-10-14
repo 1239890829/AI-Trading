@@ -187,6 +187,71 @@ def test_cli_completion_success_and_command_shape(monkeypatch):
     assert calls[0]["kwargs"]["timeout"] >= 120  # CLI 冷启动下超时下限抬到 120s
 
 
+@pytest.mark.parametrize("cancel_early", [False, True])
+def test_stream_cli_does_not_persist_or_share_context_and_still_drains(monkeypatch, tmp_path, cancel_early):
+    """A fake CLI models disk persistence; no real process, model or source log is used."""
+    from app.core.llm_client import stream_chat_completion
+
+    calls, processes = [], []
+
+    class StreamProcess:
+        stderr = None
+
+        def __init__(self, reply):
+            self.active = True
+            self.kills = 0
+            self.waits = []
+            self.stdout = iter([
+                _json.dumps({"type": "stream_event", "event": {"type": "content_block_delta",
+                    "delta": {"type": "text_delta", "text": reply}}}),
+                _json.dumps({"type": "stream_event", "event": {"type": "content_block_delta",
+                    "delta": {"type": "text_delta", "text": " finished"}}}),
+                _json.dumps({"type": "result", "is_error": False}),
+            ])
+
+        def poll(self):
+            return None if self.active else 0
+
+        def kill(self):
+            self.kills += 1
+            self.active = False
+
+        def wait(self, timeout):
+            self.waits.append(timeout)
+            assert not self.active
+            return 0
+
+    def fake_popen(argv, **kwargs):
+        calls.append(list(argv))
+        # The documented print-mode default persists a fresh session. Reproduce
+        # that side effect unless the invocation explicitly disables it.
+        if "--no-session-persistence" not in argv:
+            (tmp_path / f"session-{len(calls)}.json").write_text('{"synthetic_session":true}')
+        proc = StreamProcess(f"reply-{len(calls)}")
+        processes.append(proc)
+        return proc
+
+    monkeypatch.setattr("app.core.llm_client.resolve_cli_path", lambda _path="": "/fake/claude")
+    monkeypatch.setattr("app.core.llm_client.subprocess.Popen", fake_popen)
+    for index, prompt in enumerate(("synthetic first request", "synthetic second request"), start=1):
+        stream = stream_chat_completion("", "", "fixture-model", [
+            {"role": "system", "content": "synthetic system"}, {"role": "user", "content": prompt},
+        ], provider="claude_cli", cli_path="/fake/claude")
+        try:
+            assert (next(stream) if cancel_early else "".join(stream)) == f"reply-{index}" + ("" if cancel_early else " finished")
+        finally:
+            stream.close()
+            stream.close()
+        assert calls[-1][2] == prompt
+        assert calls[-1][calls[-1].index("--system-prompt") + 1] == "synthetic system"
+        assert calls[-1][calls[-1].index("--model") + 1] == "fixture-model"
+        assert calls[-1][calls[-1].index("--tools") + 1] == ""
+        assert not {"--continue", "--resume", "--session-id", "-c", "-r"}.intersection(calls[-1])
+    assert len(processes) == 2 and processes[0] is not processes[1]
+    assert all(proc.kills == 1 and proc.waits == [5] for proc in processes)
+    assert list(tmp_path.glob("session-*.json")) == []
+
+
 def test_cli_completion_errors(monkeypatch):
     # 找不到 CLI
     monkeypatch.setattr(

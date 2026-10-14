@@ -12,13 +12,15 @@ from types import SimpleNamespace
 
 import pytest
 
-from app.data_providers.eastmoney import EastmoneyProvider
+from app.data_providers.eastmoney import EastmoneyProvider, ProviderError
 
 _D = date(2026, 8, 28)
 
 _RAW = {
+    "rc": 0,
     "data": {
-        "tc": 16,
+        # One retained row from the real 16-stock response; total matches this fixture.
+        "tc": 1,
         "qdate": 20260828,
         "pool": [
             {
@@ -60,21 +62,21 @@ def test_parse_scales_price_by_1000(monkeypatch: pytest.MonkeyPatch):
     assert r.source == "eastmoney"
 
 
-def test_skips_rows_without_symbol(monkeypatch: pytest.MonkeyPatch):
+def test_rejects_partial_pool_with_missing_symbol(monkeypatch: pytest.MonkeyPatch):
     p = _provider_with_payload(monkeypatch)
-    raw = {"data": {"tc": 2, "pool": [{"c": "", "n": "无代码"}, _RAW["data"]["pool"][0]]}}
+    raw = {"rc": 0, "data": {"tc": 2, "pool": [{"c": "", "n": "无代码"}, _RAW["data"]["pool"][0]]}}
 
     async def _fake(url: str, params: dict) -> dict:
         return raw
 
     monkeypatch.setattr(p, "_get_json", _fake)
-    rows = asyncio.run(p.get_limit_break_pool(_D))
-    assert [r.symbol for r in rows] == ["600103"]
+    with pytest.raises(ProviderError, match="invalid or duplicate symbols"):
+        asyncio.run(p.get_limit_break_pool(_D))
 
 
 def test_missing_optional_fields_do_not_crash(monkeypatch: pytest.MonkeyPatch):
     p = _provider_with_payload(monkeypatch)
-    raw = {"data": {"tc": 1, "pool": [{"c": "600103"}]}}
+    raw = {"rc": 0, "data": {"tc": 1, "pool": [{"c": "600103"}]}}
 
     async def _fake(url: str, params: dict) -> dict:
         return raw

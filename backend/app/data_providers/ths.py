@@ -276,16 +276,68 @@ class ThsFuyaoProvider:
         return out
 
     async def get_limit_break_pool(self, trade_date: date) -> list[LimitUpRecord]:
-        """炸板池（涨停后开板未回封）。"""
-        data = await self._get(
-            "/api/a-share/special-data/limit-break-pool",
-            {"date_ms": date_ms(trade_date), "page": 1, "size": 200},
-        )
+        """炸板池；完整的成功空池与供应商失败分开，分页不丢后续股票。
+
+        官方 data.timestamp 是就绪时间，并非历史池交易日证据。
+        仅此方法严格核验原始 envelope，不改变其他端点的 _get 契约。
+        """
+        path = "/api/a-share/special-data/limit-break-pool"
+        items = []
+        total = None
+        page_size = 200
+        page = 1
+        while True:
+            resp = await self._client.get(
+                f"{self._base}{path}",
+                params={"date_ms": date_ms(trade_date), "page": page, "size": 200},
+            )
+            if resp.status_code != 200:
+                raise ProviderError(f"ths limit-break HTTP {resp.status_code}")
+            try:
+                payload = resp.json()
+            except ValueError as exc:
+                raise ProviderError("ths limit-break invalid JSON") from exc
+            if not isinstance(payload, dict) or type(payload.get("code")) is not int or payload["code"] != 0:
+                raise ProviderError("ths limit-break business response failed")
+            data = payload.get("data")
+            if not isinstance(data, dict) or not isinstance(data.get("item"), list):
+                raise ProviderError("ths limit-break pool missing or malformed")
+            pagination = data.get("pagination")
+            if not isinstance(pagination, dict) or type(pagination.get("total")) is not int or pagination["total"] < 0:
+                raise ProviderError("ths limit-break pagination missing or malformed")
+            reported_size = pagination.get("size", 200)
+            if type(reported_size) is not int or not 1 <= reported_size <= 200:
+                raise ProviderError("ths limit-break page size invalid")
+            if total is None:
+                total, page_size = pagination["total"], reported_size
+            if pagination["total"] != total or reported_size != page_size:
+                raise ProviderError("ths limit-break pagination changed during read")
+            pages = (total + page_size - 1) // page_size
+            if ("page" in pagination and (type(pagination["page"]) is not int or pagination["page"] != page)
+                    or "pages" in pagination and (type(pagination["pages"]) is not int
+                        or pagination["pages"] not in ({0, 1} if total == 0 else {pages}))):
+                raise ProviderError("ths limit-break pagination inconsistent")
+            expected = min(page_size, total - len(items))
+            if len(data["item"]) != expected:
+                raise ProviderError("ths limit-break pool incomplete")
+            items.extend(data["item"])
+            if len(items) == total:
+                break
+            page += 1
+
+        symbols = []
+        for it in items:
+            thscode = it.get("thscode") if isinstance(it, dict) else None
+            code = from_thscode(thscode) if isinstance(thscode, str) else ""
+            if (len(code) != 6 or not code.isascii() or not code.isdigit()
+                    or thscode != to_thscode(code)
+                    or it.get("ticker") is not None and it["ticker"] != code):
+                raise ProviderError("ths limit-break pool has invalid symbol identity")
+            symbols.append(code)
+        if len(set(symbols)) != len(symbols):
+            raise ProviderError("ths limit-break pool has duplicate symbols")
         out = []
-        for it in data.get("item") or []:
-            code = from_thscode(str(it.get("thscode") or ""))
-            if len(code) != 6:
-                continue
+        for code, it in zip(symbols, items):
             num = lambda v: float(v) if v is not None else None  # noqa: E731
             out.append(
                 LimitUpRecord(

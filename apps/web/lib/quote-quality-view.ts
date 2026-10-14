@@ -55,6 +55,7 @@ export function quoteQualityView(input: QuoteQualityInput) {
   let label = quality === "high" ? "正常" : quality === "invalid" ? "非法" : "时点待核";
   let tone: "quiet" | "warning" | "danger" = quality === "invalid" ? "danger" : quality === "high" ? "quiet" : "warning";
   let context = "";
+  let expectedSession = false;
   if (quality === "stale") {
     // Actual failed or rejected reads outrank an age or pause explanation.
     if (has("refresh_failed")) label = "刷新异常";
@@ -82,10 +83,12 @@ export function quoteQualityView(input: QuoteQualityInput) {
         label = pause;
         context += `；日历确认${pause}，仍展示最近源观测，不声明源报价已更新`;
       } else if (phase && onlyAge && validTime && isKnownIndex(input.symbol, input.market)) {
+        expectedSession = true;
         label = phase === "auction" ? "竞价等待" : "开盘等待";
         context += "；交易日阶段：" + (phase === "auction" ? "集合竞价" : "开盘等待") + "；指数尚无较新的可信观测，不声明数据源必定更新";
       } else if (phase === "pre_open_gap" && onlyAge && validTime
         && sourceDate === session?.trade_date && sourceMinute !== null && sourceMinute >= 565) {
+        expectedSession = true;
         label = "开盘等待";
         context += "；当前处于09:25–09:30开盘等待；保留本日09:25之后的源观测，不据此认定最终竞价结果";
       }
@@ -106,5 +109,5 @@ export function quoteQualityView(input: QuoteQualityInput) {
   const sourceTime = dataTimestamp ? `${bjDate(dataTimestamp) || "未知日期"} ${timeText(dataTimestamp)}` : "未提供";
   const age = dataTimestamp && session ? (Date.parse(session.as_of) - Date.parse(dataTimestamp)) / 1000 : NaN;
   const detail = dataTimestamp || session ? `源数据时间：${sourceTime}${Number.isFinite(age) && age >= 0 ? `；源时间距展示时刻 ${Math.floor(age)} 秒` : ""}` : "";
-  return {label, tone, title: [context, explanation, detail].filter(Boolean).join("；") || undefined};
+  return {label, tone, expectedSession, title: [context, explanation, detail].filter(Boolean).join("；") || undefined};
 }

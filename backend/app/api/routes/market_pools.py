@@ -6,6 +6,7 @@
 
 from __future__ import annotations
 
+import asyncio
 from copy import deepcopy
 import hashlib
 import re
@@ -67,11 +68,48 @@ def _reason_observations(holder, trade_date: date, rows) -> dict:
     return result
 
 
-@router.get("/limit-up", response_model=Envelope[LimitUpPoolPayload])
+def _qualification_observations(holder, trade_date: date, domains: dict[str, list]) -> dict:
+    """Retain affirmative same-day source identities, never current board status."""
+    cache = cache_on(holder, "market.limit_qualifications", 86400, maxsize=2)
+    _, saved = cache.get(trade_date)
+    observations = deepcopy(saved or {})
+    for kind, rows in domains.items():
+        for row in rows:
+            if row.get("quality") not in {"high", "medium"}:
+                continue  # A successful source read does not upgrade low-quality membership.
+            key = (row["symbol"], kind, row["source"])
+            observations.setdefault(key, {
+                "symbol": row["symbol"], "trade_date": trade_date.isoformat(),
+                # A combined read must retain the original domain receipt clock.
+                "kind": kind, "source": row["source"], "observed_at": row["received_at"],
+            })
+    while len(observations) > 4096:
+        observations.pop(next(iter(observations)))
+    cache.set(trade_date, observations)
+    result = {}
+    for (symbol, _kind, _source), value in observations.items():
+        result.setdefault(symbol, []).append(deepcopy(value))
+    return result
+
+
+def _membership_coverage(rows, trade_date: date) -> dict:
+    if not isinstance(rows, list) or any(
+        not isinstance(row, dict) or row.get("trade_date") != trade_date.isoformat()
+        or not isinstance(row.get("symbol"), str) or not re.fullmatch(r"[0-9]{6}", row["symbol"])
+        or not row.get("source") for row in rows
+    ):
+        return {"state": "error", "error": "池记录日期或证券来源身份不符"}
+    if any(row.get("quality") in {"invalid", "stale"} for row in rows):
+        return {"state": "unknown", "error": "池记录质量不足，当前资格待核"}
+    return {"state": "success", "error": None}
+
+
+@router.get("/limit-up", response_model=Envelope[LimitUpPoolPayload], response_model_exclude_unset=True)
 async def limit_up(
     request: Request,
     date_str: str | None = Query(default=None, alias="date", description="YYYY-MM-DD，默认最近交易日"),
     hub: QuoteHub = Depends(get_hub),
+    include_breaks: bool = False,
 ) -> dict:
     try:
         trade_date = date.fromisoformat(date_str) if date_str else await default_trade_date(hub)
@@ -99,10 +137,70 @@ async def limit_up(
             "meta": await dated_meta(hub, trade_date),
         }
 
-    hit, payload = await cache.get_or_set(trade_date, build)
-    result = deepcopy(payload)
-    result["meta"]["cached"] = hit
-    return result
+    async def read_up():
+        hit, payload = await cache.get_or_set(trade_date, build)
+        result = deepcopy(payload)
+        result["meta"]["cached"] = hit
+        return result
+
+    if not include_breaks:
+        return await read_up()
+
+    break_cache = cache_on(request.app.state, "market.limit_break", 60, maxsize=8)
+
+    async def build_breaks():
+        method = getattr(hub.provider, "get_limit_break_pool", None)
+        if method is None:
+            raise NotImplementedError("当前数据链未提供炸板池")
+        records = await method(trade_date)
+        if not isinstance(records, list):
+            raise ValueError("炸板池响应不是记录列表")
+        rows = [row.model_dump(mode="json") for row in records]
+        coverage = _membership_coverage(rows, trade_date)
+        if coverage["state"] == "error":
+            raise ValueError(coverage["error"])
+        return rows
+
+    async def read_breaks():
+        _, rows = await break_cache.get_or_set(trade_date, build_breaks)
+        return deepcopy(rows)
+
+    async def combined():
+        # Only domain reads have a TTL. Caching this assembled response would
+        # restart an already cached domain's age and retain it for up to 119s.
+        up, broken = await asyncio.gather(read_up(), read_breaks(), return_exceptions=True)
+        if isinstance(up, BaseException):
+            if isinstance(up, asyncio.CancelledError):
+                raise up
+            up_rows, reasons = [], _reason_observations(request.app.state, trade_date, [])
+            up_coverage = {"state": "error", "error": str(getattr(up, "detail", up))}
+            meta = await dated_meta(hub, trade_date)
+        else:
+            up_rows, reasons = up["data"]["pool"], up["data"]["reason_observations"]
+            up_coverage = _membership_coverage(up_rows, trade_date)
+            meta = up["meta"]
+        if isinstance(broken, BaseException):
+            if isinstance(broken, asyncio.CancelledError):
+                raise broken
+            break_rows = None
+            break_coverage = {"state": "unknown" if isinstance(broken, NotImplementedError) else "error",
+                              "error": str(broken)}
+        else:
+            break_coverage = _membership_coverage(broken, trade_date)
+            break_rows = broken if break_coverage["state"] == "success" else None
+        affirmative = {}
+        if up_coverage["state"] == "success":
+            affirmative["limit_up"] = up_rows
+        if break_coverage["state"] == "success":
+            affirmative["limit_break"] = break_rows
+        return {"data": {
+            "trade_date": trade_date.isoformat(), "pool": up_rows,
+            "reason_observations": reasons, "break_pool": break_rows,
+            "coverage": {"limit_up": up_coverage, "limit_break": break_coverage},
+            "qualification_observations": _qualification_observations(request.app.state, trade_date, affirmative),
+        }, "meta": {**meta, "qualification_scope": "same_day_source_observations_not_current_seal"}}
+
+    return await combined()
 
 
 @router.get("/limit-down", response_model=Envelope[LimitDownPoolPayload])

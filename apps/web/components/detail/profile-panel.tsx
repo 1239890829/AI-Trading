@@ -5,7 +5,8 @@ import {NarrativeText} from "@/components/ui/explanation-map";
 import { fmt, pctColor, pctText } from "@/lib/format";
 import { Skeleton } from "@/components/ui/loading";
 import {DetailReadStatus, type DetailReadState} from "./read-status";
-import {CompanyConceptChips} from "./theme-chips";
+import {ThemeChipsRow} from "./theme-chips";
+import type {StockThemes} from "@/lib/api";
 
 /** 公司资料（/api/company 返回的超集；类型随消费方窄化）。 */
 export interface CompanyProfile {
@@ -44,6 +45,9 @@ export function ProfilePanel({
   onRetry,
   readIdentity,
   active = true,
+  themes = null,
+  themesState,
+  onThemesRetry,
 }: {
   boardRows: BoardRows;
   company: CompanyProfile | null;
@@ -52,16 +56,19 @@ export function ProfilePanel({
   onRetry?: () => void;
   readIdentity?: string;
   active?: boolean;
+  themes?: StockThemes | null;
+  themesState?: DetailReadState;
+  onThemesRetry?: () => void;
 }) {
   return (
     <div className="px-3 py-2 text-xs">
       {boardRows
-        .filter(([, items]) => items.length > 0)
+        .filter(([label, items]) => label !== "概念题材" && items.length > 0)
         .map(([label, items, tone]) => (
           <div key={label} className="mb-2.5">
             <div className="mb-1 text-zinc-600 dark:text-zinc-400">{label}</div>
             <div className="flex flex-wrap gap-1">
-              {label === "概念题材" ? <CompanyConceptChips names={items} heading={false} /> : items.map((b) => (
+              {items.map((b) => (
                 <span key={b} className={`rounded bg-zinc-100 px-1.5 py-0.5 dark:bg-zinc-800 ${tone}`}>
                   {b}
                 </span>
@@ -69,6 +76,10 @@ export function ProfilePanel({
             </div>
           </div>
         ))}
+      <div className="mb-3">
+        {themesState && <DetailReadStatus label="题材" state={themesState} onRetry={onThemesRetry} identity={`${readIdentity}:themes`} active={active}/>}
+        <ThemeChipsRow themes={themes} companyNames={boardRows.find(([label]) => label === "概念题材")?.[1] || []}/>
+      </div>
       {company?.main_business && (
         <div className="mb-2">
           <div className="mb-1 text-zinc-600 dark:text-zinc-400">主营业务</div>

@@ -36,7 +36,7 @@ it("an error outranks a closed label, keeps retry visible and explains retained 
 });
 
 it("a different security or inactive consumer closes diagnostics and does not silently reopen", () => {
-  const props = {label: "分钟", state, diagnostics: <p>合成源钟</p>};
+  const props = {label: "分钟", state, diagnostics: <p>合成源钟</p>, diagnosticIssue: true};
   const view = render(<DetailReadStatus {...props} identity="600519:minute" />);
   fireEvent.click(screen.getByRole("button", {name: "分钟诊断"}));
   view.rerender(<DetailReadStatus {...props} identity="000001:minute" />);
@@ -46,4 +46,11 @@ it("a different security or inactive consumer closes diagnostics and does not si
   fireEvent.click(screen.getByRole("button", {name: "分钟诊断"}));
   view.rerender(<DetailReadStatus {...props} identity="600519:minute" active={false} />);
   expect(screen.queryByRole("dialog")).toBeNull();
+});
+
+it("healthy successful reads do not keep a diagnostic row or a refresh spacer", () => {
+  const view = render(<DetailReadStatus label="分钟" state={state} diagnostics={<p>合成源钟</p>} />);
+  expect(view.container.textContent).toBe("");
+  view.rerender(<DetailReadStatus label="分钟" state={{...state, pending: true}} diagnostics={<p>合成源钟</p>} />);
+  expect(view.container.textContent).toBe("");
 });

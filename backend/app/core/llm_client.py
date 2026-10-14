@@ -511,6 +511,7 @@ def _stream_cli(
         "--verbose",
         "--model", model,
         "--tools", "",
+        "--no-session-persistence",
         "--exclude-dynamic-system-prompt-sections",
     ]
     if system:

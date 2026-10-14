@@ -34,6 +34,17 @@ afterEach(cleanup);
  */
 
 describe("QualityBadge 可见性策略（唯一决策点）", () => {
+  it.each(["auction", "pre_open_gap"] as const)("正常%s等待仅文字变色，stale与源钟保留，真实失败仍有警告底色", phase => {
+    const asOf = phase === "auction" ? "2026-10-14T09:20:00+08:00" : "2026-10-14T09:27:00+08:00";
+    const props = {quality: "stale", reasons: ["quote_age_exceeded"], symbol: "sh000001", dataTimestamp: "2026-10-13T15:00:00+08:00", session: {phase, trade_date: "2026-10-14", as_of: asOf, trade_day_result: true}};
+    const view = render(<QualityBadge {...props}/>);
+    const badge = screen.getByText(phase === "auction" ? "竞价等待" : "开盘等待");
+    expect(badge.className).not.toContain("bg-");
+    expect(badge.getAttribute("data-quality")).toBe("stale");
+    expect(badge.title).toContain("2026-10-13");
+    view.rerender(<QualityBadge {...props} reasons={["quote_age_exceeded", "refresh_failed"]}/>);
+    expect(screen.getByText("刷新异常").className).toContain("bg-");
+  });
   it("high（正常）渲染为静音灰「正常」——不得静默消失，否则与「字段缺失」不可辨", () => {
     render(<QualityBadge quality="high" />);
     expect(screen.getByText("正常")).toBeTruthy();

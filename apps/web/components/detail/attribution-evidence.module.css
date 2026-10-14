@@ -38,6 +38,12 @@
 .reasonEntry {display: grid;grid-template-columns: minmax(0,1fr) auto;align-items: center;gap: 8px;width: 100%;min-width: 0;text-align: left;}
 .reasonEntry span {min-width: 0;}
 .reasonEntry svg {flex: none;}
+.reasonFlow {display: grid;grid-template-columns: repeat(3,minmax(0,1fr));gap: 8px;margin: 0;padding: 0;list-style: none;}
+.reasonFlow li {min-width: 0;padding: 8px 0;border-top: 1px solid var(--ui-line,rgba(128,128,128,.2));overflow-wrap: anywhere;}
+.reasonFlow span {display: block;margin-bottom: 5px;color: var(--ui-muted);font-size: .6875rem;}
+.reasonFlow strong {font-weight: 500;line-height: 1.6;}
+.reasonConditions {display: grid;grid-template-columns: minmax(0,1fr);gap: 7px;margin: 0;padding: 0;list-style: none;}
+.reasonConditions li {min-width: 0;padding: 7px 0 7px 10px;border-left: 2px solid var(--ui-line,rgba(128,128,128,.2));line-height: 1.65;overflow-wrap: anywhere;}
 
 @media(max-width:480px) {
   .evidence {gap: 14px;}

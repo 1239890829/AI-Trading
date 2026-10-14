@@ -15,14 +15,15 @@ const fixture: StockThemes = {
 };
 
 describe("ThemeChipsRow", () => {
-  it("双源并列渲染，跳转链接与涨停归因徽标齐全", () => {
-    render(<ThemeChipsRow themes={fixture} />);
+  it("精确同名只渲染一个题材入口，官方、来源归因和公司资料均保留", () => {
+    render(<ThemeChipsRow themes={fixture} companyNames={["粮食概念", "粮食概念"]} />);
 
-    // 同一题材双源各渲染一个 chip（官方成分 + 涨停归因），互不覆盖
+    // 合并入口保留每个来源，不把公司概念升级成当日催化。
     const chips = screen.getAllByText("粮食概念");
-    expect(chips.length).toBe(2);
+    expect(chips.length).toBe(1);
     expect(chips[0].closest("a")?.getAttribute("href")).toBe("/tape?tab=themes&focus=%E7%B2%AE%E9%A3%9F%E6%A6%82%E5%BF%B5");
-    expect(screen.getByText("涨停归因")).toBeTruthy();
+    expect(chips[0].closest("a")?.getAttribute("title")).toContain("官方成分 · 2026-08-28 来源归因 · 公司资料");
+    expect(screen.getByText("官方 / 归因 / 资料")).toBeTruthy();
   });
 
   it("官方 chip 内嵌板块当日涨跌幅徽标", () => {
