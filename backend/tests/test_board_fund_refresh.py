@@ -21,6 +21,7 @@ def test_dynamic_fields_do_not_outlive_original_input_cache(monkeypatch, input_t
     generation = {"value": 1}
     source_calls = []
     trace = []
+    monkeypatch.setattr(board_flow, "_inflight_source_reads", None, raising=False)
     monkeypatch.setattr(ttl_cache, "monotonic", lambda: clock[0])
     monkeypatch.setattr(board_flow, "_in_session", lambda: in_session)
     monkeypatch.setattr(

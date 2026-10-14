@@ -53,6 +53,7 @@ def _request():
 
 def _patch_board_list(monkeypatch, rows_by_kind):
     from app.market import board_flow as bf
+    monkeypatch.setattr(bf, "_inflight_source_reads", None, raising=False)
 
     async def fake_list(kind):
         return rows_by_kind.get(kind, []), []

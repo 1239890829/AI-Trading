@@ -97,6 +97,23 @@ def _in_session() -> bool:
     return trade_calendar.in_wide_market_window(beijing_now())
 
 
+def board_list_read_identity(kind: str) -> tuple[TTLCache, tuple]:
+    """The original success-cache identity, also used by whole-index owners."""
+    cache = _LIST_CACHE if _in_session() else _LIST_EOD_CACHE
+    key = (beijing_now().date().isoformat(), kind, _HOSTS, _BOARD_LIST_FIELDS)
+    return cache, key
+
+
+def start_board_read_lifecycle() -> None:
+    """Reopen a closed module owner only after its actual work has drained."""
+    owner = globals().get("_inflight_source_reads")
+    if owner is None or not owner.closing:
+        return
+    if any(not task.done() for task in owner.tasks.values()):
+        raise RuntimeError("board read owner is still draining")
+    globals().pop("_inflight_source_reads", None)
+
+
 def _num(v) -> float | None:
     if v in (None, "-", ""):
         return None
@@ -206,8 +223,7 @@ async def get_board_list(kind: str) -> tuple[list[dict] | None, list[str]]:
     """全量板块行（concept/industry）。缓存盘中 30s / 盘外 300s；失败不缓存。"""
     if kind not in _KIND_FS:
         return None, [f"kind 非法：{kind!r}"]
-    cache = _LIST_CACHE if _in_session() else _LIST_EOD_CACHE
-    key = (beijing_now().date().isoformat(), kind, _HOSTS, _BOARD_LIST_FIELDS)
+    cache, key = board_list_read_identity(kind)
     pending_key = (cache, key)
 
     async def load() -> dict:
