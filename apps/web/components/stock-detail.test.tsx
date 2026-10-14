@@ -1109,4 +1109,51 @@ describe("StockDetailPanel · 每个端点只读取一次首屏", () => {
     expect(view.getByTestId("minute-price").getAttribute("data-index-last")).toBe("3030");
     expect(view.getByRole("alert").textContent).toContain("指数叠加读取失败");
   });
+
+  it("指数叠加可展示已确认休市同日历史，保留非实时标签和实际 stale 质量，后续失败可重试", async () => {
+    const fetcher = vi.fn(() => {throw new Error("offline test: unexpected fetch");});
+    vi.stubGlobal("fetch", fetcher);
+    vi.setSystemTime(new Date("2026-10-14T08:08:35+08:00"));
+    const points = [{ts: "2026-10-13T15:00:00+08:00", price: 3030, source: "tencent"}];
+    const quote = {...audit, symbol: "000001", market: "SH", source: "tencent", quality: "stale" as const, quality_reasons: ["market_closed"],
+      price: 3030, prev_close: 3000, data_timestamp: "2026-10-13T16:15:00+08:00",
+      display_session: {phase: "closed" as const, trade_date: "2026-10-14", as_of: "2026-10-14T08:08:35+08:00", trade_day_result: true}};
+    const before = JSON.stringify(quote);
+    api.getMinuteLineWithBaseline.mockResolvedValue({points, vr_baseline_5m: null});
+    api.getMinuteLine.mockResolvedValue(points);
+    api.getMarketOverview.mockResolvedValue({indices: [quote]});
+    const view = render(<StockDetailPanel symbol="600519" chartTab="minute" />);
+    await settle();
+    expect(view.getByTestId("minute-price").getAttribute("data-index-last")).toBe("3030");
+    expect(view.getByText("上证叠加 · 2026-10-13 · 非实时")).toBeTruthy();
+    expect(view.queryByText(/指数叠加读取失败/)).toBeNull();
+    expect(JSON.stringify(quote)).toBe(before);
+    api.getMinuteLine.mockRejectedValueOnce(new Error("synthetic overlay network failure"));
+    await advance(60_000);
+    expect(view.getByRole("alert").textContent).toContain("指数叠加读取失败 · 保留结果");
+    expect(view.getByTestId("minute-price").getAttribute("data-index-last")).toBe("3030");
+    expect(view.getByText("上证叠加 · 2026-10-13 · 非实时")).toBeTruthy();
+    fireEvent.click(view.getByRole("button", {name: "重新读取指数叠加"}));
+    await settle();
+    expect(view.queryByText(/指数叠加读取失败/)).toBeNull();
+    expect(api.getNewsDigest).not.toHaveBeenCalled();
+    expect(api.getPaperAccount).not.toHaveBeenCalled();
+    expect(fetcher).not.toHaveBeenCalled();
+  });
+
+  it.each(["refresh_failed", "quote_age_exceeded"])("指数叠加不能把真实%s混入休市历史", async reason => {
+    vi.setSystemTime(new Date("2026-10-14T08:08:35+08:00"));
+    const points = [{ts: "2026-10-13T15:00:00+08:00", price: 3030, source: "tencent"}];
+    api.getMinuteLineWithBaseline.mockResolvedValue({points, vr_baseline_5m: null});
+    api.getMinuteLine.mockResolvedValue(points);
+    api.getMarketOverview.mockResolvedValue({indices: [{...audit, symbol: "sh000001", source: "tencent", quality: "stale", quality_reasons: ["market_closed", reason],
+      price: 3030, prev_close: 3000, data_timestamp: "2026-10-13T16:15:00+08:00",
+      display_session: {phase: "closed", trade_date: "2026-10-14", as_of: "2026-10-14T08:08:35+08:00", trade_day_result: true}}]});
+    const view = render(<StockDetailPanel symbol="600519" chartTab="minute" />);
+    await settle();
+    expect(view.getByRole("alert").textContent).toContain("指数叠加读取失败");
+    expect(view.getByTestId("minute-price").getAttribute("data-index-last")).toBe("none");
+    expect(view.queryByText(/上证叠加 · .*非实时/)).toBeNull();
+    expect(api.getNewsDigest).not.toHaveBeenCalled();
+  });
 });

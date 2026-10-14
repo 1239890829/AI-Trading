@@ -28,7 +28,7 @@ function calendarPhase(session: QuoteDisplaySession | null | undefined): "auctio
   return null;
 }
 
-function calendarPause(session: QuoteDisplaySession | null | undefined): "未开盘" | "午间休息" | "已收盘" | "休市" | null {
+export function calendarPause(session: QuoteDisplaySession | null | undefined): "未开盘" | "午间休息" | "已收盘" | "休市" | null {
   if (!session || session.phase !== "closed" || (session.trade_day_result !== true && session.trade_day_result !== false)
     || !/(?:Z|[+-]\d{2}:\d{2})$/.test(session.as_of) || bjDate(session.as_of) !== session.trade_date) return null;
   const minute = beijingMinute(session.as_of);

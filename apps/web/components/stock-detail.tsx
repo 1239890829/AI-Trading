@@ -17,6 +17,7 @@ import type { RealPositionsResource } from "@/hooks/use-real-positions";
 import { analyze } from "@/lib/technical-analysis";
 import { buildEventMarks, buildMinuteNewsEvents } from "@/lib/event-markers";
 import { hasTrustedQuoteObservation, mergeQuoteIntoBars, mergeQuoteIntoMinutes } from "@/lib/kline-live";
+import {buildIndexOverlay} from "@/lib/index-overlay";
 import { isIndexSymbol } from "@/lib/api";
 import { notifyWatchlistChanged, subscribeWatchlist } from "@/lib/watchlist-sync";
 import { ThemeChipsRow, CompanyConceptChips } from "@/components/detail/theme-chips";
@@ -624,10 +625,7 @@ export const StockDetailPanel = memo(function StockDetailPanel({
   const indexResource = useResource(async () => {
     const [points, overview] = await Promise.all([getMinuteLine("sh000001"), getMarketOverview()]);
     const sh = overview.indices.find(value => value.symbol === "000001" || value.symbol === "sh000001");
-    if (!hasTrustedQuoteObservation(sh) || !sh.prev_close || sh.prev_close <= 0 || !Number.isFinite(sh.prev_close)) throw new Error("指数基准质量或来源时刻未确认");
-    const referenceDate = bjDate(sh.data_timestamp);
-    if (!referenceDate || points.some(point => bjDate(point.ts) !== referenceDate)) throw new Error("指数分钟与基准非同一交易日");
-    return {points, prevClose: sh.prev_close, referenceDate};
+    return buildIndexOverlay(points, sh, bjDate(minutes[0]?.ts));
   }, {key: `${symbol}:${minutes[0]?.ts ? bjDate(minutes[0].ts) : "unknown"}`, intervalMs: 60_000,
     enabled: active && !isIndex && chartTab === "minute" && minutes.length > 0});
   const indexOverlay = indexResource.data ?? null;
@@ -706,7 +704,7 @@ export const StockDetailPanel = memo(function StockDetailPanel({
     {STREAM_ABNORMAL.includes(streamStatus) && (streamStatus !== "connecting" || connectingDebounced) && <p>行情连接：{STREAM_STATUS_LABEL[streamStatus].text}；断线时使用既有读取通道。</p>}
   </>;
   const klineDiagnostics = <>{quoteDiagnostics}{bars.at(-1) && <p>REST基座：{sourceLabel(bars.at(-1)?.source)} · 尾记录 {dateTimeTextBJ(bars.at(-1)?.ts, {seconds: true})} · 质量 {bars.at(-1)?.quality}</p>}</>;
-  const minuteDiagnostics = <>{quoteDiagnostics}{minutes.at(-1) && <p>REST基座：{sourceLabel(minutes.at(-1)?.source)} · 源分钟 {dateTimeTextBJ(minutes.at(-1)?.ts, {seconds: true})}</p>}{indexOverlay?.points.at(-1) && <p>指数叠加截至 {dateTimeTextBJ(indexOverlay.points.at(-1)?.ts, {seconds: true})}</p>}</>;
+  const minuteDiagnostics = <>{quoteDiagnostics}{minutes.at(-1) && <p>REST基座：{sourceLabel(minutes.at(-1)?.source)} · 源分钟 {dateTimeTextBJ(minutes.at(-1)?.ts, {seconds: true})}</p>}{indexOverlay?.points.at(-1) && <p>指数叠加截至 {dateTimeTextBJ(indexOverlay.points.at(-1)?.ts, {seconds: true})}</p>}{indexResource.error instanceof Error && <p>指数叠加：{indexResource.error.message}</p>}</>;
 
 
   return (
@@ -857,6 +855,7 @@ export const StockDetailPanel = memo(function StockDetailPanel({
                （2026-09-02 用户要求） */
             <Panel bodyClassName="overflow-hidden flex flex-col" className="detail-chart-panel min-h-0 flex-1">
               <DetailReadStatus label="分钟" state={readStates.minute} onRetry={() => retryRead("minute")} diagnostics={minuteDiagnostics} status={chartStatus} identity={`${symbol}:minute`} active={active}/>
+              {indexOverlay?.mode === "historical" && <p className="px-3 pb-1 text-xs text-zinc-600 dark:text-zinc-400">上证叠加 · {indexOverlay.referenceDate} · 非实时</p>}
               {!!indexResource.error && <div className="flex flex-wrap items-center gap-2 px-3 pb-1 text-xs"><p role="alert" className="text-amber-800 dark:text-amber-300">指数叠加读取失败{indexOverlay ? " · 保留结果" : ""}</p><button type="button" data-action="secondary" disabled={indexResource.pending} onClick={indexResource.refresh}>重新读取指数叠加</button></div>}
               {minutes.length > 0 ? (
                 <div className="relative min-h-0 flex-1">
