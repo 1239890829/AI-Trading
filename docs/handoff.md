@@ -8,11 +8,11 @@
 
 - **当前主门**：G4
 - **主切片首选**：IMP-019
-- **候选顺位与执行边界**：仅IMP-019；14日两次有界交易观察继续，用户追加详情原因、重复题材/资讯、等待样式与DeepSeek会话噪声。本批在隔离工作树施工，主树生产保持已发布版本。
-- **基点与分支**：master `65f9a4f700c46cb888608129f9ef227d75558f8a`，`codex/detail-signal-consolidation`；主树两份未跟踪evolution保留。
-- **获准范围**：原因只依同日涨停/炸板证据出现并直接阅读；资料复用题材，资讯/事件合并入口；正常诊断收纳、等待仅文字；修真实源钟倒退的有界备用读取与假空池，不改原源序、TTL、轮频、总预算、时效、选股或通知资格。不恢复退出的服务。
-- **发布前冻结运行基线**：PR #276已准确HEAD发布并合并65f9a4f7，required/post-master三job成功；09:28仅前端激活Next16.3.8/build oh7qFRuf6uFmhmgzJdems/PID43720，8000单实例PID4059未重启。本批后续运行身份只按准确HEAD PR发布说明与artifacts/runs/live-performance-20261014/detail-consolidation-release/runtime-identity.json核对，不能把本段施工冻结值当作后续实际版本。
-- **证据状态**：09:35:11–09:40:11五分钟57次观察请求全200；6身份×20批共120报价，1条600105源钟倒退拒绝而保留新价，19条正常，其他100条正常；非HTTP超时。专用浏览器页被用户切走，没有原生trace、手机真机或内置浏览器帧耗时证据。下午13:35另冻版本，不能把上午分母外推全站。详情与读链修补、针对反例和待完成门见[报告§16](system/runtime-performance.md#16-2026-10-14-上午观察与详情读链纠偏)。
+- **候选顺位与执行边界**：仅IMP-019；14日AM观察已完成，13:35独立观察仍待执行。用户追加的详情阅读整改已由PR #277发布；激活后确证行情计时器兼容缺陷，本批只作该同根故障修补。
+- **基点与分支**：master `1c812758424e6c39ce3f66b7b7e5a2d2d327228a`，`codex/quote-timer-compat`；主树两份未跟踪evolution保留。
+- **获准范围**：保留PR #277的原因直接阅读、入口去重与有界恢复；只修立即发布句柄不支持when导致两域轮询退出。不改原源序、TTL、轮频、预算、时效、选股或通知资格，不恢复退出服务。
+- **发布前运行冻结**：PR #277准确HEAD 1c32bf3e已合并1c812758，required/post-master三job成功。11:08加载Next16.3.8/build jkLAAevCzzsniOMqUkryb/PID89759；后端原PID89713在uvloop下反复退出行情循环，11:15:34经零活动守卫单独重启为PID92927、临时显式--loop asyncio，前端不重启。永久补丁只动后端；后续实际版本与默认loop加载结果只按artifacts/runs/live-performance-20261014/quote-timer-compat-release/runtime-identity.json及准确发布回执核对，不能把这里的施工冻结值当之后现场。
+- **证据状态**：09:35:11–09:40:11五分钟57次观察请求全200；120报价中1条源钟倒退拒绝，非HTTP超时。没有原生trace/手机真机/内置浏览器帧耗时证据。11:09额外读取确证6条真实过期；11:08:14起生产堆栈及真实uvloop离线反例定位立即Handle无when，两域取消后按30/60/120秒退避重启。额外恢复诊断不计AM/PM窗口。详见[报告§17](system/runtime-performance.md#17-2026-10-14-行情发布计时器运行纠错)。
 - **U50 降级授权回执**：2026-09-24 DEGRADED_FULL_CONTROL未撤销；作者自审和协作反证不冒充独立网页Review。每个PR准确HEAD另有DegradedRelease。
 
 ## 2. U49 主动审计回执 / Preflight

@@ -175,7 +175,8 @@ class QuoteHub:
         self._complete_generations = {"indices": 0, "quotes": 0}
         self._pending_domains: set[str] = set()
         self._publish_task: asyncio.Task | None = None
-        self._publish_timer: asyncio.TimerHandle | None = None
+        self._publish_timer: asyncio.Handle | None = None
+        self._publish_deadline: float | None = None
         self._running = False
         self._last_publish_at: float | None = None
 
@@ -327,10 +328,13 @@ class QuoteHub:
         due = self._publish_due_at()
         if self._publish_timer is not None:
             # 另域已归或已失败：把等待同轮的 timer 提前，仍遵守原出版间隔。
-            if self._publish_timer.when() <= due:
+            # uvloop may return an opaque Handle for an immediate call_at;
+            # only its cancellation contract is shared with TimerHandle.
+            if self._publish_deadline is not None and self._publish_deadline <= due:
                 return
             self._publish_timer.cancel()
-        self._publish_timer = loop.call_at(max(loop.time(), due), self._start_publish)
+        self._publish_deadline = max(loop.time(), due)
+        self._publish_timer = loop.call_at(self._publish_deadline, self._start_publish)
 
     def _publish_due_at(self) -> float:
         loop = asyncio.get_running_loop()
@@ -354,6 +358,7 @@ class QuoteHub:
 
     def _start_publish(self, *, force: bool = False) -> None:
         self._publish_timer = None
+        self._publish_deadline = None
         if self._pending_domains and (self._publish_task is None or self._publish_task.done()):
             if not force and self._publish_due_at() > asyncio.get_running_loop().time():
                 self._schedule_publish()
@@ -364,6 +369,7 @@ class QuoteHub:
         if self._publish_timer is not None:
             self._publish_timer.cancel()
             self._publish_timer = None
+        self._publish_deadline = None
         self._start_publish(force=True)
         if self._publish_task is not None:
             await asyncio.shield(self._publish_task)
@@ -897,6 +903,7 @@ class QuoteHub:
             if self._publish_timer is not None:
                 self._publish_timer.cancel()
                 self._publish_timer = None
+            self._publish_deadline = None
             owned = set(loops) | set(self._domain_tasks.values())
             if self._publish_task is not None:
                 owned.add(self._publish_task)
