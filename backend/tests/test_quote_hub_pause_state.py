@@ -247,3 +247,39 @@ def test_empty_or_error_calendar_still_publishes_confirmed_offhours(context, mon
         assert frame["data"][0]["data_timestamp"] == hub.quotes["600519"].model_dump(mode="json")["data_timestamp"]
         assert hub._pending_domains == set()
     asyncio.run(scenario())
+
+
+@pytest.mark.parametrize(("now", "days", "expected"), [
+    ("2026-10-14T19:35:00+08:00", ["2026-10-13", "2026-10-14"], "2026-10-14"),
+    ("2026-10-14T12:00:00+08:00", ["2026-10-13", "2026-10-14"], "2026-10-14"),
+    ("2026-10-14T08:00:00+08:00", ["2026-10-13", "2026-10-14"], "2026-10-13"),
+    ("2026-10-17T12:00:00+08:00", ["2026-10-15", "2026-10-16"], "2026-10-16"),
+    ("2026-10-18T12:00:00+08:00", ["2026-10-15", "2026-10-16"], "2026-10-16"),
+    ("2026-10-01T12:00:00+08:00", ["2026-09-30", "2026-10-09"], "2026-09-30"),
+    ("2026-10-14T19:35:00+08:00", ["2026-10-13"], None),
+    ("2026-10-17T12:00:00+08:00", ["2026-10-14"], None),
+    ("2026-10-14T08:00:00+08:00", ["2026-10-14"], None),
+])
+def test_display_session_has_calendar_backed_expected_source_date(context, now, days, expected):
+    context["now"] = datetime.fromisoformat(now)
+    context["days"] = [date.fromisoformat(day) for day in days]
+    hub = qh.QuoteHub(None, 1)
+    session = hub._display_session()
+    assert session.model_dump(mode="json")["expected_source_date"] == expected
+    assert hub.last_attempt is None and hub.last_success_refresh is None
+    assert not hub.quotes and not hub.indices
+
+
+@pytest.mark.parametrize(("now", "expected"), [
+    ("2026-10-14T19:35:00+08:00", "2026-10-14T14:59:50+08:00"),
+    ("2026-10-14T12:00:00+08:00", "2026-10-14T11:29:50+08:00"),
+    ("2026-10-14T08:00:00+08:00", "2026-10-13T14:59:50+08:00"),
+    ("2026-10-17T12:00:00+08:00", "2026-10-16T14:59:50+08:00"),
+    ("2026-10-14T10:00:00+08:00", None),
+    ("2026-10-14T09:20:00+08:00", None),
+])
+def test_pause_source_tail_uses_original_age_tolerance(context, now, expected):
+    context["now"] = datetime.fromisoformat(now)
+    context["days"] = [date(2026, 10, 13), date(2026, 10, 14), date(2026, 10, 15), date(2026, 10, 16)]
+    hub = qh.QuoteHub(None, 1, stale_after=10)
+    assert hub._display_session().model_dump(mode="json")["expected_source_after"] == expected

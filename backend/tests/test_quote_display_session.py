@@ -17,7 +17,11 @@ def hub_at(monkeypatch, clock, trade_day=True):
             return now.astimezone(tz) if tz else now.replace(tzinfo=None)
     monkeypatch.setattr(freshness, "datetime", FixedDatetime)
     monkeypatch.setattr(qh, "beijing_now", lambda: now)
-    monkeypatch.setattr(qh.tc, "is_trade_day_on", lambda d: trade_day)
+    # 使用真实的二参数日历契约；固定日期，不借用运行机器的日历快照。
+    days = [date(2026, 10, 12)]
+    if trade_day is not None:
+        days.append(date(2026, 10, 13) if trade_day else date(2026, 10, 14))
+    monkeypatch.setattr(qh.tc, "known_trade_days", lambda: days)
     return qh.QuoteHub(provider=None, poll_interval=1, stale_after=10)
 
 

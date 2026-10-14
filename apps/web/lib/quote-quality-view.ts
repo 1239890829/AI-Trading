@@ -48,6 +48,18 @@ function isKnownIndex(symbol: string | undefined, market: string | null | undefi
   return ["sh000001", "sh000688", "sz399006", "sz399001", "sh000300", "sh000852"].includes(identity);
 }
 
+function hasExpectedPausedSource(dataTimestamp: string | null | undefined, session: QuoteDisplaySession | null | undefined): boolean {
+  const after = session?.expected_source_after;
+  if (!session || !dataTimestamp || !after || !/(?:Z|[+-]\d{2}:\d{2})$/.test(dataTimestamp)
+    || !/(?:Z|[+-]\d{2}:\d{2})$/.test(after)) return false;
+  const observedAt = Date.parse(dataTimestamp);
+  const expectedAfter = Date.parse(after);
+  const asOf = Date.parse(session.as_of);
+  return bjDate(dataTimestamp) === session.expected_source_date && bjDate(after) === session.expected_source_date
+    && Number.isFinite(observedAt) && Number.isFinite(expectedAfter)
+    && expectedAfter <= asOf && observedAt >= expectedAfter && observedAt <= asOf;
+}
+
 /** Presentation only. Neither source time nor business quality is changed. */
 export function quoteQualityView(input: QuoteQualityInput) {
   const {quality, reasons = [], dataTimestamp, session} = input;
@@ -78,8 +90,7 @@ export function quoteQualityView(input: QuoteQualityInput) {
       const sourceMinute = dataTimestamp ? beijingMinute(dataTimestamp) : null;
       const validTime = sourceDate && sourceDate <= (session?.trade_date ?? "") && observedAt <= phaseAt;
       const pause = calendarPause(session);
-      const zonedSource = dataTimestamp && /(?:Z|[+-]\d{2}:\d{2})$/.test(dataTimestamp);
-      if (pause && onlyAge && validTime && zonedSource) {
+      if (pause && onlyAge && hasExpectedPausedSource(dataTimestamp, session)) {
         label = pause;
         context += `；日历确认${pause}，仍展示最近源观测，不声明源报价已更新`;
       } else if (phase && onlyAge && validTime && isKnownIndex(input.symbol, input.market)) {
@@ -94,9 +105,7 @@ export function quoteQualityView(input: QuoteQualityInput) {
       }
     } else if (has("market_closed") && reasons.every(reason => reason === "market_closed" || reason === "off_session")) {
       const pause = calendarPause(session);
-      const observedAt = dataTimestamp ? Date.parse(dataTimestamp) : NaN;
-      if (pause && dataTimestamp && /(?:Z|[+-]\d{2}:\d{2})$/.test(dataTimestamp)
-        && observedAt <= Date.parse(session!.as_of)) {
+      if (pause && hasExpectedPausedSource(dataTimestamp, session)) {
         label = pause;
         context = `日历确认${pause}，仍展示最近源观测，不声明源报价已更新`;
         tone = "quiet";

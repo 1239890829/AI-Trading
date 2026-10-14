@@ -42,6 +42,8 @@ class QuoteDisplaySession(BaseModel):
     trade_date: date
     as_of: datetime
     trade_day_result: bool | None
+    expected_source_date: date | None = None  # 日历可证明的应有交易日；不升级报价质量。
+    expected_source_after: datetime | None = None  # 暂停前应达到的源尾点下界，仅用于解释。
 
 
 class Quote(AuditFields):
