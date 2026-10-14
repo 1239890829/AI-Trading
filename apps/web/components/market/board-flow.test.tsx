@@ -76,6 +76,25 @@ async function mount() {
 }
 
 describe("BoardFlowPanel", () => {
+  it.each(["minute", "members", "both"])("下钻%s失败时重试只校准失败域", async failed => {
+    vi.mocked(getBoardFundFlow).mockResolvedValue(payload([row({})]));
+    const minute = {available: true, board_code: "BK0001", items: [], daily_bars: [], delayed: true, updated_at: "10:30:00", degraded: []};
+    const members = {available: true, board_code: "BK0001", rows: [], delayed: true, updated_at: "10:30:00", degraded: []};
+    vi.mocked(getBoardFlowMinute).mockResolvedValue(minute);
+    vi.mocked(getBoardFlowMembers).mockResolvedValue(members);
+    if (failed !== "members") vi.mocked(getBoardFlowMinute).mockRejectedValueOnce(new Error("minute offline"));
+    if (failed !== "minute") vi.mocked(getBoardFlowMembers).mockRejectedValueOnce(new Error("members offline"));
+    await mount();
+    fireEvent.click(screen.getByTestId("board-row-BK0001"));
+    await act(async () => {});
+    expect(screen.getByRole("alert").textContent).toContain("部分资金来源读取失败");
+    fireEvent.click(screen.getByRole("button", {name: "重试"}));
+    await act(async () => {});
+    expect(getBoardFlowMinute).toHaveBeenCalledTimes(failed === "members" ? 1 : 2);
+    expect(getBoardFlowMembers).toHaveBeenCalledTimes(failed === "minute" ? 1 : 2);
+    expect(screen.queryByRole("alert")).toBeNull();
+  });
+
   it("按净流入降序渲染，null 殿后显示 --，榜位/排名Δ 正确", async () => {
     vi.mocked(getBoardFundFlow).mockResolvedValue(payload([
       row({ board_code: "BK0003", name: "丙板", main_net_yi: null, rank_delta: null, streak: null, rank: 3 }),

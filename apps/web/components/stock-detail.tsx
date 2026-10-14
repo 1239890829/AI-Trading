@@ -507,8 +507,11 @@ export const StockDetailPanel = memo(function StockDetailPanel({
     const managedRead = <T,>(kind: DetailReadKind, load: () => Promise<T>, apply: (value: T) => void) => {
       let flight: Promise<T> | null = null;
       let generation = 0;
+      let financialSnapshot: {date: string; value: T} | null = null;
       return (fresh = false): Promise<T> => {
         if (flight && !fresh) return flight;
+        const date = bjDate(new Date().toISOString());
+        if (!fresh && kind === "financials" && financialSnapshot?.date === date) return Promise.resolve(financialSnapshot.value);
         const request = ++generation;
         const current = () => reads.alive && reads === dataReadsRef.current && request === generation;
         const next = Promise.resolve().then(async () => {
@@ -517,6 +520,7 @@ export const StockDetailPanel = memo(function StockDetailPanel({
             const value = await load();
             if (current()) {
               apply(value);
+              if (kind === "financials") financialSnapshot = {date, value};
               setReadStates(previous => ({...previous, [kind]: {pending: false, loaded: true, error: null, readAt: new Date().toISOString()}}));
             }
             return value;
@@ -749,7 +753,7 @@ export const StockDetailPanel = memo(function StockDetailPanel({
 
       {/* 共用工具行位于内容网格上方，图表与右侧核对面板保持同一顶线。 */}
       <div className="chart-toolbar flex shrink-0 flex-wrap items-center gap-2">
-        <SelectionRail className="chart-modes" activeKey={chartTab} label="图表视角">
+        <SelectionRail className="chart-modes" activeKey={chartTab} label="图表视角" indicator={false}>
         {(
           (
             [

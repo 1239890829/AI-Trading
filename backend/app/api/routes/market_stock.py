@@ -13,6 +13,7 @@ from fastapi import APIRouter, Depends, HTTPException, Query, Request
 from fastapi.responses import JSONResponse
 from app.api.deps import get_hub
 from app.core.ttl_cache import cache_on
+from app.services.source_reads import read_news_input
 from app.data_providers.eastmoney import ProviderError
 from app.market.article import ArticleFetchError, classify_url, fetch_article
 from app.schemas.envelope import (
@@ -93,7 +94,7 @@ async def announcements(
     cache = cache_on(request.app.state, "market.announcements", 60, maxsize=512)
     key = (symbol, limit)
     async def load():
-        rows = await hub.provider.get_announcements(symbol, limit)
+        rows = await read_news_input(hub.provider, "get_announcements", symbol, limit)
         return {"symbol": symbol, "items": rows}
 
     try:
@@ -142,7 +143,7 @@ async def news(
     cache = cache_on(request.app.state, "market.news", 60, maxsize=512)
     key = (symbol, limit)
     async def load():
-        rows = await hub.provider.get_news(symbol, limit)
+        rows = await read_news_input(hub.provider, "get_news", symbol, limit)
         return {"symbol": symbol, "items": rows}
 
     try:

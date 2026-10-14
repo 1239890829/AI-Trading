@@ -464,9 +464,6 @@ class PaperTradingEngine:
             return reject(blocked)
 
         with self._sf() as db:
-            # 账户对象在**本 session 内**取（原实现是 session 外 `ensure_account()`
-            # + `db.add()` 整行回写），且读取点后移到两次 await 之后，缩小陈旧窗口。
-            acc = self._account(db)
             # 成交前结算（R04）：卖单的可卖量校验在第 381 行读 `pos.available`，
             # 而它是 `quantity - frozen_today` 的派生值——不先解冻就会把昨日买入
             # 误判成"当日买入不可卖"。
@@ -476,6 +473,10 @@ class PaperTradingEngine:
             risk_blocked = await self._risk_block_reason(symbol, side, price, qty, quote)
             if risk_blocked:
                 return reject(risk_blocked)
+            # Keep initialization flush after the calendar/risk waits. A missing
+            # account INSERT otherwise holds SQLite's write lock across await.
+            # Balance still belongs to this Session's read/modify/commit boundary.
+            acc = self._account(db)
             if side == "buy":
                 need = price * qty + calc_fee("buy", price, qty)
                 if need > acc.cash:

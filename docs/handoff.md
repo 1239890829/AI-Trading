@@ -1,4 +1,4 @@
-# 当前交接：IMP-019 系统质量与短阅读整改
+# 当前交接：IMP-019 剩余请求、锁竞争与电脑验证
 
 > 总方案v9.13；累计U01–U55。阅读与WS整改[W07/IMP-093](stages/w07-simplification.md#imp-093)已由PR #270发布并运行；直接上游单位反例按[W00/BUG-020](stages/w00-foundation.md#bug-020)既有同根回归条款止险，不启动第二个产品优化任务。
 
@@ -8,11 +8,11 @@
 
 - **当前主门**：G4
 - **主切片首选**：IMP-019
-- **候选顺位与执行边界**：仅IMP-019；14日AM/PM两次五分钟观察均已完成，既有imp-019已暂停。用户确认详情与工作台两处状态跳变；本批验证既有四源短窗表现，修已证连接状态、可信图表保留和恢复熔断错误。全项目SLO仍部分完成。
-- **基点与分支**：master `aea8c799db9cb956d49b14608ae2d5802fffc0a8`，`codex/quote-state-recovery`；主树两份未跟踪evolution保留。
-- **获准范围**：保留PR #277阅读整改与PR #278真实uvloop修补；区分连接、单股质量和市场阶段，REST成功恢复备用读取态，图表拒旧期间保留原可信尾点；恢复所见有效但不更新的备源不误记传输故障。同步自选DB读取及八个无await的自选路由隔离到自有Session工作线程，嵌入详情复用父名单、失败域独立重试。不改原源序、底层输入TTL、轮频、预算、时效、报价质量、选股或通知资格；只移除重复包裹动态板块资金的外层60秒缓存，不恢复退出服务。
-- **切换前运行冻结**：PR #278准确HEAD 105b84e1已合并aea8c799，required/post-master三job成功。11:49:45后端PID8455、默认auto/uvloop0.22.1；前端PID89759、Next16.3.8/build jkLAAevCzzsniOMqUkryb未变。本批源码验收与正式切换分别记录，不能把工作区改动当运行生效；切换完成后的实际source/build/PID以artifacts/runs/live-performance-20261014/quote-state-recovery-release/runtime-identity.json及runtime-source-manifest.json核对。
-- **证据状态**：14日AM/PM各五分钟57观察HTTP200，报价分别119high/1stale、115high/5stale，均腾讯，异常均为源钟倒退拒绝；PM指数覆盖两次仅2/6，health4次degraded，不能以200称全正常。13:52–13:54四源隔离五轮实际40方法/41HTTP发送hook，腾讯/新浪/THS完整、东财10错误、THS45行无源钟。无浏览器/手机原生trace，原专用页已丢弃且未恢复。两窗后imp-019已PAUSED。全系统读链审计和已复现修补见[报告§18](system/runtime-performance.md#18-2026-10-14-双窗口收尾与状态恢复反证)及[§19](system/runtime-performance.md#19-全系统请求归属重复读取与缓存年龄审计)。
+- **候选顺位与执行边界**：仅IMP-019；PR #279已发布并于15:29激活。用户要求继续剩余请求/数据库锁竞争，最新明确先测电脑，手机真机暂缓。双交易窗跟进已PAUSED，不新增永久监控。
+- **基点与分支**：master `744ed820a8d81d83382897b753b46a9947f4afdb`，`codex/request-contention-validation`；主树两份未跟踪evolution保留。
+- **获准范围**：从744ed820验证剩余同键并发读、无消费者读、局部重试/预取、通知已读保存、真实SQLite锁与电脑图表交互；确认缺陷后最小修复，不改源序、TTL/轮频/预算/freshness、选股资格、通知原范围/去重/资格与撮合硬门。
+- **切换前运行冻结**：当前PR #279/master744ed820，8000 PID95924/15:29:29，默认auto/uvloop0.22.1；3000 PID95992/15:29:32、Next16.3.8/build cWt2nukX_aJqrXLFLW7UQ。131文件实际源码hash已全核，manifest聚合87347a5635dcdd3b00da1412463dbbbb135c25ecebd82fa9eef161b6381f12fe。本批改动尚未加载，不以工作区冒充运行。
+- **证据状态**：既有14日双窗57+57观察保留真实stale/覆盖失败；市场trace不替代工作台。3000工作台已实际复现K线15秒超时、盘口失败及指数异常，保留失败记录；导出trace正按主frame/导航核归属。最终源码后端5500通过/82跳过（453.38s）、pyflakes通过；前端默认/UTC各1646通过/138文件（244.21/266.66s命令墙钟），tsc、ESLint（2既有warning/0error）、Next16.3.8构建通过，源码无漂移。正式发布/加载及工作台改后trace分别验收，手机未测。详见报告§20。
 - **U50 降级授权回执**：2026-09-24 DEGRADED_FULL_CONTROL未撤销；作者自审和协作反证不冒充独立网页Review。每个PR准确HEAD另有DegradedRelease。
 
 ## 2. U49 主动审计回执 / Preflight
@@ -117,3 +117,24 @@ PR #275已准确HEAD发布、合并master 69820808，post-master三job成功。0
 发布反证另实证停止期publisher重建，新增_stopping只在真实drain期间抑制schedule/start，不提前释放_running。新生命周期反例先红，最终后端需在新源码重新完整核验；先前5445为旧批事实，不转借。作者/团队反证仍不是独立Review。
 
 本批最终源码验收：后端5446 passed/81 skipped/385.43s、pyflakes通过；前端默认/UTC各1622 passed/138文件（245.41/200.91s），tsc、ESLint（0error/2既有warning）、Next16.3.8/build cWt2nukX_aJqrXLFLW7UQ通过。19个源码/测试SHA均与对应完整门冻结一致；文档收尾另核体检/守卫/卫生/公开扫描。两处发布反证均已关闭，当前仍须准确HEAD DegradedRelease、required CI、release_check、post-master及实际配对切换回执；不能把源码验收写成运行生效或全域SLO达标。
+
+## 14. 剩余请求与锁竞争验证开工
+
+2026-10-14用户继续授权逐项验证报告剩余请求、真实SQLite锁和设备卡顿，随后明确先电脑、手机暂缓。当前G4/IMP-019唯一主任务，无硬依赖/效果前置；PR #279已发布且post-master三job成功，15:29配对运行8000/PID95924、3000/PID95992/build cWt2nukX_aJqrXLFLW7UQ，131文件冻结匹配；不是交接顶部旧PR278现场。新分支codex/request-contention-validation在既有隔离树，主树两份evolution不动。
+
+本轮Preflight覆盖全报告剩余项而非只修一处：前端bootstrap/双详情/预取/局部重试/词典及写失效，后端图表/题材/池/原文输入及恢复能力，SQLite真实两连接锁与loop心跳；每项先证实或反证再动原owner。桌面用原生Chrome Performance录制市场/指数详情，不额外触发模拟、选股、消息写或冷摘要模型；真实收盘、原生trace、同输入计数和未来盘中SLO分别结论。原版Impeccable scoped optimize先测后改，浏览器桥离线用现有原生工具，不新装插件或恢复退出服务。手机经用户收窄本轮不做，不以窄屏替代真机。
+
+U49反证核共享完整身份、独立采样/源预算、容量满不引入busy失败、全取消/close排空、完成值不续时效、未知/合法空、SQL真实事务与逻辑Session、发送过期/租约/末刻许可及T+1原子性。无新架构/模型/规则/源优先级/行情频率或时效阈值；作者团队反证不是独立Review，完整门及本PR准确HEAD DegradedRelease/CI/release_check/post-master和实际加载仍单独验收。
+
+
+## 15. 工作台实际验收与反证修订
+
+用户明确纠正本次应测工作台，市场页/共享图表记录不能替代。3000真实工作台已导出失败Performance，K线15000ms超时、盘口失败和指数异常保留；未为分数好看删除失败。日志证实同窗秒级源预算耗尽/盘口502及THS日K耗时波动，没有请求关联id不能把200精确配到客户端超时。正常工作台只操作图表/只读诊断，不点选股生成、通知已读/发送或模拟下单；当前stock-detail已核实只有info视角调用digest，盘口视角idle无模型摘要，不套用旧warning。手机真机按用户“先搞电脑的”暂缓。
+
+发送末刻反证又覆盖价格/源龄/规则/来源跨真实写锁变化，以及受支持StaticPool嵌套Session回滚标记。原commit前callback方案已撤回：最终先commit标记，再只读复核，明确拒绝仅在begin_send内部按精确CAS清标记；异常/CAS竞争保守unknown不重发。76目标及完整门分别记录，不复用旧回执。性能源码/文档与最终运行仍按准确HEAD发布；真实工作台可用率/持续帧耗时不能由市场或离线测试替代。
+
+## 16. 最终源码门与清理安排
+
+本轮完整后端5500 passed/82 skipped/453.38s（命令489.46s）、pyflakes17.26s通过；82跳过中80为既有import-lint“装配层/其他”参数、另2为指数后端不适用，新增core模块触发现有导入方向守卫的“其他”参数跳过1项，不算覆盖增强。前端默认/UTC各1646 passed/138文件、tsc与ESLint0error/2既有warning、Next16.3.8构建J5Ag_oYn_LpFdUsUgw_98通过。构建生成的next-env已精确恢复原稿并补tsc，不作为业务修改提交。最终文档守卫/公开扫描/卫生及准确HEAD发布另验。
+
+用户追加要求修复及工作台验收后扩大清理缓存/测试残留并形成技能，作为GOV-026伴随收尾；先只读盘点，保护三个evolution未跟踪文档、运行构建、业务库/行情历史、当前唯一trace及恢复证据。未知归属不删，不使用清理代替性能根因修复；新技能按skill-creator在本机可发现目录维护，不在项目放应用专属目录。

@@ -93,6 +93,11 @@ def date_ms(d: date) -> int:
 class ThsFuyaoProvider:
     name = "ths"
     realtime = True
+    # These two methods always send explicit thscodes. The verified 2026-10-14
+    # snapshot contract has data.timestamp=null and no per-item source clock.
+    # Reopen this declaration if that endpoint/mode contract changes; ordinary
+    # fallback remains available. No receipt/readiness timestamp substitutes it.
+    source_clock_recovery = {"get_quotes": False, "get_indices": False}
 
     def __init__(self, api_key: str, base_url: str = "https://fuyao.aicubes.cn", timeout: float = 8.0):
         if not api_key:

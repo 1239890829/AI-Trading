@@ -11,6 +11,7 @@ import { act, cleanup, fireEvent, render, screen, waitFor } from "@testing-libra
 
 import { FloatingAssistant } from "@/components/assistant/floating-assistant";
 import { loadSessions, CURRENT_KEY, SESSIONS_KEY } from "@/lib/assistant-sessions";
+import {__resetEntityDictCache, loadEntityDict} from "@/lib/entity-dict";
 
 const enc = new TextEncoder();
 
@@ -31,6 +32,7 @@ function makeStream() {
 
 beforeEach(() => {
   localStorage.clear();
+  __resetEntityDictCache();
 });
 
 afterEach(() => {
@@ -49,6 +51,21 @@ function openPanel() {
 }
 
 describe("FloatingAssistant 视口缩放", () => {
+  it("助手打开复用资讯已启动的实体词典，不另建网络读取", async () => {
+    let finish!: (response: Response) => void;
+    const fetcher = vi.fn(() => new Promise<Response>(resolve => {finish = resolve;}));
+    vi.stubGlobal("fetch", fetcher);
+    const articleOwner = loadEntityDict();
+    render(<FloatingAssistant/>);
+    await act(async () => openPanel());
+    expect(fetcher).toHaveBeenCalledTimes(1);
+    await act(async () => {
+      finish(new Response(JSON.stringify({data: {stocks: [], themes: []}})));
+      await articleOwner;
+    });
+    expect(screen.getByTestId("assistant-panel")).toBeTruthy();
+  });
+
   it("真实 resize 保留左右贴边，未贴边的位置仅做边界约束", async () => {
     vi.stubGlobal("fetch", vi.fn(async () => new Response(JSON.stringify({ data: [] }))));
     const resize = (width: number) => {

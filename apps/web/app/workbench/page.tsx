@@ -12,12 +12,13 @@ import Cancel01Icon from "@hugeicons/core-free-icons/Cancel01Icon";
 import Link from "next/link";
 import { AccountScopePanel } from "@/components/detail/account-scope-panel";
 import { patchWorkspaceUrl } from "@/lib/task-navigation";
-import { Suspense, useCallback, useEffect, useMemo, useRef, useState, useSyncExternalStore } from "react";
+import { Suspense, useCallback, useContext, useEffect, useMemo, useRef, useState, useSyncExternalStore } from "react";
 import { useRouter, useSearchParams } from "next/navigation";
 import { Panel } from "@/components/panel";
 import { parseChartTab, parseRightTab } from "@/lib/detail-tabs";
 import { IndexCards } from "@/components/index-cards";
 import { StockDetailPanel, type ChartTab, type RightTab } from "@/components/stock-detail";
+import { SymbolDetailStateCtx } from "@/components/detail/symbol-detail-context";
 import { PriceFlash } from "@/components/price-flash";
 import { QualityBadge } from "@/components/quality-badge";
 import { PickDetailModal, type PickDetailTarget } from "@/components/picks/pick-detail-modal";
@@ -112,7 +113,8 @@ function WorkbenchInner() {
   const { data: realData, error: realError, reload: reloadRealPositions } = useRealPositions();
   const realPositions = useMemo(() => ({data: realData, error: realError, reload: reloadRealPositions}), [realData, realError, reloadRealPositions]);
   const isMobile = useSyncExternalStore(subscribeMobile, mobileSnapshot, () => false);
-  const detailActive = !isMobile || mobileView !== "list";
+  const symbolDetail = useContext(SymbolDetailStateCtx);
+  const detailActive = (!isMobile || mobileView !== "list") && !symbolDetail;
   const realSymbols = useMemo(() => realData?.items.map((i) => i.symbol) ?? [], [realData]);
   const [indices, setIndices] = useState<Quote[]>([]);
   const [totalAmount, setTotalAmount] = useState<number | null>(null);
@@ -337,20 +339,19 @@ function WorkbenchInner() {
   useEffect(() => subscribeWatchlist(refreshWatchlist), [refreshWatchlist]);
 
   // 首帧行情兜底：WS 订阅切换窗口期里，动态分组标的与自选一起走 REST 补拉
-  const feedSymbols = useMemo(
-    () => [...new Set([...symbols, ...realSymbols, ...paperSymbols, ...picksSymbols, ...topSymbols, activeSymbol])],
-    [symbols, realSymbols, paperSymbols, picksSymbols, topSymbols, activeSymbol],
-  );
+  const feedSymbolKey = [...streamSymbols].sort().join(",");
   useEffect(() => {
-    if (feedSymbols.length === 0) return;
-    const missing = feedSymbols.filter((s) => !(s in merged));
+    let alive = true;
+    const missing = feedSymbolKey.split(",").filter((s) => s && !(s in merged));
     if (missing.length > 0) {
+      const requested = new Set(missing);
       getQuotes(missing)
-        .then((qs) => setExtra((prev) => Object.fromEntries([...Object.entries(prev), ...qs.map((q) => [q.symbol, q])])))
+        .then((qs) => {if (alive) setExtra((prev) => Object.fromEntries([...Object.entries(prev), ...qs.filter(q => requested.has(q.symbol)).map((q) => [q.symbol, q])]));})
         .catch(() => {});
     }
+    return () => {alive = false;};
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [feedSymbols]);
+  }, [feedSymbolKey]);
 
   // 所属板块资金（P1-4，2026-09-10）：主板块 = 东财行业三级 L2（白酒Ⅱ/银行Ⅱ…），
   // 资金 = 东财 f62 主力净额 + 连续流入天数。**口径与个股资金流（新浪 L4）不同，不可相加**。

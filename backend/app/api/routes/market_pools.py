@@ -6,6 +6,8 @@
 
 from __future__ import annotations
 
+from app.services.source_reads import read_pool_input
+
 import asyncio
 from copy import deepcopy
 import hashlib
@@ -125,7 +127,7 @@ async def limit_up(
 
     async def build() -> dict:
         try:
-            records = await hub.provider.get_limit_up_pool(trade_date)
+            records = await read_pool_input(hub.provider, "get_limit_up_pool", trade_date)
         except Exception as exc:
             raise HTTPException(status_code=502, detail=f"涨停池数据源失败：{exc}") from exc
         if any(getattr(row, "trade_date", None) != trade_date for row in records):
@@ -152,7 +154,7 @@ async def limit_up(
         method = getattr(hub.provider, "get_limit_break_pool", None)
         if method is None:
             raise NotImplementedError("当前数据链未提供炸板池")
-        records = await method(trade_date)
+        records = await read_pool_input(hub.provider, "get_limit_break_pool", trade_date)
         if not isinstance(records, list):
             raise ValueError("炸板池响应不是记录列表")
         rows = [row.model_dump(mode="json") for row in records]

@@ -587,6 +587,26 @@ afterEach(() => {
 });
 
 describe("StockDetailPanel · 自选读取真实请求边界", () => {
+  it("同一激活范围已成功预取财务后，切入资料直接复用而不是重复GET", async () => {
+    const view = render(<StockDetailPanel symbol="600519" chartTab="flow" rightTab="book"/>); await settle();
+    await advance(900);
+    expect(api.getFinancials).toHaveBeenCalledTimes(1);
+    fireEvent.click(view.getByRole("tab", {name: "资料"})); await settle();
+    expect(api.getFinancials).toHaveBeenCalledTimes(1);
+    view.rerender(<StockDetailPanel symbol="600519" chartTab="flow" rightTab="profile" active={false}/>); await settle();
+    view.rerender(<StockDetailPanel symbol="600519" chartTab="flow" rightTab="profile" active/>); await settle();
+    expect(api.getFinancials).toHaveBeenCalledTimes(2);
+  });
+
+  it("财务预取失败后切入资料仍立即重读，不把失败当作已完成缓存", async () => {
+    api.getFinancials.mockRejectedValueOnce(new Error("financial prefetch failed"));
+    const view = render(<StockDetailPanel symbol="600519" chartTab="flow" rightTab="book"/>); await settle();
+    await advance(900);
+    expect(api.getFinancials).toHaveBeenCalledTimes(1);
+    fireEvent.click(view.getByRole("tab", {name: "资料"})); await settle();
+    expect(api.getFinancials).toHaveBeenCalledTimes(2);
+  });
+
   it.each([null, false, true])("父owner的membership=%s替代子详情GET和写后订阅，切股/手机恢复仍不重复读", async membership => {
     const props = {symbol: "600519", chartTab: "flow" as const, liveQuote: {...audit, symbol: "600519", price: 20}, watchlistMembership: membership};
     const view = render(<StockDetailPanel {...props}/>); await settle();

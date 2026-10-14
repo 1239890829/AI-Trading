@@ -117,7 +117,7 @@ function BoardFlowDrawer({ row, onClose, open, asOf }: { row: BoardFlowRow; onCl
   return (
     <ModalShell open={open} presentation="drawer" onClose={onClose} label={`板块资金 ${row.name}`} testid="board-flow-drawer"
       header={<div><p className="text-sm font-semibold">{row.name}</p><p className="text-xs text-zinc-600 dark:text-zinc-400">{row.board_code} · {asOf ? `存档榜位 #${row.rank}（截至 ${asOf}）` : `榜位 #${row.rank}`} · 东财 f62口径，非成分股相加</p></div>}>
-        {!!(minuteResult.error || memberResult.error) && <p role="alert" className="text-xs text-amber-800 dark:text-amber-300">部分资金来源读取失败；保留值仅作上次结果参考。<button onClick={() => { minuteResult.refresh(); memberResult.refresh(); }}>重试</button></p>}
+        {!!(minuteResult.error || memberResult.error) && <p role="alert" className="text-xs text-amber-800 dark:text-amber-300">部分资金来源读取失败；保留值仅作上次结果参考。<button onClick={() => { if (minuteResult.error) minuteResult.refresh(); if (memberResult.error) memberResult.refresh(); }}>重试</button></p>}
         <div className="space-y-4 px-4 py-3">
           {/* ① 板块分钟五档累计（延迟 ~15min 口径） */}
           <section>

@@ -13,6 +13,7 @@ from datetime import date
 from fastapi import APIRouter, Depends, HTTPException, Query, Request
 from app.api.deps import get_hub
 from app.core.ttl_cache import cache_on
+from app.core.inflight_reads import read_inflight
 from app.schemas.envelope import (
     Envelope,
     OverviewPayload,
@@ -212,20 +213,25 @@ async def _theme_board_cached(request: Request, hub: QuoteHub, trade_date: date)
     cache = cache_on(request.app.state, "market.themes", 60, maxsize=16)
     hit, payload = cache.get(trade_date)
     if hit:
+        return deepcopy(payload)
+
+    async def load():
+        # Keep the original 60s completed cache; coalesce the whole cold factory,
+        # including failures, without changing snapshot or source-time facts.
+        try:
+            board = await build_theme_board(
+                hub.provider, trade_date,
+                snapshot_map=await asyncio.to_thread(load_snapshot_map, request.app.state.snapshot_service, trade_date),
+            )
+        except RuntimeError as exc:
+            raise HTTPException(status_code=502, detail=str(exc)) from exc
+        return {"data": board, "meta": await dated_meta(hub, trade_date)}
+
+    async def cached():
+        _, payload = await cache.get_or_set(trade_date, load)
         return payload
-    # 读 Parquet 是同步阻塞调用，必须丢到线程池，否则会卡住事件循环
-    # （曾导致整个服务无响应，连 /api/health 都超时）。
-    try:
-        board = await build_theme_board(
-            hub.provider,
-            trade_date,
-            snapshot_map=await asyncio.to_thread(load_snapshot_map, request.app.state.snapshot_service, trade_date),
-        )
-    except RuntimeError as exc:
-        raise HTTPException(status_code=502, detail=str(exc)) from exc
-    payload = {"data": board, "meta": await dated_meta(hub, trade_date)}
-    cache.set(trade_date, payload)
-    return payload
+
+    return await read_inflight(hub.provider, ("theme-board", cache, trade_date), cached)
 
 
 async def _market_phase_cached(request: Request, hub: QuoteHub) -> str | None:

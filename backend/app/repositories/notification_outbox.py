@@ -6,6 +6,7 @@ is unknown and is never automatically sent again without channel idempotency.
 from __future__ import annotations
 
 import json
+from collections.abc import Callable
 from uuid import uuid4
 
 from sqlalchemy import and_, or_, select, update
@@ -104,7 +105,10 @@ class NotificationOutboxRepository:
             db.expunge(row)
             return row
 
-    def begin_send(self, row: NotificationOutbox, now_ms: int) -> bool:
+    def begin_send(
+        self, row: NotificationOutbox, now_ms: int,
+        *, pre_send_check: Callable[[], bool] | None = None,
+    ) -> bool:
         with self._session_factory() as db:
             changed = db.execute(update(NotificationOutbox).where(
                 NotificationOutbox.id == row.id, NotificationOutbox.state == "leased",
@@ -115,7 +119,25 @@ class NotificationOutboxRepository:
                 NotificationOutbox.event_id.is_not(None),
             ).values(send_started_at_ms=now_ms))
             db.commit()
-            return changed.rowcount == 1
+            if changed.rowcount != 1:
+                return False
+            # Commit before nested read Sessions: StaticPool may give them this
+            # same SQLite connection, and closing one must not roll back an
+            # uncommitted send boundary. Exceptions retain the conservative mark.
+            if pre_send_check is None or pre_send_check():
+                return True
+            # This method has not returned, so notifier I/O cannot have begun.
+            # Only a definite rejection may clear exactly this owned mark; no
+            # public reset of an exposed/possibly started send is permitted.
+            cleared = db.execute(update(NotificationOutbox).where(
+                NotificationOutbox.id == row.id, NotificationOutbox.state == "leased",
+                NotificationOutbox.lease_token == row.lease_token,
+                NotificationOutbox.send_started_at_ms == now_ms,
+            ).values(send_started_at_ms=None))
+            db.commit()
+            if cleared.rowcount != 1:
+                raise RuntimeError("pre-send recheck lease changed")
+            return False
 
     def defer(self, row: NotificationOutbox, reason: str, now_ms: int) -> bool:
         """Retry an unavailable pre-send recheck without claiming a send result."""

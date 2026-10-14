@@ -19,6 +19,26 @@ log = logging.getLogger(__name__)
 _BUY_POINT_SEND_SPACING_SECONDS = 0.5
 
 
+async def _db_call(call, *args, **kwargs):
+    """Run a whole repository transaction off-loop; cancellation drains it."""
+    worker = asyncio.create_task(asyncio.to_thread(call, *args, **kwargs))
+    try:
+        return await asyncio.shield(worker)
+    except asyncio.CancelledError:
+        # Canceling to_thread does not end SQLite's real lock wait or commit.
+        # Keep shutdown/next-owner boundaries truthful until it has really ended.
+        while not worker.done():
+            try:
+                await asyncio.shield(worker)
+            except asyncio.CancelledError:
+                continue
+            except Exception:
+                break
+        if not worker.cancelled():
+            worker.exception()
+        raise
+
+
 class AlertEngine:
     """后台轮询预警规则，生成 AlertEvent 并通过通知通道派发。"""
 
@@ -72,12 +92,12 @@ class AlertEngine:
 
     async def _tick(self) -> None:
         await self._deliver_pending()
-        rules = self._repo.list_rules(enabled_only=True)
+        rules = await _db_call(self._repo.list_rules, enabled_only=True)
         if not rules:
             return
 
         for rule in rules:
-            symbols = self._resolve_symbols(rule)
+            symbols = await _db_call(self._resolve_symbols, rule)
             for symbol in symbols:
                 quote = self._quotes.get(symbol)
                 if not quote:
@@ -96,7 +116,7 @@ class AlertEngine:
                 notifier = self._registry.get("feishu")
                 target = notifier.delivery_target() if notifier is not None else ""
                 now_ms = self._now_ms()
-                event = self._repo.record_trigger(
+                event = await _db_call(self._repo.record_trigger,
                     rule_id=rule.id,
                     symbol=symbol,
                     trigger_value=value,
@@ -107,8 +127,8 @@ class AlertEngine:
                 )
                 delivered = await self._registry.dispatch(event, rule, exclude=("feishu",))
                 if delivered:
-                    self._repo.update_last_triggered(rule.id, event.triggered_at)
-                    self._repo.update_event_channels(event.id, delivered)
+                    await _db_call(self._repo.update_last_triggered, rule.id, event.triggered_at)
+                    await _db_call(self._repo.update_event_channels, event.id, delivered)
         await self._deliver_pending()
 
     @staticmethod
@@ -314,20 +334,22 @@ class AlertEngine:
 
     async def _deliver_pending(self) -> None:
         outbox = self._repo.outbox
-        outbox.reconcile(self._now_ms())
-        for outbox_id in outbox.pending_ids():
-            row = outbox.claim(outbox_id, self._now_ms())
+        await _db_call(lambda: outbox.reconcile(self._now_ms()))
+        for outbox_id in await _db_call(outbox.pending_ids):
+            row = await _db_call(lambda: outbox.claim(outbox_id, self._now_ms()))
             if row is None:
                 continue
-            event = self._repo.get_event(row.event_id)
-            rule = self._repo.get_rule(event.rule_id) if event is not None else None
             notifier = self._registry.get(row.channel)
-            reason = self._delivery_block(row, event, rule, notifier)
+            def recheck():
+                event = self._repo.get_event(row.event_id)
+                rule = self._repo.get_rule(event.rule_id) if event is not None else None
+                return event, rule, self._delivery_block(row, event, rule, notifier)
+            event, rule, reason = await _db_call(recheck)
             if reason:
                 if reason == "source_recheck_unavailable":
-                    outbox.defer(row, reason, self._now_ms())
+                    await _db_call(lambda: outbox.defer(row, reason, self._now_ms()))
                 else:
-                    outbox.finish(row, "suppressed", reason, self._now_ms())
+                    await _db_call(lambda: outbox.finish(row, "suppressed", reason, self._now_ms()))
                 continue
             try:
                 intent_kind = (json.loads(row.payload).get("intent") or {}).get("kind")
@@ -337,10 +359,25 @@ class AlertEngine:
                 elapsed = time.monotonic() - self._last_buy_point_send_monotonic
                 if elapsed < _BUY_POINT_SEND_SPACING_SECONDS:
                     await asyncio.sleep(_BUY_POINT_SEND_SPACING_SECONDS - elapsed)
-            # The pacing wait may cross expiry; begin_send is the authoritative
-            # last-moment boundary and must re-check lease/expiry after waiting.
-            if not outbox.begin_send(row, self._now_ms()):
-                outbox.finish(row, "expired", "send_window_closed", self._now_ms())
+            def pre_send_check():
+                nonlocal event, rule, reason
+                event, rule, reason = recheck()
+                return reason is None
+            # Revalidate after SQLite's real write-lock wait in the same worker.
+            # A definite rejection clears only this unexposed send mark inside
+            # begin_send, so unavailable sources retain the pre-send defer.
+            started = await _db_call(lambda: outbox.begin_send(
+                row, self._now_ms(), pre_send_check=pre_send_check))
+            # SQLite may wait for a writer after receiving now_ms. Recheck the
+            # same deadlines after that real wait, immediately before I/O.
+            if min(row.lease_until_ms, row.expires_at_ms) <= self._now_ms() or (not started and reason is None):
+                await _db_call(lambda: outbox.finish(row, "expired", "send_window_closed", self._now_ms()))
+                continue
+            if reason:
+                if reason == "source_recheck_unavailable":
+                    await _db_call(lambda: outbox.defer(row, reason, self._now_ms()))
+                else:
+                    await _db_call(lambda: outbox.finish(row, "suppressed", reason, self._now_ms()))
                 continue
             try:
                 result = await asyncio.wait_for(notifier.send_result(event, rule), timeout=25.0)
@@ -360,7 +397,7 @@ class AlertEngine:
             else:
                 state = "accepted"
                 reason = result.reason
-            outbox.finish(row, state, reason, self._now_ms())
+            await _db_call(lambda: outbox.finish(row, state, reason, self._now_ms()))
 
     def _resolve_symbols(self, rule) -> list[str]:
         if rule.scope == "all":

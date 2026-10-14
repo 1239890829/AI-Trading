@@ -12,6 +12,8 @@ from datetime import date
 from fastapi import APIRouter, Depends, HTTPException, Query, Request
 from app.api.deps import get_hub
 from app.core.ttl_cache import cache_on
+from app.core.inflight_reads import read_inflight, read_policy
+from app.core.config import settings
 from app.data_quality.validator import validate_order_book
 from app.schemas.envelope import (
     Envelope,
@@ -219,21 +221,25 @@ async def _trading_status_payload(hub: QuoteHub, bars, timeframe: str) -> dict |
 
 
 async def _kline_payload(hub: QuoteHub, symbol: str, timeframe: str, limit: int, start, end) -> dict:
-    try:
-        bars = await hub.provider.get_kline(symbol, timeframe, start, end)
-    except Exception as exc:
-        log.warning("kline failed for %s: %s", symbol, exc)
-        raise HTTPException(status_code=502, detail=f"K线数据源失败：{exc}")
-    bars = bars[-limit:]
-    return {
-        "data": {
-            "symbol": symbol,
-            "timeframe": timeframe,
-            "bars": [b.model_dump(mode="json") for b in bars],
-            "trading_status": await _trading_status_payload(hub, bars, timeframe),
-        },
-        "meta": meta_payload(hub),
-    }
+    async def load():
+        try:
+            bars = await hub.provider.get_kline(symbol, timeframe, start, end)
+        except Exception as exc:
+            log.warning("kline failed for %s: %s", symbol, exc)
+            raise HTTPException(status_code=502, detail=f"K线数据源失败：{exc}")
+        bars = bars[-limit:]
+        return {
+            "data": {
+                "symbol": symbol,
+                "timeframe": timeframe,
+                "bars": [b.model_dump(mode="json") for b in bars],
+                "trading_status": await _trading_status_payload(hub, bars, timeframe),
+            },
+            "meta": meta_payload(hub),
+        }
+    key = ("chart.kline", id(hub), beijing_now().date(), symbol, timeframe, limit, start, end,
+           read_policy(hub.provider, "get_kline"))
+    return await read_inflight(hub.provider, key, load)
 
 
 @router.get("/kline/{symbol}", response_model=Envelope[KlinePayload])
@@ -255,14 +261,17 @@ async def kline(
 
 @router.get("/order-book/{symbol}", response_model=Envelope[OrderBook])
 async def order_book(symbol: str, hub: QuoteHub = Depends(get_hub)) -> dict:
-    try:
-        ob = await hub.provider.get_order_book(symbol)
-    except Exception as exc:
-        raise HTTPException(status_code=502, detail=f"盘口数据源失败：{exc}")
-    if ob is None:
-        raise HTTPException(status_code=404, detail=f"{symbol} 无盘口数据")
-    validate_order_book(ob)
-    return {"data": ob.model_dump(mode="json"), "meta": meta_payload(hub)}
+    async def load():
+        try:
+            ob = await hub.provider.get_order_book(symbol)
+        except Exception as exc:
+            raise HTTPException(status_code=502, detail=f"盘口数据源失败：{exc}")
+        if ob is None:
+            raise HTTPException(status_code=404, detail=f"{symbol} 无盘口数据")
+        validate_order_book(ob)
+        return {"data": ob.model_dump(mode="json"), "meta": meta_payload(hub)}
+    key = ("chart.order-book", id(hub), beijing_now().date(), symbol, read_policy(hub.provider, "get_order_book"))
+    return await read_inflight(hub.provider, key, load)
 
 
 @router.get("/trades/{symbol}", response_model=Envelope[list[Trade]])
@@ -289,21 +298,26 @@ async def trades(symbol: str, limit: int = Query(default=50, ge=1, le=200), hub:
     IMP-079：链与TDX均无结果后，可启用有界腾讯HTTP分笔聚合后备；非L2，
     日期/陈旧状态来自源时间，第三路仍沿用上述故障与有效空集区分。
     """
-    rows, source, detail = await fetch_trades_with_tdx_fallback(
-        hub.provider.get_trades, symbol, limit=limit
-    )
-    # 只有**真故障**才 502；"两源都没给出数据"是 200 + 空列表 + 原因
-    # （判据见 `trades_failure_detail`，**不是** `if detail:`——后者会把
-    #  `chain: empty; tdx: disabled` 这类非故障状态也报成 502）。
-    failed = trades_failure_detail(detail)
-    if not rows and failed:
-        raise HTTPException(status_code=502, detail=f"逐笔数据源失败：{failed}")
-    rows = rows[-limit:]
-    meta = meta_payload(hub)
-    meta["trades_source"] = source
-    if not rows:
-        meta["trades_detail"] = detail or "两源均未给出数据"
-    return {"data": [t.model_dump(mode="json") for t in rows], "meta": meta}
+    async def load():
+        rows, source, detail = await fetch_trades_with_tdx_fallback(
+            hub.provider.get_trades, symbol, limit=limit
+        )
+        # 只有**真故障**才 502；"两源都没给出数据"是 200 + 空列表 + 原因
+        # （判据见 `trades_failure_detail`，**不是** `if detail:`——后者会把
+        #  `chain: empty; tdx: disabled` 这类非故障状态也报成 502）。
+        failed = trades_failure_detail(detail)
+        if not rows and failed:
+            raise HTTPException(status_code=502, detail=f"逐笔数据源失败：{failed}")
+        rows = rows[-limit:]
+        meta = meta_payload(hub)
+        meta["trades_source"] = source
+        if not rows:
+            meta["trades_detail"] = detail or "两源均未给出数据"
+        return {"data": [t.model_dump(mode="json") for t in rows], "meta": meta}
+    key = ("chart.trades", id(hub), beijing_now().date(), symbol, limit,
+           settings.trades_tdx_fallback_enabled, settings.trades_tencent_http_fallback_enabled,
+           read_policy(hub.provider, "get_trades"))
+    return await read_inflight(hub.provider, key, load)
 
 
 @router.get("/minute-line/{symbol}", response_model=Envelope[MinuteLinePayload])
@@ -315,26 +329,29 @@ async def minute_line(symbol: str, hub: QuoteHub = Depends(get_hub)) -> dict:
     （最近 5 个完整交易日逐 5min 槽同期累计量均值，来自 TDX 落地历史）——
     前端量比优先用精确口径（cum_i / (baseline[slot]/5)），缺失时回退近似口径。
     """
-    try:
-        points = await hub.provider.get_minute_line(symbol)
-    except Exception as exc:
-        from app.market.minute_backfill import tdx_minute_line_fallback
-
+    async def load():
         try:
-            points = await asyncio.to_thread(tdx_minute_line_fallback, symbol)
-            log.warning("minute-line 主源失败，TDX 备源接管 %s（主源错误：%s）", symbol, exc)
-        except Exception as tdx_exc:
-            raise HTTPException(
-                status_code=502,
-                detail=f"分时数据源失败：主源 {exc}；TDX 备源 {tdx_exc}",
-            ) from tdx_exc
-    baseline = None
-    try:
-        from app.market.minute_backfill import load_vr_baseline
+            points = await hub.provider.get_minute_line(symbol)
+        except Exception as exc:
+            from app.market.minute_backfill import tdx_minute_line_fallback
 
-        # Parquet 读是同步阻塞（评审 B5）：与同文件 themes 路由 986 行同一纪律——
-        # 必须丢线程池，否则卡死事件循环
-        baseline = await asyncio.to_thread(load_vr_baseline, symbol)
-    except Exception as exc:
-        log.warning("vr baseline failed for %s: %s", symbol, exc)
-    return {"data": {"symbol": symbol, "points": points, "vr_baseline_5m": baseline}, "meta": meta_payload(hub)}
+            try:
+                points = await asyncio.to_thread(tdx_minute_line_fallback, symbol)
+                log.warning("minute-line 主源失败，TDX 备源接管 %s（主源错误：%s）", symbol, exc)
+            except Exception as tdx_exc:
+                raise HTTPException(
+                    status_code=502,
+                    detail=f"分时数据源失败：主源 {exc}；TDX 备源 {tdx_exc}",
+                ) from tdx_exc
+        baseline = None
+        try:
+            from app.market.minute_backfill import load_vr_baseline
+
+            # Parquet 读是同步阻塞（评审 B5）：与同文件 themes 路由 986 行同一纪律——
+            # 必须丢线程池，否则卡死事件循环
+            baseline = await asyncio.to_thread(load_vr_baseline, symbol)
+        except Exception as exc:
+            log.warning("vr baseline failed for %s: %s", symbol, exc)
+        return {"data": {"symbol": symbol, "points": points, "vr_baseline_5m": baseline}, "meta": meta_payload(hub)}
+    key = ("chart.minute-line", id(hub), beijing_now().date(), symbol, read_policy(hub.provider, "get_minute_line"))
+    return await read_inflight(hub.provider, key, load)

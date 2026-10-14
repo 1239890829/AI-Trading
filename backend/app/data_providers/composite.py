@@ -180,8 +180,13 @@ class CompositeProvider:
         return "chain(" + "→".join(p.name for p in self.providers) + ")"
 
     async def aclose(self) -> None:
-        for p in self.providers:
-            await p.aclose()
+        from app.core.inflight_reads import close_inflight_reads
+
+        try:
+            await close_inflight_reads(self)
+        finally:
+            for p in self.providers:
+                await p.aclose()
 
     def budget_for(self, method: str) -> float:
         """该方法一次调用的**总**预算（秒）。秒级方法更紧（Hub 1Hz 轮询等不起）。"""
@@ -405,6 +410,9 @@ class CompositeProvider:
             targets = {key for key, source in remaining.items() if source != p.name}
             if not targets or self._in_cooldown(method, p.name):
                 continue
+            capabilities = getattr(p, "source_clock_recovery", {})
+            if isinstance(capabilities, dict) and capabilities.get(method) is False:
+                continue  # Only an explicit method/mode contract excludes recovery.
             if time.monotonic() >= deadline:
                 self._observe_attempt(method, p.name, "deadline_before_method", "BudgetExhausted")
                 break
