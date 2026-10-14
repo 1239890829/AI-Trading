@@ -694,7 +694,7 @@ export const StockDetailPanel = memo(function StockDetailPanel({
   const pausedLabel = qualityView && ["已收盘", "午间休息", "未开盘", "休市", "竞价等待", "开盘等待"].includes(qualityView.label);
   const chartStatus = streamStatus === "error" ? {label: "行情连接异常", warning: true}
     : active && immediateQuote === null ? {label: "报价待恢复", warning: true, quality: "stale"}
-    : liveQuote && !hasTrustedQuoteObservation(liveQuote) ? {label: qualityView?.label === "正常" ? "时间待核" : qualityView?.label || "报价待核", warning: !pausedLabel, quality: liveQuote.quality}
+    : liveQuote && !hasTrustedQuoteObservation(liveQuote) && !pausedLabel ? {label: qualityView?.label === "正常" ? "时间待核" : qualityView?.label || "报价待核", warning: true, quality: liveQuote.quality}
       : streamStatus === "polling" ? {label: "备用读取", warning: true}
         : connectingDebounced && streamStatus === "connecting" ? {label: "行情连接中", warning: true} : null;
   const quoteDiagnostics = <>

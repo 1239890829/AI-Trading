@@ -137,6 +137,24 @@ function testQuoteFeed() {
 }
 
 describe("StockDetailPanel · 即时报价复用", () => {
+  it.each(["kline", "minute", "flow"] as const)("%s正常休市状态只在行情头部显示，连接和源读取异常仍可见", async chartTab => {
+    vi.setSystemTime(new Date("2026-10-14T08:00:00+08:00"));
+    const quote: Quote = {...audit, symbol: "600519", price: 88, quality: "stale", quality_reasons: ["market_closed"],
+      data_timestamp: "2026-10-13T15:00:00+08:00",
+      display_session: {phase: "closed", trade_date: "2026-10-14", as_of: "2026-10-14T08:00:00+08:00", trade_day_result: true}};
+    const props = {symbol: "600519", chartTab, liveQuote: quote};
+    const view = render(<StockDetailPanel {...props} streamStatus="live" />); await settle();
+    expect(view.getAllByText("未开盘")).toHaveLength(1);
+    expect(within(view.container.querySelector(".quote-sheet") as HTMLElement).getByText("未开盘")).toBeTruthy();
+    view.rerender(<StockDetailPanel {...props} streamStatus="polling" />); await settle();
+    expect(view.getByRole("status").textContent).toBe("备用读取");
+    view.rerender(<StockDetailPanel {...props} streamStatus="error" />); await settle();
+    expect(view.getByRole("status").textContent).toBe("行情连接异常");
+    view.rerender(<StockDetailPanel {...props} streamStatus="live" liveQuote={{...quote, quality_reasons: ["market_closed", "refresh_failed"]}} />); await settle();
+    expect(view.getByRole("status").textContent).toBe("刷新异常");
+    expect(api.getNewsDigest).not.toHaveBeenCalled();
+  });
+
   it("REST基座尾记录按北京时间显示，保留原始bar身份", async () => {
     const original = kline(); original.bars[0].ts = "2026-10-09T10:00:12+08:00";
     api.getKlinePayload.mockResolvedValue(original);
