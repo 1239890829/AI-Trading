@@ -17,6 +17,41 @@ import app.events.llm_aux as la
 from app.core.bjtime import beijing_now_naive
 
 
+def test_model_receives_exact_current_catalog_and_keeps_news_input_separate(tmp_path, monkeypatch):
+    import json
+    from app.core import llm_client
+    sf = _factory(tmp_path)
+    _settings(monkeypatch)
+    event = _event(sf, '公开公告：公司拟收购测试设备，尚待审批')
+    captured = {}
+    def reply(**kw):
+        captured.update(kw)
+        return json.dumps({'items': [{'event_id': event.id, 'direction': 0, 'theme': None,
+            'chain': '', 'reason': '交易仍待审批，影响对象尚不清楚',
+            'evidence': {'field': 'title', 'quote': event.title}}]}, ensure_ascii=False)
+    monkeypatch.setattr(llm_client, 'chat_completion', reply)
+    catalog = ['存储测试设备', '电子材料', '存储测试设备']
+    assert la._deepseek_items([event], sf, theme_names=catalog)[0] is not None
+    assert json.dumps(['存储测试设备', '电子材料'], ensure_ascii=False) in captured['messages'][0]['content']
+    assert '不是新闻证据' in captured['messages'][0]['content']
+    assert json.loads(captured['messages'][1]['content']) == [
+        {'event_id': event.id, 'title': event.title, 'summary': event.summary}]
+
+
+def test_catalog_repair_does_not_admit_unknown_theme_and_records_precise_failure(tmp_path, monkeypatch):
+    sf = _factory(tmp_path)
+    _settings(monkeypatch)
+    event = _event(sf, '公司公告测试设备订单')
+    _mock_llm(monkeypatch, [{'direction': 1, 'theme': '臆造的新题材', 'reason': '公司公告测试设备订单'}])
+    result = la.judge_pending_batch(sf, theme_names=['存储测试设备'], min_batch=1)
+    assert result['skipped'] is True and '目录' in result['reason']
+    with sf() as db:
+        assert db.get(EventCard, event.id).llm_judged_at is None
+        assert db.query(EventDirection).count() == 0
+        receipt = db.query(AgentResourceUsage).one()
+        assert receipt.state == 'failed' and receipt.error_kind == 'theme_not_catalog'
+
+
 def _factory(tmp_path, name="llm_aux.db"):
     from sqlalchemy import create_engine
     from sqlalchemy.orm import sessionmaker

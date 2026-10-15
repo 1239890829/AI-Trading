@@ -1,4 +1,4 @@
-import { cleanup, fireEvent, render, screen, within } from "@testing-library/react";
+import { cleanup, fireEvent, render, screen, within, waitFor } from "@testing-library/react";
 import { afterEach, describe, expect, it, vi } from "vitest";
 
 import {
@@ -7,8 +7,10 @@ import {
   StandAsideBanner,
   fromDailyPick,
   fromIntradayStock,
+  selectionReading,
 } from "@/components/picks/pick-card";
 import type { DailyPickItem, IntradayTopStock, OpportunityStock, StandAsideGate } from "@/lib/api";
+import * as API from "@/lib/api";
 
 // vitest 未开 globals 时 RTL 自动 cleanup 不注册，必须手动（见 event-panel.test.tsx 注释）
 afterEach(cleanup);
@@ -140,7 +142,7 @@ describe("PickCard · 盘前名单（fromDailyPick）", () => {
     expect(screen.getByText("止损参考")).toBeTruthy();
     expect(screen.getByText("回落 8%")).toBeTruthy();
     expect(screen.getByText("+10%→减半仓；+20%→再减半")).toBeTruthy();
-    expect(screen.getByText(/收盘跌破 5 日线/)).toBeTruthy();
+    expect(within(screen.getByLabelText("失效条件")).getByText(/收盘跌破 5 日线/)).toBeTruthy();
   });
 
   it("空仓闸门触发时标注仅观察并撤除买入区间", () => {
@@ -331,7 +333,7 @@ describe("PickCard · 盘中名单（fromIntradayStock）", () => {
     expect(screen.getByText("联动确定性·高").getAttribute("title")).toContain(displayed);
 
     rerender(<PickCard evidenceExpanded item={fromIntradayStock(accordion)} />);
-    fireEvent.click(screen.getByRole("button",{name:"依据"}));
+    fireEvent.click(screen.getByRole("button",{name:"入选解读"}));
     readBasis("联动");
     expect(within(screen.getByLabelText("入选依据核对")).getByText(displayed)).toBeTruthy();
     expect(screen.getByText("联动确定性·高").getAttribute("title")).toContain(displayed);
@@ -472,7 +474,7 @@ describe("适配器归一：4 组异名同义字段", () => {
     expect(container.textContent).not.toContain("入选 —");
     readBasis("涨停原因");
     expect(container.textContent).toContain("数据源未提供涨停原因");
-    expect(screen.getByRole("button", {name: "依据"})).toBeTruthy();
+    expect(screen.getByRole("button", {name: "入选解读"})).toBeTruthy();
     expect(card.basisRows.some(row => row.label === "入选")).toBe(false);
   });
 });
@@ -867,7 +869,7 @@ it("keeps the compact card short, exposes late limitations before the full recor
   expect(brief.textContent).toContain("仍有待确认事项");
   expect(brief.textContent).toContain("注意适用范围与限制");
   expect(screen.queryByLabelText("入选依据核对")).toBeNull();
-  fireEvent.click(screen.getByRole("button",{name:"依据"}));
+  fireEvent.click(screen.getByRole("button",{name:"入选解读"}));
   expect(screen.getByLabelText("入选依据核对").textContent).toContain(basis);
   expect(item.basisRows[0].value).toBe(basis);
 });
@@ -879,6 +881,42 @@ it("keeps decision references outside the collapsed evidence: quote, boards, dis
  expect(screen.getByText("中军 · 3板")).toBeTruthy();expect(screen.getByText("辨识度·中")).toBeTruthy();
  expect(screen.getByLabelText("个股关键参考").textContent).toContain("4.99（-8%）");
  expect(screen.queryByLabelText("入选依据核对")).toBeNull();
- fireEvent.click(screen.getByRole("button",{name:"依据"}));
+ fireEvent.click(screen.getByRole("button",{name:"入选解读"}));
  expect(screen.getByText("档位基准 8% → 取 8.0%（clamp 3%~12%）")).toBeTruthy();
+});
+
+it("explains saved system evidence instead of substituting the vendor limit-up note", () => {
+ const item=fromIntradayStock({...topPath, pick_basis:"", reason:"供应商短语：存储芯片"});
+ item.linkage=null;item.distinctiveness=null;item.certainty=null;
+ const reading=selectionReading(item);
+ expect(reading.why).toContain("没有保存系统筛选理由");
+ expect(reading.why).not.toContain("存储芯片");
+ const daily=selectionReading(fromDailyPick({...base, source_basis:undefined, sub_scores:{fundamental:90}, bases:{fundamental:"营收和净利润增长较好"}}));
+ expect(daily.why).toContain("营收和净利润增长较好");
+ expect(daily.supports.length).toBeGreaterThan(0);
+});
+
+it("has one selection reader and loads related messages only after opening it", () => {
+ render(<PickCard item={fromDailyPick(base)}/>);
+ expect(screen.queryByRole("button",{name:"关联消息"})).toBeNull();
+ expect(screen.queryByLabelText("相关消息与AI解读")).toBeNull();
+ fireEvent.click(screen.getByRole("button",{name:"入选解读"}));
+ expect(screen.getByLabelText("本次筛选考虑")).toBeTruthy();
+ expect(screen.getByLabelText("相关消息与AI解读")).toBeTruthy();
+ expect(screen.getByLabelText("入选依据核对")).toBeTruthy();
+});
+
+it("keeps exact archived event references in the combined reader and performs one read only on open", async () => {
+ const spy=vi.spyOn(API,"getStockAttribution").mockResolvedValue({schema_version:1,symbol:"600995",count:0,items:[]} as API.StockAttributionPayload);
+ try {
+  render(<PickCard item={fromDailyPick({...base,symbol:"600995",related_event_refs:[{event_id:18,version_id:20,observation_id:19,state:"active",available_at:"2026-10-12T09:31:00+08:00"}]})}/>);
+  expect(spy).not.toHaveBeenCalled();
+  fireEvent.click(screen.getByRole("button",{name:"入选解读"}));
+  await waitFor(()=>expect(spy).toHaveBeenCalledTimes(1));
+  expect(spy).toHaveBeenCalledWith("600995");
+  expect(screen.getByText(/原解释 #20/).textContent).toContain("事件 #18");
+  fireEvent.click(screen.getByRole("button",{name:"入选解读"}));
+  expect(screen.getByRole("button",{name:"入选解读"}).getAttribute("aria-expanded")).toBe("false");
+  expect(spy).toHaveBeenCalledTimes(1);
+ } finally {spy.mockRestore();}
 });
