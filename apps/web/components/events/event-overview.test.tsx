@@ -9,39 +9,36 @@ const event: EventSummary = {id:18,title:"粮价上涨，但公司原材料成�
   {target_type:"symbol",target:"600127",direction:-1,strength:1,chain:"成本压力原记录",basis:"尚需核对业务",matched_by:"source"},
 ]};
 
-it("makes source essentials and each scoped target basis readable without selecting nodes", () => {
+it("shows a short message and keeps expired objects distinct from current direction, without a graph", () => {
   const original=JSON.stringify(event);
   render(<EventOverview event={event} symbol="600127"/>);
-  expect(screen.queryByRole("tabpanel")).toBeNull();
-  expect(within(screen.getByLabelText("消息要点摘录")).getByText(event.summary!)).toBeTruthy();
-  expect(screen.getByRole("tab",{name:"题材 · 农业"}).textContent).toContain("题材线索");
-  expect(screen.getByRole("tab",{name:"个股 · 600127"}).textContent).toContain("规则负向线索");
-  expect(screen.getByRole("tab",{name:"个股 · 600127"}).textContent).toContain("尚需核对业务");
-  expect(screen.getByText("未记录，未用系统时间补填")).toBeTruthy();
-  expect(screen.getByText("事件已非活跃，原记录仅供核对。")).toBeTruthy();
-  expect(screen.getByText("解释已撤回，不能当作有效依据。")).toBeTruthy();
-  fireEvent.click(screen.getByRole("tab",{name:"个股 · 600127"}));
-  expect(within(screen.getByRole("tabpanel")).getByText(event.directions[1].basis,{selector:"blockquote"})).toBeTruthy();
+  expect(screen.queryByRole("tab")).toBeNull();
+  expect(screen.getByLabelText("消息要点摘录").textContent).toContain(event.summary!);
+  expect(screen.getByLabelText("关联 农业").textContent).toContain("原记录已失效");
+  expect(screen.getByLabelText("关联 600127").textContent).toContain("尚需核对业务");
+  expect(screen.getByText("原记录仅供复盘，不作为当前依据")).toBeTruthy();
+  expect(screen.queryByText("题材原记录")).toBeNull();
+  fireEvent.click(screen.getByRole("button",{name:"完整判读与来源记录"}));
+  expect(screen.getByText("题材原记录")).toBeTruthy();
+  expect(screen.getByText("成本压力原记录")).toBeTruthy();
   expect(JSON.stringify(event)).toBe(original);
 });
-
-it("shows only declared targets and clears old evidence when a different event has no associations", () => {
+it("shows only supplied objects and retires open records when the event changes", () => {
   const view=render(<EventOverview event={event} symbol="600127"/>);
-  fireEvent.click(screen.getByRole("tab",{name:"题材 · 农业"}));
-  expect(screen.getByRole("tabpanel").textContent).toContain("不能将题材方向套用于该股");
+  fireEvent.click(screen.getByRole("button",{name:"完整判读与来源记录"}));
+  expect(screen.getByText("题材原记录")).toBeTruthy();
   view.rerender(<EventOverview event={{...event,id:19,title:"另一条消息",directions:[]}}/>);
-  expect(screen.queryByRole("tabpanel")).toBeNull();
   expect(screen.queryByRole("tab")).toBeNull();
   expect(screen.getByText("没有已记录的题材或个股关联。不能从标题自动推导受益股。")).toBeTruthy();
+  expect(screen.queryByText("题材原记录")).toBeNull();
   expect(screen.queryByText("市场响应已确认")).toBeNull();
 });
-
-
-it("retires selected evidence when the same event's associated targets reorder", () => {
-  const view = render(<EventOverview event={event} symbol="600127"/>);
-  fireEvent.click(screen.getByRole("tab", {name:"题材 · 农业"}));
-  expect(screen.getByRole("tabpanel").textContent).toContain("题材原记录");
-  view.rerender(<EventOverview event={{...event,directions:[...event.directions].reverse()}} symbol="600127"/>);
-  expect(screen.queryByRole("tabpanel")).toBeNull();
-  expect(screen.getByRole("tab",{name:"个股 · 600127"}).getAttribute("aria-selected")).toBe("false");
+it("changing or reordering targets retires the old full record rather than applying its direction elsewhere", () => {
+  const active={...event,is_active:true,interpretation_ref:{...event.interpretation_ref!,state:"active" as const}};
+  const view=render(<EventOverview event={active} symbol="600127"/>);
+  expect(screen.getByLabelText("关联 农业").textContent).toContain("题材线索");
+  expect(screen.getByLabelText("关联 600127").textContent).toContain("规则负向线索");
+  fireEvent.click(screen.getByRole("button",{name:"完整判读与来源记录"}));
+  view.rerender(<EventOverview event={{...active,directions:[...event.directions].reverse()}} symbol="600127"/>);
+  expect(screen.getByRole("button",{name:"完整判读与来源记录"}).getAttribute("aria-expanded")).toBe("false");
 });

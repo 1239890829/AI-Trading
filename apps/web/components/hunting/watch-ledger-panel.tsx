@@ -15,7 +15,8 @@ import { LeaderResearchPanel } from "./leader-research-panel";
 import { useResource } from "@/hooks/use-resource";
 import { getWatchLedger } from "@/lib/api";
 import { fmt, pctColor, pctText, winRateColor } from "@/lib/format";
-import { ExplanationMap, NarrativeText } from "@/components/ui/explanation-map";
+import {PlainExplanation as NarrativeText} from "@/components/ui/reader-brief";
+import { ExplanationMap } from "@/components/ui/explanation-map";
 import { readingRowClasses } from "@/components/ui/reading-row";
 
 export function WatchLedgerPanel({ date, readOnly = false }: { date?: string; readOnly?: boolean } = {}) {

@@ -3,8 +3,9 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 import { Panel } from "@/components/panel";
 import { useResource } from "@/hooks/use-polling-fetch";
-import {ConditionList, ExplanationMap, NarrativeText} from "@/components/ui/explanation-map";
-import {readingExcerpt} from "@/lib/reading-clues";
+import {ConditionList} from "@/components/ui/explanation-map";
+import {ReaderBrief, ResearchDisclosure} from "@/components/ui/reader-brief";
+import {readerExcerpt, readerCautions} from "@/lib/reader-copy";
 import "./review-layout.css";
 import {
   ApiError,
@@ -262,39 +263,24 @@ function ReportDetail({
 }) {
   return (
     <div className="review-report space-y-3 px-4 py-3 text-sm">
-      <div className="flex flex-wrap items-center gap-x-3 gap-y-1 text-xs text-zinc-600 dark:text-zinc-400">
-        <span className="font-mono">{report.review_id}</span>
-        <span>方法论 {report.methodology_version}</span>
-        <span>
-          模型 {report.model.actual ?? "--"}
-          {report.model.degraded && <span className="text-amber-800 dark:text-amber-400">（降级：{report.model.reason ?? "未知"}）</span>}
-        </span>
-      </div>
-
-      <NarrativeText text={report.summary} label="复盘摘要原文" identity={report.review_id}/>
-      {report.meta_insights.length > 0 && <section aria-label="复盘观察与建议" className="space-y-2">
-        {report.meta_insights.map((insight, i) => <div key={i} className="border-b border-zinc-300 pb-3 last:border-0 dark:border-zinc-700">
-          <ExplanationMap label={insight.dimension} identity={`${report.review_id}:insight:${i}`} steps={[
-            {id:"observation",label:"报告观察",icon:"source",summary:readingExcerpt(insight.observation, 84) || "本报告未列观察",content:<NarrativeText text={insight.observation} label="观察原文"/>},
-            {id:"evidence",label:"依据与有效性",icon:"response",summary:`报告有效性：${insight.effectiveness || "未记录"}；原依据摘录：${readingExcerpt(insight.evidence, 64) || "未记录"}`,content:<ConditionList label="报告已列依据" items={[`依据：${insight.evidence}`,`有效性：${insight.effectiveness}`]}/>},
-            {id:"suggestion",label:"待核建议",icon:"risk",summary:`原建议摘录：${readingExcerpt(insight.suggestion, 84) || "未记录"}`,content:<NarrativeText text={insight.suggestion} label="建议原文"/>},
-          ]}/>
+      <ReaderBrief label="复盘速读" headline={readerExcerpt(report.summary, 80)} facts={[
+        {label:"本次记录",value:`${report.dimensions.length} 项检查 · ${report.action_items.length} 项改进建议`},
+      ]} cautions={["建议不等于已实施，实施后仍需验证效果"]}/>
+      <ResearchDisclosure label="复盘完整摘要与生成记录" identity={report.review_id}>
+        <p className="whitespace-pre-wrap">{report.summary}</p><p>记录 {report.review_id} · 方法论 {report.methodology_version} · 模型 {report.model.actual || "未记录"}{report.model.degraded ? ` · 降级：${report.model.reason || "未知"}` : ""}</p>
+      </ResearchDisclosure>
+      {report.meta_insights.length > 0 && <section aria-label="复盘观察与建议" className="space-y-3">
+        {report.meta_insights.map((insight,i) => <div key={i} className="border-b border-zinc-200 pb-3 dark:border-zinc-700">
+          <h4 className="font-medium">{insight.dimension}</h4>
+          <ReaderBrief label={`${insight.dimension}简述`} facts={[{label:"发现了什么",value:readerExcerpt(insight.observation) || "本次未记录"},{label:"建议怎么改",value:readerExcerpt(insight.suggestion) || "尚无建议"}]} cautions={readerCautions([insight.observation,insight.suggestion,insight.evidence])}/>
+          <ResearchDisclosure label="观察与建议的完整依据" identity={`${report.review_id}:${i}`}><p>{insight.observation}</p><p>依据：{insight.evidence}</p><p>有效性：{insight.effectiveness}</p><p>建议：{insight.suggestion}</p></ResearchDisclosure>
         </div>)}
       </section>}
-
-      {report.dimensions.map((d) => (
-        <div key={d.key} className="rounded-lg border border-zinc-200 px-3 py-2 dark:border-zinc-800">
-          <div className="text-xs font-medium text-zinc-900 dark:text-zinc-100">
-            {d.title}
-            <span className="ml-2 font-normal text-zinc-600 dark:text-zinc-400">{d.status}</span>
-          </div>
-          <ExplanationMap label="维度依据" identity={`${report.review_id}:${d.key}`} steps={[
-            {id:"findings",label:"报告观察",icon:"source",summary:d.findings.length ? <span className="block"><span className="block">{readingExcerpt(d.findings[0], 84)}</span>{d.findings.length > 1 && <span className="block">共 {d.findings.length} 条原观察，完整记录见节点</span>}</span> : "本报告未列观察，不补填事实",content:d.findings.length ? <ConditionList label="原始观察记录" items={d.findings}/> : <p>本报告未列观察，不补填事实。</p>},
-            {id:"judgements",label:"报告判断",icon:"check",summary:d.judgements.length ? `原判断摘录：${readingExcerpt(d.judgements[0], 84)}` : "本报告未列判断",content:d.judgements.length ? <ConditionList label="原始判断" items={d.judgements}/> : <p>本报告未列判断。</p>},
-            {id:"gaps",label:"已列缺口",icon:"risk",tone:"warning",summary:d.gaps.length ? <span className="block space-y-1">{d.gaps.map((gap, index)=><span key={index} className="block">{gapText(gap)}</span>)}</span> : "本报告未列缺口，不等于已完整验证",content:d.gaps.length ? <ConditionList label="缺口与限制" items={d.gaps.map(gapText)} tone="warning"/> : <p>本报告未列缺口，不等于已完整验证。</p>},
-          ]} footer="报告字段分类不代表独立验证，判断仍需核对来源。"/>
-        </div>
-      ))}
+      {report.dimensions.map(d => <section key={d.key} className="border-b border-zinc-200 py-2 dark:border-zinc-700">
+        <h4 className="text-xs font-medium">{d.title}<span className="ml-2 font-normal text-zinc-600 dark:text-zinc-400">{d.status}</span></h4>
+        <ReaderBrief label={`${d.title}简述`} facts={[{label:"发现了什么",value:readerExcerpt(d.findings[0]) || "本次没有记录"},{label:"目前判断",value:readerExcerpt(d.judgements[0]) || "还不能下结论"}]} cautions={d.gaps.length ? [`还有 ${d.gaps.length} 项资料或验证缺口`] : ["未列缺口不代表已经验证完整"]}/>
+        <ResearchDisclosure label={`${d.title}完整检查记录`} identity={`${report.review_id}:${d.key}`}><ConditionList label="原始观察记录" items={d.findings}/><ConditionList label="原始判断" items={d.judgements}/><ConditionList label="缺口与限制" items={d.gaps.map(gapText)} tone="warning"/></ResearchDisclosure>
+      </section>)}
 
       {report.action_items.length > 0 && (
         <div>
@@ -310,13 +296,8 @@ function ReportDetail({
                   <span className="text-zinc-900 dark:text-zinc-100">{a.title}</span>
                   <span className="text-zinc-600 dark:text-zinc-400">[{CATEGORY_LABEL[a.category] ?? a.category}]</span>
                 </div>
-                <NarrativeText text={a.expected_impact} label="预期影响原文"/>
-                {a.proposed_change && (
-                  <div className="mt-0.5 text-[11px] text-zinc-600 dark:text-zinc-400">
-                    建议：<NarrativeText text={a.proposed_change} label="拟议变更原文"/>
-                    {a.target && <span className="ml-1 text-zinc-600 dark:text-zinc-400">（{a.target}）</span>}
-                  </div>
-                )}
+                <ReaderBrief label="改进建议简述" facts={[{label:"准备怎么改",value:readerExcerpt(a.proposed_change || a.expected_impact) || "具体建议未记录"}]}/>
+                <ResearchDisclosure label="改进建议完整内容" identity={JSON.stringify([report.review_id,a.id,a.title])}><p>{a.expected_impact}</p>{a.evidence && <p>依据：{a.evidence}</p>}{a.proposed_change && <p>{a.proposed_change}</p>}{a.target && <p>对应位置：{a.target}</p>}</ResearchDisclosure>
                 {allowDispose ? <ActionItemDispose
                   item={{ id: a.id, trade_date: report.trade_date, category: a.category, title: a.title }}
                   status={a.status ?? "pending"}
@@ -376,7 +357,7 @@ export function ReviewTab({ focusDate, allowDispose = false }: { focusDate?: str
 
   return (
     <div className="review-workspace">
-      <p className="review-reader-hint">左右滑动查看报告、正文与处置</p>
+      <p className="review-reader-hint">选择日期查看报告，完整依据按需展开</p>
       {error && <p role="alert" className="px-4 py-2 text-xs text-amber-800 dark:text-amber-300">报告列表刷新失败，保留上次读取：{error} <button onClick={list.refresh}>重试列表</button></p>}
     <div className={`review-layout${allowDispose ? " review-layout-with-disposition" : ""}`} role="region" aria-label="报告索引、正文与处置阅读区" tabIndex={0}>
       <Panel title="复盘报告（冻结版本）" className="review-index" bodyClassName="review-index-scroll overflow-auto">
@@ -395,7 +376,7 @@ export function ReviewTab({ focusDate, allowDispose = false }: { focusDate?: str
               >
                 <div className="review-record-heading text-sm">
                   <span className="font-mono text-xs text-zinc-600 dark:text-zinc-400">{r.trade_date}</span>
-                  <span className="text-zinc-900 dark:text-zinc-100">{r.summary}</span>
+                  <span className="text-zinc-900 dark:text-zinc-100" title={r.summary}>{readerExcerpt(r.summary,64)}</span>
                 </div>
                 <div className="mt-1 text-xs text-zinc-600 dark:text-zinc-400">
                   缺口 {r.gap_count} · 行动项 {r.action_item_count}

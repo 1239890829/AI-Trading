@@ -82,7 +82,7 @@ it("reads the full recorded rationale past 80 characters without a simulation ac
   vi.mocked(getWatchLedger).mockResolvedValue(data);
   render(<WatchLedgerPanel date="2026-10-08" readOnly />);
   fireEvent.click(await screen.findByRole("button", {name: "阅读 600127 入选说明"}));
-  fireEvent.click(screen.getByRole("button", {name: "完整原文"}));
+  fireEvent.click(screen.getByRole("button", {name: "完整入选说明完整内容"}));
   expect(screen.getByLabelText("台账入选说明").textContent).toContain(reason);
   expect(getWatchLedger).toHaveBeenCalledTimes(1);
   expect(placePaperOrder).not.toHaveBeenCalled();

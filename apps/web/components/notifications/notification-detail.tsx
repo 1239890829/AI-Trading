@@ -4,6 +4,8 @@ import type {NotificationItem} from "@/lib/api";
 import {dateTimeTextBJ, dateTimesInTextBJ, formatLegacyLimitDistance, sourceLabel} from "@/lib/format";
 import {workbenchUrl} from "@/lib/routing";
 import {ModalShell} from "@/components/ui/modal-shell";
+import {ReaderBrief, ResearchDisclosure} from "@/components/ui/reader-brief";
+import {readerExcerpt, readerCautions} from "@/lib/reader-copy";
 import {ConditionList} from "@/components/ui/explanation-map";
 import {readingRowClasses} from "@/components/ui/reading-row";
 import {inspectionClick, useInspection} from "@/components/inspection/inspection-context";
@@ -21,7 +23,7 @@ export function notificationSummary(item: NotificationItem): string {
   const evidence = (item.references ?? []).map(ref => object(ref.evidence));
   const stored = evidence.map(value => text(value.pick_basis) || text(value.source_basis)).find(Boolean);
   const reason = visibleProse(stored || item.body || "原提醒依据未提供，请打开详情核对。").replace(/\s+/g, " ").trim();
-  return reason.length > 100 ? `${reason.slice(0, 100)}…` : reason;
+  return readerExcerpt(reason);
 }
 
 export function notificationKeyState(item: NotificationItem): string {
@@ -78,8 +80,13 @@ export function NotificationDetail({item, open, onClose, onOpenNews}: {item: Not
   return <ModalShell open={open} onClose={onClose} presentation="drawer" zIndex={60} label={item.title} testid="notification-detail" size="md"
     header={<div className="min-w-0"><h3 className="break-words text-sm font-semibold">{item.title}</h3><p className="mt-1 text-xs text-zinc-600 dark:text-zinc-400">{item.label} · {dateTimeTextBJ(item.ts)}</p></div>}
     bodyClassName="overflow-y-auto px-4 py-4"
-    footer={<p className="text-xs text-zinc-600 dark:text-zinc-400">未读仅表示站内尚未点开；渠道受理不等于送达。不构成买卖建议。</p>}>
+    footer={<p className="text-xs text-zinc-600 dark:text-zinc-400">不构成买卖建议。</p>}>
     <div className="space-y-5 break-words text-sm leading-relaxed [overflow-wrap:anywhere]">
+      <ReaderBrief label="提醒简述" headline={notificationSummary(item)} facts={[
+        {label:"这条提醒",value:item.category === "risk" ? "提醒你核对风险" : item.category === "reminder" ? "你设置的条件曾触发" : "选股系统曾把它列入观察"},
+        {label:"发生时间",value:clock(item.source_as_of ?? item.ts, "原时点未记录")},
+      ]} cautions={[...readerCautions([item.body, item.validity || ""]), "这是当时的记录，不代表现在可以买入"]}/>
+      <ResearchDisclosure identity={`${item.id}:${JSON.stringify(item)}`} label="完整依据与研究记录">
       <section aria-label="原提醒内容"><h4 className="mb-1 font-medium">提醒依据</h4><p className="whitespace-pre-wrap">{visibleProse(item.body) || "原提醒内容未提供。"}</p></section>
       <section aria-label="来源与时点" className="space-y-1 text-xs text-zinc-600 dark:text-zinc-400">
         <p>来源：{sourceLabel(item.source) === "--" ? "历史事件，来源未标注" : sourceLabel(item.source)}</p>
@@ -95,7 +102,8 @@ export function NotificationDetail({item, open, onClose, onOpenNews}: {item: Not
         <p className="text-xs text-zinc-600 dark:text-zinc-400">来源身份：{ref.source_id ?? "未记录"} · 版本：{ref.source_version ?? "未绑定"}{ref.run_id ? ` · 归档 ${ref.run_id}` : ""}</p>
         {ref.selection_source === "daily" && ref.source_version && ref.trade_date && <a data-reading-action className={actionClass} href={`/hunting?${new URLSearchParams({view:"review", date:ref.trade_date, version:ref.source_version})}`} onClick={event => {inspectionClick(inspect, {kind:"selection-review", date:ref.trade_date!, version:ref.source_version!})(event); if (event.defaultPrevented) onClose();}}>查看此版本复盘</a>}
       </section>)}
-      <section aria-label="通知渠道" className="text-xs text-zinc-600 dark:text-zinc-400"><h4 className="mb-1 font-medium">渠道状态</h4><p>站内记录可见；<ChannelStatus channels={item.channels} />。</p></section>
+      <section aria-label="通知渠道" className="text-xs text-zinc-600 dark:text-zinc-400"><h4 className="mb-1 font-medium">渠道状态</h4><p>未读仅表示站内尚未点开；渠道受理不等于送达。</p><p>站内记录可见；<ChannelStatus channels={item.channels} />。</p></section>
+      </ResearchDisclosure>
       <div className="flex flex-wrap gap-2">
         {item.symbol && <a data-reading-action className={actionClass} href={workbenchUrl(item.symbol)} onClick={event => {symbolDetailClick(openSymbol, {symbol:item.symbol!, preferModal:true})(event); if (event.defaultPrevented) onClose();}}>查看行情</a>}
         {item.symbol && <a data-reading-action className={actionClass} href="/hunting?view=discover&sec=candidates" onClick={event => {inspectionClick(inspect, {kind:"selection-preview", section:"candidates"})(event); if (event.defaultPrevented) onClose();}}>查看当前选股条件</a>}

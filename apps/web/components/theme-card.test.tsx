@@ -23,11 +23,11 @@ it("opens each rung cause for reading without adding a wide table column", async
   const rung: LadderRung = {symbol: "600825", name: "新华传媒", role: "龙头", is_primary: true,
     other_themes: ["传媒成员标签不是原因"], boards: 4, reason: "拟收购财联社+重大资产重组", source: "ths", trade_date: "2026-10-09"};
   const {container} = render(<ThemeCardView card={card({ladder: [rung]})} rank={1} />);
-  fireEvent.click(screen.getByRole("button", {name: /涨停原因 · 查看原文/}));
+  fireEvent.click(screen.getByRole("button", {name: /涨停原因 · 查看依据/}));
   const dialog = await screen.findByRole("dialog", {name: "涨停原因原文"});
   expect(within(dialog).getByText("拟收购财联社+重大资产重组")).toBeTruthy();
   expect(within(dialog).getByText("2026-10-09")).toBeTruthy();
-  expect(within(dialog).getByText("同花顺 · 数据源归因 · 因果待核")).toBeTruthy();
+  expect(within(dialog).getByLabelText("数据源归因原文").textContent).toContain("同花顺");
   expect(container.querySelectorAll("thead th")).toHaveLength(9);
 });
 

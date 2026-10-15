@@ -121,6 +121,7 @@ describe("通知中心：原提醒与独立行情落点", () => {
     payload = makePayload([item()]); renderBell(); await openDrawer();
     fireEvent.click(screen.getByText("示例个股提醒"));
     const detail = await screen.findByRole("dialog", {name:"示例个股提醒"});
+  fireEvent.click(within(detail).getByRole("button",{name:"完整依据与研究记录"}));
     expect(detail.textContent).toContain("AI 判读（建议关注）：放量突破前高，量比 2.3");
     expect(spies.symbolOpen).not.toHaveBeenCalled();
   });
@@ -138,6 +139,7 @@ describe("通知中心：原提醒与独立行情落点", () => {
     payload = makePayload([item()]); renderBell(); await openDrawer();
     fireEvent.click(screen.getByTestId("notification-judgment"));
     const detail = await screen.findByRole("dialog", {name:"示例个股提醒"});
+  fireEvent.click(within(detail).getByRole("button",{name:"完整依据与研究记录"}));
     expect(detail.textContent).toContain("AI 判读");
     expect(detail.textContent).toContain("确认");
     expect(detail.textContent).toContain("原事件评分：78（不是胜率）");
@@ -148,6 +150,7 @@ describe("通知中心：原提醒与独立行情落点", () => {
     payload = makePayload([item({symbol:null, category:"news", label:"快讯", title:"某条快讯"})]); renderBell(); await openDrawer();
     fireEvent.click(screen.getByText("某条快讯"));
     const detail = await screen.findByRole("dialog", {name:"某条快讯"});
+  fireEvent.click(within(detail).getByRole("button",{name:"完整依据与研究记录"}));
     expect(detail.textContent).toContain("AI 判读");
     expect(within(detail).queryByRole("link", {name:"查看行情"})).toBeNull();
     expect(spies.symbolOpen).not.toHaveBeenCalled();

@@ -1,6 +1,6 @@
 "use client";
 
-import {ConditionList, ExplanationMap, NarrativeText, FactCards, FactTimeline} from "@/components/ui/explanation-map";
+import {ConditionList, NarrativeText, FactCards, FactTimeline} from "@/components/ui/explanation-map";
 import type { ReactNode } from "react";
 
 import { CardHead, CardShell } from "@/components/picks/card-shell";
@@ -10,7 +10,8 @@ import { useStockRowNav } from "@/components/stock-link";
 import { bjDate, fmt, formatLegacyLimitDistance, pctColor, pctText, timeTextBJ, triText } from "@/lib/format";
 import { clockOf, compareGates, gateActive, type GateComparison } from "@/lib/picks-gate";
 import { roleClass } from "@/lib/role-style";
-import { readingClues, readingExcerpt } from "@/lib/reading-clues";
+import {ReaderBrief, ResearchDisclosure} from "@/components/ui/reader-brief";
+import {readerExcerpt, readerCautions} from "@/lib/reader-copy";
 import type {
   DailyPickItem,
   ExecutionDecisionContract,
@@ -54,14 +55,6 @@ export const SUB_LABELS: [string, string][] = [
   ["capital", "资金"],
   ["echelon", "梯队"],
 ];
-
-/** Source excerpts orient the overview; qualification sentences remain intact and visible. */
-function BasisPreview({value, missing}: {value: string; missing: string}) {
-  if (!value.trim()) return <span>{missing}</span>;
-  const excerpt = readingExcerpt(value, 90);
-  const limits = value.trim().length > 90 ? [...new Set(readingClues(value).filter(clue => clue.kind === "qualification").map(clue => clue.sourceText.trim()))].filter(line => !excerpt.includes(line)) : [];
-  return <span className="block space-y-1"><span className="block">原文摘录：{excerpt}</span>{limits.map((line, index) => <span key={index} className="block text-amber-800 dark:text-amber-300">原文限定：{line}</span>)}</span>;
-}
 
 /** 梯队地位配色：唯一权威表在 `@/lib/role-style`（S2-10 合并，跨端由后端测试守卫）。 */
 
@@ -359,6 +352,7 @@ export function PickCard({
   dailyEvidence,
   onShowDailyEvidence,
   readError = false,
+  evidenceExpanded = false,
 }: {
   item: TradingCard;
   /** 闭环「标签」：sim=已模拟持仓 / real=已真实持仓（持仓状态派生，卖出自动消失） */
@@ -367,6 +361,7 @@ export function PickCard({
   onShowDailyEvidence?: (item: DailyPickItem) => void;
   /** Retained read-only snapshot after a failed refresh, never current eligibility. */
   readError?: boolean;
+  evidenceExpanded?: boolean;
 }) {
   // 整行点击跳工作台（2026-09-09 用户反馈：盘中跟踪条目标点击无响应——两卡现已统一）
   const stockNav = useStockRowNav();
@@ -536,6 +531,96 @@ export function PickCard({
         </div>
       )}
 
+      {/* 标的画像 chips：梯队地位 / 题材·阶段 / 题材强度档 / 风险档位（两源归一，有则渲染） */}
+      {(item.role || item.theme || item.strengthTier || item.riskTier) && (
+        <div className="mt-2 flex flex-wrap items-center gap-1">
+          {item.role && (
+            <Chip
+              text={`${item.role}${item.boards ? ` · ${item.boards}板` : ""}`}
+              title={item.roleBasis ? `梯队地位（Echelon Role）：${item.roleBasis}` : `梯队地位：${item.role}`}
+              className={roleClass(item.role)}
+            />
+          )}
+          {item.theme && (
+            <Chip
+              text={`${item.theme}${item.stage ? ` · ${item.stage}` : ""}`}
+              title="所属题材与题材天梯阶段（启动/发酵/高潮/分歧/退潮）——同一个梯队角色在不同阶段价值不同"
+              className="border-zinc-300 text-zinc-600 dark:border-zinc-600 dark:text-zinc-300"
+            />
+          )}
+          {item.strengthTier && <Chip text={item.strengthTier} title="题材强度档" />}
+          {item.board && (
+            <Chip
+              text={item.board}
+              title="板块与账户交易权限（2026-09-15 起账户只开沪深主板）——本名单已按权限过滤，不含创业板/科创板/北交所/B 股"
+            />
+          )}
+          {item.riskTier && (
+            <Chip
+              text={item.riskTier}
+              title={`风险档位（Risk Tier）：决定止损宽严与仓位保守程度。${item.exit?.note ?? ""}`}
+              className={TIER_STYLE[item.riskTier]}
+            />
+          )}
+        </div>
+      )}
+
+      {/* 立场与筹码信号 chips（仅盘前名单） */}
+      {(item.observationOnly || item.chipSignal?.signal) && (
+        <div className="mt-2 flex flex-wrap items-center gap-1">
+          {item.observationOnly && (
+            <Chip
+              text={followChipText}
+              title={followChipTitle}
+              className={
+                item.followState === "followable"
+                  ? "border-sky-500/50 bg-sky-500/10 text-sky-700 dark:text-sky-300"
+                  : "border-red-500/50 bg-red-500/10 text-red-700 dark:text-red-300"
+              }
+            />
+          )}
+          {item.chipSignal?.signal === "distribution_warning" && (
+            <Chip
+              text="派发警示"
+              title={`筹码形态警示（CYQ 近似口径）：${item.chipSignal.reasons.join("；")}`}
+              className="border-red-500/50 bg-red-500/10 text-red-700 dark:text-red-300"
+            />
+          )}
+          {item.chipSignal?.signal === "launch_watch" && (
+            <Chip
+              text="启动观察"
+              title={`筹码形态观察（CYQ 近似口径）：${item.chipSignal.reasons.join("；")}`}
+              className="border-teal-500/50 bg-teal-500/10 text-teal-700 dark:text-teal-300"
+            />
+          )}
+        </div>
+      )}
+
+      {/* 判定（辨识度/确定性/联动，仅盘中名单）：三态，依据悬停可见。
+          联动确定性是 2026-09-15 新口径下**候选卡片的主判定**（候选当前未封板，
+          封板质量那一套判据不适用 ⇒ 辨识度/确定性为 null 时不渲染，不拿占位糊上）。 */}
+      {(item.distinctiveness || item.certainty || item.linkage) && (
+        <div className="mt-2 flex flex-wrap gap-1">
+          {item.linkage && <JudgeChip label="联动确定性" level={item.linkage.level} basis={item.linkage.basis} />}
+          {item.distinctiveness && (
+            <JudgeChip label="辨识度" level={item.distinctiveness.level} basis={item.distinctiveness.basis} />
+          )}
+          {item.certainty && <JudgeChip label="确定性" level={item.certainty.level} basis={item.certainty.basis} />}
+        </div>
+      )}
+
+      <div aria-label="个股关键参考" className="my-2 flex flex-wrap items-baseline gap-x-4 gap-y-1 text-[11px] tabular-nums">
+        {!item.role && item.boards != null && <span>板数 {item.boards}板</span>}
+        {item.score != null && <span title="筛选评分，不是上涨概率">筛选评分 {item.score}</span>}
+        {item.stopLoss && <span>止损参考 <strong className="font-medium">{fmt(item.stopLoss.price)}（-{item.stopLoss.pct}%）</strong></span>}
+        {item.buyRange && <span>参考区间 {fmt(item.buyRange.low)}–{fmt(item.buyRange.high)}</span>}
+      </div>
+      <ReaderBrief label="入选简述"
+        headline={item.theme ? `${item.theme}${item.role ? ` · ${item.role}` : ""}` : "已进入观察名单"}
+        facts={[{label: "入选理由", value: readerExcerpt(item.basisRows.find(row => ["入选", "来源", "入选原因", "消息"].includes(row.label))?.value || item.basisRows[0]?.value) || "本记录未提供入选理由"}]}
+        cautions={[...(readError ? ["刷新失败，当前条件待核实"] : []), ...(item.vetoes.length ? ["存在不满足条件的项目"] : []), ...(item.invalidations.length ? ["有失效条件，见依据"] : []), ...readerCautions([...item.basisRows.map(row => row.value), ...item.followReasons]), ...(item.dimensionEvidence && Object.values(item.dimensionEvidence).some(e => ["missing", "error", "partial"].includes(e.state)) ? ["部分依据缺失"] : [])]}
+      />
+      <ResearchDisclosure label="依据" identity={`${item.symbol}:${item.origin}`} defaultOpen={evidenceExpanded}>
       {/* 估值（仅盘前名单）：数据源确实不提供时（新股/亏损/长期停牌）显示"暂无"并注明原因，
           不留白、不臆造，与个股详情页口径一致。 */}
       {(item.pe_ttm != null || item.pb != null) && (
@@ -616,86 +701,8 @@ export function PickCard({
         </div>
       )}
       {item.themeSources && item.themeSources.length > 1 && (
-        <ExplanationMap label={`${item.themeSources.length} 个题材来源 · 同股只占一个名额`} identity={item.symbol} center={{label: "名单对象", value: `${item.name || ""} ${item.symbol}`}} links={item.themeSources.map((_, index) => ({from: "center", to: String(index), label: "原题材来源 · 受益须核验", kind: "recorded"}))} steps={item.themeSources.map((source, index) => ({id: String(index), label: source.theme ?? "题材未记录", icon: "relation", summary: <span className="block space-y-1"><span className="block">{source.strength_tier ?? "强度未记录"}</span><BasisPreview value={source.pick_basis || source.linkage?.basis || ""} missing="来源依据未记录" /></span>, content: <NarrativeText text={source.pick_basis || source.linkage?.basis || "来源依据未记录"} label="原始题材依据"/>}))}/>
+        <section aria-label="全部题材来源" className="space-y-2">{item.themeSources.map((source, index) => <div key={index}><h4>{source.theme || "题材未记录"} · {source.strength_tier || "强度未记录"}</h4><p className="whitespace-pre-wrap">{source.pick_basis || source.linkage?.basis || "来源依据未记录"}</p></div>)}</section>
 
-      )}
-
-      {/* 标的画像 chips：梯队地位 / 题材·阶段 / 题材强度档 / 风险档位（两源归一，有则渲染） */}
-      {(item.role || item.theme || item.strengthTier || item.riskTier) && (
-        <div className="mt-2 flex flex-wrap items-center gap-1">
-          {item.role && (
-            <Chip
-              text={`${item.role}${item.boards ? ` · ${item.boards}板` : ""}`}
-              title={item.roleBasis ? `梯队地位（Echelon Role）：${item.roleBasis}` : `梯队地位：${item.role}`}
-              className={roleClass(item.role)}
-            />
-          )}
-          {item.theme && (
-            <Chip
-              text={`${item.theme}${item.stage ? ` · ${item.stage}` : ""}`}
-              title="所属题材与题材天梯阶段（启动/发酵/高潮/分歧/退潮）——同一个梯队角色在不同阶段价值不同"
-              className="border-zinc-300 text-zinc-600 dark:border-zinc-600 dark:text-zinc-300"
-            />
-          )}
-          {item.strengthTier && <Chip text={item.strengthTier} title="题材强度档" />}
-          {item.board && (
-            <Chip
-              text={item.board}
-              title="板块与账户交易权限（2026-09-15 起账户只开沪深主板）——本名单已按权限过滤，不含创业板/科创板/北交所/B 股"
-            />
-          )}
-          {item.riskTier && (
-            <Chip
-              text={item.riskTier}
-              title={`风险档位（Risk Tier）：决定止损宽严与仓位保守程度。${item.exit?.note ?? ""}`}
-              className={TIER_STYLE[item.riskTier]}
-            />
-          )}
-        </div>
-      )}
-
-      {/* 立场与筹码信号 chips（仅盘前名单） */}
-      {(item.observationOnly || item.chipSignal?.signal) && (
-        <div className="mt-2 flex flex-wrap items-center gap-1">
-          {item.observationOnly && (
-            <Chip
-              text={followChipText}
-              title={followChipTitle}
-              className={
-                item.followState === "followable"
-                  ? "border-sky-500/50 bg-sky-500/10 text-sky-700 dark:text-sky-300"
-                  : "border-red-500/50 bg-red-500/10 text-red-700 dark:text-red-300"
-              }
-            />
-          )}
-          {item.chipSignal?.signal === "distribution_warning" && (
-            <Chip
-              text="派发警示"
-              title={`筹码形态警示（CYQ 近似口径）：${item.chipSignal.reasons.join("；")}`}
-              className="border-red-500/50 bg-red-500/10 text-red-700 dark:text-red-300"
-            />
-          )}
-          {item.chipSignal?.signal === "launch_watch" && (
-            <Chip
-              text="启动观察"
-              title={`筹码形态观察（CYQ 近似口径）：${item.chipSignal.reasons.join("；")}`}
-              className="border-teal-500/50 bg-teal-500/10 text-teal-700 dark:text-teal-300"
-            />
-          )}
-        </div>
-      )}
-
-      {/* 判定（辨识度/确定性/联动，仅盘中名单）：三态，依据悬停可见。
-          联动确定性是 2026-09-15 新口径下**候选卡片的主判定**（候选当前未封板，
-          封板质量那一套判据不适用 ⇒ 辨识度/确定性为 null 时不渲染，不拿占位糊上）。 */}
-      {(item.distinctiveness || item.certainty || item.linkage) && (
-        <div className="mt-2 flex flex-wrap gap-1">
-          {item.linkage && <JudgeChip label="联动确定性" level={item.linkage.level} basis={item.linkage.basis} />}
-          {item.distinctiveness && (
-            <JudgeChip label="辨识度" level={item.distinctiveness.level} basis={item.distinctiveness.basis} />
-          )}
-          {item.certainty && <JudgeChip label="确定性" level={item.certainty.level} basis={item.certainty.basis} />}
-        </div>
       )}
 
       {/* 入选原因：「为什么选它」。
@@ -708,7 +715,7 @@ export function PickCard({
       {(item.basisRows.length > 0 || item.vetoes.length > 0) && (
         <div className="stock-card-basis text-[11px] leading-relaxed">
           <div className="text-[10px] font-medium text-zinc-600 dark:text-zinc-400">入选原因</div>
-          <ExplanationMap label="入选依据核对" identity={item.symbol} center={{label: "名单对象", value: `${item.name || ""} ${item.symbol}`}} links={item.basisRows.map((row, index) => ({from: "center", to: `${index}:${row.label}`, label: row.label === "涨停原因" ? "原记录归因 · 待核" : "原记录依据", kind: row.label === "涨停原因" ? "unverified" : "recorded"}))} steps={item.basisRows.map((row, index) => ({id: `${index}:${row.label}`, label: row.label, summary: row.label === "首封" ? row.value : <BasisPreview value={row.value} missing={row.label === "涨停原因" ? "数据源未提供涨停原因" : "原依据未记录"} />, icon: row.label === "涨停原因" ? "source" : "relation", content: row.label === "涨停原因" ? <LimitReason symbol={item.symbol} reason={row.value} source={row.source} date={row.date} compact/> : <NarrativeText text={row.value} label={row.label}/>}))}/>
+          <dl aria-label="入选依据核对" className="space-y-3">{item.basisRows.map((row, index) => <div key={`${index}:${row.label}`}><dt className="font-medium">{row.label}</dt><dd className="mt-1 whitespace-pre-wrap">{row.label === "涨停原因" ? <LimitReason symbol={item.symbol} reason={row.value} source={row.source} date={row.date} full/> : row.value}</dd></div>)}</dl>
           <ConditionList label="否决条件" items={item.vetoes} tone="warning"/>
 
         </div>
@@ -741,14 +748,7 @@ export function PickCard({
       {/* 止损参考位 + 出场纪律 + 失效条件（freqtrade 的止损/跟踪止盈/ROI 分档 的 A 股映射） */}
       {(item.stopLoss || item.exit || item.invalidations.length > 0) && (
         <div className="stock-card-risk text-[11px]">
-          {item.stopLoss && (
-            <div className="flex flex-wrap gap-1.5" title={item.stopLoss.basis}>
-              <span className="shrink-0 text-zinc-600 dark:text-zinc-400">止损参考</span>
-              <span className="font-mono tabular-nums text-red-700 dark:text-red-300">
-                {fmt(item.stopLoss.price)}（-{item.stopLoss.pct}%）
-              </span>{item.stopLoss.basis && <NarrativeText text={item.stopLoss.basis} label="止损参考依据"/>}
-            </div>
-          )}
+          {item.stopLoss && <Row k="止损计算依据" v={item.stopLoss.basis || "原记录未提供"}/>}
           {item.exit?.trailing_pct != null && (
             <Row k="跟踪止盈" v={`回落 ${item.exit.trailing_pct}%`} title={item.exit.disclaimer} />
           )}
@@ -779,6 +779,7 @@ export function PickCard({
         </p>
       )}
 
+      </ResearchDisclosure>
       {/* 跨模块入口（2026-09-09 需求 3）：事件弹窗 / 消息·资金·梯队跳转 */}
       <CardEntryRow symbol={item.symbol} name={item.name} theme={item.theme ?? null} selectionEntry={item.selectionEntry} eventRefs={item.relatedEventRefs} />
     </CardShell>
@@ -813,7 +814,7 @@ function SelectionEntryRow({ entry, scope, referenceOnly = false }: {
       <span className="whitespace-nowrap text-[10px]">非成交价</span>
       {(entry?.state === "partial" || !knownTime || price == null) && <span className="whitespace-nowrap text-[10px] text-amber-800 dark:text-amber-400">依据不完整</span>}
     </> : <span className="min-w-0 [overflow-wrap:anywhere]">{scopeName}{referenceOnly ? " · 当前仅参考，未查到已归档入选依据" : "首次入选依据未记录"}</span>}
-    <div className="w-full" onClick={event => event.stopPropagation()} onKeyDown={event => event.stopPropagation()}>
+    <div className="w-full"><ResearchDisclosure label="加入记录的完整依据" identity={`${scope}:${JSON.stringify(entry)}`}>
       <FactTimeline label="时点依据" items={[
         {label: quoteClockLabel, value: quoteClock ?? "原记录缺少有效时间", kind: "time"},
       ]}/>
@@ -821,8 +822,8 @@ function SelectionEntryRow({ entry, scope, referenceOnly = false }: {
         {label: "记录来源", value: !usable ? (entry?.source ? "来源不匹配，不能作为本名单依据" : "未记录") : scope === "daily" ? "每日组合生成" : "盘中入选归档"},
         {label: "原版本", value: usable && entry?.source_version ? entry.source_version : "版本缺项"},
       ]}/>
-      {(!hasFacts || entry?.reason) && <NarrativeText text={reason} label="记录限制"/>}
-    </div>
+      {(!hasFacts || entry?.reason) && <p className="whitespace-pre-wrap">{reason}</p>}
+    </ResearchDisclosure></div>
   </div>;
 }
 

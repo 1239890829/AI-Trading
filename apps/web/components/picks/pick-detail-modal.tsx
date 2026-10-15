@@ -44,9 +44,9 @@ export function PickDetailModal({ target, onClose, readError = false }: { target
       }
     >
       {presence.active && (shown.kind === "pick" ? (
-        <PickCard key={shown.item.symbol} item={fromDailyPick(shown.item)} readError={readError} />
+        <PickCard key={shown.item.symbol} item={fromDailyPick(shown.item)} readError={readError} evidenceExpanded />
       ) : (
-        <PickCard key={shown.item.symbol} item={fromIntradayStock(shown.item)} readError={readError} />
+        <PickCard key={shown.item.symbol} item={fromIntradayStock(shown.item)} readError={readError} evidenceExpanded />
       ))}
     </ModalShell>
   );

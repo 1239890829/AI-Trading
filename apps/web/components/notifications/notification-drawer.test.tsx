@@ -146,6 +146,7 @@ describe("通知中心：未读计数与红点", () => {
       fireEvent.click(await target);
       if (action === "通知正文") {
         const original = await screen.findByRole("dialog", {name:"来源通知"});
+  fireEvent.click(within(original).getByRole("button",{name:"完整依据与研究记录"}));
         expect(original.textContent).toContain("正文");
         expect(screen.queryByTestId("notification-security-detail")).toBeNull();
         fireEvent.click(within(original).getByRole("link", {name:"查看行情"}));
@@ -532,6 +533,7 @@ describe("通知事实与浏览状态分离（BUG-016）", () => {
     expect(facts.textContent).toContain("渠道已受理，未确认送达");
     fireEvent.click(screen.getByTestId("notification-judgment"));
     const detail = await screen.findByRole("dialog", {name:"示例通知"});
+  fireEvent.click(within(detail).getByRole("button",{name:"完整依据与研究记录"}));
     expect(detail.textContent).toContain("盘中买点判定");
     expect(detail.textContent).toContain("渠道已受理（未确认送达）");
     expect(detail.textContent).toContain("未读仅表示站内尚未点开");
@@ -586,6 +588,7 @@ it("user-defined reminders have their own category while stock opportunities, ri
     expect(list.textContent).toContain(text);
   fireEvent.click(within(screen.getByText("显式个股阈值").closest('[data-testid="notification-row"]') as HTMLElement).getByTestId("notification-judgment"));
   const detail = await screen.findByRole("dialog", {name: "显式个股阈值"});
+  fireEvent.click(within(detail).getByRole("button",{name:"完整依据与研究记录"}));
   for (const text of ["研究观察，不构成买卖建议", "用户条件规则", "原触发条件需重验"]) expect(detail.textContent).toContain(text);
 });
 
@@ -609,6 +612,7 @@ it("shows the original evidence and both clocks without claiming current eligibi
   expect(screen.getByTestId("notification-row").textContent).not.toContain("version-A");
   fireEvent.click(screen.getByTestId("notification-judgment"));
   const original = await screen.findByRole("dialog", {name: "原入选A"});
+  fireEvent.click(within(original).getByRole("button",{name:"完整依据与研究记录"}));
   expect(original.textContent).toContain("原观察：2026-10-09 09:40:00");
   expect(original.textContent).toContain("记录：2026-10-09 10:10:00");
   expect(within(original).getByText("消息：原新闻依据A")).toBeTruthy();
@@ -638,6 +642,7 @@ it("one detail opening shows the entire message and all original references with
   const calls = vi.mocked(getNotifications).mock.calls.length;
   fireEvent.click(screen.getByText("长消息核对"));
   const detail = await screen.findByRole("dialog", {name:"长消息核对"});
+  fireEvent.click(within(detail).getByRole("button",{name:"完整依据与研究记录"}));
   expect(detail.textContent).toContain(body);
   expect(detail.textContent).toContain("第四条件不能省略");
   expect(detail.textContent).toContain("另一对象条件");

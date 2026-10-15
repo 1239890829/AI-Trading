@@ -6,8 +6,9 @@ import { useExitPresence } from "@/hooks/use-exit-presence";
 import { useResource } from "@/hooks/use-polling-fetch";
 import { getOpportunities, type OpportunityView } from "@/lib/api/picks";
 import { bjDate, dateTimeTextBJ } from "@/lib/format";
-import { readingClues, readingExcerpt } from "@/lib/reading-clues";
-import { ConditionList, ExplanationMap, FactCards, FactTimeline, NarrativeText } from "@/components/ui/explanation-map";
+import {readerExcerpt, readerCautions} from "@/lib/reader-copy";
+import {ReaderBrief, ResearchDisclosure} from "@/components/ui/reader-brief";
+import { ConditionList, FactCards, FactTimeline } from "@/components/ui/explanation-map";
 import { ReadingRow, readingRowClasses } from "@/components/ui/reading-row";
 
 const STATES: Record<string, string> = {
@@ -27,37 +28,19 @@ const ROUTES: Record<string, string> = {
 };
 
 function OpportunityCardReading({card, date}: {card: OpportunityView["cards"][number]; date: string}) {
-  return <ExplanationMap label={`${card.name || card.symbol}机会假设`} identity={`${date}:${card.symbol}:${card.hypotheses.map(h => h.decision_version ?? h.opportunity_id).join(":")}`} center={{label: "观察对象", value: `${card.name || ""} ${card.symbol}`}} links={card.hypotheses.map(h => ({from: "center", to: h.opportunity_id, label: "独立假设 · 不合并胜率", kind: "recorded"}))} steps={card.hypotheses.map(h => ({
-    id: h.opportunity_id,
-    label: h.source_theme || SCENARIOS[h.scenario] || h.scenario,
-    summary: <span className="block space-y-1">
-      <span className="opportunity-state" data-state={h.state}>{STATES[h.state] ?? h.state}</span>
-      <span className="block">原依据摘录：{h.reasons.length ? readingExcerpt(h.reasons[0], 84) : "尚无已记录依据"}{h.reasons.length > 1 ? `（共 ${h.reasons.length} 条，完整记录见节点）` : ""}</span>
-      {[...new Set(h.reasons.flatMap(reason => readingClues(reason).filter(clue => clue.kind === "qualification").map(clue => clue.sourceText.trim())))].filter(line => !readingExcerpt(h.reasons[0] || "", 84).includes(line)).map((line, index) => <span key={index} className="block text-amber-800 dark:text-amber-300">原文限定：{line}</span>)}
-      <span className="block text-amber-800 dark:text-amber-300">待核：{h.unknowns.join("；") || "原待核项未记录，仍须核对动作前条件"}</span>
-      <span className="block">执行限制：{h.execution_blocker || "原限制未记录，不能由状态推定可执行"}</span>
-      <span className="block tabular-nums">参考价 {h.reference.price ?? "缺失"} · 非成交价</span>
-    </span>,
-    icon: "relation",
-    content: <div className="space-y-3">
-      <p><span className="opportunity-state" data-state={h.state}>{STATES[h.state] ?? h.state}</span> · {h.decision_version ?? `研究观察 ${h.observation_id ?? "身份待核"}`}</p>
-      {!!h.routes?.length && <p>观察路径：{h.routes.map(route => ROUTES[route] ?? route).join(" / ")}</p>}
-      <ConditionList label="已记录依据" items={h.reasons.length ? h.reasons : ["尚无已记录依据"]} />
-      <ConditionList label="还缺什么" tone="warning" items={h.unknowns.length ? h.unknowns : ["请核对原始证据及动作前条件"]} />
-      <NarrativeText text={h.execution_blocker} label="执行限制" identity={h.opportunity_id} />
-      <FactTimeline label="观察时点" items={[
-        {label: "首次观察", value: h.first_seen, kind: "time"}, {label: "本版来源时间", value: h.as_of, kind: "time"},
-      ]} />
-      <FactCards label="记录身份" items={[
-        {label: "来源", value: h.source}, {label: "版本", value: h.decision_version ?? `研究观察 ${h.observation_id ?? "身份待核"}`},
-      ]} />
-      <p>参考价 {h.reference.price ?? "缺失"}，不是成交价。</p>
-      <details><summary className={`${readingRowClasses.action} cursor-pointer rounded px-2 py-1`}>来源与反证记录</summary><pre className="whitespace-pre-wrap break-all text-xs">{JSON.stringify({
-        事件引用: h.event_refs ?? [], 知识依据: h.kb_refs ?? {}, 反证: h.counterevidence ?? [],
-        原始证据: h.evidence ?? {}, 进入条件: h.entry_conditions ?? {},
-      }, null, 2)}</pre></details>
-    </div>,
-  }))} />;
+  return <div aria-label={`${card.name || card.symbol}机会说明`} className="space-y-3">{card.hypotheses.map(h => <section key={h.opportunity_id} className="border-b border-zinc-200 py-2 dark:border-zinc-700">
+    <h5 className="font-medium">{h.source_theme || SCENARIOS[h.scenario] || "观察记录"} · {STATES[h.state] || "待核实"}</h5>
+    <ReaderBrief label="观察理由简述" facts={[{label:"为什么关注",value:readerExcerpt(h.reasons[0]) || "尚未保存理由"},{label:"还要等什么",value:readerExcerpt(h.execution_blocker) || "当前条件尚未确认"}]} cautions={[...readerCautions(h.reasons), ...(h.unknowns.length ? [`还有 ${h.unknowns.length} 项待确认`] : []), "状态触发不代表可以买入"]}/>
+    <ResearchDisclosure label="这条观察的完整依据" identity={`${date}:${h.opportunity_id}:${h.decision_version}`}>
+      <p>{STATES[h.state] || h.state} · {h.decision_version || `研究观察 ${h.observation_id || "未知"}`}</p>
+      {!!h.routes?.length && <p>观察路径：{h.routes.map(route => ROUTES[route] || route).join(" / ")}</p>}
+      <ConditionList label="已记录依据" items={h.reasons}/><ConditionList label="还缺什么" items={h.unknowns} tone="warning"/>
+      <p>执行限制：{h.execution_blocker || "未记录，不能推定可执行"}</p><p>参考价 {h.reference.price ?? "缺失"}，不是成交价。</p>
+      <FactTimeline label="观察时点" items={[{label:"首次观察",value:h.first_seen,kind:"time"},{label:"本版来源时间",value:h.as_of,kind:"time"}]}/>
+      <FactCards label="记录身份" items={[{label:"来源",value:h.source},{label:"版本",value:h.decision_version || "未记录"}]}/>
+      <pre className="whitespace-pre-wrap break-all text-xs">{JSON.stringify({事件引用:h.event_refs || [],知识依据:h.kb_refs || {},反证:h.counterevidence || [],原始证据:h.evidence || {},进入条件:h.entry_conditions || {}},null,2)}</pre>
+    </ResearchDisclosure>
+  </section>)}</div>;
 }
 
 /** One read-only consumer for versioned decisions, without new rankings or actions. */

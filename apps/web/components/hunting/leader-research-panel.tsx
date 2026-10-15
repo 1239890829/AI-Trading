@@ -4,8 +4,10 @@ import { useState } from "react";
 import { useResource } from "@/hooks/use-polling-fetch";
 import { getLeaderResearch } from "@/lib/api/picks";
 import { dateTimeTextBJ, pctColor, pctText } from "@/lib/format";
-import { readingClues, readingExcerpt } from "@/lib/reading-clues";
-import { ConditionList, ExplanationMap, FactCards, FactTimeline, NarrativeText } from "@/components/ui/explanation-map";
+import {readerExcerpt, readerCautions} from "@/lib/reader-copy";
+import {ReaderBrief, ResearchDisclosure} from "@/components/ui/reader-brief";
+import {StockLink} from "@/components/stock-link";
+import { ConditionList, FactCards, FactTimeline } from "@/components/ui/explanation-map";
 
 const ROUTES: Record<string, string> = { public_event: "公共事件", company_event: "公司事件", trend: "相对强势" };
 const STATES: Record<string, string> = { priority: "重点观察", observing: "观察", weakened: "转弱" };
@@ -41,32 +43,18 @@ export function LeaderResearchPanel({date: requestedDate, onDateChange}: {date?:
       {data.collector.reason && <p className="mt-1 text-amber-800 dark:text-amber-300">{data.collector.reason}</p>}
       <p className="mt-1 text-zinc-600 dark:text-zinc-400">{data.disclaimer}</p>
       {data.cards.length === 0 && <p className="py-3">{data.state === "collected_empty" ? "本日有收盘对照，尚无盘中候选记录。" : "尚无该日期的研究观察；未采集不代表没有机会。"}</p>}
-      <ExplanationMap label="逐股研究资料" identity={`${data.trade_date}:${data.version}`} center={{label: "研究记录日", value: data.trade_date}} links={data.cards.slice(0, limit).map(card => ({from: "center", to: card.symbol, label: "该日独立观察", kind: "context"}))} steps={data.cards.slice(0, limit).map(card => ({
-        id: card.symbol, label: `${card.name} ${card.symbol}`, icon: "relation",
-        summary: <span>
-            {STATES[card.state] ?? "未知"} · {card.routes.map(r => ROUTES[r] ?? r).join(" / ") || "催化待核"}
-            <span className={`ml-2 tabular-nums ${pctColor(card.pct)}`}>{pctText(card.pct)}（观察时）</span>
-            {card.stale && <span className="ml-2 text-amber-800 dark:text-amber-300">待更新</span>}
-            {card.expired && <span className="ml-2">跟踪期届满</span>}
-            <span className="mt-1 block">原依据摘录：{card.reasons.length ? readingExcerpt(card.reasons[0], 84) : "尚无已记录依据"}{card.reasons.length > 1 ? `（共 ${card.reasons.length} 条）` : ""}</span>
-            {[...new Set(card.reasons.flatMap(reason => readingClues(reason).filter(clue => clue.kind === "qualification").map(clue => clue.sourceText.trim())))].filter(line => !readingExcerpt(card.reasons[0] || "", 84).includes(line)).map((line, index) => <span key={index} className="block text-amber-800 dark:text-amber-300">原文限定：{line}</span>)}
-            <span className="block">参与条件：{card.entry_state || "原参与条件未记录"}</span>
-            <span className="block text-amber-800 dark:text-amber-300">待核：{card.unknowns.join("；") || "未记录待核项，仍须核对当前条件"}</span>
-            <span className="block text-amber-800 dark:text-amber-300">失效：{card.invalidation || "失效条件未记录"}</span>
-          </span>,
-        content: <div className="space-y-3 leading-relaxed">
-            <FactTimeline label="原观察时点" items={[{label: "首次观察", value: card.first_seen, kind: "time"}, {label: "行情时点", value: card.source_as_of, kind: "time"}]} />
-            <FactCards label="观察来源" items={[{label: "来源", value: card.source}]} />
-            <ConditionList label="入池依据" items={card.reasons.length ? card.reasons : ["尚无已记录依据"]} />
-            <p>参与条件：{card.entry_state}</p>
-            <ConditionList label="待核实" items={card.unknowns.length ? card.unknowns : ["未记录待核项，仍须核对当前条件。"]} tone="warning" />
-            {!!card.event_refs.length && <ExplanationMap label="事件关联资料" identity={`${data.trade_date}:${card.symbol}:${JSON.stringify(card.event_refs)}`} center={{label: "研究对象", value: card.name || card.symbol}} links={card.event_refs.map((ref, i) => ({from: "center", to: `event-${i}`, label: ref.link_kind === "theme" ? "题材成员关联 · 受益待验" : ref.link_kind === "symbol" ? "已记录个股关联" : "关联类型待核", kind: ref.link_kind === "symbol" ? "recorded" : "unverified"}))} steps={card.event_refs.map((ref, i) => ({id: `event-${i}`, label: ref.title, icon: "source", summary: ref.source || "来源未记录", content: <div className="space-y-3"><FactCards label="事件来源" items={[{label: "来源", value: ref.source}]} /><FactTimeline label="事件时点" items={[{label: "发布", value: ref.published_at, kind: "time"}, {label: "可用时间", value: ref.available_at, kind: "time"}]} /><p>{ref.link_kind === "theme" ? "当前题材成员关联，直接受益待验" : ref.link_kind === "symbol" ? "个股关联" : "关联类型未记录，不能补推个股直接受益。"}</p><NarrativeText text={ref.basis} label="事件关联依据" /></div>}))} />}
-            <p>下一观察：{card.next_check}</p>
-            <ConditionList label="失效条件" items={[card.invalidation || "失效条件未记录。"]} tone="warning" />
-            <div className="flex flex-wrap gap-x-4 gap-y-1 tabular-nums">{Object.entries(card.outcomes).map(([h, o]) =>
-              <span key={h}>{h.toUpperCase()}：{o.state === "observed" ? <span className={pctColor(o.reference_change_pct)}>{pctText(o.reference_change_pct)}</span> : o.state === "missing" ? "缺收盘数据" : o.state === "unknown" ? "日历缺失" : "待观察"}</span>)}</div>
-          </div>,
-      }))} />
+      <div aria-label="逐股研究资料" className="divide-y divide-zinc-200 dark:divide-zinc-700">{data.cards.slice(0,limit).map(card => <section key={card.symbol} className="py-3">
+        <h5><StockLink symbol={card.symbol} preferModal>{card.name} {card.symbol}</StockLink><span className={`ml-2 tabular-nums ${pctColor(card.pct)}`}>{pctText(card.pct)}（观察时）</span></h5>
+        <ReaderBrief label={`${card.symbol}研究简述`} facts={[{label:"观察状态",value:`${STATES[card.state] || "待核实"}${card.stale ? " · 数据待更新" : ""}${card.expired ? " · 跟踪期已结束" : ""}`},{label:"为什么关注",value:readerExcerpt(card.reasons[0]) || "尚未保存理由"},{label:"还要等什么",value:readerExcerpt(card.entry_state) || "当前参与条件尚未确认"}]} cautions={[...readerCautions(card.reasons), ...(card.unknowns.length ? [`还有 ${card.unknowns.length} 项待确认`] : []), ...(card.invalidation ? ["有失效条件，见依据"] : [])]}/>
+        <ResearchDisclosure label="研究完整依据" identity={`${data.trade_date}:${data.version}:${card.symbol}`}>
+          <p>观察路径：{card.routes.map(r => ROUTES[r] || r).join(" / ")}</p>
+          <FactTimeline label="原观察时点" items={[{label:"首次观察",value:card.first_seen,kind:"time"},{label:"行情时点",value:card.source_as_of,kind:"time"}]}/><FactCards label="观察来源" items={[{label:"来源",value:card.source}]}/>
+          <ConditionList label="入池依据" items={card.reasons}/><p>参与条件：{card.entry_state}</p><ConditionList label="待核实" items={card.unknowns} tone="warning"/>
+          {card.event_refs.map((ref,i) => <section key={i}><h5>{ref.title}</h5><p>{ref.source} · {ref.link_kind === "theme" ? "仅题材成员关联，未证明个股受益" : ref.link_kind === "symbol" ? "个股关联记录" : "关联类型待核"}</p><p>{ref.basis}</p><FactTimeline label="事件时点" items={[{label:"发布",value:ref.published_at,kind:"time"},{label:"可用时间",value:ref.available_at,kind:"time"}]}/></section>)}
+          <p>下一观察：{card.next_check}</p><p>失效条件：{card.invalidation || "未记录"}</p>
+          <div>{Object.entries(card.outcomes).map(([h,o]) => <p key={h}>{h.toUpperCase()}：{o.state === "observed" ? pctText(o.reference_change_pct) : o.state === "missing" ? "缺收盘数据" : o.state === "unknown" ? "日历缺失" : "待观察"}</p>)}</div>
+        </ResearchDisclosure>
+      </section>)}</div>
       {data.cards.length > limit && <button className="mt-2 rounded border border-zinc-300 px-3 py-1 dark:border-zinc-600 focus-visible:outline-2 focus-visible:outline-sky-500 active:opacity-70" onClick={() => setLimit(n => n + 10)}>再显示 10 只（共 {data.cards.length} 只）</button>}
       <section className="mt-3" aria-label="收盘漏选与转弱复核">
         <h5 className="font-medium">收盘漏选与转弱复核</h5>
