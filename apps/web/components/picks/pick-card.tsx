@@ -6,6 +6,7 @@ import type { ReactNode } from "react";
 import { CardHead, CardShell } from "@/components/picks/card-shell";
 import { CardEntryRow } from "@/components/picks/card-entries";
 import { LimitReason } from "@/components/detail/limit-reason";
+import {StockAttributionPanel} from "@/components/detail/attribution-evidence";
 import { useStockRowNav } from "@/components/stock-link";
 import { bjDate, fmt, formatLegacyLimitDistance, pctColor, pctText, timeTextBJ, triText } from "@/lib/format";
 import { clockOf, compareGates, gateActive, type GateComparison } from "@/lib/picks-gate";
@@ -307,6 +308,31 @@ export function fromIntradayStock(it: IntradayTopStock | OpportunityStock): Trad
 
 /* ---------------------------------------------------------------- 渲染 */
 
+/** Explain saved selection evidence; a vendor's limit-up note is never the selection reason. */
+export function selectionReading(item: TradingCard) {
+  const reason = item.basisRows.find(row => ["入选", "来源", "联动"].includes(row.label))?.value;
+  const dimensions = SUB_LABELS.map(([key, label]) => ({key, label: label === "基本" ? "基本面" : label,
+    score: item.sub_scores?.[key], row: item.basisRows.find(row => row.label === label)}))
+    .filter(value => typeof value.score === "number" && Number.isFinite(value.score)
+      && value.row && (!item.dimensionEvidence?.[value.key] || item.dimensionEvidence[value.key].state === "success"))
+    .sort((a, b) => b.score! - a.score!).slice(0, 2);
+  const plainBasis = (value: string) => readerExcerpt(value.replace(/技术面偏多/g, "走势指标多数偏强")
+    .replace(/技术面中性/g, "走势尚无明确倾向").replace(/共振向上/g, "多项走势指标同时偏强")
+    .replace(/多空分歧/g, "走势信号不一致").replace(/\bPE\b/g, "市盈率").replace(/\bROE\b/g, "净资产收益率"), 90);
+  const why = item.origin === "picks" && dimensions.length
+    ? `这次综合筛选中，${dimensions[0].label}项的得分相对靠前：${plainBasis(dimensions[0].row!.value)}`
+    : reason ? readerExcerpt(reason, 120)
+    : item.referenceOnly ? "这是强势参考项，不是可参与候选；原记录未保存完整筛选理由。"
+    : "原记录没有保存系统筛选理由，不能把来源的涨停说明当作入选理由。";
+  const supports = dimensions.length ? dimensions.map(d => ({label: `${d.label}依据`, value: plainBasis(d.row!.value)}))
+    : [item.linkage && {label: "题材支持", value: readerExcerpt(item.linkage.basis, 100)},
+      item.distinctiveness && {label: "个股表现", value: readerExcerpt(item.distinctiveness.basis, 100)},
+      item.certainty && {label: "判断依据", value: readerExcerpt(item.certainty.basis, 100)}]
+      .filter((value): value is {label: string; value: string} => !!value?.value).slice(0, 2);
+  const limits = [...item.vetoes, ...item.followReasons, ...item.invalidations];
+  return {why, supports, limit: readerExcerpt(limits[0], 100) || (item.referenceOnly ? "先确认是否具备参与条件。" : "按原记录的失效条件继续观察，不代表后续一定上涨。")};
+}
+
 /** 三态判定徽标：title 挂完整判定依据（可追溯）。 */
 export function JudgeChip({ label, level, basis }: { label: string; level: string; basis: string }) {
   const tone =
@@ -374,6 +400,7 @@ export function PickCard({
         ? `空仓闸门日红线压制（禁买）：${item.followReasons.join("；") || "命中否决/异动风险"}`
         : `空仓闸门已触发：本条不给买入范围，仅供复盘与观察。${item.followReasons.join("；")}`;
 
+  const reading = selectionReading(item);
   const executionState = readError && item.execution ? "stale" : item.execution?.executable_snapshot.state ?? null;
   const executionStateText =
     executionState === "ready"
@@ -617,10 +644,14 @@ export function PickCard({
       </div>
       <ReaderBrief label="入选简述"
         headline={item.theme ? `${item.theme}${item.role ? ` · ${item.role}` : ""}` : "已进入观察名单"}
-        facts={[{label: "入选理由", value: readerExcerpt(item.basisRows.find(row => ["入选", "来源", "入选原因", "消息"].includes(row.label))?.value || item.basisRows[0]?.value) || "本记录未提供入选理由"}]}
-        cautions={[...(readError ? ["刷新失败，当前条件待核实"] : []), ...(item.vetoes.length ? ["存在不满足条件的项目"] : []), ...(item.invalidations.length ? ["有失效条件，见依据"] : []), ...readerCautions([...item.basisRows.map(row => row.value), ...item.followReasons]), ...(item.dimensionEvidence && Object.values(item.dimensionEvidence).some(e => ["missing", "error", "partial"].includes(e.state)) ? ["部分依据缺失"] : [])]}
+        facts={[{label: "为什么关注", value: readerExcerpt(reading.why, 60)}, {label: "还需留意", value: readerExcerpt(reading.limit, 36)}]}
+        cautions={[...(readError ? ["刷新失败，当前条件待核实"] : []), ...(item.vetoes.length ? ["存在不满足条件的项目"] : []), ...readerCautions([...item.basisRows.map(row => row.value), ...item.followReasons]), ...(item.dimensionEvidence && Object.values(item.dimensionEvidence).some(e => ["missing", "error", "partial"].includes(e.state)) ? ["部分依据缺失"] : [])]}
       />
-      <ResearchDisclosure label="依据" identity={`${item.symbol}:${item.origin}`} defaultOpen={evidenceExpanded}>
+      <ResearchDisclosure label="入选解读" identity={`${item.symbol}:${item.origin}:${item.selectionEntry?.source_version || ""}`} defaultOpen={evidenceExpanded}>
+      <ReaderBrief label="本次筛选考虑" facts={[{label: "系统为何选中", value: reading.why}, ...reading.supports, {label: "等待或失效条件", value: reading.limit}]}/>
+      <p className="text-xs leading-relaxed text-zinc-600 dark:text-zinc-400">上方解释来自本次保存的筛选记录。下方消息用于核对关联，晚到或更新的消息不替换当时的入选理由。</p>
+      <StockAttributionPanel symbol={item.symbol} title="相关消息与AI解读" defaultExpanded bounded={false}
+        selectedAt={item.selectionEntry?.selected_at} recordedRefs={item.relatedEventRefs} selectionContext/>
       {/* 估值（仅盘前名单）：数据源确实不提供时（新股/亏损/长期停牌）显示"暂无"并注明原因，
           不留白、不臆造，与个股详情页口径一致。 */}
       {(item.pe_ttm != null || item.pb != null) && (
@@ -768,7 +799,7 @@ export function PickCard({
       {/* 关联消息（仅盘前名单有） */}
       {item.relatedEvents.length > 0 && (
         <div className="stock-card-events text-[11px]">
-          <ConditionList label="关联消息" items={item.relatedEvents}/>
+          <ConditionList label="入选当时记录的消息" items={item.relatedEvents}/>
         </div>
       )}
 
@@ -781,7 +812,7 @@ export function PickCard({
 
       </ResearchDisclosure>
       {/* 跨模块入口（2026-09-09 需求 3）：事件弹窗 / 消息·资金·梯队跳转 */}
-      <CardEntryRow symbol={item.symbol} name={item.name} theme={item.theme ?? null} selectionEntry={item.selectionEntry} eventRefs={item.relatedEventRefs} />
+      <CardEntryRow symbol={item.symbol} name={item.name} theme={item.theme ?? null}/>
     </CardShell>
   );
 }

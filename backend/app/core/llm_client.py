@@ -267,16 +267,14 @@ def _chat_completion_via_cli(
         proc = subprocess.run(
             cmd, capture_output=True, text=True, timeout=timeout, check=False,
         )
-    except subprocess.TimeoutExpired as exc:
-        # 失败信息必须自带 model —— 2026-09-16 事故里报的是裸「claude_cli 调用超时」，
-        # 模型名只藏在被截断的命令行里，于是一眼看不出"是模型被下架了"。
-        # 该事故的形态值得写进提示：上游下架某模型时，CLI 不是快速报错而是**挂起**。
+    except subprocess.TimeoutExpired:
+        # TimeoutExpired.__str__ includes the complete argv, including all input
+        # and the system prompt. Keep only model/time metadata, also in traceback.
         raise LLMError(
-            f"claude_cli 调用超时（model={model}）：{exc}"
-            "；提示：若该模型已被上游网关下架，现象正是「挂起直到超时」而不是快速失败"
-            "——请核对 ASHARE_REVIEW_LLM_MODEL / settings.review_llm_model 所配模型是否仍可用",
+            f"claude_cli 调用超时（model={model}，限时={timeout:g}s），未取得完整输出；"
+            "仅凭超时不能确定网关故障或模型不可用；可核对 ASHARE_REVIEW_LLM_MODEL 配置和网关状态",
             LLMFailure.TIMEOUT,
-        ) from exc
+        ) from None
     except OSError as exc:
         raise LLMError(f"claude_cli 启动失败：{exc}", LLMFailure.UNAVAILABLE) from exc
     if proc.returncode != 0:

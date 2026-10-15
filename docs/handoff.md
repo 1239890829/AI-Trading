@@ -1,10 +1,18 @@
-# 当前交接：IMP-093通俗阅读整改与既有性能效果边界
+# 当前交接：DeepSeek判读正确性与统一入选解读
+
+## 2026-10-15最新直派：判读失败与入选理由
+
+PR #293已合并a06ef1fc，post-master三job成功，正式3000/build R5H6OTUEfsNYIJMV4Wg78，8000/PID18876未重启；当前权威仍为统一runtime-identity。原前端升级连接持租约导致首次激活失败，已精确退役旧前端后恢复；不能复用原PID断言。新用户明确要求先修DeepSeek、再有限扩展四题型，合并“依据/关联消息”为“入选解读”，保留关键价格/几板/辨识度/止损。新批从该最新master建codex/deepseek-selection-explanations；selector仍列G4/IMP-019，本批按本轮直接指定的正确性和阅读整改执行，不自动延伸真实性能/第二业务任务。
+
+8次目录失败已对齐真实日志，旧提示缺目录；2超时无完整网络证据，不能臆断网关/模型下架。5次隔离调用已结束，无生产写；结构有效但仍有估值中性被夸大及需求外推，因此新解释消费者不常开，基线先用保存的系统筛选记录解释。规则/评分/通知/行情时效不改，有限结果归语义蓝图及W04。完整门、准确HEAD回执/CI与实际加载分别核验，未取得不预写成功。
 
 > 摘要：IMP-093本轮代码f71d3c3b已完成通俗阅读与完整依据分层，关键价格/板数/辨识度/止损/加入参考常显。BE5663/83跳过、FE最终默认/UTC各1721/143文件、tsc/ESLint和构建R5H6OTUEfsNYIJMV4Wg78通过；证据见W07与artifacts/runs/plain-language-evidence-20261015/。独立身份未建立，仅走显式降级作者自审。PR/合并/运行激活仍以本批准确HEAD及统一runtime-identity为准，工程通过不等于已运行或选股增益。
 
 > 总方案v9.13；累计U01–U55。阅读与WS整改[W07/IMP-093](stages/w07-simplification.md#imp-093)已由PR #270发布并运行；直接上游单位反例按[W00/BUG-020](stages/w00-foundation.md#bug-020)既有同根回归条款止险，不启动第二个产品优化任务。
 
 现役语义判断依[semantic-decisions](ai/semantic-decisions.md)；外部能力依[开放世界持续演进](ai/continuous-evolution.md)筛选。
+
+本轮工程实现提交 `c0e4ba0edd8d6430f198a05ec33b2859625875a5`：后端5676 passed/83 skipped/199.61s、pyflakes；最终前端默认/UTC各1724 passed/143文件（99.52/103.04s），tsc（含生成类型恢复）、ESLint0error/2既有warning与生产构建1Ut5jZ5F7spMSmLh0eIKS通过。文档198项、卫生/公开扫描/文档体检通过；1031代码/测试路径冻结。三类新反例在旧代码均判红，修后专项52项通过。实际React隔离组件1280/390/320核统一入口和关键参考，390标签单行高19.8px、宽72px，320无横溢出；不是实盘/真机/语义准确率证据。5次模型实验与具体语义反例原样保留，自动解释生成未上线。准确HEAD降级回执、CI、release_check、合并后CI与实际配对加载仍由本轮release核验。
 
 ## 当前用户纠偏（2026-10-15）
 

@@ -22,6 +22,7 @@ from __future__ import annotations
 
 import json
 import re
+import traceback
 import subprocess
 from pathlib import Path
 
@@ -30,6 +31,25 @@ import pytest
 from app.core import llm_client
 from app.core.config import Settings
 from app.core.llm_client import LLMError, LLMFailure, chat_completion
+
+
+def test_cli_timeout_does_not_log_prompt_argv_or_assume_model_removed(monkeypatch):
+    secret_input = 'private-body-never-log'
+    secret_system = 'private-system-never-log'
+    monkeypatch.setattr(llm_client, 'resolve_cli_path', lambda _: '/fake/claude')
+    def timeout(cmd, **kw):
+        raise subprocess.TimeoutExpired(cmd, kw['timeout'])
+    monkeypatch.setattr(llm_client.subprocess, 'run', timeout)
+    with pytest.raises(llm_client.LLMError) as error:
+        llm_client.chat_completion_via_cli('configured-model', [
+            {'role': 'system', 'content': secret_system}, {'role': 'user', 'content': secret_input}], timeout=180)
+    output = ''.join(traceback.format_exception(error.value))
+    assert secret_input not in output and secret_system not in output
+    assert '--system-prompt' not in output
+    assert 'configured-model' in str(error.value) and '180s' in str(error.value)
+    assert '被上游网关下架' not in str(error.value)
+    assert error.value.kind == llm_client.LLMFailure.TIMEOUT
+
 
 APP_DIR = Path(__file__).resolve().parents[1] / "app"
 

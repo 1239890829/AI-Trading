@@ -1,7 +1,7 @@
 import {cleanup, fireEvent, render, screen} from "@testing-library/react";
 import {afterEach, expect, it, vi} from "vitest";
 import {CardEntryRow} from "./card-entries";
-import {getEventsForSymbol, type EventInterpretationRef, type SelectionEntry} from "@/lib/api";
+import {getEventsForSymbol} from "@/lib/api";
 
 vi.mock("@/lib/api", () => ({getEventsForSymbol: vi.fn()}));
 const open = vi.hoisted(() => vi.fn());
@@ -9,24 +9,22 @@ vi.mock("@/components/detail/detail-modal", () => ({useDetailModal: () => ({open
 vi.mock("@/components/inspection/inspection-context", () => ({useInspection: () => ({open: vi.fn()})}));
 afterEach(() => {cleanup(); vi.clearAllMocks();});
 
-it("keeps evidence reachable without polling every candidate or checking whether its feed is empty", () => {
+it("retains capital inspection without a second message reader or candidate polling", () => {
   render(<><CardEntryRow symbol="600991" /><CardEntryRow symbol="600992" /></>);
   expect(getEventsForSymbol).not.toHaveBeenCalled();
-  expect(screen.getAllByRole("button", {name: "关联消息"})).toHaveLength(2);
-  fireEvent.click(screen.getAllByRole("button", {name: "关联消息"})[0]);
-  expect(open).toHaveBeenCalledWith(expect.objectContaining({kind: "attribution", symbol: "600991"}));
+  expect(screen.queryByRole("button", {name: "关联消息"})).toBeNull();
+  fireEvent.click(screen.getAllByRole("button", {name: "资金"})[0]);
+  expect(open).toHaveBeenCalledWith(expect.objectContaining({kind: "capital", symbol: "600991"}));
   expect(getEventsForSymbol).not.toHaveBeenCalled();
 });
 
-it("passes exact archived references and first-entry facts, and cancels parent navigation", () => {
-  const refs: EventInterpretationRef[] = [{event_id: 18, version_id: 20, observation_id: 19, available_at: "2026-10-12T09:31:00+08:00", state: "active"}];
-  const selection: SelectionEntry = {state: "recorded", selected_at: "2026-10-12T09:32:00+08:00", reference_price: 8, reference_change_pct: 2, quote_as_of: "2026-10-12T09:31:59+08:00", source: "daily_generation", source_version: "original-version", semantics: "observation_only_not_fill"};
+it("keeps each capital inspection on its own stock and cancels parent navigation", () => {
   const parent = vi.fn();
-  const view = render(<div onClick={parent}><CardEntryRow symbol="600991" name="示例公司" eventRefs={refs} selectionEntry={selection} /></div>);
-  fireEvent.click(screen.getByRole("button", {name: "关联消息"}));
+  const view = render(<div onClick={parent}><CardEntryRow symbol="600991" name="示例公司" /></div>);
+  fireEvent.click(screen.getByRole("button", {name: "资金"}));
   expect(parent).not.toHaveBeenCalled();
-  expect(open).toHaveBeenLastCalledWith(expect.objectContaining({symbol: "600991", eventRefs: refs, selectionEntry: selection}));
+  expect(open).toHaveBeenLastCalledWith(expect.objectContaining({kind: "capital", symbol: "600991"}));
   view.rerender(<CardEntryRow symbol="600992" />);
-  fireEvent.click(screen.getByRole("button", {name: "关联消息"}));
-  expect(open).toHaveBeenLastCalledWith(expect.objectContaining({symbol: "600992", eventRefs: undefined, selectionEntry: undefined}));
+  fireEvent.click(screen.getByRole("button", {name: "资金"}));
+  expect(open).toHaveBeenLastCalledWith(expect.objectContaining({kind: "capital", symbol: "600992"}));
 });

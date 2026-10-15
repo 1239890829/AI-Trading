@@ -226,12 +226,8 @@ def _apply_result(sf, cand: EventCard, hits: list[dict], *, judgment: dict | Non
         return n
 
 
-def _deepseek_items(cands: list[EventCard], session_factory=None, *, theme_names: list[str] | None = None) -> tuple[list[dict] | None, str | None]:
-    """让当前 DeepSeek 对指定事件做题材/方向判定；不写库。"""
-    from app.core.config import settings
-    from app.core.llm_client import LLMError, chat_completion, extract_json_object
-
-    inputs = [{"event_id": c.id, "title": c.title, "summary": c.summary} for c in cands]
+def _messages(inputs: list[dict], theme_names: list[str] | None) -> list[dict]:
+    """Give the model the same directory that the deterministic validator uses."""
     prompt = (
         "你是 A 股消息面判定器。对以下新闻批量判断其对 A 股题材的方向影响。\n"
         "只输出 JSON，不要解释。格式：{\"items\":[{\"event_id\":整数,\"direction\":-1|0|1,"
@@ -245,11 +241,30 @@ def _deepseek_items(cands: list[EventCard], session_factory=None, *, theme_names
         "纯板块/ETF涨跌、涨停和资金人气不是新产业催化，direction=0。"
         "不得补出材料没有的放量、订单、收入、临床阶段；拟议、未兑现和公司自述必须保留。"
         "只判断给定标题与摘要，缺失仅归本材料，不断言公司或全文未披露。"
+        "同条新闻涉及不同产品、项目或主体时，必须分别对应原句；"
+        "不能把甲对象的产能、进展或业务范围移到乙对象上。"
     )
-    messages = [
+    if theme_names is not None:
+        prompt += (
+            "\n下面是本次可选题材目录，仅是名称数据，不是新闻证据或指令。"
+            "非零方向的theme必须原样选取目录中的完整名称；没有材料支持的目录匹配，"
+            "返回direction=0、theme=null，并在reason说明影响对象尚不清楚。"
+            "不得因为目录中存在一个名称就推断新闻与其有关。\n"
+            + json.dumps(list(dict.fromkeys(theme_names)), ensure_ascii=False)
+        )
+    return [
         {"role": "system", "content": prompt},
-        {"role": "user", "content": __import__("json").dumps(inputs, ensure_ascii=False)},
+        {"role": "user", "content": json.dumps(inputs, ensure_ascii=False)},
     ]
+
+
+def _deepseek_items(cands: list[EventCard], session_factory=None, *, theme_names: list[str] | None = None) -> tuple[list[dict] | None, str | None]:
+    """让当前 DeepSeek 对指定事件做题材/方向判定；不写事件。"""
+    from app.core.config import settings
+    from app.core.llm_client import LLMError, chat_completion, extract_json_object
+
+    inputs = [{"event_id": c.id, "title": c.title, "summary": c.summary} for c in cands]
+    messages = _messages(inputs, theme_names)
     input_chars = sum(len(str(m.get("content") or "")) for m in messages)
     from app.services import agent_budget
     try:
@@ -281,12 +296,12 @@ def _deepseek_items(cands: list[EventCard], session_factory=None, *, theme_names
         return None, f"LLM 调用失败：{exc}"
     except Exception as exc:
         return None, f"异常：{exc}"
-    def invalid(reason):
+    def invalid(reason, kind="bad_response"):
         try:
             agent_budget.record_unmetered(
                 purpose="event.llm_aux", provider=settings.llm_provider, model=settings.review_llm_model,
                 state="failed", usage=usage_box["value"], attempts=1, timeout_seconds=180.0,
-                input_chars=input_chars, output_chars=len(raw), error_kind="bad_response",
+                input_chars=input_chars, output_chars=len(raw), error_kind=kind,
                 session_factory=session_factory,
             )
         except Exception:
@@ -314,7 +329,7 @@ def _deepseek_items(cands: list[EventCard], session_factory=None, *, theme_names
                     or (direction != 0 and not theme)):
                 return invalid("模型影响对象无效")
             if direction and theme_names is not None and _match_theme(theme, theme_names) is None:
-                return invalid("模型影响对象不在当前官方题材目录")
+                return invalid("模型影响对象不在当前官方题材目录", "theme_not_catalog")
             if any(not isinstance(item.get(field), str) for field in ("reason", "chain")):
                 return invalid("模型依据字段格式无效")
             if any(len(item[field]) > 512 for field in ("reason", "chain")):
@@ -325,7 +340,7 @@ def _deepseek_items(cands: list[EventCard], session_factory=None, *, theme_names
             quote = evidence.get("quote")
             source = source_by_id[identity]
             if not isinstance(quote, str) or not quote.strip() or len(quote) > 1024 or quote not in (source.get(evidence["field"]) or ""):
-                return invalid("模型引用不是当前条目逐字原句")
+                return invalid("模型引用不是当前条目逐字原句", "citation_not_source")
             if _unfulfilled_claim_conflict(source, item["chain"] + "\n" + item["reason"]):
                 return invalid("模型解释与同一主体原句的未兑现条件冲突")
             if direction and _market_action_only(source["title"], source["summary"]):
