@@ -11,31 +11,36 @@
 | **端口纪律** | 前端固定 **3000**、后端固定 **8000**；不起多余实例，任务结束须确认两者仍在跑 |
 | **数据持久化** | 挂宿主 `./data` → 容器 `/data`。**挂 `/app/data` 不生效** |
 | **密钥（红线 4）** | API Key 只走 `backend/.env`（`env_file` 注入），**绝不进镜像层 / 前端 / git** |
-| **前端连后端** | 同源 `/backend` 相对路径 + 服务端运行时代理 `BACKEND_ORIGIN`（**改后端地址无需重新构建**）；WS **不走**代理，需 nginx 反代或自动降级 5s 轮询 |
+| **前端连后端** | HTTP及WS均走同源 `/backend`、运行时读取 `BACKEND_ORIGIN`；WS用子协议凭据，失败保留既有轮询降级 |
 | **公网 / NAS 必配** | `ASHARE_AUTH_MODE=shared` + `ASHARE_API_TOKEN`（**R22 默认拒绝：全部接口**，backend 与 web 容器都要有）+ `ASHARE_CORS_ORIGINS`（加实际访问域名） |
 | **鉴权漏配 = 全站 401** | 后端配了 token 而 web 容器没拿到 ⇒ 连读接口也 401（代理层不附加请求头） |
-| **发布门禁** | `node scripts/api-sweep.js`——专抓「HTTP 200 但数据为空」这类测试与类型检查都发现不了的问题 |
+| **启动验收** | `scripts/local-services.py check`核受保护纯缓存读取与代理鉴权；实际WS另在已授权页面验101及非空行情帧。工程发布仍走 `AGENTS.md` 完整门 |
 
 **章节导航**：本地开发 ｜ Docker ｜ 环境变量 ｜ 前端如何连后端 ｜ 运维工具（全 GET 端点巡检）｜ 运维要点 ｜ 已踩过的坑 ｜ Docker 用户侧验证清单（8 项）
 
 ---
 
-## 本地开发（推荐）
+## 本地启动与重启
+
+首次安装按根目录 `README.md`。两个独立终端从仓库根启动，后端Python必须已安装项目依赖：
 
 ```bash
-# 后端（Python 3.11+）
-cd backend
-python3.11 -m venv .venv && source .venv/bin/activate
-pip install -r requirements.txt
-cp ../.env.example .env   # 按需修改
-uvicorn app.main:app --port 8000
-# ⚠️ 勿加 --reload：与 SQLite 锁组合会反复挂死（见 AGENTS.md §6.1）
-
-# 前端（Node 18.18+）
-cd apps/web
-npm install
-npm run dev   # http://localhost:3000
+backend/.venv/bin/python scripts/local-services.py backend
+# 另一个终端：已有生产构建直接启动；开发时显式加 --dev
+backend/.venv/bin/python scripts/local-services.py frontend
+# 两端启动后，在第三个终端验证
+backend/.venv/bin/python scripts/local-services.py check
 ```
+
+入口只解析 `backend/.env` 的鉴权字段，向Next内存传递服务端 `ASHARE_API_TOKEN`、固定回环 `BACKEND_ORIGIN` 和运行模式；不执行 `.env`，不复制供应商、模型或数据库配置。继承环境与文件冲突、重复鉴权字段、未知模式、共享姿态缺凭据或不支持的插值直接拒绝；不会改写凭据。前端已有token时保留原有LAN监听，无token的本地模式只绑回环。
+
+前台进程使用 `exec`，同工作区端口锁随服务存活；端口已占用或归属无法确认则拒绝，不启动第二实例。入口不自动安装、构建、终止或重启。生产构建缺失时明确失败；构建仍须先停止同工作区dev，独立工作区不得误停原服务。
+
+重启时先核真实LISTEN的PID、cwd、命令与启动时刻，只正常终止已确认的本项目进程并等待退出；再用以上入口重启。**不得用手工拼环境的 `next start` 代替入口**，否则前端不会自动读取后端凭据。不要向前端复制整份 `.env`。
+
+`check`只读固定回环health、受保护 `/api/quotes` 内存缓存及WS凭据配置。启用token时，无凭据直连必须401、带既有凭据及经Next代理必须200；凭据响应只在内存比较，不输出正文。空缓存可以通过运输/鉴权检查，不能当市场数据可用；`actual_ws`及`market_freshness`明确未验证。检查失败不得只看页面或公开health200宣布成功，也不用全GET巡检替代。
+
+真实WS验收仅复用获准的一个工作台：完整刷新后，在原生Network核新101，在消息面板核当前证券的非空报价及后续行情帧。只收到pong或空snapshot不够。旧页面可能成功缓存过空凭据，重启前端后仍需完整刷新；站内跳转不保证清缓存。不导出包含凭据的HAR/请求头，不为启动探测另建WS。握手成功不能升级盘前、休市或失败报价的质量。
 
 ## Docker
 
@@ -98,8 +103,10 @@ nginx 反代时**不要剥掉 `Sec-WebSocket-Protocol`**；详见下文「WebSoc
 ```bash
 cd apps/web
 npx next build                              # dev server 运行时禁止执行
-BACKEND_ORIGIN=http://127.0.0.1:8000 npx next start -p 3100
-curl http://127.0.0.1:3100/backend/api/health   # 应返回后端健康信息
+cd ../..
+backend/.venv/bin/python scripts/local-services.py frontend
+# 另一个终端：核受保护代理及凭据配置，不以豁免health代替
+backend/.venv/bin/python scripts/local-services.py check
 ```
 
 ### 鉴权凭据的传递路径（2026-09-14 起；2026-09-15 R22 扩面）

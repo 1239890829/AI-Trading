@@ -51,19 +51,19 @@
 在目标工作区运行，独立 worktree 可复用原仓 backend/.venv 的解释器，前端依赖使用本工作区副本。
 
 ```bash
-# 本机后端：绝不用 --reload，避免 SQLite/调度重复实例
-cd backend
-.venv/bin/uvicorn app.main:app --host 127.0.0.1 --port 8000
-# 前端（独立终端）
-cd apps/web
-npm run dev
+# 本机启动：均从仓库根运行，先安装好依赖；绝不用 --reload
+backend/.venv/bin/python scripts/local-services.py backend
+# 前端（独立终端）：沿用已构建的生产包；开发时显式加 --dev
+backend/.venv/bin/python scripts/local-services.py frontend
+# 每次启动/重启后验收代理鉴权与WS凭据配置，不建立测试WS
+backend/.venv/bin/python scripts/local-services.py check
 # 后端完整门禁：pyproject 已有 -q，不叠加；临时目录每批独立
 # ⚠️ 前置 `PYTHONPATH=` 是必需的：在本机助手环境内，harness 会注入
 # `PYTHONPATH=…/cli/vendor/shim`，其 sitecustomize 把每次 open() 经 unix socket
 # 代理，被 conftest 的离线守卫判成"真实网络尝试"⇒ 大量假失败。详见下方取证纪律。
 cd backend
 PYTHONPATH= .venv/bin/pytest --basetemp=/tmp/ashare-pytest --junitxml=/tmp/ashare-be.xml
-.venv/bin/python -m pyflakes app tests scripts
+.venv/bin/python -m pyflakes app tests scripts ../scripts/local-services.py
 # 前端完整门禁；与后端全量串行，单 worker 减少本机争用
 cd apps/web
 npx tsc --noEmit
@@ -88,6 +88,7 @@ python3 scripts/doc-health.py
   全量清空后 4279 passed。**不得据此改断言、放宽阈值或贴豁免**。
 - 不盲目重启生产。需要运行验收先判断真实外发/调度影响；默认隔离实例与测试库。改动未加载到生产就明确说明。
 - 管理已确认属于本任务的进程；按端口定位必须带 `lsof -ti tcp:<port> -sTCP:LISTEN`，优先正常终止并复查两侧服务，不能误杀客户端。
+- 本机启动统一走 `scripts/local-services.py`，从后端既有配置最小传递服务端鉴权；不手抄 token、不复制整份 `.env` 到前端。入口拒绝配置冲突、已有监听及并发启动，不自动终止进程、改端口、安装或构建。重启先核归属并正常退出原进程，再按上方启动和 `check` 验收；页面/豁免 health 的 HTTP200 不证明代理鉴权成功。真实WS另用已授权的单个工作台完整刷新核101及当前证券非空行情帧，不保存凭据/请求头，不新增工具探测连接；盘前 stale 不因握手成功升级。详见 `docs/system/deployment.md` 本地启动与重启。
 
 ## 2. 方案主导与评估纪律
 

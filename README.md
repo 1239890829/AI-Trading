@@ -8,25 +8,26 @@
 ## 快速启动
 
 ```bash
-# 1) 后端（Python 3.11+）
+# 首次安装：后端 Python 3.11+，前端 Node.js 22（与CI一致）
 cd backend
-python3.11 -m venv .venv && source .venv/bin/activate
-pip install -r requirements.txt
-uvicorn app.main:app --port 8000
-# ⚠️ 勿加 --reload：与 SQLite 锁组合会反复挂死（见 AGENTS.md §6.1）
-# API 文档: http://127.0.0.1:8000/docs
+python3.11 -m venv .venv
+.venv/bin/pip install -r requirements.txt
+cd ../apps/web
+npm ci
+cd ../..
 
-# 2) 前端（Node.js 22，与仓库 CI 一致）
-cd apps/web
-npm install
-npm run dev
-# 打开 http://localhost:3000/workbench
-
-# 3) 测试
-cd backend && pytest
+# 1) 仓库根目录，终端一：后端8000，不启用reload
+backend/.venv/bin/python scripts/local-services.py backend
+# 2) 仓库根目录，终端二：首次开发用已安装Next的dev模式
+backend/.venv/bin/python scripts/local-services.py frontend --dev
+# 已有生产构建时，省略 --dev 即沿用该构建，不自动重建
+# 3) 仓库根目录，终端三：验收受保护读取、前端代理与WS凭据配置
+backend/.venv/bin/python scripts/local-services.py check
 ```
 
-无网络 / 演示模式：`ASHARE_DATA_PROVIDER=mock uvicorn app.main:app --port 8000`（数据标记 source=mock）。
+打开 http://127.0.0.1:3000/workbench 。启动入口自动从 `backend/.env` 最小传递服务端凭据，拒绝冲突配置或占用端口；不复制其他后端密钥到前端。`check` 不建立WS，也不证明行情新鲜。重启与真实WS验收见[本地启动与重启](docs/system/deployment.md#本地启动与重启)。完整测试见 `AGENTS.md` §1。
+
+无网络 / 演示模式：`ASHARE_DATA_PROVIDER=mock backend/.venv/bin/python scripts/local-services.py backend`（数据标记 source=mock）。
 
 ## 当前能力与实施入口
 
