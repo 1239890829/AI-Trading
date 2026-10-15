@@ -1,9 +1,11 @@
+"use client";
+import {useState} from "react";
 /** 盘口 / 逐笔 共用视图（右列 book 与 trades 页签的内容区）。纯展示。
  *  三态纪律（2026-09-08 审查 F1）：undefined=尚未拉到 → Skeleton 占位；
  *  null/[] =拉过且确认无 → 空态文案。此前切股重挂载窗口期把"加载中"渲染成
  *  "盘口数据不可用（免费源仅盘中提供）"——把"还没拉到"说成"不可用"是误导。 */
 import type { OrderBook, Trade } from "@/types/market";
-import { bjDate, dateTimeTextBJ, fmt, sourceLabel, timeText } from "@/lib/format";
+import { bjDate, dateTimeTextBJ, fmt, fmtAmount, sourceLabel, timeText } from "@/lib/format";
 import { Skeleton } from "@/components/ui/loading";
 import {QualityBadge} from "@/components/quality-badge";
 import {DetailReadStatus, type DetailReadState} from "./read-status";
@@ -53,6 +55,12 @@ export function BookTradesView({book, trades, showBook, readState, onRetry, empt
   readState?: DetailReadState; onRetry?: () => void; emptyReason?: string | null; tradesSource?: string | null;
   readIdentity?: string; active?: boolean;
 }) {
+  const [bookUnit, setBookUnit] = useState<"amount" | "lots">("amount");
+  const bookValue = (price: number | null | undefined, shares: number | null | undefined) => {
+    if (shares == null || !Number.isFinite(shares) || shares < 0) return "--";
+    if (bookUnit === "lots") return `${fmt(shares / 100, 2)} 手`;
+    return price == null || !Number.isFinite(price) || price <= 0 ? "--" : `${fmtAmount(price * shares)}元`;
+  };
   const lastTrade = trades?.at(-1);
   const diagnostics = showBook ? <p>来源：{sourceLabel(book?.source)} · 源数据时间：{dateTimeTextBJ(book?.data_timestamp, {seconds: true})} · 质量 {book?.quality ?? "未提供"}</p>
     : <><p>来源：{sourceLabel(lastTrade?.source || tradesSource)} · 最新成交时间：{dateTimeTextBJ(lastTrade?.ts, {seconds: true})} · 质量 {lastTrade?.quality ?? "未提供"}</p>{emptyReason && <p>本次空结果原因：{emptyReason}</p>}</>;
@@ -61,20 +69,21 @@ export function BookTradesView({book, trades, showBook, readState, onRetry, empt
     if (book === undefined) return <>{notice}{!readState?.error && <BookSkeleton />}</>;
     return <>{notice}{book ? <>
       <p className="flex flex-wrap items-center gap-1 border-b border-zinc-100 px-3 py-1.5 text-xs text-zinc-600 dark:border-zinc-800 dark:text-zinc-400">{sourceLabel(book.source)}<QualityBadge quality={book.quality} reasons={book.quality_reasons}/></p>
+      <div className="flex items-center justify-between gap-2 px-3 py-1.5 text-xs"><span>五档挂单 · 非成交额</span><div className="inline-flex gap-1" aria-label="盘口数量口径">{(["amount", "lots"] as const).map(unit => <button key={unit} type="button" className="px-2 py-1" aria-pressed={bookUnit === unit} onClick={() => setBookUnit(unit)}>{unit === "amount" ? "金额" : "手数"}</button>)}</div></div>
       <table className="w-full text-sm">
         <tbody>
           {[...book.asks].reverse().map((lv, i) => (
             <tr key={`a${i}`} className="border-b border-zinc-100 dark:border-zinc-800/60">
               <td className="px-3 py-1.5 text-xs text-zinc-600 dark:text-zinc-400">卖{book.asks.length - i}</td>
               <td className="px-2 py-1.5 text-right font-mono tabular-nums text-down-ink dark:text-down">{fmt(lv.price)}</td>
-              <td className="px-3 py-1.5 text-right font-mono text-xs tabular-nums text-zinc-600 dark:text-zinc-400">{fmt(lv.volume, 0)}</td>
+              <td className="px-3 py-1.5 text-right font-mono text-xs tabular-nums text-zinc-600 dark:text-zinc-400">{bookValue(lv.price, lv.volume)}</td>
             </tr>
           ))}
           {[...book.bids].map((lv, i) => (
             <tr key={`b${i}`}>
               <td className="px-3 py-1.5 text-xs text-zinc-600 dark:text-zinc-400">买{i + 1}</td>
               <td className="px-2 py-1.5 text-right font-mono tabular-nums text-up-ink dark:text-up">{fmt(lv.price)}</td>
-              <td className="px-3 py-1.5 text-right font-mono text-xs tabular-nums text-zinc-600 dark:text-zinc-400">{fmt(lv.volume, 0)}</td>
+              <td className="px-3 py-1.5 text-right font-mono text-xs tabular-nums text-zinc-600 dark:text-zinc-400">{bookValue(lv.price, lv.volume)}</td>
             </tr>
           ))}
         </tbody>

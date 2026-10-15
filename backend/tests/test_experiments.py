@@ -188,8 +188,8 @@ def test_baseline_insufficient_never_rolls_back(sf, monkeypatch):
 
 # ---------------------------------------------------------------- 复盘闭环
 
-def test_sync_review_items_marks_applied(sf):
-    """执行成功的议程项（带 review_item）→ 复盘改进项状态回写 applied。"""
+def test_sync_review_items_marks_recorded(sf):
+    """执行成功的议程项（带 review_item）→ 复盘改进项只回写 recorded，归档不是实施。"""
     from sqlalchemy import select
 
     from app.review.models import ReviewActionItemRow
@@ -215,8 +215,8 @@ def test_sync_review_items_marks_applied(sf):
         row = db.execute(
             select(ReviewActionItemRow).where(ReviewActionItemRow.id == 7)
         ).scalars().one()
-        assert row.status == "applied"
-        assert "自动执行" in row.resolution_note
+        assert row.status == "recorded"
+        assert "尚待实施与验证" in row.resolution_note
 
 
 def test_conclude_due_is_sync_callable(sf, monkeypatch):

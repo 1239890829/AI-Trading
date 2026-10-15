@@ -8,12 +8,13 @@ import {SymbolDetailStateCtx} from "@/components/detail/symbol-detail-context";
 import type {Quote} from "@/types/market";
 
 const state = vi.hoisted(() => ({
+  streamSymbols: [] as string[],
   params: new URLSearchParams("symbol=600127&ct=minute&rt=info&from=%2Fmarket%3Ftab%3Devents"),
   push: vi.fn(), replace: vi.fn(),
   watch: [{symbol: "600127", group_name: "默认"}, {symbol: "603256", group_name: "材料观察"}],
   quoteStream: {status: "live", quoteFeed: {subscribe: () => () => {}, getSnapshot: () => undefined}, quotes: {
     "600127": {symbol: "600127", name: "金健米业", price: 8.13, change_pct: 2.52, source: "fixture", quality: "high", quality_reasons: [], received_at: "2026-10-08T09:55:00+08:00", data_timestamp: "2026-10-08T09:55:00+08:00"},
-  }},
+  } as Record<string, Quote>},
   realPositions: {items: [{symbol: "600127"}]},
   reloadReal: vi.fn(async () => undefined), mobile: false, mediaListeners: new Set<() => void>(),
 }));
@@ -21,13 +22,13 @@ vi.mock("next/navigation", () => ({useRouter: () => ({push: state.push, replace:
 vi.mock("@/lib/market-hours", () => ({isTradingSession: () => true}));
 vi.mock("@/hooks/use-quote-stream", () => ({
   STREAM_STATUS_LABEL: {live: {text: "已连接", cls: "", title: "通信夹具，不证明源报价已更新"}},
-  useQuoteStream: () => state.quoteStream,
+  useQuoteStream: (symbols: string[]) => {state.streamSymbols = symbols; return state.quoteStream;},
 }));
 // Match the real hooks' stable data identity between network updates.
 // A fresh items array on every render repeatedly triggers the REST fallback effect.
 vi.mock("@/hooks/use-real-positions", () => ({useRealPositions: () => ({data: state.realPositions, error: null, reload: state.reloadReal})}));
 vi.mock("@/components/stock-detail", () => ({StockDetailPanel: ({symbol, chartTab, rightTab, active, realPositions, quoteFeed, watchlistMembership, onWatchlistAdded, indexQuote}: {symbol: string; chartTab?: string; rightTab?: string; active?: boolean; realPositions?: {reload: () => Promise<void>}; quoteFeed?: unknown; watchlistMembership?: boolean | null; onWatchlistAdded?: (symbol: string) => void; indexQuote?: Quote | null}) => <><div data-testid="stock-detail" data-active={String(active)} data-shared-positions={String(realPositions?.reload === state.reloadReal)} data-shared-quote-feed={String(quoteFeed === state.quoteStream.quoteFeed)} data-membership={String(watchlistMembership)} data-index-source={indexQuote === null ? "missing" : indexQuote?.source ?? "no-owner"}>{symbol}/{chartTab}/{rightTab}</div><button onClick={() => onWatchlistAdded?.(symbol)}>确认加入回执</button></>}));
-vi.mock("@/components/index-cards", () => ({IndexCards: ({onSelect}: {onSelect: (symbol: string) => void}) => <div>指数摘要<button onClick={() => onSelect("sh000688")}>查看科创50</button></div>}));
+vi.mock("@/components/index-cards", () => ({IndexCards: ({onSelect, indices}: {onSelect: (symbol: string) => void; indices: Quote[]}) => <div data-testid="index-cards">指数摘要{indices.map(q => <span key={q.symbol}>{q.price}</span>)}<button onClick={() => onSelect("sh000688")}>查看科创50</button></div>}));
 vi.mock("@/components/detail/account-scope-panel", () => ({AccountScopePanel: ({account}: {account: string}) => <div>账户结果 {account}</div>}));
 vi.mock("@/components/picks/pick-detail-modal", () => ({PickDetailModal: ({target}: {target: {kind: string; item: {symbol: string}} | null}) => target ? <div role="dialog">{target.kind}/{target.item.symbol}</div> : null}));
 vi.mock("@/lib/api", () => ({
@@ -64,6 +65,20 @@ async function selectList(name: string) {
 }
 
 describe("B+C workbench production consumers", () => {
+  it("指数卡复用同一行情连接的最新帧，不必等下一次10秒概览", async () => {
+    const sh: Quote = {symbol:"000001",market:"SH",price:3000,source:"tencent",quality:"high",quality_reasons:[],received_at:"2026-10-15T10:00:00+08:00",data_timestamp:"2026-10-15T10:00:00+08:00"};
+    vi.mocked(api.getMarketOverview).mockResolvedValueOnce({indices:[sh],total_amount:null,total_amount_freshness:null});
+    const old = state.quoteStream.quotes;
+    const view = render(<WorkbenchPage/>);
+    await waitFor(() => expect(screen.getByTestId("index-cards").textContent).toContain("3000"));
+    expect(state.streamSymbols).toContain("sh000001");
+    state.quoteStream.quotes = {...old,sh000001:{...sh,symbol:"sh000001",price:3001}};
+    view.rerender(<WorkbenchPage/>);
+    expect(screen.getByTestId("index-cards").textContent).toContain("3001");
+    expect(api.getMarketOverview).toHaveBeenCalledTimes(1);
+    state.quoteStream.quotes = old;
+  });
+
   it("详情复用已有概览的上证观察，空成功明确缺项而非新建指数读取", async () => {
     const sh: Quote = {symbol: "000001", market: "SH", source: "tencent", quality: "high", quality_reasons: [], received_at: "2026-10-14T15:00:01+08:00", data_timestamp: "2026-10-14T15:00:00+08:00", price: 3000, prev_close: 2990};
     vi.mocked(api.getMarketOverview).mockResolvedValueOnce({indices: [sh], total_amount: null, total_amount_freshness: null});
@@ -151,14 +166,14 @@ describe("B+C workbench production consumers", () => {
     await screen.findByText(/分组读取失败/);
     expect(api.getWatchlist).toHaveBeenCalledTimes(1);
     expect(api.getMarketOverview).toHaveBeenCalledTimes(1);
-    expect(api.getPaperPositions).toHaveBeenCalledTimes(1);
+    expect(api.getPaperPositions).not.toHaveBeenCalled();
     vi.mocked(api.getWatchlistGroups).mockRejectedValueOnce(new Error("still unavailable"));
     fireEvent.click(screen.getByRole("button", {name: "重试读取"}));
     await waitFor(() => expect(api.getWatchlistGroups).toHaveBeenCalledTimes(2));
     expect(screen.getByText(/分组读取失败/)).toBeTruthy();
     expect(api.getWatchlist).toHaveBeenCalledTimes(1);
     expect(api.getMarketOverview).toHaveBeenCalledTimes(1);
-    expect(api.getPaperPositions).toHaveBeenCalledTimes(1);
+    expect(api.getPaperPositions).not.toHaveBeenCalled();
     fireEvent.click(screen.getByRole("button", {name: "重试读取"}));
     await waitFor(() => expect(screen.queryByText(/分组读取失败/)).toBeNull());
     expect(api.getWatchlistGroups).toHaveBeenCalledTimes(3);
@@ -245,33 +260,33 @@ describe("B+C workbench production consumers", () => {
     expect(screen.getByRole("button", {name: "查看 金健米业 600127"})).toBeTruthy();
   });
 
-  it("keeps quotes/paper positions at 10s, static lists at 60s and mutation sync immediate", async () => {
+  it("keeps overview at 10s and static lists at 60s with no user-facing paper polling", async () => {
     vi.useFakeTimers();
     render(<WorkbenchPage />);
     await act(async () => {await vi.advanceTimersByTimeAsync(0);});
     expect(api.getMarketOverview).toHaveBeenCalledTimes(1);
     expect(api.getWatchlist).toHaveBeenCalledTimes(1);
     expect(api.getWatchlistGroups).toHaveBeenCalledTimes(1);
-    expect(api.getPaperPositions).toHaveBeenCalledTimes(1);
+    expect(api.getPaperPositions).not.toHaveBeenCalled();
     await act(async () => {await vi.advanceTimersByTimeAsync(10_000);});
     expect(api.getMarketOverview).toHaveBeenCalledTimes(2);
     expect(api.getWatchlist).toHaveBeenCalledTimes(1);
     expect(api.getWatchlistGroups).toHaveBeenCalledTimes(1);
-    expect(api.getPaperPositions).toHaveBeenCalledTimes(2);
+    expect(api.getPaperPositions).not.toHaveBeenCalled();
     await act(async () => {await vi.advanceTimersByTimeAsync(20_000);});
     expect(api.getMarketOverview).toHaveBeenCalledTimes(4);
-    expect(api.getPaperPositions).toHaveBeenCalledTimes(4);
+    expect(api.getPaperPositions).not.toHaveBeenCalled();
     await act(async () => {await vi.advanceTimersByTimeAsync(30_000);});
     expect(api.getMarketOverview).toHaveBeenCalledTimes(7);
     expect(api.getWatchlist).toHaveBeenCalledTimes(2);
     expect(api.getWatchlistGroups).toHaveBeenCalledTimes(2);
-    expect(api.getPaperPositions).toHaveBeenCalledTimes(7);
+    expect(api.getPaperPositions).not.toHaveBeenCalled();
     state.watch = [{symbol: "002297", group_name: "默认"}];
     await act(async () => {notifyWatchlistChanged();});
     expect(api.getWatchlist).toHaveBeenCalledTimes(3);
     expect(api.getWatchlistGroups).toHaveBeenCalledTimes(3);
     expect(api.getMarketOverview).toHaveBeenCalledTimes(7);
-    expect(api.getPaperPositions).toHaveBeenCalledTimes(7);
+    expect(api.getPaperPositions).not.toHaveBeenCalled();
     expect(screen.getByRole("button", {name: "查看 002297 002297"})).toBeTruthy();
   });
 
@@ -377,8 +392,9 @@ describe("B+C workbench production consumers", () => {
     state.params = new URLSearchParams("symbol=600127&mode=positions&account=paper&rt=trade&ct=minute");
     page.rerender(<WorkbenchPage />);
     expect(screen.getByRole("button", {name: "核对"}).getAttribute("aria-pressed")).toBe("true");
-    expect(screen.getByTestId("stock-detail").textContent).toBe("600127/minute/trade");
-    expect(await screen.findByText("账户结果 paper")).toBeTruthy();
+    expect(screen.getByTestId("stock-detail").textContent).toBe("600127/minute/real");
+    expect(screen.queryByText("账户结果 paper")).toBeNull();
+    expect(api.getPaperPositions).not.toHaveBeenCalled();
     expect(api.addToWatchlist).not.toHaveBeenCalled();
     expect(api.removeFromWatchlist).not.toHaveBeenCalled();
   });
@@ -435,19 +451,14 @@ describe("B+C workbench production consumers", () => {
     expect(api.addToWatchlist).toHaveBeenCalledTimes(1);
   });
 
-  it("keeps account scopes separate and never offers watchlist deletion for a position", async () => {
+  it("legacy paper link shows manual holdings without paper reads or watchlist deletion", async () => {
     state.params = new URLSearchParams("symbol=600127&mode=positions&account=paper&ct=minute&from=%2Fhunting");
     render(<WorkbenchPage />);
-    expect(await screen.findByText("账户结果 paper")).toBeTruthy();
     expect(await screen.findByRole("button", {name: "查看 金健米业 600127"})).toBeTruthy();
     expect(screen.queryByRole("button", {name: /移出自选/})).toBeNull();
-    fireEvent.keyDown(screen.getByRole("button", {name: "账户：手工模拟"}), {key: "ArrowDown"});
-    fireEvent.click(await screen.findByRole("menuitemradio", {name: /机会影子/}));
-    await waitFor(() => expect(state.push).toHaveBeenCalled());
-    const next = new URL(state.push.mock.calls.at(-1)?.[0], "http://localhost");
-    expect(next.searchParams.get("account")).toBe("hunting");
-    expect(next.searchParams.get("ct")).toBe("minute");
-    expect(next.searchParams.get("from")).toBe("/hunting");
+    expect(screen.queryByRole("button", {name: /账户/})).toBeNull();
+    expect(screen.getByTestId("stock-detail").textContent).toBe("600127/minute/real");
+    expect(api.getPaperPositions).not.toHaveBeenCalled();
     expect(api.removeFromWatchlist).not.toHaveBeenCalled();
   });
 });

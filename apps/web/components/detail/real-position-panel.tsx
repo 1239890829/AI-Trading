@@ -8,6 +8,10 @@ import {
   overrideRealPosition,
   type RealPositionRow,
 } from "@/lib/api";
+import { getValidationEntries } from "@/lib/api/validation";
+import { useResource } from "@/hooks/use-resource";
+import { FilterMenu } from "@/components/ui/filter-menu";
+import { dateTimeTextBJ } from "@/lib/format";
 import { bjToday } from "@/lib/market-hours";
 import { fmt, pctColor, pctText } from "@/lib/format";
 import { useRealPositions, type RealPositionsResource } from "@/hooks/use-real-positions";
@@ -39,6 +43,14 @@ export function RealPositionPanel({ symbol, currentPrice, currentName, className
   const [qty, setQty] = useState("");
   const [fee, setFee] = useState("");
   const [tradedAt, setTradedAt] = useState(() => bjToday());
+  const [fillTime, setFillTime] = useState("");
+  const [feeKnown, setFeeKnown] = useState(false);
+  const [selectionRef, setSelectionRef] = useState("");
+  const entryKey = `${formSymbol.trim()}`;
+  const entries = useResource(() => getValidationEntries(entryKey), {key: entryKey, intervalMs: null,
+    enabled: active && !readOnly && side === "buy" && /^\d{6}$/.test(entryKey)});
+  const choices = entries.data ?? [];
+
   // 手动修正态（对哪只持仓改数量/总成本）
   const [editSymbol, setEditSymbol] = useState<string | null>(null);
   const [editQty, setEditQty] = useState("");
@@ -71,10 +83,14 @@ export function RealPositionPanel({ symbol, currentPrice, currentName, className
     if (!formSymbol.trim()) return setError("请填代码");
     if (!(pv > 0)) return setError("成交价必须大于 0");
     if (!(qv > 0) || !Number.isInteger(qv)) return setError("数量必须为正整数（股）");
+    if (!fillTime) return setError("请填写已发生的准确成交时间");
+    if (side === "buy" && !choices.some(e => e.id === selectionRef)) return setError("请选择成交前已入选的记录");
+    if (feeKnown && !fee.trim()) return setError("请明确填写全部费用，确为零时填0");
     setBusy(true);
     setError(null);
     try {
-      await createRealTrade({ symbol: formSymbol.trim(), name: formSymbol === symbol ? currentName ?? null : null, side, fill_price: pv, quantity: qv, fee: fv, traded_at: tradedAt });
+      await createRealTrade({ executed_at: `${tradedAt}T${fillTime.length === 5 ? `${fillTime}:00` : fillTime}+08:00`,
+        fee_known: feeKnown, selection_ref: side === "buy" ? selectionRef : undefined, symbol: formSymbol.trim(), name: formSymbol === symbol ? currentName ?? null : null, side, fill_price: pv, quantity: qv, fee: fv, traded_at: tradedAt });
       setQty("");
       setFee("");
       setDraftEdited(false);
@@ -172,7 +188,7 @@ export function RealPositionPanel({ symbol, currentPrice, currentName, className
             aria-label="数量"
           />
           </label>
-          <label className="manual-entry-field"><span>费用（可选）</span>
+          <label className="manual-entry-field"><span>全部费用（元）</span>
           <input
             value={fee}
             onChange={(e) => { setDraftEdited(true); setFee(e.target.value); }}
@@ -191,6 +207,11 @@ export function RealPositionPanel({ symbol, currentPrice, currentName, className
             aria-label="成交日期"
           />
           </label>
+          <label className="manual-entry-field"><span>成交时间</span><input type="time" step="1" value={fillTime} aria-label="准确成交时间" onChange={e => setFillTime(e.target.value)} /></label>
+          {side === "buy" && <div className="col-span-2"><FilterMenu label="原入选" value={selectionRef} options={choices.map(e => ({key:e.id,label:`${e.scope === "daily" ? "精选" : "盘中"} ${dateTimeTextBJ(e.selected_at, {seconds:true})}`, title:`原参考价 ${e.reference_price ?? "未记录"}`}))} onChange={setSelectionRef} />
+            {!!entries.error && <p role="alert" className="text-xs">原入选读取失败，请重新核对；未关联不能记买入。<button onClick={entries.refresh}>重试</button></p>}
+            {!entries.pending && !entries.error && choices.length === 0 && <p className="text-xs">没有已记录的有效入选，不能用当前价或后续入选补填。</p>}</div>}
+          <label className="col-span-2 flex items-center gap-2 text-xs"><input type="checkbox" checked={feeKnown} onChange={e => setFeeKnown(e.target.checked)} />已核对全部费用（含佣金与税费）</label>
           <button data-action="primary"
             onClick={() => void submitTrade()}
             disabled={busy}

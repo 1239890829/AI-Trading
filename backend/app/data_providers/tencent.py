@@ -21,6 +21,7 @@ from time import monotonic
 import httpx
 
 from app.data_providers.eastmoney import ProviderError
+from app.core.inflight_reads import InflightReads
 from app.market.indices import INDEX_CATALOG
 from app.schemas.market import (
     Kline,
@@ -323,6 +324,7 @@ class TencentProvider:
 
     def __init__(self, timeout: float = 5.0):
         self._kline_down_until: dict[str, float] = {}
+        self._snapshot_reads = InflightReads(maxsize=64)
         self._client = httpx.AsyncClient(
             trust_env=False,  # 行情源均为国内站，直连，不走用户系统代理
             timeout=timeout,
@@ -330,19 +332,35 @@ class TencentProvider:
         )
 
     async def aclose(self) -> None:
+        await self._snapshot_reads.close()
         await self._client.aclose()
 
     async def _snapshot(self, symbols: list[str]) -> dict[str, tuple[str, list[str]]]:
-        codes = ",".join(to_tencent_symbol(s) for s in symbols)
-        resp = await self._client.get(f"https://qt.gtimg.cn/q={codes}")
-        if resp.status_code != 200:
-            raise ProviderError(f"tencent snapshot HTTP {resp.status_code}")
-        text = resp.content.decode("gbk", errors="replace")
-        found = _ROW_RE.findall(text)
-        if not found:
-            raise ProviderError("tencent snapshot empty reply")
-        # 市场也是身份的一部分：sz000001 与 sh000001 不能共享裸代码键。
-        by_code = {prefix + code: (prefix, fields) for prefix, code, raw in found if (fields := raw.split("~"))}
+        if not symbols:
+            return {}
+        codes = tuple(dict.fromkeys(to_tencent_symbol(s) for s in symbols))
+        key = ("tencent.raw-snapshot", tuple(sorted(codes)))
+        requested = set(codes)
+        loop = asyncio.get_running_loop()
+        # Share only an unfinished batch on this provider/loop which already
+        # contains every requested market-qualified security. No completed TTL.
+        for (owner_loop, active_key), task in self._snapshot_reads.tasks.items():
+            if (owner_loop is loop and not task.done() and active_key[0] == key[0]
+                    and requested.issubset(active_key[1])):
+                key = active_key
+                break
+
+        async def load():
+            resp = await self._client.get("https://qt.gtimg.cn/q=" + ",".join(codes))
+            if resp.status_code != 200:
+                raise ProviderError(f"tencent snapshot HTTP {resp.status_code}")
+            found = _ROW_RE.findall(resp.content.decode("gbk", errors="replace"))
+            if not found:
+                raise ProviderError("tencent snapshot empty reply")
+            return {prefix + code: (prefix, fields) for prefix, code, raw in found
+                    if (fields := raw.split("~"))}
+
+        by_code = await self._snapshot_reads.read(key, load)
         # key 用调用方传入的原始 symbol：个股（裸 6 位）与指数（sh000001 等带前缀）
         # 都能命中。旧实现 key 是响应里的裸代码，带前缀查询永远 miss——
         # 表现为"tencent snapshot no rows"假象而非"不支持"，2026-08-31 修复。

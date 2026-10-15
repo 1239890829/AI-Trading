@@ -18,6 +18,7 @@ function hhmmToMin(hhmm: string): number {
 // 两者意图不同**不可合并**，但边界必须同源——现由 market-hours 单点持有。）
 
 interface MinuteLivePoint {
+  volume_basis?: "observed_only";
   ts: string;
   price: number;
   source?: string;
@@ -49,6 +50,7 @@ export function hasTrustedQuoteObservation(quote: Quote | null | undefined): quo
 }
 
 function adjacentMinutes(previous: MinuteLivePoint | undefined, point: MinuteLivePoint): boolean {
+  if (previous?.volume_basis === "observed_only" || point.volume_basis === "observed_only") return false;
   if (!previous || !bjDate(point.ts) || bjDate(previous.ts) !== bjDate(point.ts)) return false;
   // A forming end-labelled point is not a sealed cumulative baseline. This
   // applies to both the chart amount fallback and subsequent live updates.
@@ -139,7 +141,21 @@ export function mergeQuoteIntoMinutes<T extends MinuteLivePoint>(
   quote: Quote | null | undefined,
   isIndex = false,
 ): T[] | null {
-  if (points.length === 0 || !hasTrustedQuoteObservation(quote)) return null;
+  if (!hasTrustedQuoteObservation(quote)) return null;
+  if (points.length === 0) {
+    const clock = quote.data_timestamp;
+    const hhmm = bjHHMM(clock);
+    if (!clock || !hhmm || !isContinuousSession(hhmmToMin(hhmm)) || !nonnegative(quote.price) || !quote.price) return null;
+    const slot = new Date(clock); slot.setSeconds(0, 0);
+    const volume = nonnegative(quote.volume) ? quote.volume : null;
+    const amount = nonnegative(quote.amount) ? quote.amount : null;
+    const avg = !isIndex && volume != null && volume > 0 && amount != null ? amount / volume : null;
+    // A price observation is not a reconstructed historical minute or minute volume.
+    return [{ts: slot.toISOString(), price: quote.price, source: quote.source,
+      volume: null, minute_amount: null, cum_volume: volume, cum_amount: amount,
+      volume_basis: "observed_only", observation_ts: clock,
+      avg: avg != null && Number.isFinite(avg) && avg > 0 ? +avg.toFixed(3) : null} as unknown as T];
+  }
   const price = quote.price;
   if (price == null || !Number.isFinite(price) || price <= 0) return null;
   const last = points[points.length - 1];

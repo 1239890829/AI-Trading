@@ -1,0 +1,121 @@
+"use client";
+
+import { useExitPresence } from "@/hooks/use-exit-presence";
+import { useMemo, useState } from "react";
+import { getSelectionValidation, type ValidationSelectionEntry, type TradeEpisode, type ValidationReport } from "@/lib/api/validation";
+import { useResource } from "@/hooks/use-resource";
+import { FilterMenu } from "@/components/ui/filter-menu";
+import { useSymbolDetail } from "@/components/detail/symbol-detail-context";
+import { bjToday } from "@/lib/market-hours";
+import { timeText, dateTimeTextBJ } from "@/lib/format";
+import "./validation-panel.css";
+
+const percent = (n: number | null) => n == null ? "—" : `${n > 0 ? "+" : ""}${n.toFixed(2)}%`;
+const sign = (n: number | null) => n == null || n === 0 ? "flat" : n > 0 ? "up" : "down";
+const price = (n: number | null) => n == null ? "未记录" : n.toFixed(2);
+const stateName: Record<string, string> = {pending: "等待收盘观察", no_matching_archive: "暂无同口径结果", basis_or_window_unavailable: "结果口径待补", labeled: "已有结果", open: "持有中", closed: "已清仓", excluded: "缺项未计胜率"};
+
+/** One chart point selects the same row as the table; no hidden data requests. */
+function Chart({title, points, suffix, onSelect, bars = false, percentage = false}: {bars?: boolean; percentage?: boolean; title: string; points: {id: string; label: string; value: number | null}[]; suffix: string; onSelect: (id: string) => void}) {
+  const [focus, setFocus] = useState<string | null>(null);
+  const finite = points.filter(p => p.value != null);
+  const high = percentage ? 100 : Math.max(1, ...finite.map(p => p.value!)), low = percentage ? 0 : Math.min(0, ...finite.map(p => p.value!));
+  const coord = (i: number, value: number) => [48 + i * 528 / Math.max(1, points.length-1), 136 - (value-low) / (high-low || 1)*112];
+  const selected = points.find(p => p.id === focus);
+  return <section className="validation-chart" aria-label={title}>
+    <header><h3>{title}</h3><span aria-live="polite">{selected ? `${selected.label} · ${selected.value == null ? "暂无结果" : `${selected.value.toFixed(2)}${suffix}`}` : "点击节点查看记录"}</span></header>
+    {finite.length ? <svg viewBox="0 0 600 164" role="group" aria-label={`${title}，节点可用键盘选择`}>
+      <line x1="48" x2="576" y1={coord(0, 0)[1]} y2={coord(0, 0)[1]} className="validation-axis" />
+      <text x="0" y="18">{high.toFixed(0)}{suffix}</text><text x="0" y="136">{low.toFixed(0)}{suffix}</text>
+      {points.map((p, i) => {
+        if (p.value == null) return null;
+        const [x,y] = coord(i, p.value);
+        const previous = i > 0 && points[i-1].value != null ? coord(i-1, points[i-1].value!) : null;
+        return <g key={p.id}>
+          {!bars && previous && <line x1={previous[0]} y1={previous[1]} x2={x} y2={y} className="validation-line" />}
+          {bars && <rect x={x-8} y={y} width="16" height={Math.max(1, coord(0,0)[1]-y)} rx="3" className="validation-bar" />}
+          <g role="button" tabIndex={0} aria-label={`${p.label} ${p.value.toFixed(2)}${suffix}，查看记录`}
+            onMouseEnter={() => setFocus(p.id)} onFocus={() => setFocus(p.id)} onClick={() => onSelect(p.id)}
+            onKeyDown={e => {if(e.key === "Enter" || e.key === " "){e.preventDefault(); onSelect(p.id);}}}>
+            <circle cx={x} cy={y} r="12" fill="transparent" /><circle cx={x} cy={y} r={focus === p.id ? 5 : 3} className="validation-point" />
+          </g></g>;
+      })}
+      <text x="48" y="162">{points[0]?.label}</text><text x="576" y="162" textAnchor="end">{points.at(-1)?.label}</text>
+    </svg> : <div className="validation-chart-empty">暂无可绘制结果。缺项保留，不用 0 代替。</div>}
+  </section>;
+}
+
+function EntryDetail({entry}: {entry: ValidationSelectionEntry}) {
+  const {open} = useSymbolDetail();
+  return <div className="validation-detail">
+    <div><h3>{entry.name} · 原入选记录</h3><button className="quiet-action" onClick={() => open({symbol: entry.symbol, rightTab: "book"})}>查看行情</button></div>
+    <dl><div><dt>首次加入</dt><dd>{dateTimeTextBJ(entry.selected_at, {seconds:true})}</dd></div><div><dt>加入参考价</dt><dd>{price(entry.reference_price)}</dd></div><div><dt>当时涨幅</dt><dd>{percent(entry.reference_change_pct)}</dd></div><div><dt>观察天数</dt><dd>{entry.observation_calendar_days} 自然日</dd></div></dl>
+    <p>{entry.reason}</p>{entry.conditions.length > 0 && <ul>{entry.conditions.map((c,i) => <li key={i}>{c}</li>)}</ul>}
+    <p className="validation-muted">{stateName[entry.outcome_state] ?? "结果待核"} · {entry.scope === "daily" ? "每日精选" : "盘中入选"} · 入选不代表可成交。</p>
+  </div>;
+}
+function EpisodeDetail({episode}: {episode: TradeEpisode}) {
+  return <div className="validation-detail"><h3>{episode.name} · 成交回合</h3>
+    <p>买入 {dateTimeTextBJ(episode.opened_at, {seconds:true})} → {episode.close_date ? `清仓 ${dateTimeTextBJ(episode.closed_at, {seconds:true})}` : "尚未清仓"}</p>
+    <dl><div><dt>买入金额及费用</dt><dd>{(episode.cost + episode.buy_fee).toFixed(2)} 元</dd></div><div><dt>卖出净额</dt><dd>{(episode.proceeds - episode.sell_fee).toFixed(2)} 元</dd></div><div><dt>持有交易日</dt><dd>{episode.holding_trade_days ?? "日历未覆盖"}</dd></div><div><dt>流水笔数</dt><dd>{episode.fill_ids.length}</dd></div></dl>
+    {episode.entry_reason && <p>原入选依据：{episode.entry_reason}</p>}
+    <p>{episode.issues.join("；") || "准确时刻、原入选关联与费用完整，清仓后计入胜率。"}</p>
+    <p className="validation-muted">人工记录未经券商核验。加仓与部分卖出合为一回合，完全清仓后再次买入另计。</p>
+  </div>;
+}
+
+export function ValidationContent({report}: {report: ValidationReport}) {
+  const [mode, setMode] = useState<"selection" | "actual">("selection");
+  const [picked, setPicked] = useState<string | null>(null);
+  const [page, setPage] = useState(0);
+  const [day, setDay] = useState<string | null>(null);
+  const entries = day ? report.entries.filter(e => e.date === day) : report.entries;
+  const expanded = useExitPresence(picked);
+  const entry = report.entries.find(e => e.id === expanded.value);
+  const episode = report.episodes.find(e => `episode:${e.id}` === expanded.value);
+  const [methodOpen, setMethodOpen] = useState(false);
+  const method = useExitPresence(methodOpen ? true : null);
+  const actual = report.actual;
+  return <>
+    <nav className="validation-modes" aria-label="统计口径">{([["selection", "入选观察"], ["actual", "实际买入"]] as const).map(([key,label]) => <button key={key} type="button" aria-pressed={mode === key} onClick={() => {setMode(key); setPicked(null); setDay(null); setPage(0);}}>{label}</button>)}</nav>
+    <div className="validation-summary" aria-live="polite">{mode === "selection" ? <><span><b>{report.selection.count}</b> 次入选</span><span><b>{report.selection.observed}</b> 条有效观察</span><span>平均 <b data-sign={sign(report.selection.mean_pct)}>{percent(report.selection.mean_pct)}</b></span><span>中位数 <b data-sign={sign(report.selection.median_pct)}>{percent(report.selection.median_pct)}</b></span></> : <><span>清仓胜率 <b>{actual.win_rate == null ? "—" : `${actual.win_rate.toFixed(1)}%`}</b></span><span>有效分母 <b>{actual.denominator}</b> 回合</span><span>平均 <b data-sign={sign(actual.mean_pct)}>{percent(actual.mean_pct)}</b></span><span>中位数 <b data-sign={sign(actual.median_pct)}>{percent(actual.median_pct)}</b></span></>}</div>
+    <p className="validation-muted">{mode === "selection" ? `${report.basis.selection}。${report.selection.missing} 条结果未覆盖。` : `${report.basis.actual}。盈利 ${actual.wins} / 亏损 ${actual.losses} / 持平 ${actual.flat}；持有中 ${actual.open}，缺项排除 ${actual.excluded}。`}</p>
+    <div className="validation-plots">{mode === "selection" ? <>
+      <Chart bars title="每天挑选数量" suffix="只" points={report.daily.map(d => ({id:d.date, label:d.date.slice(5), value:d.count}))} onSelect={id => {setDay(id);setPage(0);setPicked(null);}} />
+      <Chart title="入选后平均涨跌幅" suffix="%" points={report.daily.map(d => ({id:d.date, label:d.date.slice(5), value:d.mean_pct}))} onSelect={id => {setDay(id);setPage(0);}} />
+    </> : <>
+      <Chart percentage title="已清仓胜率曲线" suffix="%" points={report.win_curve.map(d => ({id:`episode:${d.episode_id}`, label:d.date.slice(5), value:d.win_rate}))} onSelect={setPicked} />
+      <Chart title="成交净收益中位数" suffix="%" points={report.win_curve.map(d => ({id:`episode:${d.episode_id}`, label:d.date.slice(5), value:d.median_pct}))} onSelect={setPicked} />
+    </>}</div>
+    {mode === "actual" && <p className="validation-muted">持仓覆盖 {actual.exposure_trade_days ?? "未知"} 个交易日（同日去重）；回合累计 {actual.episode_trade_days ?? "未知"} 个交易日。旧缺项流水 {actual.legacy_fills} 笔，未混入胜率。</p>}
+    <section className="validation-records"><header><h3>{mode === "selection" ? "逐笔入选" : "成交回合"}</h3>{day && <button className="quiet-action" onClick={() => setDay(null)}>清除日期筛选 {day}</button>}<span>点击行查看原依据</span></header>
+      <div className="validation-table-scroll" tabIndex={0} role="region" aria-label="统计明细，可横向滚动"><table><thead><tr>{(mode === "selection" ? ["入选日期 / 股票", "首次加入", "参考价", "当时涨幅", "观察涨跌幅"] : ["股票 / 首买日期", "清仓日期", "持有交易日", "净收益", "状态"]).map(label => <th key={label}>{label}</th>)}</tr></thead><tbody>
+        {mode === "selection" ? entries.slice(page*50, (page+1)*50).map(e => <tr key={e.id} data-selected={picked === e.id}><td><button onClick={() => setPicked(picked === e.id ? null : e.id)} aria-expanded={picked === e.id}>{e.name}<small>{e.date} · {e.symbol}</small></button></td><td>{e.selected_at ? timeText(e.selected_at) : "未记录"}</td><td>{price(e.reference_price)}</td><td data-sign={sign(e.reference_change_pct)}>{percent(e.reference_change_pct)}</td><td data-sign={sign(e.return_pct)}>{percent(e.return_pct)}</td></tr>) : report.episodes.slice(page*50, (page+1)*50).map(e => <tr key={e.id} data-selected={picked === `episode:${e.id}`}><td><button onClick={() => setPicked(picked === `episode:${e.id}` ? null : `episode:${e.id}`)} aria-expanded={picked === `episode:${e.id}`}>{e.name}<small>{e.open_date} · {e.symbol}</small></button></td><td>{e.close_date ?? "持有中"}</td><td>{e.holding_trade_days ?? "未知"}</td><td data-sign={sign(e.return_pct)}>{percent(e.return_pct)}</td><td>{stateName[e.state]}</td></tr>)}
+      </tbody></table>{(mode === "selection" ? entries.length : report.episodes.length) === 0 && <p className="validation-empty">这个范围还没有{mode === "selection" ? "入选记录" : "实际成交流水"}，不会用模拟记录填充。</p>}</div>
+      <div className="validation-pagination"><button className="quiet-action" disabled={page === 0} onClick={() => setPage(p => p-1)}>上一页</button><span>第 {page+1} / {Math.max(1,Math.ceil((mode === "selection" ? entries.length : report.episodes.length)/50))} 页</span><button className="quiet-action" disabled={(page+1)*50 >= (mode === "selection" ? entries.length : report.episodes.length)} onClick={() => setPage(p => p+1)}>下一页</button></div>
+      {expanded.value && <div className="validation-expanded" data-open={expanded.active} inert={!expanded.active} aria-hidden={!expanded.active}><div>{entry && <EntryDetail key={entry.id} entry={entry} />}{episode && <EpisodeDetail key={episode.id} episode={episode} />}</div></div>}
+    </section>
+    {mode === "actual" && report.cohorts.length > 0 && <section className="validation-cohorts"><h3>原入选依据：成功与失败对照</h3><p className="validation-muted">按成交前记录的依据分组，只作描述；样本少不能认定因果，也不自动改策略。</p>{report.cohorts.map((c,i) => <div key={i}><p>{c.reason}</p><span>有效 {c.denominator} / 总回合 {c.total} · 盈 {c.wins} / 亏 {c.losses} · 中位 {percent(c.median_pct)}</span></div>)}</section>}
+    <section className="validation-method"><button type="button" aria-expanded={methodOpen} onClick={() => setMethodOpen(open => !open)}>如何读结果、怎样改进</button>{method.value && <div className="validation-expanded" data-open={method.active} inert={!method.active} aria-hidden={!method.active}><div><p>{report.basis.coverage}</p><p>入选数量来自现存档案。旧每日覆盖式存储无法还原全部轮次；没有记录的历史不补造。</p><p>先看同一入选时点的原依据，再比较盈利与亏损的样本。小样本、未成交、缺费用或缺源价不能证明战法有效。把握主升浪与缩窄范围须经过分时期的前向对照，不能从赢家倒推。</p><p>{report.basis.improvement}</p></div></div>}</section>
+    <p className="validation-disclaimer">仅供投研与复盘，不构成买卖建议。</p>
+  </>;
+}
+
+export function SelectionValidationPanel() {
+  const [end, setEnd] = useState(bjToday);
+  const [start, setStart] = useState(() => {const t = new Date(`${bjToday()}T12:00:00+08:00`);t.setUTCDate(t.getUTCDate()-29);return t.toISOString().slice(0,10);});
+  const [horizon, setHorizon] = useState("d1_close"), [scope, setScope] = useState("all");
+  const key = `${start}/${end}/${horizon}/${scope}`;
+  const load = useMemo(() => () => getSelectionValidation(start,end,horizon,scope),[start,end,horizon,scope]);
+  const resource = useResource(load, {key, intervalMs: 60_000});
+  return <div className="selection-validation"><header className="validation-heading"><div><h2>验证统计</h2><p>挑选得如何，买入后又如何，分开核对。</p></div><button className="quiet-action" disabled={resource.pending} onClick={resource.refresh}>{resource.pending ? "读取中…" : "刷新统计"}</button></header>
+    <div className="validation-filters"><label>起始日期<input aria-label="起始日期" type="date" value={start} max={end} onChange={e => {if(e.target.value)setStart(e.target.value);}} /></label><label>截止日期<input aria-label="截止日期" type="date" value={end} min={start} max={bjToday()} onChange={e => {if(e.target.value)setEnd(e.target.value);}} /></label>
+      <FilterMenu label="入选来源" value={scope} options={[{key:"all",label:"同股按日去重"},{key:"daily",label:"每日精选"},{key:"intraday",label:"盘中入选"}]} onChange={setScope} />
+      <FilterMenu label="观察周期" value={horizon} options={[{key:"d0_close",label:"当日收盘"},{key:"d1_close",label:"下一交易日"},{key:"d3_close",label:"第3交易日"},{key:"d5_close",label:"第5交易日"}]} onChange={setHorizon} />
+    </div>
+    <p className="validation-muted">入选来源与观察周期只影响入选观察；实际买入按清仓日统计。</p>
+    {!!resource.error && <p role="alert">统计读取失败，请重试。{String(resource.error)}</p>}
+    {resource.pending && <p role="status">正在读取原入选与成交流水…</p>}
+    {resource.data && <ValidationContent key={key} report={resource.data} />}
+  </div>;
+}

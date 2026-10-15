@@ -105,6 +105,9 @@ def daily_entries(items, meta: dict, *, previous_meta, previous_items, trade_dat
         entries[symbol] = {"state": "recorded" if ready else "partial", "selected_at": clock.isoformat(),
             "reference_price": price, "reference_change_pct": pct, "quote_as_of": quote_as_of,
             "source": "daily_generation", "source_version": meta.get("selection_version"),
+            "name": str(item.get("name") or symbol),
+            "selection_basis": {str(k): str(v) for k, v in _object(item.get("bases")).items()},
+            "invalidations": [str(v) for v in item.get("invalidations") or []],
             "semantics": "observation_only_not_fill", "reason": f"首次加入已记录；{reason}" if reason else None}
     return entries
 
@@ -167,3 +170,27 @@ def attach_intraday_entries(data: dict, *, session_factory=None) -> None:
     fallback = missing_entry("intraday_rank_archive", reason) if reason else missing_entry("intraday_rank_archive")
     for stock in stocks:
         stock["selection_entry"] = entries.get(str(stock.get("symbol") or "")) or dict(fallback)
+
+
+def archive_daily_observations(trade_date: str, entries: dict, *, session_factory=None) -> dict:
+    """Project existing first-entry receipts into the existing EOD outcome owner.
+
+    This never creates a selection, notification, trade or model request. A distinct
+    strategy/stage keeps observation-only daily records out of intraday scorecards.
+    """
+    from app.picks.opportunity_learning import archive_records
+    records = []
+    for symbol, entry in entries.items():
+        clock = _aware(entry.get('selected_at'))
+        quote = _aware(entry.get('quote_as_of'))
+        if entry.get('state') != 'recorded' or not clock or not quote or not entry.get('source_version'):
+            continue
+        records.append(dict(run_id=f'daily-validation-{trade_date}', trade_date=trade_date,
+            as_of=datetime.fromisoformat(quote).replace(tzinfo=None), scenario='daily_selection_validation',
+            stage='validation', decision='observed', symbol=symbol, name=symbol, source_theme='', rank=None,
+            strategy_version='daily-selection-observation-v1', feature_version=CONTRACT, data_state='ready',
+            entry_price=entry['reference_price'], evidence={'selection_id': f'daily:{trade_date}:{symbol}',
+                'original_entry': entry, 'semantics': 'observation_only_not_fill'}))
+    if not records:
+        return {'inserted': 0, 'records': 0}
+    return archive_records(f'daily-validation-{trade_date}', records, session_factory=session_factory)

@@ -23,7 +23,7 @@ describe("详情页右列 tab 口径（lib/detail-tabs）", () => {
 
   it("个股核对资料在右栏，做T入口与深链已退出", () => {
     const keys = rightTabsFor(false).map(([k]) => k);
-    expect(keys).toEqual(["book", "trades", "profile", "info", "trade", "real"]);
+    expect(keys).toEqual(["book", "trades", "profile", "info", "real"]);
     expect(rightTabsFor(false, true).map(([key]) => key)).toContain("reason");
     expect(parseRightTab("dt")).toBeUndefined();
     expect(parseRightTab("themes")).toBe("themes");

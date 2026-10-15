@@ -15,7 +15,7 @@ export const NAV_COMMANDS = [
   ...MARKET_LENSES.map(item => ({label:item.label, detail:item.description, href:item.href})),
   ...RESEARCH_TOOLS.map(item => ({label:item.label, detail:item.description, href:`/agent?area=research&tab=${item.key}`})),
   ...MAINTENANCE_TOOLS.map(item => ({label:item.label, detail:item.description, href:`/agent?area=maintenance&tab=${item.key}`})),
-  {label:"持仓与模拟", detail:"明确账户范围后查看记录和回执", href:"/workbench?mode=positions"},
+  {label:"实际持仓", detail:"查看人工成交流水，未经券商核验", href:"/workbench?mode=positions"},
 ];
 
 function Match({text, query}: {text:string; query:string}) {

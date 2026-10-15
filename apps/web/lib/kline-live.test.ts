@@ -1,6 +1,7 @@
 // @vitest-environment node
 import { describe, expect, it } from "vitest";
 import { getMinuteAmount, mergeQuoteIntoBars, mergeQuoteIntoMinutes } from "@/lib/kline-live";
+import type { MinutePoint } from "@/lib/api";
 import type { Kline, Quote } from "@/types/market";
 
 const baseAudit = { source: "tencent", quality: "high" as const, quality_reasons: [], received_at: "t0" };
@@ -281,7 +282,7 @@ describe("mergeQuoteIntoMinutes", () => {
   });
 
   it("空数组 / quote 未到达 → 返回 null 不崩溃", () => {
-    expect(mergeQuoteIntoMinutes([], quoteAt("14:29", 105.3))).toBeNull();
+    expect(mergeQuoteIntoMinutes([], quoteAt("14:29", 105.3))).toHaveLength(1);
     expect(mergeQuoteIntoMinutes(minutesFixture(), undefined)).toBeNull();
     expect(mergeQuoteIntoMinutes(minutesFixture(), null)).toBeNull();
   });
@@ -442,4 +443,20 @@ describe("分钟额消费者的窗口与显式缺值", () => {
     expect(getMinuteAmount({ ...tail(), cum_amount: 1 }, before())).toBeNull();
     expect(getMinuteAmount(tail())).toBeNull();
   });
+});
+
+it("首个可信实时报价可先建立分时观察点，不伪造此前分钟或分钟量", () => {
+  const q = quoteAt("14:29", 105.3, 1_100_000, 115_830_000);
+  expect(mergeQuoteIntoMinutes([], q)).toEqual([expect.objectContaining({price:105.3, volume:null, cum_volume:1_100_000, avg:105.3})]);
+  expect(mergeQuoteIntoMinutes([], {...q,quality:"stale"})).toBeNull();
+  expect(mergeQuoteIntoMinutes([], {...q,data_timestamp:null})).toBeNull();
+});
+
+it("报价首点不是完整分钟的累计基线，后续不能把部分区间当分钟成交额", () => {
+  const q = {symbol:"600127",price:10,source:"tencent",quality:"high",quality_reasons:[],received_at:"2026-10-15T10:00:30+08:00",data_timestamp:"2026-10-15T10:00:30+08:00",volume:1000,amount:10000} as Quote;
+  const first = mergeQuoteIntoMinutes<MinutePoint>([], q)!;
+  const next = mergeQuoteIntoMinutes(first, {...q,data_timestamp:"2026-10-15T10:01:10+08:00",volume:1500,amount:15000})!;
+  const live = mergeQuoteIntoMinutes(next, {...q,data_timestamp:"2026-10-15T10:01:20+08:00",volume:1700,amount:17000})!;
+  expect(live.at(-1)?.minute_amount).toBeNull();
+  expect(live.at(-1)?.volume).toBeNull();
 });

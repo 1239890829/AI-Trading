@@ -22,6 +22,7 @@ from app.api.routes import events as events_route
 from app.api.routes import picks as picks_route
 from app.api.routes import picks_intraday as picks_intraday_route
 from app.api.routes import real_position as real_position_route
+from app.api.routes import selection_validation as selection_validation_route
 from app.api.routes import assistant as assistant_route
 from app.api.routes import ext_data as ext_data_route
 from app.api.routes import notifications as notifications_route
@@ -194,6 +195,7 @@ app.include_router(theme_catalog_route.router, prefix="/api", dependencies=_AUTH
 app.include_router(events_route.router, prefix="/api", dependencies=_AUTH_GUARD)
 app.include_router(real_position_route.router, prefix="/api", dependencies=_AUTH_GUARD)
 app.include_router(agent_route.router, prefix="/api", dependencies=_AUTH_GUARD)  # AI 控制台（任务中心/审计）
+app.include_router(selection_validation_route.router, prefix="/api", dependencies=_AUTH_GUARD)
 app.include_router(picks_route.router, prefix="/api", dependencies=_AUTH_GUARD)
 app.include_router(picks_intraday_route.router, prefix="/api", dependencies=_AUTH_GUARD)
 app.include_router(assistant_route.router, prefix="/api", dependencies=_AUTH_GUARD)

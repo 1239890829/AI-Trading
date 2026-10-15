@@ -6,7 +6,7 @@ import { inspectionClick, useInspection } from "@/components/inspection/inspecti
 
 import { patchWorkspaceUrl } from "@/lib/task-navigation";
 
-type HuntingView = "discover" | "evidence" | "tracking" | "research" | "review";
+type HuntingView = "validation" | "discover" | "evidence" | "tracking" | "research" | "review";
 type Task = { id: string; label: string; view: HuntingView; section?: string; external?: boolean };
 const GROUPS: { id: string; label: string; tasks: Task[] }[] = [
   { id: "discover", label: "发现候选", tasks: [
@@ -21,6 +21,7 @@ const GROUPS: { id: string; label: string; tasks: Task[] }[] = [
     { id: "brief", label: "盘中节拍", view: "discover", section: "brief" },
   ] },
   { id: "review", label: "验证复盘", tasks: [
+    { id: "validation", label: "验证统计", view: "validation" },
     { id: "review", label: "当日对照", view: "review", section: "review" },
     { id: "research", label: "龙头研究", view: "research" },
     { id: "crossday", label: "跨日复盘", view: "review", external: true },

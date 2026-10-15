@@ -12,7 +12,7 @@
  * 断言它会让用例随宿主时区变红（CI 跑 UTC）。时间戳口径由后端
  * `tests/test_tdx_tick.py::test_row_to_trade_uses_true_utc_not_pseudo_utc` 钉住。
  */
-import { cleanup, render, screen } from "@testing-library/react";
+import { cleanup, fireEvent, render, screen } from "@testing-library/react";
 import { afterEach, describe, expect, it } from "vitest";
 
 import { BookTradesView } from "@/components/detail/book-trades-view";
@@ -124,4 +124,12 @@ describe("盘口分支不受影响", () => {
     expect(screen.getByText(/本次未返回盘口数据/)).toBeTruthy();
     expect(screen.queryByText(/口径/)).toBeNull();
   });
+});
+
+it("五档默认金额，股数仅转换一次并可切回手数", () => {
+  const book = {symbol:"600127",source:"tencent",quality:"high" as const,quality_reasons:[],received_at:"2026-10-15T10:30:00+08:00", bids:[{price:12.34,volume:25000}],asks:[{price:12.35,volume:null}]};
+  render(<BookTradesView book={book} trades={[]} showBook/>);
+  expect(screen.getByText("30.85 万元")).toBeTruthy();
+  fireEvent.click(screen.getByRole("button",{name:"手数"}));
+  expect(screen.getByText("250.00 手")).toBeTruthy();
 });

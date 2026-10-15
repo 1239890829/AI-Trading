@@ -1,6 +1,7 @@
 "use client";
 
 import "./hunting.css";
+import { SelectionValidationPanel } from "@/components/hunting/validation-panel";
 
 import { patchWorkspaceUrl } from "@/lib/task-navigation";
 import { Suspense, useCallback, useEffect, useId, useMemo, useState } from "react";
@@ -77,7 +78,7 @@ function HuntingInner() {
   const router = useRouter();
   const sp = useSearchParams();
   const requestedView = sp.get("view");
-  const view = requestedView === "evidence" || requestedView === "tracking" || requestedView === "research" || requestedView === "review"
+  const view = requestedView === "validation" || requestedView === "evidence" || requestedView === "tracking" || requestedView === "research" || requestedView === "review"
     ? requestedView : sp.get("sec") === "review" || sp.get("review") === "1" ? "review" : "discover";
   // Evidence, reference and research own their reads. Do not mount the old feed behind them.
   const isDiscovery = view === "discover" || view === "review";
@@ -437,14 +438,14 @@ function HuntingInner() {
           : view === "research" ? "研究强势形成过程；保留来源、缺项与后续观察，尚未验证的规律不进入交易排序。"
           : view === "review" ? "比较原判断与实际结果；精选、参考轨和模拟执行分别统计。"
           : "盘中候选实时变化；每日精选保留组合日期，两种名单分开核对。"}</p></details>
-        <Link className="quiet-action" onClick={inspectionClick(inspect, {kind: "account", scope: "main"})} href={patchWorkspaceUrl("/workbench", sp.toString(), {mode: "positions", account: "paper", view: null, panel: null, from: `/hunting?${sp.toString()}`})}>持仓与模拟</Link>
+        <Link className="quiet-action" onClick={inspectionClick(inspect, {kind: "account", scope: "manual"})} href={patchWorkspaceUrl("/workbench", sp.toString(), {mode: "positions", account: "manual", view: null, panel: null, from: `/hunting?${sp.toString()}`})}>实际持仓</Link>
       </div>
       {accessory.value && <ModalShell open={accessory.active} label={accessory.value === "evidence" ? "机会证据台" : "参考跟踪"} size="lg" presentation="drawer" expandable onClose={() => router.replace(patchWorkspaceUrl("/hunting", sp.toString(), {panel: null}), {scroll: false})} header={<div><h2 className="text-lg font-semibold">{accessory.value === "evidence" ? "机会证据台" : "参考跟踪"}</h2></div>} footer="保留当前机会位置；参考价与观察记录不是成交，不构成买卖建议。">
         {accessory.active && (accessory.value === "evidence" ? <OpportunityEvidencePanel date={sp.get("date") ?? undefined} onDateChange={date => router.replace(patchWorkspaceUrl("/hunting", sp.toString(), {date}), {scroll: false})} /> : <WatchLedgerPanel date={sp.get("date") ?? undefined} />)}
       </ModalShell>}
       <PickDetailModal target={detailItem ? {kind: "pick", item: detailItem} : null} readError={!!daily.error} onClose={() => setDailyDetail(null)} />
       <div className="hunting-content min-h-0 flex-1" data-view={view} aria-label="选股内容">
-        {view === "evidence" ? <OpportunityEvidencePanel date={sp.get("date") ?? undefined} onDateChange={date => { const p = new URLSearchParams(sp.toString()); p.set("date", date); router.replace(`/hunting?${p.toString()}`, {scroll:false}); }} /> : view === "tracking" ? <WatchLedgerPanel date={sp.get("date") ?? undefined} /> : view === "research" ? <LeaderResearchPanel date={sp.get("date") ?? undefined} onDateChange={date => router.replace(patchWorkspaceUrl("/hunting", sp.toString(), {date: date ?? null}), {scroll: false})} /> : <>
+        {view === "validation" ? <SelectionValidationPanel /> : view === "evidence" ? <OpportunityEvidencePanel date={sp.get("date") ?? undefined} onDateChange={date => { const p = new URLSearchParams(sp.toString()); p.set("date", date); router.replace(`/hunting?${p.toString()}`, {scroll:false}); }} /> : view === "tracking" ? <WatchLedgerPanel date={sp.get("date") ?? undefined} /> : view === "research" ? <LeaderResearchPanel date={sp.get("date") ?? undefined} onDateChange={date => router.replace(patchWorkspaceUrl("/hunting", sp.toString(), {date: date ?? null}), {scroll: false})} /> : <>
         {view === "discover" && <>
 <div className="hunting-discovery-grid"><div className="hunting-candidate-flow" tabIndex={0} role="region" aria-label="候选结果与题材">
         <div className="hunting-candidate-notices">
@@ -566,7 +567,7 @@ function HuntingInner() {
               .map(([k, v]) => `${{ sentiment: "情绪", news: "消息", tech: "技术", fundamental: "基本", capital: "资金", echelon: "梯队" }[k] ?? k} ${Math.round(v * 100)}%`)
               .join(" / ")}`
           : "服务端未返回生效权重，不能据此判断当前规则。"}
-        {" · "}全部输出为可解释依据与模拟跟踪，不构成买卖建议。数据有延迟；参与条件及手工模拟动作须由服务端复核。
+        {" · "}全部输出为研究依据与入选观察，不构成买卖建议。数据可能延迟；入选与实际成交分别核验。
       </p></details>
     </main>
   );

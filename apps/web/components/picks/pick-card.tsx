@@ -417,16 +417,12 @@ export function PickCard({
             >
               {item.origin === "picks" ? "每日精选" : "盘中跟踪"}
             </span>
-            {positionLabel && (
+            {positionLabel === "real" && (
               <span
-                className={`rounded px-1.5 py-0.5 text-[10px] font-medium ${
-                  positionLabel === "real"
-                    ? "bg-rose-500/10 text-rose-700 dark:text-rose-300"
-                    : "bg-emerald-500/10 text-emerald-700 dark:text-emerald-300"
-                }`}
-                title="点击打开工作台查看持仓；卖出/删流水后标签自动消失"
+                className="rounded px-1.5 py-0.5 text-[10px] font-medium text-rose-700 dark:text-rose-300"
+                title="人工成交流水记录，未经券商核验；卖出或修正后更新"
               >
-                {positionLabel === "real" ? "有手工持仓记录" : "已模拟持仓"}
+                有手工持仓记录
               </span>
             )}
             {item.tier != null && (

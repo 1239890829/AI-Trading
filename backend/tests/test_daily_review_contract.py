@@ -308,6 +308,8 @@ def test_old_head_upgrade_keeps_legacy_row_unbound_and_column_nullable(tmp_path)
     with engine.begin() as conn:
         conn.execute(text('CREATE TABLE daily_pick_review (id INTEGER PRIMARY KEY, date VARCHAR(10), symbol VARCHAR(12), name VARCHAR(64), verdict VARCHAR(8), reason_category VARCHAR(24), excess_pct FLOAT, note VARCHAR(512), created_at DATETIME, CONSTRAINT uq_daily_pick_review_date_symbol UNIQUE(date,symbol))'))
         conn.execute(text("INSERT INTO daily_pick_review (date,symbol,verdict,excess_pct,note) VALUES ('2026-10-08','600127','good',4.0,'legacy evidence')"))
+        conn.execute(text('CREATE TABLE real_trade (id INTEGER PRIMARY KEY, symbol VARCHAR(12), name VARCHAR(64), side VARCHAR(4), fill_price FLOAT, quantity INTEGER, fee FLOAT, traded_at VARCHAR(10), note VARCHAR(256), created_at DATETIME)'))
+        conn.execute(text("INSERT INTO real_trade (symbol,side,fill_price,quantity,fee,traded_at) VALUES ('600127','buy',10,100,0,'2026-10-08')"))
         conn.execute(text('CREATE TABLE alembic_version (version_num VARCHAR(32) PRIMARY KEY)'))
         conn.execute(text("INSERT INTO alembic_version VALUES ('e2c6a8f4b9d1')"))
     config = Config(str(Path(__file__).resolve().parents[1] / 'alembic.ini'))
@@ -316,7 +318,8 @@ def test_old_head_upgrade_keeps_legacy_row_unbound_and_column_nullable(tmp_path)
         config.attributes['connection'] = conn
         command.upgrade(config, 'head')
         assert conn.execute(text('SELECT note,excess_pct,review_context,selection_version FROM daily_pick_review')).one() == ('legacy evidence', 4.0, None, None)
-        assert conn.execute(text('SELECT version_num FROM alembic_version')).scalar() == 'f2a7c9e4b6d8'
+        assert conn.execute(text('SELECT version_num FROM alembic_version')).scalar() == 'a8d4f2c6e9b1'
+        assert conn.execute(text('SELECT fill_price,executed_at,fee_known,selection_ref FROM real_trade')).one() == (10, None, None, None)
     col = next(c for c in inspect(engine).get_columns('daily_pick_review') if c['name'] == 'review_context')
     assert col['nullable'] is True
     with engine.begin() as conn:
@@ -326,5 +329,5 @@ def test_old_head_upgrade_keeps_legacy_row_unbound_and_column_nullable(tmp_path)
         with pytest.raises(RuntimeError, match='preservation plan'):
             command.downgrade(config, 'e2c6a8f4b9d1')
         assert conn.execute(text('SELECT count(*) FROM daily_pick_review')).scalar() == 3
-        assert conn.execute(text('SELECT version_num FROM alembic_version')).scalar() == 'f2a7c9e4b6d8'
+        assert conn.execute(text('SELECT version_num FROM alembic_version')).scalar() == 'a8d4f2c6e9b1'
     engine.dispose()

@@ -1,4 +1,4 @@
-import { afterEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { act, cleanup, fireEvent, render, screen, waitFor } from "@testing-library/react";
 import { RealPositionPanel } from "@/components/detail/real-position-panel";
 import { useRealPositions } from "@/hooks/use-real-positions";
@@ -23,6 +23,18 @@ vi.mock("@/lib/api", async () => {
     deleteRealTrade: vi.fn(),
   };
 });
+
+vi.mock("@/lib/api/validation", () => ({getValidationEntries: vi.fn(async () => [{id:"daily:2026-08-31:603118",scope:"daily",selected_at:"2026-08-31T09:35:00+08:00",reference_price:18.4}])}));
+async function linkSelection() {
+  await act(async () => {await Promise.resolve();});
+  fireEvent.change(screen.getByLabelText("准确成交时间"), {target:{value:"10:00:00"}});
+  const trigger = screen.getByRole("button",{name:"原入选：请选择"});
+  fireEvent.keyDown(trigger,{key:"ArrowDown"});
+  await act(async () => {if(vi.isFakeTimers()) await vi.advanceTimersByTimeAsync(0);});
+  fireEvent.click(screen.getByRole("menuitemradio",{name:/精选/}));
+}
+
+beforeEach(() => {vi.useRealTimers();});
 
 const mockedGet = vi.mocked(getRealPositions);
 const mockedCreate = vi.mocked(createRealTrade);
@@ -80,6 +92,7 @@ describe("RealPositionPanel 真实持仓", () => {
     await waitFor(() => expect(priceInput.value).toBe("18.6")); // 默认带现价
     fireEvent.change(priceInput, { target: { value: "18.479" } }); // 用户改成实际成交价
     fireEvent.change(screen.getByLabelText("数量"), { target: { value: "1000" } });
+    await linkSelection();
     fireEvent.click(screen.getByText("记账"));
     await waitFor(() => expect(mockedCreate).toHaveBeenCalled());
     const arg = mockedCreate.mock.calls[0][0];
@@ -165,6 +178,7 @@ describe("RealPositionPanel · 上游持仓读取复用", () => {
     expect(mockedGet).toHaveBeenCalledTimes(1);
     if (operation === "记账") {
       fireEvent.change(screen.getByLabelText("数量"), { target: { value: "100" } });
+      await linkSelection();
       fireEvent.click(screen.getByRole("button", { name: "记账" }));
     } else if (operation === "修正") {
       fireEvent.click(screen.getByRole("button", { name: "改" }));

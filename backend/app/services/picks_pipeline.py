@@ -1077,6 +1077,12 @@ def _persist_picks(
             for key, val in payload.items():
                 setattr(row, key, val)
         db.commit()
+    # Outcome projection is optional and isolated from selection/notification success.
+    try:
+        from app.picks.selection_entry import archive_daily_observations
+        archive_daily_observations(today, meta["selection_entries"], session_factory=_db)
+    except Exception:
+        log.exception("daily picks saved; observation archive unavailable, statistics retain missing coverage")
     # Picks are already committed. A message failure is an observable, retryable
     # projection failure, never a claim that the original selection did not finish.
     try:

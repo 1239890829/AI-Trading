@@ -4,18 +4,17 @@
  * 盘中跟踪台账面板（猎场批次 A，2026-09-08 用户需求 7/8/9/10/11）：
  * - 当日台账：入选时间 / 题材归属 / 入选价 / 收盘价 / 盈亏 / 判定 / 入选说明；
  *   tracking 行持续保留（不被中途移除），settled 行收盘清算后展示盈亏与判定。
- * - 历史记录：近 N 个交易日逐日统计（胜率/平均盈亏），收盘后仍可查。
+ * - 历史记录：近 N 个交易日逐日统计（观察成功率/平均观察涨跌幅），收盘后仍可查。
  * - 三态：盈亏/收盘价缺失显式 --（未清算或快照缺失），不臆造。
  */
-import { useEffect, useState } from "react";
+import { useState } from "react";
 import { useExitPresence } from "@/hooks/use-exit-presence";
 
 import { OpportunityEvidencePanel } from "./opportunity-evidence-panel";
 import { LeaderResearchPanel } from "./leader-research-panel";
 import { useResource } from "@/hooks/use-resource";
-import { getWatchLedger, placePaperOrder } from "@/lib/api";
+import { getWatchLedger } from "@/lib/api";
 import { fmt, pctColor, pctText, winRateColor } from "@/lib/format";
-import { bjToday } from "@/lib/market-hours";
 import { ExplanationMap, NarrativeText } from "@/components/ui/explanation-map";
 import { readingRowClasses } from "@/components/ui/reading-row";
 
@@ -28,7 +27,6 @@ export function WatchLedgerPanel({ date, readOnly = false }: { date?: string; re
   const [evidenceOpen, setEvidenceOpen] = useState(false);
   const historyPresence = useExitPresence(showHistory ? true : null);
   const evidencePresence = useExitPresence(evidenceOpen ? true : null);
-  const [orderNote, setOrderNote] = useState<string | null>(null);
   const readingScope = scopeDate ?? "today";
   const [readingReason, setReadingReason] = useState<{scope: string; date: string; id: number} | null>(null);
   const reasonRow = data && readingReason && data.trade_date === readingReason.date ? data.rows.find(row => row.id === readingReason.id) : undefined;
@@ -36,20 +34,6 @@ export function WatchLedgerPanel({ date, readOnly = false }: { date?: string; re
   if (readingReason && (readingReason.scope !== readingScope || (data && resource.error == null && !reasonRow))) setReadingReason(null);
 
   const load = resource.refresh;
-
-  /** 模拟建仓（系统审查 #7：闭环「选出→验证」）：入选价 × 100 股，撮合规则硬拦截 */
-  const quickBuy = async (symbol: string, price: number) => {
-    if (readOnly || scopeDate || data?.trade_date !== bjToday() || resource.error) return null;
-    try {
-      const res = await placePaperOrder(symbol, "buy", price, 100);
-      setOrderNote(res.replayed ? `${symbol} 此前已处理（原委托 #${res.id}），未重复下单；请核对工作台` : `${symbol} 模拟买单已提交（100 股 @ ${price}）——状态见工作台交易页签`);
-      void load();
-      return res;
-    } catch (e) {
-      setOrderNote(`${symbol} 建仓失败：${e instanceof Error ? e.message : String(e)}`);
-      return null;
-    }
-  };
 
   const st = data?.stats;
 
@@ -65,7 +49,7 @@ export function WatchLedgerPanel({ date, readOnly = false }: { date?: string; re
         <div className="flex items-center gap-2 text-[11px]">
           {st && (
             <span className="text-zinc-600 dark:text-zinc-400">
-              已清算 {st.settled} · 胜率{" "}
+              已清算 {st.settled} · 观察成功率{" "}
               <span className={winRateColor(st.win_rate, "01")}>
                 {st.win_rate != null ? `${(st.win_rate * 100).toFixed(0)}%` : "--"}
               </span>
@@ -84,7 +68,7 @@ export function WatchLedgerPanel({ date, readOnly = false }: { date?: string; re
       </div>
 
       {error && <p role="alert" className="mb-2 rounded bg-amber-500/10 px-2 py-1 text-[11px] text-amber-800 dark:text-amber-300">台账加载失败：{error}{data ? "。以下保留上次读取结果，当前状态待重试核实。" : "。请稍后重试，未读到记录不代表没有跟踪。"}</p>}
-      {orderNote && <p role="status" className="mb-2 rounded bg-sky-500/10 px-2 py-1 text-[11px] text-sky-700 dark:text-sky-300">{orderNote}</p>}
+
 
       <div className="hunting-ledger-workarea"><div className="hunting-ledger-primary">
       {data && (data.rows?.length ?? 0) === 0 && (
@@ -148,15 +132,7 @@ export function WatchLedgerPanel({ date, readOnly = false }: { date?: string; re
                         跟踪中
                       </span>
                     )}
-                    {!readOnly && !scopeDate && data.trade_date === bjToday() && !resource.error && r.status === "tracking" && r.entry_price != null && (
-                      <button
-                        onClick={() => void quickBuy(r.symbol, r.entry_price as number)}
-                        className="ml-1 rounded border border-up/40 px-1 text-[10px] text-up-ink dark:text-up transition-colors hover:bg-up/10"
-                        title={`模拟建仓：100 股 @ ${r.entry_price}（撮合引擎硬拦截：T+1/整手/停牌拒）`}
-                      >
-                        模拟建仓
-                      </button>
-                    )}
+
                   </td>
                   <td className="max-w-[16em] py-1.5 text-[11px] text-zinc-600 dark:text-zinc-400">
                     <span className="line-clamp-2" title={reasonText(r)}>
@@ -185,8 +161,8 @@ export function WatchLedgerPanel({ date, readOnly = false }: { date?: string; re
                 <th className="py-1 pr-2 text-right font-normal">跟踪</th>
                 <th className="py-1 pr-2 text-right font-normal">成功</th>
                 <th className="py-1 pr-2 text-right font-normal">失败</th>
-                <th className="py-1 pr-2 text-right font-normal">胜率</th>
-                <th className="py-1 text-right font-normal">平均盈亏</th>
+                <th className="py-1 pr-2 text-right font-normal">观察成功率</th>
+                <th className="py-1 text-right font-normal">平均观察涨跌幅</th>
               </tr>
             </thead>
             <tbody>
@@ -216,7 +192,7 @@ export function WatchLedgerPanel({ date, readOnly = false }: { date?: string; re
         {from:"center",to:"record",label:"登记与清算流程",kind:"context"},
         {from:"record",to:"verdict",label:"清算后对照",kind:"sequence"},
       ]} steps={[
-        {id: "reference", label: "参考跟踪", icon: "risk", tone: "warning", content: <p>参考跟踪、非持仓：参考价不是成交价，收盘变化不代表模拟交易收益。{readOnly ? "此旁览只读核对，不提交模拟委托。" : "手工模拟建仓仍须经后端撮合与风险校验。"}</p>},
+        {id: "reference", label: "参考跟踪", icon: "risk", tone: "warning", content: <p>参考跟踪不是持仓，参考价不是成交价。实际成交由手工持仓记录；入选观察与实际买入请在验证统计中分别核对。{readOnly && "此旁览只读核对，不记录成交。"}</p>},
         {id: "record", label: "记录与清算", icon: "time", content: <p>入选即登记（当日唯一，盘中不移除）→ 收盘清算（入选价 vs 收盘价）→ 逐股判定与统计。</p>},
         {id: "verdict", label: "判定口径", icon: "check", content: <p>收盘 ≥ 入选 = 成功、亏 ≤2% = 持平、否则失败。历史记录收盘后可查。</p>},
       ]} />

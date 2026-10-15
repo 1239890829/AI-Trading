@@ -403,7 +403,7 @@ describe("PickCard · 盘中名单（fromIntradayStock）", () => {
       <PickCard item={fromIntradayStock(topPath)} positionLabel="sim" />,
     );
     expect(container.textContent).toContain("盘中跟踪");
-    expect(container.textContent).toContain("已模拟持仓");
+    expect(container.textContent).not.toContain("已模拟持仓");
 
     cleanup();
     const noPos = render(<PickCard item={fromIntradayStock(topPath)} />);

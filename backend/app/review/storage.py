@@ -22,7 +22,7 @@ import json
 import logging
 from pathlib import Path
 
-from sqlalchemy import select
+from sqlalchemy import select, update
 
 from app.core.db import utcnow
 from app.review.models import (
@@ -258,11 +258,11 @@ def get_report(session_factory, trade_date: str) -> ReviewReport | None:
 
 
 #: 允许的处置状态。`pending` 保留在内，用于"撤销确认"。
-ALLOWED_STATUSES = ("pending", "confirmed", "applied", "rejected", "reverted")
+ALLOWED_STATUSES = ("pending", "recorded", "confirmed", "applied", "rejected", "reverted")
 
 #: 需要填写处置说明的状态——没有理由的驳回/回退是无法归因的，
 #: 后期统计"哪类改进项总被驳回"时全靠这段文字。
-NOTE_REQUIRED = ("rejected", "reverted")
+NOTE_REQUIRED = ("applied", "rejected", "reverted")
 
 
 class ActionItemStaleError(Exception):
@@ -285,6 +285,7 @@ def update_action_item_status(
     expect_trade_date: str,
     expect_category: str,
     expect_title: str,
+    only_statuses: tuple[str, ...] | None = None,
 ) -> dict:
     """变更单条改进项的处置状态。
 
@@ -330,10 +331,32 @@ def update_action_item_status(
                 f"请求指 {expected}，表行现为 {fp}。请刷新页面后重试"
             )
 
-        row.status = status
-        row.resolution_note = note.strip()
-        # 回到 pending 视为"撤销处置"，清掉处置时间；其余记当前时间
-        row.resolved_at = None if status == "pending" else utcnow()
+        if only_statuses is not None and row.status not in only_statuses:
+            raise ActionItemStaleError("处置已变化，不覆盖人工结论")
+        if only_statuses is not None and row.status == status and row.resolution_note == note.strip():
+            return {"id": row.id, "review_id": row.review_id, "trade_date": row.trade_date,
+                    "title": row.title, "status": row.status, "resolution_note": row.resolution_note,
+                    "resolved_at": row.resolved_at.isoformat() if row.resolved_at else None}
+        before = {"status": row.status, "note": row.resolution_note,
+                  "resolved_at": row.resolved_at.isoformat() if row.resolved_at else None}
+        previous_status, previous_note = row.status, row.resolution_note
+        result = db.execute(update(ReviewActionItemRow).where(
+            ReviewActionItemRow.id == pk, ReviewActionItemRow.status == previous_status,
+            ReviewActionItemRow.resolution_note == previous_note,
+            ReviewActionItemRow.trade_date == expect_trade_date,
+            ReviewActionItemRow.category == expect_category, ReviewActionItemRow.title == expect_title,
+        ).values(status=status, resolution_note=note.strip(),
+                 resolved_at=None if status in ("pending", "recorded") else utcnow()))
+        if result.rowcount != 1:
+            raise ActionItemStaleError("处置并发变化，请刷新后重试")
+        db.refresh(row)
+        from app.models.agent import AgentAudit
+        db.add(AgentAudit(actor="user" if only_statuses is None else "scheduler",
+                          action="review.disposition", target=f"review:{row.trade_date}:{pk}",
+                          before=json.dumps(before, ensure_ascii=False),
+                          after=json.dumps({"status": status, "note": note.strip(),
+                                            "trade_date": row.trade_date, "category": row.category,
+                                            "title": row.title}, ensure_ascii=False)))
         db.commit()
         return {
             "id": row.id,

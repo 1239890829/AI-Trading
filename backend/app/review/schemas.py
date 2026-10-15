@@ -218,7 +218,7 @@ class ActionItem(BaseModel):
     evidence: str
     target: str = Field("", description="要改的具体位置，如 sentiment.EARNING_BANDS.promo_1to2")
     proposed_change: str = ""
-    status: str = Field("pending", description="pending | confirmed | applied | rejected | reverted")
+    status: str = Field("pending", description="pending | recorded | confirmed | applied | rejected | reverted")
 
 
 class MetaInsight(BaseModel):

@@ -113,6 +113,8 @@ def evaluate_historical_effectiveness(
             "reverted": reverted,
             "rejected": rejected,
             "pending": s.get("pending", 0),
+            "recorded": s.get("recorded", 0),
+            "implemented": s.get("applied", 0),
             "adoption_rate": round(confirmed / total, 3) if total else None,
             "revert_rate": round(reverted / confirmed, 3) if confirmed else None,
         }

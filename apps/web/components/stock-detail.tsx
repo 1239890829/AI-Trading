@@ -28,7 +28,6 @@ import {quoteQualityView} from "@/lib/quote-quality-view";
 import { StockEventsRow } from "@/components/detail/stock-events";
 import {
   addToWatchlist,
-  cancelPaperOrder,
   getAuction,
   getCapitalFlow,
   getCompanyProfile,
@@ -39,10 +38,6 @@ import {
   getMinuteLine,
   getMinuteLineWithBaseline,
   getOrderBook,
-  getPaperAccount,
-  getPaperFills,
-  getPaperOrders,
-  getPaperPositions,
   getQuote,
   getQuotes,
   getNewsDigest,
@@ -50,12 +45,10 @@ import {
   getTradesPayload,
   getWatchlist,
   type MinutePoint,
-  type PaperFill,
 } from "@/lib/api";
 import { bjDate, fmt, pctColor, pctText, sourceLabel, dateTimeTextBJ } from "@/lib/format";
 import type { Kline, OrderBook, Quote, Trade, TradingStatusInfo } from "@/types/market";
 import { QuoteStrip } from "@/components/detail/quote-strip";
-import { TradePanel, type PaperBundle } from "@/components/detail/trade-panel";
 import { ProfilePanel, type CompanyProfile, type FinRow, type BoardRows } from "@/components/detail/profile-panel";
 import { InfoPanel, type InfoItem } from "@/components/detail/info-panel";
 import { BookTradesView } from "@/components/detail/book-trades-view";
@@ -165,9 +158,7 @@ export const StockDetailPanel = memo(function StockDetailPanel({
     const animation = column.animate([{opacity: 0.65}, {opacity: 1}], {duration: 160, easing: "ease-out"});
     return () => animation.cancel();
   }, [chartTab, reducedMotion]);
-  // 模拟交易数据刷新（2026-09-01 简化：原 paperChanged 全局事件改为 ref 直调——
-  // trade-form/trade-panel 都在本组件子树内，props 回调 + ref 即可，无需全局广播）
-  const loadPaperRef = useRef<() => void>(() => {});
+
   // 布局方案 B（2026-09-04 用户拍板）：右列可整体收起，收起后 K 线/分时获得全宽
   const [rightCollapsed, setRightCollapsed] = useState(false);
   const [exitingRightW, setExitingRightW] = useState(300);
@@ -219,9 +210,6 @@ export const StockDetailPanel = memo(function StockDetailPanel({
   const [annError, setAnnError] = useState<string | null>(null);
   const [newsError, setNewsError] = useState<string | null>(null);
   const [digestLoading, setDigestLoading] = useState(false);
-  const [fills, setFills] = useState<PaperFill[]>([]);
-  const [paper, setPaper] = useState<PaperBundle | null | undefined>(undefined);
-  const [paperError, setPaperError] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [inWatchlist, setInWatchlist] = useState(false);
   // quote 三态：undefined=WS 快照/REST 均未到达（行情条渲染骨架）；null=两侧都
@@ -318,39 +306,6 @@ export const StockDetailPanel = memo(function StockDetailPanel({
     { enabled: active && !!symbol }
   );
 
-  // 模拟账户数据只服务「模拟交易」页签（O2）：不在该页签时不轮询不拉取——
-  // `enabled` 表达该门控：切入页签时立即拉一次；挂单成交等状态变化由
-  // paper-changed 事件兜底（下单/撤单/重置都会派发）。
-  // 轮询 10s → 30s（费率预估与持仓盈亏对实时性不敏感，原 10s 属过密）。
-  // 2026-09-11（S2-5）：裸 setInterval → 统一入口。
-  const paperRequestRef = useRef(0);
-  const loadPaper = useCallback(async () => {
-    const scope = detailReadScopeRef.current;
-    if (!scope?.alive || scope.symbol !== symbol) return;
-    const request = ++paperRequestRef.current;
-    try {
-      const [acc, positions, orders, fs] = await Promise.all([
-        getPaperAccount(),
-        getPaperPositions(),
-        getPaperOrders(),
-        getPaperFills(symbol),
-      ]);
-      if (!scope.alive || scope !== detailReadScopeRef.current || request !== paperRequestRef.current) return;
-      setPaper({ acc, positions, orders });
-      setFills(fs);
-      setPaperError(null);
-    } catch (e) {
-      if (!scope.alive || scope !== detailReadScopeRef.current || request !== paperRequestRef.current) return;
-      setPaper(prev => prev === undefined ? null : prev);
-      setPaperError(e instanceof Error ? e.message : "模拟账户读取失败");
-    }
-  }, [symbol]);
-  // 手动刷新入口（下单/撤单后 onPaperChanged 触发）：保持 ref 指向最新闭包
-  useEffect(() => {
-    loadPaperRef.current = loadPaper;
-  }, [loadPaper]);
-  usePollingFetch(loadPaper, 30_000, symbol, { enabled: rightActive && !!symbol && rightTab === "trade" });
-
   const digestRequestRef = useRef(0);
   const loadDigest = useCallback(async () => {
     const scope = detailReadScopeRef.current;
@@ -401,13 +356,10 @@ export const StockDetailPanel = memo(function StockDetailPanel({
   // 复用原一次读取，按symbol绑定数据；右栏可显式重试，失败不拖垮图表。
 
   // 切股清空三件套（渲染期 adjust-state：symbol 变化时同步重置，防上一只残留）——
-  // fills 的按页签拉取、自选/题材的各自 fetch effect 保持不变，只把「清空」前移到渲染期。
+  // 切股时清空本股读取结果，自选与题材仍由各自owner管理。
   const [prevResetSymbol, setPrevResetSymbol] = useState<string | null>(null);
   if (symbol !== prevResetSymbol) {
     setPrevResetSymbol(symbol);
-    setFills([]);
-    setPaper(undefined);
-    setPaperError(null);
     setAnns(null);
     setNews(null);
     setAnnError(null);
@@ -703,8 +655,7 @@ export const StockDetailPanel = memo(function StockDetailPanel({
   const techPresence = useExitPresence(techVisible ? true : null);
 
   // 当前个股的模拟持仓（用于 K 线成本线）
-  const myPosition = paper?.positions.find((p) => p.symbol === symbol) ?? null;
-  const costPrice = myPosition && myPosition.quantity > 0 ? myPosition.cost_price : null;
+  const costPrice = realPositions?.data?.items.find(p => p.symbol === symbol)?.avg_cost ?? null;
 
   // 新闻/公告 → K 线事件点（P1-8）：复用 digest 已取回的数据，零新增请求。
   // 依赖必须用内容键（日期串）而非 displayBars 引用——WS 合成每秒给最后一根 bar
@@ -889,7 +840,7 @@ export const StockDetailPanel = memo(function StockDetailPanel({
                   {/* 技术评估条已移至图表工具栏（与依据同行，2026-09-04 用户
                       反馈浮层遮挡 K 线）：图区只留图表本身 */}
                   <div className="relative min-h-0 flex-1">
-                    <KlineChartPro bars={displayBars} tradeMarks={fills} costPrice={costPrice} eventMarks={eventMarks} className="h-full" />
+                    <KlineChartPro bars={displayBars} costPrice={costPrice} eventMarks={eventMarks} className="h-full" />
                   </div>
                 </div>
               ) : (
@@ -907,7 +858,7 @@ export const StockDetailPanel = memo(function StockDetailPanel({
               <DetailReadStatus label="分钟" state={readStates.minute} onRetry={() => retryRead("minute")} diagnostics={minuteDiagnostics} diagnosticIssue={!!indexResource.error} identity={`${symbol}:minute`} active={active}/>
               {indexOverlay?.mode === "historical" && <p className="px-3 pb-1 text-xs text-zinc-600 dark:text-zinc-400">上证叠加 · {indexOverlay.referenceDate} · 非实时</p>}
               {!!indexResource.error && <div className="flex flex-wrap items-center gap-2 px-3 pb-1 text-xs"><p role="alert" className="text-amber-800 dark:text-amber-300">指数叠加读取失败{indexOverlay ? " · 保留结果" : ""}</p><button type="button" data-action="secondary" disabled={indexResource.pending} onClick={indexResource.refresh}>重新读取指数叠加</button></div>}
-              {minutes.length > 0 ? (
+              {displayMinutes.length > 0 ? (
                 <div className="relative min-h-0 flex-1">
                   {/* 停牌遮罩：分时是当日数据，停牌股当日无成交，
                       空图会被误读成"数据源挂了"，必须显式说明原因 */}
@@ -1023,9 +974,7 @@ export const StockDetailPanel = memo(function StockDetailPanel({
               ? "五档盘口"
               : viewRightTab === "trades"
                 ? "逐笔成交"
-                : viewRightTab === "trade"
-                  ? "模拟交易"
-                  : viewRightTab === "real"
+                : viewRightTab === "real"
                     ? "手工记录（用户录入，非券商核验）"
                     : viewRightTab === "profile"
                       ? "公司资料"
@@ -1097,27 +1046,6 @@ export const StockDetailPanel = memo(function StockDetailPanel({
           {viewRightTab === "real" && (
             <RealPositionPanel symbol={symbol} currentPrice={quote?.price ?? null} currentName={quote?.name ?? null} realPositions={realPositions} active={rightActive} className="h-full" />
           )}
-          {viewRightTab === "trade" &&
-            (paper === undefined ? (
-              <div className="space-y-2 p-1" aria-hidden>
-                <Skeleton className="h-8 w-full rounded-lg" />
-                <Skeleton className="h-24 w-full rounded-xl" />
-                <Skeleton className="h-16 w-full rounded-xl" />
-              </div>
-            ) : paper ? (
-              <TradePanel
-                symbol={symbol}
-                paper={paper}
-                fills={fills}
-                quote={quote ?? null}
-                onPaperChanged={() => loadPaperRef.current()}
-                active={rightActive && immediateQuote !== null}
-                readError={paperError}
-              />
-            ) : (
-              <p className="px-3 py-10 text-center text-xs text-zinc-600 dark:text-zinc-400">模拟账户数据加载失败（稍后自动重试）</p>
-            ))}
-
           {(viewRightTab === "profile" || viewRightTab === "themes") && <ProfilePanel themes={stockThemes} themesState={{pending: themesResource.pending, loaded: themesResource.data !== undefined, error: themesResource.error ? "题材读取失败" : null, readAt: null}} onThemesRetry={themesResource.refresh} boardRows={boardRows} company={company} fins={fins} readState={readStates.financials} onRetry={() => retryRead("financials")} readIdentity={`${symbol}:financials`} active={rightActive}/>}
 
           {viewRightTab === "info" && <div id={`${perspectiveId}-information`}><InfoPanel key={symbol} anns={anns} news={news} annError={annError} newsError={newsError} loading={digestLoading} onRetry={() => { void loadDigest(); }} /></div>}
