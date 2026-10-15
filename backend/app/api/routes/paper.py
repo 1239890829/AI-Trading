@@ -51,7 +51,7 @@ async def _positions_with_live(request):
         await engine.settle_t1()
     except Exception as exc:  # noqa: BLE001
         log.warning("T+1 结算失败（持仓读快照用旧冻结态）：%s: %s", type(exc).__name__, exc)
-    positions = engine.positions_with_pnl({})
+    positions = await asyncio.to_thread(engine.positions_with_pnl, {})
     price_map = {q.symbol: q.price for q in hub.get_quotes() if q.price}
     for pos in positions:
         if pos["last_price"] is None and pos["symbol"] in price_map:
