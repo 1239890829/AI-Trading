@@ -285,7 +285,9 @@ async def notifications(
     alert_items: list[dict] = []
     shapes_seen: dict[str, int] = {}
     try:
-        alert_items, shapes_seen = _alert_items(repo, alert_limit, trading_dates)
+        # Repository methods own their Sessions. A locked SQLite read must not
+        # suspend the shared quote/WS event loop while this message read waits.
+        alert_items, shapes_seen = await asyncio.to_thread(_alert_items, repo, alert_limit, trading_dates)
     except Exception as exc:  # noqa: BLE001
         log.exception("notifications: alert source failed")
         errors["alerts"] = type(exc).__name__
@@ -318,7 +320,7 @@ async def notifications(
         try:
             outbox = getattr(repo, "outbox", None)
             event_ids = [eid for i in items for eid in i.get("_event_ids", [int(i["id"][6:])])]
-            states = outbox.states_for_events(event_ids) if outbox else {}
+            states = await asyncio.to_thread(outbox.states_for_events, event_ids) if outbox else {}
             for item in items:
                 item["channels"] = [state for eid in item.get("_event_ids", [int(item["id"][6:])]) for state in states.get(eid, [])]
         except Exception as exc:  # noqa: BLE001

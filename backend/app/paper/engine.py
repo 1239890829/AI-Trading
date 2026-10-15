@@ -14,6 +14,7 @@ A股规则落地（full.md §14/§2.4，配置化）：
 """
 from __future__ import annotations
 
+import asyncio
 import logging
 import math
 from datetime import date, datetime
@@ -589,12 +590,11 @@ class PaperTradingEngine:
     async def match_pending(self) -> int:
         """对全部挂单重试撮合（价格到位即成交）。返回**剩余挂单数**（技术债 #5：
         调用方据此自适应降频——无挂单时空转降频，有挂单才密集轮询）。"""
-        with self._sf() as db:
-            pending = db.query(PaperOrder).filter(
-                PaperOrder.status == "pending", PaperOrder.scope == self.scope
-            ).all()
-            symbols = {o.symbol for o in pending}
-            pending_left = len(pending)
+        # Keep each read Session entirely inside its worker. SQLite may wait
+        # for another transaction even when this query only reads pending rows.
+        pending = await asyncio.to_thread(self.pending_orders)
+        symbols = {o["symbol"] for o in pending}
+        pending_left = len(pending)
         if not symbols:
             return pending_left
         for sym in symbols:
@@ -630,11 +630,13 @@ class PaperTradingEngine:
                         await self._fill(db, acc, o, quote.price, o.quantity)
                     elif o.side == "sell" and o.price <= quote.price:
                         await self._fill_sell(db, acc, o, quote.price, o.quantity)
+        return await asyncio.to_thread(self._pending_order_count)
+
+    def _pending_order_count(self) -> int:
         with self._sf() as db:
-            pending_left = db.query(PaperOrder).filter(
+            return db.query(PaperOrder).filter(
                 PaperOrder.status == "pending", PaperOrder.scope == self.scope
             ).count()
-        return pending_left
 
     # ---------- 撤单 ----------
 
