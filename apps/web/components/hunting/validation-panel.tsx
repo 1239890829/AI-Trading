@@ -9,6 +9,8 @@ import { useSymbolDetail } from "@/components/detail/symbol-detail-context";
 import { bjToday } from "@/lib/market-hours";
 import { timeText, dateTimeTextBJ } from "@/lib/format";
 import "./validation-panel.css";
+import {ExecutionValidation} from "./execution-validation";
+import {ValidationRecordTable} from "./validation-record-table";
 
 const percent = (n: number | null) => n == null ? "—" : `${n > 0 ? "+" : ""}${n.toFixed(2)}%`;
 const sign = (n: number | null) => n == null || n === 0 ? "flat" : n > 0 ? "up" : "down";
@@ -65,9 +67,8 @@ function EpisodeDetail({episode}: {episode: TradeEpisode}) {
 }
 
 export function ValidationContent({report}: {report: ValidationReport}) {
-  const [mode, setMode] = useState<"selection" | "actual">("selection");
+  const [mode, setMode] = useState<"selection" | "actual" | "execution">("selection");
   const [picked, setPicked] = useState<string | null>(null);
-  const [page, setPage] = useState(0);
   const [day, setDay] = useState<string | null>(null);
   const entries = day ? report.entries.filter(e => e.date === day) : report.entries;
   const expanded = useExitPresence(picked);
@@ -76,23 +77,22 @@ export function ValidationContent({report}: {report: ValidationReport}) {
   const [methodOpen, setMethodOpen] = useState(false);
   const method = useExitPresence(methodOpen ? true : null);
   const actual = report.actual;
+  const modes = <nav className="validation-modes" aria-label="统计口径">{([["selection", "入选观察"], ["actual", "实际买入"], ["execution", "执行对照"]] as const).map(([key,label]) => <button key={key} type="button" aria-pressed={mode === key} onClick={() => {setMode(key); setPicked(null); setDay(null);}}>{label}</button>)}</nav>;
+  if (mode === "execution") return <>{modes}<ExecutionValidation start={report.start} end={report.end}/></>;
   return <>
-    <nav className="validation-modes" aria-label="统计口径">{([["selection", "入选观察"], ["actual", "实际买入"]] as const).map(([key,label]) => <button key={key} type="button" aria-pressed={mode === key} onClick={() => {setMode(key); setPicked(null); setDay(null); setPage(0);}}>{label}</button>)}</nav>
-    <div className="validation-summary" aria-live="polite">{mode === "selection" ? <><span><b>{report.selection.count}</b> 次入选</span><span><b>{report.selection.observed}</b> 条有效观察</span><span>平均 <b data-sign={sign(report.selection.mean_pct)}>{percent(report.selection.mean_pct)}</b></span><span>中位数 <b data-sign={sign(report.selection.median_pct)}>{percent(report.selection.median_pct)}</b></span></> : <><span>清仓胜率 <b>{actual.win_rate == null ? "—" : `${actual.win_rate.toFixed(1)}%`}</b></span><span>有效分母 <b>{actual.denominator}</b> 回合</span><span>平均 <b data-sign={sign(actual.mean_pct)}>{percent(actual.mean_pct)}</b></span><span>中位数 <b data-sign={sign(actual.median_pct)}>{percent(actual.median_pct)}</b></span></>}</div>
+    {modes}
+    <div className="validation-overview" aria-live="polite"><div className="validation-overview-lead"><span>{mode === "selection" ? "原始入选记录" : "实际买入 · 清仓胜率"}</span><strong>{mode === "selection" ? report.selection.count : actual.win_rate == null ? "—" : `${actual.win_rate.toFixed(1)}%`}</strong><small>{mode === "selection" ? "同股跨日分别记录" : "仅计成本与费用完整的清仓回合"}</small></div><div className="validation-summary">{mode === "selection" ? <><span><b>{report.selection.observed}</b> 条有效观察</span><span><b>{report.selection.missing}</b> 条待补结果</span><span>平均 <b data-sign={sign(report.selection.mean_pct)}>{percent(report.selection.mean_pct)}</b></span><span>中位数 <b data-sign={sign(report.selection.median_pct)}>{percent(report.selection.median_pct)}</b></span></> : <><span>有效分母 <b>{actual.denominator}</b> 回合</span><span>持有中 <b>{actual.open}</b> 回合</span><span>平均 <b data-sign={sign(actual.mean_pct)}>{percent(actual.mean_pct)}</b></span><span>中位数 <b data-sign={sign(actual.median_pct)}>{percent(actual.median_pct)}</b></span></>}</div></div>
     <p className="validation-muted">{mode === "selection" ? `${report.basis.selection}。${report.selection.missing} 条结果未覆盖。` : `${report.basis.actual}。盈利 ${actual.wins} / 亏损 ${actual.losses} / 持平 ${actual.flat}；持有中 ${actual.open}，缺项排除 ${actual.excluded}。`}</p>
     <div className="validation-plots">{mode === "selection" ? <>
-      <Chart bars title="每天挑选数量" suffix="只" points={report.daily.map(d => ({id:d.date, label:d.date.slice(5), value:d.count}))} onSelect={id => {setDay(id);setPage(0);setPicked(null);}} />
-      <Chart title="入选后平均涨跌幅" suffix="%" points={report.daily.map(d => ({id:d.date, label:d.date.slice(5), value:d.mean_pct}))} onSelect={id => {setDay(id);setPage(0);}} />
+      <Chart bars title="每天挑选数量" suffix="只" points={report.daily.map(d => ({id:d.date, label:d.date.slice(5), value:d.count}))} onSelect={id => {setDay(id);setPicked(null);}} />
+      <Chart title="入选后平均涨跌幅" suffix="%" points={report.daily.map(d => ({id:d.date, label:d.date.slice(5), value:d.mean_pct}))} onSelect={id => setDay(id)} />
     </> : <>
       <Chart percentage title="已清仓胜率曲线" suffix="%" points={report.win_curve.map(d => ({id:`episode:${d.episode_id}`, label:d.date.slice(5), value:d.win_rate}))} onSelect={setPicked} />
       <Chart title="成交净收益中位数" suffix="%" points={report.win_curve.map(d => ({id:`episode:${d.episode_id}`, label:d.date.slice(5), value:d.median_pct}))} onSelect={setPicked} />
     </>}</div>
     {mode === "actual" && <p className="validation-muted">持仓覆盖 {actual.exposure_trade_days ?? "未知"} 个交易日（同日去重）；回合累计 {actual.episode_trade_days ?? "未知"} 个交易日。旧缺项流水 {actual.legacy_fills} 笔，未混入胜率。</p>}
     <section className="validation-records"><header><h3>{mode === "selection" ? "逐笔入选" : "成交回合"}</h3>{day && <button className="quiet-action" onClick={() => setDay(null)}>清除日期筛选 {day}</button>}<span>点击行查看原依据</span></header>
-      <div className="validation-table-scroll" tabIndex={0} role="region" aria-label="统计明细，可横向滚动"><table><thead><tr>{(mode === "selection" ? ["入选日期 / 股票", "首次加入", "参考价", "当时涨幅", "观察涨跌幅"] : ["股票 / 首买日期", "清仓日期", "持有交易日", "净收益", "状态"]).map(label => <th key={label}>{label}</th>)}</tr></thead><tbody>
-        {mode === "selection" ? entries.slice(page*50, (page+1)*50).map(e => <tr key={e.id} data-selected={picked === e.id}><td><button onClick={() => setPicked(picked === e.id ? null : e.id)} aria-expanded={picked === e.id}>{e.name}<small>{e.date} · {e.symbol}</small></button></td><td>{e.selected_at ? timeText(e.selected_at) : "未记录"}</td><td>{price(e.reference_price)}</td><td data-sign={sign(e.reference_change_pct)}>{percent(e.reference_change_pct)}</td><td data-sign={sign(e.return_pct)}>{percent(e.return_pct)}</td></tr>) : report.episodes.slice(page*50, (page+1)*50).map(e => <tr key={e.id} data-selected={picked === `episode:${e.id}`}><td><button onClick={() => setPicked(picked === `episode:${e.id}` ? null : `episode:${e.id}`)} aria-expanded={picked === `episode:${e.id}`}>{e.name}<small>{e.open_date} · {e.symbol}</small></button></td><td>{e.close_date ?? "持有中"}</td><td>{e.holding_trade_days ?? "未知"}</td><td data-sign={sign(e.return_pct)}>{percent(e.return_pct)}</td><td>{stateName[e.state]}</td></tr>)}
-      </tbody></table>{(mode === "selection" ? entries.length : report.episodes.length) === 0 && <p className="validation-empty">这个范围还没有{mode === "selection" ? "入选记录" : "实际成交流水"}，不会用模拟记录填充。</p>}</div>
-      <div className="validation-pagination"><button className="quiet-action" disabled={page === 0} onClick={() => setPage(p => p-1)}>上一页</button><span>第 {page+1} / {Math.max(1,Math.ceil((mode === "selection" ? entries.length : report.episodes.length)/50))} 页</span><button className="quiet-action" disabled={(page+1)*50 >= (mode === "selection" ? entries.length : report.episodes.length)} onClick={() => setPage(p => p+1)}>下一页</button></div>
+      {mode === "selection" ? <ValidationRecordTable key="selections" items={entries} columns={["入选日期 / 股票","首次加入","参考价","当时涨幅","观察涨跌幅"]} resetKey={day ?? "all"} label="统计明细，可横向滚动" empty="这个范围还没有入选记录，不用模拟记录填充。" renderRow={e => <tr key={e.id} data-selected={picked===e.id}><td><button aria-label={`${e.name}，${e.date}入选记录`} onClick={() => setPicked(picked===e.id ? null : e.id)} aria-expanded={picked===e.id}>{e.name}<small>{e.date} · {e.symbol}</small></button></td><td>{e.selected_at ? timeText(e.selected_at) : "未记录"}</td><td>{price(e.reference_price)}</td><td data-sign={sign(e.reference_change_pct)}>{percent(e.reference_change_pct)}</td><td data-sign={sign(e.return_pct)}>{percent(e.return_pct)}</td></tr>} /> : <ValidationRecordTable key="actual" items={report.episodes} columns={["股票 / 首买日期","清仓日期","持有交易日","净收益","状态"]} resetKey="actual" label="统计明细，可横向滚动" empty="这个范围还没有实际成交流水，不用模拟记录填充。" renderRow={e => <tr key={e.id} data-selected={picked===`episode:${e.id}`}><td><button onClick={() => setPicked(picked===`episode:${e.id}` ? null : `episode:${e.id}`)} aria-expanded={picked===`episode:${e.id}`}>{e.name}<small>{e.open_date} · {e.symbol}</small></button></td><td>{e.close_date ?? "持有中"}</td><td>{e.holding_trade_days ?? "未知"}</td><td data-sign={sign(e.return_pct)}>{percent(e.return_pct)}</td><td>{stateName[e.state]}</td></tr>} />}
       {expanded.value && <div className="validation-expanded" data-open={expanded.active} inert={!expanded.active} aria-hidden={!expanded.active}><div>{entry && <EntryDetail key={entry.id} entry={entry} />}{episode && <EpisodeDetail key={episode.id} episode={episode} />}</div></div>}
     </section>
     {mode === "actual" && report.cohorts.length > 0 && <section className="validation-cohorts"><h3>原入选依据：成功与失败对照</h3><p className="validation-muted">按成交前记录的依据分组，只作描述；样本少不能认定因果，也不自动改策略。</p>{report.cohorts.map((c,i) => <div key={i}><p>{c.reason}</p><span>有效 {c.denominator} / 总回合 {c.total} · 盈 {c.wins} / 亏 {c.losses} · 中位 {percent(c.median_pct)}</span></div>)}</section>}

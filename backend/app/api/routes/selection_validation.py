@@ -4,8 +4,19 @@ from datetime import timedelta
 from fastapi import APIRouter, HTTPException, Query
 from app.core.bjtime import beijing_today
 from app.picks.validation import validation_report
+from app.picks.execution_validation import execution_report
 
 router = APIRouter(prefix='/picks/validation', tags=['selection-validation'])
+
+
+@router.get('/execution')
+async def execution(start: str | None = Query(None), end: str | None = Query(None)):
+    today = beijing_today()
+    try:
+        data = await asyncio.to_thread(execution_report, start or (today-timedelta(days=29)).isoformat(), end or today.isoformat())
+    except (ValueError, TypeError) as exc:
+        raise HTTPException(status_code=422, detail=str(exc)) from exc
+    return {'data': data, 'meta': {'basis': 'internal_paper_execution_only'}}
 
 
 @router.get('')

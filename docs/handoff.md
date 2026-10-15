@@ -1,10 +1,14 @@
-# 当前交接：IMP-094交付收尾与IMP-019性能效果边界
+# 当前交接：IMP-094执行验证收拢与IMP-019性能效果边界
 
 > 摘要：用户批准的复盘误标、在途复用、分时同步、盘口金额、入选/实际买入验证已以代码`6769563a`实现。BE5656/83跳过，FE最终默认/UTC各1713/141文件，tsc/ESLint与同内容生产构建EWk6qpy8rQFVdHxKlX1aN通过；详细见W03/IMP-094及运行报告§29。准确HEAD发布、合并和生产激活各以本批回执为准，不把本地通过当现役或盘中SLO已闭环。
 
 > 总方案v9.13；累计U01–U55。阅读与WS整改[W07/IMP-093](stages/w07-simplification.md#imp-093)已由PR #270发布并运行；直接上游单位反例按[W00/BUG-020](stages/w00-foundation.md#bug-020)既有同根回归条款止险，不启动第二个产品优化任务。
 
 现役语义判断依[semantic-decisions](ai/semantic-decisions.md)；外部能力依[开放世界持续演进](ai/continuous-evolution.md)筛选。
+
+## 最新用户补充（2026-10-15）
+
+PR #290已合并67475012并通过post-master三job；本机配对激活build EWk6qpy8rQFVdHxKlX1aN（8000/93549、3000/93636）。19条自动归档误标已备份后精确纠正，迁移a8d4f2c6e9b1已核；现役身份见统一runtime-identity与本批release。新增用户授权：将每日精选影子与机会影子的已有执行结果并入验证页，只读结果整合、不合资金账、不改执行条件、不中断原选股/通知。施工codex/selection-execution-consolidation，基点67475012；本地BE5663/83跳过、FE两时区各1717/142文件及构建Fd0hY8uMXbZeroV8Jep97通过。用户纠偏后的银灰总览、左右执行布局与容器连续加载已核，140条合成记录追加且展开保留；准确HEAD发布与运行另核。
 
 ## 最近获准工程交付（2026-10-15）
 
@@ -14,7 +18,7 @@ G4/IMP-094代码`6769563a11c0bd523dc3d6c885837b3aee951b8f`从最新master09765ab
 
 - **当前主门**：G4
 - **主切片首选**：IMP-019
-- **候选顺位与执行边界**：IMP-019；IMP-094完成工程交付，实际发布以本批准确HEAD回执为准；原性能效果缺口保留，不自动增加观察窗口。PR #287已合并038db987，PR及post-master三job成功。用户明确要求的两窗已采集，AM/PM claim均保留；临时跟进已删除，手机仍暂缓，不追加观察窗或补造证据。
+- **候选顺位与执行边界**：IMP-019；IMP-094首批已发布，用户追加执行验证结果收拢已实现，当前只做其完整门与发布收尾，补充运行以本批准确HEAD回执为准；原性能效果缺口保留，不自动增加观察窗口。PR #287已合并038db987，PR及post-master三job成功。用户明确要求的两窗已采集，AM/PM claim均保留；临时跟进已删除，手机仍暂缓，不追加观察窗或补造证据。
 - **基点与分支**：PR #288已合并dcc1b144437ac72c499859f7c9b74a1f52d849b3，PR/post-master CI各三job成功，准确HEAD DegradedRelease与release_check已核。15:07后端69452按统一入口激活；前端44673/09:18:28仍Next16.3.8/build gCR78igTpBCF3LAzv3fJQ。新批codex/workbench-context-read-state从经GitHub API核对的该最新master创建；fetch传输失败不冒充成功，已在本地的同SHA对象可用。主树三份未跟踪evolution原件保留。上述为施工前运行基线；新批完整门已过，准确HEAD发布及激活以artifacts/runs/workbench-context-20261015/release/及统一runtime-identity.json为权威，不能以施工树或旧PID冒充现役。
 - **双窗结果与当前修复**：AM55次额外GET中54次200、一次health约6048ms超时，114报价行7stale；PM57次额外GET均200，120报价行3stale。200不等于新鲜，快照完成钟不等于完整源钟。PM通知/模拟挂单读取出现真实SQLite锁等待；旧代码把同步读放在async事件循环，隔离真实文件锁反例7项先红，修后连相关回归92项通过。只将通知读取、挂单清单/计数、持仓快照移入工作线程，各Session在工作线程内开闭；过滤、通知资格、交易硬门、错误反馈、TTL/轮频不变。完整门已通过（BE5628/82跳过，FE默认/UTC各1702）；准确HEAD发布与必要后端激活按本批release/activation.json及统一runtime-identity回执分别核验，详见[报告§27](system/runtime-performance.md#27-2026-10-15-真实交易双窗与sqlite读取隔离)。
 - **当前追加切片**：用户明确选择“指数成分股，切回股票盘口”。旧涨速深链兼容到成分，指数/股票两向校正URL与面板；静态成员复用同花顺既有接口，不新增行情全量订阅。隐藏分时/资金/财报/公司/竞价/题材改由可见消费者首取；原行情刷新/过期标准、选股及消息规则不变。分组数字/勾选分列，异常仅文字着色。旧行为反例先红，六份真实成员完整响应离线验证，UI夹具420/390/320检查；本批BE5632/82跳过、FE两时区各1711/140文件、tsc/ESLint/build与文档门已过，ESLint仍只有2条既有warning。盘中偶发故障仍只依据已结束双窗，不补造新窗，见[报告§28](system/runtime-performance.md#28-2026-10-15-工作台标的视角与按需读取)。

@@ -357,3 +357,5 @@ PR #265发布后，用户追加市场指数三列和弹窗双向过渡纠偏。�
 ### 2026-10-15验证统计传播核对
 
 批准的入选/实际成交分账与模拟前台退出已传播到implementation-plan、hunting-decision-design、W03/IMP-094和handoff。INDEX沿用既有文档条目，无新权威文档；AGENTS/通用Skills权限与工程协议不变，不适用规则修订。product-closure-design与feature-closure-audit已同步前台模拟退出、分账/分母、观察归档与失败边界；实际验收同批核对，不以方案登记当实现。
+
+2026-10-15 IMP-094补充传播：执行验证结果统一入口/读取，内部模拟运行owner与资金账保留；无新调度、模型、数据源或普通前台交易入口。同步implementation-plan、产品闭环、猎场设计、细功能覆盖、W03、handoff和运行报告；AGENTS/Skills及INDEX分类无变化（既有专题内扩展，无新文档）。
