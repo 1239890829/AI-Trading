@@ -9,6 +9,16 @@ vi.mock("@/components/detail/capital-flow-panel", () => ({CapitalFlowPanel: () =
 vi.mock("@/components/detail/symbol-detail-context", () => ({useSymbolDetail: () => ({open: vi.fn()}), symbolDetailClick: () => () => {}}));
 afterEach(() => {cleanup(); vi.resetAllMocks();});
 
+it("does not describe capital inspection as a news item missing its original link", () => {
+ function CapitalOpener(){const {open}=useDetailModal();return <button onClick={()=>open({kind:"capital",title:"资金流",symbol:"600825"})}>打开资金</button>;}
+ render(<DetailModalProvider><CapitalOpener/></DetailModalProvider>);
+ fireEvent.click(screen.getByRole("button",{name:"打开资金"}));
+ expect(screen.queryByText(/原文链接缺失/)).toBeNull();
+ expect(screen.queryByText(/该事件由快讯流提取/)).toBeNull();
+ expect(getNewsContent).not.toHaveBeenCalled();
+ expect(getEventsForSymbol).not.toHaveBeenCalled();
+});
+
 function Openers() {
   const {open} = useDetailModal();
   return <>{["600519", "000001"].map(symbol => <button key={symbol} onClick={() => open({kind: "feed", title: symbol + "关联消息", symbol})}>打开 {symbol}</button>)}</>;

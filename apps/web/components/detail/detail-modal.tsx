@@ -114,6 +114,7 @@ function DetailModalBody({ payload, active, onClose }: { payload: DetailPayload;
     items: [],
   });
   const isFeed = payload.kind === "feed";
+  const isArticle = payload.kind === "news" || payload.kind === "event";
   const selection = payload.selectionEntry;
   const recordedSelection = !!selection && ["recorded", "partial"].includes(selection.state)
     && selection.semantics === "observation_only_not_fill"
@@ -286,7 +287,7 @@ function DetailModalBody({ payload, active, onClose }: { payload: DetailPayload;
         )}
 
         {/* 三态：加载 / 错误（可重试）/ 空（显式说明） */}
-        {payload.kind !== "attribution" && <div className="mt-3">
+        {isArticle && <div className="mt-3">
           {state.status === "loading" && <p className="text-xs text-zinc-600 dark:text-zinc-400">正文加载中…</p>}
           {state.status === "error" && (
             <div className="rounded border border-amber-200 bg-amber-50 p-2 text-xs text-amber-800 dark:border-amber-900 dark:bg-amber-950/40 dark:text-amber-300">
@@ -308,7 +309,7 @@ function DetailModalBody({ payload, active, onClose }: { payload: DetailPayload;
         </div>}
 
         {/* 无原文链接时的兜底说明（此前这类事件直接不可点）；feed 是列表视图不适用 */}
-        {!payload.url && !isFeed && payload.kind !== "attribution" && (
+        {!payload.url && isArticle && (
           <p className="mt-2 text-[11px] text-zinc-600 dark:text-zinc-400">
             该事件由快讯流提取，源站未提供原文链接；判定结果见上方元信息。
           </p>

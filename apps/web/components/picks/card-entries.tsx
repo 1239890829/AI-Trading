@@ -4,7 +4,7 @@
  * 猎场个股卡片入口行（2026-09-09 需求 3，17:15 按用户反馈收敛）
  *
  * 入选与关联消息由PickCard的“入选解读”统一承接。
- * - **资金** → 弹窗内展示资金图（`kind: "capital"`，复用工作台组件），**不跳转**；
+ * - **资金** → 抽屉内展示资金图（`kind: "capital"`，复用工作台组件），**不跳转**；
  *   **梯队** → 原地题材旁览，保留当前候选。
  *   两者都阻止冒泡（卡片整块可点会带走路由）。
  *
@@ -21,10 +21,14 @@ export function CardEntryRow({
   symbol,
   name,
   theme,
+  onRead,
+  readingOpen = false,
 }: {
   symbol: string;
   name?: string | null;
   theme?: string | null;
+  onRead?: () => void;
+  readingOpen?: boolean;
 }) {
   const { open } = useDetailModal();
   const { open: inspect } = useInspection();
@@ -41,13 +45,17 @@ export function CardEntryRow({
 
   return (
     <div className="card-entry-dock" aria-label="关联研究入口">
+      {onRead && <button type="button" className={BTN} aria-haspopup="dialog" aria-expanded={readingOpen}
+        onClick={stopAnd(onRead)}>
+        <svg aria-hidden="true" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.5"><path d="M4 4h7a3 3 0 0 1 3 3v14a4 4 0 0 0-4-2H4zM14 7h6v12h-2" /></svg>入选解读
+      </button>}
       <button
         type="button"
         className={BTN}
         onClick={stopAnd(() =>
           open({ kind: "capital", title: `${name ?? symbol} · 资金流`, symbol }),
         )}
-        title="资金图：近 30 日主力净额（复用工作台组件，弹窗内展示）"
+        title="资金图：近 30 日主力净额，在抽屉内查看"
       >
         <svg aria-hidden="true" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.5"><path d="M4 19h16M7 15V9m5 6V5m5 10v-7" /></svg>资金
       </button>

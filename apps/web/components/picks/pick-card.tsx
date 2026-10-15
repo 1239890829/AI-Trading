@@ -1,7 +1,7 @@
 "use client";
 
 import {ConditionList, NarrativeText, FactCards, FactTimeline} from "@/components/ui/explanation-map";
-import type { ReactNode } from "react";
+import { useState, type ReactNode } from "react";
 
 import { CardHead, CardShell } from "@/components/picks/card-shell";
 import { CardEntryRow } from "@/components/picks/card-entries";
@@ -12,6 +12,8 @@ import { bjDate, fmt, formatLegacyLimitDistance, pctColor, pctText, timeTextBJ, 
 import { clockOf, compareGates, gateActive, type GateComparison } from "@/lib/picks-gate";
 import { roleClass } from "@/lib/role-style";
 import {ReaderBrief, ResearchDisclosure} from "@/components/ui/reader-brief";
+import { ModalShell } from "@/components/ui/modal-shell";
+import { useExitPresence } from "@/hooks/use-exit-presence";
 import {readerExcerpt, readerCautions} from "@/lib/reader-copy";
 import type {
   DailyPickItem,
@@ -319,9 +321,9 @@ export function selectionReading(item: TradingCard) {
   const plainBasis = (value: string) => readerExcerpt(value.replace(/技术面偏多/g, "走势指标多数偏强")
     .replace(/技术面中性/g, "走势尚无明确倾向").replace(/共振向上/g, "多项走势指标同时偏强")
     .replace(/多空分歧/g, "走势信号不一致").replace(/\bPE\b/g, "市盈率").replace(/\bROE\b/g, "净资产收益率"), 90);
-  const why = item.origin === "picks" && dimensions.length
+  const why = reason ? readerExcerpt(reason, 120)
+    : item.origin === "picks" && dimensions.length
     ? `这次综合筛选中，${dimensions[0].label}项的得分相对靠前：${plainBasis(dimensions[0].row!.value)}`
-    : reason ? readerExcerpt(reason, 120)
     : item.referenceOnly ? "这是强势参考项，不是可参与候选；原记录未保存完整筛选理由。"
     : "原记录没有保存系统筛选理由，不能把来源的涨停说明当作入选理由。";
   const supports = dimensions.length ? dimensions.map(d => ({label: `${d.label}依据`, value: plainBasis(d.row!.value)}))
@@ -415,7 +417,178 @@ export function PickCard({
               ? "未判定"
               : null;
 
+  const readingKey = `${item.symbol}:${item.origin}:${item.selectionEntry?.selected_at || ""}:${item.selectionEntry?.source_version || ""}`;
+  const [readingIdentity, setReadingIdentity] = useState<string | null>(null);
+  if (readingIdentity !== null && readingIdentity !== readingKey) setReadingIdentity(null);
+  const readingOpen = !evidenceExpanded && readingIdentity === readingKey;
+  const presence = useExitPresence(readingOpen ? readingKey : null);
+  const evidence = <>
+      <ReaderBrief label="本次筛选考虑" facts={[{label: "选择理由", value: reading.why}, ...reading.supports, {label: "失效条件", value: reading.limit}]}/>
+      <p className="text-xs leading-relaxed text-zinc-600 dark:text-zinc-400">上方解释来自本次保存的筛选记录。下方消息用于核对关联，晚到或更新的消息不替换当时的入选理由。</p>
+      <StockAttributionPanel symbol={item.symbol} title="相关消息与AI解读" defaultExpanded bounded={false}
+        selectedAt={item.selectionEntry?.selected_at} recordedRefs={item.relatedEventRefs} selectionContext/>
+      {/* 估值（仅盘前名单）：数据源确实不提供时（新股/亏损/长期停牌）显示"暂无"并注明原因，
+          不留白、不臆造，与个股详情页口径一致。 */}
+      {(item.pe_ttm != null || item.pb != null) && (
+        <div className="mt-1 flex items-center gap-2 text-[10px] text-zinc-600 dark:text-zinc-400">
+          <span
+            className="font-mono"
+            // 负 PE = TTM 净利润为负（亏损）。直接显示 "-78.01" 会被误读成"极低估值"，
+            // 因此负值与缺失分别表述；悬停给出原始数值，信息不丢失。
+            title={
+              item.pe_ttm == null
+                ? "数据源未提供市盈率（常见于新股、亏损或长期停牌个股）"
+                : item.pe_ttm < 0
+                  ? `TTM 净利润为负（亏损），市盈率 ${item.pe_ttm} 不适用估值比较`
+                  : "市盈率 TTM（后端已用腾讯行情补全；链首 ths 快照不带该字段）"
+            }
+          >
+            PE {item.pe_ttm == null ? "暂无" : item.pe_ttm < 0 ? "亏损" : fmt(item.pe_ttm)}
+          </span>
+          <span className="font-mono" title="市净率">
+            PB {item.pb != null ? fmt(item.pb) : "暂无"}
+          </span>
+        </div>
+      )}
+
+      {/* 六维评分（仅盘前名单）+ meta 置信档 */}
+      {item.sub_scores && (
+        <div className="mt-2 flex items-center gap-2">
+          <span
+            className="rounded bg-zinc-100 px-1.5 py-0.5 font-mono text-xs font-semibold dark:bg-zinc-800"
+            title="六维加权综合分（一票否决后）"
+          >
+            {item.score ?? "--"}
+          </span>
+          {item.confidence && (
+            <span
+              className={`rounded border px-1.5 py-0.5 text-[10px] font-medium ${
+                item.confidence.tier === "strong"
+                  ? "border-red-500/50 bg-red-500/10 text-red-700 dark:text-red-300"
+                  : item.confidence.tier === "executable"
+                    ? "border-sky-500/50 bg-sky-500/10 text-sky-700 dark:text-sky-300"
+                    : "border-amber-500/40 bg-amber-500/10 text-amber-800 dark:text-amber-300"
+              }`}
+              title={`meta 置信层（综合分+相位+筹码+红线 → 三档）：\n${item.confidence.reasons.join("；")}`}
+            >
+              {item.confidence.label}
+            </span>
+          )}
+          <div className="flex flex-1 gap-1">
+            {SUB_LABELS.map(([key, label]) => {
+              const v = item.sub_scores?.[key];
+              const evidence = item.dimensionEvidence?.[key];
+              const absent = evidence?.state === "missing" || evidence?.state === "error";
+              return (
+                <div key={key} className="flex-1" title={`${label}：${item.basisRows.find((r) => r.label === label)?.value ?? "--"}`}>
+                  {absent ? <span className="block text-center text-[9px] text-zinc-600 dark:text-zinc-400" aria-label={`${label}依据缺失，计算占位 ${v ?? "未知"}`} title={evidence.reason}>缺项</span> : v == null ? <span className="block text-center text-[9px] text-zinc-600 dark:text-zinc-400" aria-label={`${label}评分缺失`}>暂无</span> : <div role="meter" aria-label={`${label}评分`} aria-valuemin={0} aria-valuemax={100} aria-valuenow={v} className="score-track h-1 w-full overflow-hidden rounded bg-zinc-100 dark:bg-zinc-800">
+                    <div className="h-full rounded bg-zinc-500 dark:bg-zinc-400" style={{ width: `${Math.max(0, Math.min(100, v))}%` }} />
+                  </div>}
+                  <div className="mt-0.5 text-center text-[9px] text-zinc-600 dark:text-zinc-400">{label}{evidence?.state === "partial" ? "·部分" : ""}</div>
+                </div>
+              );
+            })}
+          </div>
+        </div>
+      )}
+
+      {item.sub_scores && !item.dimensionEvidence && <p className="mt-2 text-xs text-zinc-600 dark:text-zinc-400">历史记录未保存各维读取状态；评分数字不能证明依据齐全。</p>}
+      {item.dimensionEvidence && Object.entries(item.dimensionEvidence).some(([, e]) => ["missing", "error", "partial"].includes(e.state)) && (
+        <ConditionList label="依据缺项" tone="warning" items={SUB_LABELS.flatMap(([key, label]) => {
+          const evidence = item.dimensionEvidence?.[key];
+          return evidence && ["missing", "error", "partial"].includes(evidence.state) ? [`${label}：${evidence.reason}；当前计分 ${item.sub_scores?.[key] ?? "未知"}${evidence.state !== "partial" ? " 为计算占位，不代表实测中性" : " 仅依据已取得部分"}。`] : [];
+        })}/>
+
+      )}
+      {dailyEvidence && onShowDailyEvidence && (
+        <div className="mt-2 flex flex-wrap items-center justify-between gap-2 text-xs text-zinc-600 dark:text-zinc-400" onClick={event => event.stopPropagation()}>
+          <span className="min-w-0" title={dailyEvidence.version ?? "生成版本未记录"}>每日 {dailyEvidence.date} · {dailyEvidence.generatedAt ? clockOf(dailyEvidence.generatedAt) : "生成时点未记录"} · {dailyEvidence.item.score}分</span>
+          <button type="button" className="quiet-action shrink-0" onClick={() => onShowDailyEvidence(dailyEvidence.item)}>每日依据</button>
+        </div>
+      )}
+      {item.themeSources && item.themeSources.length > 1 && (
+        <section aria-label="全部题材来源" className="space-y-2">{item.themeSources.map((source, index) => <div key={index}><h4>{source.theme || "题材未记录"} · {source.strength_tier || "强度未记录"}</h4><p className="whitespace-pre-wrap">{source.pick_basis || source.linkage?.basis || "来源依据未记录"}</p></div>)}</section>
+
+      )}
+
+      {/* 入选原因：「为什么选它」。
+          盘前 = 六维 basis 摘要（一票否决显式标红；筹码为附注维度不进权重）；
+          盘中 = 入选理由（pick_basis，仅分层名单）+ 涨停原因（reason，同花顺官方原串）。
+          ⚠️ 必须带标题行（2026-09-10 用户反馈「盘前选择怎么没有入选原因」）：盘前的依据
+          本就是七行维度依据，但没有标题时看起来像「这卡没有入选原因」——数据没丢，
+          丢的是口径。标题两侧统一，用户才能一眼对上「入选」这件事。
+          两者皆无时**整节不渲染**——不拿「入选 —」把「本就没有这个维度」伪装成「没取到」。 */}
+      {(item.basisRows.length > 0 || item.vetoes.length > 0) && (
+        <div className="stock-card-basis text-[11px] leading-relaxed">
+          <div className="text-[10px] font-medium text-zinc-600 dark:text-zinc-400">入选原因</div>
+          <dl aria-label="入选依据核对" className="space-y-3">{item.basisRows.map((row, index) => <div key={`${index}:${row.label}`}><dt className="font-medium">{row.label}</dt><dd className="mt-1 whitespace-pre-wrap">{row.label === "涨停原因" ? <LimitReason symbol={item.symbol} reason={row.value} source={row.source} date={row.date} full/> : row.value}</dd></div>)}</dl>
+          <ConditionList label="否决条件" items={item.vetoes} tone="warning"/>
+
+        </div>
+      )}
+
+      {/* 买入区间（仅盘前名单：收盘评分产出，盘中路径不适用 ⇒ 整节不渲染并见卡底口径注记）。
+          空仓闸门触发时撤除区间，不给出手依据。 */}
+      {item.origin === "picks" &&
+        (item.buyRange ? (
+          <div className="mt-2 rounded-lg bg-sky-500/5 px-2 py-1.5 text-[11px]" title={item.buyRange.basis}>
+            <span className="text-zinc-600 dark:text-zinc-400">买入参考区间</span>{" "}
+            <span className="font-mono font-medium tabular-nums">
+              {fmt(item.buyRange.low)} – {fmt(item.buyRange.high)}
+            </span>{item.buyRange.basis && <NarrativeText text={item.buyRange.basis} label="区间依据"/>}
+          </div>
+        ) : (
+          <div
+            className={`mt-2 rounded-lg px-2 py-1.5 text-[11px] ${
+              item.followState === "followable"
+                ? "bg-sky-500/5 text-sky-700 dark:text-sky-300"
+                : "bg-red-500/5 text-red-700 dark:text-red-300"
+            }`}
+          >
+            {item.followState === "followable"
+              ? "空仓闸门日：不给买入区间；属「可跟」名单，参与须经影子持仓先验证"
+              : "空仓闸门已触发：本条不给出买入参考区间"}
+          </div>
+        ))}
+
+      {/* 止损参考位 + 出场纪律 + 失效条件（freqtrade 的止损/跟踪止盈/ROI 分档 的 A 股映射） */}
+      {(item.stopLoss || item.exit || item.invalidations.length > 0) && (
+        <div className="stock-card-risk text-[11px]">
+          {item.stopLoss && <Row k="止损计算依据" v={item.stopLoss.basis || "原记录未提供"}/>}
+          {item.exit?.trailing_pct != null && (
+            <Row k="跟踪止盈" v={`回落 ${item.exit.trailing_pct}%`} title={item.exit.disclaimer} />
+          )}
+          {item.exit && item.exit.roi_ladder.length > 0 && (
+            <Row
+              k="ROI 阶梯"
+              v={item.exit.roi_ladder.map((r) => `+${r.gain_pct}%→${r.action}`).join("；")}
+            />
+          )}
+          {item.exit?.note && <Row k="纪律" v={item.exit.note} />}
+          {item.invalidations.length > 0 && (
+            <ConditionList label="失效条件" items={item.invalidations} tone="warning"/>
+          )}
+        </div>
+      )}
+
+      {/* 关联消息（仅盘前名单有） */}
+      {item.relatedEvents.length > 0 && (
+        <div className="stock-card-events text-[11px]">
+          <ConditionList label="入选当时记录的消息" items={item.relatedEvents}/>
+        </div>
+      )}
+
+      {/* 口径注记：解释「本卡为什么缺某几节」（仅盘中路径需要——缺的维度属收盘口径） */}
+      {item.caliberNote && (
+        <p className="stock-card-note text-[11px] leading-relaxed text-zinc-600 dark:text-zinc-400">
+          {item.caliberNote}
+        </p>
+      )}
+
+  </>;
+
   return (
+    <>
     <CardShell flow className={`stock-card-${item.origin}`} onClick={stockNav(item.symbol)}>
       {readError && <p role="status" className="text-xs text-amber-800 dark:text-amber-300">上次读取结果 · 刷新失败，当前行情与参与条件待重新核实。原始依据仅供核对。</p>}
       {/* 头：名称代码（可点 → 工作台）+ 来源/持仓/T 档徽标 + 现价 + 涨跌幅 */}
@@ -647,173 +820,20 @@ export function PickCard({
         facts={[{label: "为什么关注", value: readerExcerpt(reading.why, 60)}, {label: "还需留意", value: readerExcerpt(reading.limit, 36)}]}
         cautions={[...(readError ? ["刷新失败，当前条件待核实"] : []), ...(item.vetoes.length ? ["存在不满足条件的项目"] : []), ...readerCautions([...item.basisRows.map(row => row.value), ...item.followReasons]), ...(item.dimensionEvidence && Object.values(item.dimensionEvidence).some(e => ["missing", "error", "partial"].includes(e.state)) ? ["部分依据缺失"] : [])]}
       />
-      <ResearchDisclosure label="入选解读" identity={`${item.symbol}:${item.origin}:${item.selectionEntry?.source_version || ""}`} defaultOpen={evidenceExpanded}>
-      <ReaderBrief label="本次筛选考虑" facts={[{label: "系统为何选中", value: reading.why}, ...reading.supports, {label: "等待或失效条件", value: reading.limit}]}/>
-      <p className="text-xs leading-relaxed text-zinc-600 dark:text-zinc-400">上方解释来自本次保存的筛选记录。下方消息用于核对关联，晚到或更新的消息不替换当时的入选理由。</p>
-      <StockAttributionPanel symbol={item.symbol} title="相关消息与AI解读" defaultExpanded bounded={false}
-        selectedAt={item.selectionEntry?.selected_at} recordedRefs={item.relatedEventRefs} selectionContext/>
-      {/* 估值（仅盘前名单）：数据源确实不提供时（新股/亏损/长期停牌）显示"暂无"并注明原因，
-          不留白、不臆造，与个股详情页口径一致。 */}
-      {(item.pe_ttm != null || item.pb != null) && (
-        <div className="mt-1 flex items-center gap-2 text-[10px] text-zinc-600 dark:text-zinc-400">
-          <span
-            className="font-mono"
-            // 负 PE = TTM 净利润为负（亏损）。直接显示 "-78.01" 会被误读成"极低估值"，
-            // 因此负值与缺失分别表述；悬停给出原始数值，信息不丢失。
-            title={
-              item.pe_ttm == null
-                ? "数据源未提供市盈率（常见于新股、亏损或长期停牌个股）"
-                : item.pe_ttm < 0
-                  ? `TTM 净利润为负（亏损），市盈率 ${item.pe_ttm} 不适用估值比较`
-                  : "市盈率 TTM（后端已用腾讯行情补全；链首 ths 快照不带该字段）"
-            }
-          >
-            PE {item.pe_ttm == null ? "暂无" : item.pe_ttm < 0 ? "亏损" : fmt(item.pe_ttm)}
-          </span>
-          <span className="font-mono" title="市净率">
-            PB {item.pb != null ? fmt(item.pb) : "暂无"}
-          </span>
-        </div>
-      )}
+      {evidenceExpanded ? <ResearchDisclosure label="入选解读" identity={readingKey} defaultOpen>{evidence}</ResearchDisclosure> : null}
+      <CardEntryRow symbol={item.symbol} name={item.name} theme={item.theme ?? null}
+        onRead={evidenceExpanded ? undefined : () => setReadingIdentity(readingKey)} readingOpen={readingOpen}/>
 
-      {/* 六维评分（仅盘前名单）+ meta 置信档 */}
-      {item.sub_scores && (
-        <div className="mt-2 flex items-center gap-2">
-          <span
-            className="rounded bg-zinc-100 px-1.5 py-0.5 font-mono text-xs font-semibold dark:bg-zinc-800"
-            title="六维加权综合分（一票否决后）"
-          >
-            {item.score ?? "--"}
-          </span>
-          {item.confidence && (
-            <span
-              className={`rounded border px-1.5 py-0.5 text-[10px] font-medium ${
-                item.confidence.tier === "strong"
-                  ? "border-red-500/50 bg-red-500/10 text-red-700 dark:text-red-300"
-                  : item.confidence.tier === "executable"
-                    ? "border-sky-500/50 bg-sky-500/10 text-sky-700 dark:text-sky-300"
-                    : "border-amber-500/40 bg-amber-500/10 text-amber-800 dark:text-amber-300"
-              }`}
-              title={`meta 置信层（综合分+相位+筹码+红线 → 三档）：\n${item.confidence.reasons.join("；")}`}
-            >
-              {item.confidence.label}
-            </span>
-          )}
-          <div className="flex flex-1 gap-1">
-            {SUB_LABELS.map(([key, label]) => {
-              const v = item.sub_scores?.[key];
-              const evidence = item.dimensionEvidence?.[key];
-              const absent = evidence?.state === "missing" || evidence?.state === "error";
-              return (
-                <div key={key} className="flex-1" title={`${label}：${item.basisRows.find((r) => r.label === label)?.value ?? "--"}`}>
-                  {absent ? <span className="block text-center text-[9px] text-zinc-600 dark:text-zinc-400" aria-label={`${label}依据缺失，计算占位 ${v ?? "未知"}`} title={evidence.reason}>缺项</span> : v == null ? <span className="block text-center text-[9px] text-zinc-600 dark:text-zinc-400" aria-label={`${label}评分缺失`}>暂无</span> : <div role="meter" aria-label={`${label}评分`} aria-valuemin={0} aria-valuemax={100} aria-valuenow={v} className="score-track h-1 w-full overflow-hidden rounded bg-zinc-100 dark:bg-zinc-800">
-                    <div className="h-full rounded bg-zinc-500 dark:bg-zinc-400" style={{ width: `${Math.max(0, Math.min(100, v))}%` }} />
-                  </div>}
-                  <div className="mt-0.5 text-center text-[9px] text-zinc-600 dark:text-zinc-400">{label}{evidence?.state === "partial" ? "·部分" : ""}</div>
-                </div>
-              );
-            })}
-          </div>
-        </div>
-      )}
-
-      {item.sub_scores && !item.dimensionEvidence && <p className="mt-2 text-xs text-zinc-600 dark:text-zinc-400">历史记录未保存各维读取状态；评分数字不能证明依据齐全。</p>}
-      {item.dimensionEvidence && Object.entries(item.dimensionEvidence).some(([, e]) => ["missing", "error", "partial"].includes(e.state)) && (
-        <ConditionList label="依据缺项" tone="warning" items={SUB_LABELS.flatMap(([key, label]) => {
-          const evidence = item.dimensionEvidence?.[key];
-          return evidence && ["missing", "error", "partial"].includes(evidence.state) ? [`${label}：${evidence.reason}；当前计分 ${item.sub_scores?.[key] ?? "未知"}${evidence.state !== "partial" ? " 为计算占位，不代表实测中性" : " 仅依据已取得部分"}。`] : [];
-        })}/>
-
-      )}
-      {dailyEvidence && onShowDailyEvidence && (
-        <div className="mt-2 flex flex-wrap items-center justify-between gap-2 text-xs text-zinc-600 dark:text-zinc-400" onClick={event => event.stopPropagation()}>
-          <span className="min-w-0" title={dailyEvidence.version ?? "生成版本未记录"}>每日 {dailyEvidence.date} · {dailyEvidence.generatedAt ? clockOf(dailyEvidence.generatedAt) : "生成时点未记录"} · {dailyEvidence.item.score}分</span>
-          <button type="button" className="quiet-action shrink-0" onClick={() => onShowDailyEvidence(dailyEvidence.item)}>每日依据</button>
-        </div>
-      )}
-      {item.themeSources && item.themeSources.length > 1 && (
-        <section aria-label="全部题材来源" className="space-y-2">{item.themeSources.map((source, index) => <div key={index}><h4>{source.theme || "题材未记录"} · {source.strength_tier || "强度未记录"}</h4><p className="whitespace-pre-wrap">{source.pick_basis || source.linkage?.basis || "来源依据未记录"}</p></div>)}</section>
-
-      )}
-
-      {/* 入选原因：「为什么选它」。
-          盘前 = 六维 basis 摘要（一票否决显式标红；筹码为附注维度不进权重）；
-          盘中 = 入选理由（pick_basis，仅分层名单）+ 涨停原因（reason，同花顺官方原串）。
-          ⚠️ 必须带标题行（2026-09-10 用户反馈「盘前选择怎么没有入选原因」）：盘前的依据
-          本就是七行维度依据，但没有标题时看起来像「这卡没有入选原因」——数据没丢，
-          丢的是口径。标题两侧统一，用户才能一眼对上「入选」这件事。
-          两者皆无时**整节不渲染**——不拿「入选 —」把「本就没有这个维度」伪装成「没取到」。 */}
-      {(item.basisRows.length > 0 || item.vetoes.length > 0) && (
-        <div className="stock-card-basis text-[11px] leading-relaxed">
-          <div className="text-[10px] font-medium text-zinc-600 dark:text-zinc-400">入选原因</div>
-          <dl aria-label="入选依据核对" className="space-y-3">{item.basisRows.map((row, index) => <div key={`${index}:${row.label}`}><dt className="font-medium">{row.label}</dt><dd className="mt-1 whitespace-pre-wrap">{row.label === "涨停原因" ? <LimitReason symbol={item.symbol} reason={row.value} source={row.source} date={row.date} full/> : row.value}</dd></div>)}</dl>
-          <ConditionList label="否决条件" items={item.vetoes} tone="warning"/>
-
-        </div>
-      )}
-
-      {/* 买入区间（仅盘前名单：收盘评分产出，盘中路径不适用 ⇒ 整节不渲染并见卡底口径注记）。
-          空仓闸门触发时撤除区间，不给出手依据。 */}
-      {item.origin === "picks" &&
-        (item.buyRange ? (
-          <div className="mt-2 rounded-lg bg-sky-500/5 px-2 py-1.5 text-[11px]" title={item.buyRange.basis}>
-            <span className="text-zinc-600 dark:text-zinc-400">买入参考区间</span>{" "}
-            <span className="font-mono font-medium tabular-nums">
-              {fmt(item.buyRange.low)} – {fmt(item.buyRange.high)}
-            </span>{item.buyRange.basis && <NarrativeText text={item.buyRange.basis} label="区间依据"/>}
-          </div>
-        ) : (
-          <div
-            className={`mt-2 rounded-lg px-2 py-1.5 text-[11px] ${
-              item.followState === "followable"
-                ? "bg-sky-500/5 text-sky-700 dark:text-sky-300"
-                : "bg-red-500/5 text-red-700 dark:text-red-300"
-            }`}
-          >
-            {item.followState === "followable"
-              ? "空仓闸门日：不给买入区间；属「可跟」名单，参与须经影子持仓先验证"
-              : "空仓闸门已触发：本条不给出买入参考区间"}
-          </div>
-        ))}
-
-      {/* 止损参考位 + 出场纪律 + 失效条件（freqtrade 的止损/跟踪止盈/ROI 分档 的 A 股映射） */}
-      {(item.stopLoss || item.exit || item.invalidations.length > 0) && (
-        <div className="stock-card-risk text-[11px]">
-          {item.stopLoss && <Row k="止损计算依据" v={item.stopLoss.basis || "原记录未提供"}/>}
-          {item.exit?.trailing_pct != null && (
-            <Row k="跟踪止盈" v={`回落 ${item.exit.trailing_pct}%`} title={item.exit.disclaimer} />
-          )}
-          {item.exit && item.exit.roi_ladder.length > 0 && (
-            <Row
-              k="ROI 阶梯"
-              v={item.exit.roi_ladder.map((r) => `+${r.gain_pct}%→${r.action}`).join("；")}
-            />
-          )}
-          {item.exit?.note && <Row k="纪律" v={item.exit.note} />}
-          {item.invalidations.length > 0 && (
-            <ConditionList label="失效条件" items={item.invalidations} tone="warning"/>
-          )}
-        </div>
-      )}
-
-      {/* 关联消息（仅盘前名单有） */}
-      {item.relatedEvents.length > 0 && (
-        <div className="stock-card-events text-[11px]">
-          <ConditionList label="入选当时记录的消息" items={item.relatedEvents}/>
-        </div>
-      )}
-
-      {/* 口径注记：解释「本卡为什么缺某几节」（仅盘中路径需要——缺的维度属收盘口径） */}
-      {item.caliberNote && (
-        <p className="stock-card-note text-[11px] leading-relaxed text-zinc-600 dark:text-zinc-400">
-          {item.caliberNote}
-        </p>
-      )}
-
-      </ResearchDisclosure>
-      {/* 跨模块入口（2026-09-09 需求 3）：事件弹窗 / 消息·资金·梯队跳转 */}
-      <CardEntryRow symbol={item.symbol} name={item.name} theme={item.theme ?? null}/>
     </CardShell>
+    {/* Sibling of the spatial card: portal pointer/capture events cannot tilt or activate it. */}
+    {presence.value === readingKey && <ModalShell presentation="drawer" open={presence.active}
+      onClose={() => setReadingIdentity(null)} label={`${item.name || item.symbol} · 入选解读`} size="md" zIndex={60}
+      header={<h2 className="text-sm font-medium">{item.name || item.symbol} · 入选解读</h2>}
+      bodyClassName="overflow-y-auto space-y-4 px-4 py-4"
+      footer="来自保存的筛选记录；消息用于核对关联，不改写当时理由。不构成买卖建议。">
+      {presence.active && evidence}
+    </ModalShell>}
+    </>
   );
 }
 

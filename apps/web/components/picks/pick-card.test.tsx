@@ -896,6 +896,13 @@ it("explains saved system evidence instead of substituting the vendor limit-up n
  expect(daily.supports.length).toBeGreaterThan(0);
 });
 
+it("uses the recorded selection rationale before a high-scoring dimension as the reason", () => {
+ const item=fromDailyPick({...base,source_basis:"因已公布的收购计划纳入观察，仍待审议。",sub_scores:{fundamental:90},bases:{fundamental:"估值中性，盈利同比增长"}});
+ const reading=selectionReading(item);
+ expect(reading.why).toBe("因已公布的收购计划纳入观察，仍待审议。");
+ expect(reading.supports[0].value).toContain("估值中性");
+});
+
 it("has one selection reader and loads related messages only after opening it", () => {
  render(<PickCard item={fromDailyPick(base)}/>);
  expect(screen.queryByRole("button",{name:"关联消息"})).toBeNull();
@@ -915,8 +922,46 @@ it("keeps exact archived event references in the combined reader and performs on
   await waitFor(()=>expect(spy).toHaveBeenCalledTimes(1));
   expect(spy).toHaveBeenCalledWith("600995");
   expect(screen.getByText(/原解释 #20/).textContent).toContain("事件 #18");
-  fireEvent.click(screen.getByRole("button",{name:"入选解读"}));
+  fireEvent.click(within(screen.getByRole("dialog")).getByRole("button",{name:"关闭"}));
   expect(screen.getByRole("button",{name:"入选解读"}).getAttribute("aria-expanded")).toBe("false");
+  await waitFor(()=>expect(screen.queryByLabelText("相关消息与AI解读")).toBeNull());
   expect(spy).toHaveBeenCalledTimes(1);
  } finally {spy.mockRestore();}
+});
+
+it("opens a bottom-entry drawer without navigation or moving the card, and retires it on identity change", () => {
+ const item=fromDailyPick(base);
+ const view=render(<PickCard item={item}/>);
+ const trigger=screen.getByRole("button",{name:"入选解读"});
+ expect(within(screen.getByLabelText("关联研究入口")).getByRole("button",{name:"入选解读"})).toBe(trigger);
+ fireEvent.click(trigger);
+ const dialog=screen.getByRole("dialog",{name:`${base.name} · 入选解读`});
+ expect(dialog.classList.contains("motion-drawer")).toBe(true);
+ expect(dialog.parentElement?.parentElement).toBe(document.body);
+ expect(trigger.getAttribute("aria-expanded")).toBe("true");
+ fireEvent.click(within(dialog).getByLabelText("本次筛选考虑"));
+ expect(screen.getByRole("dialog")).toBe(dialog);
+ view.rerender(<PickCard item={{...item,price:41}}/>);
+ expect(screen.getByRole("dialog")).toBe(dialog);
+ view.rerender(<PickCard item={{...item,selectionEntry:{state:"missing",selected_at:null,reference_price:null,reference_change_pct:null,quote_as_of:null,source:"daily_generation",semantics:"observation_only_not_fill",source_version:"another-saved-version"}}}/>);
+ expect(screen.queryByRole("dialog")).toBeNull();
+ fireEvent.click(screen.getByRole("button",{name:"入选解读"}));
+ view.rerender(<PickCard item={{...item,symbol:"600127",name:"另一记录"}}/>);
+ expect(screen.queryByRole("dialog")).toBeNull();
+ expect(screen.getByRole("button",{name:"入选解读"}).getAttribute("aria-expanded")).toBe("false");
+});
+
+it("keeps drawer pointer gestures outside the underlying spatial card", () => {
+ const bounds=vi.spyOn(HTMLElement.prototype,"getBoundingClientRect").mockReturnValue(new DOMRect(0,0,400,800));
+ try {
+  const view=render(<PickCard item={fromDailyPick(base)}/>);
+  fireEvent.click(screen.getByRole("button",{name:"入选解读"}));
+  const content=within(screen.getByRole("dialog")).getByLabelText("本次筛选考虑");
+  const move=new MouseEvent("pointermove",{bubbles:true,clientX:360,clientY:100});
+  Object.defineProperties(move,{isPrimary:{value:true},pointerType:{value:"mouse"}});
+  fireEvent(content,move);
+  expect(view.container.querySelector("[data-spatial-active]")).toBeNull();
+  fireEvent.click(within(screen.getByRole("dialog")).getByRole("button",{name:"关闭"}));
+  expect(screen.getByRole("button",{name:"入选解读"}).getAttribute("aria-expanded")).toBe("false");
+ } finally {bounds.mockRestore();}
 });
