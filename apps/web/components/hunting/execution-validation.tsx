@@ -41,7 +41,7 @@ export function ExecutionContent({report}: {report: ExecutionReport}) {
     {presence.value && <div className="validation-expanded" data-open={presence.active} inert={!presence.active} aria-hidden={!presence.active}><div><div className="validation-detail">
       {order && <><h3>{order.symbol} · 原委托 #{order.id}</h3><p>{reasons[order.reason] ?? (order.reason || "原委托未附原因")}</p><dl><div><dt>成交价</dt><dd>{order.filled_price?.toFixed(2) ?? "未确认"} 元</dd></div><div><dt>已记费用</dt><dd>{order.fee?.toFixed(2) ?? "未确认"} 元</dd></div><div><dt>委托时刻</dt><dd>{dateTimeTextBJ(order.submitted_at,{seconds:true})}</dd></div></dl><p className="validation-muted">所示时刻为委托提交时间，不冒称成交时间。</p></>}
       {attempt && <><h3>{attempt.symbol} · 原机会尝试</h3><p>{attempt.issue || reasons[attempt.reason] || attempt.reason || "原记录未附原因"}</p><p>关联买入委托 {attempt.order_id ?? "无"} · {states[attempt.order_state]}</p><p className="validation-muted">决策 {attempt.decision_id} · 快照 {attempt.snapshot_id}</p></>}
-      {report.runs.filter(r => `run:${r.date}`===presence.value).map(r => <div key={r.date}><h3>{r.date} · 运行留痕</h3><p>{reasons[r.reason] ?? r.reason}</p>{r.pick_date && <p>原精选日期 {r.pick_date}</p>}<p className="validation-muted">日级留痕没有订单ID，不推断逐笔成交关联。</p></div>)}
+      {report.runs.filter(r => `run:${r.date}`===presence.value).map(r => <section key={r.date}><h3>{r.date} · 运行留痕</h3><p>{reasons[r.reason] ?? r.reason}</p>{r.pick_date && <p>原精选日期 {r.pick_date}</p>}<p className="validation-muted">日级留痕没有订单ID，不推断逐笔成交关联。</p></section>)}
     </div></div></div>}
     <p className="validation-disclaimer">{report.limitation}</p>
   </section>;

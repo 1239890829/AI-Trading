@@ -8,7 +8,7 @@
 
 ## 最新用户补充（2026-10-15）
 
-PR #290已合并67475012并通过post-master三job；本机配对激活build EWk6qpy8rQFVdHxKlX1aN（8000/93549、3000/93636）。19条自动归档误标已备份后精确纠正，迁移a8d4f2c6e9b1已核；现役身份见统一runtime-identity与本批release。新增用户授权：将每日精选影子与机会影子的已有执行结果并入验证页，只读结果整合、不合资金账、不改执行条件、不中断原选股/通知。施工codex/selection-execution-consolidation，基点67475012；本地BE5663/83跳过、FE两时区各1717/142文件及构建Fd0hY8uMXbZeroV8Jep97通过。用户纠偏后的银灰总览、左右执行布局与容器连续加载已核，140条合成记录追加且展开保留；准确HEAD发布与运行另核。
+PR #290已合并67475012并通过post-master三job；本机配对激活build EWk6qpy8rQFVdHxKlX1aN（8000/93549、3000/93636）。19条自动归档误标已备份后精确纠正，迁移a8d4f2c6e9b1已核；现役身份见统一runtime-identity与本批release。新增用户授权：将每日精选影子与机会影子的已有执行结果并入验证页，只读结果整合、不合资金账、不改执行条件、不中断原选股/通知。PR #291已合并b9da51bf并通过post-master三job，原施工分支已清理。本地BE5663/83跳过、FE两时区各1717/142文件及构建Fd0hY8uMXbZeroV8Jep97通过。用户纠偏后的银灰总览、左右执行布局与容器连续加载已核，140条合成记录追加且展开保留；原生390px后续发现日级运行详情误继承标题flex样式，已仅将详情容器改成section并复验单列。补充发布归本批release/execution/run-layout/；现役head/build/PID以统一runtime-identity为准，不把本段PR #290的历史激活身份当当前现场。
 
 ## 最近获准工程交付（2026-10-15）
 
