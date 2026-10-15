@@ -32,3 +32,14 @@ export async function getSelectionValidation(start: string, end: string, horizon
 export async function getValidationEntries(symbol: string) {
   return getJsonArray<ValidationSelectionEntry>(`/api/picks/validation/entries?${new URLSearchParams({symbol})}`, 15_000);
 }
+
+export interface ExecutionReport {
+  start:string;end:string;basis:string;limitation:string;
+  accounts:{scope:string;label:string;orders:number;filled:number;pending:number;rejected:number;cancelled:number;unknown:number}[];
+  orders:{id:number;scope:string;symbol:string;side:string;submitted_at:string;state:string;price:number|null;filled_price:number|null;quantity:number;fee:number|null;reason:string}[];
+  attempts:{id:string;date:string;symbol:string;state:string;order_id:number|null;order_state:string;reason:string;issue:string;decision_id:string;snapshot_id:string}[];
+  runs:{date:string;state:string;reason:string;pick_date:string|null}[];
+}
+export async function getExecutionValidation(start:string,end:string) {
+  return (await getJson<ExecutionReport>(`/api/picks/validation/execution?${new URLSearchParams({start,end})}`,15_000)).data;
+}

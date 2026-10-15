@@ -17,6 +17,18 @@ export const report: ValidationReport = {
 };
 
 describe("selection validation reading", () => {
+  it("appends records on scroll without pagination or losing the expanded evidence", () => {
+    const entries=Array.from({length:96},(_,i) => ({...report.entries[0],id:`test:${i}`,name:`样本${i}`}));
+    render(<ValidationContent report={{...report,entries}}/>);
+    const first=screen.getByRole("button",{name:/^样本0，/});
+    fireEvent.click(first);
+    expect(screen.getAllByRole("button",{name:/^样本\d+，/}).length).toBeLessThan(96);
+    fireEvent.scroll(window);fireEvent.scroll(window);
+    expect(screen.getAllByRole("button",{name:/^样本\d+，/})).toHaveLength(96);
+    expect(first.getAttribute("aria-expanded")).toBe("true");
+    expect(screen.queryByRole("button",{name:"上一页"})).toBeNull();
+    expect(screen.queryByRole("button",{name:"下一页"})).toBeNull();
+  });
   it("keeps cross-day same stock and opens original entry without another data request", () => {
     render(<ValidationContent report={report}/>);
     expect(screen.getAllByRole("button",{name:/金健米业/})).toHaveLength(2);
