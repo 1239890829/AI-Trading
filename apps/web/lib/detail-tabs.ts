@@ -126,7 +126,6 @@ const STOCK_RIGHT_TABS: readonly (readonly [DetailRightTab, string])[] = [
   ["reason", "原因"],
   ["profile", "资料"],
   ["info", "资讯"],
-  ["trade", "模拟交易"],
   // 真实持仓：券商实际成交的手工账本，与模拟交易完全独立
   ["real", "手工记账"],
 ] as const;
@@ -145,5 +144,5 @@ export function rightTabsFor(isIndex: boolean, reasonEligible = false): readonly
 /** Keep deep links and reused panels within the selected security's capabilities. */
 export function contextualRightTab(isIndex: boolean, tab: DetailRightTab): DetailRightTab {
   if (isIndex) return INDEX_RIGHT_TABS.has(tab) ? tab : INDEX_DEFAULT_RIGHT_TAB;
-  return INDEX_RIGHT_TABS.has(tab) ? "book" : tab;
+  return INDEX_RIGHT_TABS.has(tab) ? "book" : tab === "trade" ? "real" : tab;
 }

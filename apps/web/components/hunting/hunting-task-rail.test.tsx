@@ -28,7 +28,7 @@ describe("选股任务入口保真", () => {
     fireEvent.click(screen.getByRole("button", { name: "持续观察" }));
     expect(screen.getAllByRole("link").map(link => link.textContent)).toEqual(["跟踪记录", "接力与潜伏", "盘中节拍"]);
     fireEvent.click(screen.getByRole("button", { name: "验证复盘" }));
-    expect(screen.getAllByRole("link").map(link => link.textContent)).toEqual(["当日对照", "龙头研究", "跨日复盘"]);
+    expect(screen.getAllByRole("link").map(link => link.textContent)).toEqual(["验证统计", "当日对照", "龙头研究", "跨日复盘"]);
     const crossday = params(screen.getByRole("link", { name: "跨日复盘" }));
     expect(crossday.get("area")).toBe("research");
     expect(crossday.get("tab")).toBe("review");

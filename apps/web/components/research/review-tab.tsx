@@ -44,6 +44,7 @@ const CATEGORY_LABEL: Record<string, string> = {
 
 const STATUS_LABEL: Record<string, string> = {
   pending: "待处置",
+  recorded: "已记录 · 待实施",
   confirmed: "已确认",
   applied: "已实施",
   rejected: "已驳回",
@@ -51,6 +52,7 @@ const STATUS_LABEL: Record<string, string> = {
 };
 
 const STATUS_CLS: Record<string, string> = {
+  recorded: "text-zinc-600 dark:text-zinc-400",
   pending: "text-zinc-600 dark:text-zinc-400",
   confirmed: "text-sky-700 dark:text-sky-400",
   applied: "text-emerald-700 dark:text-emerald-400",
@@ -59,7 +61,7 @@ const STATUS_CLS: Record<string, string> = {
 };
 
 /** 需要填写理由才能提交的状态——后端强制校验，前端同步提示，避免点了才报错。 */
-const NOTE_REQUIRED: ActionItemStatus[] = ["rejected", "reverted"];
+const NOTE_REQUIRED: ActionItemStatus[] = ["applied", "rejected", "reverted"];
 
 /** gaps 元素可能是字符串，也可能是结构化对象（{field,reason,impact,severity}）——统一成可读文本。 */
 function gapText(g: unknown): string {
@@ -218,7 +220,7 @@ function ActionItemDispose({
             autoFocus
             value={note}
             onChange={(e) => setNote(e.target.value)}
-            placeholder={pending === "rejected" ? "驳回理由（必填）" : "回退理由（必填）"}
+            placeholder={pending === "applied" ? "实施与验证证据：PR、提交或批准记录（必填）" : pending === "rejected" ? "驳回理由（必填）" : "回退理由（必填）"}
             className="w-full rounded border border-zinc-300 bg-transparent px-2 py-1 text-[11px] text-zinc-900 dark:text-zinc-200 outline-none placeholder:text-zinc-600 focus:border-sky-500 dark:border-zinc-700"
           />
           <div className="flex items-center gap-2">

@@ -49,6 +49,9 @@ export interface RealTradeIn {
   fee?: number;
   traded_at?: string;
   note?: string | null;
+  executed_at?: string;
+  fee_known?: boolean;
+  selection_ref?: string;
 }
 
 export async function getRealPositions(): Promise<RealPositionsPayload> {

@@ -353,3 +353,7 @@ PR #265发布后，用户追加市场指数三列和弹窗双向过渡纠偏。�
 ### 2026-10-14 详情收拢与既有来源正确性传播
 
 用户直派沿IMP-019，事实与反例归runtime-performance§16，状态归W06/handoff，原因交互归limit-up-attribution，炸板/实时源钟恢复契约归data-sources，保存辅助与不持久化归semantic-decisions。仍为既有来源/既有模型的正确性修补，源优先级、TTL、采集/模型频率、4秒实时/12秒炸板预算、选股/通知资格不改。主方案v9.13、AGENTS与Skills无需新准入规则；INDEX无需新增文档入口，既有产品细功能同步原消费者。没有新服务、数据库、调度、一级页面或权限制，不以协作作者反证冒充独立Review；全门/精确HEAD/运行加载和未来效果仍分别验收。
+
+### 2026-10-15验证统计传播核对
+
+批准的入选/实际成交分账与模拟前台退出已传播到implementation-plan、hunting-decision-design、W03/IMP-094和handoff。INDEX沿用既有文档条目，无新权威文档；AGENTS/通用Skills权限与工程协议不变，不适用规则修订。product-closure-design与feature-closure-audit已同步前台模拟退出、分账/分母、观察归档与失败边界；实际验收同批核对，不以方案登记当实现。

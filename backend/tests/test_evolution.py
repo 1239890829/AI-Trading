@@ -916,7 +916,7 @@ def test_imp046_code_proposals_never_apply_review_items(sf, monkeypatch, status)
              {"class": "B", "status": "executed", "review_item": meta, "result": "document"}]
     evo._sync_review_items(agenda, items, sf)
     assert len(calls) == 1
-    assert calls[0][0][2] == "applied" and "document" in calls[0][1]["note"]
+    assert calls[0][0][2] == "recorded" and "尚待实施" in calls[0][1]["note"]
 
 
 def test_imp046_summary_counts_proposals_separately(monkeypatch):

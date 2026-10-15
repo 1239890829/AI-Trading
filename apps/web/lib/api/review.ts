@@ -63,7 +63,7 @@ export async function getReviewEffectiveness(): Promise<ReviewEffectiveness> {
   return (await getJson<ReviewEffectiveness>("/api/review/effectiveness")).data;
 }
 
-export type ActionItemStatus = "pending" | "confirmed" | "applied" | "rejected" | "reverted";
+export type ActionItemStatus = "pending" | "recorded" | "confirmed" | "applied" | "rejected" | "reverted";
 
 export interface ReviewActionItem {
   id: number;

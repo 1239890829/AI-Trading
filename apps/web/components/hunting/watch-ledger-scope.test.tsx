@@ -64,17 +64,15 @@ it("keeps an undated inspection read-only even when today's row has an entry pri
   expect(getWatchLedger).toHaveBeenCalledWith(undefined, 5);
   expect(screen.queryByRole("button", {name: "模拟建仓"})).toBeNull();
   fireEvent.click(screen.getByRole("tab", {name:"参考跟踪"}));
-  expect(screen.getByText(/此旁览只读核对，不提交模拟委托/)).toBeTruthy();
+  expect(screen.getByText(/此旁览只读核对，不记录成交/)).toBeTruthy();
   expect(placePaperOrder).not.toHaveBeenCalled();
 });
 
-it("retains the default current-day explicit simulation action and submits only after a click", async () => {
+it("当前参考跟踪也不再提供前台模拟建仓", async () => {
   render(<WatchLedgerPanel />);
-  const button = await screen.findByRole("button", {name: "模拟建仓"});
+  await screen.findByText("记录 600127");
+  expect(screen.queryByRole("button", {name:"模拟建仓"})).toBeNull();
   expect(placePaperOrder).not.toHaveBeenCalled();
-  fireEvent.click(button);
-  await waitFor(() => expect(placePaperOrder).toHaveBeenCalledWith("600127", "buy", 7.15, 100));
-  expect((await screen.findByRole("status")).textContent).toContain("模拟买单已提交");
 });
 
 it("reads the full recorded rationale past 80 characters without a simulation action or extra read", async () => {

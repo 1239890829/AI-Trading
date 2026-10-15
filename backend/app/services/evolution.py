@@ -7,7 +7,7 @@
 - 感知：五路证据（复盘改进项 / signal_health / 告警判读统计 / 计划对账；
   因子 IC 月度复核未到期时显式标注）。
 - 诊断：LLM 汇总证据 → 严格 JSON 议程（A 参数 / B 文档 / C 代码），
-  对复盘 action_items 逐条裁决（review_item 回执 → 执行后回写 applied）。
+  对复盘 action_items 逐条裁决（review_item 回执 → 归档后仅记 recorded）。
 - 执行：A 类只建影子变更单（不写运行覆盖层；白名单 + 红线 + 24h 频率闸 + 预算；
   已有已生效变更仍保留后置回滚）；B 类写进化日报（docs/evolution/）；
   C 类仅生成待审补丁：读取明确文件 → LLM 文本 diff → 路径授权 → git apply --check
@@ -107,7 +107,7 @@ def _collect_review_improvements(session_factory) -> dict:
     """今日复盘报告的改进项（已有 15:30 复盘产出）。
 
     每条带齐**回写三元组**（id/title/category + 顶层 trade_date）——议程裁决
-    为可自动化并执行成功后，用三元组把 action_items 状态回写为 applied
+    日报归档成功后只记 recorded，不代表原建议已实施
     （闭环第三段；update_action_item_status 的寻址守卫要求三元组吻合）。
     """
     try:
@@ -149,7 +149,7 @@ def _repeat_pending_items(session_factory, days: int = 7) -> list[dict]:
             rows = db.execute(
                 _sel(ReviewActionItemRow).where(
                     ReviewActionItemRow.trade_date >= cutoff.strftime("%Y%m%d"),
-                    ReviewActionItemRow.status == "pending",
+                    ReviewActionItemRow.status.in_(("pending", "recorded")),
                 )
             ).scalars().all()
     except Exception as exc:  # noqa: BLE001  重复检测失败不阻断
@@ -1232,10 +1232,7 @@ def execute_agenda(agenda: dict, session_factory=None) -> dict:
 
 
 def _sync_review_items(agenda: dict, items: list[dict], sf) -> None:
-    """闭环第三段：裁决为可自动化且**执行成功**的议程项 → 对应复盘改进项
-    状态回写 applied（机器全权，无人工流转；review 的 status 枚举本就有 applied）。
-    deferred/rejected 的改进项保持 pending——它们会出现在下次议程的输入里。
-    """
+    """日报成功只记 recorded；原建议仍待实施，不覆盖人工处置。"""
     review = (agenda.get("inputs") or {}).get("review") or {}
     if not review.get("available"):
         return
@@ -1244,7 +1241,7 @@ def _sync_review_items(agenda: dict, items: list[dict], sf) -> None:
     from app.review.storage import ActionItemStaleError, update_action_item_status
 
     for it in items:
-        if it.get("class") in ("A", "C") or it.get("status") != "executed":
+        if it.get("class") != "B" or it.get("status") != "executed":
             # 包含历史A/C：入影子或产出补丁不代表运行生效，输入flag也不是凭证。
             continue
         ri = it.get("review_item") or {}
@@ -1254,11 +1251,12 @@ def _sync_review_items(agenda: dict, items: list[dict], sf) -> None:
             continue
         try:
             update_action_item_status(
-                sf, item_id, "applied",
-                note=f"AI 大脑自动执行：{it.get('result', '')[:160]}",
+                sf, item_id, "recorded",
+                note=f"已记录进化日报；原建议尚待实施与验证。{it.get('result', '')[:160]}",
                 expect_trade_date=trade_date or "",
                 expect_category=ri.get("category") or meta["category"],
                 expect_title=ri.get("title") or meta["title"],
+                only_statuses=("pending", "recorded"),
             )
         except (ValueError, LookupError, ActionItemStaleError) as exc:
             log.warning("review item %s sync failed: %s", item_id, exc)

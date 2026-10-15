@@ -194,6 +194,7 @@ type SeriesBundle = {
   slots: number[];
   base0: number;
   axisRange?: readonly [number, number, number, number];
+  rendered?: Partial<Record<"price" | "pct" | "avg" | "vol", {time: Time; value?: number; color?: string}[]>>;
 };
 
 const emptyBundle = (): SeriesBundle => ({
@@ -416,7 +417,7 @@ export function MinuteChart({
    * update() 只允许写入不早于最后时间点的数据，盘中 update(当前分钟) 必抛
    * "Cannot update oldest data"（2026-09-02 实测把页面打进 error boundary）。
    * setData 使用已排序的全天槽并做 Canvas 原位重绘（不重建图表、不闪）：243 槽 ×
-   * 4 序列在 1Hz 节奏下开销可忽略，且天然消除合成点与官方点同槽竞态。
+   * 序列逐项核对，仅变化序列重灌；保留固定轴与同槽校准，不假定1Hz成本可忽略。
    */
   function fillAll(s: SeriesBundle, pts: P[], base: number | null | undefined, palette: MinutePalette) {
     if (!s.price) return;
@@ -441,18 +442,26 @@ export function MinuteChart({
         const v = p ? pick(p) : null;
         return (v == null ? { time: sec as Time } : { time: sec as Time, value: v }) as { time: Time; value?: T };
       });
-    s.price.setData(over((p) => isPositivePrice(p.price) ? p.price : null) as never);
+    const write = (name: "price" | "pct" | "avg" | "vol", data: {time: Time; value?: number; color?: string}[]) => {
+      const target = s[name]; if (!target) return;
+      const previous = s.rendered?.[name];
+      if (previous?.length === data.length && previous.every((row, i) =>
+        row.time === data[i].time && row.value === data[i].value && row.color === data[i].color)) return;
+      target.setData(data as never);
+      (s.rendered ??= {})[name] = data;
+    };
+    write("price", over((p) => isPositivePrice(p.price) ? p.price : null));
     if (s.pct && isPositivePrice(base)) {
-      s.pct.setData(over((p) => (isPositivePrice(p.price) ? ((p.price - base) / base) * 100 : null)) as never);
+      write("pct", over((p) => (isPositivePrice(p.price) ? ((p.price - base) / base) * 100 : null)));
     }
-    s.avg?.setData(over((p) => isPositivePrice(p.avg) ? p.avg : null) as never);
+    write("avg", over((p) => isPositivePrice(p.avg) ? p.avg : null));
     if (s.vol) {
       const volData: { time: Time; value?: number; color?: string }[] = s.slots.map((sec, i) => {
         const p = byHHMM.get(slotHHMMs[i]);
         if (!p || p.volume == null) return { time: sec as Time }; // whitespace
         return { time: sec as Time, value: p.volume, color: volColor(p) };
       });
-      s.vol.setData(volData as never);
+      write("vol", volData);
     }
   }
 

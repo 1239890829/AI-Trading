@@ -1,0 +1,38 @@
+import {afterEach, describe, expect, it} from "vitest";
+import {cleanup, fireEvent, render, screen} from "@testing-library/react";
+import {ValidationContent} from "./validation-panel";
+import type {ValidationReport} from "@/lib/api/validation";
+
+afterEach(cleanup);
+export const report: ValidationReport = {
+  start:"2026-10-12",end:"2026-10-15",scope:"all",horizon:"d1_close",
+  selection:{count:2,observed:1,missing:1,mean_pct:3,median_pct:3},
+  actual:{denominator:1,win_rate:0,mean_pct:-2,median_pct:-2,wins:0,losses:1,flat:0,open:1,excluded:1,legacy_fills:2,exposure_trade_days:null,episode_trade_days:null},
+  entries:[{id:"daily:2026-10-12:600127",date:"2026-10-12",symbol:"600127",name:"金健米业",scope:"daily",state:"recorded",selected_at:"2026-10-12T10:02:00+08:00",reference_price:10,reference_change_pct:1,return_pct:3,outcome_state:"labeled",version:"v1",reason:"原入选依据：粮食安全催化，等待承接确认",conditions:["催化失效则重新核对"],selection_refs:[],observation_calendar_days:3},
+    {id:"daily:2026-10-13:600127",date:"2026-10-13",symbol:"600127",name:"金健米业",scope:"daily",state:"missing",selected_at:null,reference_price:null,reference_change_pct:null,return_pct:null,outcome_state:"no_matching_archive",version:null,reason:"原记录缺项",conditions:[],selection_refs:[],observation_calendar_days:2}],
+  episodes:[{id:1,symbol:"600127",name:"金健米业",opened_at:"2026-10-12T10:03:00+08:00",open_date:"2026-10-12",closed_at:"2026-10-13T10:03:00+08:00",close_date:"2026-10-13",quantity:0,cost:1000,proceeds:980,buy_fee:0,sell_fee:0,selection_ref:"daily:2026-10-12:600127",state:"closed",return_pct:-2,holding_trade_days:2,holding_calendar_days:2,fill_ids:[1,2],issues:[]}],
+  daily:[{date:"2026-10-12",count:1,observed:1,mean_pct:3,median_pct:3},{date:"2026-10-13",count:1,observed:0,mean_pct:null,median_pct:null}],
+  win_curve:[{date:"2026-10-13",episode_id:1,denominator:1,win_rate:0,mean_pct:-2,median_pct:-2}],cohorts:[],
+  basis:{actual:"人工记录未经券商核验",selection:"入选不是成交",coverage:"原记录缺项不倒填",improvement:"建议经人工确认和验证"},
+};
+
+describe("selection validation reading", () => {
+  it("keeps cross-day same stock and opens original entry without another data request", () => {
+    render(<ValidationContent report={report}/>);
+    expect(screen.getAllByRole("button",{name:/金健米业/})).toHaveLength(2);
+    fireEvent.click(screen.getAllByRole("button",{name:/金健米业/})[0]);
+    expect(screen.getByText(/原入选依据：粮食安全/)).toBeTruthy();
+    expect(screen.getByText("2026-10-12 10:02:00")).toBeTruthy();
+    expect(screen.queryByText("0.00%")).toBeNull();
+    fireEvent.click(screen.getByRole("button",{name:"10-12 1.00只，查看记录"}));
+    expect(screen.getAllByRole("button",{name:/金健米业/})).toHaveLength(1);
+  });
+  it("shows zero win rate as real zero, separate from positive selection observation", () => {
+    render(<ValidationContent report={report}/>);
+    fireEvent.click(screen.getByRole("button",{name:"实际买入"}));
+    expect(screen.getByText("0.0%")).toBeTruthy();
+    expect(screen.queryByText("+3.00%")).toBeNull();
+    fireEvent.keyDown(screen.getByRole("button",{name:"10-13 0.00%，查看记录"}),{key:"Enter"});
+    expect(screen.getByRole("heading",{name:"金健米业 · 成交回合"})).toBeTruthy();
+  });
+});

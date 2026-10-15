@@ -2,7 +2,7 @@ from __future__ import annotations
 
 from datetime import datetime
 
-from sqlalchemy import DateTime, Float, Integer, String, UniqueConstraint
+from sqlalchemy import DateTime, Float, Integer, String, Text, UniqueConstraint
 from sqlalchemy.orm import Mapped, mapped_column
 
 from app.core.db import utcnow
@@ -28,8 +28,12 @@ class RealTrade(Base):
     quantity: Mapped[int] = mapped_column(Integer, nullable=False)
     # 佣金/税费等合计（可选，默认 0）；买入费用计入成本，卖出费用抵减盈亏
     fee: Mapped[float] = mapped_column(Float, default=0.0)
-    traded_at: Mapped[str] = mapped_column(String(10), default="")  # YYYY-MM-DD
+    traded_at: Mapped[str] = mapped_column(String(10), default="", index=True)  # YYYY-MM-DD
     note: Mapped[str | None] = mapped_column(String(256), default=None)
+    executed_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True, default=None)
+    fee_known: Mapped[int | None] = mapped_column(Integer, nullable=True, default=None)
+    selection_ref: Mapped[str | None] = mapped_column(String(96), nullable=True, default=None)
+    selection_evidence: Mapped[str | None] = mapped_column(Text, nullable=True, default=None)
     created_at: Mapped[datetime] = mapped_column(DateTime, default=utcnow)
 
 

@@ -1,4 +1,4 @@
-import { act, cleanup, fireEvent, render, within } from "@testing-library/react";
+import { act, cleanup, fireEvent, render, screen, within } from "@testing-library/react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 import { StockDetailPanel, type ChartTab, type RightTab } from "@/components/stock-detail";
@@ -138,6 +138,29 @@ function testQuoteFeed() {
 }
 
 describe("StockDetailPanel · 即时报价复用", () => {
+  it.each(["trade", "real", "book"] as const)("%s不再挂载前台模拟账户或触发模拟读取", async rightTab => {
+    render(<StockDetailPanel symbol="600519" chartTab="flow" rightTab={rightTab}/>); await settle();
+    expect(api.getPaperAccount).not.toHaveBeenCalled();
+    expect(api.getPaperPositions).not.toHaveBeenCalled();
+    expect(api.getPaperFills).not.toHaveBeenCalled();
+    expect(api.getPaperOrders).not.toHaveBeenCalled();
+    expect(screen.queryByRole("tab", {name:"模拟"})).toBeNull();
+  });
+
+  it("历史分钟尚未就绪时，同一可信feed先显示已观察当前点，并同步后续价格", async () => {
+    api.getMinuteLineWithBaseline.mockResolvedValue({points:[], vr_baseline_5m:null});
+    const feed = testQuoteFeed();
+    const first: Quote = {...audit, symbol:"600519", price:22, data_timestamp:"2026-10-09T02:00:30Z"};
+    feed.publish("600519", first);
+    const view = render(<StockDetailPanel symbol="600519" chartTab="minute" quoteFeed={feed} streamStatus="live"/>);
+    await settle();
+    expect(view.getByTestId("minute-price").textContent).toBe("22");
+    await act(async () => {feed.publish("600519", {...first,price:23,data_timestamp:"2026-10-09T02:00:31Z"});});
+    expect(view.getByTestId("minute-price").textContent).toBe("23");
+    expect(api.getNewsDigest).not.toHaveBeenCalled();
+    expect(calls.symbols.every(s => s.length === 0)).toBe(true);
+  });
+
   it.each(["kline", "minute"] as const)("%s拒旧帧保留已显示的可信尾点，不能退回更旧REST基座再弹回", async chartTab => {
     const feed = testQuoteFeed();
     const first: Quote = {...audit, symbol: "600519", price: 22, data_timestamp: "2026-10-09T02:00:30Z"};
@@ -350,29 +373,7 @@ describe("StockDetailPanel · 即时报价复用", () => {
     expect(view.queryByText(/最近行情帧缺少该证券/)).toBeNull();
   });
 
-  it("a missing quote frame suspends precheck eligibility, preserves the trading draft and rechecks on recovery", async () => {
-    api.checkOrderRisk.mockImplementation(async () => ({allowed: true, checked_at: new Date().toISOString(), estimated_fee: 5, max_qty: 1000, reasons: [], warnings: [], state: "allowed"}));
-    const feed = testQuoteFeed();
-    const latest = {...audit, symbol: "600519", price: 22, data_timestamp: "2026-10-09T02:00:30Z"};
-    feed.publish("600519", latest);
-    const view = render(<StockDetailPanel symbol="600519" rightTab="trade" quoteFeed={feed} />); await settle();
-    fireEvent.change(view.getByLabelText("价格"), {target: {value: "21.8"}});
-    fireEvent.change(view.getByLabelText("数量"), {target: {value: "200"}});
-    await advance(300);
-    const submit = () => view.getByRole("button", {name: "买入 600519"}) as HTMLButtonElement;
-    expect(submit().disabled).toBe(false);
-    await act(async () => {feed.publish("600519", null);});
-    expect(submit().disabled).toBe(true);
-    const checks = api.checkOrderRisk.mock.calls.length;
-    await advance(1000); expect(api.checkOrderRisk).toHaveBeenCalledTimes(checks);
-    expect((view.getByLabelText("价格") as HTMLInputElement).value).toBe("21.8");
-    expect((view.getByLabelText("数量") as HTMLInputElement).value).toBe("200");
-    await act(async () => {feed.publish("600519", {...latest, price: 23});});
-    expect(submit().disabled).toBe(true);
-    await advance(300);
-    expect(api.checkOrderRisk.mock.calls.length).toBeGreaterThan(checks);
-    expect(submit().disabled).toBe(false);
-  });
+
 
   it("late valuation enrichment cannot mix older REST flow fields or provenance into the latest accepted quote", async () => {
     const enrichment = deferred<Quote>(); api.getQuote.mockReturnValueOnce(enrichment.promise);
@@ -470,113 +471,15 @@ describe("StockDetailPanel · 估值和模拟持仓回包归属", () => {
     expect(view.getByText("当前标的")).toBeTruthy();
   });
 
-  it.each(["success", "failure"])("旧模拟账户 %s 回包不能覆盖新标的账户、持仓与成交记录", async (outcome) => {
-    const old = deferred<PaperFill[]>();
-    api.getPaperAccount.mockResolvedValueOnce(account(111)).mockResolvedValue(account(222));
-    api.getPaperPositions.mockResolvedValueOnce([position("600519", 100, 11)]).mockResolvedValue([position("000001", 300, 22)]);
-    api.getPaperFills.mockImplementation((symbol: string) => symbol === "600519" ? old.promise : Promise.resolve([fill(symbol, 22)]));
-    const view = render(<StockDetailPanel symbol="600519" rightTab="trade" />);
-    view.rerender(<StockDetailPanel symbol="000001" rightTab="trade" />);
-    await settle();
-    expect(within(view.getByRole("tabpanel")).getByText("300股 · 可卖300")).toBeTruthy();
-    expect(within(view.getByRole("tabpanel")).getAllByText("222.00")).toHaveLength(2);
-    await act(async () => { if (outcome === "success") old.resolve([fill("600519", 11)]); else old.reject(new Error("old failure")); });
-    expect(view.queryByText("模拟账户数据加载失败（稍后自动重试）")).toBeNull();
-    expect(within(view.getByRole("tabpanel")).getByText("300股 · 可卖300")).toBeTruthy();
-    expect(within(view.getByRole("tabpanel")).queryByText("11.00")).toBeNull();
-    expect(within(view.getByRole("tabpanel")).getAllByText("222.00")).toHaveLength(2);
-    expect(view.getByTestId("kline-price").getAttribute("data-cost-price")).toBe("22");
-    expect(view.getByTestId("kline-price").getAttribute("data-fill-count")).toBe("1");
-  });
 
-  it("当前模拟账户首取失败仍提示错误，旧标的成功不能把错误改成旧账户", async () => {
-    const old = deferred<PaperFill[]>();
-    api.getPaperFills.mockImplementation((symbol: string) => symbol === "600519" ? old.promise : Promise.reject(new Error("current failure")));
-    const view = render(<StockDetailPanel symbol="600519" chartTab="flow" rightTab="trade" />);
-    view.rerender(<StockDetailPanel symbol="000001" chartTab="flow" rightTab="trade" />);
-    await settle();
-    expect(view.getByText("模拟账户数据加载失败（稍后自动重试）")).toBeTruthy();
-    await act(async () => { old.resolve([fill("600519", 11)]); });
-    expect(view.getByText("模拟账户数据加载失败（稍后自动重试）")).toBeTruthy();
-  });
 
-  it("撤单后仍立即同步模拟账户、持仓、成交和图表成本线；离开交易页签保留快照", async () => {
-    api.getPaperPositions.mockResolvedValueOnce([position("600519", 200, 17)]).mockResolvedValue([position("600519", 300, 19)]);
-    api.getPaperOrders.mockResolvedValueOnce([{ id: 7, symbol: "600519", side: "buy", price: 19, quantity: 100, status: "pending" }]);
-    api.getPaperFills.mockResolvedValueOnce([]).mockResolvedValue([fill("600519", 19)]);
-    const view = render(<StockDetailPanel symbol="600519" rightTab="trade" />);
-    await settle();
-    expect(view.getByText("200股 · 可卖200")).toBeTruthy();
-    expect(view.getByTestId("kline-price").getAttribute("data-cost-price")).toBe("17");
-    expect(view.getByTestId("kline-price").getAttribute("data-fill-count")).toBe("0");
-    fireEvent.click(view.getByRole("button", { name: "撤" }));
-    await settle();
-    expect(api.cancelPaperOrder).toHaveBeenCalledWith(7);
-    for (const endpoint of [api.getPaperAccount, api.getPaperPositions, api.getPaperOrders, api.getPaperFills]) expect(endpoint).toHaveBeenCalledTimes(2);
-    expect(view.getByText("300股 · 可卖300")).toBeTruthy();
-    expect(view.getByText("2026-10-09")).toBeTruthy();
-    expect(view.getByTestId("kline-price").getAttribute("data-cost-price")).toBe("19");
-    expect(view.getByTestId("kline-price").getAttribute("data-fill-count")).toBe("1");
-    fireEvent.click(view.getByRole("tab", { name: "盘口" }));
-    await advance(30_000);
-    expect(api.getPaperPositions).toHaveBeenCalledTimes(2);
-    expect(view.getByTestId("kline-price").getAttribute("data-cost-price")).toBe("19");
-    expect(view.getByTestId("kline-price").getAttribute("data-fill-count")).toBe("1");
-  });
 
-  it.each(["success", "failure"])("same-scope old paper poll %s cannot overwrite the post-cancel refresh", async (outcome) => {
-    const old = deferred<PaperFill[]>();
-    api.getPaperAccount.mockResolvedValueOnce(account(100)).mockResolvedValueOnce(account(111)).mockResolvedValue(account(222));
-    api.getPaperPositions.mockResolvedValueOnce([position("600519", 200, 17)]).mockResolvedValueOnce([position("600519", 100, 11)]).mockResolvedValue([position("600519", 300, 19)]);
-    api.getPaperOrders.mockResolvedValueOnce([{id: 7, symbol: "600519", side: "buy", price: 19, quantity: 100, status: "pending"}]).mockResolvedValueOnce([{id: 7, symbol: "600519", side: "buy", price: 11, quantity: 100, status: "pending"}]).mockResolvedValue([]);
-    api.getPaperFills.mockResolvedValueOnce([]).mockReturnValueOnce(old.promise).mockResolvedValue([fill("600519", 19)]);
-    const view = render(<StockDetailPanel symbol="600519" rightTab="trade" />); await settle();
-    await advance(30_000);
-    fireEvent.click(view.getByRole("button", {name: "撤"})); await settle();
-    expect(view.getByText("300股 · 可卖300")).toBeTruthy();
-    await act(async () => {if (outcome === "success") old.resolve([fill("600519", 11)]); else old.reject(new Error("old failure"));});
-    expect(view.getByText("300股 · 可卖300")).toBeTruthy();
-    expect(view.queryByRole("button", {name: "撤"})).toBeNull();
-    expect(view.queryByText("模拟账户数据加载失败（稍后自动重试）")).toBeNull();
-    expect(view.queryByText(/保留上次读取的模拟账户/)).toBeNull();
-    expect(view.getByTestId("kline-price").getAttribute("data-cost-price")).toBe("19");
-    expect(view.getByTestId("kline-price").getAttribute("data-fill-count")).toBe("1");
-  });
 
-  it("paper refresh failure preserves the readable snapshot but blocks stale pending-order actions", async () => {
-    api.checkOrderRisk.mockImplementation(async () => ({ allowed: true, checked_at: new Date().toISOString(), estimated_fee: 5, max_qty: 1000, reasons: [], warnings: [], state: "allowed" }));
-    api.getPaperPositions.mockResolvedValue([position("600519", 200, 17)]);
-    api.getPaperOrders.mockResolvedValue([{id: 7, symbol: "600519", side: "buy", price: 19, quantity: 100, status: "pending"}]);
-    api.getPaperFills.mockResolvedValueOnce([fill("600519", 17)]).mockRejectedValue(new Error("current failure"));
-    const view = render(<StockDetailPanel symbol="600519" rightTab="trade" />); await settle();
-    fireEvent.change(view.getByLabelText("价格"), {target: {value: "19.8"}});
-    fireEvent.change(view.getByLabelText("数量"), {target: {value: "200"}});
-    await advance(300);
-    const submit = () => view.getByRole("button", {name: "买入 600519"}) as HTMLButtonElement;
-    expect(submit().disabled).toBe(false);
-    fireEvent.click(view.getByRole("button", {name: "撤"})); await settle();
-    expect(view.getByText(/保留上次读取的模拟账户/)).toBeTruthy();
-    expect(view.getByText("200股 · 可卖200")).toBeTruthy();
-    expect((view.getByRole("button", {name: "撤"}) as HTMLButtonElement).disabled).toBe(true);
-    expect(submit().disabled).toBe(true);
-    const checks = api.checkOrderRisk.mock.calls.length;
-    await advance(1000);
-    expect(api.checkOrderRisk).toHaveBeenCalledTimes(checks);
-    expect(view.getByTestId("kline-price").getAttribute("data-fill-count")).toBe("1");
-    api.getPaperFills.mockResolvedValue([fill("600519", 19)]);
-    api.getPaperOrders.mockResolvedValue([]);
-    api.getPaperPositions.mockResolvedValue([position("600519", 300, 19)]);
-    await advance(30_000);
-    expect(view.getByText("300股 · 可卖300")).toBeTruthy();
-    expect(view.queryByText(/保留上次读取的模拟账户/)).toBeNull();
-    expect(view.queryByRole("button", {name: "撤"})).toBeNull();
-    expect((view.getByLabelText("价格") as HTMLInputElement).value).toBe("19.8");
-    expect((view.getByLabelText("数量") as HTMLInputElement).value).toBe("200");
-    expect(submit().disabled).toBe(true);
-    await advance(300);
-    expect(api.checkOrderRisk.mock.calls.length).toBeGreaterThan(checks);
-    expect(submit().disabled).toBe(false);
-  });
+
+
+
+
+
 });
 
 afterEach(() => {
@@ -975,7 +878,7 @@ describe("StockDetailPanel · 核对视角入口", () => {
     fireEvent.keyDown(controls.getByRole("tab", { name: "盘口" }), { key: "ArrowLeft" });
     expect(onRightTabChange).toHaveBeenLastCalledWith("real");
     expect(document.activeElement).toBe(controls.getByRole("tab", { name: "手工记账" }));
-    expect(controls.getAllByRole("tab")).toHaveLength(6);
+    expect(controls.getAllByRole("tab")).toHaveLength(5);
   });
 
   it("指数只提供适用视角，不能从入口进入股票交易", () => {
@@ -1246,35 +1149,7 @@ describe("StockDetailPanel · 每个端点只读取一次首屏", () => {
     expect(within(view.getByRole("tabpanel")).queryByText("111.00")).toBeNull();
   });
 
-  it("旧估值/模拟账户晚回不能覆盖恢复后的结果，隐藏停止预检并保留交易草稿", async () => {
-    const oldQuote = deferred<Quote>();
-    const oldFills = deferred<PaperFill[]>();
-    api.getQuote.mockReturnValueOnce(oldQuote.promise).mockResolvedValue({...audit, symbol: "600519", name: "当前报价", price: 22});
-    api.getPaperFills.mockReturnValueOnce(oldFills.promise).mockResolvedValue([fill("600519", 22)]);
-    api.getPaperPositions.mockResolvedValue([position("600519", 300, 22)]);
-    const view = render(<StockDetailPanel symbol="600519" rightTab="trade" />);
-    view.rerender(<StockDetailPanel symbol="600519" rightTab="trade" active={false} />);
-    const paperCount = api.getPaperAccount.mock.calls.length;
-    await advance(60_000);
-    expect(api.getPaperAccount).toHaveBeenCalledTimes(paperCount);
-    view.rerender(<StockDetailPanel symbol="600519" rightTab="trade" active />);
-    await settle();
-    expect(view.getByText("当前报价")).toBeTruthy();
-    fireEvent.change(view.getByLabelText("价格"), {target: {value: "19.8"}});
-    fireEvent.change(view.getByLabelText("数量"), {target: {value: "200"}});
-    view.rerender(<StockDetailPanel symbol="600519" rightTab="trade" active={false} />);
-    await advance(60_000);
-    const checks = api.checkOrderRisk.mock.calls.length;
-    await advance(60_000);
-    expect(api.checkOrderRisk).toHaveBeenCalledTimes(checks);
-    await act(async () => {oldQuote.resolve({...audit, symbol: "600519", name: "旧报价", price: 111}); oldFills.resolve([fill("600519", 111)]);});
-    view.rerender(<StockDetailPanel symbol="600519" rightTab="trade" active />);
-    await settle();
-    expect(view.queryByText("旧报价")).toBeNull();
-    expect((view.getByLabelText("价格") as HTMLInputElement).value).toBe("19.8");
-    expect((view.getByLabelText("数量") as HTMLInputElement).value).toBe("200");
-    expect(view.getByTestId("kline-price").getAttribute("data-cost-price")).toBe("22");
-  });
+
 
   it("共享持仓的null/error也传到面板，不启动独立轮询，隐藏保留记账草稿", async () => {
     const shared = {data: null, error: "共享持仓读取失败", reload: vi.fn(async () => {})};

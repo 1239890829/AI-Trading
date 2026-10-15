@@ -119,12 +119,16 @@ describe("MinuteChart 首提交主题工作", () => {
     chart.timeScale().setVisibleLogicalRange.mockClear();
     const next = [point(10), point(10.5, "31")];
     view.rerender(<MinuteChart points={next} prevClose={10} />);
-    for (const series of core(chart)) expect(series.setData).toHaveBeenCalledOnce();
+    expect(chart.series[0].setData).toHaveBeenCalledOnce();
+    expect(chart.series[1].setData).toHaveBeenCalledOnce();
+    for (const series of core(chart).slice(2)) expect(series.setData).not.toHaveBeenCalled();
     view.rerender(<MinuteChart points={next} prevClose={10} index={{ prevClose: 3000, points: [point(3030, "31")] }} />);
     expect(charts).toHaveLength(1);
     expect(chart.series[0].values.some(value => value.value === 10.5)).toBe(true);
     expect(chart.series.find(series => series.opts.lineStyle === 3)?.values.some(value => value.value === 1)).toBe(true);
-    for (const series of core(chart)) expect(series.setData).toHaveBeenCalledOnce();
+    expect(chart.series[0].setData).toHaveBeenCalledOnce();
+    expect(chart.series[1].setData).toHaveBeenCalledOnce();
+    for (const series of core(chart).slice(2)) expect(series.setData).not.toHaveBeenCalled();
     expect(chart.timeScale().setVisibleLogicalRange).not.toHaveBeenCalled();
   });
 
@@ -470,5 +474,20 @@ describe("MinuteChart 轴契约", () => {
     render(<MinuteChart points={[point(10)]} prevClose={10} index={{ prevClose: Infinity, points: [point(0)] }} />);
     expect(screen.getByText("叠加指数基准无效")).toBeTruthy();
     expect(screen.getByText(/无效价格已留空/)).toBeTruthy();
+  });
+});
+
+describe("同帧只灌入变化的分时序列", () => {
+  it("仅价格变化不重灌未变化的均价与分钟量", () => {
+    const first = [point(10, "30", 9.9), point(10.1, "31", 10)];
+    const view = render(<MinuteChart points={first} prevClose={9.8}/>);
+    const chart = charts[0];
+    const avg = chart.series.find(s => s.kind === "line" && s.values.some(p => p.value === 9.9))!;
+    const vol = chart.series.find(s => s.kind === "volume")!;
+    const before = [avg.setData.mock.calls.length, vol.setData.mock.calls.length];
+    view.rerender(<MinuteChart points={[first[0], {...first[1], price: 10.2}]} prevClose={9.8}/>);
+    expect(avg.setData.mock.calls.length).toBe(before[0]);
+    expect(vol.setData.mock.calls.length).toBe(before[1]);
+    expect(chart.series.find(s=>s.kind === "price")!.values.some(p=>p.value === 10.2)).toBe(true);
   });
 });

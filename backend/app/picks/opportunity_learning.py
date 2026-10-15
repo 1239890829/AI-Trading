@@ -274,6 +274,7 @@ def _selected_outcome_snapshot(stage: str, decision: str) -> bool:
     """Whether this snapshot belongs to the realtime selected/actionable outcome lane."""
     return (
         (stage == "rank" and decision == "ranked")
+        or (stage == "validation" and decision == "observed")
         or (stage == "notification" and decision in {"eligible", "notified", "suppressed"})
     )
 
@@ -281,6 +282,8 @@ def _selected_outcome_snapshot(stage: str, decision: str) -> bool:
 def _selected_outcome_sql():
     """SQL equivalent of :func:`_selected_outcome_snapshot` for large-day queries."""
     return or_(
+        and_(OpportunityDecisionSnapshot.stage == "validation",
+             OpportunityDecisionSnapshot.decision == "observed"),
         and_(
             OpportunityDecisionSnapshot.stage == "rank",
             OpportunityDecisionSnapshot.decision == "ranked",
@@ -2759,3 +2762,19 @@ def opportunity_scorecard(
             "deferred/not_actionable 只服务漏选/失败分母，不进入可执行净收益。"
         ),
     }
+
+
+def read_effective_outcomes(db, snapshot_ids, horizon):
+    """Bounded read for validation; use the same immutable revision overlay as research."""
+    ids = sorted(set(snapshot_ids))
+    result = {}
+    for offset in range(0, len(ids), 500):
+        batch = ids[offset:offset+500]
+        bases = db.scalars(select(OpportunityOutcomeLabel).where(
+            OpportunityOutcomeLabel.snapshot_id.in_(batch), OpportunityOutcomeLabel.horizon == horizon)).all()
+        revisions = db.scalars(select(OpportunityOutcomeRevision).where(
+            OpportunityOutcomeRevision.snapshot_id.in_(batch), OpportunityOutcomeRevision.horizon == horizon,
+            OpportunityOutcomeRevision.revision_version == OUTCOME_REVISION_VERSION)).all()
+        by_base = {r.base_outcome_id: r for r in revisions}
+        result.update({b.snapshot_id: _effective_outcome(b, by_base.get(b.id)) for b in bases})
+    return result

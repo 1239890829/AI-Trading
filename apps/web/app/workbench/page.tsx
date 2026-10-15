@@ -10,7 +10,6 @@ import { HugeiconsIcon } from "@hugeicons/react";
 import Cancel01Icon from "@hugeicons/core-free-icons/Cancel01Icon";
 
 import Link from "next/link";
-import { AccountScopePanel } from "@/components/detail/account-scope-panel";
 import { patchWorkspaceUrl } from "@/lib/task-navigation";
 import { Suspense, useCallback, useContext, useEffect, useMemo, useRef, useState, useSyncExternalStore } from "react";
 import { useRouter, useSearchParams } from "next/navigation";
@@ -34,7 +33,6 @@ import {
   getIntradayTop,
   isIndexSymbol,
   getMarketOverview,
-  getPaperPositions,
   getBoardFundBySymbols,
   getQuotes,
   getRiskState,
@@ -48,14 +46,13 @@ import {
   type DailyPickItem,
   type Freshness,
   type IntradayTopStock,
-  type PaperPositionInfo,
   type RiskState,
   type SymbolBoardFund,
-  getPositionLabels,
 } from "@/lib/api";
 import { fmt, pctColor, pctText, signedYi, sourceLabel, timeText, triAmount, triText } from "@/lib/format";
 import { subscribeWatchlist, notifyWatchlistChanged } from "@/lib/watchlist-sync";
 import { LAST_SYMBOL_KEY, originLabel } from "@/lib/routing";
+import { indexDetailSymbol } from "@/lib/api/client";
 import type { Quote } from "@/types/market";
 
 const STATUS_LABEL = STREAM_STATUS_LABEL;
@@ -78,10 +75,11 @@ function WorkbenchInner() {
   const sp = useSearchParams();
   const paramSymbol = sp.get("symbol");
   const mode = sp.get("mode") === "positions" ? "positions" : "watch";
-  const account = ["manual", "paper", "daily", "hunting"].includes(sp.get("account") ?? "") ? sp.get("account")! : "manual";
+  const account = "manual"; // User views contain actual manual holdings; shadows remain internal.
   // 深链 tab（助手一键跳转 / 分享链接）：?ct= 图表区、?rt= 右栏，非法值忽略回落到默认
   const chartTab = parseChartTab(sp.get("ct"));
-  const rightTab = parseRightTab(sp.get("rt")) ?? (mode === "positions" ? account === "manual" ? "real" : account === "paper" ? "trade" : "info" : undefined);
+  const requestedRight = parseRightTab(sp.get("rt"));
+  const rightTab = requestedRight === "trade" ? "real" : requestedRight ?? (mode === "positions" ? "real" : undefined);
   const mobileContext = `${mode}:${account}:${rightTab ?? ""}`;
   const preferredMobileView = rightTab ? "check" : "chart";
   const [mobileView, setMobileView] = useState<"list" | "chart" | "check">(preferredMobileView);
@@ -96,17 +94,14 @@ function WorkbenchInner() {
   const confirmWatchlistAdded = useCallback((symbol: string) => {
     setSymbols(previous => previous.includes(symbol) ? previous : [...previous, symbol]);
   }, []);
-  const [positions, setPositions] = useState<PaperPositionInfo[]>([]);
-  const paperSymbols = useMemo(() => positions.map(p => p.symbol), [positions]);
   // 左栏列表 pending 哨兵（审查 F2/R2）：loadBase/dyn 首拉完成前渲染行骨架
   const [baseLoaded, setBaseLoaded] = useState(false);
-  const [paperLoaded, setPaperLoaded] = useState(false);
   const [baseErrors, setBaseErrors] = useState<Record<string, string>>({});
-  const baseReadRef = useRef({watch: 0, groups: 0, paper: 0, overview: 0});
+  const baseReadRef = useRef({watch: 0, groups: 0, overview: 0});
   const watchReadsRef = useRef<{watch?: AbortController; groups?: AbortController; fresh: boolean}>({fresh: false});
   useEffect(() => () => {
     const reads = baseReadRef.current;
-    reads.watch += 1; reads.groups += 1; reads.paper += 1; reads.overview += 1;
+    reads.watch += 1; reads.groups += 1; reads.overview += 1;
     watchReadsRef.current.watch?.abort(); watchReadsRef.current.groups?.abort();
   }, []);
   // 真实持仓（CONTEXT.md: Holdings Group）：共用 hook 一份轮询（评审 M3），
@@ -170,14 +165,15 @@ function WorkbenchInner() {
   // activeSymbol 可能是深链/搜索进来的、不在任何分组里的标的——必须显式加入，
   // 否则详情面板会拿不到行情。切股只发 subscribe 消息，不重连（见 useQuoteStream 头注）。
   const streamSymbols = useMemo(
-    () => [...new Set([...symbols, ...realSymbols, ...paperSymbols, ...picksSymbols, ...topSymbols, activeSymbol])],
-    [symbols, realSymbols, paperSymbols, picksSymbols, topSymbols, activeSymbol],
+    () => [...new Set([...symbols, ...realSymbols, ...picksSymbols, ...topSymbols, activeSymbol, ...(indices ?? []).map(q => indexDetailSymbol(q.symbol, q.market))])],
+    [symbols, realSymbols, picksSymbols, topSymbols, activeSymbol, indices],
   );
   const { quotes, status, quoteFeed } = useQuoteStream(streamSymbols, { throttleMs: 3000 });
   const [extra, setExtra] = useState<Record<string, Quote>>({});
   // WS 每 5s tick 全量替换 quotes：merged/列表查找都必须 memo 化，
   // 否则每次 tick 触发整列表 O(n²) 重算（评审 F2）
   const merged: Record<string, Quote> = useMemo(() => ({ ...extra, ...quotes }), [extra, quotes]);
+  const displayedIndices = useMemo(() => indices?.map(q => merged[indexDetailSymbol(q.symbol, q.market)] ?? q), [indices, merged]);
 
   const [risk, setRisk] = useState<RiskState | null>(null);
 
@@ -206,7 +202,8 @@ function WorkbenchInner() {
     const patch: Record<string, string | null> = { rt: tab };
     if (tab === "trade" || tab === "real") {
       patch.mode = "positions";
-      patch.account = tab === "trade" ? "paper" : "manual";
+      patch.account = "manual";
+      patch.rt = "real";
     }
     router.replace(patchWorkspaceUrl("/workbench", sp.toString(), patch), {scroll: false});
   }, [router, sp]);
@@ -228,7 +225,7 @@ function WorkbenchInner() {
 
   // 四个读取分别拥有单飞/计时链，首屏自选不等待概览或分组。
   // 自选/分组首次即读、写后即时失效，并以 60s 兜底同步其它客户端；
-  // 模拟持仓尚无跨组件写后事件，保留 10s 校准；行情概览也保持 10s。
+  // 行情概览保持原10s校准；指数价格复用既有WS帧。
   // 这里沿用各自的状态与错误展示。
   const {refresh: refreshWatch} = useResource(async () => {
     const version = baseReadRef.current.watch;
@@ -271,17 +268,6 @@ function WorkbenchInner() {
       reportBase("overview");
     } catch {if (version === baseReadRef.current.overview) reportBase("overview", "行情概览读取失败");}
   }, {intervalMs: 10_000});
-  const {refresh: refreshPaper} = useResource(async () => {
-    const version = baseReadRef.current.paper;
-    const current = () => version === baseReadRef.current.paper;
-    try {
-      const value = await getPaperPositions();
-      if (!current()) return;
-      setPositions(value);
-      reportBase("paper");
-    } catch {if (current()) reportBase("paper", "main 模拟持仓读取失败");}
-    finally {if (current()) setPaperLoaded(true);}
-  }, {intervalMs: 10_000});
   const refreshWatchlist = useCallback(() => {
     baseReadRef.current.watch += 1; baseReadRef.current.groups += 1;
     watchReadsRef.current.watch?.abort(); watchReadsRef.current.groups?.abort();
@@ -301,8 +287,7 @@ function WorkbenchInner() {
       refreshGroups();
     }
     if (baseErrors.overview) {baseReadRef.current.overview += 1; refreshOverview();}
-    if (baseErrors.paper) {baseReadRef.current.paper += 1; refreshPaper();}
-  }, [baseErrors, refreshWatch, refreshGroups, refreshOverview, refreshPaper]);
+  }, [baseErrors, refreshWatch, refreshGroups, refreshOverview]);
 
   // 风控市场状态（评审 O2）：七档状态变化以日为尺度，独立 30s 轮询——
   // 混在 loadBase 10s 里纯属浪费（state_classifier 本身走 60s 快照聚合）。
@@ -398,17 +383,12 @@ function WorkbenchInner() {
   const allGroups = useMemo(() => Array.from(new Set(["默认", ...allGroupNames])), [allGroupNames]);
   // 对象身份来自真实列表；报价未到时仍保留该证券，不把缺报价解释成空集合。
   const activeRowSymbols = useMemo(() => {
-    if (activeGroup === "持仓") return account === "manual" ? realSymbols : account === "paper" ? paperSymbols : [];
+    if (activeGroup === "持仓") return realSymbols;
     if (activeGroup === "猎场") return Array.from(new Set([...topSymbols, ...picksSymbols]));
     return symbols.filter((symbol) => activeGroup === "全部" || (groupMap[symbol] ?? "默认") === activeGroup);
-  }, [activeGroup, account, realSymbols, paperSymbols, topSymbols, picksSymbols, symbols, groupMap]);
-  // 闭环「标签」（2026-09-09）：已模拟持仓/已真实持仓（60s 轮询派生接口）
-  // 2026-09-11（S2-5）：原为裸 setInterval，绕过统一入口 ⇒ 无可见性暂停、无盘外降频，已收编。
-  const [posLabels, setPosLabels] = useState<Record<string, string>>({});
-  usePollingFetch(async () => {
-    const m = await getPositionLabels().catch(() => null);
-    if (m) setPosLabels(m); // 失败保持旧值（标签是低频派生数据，偶发失败不该清空）
-  }, 60_000);
+  }, [activeGroup, realSymbols, topSymbols, picksSymbols, symbols, groupMap]);
+  // Manual holding labels reuse the existing position owner; no shadow-account read.
+  const posLabels = useMemo<Record<string, string>>(() => Object.fromEntries(realSymbols.map(s => [s, "real"])), [realSymbols]);
 
   const pickInfoBySymbol = useMemo(() => new Map(picksItems.map((i) => [i.symbol, i])), [picksItems]);
   const topInfoBySymbol = useMemo(() => new Map(topItems.map((i) => [i.symbol, i])), [topItems]);
@@ -517,8 +497,8 @@ function WorkbenchInner() {
     { key: "猎场", label: "系统候选", count: new Set([...topSymbols, ...picksSymbols]).size, title: "盘中跟踪与每日精选；只读系统结果" },
     ...groups.map((group) => ({ key: group, label: group })),
   ];
-  const sourcePending = isDynamicGroup ? !dynReady.picks || !dynReady.top : mode === "positions" ? account === "paper" ? !paperLoaded : account === "manual" ? !realData && !realError : false : !baseLoaded;
-  const sourceError = isDynamicGroup ? dynErrors.picks || dynErrors.top : mode === "positions" ? account === "paper" ? baseErrors.paper : account === "manual" ? realError : null : baseErrors.watch;
+  const sourcePending = isDynamicGroup ? !dynReady.picks || !dynReady.top : mode === "positions" ? !realData && !realError : !baseLoaded;
+  const sourceError = isDynamicGroup ? dynErrors.picks || dynErrors.top : mode === "positions" ? realError : baseErrors.watch;
   const readWarning = [error, ...Object.values(baseErrors)].filter(Boolean).join("；");
 
   return (
@@ -533,12 +513,9 @@ function WorkbenchInner() {
         <div className="bc-workbench-objects">
           <nav aria-label="个人对象" className="bc-object-switch">
             <Link href={patchWorkspaceUrl("/workbench", sp.toString(), {mode: "watch", rt: null})} aria-current={mode === "watch" ? "page" : undefined}>自选跟踪</Link>
-            <Link href={patchWorkspaceUrl("/workbench", sp.toString(), {mode: "positions", account: "manual", rt: null})} aria-current={mode === "positions" ? "page" : undefined}>持仓与模拟</Link>
+            <Link href={patchWorkspaceUrl("/workbench", sp.toString(), {mode: "positions", account: "manual", rt: null})} aria-current={mode === "positions" ? "page" : undefined}>实际持仓</Link>
           </nav>
-          {mode === "positions" && <FilterMenu label="账户" value={account} options={[
-            {key: "manual", label: "手工记录", title: "用户记账，非券商验证"}, {key: "paper", label: "手工模拟", title: "main 模拟账户"},
-            {key: "daily", label: "每日精选影子", title: "独立账户，只读结果"}, {key: "hunting", label: "机会影子", title: "独立账户，只读结果"},
-          ]} onChange={value => router.push(patchWorkspaceUrl("/workbench", sp.toString(), {account: value, rt: null}), {scroll: false})} />}
+
         </div>
       </header>
       {readWarning && <div role="alert" className="bc-read-warning bc-base-warning"><details><summary>部分数据读取失败 · 查看原因</summary><p className="data-scroll" tabIndex={0}>{readWarning}。保留值仅为上次结果，不能判断当前为空。</p></details>{Object.keys(baseErrors).length > 0 && <button onClick={retryFailedBase}>重试读取</button>}</div>}
@@ -549,7 +526,7 @@ function WorkbenchInner() {
       <div className="bc-workbench-layout" data-mobile-view={mobileView}>
         <aside className="bc-workbench-sidebar" data-account-view={mode === "positions"} aria-label="指数与证券列表">
         <div className="bc-market-context">
-          <div className="bc-index-strip"><IndexCards indices={indices ?? []} selected={activeSymbol} onSelect={switchSymbol} /></div>
+          <div className="bc-index-strip"><IndexCards indices={displayedIndices ?? []} selected={activeSymbol} onSelect={switchSymbol} /></div>
           <div className="bc-market-summary">
             <button className="bc-turnover" onClick={inspectionClick(inspect, {kind: "fund"})} title="查看实时对比、全日估算与资金流">
               <span>两市成交额</span><strong title={amountFreshness?.reason ?? undefined}>{triAmount(totalAmount, amountFreshness?.state)}</strong>
@@ -560,21 +537,12 @@ function WorkbenchInner() {
           </div>
         </div>
 
-        {mode === "positions" && <div className="bc-account-context">
-        <div className="bc-account-results"><AccountScopePanel account={account} date={sp.get("date") ?? undefined} /></div>
-        {account === "manual" && realError && <p role="alert" className="bc-read-warning">手工记录读取失败，保留结果仅供参考：{realError}</p>}
-        {account === "paper" && positions.length > 0 && <Panel title={`main 模拟持仓（${positions.length}）`} className="bc-paper-positions" bodyClassName="overflow-auto">
-          <table className="bc-position-table"><thead><tr><th>证券</th><th>数量</th><th>浮动盈亏</th></tr></thead><tbody>{positions.map(position => <tr key={position.symbol}>
-            <td><button onClick={() => switchSymbol(position.symbol)}>{merged[position.symbol]?.name ?? position.symbol}<small>{position.symbol}</small></button></td>
-            <td>{position.quantity} 股</td><td className={position.pnl_pct == null ? "" : pctColor(position.pnl_pct)}>{position.pnl_pct == null ? "--" : `${position.pnl_pct > 0 ? "+" : ""}${position.pnl_pct.toFixed(2)}%`}</td>
-          </tr>)}</tbody></table>
-        </Panel>}
-        </div>}
+        {mode === "positions" && realError && <p role="alert" className="bc-read-warning">手工记录读取失败，保留结果仅供参考：{realError}</p>}
 
         <section className="bc-attention" aria-label={mode === "positions" ? "当前账户证券" : "关注与候选"}>
           <div className="bc-attention-heading">
             <div className="bc-attention-scope">
-              {mode === "watch" ? <FilterMenu label="列表" value={activeGroup} options={groupOptions} onChange={value => {setActiveGroup(value); setGroupAction(null); setGroupError(null);}} /> : <h3>{account === "manual" ? "手工记录持仓" : account === "paper" ? "main 模拟持仓" : "当前选中证券"}</h3>}
+              {mode === "watch" ? <FilterMenu label="列表" value={activeGroup} options={groupOptions} onChange={value => {setActiveGroup(value); setGroupAction(null); setGroupError(null);}} /> : <h3>{"手工记录持仓"}</h3>}
               <span className="bc-list-count">{activeRowSymbols.length} 只</span>
               {isDynamicGroup && <span className="bc-list-note">盘中跟踪 + 每日精选 {picksDate ?? "未生成"}</span>}
             </div>
@@ -601,7 +569,7 @@ function WorkbenchInner() {
           </div>}
           <div className="bc-attention-track" tabIndex={0} aria-label="证券列表，可滚动">
             {sourcePending ? <div className="bc-watch-skeleton" aria-label="正在读取证券列表">{Array.from({length: 4}, (_, index) => <Skeleton key={index} className="h-20 w-44 shrink-0 rounded-lg" />)}</div> : activeRowSymbols.length === 0 ? <div className="bc-watch-empty">
-              {sourceError ? "列表读取有缺项，暂不能判断为空。请重试读取。" : activeGroup === "持仓" ? account === "manual" ? "暂无手工记录。可在同证券的记账面板记录成交；记录未经券商验证。" : account === "paper" ? "main 模拟账户暂无持仓，不合并其他账户。" : "此影子范围的成交与退出见上方独立回执。" : isDynamicGroup ? "暂无系统候选。盘中跟踪随盘面重算；每日精选由后台生成，生成状态见系统维护。" : "自选为空。使用顶部搜索查看证券，再明确加入自选；也可在管理中输入代码。"}
+              {sourceError ? "列表读取有缺项，暂不能判断为空。请重试读取。" : activeGroup === "持仓" ? "暂无手工记录。可在记账面板记录已入选股票的实际成交；记录未经券商验证。" : isDynamicGroup ? "暂无系统候选。盘中跟踪随盘面重算；每日精选由后台生成，生成状态见系统维护。" : "自选为空。使用顶部搜索查看证券，再明确加入自选；也可在管理中输入代码。"}
             </div> : activeRowSymbols.map(symbol => {
               const quote = merged[symbol];
               const pick = isDynamicGroup ? pickInfoBySymbol.get(symbol) : undefined;
@@ -637,7 +605,7 @@ function WorkbenchInner() {
         <section className="bc-workbench-detail" aria-label="证券详情">
         {/* 边界跟随证券/scope重置，保留深链与共享真实详情的全部消费者。 */}
         <PanelBoundary key={`${activeSymbol}:${mode}:${account}`} label="个股详情">
-          <StockDetailPanel symbol={activeSymbol} chartTab={chartTab} rightTab={rightTab} onRightTabChange={switchRightTab} onSymbolChange={switchSymbol} liveQuote={merged[activeSymbol]} streamStatus={status} quoteFeed={quoteFeed} indexQuote={indices === undefined ? undefined : indices.find(q => q.symbol === "sh000001" || (q.symbol === "000001" && q.market === "SH")) ?? null} active={detailActive} realPositions={realPositions} watchlistMembership={symbols.includes(activeSymbol) ? true : watchConfirmed ? false : null} onWatchlistAdded={confirmWatchlistAdded} />
+          <StockDetailPanel symbol={activeSymbol} chartTab={chartTab} rightTab={rightTab} onRightTabChange={switchRightTab} onSymbolChange={switchSymbol} liveQuote={merged[activeSymbol]} streamStatus={status} quoteFeed={quoteFeed} indexQuote={displayedIndices === undefined ? undefined : displayedIndices.find(q => q.symbol === "sh000001" || (q.symbol === "000001" && q.market === "SH")) ?? null} active={detailActive} realPositions={realPositions} watchlistMembership={symbols.includes(activeSymbol) ? true : watchConfirmed ? false : null} onWatchlistAdded={confirmWatchlistAdded} />
         </PanelBoundary>
         </section>
       </div>

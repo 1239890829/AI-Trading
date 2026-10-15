@@ -10,7 +10,9 @@
 from __future__ import annotations
 
 from typing import Any
-from datetime import date
+from datetime import date, datetime, timezone
+import asyncio
+import json
 
 from fastapi import APIRouter, Depends, HTTPException
 from pydantic import BaseModel, Field, field_validator
@@ -39,6 +41,9 @@ class TradeIn(BaseModel):
     fee: float = Field(default=0.0, ge=0, allow_inf_nan=False)
     traded_at: str = Field(default="", max_length=10)
     note: str | None = Field(default=None, max_length=256)
+    executed_at: datetime | None = None
+    fee_known: bool = False
+    selection_ref: str | None = Field(default=None, max_length=96)
 
 
     @field_validator("traded_at")
@@ -136,27 +141,43 @@ async def list_positions(hub: QuoteHub = Depends(get_hub)) -> dict:
 
 @router.post("/trades", dependencies=[Depends(require_write_token)])
 async def create_trade(body: TradeIn) -> dict:
+    # One worker owns validation + receipt + insertion, never block the market event loop.
+    try:
+        return await asyncio.to_thread(_record_trade, body)
+    except ValueError as exc:
+        raise HTTPException(status_code=422, detail=str(exc)) from exc
+
+
+def _record_trade(body: TradeIn) -> dict:
+    from app.models.real_position import RealTrade
+    from app.picks.validation import validate_trade_selection
+    from app.core.bjtime import beijing_now
     symbol = body.symbol.strip()
     if not symbol:
-        raise HTTPException(status_code=400, detail="symbol 不能为空")
-    traded_at = body.traded_at or beijing_today().isoformat()
+        raise ValueError("symbol 不能为空")
+    executed = body.executed_at
+    if executed is not None:
+        if executed.tzinfo is None or executed > beijing_now():
+            raise ValueError("成交时间须带明确时区且已发生")
+        day = executed.astimezone(beijing_now().tzinfo).date().isoformat()
+        if body.traded_at and body.traded_at != day:
+            raise ValueError("成交日期与准确成交时间不一致")
+    else:
+        day = body.traded_at or beijing_today().isoformat()
+    if body.fee_known and "fee" not in body.model_fields_set:
+        raise ValueError("确认费用完整时须明确填写费用，确为零时填0")
     with _sf() as db:
-        from app.models.real_position import RealTrade
-
-        row = RealTrade(
-            symbol=symbol,
-            name=body.name,
-            side=body.side,
-            fill_price=body.fill_price,
-            quantity=body.quantity,
-            fee=body.fee,
-            traded_at=traded_at,
-            note=body.note,
-        )
-        db.add(row)
-        db.commit()
-        db.refresh(row)
-        return {"data": {"id": row.id, "symbol": symbol, "side": body.side, "fill_price": body.fill_price, "quantity": body.quantity}, "meta": {}}
+        evidence = validate_trade_selection(db, symbol, body.selection_ref, executed) if body.side == "buy" and executed else None
+        if body.side == "buy" and evidence is None:
+            raise ValueError("买入须填写准确成交时间，并关联成交前已存在的同股入选")
+        row = RealTrade(symbol=symbol, name=body.name, side=body.side, fill_price=body.fill_price,
+            quantity=body.quantity, fee=body.fee, traded_at=day, note=body.note,
+            executed_at=executed.astimezone(timezone.utc).replace(tzinfo=None) if executed else None,
+            fee_known=int(body.fee_known), selection_ref=body.selection_ref if evidence else None,
+            selection_evidence=json.dumps(evidence, ensure_ascii=False) if evidence else None)
+        db.add(row); db.commit(); db.refresh(row)
+        return {"data": {"id": row.id, "symbol": symbol, "side": body.side, "fill_price": body.fill_price,
+                         "quantity": body.quantity, "selection_ref": row.selection_ref}, "meta": {"basis": "manual_not_broker_verified"}}
 
 
 @router.delete("/trades/{trade_id}", dependencies=[Depends(require_write_token)])

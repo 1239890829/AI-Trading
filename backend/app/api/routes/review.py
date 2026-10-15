@@ -80,8 +80,8 @@ async def review_detail(trade_date: str, request: Request):
 
 
 class ActionItemPatch(BaseModel):
-    status: str = Field(..., description="pending | confirmed | applied | rejected | reverted")
-    note: str = Field("", description="处置说明；rejected/reverted 必填")
+    status: str = Field(..., description="pending | recorded | confirmed | applied | rejected | reverted")
+    note: str = Field("", description="处置说明；applied需实施与验证证据，rejected/reverted需理由")
     # id 漂移守卫（2026-09-01）：id 是 SQLite rowid 别名且无 AUTOINCREMENT，
     # 报告重跑删除重建后 id 会被复用甚至跨交易日串号。三元组对不上 = 该 id
     # 已不是调用方看到的那条 → 409 而不是静默写到别的改进项上。

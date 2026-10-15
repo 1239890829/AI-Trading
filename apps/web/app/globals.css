@@ -698,3 +698,6 @@ select {
 @media(max-width:767px), (pointer:coarse) { .watchlist-group-editor > select,.detail-perspective-tabs > button { min-height:44px; } }
 
 .detail-perspective-tabs[data-index=true] { grid-template-columns:repeat(2,minmax(0,1fr)); }
+
+/* Manual fee confirmation is a compact checkbox, not a full-width trade input. */
+.manual-entry-fields input[type="checkbox"] {width:14px;min-height:14px;height:14px;padding:0;flex:none;accent-color:var(--ui-accent);}
