@@ -1,5 +1,10 @@
 # 当前交接：DeepSeek判读正确性与统一入选解读
 
+
+## 2026-10-16 用户直派续修现场
+
+从已同步origin/master d7ccd6e5创建codex/grounded-selection-drawers；主树三份evolution原件保留。通用selector的IMP-019不替代本次直接授权，不新增交易观察或跟进。运行身份查统一runtime-identity，本轮尚未激活。RSH-030两股归档一次8题结束：原标签/条件保留，无模型增量未证，不新增自动调用。IMP-093工程代码`fd56799cbc94e1bdba1b56a305b7e56588f025ff`完成底部抽屉/按需读取/资金空态与portal手势隔离。完整BE5689/83跳过/197.92s，pyflakes；最终FE默认/UTC各1728/143文件，tsc含生成引用恢复、ESLint0error/2既有warning、构建`u2o1dI_fjm_fWEBPVJ2df`通过。首次BE账本指针失败已纠正，原失败和前端中断保留；准确HEAD/CI/激活仍查本批release，不能把施工构建当现役。U49核版本退役、退出停止读取、引用条件、选股/消息资格隔离；作者自审不称独立Review。
+
 ## 2026-10-15最新直派：判读失败与入选理由
 
 PR #293已合并a06ef1fc，post-master三job成功，正式3000/build R5H6OTUEfsNYIJMV4Wg78，8000/PID18876未重启；当前权威仍为统一runtime-identity。原前端升级连接持租约导致首次激活失败，已精确退役旧前端后恢复；不能复用原PID断言。新用户明确要求先修DeepSeek、再有限扩展四题型，合并“依据/关联消息”为“入选解读”，保留关键价格/几板/辨识度/止损。新批从该最新master建codex/deepseek-selection-explanations；selector仍列G4/IMP-019，本批按本轮直接指定的正确性和阅读整改执行，不自动延伸真实性能/第二业务任务。
