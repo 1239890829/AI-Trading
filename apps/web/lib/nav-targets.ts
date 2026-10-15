@@ -34,9 +34,9 @@ export const NAV_TARGETS = {
   stock_kline: (symbol: string) => workbenchTabUrl(symbol, { chartTab: "kline" }),
   stock_minute: (symbol: string) => workbenchTabUrl(symbol, { chartTab: "minute" }),
   stock_flow: (symbol: string) => workbenchTabUrl(symbol, { chartTab: "flow" }),
-  // 右栏 tab（rt 与 RightTab 同域：book|trades|trade|real|profile|info|speed|boards|themes|events|reason）
+  // 右栏 tab（rt 与 RightTab 同域：book|trades|trade|real|profile|info|members|boards|themes|events|reason）
   // 口径：只登记**个股研究面**的页签。刻意不登记 trade / real（模拟交易、真实持仓
-  // 是账户面，不是"看这只票"，助手回复里也不该引导去下单）与 speed / boards（指数专属）。
+  // 是账户面，不是"看这只票"，助手回复里也不该引导去下单）与 members / boards（指数专属）。
   stock_book: (symbol: string) => workbenchTabUrl(symbol, { rightTab: "book" }),
   stock_trades: (symbol: string) => workbenchTabUrl(symbol, { rightTab: "trades" }),
   stock_profile: (symbol: string) => workbenchTabUrl(symbol, { rightTab: "profile" }),

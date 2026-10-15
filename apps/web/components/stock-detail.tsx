@@ -7,7 +7,7 @@ import { useCallback, useEffect, memo, useId, useMemo, useRef, useState, useSync
 import { MinuteChart } from "@/components/minute-chart";
 import { KlineChartPro } from "@/components/kline-chart-pro";
 import { priceLimitPct } from "@/lib/price-limit";
-import { INDEX_DEFAULT_RIGHT_TAB, INDEX_RIGHT_TABS, rightTabsFor, type DetailRightTab } from "@/lib/detail-tabs";
+import { contextualRightTab, rightTabsFor, type DetailRightTab } from "@/lib/detail-tabs";
 import { Panel } from "@/components/panel";
 import { PriceFlash } from "@/components/price-flash";
 import { QualityBadge } from "@/components/quality-badge";
@@ -22,6 +22,7 @@ import {limitQualification} from "@/lib/limit-qualification";
 import { isIndexSymbol } from "@/lib/api";
 import { notifyWatchlistChanged, subscribeWatchlist } from "@/lib/watchlist-sync";
 import { LimitUpReasonPanel } from "@/components/detail/limit-up-reason";
+import {useSymbolDetail} from "@/components/detail/symbol-detail-context";
 import {useDetailModal} from "@/components/detail/detail-modal";
 import {quoteQualityView} from "@/lib/quote-quality-view";
 import { StockEventsRow } from "@/components/detail/stock-events";
@@ -48,7 +49,6 @@ import {
   getStockThemes,
   getTradesPayload,
   getWatchlist,
-  type AuctionData,
   type MinutePoint,
   type PaperFill,
 } from "@/lib/api";
@@ -62,28 +62,10 @@ import { BookTradesView } from "@/components/detail/book-trades-view";
 import {DetailReadStatus, type DetailReadState} from "@/components/detail/read-status";
 import { Skeleton } from "@/components/ui/loading";
 import { FlowChart, type CapitalFlow } from "@/components/detail/flow-chart";
-import { SpeedPanel } from "@/components/detail/speed-panel";
+import { IndexMembersPanel } from "@/components/detail/index-members-panel";
 import { BoardRankPanel } from "@/components/detail/board-rank-panel";
 import { RealPositionPanel } from "@/components/detail/real-position-panel";
 import { SuspendedBadge, SuspendedNotice, isSuspended } from "@/components/detail/suspended-badge";
-
-/**
- * 次屏数据调度（评审 O1，2026-09-01）：切股首屏只需 K 线 + 盘口（各自默认 tab），
- * 其余数据推到浏览器空闲时拉取——首屏不再被最慢的财务/新闻请求拖住（东财慢时
- * 2-4s 白屏）。requestIdleCallback 不可用时退化为 900ms setTimeout。
- */
-function scheduleIdle(fn: () => void): () => void {
-  const w = window as Window & {
-    requestIdleCallback?: (cb: () => void, opts?: { timeout: number }) => number;
-    cancelIdleCallback?: (id: number) => void;
-  };
-  if (typeof w.requestIdleCallback === "function") {
-    const id = w.requestIdleCallback(fn, { timeout: 2500 });
-    return () => w.cancelIdleCallback?.(id);
-  }
-  const t = window.setTimeout(fn, 900);
-  return () => window.clearTimeout(t);
-}
 
 /** 个股详情终端 v3（工作台右栏 / 个股页共用）：
  * 顶部紧凑行情条 → 中部 [左：图表区(K线/分时/资金图) | 右：盘口↔逐笔] → 右列：盘口↔逐笔 + 财务摘要。龙虎榜见独立页面。
@@ -142,6 +124,7 @@ export const StockDetailPanel = memo(function StockDetailPanel({
   chartTab: chartTabInit,
   rightTab: rightTabInit,
   onRightTabChange,
+  onSymbolChange,
   liveQuote: liveQuoteProp,
   streamStatus: streamStatusProp,
   quoteFeed: quoteFeedProp,
@@ -150,8 +133,9 @@ export const StockDetailPanel = memo(function StockDetailPanel({
   watchlistMembership,
   onWatchlistAdded,
   active = true,
-}: { symbol: string; active?: boolean; realPositions?: RealPositionsResource; watchlistMembership?: boolean | null; onWatchlistAdded?: (symbol: string) => void } & StockDetailTabs & StockDetailStreamProps) {
+}: { symbol: string; onSymbolChange?: (symbol: string) => void; active?: boolean; realPositions?: RealPositionsResource; watchlistMembership?: boolean | null; onWatchlistAdded?: (symbol: string) => void } & StockDetailTabs & StockDetailStreamProps) {
   const {open: openDetail} = useDetailModal();
+  const {open: openSymbolDetail} = useSymbolDetail();
   const [chartTab, setChartTab] = useState<ChartTab>(chartTabInit ?? "kline");
   const [rightTab, setRightTab] = useState<RightTab>(rightTabInit ?? "book");
   // 深链跟随：同一只股票内（面板未重挂载）外部改了 ct/rt 也要生效。
@@ -164,7 +148,6 @@ export const StockDetailPanel = memo(function StockDetailPanel({
   if (prevInit.c !== chartTabInit || prevInit.r !== rightTabInit) {
     setPrevInit({ c: chartTabInit, r: rightTabInit });
     if (chartTabInit) setChartTab(chartTabInit);
-    if (rightTabInit) setRightTab(rightTabInit);
   }
   // 布局 #1：右列宽度可拖拽（localStorage 持久化；260-480px 防极限）
   const [rightW, setRightW] = useState(300);
@@ -236,7 +219,6 @@ export const StockDetailPanel = memo(function StockDetailPanel({
   const [annError, setAnnError] = useState<string | null>(null);
   const [newsError, setNewsError] = useState<string | null>(null);
   const [digestLoading, setDigestLoading] = useState(false);
-  const [company, setCompany] = useState<CompanyProfile | null>(null);
   const [fills, setFills] = useState<PaperFill[]>([]);
   const [paper, setPaper] = useState<PaperBundle | null | undefined>(undefined);
   const [paperError, setPaperError] = useState<string | null>(null);
@@ -245,29 +227,16 @@ export const StockDetailPanel = memo(function StockDetailPanel({
   // quote 三态：undefined=WS 快照/REST 均未到达（行情条渲染骨架）；null=两侧都
   // 确认拉不到（渲染"行情不可用"）；有值=正常。WS 合并与 REST 轮询共用该状态。
   const [quote, setQuote] = useState<Quote | null | undefined>(undefined);
-  const [auction, setAuction] = useState<AuctionData | null>(null);
-  // MinuteChart 的 auction prop 引用稳定化：行内对象每渲染必新引用，而分时图
-  // 创建 effect 依赖 auction——不 memo 会导致整图每秒销毁重建（闪烁回归）。
-  const auctionProp = useMemo(
-    () => (auction?.auction_price ? { price: auction.auction_price, pct: auction.auction_pct } : null),
-    [auction],
-  );
+
   const [vrBaseline, setVrBaseline] = useState<number[] | null>(null);
   // 指数 symbol（sh000001 等）：禁用个股专属面板（加自选/交易/资料/资金图）
   const isIndex = isIndexSymbol(symbol);
-  // 指数下个股专属 tab 不可用：残留的 flow/trade/real/profile/trades/book/info 选中态
-  // 强制归位到指数可用 tab（2026-09-11：指数右列精简为 涨速/板块——盘口无真实撮合
-  // 数据源、资讯接口对指数恒 502，两者均为死 tab）。
-  //（workbench 切股走 key 重挂载不会残留，这里是 /stock/[symbol] 等复用方的防御）。
-  // 渲染期调整（adjust-state 模式）：prevIsIndex 初始 false，挂载即指数时同样归位。
-  const [prevIsIndex, setPrevIsIndex] = useState(false);
-  if (isIndex !== prevIsIndex) {
-    setPrevIsIndex(isIndex);
-    if (isIndex) {
-      setChartTab((t) => (t === "flow" ? "kline" : t));
-      setRightTab((t) => (INDEX_RIGHT_TABS.has(t) ? t : INDEX_DEFAULT_RIGHT_TAB));
-    }
-  }
+  // Normalize both directions before a consumer mounts; old index deep links
+  // must never keep a board request alive under a stock heading.
+  const requestedRightTab = prevInit.r !== rightTabInit && rightTabInit ? rightTabInit : rightTab;
+  const resolvedRightTab = contextualRightTab(isIndex, requestedRightTab);
+  if (resolvedRightTab !== rightTab) setRightTab(resolvedRightTab);
+  if (isIndex && chartTab === "flow") setChartTab("kline");
 
   // 上游 feed/连接态也是连接归属证据，未收到首帧时不另建 WS。
   const ownsStream = quoteFeedProp !== undefined || liveQuoteProp !== undefined || streamStatusProp !== undefined;
@@ -445,16 +414,10 @@ export const StockDetailPanel = memo(function StockDetailPanel({
     setNewsError(null);
     setDigestLoading(false);
     setInWatchlist(false);
-    setFins(undefined); setCompany(null); setFlow(null); setAuction(null);
+    setFins(undefined); setFlow(null);
     setQuote(undefined); setAppliedLive(null);
     setReadStates(emptyDetailReads()); setTradeEmptyReason(null); setTradeSource(null);
   }
-  const themesResource = useResource(async () => {
-    const result = await getStockThemes(symbol);
-    if (result && result.symbol !== symbol) throw new Error("题材资料标的不匹配");
-    return result;
-  }, {key: symbol, enabled: active && !!symbol && !isIndex, intervalMs: null, marketHours: false});
-  const stockThemes = themesResource.data ?? null;
   const quoteDate = quote?.symbol === symbol && quote.data_timestamp && /(?:Z|[+-]\d{2}:\d{2})$/.test(quote.data_timestamp) ? bjDate(quote.data_timestamp) : null;
   const reasonResource = useResource(() => getLimitUpPoolSnapshot(quoteDate || undefined, {includeBreaks: true}), {
     key: `${symbol}:${quoteDate || "unknown"}`, enabled: rightActive && !isIndex && !!quoteDate, intervalMs: 60_000,
@@ -463,18 +426,25 @@ export const StockDetailPanel = memo(function StockDetailPanel({
   const viewRightTab = rightTab === "reason" && !qualification.eligible ? "profile" : rightTab;
   const parentRightTab = viewRightTab === "themes" ? "profile" : viewRightTab === "events" ? "info" : viewRightTab;
 
-  // ---- 切股数据分级加载（2026-09-01 评审 O1）----
-  // 此前切股一次并发 ~14 个请求（Promise.all 8 个 + 竞价/题材/大盘叠加/paper 等），
-  // 首屏 K 线被最慢的财务/新闻拖住（东财慢时 2-4s 白屏）。按可见性分级：
-  //   首屏（立即）：K 线（左图默认 tab）+ 五档盘口（右列默认 tab）+ 题材 chips（首屏行）
-  //   次屏（idle ≤2.5s）：分时/资金流/财务/公司/竞价——
-  //     切到对应 tab 时通常已就绪；不在首屏路径上，晚到不阻塞交互。
-  //   逐笔仅供右列逐笔页签使用，进入时立即读取，不在盘口/图表后台预取。
-  // 激活页签的轮询负责立即首取；预取只补其余页签，避免同端点首挂请求两次。
-  // 预取和轮询共用本次 symbol 的 alive 身份；复用组件切股时同样丢弃旧回包。
-  // 指数无盘口/逐笔数据源 → 当帧置「确认空」，不留加载中转圈。
-  // 渲染期 adjust-state（P1-27）：原写法在 data effect 内同步 setBook/setTrades。
-  // 本组件由 page.tsx 用 key={activeSymbol} 挂载，首帧即切股后的首帧，时机等价。
+  const profileVisible = rightActive && !isIndex && (viewRightTab === "profile" || viewRightTab === "themes");
+  const themesResource = useResource(async () => {
+    const result = await getStockThemes(symbol);
+    if (result && result.symbol !== symbol) throw new Error("题材资料标的不匹配");
+    return result;
+  }, {key: symbol, enabled: profileVisible && !!symbol, intervalMs: null, marketHours: false});
+  const stockThemes = themesResource.data ?? null;
+  const companyResource = useResource(() => getCompanyProfile<CompanyProfile>(symbol), {
+    key: symbol, enabled: profileVisible, intervalMs: null, marketHours: false,
+  });
+  const company = companyResource.data ?? null;
+  const auctionResource = useResource(() => getAuction(symbol), {
+    key: symbol, enabled: active && !isIndex && chartTab === "minute", intervalMs: null, marketHours: false,
+  });
+  const auction = auctionResource.data;
+  const auctionProp = useMemo(() => auction?.auction_price ? {price: auction.auction_price, pct: auction.auction_pct} : null, [auction]);
+
+  // Visible consumers own their reads. The hidden daily bar is retained only
+  // for trading/suspension status; no idle burst for the other perspectives.
   const [prevDataSymbol, setPrevDataSymbol] = useState<string | null>(null);
   if (symbol !== prevDataSymbol) {
     setPrevDataSymbol(symbol);
@@ -492,9 +462,6 @@ export const StockDetailPanel = memo(function StockDetailPanel({
   }, [chartTab, rightTab]);
   const dataReadsRef = useRef<{
     alive: boolean;
-    minuteRequested: boolean;
-    financialsRequested: boolean;
-    flowRequested: boolean;
     kline: (fresh?: boolean) => ReturnType<typeof getKlinePayload>;
     book: (fresh?: boolean) => ReturnType<typeof getOrderBook>;
     minute: (fresh?: boolean) => ReturnType<typeof getMinuteLineWithBaseline>;
@@ -539,7 +506,7 @@ export const StockDetailPanel = memo(function StockDetailPanel({
       };
     };
     const reads: NonNullable<typeof dataReadsRef.current> = {
-      alive: true, minuteRequested: false, financialsRequested: false, flowRequested: false,
+      alive: true,
       kline: managedRead("kline", () => getKlinePayload(symbol, "1d", 120), payload => {
         if (payload.symbol !== symbol || payload.timeframe !== "1d" || payload.bars.some(row => row.symbol !== symbol)) throw new Error("K线证券身份不匹配");
         setBars(payload.bars); setTradingStatus(payload.trading_status);
@@ -568,19 +535,8 @@ export const StockDetailPanel = memo(function StockDetailPanel({
     };
     dataReadsRef.current = reads;
     const ignoreFailure = () => {};
-    const stock = !isIndexSymbol(symbol);
     if (dataTabsRef.current.chartTab !== "kline") void reads.kline().catch(ignoreFailure);
-    if (stock && dataTabsRef.current.rightTab !== "book") void reads.book().catch(ignoreFailure);
-    const cancelIdle = scheduleIdle(() => {
-      if (!reads.alive) return;
-      if (!reads.minuteRequested) {reads.minuteRequested = true; void reads.minute().catch(ignoreFailure);}
-      if (!stock) return;
-      if (!reads.flowRequested) {reads.flowRequested = true; void reads.flow().catch(ignoreFailure);}
-      if (!reads.financialsRequested) {reads.financialsRequested = true; void reads.financials().catch(ignoreFailure);}
-      getAuction(symbol).then(value => reads.alive && setAuction(value)).catch(ignoreFailure);
-      getCompanyProfile<CompanyProfile>(symbol).then(value => reads.alive && value && setCompany(value)).catch(ignoreFailure);
-    });
-    return () => {reads.alive = false; cancelIdle();};
+    return () => {reads.alive = false;};
   }, [symbol, active]);
 
   // ---- 盘中实时刷新（2026-08-31 修复"K线/分时/盘口/逐笔拉一次就死"）----
@@ -624,7 +580,7 @@ export const StockDetailPanel = memo(function StockDetailPanel({
     {enabled: active && !!symbol && chartTab === "kline"});
   usePollingFetch(async () => {
     const reads = dataReadsRef.current; if (!reads?.alive) return;
-    reads.minuteRequested = true; await reads.minute().catch(() => {});
+    await reads.minute().catch(() => {});
   }, 60_000, symbol, {enabled: active && !!symbol && chartTab === "minute"});
   usePollingFetch(async () => {await dataReadsRef.current?.book().catch(() => {});}, 5_000, symbol,
     {enabled: rightActive && !!symbol && !isIndex && rightTab === "book"});
@@ -634,11 +590,11 @@ export const StockDetailPanel = memo(function StockDetailPanel({
   }, 10_000, symbol, {enabled: rightActive && !!symbol && !isIndex && rightTab === "trades"});
   usePollingFetch(async () => {
     const reads = dataReadsRef.current; if (!reads?.alive) return;
-    reads.flowRequested = true; await reads.flow().catch(() => {});
+    await reads.flow().catch(() => {});
   }, 60_000, symbol, {enabled: active && !isIndex && chartTab === "flow"});
   usePollingFetch(async () => {
     const reads = dataReadsRef.current; if (!reads?.alive) return;
-    reads.financialsRequested = true; await reads.financials().catch(() => {});
+    await reads.financials().catch(() => {});
   }, null, symbol, {enabled: rightActive && !isIndex && (viewRightTab === "profile" || viewRightTab === "themes"), marketHours: false});
   // Model summaries are requested by their visible consumer, never by chart prefetch.
   usePollingFetch(loadDigest, null, symbol, {enabled: rightActive && !isIndex && rightTab === "info", marketHours: false});
@@ -805,7 +761,7 @@ export const StockDetailPanel = memo(function StockDetailPanel({
     <div className="stock-workspace flex min-h-0 min-w-0 flex-col gap-4">
       <div className="stock-context-brief">
       {error && (
-        <div className="shrink-0 rounded-lg border border-amber-500/40 bg-amber-500/10 px-3 py-1.5 text-xs text-amber-800 dark:text-amber-300">{error}</div>
+        <div className="shrink-0 rounded-lg border border-zinc-200 dark:border-zinc-800 px-3 py-1.5 text-xs text-amber-800 dark:text-amber-300">{error}</div>
       )}
 
       {/* ① 紧凑行情条（指数隐藏加自选：sh000001 不是合法自选股代码）
@@ -821,7 +777,7 @@ export const StockDetailPanel = memo(function StockDetailPanel({
       ) : quote ? (
         <QuoteStrip quote={quote} inWatchlist={watchlistMembership === undefined ? inWatchlist : watchlistMembership} onAdd={() => void add()} hideWatchlist={isIndex} tradingStatus={tradingStatus} active={active} connectionStatus={streamStatus} issue={quoteIssue} diagnostics={chartTab === "kline" ? klineDiagnostics : chartTab === "minute" ? minuteDiagnostics : quoteDiagnostics}/>
       ) : (
-        <div className="shrink-0 rounded-xl border border-amber-500/40 bg-amber-500/10 px-4 py-1.5 text-xs text-amber-800 dark:text-amber-300">
+        <div className="shrink-0 rounded-xl border border-zinc-200 dark:border-zinc-800 px-4 py-1.5 text-xs text-amber-800 dark:text-amber-300">
           行情数据暂不可用（数据源失败，稍后自动重试）
         </div>
       )}
@@ -957,7 +913,7 @@ export const StockDetailPanel = memo(function StockDetailPanel({
                       空图会被误读成"数据源挂了"，必须显式说明原因 */}
                   {isSuspended(tradingStatus) && (
                     <div className="absolute inset-0 z-10 flex items-center justify-center bg-zinc-50/70 backdrop-blur-[1px] dark:bg-zinc-950/70">
-                      <div className="rounded-lg border border-amber-500/40 bg-amber-500/10 px-4 py-3 text-center text-xs text-amber-800 dark:text-amber-300">
+                      <div className="rounded-lg border border-zinc-200 dark:border-zinc-800 px-4 py-3 text-center text-xs text-amber-800 dark:text-amber-300">
                         <div className="text-sm font-medium">该股当前停牌，当日无分时数据</div>
                         <div className="mt-1 opacity-80">{tradingStatus?.reason}</div>
                       </div>
@@ -1073,8 +1029,8 @@ export const StockDetailPanel = memo(function StockDetailPanel({
                     ? "手工记录（用户录入，非券商核验）"
                     : viewRightTab === "profile"
                       ? "公司资料"
-                      : viewRightTab === "speed"
-                        ? "题材涨速榜（5 分钟）"
+                      : viewRightTab === "members"
+                        ? "指数成分股"
                         : viewRightTab === "boards"
                           ? "板块涨幅"
                           : viewRightTab === "themes" ? "公司资料"
@@ -1123,7 +1079,7 @@ export const StockDetailPanel = memo(function StockDetailPanel({
             ))}
           </div>
           <div id={`${perspectiveId}-panel`} role="tabpanel" aria-labelledby={`${perspectiveId}-${parentRightTab}`} className="min-h-0 flex-1 overflow-auto">
-          {viewRightTab === "speed" && <SpeedPanel className="h-full" active={rightActive} />}
+          {viewRightTab === "members" && <IndexMembersPanel key={symbol} symbol={symbol} active={rightActive} onSelect={selected => {if (onSymbolChange) onSymbolChange(selected); else openSymbolDetail({symbol: selected, rightTab: "book"});}} />}
           {viewRightTab === "boards" && <BoardRankPanel className="h-full" active={rightActive} />}
           {(viewRightTab === "info" || viewRightTab === "events") && <div role="tablist" aria-label="资讯内容" className="flex gap-1 border-b border-zinc-200 px-3 py-2 dark:border-zinc-800" onKeyDown={event => {
             if (!["ArrowLeft", "ArrowRight", "Home", "End"].includes(event.key)) return;

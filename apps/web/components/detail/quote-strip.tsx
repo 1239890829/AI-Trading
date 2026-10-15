@@ -86,7 +86,7 @@ export function QuoteStrip({
               low/medium 瞬态不出（2026-09-02 闪烁修复），stale/invalid 常显。
               2026-09-14 口径统一：此前调用点各自判断，导致同一数据在盘面/工作台表现相反。 */}
           <span data-quote-status-slot className="inline-flex h-7 w-[6.4em] shrink-0 items-center text-xs">
-            {issue ? <button type="button" aria-label="查看行情问题" aria-haspopup="dialog" title={issue.title} data-quality={quote.quality} onClick={() => setOpenedFor(quote.symbol)} className={`inline-flex h-6 w-full items-center justify-center whitespace-nowrap rounded px-1 text-xs ${quote.quality === "invalid" ? "bg-red-500/10 text-red-700 dark:text-red-400" : "bg-amber-500/10 text-orange-800 dark:text-orange-400"}`}>{issue.label}</button>
+            {issue ? <button type="button" aria-label="查看行情问题" aria-haspopup="dialog" title={issue.title} data-quality={quote.quality} onClick={() => setOpenedFor(quote.symbol)} className={`inline-flex h-6 w-full items-center justify-center whitespace-nowrap rounded px-1 text-xs ${quote.quality === "invalid" ? "text-red-700 dark:text-red-400" : "text-orange-800 dark:text-orange-400"}`}>{issue.label}</button>
               : <QualityBadge quality={quote.quality} reasons={quote.quality_reasons} symbol={quote.symbol} market={quote.market} dataTimestamp={quote.data_timestamp} session={quote.display_session} />}
           </span>
           <SuspendedBadge status={tradingStatus} />

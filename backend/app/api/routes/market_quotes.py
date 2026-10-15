@@ -43,6 +43,28 @@ from app.api.routes.market_envelope import (
 )
 
 
+@router.get("/indices/{symbol}/members")
+async def index_members(symbol: str, request: Request) -> dict:
+    """Six displayed indices only. Cache membership, never security prices."""
+    from app.market.indices import INDEX_CATALOG
+
+    catalog = {market.lower() + code: (code + "." + market, name)
+               for code, market, name in INDEX_CATALOG}
+    if symbol not in catalog:
+        raise HTTPException(status_code=400, detail="请选择带市场前缀的工作台指数")
+    service = getattr(request.app.state, "theme_catalog", None)
+    if service is None:
+        raise HTTPException(status_code=503, detail="指数成分服务未就绪")
+    code, name = catalog[symbol]
+    cache = cache_on(request.app.state, "index.members", 6 * 3600, maxsize=len(catalog))
+    try:
+        hit, snapshot = await cache.get_or_set((symbol, beijing_now().date()), lambda: service.fetch_index_members(code))
+    except Exception as exc:
+        log.warning("index members unavailable %s: %s", symbol, type(exc).__name__)
+        raise HTTPException(status_code=502, detail="指数成分读取失败，请稍后重试") from None
+    return {"data": {**snapshot, "symbol": symbol, "name": name, "source": "ths", "cached": hit}}
+
+
 @router.get("/sparkline", response_model=Envelope[SparklinePayload])
 async def sparkline(
     request: Request,

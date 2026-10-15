@@ -25,8 +25,8 @@ export function FilterMenu<T extends string>({label, value, options, onChange}: 
     <DropdownMenu.Portal container={container}><DropdownMenu.Content className="filter-menu" sideOffset={6} collisionPadding={12} align="start" aria-label={label}>
       <DropdownMenu.Label className="filter-menu-label">{label}</DropdownMenu.Label>
       <DropdownMenu.RadioGroup value={value} onValueChange={key => { const option = options.find(item => item.key === key); if (option) onChange(option.key); }}>
-        {options.map(option => <DropdownMenu.RadioItem className="filter-option" key={option.key} value={option.key} textValue={option.label}>
-          <span><span className="filter-option-title">{option.label}</span>{option.title && <span className="filter-description">{option.title}</span>}</span>
+        {options.map(option => <DropdownMenu.RadioItem className="filter-option filter-option-layout" key={option.key} value={option.key} textValue={option.label}>
+          <span className="filter-option-copy"><span className="filter-option-title">{option.label}</span>{option.title && <span className="filter-description">{option.title}</span>}</span>
           {option.count != null && <span className="filter-count">{option.count}</span>}
           <span className="filter-check"><DropdownMenu.ItemIndicator><HugeiconsIcon icon={Tick02Icon} size={15} aria-hidden="true" /></DropdownMenu.ItemIndicator></span>
         </DropdownMenu.RadioItem>)}

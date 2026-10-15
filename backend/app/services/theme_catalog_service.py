@@ -320,8 +320,8 @@ class ThemeCatalogService:
         r.raise_for_status()
         return parse_catalog_items(r.json())
 
-    async def fetch_members(self, code: str) -> list[dict]:
-        """只返回经校验可替换的响应；业务失败/损坏不能触发旧成员删除。"""
+    async def _fetch_member_payload(self, code: str) -> dict:
+        """Validate the complete official snapshot before any consumer uses it."""
         r = await self._client.get(f"{self._base}/api/a-share-index/constituents/ths-stock-list",
                                    params={"thscode": code})
         r.raise_for_status()
@@ -339,7 +339,26 @@ class ThemeCatalogService:
         if (len(items) != len(data["item"]) or len(set(symbols)) != len(symbols)
                 or any(not symbol.isascii() for symbol in symbols)):
             raise RuntimeError("theme members: incomplete or duplicate members")
-        return items
+        return payload
+
+    async def fetch_members(self, code: str) -> list[dict]:
+        """只返回经校验可替换的响应；业务失败/损坏不能触发旧成员删除。"""
+        return parse_member_items(await self._fetch_member_payload(code))
+
+    async def fetch_index_members(self, code: str) -> dict:
+        """Current standard-index membership; no quote reads or database writes."""
+        payload = await self._fetch_member_payload(code)
+        rows = payload["data"]["item"]
+        if not rows:
+            raise RuntimeError("index members: empty snapshot")
+        items = []
+        for row in rows:
+            symbol, _, market = str(row.get("thscode") or "").partition(".")
+            if symbol != row["ticker"] or market not in {"SH", "SZ", "BJ"} or not row.get("name"):
+                raise RuntimeError("index members: security identity missing or mismatched")
+            items.append({"symbol": symbol, "name": row["name"], "market": market})
+        return {"items": items, "snapshot_at": datetime.fromtimestamp(
+            payload["data"]["timestamp"] / 1000, tz=timezone.utc).isoformat()}
 
     async def fetch_board_bars(self, code: str, calendar_days: int = 35) -> list[dict]:
         """官方板块日 K（close 序列），供 3/5/10 日涨跌幅交叉验证（T3/B3）。"""
