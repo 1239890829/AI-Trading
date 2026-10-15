@@ -6,7 +6,7 @@ import {getEventsForSymbol, getNewsContent, getStockAttribution, type EventSumma
 vi.mock("@/lib/api", () => ({getEventsForSymbol: vi.fn(), getNewsContent: vi.fn(), getStockAttribution: vi.fn()}));
 vi.mock("@/components/ui/modal-shell", () => ({ModalShell: ({children, open, onClose}: {children: React.ReactNode; open: boolean; onClose: () => void}) => <section aria-hidden={!open || undefined} inert={!open} data-testid="detail-shell">{open && <button onClick={onClose}>关闭详情</button>}{children}</section>}));
 vi.mock("@/components/detail/capital-flow-panel", () => ({CapitalFlowPanel: () => null}));
-vi.mock("@/components/detail/symbol-detail-context", () => ({useSymbolDetail: () => ({open: vi.fn()})}));
+vi.mock("@/components/detail/symbol-detail-context", () => ({useSymbolDetail: () => ({open: vi.fn()}), symbolDetailClick: () => () => {}}));
 afterEach(() => {cleanup(); vi.resetAllMocks();});
 
 function Openers() {
@@ -32,7 +32,7 @@ it("feed direction remains scoped to the requested stock across the click into d
   expect(screen.queryByText("规则正向线索")).toBeNull();
   fireEvent.click(screen.getByRole("button", {name: /上游涨价，公司成本上升/}));
   expect(screen.queryByRole("tabpanel")).toBeNull();
-  fireEvent.click(screen.getByRole("tab", {name: "个股 · 600519"}));
+  fireEvent.click(screen.getByRole("button",{name:"完整判读与来源记录"}));
   expect(screen.getByText("规则负向线索")).toBeTruthy();
   expect(screen.getByText(/#20 · 生效/)).toBeTruthy();
   expect(JSON.stringify(event)).toBe(original);

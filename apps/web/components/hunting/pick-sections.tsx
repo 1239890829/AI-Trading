@@ -3,7 +3,8 @@
 import { StockLink } from "@/components/stock-link";
 import { pctColor, pctText, winRateColor } from "@/lib/format";
 import type { PickReviewRow } from "@/lib/api";
-import { NarrativeText } from "@/components/ui/explanation-map";
+import {ReaderBrief, ResearchDisclosure} from "@/components/ui/reader-brief";
+import {readerExcerpt, readerCautions} from "@/lib/reader-copy";
 
 /**
  * 猎场「每日精选」侧的复盘区块（2026-09-08 猎场批次③从 /picks/page.tsx 迁出）：
@@ -108,7 +109,7 @@ export function DailyReviews({ reviews }: { reviews: PickReviewRow[] }) {
               {r.excess_pct == null ? "收益观察未知" : `观察超额 ${pctText(r.excess_pct)}`}
             </span>
             <span className={tone}>{label}</span>
-            <div className="w-full text-zinc-600 dark:text-zinc-400"><NarrativeText text={r.note} label="逐股复盘原说明" identity={`${r.symbol}:${r.date}`}/></div>
+            <div className="w-full text-zinc-600 dark:text-zinc-400"><ReaderBrief label="逐股复盘简述" headline={readerExcerpt(r.note)} cautions={readerCautions([r.note])}/><ResearchDisclosure label="逐股复盘完整说明" identity={`${r.symbol}:${r.date}`}><p className="whitespace-pre-wrap">{r.note}</p></ResearchDisclosure></div>
             <span className="w-full break-words text-zinc-600 dark:text-zinc-400" title={r.review_context?.selection_version ?? "历史版本未绑定"}>
               {r.statistics_eligible === true ? "同版可信价格观察" : r.review_context?.selection_version ? "未进入可信统计：窗口、源数据或生成版本不满足" : "历史口径未绑定，不进入可信统计"}
               {r.review_context?.window_start ? ` · ${r.review_context.window_start} → ${r.review_context.window_end ?? "终点未知"}` : ""}

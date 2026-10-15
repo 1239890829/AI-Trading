@@ -9,6 +9,8 @@ import { useSymbolDetail } from "@/components/detail/symbol-detail-context";
 import { bjToday } from "@/lib/market-hours";
 import { timeText, dateTimeTextBJ } from "@/lib/format";
 import "./validation-panel.css";
+import {ReaderBrief, ResearchDisclosure} from "@/components/ui/reader-brief";
+import {readerExcerpt, readerCautions} from "@/lib/reader-copy";
 import {ExecutionValidation} from "./execution-validation";
 import {ValidationRecordTable} from "./validation-record-table";
 
@@ -52,7 +54,7 @@ function EntryDetail({entry}: {entry: ValidationSelectionEntry}) {
   return <div className="validation-detail">
     <div><h3>{entry.name} · 原入选记录</h3><button className="quiet-action" onClick={() => open({symbol: entry.symbol, rightTab: "book"})}>查看行情</button></div>
     <dl><div><dt>首次加入</dt><dd>{dateTimeTextBJ(entry.selected_at, {seconds:true})}</dd></div><div><dt>加入参考价</dt><dd>{price(entry.reference_price)}</dd></div><div><dt>当时涨幅</dt><dd>{percent(entry.reference_change_pct)}</dd></div><div><dt>观察天数</dt><dd>{entry.observation_calendar_days} 自然日</dd></div></dl>
-    <p>{entry.reason}</p>{entry.conditions.length > 0 && <ul>{entry.conditions.map((c,i) => <li key={i}>{c}</li>)}</ul>}
+    <ReaderBrief label="入选记录简述" headline={readerExcerpt(entry.reason)} cautions={[...readerCautions([entry.reason,...entry.conditions]), ...(entry.conditions.length ? ["当时附有条件，见完整依据"] : [])]}/><ResearchDisclosure identity={JSON.stringify(entry)} label="原入选完整依据"><p>{entry.reason}</p><ul>{entry.conditions.map((c,i) => <li key={i}>{c}</li>)}</ul></ResearchDisclosure>
     <p className="validation-muted">{stateName[entry.outcome_state] ?? "结果待核"} · {entry.scope === "daily" ? "每日精选" : "盘中入选"} · 入选不代表可成交。</p>
   </div>;
 }
@@ -60,7 +62,7 @@ function EpisodeDetail({episode}: {episode: TradeEpisode}) {
   return <div className="validation-detail"><h3>{episode.name} · 成交回合</h3>
     <p>买入 {dateTimeTextBJ(episode.opened_at, {seconds:true})} → {episode.close_date ? `清仓 ${dateTimeTextBJ(episode.closed_at, {seconds:true})}` : "尚未清仓"}</p>
     <dl><div><dt>买入金额及费用</dt><dd>{(episode.cost + episode.buy_fee).toFixed(2)} 元</dd></div><div><dt>卖出净额</dt><dd>{(episode.proceeds - episode.sell_fee).toFixed(2)} 元</dd></div><div><dt>持有交易日</dt><dd>{episode.holding_trade_days ?? "日历未覆盖"}</dd></div><div><dt>流水笔数</dt><dd>{episode.fill_ids.length}</dd></div></dl>
-    {episode.entry_reason && <p>原入选依据：{episode.entry_reason}</p>}
+    {episode.entry_reason && <><p>原入选摘录：{readerExcerpt(episode.entry_reason)}</p><ResearchDisclosure identity={JSON.stringify(episode)} label="成交对应的原入选依据"><p>{episode.entry_reason}</p></ResearchDisclosure></>}
     <p>{episode.issues.join("；") || "准确时刻、原入选关联与费用完整，清仓后计入胜率。"}</p>
     <p className="validation-muted">人工记录未经券商核验。加仓与部分卖出合为一回合，完全清仓后再次买入另计。</p>
   </div>;
@@ -95,7 +97,7 @@ export function ValidationContent({report}: {report: ValidationReport}) {
       {mode === "selection" ? <ValidationRecordTable key="selections" items={entries} columns={["入选日期 / 股票","首次加入","参考价","当时涨幅","观察涨跌幅"]} resetKey={day ?? "all"} label="统计明细，可横向滚动" empty="这个范围还没有入选记录，不用模拟记录填充。" renderRow={e => <tr key={e.id} data-selected={picked===e.id}><td><button aria-label={`${e.name}，${e.date}入选记录`} onClick={() => setPicked(picked===e.id ? null : e.id)} aria-expanded={picked===e.id}>{e.name}<small>{e.date} · {e.symbol}</small></button></td><td>{e.selected_at ? timeText(e.selected_at) : "未记录"}</td><td>{price(e.reference_price)}</td><td data-sign={sign(e.reference_change_pct)}>{percent(e.reference_change_pct)}</td><td data-sign={sign(e.return_pct)}>{percent(e.return_pct)}</td></tr>} /> : <ValidationRecordTable key="actual" items={report.episodes} columns={["股票 / 首买日期","清仓日期","持有交易日","净收益","状态"]} resetKey="actual" label="统计明细，可横向滚动" empty="这个范围还没有实际成交流水，不用模拟记录填充。" renderRow={e => <tr key={e.id} data-selected={picked===`episode:${e.id}`}><td><button onClick={() => setPicked(picked===`episode:${e.id}` ? null : `episode:${e.id}`)} aria-expanded={picked===`episode:${e.id}`}>{e.name}<small>{e.open_date} · {e.symbol}</small></button></td><td>{e.close_date ?? "持有中"}</td><td>{e.holding_trade_days ?? "未知"}</td><td data-sign={sign(e.return_pct)}>{percent(e.return_pct)}</td><td>{stateName[e.state]}</td></tr>} />}
       {expanded.value && <div className="validation-expanded" data-open={expanded.active} inert={!expanded.active} aria-hidden={!expanded.active}><div>{entry && <EntryDetail key={entry.id} entry={entry} />}{episode && <EpisodeDetail key={episode.id} episode={episode} />}</div></div>}
     </section>
-    {mode === "actual" && report.cohorts.length > 0 && <section className="validation-cohorts"><h3>原入选依据：成功与失败对照</h3><p className="validation-muted">按成交前记录的依据分组，只作描述；样本少不能认定因果，也不自动改策略。</p>{report.cohorts.map((c,i) => <div key={i}><p>{c.reason}</p><span>有效 {c.denominator} / 总回合 {c.total} · 盈 {c.wins} / 亏 {c.losses} · 中位 {percent(c.median_pct)}</span></div>)}</section>}
+    {mode === "actual" && report.cohorts.length > 0 && <section className="validation-cohorts"><h3>原入选依据：成功与失败对照</h3><p className="validation-muted">按成交前记录的依据分组，只作描述；样本少不能认定因果，也不自动改策略。</p>{report.cohorts.map((c,i) => <div key={i}><p>{readerExcerpt(c.reason)}</p><ResearchDisclosure label="分组原依据" identity={`${i}:${c.reason}`}><p>{c.reason}</p></ResearchDisclosure><span>有效 {c.denominator} / 总回合 {c.total} · 盈 {c.wins} / 亏 {c.losses} · 中位 {percent(c.median_pct)}</span></div>)}</section>}
     <section className="validation-method"><button type="button" aria-expanded={methodOpen} onClick={() => setMethodOpen(open => !open)}>如何读结果、怎样改进</button>{method.value && <div className="validation-expanded" data-open={method.active} inert={!method.active} aria-hidden={!method.active}><div><p>{report.basis.coverage}</p><p>入选数量来自现存档案。旧每日覆盖式存储无法还原全部轮次；没有记录的历史不补造。</p><p>先看同一入选时点的原依据，再比较盈利与亏损的样本。小样本、未成交、缺费用或缺源价不能证明战法有效。把握主升浪与缩窄范围须经过分时期的前向对照，不能从赢家倒推。</p><p>{report.basis.improvement}</p></div></div>}</section>
     <p className="validation-disclaimer">仅供投研与复盘，不构成买卖建议。</p>
   </>;

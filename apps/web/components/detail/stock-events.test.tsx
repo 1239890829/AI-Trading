@@ -1,5 +1,5 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { act, cleanup, fireEvent, render, screen } from "@testing-library/react";
+import { act, cleanup, fireEvent, render, screen, within } from "@testing-library/react";
 import { StockEventsRow } from "./stock-events";
 import { DetailModalProvider, useDetailModal } from "./detail-modal";
 import type { EventSummary } from "@/lib/api";
@@ -48,6 +48,13 @@ function FeedEntry() {
   return <button onClick={() => open({ kind: "feed", title: "关联消息", symbol: "600519" })}>查看关联消息</button>;
 }
 
+function fullEventDialog() {
+ const dialog=screen.getByRole("dialog");
+ const button=within(dialog).queryByRole("button",{name:"完整判读与来源记录"});
+ if(button?.getAttribute("aria-expanded")==="false") fireEvent.click(button);
+ return dialog;
+}
+
 describe("StockEventsRow", () => {
   it("优先展示当前个股方向，不把第一条题材利好移到该股上", async () => {
     const mixed = {...event, directions: [
@@ -61,7 +68,8 @@ describe("StockEventsRow", () => {
     await screen.findByText("规则负向线索");
     expect(screen.queryByText("规则正向线索")).toBeNull();
     fireEvent.click(screen.getByRole("button", {name: /沃什鹰派/}));
-    expect((await screen.findByRole("dialog")).textContent).toContain("规则负向线索");
+    await screen.findByRole("dialog");
+    expect(fullEventDialog().textContent).toContain("规则负向线索");
     expect(screen.getByRole("dialog").textContent).toContain("#12 · 生效");
     expect(mixed.directions[0].direction).toBe(1);
   });
@@ -87,7 +95,8 @@ describe("StockEventsRow", () => {
 
     // 弹窗化交互：条目是按钮，点击打开通用详情弹窗（Portal 到 body）
     fireEvent.click(screen.getByRole("button", { name: /沃什鹰派/ }));
-    const modal = await screen.findByRole("dialog");
+    await screen.findByRole("dialog");
+    const modal = fullEventDialog();
     expect(modal).toBeTruthy();
     expect(modal.textContent).toContain("#12 · 生效 · 2026-08-31 09:02:00");
     await screen.findByText("正文第一段。");
@@ -113,7 +122,8 @@ describe("StockEventsRow", () => {
     expect(screen.getByRole("button", {name: /沃什鹰派/}).getAttribute("title")).toContain("模型负向假设");
     expect(screen.queryByText("利空")).toBeNull();
     fireEvent.click(screen.getByRole("button", { name: /沃什鹰派/ }));
-    expect((await screen.findByRole("dialog")).textContent).toContain("尚未经人工验证");
+    await screen.findByRole("dialog");
+    expect(fullEventDialog().textContent).toContain("尚未经人工验证");
   });
 
   it("同一事件已判定也不把方向为0的关联行当作明确方向", async () => {
@@ -131,7 +141,8 @@ describe("StockEventsRow", () => {
     renderWithProvider(<StockEventsRow symbol="600519" />);
     await screen.findByText("已过期");
     fireEvent.click(screen.getByRole("button", { name: /沃什鹰派/ }));
-    expect((await screen.findByRole("dialog")).textContent).toContain("已超过有效时限");
+    await screen.findByRole("dialog");
+    expect(fullEventDialog().textContent).toContain("已超过有效时限");
   });
 
   it("加载失败显示失败态与重试（不再是静默消失）", async () => {
@@ -174,7 +185,8 @@ describe("StockEventsRow", () => {
     renderWithProvider(<StockEventsRow symbol="600519" />);
     await screen.findByText(/沃什鹰派/);
     fireEvent.click(screen.getByRole("button", { name: /沃什鹰派/ }));
-    const modal = await screen.findByRole("dialog");
+    await screen.findByRole("dialog");
+    const modal = fullEventDialog();
     expect(modal.textContent).toContain("原文链接缺失");
   });
 
@@ -183,7 +195,8 @@ describe("StockEventsRow", () => {
       items: [{ ...event, interpretation_ref: null }] });
     renderWithProvider(<StockEventsRow symbol="600519" />);
     fireEvent.click(await screen.findByRole("button", { name: /沃什鹰派/ }));
-    expect((await screen.findByRole("dialog")).textContent).toContain("历史解释版本未知");
+    await screen.findByRole("dialog");
+    expect(fullEventDialog().textContent).toContain("历史解释版本未知");
   });
 
   it("指数（isIndex）：整行不渲染，且**不发请求**（后端对指数代码必拒 400）", async () => {
@@ -207,7 +220,8 @@ describe("StockEventsRow", () => {
     expect(screen.getByText("题材线索 · 黄金概念").getAttribute("title")).toContain("模型负向假设");
     expect(screen.getByText("已过期")).toBeTruthy();
     fireEvent.click(screen.getByRole("button", { name: /沃什鹰派/ }));
-    expect((await screen.findByRole("dialog")).textContent).toContain("尚未经人工验证");
+    await screen.findByRole("dialog");
+    expect(fullEventDialog().textContent).toContain("尚未经人工验证");
     expect(screen.getByRole("dialog").textContent).toContain("超过有效时限");
   });
 });

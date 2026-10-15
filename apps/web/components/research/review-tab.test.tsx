@@ -94,12 +94,11 @@ it("keeps observations, judgments and every gap condition distinct without chang
   vi.mocked(mocked.getReviewReport).mockResolvedValue(report);
   render(<ReviewTab allowDispose/>);
   expect(await screen.findByText("仅取得 12.36 亿元的单源记录。")).toBeTruthy();
-  expect(screen.getByText("原判断摘录：尚不能判断可靠性。")).toBeTruthy();
-  expect(screen.getByText(/发布时间未知.*不能回填时点.*P0/)).toBeTruthy();
-  fireEvent.click(screen.getByRole("tab",{name:"报告判断"}));
-  expect(within(screen.getByRole("tabpanel",{name:"报告判断"})).getByText("尚不能判断可靠性。")).toBeTruthy();
-  fireEvent.click(screen.getByRole("tab",{name:"已列缺口"}));
-  expect(within(screen.getByRole("tabpanel",{name:"已列缺口"})).getByText(/发布时间未知.*不能回填时点.*P0/)).toBeTruthy();
+  expect(screen.getByText("尚不能判断可靠性。")).toBeTruthy();
+  expect(screen.getByText("还有 1 项资料或验证缺口")).toBeTruthy();
+  fireEvent.click(screen.getByRole("button",{name:"数据窗口完整检查记录"}));
+  expect(screen.getByLabelText("原始判断").textContent).toContain("尚不能判断可靠性。");
+  expect(screen.getByLabelText("缺口与限制").textContent).toMatch(/发布时间未知.*不能回填时点.*P0/);
   expect(screen.getByRole("button",{name:"确认"})).toBeTruthy();
   expect(mocked.updateActionItemStatus).not.toHaveBeenCalled();
 });
@@ -284,10 +283,10 @@ describe("ReviewTab 只读与请求身份", () => {
     render(<ReviewTab />);
     await waitFor(() => expect(mocked.getReviewReport).toHaveBeenCalledWith(SUMMARY.trade_date));
     fireEvent.click(screen.getByRole("button", {name: /B报告/}));
-    expect(await screen.findByText("RV-B")).toBeTruthy();
+    expect(await screen.findByText("B正文")).toBeTruthy();
     rejectA(new Error("迟到A错误"));
     await waitFor(() => expect(screen.queryByText(/迟到A错误/)).toBeNull());
-    expect(screen.getByText("RV-B")).toBeTruthy();
+    expect(screen.getByText("B正文")).toBeTruthy();
   });
   it("a missing requested date never silently falls back to a different report", async () => {
     setup(); vi.mocked(mocked.getReviewReport).mockRejectedValue(new mocked.ApiError(404, "无报告", "not_found"));

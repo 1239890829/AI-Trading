@@ -29,7 +29,8 @@ import type {
   OpportunityTheme,
   WatcherState,
 } from "@/lib/api";
-import { ConditionList, ExplanationMap, NarrativeText } from "@/components/ui/explanation-map";
+import {PlainExplanation as NarrativeText} from "@/components/ui/reader-brief";
+import { ConditionList, ExplanationMap } from "@/components/ui/explanation-map";
 import { ReadingRow, readingRowClasses } from "@/components/ui/reading-row";
 
 /**

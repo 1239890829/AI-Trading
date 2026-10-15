@@ -19,6 +19,8 @@ describe("shared security detail limit-up attribution", () => {
     vi.mocked(getStockAttribution).mockResolvedValue({schema_version: 1, symbol: "600825", count: 0, items: []});
     render(<LimitUpReasonPanel symbol="600825" quote={quote()} standalone/>);
     expect(await screen.findByText("覆铜板涨价")).toBeTruthy();
+    expect(screen.queryByText("拟收购欧康诺，交易尚需审批且未完成审计")).toBeNull();
+    fireEvent.click(screen.getByRole("button",{name:"来源原文与完整核对"}));
     expect(screen.getByText("拟收购欧康诺，交易尚需审批且未完成审计")).toBeTruthy();
     expect(screen.getByText("该业务收入不足总收入1%，预计暂不贡献利润")).toBeTruthy();
     await waitFor(() => expect(getStockAttribution).toHaveBeenCalledTimes(1));
@@ -119,8 +121,8 @@ describe("shared security detail limit-up attribution", () => {
     fireEvent.click(await screen.findByRole("button",{name:"查看全文"}));
     const dialog = await screen.findByRole("dialog",{name:"涨停原因 600825"});
     expect(within(dialog).getByText("拟收购财联社+重大资产重组")).toBeTruthy();
-    expect(within(dialog).getByLabelText("交易日记录").textContent).toContain("2026-10-09");
-    expect(within(dialog).getByText(/同花顺 · 数据源归因 · 因果待核/)).toBeTruthy();
+    expect(within(dialog).getByLabelText("数据源归因原文").textContent).toContain("2026-10-09");
+    expect(within(dialog).getByLabelText("数据源归因原文").textContent).toContain("同花顺 · 2026-10-09");
     fireEvent.click(within(dialog).getByRole("button",{name:"关闭"}));
     await vi.waitFor(() => expect(screen.queryByRole("dialog",{name:"涨停原因 600825"})).toBeNull());
     expect(within(container).getByText("拟收购财联社+重大资产重组")).toBeTruthy();
@@ -183,7 +185,7 @@ describe("shared security detail limit-up attribution", () => {
   });
   it("does not revive a canceled original when refreshed content later reverts", async () => {
     const {rerender} = render(<LimitReason reason="原文甲" compact />);
-    fireEvent.click(screen.getByRole("button", {name:/涨停原因 · 查看原文/}));
+    fireEvent.click(screen.getByRole("button", {name:/涨停原因 · 查看依据/}));
     expect(screen.getByRole("dialog", {name:"涨停原因原文"})).toBeTruthy();
     rerender(<LimitReason reason="原文乙" compact />);
     rerender(<LimitReason reason="原文甲" compact />);
@@ -194,7 +196,7 @@ describe("shared security detail limit-up attribution", () => {
     vi.stubGlobal("matchMedia", () => ({matches:false, addEventListener:()=>{}, removeEventListener:()=>{}}));
     vi.mocked(getStockAttribution).mockResolvedValue({schema_version:1, symbol:"600825", count:0, items:[]});
     const view = render(<LimitReason symbol="600825" reason="原文甲" compact />);
-    fireEvent.click(screen.getByRole("button", {name:/涨停原因 · 查看原文/}));
+    fireEvent.click(screen.getByRole("button", {name:/涨停原因 · 查看依据/}));
     await act(async () => {});
     expect(getStockAttribution).toHaveBeenCalledTimes(1);
     view.rerender(<LimitReason symbol="600825" reason={null} compact />);
@@ -210,19 +212,18 @@ describe("shared security detail limit-up attribution", () => {
   it("keeps a full long original available to touch and keyboard, without fabricating a source", async () => {
     const reason = "自有消息面+".repeat(40);
     const {container} = render(<LimitReason reason={reason} compact />);
-    fireEvent.click(screen.getByRole("button", {name: /涨停原因 · 查看原文/}));
+    fireEvent.click(screen.getByRole("button", {name: /涨停原因 · 查看依据/}));
     const dialog = await screen.findByRole("dialog", {name: "涨停原因原文"});
     expect(within(dialog).queryByRole("tabpanel")).toBeNull();
-    fireEvent.click(within(dialog).getByRole("button", {name:"完整原文"}));
-    expect(within(dialog).getByLabelText("数据源归因原文完整原文").textContent).toContain(reason);
-    expect(within(within(dialog).getByLabelText("数据源归因原文完整原文")).getByText(reason).textContent).toBe(reason);
-    expect(within(dialog).getByText(/来源未记录 · 数据源归因 · 因果待核/)).toBeTruthy();
+    expect(within(dialog).getByLabelText("数据源归因原文").textContent).toContain(reason);
+    expect(within(within(dialog).getByLabelText("数据源归因原文")).getByText(reason).textContent).toBe(reason);
+    expect(within(dialog).getByLabelText("数据源归因原文").textContent).toContain("来源未记录 · 交易日未记录");
     expect(container.querySelector(".truncate")).toBeNull();
   });
 
   it("does not retain an open attribution overlay when another security has the same reason", () => {
     const view = render(<LimitReason symbol="600825" date="2026-10-09" reason="公司独立事件" compact />);
-    fireEvent.click(screen.getByRole("button", {name: /涨停原因 · 查看原文/}));
+    fireEvent.click(screen.getByRole("button", {name: /涨停原因 · 查看依据/}));
     expect(screen.getByRole("dialog", {name: "涨停原因原文"})).toBeTruthy();
     view.rerender(<LimitReason symbol="600127" date="2026-10-09" reason="公司独立事件" compact />);
     expect(screen.queryByRole("dialog")).toBeNull();
@@ -234,9 +235,9 @@ describe("shared security detail limit-up attribution", () => {
     vi.mocked(getStockAttribution).mockResolvedValue({schema_version: 1, symbol: "600825", count: 0, items: []});
     render(<LimitReason symbol="600825" date="2026-10-09" reason="拟收购" compact />);
     expect(getStockAttribution).not.toHaveBeenCalled();
-    fireEvent.click(screen.getByRole("button", {name: /涨停原因 · 查看原文/}));
+    fireEvent.click(screen.getByRole("button", {name: /涨停原因 · 查看依据/}));
     await screen.findByText(/暂未找到关联事件/);
-    expect(screen.getByRole("button", {name: "涨停归因 · 证据核对"}).getAttribute("aria-expanded")).toBe("true");
+    expect(screen.getByRole("button", {name: "相关消息"}).getAttribute("aria-expanded")).toBe("true");
     expect(getStockAttribution).toHaveBeenCalledTimes(1);
     expect(getStockAttribution).toHaveBeenCalledWith("600825", {poolDate:"2026-10-09",responseAsOf:undefined});
   });
