@@ -444,3 +444,9 @@ PYTHONPATH=backend backend/.venv/bin/python backend/scripts/recovery_bundle.py r
 紧凑证据在忽略的`artifacts/runs/ops003-production-runtime-20261003/`：manifest、build/served资源hash、ASGI逐请求/断开记录、20次代理探针、前后表hash、截图/AX、日志和一次性脚本；acceptance-summary绑定文件hash。保留唯一新库；已停止的可再生源码/构建缓存156825519字节和自有canary已清理。应用代码/默认配置未修改。
 
 本轮构建身份和此生产构建的卸载/关标签验收收口。上批开发500与残留订阅转为**未复现的历史线索**，仅在相同故障再现或有新堆栈/宿主连接证据时重开；不重复同一休市窗口求“证明永远不发生”。OPS-003整体仍按真实交易日、其它后台、源失败反馈、慢客户端/增量和真实渠道授权验收；生产部署仍搁置。发布只签收本批事实文档，准确HEAD结果看PR回执。
+
+### 归档误标的窄范围恢复
+
+从backend运行`PYTHONPATH= .venv/bin/python -m scripts.review_archive_repair`只读出计划。核对后以`--apply-digest`绑定精确摘要，并用`--backup`指定不存在的SQLite备份文件。只有完整自动“已写入日报”说明、状态applied且指纹未变的行改为recorded；人工状态不覆盖。应用需已加载本轮修复，避免旧运行器重新误标。
+
+恢复用`--restore-digest`及另一个不存在的备份目标，只恢复仍与修复后状态一致的原行，后续人工变化使整批拒绝。该工具不恢复整个数据库、不删除审计、不改变参数/策略或通知。备份、实际摘要、数量、运行版本和前后核验只保留于受控本地产物；历史归档误标纠正不等于原建议已经实施。
