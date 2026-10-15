@@ -32,6 +32,7 @@ import {
   createWatchlistGroup,
   deleteWatchlistGroup,
   getIntradayTop,
+  isIndexSymbol,
   getMarketOverview,
   getPaperPositions,
   getBoardFundBySymbols,
@@ -191,10 +192,13 @@ function WorkbenchInner() {
     (s: string) => {
       setSelected(s);
       setMobileView("chart");
-      const url = patchWorkspaceUrl("/workbench", sp.toString(), { symbol: s });
+      const prior = parseRightTab(sp.get("rt"));
+      const nextRight = isIndexSymbol(s) ? "members"
+        : isIndexSymbol(activeSymbol) || prior === "members" || prior === "boards" ? "book" : prior;
+      const url = patchWorkspaceUrl("/workbench", sp.toString(), {symbol: s, rt: nextRight ?? null});
       router.replace(url, { scroll: false });
     },
-    [router, sp],
+    [router, sp, activeSymbol],
   );
 
   const switchRightTab = useCallback((tab: RightTab) => {
@@ -633,7 +637,7 @@ function WorkbenchInner() {
         <section className="bc-workbench-detail" aria-label="证券详情">
         {/* 边界跟随证券/scope重置，保留深链与共享真实详情的全部消费者。 */}
         <PanelBoundary key={`${activeSymbol}:${mode}:${account}`} label="个股详情">
-          <StockDetailPanel symbol={activeSymbol} chartTab={chartTab} rightTab={rightTab} onRightTabChange={switchRightTab} liveQuote={merged[activeSymbol]} streamStatus={status} quoteFeed={quoteFeed} indexQuote={indices === undefined ? undefined : indices.find(q => q.symbol === "sh000001" || (q.symbol === "000001" && q.market === "SH")) ?? null} active={detailActive} realPositions={realPositions} watchlistMembership={symbols.includes(activeSymbol) ? true : watchConfirmed ? false : null} onWatchlistAdded={confirmWatchlistAdded} />
+          <StockDetailPanel symbol={activeSymbol} chartTab={chartTab} rightTab={rightTab} onRightTabChange={switchRightTab} onSymbolChange={switchSymbol} liveQuote={merged[activeSymbol]} streamStatus={status} quoteFeed={quoteFeed} indexQuote={indices === undefined ? undefined : indices.find(q => q.symbol === "sh000001" || (q.symbol === "000001" && q.market === "SH")) ?? null} active={detailActive} realPositions={realPositions} watchlistMembership={symbols.includes(activeSymbol) ? true : watchConfirmed ? false : null} onWatchlistAdded={confirmWatchlistAdded} />
         </PanelBoundary>
         </section>
       </div>

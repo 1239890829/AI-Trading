@@ -30,6 +30,7 @@ describe("QuoteStrip 限价展示", () => {
     const view = render(<QuoteStrip quote={raw} inWatchlist={false} onAdd={() => {}} connectionStatus="live" issue={{label: "保留可信值", title: "旧快照已忽略，保留较新报价"}} diagnostics={<p>原源钟与拒旧依据</p>}/>);
     const slot = view.container.querySelector("[data-quote-status-slot]");
     expect(slot?.className).toContain("w-[6.4em]");
+    expect(screen.getByRole("button", {name: "查看行情问题"}).className).not.toContain("bg-");
     expect(screen.getByText("已连接").title).toContain("WebSocket");
     expect(screen.getByRole("button", {name: "查看行情问题"}).getAttribute("data-quality")).toBe("stale");
     fireEvent.click(screen.getByRole("button", {name: "查看行情问题"}));

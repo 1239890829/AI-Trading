@@ -3,8 +3,8 @@ import { quoteQualityView, type QuoteQualityInput } from "@/lib/quote-quality-vi
 
 const TONES = {
   quiet: "text-zinc-600 dark:text-zinc-400",
-  warning: "bg-amber-500/10 text-orange-800 dark:text-orange-400",
-  danger: "bg-red-500/10 text-red-700 dark:text-red-400",
+  warning: "text-orange-800 dark:text-orange-400",
+  danger: "text-red-700 dark:text-red-400",
 };
 
 /** Keep one stable slot while reporting actual source quality without a debounce. */

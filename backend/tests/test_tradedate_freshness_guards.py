@@ -91,6 +91,12 @@ _TTL_CARRIERS: dict[str, int] = {
 #: 登记的门槛不是"TTL 长"本身，而是必须说清：**为什么它不会因跨日而陈旧**。
 #: 判据锚点 = 2026-09-14 的根因——「时效语义是**必须覆盖今天**，却用固定时长表达」。
 LONG_TTL_REGISTRY: dict[tuple[str, str], str] = {
+    ("app/api/routes/market_quotes.py", "index.members"): (
+        "只缓存标准指数当前成员关系，不含价格、权重、排名或交易资格。"
+        "键含带市场身份的指数及北京时间自然日，跨午夜不命中昨天成员；最多6键。"
+        "6小时限制同日静态关系复用，不参与日历、行情新鲜度、选股或消息资格。"
+        "保留官方快照就绪钟，不能当成分调整生效日期或报价源钟；源失败/损坏不缓存为空。"
+    ),
     ("app/api/routes/market_pools.py", "market.limit_qualifications"): (
         "仅保留源明确返回的同日同股涨停或炸板肯定观察，键为已核验的请求trade_date；"
         "最多2个日键、每日4096条，86400s限制进程内留存，重复读取不推进observed_at。"

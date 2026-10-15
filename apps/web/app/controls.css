@@ -279,3 +279,9 @@
 @media(prefers-reduced-motion:reduce) {.navigation-marker {transition:none;}}
 .index-disclosure,.turnover-link {min-height:28px;}
 @media(max-width:767px),(pointer:coarse) {.index-disclosure,.turnover-link {min-height:44px;}}
+
+/* Reserve independent columns for the value count and the selected check. */
+.filter-option-layout {display:grid;grid-template-columns:minmax(0,1fr) max-content 18px;column-gap:8px;}
+.filter-option-copy {min-width:0;}
+.filter-option-layout .filter-count {grid-column:2;justify-self:end;align-self:start;margin-left:0;}
+.filter-option-layout .filter-check {grid-column:3;align-self:start;margin-left:0;}

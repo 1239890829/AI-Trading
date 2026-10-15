@@ -27,10 +27,11 @@ vi.mock("@/hooks/use-quote-stream", () => ({
 // A fresh items array on every render repeatedly triggers the REST fallback effect.
 vi.mock("@/hooks/use-real-positions", () => ({useRealPositions: () => ({data: state.realPositions, error: null, reload: state.reloadReal})}));
 vi.mock("@/components/stock-detail", () => ({StockDetailPanel: ({symbol, chartTab, rightTab, active, realPositions, quoteFeed, watchlistMembership, onWatchlistAdded, indexQuote}: {symbol: string; chartTab?: string; rightTab?: string; active?: boolean; realPositions?: {reload: () => Promise<void>}; quoteFeed?: unknown; watchlistMembership?: boolean | null; onWatchlistAdded?: (symbol: string) => void; indexQuote?: Quote | null}) => <><div data-testid="stock-detail" data-active={String(active)} data-shared-positions={String(realPositions?.reload === state.reloadReal)} data-shared-quote-feed={String(quoteFeed === state.quoteStream.quoteFeed)} data-membership={String(watchlistMembership)} data-index-source={indexQuote === null ? "missing" : indexQuote?.source ?? "no-owner"}>{symbol}/{chartTab}/{rightTab}</div><button onClick={() => onWatchlistAdded?.(symbol)}>确认加入回执</button></>}));
-vi.mock("@/components/index-cards", () => ({IndexCards: () => <div>指数摘要</div>}));
+vi.mock("@/components/index-cards", () => ({IndexCards: ({onSelect}: {onSelect: (symbol: string) => void}) => <div>指数摘要<button onClick={() => onSelect("sh000688")}>查看科创50</button></div>}));
 vi.mock("@/components/detail/account-scope-panel", () => ({AccountScopePanel: ({account}: {account: string}) => <div>账户结果 {account}</div>}));
 vi.mock("@/components/picks/pick-detail-modal", () => ({PickDetailModal: ({target}: {target: {kind: string; item: {symbol: string}} | null}) => target ? <div role="dialog">{target.kind}/{target.item.symbol}</div> : null}));
 vi.mock("@/lib/api", () => ({
+  isIndexSymbol: (symbol: string) => /^(?:sh|sz)\d{6}$/.test(symbol),
   getWatchlist: vi.fn(async () => state.watch), getWatchlistGroups: vi.fn(async () => ["材料观察"]),
   getMarketOverview: vi.fn(async () => ({indices: [], total_amount: null, total_amount_freshness: null})),
   getPaperPositions: vi.fn(async () => [{symbol: "600127", quantity: 100, pnl_pct: null}]),
@@ -449,4 +450,30 @@ describe("B+C workbench production consumers", () => {
     expect(next.searchParams.get("from")).toBe("/hunting");
     expect(api.removeFromWatchlist).not.toHaveBeenCalled();
   });
+});
+
+it("指数选择写入成分视角，指数回个股清除板块深链并打开盘口", async () => {
+  state.params = new URLSearchParams("symbol=600127&ct=minute&rt=info");
+  const view = render(<WorkbenchPage/>);
+  await screen.findByRole("button", {name: "查看科创50"});
+  fireEvent.click(screen.getByRole("button", {name: "查看科创50"}));
+  let target = new URL(state.replace.mock.calls.at(-1)![0], "http://local.invalid");
+  expect(target.searchParams.get("symbol")).toBe("sh000688");
+  expect(target.searchParams.get("rt")).toBe("members");
+  state.params = new URLSearchParams("symbol=sh000688&ct=minute&rt=boards");
+  view.rerender(<WorkbenchPage/>);
+  await screen.findByRole("button", {name: /查看 金健米业/});
+  fireEvent.click(screen.getByRole("button", {name: /查看 金健米业/}));
+  target = new URL(state.replace.mock.calls.at(-1)![0], "http://local.invalid");
+  expect(target.searchParams.get("symbol")).toBe("600127");
+  expect(target.searchParams.get("rt")).toBe("book");
+});
+
+it("从另一指数的板块视角选择新指数也回到该指数成分股", async () => {
+  state.params = new URLSearchParams("symbol=sh000001&rt=boards");
+  render(<WorkbenchPage/>);
+  fireEvent.click(await screen.findByRole("button", {name: "查看科创50"}));
+  const target = new URL(state.replace.mock.calls.at(-1)![0], "http://local.invalid");
+  expect(target.searchParams.get("symbol")).toBe("sh000688");
+  expect(target.searchParams.get("rt")).toBe("members");
 });

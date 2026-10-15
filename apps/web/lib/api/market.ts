@@ -671,3 +671,13 @@ export async function getBoardFlowMembers(boardCode: string): Promise<BoardFlowM
     `/api/market/board-fund-flow/${boardCode}/members`, 30_000,
   )).data;
 }
+
+export interface IndexMembers {
+  symbol: string; name: string; source: string; snapshot_at: string; cached: boolean;
+  items: {symbol: string; name: string; market: "SH" | "SZ" | "BJ"}[];
+}
+export async function getIndexMembers(symbol: string): Promise<IndexMembers> {
+  const result = (await getJson<IndexMembers>(`/api/indices/${encodeURIComponent(symbol)}/members`)).data;
+  if (result.symbol !== symbol || !Array.isArray(result.items)) throw new Error("指数成分身份不匹配");
+  return result;
+}

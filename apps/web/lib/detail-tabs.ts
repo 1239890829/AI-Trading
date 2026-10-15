@@ -5,10 +5,8 @@
  * 1. **可单测**——tab 列表原先内联在 900+ 行的组件里，只能靠渲染整个详情页来验证；
  * 2. **口径显式**——「指数能用哪些 tab」是一条规定，不是 UI 细节，应可被断言。
  *
- * 指数右列精简（2026-09-11 用户反馈「过多用不到的 tab」）：
- * - 盘口：免费源无指数撮合数据 → 面板恒显示「盘口数据不可用（免费源仅盘中提供）」
- * - 资讯：`/api/news|announcements|company/{指数代码}` 恒 502（接口只接受 6 位个股代码）
- * 保留「涨速 / 板块」——指数专属价值且接口实测可用。
+ * 指数显示对应成分与板块；个股显示盘口等个股视角。
+ * 旧涨速深链兼容至成分列表，不再运行涨速消费者。
  */
 
 /** 详情页右列 tab 键（与 components/stock-detail 的 RightTab 同域）。 */
@@ -22,7 +20,7 @@ export type DetailRightTab =
   | "themes"
   | "events"
   | "reason"
-  | "speed"
+  | "members"
   | "boards";
 
 /** 图表区 tab 键（与 components/stock-detail 的 ChartTab 同域）。 */
@@ -43,6 +41,7 @@ export function parseChartTab(v: string | null): DetailChartTab | undefined {
 }
 
 export function parseRightTab(v: string | null): DetailRightTab | undefined {
+  if (v === "speed") return "members";
   return v === "book" ||
     v === "trades" ||
     v === "trade" ||
@@ -52,7 +51,7 @@ export function parseRightTab(v: string | null): DetailRightTab | undefined {
     v === "themes" ||
     v === "events" ||
     v === "reason" ||
-    v === "speed" ||
+    v === "members" ||
     v === "boards"
     ? v
     : undefined;
@@ -113,12 +112,12 @@ export function parseWorkbenchDetailUrl(url: string | null | undefined): Workben
 
 /** 指数右列可用 tab：精简后只剩这两个。 */
 export const INDEX_RIGHT_TABS: ReadonlySet<DetailRightTab> = new Set<DetailRightTab>([
-  "speed",
+  "members",
   "boards",
 ]);
 
 /** 指数右列的默认 tab（首次打开指数时落到哪个）。 */
-export const INDEX_DEFAULT_RIGHT_TAB: DetailRightTab = "speed";
+export const INDEX_DEFAULT_RIGHT_TAB: DetailRightTab = "members";
 
 /** 个股右列 tab 顺序（与历史一致）。 */
 const STOCK_RIGHT_TABS: readonly (readonly [DetailRightTab, string])[] = [
@@ -134,11 +133,17 @@ const STOCK_RIGHT_TABS: readonly (readonly [DetailRightTab, string])[] = [
 
 /** 指数右列 tab 顺序。 */
 const INDEX_TABS: readonly (readonly [DetailRightTab, string])[] = [
-  ["speed", "涨速"],
+  ["members", "成分股"],
   ["boards", "板块"],
 ] as const;
 
 /** 按标的是否为指数返回右列 tab 列表（纯函数）。 */
 export function rightTabsFor(isIndex: boolean, reasonEligible = false): readonly (readonly [DetailRightTab, string])[] {
   return isIndex ? INDEX_TABS : STOCK_RIGHT_TABS.filter(([key]) => key !== "reason" || reasonEligible);
+}
+
+/** Keep deep links and reused panels within the selected security's capabilities. */
+export function contextualRightTab(isIndex: boolean, tab: DetailRightTab): DetailRightTab {
+  if (isIndex) return INDEX_RIGHT_TABS.has(tab) ? tab : INDEX_DEFAULT_RIGHT_TAB;
+  return INDEX_RIGHT_TABS.has(tab) ? "book" : tab;
 }

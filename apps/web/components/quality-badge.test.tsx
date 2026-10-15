@@ -39,11 +39,11 @@ describe("QualityBadge 可见性策略（唯一决策点）", () => {
     const props = {quality: "stale", reasons: ["quote_age_exceeded"], symbol: "sh000001", dataTimestamp: "2026-10-13T15:00:00+08:00", session: {phase, trade_date: "2026-10-14", as_of: asOf, trade_day_result: true}};
     const view = render(<QualityBadge {...props}/>);
     const badge = screen.getByText(phase === "auction" ? "竞价等待" : "开盘等待");
-    expect(badge.className).not.toContain("bg-");
+    expect(badge.className).not.not.toContain("bg-");
     expect(badge.getAttribute("data-quality")).toBe("stale");
     expect(badge.title).toContain("2026-10-13");
     view.rerender(<QualityBadge {...props} reasons={["quote_age_exceeded", "refresh_failed"]}/>);
-    expect(screen.getByText("刷新异常").className).toContain("bg-");
+    expect(screen.getByText("刷新异常").className).not.toContain("bg-");
   });
   it("high（正常）渲染为静音灰「正常」——不得静默消失，否则与「字段缺失」不可辨", () => {
     render(<QualityBadge quality="high" />);
@@ -73,15 +73,15 @@ describe("QualityBadge 可见性策略（唯一决策点）", () => {
     const session = {phase: "closed" as const, trade_date: "2026-10-14", as_of: "2026-10-14T19:34:00+08:00", trade_day_result: true, expected_source_date: "2026-10-14", expected_source_after: "2026-10-14T14:59:50+08:00"};
     const view = render(<QualityBadge quality="stale" reasons={["market_closed"]} dataTimestamp="2026-10-13T15:00:00+08:00" session={session} />);
     const warning = screen.getByText("时点待核");
-    expect(warning.className).toContain("bg-");
+    expect(warning.className).not.toContain("bg-");
     expect(warning.getAttribute("data-quality")).toBe("stale");
     expect(warning.title).toContain("2026-10-13");
     view.rerender(<QualityBadge quality="stale" reasons={["market_closed"]} dataTimestamp="2026-10-14T10:00:00+08:00" session={session} />);
-    expect(screen.getByText("时点待核").className).toContain("bg-");
+    expect(screen.getByText("时点待核").className).not.toContain("bg-");
     expect(screen.getByText("时点待核").title).toContain("10:00:00");
     view.rerender(<QualityBadge quality="stale" reasons={["market_closed"]} dataTimestamp="2026-10-14T15:00:00+08:00" session={session} />);
     const closed = screen.getByText("已收盘");
-    expect(closed.className).not.toContain("bg-");
+    expect(closed.className).not.not.toContain("bg-");
     expect(closed.getAttribute("data-quality")).toBe("stale");
   });
 
