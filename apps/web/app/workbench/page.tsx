@@ -193,7 +193,7 @@ function WorkbenchInner() {
       setSelected(s);
       setMobileView("chart");
       const prior = parseRightTab(sp.get("rt"));
-      const nextRight = isIndexSymbol(s) ? (prior === "boards" ? "boards" : "members")
+      const nextRight = isIndexSymbol(s) ? "members"
         : isIndexSymbol(activeSymbol) || prior === "members" || prior === "boards" ? "book" : prior;
       const url = patchWorkspaceUrl("/workbench", sp.toString(), {symbol: s, rt: nextRight ?? null});
       router.replace(url, { scroll: false });

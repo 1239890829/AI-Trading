@@ -468,3 +468,12 @@ it("指数选择写入成分视角，指数回个股清除板块深链并打开�
   expect(target.searchParams.get("symbol")).toBe("600127");
   expect(target.searchParams.get("rt")).toBe("book");
 });
+
+it("从另一指数的板块视角选择新指数也回到该指数成分股", async () => {
+  state.params = new URLSearchParams("symbol=sh000001&rt=boards");
+  render(<WorkbenchPage/>);
+  fireEvent.click(await screen.findByRole("button", {name: "查看科创50"}));
+  const target = new URL(state.replace.mock.calls.at(-1)![0], "http://local.invalid");
+  expect(target.searchParams.get("symbol")).toBe("sh000688");
+  expect(target.searchParams.get("rt")).toBe("members");
+});
