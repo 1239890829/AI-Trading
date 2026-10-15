@@ -44,7 +44,7 @@ jobs:
         run: python -m pytest -n 4 --dist loadfile --basetemp=/tmp/pytest-ci --durations=20 --junitxml=/tmp/backend-junit.xml
 
       - name: pyflakes（静态检查）
-        run: python -m pyflakes app tests scripts
+        run: python -m pyflakes app tests scripts ../scripts/local-services.py
 
   frontend:
     name: frontend (tsc + lint)

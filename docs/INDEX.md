@@ -49,7 +49,7 @@
 | **MD-07** | `strategy/risk-management.md` | L2 | 风控 | 风险拦截位置与规则。⚠️ 旧稿曾把「预检」写成「强制拦截」（**文档高估**），已更正 |
 | **FN-01** | `strategy/strategy-registry.md` | L2 | 登记册 | **策略级**生命周期（核心辨析：**因子 ≠ 策略**） |
 | **FN-02** | `system/architecture.md` | L2 | 架构 | 数据流与分层设计 |
-| **FN-03** | `system/deployment.md` | L2 | 部署 | 部署与运维（3000/8000纪律、离线备份/恢复hold、OPS-003实源隔离窗口、HTTP鉴权/WS及固定生产构建/订阅退出补验与未验边界） |
+| **FN-03** | `system/deployment.md` | L2 | 部署 | 部署与运维（本机统一启动/最小凭据/受保护代理与真实WS分层验收、3000/8000纪律、离线备份/恢复hold及OPS-003边界） |
 | **FN-04** | `system/api.md` | L2 | API | API 契约（⚠️ 端点计数滞后，**以 `/openapi.json` 为权威**） |
 | **FN-05** | `system/websocket.md` | L2 | WS | WS 协议（**必须直连后端，不走 Next 代理**） |
 | **FN-06** | `system/mcp.md` | L2 | MCP | MCP 工具体系清单 |
@@ -59,7 +59,7 @@
 | **FN-10** | `archive/jev-integration-retired-20261011.md` | L2 | 历史档案 | 已退役Jev蓝图与历史实测；不得作为当前调用/安装/评分义务，现役入口为FN-12 |
 | **FN-12** | `ai/semantic-decisions.md` | L2 | AI/Agent 架构 | 当前规则/已有LLM路径、DeepSeek新闻分类/依据有限LAB、关键词误拒、完整语境/对象/关键条件配对与人工gold；Jev退役和Decisions不接入，状态分别归W07/IMP-091、W04/RSH-030 |
 | **FN-13** | `product/limit-up-attribution.md` | L2 | 产品/事件归因 | 多维消息证据、股票关联、市场响应、连续采集及选股/通知/复盘边界；工程状态归W00/IMP-092 |
-| **FN-11** | `system/runtime-performance.md` | L2 | 性能测量 | IMP-019 可复现入口及系统质量/归因/依赖整改；§23首图否决实验、§24重复工作与详情首帧、§25锁竞争测量纠偏，冷读/DB/WS/Canvas、工程与现场分层，条件变化才重验 |
+| **FN-11** | `system/runtime-performance.md` | L2 | 性能测量 | IMP-019 可复现入口；§23首图否决、§24重复工作/首帧、§25锁竞争测量、§26本机启动鉴权及盘前WS刷新取证；工程与交易窗口分层 |
 | **EX-01** | `archive/live-trading-guosen-plan.md` | L1 | 搁置历史 | 国信 miniQMT 实盘蓝图。**用户已搁置**（不接受 Windows 依赖），恢复条件见文档头 |
 | **RV-01** | `review/review-agent.md` | L2 | 复盘 | 盘后复盘 Agent 架构 |
 | **RV-02** | `review/daily-review-sop.md` | L2 | 复盘 | 每日复盘 SOP（怎么判） |
@@ -146,7 +146,7 @@
 
 | 主题 | 先读（入口，必读） | 再读（需深入时） | 红线（最常咬人） |
 |---|---|---|---|
-| **T1 起栈与环境** | `AGENTS.md` §1 快速启动 | `system/deployment.md` · `archive/PROJECT-MASTER.md` | `--reload` **禁用**（与 SQLite 锁组合挂死）；端口固定 **3000/8000**；仅同工作区共享构建目录时先停止对应 dev，独立工作区不得误停原服务 |
+| **T1 起栈与环境** | `AGENTS.md` §1 快速启动 | [本机启动入口](../scripts/local-services.py) · [隔离启动反例](../backend/tests/test_local_services.py) · `system/deployment.md` | 固定3000/8000、后端禁reload；前端最小凭据传递与受保护代理检查；实际WS另验；只管理已核归属进程，构建不误停其他工作区 |
 | **T2 门禁与测试** | `AGENTS.md` §1 门禁命令块 | `kb/09-verification-pitfalls.md` · `kb/03-engineering.md` | 必带 `--basetemp`、**勿叠 `-q`**；涉时区断言**必须 `TZ=UTC` 复跑**；vitest 加 `--maxWorkers=1`；**必须整仓跑** |
 | **T3 数据源与行情口径** | `data/data-source-comparison.md` → `data/data-sources.md` | `system/data-dictionary.md` · `system/websocket.md` | 时效按数据类型、交易日历与来源可见时间判定；盘前/休市可用上一有效交易日，盘中旧数据不能冒充当前；不以一律“今天”或固定TTL替代业务语义 |
 | **T4 选股与策略** | `product/hunting-decision-design.md` → `kb/00-INDEX.md` 选股表 | 历史涨停/龙头研究 `research/limit-up-dragon-research.md` · `summary/stock-strategy.md` · `strategy/strategy-registry.md` · `strategy/factor-lifecycle-governance.md` + `strategy/factor-candidates.md` | **示例 ≠ 规范**；赢家复盘≠预测能力；策略/因子落地**必须先过点时全分母、OOS/前向和成本实证**；回测禁令见 `strategy/backtest-rules.md` |
@@ -256,7 +256,7 @@
 | architecture-redesign.md | 08-31 模块盘点与重构方案（实测驱动）· **已归档**（优先级清单已全部清零）→ `archive/architecture-redesign.md` |
 | system/deployment.md | 部署与运维（本地开发8000/3000纪律、GOV-013恢复对账、OPS-003隔离运行、鉴权/WS与固定生产构建/订阅退出补验） |
 | system/api.md | REST API 按域检索手册（端点/路径计数以 /openapi.json 为权威） |
-| system/websocket.md | WS 协议（必须直连后端，不走 Next 代理） |
+| system/websocket.md | WS协议；默认同源Next升级代理与子协议凭据，连接、行情投递和时效分别验收 |
 | system/mcp.md | MCP 工具体系清单 |
 | system/data-dictionary.md | 数据对象审计字段约定（source/quality） |
 
