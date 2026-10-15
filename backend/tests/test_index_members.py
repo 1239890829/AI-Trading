@@ -1,5 +1,6 @@
 """Current index membership: no quote subscriptions, DB writes or false empty sets."""
 import asyncio
+from datetime import date
 from types import SimpleNamespace
 from unittest.mock import AsyncMock
 
@@ -8,6 +9,7 @@ import pytest
 from fastapi import FastAPI
 from fastapi.testclient import TestClient
 
+from app.api.routes import market_quotes
 from app.api.routes.market_quotes import router
 from app.services.theme_catalog_service import ThemeCatalogService
 
@@ -44,6 +46,7 @@ def test_index_source_validates_identity_and_keeps_snapshot_clock():
 
 
 def test_route_only_known_index_and_cache_not_quote_cache(monkeypatch):
+    monkeypatch.setattr(market_quotes, "beijing_now", lambda: SimpleNamespace(date=lambda: date(2026, 10, 15)))
     app = FastAPI()
     app.include_router(router, prefix="/api")
     service = SimpleNamespace(fetch_index_members=AsyncMock(return_value={
@@ -59,8 +62,6 @@ def test_route_only_known_index_and_cache_not_quote_cache(monkeypatch):
         assert second.json()["data"]["cached"] is True
         assert service.fetch_index_members.await_count == 1
         service.fetch_index_members.assert_awaited_with("000300.SH")
-        from datetime import date
-        from app.api.routes import market_quotes
         monkeypatch.setattr(market_quotes, "beijing_now", lambda: SimpleNamespace(date=lambda: date(2026, 10, 16)))
         assert client.get("/api/indices/sh000300/members").status_code == 200
         assert service.fetch_index_members.await_count == 2
