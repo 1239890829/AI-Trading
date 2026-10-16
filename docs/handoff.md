@@ -2,6 +2,8 @@
 
 ## 2026-10-16 统一工程验收完成，发布与运行单独核实
 
+工程提交`44a01bcd9b083d6d3200ae95c335b91730c47538`。本次只补完成证据和selector指针，不改应用源码。重算普通门为G4/IMP-019，不自动追加新的交易观察或永久跟进。
+
 最终BE5791通过/87跳过（427.58s）、pyflakes；FE默认/UTC各1769通过/146文件（219.08/241.10s）、类型、ESLint（0error/2既有warning）与构建ioivmmT6FZ1fnAlBRvi1u通过。工程门期间应用源码无漂移。原超时失败和有意停止批次保留，不以局部通过覆盖失败。 原版Impeccable的局部澄清/加固及桌面/320/390实屏已用于对应改动。实际Next首次配对、刷新WS、维护开关和退出已在隔离合成数据下验证；最终命令面板遗漏补齐并全量复验。此证据不能证明生产实时性、手机真机FPS、模型准确率或选股收益。
 
 S02已获用户明确批准，W00/IMP-095与W04/BUG-034的工程验收完成。38项按实现、保留正确机制及研究设计区分；策略阈值/源序/通知资格/行情时效保持。当前施工分支codex/catalog-candidate-integrity，发布必须以本批准确HEAD的DegradedRelease、三项CI、release_check和合并后CI为准。统一激活另需一致数据库备份、旧构建恢复、旧服务token轮换、单实例启动与官方目录定向同步；首位管理员由用户本机初始化，不自动登记。正式版本只查权威runtime-identity与激活回执；下文为本批过程及历史证据，不把旧进行中描述当最新结论。
@@ -67,8 +69,8 @@ G4/IMP-094代码`6769563a11c0bd523dc3d6c885837b3aee951b8f`从最新master09765ab
 
 ## 1. 现场、授权与最新验收
 
-- **当前主门**：G0
-- **主切片首选**：IMP-095
+- **当前主门**：G4
+- **主切片首选**：IMP-019
 - **候选顺位与执行边界**：本轮IMP-093阅读工程已闭环，先完成其发布收尾，不自动领取第二业务任务。IMP-019；IMP-094首批已发布，用户追加执行验证结果收拢已实现，当前只做其完整门与发布收尾，补充运行以本批准确HEAD回执为准；原性能效果缺口保留，不自动增加观察窗口。PR #287已合并038db987，PR及post-master三job成功。用户明确要求的两窗已采集，AM/PM claim均保留；临时跟进已删除，手机仍暂缓，不追加观察窗或补造证据。
 - **基点与分支**：PR #288已合并dcc1b144437ac72c499859f7c9b74a1f52d849b3，PR/post-master CI各三job成功，准确HEAD DegradedRelease与release_check已核。15:07后端69452按统一入口激活；前端44673/09:18:28仍Next16.3.8/build gCR78igTpBCF3LAzv3fJQ。新批codex/workbench-context-read-state从经GitHub API核对的该最新master创建；fetch传输失败不冒充成功，已在本地的同SHA对象可用。主树三份未跟踪evolution原件保留。上述为施工前运行基线；新批完整门已过，准确HEAD发布及激活以artifacts/runs/workbench-context-20261015/release/及统一runtime-identity.json为权威，不能以施工树或旧PID冒充现役。
 - **双窗结果与当前修复**：AM55次额外GET中54次200、一次health约6048ms超时，114报价行7stale；PM57次额外GET均200，120报价行3stale。200不等于新鲜，快照完成钟不等于完整源钟。PM通知/模拟挂单读取出现真实SQLite锁等待；旧代码把同步读放在async事件循环，隔离真实文件锁反例7项先红，修后连相关回归92项通过。只将通知读取、挂单清单/计数、持仓快照移入工作线程，各Session在工作线程内开闭；过滤、通知资格、交易硬门、错误反馈、TTL/轮频不变。完整门已通过（BE5628/82跳过，FE默认/UTC各1702）；准确HEAD发布与必要后端激活按本批release/activation.json及统一runtime-identity回执分别核验，详见[报告§27](system/runtime-performance.md#27-2026-10-15-真实交易双窗与sqlite读取隔离)。
