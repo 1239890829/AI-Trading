@@ -3,7 +3,7 @@ import asyncio
 from concurrent.futures import ThreadPoolExecutor
 import stat
 
-from fastapi import Depends, FastAPI
+from fastapi import APIRouter, Depends, FastAPI, HTTPException, Request
 from fastapi.testclient import TestClient
 import pytest
 from starlette.websockets import WebSocketDisconnect
@@ -207,6 +207,87 @@ def test_actual_http_requires_server_and_device_then_maintenance(client, store):
     store.manage(admin, ORIGIN, row['id'], 'grant-maintenance')
     assert client.post('/api/agent/params/change', headers=headers(admin)).status_code == 200
     assert client.get('/api/quotes', headers={'X-API-Token':'fixture-service','Origin':ORIGIN}).status_code == 401
+
+
+@pytest.mark.parametrize('depth', [0, 1, 2])
+def test_included_router_keeps_business_and_maintenance_permissions(store, depth):
+    app = FastAPI()
+    business = APIRouter()
+    @business.get('/quotes/{symbol}')
+    def quote(symbol: str): return {'symbol': symbol}
+    @business.get('/quotes/internal-export')
+    def internal_export(): return {'internal': True}
+    @business.post('/watchlist')
+    def watchlist(): return {'ok': True}
+    @business.post('/picks/generate')
+    def generate(): return {'ok': True}
+    # Exact static routes must precede the existing dynamic quote route.
+    business.routes[0], business.routes[1] = business.routes[1], business.routes[0]
+    for _ in range(depth):
+        parent = APIRouter()
+        parent.include_router(business)
+        business = parent
+    app.include_router(business, prefix='/api', dependencies=[Depends(require_api_token)])
+    app.include_router(business, prefix='/internal/api', dependencies=[Depends(require_api_token)])
+    mounted = FastAPI()
+    mounted.include_router(business, prefix='/api', dependencies=[Depends(require_api_token)])
+    app.mount('/private', mounted)
+    probe = TestClient(app)
+    admin, _ = owner(store)
+    mobile, _ = phone(store, admin)
+    for token, origin in [(admin, ORIGIN), (mobile, PHONE)]:
+        assert store.authorize(token, origin)['maintenance'] is False
+        h = headers(token, origin)
+        assert probe.get('/api/quotes/600127', headers=h).status_code == 200
+        assert probe.post('/api/watchlist', headers=h).status_code == 200
+        assert probe.get('/api/quotes/internal-export', headers=h).status_code == 403
+        assert probe.get('/internal/api/quotes/600127', headers=h).status_code == 403
+        assert probe.get('/private/api/quotes/600127', headers=h).status_code == 403
+        assert probe.post('/api/picks/generate', headers=h).status_code == 403
+    assert probe.get('/api/quotes/600127', headers=headers('unknown')).status_code == 401
+
+
+@pytest.mark.parametrize('paired_phone', [False, True])
+def test_real_app_business_routes_reach_consumer_without_maintenance(store, monkeypatch, paired_phone):
+    """Exercise actual registration; stop after auth before any business consumer."""
+    import re
+    from app.main import app
+    from app.core.device_policy import READ_PATHS, WRITE_PATHS
+
+    async def stop_after_authorization(request: Request):
+        await require_api_token(request)
+        raise HTTPException(418, detail='authorized_before_consumer')
+
+    monkeypatch.setattr(app, 'dependency_overrides', {
+        **app.dependency_overrides, require_api_token: stop_after_authorization,
+    })
+    admin, _ = owner(store)
+    token, origin = (phone(store, admin)[0], PHONE) if paired_phone else (admin, ORIGIN)
+    operations = {('GET', path) for path in READ_PATHS} | set(WRITE_PATHS)
+    contract = app.openapi()['paths']
+    probe = TestClient(app)  # No lifespan, scheduler, source, model or business write.
+    for method, template in sorted(operations):
+        template = '/api' + template
+        assert method.lower() in contract[template], (method, template)
+        concrete = re.sub(r'\{[^}]+\}', '600127', template)
+        response = probe.request(method, concrete, headers=headers(token, origin))
+        assert response.status_code == 418, (method, template, response.json())
+
+
+def test_missing_or_mismatched_route_context_does_not_inherit_business_access():
+    from types import SimpleNamespace
+    from app.core.device_policy import matched_route_template
+
+    route = SimpleNamespace(path='/api/quotes')
+    assert matched_route_template({'route': route}) == '/api/quotes'
+    for scope in [
+        {'path': '/api/quotes'},  # A user-controlled URL is not a route identity.
+        {'fastapi': {'effective_route_context': SimpleNamespace(path='/api/quotes')}},
+        {'route': route, 'fastapi': {'effective_route_context': SimpleNamespace(original_route=route)}},
+        {'route': route, 'fastapi': {'effective_route_context': SimpleNamespace(original_route=object(), path='/api/quotes')}},
+        {'route': route, 'root_path': 5},
+    ]:
+        assert needs_maintenance('GET', matched_route_template(scope)) is True
 
 
 def test_bootstrap_cannot_be_issued_by_browser_or_non_loopback(client, store):

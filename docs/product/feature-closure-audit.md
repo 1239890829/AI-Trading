@@ -1026,7 +1026,7 @@ BUG-034覆盖目录完整/失败/新增/退役/未来时间、成员单查/批�
 |方案项|对应功能与本批处理|核验位置|边界|
 |---|---|---|---|
 |S01 新闻取文|逐跳地址与IP固定、协议/端口/域名/体积/总时限检查|market/article.py；test_news_content.py|已实现，完整工程门通过|
-|S02 设备权限|用户已批准；设备配对、普通能力清单、临时维护授权、短效一次性WS票据、退出/撤销失效|W00/IMP-095；device_access；device_policy；DeviceAccessGate；权限/WS/启动专项|本地联合验收通过；任务与命令入口同步分权；统一发布另核；HTTP局域网不等于加密|
+|S02 设备权限|用户已批准；设备配对、普通能力清单、临时维护授权、短效一次性WS票据、退出/撤销失效|W00/IMP-095；device_access；device_policy；DeviceAccessGate；权限/WS/启动专项|PR297后发现include前缀导致普通403，IMP-095纠偏补真实路由鉴权截断测试；状态读取与维护命令分离；发布运行另核；HTTP局域网不等于加密|
 |S03 依赖|urllib3锁定2.8.0；官方元数据无该版本已列漏洞；braces构建链无兼容补丁|requirements.*；官方PyPI/GitHub公告；npm审计|兼容修复已实现，原告警保留|
 |S04 目录|分离目录/成员时钟，未来时间无效；退役身份保留历史；测试禁止写非临时库|theme_catalog_service；test_catalog_candidate_integrity|已实现；生产定向治理留待统一激活|
 |D01 行情|源失败、事件循环锁等待、图表绘制分开取证；保持原时效|既有两窗trace；本批lock-paths；db_observation|已证T1阻塞已修；当前写锁持有者与新版本实盘效果未知|

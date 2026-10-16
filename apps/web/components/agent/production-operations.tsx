@@ -2,6 +2,7 @@
 
 import { useRef, useState } from "react";
 import { useResource } from "@/hooks/use-polling-fetch";
+import { useDeviceAccess } from "@/components/access/device-access";
 import {ConditionList, ExplanationMap, FactTimeline, NarrativeText} from "@/components/ui/explanation-map";
 import {dateTimeTextBJ} from "@/lib/format";
 import {
@@ -19,6 +20,8 @@ const COMMANDS = [
 
 /** Existing backend commands, now separated from result reading. No effect invokes a write. */
 export function ProductionOperations() {
+  const {device, open: openAccess} = useDeviceAccess();
+  const canMaintain = device?.state === "active" && device.maintenance === true;
   const watcher = useResource(getWatcherState, { intervalMs: 30_000, marketHours: false });
   const lock = useRef(false);
   const [busy, setBusy] = useState<string | null>(null);
@@ -30,7 +33,7 @@ export function ProductionOperations() {
     `节拍计数：${watcher.data.beat_count ?? "未记录"}`,
   ] : [];
   async function execute(command: typeof COMMANDS[number]) {
-    if (lock.current || !window.confirm(`${command.label}：${command.note} 确认执行？`)) return;
+    if (!canMaintain || lock.current || !window.confirm(`${command.label}：${command.note} 确认执行？`)) return;
     lock.current = true;
     setBusy(command.label);
     setReceipt(null);
@@ -63,6 +66,7 @@ export function ProductionOperations() {
         <p>查看生产结果，按需补做任务。每次执行前核对影响，完成后查看回执。</p>
       </header>
       <div className="operations-command-scroll">
+      {!canMaintain ? <div className="operations-note"><p>查看状态无需维护授权；重新生成或执行任务时再临时授权。</p><button className="quiet-action" onClick={openAccess}>设备与权限</button></div> : <>
       <p className="operations-note">命令沿用后端写权限、预算与安全边界。进入此区域不授予额外权限。</p>
         <div className="command-list">
           {COMMANDS.map((command) => <div key={command.label} className="command-row">
@@ -71,6 +75,7 @@ export function ProductionOperations() {
           </div>)}
         </div>
         {receipt && <section className="command-receipt" aria-label="本次命令回执"><h3 className="text-xs font-medium">本次命令回执</h3><div role="status"><NarrativeText text={receipt} label="原始命令回执"/></div></section>}
+      </>}
       </div>
     </section>
 

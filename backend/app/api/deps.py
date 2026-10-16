@@ -8,7 +8,7 @@ from app.core.auth import TOKEN_HEADER, check_agent_promotion_token, check_api_t
 from app.core.device_access import (
     AccessError, BROWSER_HEADER, ORIGIN_HEADER, SESSION_HEADER, get_device_store,
 )
-from app.core.device_policy import needs_maintenance
+from app.core.device_policy import matched_route_template, needs_maintenance
 from app.core.config import settings
 from app.repositories.watchlist_repo import WatchlistRepository
 from app.services.quote_hub import QuoteHub
@@ -87,7 +87,7 @@ async def _check_request_access(request: Request) -> None:
             request.state.device_access = await asyncio.to_thread(
                 get_device_store().authorize,
                 request.headers.get(SESSION_HEADER, ""), request.headers.get(ORIGIN_HEADER, ""),
-                maintenance=needs_maintenance(request.method, getattr(request.scope.get("route"), "path", "")),
+                maintenance=needs_maintenance(request.method, matched_route_template(request.scope)),
             )
         except AccessError as exc:
             raise HTTPException(exc.status, detail=exc.code) from exc

@@ -3,6 +3,36 @@
 These are actual product consumers, not a blanket GET exemption. Authentication
 is always checked first. Service credentials remain outside the browser lane.
 """
+from collections.abc import Mapping
+from typing import Any
+
+
+def matched_route_template(scope: Mapping[str, Any]) -> str:
+    """Resolve the matched template, including FastAPI include/mount prefixes.
+
+    FastAPI 0.137+ preserves the original APIRoute in scope['route']; its path
+    omits include_router prefixes. The effective context owns those prefixes.
+    Never infer authorization from the request URL or a partial route identity.
+    """
+    route = scope.get("route")
+    if route is None:
+        return ""
+    fastapi_scope = scope.get("fastapi", {})
+    context = fastapi_scope.get("effective_route_context") if isinstance(fastapi_scope, Mapping) else None
+    if context is not None:
+        if getattr(context, "original_route", None) is not route:
+            return ""
+        path = getattr(context, "path", None)
+    else:
+        path = getattr(route, "path", None)
+    root = scope.get("root_path", "")
+    if not isinstance(path, str) or not path.startswith("/") or not isinstance(root, str):
+        return ""
+    if root and not root.startswith("/"):
+        return ""
+    return root.rstrip("/") + path
+
+
 READ_PATHS = frozenset({
     "/picks/watcher/state", "/picks/signal-health",
     "/picks/strategy-health", "/picks/strategy-registry",
