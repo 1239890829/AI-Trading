@@ -1,87 +1,35 @@
-import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-
-import { resetWsCredentialCache, wsSubprotocols } from "@/lib/ws-credential";
-
-/**
- * WS 子协议凭据的取用语义（R22，2026-09-15）。
- *
- * 这里守的主要是**缓存策略**——它是最容易写错、且写错后最难排查的一块：
- * - 成功缓存（含"未配置 ⇒ null"）：值是连接期常量，不必每次重连都取；
- * - **失败不缓存**：把一次网络抖动缓存住，等于让整个会话永久降级为 REST 轮询，
- *   而界面上只会显示一个中性的"WS 断线 · REST 轮询"，排查时完全无从下手。
- */
-
-const fetchMock = vi.fn();
-
-beforeEach(() => {
-  resetWsCredentialCache();
-  fetchMock.mockReset();
-  vi.stubGlobal("fetch", fetchMock);
+import {afterEach, beforeEach, expect, it, vi} from "vitest";
+import {wsSubprotocols} from "./ws-credential";
+import {clearDeviceSessionReads} from "./api/internal";
+const request = vi.fn();
+beforeEach(() => {request.mockReset(); vi.stubGlobal("fetch", request);});
+afterEach(() => vi.unstubAllGlobals());
+function reply(subprotocol: unknown) {return {ok: true, json: async () => ({subprotocol})};}
+it("每个连接取得独立短效票据，并发也不共享", async () => {
+  request.mockResolvedValueOnce(reply("ashare-ticket.first")).mockResolvedValueOnce(reply("ashare-ticket.second"));
+  expect(await Promise.all([wsSubprotocols(), wsSubprotocols()])).toEqual([["ashare-ticket.first"],["ashare-ticket.second"]]);
+  expect(request).toHaveBeenCalledTimes(2);
+  expect(request).toHaveBeenCalledWith("/api/ws-credential", {cache:"no-store"});
 });
-
-afterEach(() => {
-  vi.unstubAllGlobals();
-  resetWsCredentialCache();
+it.each([null, undefined, "ashare-token.old", {}, "bad value"])("拒绝长期或损坏凭据 %j", async value => {
+  request.mockResolvedValueOnce(reply(value)); expect(await wsSubprotocols()).toEqual([]);
 });
-
-function jsonOnce(body: unknown, ok = true) {
-  fetchMock.mockResolvedValueOnce({
-    ok,
-    json: async () => body,
-  });
-}
-
-describe("WS 子协议凭据", () => {
-  it("服务端下发凭据时返回单元素子协议数组", async () => {
-    jsonOnce({ subprotocol: "ashare-token.YWJj" });
-    expect(await wsSubprotocols()).toEqual(["ashare-token.YWJj"]);
-  });
-
-  it("未配置凭据时返回空数组（本地默认 ⇒ 调用方不传第二个参数）", async () => {
-    jsonOnce({ subprotocol: null });
-    expect(await wsSubprotocols()).toEqual([]);
-  });
-
-  it("请求带 no-store（凭据不得被任何中间层缓存）", async () => {
-    jsonOnce({ subprotocol: null });
-    await wsSubprotocols();
-    expect(fetchMock).toHaveBeenCalledWith("/api/ws-credential", { cache: "no-store" });
-  });
-
-  it("成功结果被缓存：多次调用只取一次", async () => {
-    jsonOnce({ subprotocol: "ashare-token.YWJj" });
-    await wsSubprotocols();
-    await wsSubprotocols();
-    await wsSubprotocols();
-    expect(fetchMock).toHaveBeenCalledTimes(1);
-  });
-
-  it("'未配置'也算成功结果 —— 同样缓存（否则每次重连都白跑一次同源请求）", async () => {
-    jsonOnce({ subprotocol: null });
-    await wsSubprotocols();
-    await wsSubprotocols();
-    expect(fetchMock).toHaveBeenCalledTimes(1);
-  });
-
-  it("**网络失败不缓存**：下次调用必须重试", async () => {
-    fetchMock.mockRejectedValueOnce(new Error("offline"));
-    expect(await wsSubprotocols()).toEqual([]);
-    jsonOnce({ subprotocol: "ashare-token.YWJj" });
-    // 若把失败也缓存住，这里会拿到 []（= 会话永久降级为轮询）而不是重试后的凭据
-    expect(await wsSubprotocols()).toEqual(["ashare-token.YWJj"]);
-  });
-
-  it("HTTP 非 2xx 同样不缓存、不抛（降级为不带子协议，由后端决定是否放行）", async () => {
-    jsonOnce({ detail: "boom" }, false);
-    expect(await wsSubprotocols()).toEqual([]);
-    jsonOnce({ subprotocol: "ashare-token.YWJj" });
-    expect(await wsSubprotocols()).toEqual(["ashare-token.YWJj"]);
-  });
-
-  it("响应缺字段时按'未配置'处理（不把 undefined 塞进子协议数组）", async () => {
-    // 子协议数组里的 undefined 会让 `new WebSocket(url, [undefined])` 抛异常，
-    // 而那是**前端**的失败，后端只看到"连接没建立"。
-    jsonOnce({});
-    expect(await wsSubprotocols()).toEqual([]);
-  });
+it("网络失败后下次连接可重试", async () => {
+  request.mockRejectedValueOnce(new Error("offline")).mockResolvedValueOnce(reply("ashare-ticket.next"));
+  expect(await wsSubprotocols()).toEqual([]); expect(await wsSubprotocols()).toEqual(["ashare-ticket.next"]);
+});
+it("401 通知根权限门结束业务组件", async () => {
+  const listener = vi.fn(); window.addEventListener("ashare-access-expired", listener);
+  request.mockResolvedValueOnce({ok:false,status:401});
+  expect(await wsSubprotocols()).toEqual([]); expect(listener).toHaveBeenCalledTimes(1);
+  window.removeEventListener("ashare-access-expired", listener);
+});
+it("旧会话的迟到401不撤销新配对", async () => {
+  let finish!: (value: {ok: boolean; status: number}) => void;
+  const listener = vi.fn(); window.addEventListener("ashare-access-expired", listener);
+  try {
+    request.mockImplementationOnce(() => new Promise(resolve => {finish = resolve;}));
+    const pending = wsSubprotocols(); clearDeviceSessionReads(); finish({ok: false, status: 401});
+    expect(await pending).toEqual([]); expect(listener).not.toHaveBeenCalled();
+  } finally {window.removeEventListener("ashare-access-expired", listener);}
 });

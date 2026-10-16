@@ -150,17 +150,21 @@ def test_calibrate_never_raises_on_garbage_history():
         assert all(v["calibrated"] is False for v in basis.values())
 
 
-# ---------------------------------------------------------------- 得分与标签不被改动
+# ---------------------------------------------------------------- 得分保留，标签跟随实际边界
 
 
-def test_calibration_touches_only_uppers():
-    """校准只动上界。改得分/标签等于改权重，超出本函数职责。"""
+def test_calibration_preserves_scores_and_updates_range_labels():
+    """阈值变化后标签同步，不改变评分权重。"""
     history = _hist(60, "limit_up", 36, 137)
     bands, _ = calibrate_bands(history, {"limit_up": HEAT_BANDS["limit_up"]})
     for (u_new, p_new, l_new), (_u_old, p_old, l_old) in zip(
         bands["limit_up"], HEAT_BANDS["limit_up"]
     ):
-        assert p_new == p_old and l_new == l_old
+        assert p_new == p_old
+        assert "历史分位校准" in l_new
+        assert l_new != l_old
+        if u_new is not None:
+            assert f"<{u_new:g}家" in l_new
 
 
 def test_calibratable_set_matches_recomputable_metrics():
@@ -186,3 +190,12 @@ def test_describe_reports_current_percentile():
 
 def test_describe_empty_history():
     assert describe([], ["limit_up"]) == {}
+
+
+def test_calibrated_promotion_label_contains_the_observed_value():
+    from app.sentiment.engine import earning_axis
+    history = _hist(100, "promo_1to2", .02, .25)
+    bands, _ = calibrate_bands(history, EARNING_BANDS)
+    out = earning_axis(.133, -1.81, .361, 0, bands)
+    assert "15–25%" not in out["basis"][0]
+    assert "历史分位校准" in out["basis"][0]

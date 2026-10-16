@@ -258,16 +258,21 @@ export function useQuoteStream(symbols: string[], opts?: { throttleMs?: number }
       setStatus((prev) => (retry === 0 ? "connecting" : prev));
       // R22：/ws/quotes 在启用鉴权后要求**子协议**携带凭据（浏览器不允许给
       // WebSocket 设自定义请求头，而 ?token= 通道已刻意关闭）。凭据由同源
-      // `/api/ws-credential` 运行时下发；未配置时回空数组 ⇒ 不传第二个参数
-      // ⇒ 与加固前行为逐字一致。
+      // 每次连接取得短效配对票据；凭据不可用时沿既有重试路径等待。
       const protocols = await wsSubprotocols();
       // await 期间可能已卸载/断开：这里必须重新判一次，否则会创建一个
       // 无人回收的 socket（cleanup 已经跑过了）。
       if (closed) return;
+      if (!protocols.length) {
+        retry += 1;
+        if (retry >= 3) startPolling();
+        reconnectTimer = setTimeout(() => void connect(), Math.min(1000 * 2 ** retry, 10000));
+        return;
+      }
       let ws: WebSocket;
       try {
         const url = `${wsBase()}/ws/quotes?symbols=${symbolsRef.current.join(",")}`;
-        ws = protocols.length ? new WebSocket(url, protocols) : new WebSocket(url);
+        ws = new WebSocket(url, protocols);
         wsRef.current = ws;
       } catch {
         startPolling();

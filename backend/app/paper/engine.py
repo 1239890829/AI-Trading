@@ -260,8 +260,26 @@ class PaperTradingEngine:
         「T+1 当日买入不可卖——下一交易日自动执行」分支，**硬止损被无限期跳过**
         （只有恰好又下过一单才顺带结算一次）。修写入路径而不修只读路径，等于没修。
         """
+        # Calendar awaits occur outside a DB session. SQLite lock waits must not
+        # block the loop that serves quotes and notifications.
+        if not await asyncio.to_thread(self._has_frozen_positions):
+            return 0
+        today = _today()
+        anchor = await self._last_trading_day_on_or_before(today)
+        return await asyncio.to_thread(self._settle_t1_at, today, anchor)
+
+    def _has_frozen_positions(self) -> bool:
         with self._sf() as db:
-            cleared = await self._unfreeze(db)
+            return db.query(PaperPosition.id).filter(
+                PaperPosition.scope == self.scope, PaperPosition.frozen_today > 0
+            ).first() is not None
+
+    def _settle_t1_at(self, today: str, anchor: str) -> int:
+        with self._sf() as db:
+            positions = db.query(PaperPosition).filter(
+                PaperPosition.scope == self.scope, PaperPosition.frozen_today > 0
+            ).all()
+            cleared = self._apply_unfreeze(positions, today, anchor)
             if cleared:
                 db.commit()
             return cleared
@@ -291,6 +309,11 @@ class PaperTradingEngine:
             return 0
         today = _today()
         anchor = await self._last_trading_day_on_or_before(today)
+        return self._apply_unfreeze(positions, today, anchor)
+
+    @staticmethod
+    def _apply_unfreeze(positions, today: str, anchor: str) -> int:
+        """Shared T+1 predicate; callers retain their transaction ownership."""
         cleared = 0
         undated = 0
         for pos in positions:

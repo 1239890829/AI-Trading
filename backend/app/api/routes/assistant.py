@@ -322,6 +322,11 @@ async def assistant_chat(req: ChatRequest, request: Request) -> StreamingRespons
         from app.assistant.tools.registry import available_tools
 
         names_available = available_tools(tool_ctx) if tools_enabled else set()
+        if getattr(request.state, "device_access", None) is not None:
+            # Browser assistant stays in the ordinary product lane. Internal
+            # simulation and maintenance records use the separately gated UI,
+            # even while a temporary maintenance grant is active.
+            names_available -= {"paper", "param_changes", "agent_tasks"}
         # Dependency readiness and execution authority remain deterministic.
         prompt_tool_names = names_available if tools_enabled else None
         tool_block: str | None = None

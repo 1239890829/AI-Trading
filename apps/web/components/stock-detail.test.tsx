@@ -241,9 +241,10 @@ describe("StockDetailPanel · 即时报价复用", () => {
     expect(view.getAllByText("未开盘")).toHaveLength(1);
     expect(within(view.container.querySelector(".quote-sheet") as HTMLElement).getByText("未开盘")).toBeTruthy();
     view.rerender(<StockDetailPanel {...props} streamStatus="polling" />); await settle();
-    expect(view.getByText("备用读取")).toBeTruthy();
+    expect(view.getAllByText("未开盘")).toHaveLength(1);
+    expect(view.container.querySelector(".quote-source")?.getAttribute("title")).toContain("REST备用通道");
     view.rerender(<StockDetailPanel {...props} streamStatus="error" />); await settle();
-    expect(view.getByText("备用读取失败")).toBeTruthy();
+    expect(view.container.querySelector(".quote-source")?.getAttribute("title")).toContain("失败");
     view.rerender(<StockDetailPanel {...props} streamStatus="live" liveQuote={{...quote, quality_reasons: ["market_closed", "refresh_failed"]}} />); await settle();
     expect(view.getByRole("button", {name: "查看行情问题"}).textContent).toBe("刷新异常");
     expect(api.getNewsDigest).not.toHaveBeenCalled();

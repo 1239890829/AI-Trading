@@ -45,9 +45,9 @@ LIMIT_DOWN_CEIL = 15
 #: 昨日涨停股今日中位溢价下限（百分点）：接力亏钱效应
 PREV_ZT_MEDIAN_FLOOR = -1.0
 
-ADVICE_STRONG = "市场情绪明显转弱，建议空仓观望，切忌盲目出手"
-ADVICE_MILD = "市场情绪偏弱，建议控制仓位、减少出手频率"
-ADVICE_NONE = "市场情绪未见系统性风险，按组合纪律执行即可"
+ADVICE_STRONG = "涨停接力风险较高，当前入选按观察处理；不代表全市场普跌"
+ADVICE_MILD = "涨停接力有局部风险，需结合个股条件核对"
+ADVICE_NONE = "涨停接力暂未触发风险提示，仍需核对个股条件"
 
 DISCLAIMER = "风险提示为规则化判读结果，不构成买卖建议"
 
@@ -79,7 +79,7 @@ def evaluate_stand_aside(
     reasons: list[str] = []
 
     if phase in WEAK_PHASES:
-        reasons.append(f"情绪相位「{phase}」——赚钱效应处于周期低位")
+        reasons.append(f"涨停接力相位「{phase}」——昨日强势股的延续表现偏弱")
     # 晋级率：分位口径优先（"异常弱"= 历史后 10%），分位不可用才回落绝对经验值
     if promotion_1to2 is not None:
         if promotion_1to2_pctl is not None:
@@ -276,3 +276,29 @@ def _follow_state_of(item: dict) -> tuple[str, list[str]]:
         return "followable", reasons
     reasons.append("龙头判据未全满足，保持仅观察")
     return "observe", reasons
+
+
+def describe_gate_context(sentiment: dict, gate: dict) -> dict:
+    """Explain the existing gate without changing scoring or notification eligibility."""
+    facts = {row.get("name"): row.get("value") for row in sentiment.get("indicators", [])}
+    freshness = sentiment.get("snapshot_freshness") or {}
+    uncertain = bool(sentiment.get("phase_unreliable")) or freshness.get("state") not in (None, "ready")
+    headline = ("接力判断依据待核，暂不判断当前强弱" if uncertain else
+                "涨停接力存在风险，需核对昨日强势股表现" if gate.get("stand_aside") else
+                "涨停接力暂未触发风险提示")
+    rows = []
+    for name, label, suffix in (
+        ("上涨/下跌", "全市场涨/跌", "家"),
+        ("涨停家数", "今日涨停", "家"),
+        ("昨日涨停今日中位", "昨日涨停股今日中位", "%"),
+        ("跌停家数", "今日跌停", "家"),
+    ):
+        value = facts.get(name)
+        if value is not None:
+            rows.append({"label": label, "value": f"{value}{suffix}"})
+    return {
+        "scope": "涨停接力", "headline": headline, "facts": rows,
+        "note": "相位主要衡量涨停股接力，不能代表所有股票；相位与昨日涨停收益存在重叠，不是两项独立证据。",
+        "judged_at": sentiment.get("judged_at"),
+        "source_state": freshness.get("state", "unknown"),
+    }

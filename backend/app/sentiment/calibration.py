@@ -101,8 +101,8 @@ def calibrate_bands(
 
     Args:
         history: 每日原始指标列表（每项为 {指标名: 数值|None}）
-        template: 分档模板 `{指标名: [(上界, 得分, 标签), ...]}`，只改上界、
-                  沿用得分与标签（改得分等于改权重，超出本函数职责）
+        template: 分档模板 `{指标名: [(上界, 得分, 标签), ...]}`，只改上界并更新区间标签、
+                  沿用得分（改得分等于改权重，超出本函数职责）
         target: 只校准这些指标；默认取 `CALIBRATABLE ∩ template`
 
     Returns:
@@ -146,6 +146,18 @@ def calibrate_bands(
 
         for i, u in enumerate(uppers):
             rows[i][0] = u
+        # The old static label can contradict the calibrated bound (13% called 15–25%).
+        def display(value: float) -> str:
+            if metric in ("break_rate", "promo_1to2", "promo_2to3"):
+                return f"{value * 100:.4f}".rstrip("0").rstrip(".") + "%"
+            return f"{value:g}" + ("板" if metric == "max_board" else "家")
+
+        for i, row in enumerate(rows):
+            lower = rows[i - 1][0] if i else None
+            upper = row[0]
+            row[2] = (f"<{display(upper)}" if lower is None else
+                      f"≥{display(lower)}" if upper is None else
+                      f"≥{display(lower)}且<{display(upper)}") + "，历史分位校准"
         basis[metric] = {
             "calibrated": True,
             "samples": len(values),

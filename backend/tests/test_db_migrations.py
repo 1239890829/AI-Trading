@@ -243,7 +243,7 @@ def test_event_observation_upgrade_preserves_legacy_rows_and_matches_model(tmp_p
             """))
         assert run_migrations(engine) == "upgraded"
         with engine.connect() as conn:
-            assert conn.scalar(text("select version_num from alembic_version")) == "a8d4f2c6e9b1"
+            assert conn.scalar(text("select version_num from alembic_version")) == "d2f4b6e8a0c1"
             assert conn.scalar(text("select count(*) from event_card where fingerprint='legacy-event'")) == 1
             assert conn.scalar(text("select count(*) from event_observation")) == 0
             assert conn.scalar(text("select count(*) from event_interpretation")) == 0
@@ -401,3 +401,46 @@ def test_hunting_upgrade_preserves_earlier_paper_facts_and_target_db(tmp_path):
     finally:
         engine.dispose()
         path.unlink(missing_ok=True)
+
+
+def test_catalog_upgrade_preserves_existing_identity_in_versioned_and_legacy_databases(tmp_path):
+    for versioned in (True, False):
+        engine, _ = _fresh_engine(tmp_path, f"catalog-{versioned}")
+        try:
+            run_migrations(engine)
+            with engine.begin() as conn:
+                conn.execute(text("ALTER TABLE theme DROP COLUMN catalog_active"))
+                conn.execute(text("ALTER TABLE theme DROP COLUMN catalog_synced_at"))
+                conn.execute(text("INSERT INTO theme (code,name,source,synced_at,created_at) VALUES ('886042.TI','存储芯片','ths_official','2026-10-14','2026-10-14')"))
+                if versioned:
+                    conn.execute(text("UPDATE alembic_version SET version_num='a8d4f2c6e9b1'"))
+                else:
+                    conn.execute(text("DROP TABLE alembic_version"))
+            run_migrations(engine)
+            with engine.connect() as conn:
+                row = conn.execute(text("SELECT name,synced_at,catalog_active,catalog_synced_at FROM theme WHERE code='886042.TI'" )).one()
+                assert tuple(row) == ("存储芯片", "2026-10-14", 1, None)
+        finally:
+            engine.dispose()
+
+
+def test_review_evidence_upgrade_preserves_old_rows_and_blocks_lossy_downgrade(tmp_path):
+    import pytest
+    from alembic import command
+    from alembic.config import Config
+    from sqlalchemy import create_engine, text
+    from app.core.migrations import BACKEND_DIR
+    engine = create_engine(f"sqlite:///{tmp_path / 'review-receipt.db'}")
+    cfg = Config(str(BACKEND_DIR / 'alembic.ini'))
+    cfg.set_main_option('script_location', str(BACKEND_DIR / 'migrations'))
+    cfg.attributes['configure_logger'] = False
+    try:
+        with engine.begin() as connection:
+            cfg.attributes['connection'] = connection
+            command.upgrade(cfg, 'head')
+            connection.execute(text("INSERT INTO review_action_items (review_id,trade_date,title,category,priority,expected_impact,evidence,target,proposed_change,status,resolution_note,implementation_evidence,created_at) VALUES ('r','20261016','已实施项目','process','P1','','','','','applied','保留原凭据',:receipt,'2026-10-16 04:00:00')"), {'receipt':'{"implementation_ref":"PR #12","release_version":"abc","verification_ref":"test passed"}'})
+            with pytest.raises(RuntimeError, match='preservation plan'):
+                command.downgrade(cfg, 'c9e3a7b5d1f2')
+            assert connection.execute(text('SELECT resolution_note FROM review_action_items')).scalar_one() == '保留原凭据'
+    finally:
+        engine.dispose()

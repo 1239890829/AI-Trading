@@ -3,11 +3,13 @@
 存储分两处，各有职责：
 - **SQLite**：结构化列用于检索与统计（"某方法论版本产生了多少 P0"、
   "某维度的历史采纳率"）。改进项单独建表，因为它会被确认/应用/回退。
-- **JSON 落盘**（`data/review/reports/YYYYMMDD.json`）：完整报告，
-  用于历史 diff 与重放。只存 SQLite 会丢细节，只存 JSON 会失去检索能力。
+- **JSON 落盘**（`data/review/reports/YYYYMMDD/<sha256>.json`）：不可变版本，
+  用于历史 diff 与重放。SQLite payload 与 report_path 决定当前版本。
 
-同一交易日重复生成时**覆盖**而不是追加——复盘是对某一天的判断，
-留两份只会让人分不清该看哪个。
+同一交易日重复生成时更新数据库当前指针，旧文件保留。旧 YYYYMMDD.json
+只属历史格式；目录扫描、孤立文件和文件 mtime 均不能判断当前版本。
+文件先以临时文件原子发布，再提交 DB；提交失败不损坏旧版本。
+维护可显式调用 repair_report_projection 从已提交 payload 重建文件。
 
 覆盖的两个坑（2026-09-01 实测，都已修）：
 - 清旧行必须按 `trade_date` 过滤，不能按 `review_id`：review_id 每次生成都带新的
@@ -18,9 +20,14 @@
 """
 from __future__ import annotations
 
+import hashlib
 import json
+import os
+import re
+import tempfile
 import logging
 from pathlib import Path
+from uuid import uuid4
 
 from sqlalchemy import select, update
 
@@ -39,8 +46,45 @@ REPO_ROOT = Path(__file__).resolve().parents[3]
 REPORT_DIR = REPO_ROOT / "data" / "review" / "reports"
 
 
-def _report_path(trade_date: str) -> Path:
-    return REPORT_DIR / f"{trade_date}.json"
+def _write_report_version(trade_date: str, payload: str) -> Path:
+    """Immutable, atomically published file; the DB pointer determines currentness."""
+    if not re.fullmatch(r"\d{8}", trade_date):
+        raise ValueError("invalid report trade_date")
+    body = payload.encode("utf-8")
+    directory = REPORT_DIR / trade_date
+    directory.mkdir(parents=True, exist_ok=True)
+    path = directory / f"{hashlib.sha256(body).hexdigest()}.json"
+    if path.exists() and path.read_bytes() == body:
+        return path
+    fd, temporary = tempfile.mkstemp(prefix="report-", suffix=".tmp", dir=directory)
+    try:
+        with os.fdopen(fd, "wb") as stream:
+            stream.write(body)
+            stream.flush()
+            os.fsync(stream.fileno())
+        os.replace(temporary, path)
+    finally:
+        Path(temporary).unlink(missing_ok=True)
+    return path
+
+
+def repair_report_projection(session_factory, trade_date: str) -> Path | None:
+    """Explicit maintenance recovery from committed DB payload; never on page reads."""
+    with session_factory() as db:
+        row = db.execute(select(ReviewReportRow).where(
+            ReviewReportRow.trade_date == trade_date)).scalar_one_or_none()
+        if row is None:
+            return None
+        payload = row.payload
+        path = _write_report_version(trade_date, payload)
+        changed = db.execute(update(ReviewReportRow).where(
+            ReviewReportRow.id == row.id, ReviewReportRow.payload == payload,
+        ).values(report_path=str(path)))
+        if changed.rowcount != 1:
+            db.rollback()
+            raise RuntimeError("report changed during projection recovery")
+        db.commit()
+        return path
 
 
 def _fingerprint(item: object) -> tuple[str, str]:
@@ -65,8 +109,11 @@ def _snapshot_disposition(db, trade_date: str) -> dict[tuple[str, str], dict]:
     ).scalars().all()
     return {
         (r.category, r.title): {
+            "row_id": r.id,
+            "review_id": r.review_id,
             "status": r.status,
             "resolution_note": r.resolution_note,
+            "implementation_evidence": r.implementation_evidence,
             "resolved_at": r.resolved_at,
         }
         for r in rows
@@ -76,17 +123,8 @@ def _snapshot_disposition(db, trade_date: str) -> dict[tuple[str, str], dict]:
 
 def save_report(session_factory, report: ReviewReport) -> ReviewReport:
     """落库 + 落盘。同一交易日覆盖（但继承已处置的改进项状态）。"""
-    REPORT_DIR.mkdir(parents=True, exist_ok=True)
-    path = _report_path(report.trade_date)
-
     if not report.review_id:
-        report.review_id = f"RV-{report.trade_date}-{beijing_now().strftime('%H%M%S')}"
-
-    # JSON 先落盘：落盘失败就不该写库，避免"库里有报告但文件找不到"
-    path.write_text(
-        json.dumps(report.model_dump(), ensure_ascii=False, indent=2, default=str),
-        encoding="utf-8",
-    )
+        report.review_id = f"RV-{report.trade_date}-{beijing_now().strftime('%H%M%S')}-{uuid4().hex[:6]}"
 
     db = session_factory()
     try:
@@ -94,7 +132,29 @@ def save_report(session_factory, report: ReviewReport) -> ReviewReport:
             select(ReviewReportRow).where(ReviewReportRow.trade_date == report.trade_date)
         ).scalars().first()
 
+        carried = _snapshot_disposition(db, report.trade_date)
+        if existing:
+            # Preserve disposition evidence even when a regenerated report omits an item.
+            previous = json.loads(existing.payload)
+            previous["_action_dispositions"] = [
+                {"category": key[0], "title": key[1], **value}
+                for key, value in carried.items()
+            ]
+            _write_report_version(report.trade_date, json.dumps(
+                previous, ensure_ascii=False, default=str, sort_keys=True))
+        for item in report.action_items:
+            old = carried.get(_fingerprint(item))
+            # Model-generated text cannot create an implementation receipt, even
+            # in the immutable file or raw payload consumed by internal tools.
+            item.status = old["status"] if old else "pending"
+            item.resolution_note = old["resolution_note"] if old else ""
+            item.implementation_evidence = json.loads(old["implementation_evidence"] or "{}") if old else {}
+            item.resolved_at = old["resolved_at"].isoformat() if old and old["resolved_at"] else None
+            item.disposition_basis = "management_record_not_release_verification"
         payload = json.dumps(report.model_dump(), ensure_ascii=False, default=str)
+        # A file/DB failure cannot overwrite a committed version. Unreferenced versions
+        # after a failed commit are recoverable artifacts, never current reports.
+        path = _write_report_version(report.trade_date, payload)
         if existing:
             existing.review_id = report.review_id
             existing.methodology_version = report.methodology_version
@@ -130,7 +190,6 @@ def save_report(session_factory, report: ReviewReport) -> ReviewReport:
         # review_id 每次生成都带新的 HHMMSS 后缀，用新 id 匹配旧行永远匹配不到
         # → 孤儿行只增不减（实测 7 条真实改进项累积成 113 行，采纳率分母虚高 16 倍）。
         # 删除前先快照已处置的改进项，插入时按指纹继承，避免把人的处置结论打回 pending。
-        carried = _snapshot_disposition(db, report.trade_date)
         db.query(ReviewActionItemRow).filter(
             ReviewActionItemRow.trade_date == report.trade_date
         ).delete()
@@ -145,13 +204,14 @@ def save_report(session_factory, report: ReviewReport) -> ReviewReport:
                 title=it.title, category=it.category, priority=it.priority,
                 expected_impact=it.expected_impact, evidence=it.evidence,
                 target=it.target, proposed_change=it.proposed_change,
-                status=old["status"] if old else it.status,
+                status=old["status"] if old else "pending",
                 resolution_note=old["resolution_note"] if old else "",
+                implementation_evidence=old["implementation_evidence"] if old else "{}",
                 resolved_at=old["resolved_at"] if old else None,
             ))
         # 还有剩的说明上次的改进项这次没再产出：处置结论随之失效，记一条提示
         for fp in carried:
-            log.info("改进项本次未再产出，历史处置记录丢弃：%s / %s", fp[0], fp[1][:40])
+            log.info("改进项本次未再产出，历史处置已保留于旧版本：%s / %s", fp[0], fp[1][:40])
         for mi in report.meta_insights:
             db.add(ReviewMetaInsightRow(
                 review_id=report.review_id, trade_date=report.trade_date,
@@ -220,23 +280,35 @@ def _sync_action_items_from_db(db, report: ReviewReport) -> None:
     长度不一致说明报告被外部改写过 → 此时整批跳过，
     宁可让这些条目不可操作，也绝不错配到别的改进项上。
 
-    注：`resolution_note` / `resolved_at` 不进报告模型（报告快照只记生成时的判断），
-    需要处置明细走 `GET /review/action-items`。
+    处置说明与时刻同样从表行投影，便于读者追踪实施/发布/复测凭据。
+    这些是管理记录，不冒充代码已发布或效果已验证。
     """
     rows = db.execute(
         select(ReviewActionItemRow)
         .where(ReviewActionItemRow.review_id == report.review_id)
         .order_by(ReviewActionItemRow.id)
     ).scalars().all()
-    if len(rows) != len(report.action_items):
+    if (len(rows) != len(report.action_items)
+            or any(_fingerprint(row) != _fingerprint(item) for row, item in zip(rows, report.action_items))):
         log.warning(
             "action item count mismatch for %s: db=%d payload=%d，跳过状态同步",
             report.review_id, len(rows), len(report.action_items),
         )
+        for item in report.action_items:
+            item.id = ""
+            item.status = "pending"
+            item.resolution_note = ""
+            item.implementation_evidence = {}
+            item.resolved_at = None
+            item.disposition_basis = "disposition_unavailable"
         return
     for row, item in zip(rows, report.action_items):
         item.id = str(row.id)
         item.status = row.status
+        item.resolution_note = row.resolution_note
+        item.implementation_evidence = json.loads(row.implementation_evidence or "{}")
+        item.resolved_at = row.resolved_at.isoformat() if row.resolved_at else None
+        item.disposition_basis = "management_record_not_release_verification"
 
 
 def get_report(session_factory, trade_date: str) -> ReviewReport | None:
@@ -286,6 +358,7 @@ def update_action_item_status(
     expect_category: str,
     expect_title: str,
     only_statuses: tuple[str, ...] | None = None,
+    implementation_evidence: dict[str, str] | None = None,
 ) -> dict:
     """变更单条改进项的处置状态。
 
@@ -308,6 +381,16 @@ def update_action_item_status(
         raise ValueError(f"status 非法：{status!r}，允许值 {ALLOWED_STATUSES}")
     if status in NOTE_REQUIRED and not note.strip():
         raise ValueError(f"status={status} 必须填写 note（没有理由的处置无法归因）")
+    evidence = implementation_evidence or {}
+    if not isinstance(evidence, dict):
+        raise ValueError("实施凭据必须是结构化对象")
+    allowed_evidence = {"implementation_ref", "release_version", "verification_ref"}
+    if set(evidence) - allowed_evidence or any(not isinstance(v, str) or len(v) > 2000 for v in evidence.values()):
+        raise ValueError("实施凭据字段或长度无效")
+    evidence = {k: v.strip() for k, v in evidence.items()}
+    if status == "applied" and any(not evidence.get(k) for k in allowed_evidence):
+        raise ValueError("登记实施需要 implementation_ref、release_version 和 verification_ref；缺少发布或复测时请保持 confirmed")
+    encoded_evidence = json.dumps(evidence, ensure_ascii=False, sort_keys=True)
     try:
         pk = int(item_id)
     except (TypeError, ValueError):
@@ -338,14 +421,18 @@ def update_action_item_status(
                     "title": row.title, "status": row.status, "resolution_note": row.resolution_note,
                     "resolved_at": row.resolved_at.isoformat() if row.resolved_at else None}
         before = {"status": row.status, "note": row.resolution_note,
+                  "implementation_evidence": json.loads(row.implementation_evidence or "{}"),
                   "resolved_at": row.resolved_at.isoformat() if row.resolved_at else None}
         previous_status, previous_note = row.status, row.resolution_note
+        previous_evidence = row.implementation_evidence
         result = db.execute(update(ReviewActionItemRow).where(
             ReviewActionItemRow.id == pk, ReviewActionItemRow.status == previous_status,
             ReviewActionItemRow.resolution_note == previous_note,
+            ReviewActionItemRow.implementation_evidence == previous_evidence,
             ReviewActionItemRow.trade_date == expect_trade_date,
             ReviewActionItemRow.category == expect_category, ReviewActionItemRow.title == expect_title,
         ).values(status=status, resolution_note=note.strip(),
+                 implementation_evidence=encoded_evidence,
                  resolved_at=None if status in ("pending", "recorded") else utcnow()))
         if result.rowcount != 1:
             raise ActionItemStaleError("处置并发变化，请刷新后重试")
@@ -355,6 +442,7 @@ def update_action_item_status(
                           action="review.disposition", target=f"review:{row.trade_date}:{pk}",
                           before=json.dumps(before, ensure_ascii=False),
                           after=json.dumps({"status": status, "note": note.strip(),
+                                            "implementation_evidence": evidence,
                                             "trade_date": row.trade_date, "category": row.category,
                                             "title": row.title}, ensure_ascii=False)))
         db.commit()
@@ -365,6 +453,7 @@ def update_action_item_status(
             "title": row.title,
             "status": row.status,
             "resolution_note": row.resolution_note,
+            "implementation_evidence": json.loads(row.implementation_evidence or "{}"),
             "resolved_at": row.resolved_at.isoformat() if row.resolved_at else None,
         }
     except Exception:

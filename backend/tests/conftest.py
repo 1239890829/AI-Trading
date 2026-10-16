@@ -4,6 +4,30 @@ import os
 import socket
 import threading
 import traceback
+import sys
+import tempfile
+from pathlib import Path
+from urllib.parse import parse_qs, unquote, urlsplit
+
+
+def _guard_sqlite_target(event, args):
+    """Block real SQLite files before open, including direct sqlite3 and URI calls."""
+    if event != "sqlite3.connect":
+        return
+    target = os.fsdecode(args[0])
+    if target in {"", ":memory:"}:
+        return
+    if target.startswith("file:"):
+        uri = urlsplit(target)
+        if unquote(uri.path) == ":memory:" or parse_qs(uri.query).get("mode") == ["memory"]:
+            return
+        target = unquote(uri.path)
+    if not any(Path(target).resolve().is_relative_to(root) for root in
+               (Path(tempfile.gettempdir()).resolve(), Path("/tmp").resolve())):
+        raise RuntimeError("test SQLite must use an isolated temporary directory")
+
+
+sys.addaudithook(_guard_sqlite_target)
 
 # 必须在导入 app 之前设置：保证测试环境确定性（mock provider + 不主动轮询）
 os.environ["ASHARE_DATA_PROVIDER"] = "mock"
@@ -76,8 +100,6 @@ os.environ["ASHARE_TRADES_TENCENT_HTTP_FALLBACK_ENABLED"] = "false"
 #      就会连真实的 `20260901.json` 一起删掉。
 # 这里在 app 被导入后立刻改指向临时目录，测试模块再 `from ... import REPORT_DIR`
 # 拿到的就是隔离后的路径。
-import tempfile  # noqa: E402
-from pathlib import Path  # noqa: E402
 
 # TemporaryDirectory owns deletion; keeping the owner global prevents premature
 # GC while tests run and avoids leaving one directory behind per pytest process.
@@ -118,6 +140,9 @@ _TMP_REPORT_DIR.mkdir(parents=True, exist_ok=True)
 # 守卫：`tests/test_data_path_isolation.py`（新增 data 路径常量必须登记 + 注入校验 + 功能回归）。
 _DATA_SANDBOX_OWNER = tempfile.TemporaryDirectory(prefix="ashare-test-data-")
 _DATA_SANDBOX = Path(_DATA_SANDBOX_OWNER.name)
+
+import app.core.device_access as _device_access_mod  # noqa: E402
+_device_access_mod.STORE_PATH = _DATA_SANDBOX / "device-access.sqlite3"
 
 import app.assistant.cognition as _cognition_mod  # noqa: E402
 import app.services.leader_archive as _leader_archive_mod  # noqa: E402

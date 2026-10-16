@@ -62,6 +62,7 @@ def _is_real_data_path(p: Path) -> bool:
 #: 「是」= 必须在 conftest 里改指沙箱（本文件第 2 项守卫会验）；
 #: 「否」= 保留真实路径，理由写清楚（新增常量时必须逐条判断，不许默认填否）。
 _DECLARED: dict[str, tuple[bool, str]] = {
+    "core/device_access.py:STORE_PATH": (True, "设备会话 API 及全端点冒烟统一隔离到测试沙箱"),
     # --- 已隔离：实测被测试写到的入口（第三批：审计钩子实测，见 conftest 注释）---
     "services/leader_archive.py:ARCHIVE_PATH": (
         True, "全端点冒烟经 /api/events/impact·/api/picks/leader-archive 触发 get_archive 覆盖缓存"),
@@ -373,6 +374,7 @@ def test_test_writable_paths_are_sandboxed():
 
     删掉 conftest 的隔离块 → 本用例立刻变红（隔离失效必须可见，不能静默）。
     """
+    import app.core.device_access as device_access
     import app.assistant.cognition as cognition
     import app.predict.storage as predict_storage
     import app.picks.position_engine as position_engine
@@ -383,6 +385,7 @@ def test_test_writable_paths_are_sandboxed():
     assert writable, "登记表里没有任何「测试可写」项，疑似登记被误清空"
 
     modules = {
+        "core/device_access.py:STORE_PATH": device_access,
         "services/leader_archive.py:ARCHIVE_PATH": leader_archive,
         "assistant/cognition.py:GAP_LOG_PATH": cognition,
         "predict/storage.py:REPORT_DIR": predict_storage,
@@ -493,11 +496,12 @@ def test_sandbox_root_not_inside_repo_data():
     2026-09-14 增补：真实数据目录有**两处**（`backend/data` 与**仓库根 `data/`**），
     本用例与判据用同一函数 ⇒ 两处一起覆盖，不会出现"只守了一半"。
     """
+    import app.core.device_access as device_access
     import app.assistant.cognition as cognition
     import app.predict.storage as predict_storage
     import app.services.leader_archive as leader_archive
 
-    for current in (Path(cognition.GAP_LOG_PATH), Path(leader_archive.ARCHIVE_PATH),
+    for current in (Path(device_access.STORE_PATH), Path(cognition.GAP_LOG_PATH), Path(leader_archive.ARCHIVE_PATH),
                     Path(predict_storage.REPORT_DIR)):
         assert not _is_real_data_path(current), (
             f"沙箱路径 {current} 位于真实数据目录之内——`_is_real_data_path` 判据"

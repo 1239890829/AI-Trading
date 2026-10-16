@@ -33,7 +33,7 @@ def load_evidence(as_of: datetime, session_factory=None) -> dict[str, list[dict]
                 EventObservation.available_at <= now)).all()
         memberships = db.execute(select(Theme.name, ThemeMember.symbol, ThemeMember.synced_at).join(
             ThemeMember, ThemeMember.theme_code == Theme.code,
-        )).all()
+        ).where(Theme.catalog_active.is_(True))).all()
         overrides = db.execute(select(Theme.name, ThemeOverride).join(
             ThemeOverride, ThemeOverride.theme_code == Theme.code,
         )).all()

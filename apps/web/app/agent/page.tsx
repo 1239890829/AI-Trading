@@ -1,5 +1,6 @@
 "use client";
 
+import { MaintenanceBoundary } from "@/components/access/device-access";
 import { Suspense, useState } from "react";
 import { useRouter, useSearchParams } from "next/navigation";
 
@@ -19,6 +20,7 @@ import { WorkspaceDeck } from "@/components/ui/workspace-deck";
 import { ModalShell } from "@/components/ui/modal-shell";
 import { RESEARCH_TOOLS, MAINTENANCE_TOOLS } from "@/lib/workspace-tools";
 import { LeaderResearchPanel } from "@/components/hunting/leader-research-panel";
+import { SelectionValidationPanel } from "@/components/hunting/validation-panel";
 import { ReviewTab } from "@/components/research/review-tab";
 import { PageSkeletonFallback } from "@/components/ui/loading";
 import "./agent-layout.css";
@@ -35,6 +37,12 @@ import "./agent-layout.css";
  */
 
 function AgentInner() {
+  const accessParams = useSearchParams();
+  const isMaintenance = agentArea(accessParams.get("area"), accessParams.get("tab")) === "maintenance";
+  return isMaintenance ? <MaintenanceBoundary><AgentContent /></MaintenanceBoundary> : <AgentContent />;
+}
+
+function AgentContent() {
   const router = useRouter();
   const [origin, setOrigin] = useState<MotionOrigin | null>(null);
   const sp = useSearchParams();
@@ -67,6 +75,7 @@ function AgentInner() {
     </div>
     {selected && <ModalShell motionOrigin={origin} open={presence.active} label={selected.label} size={["params", "repos"].includes(selected.key) ? "md" : "lg"} presentation="drawer" expandable onClose={closeTool} header={<div><h2 className="text-lg font-semibold">{selected.label}</h2><p className="text-xs text-zinc-600 dark:text-zinc-400">{selected.description}</p></div>} bodyClassName="overflow-hidden p-3" footer={maintenance ? "维护视图不授予权限；命令继续由后端鉴权、预算和批准链约束。" : "只读研究；样本不足与缺失产物不代表已经验证。"}>
       {presence.active && selected.key === "evolution" && <EvolutionTab />}
+      {presence.active && selected.key === "validation" && maintenance && <div className="min-h-0 flex-1 overflow-y-auto"><SelectionValidationPanel maintenance /></div>}
       {presence.active && selected.key === "tasks" && <TaskCenter />}
       {presence.active && selected.key === "review" && <ReviewTab key={`maintenance:${reviewDate ?? "latest"}`} focusDate={reviewDate} allowDispose />}
       {presence.active && selected.key === "leaders" && <div className="min-h-0 flex-1 overflow-auto"><LeaderResearchPanel /></div>}

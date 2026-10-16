@@ -7,7 +7,7 @@
  * 无事件名字符串、一个用途一个函数，类型直接由函数签名表达。
  *
  * 另外两种事件的去向：
- * - paperChanged → props 回调（trade-form/trade-panel 都在 StockDetailPanel 子树内）
+ * - paperChanged → props 回调（trade-form 等既有消费者）
  * - realChanged  → useRealPositions 的 reload 直调（跨实例由 15s 轮询兜底）
  */
 

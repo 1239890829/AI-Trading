@@ -4,6 +4,7 @@ from __future__ import annotations
 import json
 import math
 import logging
+from copy import deepcopy
 from datetime import datetime, timezone, timedelta
 
 from sqlalchemy import case, func, select
@@ -107,6 +108,16 @@ def daily_entries(items, meta: dict, *, previous_meta, previous_items, trade_dat
             "source": "daily_generation", "source_version": meta.get("selection_version"),
             "name": str(item.get("name") or symbol),
             "selection_basis": {str(k): str(v) for k, v in _object(item.get("bases")).items()},
+            "strategy_version": _object(meta.get("selection_contract")).get("strategy_version"),
+            "feature_version": _object(meta.get("selection_contract")).get("feature_version"),
+            "event_refs": deepcopy(item.get("related_event_refs") or []),
+            "related_events": list(item.get("related_events") or []),
+            "original_features": deepcopy({key: item.get(key) for key in (
+                "score", "sub_scores", "dimension_evidence", "vetoes", "source", "source_basis",
+                "theme", "theme_stage", "boards", "tradability", "quote_audit", "confidence")}),
+            "rule_context": deepcopy({key: meta.get(key) for key in (
+                "weights", "regime", "style_routing", "gate", "market_phase", "min_pick_score")}),
+            "explanation_producer": "rules",
             "invalidations": [str(v) for v in item.get("invalidations") or []],
             "semantics": "observation_only_not_fill", "reason": f"首次加入已记录；{reason}" if reason else None}
     return entries

@@ -63,36 +63,9 @@ def _pick_provider(provider, class_name: str):
 
 # ---------------------------------------------------------------- 题材归一化词典
 
-#: 原始标签 → 归一化题材名。只合并明确同义的，避免过度合并掩盖真实结构。
-#: 新增词条时必须同步 tests/test_theme_service.py，并说明合并理由。
-THEME_ALIASES: dict[str, str] = {
-    # ⚠️ 官方名称纪律（2026-09-08 用户指令）：题材名称必须逐字使用官方标准名，
-    # 严禁自创/翻译/简写。本表只允许两类条目：
-    #   1) value 是 **题材目录中真实存在的官方概念名**（如「黄金概念」「液冷服务器」
-    #      「数据中心(AIDC)」「央企国企改革」「转基因」——逐字含括号）；
-    #   2) 原始标签本身已在目录中 → 直接删除映射让其直通（如「业绩增长」「算力租赁」
-    #      「人形机器人」「国企改革」等 ths 原发标签）。
-    # 曾有 10 个自创目标名（业绩驱动/黄金珠宝/国资改革/液冷/算力/机器人/数据中心/
-    # 重组/控制权变更/次新股/PTFE）被全部清除——它们在同花顺 App 里搜不到。
-    # 官方无统一概念的近似标签（如业绩类 16 种表述）**不做归并**：名称准确性优先，
-    # 碎片化由 official_matches 官方挂靠 + formation 分级兜底。
-    # 黄金系：炒作时同涨同跌，归到官方「黄金概念」
-    "黄金": "黄金概念",
-    "黄金概念": "黄金概念",
-    "珠宝加工": "黄金概念",
-    "黄金租赁": "黄金概念",
-    "艺术珠宝": "黄金概念",
-    # 液冷：官方概念名是「液冷服务器」
-    "AI液冷": "液冷服务器",
-    # 数据中心：官方概念名逐字为「数据中心(AIDC)」
-    "数据中心业务": "数据中心(AIDC)",
-    "数据中心交换机": "数据中心(AIDC)",
-    # 国资：官方概念名为「央企国企改革」
-    "央国企改革": "央企国企改革",
-    "央企改革": "央企国企改革",
-    # 转基因：与种业同源，官方「转基因」概念存在
-    "转基因玉米": "转基因",
-}
+# 原始涨停原因标签与官方概念目录是两种事实。没有验证证据的近义词不合并，
+# 防止“珠宝加工”等被改写成“黄金概念”并制造共同上涨原因。
+THEME_ALIASES: dict[str, str] = {}
 
 # ---------------------------------------------------------------- 成建制门槛
 
@@ -715,7 +688,7 @@ async def build_theme_board(
             )
         )
 
-    cards.sort(key=lambda c: -c["strength_score"])
+    cards.sort(key=lambda c: (c["is_unclassified"], -c["strength_score"]))
 
     # ---- 7. 断板股：昨日连板、今日不在涨停池 ----
     today_symbols = {r.symbol for r in today_pool}
@@ -745,7 +718,7 @@ async def build_theme_board(
             "market_max_board_stocks": [{"symbol": r.symbol, "name": r.name, "boards": r.consecutive_boards or 0}
                                         for r in today_pool if market_max_boards > 0 and (r.consecutive_boards or 0) == market_max_boards],
             "market_break_rate": market_break_rate,
-            "top_theme": cards[0]["theme"] if cards else None,
+            "top_theme": next((c["theme"] for c in cards if not c["is_unclassified"]), None),
         },
         "caveats": [
             "题材归因来自同花顺官方涨停原因，非交易时段数据为最近交易日收盘口径",

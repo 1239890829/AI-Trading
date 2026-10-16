@@ -2,6 +2,22 @@ import { afterEach, expect, it, vi } from "vitest";
 import { cleanup, fireEvent, render, screen } from "@testing-library/react";
 import { CommandPalette } from "./command-palette";
 afterEach(cleanup);
+it("普通命令面板保留研究入口并隐藏内部维护工具", () => {
+ render(<CommandPalette/>);
+ fireEvent.click(screen.getByRole("button",{name:"打开命令面板"}));
+ expect(screen.getByRole("option",{name:/研究笔记/})).toBeTruthy();
+ expect(screen.queryByRole("option",{name:/后台任务/})).toBeNull();
+ expect(screen.queryByRole("option",{name:/执行核验/})).toBeNull();
+});
+it("维护授权结束后移除已打开命令面板中的内部入口", () => {
+ const view=render(<CommandPalette maintenance/>);
+ fireEvent.click(screen.getByRole("button",{name:"打开命令面板"}));
+ expect(screen.getByRole("option",{name:/执行核验/})).toBeTruthy();
+ view.rerender(<CommandPalette maintenance={false}/>);
+ expect(screen.queryByRole("option",{name:/执行核验/})).toBeNull();
+ expect(screen.queryByRole("option",{name:/后台任务/})).toBeNull();
+ expect(screen.getByRole("option",{name:/研究笔记/})).toBeTruthy();
+});
 it("按关键词过滤且键盘选择导航；中文组合回车不触发", () => {
  render(<CommandPalette/>);
  fireEvent.keyDown(window,{key:"k",ctrlKey:true});

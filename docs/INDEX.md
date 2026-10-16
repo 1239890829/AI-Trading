@@ -49,7 +49,7 @@
 | **MD-07** | `strategy/risk-management.md` | L2 | 风控 | 风险拦截位置与规则。⚠️ 旧稿曾把「预检」写成「强制拦截」（**文档高估**），已更正 |
 | **FN-01** | `strategy/strategy-registry.md` | L2 | 登记册 | **策略级**生命周期（核心辨析：**因子 ≠ 策略**） |
 | **FN-02** | `system/architecture.md` | L2 | 架构 | 数据流与分层设计 |
-| **FN-03** | `system/deployment.md` | L2 | 部署 | 部署与运维（本机统一启动/最小凭据/受保护代理与真实WS分层验收、3000/8000纪律、离线备份/恢复hold及OPS-003边界） |
+| **FN-03** | `system/deployment.md` | L2 | 部署 | 部署与运维（设备配对/临时维护授权/一次性WS票据/本机初始化恢复/最小凭据/代理与真实WS分层验收、3000/8000纪律、离线备份/恢复hold及OPS-003边界） |
 | **FN-04** | `system/api.md` | L2 | API | API 契约（⚠️ 端点计数滞后，**以 `/openapi.json` 为权威**） |
 | **FN-05** | `system/websocket.md` | L2 | WS | WS 协议（**必须直连后端，不走 Next 代理**） |
 | **FN-06** | `system/mcp.md` | L2 | MCP | MCP 工具体系清单 |
@@ -349,3 +349,6 @@ IMP-050当前实现、B/C同任务比较及实屏边界见[产品闭环§11](pro
 IMP-054动效用途/静态弃权、反向退出、焦点/IO即时性、CSS+JS减弱和有限性能对照见[产品闭环§12](product/product-closure-design.md#12-imp-054-状态动效与空间连续性2026-09-30)，逐消费者见[细功能审计§19](product/feature-closure-audit.md#19-imp-054-动效消费者逐项验收2026-09-30)。状态与发布归[W07/IMP-054](stages/w07-simplification.md#imp-054)。
 
 2026-10-01 IMP-053当前工程合同：[猎场§9](product/hunting-decision-design.md#9-imp-053-首个执行场景与效果证据2026-10-01) → [产品§13](product/product-closure-design.md#13-imp-053-独立机会影子结果2026-10-01) / [细功能§20](product/feature-closure-audit.md#20-imp-053-逐动作与失败分母2026-10-01)。独立hunting_shadow、原策略买点与原子成交/拒绝/未成交/退出分母；默认关闭，工程状态只归W03。未绑定实验不制造策略晋级或RSH-031效果结论。
+
+
+2026-10-16 分类与候选真实性补充：实施范围见[W04/BUG-034](stages/w04-research.md#bug-034)，合同见[猎场决策](product/hunting-decision-design.md)、[数据来源](data/data-sources.md)和[细功能覆盖](product/feature-closure-audit.md)。原计划与版本证据归Git；行情真实运行验收仍归W06/IMP-019。

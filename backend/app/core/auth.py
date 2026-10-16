@@ -1,78 +1,10 @@
-"""入站凭据校验的**单点策略**（B6 写鉴权 → R22 统一鉴权边界）。
+"""Service credential policy and legacy non-browser WS encoding.
 
-## 为什么要把判定抽出来
-
-原先判定只有一处（`api/deps.py::require_write_token`），但**消费面正要变宽**：
-写接口之外还要盖住「敏感读 / 花钱读」与 WebSocket。若每个面各写一份判定，
-两份就会漂移——而**鉴权判定的漂移是静默的**（多一处宽松分支 = 多一个无声后门，
-运行时与"正确"长得完全一样）。故：**策略只有这一份**，各面只做「把凭据取出来」这件事
-（HTTP 取请求头、WebSocket 取子协议），取法不同、判定同一。
-
-## 三种面、一个判定
-
-| 面 | 凭据通道 | 适配位置 |
-|---|---|---|
-| **全部 HTTP 路由**（默认拒绝，豁免见下） | `X-API-Token` 请求头 | `api/deps.py::require_api_token`（router 级挂载） |
-| 写接口（非 GET） | 同上（**同判定**，只是显式作用域标记） | `api/deps.py::require_write_token` |
-| WebSocket `/ws/quotes` | `Sec-WebSocket-Protocol` 子协议 | `websocket/routes.py` |
-
-「全部 HTTP 路由」与「写接口」**不是两套规则**：两者都调 `check_api_token`，
-判定只有一份；保留两个名字是因为前者是"地板"（漏挂即 401），后者是"这条路由会改状态"
-的声明式标记（既有 `test_write_token.py` 靠它做机械门禁）。
-
-⚠️ **WebSocket 为何不能也用请求头**：浏览器的 `WebSocket` 构造器**不允许设置自定义
-请求头**（不是本项目的选择，是平台约束）⇒ 只能走 URL 或子协议。URL 通道（`?token=`）
-已被本项目**刻意关闭**（2026-09-14：token 出现在 URL 上会被浏览器历史、`Referer`、
-反代访问日志逐层留存）。子协议是**请求头**，不进 URL，故是三条通道里唯一
-既可用又符合既有决策的（`Sec-WebSocket-Protocol` 承载凭据亦是 Kubernetes
-等项目的既有做法）。
-
-## 子协议为何要 base64url 编码
-
-RFC 6455 的子协议值必须是 **HTTP token**（字符集不含 `=` `/` `+` 等）。
-用户配的 token 若是 base64（含 `=` 填充）或含其它字符，直接拼进子协议会让浏览器
-在 `new WebSocket(...)` 处**抛异常**——而那是**前端**的失败，后端只会看到
-"连接没建立"，属于最难排查的一类。故两侧统一 `base64url(token)`（去填充）：
-字符集恒为 `A-Za-z0-9-_`，对任意二进制安全，且顺带让明文 token 不出现在握手中。
-
-## WS 凭据怎么到达浏览器（唯一一处"凭据出服务端"）
-
-HTTP 面浏览器**从不持有** token（由 Next 服务端代理在运行时注入请求头）。WS 面做不到
-这一点：回显约束（见下）要求"客户端提议过才能回显"⇒ **浏览器必须自己知道凭据**，
-且它是**浏览器内存**里的值，不是构建产物里的常量。故投递路径刻意设计为：
-
-    浏览器 ──GET /api/ws-credential──> Next Route Handler（运行时读 ASHARE_API_TOKEN）
-                                          └─> 返回 `ashare-token.<base64url>`
-
-三重约束保证它不比 HTTP 面更弱：① 端点在同源 Next 服务端，**构建期不内联**任何秘密
-（`NEXT_PUBLIC_*` 禁令由 `apps/web/lib/env-secrecy.test.ts` 机械守卫）；② 返回的是
-**编码后的子协议**而非明文 token，且不进 URL、不进浏览器历史 / Referer / 反代日志；
-③ 凭据只在**内存**中持有，不落 localStorage / cookie。
-
-⚠️ **残留风险（必须知道，别当成"已解决"）**：能打开前端的访客可以取得该凭据，
-进而**绕过前端直连后端端口**。所以它保护的是"后端端口不对未授权者开放"，
-**不是"区分前端访客的身份"**——真正区分用户需要会话/身份层，那是 R22 明确
-"不要求现在上"的部分。配套纪律：后端端口仍须只绑回环（`docker-compose.prod.yml`
-已如此），共享部署把反代作为唯一入口。
-
-## 保护面：默认拒绝，而不是「敏感清单」
-
-`shared` 姿态下**所有** HTTP 路由都要凭据，例外只有一份**显式登记**的清单
-（见 `AUTH_EXEMPT_PATHS`）。刻意不用「敏感读白名单」的写法：白名单是
-**默认放行 + 逐条登记才保护**，于是「新加了会花钱/读持仓的端点但忘了登记」
-与「登记好了」在运行时**长得一模一样**（都是 200，只有配了 token 才分叉）
-——这正是 R22 病灶的形态（原实现只按"写接口"分类，于是助手聊天与摘要
-这类花钱读被整类漏掉）。默认拒绝把这个失效方向**翻转**：忘登记的结果是
-该端点**报 401**（吵闹、立刻被发现），而不是**静默开放**。
-
-代价是新增端点必须先确认「它确实该受保护」——这是可接受的，因为答案
-99% 是"是"；而唯一需要豁免的（存活探针）已在清单里显式登记并有测试钉住。
-
-## 失败方向
-
-一律 **fail closed**：`shared` 姿态下 token 为空时，运行期判定**拒绝**（而不是放行）。
-启动校验本应拦住这种配置，但**不能把启动校验当作唯一防线**——它只覆盖
-"经 `main.py` 启动"这一条路径（测试夹具、脚本直连、ASGI 服务器自定义入口都可能绕过）。
+HTTP service callers still use X-API-Token. Browser requests also require a
+paired session and an explicit capability check in api/deps.py. The only HTTP
+exemption is /api/health. Browser WS connections use one-use device tickets;
+long-term service tokens are never sent to the browser. Base64 is encoding,
+not encryption or an identity boundary. See docs/system/deployment.md.
 """
 
 from __future__ import annotations
@@ -158,7 +90,7 @@ def is_api_token_valid(provided: str | None) -> bool:
     if not settings.auth_required:
         return True
     expected = settings.api_token
-    return bool(expected) and provided == expected
+    return bool(expected) and hmac.compare_digest((provided or "").encode(), expected.encode())
 
 
 def check_api_token(provided: str | None) -> None:

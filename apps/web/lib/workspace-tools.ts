@@ -9,6 +9,7 @@ export const MAINTENANCE_TOOLS = [
   { key: "tasks", label: "后台任务", description: "发起受控任务，查看结果、失败与取消记录", group: "运行与处置", mark: "01" },
   { key: "review", label: "改进项处置", description: "核对提案与执行记录后处置", group: "运行与处置", mark: "02" },
   { key: "strategies", label: "策略健康", description: "核对判定口径和原始验证产物", group: "核验与迭代", mark: "03" },
+  { key: "validation", label: "执行核验", description: "内部模拟执行与原入选对照，保持独立账本", group: "核验与迭代", mark: "08" },
   { key: "evolution", label: "迭代记录", description: "查看进化历史、实验与权限边界", group: "核验与迭代", mark: "04" },
   { key: "params", label: "参数配置", description: "在原鉴权范围内维护生效参数", group: "设置与追踪", mark: "05" },
   { key: "alerts", label: "提醒管理", description: "维护规则，日常提醒仍在通知中心", group: "设置与追踪", mark: "06" },

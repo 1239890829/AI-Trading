@@ -31,7 +31,8 @@ describe("QuoteStrip 限价展示", () => {
     const slot = view.container.querySelector("[data-quote-status-slot]");
     expect(slot?.className).toContain("w-[6.4em]");
     expect(screen.getByRole("button", {name: "查看行情问题"}).className).not.toContain("bg-");
-    expect(screen.getByText("已连接").title).toContain("WebSocket");
+    expect(screen.queryByText("已连接")).toBeNull();
+    expect(screen.getByRole("button", {name: "查看行情问题"}).title).toContain("WebSocket");
     expect(screen.getByRole("button", {name: "查看行情问题"}).getAttribute("data-quality")).toBe("stale");
     fireEvent.click(screen.getByRole("button", {name: "查看行情问题"}));
     expect(screen.getByRole("dialog", {name: "行情诊断"}).textContent).toContain("原源钟与拒旧依据");

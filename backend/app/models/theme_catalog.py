@@ -2,7 +2,7 @@ from __future__ import annotations
 
 from datetime import datetime
 
-from sqlalchemy import DateTime, Integer, String, UniqueConstraint
+from sqlalchemy import Boolean, DateTime, Integer, String, UniqueConstraint
 from sqlalchemy.orm import Mapped, mapped_column
 
 from app.core.db import utcnow
@@ -24,7 +24,10 @@ class Theme(Base):
     name: Mapped[str] = mapped_column(String(64))
     # 目前仅 ths_official；预留 em_concept / manual
     source: Mapped[str] = mapped_column(String(16), default="ths_official")
-    synced_at: Mapped[datetime] = mapped_column(DateTime, default=utcnow, onupdate=utcnow)
+    # 保留退出目录的历史行；当前归属只能消费最新完整目录的有效条目。
+    catalog_active: Mapped[bool] = mapped_column(Boolean, default=True, server_default="1")
+    catalog_synced_at: Mapped[datetime | None] = mapped_column(DateTime, default=None)
+    synced_at: Mapped[datetime] = mapped_column(DateTime, default=utcnow)
     created_at: Mapped[datetime] = mapped_column(DateTime, default=utcnow)
 
 

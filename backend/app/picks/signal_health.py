@@ -57,7 +57,7 @@ def evaluate_signal_health(
     :returns: {status, window: {...}, cusum: {...}, history: [...], counts}
     """
     if not groups:
-        return {"status": "insufficient", "reason": "无命中记录", "history": [],
+        return {"status": "insufficient", "reason": f"已完成有效复盘 0/{min_groups} 个组合日；未入选、未成熟或缺基准不计入样本", "history": [],
                 "window": None, "cusum": None, "counts": {"groups": 0, "picks": 0}}
 
     recent = groups[-window:]
@@ -103,6 +103,7 @@ def evaluate_signal_health(
 
     return {
         "status": status,
+        "reason": f"已完成有效复盘 {len(groups)}/{min_groups} 个组合日；同日多只股票仍计一个组合日" if status == "insufficient" else None,
         "window": {
             "groups": len(recent),
             "total_picks": total,

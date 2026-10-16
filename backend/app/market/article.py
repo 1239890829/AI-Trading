@@ -15,13 +15,19 @@
 """
 from __future__ import annotations
 
+import asyncio
+import ipaddress
 import re
+import socket
 from typing import Any
-from urllib.parse import urlparse
+from urllib.parse import urljoin, urlparse
 
 import httpx
 
 ALLOWED_HOSTS = {"finance.eastmoney.com", "data.eastmoney.com"}
+_FETCH_HOSTS = ALLOWED_HOSTS | {"np-cnotice-stock.eastmoney.com"}
+_MAX_RESPONSE_BYTES = 2 * 1024 * 1024
+_MAX_REDIRECTS = 3
 
 _UA = (
     "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 "
@@ -52,6 +58,10 @@ def classify_url(url: str) -> tuple[str, str | None]:
         raise ValueError(f"URL 无法解析：{exc}") from exc
     if parsed.scheme not in ("http", "https") or not parsed.hostname:
         raise ValueError("仅支持 http(s) 链接")
+    if parsed.username is not None or parsed.password is not None:
+        raise ValueError("正文链接不支持登录凭据")
+    if parsed.port not in (None, 80 if parsed.scheme == "http" else 443):
+        raise ValueError("正文链接仅支持标准端口")
     host = parsed.hostname.lower()
     if host not in ALLOWED_HOSTS:
         raise ValueError(f"不支持的内容源：{host}")
@@ -210,34 +220,94 @@ def parse_notice_payload(data: dict[str, Any]) -> dict[str, Any]:
     }
 
 
+async def _public_target(url: str) -> tuple[httpx.URL, str]:
+    """Validate every hop and connect to the checked IP, retaining TLS identity.
+
+    Pinning the address prevents a second DNS lookup from bypassing the check.
+    HTTPX/httpcore's documented sni_hostname extension preserves certificate checks.
+    """
+    try:
+        parsed = urlparse(url)
+        host = parsed.hostname or ""
+        port = parsed.port or (443 if parsed.scheme == "https" else 80)
+        if (parsed.scheme not in ("http", "https") or host not in _FETCH_HOSTS
+                or parsed.username is not None or parsed.password is not None
+                or port != (443 if parsed.scheme == "https" else 80)):
+            raise ValueError("正文跳转超出允许来源")
+        addresses = await asyncio.to_thread(socket.getaddrinfo, host, port,
+                                             type=socket.SOCK_STREAM)
+        ips = [ipaddress.ip_address(row[4][0]) for row in addresses]
+        if not ips or any(not ip.is_global for ip in ips):
+            raise ValueError("正文来源未解析到公网地址")
+        # Prefer IPv4 where supplied; do not fall back to an unchecked DNS lookup.
+        address = next((ip for ip in ips if ip.version == 4), ips[0])
+        return httpx.URL(url).copy_with(host=str(address)), host
+    except (ValueError, OSError) as exc:
+        raise ArticleFetchError(str(exc)) from exc
+
+
+async def _fetch_response(client: httpx.AsyncClient, url: str) -> httpx.Response:
+    current = url
+    visited: set[str] = set()
+    for _ in range(_MAX_REDIRECTS + 1):
+        if current in visited:
+            raise ArticleFetchError("正文跳转循环")
+        visited.add(current)
+        target, host = await _public_target(current)
+        async with client.stream("GET", target, headers={"Host": host},
+                                 extensions={"sni_hostname": host}) as response:
+            if response.status_code in (301, 302, 303, 307, 308):
+                location = response.headers.get("location")
+                if not location:
+                    raise ArticleFetchError("正文跳转缺少目标")
+                next_url = urljoin(current, location)
+                if current.startswith("https:") and not next_url.startswith("https:"):
+                    raise ArticleFetchError("正文跳转不允许降为明文连接")
+                current = next_url
+                continue
+            if response.status_code != 200:
+                raise ArticleFetchError(f"正文接口 HTTP {response.status_code}")
+            length = response.headers.get("content-length")
+            if length is not None:
+                try:
+                    if int(length) < 0 or int(length) > _MAX_RESPONSE_BYTES:
+                        raise ArticleFetchError("正文响应过大")
+                except ValueError as exc:
+                    raise ArticleFetchError("正文响应长度无效") from exc
+            body = bytearray()
+            async for chunk in response.aiter_bytes(chunk_size=65536):
+                if len(body) + len(chunk) > _MAX_RESPONSE_BYTES:
+                    raise ArticleFetchError("正文响应过大")
+                body.extend(chunk)
+            # Already decoded by aiter_bytes; omit compression headers on reconstruction.
+            return httpx.Response(200, content=bytes(body),
+                                  headers={"content-type": response.headers.get("content-type", "")})
+    raise ArticleFetchError("正文跳转次数超限")
+
+
 async def fetch_article(url: str) -> dict[str, Any]:
-    """按 URL 类型抓取正文，返回统一形态 {kind,title,source_label,published,paragraphs,truncated}。"""
+    """Fetch a bounded public article without automatic or unchecked redirects."""
     kind, art_code = classify_url(url)
-    async with httpx.AsyncClient(
-        trust_env=False,  # 直连，不走系统代理（本机会话代理会伪装失败）
-        headers={"User-Agent": _UA, "Connection": "close"},  # 东财 keep-alive 会被断
-        timeout=10.0,
-        follow_redirects=True,
-    ) as client:
+    target = (str(httpx.URL("https://np-cnotice-stock.eastmoney.com/api/content/ann",
+                           params={"art_code": art_code, "client_source": "web", "page_index": "1"}))
+              if kind == "notice" else url)
+    try:
+        async with asyncio.timeout(10.0), httpx.AsyncClient(
+            trust_env=False, headers={"User-Agent": _UA, "Connection": "close",
+                                      "Referer": "https://data.eastmoney.com/"},
+            timeout=10.0, follow_redirects=False,
+        ) as client:
+            response = await _fetch_response(client, target)
         if kind == "notice":
-            api = "https://np-cnotice-stock.eastmoney.com/api/content/ann"
-            resp = await client.get(
-                api,
-                params={"art_code": art_code, "client_source": "web", "page_index": "1"},
-                headers={"User-Agent": _UA, "Referer": "https://data.eastmoney.com/", "Connection": "close"},
-            )
-            if resp.status_code != 200:
-                raise ArticleFetchError(f"公告全文接口 HTTP {resp.status_code}")
-            payload = resp.json()
-            data = (payload or {}).get("data") or {}
-            if not data:
+            payload = response.json()
+            data = payload.get("data") if isinstance(payload, dict) else None
+            if not isinstance(data, dict) or not data:
                 raise ArticleFetchError("公告全文接口返回空数据")
             result = parse_notice_payload(data)
         else:
-            resp = await client.get(url)
-            if resp.status_code != 200:
-                raise ArticleFetchError(f"文章页 HTTP {resp.status_code}")
-            result = parse_news_html(resp.text)
+            result = parse_news_html(response.text)
+    except (httpx.HTTPError, TimeoutError, ValueError) as exc:
+        raise ArticleFetchError("正文读取失败") from exc
     result["kind"] = kind
     result["url"] = url
     return result

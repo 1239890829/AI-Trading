@@ -29,9 +29,9 @@ import { isTradingSession } from "@/lib/market-hours";
  *      回可见时若当前 owner 已有请求在途，
  *      合并而非再发一次 —— 旧实现会并发两次，并因此排出**两条计时链**，
  *      之后每周期取数翻倍（实测 2→4→6）。
- *    刻意**不做网络层 abort**：那需要给 `fn` 加 `AbortSignal` 形参并改动 45 个调用点
- *    的 `fetch` 调用；而"丢弃过期回包"（逻辑取消）已足以保证正确性，
- *    网络层取消只省带宽、不改结论，属另一件事（YAGNI）。
+ *    经确认的纯读取可显式传 `abortable: true`，把 signal 交给 API。
+ *    离开页面、换 key、写后重读时取消无消费者的请求；默认调用契约不变，
+ *    不将 AbortSignal 误传成旧 API 的日期/标的参数，也不取消有后台副作用的读取。
  *
  *    ⚠️ **约束：`fn` 必须返回值，三态才成立**（2026-09-12 评审批次 2，有测试钉住）。
  *    `ready` 的判据是 `data !== undefined` —— 若 `fn` 返回 `undefined`（含调用方写
@@ -77,6 +77,8 @@ export interface ResourceOptions {
   enabled?: boolean;
   /** 是否套用「盘外 ×5 降频」，默认 true（行情类）。非行情类取数传 false。 */
   marketHours?: boolean;
+  /** Only opt in after confirming the endpoint is a pure read. */
+  abortable?: boolean;
 }
 
 /** 盘外降频倍数。 */
@@ -96,8 +98,10 @@ function nextDelay(base: number | null, marketHours: boolean): number | null {
   return Math.min(base * OFF_SESSION_FACTOR, Math.max(base, OFF_SESSION_MAX_MS));
 }
 
-export function useResource<T = unknown>(fn: () => Promise<T>, options: ResourceOptions = {}): Resource<T> {
-  const { intervalMs = null, key, enabled = true, marketHours = true } = options;
+export function useResource<T = unknown>(fn: (signal: AbortSignal) => Promise<T>, options: ResourceOptions & {abortable: true}): Resource<T>;
+export function useResource<T = unknown>(fn: () => Promise<T>, options?: ResourceOptions & {abortable?: false}): Resource<T>;
+export function useResource<T = unknown>(fn: (() => Promise<T>) | ((signal: AbortSignal) => Promise<T>), options: ResourceOptions = {}): Resource<T> {
+  const { intervalMs = null, key, enabled = true, marketHours = true, abortable = false } = options;
 
   const fnRef = useRef(fn);
   useEffect(() => {
@@ -145,6 +149,7 @@ export function useResource<T = unknown>(fn: () => Promise<T>, options: Resource
     let timer: ReturnType<typeof setTimeout> | null = null;
     /** 自动读取单飞；手动刷新会使旧实例失活，其网络请求仍可 drain。 */
     let inFlight: Promise<void> | null = null;
+    let controller: AbortController | null = null;
     const epoch = refreshEpoch.current;
     const isCurrent = () => alive && epoch === refreshEpoch.current;
 
@@ -167,9 +172,12 @@ export function useResource<T = unknown>(fn: () => Promise<T>, options: Resource
       // 先后触发；旧实现两处都直接 `run()` ⇒ 并发两次请求，且两条 `run().then(schedule)`
       // 各排一个定时器，计时链就此叠加（实测"每周期 2 次"，并逐轮累积成 2→4→6）。
       if (inFlight) return inFlight;
+      controller = abortable ? new AbortController() : null;
+      const signal = controller?.signal;
       const p = (async () => {
         try {
-          const next = await fnRef.current();
+          const next = await (signal ? (fnRef.current as (signal: AbortSignal) => Promise<T>)(signal)
+            : (fnRef.current as () => Promise<T>)());
           if (!isCurrent()) return;
           setSnap({ key: dataKey, data: next, error: null });
         } catch (e) {
@@ -184,6 +192,7 @@ export function useResource<T = unknown>(fn: () => Promise<T>, options: Resource
       // cleanup 放在 promise 回调中；fn 同步抛错时也不会留下已完成的 inFlight。
       inFlight = p.finally(() => {
         inFlight = null;
+        controller = null;
         if (isCurrent()) setRefreshing(previous => Object.is(previous.key, dataKey) && !previous.active ? previous : {key: dataKey, active: false});
       });
       return inFlight;
@@ -225,10 +234,11 @@ export function useResource<T = unknown>(fn: () => Promise<T>, options: Resource
 
     return () => {
       alive = false;
+      controller?.abort();
       clear();
       if (typeof document !== "undefined") document.removeEventListener("visibilitychange", onVisibility);
     };
-  }, [enabled, intervalMs, key, marketHours, nonce]);
+  }, [enabled, intervalMs, key, marketHours, nonce, abortable]);
 
   // 快照只在"属于当前 key"时才算数；否则一律回到未判定（三态优先于"有值就显示"）。
   const matched = Object.is(snap.key, key);

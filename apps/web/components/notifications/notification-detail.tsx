@@ -38,6 +38,13 @@ export function notificationKeyState(item: NotificationItem): string {
   return `${observation} · ${state ? labels[state] : states.length ? "渠道状态未知" : "仅站内记录"}`;
 }
 
+export function notificationDeliveryHint(item: NotificationItem): string {
+  const labels: Record<string, string> = {permanent_failed:"外部发送失败", unknown:"外部结果待核",
+    expired:"外部已过期", suppressed:"外部已静默", pending:"外部待发送", leased:"外部处理中", accepted:"外部待确认"};
+  const state = Object.keys(labels).find(key => item.channels?.some(channel => channel.state === key));
+  return state ? labels[state] : "";
+}
+
 function evidenceLines(evidence: Record<string, unknown>): string[] {
   const lines: string[] = [];
   const labels: Record<string, string> = {tech:"技术", news:"消息", fundamental:"基本", capital:"资金", sentiment:"情绪", echelon:"梯队"};

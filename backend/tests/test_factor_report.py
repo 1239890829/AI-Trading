@@ -16,10 +16,10 @@ from app.factors import evaluate as ev
 from app.factors import report as fr
 
 
-def _write_report(tmp_path, *, generated_at: str | None, factors=None, summary=None):
+def _write_report(tmp_path, *, generated_at: str | None, factors=None, summary=None, identity=None):
     p = tmp_path / "eval_report.json"
     p.write_text(json.dumps({
-        "generated_at": generated_at,
+        "generated_at": generated_at, **(identity or {}),
         "protocol": {}, "universe": {"stocks": 100}, "data_quality": {},
         "factors": factors if factors is not None else [],
         "summary": summary if summary is not None else {"pass": [], "conditional": [], "fail": []},
@@ -168,7 +168,7 @@ def _aware(y, m, d, h=18, mi=0):
 
 
 def test_should_run_eval_fresh_report_does_not_run(monkeypatch, tmp_path):
-    p = _write_report(tmp_path, generated_at=datetime.now().isoformat())
+    p = _write_report(tmp_path, generated_at="2026-10-04T18:00:00+08:00", identity=ev.evaluation_identity())
     monkeypatch.setattr(ev, "DEFAULT_OUT_PATH", p)
     monkeypatch.setattr(ev, "_load_eval_state", lambda: {})
     assert ev.should_run_eval(_aware(2026, 10, 5), run_day=1, max_age_days=40) is False
@@ -182,8 +182,8 @@ def test_should_run_eval_aware_now_vs_naive_generated_at(monkeypatch, tmp_path):
 
     修法是**统一时区语义后再比**，不是吞异常。本用例钉死：新鲜的报告不触发重跑。
     """
-    fresh = (datetime.now() - timedelta(days=4)).isoformat()  # naive，与产物口径一致
-    p = _write_report(tmp_path, generated_at=fresh)
+    fresh = "2026-09-07T18:00:00"  # naive，与产物口径一致
+    p = _write_report(tmp_path, generated_at=fresh, identity=ev.evaluation_identity())
     monkeypatch.setattr(ev, "DEFAULT_OUT_PATH", p)
     monkeypatch.setattr(ev, "_load_eval_state", lambda: {})
     assert ev.should_run_eval(_aware(2026, 9, 11), run_day=1, max_age_days=40) is False
@@ -218,3 +218,42 @@ def test_should_run_eval_missing_report_is_treated_as_stale(monkeypatch, tmp_pat
     monkeypatch.setattr(ev, "DEFAULT_OUT_PATH", tmp_path / "nope.json")
     monkeypatch.setattr(ev, "_load_eval_state", lambda: {})
     assert ev.should_run_eval(_aware(2026, 10, 5), run_day=1, max_age_days=40) is True
+
+
+def test_missing_identity_requires_review_even_if_report_is_young(monkeypatch, tmp_path):
+    p = _write_report(tmp_path, generated_at="2026-10-04T18:00:00+08:00")
+    monkeypatch.setattr(ev, "DEFAULT_OUT_PATH", p)
+    monkeypatch.setattr(ev, "_load_eval_state", lambda: {})
+    assert ev.should_run_eval(_aware(2026, 10, 5)) is True
+
+
+def test_changed_definitions_or_input_contract_require_review(monkeypatch, tmp_path):
+    for key in ev.evaluation_identity():
+        identity = {**ev.evaluation_identity(), key: "old"}
+        p = _write_report(tmp_path, generated_at="2026-10-04T18:00:00+08:00", identity=identity)
+        monkeypatch.setattr(ev, "DEFAULT_OUT_PATH", p)
+        monkeypatch.setattr(ev, "_load_eval_state", lambda: {})
+        assert ev.should_run_eval(_aware(2026, 10, 5)) is True
+        monkeypatch.setattr(ev, "_load_eval_state", lambda: {"last_attempt_ymd": "2026-10-05"})
+        assert ev.should_run_eval(_aware(2026, 10, 5)) is False
+
+
+def test_future_factor_report_is_not_fresh(monkeypatch, tmp_path):
+    p = _write_report(tmp_path, generated_at="2026-10-06T18:00:00+08:00", identity=ev.evaluation_identity())
+    monkeypatch.setattr(ev, "DEFAULT_OUT_PATH", p)
+    monkeypatch.setattr(ev, "_load_eval_state", lambda: {})
+    monkeypatch.setattr(fr, "REPORT_PATH", p)
+    monkeypatch.setattr(fr, "beijing_now_naive", lambda: datetime(2026, 10, 5, 18))
+    assert ev.should_run_eval(_aware(2026, 10, 5)) is True
+    assert fr.freshness()["stale"] is True
+
+
+def test_aware_factor_report_preserves_timezone_and_identity(monkeypatch, tmp_path):
+    p = _write_report(tmp_path, generated_at="2026-10-04T10:00:00Z", identity=ev.evaluation_identity())
+    monkeypatch.setattr(fr, "REPORT_PATH", p)
+    monkeypatch.setattr(fr, "beijing_now_naive", lambda: datetime(2026, 10, 5, 18))
+    fresh = fr.freshness()
+    assert fresh["age_days"] == 1
+    assert fresh["stale"] is False
+    assert fresh["review_required"] is False
+    assert fresh["definition_current"] is True

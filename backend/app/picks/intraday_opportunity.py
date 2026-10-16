@@ -269,6 +269,8 @@ def assemble(
         themes_out.append(
             {
                 "theme": t.get("theme"),
+                "is_unclassified": bool(t.get("is_unclassified") or t.get("theme") == "未分类"),
+                "supporting_symbols": [r["symbol"] for r in t.get("ladder") or [] if r.get("symbol")],
                 "stage": t.get("stage"),
                 "stage_basis": t.get("stage_basis") or [],
                 "strength_score": t.get("strength_score"),
@@ -329,8 +331,8 @@ def attach_participants(
     "若多数涨停个股集中在同一板块或同一题材概念，则进一步挖掘…"；单家涨停的
     题材没有联动可言，硬挖只会得到噪音。
 
-    容器用卡片上**已经挂好的** `catalog_code`（`attach_official` 的成分重叠挂靠
-    产物）⇒ "卡片上显示的官方概念"与"挖掘用的容器"必然是同一个，不会口径分裂。
+    容器使用 `candidate_catalog_code`：须有共同原因、目录精确同名与全部
+    支持股的官方成分证据。导航用 `catalog_code` 不授予候选资格。
 
     每张卡的挖掘结果写回两个键：
     - `participants`：候选列表（`tradability.linkage_candidates` 产物，含 basis）
@@ -359,7 +361,12 @@ def attach_participants(
     current_unknown = 0
     for t in themes or []:
         count = int(t.get("limit_up_count") or 0)
-        code = t.get("catalog_code")
+        code = t.get("candidate_catalog_code")
+        if t.get("is_unclassified") or t.get("theme") == "未分类":
+            count_gate("unclassified")
+            t["participants"] = []
+            t["participants_note"] = "缺少共同上涨原因，未分类个股不构成题材共振"
+            continue
         if not is_concentrated(count, limit_up_total):
             count_gate("not_concentrated")
             t["participants"] = []
@@ -371,7 +378,7 @@ def attach_participants(
         if not code:
             count_gate("missing_catalog")
             t["participants"] = []
-            t["participants_note"] = "该题材未挂靠到官方概念容器——无成分可挖"
+            t["participants_note"] = "该题材与官方成分的对应关系尚未核实，不据重叠推选联动股"
             continue
         mined += 1
         stats: dict = {}
@@ -577,11 +584,30 @@ def top_watch_stocks(payload: dict, *, limit: int | None = None) -> dict:
     ]
     reference.sort(key=lambda x: -(x.get("boards") or 0))
     reference = _unique_stock_sources(reference)
+    stats = payload.get("linkage_stats") or {}
+    gates = stats.get("theme_gate_counts") or {}
+    unavailable = bool(payload.get("linkage_note")) or stats.get("snapshot_state") != "ready"
+    partial = bool(gates.get("mined_empty_unavailable") or stats.get("missing_quote"))
+    read_state = "unavailable" if unavailable or (partial and not items) else "partial" if partial else "ready"
+    empty_reasons = []
+    if read_state == "unavailable":
+        empty_reasons.append("本轮数据不完整，暂时无法判断候选是否退出")
+    if gates.get("unclassified"):
+        empty_reasons.append("部分涨停股缺少共同原因，不能合并为题材机会")
+    if gates.get("missing_catalog"):
+        empty_reasons.append("部分题材与官方成分的对应关系尚未核实")
+    if gates.get("not_concentrated"):
+        empty_reasons.append("已有题材尚未满足集中条件")
+    if not items and not empty_reasons:
+        empty_reasons.append("本轮没有个股同时满足参与条件与联动强度")
     closed = sum(1 for r in reference if (r.get("tradability") or {}).get("level") == "不可参与")
     unknown = sum(1 for r in reference if (r.get("tradability") or {}).get("level") in (None, "unknown"))
     return {
         "trade_date": payload.get("trade_date"),
         "selection_identity_version": SELECTION_IDENTITY_VERSION,
+        "read_state": read_state,
+        "empty_reasons": empty_reasons,
+        "selection_rule_version": "official-catalyst-v1",
         "effective_limit": limit,
         "items": items[:limit],
         "reference_items": reference[:limit],

@@ -55,6 +55,9 @@ export function QuoteStrip({
   // PE 缺失原因文案：原版把"停牌"写进猜测清单，但那是**猜**的——PE 缺失
   // 绝大部分是数据源未提供（新股/亏损股），真正的停牌应由 tradingStatus 判定。
   // 现在停牌状态真实可得，两者各归其位：这里只说"数据源未提供"，停牌由徽标表达。
+  const transportIssue = connectionStatus && connectionStatus !== "live" && !issue && !["stale", "invalid"].includes(quote.quality)
+    ? STREAM_STATUS_LABEL[connectionStatus] : null;
+  const statusTitle = [issue?.title, connectionStatus ? STREAM_STATUS_LABEL[connectionStatus].title : null].filter(Boolean).join("；");
   const peMissing = "数据源未提供市盈率（常见于新股、亏损股）";
   const strip: [string, string, string?][] = [
     ["今开", fmt(quote.open)],
@@ -86,7 +89,8 @@ export function QuoteStrip({
               low/medium 瞬态不出（2026-09-02 闪烁修复），stale/invalid 常显。
               2026-09-14 口径统一：此前调用点各自判断，导致同一数据在盘面/工作台表现相反。 */}
           <span data-quote-status-slot className="inline-flex h-7 w-[6.4em] shrink-0 items-center text-xs">
-            {issue ? <button type="button" aria-label="查看行情问题" aria-haspopup="dialog" title={issue.title} data-quality={quote.quality} onClick={() => setOpenedFor(quote.symbol)} className={`inline-flex h-6 w-full items-center justify-center whitespace-nowrap rounded px-1 text-xs ${quote.quality === "invalid" ? "text-red-700 dark:text-red-400" : "text-orange-800 dark:text-orange-400"}`}>{issue.label}</button>
+            {issue ? <button type="button" aria-label="查看行情问题" aria-haspopup="dialog" title={statusTitle} data-quality={quote.quality} onClick={() => setOpenedFor(quote.symbol)} className={`inline-flex h-6 w-full items-center justify-center whitespace-nowrap rounded px-1 text-xs ${quote.quality === "invalid" ? "text-red-700 dark:text-red-400" : "text-orange-800 dark:text-orange-400"}`}>{issue.label}</button>
+              : transportIssue ? <span data-transport={connectionStatus} title={transportIssue.title} className={`whitespace-nowrap ${transportIssue.cls}`}>{transportIssue.text}</span>
               : <QualityBadge quality={quote.quality} reasons={quote.quality_reasons} symbol={quote.symbol} market={quote.market} dataTimestamp={quote.data_timestamp} session={quote.display_session} />}
           </span>
           <SuspendedBadge status={tradingStatus} />
@@ -112,10 +116,10 @@ export function QuoteStrip({
         </div>
       </div>
       <div className="quote-sheet-meta flex min-h-7 min-w-0 items-center gap-2">
-        <span className="quote-source text-zinc-600 dark:text-zinc-400">
+        <span className="quote-source text-zinc-600 dark:text-zinc-400" title={connectionStatus ? STREAM_STATUS_LABEL[connectionStatus].title : undefined}>
           {timeText(quote.data_timestamp)} · {sourceLabel(quote.source)}
         </span>
-        {connectionStatus && <span data-transport={connectionStatus} title={STREAM_STATUS_LABEL[connectionStatus].title} className={`inline-flex w-[8.4em] shrink-0 items-center whitespace-nowrap text-[10px] ${STREAM_STATUS_LABEL[connectionStatus].cls}`}>{STREAM_STATUS_LABEL[connectionStatus].text}</span>}
+
         <button type="button" className="quote-metrics-toggle hidden" aria-expanded={metricsOpen} aria-controls={metricsId} onClick={() => setMetricsOpen(open => !open)}>
           行情指标<svg aria-hidden="true" width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.5"><path d="m7 10 5 5 5-5" /></svg>
         </button>

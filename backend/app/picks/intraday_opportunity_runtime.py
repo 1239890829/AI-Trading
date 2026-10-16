@@ -133,14 +133,15 @@ async def build_opportunities(
     """opportunities payload 构建（两处端点共用：全量视图 + 盘中 top 筛选）。
 
     读 Parquet 是同步阻塞，丢线程池（market.themes 同款处理，曾卡死事件循环）；
-    结果缓存 60s（cache key 含参数，两端点同 key 命中同一份）。
+    结果缓存 60s；现役范围保持原参数，研究扩大范围须显式传参并隔离验证。
     """
     state = _state(app)
     cache = cache_on(state, "picks.opportunities", 60, maxsize=4)
     if snapshot_bundle is None:
         snapshot_bundle = snapshot_context(app)
     snap_by, snapshot_state, snapshot_version = snapshot_bundle
-    key = (trade_date, top_themes, stocks_per_theme, snapshot_state, snapshot_version)
+    key = (trade_date, top_themes, stocks_per_theme, snapshot_state, snapshot_version,
+           getattr(getattr(state, "theme_catalog", None), "revision", 0))
     _, cached = await cache.get_or_set(
         key,
         lambda: _build_opportunities_uncached(
@@ -217,11 +218,9 @@ async def _build_opportunities_uncached(
     # 目录服务的同步读在 worker 内自建 Session，不能阻塞行情事件循环。
     await asyncio.to_thread(attach_official, app, payload["data"].get("themes") or [])
 
-    # 猎场候选口径（2026-09-15 用户指令）：涨停梯队退居**参考信息**，候选改为
-    # 「题材内**当前未封板**、通过候选门槛的联动个股」。容器直接取卡片刚挂好的
-    # `catalog_code`（成分重叠挂靠产物）⇒ 页面显示的官方概念与挖掘用的容器必然是
-    # 同一个；成分表复用 board_surge 的当日题材倒排缓存（同一份数据，不新建取数）。
-    # 挖掘失败**不静默**：写 linkage_note，页面据此显示"本轮无可参与联动候选"。
+    # Candidate identity is separate from navigation overlap. Only a verified
+    # common catalyst + official container can supply participants. Runtime scope
+    # remains unchanged until broader coverage passes its separate approval.
     try:
         import asyncio as _asyncio
 

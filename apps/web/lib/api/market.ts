@@ -21,9 +21,9 @@ import type {
 } from "@/types/market";
 
 import type { Freshness } from "./client";
-import { getJson, getJsonArray } from "./internal";
+import { getJson, getJsonArray, type ReadOptions } from "./internal";
 
-export async function getMarketOverview(): Promise<{
+export async function getMarketOverview(options: ReadOptions = {}): Promise<{
   indices: Quote[];
   total_amount: number | null;
   total_amount_freshness: Freshness | null;
@@ -32,7 +32,7 @@ export async function getMarketOverview(): Promise<{
     indices: Quote[];
     total_amount: number | null;
     total_amount_freshness: Freshness | null;
-  }>("/api/market/overview", 10_000);
+  }>("/api/market/overview", 10_000, options);
   return body.data;
 }
 

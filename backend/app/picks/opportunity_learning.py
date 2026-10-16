@@ -40,7 +40,7 @@ from app.paper.engine import calc_fee
 from app.picks.kb_routing import snapshot_citations
 from app.services.theme_service import parse_hhmmss
 
-STRATEGY_VERSION = "stock-opportunity-funnel-v2"
+STRATEGY_VERSION = "stock-opportunity-funnel-v3.official-catalyst"
 FEATURE_VERSION = "pit-evidence-v4.selection-entry"
 OUTCOME_HORIZON = "d0_close"
 OUTCOME_HORIZONS = {

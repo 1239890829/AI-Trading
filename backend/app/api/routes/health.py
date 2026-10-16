@@ -276,12 +276,14 @@ async def system_metrics() -> dict:
     from pathlib import Path
 
     from app.core.perf import api_metrics, duck_slow_queries, read_sync_history
+    from app.core.db_observation import snapshot as db_observations
 
     # backend/data/marketdb（本文件在 app/api/routes/ 下，parents[3]=backend）
     db_path = Path(__file__).resolve().parents[3] / "data" / "marketdb" / "market.duckdb"
     return {
         "api": api_metrics(),
         "duck_slow": duck_slow_queries(),
+        "sqlite_observations": db_observations(),
         "sync_history": read_sync_history(db_path),
     }
 

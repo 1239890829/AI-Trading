@@ -64,6 +64,8 @@ def get_engine():
                 Path(db_path).parent.mkdir(parents=True, exist_ok=True)
             kwargs = {"connect_args": {"check_same_thread": False}}
         _engine = create_engine(url, **kwargs)
+        from app.core.db_observation import install
+        install(_engine)
         try:
             _migrate(_engine)
         except Exception:

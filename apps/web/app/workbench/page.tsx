@@ -257,17 +257,17 @@ function WorkbenchInner() {
       reportBase("groups");
     } catch {if (version === baseReadRef.current.groups) reportBase("groups", "分组读取失败");}
   }, {intervalMs: 60_000, marketHours: false});
-  const {refresh: refreshOverview} = useResource(async () => {
+  const {refresh: refreshOverview} = useResource(async (signal) => {
     const version = baseReadRef.current.overview;
     try {
-      const value = await getMarketOverview();
-      if (version !== baseReadRef.current.overview) return;
+      const value = await getMarketOverview({signal});
+      if (signal.aborted || version !== baseReadRef.current.overview) return;
       setIndices(value.indices); setTotalAmount(value.total_amount);
       setAmountFreshness(value.total_amount_freshness);
       setUpdatedAt(new Date().toLocaleTimeString("zh-CN", {hour12: false}));
       reportBase("overview");
-    } catch {if (version === baseReadRef.current.overview) reportBase("overview", "行情概览读取失败");}
-  }, {intervalMs: 10_000});
+    } catch {if (!signal.aborted && version === baseReadRef.current.overview) reportBase("overview", "行情概览读取失败");}
+  }, {intervalMs: 10_000, abortable: true});
   const refreshWatchlist = useCallback(() => {
     baseReadRef.current.watch += 1; baseReadRef.current.groups += 1;
     watchReadsRef.current.watch?.abort(); watchReadsRef.current.groups?.abort();

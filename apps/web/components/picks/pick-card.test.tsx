@@ -965,3 +965,22 @@ it("keeps drawer pointer gestures outside the underlying spatial card", () => {
   expect(screen.getByRole("button",{name:"入选解读"}).getAttribute("aria-expanded")).toBe("false");
  } finally {bounds.mockRestore();}
 });
+
+it("接力预警同时展示全市场宽度，不把局部承压描述为市场普跌", () => {
+  render(<StandAsideBanner gate={{stand_aside: true, level: "strong", reasons: ["昨日涨停中位 -1.81%"],
+    advice: "市场情绪明显转弱", gate_source: "live", strip_buy_range: true,
+    presentation: {scope: "涨停接力", headline: "涨停接力存在风险，需核对昨日强势股表现",
+      facts: [{label: "全市场涨/跌", value: "4962/560家"}, {label: "今日跌停", value: "0家"}],
+      note: "相位与昨日涨停收益不是两项独立证据。", source_state: "ready"}}} />);
+  expect(screen.getByText("4962/560家").closest("details")).toBeNull();
+  expect(screen.getByText("0家")).toBeTruthy();
+  expect(screen.queryByText("市场情绪明显转弱")).toBeNull();
+  expect(screen.getByText(/已撤除买入区间/)).toBeTruthy();
+});
+
+it("复核失败不会把保存的强风险标题冒充当前判断", () => {
+  render(<StandAsideBanner gate={{stand_aside: true, level: "strong", reasons: [],
+    advice: "市场情绪明显转弱", gate_source: "unavailable"}} />);
+  expect(screen.queryByText("市场情绪明显转弱")).toBeNull();
+  expect(screen.getByText("实时判断未更新，以下为生成时记录")).toBeTruthy();
+});

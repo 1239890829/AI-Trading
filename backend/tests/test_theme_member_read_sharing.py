@@ -24,6 +24,10 @@ def _setup(tmp_path, filename="members.db"):
     engine = create_engine(f"sqlite:///{tmp_path / filename}")
     Base.metadata.create_all(engine)
     factory = sessionmaker(bind=engine, expire_on_commit=False)
+    # Member sharing requires an existing active official catalog identity.
+    with factory() as db:
+        db.add_all([Theme(code=code, name=code) for code in ("885001.TI", "885002.TI")])
+        db.commit()
     svc = ThemeCatalogService(factory, api_key="isolated-test-key")
     return engine, factory, svc
 
@@ -33,7 +37,11 @@ def test_two_event_consumers_match_single_correct_pool_with_one_sync_per_theme(t
     codes = ["885001.TI", "885002.TI", "885003.TI"]
     with factory() as db:
         for i, code in enumerate(codes):
-            db.add(Theme(code=code, name=f"题材{i}"))
+            row = db.scalar(select(Theme).where(Theme.code == code))
+            if row is None:
+                db.add(Theme(code=code, name=f"题材{i}"))
+            else:
+                row.name = f"题材{i}"
         card = EventCard(fingerprint="isolated-pool", title="三个题材关联", source="fixture",
             published_at=beijing_now_naive() - timedelta(minutes=1),
             directions=[EventDirection(target_type="theme", target=f"题材{i}",

@@ -162,7 +162,7 @@ tracked/独有内容的物理清理走 `scripts/safe-trash.sh` 可恢复；许�
 
 ### 6.4 行为与鉴权
 
-红涨绿跌、tabular-nums、来源/时间/质量标注、basis、现有布局与可调宽度不无故退化。API token 配置后所有 HTTP 路由鉴权，唯一豁免 GET /api/health；WS 用子协议凭据。共享姿态缺 token 或未知 auth_mode 拒绝启动，运行期同样 fail-closed；新增 router 不能整组豁免。验证遍历 OpenAPI 实发无凭据请求；注入路由后清 OpenAPI 缓存再测。
+红涨绿跌、tabular-nums、来源/时间/质量标注、basis、现有布局与可调宽度不无故退化。API token 配置后所有 HTTP 路由鉴权，唯一豁免 GET /api/health。浏览器另需设备配对会话与后端能力检查；未登记接口默认维护权限，临时维护不绕过参数晋级专用审批。浏览器WS仅用绑定设备/Origin的60秒一次性子协议票据，不下发长期服务token。首次管理员初始化走本机CLI，恢复需显式--recover。共享姿态缺 token 或未知 auth_mode 拒绝启动，运行期同样 fail-closed；新增 router 不能整组豁免。验证遍历 OpenAPI 实发无凭据请求；注入路由后清 OpenAPI 缓存再测。
 
 ### 6.4a 语义判断与退役服务边界
 

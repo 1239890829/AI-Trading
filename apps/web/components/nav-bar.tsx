@@ -1,5 +1,6 @@
 "use client";
 
+import { AccessButton, useDeviceAccess } from "@/components/access/device-access";
 import { IconButton } from "@/components/ui/icon-button";
 import { HugeiconsIcon } from "@hugeicons/react";
 import Sun03Icon from "@hugeicons/core-free-icons/Sun03Icon";
@@ -15,6 +16,7 @@ import { SearchBox } from "@/components/search-box";
 import { NotificationBell } from "@/components/notifications/notification-drawer";
 
 function NavBarInner() {
+  const {device} = useDeviceAccess();
   const pathname = usePathname();
   const params = useSearchParams();
   const activeId = activeTask(pathname, new URLSearchParams(params.toString()));
@@ -82,9 +84,10 @@ function NavBarInner() {
         <div className="header-spacer flex-1" />
         <SearchBox collapsible />
         <div className="header-tools" aria-label="全局工具">
-        <CommandPalette />
+        <CommandPalette maintenance={Boolean(device?.maintenance)} />
         <NotificationBell />
-        <TaskBrowser />
+        <TaskBrowser maintenance={Boolean(device?.maintenance)} />
+        <AccessButton />
         <ControlHint content="切换浅色或深色主题"><IconButton
           onClick={toggleTheme}
           aria-label="切换主题"

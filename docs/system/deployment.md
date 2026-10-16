@@ -32,15 +32,15 @@ backend/.venv/bin/python scripts/local-services.py frontend
 backend/.venv/bin/python scripts/local-services.py check
 ```
 
-入口只解析 `backend/.env` 的鉴权字段，向Next内存传递服务端 `ASHARE_API_TOKEN`、固定回环 `BACKEND_ORIGIN` 和运行模式；不执行 `.env`，不复制供应商、模型或数据库配置。继承环境与文件冲突、重复鉴权字段、未知模式、共享姿态缺凭据或不支持的插值直接拒绝；不会改写凭据。前端已有token时保留原有LAN监听，无token的本地模式只绑回环。
+入口只解析 `backend/.env` 的鉴权字段，向Next内存传递服务端 `ASHARE_API_TOKEN`、固定回环 `BACKEND_ORIGIN` 和运行模式；不执行 `.env`，不复制供应商、模型或数据库配置。继承环境与文件冲突、重复鉴权字段、未知模式、共享姿态缺凭据或不支持的插值直接拒绝；不会改写凭据。前端要求服务token并保留LAN监听；无token的本地前端启动拒绝，须先配置。设备配对与维护授权见本文对应章节。
 
 前台进程使用 `exec`，同工作区端口锁随服务存活；端口已占用或归属无法确认则拒绝，不启动第二实例。入口不自动安装、构建、终止或重启。生产构建缺失时明确失败；构建仍须先停止同工作区dev，独立工作区不得误停原服务。
 
 重启时先核真实LISTEN的PID、cwd、命令与启动时刻，只正常终止已确认的本项目进程并等待退出；再用以上入口重启。**不得用手工拼环境的 `next start` 代替入口**，否则前端不会自动读取后端凭据。不要向前端复制整份 `.env`。
 
-`check`只读固定回环health、受保护 `/api/quotes` 内存缓存及WS凭据配置。启用token时，无凭据直连必须401、带既有凭据及经Next代理必须200；凭据响应只在内存比较，不输出正文。空缓存可以通过运输/鉴权检查，不能当市场数据可用；`actual_ws`及`market_freshness`明确未验证。检查失败不得只看页面或公开health200宣布成功，也不用全GET巡检替代。
+`check`只读固定回环health、受保护`/api/quotes`缓存与配对状态桥。无凭据直连后端必须401、带服务凭据必须200；未配对前端业务代理与WS票据端点必须401。配对状态桥返回unpaired才证明Next服务凭据可用。空缓存不代表市场数据可用；实际WS与数据新鲜度另验。检查不创建会话，不输出凭据，不做全GET扫荡。
 
-真实WS验收仅复用获准的一个工作台：完整刷新后，在原生Network核新101，在消息面板核当前证券的非空报价及后续行情帧。只收到pong或空snapshot不够。旧页面可能成功缓存过空凭据，重启前端后仍需完整刷新；站内跳转不保证清缓存。不导出包含凭据的HAR/请求头，不为启动探测另建WS。握手成功不能升级盘前、休市或失败报价的质量。
+真实WS验收复用获准工作台，配对后完整刷新，核新101、当前证券非空帧与后续行情。每个连接使用新短效票据，不缓存长期凭据。不导出含票据的HAR/请求头，不为启动检查另建工具WS；握手不提升盘前/休市/失败报价质量。
 
 ## Docker
 
@@ -114,8 +114,8 @@ backend/.venv/bin/python scripts/local-services.py check
 **HTTP 面**的 `X-API-Token` **只在服务端流转**，浏览器侧不持有：
 
 ```
-浏览器 ──(不带 token)──▶ Next Route Handler ──(附加 X-API-Token)──▶ backend
-                            ↑ 运行时读 ASHARE_API_TOKEN，给**全部**请求附加
+已配对浏览器 ──(设备Cookie)──▶ Next Route Handler ──(服务token＋会话＋Origin)──▶ backend
+                            ↑ 运行时读服务凭据；后端逐请求核设备与能力
 ```
 
 - 历史实现用 `NEXT_PUBLIC_API_TOKEN`，而 `NEXT_PUBLIC_*` 被 Next **构建期内联**成客户端
@@ -135,38 +135,28 @@ export ASHARE_API_TOKEN="$(sed -n 's/^ASHARE_API_TOKEN=//p' backend/.env)"
 docker compose -f docker-compose.prod.yml up -d --build
 ```
 
-- **判据是"两边一致"**：变量缺失时代理不附加请求头，与后端的姿态语义对称
-  （`local` + 未配 token = 本地开发零配置、后端全放行）；但**后端配了而 web
-  没传 ⇒ 全部接口 401**（R22 前只有写接口会 401）。排查（不打印明文）：
+- **判据是"两边一致"**：变量缺失时代理不附加请求头，与后端的姿态语义对称。
+  后端低层仍保留纯本地无token兼容，但当前前端启动要求配置token及设备配对。**后端配了而 web
+  没传 ⇒ 设备桥不可用**。排查（不打印明文）：
 
 ```bash
 docker compose -f docker-compose.prod.yml exec web printenv ASHARE_API_TOKEN | wc -c
 # 0 ⇒ 未注入（除换行外无字符）；>0 ⇒ 已注入
 ```
 
-### WebSocket 面：子协议凭据（2026-09-15 R22）
+### WebSocket 面：设备一次性票据
 
-浏览器 `WebSocket` 构造器**不允许设置自定义请求头**（平台约束，非本项目选择），
-而 `?token=` 通道已刻意关闭 ⇒ 唯一可用通道是 **`Sec-WebSocket-Protocol` 子协议**。
+浏览器使用短效子协议票据；服务端长期token不再返回浏览器。完整初始化、配对、撤销与恢复步骤见本文「设备配对与维护授权」。
 
 ```
-浏览器 ──GET /api/ws-credential──▶ Next Route Handler（运行时读 ASHARE_API_TOKEN）
-   ▲                                    └─ 返回 {"subprotocol":"ashare-token.<b64url>"}
-   └── 内存持有，new WebSocket(url, [该子协议]) ──▶ backend /ws/quotes
+已配对浏览器 ──GET /api/ws-credential + httpOnly设备Cookie──▶ Next固定桥
+   ▲                     后端核设备/Origin，签发60秒一次性票据
+   └── new WebSocket(url, [ashare-ticket.…]) ──▶ 后端原子消费票据
 ```
 
-- **这是全系统唯一"凭据出服务端"的地方**——回显约束（RFC 6455 §4.1：客户端提议了子协议
-  而服务端一个都没选 ⇒ 客户端主动判定连接失败）要求浏览器**自己知道**凭据。
-  三重约束保证它不比 HTTP 面更弱：① `/api/ws-credential` 在同源 Next 服务端，**构建期不内联**
-  任何秘密；② 返回的是**编码后的子协议**而非明文 token，不进 URL / 浏览器历史 / Referer / 反代日志；
-  ③ 只在**内存**持有，不落 localStorage / cookie。
-- ⚠️ **残留风险（别当成"已解决"）**：能打开前端的访客可取得该凭据，进而绕过前端
-  直连后端端口。它保护的是"后端端口不对未授权者开放"，**不是"区分前端访客身份"**。
-  配套纪律：后端端口只绑回环（`docker-compose.prod.yml` 已如此），共享部署把反代作为唯一入口。
-- 未启用鉴权时 `/api/ws-credential` 返回 `{"subprotocol": null}`，前端**不传第二个参数**
-  （注意 `new WebSocket(url, [])` 与 `new WebSocket(url)` 在浏览器里**不等价**）
-  ⇒ 与加固前行为逐字一致。
-- 同源 WS 由 Next `proxy.ts` 精确升级 rewrite 原样转交子协议；代理不注入服务密钥，认证仍由后端完成。nginx 同样不能剥掉 `Sec-WebSocket-Protocol`。
+每个连接独立签发，不共享、不缓存、不允许重放。刷新、重连重新取票；未配对返回401并保持配对页。后端连接定期核撤销，不因握手成功把行情质量升级。Next `proxy.ts`和nginx只原样转交子协议，不注入长期服务密钥。
+
+2026-09-15旧协议曾把编码后的服务token交给前端。编码不提供保密或设备身份边界；本批首次激活必须轮换旧token。旧协议仅为无浏览器Origin的获准服务调用保留，不能作为浏览器回退路径。后端继续只监听回环，LAN仅开放前端。
 
 ## 运维工具：全 GET 端点巡检
 
@@ -179,7 +169,7 @@ ASHARE_API_TOKEN="$(sed -n 's/^ASHARE_API_TOKEN=//p' backend/.env)" node scripts
 ```
 
 从 `/openapi.json` 取权威清单（不会漏也不会多），自动替换路径参数、填必需查询参数，
-逐个打真实后端并输出非 2xx 明细与慢端点。**只读**，不触碰写接口。
+逐个打真实后端并输出非 2xx 明细与慢端点。**GET不保证无副作用**：部分旧端点会外采、历史回补或触发模型。该全扫脚本不作为生产验收默认入口；生产仅使用已核纯读取白名单，完整巡检须隔离库、网络和后台任务。
 凭据取值顺序：环境变量 `ASHARE_API_TOKEN` → 未设置则尝试 `backend/.env`；
 两者皆空即不带头（本地 `local` 姿态下正确）。
 ⚠️ **"401 满屏" 不是数据问题**：那说明后端配了 token 而巡检没带凭据，
@@ -195,7 +185,7 @@ ASHARE_API_TOKEN="$(sed -n 's/^ASHARE_API_TOKEN=//p' backend/.env)" node scripts
   一份声明，逐任务记录 `state / last_tick / failures / last_error / restarts`，经
   `GET /api/system/schedulers` 暴露，并带死亡自愈（指数退避重启）。
   **未做**的是外部监控接入（Prometheus / 告警面板）。
-- 免费数据源被限流（空回复）属预期：系统自动进入 stale 降级，调大 ASHARE_POLL_INTERVAL_SECONDS 或换备源。
+- 免费数据源被限流或失败时保留真实 stale/失败状态。先核请求去重、并发、回退和源钟；不得为掩盖故障增大刷新周期、TTL或过期阈值。备源需同口径实测后按现役协议准入。
 
 ## 已踩过的坑（务必记住）
 
@@ -450,3 +440,30 @@ PYTHONPATH=backend backend/.venv/bin/python backend/scripts/recovery_bundle.py r
 从backend运行`PYTHONPATH= .venv/bin/python -m scripts.review_archive_repair`只读出计划。核对后以`--apply-digest`绑定精确摘要，并用`--backup`指定不存在的SQLite备份文件。只有完整自动“已写入日报”说明、状态applied且指纹未变的行改为recorded；人工状态不覆盖。应用需已加载本轮修复，避免旧运行器重新误标。
 
 恢复用`--restore-digest`及另一个不存在的备份目标，只恢复仍与修复后状态一致的原行，后续人工变化使整批拒绝。该工具不恢复整个数据库、不删除审计、不改变参数/策略或通知。备份、实际摘要、数量、运行版本和前后核验只保留于受控本地产物；历史归档误标纠正不等于原建议已经实施。
+
+
+## 设备配对与维护授权（2026-10-16 用户批准，统一激活后适用）
+
+### 首次启用与日常使用
+
+1. 后端与前端继续由local-services.py启动。前端必须有服务token，即使local模式也不再接受无token启动。后端仍只监听回环。
+2. 在电脑项目终端运行`backend/.venv/bin/python scripts/local-services.py pairing-code`。命令先核8000/3000进程归属，再向本机签发5分钟一次性初始化码。只把它输入电脑网页的“电脑首次启用”，不要放聊天、日志或报告。
+3. 手机点“请求配对”，管理电脑从顶部“设备与权限”核对名称和6位识别码后批准。请求5分钟过期；批准会话30天，不因读取自动续期。相同设备换浏览器、访问主机名或清Cookie需重新配对。
+4. 普通会话可用行情、选股、既有研究、自选、人工记录和通知。后台生产/参数/内部模拟/未登记端点默认维护；按FastAPI注册模板精确匹配，新增相似路径不继承个股权限；管理电脑可为自己或已配对设备单独授予15分钟维护。维护不赋予设备管理权，不替代独立参数晋级审批。
+5. 管理电脑丢失会话时，使用`pairing-code --recover`。生成码本身不撤销设备，成功使用恢复码时原设备与未用WS票据全部撤销；此命令不自动执行。
+
+### 凭据与失败语义
+
+- Next只接受httpOnly、SameSite=Strict设备Cookie，丢弃访客伪造的权限头，再把会话与来源交给后端。写请求必须同源；读请求拒绝cross-site/same-site与不匹配Origin。通用代理不得访问access桥；初始化码签发还要求真实回环调用且不携带任何浏览器/桥标识。
+- 会话、初始化码与WS票据只存SHA-256摘要。独立`data/device-access.sqlite3`权限600，最多20待批、100活动设备，每设备32未用票据。过期/撤销记录在写入时清理，无新调度。测试路径由conftest统一隔离。权限库失败直接拒绝，不放宽权限，也不依赖行情库锁。
+- WS每个连接申请一张60秒票据，不能共享或重放；绑定设备和Origin，浏览器不能再用长期token。刷新/重连重新签发，不更改行情刷新频率或源时效。现有连接每15秒只读权限小库；退出本设备立即卸载业务连接，其它设备撤销最多15秒终止WS。已经获准且在执行中的HTTP动作不会被伪称已取消。
+- 浏览器助手只保留普通研究工具；即使临时维护获准，聊天也不读取内部模拟、参数变更或后台任务。后台查看通过维护界面进入，原服务端工具通道保留。普通“浏览工作区”和快捷命令面板仍可用，仅隐藏维护入口；授权结束后已打开的命令面板同步收敛。
+- HTTP后续请求检查当前权限；客户端维护授权到期立即卸载维护组件，迟到的旧状态响应不能覆盖退出状态。网络失败不假装权限已恢复。
+- HTTPS才设置Secure Cookie；现役LAN HTTP不提供传输加密，只用于可信网络。本批没有新增公网/TLS部署。配对不是抗恶意宿主、同源XSS或网络窃听的完整防线。
+- 采用OWASP会话管理/CSRF基本原则，参考[Session Management](https://cheatsheetseries.owasp.org/cheatsheets/Session_Management_Cheat_Sheet.html)与[CSRF Prevention](https://cheatsheetseries.owasp.org/cheatsheets/Cross-Site_Request_Forgery_Prevention_Cheat_Sheet.html)。摘要不是加密；浏览器配对与本机操作员是不同信任边界。
+
+### 首次迁移与验收
+
+旧版本曾把编码后的长期token交给浏览器，编码不是保密。因此统一激活时轮换backend/.env中的服务token，再由统一启动脚本最小传递；不输出token，不保留旧前端继续开放LAN，不自动信任旧浏览器。权限小库属于业务访问状态，清理工具不得删。此前普通局域网代理/长期WS凭据说明保留为历史，以上协议取代该访问边界。
+
+`local-services.py check`只读核后端服务认证、前端未配对HTTP/WS返回401、配对状态桥可验证服务端凭据；不获取长期凭据、不创建会话或工具WS。实际刷新/票据重连在隔离用户流与统一激活后的已授权页面分别验。行情源新鲜度、真实交易窗口与手机真机性能仍独立验收。

@@ -451,3 +451,37 @@ def test_uncached_runtime_archives_with_snapshot_fact_time_without_name_shadow(m
     assert linkage_seen["snapshot_as_of"] == "2026-09-21T03:10:00+00:00"
     assert svc.last_success == datetime(2026, 9, 21, 3, 11, tzinfo=timezone.utc)
     assert svc.snapshot[0]["change_pct"] == 2.0
+
+
+def test_sixth_theme_is_researchable_without_expanding_live_scope(monkeypatch):
+    from app.picks import intraday_opportunity_runtime as runtime
+    import app.services.theme_service as themes
+    import app.services.official_match as official
+    import app.picks.board_surge as boards
+    import app.picks.intraday_opportunity as opportunity
+    import app.picks.tradability as tradability
+    from datetime import date
+    board = {"trade_date": "2026-10-16", "themes": [
+        {"theme": f"题材{i}", "ladder": [], "performance": {}} for i in range(6)]}
+    async def read(*_, **__):
+        return board
+    monkeypatch.setattr(themes, "build_theme_board", read)
+    monkeypatch.setattr(themes, "_pick_provider", lambda *_: None)
+    monkeypatch.setattr(official, "attach_official", lambda *_: None)
+    monkeypatch.setattr(boards, "get_index_cache", lambda _: SimpleNamespace(get=lambda: ({}, {})))
+    monkeypatch.setattr(tradability, "index_views", lambda _: ({}, {}))
+    seen = []
+    def participants(cards, **_):
+        seen.extend(row["theme"] for row in cards)
+        return {"snapshot_state": "ready"}
+    monkeypatch.setattr(opportunity, "attach_participants", participants)
+    app = SimpleNamespace(state=SimpleNamespace(hub=SimpleNamespace(provider=object()), snapshot_service=object()))
+    out = asyncio.run(runtime._build_opportunities_uncached(app, date(2026, 10, 16), 5, 8,
+        snapshot_bundle=({"600001": {"price": 10}}, "ready", "2026-10-16T10:00:00+08:00")))
+    assert seen == [f"题材{i}" for i in range(5)]
+    assert len(out["data"]["themes"]) == 5
+    seen.clear()
+    research = asyncio.run(runtime._build_opportunities_uncached(app, date(2026, 10, 16), 20, 8,
+        snapshot_bundle=({"600001": {"price": 10}}, "ready", "2026-10-16T10:00:00+08:00")))
+    assert seen == [f"题材{i}" for i in range(6)]
+    assert len(research["data"]["themes"]) == 6

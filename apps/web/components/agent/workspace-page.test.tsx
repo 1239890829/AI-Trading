@@ -1,6 +1,7 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { cleanup, fireEvent, render, screen } from "@testing-library/react";
 import AgentPage from "@/app/agent/page";
+import {DeviceAccessGate} from "@/components/access/device-access";
 
 const nav = vi.hoisted(() => ({search: "", push: vi.fn(), replace: vi.fn()}));
 vi.mock("next/navigation", () => ({useRouter: () => nav, useSearchParams: () => new URLSearchParams(nav.search)}));
@@ -14,7 +15,7 @@ vi.mock("@/components/research/alerts-tab", () => ({AlertsTab: () => <div>规则
 vi.mock("@/components/agent/production-operations", () => ({ProductionOperations: () => <div>运行结果</div>}));
 vi.mock("@/components/hunting/leader-research-panel", () => ({LeaderResearchPanel: () => <div>样本内容</div>}));
 vi.mock("@/components/research/review-tab", () => ({ReviewTab: ({allowDispose}: {allowDispose: boolean}) => <div>{allowDispose ? "受控处置内容" : "只读复盘内容"}</div>}));
-afterEach(() => { cleanup(); vi.clearAllMocks(); });
+afterEach(() => { cleanup(); vi.clearAllMocks(); vi.unstubAllGlobals(); });
 
 describe("折叠工具与原深链", () => {
   it("does not mount maintenance tools in daily research and preserves context on opening", () => {
@@ -30,15 +31,23 @@ describe("折叠工具与原深链", () => {
     expect(url.searchParams.get("symbol")).toBe("600127");
     expect(url.searchParams.get("tab")).toBe("leaders");
   });
-  it("opens an old configuration link in maintenance without granting a research action", () => {
+  it("opens an old configuration link only with maintenance approval", async () => {
     nav.search = "tab=params&date=2026-09-30";
-    render(<AgentPage />);
-    expect(screen.getByRole("dialog", {name: "参数配置"})).toBeTruthy();
+    vi.stubGlobal("fetch", vi.fn(async () => Response.json({state:"active",maintenance:true,expires_at:Date.now()/1000+86400,maintenance_until:Date.now()/1000+900})));
+    render(<DeviceAccessGate><AgentPage /></DeviceAccessGate>);
+    expect(await screen.findByRole("dialog", {name: "参数配置"})).toBeTruthy();
     expect(screen.getByText("配置内容")).toBeTruthy();
     expect(screen.queryByText("只读复盘内容")).toBeNull();
     expect(screen.queryByText("任务内容")).toBeNull();
     fireEvent.click(screen.getByRole("button", {name: "关闭"}));
     expect(nav.replace).toHaveBeenCalledWith("/agent?tab=operations&date=2026-09-30&area=maintenance", {scroll: false});
+  });
+  it.each(["params", "validation"])("does not mount maintenance deep link %s without approval", tab => {
+    nav.search = `area=research&tab=${tab}`;
+    render(<AgentPage />);
+    expect(screen.getByText("维护操作需要临时授权")).toBeTruthy();
+    expect(screen.queryByText("配置内容")).toBeNull();
+    expect(screen.queryByText("运行结果")).toBeNull();
   });
   it("allows method evidence as read-only research without enabling disposal", () => {
     nav.search = "area=research&tab=strategies";

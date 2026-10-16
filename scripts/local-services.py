@@ -7,10 +7,8 @@ kill processes, open a WebSocket, or verify market-data freshness.
 from __future__ import annotations
 
 import argparse
-import base64
 from dataclasses import dataclass, field
 import fcntl
-import hmac
 import importlib.util
 import json
 import os
@@ -36,6 +34,7 @@ SYSTEM_ENV = frozenset({
 CHECK_URLS = frozenset({
     f"{BACKEND_ORIGIN}/api/health", f"{BACKEND_ORIGIN}/api/quotes",
     f"{FRONTEND_ORIGIN}/backend/api/quotes", f"{FRONTEND_ORIGIN}/api/ws-credential",
+    f"{FRONTEND_ORIGIN}/api/access/status",
 })
 
 
@@ -93,6 +92,8 @@ def load_auth(root: Path, environ: dict[str, str]) -> AuthConfig:
 
 
 def frontend_environment(config: AuthConfig, environ: dict[str, str], *, dev: bool) -> dict[str, str]:
+    if not config.token:
+        raise ServiceError("device_access_requires_server_token")
     origin = environ.get("BACKEND_ORIGIN", BACKEND_ORIGIN)
     if origin != BACKEND_ORIGIN:
         raise ServiceError("backend_origin_conflict")
@@ -300,12 +301,14 @@ def read_json(url: str, headers: dict[str, str]) -> tuple[int, object, str]:
             return response.status, json.loads(raw), response.headers.get("Cache-Control", "")
     except urllib.error.HTTPError as error:
         error.close()
-        return error.code, None, ""  # Do not print or retain error/credential bodies.
+        return error.code, None, error.headers.get("Cache-Control", "")  # No error bodies.
     except (OSError, ValueError):
         raise ServiceError("check_request_failed") from None
 
 
 def check(config: AuthConfig) -> dict:
+    if not config.token:
+        raise ServiceError("device_access_requires_server_token")
     status, health, _ = read_json(f"{BACKEND_ORIGIN}/api/health", {})
     if status != 200 or not isinstance(health, dict) or health.get("status") not in {"ok", "degraded"}:
         raise ServiceError("backend_health_unavailable")
@@ -316,20 +319,42 @@ def check(config: AuthConfig) -> dict:
         status, data, _ = read_json(f"{BACKEND_ORIGIN}/api/quotes", {"X-API-Token": config.token})
     if status != 200 or not isinstance(data, dict) or not isinstance(data.get("data"), list):
         raise ServiceError("backend_authenticated_read_failed")
-    status, proxied, _ = read_json(f"{FRONTEND_ORIGIN}/backend/api/quotes", {})
-    if status != 200 or not isinstance(proxied, dict) or not isinstance(proxied.get("data"), list):
-        raise ServiceError("frontend_proxy_auth_failed")
-    status, credential, cache_control = read_json(f"{FRONTEND_ORIGIN}/api/ws-credential", {})
-    expected = "ashare-token." + base64.urlsafe_b64encode(config.token.encode()).decode().rstrip("=") if config.token else None
-    actual = credential.get("subprotocol") if isinstance(credential, dict) else False
-    matches = actual is None if expected is None else isinstance(actual, str) and hmac.compare_digest(actual.encode(), expected.encode())
-    if status != 200 or not matches or "no-store" not in cache_control.lower():
-        raise ServiceError("frontend_ws_credential_mismatch")
+    status, _, _ = read_json(f"{FRONTEND_ORIGIN}/backend/api/quotes", {})
+    if status != 401:
+        raise ServiceError("frontend_proxy_pairing_not_enforced")
+    status, _, cache_control = read_json(f"{FRONTEND_ORIGIN}/api/ws-credential", {})
+    if status != 401 or "no-store" not in cache_control.lower():
+        raise ServiceError("frontend_ws_pairing_not_enforced")
+    status, state, _ = read_json(f"{FRONTEND_ORIGIN}/api/access/status", {})
+    if status != 200 or not isinstance(state, dict) or state.get("state") != "unpaired":
+        raise ServiceError("frontend_pairing_bridge_failed")
     return {
-        "http_available": True, "proxy_auth": "verified" if config.token else "local_no_token",
-        "quote_rows": len(proxied["data"]), "ws_credential_matches": True,
+        "http_available": True, "proxy_auth": "pairing_required",
+        "quote_rows": len(data["data"]), "ws_credential_matches": "retired_long_token_not_exposed",
         "actual_ws": "not_verified_use_existing_browser", "market_freshness": "not_verified",
     }
+
+
+def pairing_code(config: AuthConfig, *, recover: bool = False) -> dict:
+    """Explicit local operator action. The code is shown only in this terminal."""
+    if not config.token:
+        raise ServiceError("device_access_requires_server_token")
+    opener = urllib.request.build_opener(urllib.request.ProxyHandler({}), NoRedirect())
+    request = urllib.request.Request(f"{BACKEND_ORIGIN}/api/access/bootstrap-code",
+        data=json.dumps({"recover": recover}).encode(),
+        headers={"X-API-Token": config.token, "Content-Type": "application/json"}, method="POST")
+    try:
+        with opener.open(request, timeout=5) as response:
+            data = json.loads(response.read(4096))
+            if response.status != 200 or not isinstance(data.get("code"), str):
+                raise ServiceError("pairing_code_failed")
+            return {"code": data["code"], "expires_in_seconds": 300,
+                    "recovery_revokes_all_devices_on_claim": recover}
+    except urllib.error.HTTPError as error:
+        error.close()
+        raise ServiceError("pairing_code_rejected_use_existing_owner_or_explicit_recovery") from None
+    except (OSError, ValueError):
+        raise ServiceError("pairing_code_failed") from None
 
 
 def main(argv: list[str] | None = None) -> int:
@@ -339,12 +364,15 @@ def main(argv: list[str] | None = None) -> int:
     frontend = commands.add_parser("frontend", help="foreground frontend on port 3000; existing build")
     frontend.add_argument("--dev", action="store_true", help="use the installed Next dev server instead")
     commands.add_parser("check", help="fixed read-only HTTP checks; does not open WebSockets")
+    pairing = commands.add_parser("pairing-code", help="issue a five-minute local owner initialization code")
+    pairing.add_argument("--recover", action="store_true", help="replace owner and revoke all devices when the code is claimed")
     args = parser.parse_args(argv)
     try:
-        if args.command == "check":
+        if args.command in {"check", "pairing-code"}:
             config = load_auth(ROOT, dict(os.environ))
             verify_service_owners(ROOT, dict(os.environ))
-            print(json.dumps(check(config), ensure_ascii=True))
+            result = check(config) if args.command == "check" else pairing_code(config, recover=args.recover)
+            print(json.dumps(result, ensure_ascii=True))
         else:
             launch(ROOT, args.command, dev=getattr(args, "dev", False), environ=dict(os.environ))
         return 0

@@ -209,6 +209,38 @@ def test_chat_route_sse_success(client, monkeypatch):
     assert "AShare AI Trader" in sysmsg and "600519" in sysmsg
 
 
+def test_browser_assistant_cannot_read_internal_tools_even_with_maintenance(client, monkeypatch):
+    from app.core import device_access
+    from app.assistant.tools import TOOL_SPECS, ToolSpec
+    from app.assistant.tools.registry import available_tools
+
+    monkeypatch.setattr(settings, "api_token", "fixture-service")
+    store = device_access.get_device_store()
+    origin = "http://device.test"
+    token, device = store.bootstrap(store.bootstrap_code(), "管理电脑", origin)
+    store.manage(token, origin, device["id"], "grant-maintenance")
+    invoked = []
+    async def private_tool(ctx):
+        invoked.append(True)
+        return "INTERNAL_ACCOUNT_DATA"
+    monkeypatch.setitem(TOOL_SPECS, "paper", ToolSpec("paper", "内部模拟", "", private_tool))
+    monkeypatch.setattr("app.assistant.tools.registry.available_tools", lambda ctx: available_tools(ctx) | {"paper", "param_changes", "agent_tasks"})
+    streams = iter([_FakeStream(["{{tool:paper}}"]), _FakeStream(["请在维护区查看内部资料。"])])
+    prompts = []
+    def generate(messages):
+        prompts.append(messages)
+        return next(streams)
+    monkeypatch.setattr(assistant_routes, "_open_stream", generate)
+    response = client.post("/api/assistant/chat", headers={
+        "X-API-Token": "fixture-service", "X-Ashare-Browser": "1",
+        "X-Ashare-Session": token, "X-Ashare-Origin": origin,
+    }, json={"messages": [{"role": "user", "content": "查看内部模拟"}]})
+    assert response.status_code == 200
+    assert not invoked and "INTERNAL_ACCOUNT_DATA" not in response.text
+    assert "{{tool:paper" not in prompts[0][0]["content"]
+    assert "{{tool:positions" in prompts[0][0]["content"]
+
+
 def test_chat_route_sse_llm_error(client, monkeypatch):
     fake = _FakeStream(["部分"], error=LLMError("token quota is not enough"))
     monkeypatch.setattr(assistant_routes, "_open_stream", lambda msgs: fake)

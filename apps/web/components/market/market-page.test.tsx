@@ -42,7 +42,7 @@ it("closes failed sentiment evidence and requires a fresh user click after recov
   await act(async () => {});
   fireEvent.click(screen.getByRole("button", {name: "依据与失效条件"}));
   fireEvent.click(screen.getByRole("tab", {name:"观测依据"}));
-  expect(within(screen.getByRole("dialog", {name: "市场情绪依据与失效条件"})).getByText(/涨跌宽度修复/)).toBeTruthy();
+  expect(within(screen.getByRole("dialog", {name: "涨停接力依据与失效条件"})).getByText(/涨跌宽度修复/)).toBeTruthy();
 
   vi.mocked(api.getSentiment).mockRejectedValueOnce(new Error("offline"));
   await act(async () => { await vi.advanceTimersByTimeAsync(30_000); });
@@ -54,7 +54,7 @@ it("closes failed sentiment evidence and requires a fresh user click after recov
   expect(screen.getByRole("button", {name: "依据与失效条件"}).getAttribute("aria-expanded")).toBe("false");
   fireEvent.click(screen.getByRole("button", {name: "依据与失效条件"}));
   fireEvent.click(screen.getByRole("tab", {name:"观测依据"}));
-  expect(within(screen.getByRole("dialog", {name: "市场情绪依据与失效条件"})).getByText(/涨跌宽度修复/)).toBeTruthy();
+  expect(within(screen.getByRole("dialog", {name: "涨停接力依据与失效条件"})).getByText(/涨跌宽度修复/)).toBeTruthy();
   expect(api.getSentiment).toHaveBeenCalledTimes(3);
 });
 
@@ -150,13 +150,13 @@ it("a flight from the departed overview cannot overwrite the newly restored view
   state.search = "";
   view.rerender(<MarketPage />);
   await act(async () => {});
-  expect(screen.getByText("发酵")).toBeTruthy();
+  expect(screen.getByText("接力 · 发酵")).toBeTruthy();
   await act(async () => {
     oldOverview({indices: [], total_amount: null, total_amount_freshness: null});
     oldSentiment({...sentiment, phase: "退潮"});
   });
-  expect(screen.queryByText("退潮")).toBeNull();
-  expect(screen.getByText("发酵")).toBeTruthy();
+  expect(screen.queryByText("接力 · 退潮")).toBeNull();
+  expect(screen.getByText("接力 · 发酵")).toBeTruthy();
 });
 
 it("a failed overview refresh retains its last result with a visible failure warning", async () => {

@@ -85,3 +85,14 @@ def test_default_api_and_normal_top_consume_same_runtime_capacity(monkeypatch):
         assert explicit["effective_limit"] == 1 and len(explicit["items"]) == 1
     finally:
         runtime_params.set_overrides(old)
+
+
+def test_candidate_read_failure_is_not_a_successful_empty_list():
+    payload = _payload()
+    payload["themes"] = []
+    assert top_watch_stocks(payload)["read_state"] == "ready"
+    payload["linkage_note"] = "temporary read failure"
+    assert top_watch_stocks(payload)["read_state"] == "unavailable"
+    payload.pop("linkage_note")
+    payload["linkage_stats"]["snapshot_state"] = "stale"
+    assert top_watch_stocks(payload)["read_state"] == "unavailable"

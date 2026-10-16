@@ -16,6 +16,7 @@ from __future__ import annotations
 
 import asyncio
 import logging
+import re
 import time
 from datetime import datetime, timedelta, timezone
 
@@ -273,6 +274,8 @@ class ThemeCatalogService:
         # sync; completed values never acquire another member freshness window.
         self._member_reads: dict[str, asyncio.Task[int]] = {}
         self._member_closing = False
+        self._catalog_read: asyncio.Task | None = None
+        self.revision = 0
 
     async def day_changes(self, codes: list[str]) -> dict[str, float | None]:
         """官方板块指数当日涨跌幅（最新日 K close / 前一日 - 1，%）。
@@ -308,6 +311,8 @@ class ThemeCatalogService:
         self._member_closing = True
         # A canceled view may leave a shared source/write draining. Complete this
         # owner's bounded reads before closing the client they still consume.
+        if self._catalog_read and not self._catalog_read.done():
+            await asyncio.gather(self._catalog_read, return_exceptions=True)
         if self._member_reads:
             await asyncio.gather(*tuple(self._member_reads.values()), return_exceptions=True)
         await self._client.aclose()
@@ -318,7 +323,20 @@ class ThemeCatalogService:
         r = await self._client.get(f"{self._base}/api/a-share-index/catalog/ths-index-list",
                                    params={"tag": CATALOG_TAG})
         r.raise_for_status()
-        return parse_catalog_items(r.json())
+        payload = r.json()
+        data = payload.get("data") if isinstance(payload, dict) else None
+        raw = data.get("item") if isinstance(data, dict) else None
+        if (not isinstance(payload, dict) or type(payload.get("code")) is not int or payload["code"] != 0
+                or not isinstance(raw, list) or not raw
+                or type(data.get("timestamp")) is not int or data["timestamp"] <= 0
+                or any(not isinstance(row, dict) for row in raw)):
+            raise RuntimeError("theme catalog: incomplete or failed snapshot")
+        items = parse_catalog_items(payload)
+        codes = [row["code"] for row in items]
+        if (len(items) != len(raw) or len(set(codes)) != len(codes)
+                or any(not re.fullmatch(r"[0-9]{6}\.TI", code) for code in codes)):
+            raise RuntimeError("theme catalog: invalid or duplicate identity")
+        return items
 
     async def _fetch_member_payload(self, code: str) -> dict:
         """Validate the complete official snapshot before any consumer uses it."""
@@ -373,33 +391,59 @@ class ThemeCatalogService:
 
     # -- sync ------------------------------------------------------------
 
-    async def sync_catalog(self) -> int:
-        """全量 upsert 题材目录；返回目录条数。
+    def catalog_needs_sync(self) -> bool:
+        """目录独立保鲜；成分同步不能推迟目录更新，未来时间也不算有效。"""
+        now = utcnow().replace(tzinfo=None)
+        with self._sf() as db:
+            times = list(db.execute(select(Theme.catalog_synced_at).where(
+                Theme.catalog_active.is_(True))).scalars())
+        return not times or any(t is None or t > now or
+                               now - t >= timedelta(hours=24) for t in times)
 
-        ⚠️ 已有题材**名称未变化时不刷新 synced_at**：stale_codes 用 theme.synced_at
-        判断成分是否过期，目录刷新若无条件更新时间戳，会把成分 TTL 判断永远"顶掉"
-        ——2026-09-01 审计实锤：390 题材中 352 个（90%）成分从未同步、个股题材归属
-        大面积缺失（永鼎股份查不到官方已标注的「光纤概念」）。
-        DB 写入走 to_thread（评审 B2：同步 SQLite 不能跑在事件循环上）。
-        """
-        items = await self.fetch_catalog()
-        await asyncio.to_thread(self._write_catalog, items)
-        log.info("theme catalog synced: %d themes", len(items))
-        return len(items)
+    async def ensure_catalog(self) -> None:
+        if await asyncio.to_thread(self.catalog_needs_sync):
+            await self.sync_catalog()
+
+    async def sync_catalog(self) -> int:
+        """合并并发读取；仅完整官方目录能原子更新当前资格，保留历史行。"""
+        if self._member_closing:
+            raise RuntimeError("theme catalog service is closing")
+        task = self._catalog_read
+        if task is None or task.done():
+            async def sync():
+                items = await self.fetch_catalog()
+                await asyncio.to_thread(self._write_catalog, items)
+                return len(items)
+            task = asyncio.create_task(sync())
+            self._catalog_read = task
+            task.add_done_callback(lambda done: done.exception() if not done.cancelled() else None)
+        return await asyncio.shield(task)
 
     def _write_catalog(self, items: list[dict]) -> None:
+        if not items or len({r["code"] for r in items}) != len(items):
+            raise ValueError("complete nonempty catalog required")
+        now = utcnow()
+        incoming = {r["code"] for r in items}
         with self._sf() as db:
-            # 批量拉全量再内存比对（评审 B2：原循环内逐条 SELECT 是 390 次 N+1）
-            rows: dict[str, Theme] = {r.code: r for r in db.execute(select(Theme)).scalars()}
+            rows = {r.code: r for r in db.execute(select(Theme)).scalars()}
+            for row in rows.values():
+                if row.source == "ths_official":
+                    row.catalog_active = row.code in incoming
+                    row.catalog_synced_at = now
             for it in items:
                 row = rows.get(it["code"])
-                if row is not None:
-                    if row.name != it["name"]:
-                        row.name = it["name"]
-                        row.synced_at = utcnow()
+                if row is None:
+                    db.add(Theme(code=it["code"], name=it["name"], source="ths_official",
+                                 catalog_active=True, catalog_synced_at=now))
                 else:
-                    db.add(Theme(code=it["code"], name=it["name"], source="ths_official"))
+                    old_member_time = row.synced_at
+                    row.name = it["name"]
+                    row.source = "ths_official"
+                    row.catalog_active = True
+                    row.catalog_synced_at = now
+                    row.synced_at = old_member_time
             db.commit()
+        self.revision = getattr(self, "revision", 0) + 1
 
     async def sync_members(self, code: str) -> int:
         """upsert 单题材成分（官方口径：当前成分，非历史成分）。DB 写入走 to_thread。"""
@@ -457,6 +501,7 @@ class ThemeCatalogService:
             if theme is not None:
                 theme.synced_at = now
             db.commit()
+        self.revision = getattr(self, "revision", 0) + 1
         return len(items)
 
     async def sync_stale_members(self, max_themes: int = 20, concurrency: int = 6) -> list[str]:
@@ -488,7 +533,8 @@ class ThemeCatalogService:
 
     def stale_codes(self, max_themes: int = 20) -> list[str]:
         """最久未同步（或从未同步成分）的题材代码，TTL 用 settings.theme_members_ttl_hours。"""
-        cutoff = utcnow() - timedelta(hours=settings.theme_members_ttl_hours)
+        now = utcnow().replace(tzinfo=None)
+        cutoff = now - timedelta(hours=settings.theme_members_ttl_hours)
         with self._sf() as db:
             # 从未同步过成分的题材优先（member 表无行），其余按 synced_at 升序
             member_counts = dict(
@@ -498,17 +544,17 @@ class ThemeCatalogService:
                     )
                 ).all()
             )
-            rows = db.execute(select(Theme.code, Theme.synced_at).order_by(Theme.synced_at)).all()
+            rows = db.execute(select(Theme.code, Theme.synced_at).where(Theme.catalog_active.is_(True)).order_by(Theme.synced_at)).all()
         empty = [c for c, _ in rows if member_counts.get(c, 0) == 0]
         cutoff = cutoff.replace(tzinfo=None)  # SQLite 读回 naive datetime（UTC 语义），统一后再比
-        stale = [c for c, ts in rows if member_counts.get(c, 0) > 0 and (ts is None or ts < cutoff)]
+        stale = [c for c, ts in rows if member_counts.get(c, 0) > 0 and (ts is None or ts < cutoff or ts > now)]
         return (empty + stale)[:max_themes]
 
     # -- query -----------------------------------------------------------
 
     def get_catalog(self, search: str | None = None, limit: int = 500) -> list[Theme]:
         with self._sf() as db:
-            q = select(Theme).order_by(Theme.name)
+            q = select(Theme).where(Theme.catalog_active.is_(True)).order_by(Theme.name)
             if search:
                 q = q.where(Theme.name.contains(search))
             return list(db.execute(q.limit(limit)).scalars())
@@ -517,7 +563,8 @@ class ThemeCatalogService:
         with self._sf() as db:
             return list(
                 db.execute(
-                    select(ThemeMember).where(ThemeMember.theme_code == code).order_by(ThemeMember.symbol)
+                    select(ThemeMember).join(Theme, Theme.code == ThemeMember.theme_code).where(Theme.catalog_active.is_(True), Theme.synced_at <= utcnow(),
+                        ThemeMember.synced_at <= utcnow(), ThemeMember.theme_code == code).order_by(ThemeMember.symbol)
                 ).scalars()
             )
 
@@ -564,7 +611,8 @@ class ThemeCatalogService:
             rows = db.execute(
                 select(ThemeMember, Theme.name)
                 .join(Theme, Theme.code == ThemeMember.theme_code)
-                .where(ThemeMember.symbol == symbol)
+                .where(Theme.catalog_active.is_(True), Theme.synced_at <= utcnow(),
+                       ThemeMember.synced_at <= utcnow(), ThemeMember.symbol == symbol)
                 .order_by(ThemeMember.theme_code)
             ).all()
         members = [
@@ -601,7 +649,8 @@ class ThemeCatalogService:
             rows = db.execute(
                 select(ThemeMember.symbol, ThemeMember, Theme.name)
                 .join(Theme, Theme.code == ThemeMember.theme_code)
-                .where(ThemeMember.symbol.in_(uniq))
+                .where(Theme.catalog_active.is_(True), Theme.synced_at <= utcnow(),
+                       ThemeMember.synced_at <= utcnow(), ThemeMember.symbol.in_(uniq))
                 .order_by(ThemeMember.symbol, ThemeMember.theme_code)
             ).all()
         grouped: dict[str, list[dict]] = {s: [] for s in uniq}
@@ -618,7 +667,7 @@ class ThemeCatalogService:
 
     def catalog_size(self) -> int:
         with self._sf() as db:
-            return int(db.execute(select(func.count(Theme.id))).scalar_one() or 0)
+            return int(db.execute(select(func.count(Theme.id)).where(Theme.catalog_active.is_(True))).scalar_one() or 0)
 
     def member_symbols_bulk(self, codes: list[str]) -> dict[str, list[str]]:
         """批量查题材成分股列表（key=theme_code）。联动度计算 / 题材合力用。
@@ -633,6 +682,8 @@ class ThemeCatalogService:
         with self._sf() as db:
             rows = db.execute(
                 select(ThemeMember.theme_code, ThemeMember.symbol)
+                .join(Theme, Theme.code == ThemeMember.theme_code)
+                .where(Theme.catalog_active.is_(True), Theme.synced_at <= utcnow(), ThemeMember.synced_at <= utcnow())
                 .where(ThemeMember.theme_code.in_(codes))
                 .order_by(ThemeMember.theme_code, ThemeMember.symbol)
             ).all()

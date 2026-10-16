@@ -113,15 +113,15 @@ def test_parse_theme_tags_handles_empty_and_dupes():
     assert parse_theme_tags("AI应用+AI应用") == ["AI应用"]
 
 
-def test_normalize_theme_merges_synonyms():
+def test_normalize_theme_keeps_distinct_source_labels():
     """同义标签归一到**官方概念名**（2026-09-08 官方名称纪律：目标名必须逐字
     存在于同花顺概念板块目录；官方无统一概念的近似标签一律直通原始标签）。"""
     assert normalize_theme("黄金概念") == "黄金概念"  # 官方名直通
-    assert normalize_theme("黄金租赁") == "黄金概念"  # 归到官方「黄金概念」
-    assert normalize_theme("AI液冷") == "液冷服务器"  # 官方概念逐字名
-    assert normalize_theme("数据中心业务") == "数据中心(AIDC)"  # 逐字含括号
-    assert normalize_theme("央国企改革") == "央企国企改革"
-    assert normalize_theme("转基因玉米") == "转基因"
+    assert normalize_theme("黄金租赁") == "黄金租赁"  # 归到官方「黄金概念」
+    assert normalize_theme("AI液冷") == "AI液冷"  # 官方概念逐字名
+    assert normalize_theme("数据中心业务") == "数据中心业务"  # 逐字含括号
+    assert normalize_theme("央国企改革") == "央国企改革"
+    assert normalize_theme("转基因玉米") == "转基因玉米"
 
 
 def test_normalize_theme_passes_through_when_no_official_concept():
@@ -431,11 +431,11 @@ def test_formation_level_buckets():
 def test_normalize_theme_official_names_over_fragments():
     """官方名称纪律（2026-09-08）：ths 原发标签逐字直通，归并目标必须是官方概念名。"""
     assert normalize_theme("PTFE薄膜") == "PTFE薄膜"  # 官方无 PTFE 概念 → 直通
-    assert normalize_theme("AI液冷") == "液冷服务器"  # 官方「液冷服务器」
-    assert normalize_theme("黄金租赁") == "黄金概念"  # 官方「黄金概念」
+    assert normalize_theme("AI液冷") == "AI液冷"  # 官方「液冷服务器」
+    assert normalize_theme("黄金租赁") == "黄金租赁"  # 官方「黄金概念」
     assert normalize_theme("业绩高增长") == "业绩高增长"  # 业绩类直通
     assert normalize_theme("人形机器人") == "人形机器人"  # 官方概念直通
-    assert normalize_theme("数据中心业务") == "数据中心(AIDC)"  # 官方逐字含括号
+    assert normalize_theme("数据中心业务") == "数据中心业务"  # 官方逐字含括号
 
 
 def test_health_note_calls_out_solo_stock_as_not_a_theme():

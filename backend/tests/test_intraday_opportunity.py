@@ -242,7 +242,7 @@ def test_assemble_empty_board_is_honest():
 def _theme_card(**over):
     card = {
         "theme": "功能糖", "stage": "发酵", "strength_tier": "T1",
-        "limit_up_count": 4, "catalog_code": "BK0009",
+        "limit_up_count": 4, "candidate_catalog_code": "BK0009",
         "stocks": [{"symbol": "600010", "first_seal_time": "09:25:00"}],
     }
     card.update(over)
@@ -283,13 +283,13 @@ def test_attach_participants_mines_concentrated_theme_only():
 
 def test_attach_participants_without_container_is_explicit():
     """未挂靠到官方容器的题材：写明原因而不是留一个看起来"没候选"的空列表。"""
-    cards = [_theme_card(catalog_code=None)]
+    cards = [_theme_card(candidate_catalog_code=None)]
     attach_participants(
         cards, snapshot_by={}, ever_sealed_symbols=set(),
         limit_up_total=10, members_by_code={},
     )
     assert cards[0]["participants"] == []
-    assert "官方概念容器" in cards[0]["participants_note"]
+    assert "官方成分的对应关系尚未核实" in cards[0]["participants_note"]
 
 
 def test_attach_participants_share_gate_uses_total():

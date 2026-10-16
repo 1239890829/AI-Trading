@@ -4,6 +4,8 @@ from __future__ import annotations
 from collections import defaultdict
 from datetime import date, datetime, timezone
 import json
+import heapq
+from fractions import Fraction
 import math
 from statistics import mean, median
 from sqlalchemy import and_, or_, select
@@ -39,9 +41,10 @@ def _daily_rows(db, start, end):
     return days
 
 
-def selection_rows(db, start, end, *, symbol=None):
+def selection_rows(db, start, end, *, symbol=None, daily_rows=None):
     entries = []
-    for day, row in _daily_rows(db, start, end).items():
+    days = _daily_rows(db, start, end) if daily_rows is None else daily_rows
+    for day, row in days.items():
         meta = _object(row.meta)
         try:
             items = json.loads(row.items or '[]')
@@ -58,7 +61,8 @@ def selection_rows(db, start, end, *, symbol=None):
                 name=e.get("name") or names.get(member) or member, scope='daily', snapshot_id=None, state=e.get('state', 'missing'),
                 selected_at=e.get('selected_at'), reference_price=_number(e.get('reference_price'), positive=True),
                 reference_change_pct=_number(e.get('reference_change_pct')), quote_as_of=e.get('quote_as_of'),
-                version=e.get('source_version'), reason='；'.join(f'{k}：{v}' for k,v in _object(e.get('selection_basis')).items()) or e.get('reason') or '首次入选的完整依据尚未归档，未用当前版本补填',
+                version=e.get('source_version'), method_version=e.get('strategy_version'), feature_version=e.get('feature_version'), reason='；'.join(f'{k}：{v}' for k,v in _object(e.get('selection_basis')).items()) or e.get('reason') or '首次入选的完整依据尚未归档，未用当前版本补填',
+                original_shape=_object(e.get('original_features')).get('stage'), original_environment=_object(e.get('rule_context')).get('market_phase'),
                 conditions=[str(v) for v in e.get('invalidations') or []], return_pct=None, outcome_state='no_matching_archive'))
     rows = db.scalars(select(Snapshot).where(Snapshot.trade_date >= start, Snapshot.trade_date <= end,
         Snapshot.scenario == 'intraday_opportunity', Snapshot.stage == 'rank', Snapshot.decision == 'ranked',
@@ -78,18 +82,24 @@ def selection_rows(db, start, end, *, symbol=None):
             continue
         seen.add(key)
         price = _number(row.entry_price, positive=True)
+        sources = e.get('theme_sources')
+        original_theme = _object(sources[0]) if isinstance(sources, list) and sources else {}
         entries.append(dict(id=f'intraday:{row.trade_date}:{row.symbol}', date=row.trade_date, symbol=row.symbol,
             name=row.name or row.symbol, scope='intraday', snapshot_id=row.snapshot_id,
             state='recorded' if price and row.data_state == 'ready' else 'partial', selected_at=at.isoformat(),
-            reference_price=price, reference_change_pct=_number(e.get('change_pct')), version=row.run_id,
+            reference_price=price, reference_change_pct=_number(e.get('change_pct')), version=row.run_id, method_version=row.strategy_version, feature_version=row.feature_version,
             quote_as_of=row.as_of.replace(tzinfo=BJ_TZ).isoformat(),
             reason=str(e.get('reason') or e.get('selection_reason') or row.source_theme or '原候选排名已归档'),
             conditions=[str(e[k]) for k in ('entry_condition', 'invalidation', 'risk_reason') if e.get(k)],
+            original_shape=e.get('stage') or original_theme.get('stage'),
+            original_environment=e.get('market_phase'),
             return_pct=None, outcome_state='pending'))
     daily_projections = db.scalars(select(Snapshot).where(Snapshot.trade_date >= start,
         Snapshot.trade_date <= end, Snapshot.scenario == 'daily_selection_validation',
         Snapshot.stage == 'validation', Snapshot.decision == 'observed',
-        *([Snapshot.symbol == symbol] if symbol else []))).all()
+        *([Snapshot.symbol == symbol] if symbol else [])).limit(50001)).all()
+    if len(daily_projections) > 50000:
+        raise ValueError('归档过多，请缩短范围；未截断统计分母')
     by_id = {e['id']: e for e in entries if e['scope'] == 'daily'}
     for row in daily_projections:
         evidence = _object(row.evidence)
@@ -191,6 +201,91 @@ def trade_episodes(trades, *, calendar, as_of):
     return sorted(episodes, key=lambda e: (e['open_date'], e['id'] or 0))
 
 
+def _win_curve(episodes):
+    """Accumulate each completed episode once; preserve exact float means and medians."""
+    lower, upper, curve = [], [], []
+    total, wins, count = Fraction(), 0, 0
+    for episode in sorted((e for e in episodes if e['state'] == 'closed'),
+                          key=lambda e: (e['closed_at'] or '', e['id'] or 0)):
+        value = episode['return_pct']
+        if value is None:
+            continue
+        count += 1
+        wins += value > 0
+        total += Fraction(value)
+        heapq.heappush(lower, -value)
+        heapq.heappush(upper, -heapq.heappop(lower))
+        if len(upper) > len(lower):
+            heapq.heappush(lower, -heapq.heappop(upper))
+        middle = -lower[0] if len(lower) > len(upper) else (-lower[0] + upper[0]) / 2
+        curve.append(dict(date=episode['close_date'], episode_id=episode['id'], denominator=count,
+                          win_rate=wins/count*100, mean_pct=float(total/count), median_pct=middle))
+    return curve
+
+
+def _coverage(entries, *, calendar, horizon):
+    """Separate absent evidence from outcomes that have not matured; no weekday guesses."""
+    steps = {'d0_close': 0, 'd1_close': 1, 'd3_close': 3, 'd5_close': 5}[horizon]
+    days = sorted({d.isoformat() for d in calendar})
+    positions = {day: i for i, day in enumerate(days)}
+    labels = {'observed': '已有同口径结果', 'original_missing': '原入选依据缺项',
+              'not_due': '观察尚未到期', 'calendar_unknown': '观察日历未覆盖',
+              'result_missing': '已到期，结果待补', 'basis_mismatch': '结果口径不一致'}
+    counts = dict.fromkeys(labels, 0)
+    now = beijing_now()
+    versions = defaultdict(list)
+    for entry in entries:
+        if entry['state'] != 'recorded':
+            state = 'original_missing'
+        elif entry['return_pct'] is not None:
+            state = 'observed'
+        else:
+            target = entry.get('outcome_date')
+            index = positions.get(entry['date'])
+            if not target and index is not None and index + steps < len(days):
+                target = days[index + steps]
+            not_closed = target == now.date().isoformat() and (now.hour, now.minute) < (15, 0)
+            if target and (target > now.date().isoformat() or not_closed):
+                state = 'not_due'
+            elif entry['outcome_state'] == 'basis_or_window_unavailable':
+                state = 'basis_mismatch'
+            else:
+                state = 'calendar_unknown' if not target else 'result_missing'
+        entry['coverage_state'] = state
+        counts[state] += 1
+        versions[(entry['scope'], entry.get('method_version'), entry.get('feature_version'))].append(entry)
+    groups = []
+    for (scope, method, feature), rows in sorted(versions.items(), key=lambda pair: str(pair[0])):
+        values = [e['return_pct'] for e in rows if e['return_pct'] is not None]
+        groups.append(dict(scope=scope, method_version=method, feature_version=feature,
+                           version_state='recorded' if method and feature else 'missing',
+                           count=len(rows), observed=len(values), observed_days=len({e['date'] for e in rows if e['return_pct'] is not None}),
+                           mean_pct=mean(values) if values else None, median_pct=median(values) if values else None))
+    strata_rows = defaultdict(list)
+    for entry in entries:
+        at = _clock(entry.get('selected_at'))
+        band = ('盘前' if (at.hour, at.minute) < (9, 30) else '上午' if at.hour < 12 else '下午' if (at.hour, at.minute) < (15, 0) else '盘后') if at else '未记录'
+        for dimension, value in [('entry_time', band), ('shape', entry.get('original_shape')), ('environment', entry.get('original_environment'))]:
+            strata_rows[(dimension, str(value or '未记录'), entry['scope'], entry.get('method_version'), entry.get('feature_version'))].append(entry)
+    strata = []
+    for (dimension, label, scope, method, feature), rows in sorted(strata_rows.items(), key=lambda pair: str(pair[0])):
+        values = [e['return_pct'] for e in rows if e['return_pct'] is not None]
+        strata.append(dict(dimension=dimension, label=label, scope=scope, method_version=method, feature_version=feature,
+                           count=len(rows), observed=len(values), observed_days=len({e['date'] for e in rows if e['return_pct'] is not None}),
+                           mean_pct=mean(values) if values else None, median_pct=median(values) if values else None))
+    return dict(reasons=[dict(state=state, label=label, count=counts[state]) for state, label in labels.items()],
+                versions=groups, strata=strata, basis='按原始方法与特征版本分组；未记录版本不补成当前版本。观察日历仅用现有官方记录。')
+
+
+def _payoff(values):
+    wins, losses = [v for v in values if v > 0], [v for v in values if v < 0]
+    return dict(mean_win_pct=mean(wins) if wins else None, mean_loss_pct=mean(losses) if losses else None,
+                payoff_ratio=mean(wins)/abs(mean(losses)) if wins and losses else None,
+                profit_factor=sum(wins)/abs(sum(losses)) if losses else None,
+                net_expectancy_pct=mean(values) if values else None,
+                drawdown_pct=None, drawdown_basis='缺少逐日完整账户净值，不能用重叠成交回合拼出账户回撤')
+
+
 def validation_report(start, end, *, session_factory=None, calendar=None, horizon='d1_close', scope='all'):
     first, last = date.fromisoformat(start), date.fromisoformat(end)
     if start != first.isoformat() or end != last.isoformat():
@@ -204,8 +299,9 @@ def validation_report(start, end, *, session_factory=None, calendar=None, horizo
         from app.market.trade_calendar import known_trade_days
         calendar = known_trade_days()
     with sf() as db:
-        entries = selection_rows(db, start, end)
-        known_days = set(_daily_rows(db, start, end)) if scope != 'intraday' else set()
+        daily_rows = _daily_rows(db, start, end)
+        entries = selection_rows(db, start, end, daily_rows=daily_rows)
+        known_days = set(daily_rows) if scope != 'intraday' else set()
         if scope != 'daily':
             from app.models.opportunity_learning import OpportunityDecisionRun
             from app.picks.opportunity_learning import FEATURE_VERSION
@@ -220,6 +316,7 @@ def validation_report(start, end, *, session_factory=None, calendar=None, horizo
             raise ValueError('成交流水超过上限；未截断胜率分母')
         episodes = trade_episodes(trades, calendar=calendar, as_of=last)
         legacy = sum(not t.executed_at or not t.selection_ref and t.side == 'buy' for t in trades if start <= t.traded_at <= end)
+    observation_now = beijing_now()
     for e in entries:
         o = outcomes.get(e['snapshot_id'])
         if o:
@@ -227,7 +324,7 @@ def validation_report(start, end, *, session_factory=None, calendar=None, horizo
             join_clock = _clock(e['selected_at'])
             close_clock = datetime.fromisoformat(o.target_date).replace(hour=15, tzinfo=BJ_TZ)
             if (join_clock and join_clock < close_clock and e['state'] == 'recorded' and o.state == 'labeled' and o.price_basis_version == PRICE_BASIS_VERSION
-                    and _finite(o.return_pct) and o.target_date <= end and e['reference_price'] == o.reference_price):
+                    and _finite(o.return_pct) and close_clock <= observation_now and e['reference_price'] == o.reference_price):
                 e['return_pct'] = o.return_pct
             elif o.state == 'labeled':
                 e['outcome_state'] = 'basis_or_window_unavailable'
@@ -246,37 +343,37 @@ def validation_report(start, end, *, session_factory=None, calendar=None, horizo
     def med(v): return median(v) if v else None
     observed = [e['return_pct'] for e in entries if e['return_pct'] is not None]
     daily = []
-    for day in sorted({e['date'] for e in entries} | known_days):
-        members = [e for e in entries if e['date'] == day]
+    by_day = defaultdict(list)
+    for entry in entries:
+        by_day[entry['date']].append(entry)
+    for day in sorted(set(by_day) | known_days):
+        members = by_day[day]
         values = [e['return_pct'] for e in members if e['return_pct'] is not None]
         daily.append(dict(date=day, count=len(members), observed=len(values), mean_pct=avg(values), median_pct=med(values)))
     episodes = [e for e in episodes if start <= (e['close_date'] or e['open_date']) <= end]
     values = [e['return_pct'] for e in episodes if e['state'] == 'closed' and e['return_pct'] is not None]
-    curve, running = [], []
-    for e in sorted((e for e in episodes if e['state'] == 'closed'), key=lambda e: (e['closed_at'] or '', e['id'] or 0)):
-        if e['return_pct'] is None:
-            continue
-        running.append(e['return_pct'])
-        curve.append(dict(date=e['close_date'], episode_id=e['id'], denominator=len(running),
-            win_rate=sum(v > 0 for v in running)/len(running)*100, mean_pct=avg(running), median_pct=med(running)))
+    curve = _win_curve(episodes)
     exposures = [e['exposure_days'] for e in episodes]
     covered = all(d is not None for d in exposures)
     cohorts = []
-    for reason in sorted({e['entry_reason'] for e in episodes}):
-        group = [e for e in episodes if e['entry_reason'] == reason]
+    by_reason = defaultdict(list)
+    for episode in episodes:
+        by_reason[episode['entry_reason']].append(episode)
+    for reason, group in sorted(by_reason.items()):
         returns = [e['return_pct'] for e in group if e['state'] == 'closed' and e['return_pct'] is not None]
         cohorts.append(dict(reason=reason, total=len(group), denominator=len(returns),
             wins=sum(v > 0 for v in returns), losses=sum(v < 0 for v in returns),
             mean_pct=avg(returns), median_pct=med(returns)))
-    return dict(start=start, end=end, scope=scope, horizon=horizon,
+    coverage = _coverage(entries, calendar=calendar, horizon=horizon)
+    return dict(start=start, end=end, scope=scope, horizon=horizon, coverage=coverage,
         selection=dict(count=len(entries), observed=len(observed), missing=len(entries)-len(observed), mean_pct=avg(observed), median_pct=med(observed)),
-        actual=dict(denominator=len(values), win_rate=sum(v > 0 for v in values)/len(values)*100 if values else None,
+        actual=dict(**_payoff(values), denominator=len(values), win_rate=sum(v > 0 for v in values)/len(values)*100 if values else None,
             mean_pct=avg(values), median_pct=med(values), wins=sum(v > 0 for v in values), losses=sum(v < 0 for v in values), flat=sum(v == 0 for v in values),
             open=sum(e['state'] == 'open' for e in episodes), excluded=sum(e['state'] == 'excluded' for e in episodes), legacy_fills=legacy,
             exposure_trade_days=len(set(d for days in exposures for d in days)) if covered else None,
             episode_trade_days=sum(len(days) for days in exposures) if covered else None),
         entries=entries, episodes=episodes, daily=daily, win_curve=curve, cohorts=cohorts,
         basis=dict(actual='人工成交流水，未经券商核验；按清仓日统计，未平仓按首买日；含双边已确认费用',
-            selection='每日同股去重；原参考价→固定收盘观察，不代表成交或买入胜率',
+            selection='日期筛选原入选日；每日同股去重，结果读取至当前已归档且到期的固定收盘观察，不代表成交或买入胜率',
             coverage='缺原时点、同基准结果或完整费用时保留未知；只使用已归档且同参考价的固定周期结果，旧缺项不倒填',
             improvement='原依据与失效条件→复盘建议→人工确认→工程证据→前向验证；不自动改选股或通知规则'))

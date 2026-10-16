@@ -7,6 +7,7 @@
  */
 
 import { getJson, getJsonArray, sendJson } from "./internal";
+import {ApiError} from "./client";
 import type {EventInterpretationRef} from "./events";
 
 export interface StopLossRef {
@@ -197,6 +198,14 @@ export interface StandAsideRecheck {
 }
 
 export interface StandAsideGate {
+  presentation?: {
+    scope: string;
+    headline: string;
+    facts: {label: string; value: string}[];
+    note: string;
+    judged_at?: string | null;
+    source_state: string;
+  };
   stand_aside: boolean;
   level: "none" | "mild" | "strong";
   reasons: string[];
@@ -243,6 +252,10 @@ export interface DailyPicksPayload {
     gate_live?: StandAsideGate | null;
     market_phase?: string | null;
     candidate_count?: number;
+    deep_dives?: number;
+    input_readiness?: {snapshot_state: string; snapshot_as_of: string | null; events_available: boolean};
+    selection_funnel?: {available_sources: Record<string, number>; truncated_sources: Record<string, number>;
+      scored: number; above_min_score: number; selected: number};
     limit_up_count?: number;
     market_max_boards?: number;
     /** 容量上限（不是"每天必须凑满"的目标数） */
@@ -876,6 +889,8 @@ export interface IntradayTopStock {
 }
 
 export interface IntradayTopPayload {
+  read_state?: "ready" | "partial" | "unavailable";
+  empty_reasons?: string[];
   selection_identity_version?: string;
   effective_limit?: number;
   trade_date: string | null;
@@ -897,7 +912,9 @@ export interface IntradayTopPayload {
 
 export async function getIntradayTop(limit?: number): Promise<IntradayTopPayload> {
   const query = limit === undefined ? "" : `?limit=${limit}`;
-  return (await getJson<IntradayTopPayload>(`/api/picks/intraday-top${query}`, 15_000)).data;
+  const data = (await getJson<IntradayTopPayload>(`/api/picks/intraday-top${query}`, 15_000)).data;
+  if (data.read_state === "unavailable") throw new ApiError(503, "本轮数据不完整，候选状态待核实", "candidate_data_unavailable");
+  return data;
 }
 
 export async function runIntradayReview(): Promise<{ brief_date: string; directions: { direction: string; outcome: string }[] }> {

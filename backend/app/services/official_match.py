@@ -3,12 +3,13 @@
 **根因**：同花顺有**两套口径**——
 ①涨停原因动态标签（「功能糖」「减糖甜味剂」「玉米加工」，每日变）；
 ②概念板块目录（「代糖概念 885904」「玉米 885811」，静态成分，App 内展示口径）。
-我们的题材聚类用①（当日生态最准），用户在同花顺看到的是②——簇名精确匹配
+我们的题材聚类用①（保留原始标签），用户在同花顺看到的是②——簇名精确匹配
 目录的旧挂靠逻辑对「功能糖」这类簇完全失效。
 
 **修复**：按**成分重叠**反向挂靠——簇成员命中某官方概念 ≥2 只即挂靠
 （official_matches，命中数降序 ≤3 个），并过滤全市场性大概念（成分 >300 只的
-融资融券/深股通类命中几只毫无辨识度）。盘面题材看板与猎场机会视图共用。
+融资融券/深股通类命中几只毫无辨识度）。盘面题材看板与猎场机会视图共用导航。未分类不挂靠；候选资格另需精确同名
+且全部支持股均为官方成分，部分重叠不等于共同驱动。
 """
 from __future__ import annotations
 
@@ -67,10 +68,11 @@ def _get_index(holder) -> tuple[dict[str, list[tuple[str, str]]], dict[str, int]
             state._official_index_lock = lock
     with lock:
         cache = cache_on(state, "themes.official.index", 300, maxsize=2)
-        hit, cached = cache.get("index")
+        key = ("index", getattr(state.theme_catalog, "revision", 0))
+        hit, cached = cache.get(key)
         if not hit:
             cached = _official_symbol_index(state.theme_catalog)
-            cache.set("index", cached)
+            cache.set(key, cached)
         return cached
 
 
@@ -86,15 +88,36 @@ def attach_official(holder, themes_list: list[dict]) -> None:
     try:
         symbol_index, concept_sizes = _get_index(holder)
         name_to_code = {t.name: t.code for t in svc.get_catalog(limit=1000)}
+        exact_codes = list({name_to_code[c["theme"]] for c in themes_list
+                            if c.get("theme") in name_to_code and not c.get("is_unclassified")})
+        # Fresh membership read stays independent of the reverse-index cache.
+        # One batch replaces N exact-name reads without extending freshness.
+        try:
+            members_by_code = {code: set(symbols) for code, symbols
+                               in svc.member_symbols_bulk(exact_codes).items()}
+        except Exception:
+            members_by_code = {code: {m.symbol for m in svc.get_members(code)} for code in exact_codes}
         for card in themes_list:
+            card["candidate_catalog_code"] = None
+            if card.get("is_unclassified") or card.get("theme") == "未分类":
+                card["official_matches"] = []
+                card["catalog_code"] = None
+                continue
             # 成员行：看板用 ladder，机会视图用 stocks（两结构 symbol 字段同名）
             member_rows = card.get("ladder") or card.get("stocks") or []
             # 成员级：簇名与目录精确同名时，成员在官方成分内打 official 布尔
             code = name_to_code.get(card.get("theme") or "")
+            official = set()
             if code:
-                official = {m.symbol for m in svc.get_members(code)}
+                official = members_by_code.get(code, set())
                 for it in member_rows:
                     it["official"] = it.get("symbol") in official
+
+            # Only an exact official name with the complete supporting membership
+            # can supply the candidate container. Overlap remains navigation evidence.
+            supporting = card.get("supporting_symbols") or [it.get("symbol") for it in member_rows]
+            if code and supporting and set(supporting) <= official:
+                card["candidate_catalog_code"] = code
 
             # 簇级：成分重叠挂靠
             symbols = {it.get("symbol") for it in member_rows if it.get("symbol")}
@@ -110,7 +133,7 @@ def attach_official(holder, themes_list: list[dict]) -> None:
             ]
             matches.sort(key=lambda x: -x["hits"])
             card["official_matches"] = matches[:MAX_MATCHES]
-            # 弹窗入口用的目录代码：优先最高命中的官方概念，簇名精确同名次之
-            card["catalog_code"] = (matches[0]["code"] if matches else None) or code
+            # 弹窗入口用的目录代码：优先簇名精确同名，其次仅供浏览的成分重叠
+            card["catalog_code"] = code or (matches[0]["code"] if matches else None)
     except Exception:  # noqa: BLE001 - 挂靠失败不影响看板
         log.exception("attach official matches failed")

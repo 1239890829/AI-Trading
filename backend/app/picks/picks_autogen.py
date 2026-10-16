@@ -24,7 +24,7 @@ from sqlalchemy import select
 
 from app.core.db import get_session_factory
 from app.picks.morning_brief import _trade_day_state
-from app.core.bjtime import beijing_now
+from app.core.bjtime import beijing_now, to_beijing
 
 log = logging.getLogger(__name__)
 
@@ -32,26 +32,31 @@ log = logging.getLogger(__name__)
 CATCHUP_DEADLINE = "14:00"
 
 
-async def _wait_snapshot_ready(app, *, timeout: float = 120.0, interval: float = 5.0) -> bool:
+async def _wait_snapshot_ready(app, *, timeout: float = 120.0, interval: float = 5.0, trade_date=None) -> bool:
     """等全市场快照就绪（breadth 非空）再生成。返回是否等到。
 
     2026-09-09 事故：backend 重启后内存快照为空（KB-TRADE-03），补跑若立刻跑，
     compute_market_sentiment 抛 CalendarUnavailable → market_phase=None 落库并
     定格全天（评分吃不到风格偏移，前端显示「相位缺失·未路由」）。补跑前等一等
-    比重跑整条管线便宜得多；超时则按现状生成并留 warning（不无限阻塞调度）。
+    比重跑整条管线便宜得多；超时跳过本次生成，下个既有调度周期重试，不固化空结果。
     """
     svc = getattr(getattr(app, "state", None), "snapshot_service", None)
     if svc is None:
         return False
     waited = 0.0
     while waited < timeout:
-        if getattr(svc, "breadth", None) is not None:
+        freshness = getattr(svc, "freshness", None)
+        fresh = freshness() if callable(freshness) else None
+        as_of = getattr(fresh, "as_of", None)
+        same_day = bool(as_of and (trade_date is None or to_beijing(as_of).date() == trade_date))
+        if (getattr(svc, "breadth", None) is not None
+                and getattr(fresh, "state", None) == "ready" and same_day):
             if waited > 0:
                 log.info("picks autogen: 快照已就绪（等待 %.0fs）", waited)
             return True
         await asyncio.sleep(interval)
         waited += interval
-    log.warning("picks autogen: 等待 %.0fs 快照仍未就绪，按现状生成（情绪相位可能缺失）", timeout)
+    log.warning("picks autogen: 等待 %.0fs 快照仍未就绪，本轮不生成，下次调度重试", timeout)
     return False
 
 
@@ -108,7 +113,8 @@ async def picks_autogen_tick(app, *, now, run_hour: int, run_minute: int) -> boo
 
     from app.services.picks_pipeline import PipelineDeps, generate_picks_pipeline
 
-    await _wait_snapshot_ready(app)
+    if not await _wait_snapshot_ready(app, trade_date=now.date()):
+        return False
     log.info("picks autogen: 当日组合缺失，开始自动生成（%s）", now.strftime("%H:%M:%S"))
     await generate_picks_pipeline(PipelineDeps.from_state(app.state), hub, today=today)
     log.info("picks autogen: 当日组合生成完成")

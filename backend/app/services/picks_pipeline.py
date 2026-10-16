@@ -321,6 +321,13 @@ async def candidate_pool(
         for item in out:
             sources[item["from"]] = sources.get(item["from"], 0) + 1
         audit["sources"] = sources
+        available: dict[str, int] = {}
+        for symbol, meta in ordered:
+            if symbol.isdigit() and len(symbol) == 6:
+                available[meta["from"]] = available.get(meta["from"], 0) + 1
+        audit["available_sources"] = available
+        audit["truncated_sources"] = {source: n - sources.get(source, 0)
+                                      for source, n in available.items() if n > sources.get(source, 0)}
         audit["excluded_open_sealed"] = {
             "count": len(excluded),
             "items": excluded[:20],  # 明细留痕有界（不把 40 行塞进 meta）
@@ -384,10 +391,8 @@ async def mine_theme_linkage(
     它们揭示当日资金集中的方向；既然该方向上多数个股已被封死，就在同一个官方题材
     容器里找**当前未封板**且通过联动/流动性门槛的票：资金外溢的第一落点；进入评估不等于保证成交。
 
-    **为什么用"成分重叠"而不是题材名匹配**：涨停原因是同花顺的动态标签（「功能糖」），
-    官方概念是目录名（「代糖概念」），名字对不上。按成分重叠反向定位容器是既有的
-    `official_match` 口径（同一组常量），挖出来的容器与卡片上显示的官方概念必然是
-    同一个——不会出现"卡片说代糖、挖掘用功能糖"这种口径分裂。
+    共同驱动与成分归属分别核实：只有原始题材与官方目录同名、全部支持股
+    属于该概念时才挖掘；部分成分重叠只供浏览，不产生候选资格。
 
     诚实降级（三态纪律）：快照不可用 / 无题材达到集中阈值 / 无官方容器 —— 全部
     返回 `note` 说明原因并给空结果，**不臆造**候选（判不了不冒充可参与）。
@@ -428,11 +433,13 @@ async def mine_theme_linkage(
     items: list[dict] = []
     themes_out: list[dict] = []
     for f in focus:
-        containers = resolve_containers(set(f["symbols"]), symbol_index, sizes)
+        containers = [c for c in resolve_containers(set(f["symbols"]), symbol_index, sizes, max_containers=len(sizes))
+                      if c["name"] == f["theme"] and c["hits"] == len(set(f["symbols"]))
+                      and f["theme"] != "未分类"]
         if not containers:
             themes_out.append(
                 {**f, "container": None, "container_code": None, "candidates": 0,
-                 "note": "无官方容器可挂靠（成分重叠 < 2）"}
+                 "note": "共同原因与官方成分对应关系未核实，不按成分重叠外推"}
             )
             continue
         container = containers[0]
@@ -1372,6 +1379,11 @@ async def generate_picks_pipeline(
             "name": r["name"],
             "score": r["score"],
             "tech": (r.get("sub_scores") or {}).get("tech"),
+            "sub_scores": r.get("sub_scores") or {},
+            "bases": r.get("bases") or [],
+            "vetoes": r.get("vetoes") or [],
+            "selection_reason": "below_min_score" if r["score"] < limits["min_pick_score"] else "capacity_or_replacement",
+            "score_shortfall": round(max(0, limits["min_pick_score"] - r["score"]), 2),
             "rank": i + 1,
         }
         for i, r in enumerate(ranked)
@@ -1416,6 +1428,13 @@ async def generate_picks_pipeline(
         "max_swaps_per_day": limits["max_swaps_per_day"],
         "market_phase": market_phase,
         "candidate_count": len(candidates),
+        "input_readiness": {"snapshot_state": snapshot_state, "snapshot_as_of": snapshot_as_of,
+                            "events_available": events_available and event_index_available},
+        "classification_version": "official-catalyst-v1",
+        "selection_funnel": {"available_sources": audit.get("available_sources") or {},
+                             "truncated_sources": audit.get("truncated_sources") or {},
+                             "scored": len(ranked), "above_min_score": sum(r["score"] >= limits["min_pick_score"] for r in ranked),
+                             "selected": len(items)},
         "deep_dives": len(deep),
         # max_picks 是容量上限、min_pick_score 是入选门槛：两者共同决定
         # 「今日名单 = 达到门槛者，最多 5 只」，不是「每天凑满 5 只」（2026-09-10）
@@ -1440,7 +1459,9 @@ async def generate_picks_pipeline(
             "excluded_board": {"count": len(board_excluded), "items": board_excluded[:20]},
         },
         "generated_at": generated_at,
-        "selection_contract": {"version": "daily_selection_v2", "trade_date": today, "generated_at": generated_at},
+        "selection_contract": {"version": "daily_selection_v2", "trade_date": today, "generated_at": generated_at,
+                               "strategy_version": "daily-six-dimension-v1.official-catalyst",
+                               "feature_version": "daily-entry-evidence-v2"},
         "selection_version": daily_selection_version(today, generated_at, items),
     }
     # G-2：落库是同步 SQLite 写（+ 大对象 json.dumps）→ 线程池（判据见 candidate_pool 顶部）

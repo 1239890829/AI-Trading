@@ -28,7 +28,7 @@ import logging
 from datetime import datetime
 from pathlib import Path
 
-from app.core.bjtime import beijing_now_naive
+from app.core.bjtime import BJ_TZ, beijing_now_naive
 
 log = logging.getLogger(__name__)
 
@@ -66,7 +66,9 @@ def _age_days(generated_at: str | None) -> int | None:
     if not generated_at:
         return None
     try:
-        dt = datetime.fromisoformat(str(generated_at).replace("Z", ""))
+        dt = datetime.fromisoformat(str(generated_at).replace("Z", "+00:00"))
+        if dt.tzinfo is not None:
+            dt = dt.astimezone(BJ_TZ).replace(tzinfo=None)
     except Exception:  # noqa: BLE001
         return None
     return (beijing_now_naive() - dt).days
@@ -92,7 +94,7 @@ def freshness(max_age_days: int = DEFAULT_MAX_AGE_DAYS) -> dict:
         return {"available": False, "reason": f"评估报告缺失或不可解析：{REPORT_PATH}",
                 "path": str(REPORT_PATH)}
     age = _age_days(rep.get("generated_at"))
-    stale = age is None or age > max_age_days
+    stale = age is None or age < 0 or age > max_age_days
 
     declared = rep.get("algo_version")
     declared = declared if isinstance(declared, str) and declared else None
@@ -107,14 +109,22 @@ def freshness(max_age_days: int = DEFAULT_MAX_AGE_DAYS) -> dict:
     else:
         algo_note = None
 
+    from app.factors.evaluate import evaluation_identity
+    identity = evaluation_identity()
+    changed = [key for key, value in identity.items() if rep.get(key) != value]
     return {
         "available": True,
+        "review_required": bool(changed) or stale,
+        "identity_mismatches": changed,
+        "definition_current": (rep.get("definition_digest") == identity["definition_digest"]),
+        "data_contract_current": (rep.get("data_contract_version") == identity["data_contract_version"]),
         "stale": stale,
         "age_days": age,
         "max_age_days": max_age_days,
         "generated_at": rep.get("generated_at"),
         "reason": (None if not stale else
-                   ("报告时间无法解析" if age is None else f"报告已 {age} 天，超过 {max_age_days} 天宽限")),
+                   ("报告时间无法解析" if age is None else "报告时间在未来" if age < 0
+                    else f"报告已 {age} 天，超过 {max_age_days} 天宽限")),
         # 口径维度（与时间维度正交，勿混用）
         "algo_version": declared,
         "algo_version_current": current,
@@ -218,6 +228,8 @@ def ic_evidence(limit: int = 6, max_age_days: int = DEFAULT_MAX_AGE_DAYS) -> dic
         "algo_version": fresh["algo_version"],
         "algo_current": fresh["algo_current"],
         "algo_note": fresh["algo_note"],
+        "review_required": fresh["review_required"],
+        "identity_mismatches": fresh["identity_mismatches"],
         "counts": {
             "pass": len(summary.get("pass") or []),
             "conditional": len(summary.get("conditional") or []),

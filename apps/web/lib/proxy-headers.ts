@@ -45,6 +45,7 @@ export function buildUpstreamHeaders(inbound: Headers, token: string | undefined
   headers.delete("host");
   headers.delete("content-length");
   headers.delete(CLIENT_TOKEN_HEADER);
+  for (const name of ["cookie", "origin", "x-ashare-browser", "x-ashare-session", "x-ashare-origin", "x-ashare-access-bridge", "x-forwarded-for", "x-forwarded-host", "forwarded"]) headers.delete(name);
   if (token) headers.set(CLIENT_TOKEN_HEADER, token);
   return headers;
 }

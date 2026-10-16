@@ -219,6 +219,10 @@ class ActionItem(BaseModel):
     target: str = Field("", description="要改的具体位置，如 sentiment.EARNING_BANDS.promo_1to2")
     proposed_change: str = ""
     status: str = Field("pending", description="pending | recorded | confirmed | applied | rejected | reverted")
+    resolution_note: str = ""
+    implementation_evidence: dict[str, str] = Field(default_factory=dict)
+    resolved_at: str | None = None
+    disposition_basis: str = "management_record_not_release_verification"
 
 
 class MetaInsight(BaseModel):

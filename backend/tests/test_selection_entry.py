@@ -363,3 +363,25 @@ def test_main_trading_consumer_keeps_initialization_and_existing_cash(sf):
         account.cash = 1234
         db.commit()
     assert asyncio.run(paper_account(request, read_only=True))["data"]["cash"] == 1234
+
+
+def test_original_explanation_keeps_refs_conditions_and_rule_inputs_without_later_overwrite():
+    original = item()
+    original.update(bases={'news': '拟收购，尚未完成'}, related_event_refs=[{'event_id':7, 'version_id':12}],
+                    related_events=['拟收购公告'], sub_scores={'news':68}, invalidations=['收购终止'],
+                    dimension_evidence={'news':{'state':'success'}})
+    meta = {'generated_at':NOW.isoformat(), 'selection_version':'v1', 'weights':{'news':.2},
+            'selection_contract':{'strategy_version':'method1', 'feature_version':'facts1'}}
+    receipt = daily_entries([original], meta, previous_meta=None, previous_items=[], trade_date=DAY, recorded_at=NOW)
+    original['related_event_refs'][0]['version_id'] = 99
+    original['sub_scores']['news'] = 100
+    meta['weights']['news'] = .9
+    got = receipt['600127']
+    assert got['event_refs'] == [{'event_id':7, 'version_id':12}]
+    assert got['original_features']['sub_scores'] == {'news':68}
+    assert got['rule_context']['weights'] == {'news':.2}
+    assert got['strategy_version'] == 'method1' and got['feature_version'] == 'facts1'
+    assert got['selection_basis']['news'] == '拟收购，尚未完成'
+    assert got['invalidations'] == ['收购终止']
+    assert daily_entries([original], meta, previous_meta={'selection_entries':receipt}, previous_items=[],
+                         trade_date=DAY, recorded_at=NOW)['600127'] == got
