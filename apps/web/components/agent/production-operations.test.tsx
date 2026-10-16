@@ -1,10 +1,39 @@
-import { afterEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { cleanup, fireEvent, render, screen, waitFor } from "@testing-library/react";
 import { ProductionOperations } from "./production-operations";
+const access = vi.hoisted(() => ({device: {state: "active", owner: true, maintenance: false}, open: vi.fn()}));
+vi.mock("@/components/access/device-access", () => ({useDeviceAccess: () => access}));
 vi.mock("@/lib/api", () => ({getWatcherState: vi.fn(async () => ({})), generatePicks: vi.fn(), generatePickReview: vi.fn(), generateMorningBrief: vi.fn(), runWatcherBeat: vi.fn(), runIntradayReview: vi.fn()}));
 const api = await import("@/lib/api");
+beforeEach(() => {access.device = {state: "active", owner: true, maintenance: false};});
 afterEach(() => {cleanup(); vi.restoreAllMocks(); vi.clearAllMocks();});
 describe("maintenance command boundary", () => {
+  it.each([true, false])("keeps status readable without maintenance for owner=%s and offers permissions instead of commands", async owner => {
+    access.device.owner = owner;
+    vi.mocked(api.getWatcherState).mockResolvedValueOnce({active:false,enabled:true,brief_exists:false,beat_count:2});
+    render(<ProductionOperations />);
+    expect(await screen.findByText("运行标记：未运行")).toBeTruthy();
+    expect(screen.getByText("启用开关：已启用")).toBeTruthy();
+    expect(screen.queryByRole("button", {name: "重新生成组合"})).toBeNull();
+    expect(screen.queryByRole("button", {name: "执行一次节拍"})).toBeNull();
+    fireEvent.click(screen.getByRole("button", {name: "设备与权限"}));
+    expect(access.open).toHaveBeenCalledOnce();
+    expect(api.generatePicks).not.toHaveBeenCalled();
+    expect(api.runWatcherBeat).not.toHaveBeenCalled();
+  });
+  it("removes maintenance commands when approval ends while retaining the loaded status", async () => {
+    access.device.maintenance = true;
+    vi.mocked(api.getWatcherState).mockResolvedValueOnce({active:false,enabled:true,brief_exists:false,beat_count:2});
+    const view = render(<ProductionOperations />);
+    expect(await screen.findByText("运行标记：未运行")).toBeTruthy();
+    expect(screen.getByRole("button", {name: "重新生成组合"})).toBeTruthy();
+    access.device = {...access.device, maintenance: false};
+    view.rerender(<ProductionOperations />);
+    expect(screen.getByText("运行标记：未运行")).toBeTruthy();
+    expect(screen.queryByRole("button", {name: "重新生成组合"})).toBeNull();
+    expect(screen.getByRole("button", {name: "设备与权限"})).toBeTruthy();
+    expect(api.generatePicks).not.toHaveBeenCalled();
+  });
   it("reads switches separately from running state and retains unknown timing plus raw audit without producing writes",async()=>{
     vi.mocked(api.getWatcherState).mockResolvedValueOnce({active:false,enabled:true,brief_exists:false,beat_count:2,note:"未启动，不代表开关关闭。"});
     render(<ProductionOperations/>);
@@ -18,6 +47,7 @@ describe("maintenance command boundary", () => {
     expect(api.runWatcherBeat).not.toHaveBeenCalled();
   });
   it("reading and canceling confirmation never produce writes", async () => {
+    access.device.maintenance = true;
     vi.spyOn(window, "confirm").mockReturnValue(false);
     render(<ProductionOperations />);
     await waitFor(() => expect(api.getWatcherState).toHaveBeenCalled());
@@ -26,6 +56,7 @@ describe("maintenance command boundary", () => {
     expect(api.runWatcherBeat).not.toHaveBeenCalled();
   });
   it("serializes pending commands and marks transport failure unknown, without automatic retry", async () => {
+    access.device.maintenance = true;
     vi.spyOn(window, "confirm").mockReturnValue(true);
     let reject!: (e: Error) => void;
     vi.mocked(api.generatePicks).mockImplementation(() => new Promise((_, r) => {reject = r;}));
