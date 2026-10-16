@@ -17,6 +17,17 @@ export const report: ValidationReport = {
 };
 
 describe("selection validation reading", () => {
+  it("does not draw a connecting segment through an invalid archived result", () => {
+    const daily = [
+      {...report.daily[0],date:"2026-10-12",mean_pct:1},
+      {...report.daily[0],date:"2026-10-13",mean_pct:NaN},
+      {...report.daily[0],date:"2026-10-14",mean_pct:2},
+    ];
+    render(<ValidationContent report={{...report,daily}}/>);
+    const plot=screen.getByRole("region",{name:"入选后平均涨跌幅"});
+    expect(plot.querySelectorAll(".validation-point")).toHaveLength(2);
+    expect(plot.querySelectorAll(".validation-line")).toHaveLength(0);
+  });
   it("appends records on scroll without pagination or losing the expanded evidence", () => {
     const entries=Array.from({length:96},(_,i) => ({...report.entries[0],id:`test:${i}`,name:`样本${i}`}));
     render(<ValidationContent report={{...report,entries}}/>);

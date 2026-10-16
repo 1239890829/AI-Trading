@@ -3,6 +3,7 @@ from __future__ import annotations
 import asyncio
 import json
 import logging
+import sqlite3
 from datetime import datetime, timezone
 
 from fastapi import APIRouter, WebSocket, WebSocketDisconnect
@@ -12,7 +13,11 @@ from app.core.auth import (
     ws_decode_subprotocol_token,
     ws_token_subprotocol,
 )
+from app.core.config import settings
 from app.services.quote_hub import offer
+from app.core.device_access import (
+    AccessError, WS_RECHECK_SECONDS, WS_TICKET_PREFIX, get_device_store,
+)
 
 log = logging.getLogger(__name__)
 router = APIRouter()
@@ -83,8 +88,19 @@ async def quotes_ws(websocket: WebSocket):
     一律取**客户端自己提议的那一个**，服务端不生成、不替换、不追加。
     """
     raw_protocols = websocket.headers.get("sec-websocket-protocol")
-    offered = ws_token_subprotocol(raw_protocols)
-    if not is_api_token_valid(ws_decode_subprotocol_token(offered)):
+    offered = next((p.strip() for p in (raw_protocols or "").split(",") if p.strip().startswith(WS_TICKET_PREFIX)), None)
+    device_id = None
+    if offered:
+        try:
+            if not settings.api_token:
+                raise AccessError("device_access_requires_server_token", 503)
+            device_id = await asyncio.to_thread(get_device_store().consume_ticket, offered, websocket.headers.get("origin", ""))
+        except (AccessError, OSError, sqlite3.Error):
+            await websocket.close(code=_WS_CLOSE_UNAUTHORIZED)
+            return
+    else:
+        offered = ws_token_subprotocol(raw_protocols)
+    if not device_id and (websocket.headers.get("origin") or not is_api_token_valid(ws_decode_subprotocol_token(offered))):
         await websocket.close(code=_WS_CLOSE_UNAUTHORIZED)
         return
 
@@ -150,6 +166,21 @@ async def quotes_ws(websocket: WebSocket):
 
     reader_task = asyncio.create_task(reader())
     writer_task = asyncio.create_task(writer())
+    async def access_watch() -> None:
+        while True:
+            await asyncio.sleep(WS_RECHECK_SECONDS)
+            try:
+                active = await asyncio.to_thread(get_device_store().ws_active, device_id)
+            except (OSError, sqlite3.Error):
+                active = False
+            if not active:
+                return
+
+    tasks = {reader_task, writer_task}
+    access_task = None
+    if device_id:
+        access_task = asyncio.create_task(access_watch())
+        tasks.add(access_task)
     try:
         # ⚠️ 2026-09-14 R24：两条任务的生命周期必须**互相绑定**（任一侧结束即整体收尾）。
         # 旧实现只 `await writer()`：reader 先死（客户端断开或意外异常）时无人察觉 ⇒
@@ -157,15 +188,19 @@ async def quotes_ws(websocket: WebSocket):
         # 该订阅成为孤儿 —— hub 仍按 1Hz 往里投递而无人 drain，配合无界队列即
         # 内存无限增长；若 hub 恰好不推送（休市 / 无匹配标的），连 writer 都不会醒，
         # 这对任务就永久挂着。且 reader 的异常从未被取用。
-        await asyncio.wait({reader_task, writer_task}, return_when=asyncio.FIRST_COMPLETED)
+        done, _ = await asyncio.wait(tasks, return_when=asyncio.FIRST_COMPLETED)
+        if access_task is not None and access_task in done:
+            writer_task.cancel()
+            await asyncio.gather(writer_task, return_exceptions=True)
+            await websocket.close(code=_WS_CLOSE_UNAUTHORIZED)
     finally:
-        for t in (reader_task, writer_task):
+        for t in tasks:
             t.cancel()
         # ⚠️ 收尾路径**不得 await**（理由见 `_report_task_failures` 的 docstring）：
         # 被外部取消时 await 会立刻重抛，`hub.unsubscribe` 就会漏执行——那正是
         # 孤儿订阅的成因。异常交给 done-callback 取用（既避免
         # "Task exception was never retrieved"，也把非预期异常留痕）。
-        asyncio.gather(reader_task, writer_task, return_exceptions=True).add_done_callback(
+        asyncio.gather(*tasks, return_exceptions=True).add_done_callback(
             _report_task_failures
         )
         hub.unsubscribe(slot[0])

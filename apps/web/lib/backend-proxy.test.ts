@@ -7,7 +7,7 @@ afterEach(() => {vi.unstubAllGlobals(); vi.useRealTimers();});
 
 it("浏览器中止传到上游，取消不误报为数据源不可达", async () => {
   const controller = new AbortController();
-  const request = new NextRequest("http://test.local/backend/api/quotes?symbols=600127", {signal: controller.signal});
+  const request = new NextRequest("http://test.local/backend/api/quotes?symbols=600127", {headers: {cookie: "ashare_device=fixture"}, signal: controller.signal});
   let upstreamSignal: AbortSignal | undefined;
   vi.stubGlobal("fetch", vi.fn((_target: string, init: RequestInit) => new Promise((_resolve, reject) => {
     upstreamSignal = init.signal ?? undefined;
@@ -25,7 +25,7 @@ it("浏览器中止传到上游，取消不误报为数据源不可达", async (
 it("SSE 保持独立长连接预算，超过 REST 8s 后仍透传正文与取消信号", async () => {
   vi.useFakeTimers();
   const controller = new AbortController();
-  const request = new NextRequest("http://test.local/backend/api/assistant/chat", {method: "POST", body: "{}", signal: controller.signal});
+  const request = new NextRequest("http://test.local/backend/api/assistant/chat", {method: "POST", body: "{}", headers: {cookie: "ashare_device=fixture", origin: "http://test.local"}, signal: controller.signal});
   let stream!: ReadableStreamDefaultController<Uint8Array>;
   let upstreamSignal: AbortSignal | undefined;
   vi.stubGlobal("fetch", vi.fn(async (_target: string, init: RequestInit) => {

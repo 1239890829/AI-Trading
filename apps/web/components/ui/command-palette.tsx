@@ -14,7 +14,7 @@ export const NAV_COMMANDS = [
   ...TASK_LINKS.map(item => ({label:item.label, detail:"主要任务", href:item.href})),
   ...MARKET_LENSES.map(item => ({label:item.label, detail:item.description, href:item.href})),
   ...RESEARCH_TOOLS.map(item => ({label:item.label, detail:item.description, href:`/agent?area=research&tab=${item.key}`})),
-  ...MAINTENANCE_TOOLS.map(item => ({label:item.label, detail:item.description, href:`/agent?area=maintenance&tab=${item.key}`})),
+  ...MAINTENANCE_TOOLS.map(item => ({label:item.label, detail:item.description, href:`/agent?area=maintenance&tab=${item.key}`, maintenance:true})),
   {label:"实际持仓", detail:"查看人工成交流水，未经券商核验", href:"/workbench?mode=positions"},
 ];
 
@@ -25,13 +25,15 @@ function Match({text, query}: {text:string; query:string}) {
 }
 
 /** Navigation only: selecting a command cannot submit a business operation. */
-export function CommandPalette() {
+export function CommandPalette({maintenance = false}: {maintenance?: boolean} = {}) {
   const [open,setOpen] = useState(false);
   const [query,setQuery] = useState("");
   const [index,setIndex] = useState(0);
   const listId = useId();
   const list = useRef<HTMLDivElement>(null);
-  const results = useMemo(() => NAV_COMMANDS.filter(item => `${item.label} ${item.detail}`.toLocaleLowerCase().includes(query.trim().toLocaleLowerCase())), [query]);
+  const results = useMemo(() => NAV_COMMANDS.filter(item =>
+    (!("maintenance" in item && item.maintenance) || maintenance)
+    && `${item.label} ${item.detail}`.toLocaleLowerCase().includes(query.trim().toLocaleLowerCase())), [query, maintenance]);
   const presence = useExitPresence(open ? true : null);
   const selected = Math.min(index,Math.max(0,results.length-1));
   function close() { setOpen(false); }

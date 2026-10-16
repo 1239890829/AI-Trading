@@ -57,7 +57,8 @@ class TestEvaluate:
     def test_empty_history(self):
         out = evaluate_signal_health([])
         assert out["status"] == "insufficient"
-        assert "无命中记录" in out["reason"]
+        assert "0/10 个组合日" in out["reason"]
+        assert "未成熟或缺基准不计入样本" in out["reason"]
 
     def test_warning_on_low_win_rate_without_drift(self):
         """没破 CUSUM 但滚动胜率差 → warning（介于 ok 与 drift 之间的显式态）。"""

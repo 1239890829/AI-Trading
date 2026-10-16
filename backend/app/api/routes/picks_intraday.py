@@ -396,7 +396,8 @@ async def intraday_opportunities(
     
     hub = request.app.state.hub
     trade_date = await default_trade_date(hub)
-    return await _build_opportunities(request, trade_date, top_themes, stocks_per_theme)
+    payload = await _build_opportunities(request, trade_date, top_themes, stocks_per_theme)
+    return payload
 
 
 @router.get("/intraday-top")

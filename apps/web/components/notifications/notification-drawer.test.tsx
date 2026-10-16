@@ -530,7 +530,8 @@ describe("通知事实与浏览状态分离（BUG-016）", () => {
     render(<NotificationBell />);
     await openDrawer();
     const facts = screen.getByTestId("notification-facts");
-    expect(facts.textContent).toContain("渠道已受理，未确认送达");
+    expect(facts.textContent).toContain("外部待确认");
+    expect(facts.getAttribute("title")).toContain("渠道已受理，未确认送达");
     fireEvent.click(screen.getByTestId("notification-judgment"));
     const detail = await screen.findByRole("dialog", {name:"示例通知"});
   fireEvent.click(within(detail).getByRole("button",{name:"完整依据与研究记录"}));
@@ -584,7 +585,7 @@ it("user-defined reminders have their own category while stock opportunities, ri
   await openDrawer();
   expect(screen.getByRole("tab", {name: "个股提醒"}).getAttribute("title")).toContain("原入选/买点消息、真实持仓风险与自设条件提醒");
   const list = screen.getByTestId("notification-list");
-  for (const text of ["自设条件提醒", "自设提醒", "原个股消息", "个股机会", "原风险消息", "策略风险", "2026-09-11 12:35", "当前条件需核对"])
+  for (const text of ["自设条件提醒", "600519", "原个股消息", "个股机会", "原风险消息", "策略风险", "2026-09-11 12:35", "当前条件需核对"])
     expect(list.textContent).toContain(text);
   fireEvent.click(within(screen.getByText("显式个股阈值").closest('[data-testid="notification-row"]') as HTMLElement).getByTestId("notification-judgment"));
   const detail = await screen.findByRole("dialog", {name: "显式个股阈值"});

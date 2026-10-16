@@ -1,8 +1,15 @@
 from __future__ import annotations
 
+import asyncio
+import sqlite3
 from fastapi import Header, HTTPException, Request
 
 from app.core.auth import TOKEN_HEADER, check_agent_promotion_token, check_api_token
+from app.core.device_access import (
+    AccessError, BROWSER_HEADER, ORIGIN_HEADER, SESSION_HEADER, get_device_store,
+)
+from app.core.device_policy import needs_maintenance
+from app.core.config import settings
 from app.repositories.watchlist_repo import WatchlistRepository
 from app.services.quote_hub import QuoteHub
 
@@ -45,7 +52,7 @@ async def require_api_token(request: Request) -> None:
     豁免在 `main.py` 的挂载处结构性地表达（health router 不挂本守卫），
     本函数**不做路径判断**——路径型豁免写在守卫内部就等于把"名单"藏进了逻辑里。
     """
-    check_api_token(request.headers.get(TOKEN_HEADER))
+    await _check_request_access(request)
 
 
 async def require_write_token(request: Request) -> None:
@@ -65,7 +72,31 @@ async def require_write_token(request: Request) -> None:
     `/system/llm-probe?force=1`、`/real/positions` …）整类漏掉。现在这些由
     `require_api_token` 在 router 级统一盖住；本守卫保留为写作用域的显式标记。
     """
+    await _check_request_access(request)
+
+
+async def _check_request_access(request: Request) -> None:
+    # Router and explicit write guards share one completed check per request.
+    if getattr(request.state, "device_access_checked", False):
+        return
     check_api_token(request.headers.get(TOKEN_HEADER))
+    if request.headers.get(BROWSER_HEADER):
+        if not settings.api_token:
+            raise HTTPException(503, detail="device_access_requires_server_token")
+        try:
+            request.state.device_access = await asyncio.to_thread(
+                get_device_store().authorize,
+                request.headers.get(SESSION_HEADER, ""), request.headers.get(ORIGIN_HEADER, ""),
+                maintenance=needs_maintenance(request.method, getattr(request.scope.get("route"), "path", "")),
+            )
+        except AccessError as exc:
+            raise HTTPException(exc.status, detail=exc.code) from exc
+        except (OSError, sqlite3.Error):
+            raise HTTPException(503, detail="device_access_unavailable") from None
+    elif request.headers.get("origin"):
+        # Browser use of the retired long-lived credential cannot bypass pairing.
+        raise HTTPException(401, detail="device_pairing_required")
+    request.state.device_access_checked = True
 
 
 PROMOTION_TOKEN_HEADER = "X-Agent-Promotion-Token"

@@ -15,6 +15,7 @@ import type { MinutePoint as P } from "@/lib/api";
 import {
   computeMinuteAxis,
   formatMinutePercentTick,
+  formatMinuteAxisTick,
   isPositivePrice,
   minuteLimitPriceState,
 } from "@/lib/minute-axis";
@@ -334,7 +335,7 @@ export function MinuteChart({
         if (isPositivePrice(p.price)) prices.push(effectivePrevClose * p.price / usableIndex.prevClose);
       }
     }
-    return computeMinuteAxis({ prevClose: effectivePrevClose, limitPct: limitPct ?? null, prices, auctionPrice: auction?.price });
+    return computeMinuteAxis({ prevClose: effectivePrevClose, limitPct: limitPct ?? null, prices, auctionPrice: auction?.price, upperPrice, lowerPrice });
   }, [points, effectivePrevClose, limitPct, upperPrice, lowerPrice, auction, usableIndex]);
   const invalidPrices = points.flatMap((p) => [p.price, p.avg]).concat(auction?.price, index?.points.map(p => p.price) ?? [])
     .filter((v) => v != null && !isPositivePrice(v)).length;
@@ -944,10 +945,16 @@ export function MinuteChart({
     if (s.axisRange?.every((value, index) => value === nextRange[index])) return;
     s.axisRange = nextRange;
     for (const series of [s.price, s.avg, s.auction, s.events]) {
-      series?.applyOptions({ autoscaleInfoProvider: () => ({ priceRange: { minValue: axis.min, maxValue: axis.max } }) });
+      series?.applyOptions({
+        autoscaleInfoProvider: () => ({ priceRange: { minValue: axis.min, maxValue: axis.max } }),
+        priceFormat: { type: "custom", minMove: 0.01, formatter: (value: number) => formatMinuteAxisTick(value, axis.min, axis.max) },
+      });
     }
     for (const series of [s.pct, s.index]) {
-      series?.applyOptions({ autoscaleInfoProvider: () => ({ priceRange: { minValue: axis.pctMin, maxValue: axis.pctMax } }) });
+      series?.applyOptions({
+        autoscaleInfoProvider: () => ({ priceRange: { minValue: axis.pctMin, maxValue: axis.pctMax } }),
+        priceFormat: { type: "custom", minMove: 0.01, formatter: (value: number) => formatMinuteAxisTick(value, axis.pctMin, axis.pctMax, true) },
+      });
     }
   }, [axis, exactBaseline, newsEvents]);
 

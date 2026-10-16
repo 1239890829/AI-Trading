@@ -879,9 +879,9 @@ async def collect_news_events(app_state, include_limit_up: bool = False) -> dict
     86 只涨停仅 5 只有入库消息——涨停归因 × 消息面三方核实"无料可对"。
     """
     svc = getattr(app_state, "theme_catalog", None)
-    if svc is not None and svc.catalog_size() == 0:
+    if svc is not None:
         try:
-            await svc.sync_catalog()
+            await svc.ensure_catalog()
         except Exception as exc:  # noqa: BLE001
             log.warning("events collect: 目录同步失败 %s", exc)
     # 成分保鲜调度（2026-09-01 校验规则）：成分 TTL 到期的题材每轮补 40 个——

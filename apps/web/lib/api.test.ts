@@ -1,6 +1,7 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { ApiError, getPickReviews, getPicksHistory } from "@/lib/api";
-import { DEFAULT_TIMEOUT_MS, getJson, sendJson } from "@/lib/api/internal";
+import { DEFAULT_TIMEOUT_MS, clearDeviceSessionReads, getJson, sendJson } from "@/lib/api/internal";
+import {getIntradayTop} from "@/lib/api/picks";
 import {getTradesPayload} from "@/lib/api/market";
 
 /**
@@ -29,6 +30,18 @@ afterEach(() => {
 });
 
 describe("api · Envelope 契约校验（2026-09-10 崩溃回归）", () => {
+  it.each([200, 401])("配对更换后不交付旧会话响应或撤销新会话（%s）", async status => {
+    let finish!: (response: Response) => void;
+    vi.stubGlobal("fetch", vi.fn(() => new Promise<Response>(resolve => {finish = resolve;})));
+    const expired = vi.fn(); window.addEventListener("ashare-access-expired", expired);
+    try {
+      const old = getJson("/api/real/positions").catch(error => error);
+      clearDeviceSessionReads();
+      finish(Response.json(status === 200 ? {data: [{private: "old"}]} : {detail: "expired"}, {status}));
+      expect((await old).code).toBe("canceled");
+      expect(expired).not.toHaveBeenCalled();
+    } finally {window.removeEventListener("ashare-access-expired", expired);}
+  });
   it("keeps a successful empty trades read separate from its source capability reason and source clock", async () => {
     const meta = {trades_source: "tdx", trades_detail: "该源当前未提供逐笔", source_timestamp: "2026-10-13T10:00:00+08:00"};
     stubFetch(200, JSON.stringify({data: [], meta}));
@@ -175,4 +188,12 @@ describe("api · 完整响应预算", () => {
     vi.stubGlobal("fetch", vi.fn(async () => { throw new DOMException("aborted", "AbortError"); }));
     await expect(getJson("/abort")).rejects.toMatchObject({ status: 0, code: "timeout" });
   });
+});
+
+
+it("intraday failure remains an error while a verified empty result is allowed", async () => {
+  stubFetch(200, JSON.stringify({data: {items: [], read_state: "unavailable", empty_reasons: ["数据暂未就绪"]}}));
+  await expect(getIntradayTop()).rejects.toMatchObject({code: "candidate_data_unavailable"});
+  stubFetch(200, JSON.stringify({data: {items: [], read_state: "ready", empty_reasons: ["本轮条件未满足"]}}));
+  await expect(getIntradayTop()).resolves.toMatchObject({items: [], read_state: "ready"});
 });

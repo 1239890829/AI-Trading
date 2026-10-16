@@ -257,9 +257,9 @@ describe("ReviewTab 改进项处置闭环", () => {
     setup("42", "applied");
     render(<ReviewTab allowDispose />);
 
-    expect(await screen.findByText("已实施")).toBeTruthy();
+    expect(await screen.findByText("已登记实施")).toBeTruthy();
     // 已实施就不再重复提供「已实施」按钮，但可撤销
-    expect(screen.queryByRole("button", { name: "已实施" })).toBeNull();
+    expect(screen.queryByRole("button", { name: "登记实施" })).toBeNull();
     expect(screen.getByRole("button", { name: "撤销处置" })).toBeTruthy();
   });
 });
@@ -303,4 +303,19 @@ describe("ReviewTab 只读与请求身份", () => {
     await screen.findAllByText("金额 600127 日期 202609");
     expect(document.querySelector('a[href*="symbol=600127"]')).toBeNull();
   });
+});
+
+
+it("implementation registration requires three evidence fields and keeps the note", async () => {
+  setup(); render(<ReviewTab allowDispose/>);
+  fireEvent.click(await screen.findByRole("button", {name:"登记实施"}));
+  fireEvent.change(screen.getByPlaceholderText(/实施与验证证据/), {target:{value:"修复已完成"}});
+  expect((screen.getByRole("button", {name:"提交"}) as HTMLButtonElement).disabled).toBe(true);
+  fireEvent.change(screen.getByLabelText("实施引用（任务 / PR / 提交）"), {target:{value:"PR #12"}});
+  fireEvent.change(screen.getByLabelText("已上线版本 / 已生效配置"), {target:{value:"release-abc"}});
+  fireEvent.change(screen.getByLabelText("复测记录与结论"), {target:{value:"离线检查通过；实盘效果待观察"}});
+  fireEvent.click(screen.getByRole("button", {name:"提交"}));
+  await waitFor(() => expect(mocked.updateActionItemStatus).toHaveBeenCalledWith(expect.any(Object),"applied","修复已完成", {
+    implementation_ref:"PR #12",release_version:"release-abc",verification_ref:"离线检查通过；实盘效果待观察"
+  }));
 });

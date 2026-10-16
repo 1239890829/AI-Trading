@@ -96,7 +96,7 @@ def test_attachment_keeps_hot_exact_match_read_and_filters_large_concept(catalog
     assert first[0]["official_matches"] == first[1]["official_matches"] == matches
     assert first[2]["stocks"][0]["official"] is False
     assert first[2]["official_matches"] == [] and first[2]["catalog_code"] == "D"
-    assert len(queries) == 6
+    assert len(queries) == 5
     # A hot reverse index must not replace the existing fresh exact-name member read.
     with svc._sf() as db:
         db.query(ThemeMember).filter_by(theme_code="A", symbol="600001").delete()
@@ -106,7 +106,7 @@ def test_attachment_keeps_hot_exact_match_read_and_filters_large_concept(catalog
     official.attach_official(state, second)
     assert second[0]["stocks"][0]["official"] is False
     assert second[0]["official_matches"] == matches
-    assert len(queries) == 4
+    assert len(queries) == 3
 
 
 def test_two_threads_share_one_cold_index_and_expiry_rebuild(catalog, monkeypatch):

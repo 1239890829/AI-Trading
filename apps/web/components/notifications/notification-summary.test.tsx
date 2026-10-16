@@ -39,7 +39,7 @@ it("visibly labels the summary on touch screens and preserves a qualification be
   await open({references:[{event_id:17,kind:"selection",trade_date:null,source_as_of:null,recorded_at:null,source_id:"daily:A",source_version:"version-A",evidence:{pick_basis:basis}}]});
   const row=screen.getByTestId("notification-row");
   expect(within(row).getByTestId("notification-summary").textContent).toContain("依据节选：");
-  expect(within(row).getByText("个股机会 · 条件见详情")).toBeTruthy();
+  expect(within(row).getByText("600127 · 条件见详情")).toBeTruthy();
   expect(within(row).getByTestId("notification-summary").textContent).not.toContain(condition);
   fireEvent.click(within(row).getByTestId("notification-judgment"));
   await waitFor(()=>expect(screen.getByTestId("notification-detail")).toBeTruthy());
@@ -92,7 +92,7 @@ it("the quote action owns its click and does not open notification detail or bub
 
 it("unknown channel results remain visible in a compact risk row and the full reason remains in detail", async () => {
   await open({category:"risk", label:"持仓风险", title:"成本信息待核", symbol:null, body:"成本缺失，不能完成本轮风险核对。", references:[], channels:[{channel:"feishu", state:"unknown", reason:"acceptance_unconfirmed", created_at_ms:1, expires_at_ms:2, accepted_at_ms:null}]});
-  expect(screen.getByTestId("notification-row").textContent).toContain("渠道结果未知");
+  expect(screen.getByTestId("notification-row").textContent).toContain("外部结果待核");
   expect(within(screen.getByTestId("notification-row")).queryByRole("link", {name:/行情/})).toBeNull();
   fireEvent.click(screen.getByText("成本信息待核"));
   const detail = await screen.findByRole("dialog", {name:"成本信息待核"});

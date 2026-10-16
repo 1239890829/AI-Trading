@@ -309,3 +309,31 @@ def test_attach_gates_without_stored_gate_still_provides_live(monkeypatch):
     assert "gate" not in out
     assert out["gate_live"]["gate_source"] == "live"
     assert out["gate_live"]["stand_aside"] is False
+
+
+def test_broad_market_rise_and_weak_limit_up_followthrough_are_not_conflated(monkeypatch):
+    sent = {**LIVE_SENT, "phase": "退潮", "snapshot_freshness": {"state": "ready"},
+        "gate_inputs": {"promotion_1to2": .133, "break_rate": .165, "limit_down": 0,
+                        "prev_zt_median_pct": -1.81},
+        "indicators": [{"name": "上涨/下跌", "value": "4962/560"},
+                       {"name": "涨停家数", "value": 76},
+                       {"name": "昨日涨停今日中位", "value": -1.81},
+                       {"name": "跌停家数", "value": 0}]}
+    _patch_sentiment(monkeypatch, sent)
+    _patch_pctl(monkeypatch, 41, 9)
+    out = _run(picks_route._live_gate(_Request(_State()), HUB, None))
+    assert out["stand_aside"] is True and out["strip_buy_range"] is True
+    assert out["level"] == "strong"  # This presentation fix does not loosen the existing gate.
+    view = out["presentation"]
+    assert view["scope"] == "涨停接力"
+    assert "全市场" not in view["headline"] and "明显转弱" not in view["headline"]
+    assert view["facts"][0] == {"label": "全市场涨/跌", "value": "4962/560家"}
+    assert view["facts"][-1]["value"] == "0家"
+    assert "不是两项独立证据" in view["note"]
+
+
+def test_stale_sentiment_does_not_present_a_current_market_conclusion():
+    from app.picks.gate import describe_gate_context
+    view = describe_gate_context({"snapshot_freshness": {"state": "stale"}}, {"stand_aside": True})
+    assert "待核" in view["headline"]
+    assert view["facts"] == []

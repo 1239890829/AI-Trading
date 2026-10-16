@@ -43,6 +43,7 @@ data/review/*
 data/jev/*
 !data/*/.gitkeep
 *.sqlite3
+data/device-access.sqlite3-*
 *.db
 *.log
 # 助手认知缺口留痕（运行时持续追加，不入库）

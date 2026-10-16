@@ -6,6 +6,7 @@
 
 import asyncio
 import logging
+from types import SimpleNamespace
 from datetime import datetime, timedelta
 
 from app.picks import picks_autogen as pa
@@ -33,7 +34,7 @@ def _dt(h: int, m: int, weekday_offset: int = 0) -> datetime:
 def _app_stub(**state_attrs):
     """构造带 state 的 app 替身。S2-4 后管线依赖走 `PipelineDeps.from_state`，
     因此 state 必须提供 event_store（theme_catalog 可缺省）。"""
-    defaults = {"hub": object(), "event_store": object()}
+    defaults = {"hub": object(), "event_store": object(), "snapshot_service": SimpleNamespace(breadth={}, freshness=lambda: SimpleNamespace(state="ready", as_of=_dt(9, 30)))}
     state = type("S", (), {**defaults, **state_attrs})()
     return type("A", (), {"state": state})()
 
@@ -160,6 +161,9 @@ def test_wait_snapshot_ready_polls_until_breadth():
     calls = {"n": 0}
 
     class Svc:
+        def freshness(self):
+            return SimpleNamespace(state="ready", as_of=_dt(9, 30))
+
         @property
         def breadth(self):
             calls["n"] += 1
@@ -180,8 +184,8 @@ def test_wait_snapshot_ready_times_out_without_blocking():
     ) is False
 
 
-def test_tick_proceeds_without_snapshot_service(tmp_path, monkeypatch):
-    """无 snapshot_service（或旧 stub）→ 不等待、照常生成（回归保护）。"""
+def test_tick_skips_without_snapshot_service(tmp_path, monkeypatch):
+    """无 snapshot_service → 跳过，不把输入未就绪固化成当日空组合。"""
     sf = _factory(tmp_path)
     monkeypatch.setattr(pa, "get_session_factory", lambda: sf)
     counter = {"n": 0}
@@ -192,6 +196,34 @@ def test_tick_proceeds_without_snapshot_service(tmp_path, monkeypatch):
 
     monkeypatch.setattr(pa, "_trade_day_state", _trading)
     # 无 snapshot_service：_wait_snapshot_ready 直接返回 False，不阻塞
-    out = asyncio.run(pa.picks_autogen_tick(_app_stub(), now=_dt(9, 40), run_hour=9, run_minute=26))
-    assert out is True
-    assert counter["n"] == 1
+    out = asyncio.run(pa.picks_autogen_tick(_app_stub(snapshot_service=None), now=_dt(9, 40), run_hour=9, run_minute=26))
+    assert out is False
+    assert counter["n"] == 0
+
+
+def test_stale_and_previous_day_snapshot_do_not_qualify():
+    for state, at in (("stale", _dt(9, 30)), ("ready", _dt(9, 30) - timedelta(days=1))):
+        service = SimpleNamespace(breadth={}, freshness=lambda: SimpleNamespace(state=state, as_of=at))
+        assert asyncio.run(pa._wait_snapshot_ready(_app_stub(snapshot_service=service),
+            timeout=0.001, interval=0.001, trade_date=_dt(9, 30).date())) is False
+
+
+def test_unready_snapshot_can_recover_on_next_existing_tick(tmp_path, monkeypatch):
+    sf = _factory(tmp_path)
+    monkeypatch.setattr(pa, "get_session_factory", lambda: sf)
+    calls = {"n": 0}
+    _stub_generate(monkeypatch, calls)
+    async def trading(*_):
+        return True
+    ready = {"value": False}
+    async def wait(*_, **__):
+        return ready["value"]
+    monkeypatch.setattr(pa, "_trade_day_state", trading)
+    monkeypatch.setattr(pa, "_wait_snapshot_ready", wait)
+    assert not asyncio.run(pa.picks_autogen_tick(_app_stub(), now=_dt(9, 40), run_hour=9, run_minute=26))
+    assert calls["n"] == 0
+    with sf() as db:
+        assert db.query(DailyPickSet).count() == 0
+    ready["value"] = True
+    assert asyncio.run(pa.picks_autogen_tick(_app_stub(), now=_dt(9, 41), run_hour=9, run_minute=26))
+    assert calls["n"] == 1

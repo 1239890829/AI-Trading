@@ -31,7 +31,7 @@ from sqlalchemy import func, or_, select
 
 from app.core.bjtime import beijing_now
 from app.core.config import settings
-from app.core.db import get_session_factory
+from app.core.db import get_session_factory, utcnow
 from app.market import trade_calendar as tc
 from app.models.alert import AlertRule
 from app.models.event import EventCard, EventDirection, EventInterpretation
@@ -83,10 +83,11 @@ def build_theme_index(session_factory=None) -> tuple[dict[str, list[tuple[str, s
     """
     sf = session_factory or get_session_factory()
     with sf() as db:
-        names = {code: name for code, name in db.execute(select(Theme.code, Theme.name)).all()}
+        names = {code: name for code, name in db.execute(select(Theme.code, Theme.name).where(Theme.catalog_active.is_(True), Theme.synced_at <= utcnow())).all()}
         index: dict[str, list[tuple[str, str]]] = {}
-        for code, symbol in db.execute(select(ThemeMember.theme_code, ThemeMember.symbol)).all():
-            index.setdefault(symbol, []).append((code, names.get(code, code)))
+        for code, symbol in db.execute(select(ThemeMember.theme_code, ThemeMember.symbol).where(ThemeMember.synced_at <= utcnow())).all():
+            if code in names:
+                index.setdefault(symbol, []).append((code, names[code]))
     return index, names
 
 
@@ -476,6 +477,10 @@ def get_index_cache(app) -> ThemeIndexCache:
     if cache is None:
         cache = ThemeIndexCache()
         state.board_surge_index_cache = cache
+    revision = getattr(getattr(state, "theme_catalog", None), "revision", 0)
+    if getattr(cache, "_catalog_revision", None) != revision:
+        cache.invalidate()
+        cache._catalog_revision = revision
     return cache
 
 

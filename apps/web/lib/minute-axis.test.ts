@@ -1,3 +1,4 @@
+import { formatMinuteAxisTick } from "./minute-axis";
 // @vitest-environment node
 import { describe, expect, it } from "vitest";
 import { computeMinuteAxis, formatMinutePercentTick, minuteLimitPriceState } from "./minute-axis";
@@ -123,5 +124,22 @@ describe("computeMinuteAxis 分时图纵轴区间", () => {
     expect(Number.isNaN(a.pctBand)).toBe(false);
     // 实际波幅 10 元 < 3000×0.5%=15 元地板 → 取地板
     expect(a.pctBand).toBeCloseTo(0.5, 6);
+  });
+});
+
+
+describe("price scale separated from volume padding", () => {
+  it("does not mark an actual rounded limit price as outside the band", () => {
+    const axis = computeMinuteAxis({prevClose:16.97, limitPct:10, prices:[15.27,16.73], upperPrice:18.67, lowerPrice:15.27});
+    expect(axis.outOfBand).toBe(false);
+    expect(axis.min).toBe(15.27);
+    expect(axis.max).toBe(18.67);
+  });
+  it("hides only padding ticks and preserves genuinely observed prices beyond limits", () => {
+    expect(formatMinuteAxisTick(-15, -10.02, 10.02, true)).toBe("");
+    expect(formatMinuteAxisTick(-10, -10.02, 10.02, true)).toBe("−10.00%");
+    const axis = computeMinuteAxis({prevClose:10, limitPct:10, prices:[8.5], lowerPrice:9, upperPrice:11});
+    expect(axis.outOfBand).toBe(true);
+    expect(formatMinuteAxisTick(-15, axis.pctMin, axis.pctMax, true)).toBe("−15.00%");
   });
 });

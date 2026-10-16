@@ -60,6 +60,7 @@ class ReviewActionItemRow(Base):
 
     status: Mapped[str] = mapped_column(String(16), index=True, default="pending")
     resolution_note: Mapped[str] = mapped_column(Text, default="")
+    implementation_evidence: Mapped[str] = mapped_column(Text, default="{}")
     created_at: Mapped[datetime] = mapped_column(DateTime, default=utcnow, index=True)
     resolved_at: Mapped[datetime | None] = mapped_column(DateTime, default=None)
 

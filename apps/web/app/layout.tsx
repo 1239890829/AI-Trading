@@ -4,6 +4,7 @@ import "./controls.css";
 import "./system.css";
 import "./styles/disclosure-motion.css";
 import "./styles/fund-history.css";
+import { DeviceAccessGate } from "@/components/access/device-access";
 import { NavBar } from "@/components/nav-bar";
 import { FloatingAssistant } from "@/components/assistant/floating-assistant";
 import { InspectionHost, InspectionProvider } from "@/components/inspection/inspection-host";
@@ -38,7 +39,7 @@ export default function RootLayout({ children }: { children: React.ReactNode }) 
       <body className="app-shell h-dvh overflow-hidden flex flex-col antialiased">
         {/* Provider 必须包住 NavBar（通知抽屉在里面用 useDetailModal），
             否则拿到默认 noop context——点无 url 通知没反应（2026-09-09 踩坑） */}
-        <InspectionProvider><SymbolDetailProvider>
+        <DeviceAccessGate><InspectionProvider><SymbolDetailProvider>
           <DetailModalProvider>
             <NavBar />
             {/* 内容区是唯一滚动域：单页布局锁定在可视区内，溢出交给容器内部滚动 */}
@@ -52,7 +53,7 @@ export default function RootLayout({ children }: { children: React.ReactNode }) 
             <SymbolDetailModalHost />
             <InspectionHost />
           </DetailModalProvider>
-        </SymbolDetailProvider></InspectionProvider>
+        </SymbolDetailProvider></InspectionProvider></DeviceAccessGate>
       </body>
     </html>
   );

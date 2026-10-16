@@ -148,38 +148,26 @@ def _groups_from_watch_ledger(session_factory) -> list[dict]:
 
     from app.models.watch_ledger import WatchLedger
 
-    with session_factory() as db:
-        rows = db.execute(
-            select(WatchLedger).order_by(
-                WatchLedger.trade_date.asc(), WatchLedger.symbol.asc()
-            )
-        ).scalars().all()
-
+    # Stream only consumed columns. Keep the complete historical denominator and
+    # the original deterministic addition order without retaining ORM rows.
     by_date: dict[str, dict] = defaultdict(
-        lambda: {"n": 0, "good": 0, "bad": 0, "flat": 0, "ex": []}
+        lambda: {"n": 0, "good": 0, "bad": 0, "flat": 0, "sum": 0.0, "observed": 0}
     )
-    for r in rows:
-        if not r.verdict:  # 未清算：不参与统计
-            continue
-        g = by_date[r.trade_date]
-        g["n"] += 1
-        if r.verdict == "success":
-            g["good"] += 1
-        elif r.verdict == "fail":
-            g["bad"] += 1
-        else:
-            g["flat"] += 1
-        if r.pnl_pct is not None:
-            g["ex"].append(float(r.pnl_pct))
-
-    return [
-        {
-            "date": d, "phase": None, "n": g["n"],
-            "good": g["good"], "bad": g["bad"], "flat": g["flat"],
-            "mean_excess": round(sum(g["ex"]) / len(g["ex"]), 3) if g["ex"] else None,
-        }
-        for d, g in sorted(by_date.items())
-    ]
+    with session_factory() as db:
+        rows = db.execute(select(WatchLedger.trade_date, WatchLedger.verdict, WatchLedger.pnl_pct)
+            .where(WatchLedger.verdict.is_not(None), WatchLedger.verdict != "")
+            .order_by(WatchLedger.trade_date.asc(), WatchLedger.symbol.asc())
+            .execution_options(yield_per=500))
+        for day, verdict, pnl in rows:
+            group = by_date[day]
+            group["n"] += 1
+            group[{"success": "good", "fail": "bad"}.get(verdict, "flat")] += 1
+            if pnl is not None:
+                group["sum"] += float(pnl)
+                group["observed"] += 1
+    return [dict(date=day, phase=None, n=g["n"], good=g["good"], bad=g["bad"], flat=g["flat"],
+                 mean_excess=round(g["sum"] / g["observed"], 3) if g["observed"] else None)
+            for day, g in sorted(by_date.items())]
 
 
 COLLECTORS = {

@@ -5,6 +5,7 @@
 """
 from __future__ import annotations
 
+import asyncio
 import pytest
 
 from app.market.article import (
@@ -157,3 +158,93 @@ def test_endpoint_degrades_on_fetch_failure(client, monkeypatch: pytest.MonkeyPa
     )
     assert resp.status_code == 502
     assert "test source unavailable" in resp.json()["detail"]
+
+
+@pytest.mark.parametrize('url', [
+    'https://finance.eastmoney.com:8443/a/test.html',
+    'https://test@finance.eastmoney.com/a/test.html',
+])
+def test_article_rejects_nonstandard_port_and_credentials(url):
+    with pytest.raises(ValueError):
+        classify_url(url)
+
+
+def test_article_redirect_cannot_escape_allowlist(monkeypatch):
+    async def run_case():
+        import httpx
+        import socket
+        from app.market import article
+
+        client_class = httpx.AsyncClient
+        seen = []
+        def reply(req):
+            seen.append(req)
+            return httpx.Response(302, headers={'Location': 'http://127.0.0.1/private'})
+        monkeypatch.setattr(socket, 'getaddrinfo', lambda *a, **k: [
+            (2, 1, 6, '', ('1.1.1.1', 443))])
+        monkeypatch.setattr(article.httpx, 'AsyncClient', lambda **kw: client_class(
+            transport=httpx.MockTransport(reply), **kw))
+        with pytest.raises(ArticleFetchError):
+            await article.fetch_article('https://finance.eastmoney.com/a/test.html')
+        assert len(seen) == 1
+    asyncio.run(run_case())
+
+
+def test_article_pins_public_dns_and_keeps_host_tls_identity(monkeypatch):
+    async def run_case():
+        import httpx
+        import socket
+        from app.market import article
+
+        client_class = httpx.AsyncClient
+        seen = []
+        def reply(req):
+            seen.append(req)
+            if len(seen) == 1:
+                return httpx.Response(302, headers={'Location': '/a/final.html'})
+            return httpx.Response(200, text=NEWS_HTML)
+        monkeypatch.setattr(socket, 'getaddrinfo', lambda *a, **k: [
+            (2, 1, 6, '', ('1.1.1.1', 443))])
+        monkeypatch.setattr(article.httpx, 'AsyncClient', lambda **kw: client_class(
+            transport=httpx.MockTransport(reply), **kw))
+        result = await article.fetch_article('https://finance.eastmoney.com/a/test.html')
+        assert result['paragraphs'][1] == '第二条正文内容。'
+        assert len(seen) == 2
+        assert all(r.url.host == '1.1.1.1' for r in seen)
+        assert all(r.headers['host'] == 'finance.eastmoney.com' for r in seen)
+        assert all(r.extensions['sni_hostname'] == 'finance.eastmoney.com' for r in seen)
+        assert seen[-1].url.path == '/a/final.html'
+    asyncio.run(run_case())
+
+
+@pytest.mark.parametrize('address', ['127.0.0.1', '10.0.0.1', '169.254.169.254', '::1', '::ffff:127.0.0.1'])
+def test_article_rejects_nonpublic_dns_before_connect(monkeypatch, address):
+    async def run_case():
+        import socket
+        from app.market import article
+        monkeypatch.setattr(socket, 'getaddrinfo', lambda *a, **k: [
+            (2, 1, 6, '', (address, 443))])
+        with pytest.raises(ArticleFetchError, match='公网'):
+            await article.fetch_article('https://finance.eastmoney.com/a/test.html')
+    asyncio.run(run_case())
+
+
+def test_article_response_bound_and_redirect_budget(monkeypatch):
+    async def run_case():
+        import httpx
+        import socket
+        from app.market import article
+
+        client_class = httpx.AsyncClient
+        monkeypatch.setattr(socket, 'getaddrinfo', lambda *a, **k: [
+            (2, 1, 6, '', ('1.1.1.1', 443))])
+        async def run(reply):
+            monkeypatch.setattr(article.httpx, 'AsyncClient', lambda **kw: client_class(
+                transport=httpx.MockTransport(reply), **kw))
+            return await article.fetch_article('https://finance.eastmoney.com/a/test.html')
+        monkeypatch.setattr(article, '_MAX_RESPONSE_BYTES', 64, raising=False)
+        with pytest.raises(ArticleFetchError, match='过大'):
+            await run(lambda req: httpx.Response(200, content=b'x' * 65))
+        with pytest.raises(ArticleFetchError, match='跳转'):
+            await run(lambda req: httpx.Response(302, headers={'Location': '/a/test.html'}))
+    asyncio.run(run_case())

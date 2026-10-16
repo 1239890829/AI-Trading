@@ -62,7 +62,7 @@ export const SUB_LABELS: [string, string][] = [
 /** 梯队地位配色：唯一权威表在 `@/lib/role-style`（S2-10 合并，跨端由后端测试守卫）。 */
 
 export const TIER_STYLE: Record<string, string> = {
-  龙头博弈: "border-red-500/50 bg-red-500/10 text-red-700 dark:text-red-300",
+  龙头博弈: "border-zinc-200 dark:border-zinc-800 text-red-700 dark:text-red-300",
   趋势跟随: "border-sky-500/50 bg-sky-500/10 text-sky-700 dark:text-sky-300",
   情绪低位: "border-amber-500/50 bg-amber-500/10 text-amber-800 dark:text-amber-300",
 };
@@ -464,10 +464,10 @@ export function PickCard({
             <span
               className={`rounded border px-1.5 py-0.5 text-[10px] font-medium ${
                 item.confidence.tier === "strong"
-                  ? "border-red-500/50 bg-red-500/10 text-red-700 dark:text-red-300"
+                  ? "border-zinc-200 dark:border-zinc-800 text-red-700 dark:text-red-300"
                   : item.confidence.tier === "executable"
                     ? "border-sky-500/50 bg-sky-500/10 text-sky-700 dark:text-sky-300"
-                    : "border-amber-500/40 bg-amber-500/10 text-amber-800 dark:text-amber-300"
+                    : "border-zinc-200 dark:border-zinc-800 text-amber-800 dark:text-amber-300"
               }`}
               title={`meta 置信层（综合分+相位+筹码+红线 → 三档）：\n${item.confidence.reasons.join("；")}`}
             >
@@ -691,7 +691,7 @@ export function PickCard({
                 }
                 className={
                   executionState !== "ready"
-                    ? "border-amber-500/40 bg-amber-500/10 text-amber-800 dark:text-amber-300"
+                    ? "border-zinc-200 dark:border-zinc-800 text-amber-800 dark:text-amber-300"
                     : item.execution.gate_decision === "passed"
                       ? "border-sky-500/50 bg-sky-500/10 text-sky-700 dark:text-sky-300"
                       : "border-zinc-300 text-zinc-600 dark:border-zinc-700 dark:text-zinc-400"
@@ -720,11 +720,11 @@ export function PickCard({
             title={`${readError ? "上次读取的" : ""}可参与性判定（候选资格，不代表成交保证）：${item.tradability.basis}`}
             className={
               readError
-                ? "border-amber-500/40 bg-amber-500/10 text-amber-800 dark:text-amber-300"
+                ? "border-zinc-200 dark:border-zinc-800 text-amber-800 dark:text-amber-300"
                 : item.tradability.level === "可参与"
                 ? "border-sky-500/50 bg-sky-500/10 text-sky-700 dark:text-sky-300"
                 : item.tradability.level === "不可参与"
-                  ? "border-amber-500/40 bg-amber-500/10 text-amber-800 dark:text-amber-300"
+                  ? "border-zinc-200 dark:border-zinc-800 text-amber-800 dark:text-amber-300"
                   : "border-zinc-300 text-zinc-600 dark:border-zinc-700 dark:text-zinc-400"
             }
           />
@@ -775,7 +775,7 @@ export function PickCard({
               className={
                 item.followState === "followable"
                   ? "border-sky-500/50 bg-sky-500/10 text-sky-700 dark:text-sky-300"
-                  : "border-red-500/50 bg-red-500/10 text-red-700 dark:text-red-300"
+                  : "border-zinc-200 dark:border-zinc-800 text-red-700 dark:text-red-300"
               }
             />
           )}
@@ -783,7 +783,7 @@ export function PickCard({
             <Chip
               text="派发警示"
               title={`筹码形态警示（CYQ 近似口径）：${item.chipSignal.reasons.join("；")}`}
-              className="border-red-500/50 bg-red-500/10 text-red-700 dark:text-red-300"
+              className="border-zinc-200 dark:border-zinc-800 text-red-700 dark:text-red-300"
             />
           )}
           {item.chipSignal?.signal === "launch_watch" && (
@@ -922,18 +922,22 @@ export function StandAsideBanner({
       data-testid={cleared ? "stand-aside-cleared" : "stand-aside-banner"}
       className={`gate-banner shrink-0 rounded-lg border px-3 py-2 text-xs ${
         cleared
-          ? "border-emerald-500/40 bg-emerald-500/10 text-emerald-800 dark:text-emerald-300"
+          ? "border-zinc-200 dark:border-zinc-800 text-emerald-800 dark:text-emerald-300"
           : strong
-            ? "border-red-500/50 bg-red-500/10 text-red-700 dark:text-red-300"
-            : "border-amber-500/40 bg-amber-500/10 text-amber-800 dark:text-amber-300"
+            ? "border-zinc-200 dark:border-zinc-800 text-red-700 dark:text-red-300"
+            : "border-zinc-200 dark:border-zinc-800 text-amber-800 dark:text-amber-300"
       }`}
     >
       <div className="gate-current-advice flex items-start gap-1.5 font-medium">
         <svg aria-hidden="true" className="mt-0.5 shrink-0" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.6">
           {cleared ? <path d="m5 12 4 4L19 6" /> : <><path d="m12 3 9 17H3L12 3Z" /><path d="M12 9v4m0 3v1" /></>}
         </svg>
-        <span>{gate.advice || "风险复核不可用，当前状态待确认"}</span>
+        <span>{unavailable ? "实时判断未更新，以下为生成时记录" : (gate.presentation?.headline ?? gate.advice) || "风险复核不可用，当前状态待确认"}</span>
+        {!unavailable && gate.presentation?.judged_at && <span className="ml-auto shrink-0 font-normal tabular-nums opacity-80">{timeTextBJ(gate.presentation.judged_at)}</span>}
       </div>
+      {!unavailable && gate.presentation && <dl className="mt-2 grid grid-cols-2 gap-x-4 gap-y-2 sm:grid-cols-4">
+        {gate.presentation.facts.map(fact => <div key={fact.label}><dt className="text-[10px] opacity-80">{fact.label}</dt><dd className="mt-0.5 font-medium tabular-nums">{fact.value}</dd></div>)}
+      </dl>}
       {newly && <p className="mt-1 font-medium">生成时{at ? `（${at}）` : ""}未触发闸门；当前复核<strong className="font-medium">已触发</strong>，新增风险须核对。</p>}
       {cleared ? <>
         <p className="mt-1 font-medium">生成时{at ? `（${at}）` : ""}按「{cmp.storedPhase ?? "未知"}」判空仓观望；当前<strong className="font-medium">已解除</strong>。</p>
@@ -945,6 +949,8 @@ export function StandAsideBanner({
       <details className="gate-disclosure mt-1.5">
         <summary className="cursor-pointer py-1 font-medium focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-current">核对依据与时点对照</summary>
         <div className="gate-detail-content mt-2 space-y-2 leading-relaxed">
+          {unavailable && gate.advice && <p>生成时原提示：{gate.advice}</p>}
+          {gate.presentation && <p>{gate.presentation.note}</p>}
           {gate.reasons.length > 0 && <div><p className="font-medium">{unavailable ? "生成时刻触发依据（当前复核不可用）" : "当前触发依据"}</p><ul className="mt-1 space-y-0.5">{gate.reasons.map(r => <li key={r}>· {r}</li>)}</ul></div>}
           {(cleared || newly || cmp.drift === "reasons_changed") && <GateComparisonLines cmp={cmp} />}
           {stored && gate.gate_source === "live" && stored.reasons.length > 0 && <div><p className="font-medium">生成时刻原始依据</p><ul className="mt-1 space-y-0.5">{stored.reasons.map(r => <li key={r}>· {r}</li>)}</ul></div>}

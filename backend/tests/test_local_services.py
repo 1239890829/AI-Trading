@@ -2,7 +2,6 @@
 from __future__ import annotations
 
 import importlib.util
-import base64
 import json
 import os
 from pathlib import Path
@@ -143,12 +142,12 @@ def test_foreground_launch_uses_fixed_ports_without_build_or_reload(launcher, pr
     assert seen["env"]["ASHARE_API_TOKEN"] == "fixture=a=b"
 
 
-def test_local_unprotected_frontend_stays_on_loopback(launcher, project, monkeypatch):
+def test_frontend_requires_server_token_even_on_local_mode(launcher, project, monkeypatch):
     seen = fake_runtime(launcher, project, monkeypatch)
     (project / "backend/.env").write_text("ASHARE_AUTH_MODE=local\n", encoding="utf-8")
-    with pytest.raises(Executed):
+    with pytest.raises(launcher.ServiceError, match="device_access_requires_server_token"):
         launcher.launch(project, "frontend", dev=False, environ={})
-    assert seen["argv"][seen["argv"].index("--hostname") + 1] == "127.0.0.1"
+    assert "argv" not in seen
 
 
 def test_backend_does_not_inherit_reload_worker_or_python_injection_switches(launcher, project, monkeypatch):
@@ -306,7 +305,6 @@ def test_port_lock_survives_real_node_exec_without_loading_next(launcher, tmp_pa
 
 def configure_checks(launcher, monkeypatch, *, token="fixture=a=b", change=None):
     calls = []
-    expected = "ashare-token." + base64.urlsafe_b64encode(token.encode()).decode().rstrip("=") if token else None
 
     def read(url, headers):
         calls.append((url, dict(headers)))
@@ -318,8 +316,10 @@ def configure_checks(launcher, monkeypatch, *, token="fixture=a=b", change=None)
             return 200, {"status": "degraded"}, ""
         if url == f"{launcher.BACKEND_ORIGIN}/api/quotes" and token and not headers:
             return 401, None, ""
-        if url.endswith("/api/ws-credential"):
-            return 200, {"subprotocol": expected}, "no-store"
+        if url.endswith("/api/ws-credential") or "/backend/api/quotes" in url:
+            return 401, None, "no-store"
+        if url.endswith("/api/access/status"):
+            return 200, {"state": "unpaired"}, "no-store"
         return 200, {"data": []}, ""
 
     monkeypatch.setattr(launcher, "read_json", read)
@@ -327,7 +327,7 @@ def configure_checks(launcher, monkeypatch, *, token="fixture=a=b", change=None)
     return calls
 
 
-@pytest.mark.parametrize("token", ["fixture=a=b", ""])
+@pytest.mark.parametrize("token", ["fixture=a=b"])
 def test_check_accepts_empty_cache_without_claiming_market_or_ws_health(launcher, monkeypatch, token):
     calls = configure_checks(launcher, monkeypatch, token=token)
     result = launcher.check(launcher.AuthConfig("local", token))
@@ -335,15 +335,15 @@ def test_check_accepts_empty_cache_without_claiming_market_or_ws_health(launcher
     assert result["actual_ws"] == "not_verified_use_existing_browser"
     assert result["market_freshness"] == "not_verified"
     assert all(url in launcher.CHECK_URLS for url, _ in calls)
-    assert len(calls) == (5 if token else 4)
+    assert len(calls) == 6
     assert all(headers == {} for url, headers in calls if url.startswith(launcher.FRONTEND_ORIGIN))
     assert "fixture=a=b" not in json.dumps(result)
 
 
 @pytest.mark.parametrize("failure,code", [
-    ("proxy", "frontend_proxy_auth_failed"),
-    ("credential", "frontend_ws_credential_mismatch"),
-    ("cache", "frontend_ws_credential_mismatch"),
+    ("proxy", "frontend_proxy_pairing_not_enforced"),
+    ("credential", "frontend_ws_pairing_not_enforced"),
+    ("cache", "frontend_ws_pairing_not_enforced"),
     ("backend_token", "backend_authenticated_read_failed"),
     ("unprotected", "backend_auth_posture_mismatch"),
     ("health", "backend_health_unavailable"),
@@ -351,11 +351,11 @@ def test_check_accepts_empty_cache_without_claiming_market_or_ws_health(launcher
 def test_failed_auth_never_reports_ready_or_leaks_secret(launcher, project, monkeypatch, capsys, failure, code):
     def changed(url, headers):
         if failure == "proxy" and "/backend/api/quotes" in url:
-            return 401, {"detail": "fixture=a=b"}, ""
+            return 200, {"data": []}, ""
         if failure == "credential" and url.endswith("/api/ws-credential"):
             return 200, {"subprotocol": "ashare-token.wrong-secret"}, "no-store"
         if failure == "cache" and url.endswith("/api/ws-credential"):
-            return 200, {"subprotocol": "ashare-token.Zml4dHVyZT1hPWI"}, "public"
+            return 401, None, "public"
         if failure == "backend_token" and headers:
             return 401, None, ""
         if failure == "unprotected" and url == f"{launcher.BACKEND_ORIGIN}/api/quotes" and not headers:

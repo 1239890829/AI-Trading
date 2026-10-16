@@ -6,7 +6,7 @@ export const TASK_LINKS = [
   { id: "research", href: "/agent?area=research&tab=review", label: "复盘", paths: ["/agent"] },
 ] as const;
 
-const MAINTENANCE_TABS = new Set(["operations", "evolution", "tasks", "alerts", "params", "repos"]);
+const MAINTENANCE_TABS = new Set(["operations", "evolution", "tasks", "alerts", "params", "repos", "validation"]);
 
 export function agentArea(area: string | null, tab: string | null) {
   if (area === "maintenance") return "maintenance";

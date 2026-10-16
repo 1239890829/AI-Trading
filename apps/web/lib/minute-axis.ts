@@ -52,6 +52,13 @@ export function formatMinutePercentTick(value: number): string {
   return `${sign}${Math.abs(normalized).toFixed(2)}%`;
 }
 
+/** Price/percent axes share a canvas with volume. Do not label volume padding as prices. */
+export function formatMinuteAxisTick(value: number, min: number, max: number, percent = false): string {
+  const tolerance = Math.max(1, Math.abs(min), Math.abs(max)) * 1e-9;
+  if (!Number.isFinite(value) || value < min - tolerance || value > max + tolerance) return "";
+  return percent ? formatMinutePercentTick(value) : value.toFixed(2);
+}
+
 export type MinuteLimitPriceState = "both" | "upper-only" | "lower-only" | "none";
 
 /** 实际涨跌停价四态；0/-1/null/NaN 都是“未提供”，不得拿名义比例补造。 */
@@ -69,6 +76,8 @@ export function computeMinuteAxis(opts: {
   limitPct: number | null;
   prices: unknown[];
   auctionPrice?: unknown;
+  upperPrice?: unknown;
+  lowerPrice?: unknown;
 }): MinuteAxis {
   const { prevClose, limitPct } = opts;
   if (!isPositivePrice(prevClose)) throw new RangeError("Invalid minute reference price");
@@ -91,13 +100,15 @@ export function computeMinuteAxis(opts: {
   const hasExtrema = Number.isFinite(hi) && Number.isFinite(lo);
 
   if (lim != null) {
-    const limUp = prevClose * (1 + lim / 100);
-    const limDn = Math.max(prevClose * (1 - lim / 100), 0);
+    const actualUp = isPositivePrice(opts.upperPrice) && opts.upperPrice >= prevClose;
+    const actualDn = isPositivePrice(opts.lowerPrice) && opts.lowerPrice <= prevClose;
+    const limUp = actualUp ? opts.upperPrice as number : prevClose * (1 + lim / 100);
+    const limDn = actualDn ? opts.lowerPrice as number : Math.max(prevClose * (1 - lim / 100), 0);
     const beyond = hasExtrema && (hi > limUp || lo < limDn);
-    // 常规情形直接返回名义带：pctBand 恒等于 lim（不经过浮点换算，
-    // 否则 (11/10-1)*100 会得到 10.000000000000002，刻度出现尾差）
+    // 有实际涨跌停价时尊重分位取整；仅名义比例时保留精确的 ±lim。
     if (!beyond) {
-      return { ...result(limDn, limUp, false), pctBand: lim };
+      const axis = result(limDn, limUp, false);
+      return actualUp || actualDn ? axis : { ...axis, pctMin: -lim, pctMax: lim, pctBand: lim };
     }
     const min = Math.min(limDn, lo);
     const max = Math.max(limUp, hi);

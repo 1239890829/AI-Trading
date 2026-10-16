@@ -64,7 +64,7 @@ async function settle() {
 
 beforeEach(() => {
   FakeWS.instances = [];
-  cred.value = [];
+  cred.value = ["ashare-ticket.fixture"];
   cred.calls = 0;
   vi.stubGlobal("WebSocket", FakeWS);
   vi.useFakeTimers();
@@ -80,28 +80,29 @@ afterEach(() => {
 
 describe("行情 WS 的子协议凭据（R22）", () => {
   it("配置了凭据 ⇒ 建连时带上子协议", async () => {
-    cred.value = ["ashare-token.YWJj"];
+    cred.value = ["ashare-ticket.YWJj"];
     const { unmount } = renderHook(() => useQuoteStream(["600519"]));
     await settle();
     expect(FakeWS.instances).toHaveLength(1);
-    expect(FakeWS.instances[0].protocols).toEqual(["ashare-token.YWJj"]);
+    expect(FakeWS.instances[0].protocols).toEqual(["ashare-ticket.YWJj"]);
     expect(FakeWS.instances[0].url).toContain("/ws/quotes?symbols=600519");
     unmount();
   });
 
-  it("未配置凭据 ⇒ 建连不带第二个参数（本地 develop 零摩擦，不引入空协议数组）", async () => {
+  it("未获得短效凭据时不建立无授权连接，并在退避后重新申请", async () => {
     cred.value = [];
-    const { unmount } = renderHook(() => useQuoteStream(["600519"]));
+    const {unmount} = renderHook(() => useQuoteStream(["600519"]));
     await settle();
+    expect(FakeWS.instances).toHaveLength(0);
+    cred.value = ["ashare-ticket.recovered"];
+    await act(async () => {await vi.advanceTimersByTimeAsync(2100);});
     expect(FakeWS.instances).toHaveLength(1);
-    // 关键：`new WebSocket(url, [])` 与 `new WebSocket(url)` 在浏览器里
-    // **不等价**——传空数组会让服务端收到空的 Sec-WebSocket-Protocol。
-    expect(FakeWS.instances[0].protocols).toBeUndefined();
+    expect(FakeWS.instances[0].protocols).toEqual(["ashare-ticket.recovered"]);
     unmount();
   });
 
   it("断线重连后仍带凭据（凭据是连接期常量，不因重连丢失）", async () => {
-    cred.value = ["ashare-token.YWJj"];
+    cred.value = ["ashare-ticket.YWJj"];
     const { unmount } = renderHook(() => useQuoteStream(["600519"]));
     await settle();
     expect(FakeWS.instances).toHaveLength(1);
@@ -113,12 +114,12 @@ describe("行情 WS 的子协议凭据（R22）", () => {
     });
     await settle();
     expect(FakeWS.instances.length).toBeGreaterThanOrEqual(2);
-    expect(FakeWS.instances.at(-1)?.protocols).toEqual(["ashare-token.YWJj"]);
+    expect(FakeWS.instances.at(-1)?.protocols).toEqual(["ashare-ticket.YWJj"]);
     unmount();
   });
 
   it("取凭据期间卸载 ⇒ 不得再建 socket（await 窗口的竞态）", async () => {
-    cred.value = ["ashare-token.YWJj"];
+    cred.value = ["ashare-ticket.YWJj"];
     const { unmount } = renderHook(() => useQuoteStream(["600519"]));
     // 不 settle，直接卸载：此时 connect() 正挂在 await 上
     unmount();

@@ -1,6 +1,7 @@
 import type { NextRequest } from "next/server";
 
 import { buildUpstreamHeaders } from "@/lib/proxy-headers";
+import { accessDenied, DEVICE_COOKIE, sameOrigin, requestOrigin } from "@/lib/device-access-server";
 
 /**
  * 后端反向代理：**运行时**读取 BACKEND_ORIGIN。
@@ -20,12 +21,19 @@ const DEFAULT_BACKEND = "http://127.0.0.1:8000";
 async function proxy(req: NextRequest) {
   const backend = process.env.BACKEND_ORIGIN || DEFAULT_BACKEND;
   const path = req.nextUrl.pathname.replace(/^\/backend/, "");
+  if (!sameOrigin(req)) return accessDenied(403, "same_origin_required");
+  if (!path.startsWith("/api/") || path === "/api/access" || path.startsWith("/api/access/")) return accessDenied(404, "proxy_path_not_found");
+  const session = req.cookies.get(DEVICE_COOKIE)?.value;
+  if (!session) return accessDenied();
   const target = `${backend}${path}${req.nextUrl.search}`;
 
   // 凭据注入：**一律注入**（含 GET/HEAD）——后端是默认拒绝，除 /api/health 外
   // 所有路由都要凭据，只给写请求注入会让全部读请求 401。取值与"客户端伪造头一律
   // 丢弃"的规则集中在 `lib/proxy-headers.ts`（那里有行为式测试，本文件不再自查）。
   const headers = buildUpstreamHeaders(req.headers, process.env.ASHARE_API_TOKEN);
+  headers.set("x-ashare-browser", "1");
+  headers.set("x-ashare-session", session);
+  headers.set("x-ashare-origin", requestOrigin(req)!);
 
   const init: RequestInit & { duplex?: string } = {
     method: req.method,
@@ -56,6 +64,8 @@ async function proxy(req: NextRequest) {
   // 长度/编码交给响应框架处理，透传会与实际 body 不符
   out.delete("content-encoding");
   out.delete("content-length");
+  out.delete("set-cookie");
+  out.set("cache-control", "no-store");
   return new Response(upstream.body, { status: upstream.status, headers: out });
 }
 

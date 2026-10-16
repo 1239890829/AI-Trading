@@ -318,7 +318,7 @@ def test_old_head_upgrade_keeps_legacy_row_unbound_and_column_nullable(tmp_path)
         config.attributes['connection'] = conn
         command.upgrade(config, 'head')
         assert conn.execute(text('SELECT note,excess_pct,review_context,selection_version FROM daily_pick_review')).one() == ('legacy evidence', 4.0, None, None)
-        assert conn.execute(text('SELECT version_num FROM alembic_version')).scalar() == 'a8d4f2c6e9b1'
+        assert conn.execute(text('SELECT version_num FROM alembic_version')).scalar() == 'd2f4b6e8a0c1'
         assert conn.execute(text('SELECT fill_price,executed_at,fee_known,selection_ref FROM real_trade')).one() == (10, None, None, None)
     col = next(c for c in inspect(engine).get_columns('daily_pick_review') if c['name'] == 'review_context')
     assert col['nullable'] is True
@@ -329,5 +329,5 @@ def test_old_head_upgrade_keeps_legacy_row_unbound_and_column_nullable(tmp_path)
         with pytest.raises(RuntimeError, match='preservation plan'):
             command.downgrade(config, 'e2c6a8f4b9d1')
         assert conn.execute(text('SELECT count(*) FROM daily_pick_review')).scalar() == 3
-        assert conn.execute(text('SELECT version_num FROM alembic_version')).scalar() == 'a8d4f2c6e9b1'
+        assert conn.execute(text('SELECT version_num FROM alembic_version')).scalar() == 'a8d4f2c6e9b1'  # catalog-only downgrade completes before protected business migration
     engine.dispose()

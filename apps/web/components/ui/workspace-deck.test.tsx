@@ -2,8 +2,22 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 import { cleanup, fireEvent, render, screen } from "@testing-library/react";
 import { WorkspaceDeck } from "./workspace-deck";
 import { MAINTENANCE_TOOLS } from "@/lib/workspace-tools";
+import { TaskBrowser } from "./task-browser";
 
 afterEach(cleanup);
+it("设备分权保留普通入口，维护到期不残留维护链接", () => {
+  const view = render(<TaskBrowser />);
+  fireEvent.click(screen.getByRole("button", {name: "浏览工作区"}));
+  expect(screen.getByRole("button", {name: /选股与跟踪/})).toBeTruthy();
+  expect(screen.getByRole("button", {name: /证据与复盘/})).toBeTruthy();
+  expect(screen.queryByRole("button", {name: /系统维护/})).toBeNull();
+  view.rerender(<TaskBrowser maintenance />);
+  fireEvent.click(screen.getByRole("button", {name: /系统维护/}));
+  expect(screen.getByRole("link", {name: /后台任务/})).toBeTruthy();
+  view.rerender(<TaskBrowser />);
+  expect(screen.queryByRole("link", {name: /后台任务/})).toBeNull();
+  expect(screen.getByRole("link", {name: /盘中候选/})).toBeTruthy();
+});
 describe("shared workspace tray", () => {
   it("keeps one group open and unmounts the previous tool choices", () => {
     const onOpen = vi.fn();

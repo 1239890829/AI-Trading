@@ -174,3 +174,22 @@ describe("clockOf：生成时刻提取", () => {
     expect(clockOf("2026-09-16")).toBeNull();
   });
 });
+
+
+describe("saved empty selections", () => {
+  it("does not turn a partial input into no market opportunity", async () => {
+    const {dailyEmptySummary} = await import("./picks-gate");
+    const meta = {weights: {}, deep_dives: 24, min_pick_score: 50};
+    expect(dailyEmptySummary({date: "2026-10-16", items: [], meta})).toContain("已评估 24 只");
+    expect(dailyEmptySummary({date: "2026-10-16", items: [], meta})).toContain("未保存完整输入状态");
+    expect(dailyEmptySummary({date: "2026-10-16", items: [], meta: {...meta,
+      input_readiness: {snapshot_state: "stale", snapshot_as_of: null, events_available: true}}})).toContain("不能据此判断没有机会");
+  });
+});
+
+
+it("历史判断缺失不冒充盘中新触发", () => {
+  const active: StandAsideGate = {...stored, gate_source: "live"};
+  expect(gateDrift(active, undefined)).toBe("none");
+  expect(gateDrift(active, {} as StandAsideGate)).toBe("none");
+});

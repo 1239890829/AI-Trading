@@ -39,6 +39,9 @@ export interface ReviewReportDetail {
     /** pending | confirmed | applied | rejected | reverted */
     status: string;
     resolution_note: string;
+    resolved_at?: string | null;
+    disposition_basis?: string;
+    implementation_evidence?: ImplementationEvidence;
   }[];
   meta_insights: { dimension: string; observation: string; effectiveness: string; evidence: string; suggestion: string }[];
   summary: string;
@@ -62,6 +65,8 @@ export async function getReviewReport(tradeDate: string): Promise<ReviewReportDe
 export async function getReviewEffectiveness(): Promise<ReviewEffectiveness> {
   return (await getJson<ReviewEffectiveness>("/api/review/effectiveness")).data;
 }
+
+export interface ImplementationEvidence {implementation_ref?: string; release_version?: string; verification_ref?: string}
 
 export type ActionItemStatus = "pending" | "recorded" | "confirmed" | "applied" | "rejected" | "reverted";
 
@@ -90,10 +95,12 @@ export async function updateActionItemStatus(
   item: ActionItemRef,
   status: ActionItemStatus,
   note = "",
+  implementationEvidence?: ImplementationEvidence,
 ): Promise<ReviewActionItem> {
   return (await sendJson<ReviewActionItem>(`/api/review/action-items/${item.id}`, "PATCH", {
     status,
     note,
+    ...(implementationEvidence ? {implementation_evidence: implementationEvidence} : {}),
     trade_date: item.trade_date,
     category: item.category,
     title: item.title,

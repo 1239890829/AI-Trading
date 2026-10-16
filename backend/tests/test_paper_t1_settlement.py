@@ -337,3 +337,55 @@ def test_settlement_survives_engine_restart(tmp_path, monkeypatch):
     monkeypatch.setattr(pe, "_today", lambda: "20260914")
     assert asyncio.run(reborn.settle_t1()) == 1
     assert _snap(sf2)["frozen"] == 0
+
+
+def test_settlement_database_work_does_not_block_market_loop(tmp_path, monkeypatch):
+    """A real SQLite lock must not stop the loop serving quotes and notifications."""
+    import sqlite3
+    import threading
+    import time
+    from concurrent.futures import ThreadPoolExecutor
+    from sqlalchemy import event
+    engine, sf = _mk_engine(tmp_path, days=['20261014', '20261015'])
+    monkeypatch.setattr('app.paper.engine._today', lambda: '20261015')
+    _seed(sf, buy_date='20261014', frozen=100)
+    sql_started, locked = threading.Event(), threading.Event()
+    db_engine = sf.kw['bind']
+    loop_id = threading.get_ident()
+    sql_threads = []
+    def inspect(_conn, _cursor, statement, _params, _context, _many):
+        if 'paper_position' in statement.lower():
+            sql_threads.append(threading.get_ident())
+            sql_started.set()
+    event.listen(db_engine, 'before_cursor_execute', inspect)
+    def hold():
+        with sqlite3.connect(db_engine.url.database) as db:
+            db.execute('BEGIN EXCLUSIVE')
+            locked.set()
+            assert sql_started.wait(2)
+            time.sleep(.2)
+            db.commit()
+    async def run():
+        ticks = []
+        async def beat():
+            while not done.is_set():
+                ticks.append(time.perf_counter())
+                await asyncio.sleep(.01)
+        task = asyncio.create_task(beat())
+        try:
+            assert await engine.settle_t1() == 1
+        finally:
+            done.set()
+            await task
+        return ticks
+    done = threading.Event()
+    try:
+        with ThreadPoolExecutor(max_workers=1) as pool:
+            writer = pool.submit(hold)
+            assert locked.wait(2)
+            ticks = asyncio.run(run())
+            writer.result(timeout=3)
+        assert sql_threads and loop_id not in sql_threads
+        assert len(ticks) >= 3
+    finally:
+        event.remove(db_engine, 'before_cursor_execute', inspect)

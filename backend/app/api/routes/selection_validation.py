@@ -3,7 +3,7 @@ import asyncio
 from datetime import timedelta
 from fastapi import APIRouter, HTTPException, Query
 from app.core.bjtime import beijing_today
-from app.picks.validation import validation_report
+from app.picks.validation_read import read_validation
 from app.picks.execution_validation import execution_report
 
 router = APIRouter(prefix='/picks/validation', tags=['selection-validation'])
@@ -21,14 +21,17 @@ async def execution(start: str | None = Query(None), end: str | None = Query(Non
 
 @router.get('')
 async def report(start: str | None = Query(None), end: str | None = Query(None),
-                 horizon: str = Query('d1_close'), scope: str = Query('all')):
+                 horizon: str = Query('d1_close'), scope: str = Query('all'),
+                 known_revision: str | None = Query(None, pattern=r'^[0-9a-f]{64}$')):
     today = beijing_today()
     try:
-        data = await asyncio.to_thread(validation_report, start or (today-timedelta(days=29)).isoformat(),
+        data, revision = await asyncio.to_thread(read_validation, start or (today-timedelta(days=29)).isoformat(),
                                        end or today.isoformat(), horizon=horizon, scope=scope)
     except (ValueError, TypeError) as exc:
         raise HTTPException(status_code=422, detail=str(exc)) from exc
-    return {'data': data, 'meta': {'basis': 'selection_observation_and_manual_fills_separate',
+    return {'data': None if known_revision == revision else data,
+            'meta': {'revision': revision, 'not_modified': known_revision == revision,
+                     'basis': 'selection_observation_and_manual_fills_separate',
                                  'disclaimer': '不构成买卖建议；人工记录未经券商核验'}}
 
 

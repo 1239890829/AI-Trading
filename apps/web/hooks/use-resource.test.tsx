@@ -526,3 +526,46 @@ describe("useResource", () => {
     expect(fn.mock.calls.length).toBe(settled + 2);
   });
 });
+
+describe("pure-read cancellation", () => {
+  it("aborts the departed key and ignores its late result", async () => {
+    const signals: AbortSignal[] = [];
+    const finish: ((value: string) => void)[] = [];
+    const load = (signal: AbortSignal) => {
+      signals.push(signal);
+      return new Promise<string>(resolve => finish.push(resolve));
+    };
+    const {result, rerender, unmount} = renderHook(({key}) => useResource(load, {key, abortable: true}), {initialProps: {key: "A"}});
+    rerender({key: "B"});
+    expect(signals[0].aborted).toBe(true);
+    expect(signals[1].aborted).toBe(false);
+    await act(async () => finish[0]("old A"));
+    expect(result.current.data).toBeUndefined();
+    await act(async () => finish[1]("current B"));
+    expect(result.current.data).toBe("current B");
+    act(() => result.current.refresh());
+    expect(signals).toHaveLength(3);
+    unmount();
+    expect(signals[2].aborted).toBe(true);
+  });
+
+  it("does not change arguments or cancel legacy reads with possible side effects", async () => {
+    const load = vi.fn((_date?: string) => Promise.resolve("done"));
+    const {unmount} = renderHook(() => useResource(load));
+    await flush();
+    unmount();
+    expect(load.mock.calls).toEqual([[]]);
+  });
+
+  it("disabling and manual refresh release only their current read", async () => {
+    const signals: AbortSignal[] = [];
+    const load = (signal: AbortSignal) => {signals.push(signal); return new Promise<never>(() => {});};
+    const {result, rerender} = renderHook(({enabled}) => useResource(load, {enabled, abortable: true}), {initialProps: {enabled: true}});
+    act(() => result.current.refresh());
+    expect(signals[0].aborted).toBe(true);
+    expect(signals[1].aborted).toBe(false);
+    rerender({enabled: false});
+    expect(signals[1].aborted).toBe(true);
+    expect(result.current.error).toBeNull();
+  });
+});

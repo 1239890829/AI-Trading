@@ -5,6 +5,7 @@ import { Panel } from "@/components/panel";
 import { useResource } from "@/hooks/use-polling-fetch";
 import {ConditionList} from "@/components/ui/explanation-map";
 import {ReaderBrief, ResearchDisclosure} from "@/components/ui/reader-brief";
+import {dateTimeTextBJ} from "@/lib/format";
 import {readerExcerpt, readerCautions} from "@/lib/reader-copy";
 import "./review-layout.css";
 import {
@@ -47,7 +48,7 @@ const STATUS_LABEL: Record<string, string> = {
   pending: "待处置",
   recorded: "已记录 · 待实施",
   confirmed: "已确认",
-  applied: "已实施",
+  applied: "已登记实施",
   rejected: "已驳回",
   reverted: "已回退",
 };
@@ -130,6 +131,7 @@ function ActionItemDispose({
   // 需填理由时展开输入框；null 表示未处于处置中
   const [pending, setPending] = useState<ActionItemStatus | null>(null);
   const [note, setNote] = useState("");
+  const [receipt, setReceipt] = useState({implementation_ref:"",release_version:"",verification_ref:""});
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
@@ -141,9 +143,10 @@ function ActionItemDispose({
     setBusy(true);
     setError(null);
     try {
-      await updateActionItemStatus(item, next, withNote);
+      await updateActionItemStatus(item, next, withNote, ...(next === "applied" ? [receipt] as const : []));
       setPending(null);
       setNote("");
+      setReceipt({implementation_ref:"",release_version:"",verification_ref:""});
       onDisposed();
     } catch (e) {
       setError(e instanceof Error ? e.message : String(e));
@@ -188,7 +191,7 @@ function ActionItemDispose({
           disabled={busy || disabled}
           className="rounded border border-zinc-300 px-1.5 py-0.5 text-[11px] text-zinc-600 dark:text-zinc-400 transition-colors hover:border-emerald-500 hover:text-emerald-400 disabled:opacity-40 dark:border-zinc-700"
         >
-          已实施
+          登记实施
         </button>
       )}
       <button
@@ -224,10 +227,14 @@ function ActionItemDispose({
             placeholder={pending === "applied" ? "实施与验证证据：PR、提交或批准记录（必填）" : pending === "rejected" ? "驳回理由（必填）" : "回退理由（必填）"}
             className="w-full rounded border border-zinc-300 bg-transparent px-2 py-1 text-[11px] text-zinc-900 dark:text-zinc-200 outline-none placeholder:text-zinc-600 focus:border-sky-500 dark:border-zinc-700"
           />
+          {pending === "applied" && <div className="grid gap-1.5">
+            {([["implementation_ref","实施引用（任务 / PR / 提交）"],["release_version","已上线版本 / 已生效配置"],["verification_ref","复测记录与结论"]] as const).map(([key,label]) => <label key={key} className="grid gap-1 text-[11px]">{label}<input value={receipt[key]} maxLength={2000} onChange={event => setReceipt(current => ({...current,[key]:event.target.value}))} className="w-full rounded border border-zinc-300 bg-transparent px-2 py-1 dark:border-zinc-700"/></label>)}
+            <p className="text-[11px] text-zinc-500">未上线或未复测请保留为“确认”。登记保留凭据，不自动宣称效果有效。</p>
+          </div>}
           <div className="flex items-center gap-2">
             <button
               onClick={() => void submit(pending, note)}
-              disabled={busy || disabled || !note.trim()}
+              disabled={busy || disabled || !note.trim() || (pending === "applied" && Object.values(receipt).some(value => !value.trim()))}
               className="rounded border border-sky-600 px-2 py-0.5 text-[11px] text-sky-700 dark:text-sky-400 disabled:opacity-40"
             >
               提交
@@ -298,11 +305,16 @@ function ReportDetail({
                 </div>
                 <ReaderBrief label="改进建议简述" facts={[{label:"准备怎么改",value:readerExcerpt(a.proposed_change || a.expected_impact) || "具体建议未记录"}]}/>
                 <ResearchDisclosure label="改进建议完整内容" identity={JSON.stringify([report.review_id,a.id,a.title])}><p>{a.expected_impact}</p>{a.evidence && <p>依据：{a.evidence}</p>}{a.proposed_change && <p>{a.proposed_change}</p>}{a.target && <p>对应位置：{a.target}</p>}</ResearchDisclosure>
+                {(a.resolution_note || a.status === "applied") && <div className="mt-2 text-xs leading-relaxed text-zinc-600 dark:text-zinc-400">
+                  <p>处置记录{a.resolved_at ? ` · ${dateTimeTextBJ(a.resolved_at)}` : ""}：{readerExcerpt(a.resolution_note) || "实施凭据尚未提供"}</p>
+                  {a.status === "applied" && <><p>这是实施登记；上线版本与复测结论须按所附凭据核对。</p><dl>{([["implementation_ref","实施"],["release_version","上线版本"],["verification_ref","复测"]] as const).map(([key,label]) => <div key={key}><dt>{label}</dt><dd>{a.implementation_evidence?.[key] || "旧记录未提供"}</dd></div>)}</dl></>}
+                  {a.resolution_note && <ResearchDisclosure label="实施、发布与复测凭据" identity={`${a.id}:${a.resolution_note}`}><p className="whitespace-pre-wrap">{a.resolution_note}</p></ResearchDisclosure>}
+                </div>}
                 {allowDispose ? <ActionItemDispose
                   item={{ id: a.id, trade_date: report.trade_date, category: a.category, title: a.title }}
                   status={a.status ?? "pending"}
                   onDisposed={onDisposed}
-                  disabled={readError}
+                  disabled={readError || a.disposition_basis === "disposition_unavailable"}
                 /> : <p className="mt-1 text-xs text-zinc-600 dark:text-zinc-400">{STATUS_LABEL[a.status ?? "pending"] ?? a.status} · 管理处置在系统维护中进行</p>}
               </div>
             ))}

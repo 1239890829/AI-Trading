@@ -65,10 +65,10 @@ function MarketInner() {
   // Only the active overview owns these reads. Returning results lets useResource
   // discard flights from a departed lens while retaining each source's last value.
   const enabled = view === "overview";
-  const overview = useResource(async () => ({
-    value: await getMarketOverview(),
+  const overview = useResource(async (signal) => ({
+    value: await getMarketOverview({signal}),
     readAt: new Date().toLocaleTimeString("zh-CN", { hour12: false }),
-  }), {intervalMs: 10_000, enabled});
+  }), {intervalMs: 10_000, enabled, abortable: true});
   const poolResource = useResource(getLimitUpPool, {intervalMs: 10_000, enabled});
   const breadthResource = useResource(getBreadth, {intervalMs: 30_000, enabled});
   const sentimentResource = useResource(getSentiment, {intervalMs: 30_000, enabled});
@@ -166,9 +166,9 @@ function MarketInner() {
             </section>
 
             {sent ? (
-              <section className="bc-market-sentiment" aria-label="市场情绪与判定依据">
+              <section className="bc-market-sentiment" aria-label="涨停接力与判定依据">
                 <div className="bc-market-sentiment-reading">
-                  <span className={`bc-market-phase ${PHASE_STYLE[sent.phase] ?? ""}`}>{sent.phase}</span>
+                  <span className={`bc-market-phase ${PHASE_STYLE[sent.phase] ?? ""}`}>接力 · {sent.phase}</span>
                   <span>情绪温度 <strong>{sent.temperature}</strong><small> / 100</small></span>
                   <span className="bc-market-confidence">置信度 {sent.confidence}</span>
                   <button type="button" className="bc-market-evidence-trigger" aria-haspopup="dialog" aria-expanded={basisPresence.active} onClick={() => setBasisOpen(true)}>依据与失效条件</button>
@@ -204,10 +204,10 @@ function MarketInner() {
           </div>
         )}
       </FadeSwap>
-      {basisPresence.value && <ModalShell open={basisPresence.active} onClose={() => setBasisOpen(false)} label="市场情绪依据与失效条件" size="md" header={<div><h2>市场情绪依据与失效条件</h2><p className="mt-1 text-xs text-zinc-600 dark:text-zinc-400">{basisPresence.value.phase} · 情绪温度 {basisPresence.value.temperature} / 100 · 置信度 {basisPresence.value.confidence}</p></div>}>
+      {basisPresence.value && <ModalShell open={basisPresence.active} onClose={() => setBasisOpen(false)} label="涨停接力依据与失效条件" size="md" header={<div><h2>涨停接力依据与失效条件</h2><p className="mt-1 text-xs text-zinc-600 dark:text-zinc-400">{basisPresence.value.phase} · 情绪温度 {basisPresence.value.temperature} / 100 · 置信度 {basisPresence.value.confidence}</p></div>}>
         <div className="bc-market-evidence-copy">
           <ConditionList label="误判风险" items={basisPresence.value.misjudge_caveats} tone="warning"/>
-          <ExplanationMap label="盘面判断核对" identity={basisPresence.value.phase} center={{label:"当前相位记录", value: basisPresence.value.phase}} links={[
+          <ExplanationMap label="盘面判断核对" identity={basisPresence.value.phase} center={{label:"涨停接力相位", value: basisPresence.value.phase}} links={[
             {from:"center",to:"basis",label:"记录依据",kind:"recorded"},
             {from:"center",to:"metrics",label:"观测读数 · 非胜率",kind:"context"},
             {from:"center",to:"switch",label:"相位切换条件",kind:"context"},

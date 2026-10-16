@@ -25,6 +25,7 @@ from __future__ import annotations
 
 import asyncio
 import contextlib
+import hashlib
 import json
 import logging
 import math
@@ -68,6 +69,19 @@ ROLLING_WINDOW_DAYS = 250  # 滚动衰减监控窗口（约 1 年，制度 §6.1
 #: 实测 tie-break 后的 `(yr,q,avg_fwd,n)` 指纹与修复前**任何一次**观测都不相同
 #: （`rank20` 多空年化由 −8.72~−8.90% 变为 −8.39%）。故必须 bump，并使旧结论走 `review_required`。
 ALGO_VERSION = "2026-09-15.ntile-tiebreak-v4"
+# Input units/adjustment contract, not the daily ingestion timestamp.
+DATA_CONTRACT_VERSION = "daily-k-adjusted-price-turnover-v1"
+
+
+def evaluation_identity() -> dict[str, str]:
+    definitions = [{"name": f.name, "category": f.category,
+                    "min_bars": f.min_bars, "expr": f.expr} for f in FACTORS]
+    encoded = json.dumps(sorted(definitions, key=lambda f: f["name"]),
+                         ensure_ascii=False, sort_keys=True).encode()
+    return {"algo_version": ALGO_VERSION,
+            "definition_digest": hashlib.sha256(encoded).hexdigest(),
+            "data_contract_version": DATA_CONTRACT_VERSION}
+
 
 #: **新增因子不 bump 本版本号**（RSH-001 定例，2026-09-14）：
 #: 本常量描述的是**判定口径**——signal/entry/exit、剔除规则、IC 排名与最小截面守卫、准入阈值。
@@ -902,7 +916,7 @@ def run_full_eval(db_path: str | Path, *, out_path: str | Path | None = None) ->
 
         report = {
             "generated_at": beijing_now().isoformat(timespec="seconds"),
-            "algo_version": ALGO_VERSION,
+            **evaluation_identity(),
             # 口径变更的可判定性（GOV-001）：上一份报告声明的口径 + 是否已变 + 被归档的旧报告名。
             # `prev_algo_version is None` = 上一份报告无该字段（未判定），不得读成「口径未变」。
             "prev_algo_version": prev_algo,
@@ -1016,44 +1030,33 @@ def _save_eval_state(state: dict) -> None:
 
 
 def should_run_eval(now, *, run_day: int = 1, max_age_days: int = 40) -> bool:
-    """**纯函数**（便于单测）：此刻是否该跑全量评估。
+    """After-close eligibility; identity changes recheck without changing weights.
 
-    三个条件同时满足才跑，缺一不可：
-    1. 报告缺失或已超 `max_age_days`（月度复核口径，宽限 40 天）；
-    2. 当天日期 >= `run_day`（月初跑；设 1 = 每月 1 号之后）；
-    3. 今天还没尝试过（防止评估失败时每个检查周期都重跑——37 因子全历史
-       扫一遍是分钟级开销，不能拿它当心跳）。
+    The scheduler owns the 17:30 boundary. At most one attempt per Beijing day.
+    Daily data ingestion is not a contract change and does not trigger a daily full scan.
     """
-    rep = None
+    if now.tzinfo is None:
+        now = now.replace(tzinfo=BJ_TZ)
+    now = now.astimezone(BJ_TZ)
+    if now.day < run_day or _load_eval_state().get("last_attempt_ymd") == now.date().isoformat():
+        return False
     try:
-        if DEFAULT_OUT_PATH.exists():
-            rep = json.loads(DEFAULT_OUT_PATH.read_text(encoding="utf-8"))
-    except Exception:  # noqa: BLE001
-        rep = None
-
-    if isinstance(rep, dict) and rep.get("generated_at"):
-        try:
-            gen = datetime.fromisoformat(str(rep["generated_at"]).replace("Z", ""))
-            # ⚠️ `now` 是 aware（BJ_TZ），产物里的 `generated_at` 是**北京 naive**。
-            # 两者直接相减会抛 TypeError（这是刻意保留的防线：naive/aware 语义不可互换），
-            # 而下面若用 `except: pass` 吞掉，就会**永远按超期处理** ⇒ 每次启动都跑一遍
-            # 37 因子全历史扫描（分钟级）。2026-09-11 实测踩到：报告仅 4 天新鲜却照跑。
-            # 修法是**统一语义**后比较，不是吞异常。
-            if gen.tzinfo is None:
-                gen = gen.replace(tzinfo=BJ_TZ)
-            if (now - gen).days <= max_age_days:
-                return False
-        except (ValueError, TypeError):
-            # 只吞"解析/类型"两类已知问题，且**必须留痕**——静默 pass 是死守卫
-            log.warning("eval_report.generated_at 无法解析（%r）⇒ 按超期处理",
-                        rep.get("generated_at"))
-
-    if now.day < run_day:
-        return False
-
-    if _load_eval_state().get("last_attempt_ymd") == now.date().isoformat():
-        return False
-    return True
+        rep = json.loads(DEFAULT_OUT_PATH.read_text(encoding="utf-8"))
+    except (OSError, ValueError):
+        return True
+    if not isinstance(rep, dict):
+        return True
+    if any(rep.get(key) != value for key, value in evaluation_identity().items()):
+        return True
+    try:
+        gen = datetime.fromisoformat(str(rep.get("generated_at", "")).replace("Z", "+00:00"))
+        if gen.tzinfo is None:
+            gen = gen.replace(tzinfo=BJ_TZ)
+        age = now - gen
+        return age.total_seconds() < 0 or age.days > max_age_days
+    except (ValueError, TypeError):
+        log.warning("eval_report.generated_at 无法解析 ⇒ 待复核")
+        return True
 
 
 async def factor_eval_scheduler(

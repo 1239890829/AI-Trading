@@ -246,7 +246,20 @@ signal at T 收盘 → entry T+1 收盘（保守执行口径）→ exit T+h；T+
 2. **功能点**：对应系统哪个能力（tech_score 维度、watcher 规则、告警阈值…）；
 3. **调用位置**：代码级路径（模块+函数），消费方列表。
 
-### 4.2 现役因子登记表（首批 7 PASS 为例，新 PASS 因子待评估结果回填后同格式登记）
+### 4.2 因子研究登记表（历史评估状态与生产消费分开）
+
+2026-10-16消费者核对：下表的 `active(P0)` / `active(本轮)` 是原研究登记状态，**不是生产评分已计权**。
+`app/factors/library.py` 的全部定义由 `evaluate.run_evaluation` 做离线统一评估，`novelty` / `smoothing` 仅研究。
+现有报告的真实消费者为 `assistant/tools/picks._t_factor_profile`（解释档案）和
+`services/evolution`（提出改进建议）。`market/tech_score.py` / `picks/regime.py` 未动态消费此报告调整权重。
+因此不能把 PASS 数量当成正在交易的因子数，也不能把月度评估成功写成“策略已自动升级”。
+
+所有定义继续由 `library.FACTORS` 与本登记表维护，不新增第二套注册表。
+待复核由算法/定义摘要/数据契约版本、未来时间或超过40天触发；实际数据晚修订不由契约版本自动检测，仍需现有月度重评。
+低覆盖/未成熟/异常结果保持研究状态；方向改变、滚动IC衰减或冗余改变提出复核。
+候选晋级须绑定同样本基线、适用池/时期、失败反例、成本与退出条件，再获准修改真实消费者。
+现役评分与风险常量保持，禁止用本表历史 PASS 自动调权或停用风控。
+
 
 | 因子 | 状态 | 适用场景 | 功能点 | 调用位置 |
 |---|---|---|---|---|
@@ -357,10 +370,10 @@ deprecated 因子满足：新数据窗口重新跑全量评估 → 四维全过 
 
 | 项 | 制度 | 承接物 |
 |---|---|---|
-| 月度全量再评估 | 每月首个周末跑 `run_factor_eval.py`（全 37+ 因子），报告按 generated_at 版本化留存 | automation（待用户确认后排期） |
+| 月度全量再评估 | 现役 `factor_eval_scheduler` 默认每月 1 日起 17:30 后检查；按报告年龄、时间有效性与算法/定义/数据口径身份判定到期，同日最多尝试一次。报告按 generated_at 版本化留存；早期“首个周末 automation”仅为历史提议 | `bootstrap/schedulers.py` → `evaluate.py::should_run_eval`，开关与时刻沿现有配置 |
 | ↳ 版本化留存落地 | ✅ 2026-09-14（`GOV-001`）：覆盖前先把旧报告归档到 `data/factors/history/eval_report.<口径版本>.<生成时间>.json`（幂等）。**此前该承诺只写在本表里，落盘实为单文件原地覆盖** ⇒ 历史结论只剩上一次的 `verdict_prev`，更早的不可枚举 | `evaluate.py::_archive_previous` |
 | ↳ 口径变更复核清单 | ✅ 2026-09-14（`GOV-001`）：报告新增 `review_required` —— 旧口径与当前不同、或旧报告**未声明**口径（未判定）时，列出**全部**旧口径结论（**含三态未翻转的**，因"未翻转 ≠ 不受影响"）。只读层 `freshness`/`ic_evidence` 增 `algo_version`/`algo_current`（三态） | `evaluate.py::_build_review_required` · `report.py` |
-| 增量窗口对比 | 每次报告自动附「近 250 日 IC vs 全期 IC」对比，偏差 ≥50% 标衰减警告 | evaluate.py P1 增加 rolling 窗口输出 |
+| 增量窗口对比 | 现有报告附近 250 日 IC 与全期对比；告警只提出复核，不自动改生产权重 | `evaluate.py` 的 rolling 输出与原登记册处置 |
 | 版本日志 | 每次入库/出库/复活/口径变更记一行（本文件 §8） | 人工（有消费影响，不自动化） |
 | 阈值复审 | 每半年复核准入阈值是否需校准（如截面扩容后 IC 分布变化） | 人工评审 |
 

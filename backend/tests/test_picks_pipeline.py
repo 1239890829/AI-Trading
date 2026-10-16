@@ -491,6 +491,8 @@ def test_generated_selection_contract_uses_original_final_items_digest(deps, mon
     assert datetime.fromisoformat(generated_at).utcoffset().total_seconds() == 8 * 3600
     assert data["meta"]["selection_contract"] == {
         "version": "daily_selection_v2", "trade_date": data["date"], "generated_at": generated_at,
+        "strategy_version": "daily-six-dimension-v1.official-catalyst",
+        "feature_version": "daily-entry-evidence-v2",
     }
     assert data["meta"]["selection_version"] == daily_selection_version(data["date"], generated_at, data["items"])
 

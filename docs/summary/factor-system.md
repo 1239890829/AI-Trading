@@ -115,7 +115,7 @@ IC/ICIR 报告，`data/factors/eval_report.json` 也在磁盘上，但**全站�
 |---|---|---|
 | 只读访问层 | `app/factors/report.py` | `load_report` / `freshness` / `top_factors` / `ic_evidence`（三态，40 天超期） |
 | 议程接入 | `evolution.py::factor_ic` → `_collect_factor_ic()` | 实测 16 PASS / 7 conditional / 14 fail 进每日议程 |
-| 月度复核调度 | `evaluate.py::factor_eval_scheduler` | 每月 1 日 17:30；报告缺失或超 40 天才跑；`last_attempt_ymd` 防失败时反复重跑 |
+| 月度复核调度 | `evaluate.py::factor_eval_scheduler` | 默认每月 1 日起的盘后 17:30 检查；报告缺失、超 40 天、未来时间或算法/定义集合/数据口径版本变化才跑；`last_attempt_ymd` 防失败时反复重跑 |
 
 **两条纪律**：
 1. **方向由实测 IC 符号定**（`direction = 1 / -1 / None`），不取 `FactorDef.note` 里的「预期方向」。

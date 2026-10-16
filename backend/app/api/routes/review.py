@@ -82,6 +82,7 @@ async def review_detail(trade_date: str, request: Request):
 class ActionItemPatch(BaseModel):
     status: str = Field(..., description="pending | recorded | confirmed | applied | rejected | reverted")
     note: str = Field("", description="处置说明；applied需实施与验证证据，rejected/reverted需理由")
+    implementation_evidence: dict[str, str] = Field(default_factory=dict)
     # id 漂移守卫（2026-09-01）：id 是 SQLite rowid 别名且无 AUTOINCREMENT，
     # 报告重跑删除重建后 id 会被复用甚至跨交易日串号。三元组对不上 = 该 id
     # 已不是调用方看到的那条 → 409 而不是静默写到别的改进项上。
@@ -107,6 +108,7 @@ async def patch_action_item(item_id: str, body: ActionItemPatch, request: Reques
     try:
         updated = update_action_item_status(
             svc.session_factory, item_id, body.status, body.note,
+            implementation_evidence=body.implementation_evidence,
             expect_trade_date=body.trade_date,
             expect_category=body.category,
             expect_title=body.title,

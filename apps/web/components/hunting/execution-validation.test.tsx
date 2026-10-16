@@ -29,7 +29,7 @@ describe("internal execution consolidation",() => {
   });
   it("loads execution only after selecting its view and keeps actual denominator",async () => {
     const read=vi.spyOn(api,"getExecutionValidation").mockResolvedValue(execution);
-    render(<ValidationContent report={report}/>);
+    render(<ValidationContent report={report} maintenance/>);
     expect(read).not.toHaveBeenCalled();
     fireEvent.click(screen.getByRole("button",{name:"执行对照"}));
     await waitFor(() => expect(read).toHaveBeenCalledTimes(1));
@@ -38,4 +38,12 @@ describe("internal execution consolidation",() => {
     expect(screen.getByText("0.0%")).toBeTruthy();
     expect(read).toHaveBeenCalledTimes(1);
   });
+});
+
+
+it("does not offer or request internal execution in the user view", () => {
+  const read = vi.spyOn(api, "getExecutionValidation");
+  render(<ValidationContent report={report}/>);
+  expect(screen.queryByRole("button", {name:"执行对照"})).toBeNull();
+  expect(read).not.toHaveBeenCalled();
 });

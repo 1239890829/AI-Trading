@@ -13,6 +13,8 @@ sys.path.insert(0, ".")
 
 from app.core.db import get_engine, get_session_factory
 from app.models.watchlist import Base
+from app.models.agent import AgentAudit
+from app.market.sentiment_history import SentimentHistoryRow
 from app.review.analyzers import LLMAnalyzer, RulesAnalyzer
 from app.review.config import ensure_default_methodology_file, load_methodology
 from app.review.model_router import ModelRouter
@@ -42,6 +44,7 @@ from app.review.storage import (
 )
 from app.review.synthesis import build_action_items
 
+_REGISTERED = (AgentAudit, SentimentHistoryRow)
 Base.metadata.create_all(get_engine())
 ensure_default_methodology_file()
 
@@ -553,7 +556,7 @@ def test_update_action_item_status_lifecycle():
         assert r1["status"] == "confirmed"
         assert r1["resolved_at"] is not None
 
-        r2 = update_action_item_status(sf, iid, "applied", "已实施", **_guard(it))
+        r2 = update_action_item_status(sf, iid, "applied", "已实施", implementation_evidence={"implementation_ref":"PR #12","release_version":"test-release","verification_ref":"isolated-check-passed"}, **_guard(it))
         assert r2["status"] == "applied"
         # 再次读取应持久化，而不是只在内存里
         assert get_report(sf, _TEST_TD_AI).action_items[0].id == iid

@@ -8,6 +8,7 @@ from fastapi.middleware.cors import CORSMiddleware
 
 from app.api.deps import require_api_token
 from app.api.routes import agent as agent_route
+from app.api.routes import device_access as device_access_route
 from app.api.routes import backtest as backtest_route
 from app.api.routes import health as health_route
 from app.api.routes import market as market_route
@@ -178,6 +179,7 @@ app.add_middleware(
 # ⚠️ 为什么不用"敏感读清单"：清单式是**默认放行**，漏登记即静默开放——R22 的
 # 病灶（只按"写接口"分类 ⇒ 花钱/敏感 GET 整类漏保护）正是这种形态。详见 core/auth.py。
 _AUTH_GUARD = [Depends(require_api_token)]
+app.include_router(device_access_route.router, prefix="/api", dependencies=_AUTH_GUARD)
 
 app.include_router(health_route.liveness_router, prefix="/api")  # ← 唯一豁免：存活探针
 app.include_router(health_route.router, prefix="/api", dependencies=_AUTH_GUARD)  # /system/*（含花钱的 llm-probe）

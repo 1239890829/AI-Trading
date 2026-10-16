@@ -179,3 +179,15 @@ class TestAggregation:
         keys = [k["key"] for k in list_strategy_keys()]
         assert "triple_volume" in keys  # 已否决的策略也应可见（可追溯）
         assert len(keys) == len(SPECS)
+
+
+def test_watch_stream_preserves_unknown_verdict_and_missing_return(sf):
+    from app.picks.strategy_registry import _groups_from_watch_ledger
+    _add_watch(sf, '2026-10-12', [('000001', 'success', 0.2), ('000002', 'fail', -0.3),
+                               ('000003', 'flat', None), ('000004', 'legacy', 0.0),
+                               ('000005', None, 100), ('000006', '', 100)])
+    _add_watch(sf, '2026-10-13', [('000007', 'success', None)])
+    assert _groups_from_watch_ledger(sf) == [
+        dict(date='2026-10-12', phase=None, n=4, good=1, bad=1, flat=2, mean_excess=-0.033),
+        dict(date='2026-10-13', phase=None, n=1, good=1, bad=0, flat=0, mean_excess=None),
+    ]

@@ -491,3 +491,18 @@ describe("同帧只灌入变化的分时序列", () => {
     expect(chart.series.find(s=>s.kind === "price")!.values.some(p=>p.value === 10.2)).toBe(true);
   });
 });
+
+
+it("bounds price labels above volume without clipping actual out-of-band values", () => {
+  const view = render(<MinuteChart points={[point(15.27)]} prevClose={16.97} limitPct={10} upperPrice={18.67} lowerPrice={15.27} />);
+  const chart = charts[0];
+  const left = chart.series.find(series => series.opts.priceScaleId === "left")!;
+  const formatter = () => (left.opts.priceFormat as {formatter: (value: number) => string}).formatter;
+  expect(formatter()(-15)).toBe("");
+  expect(formatter()(-10)).toBe("−10.00%");
+  expect(screen.queryByText("超出名义参考范围")).toBeNull();
+  view.rerender(<MinuteChart points={[point(14)]} prevClose={16.97} limitPct={10} upperPrice={18.67} lowerPrice={15.27} />);
+  expect(formatter()(-15)).toBe("−15.00%");
+  expect(charts).toHaveLength(1);
+  expect(chart.remove).not.toHaveBeenCalled();
+});

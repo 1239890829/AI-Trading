@@ -27,6 +27,16 @@ const SAFE_READ_PATHS = new Set(["/api/watchlist", "/api/watchlist/groups", "/ap
 const sharedReads = new Map<string, SharedRead>();
 const MAX_SHARED_READS = 32;
 let readEpoch = 0;
+let sessionEpoch = 0;
+export function deviceSessionEpoch() {return sessionEpoch;}
+
+/** A new pairing must never inherit unfinished reads from the previous device session. */
+export function clearDeviceSessionReads() {
+  sessionEpoch += 1;
+  readEpoch += 1;
+  for (const entry of sharedReads.values()) entry.controller.abort();
+  sharedReads.clear();
+}
 type Envelope<T> = {data: T; meta: Meta};
 interface SharedRead {
   path: string;
@@ -69,6 +79,7 @@ async function performRequest<T>(
   init: RequestInit,
   timeoutMs: number,
 ): Promise<{ data: T; meta: Meta }> {
+  const requestSession = sessionEpoch;
   if (init.signal?.aborted) throw canceled(path);
   const ctrl = new AbortController();
   const onCancel = () => ctrl.abort();
@@ -95,9 +106,11 @@ async function performRequest<T>(
       raw = {};
     }
     // 同步 JSON 解析会占住主线程，计时器尚未运行也必须核对完整耗时。
+    if (requestSession !== sessionEpoch) throw canceled(path);
     if (expired()) throw abortError();
     const body = (raw !== null && typeof raw === "object" ? raw : {}) as { data?: T; detail?: string; code?: string };
     if (!res.ok) {
+      if (res.status === 401 && typeof window !== "undefined") window.dispatchEvent(new Event("ashare-access-expired"));
       throw new ApiError(res.status, body.detail ?? `HTTP ${res.status}`, body.code ?? `http_${res.status}`);
     }
   // 200 但没有 Envelope 的 `data` 键 = **契约破坏**（响应体不是合法 JSON，或请求落到了非 API 路由）。

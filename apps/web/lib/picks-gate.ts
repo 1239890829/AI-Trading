@@ -18,7 +18,7 @@
  *  阈值、相位集合、理由文案一律来自后端（`gate.py` 是唯一真相源）。
  */
 
-import type { StandAsideGate, StandAsideSignals } from "@/lib/api/picks";
+import type { DailyPicksPayload, StandAsideGate, StandAsideSignals } from "@/lib/api/picks";
 
 /** 两次闸门结论的差异性质。 */
 export type GateDrift =
@@ -54,6 +54,8 @@ export function gateDrift(live?: StandAsideGate | null, stored?: StandAsideGate 
   if (!live) return "none";
   if (live.gate_source === "unavailable") return "unavailable";
   if (live.gate_source !== "live") return "none";
+  // Missing historical judgement is unknown, not an earlier non-trigger.
+  if (typeof stored?.stand_aside !== "boolean" || typeof live.stand_aside !== "boolean") return "none";
   const nowOn = gateActive(live);
   const wasOn = gateActive(stored);
   if (nowOn && !wasOn) return "newly_triggered";
@@ -126,4 +128,20 @@ export function clockOf(iso?: string | null): string | null {
   if (!iso) return null;
   const m = /T(\d{2}):(\d{2})/.exec(iso);
   return m ? `${m[1]}:${m[2]}` : null;
+}
+
+
+/** Explain a saved empty result without claiming the whole market was fully checked. */
+export function dailyEmptySummary(data: DailyPicksPayload): string {
+  if (!data.date) return "尚未生成今日组合，等待自动筛选。";
+  const prefix = `${data.date}${data.stale ? "（最近一次生成，非今日）" : ""}`;
+  const meta = data.meta;
+  const ready = meta?.input_readiness;
+  if (ready && (ready.snapshot_state !== "ready" || !ready.events_available)) {
+    return `${prefix} 暂无入选；生成时数据不完整，不能据此判断没有机会。`;
+  }
+  const count = meta?.selection_funnel?.scored ?? meta?.deep_dives;
+  const checked = count == null ? "已检查的候选中" : `已评估 ${count} 只候选`;
+  const threshold = meta?.min_pick_score;
+  return `${prefix} ${checked}，本次没有入选${threshold != null ? `（门槛 ${threshold} 分）` : ""}。${ready ? "" : "旧记录未保存完整输入状态。"}`;
 }

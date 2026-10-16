@@ -40,7 +40,7 @@ import { useResource } from "@/hooks/use-resource";
 import { NewsModal, type NewsModalItem } from "@/components/news-modal";
 import { EventFeed } from "@/components/notifications/event-feed";
 import { dateTimeTextBJ, dateTimesInTextBJ } from "@/lib/format";
-import { NotificationDetail, notificationKeyState, notificationSummary } from "./notification-detail";
+import { NotificationDetail, notificationKeyState, notificationSummary, notificationDeliveryHint } from "./notification-detail";
 import { ExplanationMap, NarrativeText } from "@/components/ui/explanation-map";
 import { ReadingRow, readingRowClasses } from "@/components/ui/reading-row";
 
@@ -99,11 +99,11 @@ const SESSION_TABS: { key: NotificationItem["session"]; label: string }[] = [
 
 
 const CATEGORY_TONE: Record<NotificationItem["category"], string> = {
-  opportunity: "bg-up/10 text-up-ink dark:text-up",
-  daily_picks: "bg-amber-500/10 text-amber-800 dark:text-amber-400",
-  news: "bg-sky-500/10 text-sky-700 dark:text-sky-300",
-  risk: "bg-red-500/10 text-red-700 dark:text-red-300",
-  reminder: "bg-zinc-100 text-zinc-700 dark:bg-zinc-800 dark:text-zinc-300",
+  opportunity: "text-up-ink dark:text-up",
+  daily_picks: "text-amber-800 dark:text-amber-400",
+  news: "text-sky-700 dark:text-sky-300",
+  risk: "text-red-700 dark:text-red-300",
+  reminder: "text-zinc-700 dark:text-zinc-300",
 };
 
 const CATEGORY_LABEL: Record<NotificationItem["category"], string> = {
@@ -335,9 +335,9 @@ function NotificationRow({item, unread, onOpen}: {
       <p data-testid="notification-summary" title={summary.endsWith("…") ? "摘要节选；打开详情查看完整依据与限定。" : undefined}
         className="mt-1 line-clamp-2 break-words text-xs leading-relaxed text-zinc-600 dark:text-zinc-400">依据节选：{summary}</p>
     </button>
-    <p data-testid="notification-facts" className="mt-2 break-words text-xs leading-relaxed text-zinc-600 dark:text-zinc-400">{notificationKeyState(item)}</p>
+    <p data-testid="notification-facts" className="mt-2 break-words text-xs leading-relaxed text-zinc-600 dark:text-zinc-400" title={notificationKeyState(item)}>当时记录 · 当前条件需核对{notificationDeliveryHint(item) ? ` · ${notificationDeliveryHint(item)}` : ""}</p>
     <div className="mt-2 flex flex-wrap items-center gap-2 text-xs text-zinc-600 dark:text-zinc-400">
-      <span>{CATEGORY_LABEL[item.category]} · 条件见详情</span>
+      <span>{item.symbol || CATEGORY_LABEL[item.category]} · 条件见详情</span>
       <div data-reading-action data-testid="notification-actions" className="ml-auto flex items-stretch gap-1">
         {item.symbol && <StockLink symbol={item.symbol} preferModal
           className={`${readingRowClasses.action} inline-flex min-h-9 items-center px-2 py-1`}
@@ -476,8 +476,8 @@ export function NotificationBell() {
           <div ref={drawerRef} tabIndex={-1} data-motion-state={open ? "open" : "closed"} aria-hidden={!open || undefined} inert={!open} className="motion-overlay fixed inset-0 z-50 flex justify-end bg-black/40 backdrop-blur-sm" onMouseDown={(e) => { if (e.target === e.currentTarget) setOpen(false); }} role="dialog" aria-modal={open || undefined} aria-label="通知中心" data-testid="notification-drawer">
             <div className="ui-glass-overlay motion-drawer flex h-full w-full max-w-sm flex-col border-l border-zinc-200 bg-white shadow-2xl dark:border-zinc-800 dark:bg-zinc-950">
               {/* 头：标题 + 未读数 + 操作 */}
-              <div className="flex items-center justify-between border-b border-zinc-100 px-4 py-3 dark:border-zinc-800/80">
-                <h2 className="flex items-center gap-1.5 text-sm font-semibold text-zinc-900 dark:text-zinc-50">
+              <div className="flex flex-wrap items-center justify-between gap-2 border-b border-zinc-100 px-4 py-3 dark:border-zinc-800/80">
+                <h2 className="flex shrink-0 items-center gap-1.5 whitespace-nowrap text-sm font-semibold text-zinc-900 dark:text-zinc-50">
                   通知中心
                   {unread > 0 && (
                     <span
@@ -488,29 +488,7 @@ export function NotificationBell() {
                     </span>
                   )}
                 </h2>
-                <div className="flex items-center gap-2">
-                  {/* 已读/清除是**推送面**的操作（作用域 = `/api/notifications` 的已读水位）。
-                      资讯 tab 下隐藏：那里没有未读概念，按钮点了也没有可见反馈。 */}
-                  {mode === "opportunity" && (
-                    <>
-                      <button
-                        onClick={markAllRead}
-                        disabled={unread === 0}
-                        data-testid="notification-mark-all-read"
-                        className="rounded px-1.5 py-0.5 text-[11px] text-zinc-600 transition-colors hover:bg-zinc-100 hover:text-zinc-700 disabled:opacity-40 disabled:hover:bg-transparent dark:text-zinc-400 dark:hover:bg-zinc-800 dark:hover:text-zinc-200"
-                        title="全部标记为已读（未读红点与徽标清零）"
-                      >
-                        全部已读
-                      </button>
-                      <button
-                        onClick={clearAll}
-                        className="rounded px-1.5 py-0.5 text-[11px] text-zinc-600 dark:text-zinc-400 transition-colors hover:bg-zinc-100 hover:text-zinc-700 dark:hover:bg-zinc-800 dark:hover:text-zinc-200"
-                        title="按时间水位隐藏当前及更早的站内条目；服务端确认后清浏览器缓存不会恢复，原事件审计仍保留"
-                      >
-                        一键清除
-                      </button>
-                    </>
-                  )}
+                <div className="ml-auto flex shrink-0 items-center gap-2">
                   <IconButton
                     onClick={() => (mode === "opportunity" ? void load() : setEventsRefresh((n) => n + 1))}
                     className="rounded p-1 text-zinc-600 dark:text-zinc-400 transition-colors hover:bg-zinc-100 hover:text-zinc-700 dark:hover:bg-zinc-800 dark:hover:text-zinc-200"
@@ -523,6 +501,26 @@ export function NotificationBell() {
                   </IconButton>
                   <CloseButton onClose={() => setOpen(false)} />
                 </div>
+                {mode === "opportunity" && <div className="flex w-full items-center justify-end gap-3">
+                  {/* 已读/清除是**推送面**的操作（作用域 = `/api/notifications` 的已读水位）。
+                      资讯 tab 下隐藏：那里没有未读概念，按钮点了也没有可见反馈。 */}
+                      <button
+                        onClick={markAllRead}
+                        disabled={unread === 0}
+                        data-testid="notification-mark-all-read"
+                        className="whitespace-nowrap rounded px-1.5 py-0.5 text-[11px] text-zinc-600 transition-colors hover:bg-zinc-100 hover:text-zinc-700 disabled:opacity-40 disabled:hover:bg-transparent dark:text-zinc-400 dark:hover:bg-zinc-800 dark:hover:text-zinc-200"
+                        title="全部标记为已读（未读红点与徽标清零）"
+                      >
+                        全部已读
+                      </button>
+                      <button
+                        onClick={clearAll}
+                        className="whitespace-nowrap rounded px-1.5 py-0.5 text-[11px] text-zinc-600 dark:text-zinc-400 transition-colors hover:bg-zinc-100 hover:text-zinc-700 dark:hover:bg-zinc-800 dark:hover:text-zinc-200"
+                        title="按时间水位隐藏当前及更早的站内条目；服务端确认后清浏览器缓存不会恢复，原事件审计仍保留"
+                      >
+                        一键清除
+                      </button>
+                </div>}
               </div>
 
               {/* 顶层 tab：个股机会（推送面）/ 资讯·事件（浏览面）。
@@ -573,7 +571,7 @@ export function NotificationBell() {
                 {diagnosisError && <p className="mt-1 text-amber-700 dark:text-amber-300">原因记录读取失败，当前状态未知；请重试。</p>}
                 {diagnosis && <div className="mt-2 max-h-52 overflow-y-auto"><NotificationDiagnosis diag={diagnosis} /></div>}
               </div>
-              <p className="px-4 pt-2 text-xs text-zinc-600 dark:text-zinc-400">本次读取最近 {payload?.read_window?.limit ?? 50} 条消息{payload?.read_window?.has_more === true ? "，更早记录未包含" : payload?.read_window?.has_more === null ? "，更早记录是否存在尚未确认" : ""}；入选消息按原观察钟分时段，其他消息沿事件记录钟；已读按记录钟判断。</p>
+              <p className="px-4 pt-2 text-xs text-zinc-600 dark:text-zinc-400" title="入选消息按原观察时间分组，其他消息按记录时间分组；已读状态按记录时间判断。">最近 {payload?.read_window?.limit ?? 50} 条消息{payload?.read_window?.has_more === true ? "，更早记录未包含" : payload?.read_window?.has_more === null ? "，更早记录尚未确认" : ""} · 按提醒时间分组</p>
               {payload?.monitor && ["uncompleted", "unknown"].includes(payload.monitor.state) && <p role="status" data-testid="notification-monitor-state" className="mx-4 mt-2 rounded-lg border border-amber-500/25 bg-amber-500/5 px-3 py-2 text-xs leading-relaxed text-amber-800 dark:text-amber-200">
                 持仓风险核对{payload.monitor.state === "unknown" ? "尚未完成" : "未完整完成"}{payload.monitor.uncompleted_symbols.length ? `（${payload.monitor.uncompleted_symbols.length} 只）` : ""}：{payload.monitor.reason || "源数据或成本依据待核对"}。不能据此确认风险已排除。
               </p>}
@@ -657,14 +655,11 @@ export function NotificationBell() {
                     <p data-testid="notification-sync-status" className={syncStatus === "local_only" ? "text-amber-700 dark:text-amber-300" : ""}>
                       已读与清除：{syncStatus === "synced" ? "本页变更已获服务端确认" : syncStatus === "syncing" ? "正在同步服务端" : "服务端未确认；当前页暂存"}。
                     </p>
-                    个股机会与持仓风险提醒来自触发时点；板块与资讯事件在浏览页。已读只表示站内点开，
-                    外部渠道受理不等于送达。条件变化后须重新核验，不构成买卖建议。
+                    提醒反映当时情况，请核对当前条件。不构成买卖建议。
                   </>
                 ) : (
                   <>
-                    资讯 / 事件是<strong className="font-medium">浏览面</strong>
-                    （源自东财快讯等公开渠道的事件影响力视图），不计入未读、不主动打断；
-                    方向判读由规则引擎给出，不构成买卖建议。
+                    资讯供主动浏览，不计入未读。方向由系统规则判断，不构成买卖建议。
                   </>
                 )}
               </div>

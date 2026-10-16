@@ -1,5 +1,7 @@
 "use client";
 
+import { dailyEmptySummary } from "@/lib/picks-gate";
+
 import "./hunting.css";
 import { SelectionValidationPanel } from "@/components/hunting/validation-panel";
 
@@ -476,7 +478,9 @@ function HuntingInner() {
                 readError={!!intraday.error}
                 dailyEvidence={dailyBySymbol.has(it.symbol) && data?.date ? {item: dailyBySymbol.get(it.symbol)!, date: data.date, generatedAt: data.meta?.generated_at ?? null, version: data.meta?.selection_version ?? null} : undefined}
                 onShowDailyEvidence={showDailyDetail} positionLabel={(posLabels[it.symbol] as "sim" | "real" | undefined) ?? null} />)}</CandidateCollection>
-            : <div className="hunting-empty">{topReadFailed ? "上次读取的名单为空，当前状态待重试核实。" : "当前没有可参与候选。题材尚未集中或条件未满足时，名单可以为空；系统不会凑满名额。"}</div>}
+            : <div className="hunting-empty">{topReadFailed ? "上次读取的名单为空，当前状态待重试核实。" : (top.empty_reasons?.join("；") || "当前没有同时满足条件的候选，系统不会凑满名额。")}</div>}
+          <button type="button" className="hunting-source-note" onClick={() => router.replace(patchWorkspaceUrl("/hunting", sp.toString(), {view: "validation"}), {scroll: false})}>查看已保存的入选记录 →</button>
+          {top?.read_state === "partial" && <p role="status" className="hunting-empty">部分题材数据不完整，当前展示已核实的候选。</p>}
           {top?.criteria && <p className="hunting-source-note">{top.criteria}</p>}
           {topRefItems.length > 0 && <div className="hunting-reference-fold">
             <button type="button" className="hunting-reference-trigger" aria-expanded={referenceOpen} aria-controls={referenceId} onClick={() => setReferenceOpen(value => !value)}>
@@ -497,9 +501,7 @@ function HuntingInner() {
           <div className="hunting-section-heading"><div><h2 className="hunting-section-title">每日精选</h2><p>{data?.date ?? "组合日期待读取"} · 当日持久候选</p></div>{picksLoaded && !picksFailed && <span className="hunting-section-count">{pickTotal} 只</span>}</div>
           {picksFailed && data && <p role="alert" className="hunting-empty">每日精选读取失败。以下保留上次读取的组合与原生成依据，当前执行复核待重新读取。</p>}
           {!picksLoaded ? <CardListSkeleton count={2} /> : !data ? <div role="alert" className="hunting-empty">每日精选读取失败。请刷新重试；读取失败不表示没有组合。</div>
-            : pickTotal === 0 ? <div className="hunting-empty">{data?.date == null
-              ? "尚未生成组合。此处仅读取已保存结果；请在系统维护核对调度与受控生成。"
-              : `${data.date}${data.stale ? "（最近一次生成，非今日）" : ""} 没有标的达到入选门槛${minPickScore != null ? `（综合分≥${minPickScore}）` : ""}。这是筛选结论，不是数据缺失。`}</div>
+            : pickTotal === 0 ? <div className="hunting-empty">{dailyEmptySummary(data)}</div>
             : pickItems.length > 0 ? <CandidateCollection>{pickItems.map(it => <PickCard key={it.symbol} item={fromDailyPick(it)} readError={!!daily.error} positionLabel={(posLabels[it.symbol] as "sim" | "real" | undefined) ?? null} />)}</CandidateCollection>
             : <div className="hunting-empty">{pickTotal} 只均已在盘中候选区展示。同一标的保留一张主卡，每日评分与原生成依据可从主卡“每日依据”查看。</div>}
           <p className="hunting-source-note">{minPickScore != null ? `综合分≥${minPickScore} · ` : ""}{replaceThreshold != null ? `换股门槛 ${replaceThreshold} 分` : "换股门槛未返回"} · {maxSwaps != null ? `每日换股上限 ${maxSwaps} 只` : "换股上限未返回"}；够格几只就保留几只。</p>

@@ -147,7 +147,7 @@ async def _live_gate(request: Request, hub: QuoteHub, stored: dict | None) -> di
     是复盘归因的证据，也是 `items[].buy_range` 已被撤除的原因）；本函数只**新增**
     一个对照面 `meta.gate_live`。也不动推送口径——这是展示层复核，不是新的告警源。
     """
-    from app.picks.gate import evaluate_stand_aside
+    from app.picks.gate import describe_gate_context, evaluate_stand_aside
     from app.services.market_context import CalendarUnavailable, get_cached_sentiment
 
     try:
@@ -187,6 +187,7 @@ async def _live_gate(request: Request, hub: QuoteHub, stored: dict | None) -> di
         prev_zt_median_pct=gi.get("prev_zt_median_pct"),
         phase_unreliable=bool(sent.get("phase_unreliable")),
     )
+    gate["presentation"] = describe_gate_context(sent, gate)
     gate["gate_source"] = "live"
     # 对照面：实时相位 vs 生成时刻相位、本次复核用的交易日。前端凭此说明
     # 「结论为何变化」，不必自己推断（也不该在前端重算规则）。
