@@ -1,4 +1,12 @@
-# 当前交接：设备权限误拦截纠偏
+# 当前交接：TradingAgents完整方案同输入LAB
+
+## 2026-10-18 用户直派整项验证
+
+从最新origin/master `5b400fb9453b2fbf7dfca2f929e3f9afcc798236`创建`codex/tradingagents-validation`。本轮只验TradingAgents完整图与现有DeepSeek/Codex，不自动领取普通selector候选；主树4份未跟踪evolution原件保留，业务服务和031隔离观察不改。完整实验方法与结论归[语义蓝图](ai/semantic-decisions.md#2026-10-18-tradingagents完整流程同输入验证)，研究状态仍归W04/RSH-030。
+
+有限LAB已结束：55次实验CLI启动/55条终态，8次usage未知；TradingAgents原180秒矩阵及修正360秒恢复均0/4真实全图，单DeepSeek和Codex各4份真实回答，后者离线解码取得并保留原误判。原图完整保留，当前适配/传输未通过，实际净增量证据不够，暂不接生产；不能说上游推理无价值。原输入、所有失败/中间报告/恢复、比较JSON/HTML和机械审计保存在本机忽略的artifacts/runs/tradingagents-validation-20261018。独立人工0、已见4例及缺失输入/未成熟结果边界保留，RSH-030整体待条件不表示本批仍在运行，RSH-031不变。
+
+本地完整后端5797通过/87跳过（205.69s）、pyflakes；前端默认/UTC各1772通过/146文件（100.98/99.86s），类型、ESLint零error/两项既有warning及生产构建Xyv9NGIB85UAi1mz9FrkD通过。最终文档专项186通过，doc-health、卫生、公开扫描与diff检查通过；完整日志和本批local-gates保留在上述忽略目录。准确HEAD作者DegradedRelease、三项CI、release_check、post-master CI和主目录同步分别由本批PR发布回执承载，工程通过不冒充实际加载。临时DEGRADED_FULL_CONTROL授权继续有效，发布仅用作者DegradedRelease，不冒充独立Review；本批结束后停下，不自动领取其他业务任务。
 
 ## 2026-10-16 管理电脑读取误要求维护：IMP-095 用户直派纠偏
 
