@@ -1,12 +1,18 @@
 # 当前交接：TradingAgents完整方案同输入LAB
 
-## 2026-10-18 用户直派整项验证
+## 1. 当前定位与本批完整接续结果
+
+用户纠正PR #299提前收口后，从master `3b7105fb955f83cb62e4fbf8258d9d00ad681a2b`接续`codex/tradingagents-complete`。现已实际完成四例原版12角色、7报告字段、最终组合决定、原报告树与pending记忆，以及各自单DeepSeek/Codex同输入对照；真实原生恢复保全case2三报告、case3四报告、case4六报告，无重生成。case2为混合格式提示版本，Codex前两份精确复用历史值。来源反证和全阶段费用/失败计数归[语义蓝图](ai/semantic-decisions.md#2026-10-18-tradingagents完整流程同输入验证)；最新可读证据是忽略artifacts中的full-comparison.html/json，旧final-comparison仅PR #299历史。
+
+完整框架有内部纠错用途，但稳定净增量未证，本批不接生产，未改业务源码/依赖/模型/调度，未重启服务；人工0、未来5日反思与收益均不伪造，不阻塞本次有限工程LAB。累计170次实际顶层启动含历史失败，费用未知不记0。4份用户evolution原件与原备份继续保全。Codex DEGRADED_FULL_CONTROL授权仍有效，作者反证不冒充独立Review。本批新本地完整后端5797通过/87跳过（260.39s）、pyflakes；前端默认/UTC各1772通过/146文件（100.99/100.15s），类型、ESLint零error/两项既有warning、生产构建SgV2bHAh_NTGr5gJa1fD4及构建生成引用还原后类型复验通过。回填后的文档/账本/发布专项146通过，doc-health、工作区卫生、公开仓扫描和diff检查通过；原摘要定位块失败与修正复验均留档。模型矩阵期间未跑重门禁；本地全量后端与前端串行，宿主其他负载不完全受控。当前完整日志归忽略目录release-complete-v9；准确HEAD发布、三项新CI及master同步/清理证据以本提交关联PR的DegradedRelease与完成记录为准，不沿用PR #299旧绿。
+
+### 第一轮已发布的故障取证（历史）
 
 从最新origin/master `5b400fb9453b2fbf7dfca2f929e3f9afcc798236`创建`codex/tradingagents-validation`。本轮只验TradingAgents完整图与现有DeepSeek/Codex，不自动领取普通selector候选；主树4份未跟踪evolution原件保留，业务服务和031隔离观察不改。完整实验方法与结论归[语义蓝图](ai/semantic-decisions.md#2026-10-18-tradingagents完整流程同输入验证)，研究状态仍归W04/RSH-030。
 
-有限LAB已结束：55次实验CLI启动/55条终态，8次usage未知；TradingAgents原180秒矩阵及修正360秒恢复均0/4真实全图，单DeepSeek和Codex各4份真实回答，后者离线解码取得并保留原误判。原图完整保留，当前适配/传输未通过，实际净增量证据不够，暂不接生产；不能说上游推理无价值。原输入、所有失败/中间报告/恢复、比较JSON/HTML和机械审计保存在本机忽略的artifacts/runs/tradingagents-validation-20261018。独立人工0、已见4例及缺失输入/未成熟结果边界保留，RSH-030整体待条件不表示本批仍在运行，RSH-031不变。
+第一轮故障取证停止时：55次实验CLI启动/55条终态，8次usage未知；TradingAgents原180秒矩阵及修正360秒恢复均0/4真实全图，单DeepSeek和Codex各4份真实回答，后者离线解码取得并保留原误判。原图完整保留，PR #299停止时适配/传输未通过，实际净增量证据不够，暂不接生产；不能说上游推理无价值。原输入、所有失败/中间报告/恢复、比较JSON/HTML和机械审计保存在本机忽略的artifacts/runs/tradingagents-validation-20261018。独立人工0、已见4例及缺失输入/未成熟结果边界保留，本轮已按用户纠正继续，RSH-030静态独立效果边界保留，RSH-031不变。
 
-本地完整后端5797通过/87跳过（205.69s）、pyflakes；前端默认/UTC各1772通过/146文件（100.98/99.86s），类型、ESLint零error/两项既有warning及生产构建Xyv9NGIB85UAi1mz9FrkD通过。最终文档专项186通过，doc-health、卫生、公开扫描与diff检查通过；完整日志和本批local-gates保留在上述忽略目录。准确HEAD作者DegradedRelease、三项CI、release_check、post-master CI和主目录同步分别由本批PR发布回执承载，工程通过不冒充实际加载。临时DEGRADED_FULL_CONTROL授权继续有效，发布仅用作者DegradedRelease，不冒充独立Review；本批结束后停下，不自动领取其他业务任务。
+本地完整后端5797通过/87跳过（205.69s）、pyflakes；前端默认/UTC各1772通过/146文件（100.98/99.86s），类型、ESLint零error/两项既有warning及生产构建Xyv9NGIB85UAi1mz9FrkD通过。最终文档专项186通过，doc-health、卫生、公开扫描与diff检查通过；完整日志和本批local-gates保留在上述忽略目录。准确HEAD作者DegradedRelease、三项CI、release_check、post-master CI和主目录同步分别由本批PR发布回执承载，工程通过不冒充实际加载。临时DEGRADED_FULL_CONTROL授权继续有效，发布仅用作者DegradedRelease，不冒充独立Review；本次用户直派验证继续至完整对照，不自动领取其他业务任务。
 
 ## 2026-10-16 管理电脑读取误要求维护：IMP-095 用户直派纠偏
 
