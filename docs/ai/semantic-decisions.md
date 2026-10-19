@@ -617,3 +617,8 @@ N6真实新增5次，0重试、0在途；13份原答按原请求及调用身份�
 **本次有限实验的所有冻结尝试已完成并排空，但新场景完整质量未通过；净提升证据不够，不接入TradingAgents。** 这是带实际失败的未采用决定，不称通用来源问题已解决。后续重议需要具体消费者、代表性输入和独立同基线净收益；不自动重跑旧例或追加新一代。生产候选饥饿和阅读覆盖提示是独立正确性修复，不是TradingAgents准入或模型/评分/通知晋级。
 
 本机忽略证据根为`artifacts/runs/tradingagents-complex-20261019/`，冻结输入、三代原答/原FAIL、`audit/final-audit.json`、`audit/final-quality-decision.json`、`audit/baseline-source-review.json`、`audit/offline-source-gate-cost.json`及`audit/actual-ai-consumers.json`相互追溯；唯一原料复用，不重下旧Notebook或GB数据。原任务静态状态/门序/角色/依赖/效果和运行条件不改，RSH-031不变。工程门禁、精确HEAD降级回执/三项CI、release_check、合并后CI和实际激活分别核验，见当前handoff及关联PR。
+
+
+### 2026-10-19 个股关联与AI适用范围核对
+
+本批按用户直派修补既有只读消费者，契约单点归[归因蓝图](../product/limit-up-attribution.md#2026-10-19-个股关联与ai适用范围核对)。消息AI回执、逐股来源关系、经营影响分别呈现；题材同名/错配均不能自动成为个股AI结论。关系是确定性证据投影，无新模型调用或资格晋级；新公司资料与独立效果仍归RSH-030等原owner，不宣称语义准确率。

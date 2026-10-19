@@ -713,3 +713,99 @@ def test_current_display_retains_old_version_but_does_not_confirm_qualified_prog
     assert data['stock_relation']['direction'] is None
     with store._sf() as db:
         assert db.get(EventInterpretation, version.id).payload_json == saved
+
+
+def save_stock_reasoning_aux(store, row, *, direction=1, theme="商业航天"):
+    with store._sf() as db:
+        prior = db.query(EventInterpretation).filter_by(event_id=row.id).order_by(EventInterpretation.id.desc()).first()
+        payload = json.loads(prior.payload_json)
+        payload["llm_aux"] = {"event_id": row.id, "observation_id": prior.observation_id,
+            "input_version_id": prior.id, "direction": direction, "theme": theme,
+            "reason": "融资用途仍需兑现", "chain": "融资用于研发，后续交付待核",
+            "evidence": {"field": "summary", "quote": payload["summary"]},
+            "state": "hypothesis" if direction else "no_direction",
+            "verification": "unverified", "eligibility_changed": False}
+        db.add(EventInterpretation(event_id=row.id, observation_id=prior.observation_id,
+            state="active", effective_at=NOW, payload_json=json.dumps(payload)))
+        db.commit()
+
+
+def test_stock_reasoning_exposes_real_company_basis_and_exact_receipt(store):
+    row = add(store, matched_by="source", direction=0)
+    save_stock_reasoning_aux(store, row)
+    x = item(store)
+    reason = x["stock_reasoning"]
+    assert reason["symbol"] == "600001"
+    assert reason["status"] == "source_related"
+    assert reason["basis"] == ["对应公司公告"]
+    assert reason["transmission"] == "收购预案 → 业务变化待核"
+    assert reason["source_excerpt"]["quote"] == x["source_context"]["summary"]
+    assert reason["ai_scope"] == "company_context"
+    assert reason["version_id"] == x["interpretation_ref"]["version_id"]
+    assert reason["observation_id"] == x["source_context"]["observation_id"]
+    assert reason["business_effect_verified"] is False and reason["eligibility_changed"] is False
+    assert x["stock_relation"]["direction"] is None
+
+
+@pytest.mark.parametrize("theme", ["商业航天", "机器人"])
+def test_stock_reasoning_does_not_turn_theme_membership_into_company_ai(store, theme):
+    row = add(store, symbol=None, target_type="theme", target="机器人", matched_by="llm_aux")
+    save_stock_reasoning_aux(store, row, theme=theme)
+    x = item(store, theme_names={"机器人"})
+    reason = x["stock_reasoning"]
+    assert reason["status"] == "theme_only"
+    assert reason["ai_scope"] == "not_applicable"
+    assert "机器人" in reason["basis"][0]
+    assert reason["transmission"] is None
+    assert ("题材不同" if theme == "商业航天" else "没有公司经营关系") in reason["ai_scope_reason"]
+
+
+def test_stock_reasoning_neutral_is_processed_but_not_a_new_catalyst(store):
+    row = add(store, matched_by="source", direction=0)
+    save_stock_reasoning_aux(store, row, direction=0, theme=None)
+    reason = item(store)["stock_reasoning"]
+    assert reason["ai_scope"] == "company_context"
+    assert "无明确催化方向" in reason["ai_scope_reason"]
+
+
+def test_stock_reasoning_never_consumes_expired_or_foreign_source(store):
+    row = add(store)
+    save_stock_reasoning_aux(store, row)
+    expired = read_attribution(store._sf, event_id=row.id, symbol="600001", now=NOW + timedelta(days=20))["data"]["items"][0]
+    assert expired["stock_reasoning"]["status"] == "inactive"
+    assert expired["stock_reasoning"]["ai_scope"] == "not_applicable"
+    other = add(store, symbol="600002", source_item_id="foreign-reasoning")
+    with store._sf() as db:
+        foreign = db.query(EventInterpretation).filter_by(event_id=other.id).one()
+        own = db.query(EventInterpretation).filter_by(event_id=row.id).order_by(EventInterpretation.id.desc()).first()
+        own.observation_id = foreign.observation_id
+        db.commit()
+    x = read_attribution(store._sf, event_id=row.id, symbol="600001", now=NOW)["data"]["items"][0]
+    assert x["stock_reasoning"]["ai_scope"] == "not_applicable"
+    assert x["stock_reasoning"]["source_excerpt"] is None
+
+
+def test_stock_reasoning_preserves_opposing_source_directions_without_ai_adoption(store):
+    row = add(store, direction=1, matched_by="source")
+    save_stock_reasoning_aux(store, row)
+    with store._sf() as db:
+        version = db.query(EventInterpretation).filter_by(event_id=row.id).order_by(EventInterpretation.id.desc()).first()
+        payload = json.loads(version.payload_json)
+        opposite = dict(payload['directions'][0], direction=-1, basis='相反成本风险')
+        payload['directions'].append(opposite)
+        version.payload_json = json.dumps(payload)
+        db.commit()
+    reason = item(store)["stock_reasoning"]
+    assert reason["basis"] == ["对应公司公告", "相反成本风险"]
+    assert reason["ai_scope"] == "not_applicable"
+    assert "冲突" in reason["ai_scope_reason"]
+    assert reason["transmission"] is None
+
+
+def test_stock_reasoning_missing_ai_does_not_erase_real_source_relationship(store):
+    add(store, direction=0, matched_by="source")
+    reason = item(store)["stock_reasoning"]
+    assert reason["status"] == "source_related"
+    assert reason["basis"] == ["对应公司公告"]
+    assert "没有可用的已保存AI判读" in reason["ai_scope_reason"]
+    assert "没有可核对的个股关系" not in reason["ai_scope_reason"]
