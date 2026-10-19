@@ -15,11 +15,13 @@ published_at and available_at. The requested window must be a contiguous slice
 of that explicit calendar. A list of observed dates does not prove continuity.
 No formatted table, news tone or model report is converted into daily prices.
 """
-from datetime import datetime, timedelta, timezone
+from datetime import datetime
 from decimal import Decimal, InvalidOperation
 import hashlib
 import json
 import re
+
+from app.core.bjtime import BJ_TZ
 
 VERSION = 'bounded-source-capability-v1'
 DAILY = re.compile(
@@ -409,7 +411,7 @@ def evaluate_report(report, packet):
                     if (match.group() == '累计涨幅' and current.get('supported') and number
                             and Decimal(number.group(1)) == Decimal(current['value_percent'])
                             and re.search(r'该时点|快照|截至|盘中|当前|当时|该报价|此报价', clause)):
-                        current_day = _time(semantics['as_of']).astimezone(timezone(timedelta(hours=8))).date().isoformat()
+                        current_day = _time(semantics['as_of']).astimezone(BJ_TZ).date().isoformat()
                         binding_error = _aggregate_binding_error(clause, semantics, current_day, current_day)
                         if binding_error:
                             violations.append({**record, 'reason': binding_error, 'source_capability_sha256': _sha(_canonical(semantics))})
