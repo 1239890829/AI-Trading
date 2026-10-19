@@ -124,6 +124,8 @@
 
 ---
 
+当前TradingAgents三例来源关系修补与提速验证：见[语义蓝图](ai/semantic-decisions.md#2026-10-19-来源关系修复与提速复验)，状态仍在W04/RSH-030；旧Luna批是历史比较，不替代新HEAD验收。
+
 ## 0. 主题路由（我要做什么 → 去读什么）
 
 本轮全产品入口： [产品闭环](product/product-closure-design.md) → [细功能审计](product/feature-closure-audit.md) 与 [猎场决策](product/hunting-decision-design.md) → [实施方案](implementation-plan.md) → [阶段任务](retro-and-gaps.md#60-阶段索引)。用户追加局部要求不缩小这个范围。

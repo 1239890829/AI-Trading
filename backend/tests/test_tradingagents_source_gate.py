@@ -237,6 +237,51 @@ class EvidenceGateTests(unittest.TestCase):
         self.assert_status('FAIL', '也不能外推到10月15日，之后持续上涨。')
         self.assert_status('FAIL', '也不能外推到10月15日。不能忽略持续上涨后的风险。')
 
+    def test_actual_v3_report_denial_grammar_without_affirmative_pardon(self):
+        accepted = [
+            '不能据此说当天收涨、连续上涨或账户可成交。',
+            '不表示从开盘后连续上涨，也不能据此判断未来。',
+            '不能表示连续上涨。',
+            '这不是连续上涨路径。',
+            '不足以验证趋势与账户可成交性。',
+            '材料不足以把当时快照解释成基本面转强、持续上涨。',
+            '材料不足以把当时快照解释成基本面转强，持续上涨。',
+            '而不是把一次快照外推成持续上涨。',
+            '不说明全天路径、收盘结果、持续性或账户可成交性。',
+            '若后续取得完整财报，同时有合格历史行情和执行资料支持趋势与可成交性，多头论据才可加强。',
+        ]
+        rejected = [
+            '不能据此说当天收涨，但连续上涨是事实。',
+            '连续上涨，不能据此说当天收涨。',
+            '不能据此说连续上涨后的抛压。',
+            '并不是不能据此说连续上涨。',
+            '不是不表示连续上涨。',
+            '不是不能表示连续上涨。',
+            '不是不是连续上涨路径。',
+            '不是不足以验证账户可成交性。',
+            '不是连续上涨路径，但该股连续上涨。',
+            '材料不足以把快照解释成基本面转强，但持续上涨是事实。',
+            '材料不足以把快照解释成基本面转强，持续上涨本来存在。',
+            '持续上涨，材料不足以把快照解释成基本面转强。',
+            '并不是不足以把快照解释成持续上涨。',
+            '而不是把快照外推成持续上涨，但持续上涨已成立。',
+            '持续上涨，而不是把快照外推成基本面转强。',
+            '不是不是把快照外推成持续上涨。',
+            '不说明全天路径，但账户可成交。',
+            '账户可成交，不说明全天路径。',
+            '并不是不说明账户可成交。',
+            '若后续取得完整财报，同时有合格历史行情和执行资料支持趋势，但当前账户可成交。',
+            '若后续取得完整财报，同时有合格历史行情和执行资料支持趋势与可成交性，但账户可成交是事实。',
+            '若后续取得完整财报，同时有合格历史行情和执行资料支持趋势与可成交性。账户可成交。',
+            '不是若后续取得完整财报，同时有合格历史行情和执行资料支持趋势与可成交性。',
+        ]
+        for sentence in accepted:
+            with self.subTest(sentence=sentence):
+                self.assert_status('PASS', sentence)
+        for sentence in rejected:
+            with self.subTest(sentence=sentence):
+                self.assert_status('FAIL', sentence)
+
     def test_aggregate_value_cannot_bind_foreign_security_or_other_window(self):
         packet = deepcopy(PACKET)
         packet['facts']['market_snapshot'] = {'status': 'observed', 'received_before_as_of': True,
