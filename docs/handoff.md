@@ -1,10 +1,12 @@
-# 当前交接：TradingAgents完整方案同输入LAB
+# 当前交接：TradingAgents来源与仓位依据完整复验
 
 ## 1. 当前定位与本批完整接续结果
 
-用户纠正PR #299提前收口后，从master `3b7105fb955f83cb62e4fbf8258d9d00ad681a2b`接续`codex/tradingagents-complete`。现已实际完成四例原版12角色、7报告字段、最终组合决定、原报告树与pending记忆，以及各自单DeepSeek/Codex同输入对照；真实原生恢复保全case2三报告、case3四报告、case4六报告，无重生成。case2为混合格式提示版本，Codex前两份精确复用历史值。来源反证和全阶段费用/失败计数归[语义蓝图](ai/semantic-decisions.md#2026-10-18-tradingagents完整流程同输入验证)；最新可读证据是忽略artifacts中的full-comparison.html/json，旧final-comparison仅PR #299历史。
+2026-10-19用户直派继续修TradingAgents无源判断与仓位依据，从master `7dafe1aa19d930eef8992a1313175552f9051746`接续`codex/tradingagents-grounding`。本批已完成原完整流程及同输入对照，**暂不接入生产**。DeepSeek臂1/4完整、65次/17HTTP500的失败仍在；Codex CLI候选四例均完整12角色、7报告、最终决定、原报告树及pending记忆。三例本地IPC接入失败后仅原生续缺节点，9份成功报告hash保持；原矩阵false/三个exit1不覆盖。新臂56图调用＋2探针=58/90，原65和旧170分列，累计293；两单模型八份按准确事实/任务/契约/实际载荷与模型身份复用，时延标历史。
 
-完整框架有内部纠错用途，但稳定净增量未证，本批不接生产，未改业务源码/依赖/模型/调度，未重启服务；人工0、未来5日反思与收益均不伪造，不阻塞本次有限工程LAB。累计170次实际顶层启动含历史失败，费用未知不记0。4份用户evolution原件与原备份继续保全。Codex DEGRADED_FULL_CONTROL授权仍有效，作者反证不冒充独立Review。本批新本地完整后端5797通过/87跳过（260.39s）、pyflakes；前端默认/UTC各1772通过/146文件（100.99/100.15s），类型、ESLint零error/两项既有warning、生产构建SgV2bHAh_NTGr5gJa1fD4及构建生成引用还原后类型复验通过。回填后的文档/账本/发布专项146通过，doc-health、工作区卫生、公开仓扫描和diff检查通过；原摘要定位块失败与修正复验均留档。模型矩阵期间未跑重门禁；本地全量后端与前端串行，宿主其他负载不完全受控。当前完整日志归忽略目录release-complete-v9；准确HEAD发布、三项新CI及master同步/清理证据以本提交关联PR的DegradedRelease与完成记录为准，不沿用PR #299旧绿。
+四例可空交易/期限字段均实际null，未再编标准配置；但海欣Sentiment仍把累计偏离扩写成连续上涨，最终没沿用也不能抹去上游错误。相对最好单Codex的净提升证据不够，不因更多角色或更长报告接入；本批有限复验结束，不自动继续抽样。完整方法/有用细化/反例归[语义蓝图](ai/semantic-decisions.md#2026-10-19-tradingagents无源判断与仓位依据复验)，忽略产物根tradingagents-grounding-20261019内comparison.html/json与逐源审阅可追溯。聚合机械845项通过只证明工程与证据闭包；已见四例、人工0、历史/社交/账户/执行缺失和未成熟未来反思不伪造。RSH-030原独立效果条件及RSH-031不变；不领取普通G4/IMP-019候选。
+
+本批业务源码/生产依赖/模型/调度diff为0，未重启服务或激活新构建；四份用户evolution原件与备份保全。Codex DEGRADED_FULL_CONTROL授权仍有效，作者/协作源审不冒充独立Review或human gold。本地完整后端5797通过/87跳过（385.26s）、pyflakes；前端默认/UTC各1772通过/146文件、类型、ESLint零error/两项既有warning及生产构建7-JU392YfbpOUpIDWzAw5通过，生成类型引用精确还原后真实复验tsc通过。两次恢复生成引用的辅助脚本错误及其修正保留，未把之前的tsc当恢复后证据。后置文档/账本/发布专项231项通过，doc-health、工作区卫生、公开仓扫描与diff检查通过；本地后端/前端重门串行，但与部分远端模型等待重叠，宿主负载未完全受控，不作速度排名。完整门与发布日志归本批release；准确HEAD DegradedRelease、新三项CI、release_check、post-master CI和同步/清理分别由关联PR与完成记录承载，不能沿用PR #300旧绿。
 
 ### 第一轮已发布的故障取证（历史）
 
