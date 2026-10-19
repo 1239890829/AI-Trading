@@ -100,6 +100,28 @@ def _settings(monkeypatch, **kw):
     monkeypatch.setattr(settings, "review_llm_model", "m")
 
 
+@pytest.mark.parametrize('blocker', ['future', 'directed', 'price_only'])
+def test_ineligible_recent_rows_cannot_starve_older_eligible_news(tmp_path, blocker):
+    sf = _factory(tmp_path)
+    eligible = _event(sf, '公司公告新增设备订单，金额尚待核实', age_min=20)
+    for number in range(8):
+        title = f'公司公告第{number}项业务' if blocker != 'price_only' else f'第{number}只股票涨停'
+        ev = _event(sf, title, age_min=-10 if blocker == 'future' else 1)
+        if blocker == 'directed':
+            with sf() as db:
+                db.add(EventDirection(event_id=ev.id, target_type='theme', target='半导体概念',
+                                      direction=1, matched_by='name'))
+                db.commit()
+    assert [row.id for row in la._pending_candidates(
+        sf, theme_names=['半导体概念'], max_batch=1, age_max_h=5)] == [eligible.id]
+
+
+def test_zero_batch_capacity_never_selects_an_event(tmp_path):
+    sf = _factory(tmp_path)
+    _event(sf, '公司公告新增订单', age_min=1)
+    assert la._pending_candidates(sf, theme_names=['半导体概念'], max_batch=0, age_max_h=5) == []
+
+
 def test_versioned_neutral_keeps_full_bounded_judgment_without_direction_change(tmp_path, monkeypatch):
     import json
     from app.events.store import EventStore

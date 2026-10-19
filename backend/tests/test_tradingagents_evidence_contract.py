@@ -34,6 +34,26 @@ def packet(open_price='34.02', low='33.19'):
 
 
 class EvidenceContractTests(unittest.TestCase):
+    def test_grounding_rebuilds_identity_clock_and_sources_for_each_packet(self):
+        first = packet()
+        second = deepcopy(first)
+        second['as_of'] = '2026-10-19T17:00:00+08:00'
+        second['facts']['security'] = {'symbol': '300123', 'market': 'SZ', 'name': '新样本'}
+        second['facts']['candidate_news'] = [dict(first['facts']['candidate_news'][0],
+                                                 record_id='new-source', source_symbols=['300123'],
+                                                 title='新样本：签约仍待生效')]
+        before = deepcopy(second)
+        old = CONTRACT.build_grounding_contract(first, 'GROUNDING_CONTRACT_V6：只用本包。')
+        new = CONTRACT.build_grounding_contract(second, 'GROUNDING_CONTRACT_V6：只用本包。')
+        self.assertIn('new-source', new)
+        self.assertIn('2026-10-19T17:00:00+08:00', new)
+        self.assertNotIn('news-a', new)
+        self.assertNotIn('另一公司', new)
+        self.assertNotEqual(old, new)
+        self.assertEqual(second, before)
+        with self.assertRaisesRegex(ValueError, 'cannot be reused'):
+            CONTRACT.build_grounding_contract(second, old)
+
     def check(self, expected, text, value=None):
         value = packet() if value is None else value
         before = deepcopy(value)

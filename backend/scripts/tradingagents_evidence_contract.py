@@ -18,6 +18,34 @@ import re
 from app.core.bjtime import BJ_TZ
 
 VERSION = 'typed-evidence-ledger-v1'
+
+
+def build_grounding_contract(packet, policy):
+    """Build every case-specific annotation from this packet, never a prior prompt.
+
+    A reusable policy must contain rules only. Reject already-rendered indices
+    rather than append a contradictory current index to stale case facts.
+    """
+    from scripts.tradingagents_source_gate import source_semantics
+
+    if not isinstance(policy, str) or not policy.strip():
+        raise ValueError('A nonempty source-independent policy is required')
+    if re.search(r'(?m)^(?:SOURCE_INDEX|SOURCE_CAPABILITIES_V2|EVIDENCE_RELATIONS_V1)\b', policy):
+        raise ValueError('Rendered source annotations cannot be reused as policy')
+    facts = packet.get('facts') or {}
+    index = {
+        'version': 'packet-source-index-v3', 'as_of': packet.get('as_of'),
+        'security': facts.get('security'), 'facts_canonical_sha256': _sha(_canonical(facts)),
+        'pointer_base': '/facts', 'not_semantic_gold': True,
+        'news': [{'id': row.get('record_id'), 'pointer': '/candidate_news/' + str(i),
+                  'source_value_sha256': _sha(_canonical(row))}
+                 for i, row in enumerate(facts.get('candidate_news') or [])],
+    }
+    return (policy.rstrip() + '\nSOURCE_INDEX (字段定位辅助，不是语义gold):\n'
+            + _canonical(index) + '\nSOURCE_CAPABILITIES_V2 (有限输入能力，不是语义gold):\n'
+            + _canonical(source_semantics(packet)) + '\n' + build_contract(packet))
+
+
 PRICE_FIELDS = ('price', 'open', 'high', 'low', 'prev_close')
 ALIASES = {
     'price': r'快照价格|当前价格|最新价|现价|(?<![A-Za-z_])price(?![A-Za-z_])',

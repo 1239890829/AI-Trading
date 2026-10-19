@@ -43,6 +43,24 @@ def history(closes, first_previous=10):
 
 
 class EvidenceGateTests(unittest.TestCase):
+    def test_account_evidence_requirements_do_not_assert_execution(self):
+        for text in (
+            '若要形成账户方案，还需账户持仓、现金、风险预算、交易成本及实际可成交证据。',
+            '也不能用换手率0.71证明该账户可成交。',
+        ):
+            with self.subTest(text=text):
+                self.assertEqual('PASS', evaluate_report(text, PACKET)['status'])
+
+    def test_account_assertions_stay_blocked_after_prerequisite_or_double_negation(self):
+        for text in (
+            '还需账户持仓，但是当前账户可以成交。',
+            '还需可成交证据，现在已经齐全。',
+            '不是不能用换手率证明该账户可成交。',
+            '实际可成交证据已经具备。',
+        ):
+            with self.subTest(text=text):
+                self.assertEqual('FAIL', evaluate_report(text, PACKET)['status'])
+
     def assert_status(self, expected, value, packet=PACKET):
         before = json.dumps(packet, ensure_ascii=False, sort_keys=True)
         result = evaluate_report(value, packet)

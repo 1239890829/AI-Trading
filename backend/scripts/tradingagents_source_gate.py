@@ -241,7 +241,7 @@ def _clauses(report):
             yield outer.start() + start, outer.group()[start:]
 
 
-def _nonasserted(clause, start, end, kind, paragraph_prefix=''):
+def _nonasserted(clause, start, end, kind, paragraph_prefix='', paragraph_suffix=''):
     before, after = clause[:start], clause[end:]
     presupposed = bool(re.match(r'\s*(?:之?后|以后|的(?:风险|回撤|抛压|压力|影响|约束))', after))
     if not presupposed and kind in ('DAILY_PRICE_PATH', 'ABSOLUTE_CUMULATIVE_RETURN'):
@@ -260,6 +260,23 @@ def _nonasserted(clause, start, end, kind, paragraph_prefix=''):
                     and not re.search(r'是事实|已成立|属实|已证实|确定|无疑|本来|存在|发生|已发生|确实', after)):
                 return 'EXPLICIT_DENIED_REWRITE_LIST_NOT_PRICE_ASSERTION'
     if kind == 'ACCOUNT_EXECUTABILITY' and not presupposed:
+        # These describe missing evidence, not a current account's ability.
+        # Keep the requirement's list local and reject an affirmative suffix.
+        context = paragraph_prefix + before
+        requirement = re.search(
+            r'(?:还需|仍需|需要补齐|需补充)(?P<items>[^。；;\n]{0,160})$', context)
+        if (requirement and re.match(r'证据\s*$', after)
+                and not re.search(r'但|却|然而|不过|而是|因此|所以|已|具备|证明|确认|可以|能够',
+                                  requirement['items'])
+                and not re.search(r'(?:不是|并非)\s*$', context[:requirement.start()])
+                and not re.search(r'(?:已经|现已|当前|现在|确已).{0,12}(?:具备|齐全|证明|可以|能够)',
+                                  paragraph_suffix)):
+            return 'LOCAL_MISSING_EXECUTION_EVIDENCE_REQUIREMENT'
+        denial = re.search(
+            r'(?:不能|无法|不足以)(?:仅)?用.{0,45}(?:证明|推断|认定|确认|保证|支持)'
+            r'(?:该|本|当前)?(?:账户|投资者)?\s*$', before)
+        if denial and not re.search(r'(?:不是|并非)\s*$', before[:denial.start()]):
+            return 'LOCAL_DENIED_EXECUTION_INFERENCE'
         # A future prerequisite may span a comma and "同时". Recognize only
         # the explicit acquisition-of-evidence clause, never its contrast or
         # a new assertion that an account currently can trade.
@@ -392,11 +409,14 @@ def evaluate_report(report, packet):
     for offset, clause in _clauses(report):
         paragraph_start = max(report.rfind('\n', 0, offset), report.rfind('。', 0, offset), report.rfind(';', 0, offset), report.rfind('；', 0, offset)) + 1
         paragraph_prefix = report[paragraph_start:offset]
+        rest = report[offset + len(clause):]
+        paragraph_suffix = re.split(r'[\n。；;]', rest, maxsplit=1)[0]
         for kind, pattern in families:
             for match in pattern.finditer(clause):
                 record = {'kind': kind, 'start': offset + match.start(), 'end': offset + match.end(),
                           'claim_text_sha256_utf8': _sha(match.group()), 'report_sha256_utf8': _sha(report)}
-                scope = _nonasserted(clause, match.start(), match.end(), kind, paragraph_prefix)
+                scope = _nonasserted(clause, match.start(), match.end(), kind, paragraph_prefix,
+                                     paragraph_suffix)
                 if scope:
                     observations.append({**record, 'status': scope})
                     continue
@@ -452,6 +472,7 @@ def evaluate_report(report, packet):
                 violations.append({**record, 'reason': reason, 'source_capability_sha256': _sha(_canonical(semantics))})
     return {'status': 'FAIL' if violations else 'PASS', 'violations': violations, 'observations': observations,
             'source_semantics_sha256': _sha(_canonical(semantics)), 'gate_version': VERSION,
+            'scope_rules_version': 'local-denial-prerequisite-v2',
             'checked_scope': {'families': [name for name, _ in families], 'scope': 'finite Chinese/English proposition families and local scopes only',
                               'not_checked': ['arbitrary natural-language entailment', 'source truth', 'causality', 'investment effect', 'unknown synonyms',
                                               'unparsed natural-language security names or dates; these still require source review'],
