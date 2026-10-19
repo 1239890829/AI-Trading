@@ -1,6 +1,17 @@
-# 当前交接：海欣路径扩写修复与完整流程对照
+# 当前交接：Luna完整TradingAgents质量、耗时与成本对照
 
-## 1. 当前定位与本批接续
+## 1. 本批定位与接续
+
+2026-10-19用户明确要求以GPT-6 Luna跑完整TradingAgents，和现有DeepSeek、当前Codex同输入比较，真实净提升才接入。从最新master `b771629801f4ed9f950a7e32b9f9b680ae21879f`创建`codex/tradingagents-luna-comparison`，仍归W04/RSH-030；宿主/生产模型、业务源码、服务和RSH-031未变，四份用户evolution原件有哈希备份且保留。
+
+实际证据归忽略的`artifacts/runs/tradingagents-luna-20261019/`；方法/结果单点见[本批语义蓝图](ai/semantic-decisions.md#2026-10-19-luna完整流程与同场成本对照)。四臂原V2同输入、单Luna必要消融、100次CLI硬限与原358次分列，原gateFAIL/语义拒绝不洗绿。本次完整有界验证已结束：71真实调用（59完整Luna、三个单模型各4），0额外重试/0在途；4原生终态、48角色/28主报告/4pending齐全，其中原严格仅1例完整，其余3例是单列不可信续观，不能洗成4例通过。源审与费用全已落盘，不接生产、不自动再抽样。
+
+首轮严门的Bear论敌失真、海欣无源关注度及冰轮开盘=最低关系错均保留。隔离后段未明确纠正，海欣Bull仍出现可观察关注断言；PM未再提不算已纠错。欢瑞完整图优于单Luna的日期误排消息，但单Sol也正确，最好基线净提升未证。官方API参考价完整Luna四例USD0.1483376、单Sol0.1659448、单Luna0.0089787，DeepSeek CNY0.120779–0.241558；实际订阅/中转与宿主源审账单未知，不称同质量省费。时间/失败/费用明细与原始哈希查本批comparison，JSON指纹51886161。原12角色/报告/记忆保留；完整流程、质量与生产准入分别验收。
+
+临时DEGRADED_FULL_CONTROL仍有效，每个新HEAD另核作者反证、完整适用本地门、准确HEAD的DegradedRelease/三项CI/release_check、合并后master CI和安全同步。源审是作者及协作模型审阅，不是独立Review或人工gold；其宿主tokens/账单未归属计量，不按零。
+
+## 上一批：PR #302海欣路径扩写修复（历史）
+
 
 2026-10-19用户明确重开TradingAgents海欣Sentiment的无源扩写，从master `53c088c36156d860c7748478e4cc41470ac6be2c`创建`codex/tradingagents-entailment`，仍归W04/RSH-030。本次完整原图/新同输入DeepSeek和Codex对照先验，未证明相对最好基线的净提升不接入。方法、根因、原误拒与实际结果归[语义蓝图本次记录](ai/semantic-decisions.md#2026-10-19-海欣路径扩写修复与完整流程重验)。新来源能力守卫及测试为LAB工程资产，无生产app、依赖、模型、调度、评分/通知/撮合或服务激活变更。
 
