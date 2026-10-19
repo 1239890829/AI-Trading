@@ -1,6 +1,17 @@
-# 当前交接：TradingAgents新复杂场景与AI判读可见性
+# 当前交接：选股个股关联与AI适用范围
 
 ## 1. 本批定位与接续
+
+2026-10-19用户直派：已保存消息AI不能冒充个股解读，须说明本股关系及依据，验证后再接入。基点master `3d5a008de8ec37274953ea5fd21eb3b077e7c3fb`，分支`codex/picks-stock-ai-evidence`复用本任务干净worktree，owner W00/IMP-092扩展。临时DEGRADED_FULL_CONTROL未撤销，作者自审不称独立Review。五份用户evolution原件保留，RSH-031及其他worktree不动。
+
+已复现：兆威机电的机器人题材命中与消息AI商业航天题材不同；大业股份商业航天同名也只证明缓存成员交集，没有经营关系。最小FIX在已有投影返回stock_reasoning，显示同源逐股basis/chain/原句及AI适用范围；仅题材交集或错配明确证据不够、不能当个股判断。原存量消息AI保全，未新调用模型、改写库或晋级排序/通知/资金。新生成个股分析和独立语义准确率不在本次证据投影完成范围。
+
+本批完整本地门：后端5871 passed/87 skipped/167 subtests（216.37秒）、pyflakes；前端默认/UTC各1781 passed/146文件（109.79/105.99秒）、tsc、ESLint零error/两项既有warning、生产构建`O9Ru8bdRdwqRml6StCl34`通过。旧后端全量为主动中断，保留日志，不称失败或通过；最终后端源码在门禁期间无漂移，前端生成引用恢复后另核tsc。六组真实公开来源复验只增加stock_reasoning，旧字段不变、每组仍五次SQL、零模型调用；作者检查非独立gold或效果证明。后置文档专项、准确HEAD的DegradedRelease、三项CI、release_check及master CI/激活按本提交关联PR核，不复用PR #305绿。发布前不重启现役服务。当前生产仍是PR #305合并3d5a008，2026-10-19已按用户授权启动；运行身份只查原runtime-identity指针。本机忽略ai-reader-runtime-20261019记录真实配对普通读取、选股1/0/2条与中性解释显示，0维护授权、刷新无新模型slot；该运行通过不能代替本批新代码验收。
+
+## 上一批交接（历史，不代替本批门禁）
+
+
+### 上一批定位与接续
 
 2026-10-19用户直派：换更多真实复杂场景优化TradingAgents速度/审核成本，并核选股AI显示。由master `9cb0543652f33a6e056ab36e9f98fa9402c3873d`接续`codex/tradingagents-new-scenarios`，owner W04/RSH-030；旧四证券未重跑。方法/结果单点归[新语义记录](ai/semantic-decisions.md#2026-10-19-新复杂场景与判读可见性)，忽略证据根`artifacts/runs/tradingagents-complex-20261019/`。
 

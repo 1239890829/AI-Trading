@@ -268,6 +268,66 @@ def _relation(symbol: str | None, row: EventCard, directions: list[dict],
             "matched_themes": sorted({d["target"] for d in themes})}
 
 
+
+def _stock_reasoning(symbol, row, version, observation, relation, auxiliary, directions, context, state):
+    """Explain saved relationships; never generate a new model/financial verdict."""
+    result = {
+        "symbol": symbol, "event_id": row.id, "version_id": version.id if version else None,
+        "observation_id": observation.id if observation else None,
+        "status": "insufficient", "explanation": "证据不够，尚不能建立这只股票与消息的关系。",
+        "basis": [], "transmission": None, "ai_scope": "not_applicable",
+        "ai_scope_reason": "消息AI观点没有可核对的个股关系，不能套用于本股。",
+        "missing": "缺少同一来源中的公司业务、产品、客户、订单或股权关系证据。",
+        "source_excerpt": None, "eligibility_changed": False,
+        "method": "saved_evidence_projection", "business_effect_verified": False,
+    }
+    if symbol is None or version is None or observation is None:
+        return result
+    bound = observation.id == version.observation_id and observation.event_id == row.id
+    if not bound:
+        return result
+    if auxiliary is None:
+        result["ai_scope_reason"] = "本消息没有可用的已保存AI判读；仅核对已列出的关联证据。"
+    evidence = auxiliary.get("evidence") if auxiliary else None
+    field = evidence["field"] if evidence else "title"
+    quote = evidence["quote"] if evidence else context[field]
+    result["source_excerpt"] = {"field": field, "quote": quote}
+    if state != "active":
+        result.update(status="inactive", explanation="本解释已过期、撤回或待复核，只能核对历史材料。",
+                      ai_scope_reason="当前解释不可消费，不把保存的消息观点当成本股当前判断。")
+        return result
+    direct = [d for d in directions if d.get("target_type") == "symbol" and d.get("target") == symbol
+              and d.get("observation_id") == observation.id and d.get("matched_by") != "llm_aux"]
+    themes = relation["matched_themes"]
+    if direct and relation["status"] in {"direct_symbol", "source_association"}:
+        result.update(status="source_related",
+                      explanation=f"本消息的来源记录明确关联证券 {symbol}；已建立来源关系，尚未证明经营影响。",
+                      basis=list(dict.fromkeys(d["basis"] for d in direct if d.get("basis"))),
+                      transmission=relation["chain"] or None,
+                      missing="仍需核实消息的经营影响、规模和兑现条件；来源关联不证明受益或涨跌。")
+        if not result["basis"]:
+            result["basis"] = [f"同一来源观察 #{observation.id} 保存了证券 {symbol} 的逐股关联。"]
+        signs = {d.get("direction") for d in direct if d.get("direction") in {-1, 1}}
+        if len(signs) > 1:
+            result.update(transmission=None, ai_scope_reason="同一来源的逐股方向有冲突，保留分歧，不套用消息方向。")
+        elif auxiliary:
+            result.update(ai_scope="company_context",
+                          ai_scope_reason=("该股有同源证券关联；AI已判读为无明确催化方向，并不等于未判读。"
+                                           if auxiliary["state"] == "no_direction" else
+                                           "该股有同源证券关联，以下AI只解释该消息；公司受益、风险程度和股价影响仍未验证。"))
+    elif themes:
+        joined = "、".join(themes)
+        result.update(status="theme_only",
+                      explanation=f"证券 {symbol} 与消息仅在当前缓存题材「{joined}」相交；尚无公司经营关系证据。",
+                      basis=[f"本股当前缓存成员题材与消息方向记录的交集：{joined}。该关系不是历史时点的业务证明。"],
+                      missing="需要公司公告或业务资料证明产品、客户、订单、供需或股权关系及有效时段。")
+        if auxiliary and auxiliary.get("theme") not in themes:
+            result["ai_scope_reason"] = f"消息AI判断针对「{auxiliary.get('theme') or '未指定题材'}」，与本股命中的题材不同，不套用该AI观点。"
+        elif auxiliary:
+            result["ai_scope_reason"] = "AI与本股即使题材同名，也没有公司经营关系佐证；只保留消息研究，不能当成本股判读。"
+    return result
+
+
 def project_event_attribution(row: EventCard, version: EventInterpretation | None,
                               observation: EventObservation | None,
                               pending: EventObservation | None, *, symbol: str | None,
@@ -375,6 +435,9 @@ def project_event_attribution(row: EventCard, version: EventInterpretation | Non
         alternatives.append("事件对不同对象的方向可能相反，需要逐股核查传导关系。")
     source_tier = payload.get("source_tier") if version else row.source_tier
     source_tier = source_tier if type(source_tier) is int and 1 <= source_tier <= 5 else None
+    auxiliary = _auxiliary_judgment(payload, row, observation, version, auxiliary_input_version)
+    reasoning = _stock_reasoning(symbol, row, version, observation, relation, auxiliary,
+                                 directions if valid_payload else [], context, state)
     return {
         "event_id": row.id, "title": payload["title"] if isinstance(payload.get("title"), str) else context["title"],
         "summary": payload.get("summary") if isinstance(payload.get("summary"), str) else None,
@@ -407,7 +470,8 @@ def project_event_attribution(row: EventCard, version: EventInterpretation | Non
         "qualifiers": qualifiers, "source_context": context,
         "pending_context": _context(pending, row) if pending else None,
         "review_note": version.review_note if version else None,
-        "llm_aux": _auxiliary_judgment(payload, row, observation, version, auxiliary_input_version),
+        "llm_aux": auxiliary,
+        "stock_reasoning": reasoning,
         "withdrawal_context": withdrawal_context,
         "alternatives": alternatives, "limitations": limitations,
     }

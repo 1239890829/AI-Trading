@@ -34,6 +34,46 @@ function boundAuxiliary(item: AttributionEvidenceItem) {
     && !!aux.evidence.quote && typeof source === "string" && source.includes(aux.evidence.quote) ? aux : null;
 }
 
+/** Cross-stock or stale-version explanations cannot travel with a response. */
+function boundStockReasoning(item: AttributionEvidenceItem, symbol?: string | null) {
+  const value = item.stock_reasoning;
+  if (!value || !symbol || value.symbol !== symbol || value.event_id !== item.event_id
+    || !Number.isInteger(value.version_id) || !value.version_id || value.version_id !== item.interpretation_ref.version_id
+    || !Number.isInteger(value.observation_id) || !value.observation_id || value.observation_id !== item.interpretation_ref.observation_id
+    || value.observation_id !== item.source_context?.observation_id
+    || value.method !== "saved_evidence_projection" || value.eligibility_changed !== false
+    || value.business_effect_verified !== false) return null;
+  if (!["source_related", "theme_only", "insufficient", "inactive"].includes(value.status)
+    || !["company_context", "not_applicable"].includes(value.ai_scope)
+    || !Array.isArray(value.basis) || !value.basis.every(text => typeof text === "string")
+    || [value.explanation, value.ai_scope_reason, value.missing].some(text => typeof text !== "string")
+    || (value.transmission !== null && typeof value.transmission !== "string")) return null;
+  if (value.ai_scope === "company_context" && (value.status !== "source_related"
+    || item.state !== "active" || !item.is_active || item.interpretation_ref.state !== "active")) return null;
+  const excerpt = value.source_excerpt;
+  if (excerpt && (!["title", "summary"].includes(excerpt.field) || typeof excerpt.quote !== "string"
+    || !excerpt.quote || typeof item.source_context?.[excerpt.field] !== "string"
+    || !item.source_context[excerpt.field]!.includes(excerpt.quote))) return null;
+  return value;
+}
+
+function StockReasoningEvidence({item, symbol}: {item: AttributionEvidenceItem; symbol?: string | null}) {
+  const value = boundStockReasoning(item, symbol);
+  if (!symbol) return null;
+  if (!value) return <p className="py-1 text-zinc-600 dark:text-zinc-400">个股关系证据尚未对应完整，不将消息AI观点当成本股判断。</p>;
+  return <section aria-label="本股关联与判读依据" className="space-y-2 py-2">
+    <ReaderBrief label="本股关系核对" facts={[
+      {label: "为什么相关", value: value.explanation},
+      {label: "关联依据", value: value.basis.join("；") || "未保存可核对的逐股关联依据。"},
+      {label: "传导线索", value: value.transmission || "尚不能从现有材料建立公司经营传导链。"},
+      {label: "AI适用范围", value: value.ai_scope_reason},
+      {label: "还缺什么", value: value.missing},
+    ]}/>
+    {value.source_excerpt && <blockquote aria-label="关联核对原句" className={styles.sourceCopy}>{value.source_excerpt.quote}</blockquote>}
+    <p className="text-zinc-600 dark:text-zinc-400">关系核对来自已保存证据，不是新生成的AI结论；不改变入选、评分或通知资格。</p>
+  </section>;
+}
+
 function clock(value: string | null | undefined): number | null {
   if (!value || !/(?:Z|[+-]\d{2}:\d{2})$/.test(value)) return null;
   const result = Date.parse(value);
@@ -93,6 +133,8 @@ export function AttributionEvidence({item, symbol, selectedAt, recordedRef, sele
   const excerptLabel = !item.source_context ? "来源内容未记录" : !hasSourceIdentity ? "旧卡片摘录 · 来源观察身份未记录" : sourceBound ? "解释版本绑定的来源内容" : "来源观察内容 · 解释绑定待核";
   const stageUnknown = !["done", "proposed", "rumor"].some(value => value === item.certainty);
   const savedAux = boundAuxiliary(item);
+  const stockReasoning = boundStockReasoning(item, symbol);
+  const aiLabel = symbol && stockReasoning?.ai_scope !== "company_context" ? "消息AI观点（非个股结论）" : "AI解读（待核）";
   const qualifiers = item.qualifiers.map(value => `${value.label}${value.matched_terms.length ? `（${value.matched_terms.join("、")}）` : ""}`);
   const relationLabel = symbol ? "个股关联" : "题材关联";
   const sourceSummary = item.source_context?.summary;
@@ -102,8 +144,9 @@ export function AttributionEvidence({item, symbol, selectedAt, recordedRef, sele
     <ReaderBrief label="消息与个股说明" headline={item.title} facts={[
       {label: "怎么相关", value: relation.status === "theme_only" ? "只关联到题材，尚不能确认这只股票受益" : relation.status === "direct_symbol" ? "消息直接提到这家公司，影响仍需核实" : relation.status === "source_association" ? "来源记录了公司关联，影响仍需核实" : "还没有足够的公司关联依据"},
       {label: "消息进展", value: !item.is_active || item.interpretation_ref.state === "withdrawn" ? "已失效或撤回，不作为当前依据" : item.certainty === "proposed" ? "仍是计划，尚未落地" : item.certainty === "rumor" ? "传闻，尚未证实" : item.certainty === "done" ? "来源称已发生，未独立核实" : "进展还不清楚"},
-      {label: savedAux ? "AI解读（待核）" : "内容摘录", value: readerExcerpt(savedAux?.reason || sourceSummary || item.source_context?.title) || "来源正文未保存"},
+      {label: savedAux ? aiLabel : "内容摘录", value: readerExcerpt(savedAux?.reason || sourceSummary || item.source_context?.title) || "来源正文未保存"},
     ]} cautions={[...readerCautions([sourceSummary || "", relation.basis, ...qualifiers, ...item.limitations]), ...(savedAux ? ["AI解读未独立验证"] : []), ...(!sourceBound ? ["来源与解释尚未对应完整"] : []), ...(late || lateInterpretation ? ["这条解释晚于入选，仅供事后复盘"] : []), ...(revised ? ["解释已变更，不替换原入选依据"] : []), ...(selectedAt && (selected === null || available === null || effective === null) ? ["时间记录不全，无法确认入选时是否已知"] : [])]}/>
+    <StockReasoningEvidence item={item} symbol={symbol}/>
     <ResearchDisclosure identity={`${item.event_id}:${version}:${observation}:${item.state}:${JSON.stringify(item)}`}>
       <AttributionEvidence item={item} symbol={symbol} selectedAt={selectedAt} recordedRef={recordedRef} selectionContext={selectionContext} defaultSourceExpanded complete/>
     </ResearchDisclosure>
@@ -114,6 +157,7 @@ export function AttributionEvidence({item, symbol, selectedAt, recordedRef, sele
       {!!item.dimensions.length && <ul className={styles.dimensions} aria-label="来源线索维度">{item.dimensions.map(value => <li key={value.key}>{value.label}</li>)}</ul>}
     </header>
     <p className={styles.boundary}>来源收录不等于消息属实；关联与方向仍须核对。</p>
+    <StockReasoningEvidence item={item} symbol={symbol}/>
     {item.timing_relation && <p role="note" className="text-zinc-600 dark:text-zinc-400">{item.timing_relation.label}。时点关系不证明涨停因果。</p>}
     {stageUnknown && <p role="note" className="text-amber-800 dark:text-amber-300">事件阶段尚未核实，不能按已落地事件解读。</p>}
     {(late || lateInterpretation || revised) && <p role="note" className="text-amber-800 dark:text-amber-300">{late ? "消息可用时间晚于首次加入，仅供后续复盘。" : lateInterpretation ? "当前解释形成晚于首次加入，仅供后续复盘。" : selectionContext ? "当前解释与选股记录引用的原版本不同。" : "当前解释与列表入口引用的版本不同。"}{selectionContext || selectedAt ? "不回填当时入选依据。" : "列表快照保留原记录。"}</p>}
@@ -135,7 +179,7 @@ export function AttributionEvidence({item, symbol, selectedAt, recordedRef, sele
       </section>
       <section><h4>市场响应 · 待核</h4><p className={styles.sourceCopy}>{item.market_response.basis}</p><p>市场响应不证明消息属实或涨停因果。</p><ConditionList label="其他解释与待核线索" items={item.alternatives} />{item.review_note && <p>{item.review_note}</p>}</section>
     </div>}
-    {savedAux && <section className={styles.nodeContent} aria-label="已保存辅助判读"><h4>{savedAux.state === "no_direction" ? "辅助判读：无明确方向" : "辅助方向假设"}</h4><p>尚未验证，不影响选股资格。</p><p className={styles.sourceCopy}>{savedAux.reason}</p>{savedAux.chain && <p className={styles.sourceCopy}>{savedAux.chain}</p>}<blockquote className={styles.sourceCopy}>{savedAux.evidence.quote}</blockquote><p>输入解释 {savedAux.input_version_id ? `#${savedAux.input_version_id}` : "未知"} · 来源观察 {savedAux.observation_id ? `#${savedAux.observation_id}` : "未知"}</p></section>}
+    {savedAux && <section className={styles.nodeContent} aria-label="已保存辅助判读"><h4>{savedAux.state === "no_direction" ? "辅助判读：无明确方向" : "辅助方向假设"}</h4><p>尚未验证，不影响选股资格。</p>{symbol && stockReasoning?.ai_scope !== "company_context" && <p>该AI回执只用于消息研究，当前不能支持本股判断。</p>}<p className={styles.sourceCopy}>{savedAux.reason}</p>{savedAux.chain && <p className={styles.sourceCopy}>{savedAux.chain}</p>}<blockquote className={styles.sourceCopy}>{savedAux.evidence.quote}</blockquote><p>输入解释 {savedAux.input_version_id ? `#${savedAux.input_version_id}` : "未知"} · 来源观察 {savedAux.observation_id ? `#${savedAux.observation_id}` : "未知"}</p></section>}
     <FactTimeline label="来源与解释时点" items={[
       {label: "来源发布", value: item.timing.source_time_known ? timeLabel(item.timing.source_published_at) : "未知，未用收录时间补填", kind: "time"},
       {label: "系统收到", value: timeLabel(item.timing.received_at), kind: "time"},
@@ -261,6 +305,7 @@ export const StockAttributionPanel = memo(function StockAttributionPanel({symbol
           {label: "进展", value: !primaryItem.is_active || primaryItem.interpretation_ref.state === "withdrawn" ? "已失效或撤回" : primaryItem.certainty === "proposed" ? "尚属计划" : primaryItem.certainty === "rumor" ? "传闻待证实" : primaryItem.certainty === "done" ? "来源称已发生" : "尚不清楚"},
         ]} cautions={[...readerCautions(conditions), ...(conditions.length ? ["完整限制条件见依据"] : []), ...(primaryItem.timing_relation && primaryItem.timing_relation.status !== "known_before_response" ? ["消息时间未能对应首封时点"] : []), ...(boundAux ? ["AI解读仅作参考，未独立验证"] : [])]}/>
       </>}
+      {primaryItem && <StockReasoningEvidence item={primaryItem} symbol={symbol}/>}
       {!primaryItem && conditions.length > 0 && <ReaderBrief label="来源原因限制" cautions={readerCautions(conditions)}/>}
       {otherSavedAI.length > 0 && <details><summary className="w-fit cursor-pointer text-zinc-600 dark:text-zinc-400">其他已保存AI解读 · {otherSavedAI.length} 条</summary><div className="space-y-3 py-2">{otherSavedAI.map(item => <AttributionEvidence key={`${item.event_id}:${item.interpretation_ref.version_id}:${item.interpretation_ref.observation_id}`} item={item} symbol={symbol} selectedAt={selectedAt} selectionContext={selectionContext} complete />)}</div></details>}
       <p className="text-zinc-600 dark:text-zinc-400">来源解释，尚不能确认是涨停的真正原因。</p>

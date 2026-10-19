@@ -40,6 +40,15 @@ export interface AttributionAuxJudgment {
 }
 
 /** Current, evidence-bound explanation. It never replaces an archived selection basis. */
+export interface StockReasoning {
+  symbol: string | null; event_id: number; version_id: number | null; observation_id: number | null;
+  status: "source_related" | "theme_only" | "insufficient" | "inactive";
+  explanation: string; basis: string[]; transmission: string | null;
+  ai_scope: "company_context" | "not_applicable"; ai_scope_reason: string; missing: string;
+  source_excerpt: {field: "title" | "summary"; quote: string} | null;
+  eligibility_changed: false; method: "saved_evidence_projection"; business_effect_verified: false;
+}
+
 export interface AttributionEvidenceItem {
   event_id: number;
   title: string;
@@ -77,6 +86,7 @@ export interface AttributionEvidenceItem {
   alternatives: string[];
   limitations: string[];
   llm_aux?: AttributionAuxJudgment | null;
+  stock_reasoning?: StockReasoning | null;
 }
 
 export interface StockAttributionPayload {

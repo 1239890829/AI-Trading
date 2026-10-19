@@ -544,3 +544,30 @@ describe("shared attribution evidence", () => {
     expect(screen.getByText("来源与解释尚未对应完整")).toBeTruthy();fireEvent.click(screen.getByRole("button",{name:"完整依据与研究记录"}));
     expect(screen.getByText("来源观察内容 · 解释绑定待核")).toBeTruthy();expect(screen.queryByText("解释版本绑定的来源内容")).toBeNull();expect(screen.getByText(/解释 未知 · 来源观察/)).toBeTruthy();
   });});
+
+describe("stock-bound reasoning", () => {
+  const reasoning: NonNullable<AttributionEvidenceItem["stock_reasoning"]> = {
+    symbol: "600825", event_id: 18, version_id: 22, observation_id: 19,
+    status: "theme_only", explanation: "仅在传媒题材相交，没有公司经营关系证明",
+    basis: ["当前缓存成员题材：传媒"], transmission: null, ai_scope: "not_applicable",
+    ai_scope_reason: "消息AI针对医疗器械，不能套用于传媒个股",
+    missing: "需要公司公告、产品或客户关系及有效时段",
+    source_excerpt: {field: "summary", quote: "尚未完成审计"},
+    eligibility_changed: false, method: "saved_evidence_projection", business_effect_verified: false,
+  };
+  it("shows stock relationship, evidence, missing links and rejects another theme's AI", () => {
+    const item: AttributionEvidenceItem = {...evidence, stock_reasoning: reasoning,
+      llm_aux: {event_id: 18, input_version_id: 21, observation_id: 19, direction: 1, theme: "医疗器械",
+        reason: "消息层面的假设", chain: "", evidence: {field: "summary", quote: "尚未完成审计"}, state: "hypothesis", verification: "unverified", eligibility_changed: false}};
+    render(<AttributionEvidence item={item} symbol="600825" />);
+    expect(screen.getByLabelText("本股关联与判读依据").textContent).toContain(reasoning.ai_scope_reason);
+    expect(screen.getByText(reasoning.basis[0])).toBeTruthy();
+    expect(screen.getByText(reasoning.missing)).toBeTruthy();
+    expect(screen.getByText("消息AI观点（非个股结论）")).toBeTruthy();
+  });
+  it.each([{symbol: "600826"}, {version_id: 21}, {observation_id: 20}, {source_excerpt: {field: "summary" as const, quote: "来源没有的话"}}])("does not attach mismatched identity or quote %j", patch => {
+    render(<AttributionEvidence item={{...evidence, stock_reasoning: {...reasoning, ...patch}}} symbol="600825"/>);
+    expect(screen.queryByLabelText("本股关联与判读依据")).toBeNull();
+    expect(screen.getByText("个股关系证据尚未对应完整，不将消息AI观点当成本股判断。")).toBeTruthy();
+  });
+});
