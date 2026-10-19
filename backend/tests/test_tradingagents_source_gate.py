@@ -1,0 +1,242 @@
+"""Portable offline logical/source fixtures. These are not human accuracy gold."""
+from copy import deepcopy
+import importlib.util
+import json
+from pathlib import Path
+import unittest
+
+HERE = Path(__file__).resolve()
+SCRIPT = HERE.parent / 'evidence_gate.py'
+if not SCRIPT.is_file():
+    SCRIPT = HERE.parents[1] / 'scripts' / 'tradingagents_source_gate.py'
+SPEC = importlib.util.spec_from_file_location('tradingagents_source_gate_test', SCRIPT)
+GATE = importlib.util.module_from_spec(SPEC)
+SPEC.loader.exec_module(GATE)
+evaluate_report, source_semantics = GATE.evaluate_report, GATE.source_semantics
+
+PACKET = {'as_of': '2026-10-14T09:43:08+08:00', 'facts': {
+    'security': {'market': 'SH', 'name': '样本股份', 'symbol': '600001'},
+    'candidate_news': [{'record_id': 'news-08', 'source_symbols': ['600001'],
+        'title': '样本股份股票交易异常波动公告',
+        'summary': '样本股份（600001）在10月9日、12日和13日连续3个交易日，收盘价格涨幅偏离值累计超过20%。',
+        'published_at': '2026-10-13T18:11:00+08:00',
+        'available_at': '2026-10-13T19:06:43+08:00'}],
+    'market_snapshot': {'open': 9.0, 'low': 8.92, 'volume': 10000, 'semantics': 'ONE_OBSERVED_SNAPSHOT'},
+    'historical_ohlcv': None}}
+
+
+def history(closes, first_previous=10):
+    packet = deepcopy(PACKET)
+    days = ['2026-10-08', '2026-10-09', '2026-10-12', '2026-10-13'][-len(closes):]
+    packet['facts']['trading_calendar'] = {'market': 'SH', 'version': 'OFFLINE_CALENDAR-v1', 'complete': True,
+        'window_start': '2026-10-08', 'window_end': '2026-10-13',
+        'sessions': ['2026-10-08', '2026-10-09', '2026-10-12', '2026-10-13'],
+        'published_at': '2026-10-01T00:00:00+08:00', 'available_at': '2026-10-01T00:01:00+08:00'}
+    previous = [first_previous] + closes[:-1]
+    packet['facts']['price_history'] = {'symbol': '600001.SH', 'market': 'SH', 'version': 'OFFLINE_FIXTURE-v1',
+        'price_basis': 'same_unadjusted', 'frequency': '1d', 'sessions': days,
+        'observations': [{'session': day, 'prev_close': prior, 'close': value, 'final': True,
+                          'session_close_at': day + 'T15:00:00+08:00',
+                          'published_at': day + 'T15:01:00+08:00', 'available_at': day + 'T15:02:00+08:00'}
+                         for day, prior, value in zip(days, previous, closes)]}
+    return packet
+
+
+class EvidenceGateTests(unittest.TestCase):
+    def assert_status(self, expected, value, packet=PACKET):
+        before = json.dumps(packet, ensure_ascii=False, sort_keys=True)
+        result = evaluate_report(value, packet)
+        self.assertEqual(expected, result['status'], (value, result))
+        self.assertEqual(before, json.dumps(packet, ensure_ascii=False, sort_keys=True))
+        self.assertTrue(result['checked_scope']['does_not_rewrite_report'])
+        return result
+
+    def test_observed_failure_shape_and_correct_denial(self):
+        self.assert_status('FAIL', '该累计偏离值不能当作累计收益率。连续上涨后的风险约束仍须注意。')
+        self.assert_status('PASS', '累计偏离不是累计收益率。没有逐日价格就不能证明连续上涨。不保证成交。')
+        self.assert_status('PASS', '不能生成技术指标、实测情绪、胜率或可成交结论。换手率不证明特定账户能够成交。')
+        self.assert_status('PASS', '累计偏离不能当作累计收益率；参与评估不能理解为账户能够成交。')
+        self.assert_status('PASS', '不能由当时上涨推导持续买盘、后续封板或账户可成交。')
+        self.assert_status('PASS', '不能把该时点上涨推演为后续封板或账户可成交。')
+        self.assert_status('PASS', '观察资格不能直接变成可成交结论。不是账户可成交证明。')
+        self.assert_status('PASS', '不能把偏离值说成股票累计涨幅。')
+
+    def test_source_quote_and_useful_facts_not_all_abstention(self):
+        self.assert_status('PASS', 'news-08原文为“连续3个交易日，收盘价格涨幅偏离值累计超过20%”。'
+                           '这不能证明连续上涨，也不是累计收益率。拟转让10%仍是拟议事项；快照open9.0、low8.92。')
+
+    def test_synonyms_and_presupposition_not_keyword_only(self):
+        for sentence in ['三连涨后的风险', '连续上涨后的风险约束', '不能忽略连续上涨后的风险',
+                         '不应忽视持续上行的风险', '每日都收涨带来风险', '价格一日高过一日',
+                         '持续上行后的风险', 'consecutive daily gains imply risk']:
+            with self.subTest(sentence=sentence):
+                self.assert_status('FAIL', sentence)
+
+    def test_local_negation_and_condition_not_global_pardon(self):
+        for sentence in ['不能证明连续上涨。', '证据不足以确认持续上行。', '若逐日行情证实连续上涨，再评估。',
+                         '是否连续上涨仍待核验。', '连续上涨尚未证实。', '不能把累计偏离视为连续上涨。',
+                         '不能排除连续上涨。', '若连续上涨后回撤，再评估。']:
+            with self.subTest(sentence=sentence):
+                self.assert_status('PASS', sentence)
+        for sentence in ['不能证明连续上涨，但连续上涨后的风险仍须注意。',
+                         '不能证明连续上涨但连续上涨后的风险仍须注意。',
+                         '不能把偏离当累计收益率。不能忽略连涨后的风险。',
+                         '若逐日数据证明连续上涨但连续上涨已是事实。',
+                         '连续上涨后的抛压尚未证实。', '是否买入要看连续上涨后的风险。',
+                         '不能排除连续上涨后的回撤风险。', '不能证明连续上涨后的抛压。',
+                         '并不是不能证明连续上涨。']:
+            with self.subTest(sentence=sentence):
+                self.assert_status('FAIL', sentence)
+
+    def test_aggregate_does_not_determine_daily_path(self):
+        packet = history([10, 12, 11, 12.5])
+        self.assertEqual('25.00', source_semantics(packet)['daily_close_capability']['cumulative_return_percent'])
+        self.assert_status('PASS', '该窗口累计收益率25%。', packet)
+        self.assert_status('FAIL', '连续3个交易日上涨。', packet)
+        self.assert_status('FAIL', '累计收益率25%。')
+
+    def test_daily_path_needs_each_session_previous_close(self):
+        packet = history([11, 12, 12.5])
+        result = self.assert_status('PASS', '所给窗口连续3个交易日收涨。', packet)
+        self.assertEqual([True, True, True], source_semantics(packet)['daily_close_capability']['positive_close_steps'])
+        self.assertTrue(result['observations'])
+        self.assert_status('FAIL', '盘中连续上涨全程没有回撤。', packet)
+        self.assert_status('FAIL', '连续4个交易日上涨。', packet)
+        self.assert_status('FAIL', '连续上涨10天。', packet)
+        self.assert_status('FAIL', '连续上涨十一天。', packet)
+        self.assert_status('FAIL', '连续2个交易日上涨10天。', packet)
+        missing = deepcopy(packet)
+        del missing['facts']['price_history']['observations'][0]['prev_close']
+        self.assert_status('FAIL', '连续3个交易日上涨。', missing)
+        only_two = history([10, 11, 12], first_previous=10)
+        self.assert_status('FAIL', '连续3个交易日上涨。', only_two)
+        self.assert_status('PASS', '连续2个交易日上涨。', only_two)
+
+    def test_missing_identity_time_version_calendar_chain_reject(self):
+        for mutation in ['gap', 'foreign', 'market', 'future', 'basis', 'duplicate', 'unfinal', 'version',
+                         'calendar_missing', 'calendar_gap', 'calendar_future', 'calendar_incomplete', 'chain']:
+            packet = history([11, 12, 12.5]); block = packet['facts']['price_history']
+            if mutation == 'gap':
+                block['observations'].pop(1)
+            elif mutation == 'foreign':
+                block['observations'][1]['symbol'] = '000811.SZ'
+            elif mutation == 'market':
+                block['observations'][1]['market'] = 'SZ'
+            elif mutation == 'future':
+                block['observations'][1]['available_at'] = '2026-10-15T15:02:00+08:00'
+            elif mutation == 'basis':
+                block['observations'][1]['price_basis'] = 'other_adjustment'
+            elif mutation == 'duplicate':
+                block['sessions'][1] = block['sessions'][0]
+            elif mutation == 'unfinal':
+                block['observations'][1]['final'] = False
+            elif mutation == 'version':
+                block['observations'][1]['version'] = 'other-v2'
+            elif mutation == 'calendar_missing':
+                del packet['facts']['trading_calendar']
+            elif mutation == 'calendar_gap':
+                block['sessions'].pop(1); block['observations'].pop(1)
+            elif mutation == 'calendar_future':
+                packet['facts']['trading_calendar']['available_at'] = '2026-10-15T00:01:00+08:00'
+            elif mutation == 'calendar_incomplete':
+                packet['facts']['trading_calendar']['complete'] = False
+            else:
+                block['observations'][1]['prev_close'] = 10.5
+            with self.subTest(mutation=mutation):
+                self.assert_status('FAIL', '连续3个交易日上涨。', packet)
+
+    def test_direct_attribution_not_independent_daily_verification(self):
+        packet = deepcopy(PACKET)
+        packet['facts']['candidate_news'].append({'record_id': 'fixture-rise', 'source_symbols': ['600001'],
+            'title': '样本股份连续3个交易日上涨', 'summary': '样本股份连续3个交易日上涨。',
+            'published_at': '2026-10-13T16:00:00+08:00', 'available_at': '2026-10-13T16:01:00+08:00'})
+        result = self.assert_status('PASS', 'fixture-rise原文称“样本股份连续3个交易日上涨”。这只是报道，不代表已核验逐日行情。', packet)
+        self.assertEqual('ATTRIBUTED_NOT_DAILY_VERIFIED', result['observations'][0]['status'])
+        self.assert_status('FAIL', '样本股份连续3个交易日上涨。', packet)
+        self.assert_status('FAIL', 'news-08原文称“连续上涨”。')
+        self.assert_status('FAIL', 'fixture-rise原文称“样本股份连续3个交易日上涨”证明连续3个交易日上涨。', packet)
+        self.assert_status('FAIL', 'fixture-rise原文称“样本股份连续3个交易日上涨”，因此样本股份连续3个交易日上涨。', packet)
+        packet['facts']['candidate_news'][-1]['available_at'] = '2026-10-15T16:01:00+08:00'
+        self.assert_status('FAIL', 'fixture-rise称“样本股份连续3个交易日上涨”。', packet)
+
+    def test_negative_news_cannot_license_affirmative_quote(self):
+        packet = deepcopy(PACKET)
+        row = packet['facts']['candidate_news'][0]
+        row['summary'] = '样本股份（600001）不能证明连续上涨。'
+        self.assertEqual([], source_semantics(packet)['reported_daily_path_statements'])
+        self.assert_status('FAIL', 'news-08原文称“连续上涨”。', packet)
+
+    def test_other_company_path_is_not_target_source_capability(self):
+        packet = deepcopy(PACKET)
+        row = packet['facts']['candidate_news'][0]
+        row['summary'] = '样本股份（600001）公告提到另一公司连续3个交易日上涨。'
+        self.assertEqual([], source_semantics(packet)['reported_daily_path_statements'])
+        self.assert_status('FAIL', 'news-08原文称“样本股份连续3个交易日上涨”。', packet)
+        row['summary'] = '样本股份（600001）连续3个交易日上涨。'
+        self.assertTrue(source_semantics(packet)['reported_daily_path_statements'])
+        self.assert_status('PASS', 'news-08原文称“样本股份连续3个交易日上涨”。', packet)
+
+    def test_snapshot_volume_cannot_prove_continuous_or_executable_future(self):
+        for sentence in ['换手字段说明当时连续成交。', '累计成交量保证成交。', '该账户可以买到。',
+                         'open等于low是必然现象，是废信息。', '随后一定封板。']:
+            with self.subTest(sentence=sentence):
+                self.assert_status('FAIL', sentence)
+        self.assert_status('PASS', '快照open9.0、low8.92。单份快照不能证明连续成交，也不能保证成交；若未来资料齐备再评估。')
+        self.assert_status('PASS', 'open等于low并非必然。明天不一定上涨。')
+        self.assert_status('PASS', '只有后续出现（当前包内均无）以下证据，解释才可能改变：本股自身披露、盘口深度与可成交证据、完整日K。这些均属缺失项。')
+        self.assert_status('FAIL', '当前包内均无执行数据，账户可成交。')
+
+    def test_daily_price_scope_does_not_confuse_revenue_year_or_calendar(self):
+        self.assert_status('PASS', '文章称实现5年连续上涨。这只是收入历史概括。已报道连续交易日价格异动。')
+        self.assert_status('PASS', '营业收入连续上涨，仍待逐年财务报表核实。')
+        self.assert_status('FAIL', '股价连续上涨，营收仍待核验。')
+
+    def test_intraday_cumulative_field_is_not_historical_return(self):
+        packet = deepcopy(PACKET)
+        packet['facts']['market_snapshot'] = {'status': 'observed', 'received_before_as_of': True,
+            'semantics': 'one intraday cumulative quote; price is not a final daily close',
+            'data': {'symbol': '600001', 'market': 'SH', 'change_pct': 5.263,
+                     'received_at': '2026-10-14T09:32:46+08:00', 'ticktime': '09:32:36'}}
+        self.assert_status('PASS', '该时点累计涨幅5.263%；这只是盘中快照。', packet)
+        self.assert_status('FAIL', '该时点累计收益率5.263%。', packet)
+        self.assert_status('FAIL', '该时点累计涨幅6.263%。', packet)
+        self.assert_status('FAIL', '该时点连续上涨。', packet)
+        packet['facts']['market_snapshot']['data']['received_at'] = '2026-10-15T09:32:46+08:00'
+        self.assert_status('FAIL', '该时点累计涨幅5.263%。', packet)
+
+    def test_daily_positive_cannot_be_borrowed_for_explicit_other_code_or_window(self):
+        packet = history([11, 12, 12.5])
+        self.assert_status('FAIL', '000811连续3个交易日上涨。', packet)
+        self.assert_status('FAIL', '2026-09-01至2026-09-03连续3个交易日上涨。', packet)
+        self.assert_status('PASS', '600001连续3个交易日上涨。', packet)
+        self.assert_status('PASS', '2026-10-09至2026-10-13连续3个交易日上涨。', packet)
+
+    def test_actual_local_denials_with_subject_list_and_postposed_proof(self):
+        for sentence in ['不是个股累计收益率。', '不是本股累计收益率。',
+                         '不能改写为个股累计收益超过20%、三日每天上涨或连续涨停。',
+                         '不能改写为个股累计收益超过20%，三日每天上涨或连续涨停。',
+                         '不能改写为累计收益率、连续上涨、持续上行。',
+                         '| 累计相对偏离 | 不是逐日上涨证明 |']:
+            with self.subTest(sentence=sentence):
+                self.assert_status('PASS', sentence)
+        for sentence in ['这是个股累计收益率。', '不是个股累计收益率。连续上涨后的风险仍需注意。',
+                         '不能改写为累计收益率，但连续上涨是事实。',
+                         '不能改写为累计收益率，连续上涨是事实。',
+                         '不能改写为累计收益率，另一观点是连续上涨。',
+                         '不能改写为累计收益率，连续上涨本来就存在。',
+                         '不能改写为累计收益率，不能忽略连续上涨后的风险。',
+                         '不是逐日上涨证明。逐日上涨后的抛压尚未证实。',
+                         '不是不能改写为累计收益率。']:
+            with self.subTest(sentence=sentence):
+                self.assert_status('FAIL', sentence)
+
+    def test_actual_coordinated_external_time_extrapolation_denial(self):
+        self.assert_status('PASS', '也不能外推到10月15日或解释为之后持续上涨。')
+        self.assert_status('PASS', '不能外推到次日或解释为之后连续上涨。')
+        self.assert_status('FAIL', '也不能外推到10月15日，但之后持续上涨是事实。')
+        self.assert_status('FAIL', '也不能外推到10月15日，之后持续上涨。')
+        self.assert_status('FAIL', '也不能外推到10月15日。不能忽略持续上涨后的风险。')
+
+
+if __name__ == '__main__':
+    unittest.main(verbosity=2)
