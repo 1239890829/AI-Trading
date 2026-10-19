@@ -1,10 +1,24 @@
-# 当前交接：TradingAgents来源与仓位依据完整复验
+# 当前交接：海欣路径扩写修复与完整流程对照
 
-## 1. 当前定位与本批完整接续结果
+## 1. 当前定位与本批接续
+
+2026-10-19用户明确重开TradingAgents海欣Sentiment的无源扩写，从master `53c088c36156d860c7748478e4cc41470ac6be2c`创建`codex/tradingagents-entailment`，仍归W04/RSH-030。本次完整原图/新同输入DeepSeek和Codex对照先验，未证明相对最好基线的净提升不接入。方法、根因、原误拒与实际结果归[语义蓝图本次记录](ai/semantic-decisions.md#2026-10-19-海欣路径扩写修复与完整流程重验)。新来源能力守卫及测试为LAB工程资产，无生产app、依赖、模型、调度、评分/通知/撮合或服务激活变更。
+
+**本轮完整验证完成，未证明净提升，不接生产。** 四例各12角色、7报告、最终决定、原报告树/HTML及一条pending记忆齐备；八份新V2同输入原答已取得。海欣原“累计偏离→连续上涨”在全组角色中未复发；无据仓位/价格/期限为typed null。singleCodex已覆盖主要约束，DeepSeek两例真实血缘/关注度扩写作为质量失败保留，其他时钟/引用minor如实记录。四个已见案例、人工gold0，不能宣称泛化、准确率或收益。
+
+新有限检查器的否定范围误拒、首轮0/4、接续ToolMessage断言错误及两份失败矩阵均保留，未洗绿；最终LAB协议只允许逐源确认的精确原答假阳性继续，保留原词法FAIL。66预留/65实际/66终态含1prelaunch abort、0额外retry/0在途，原96/8硬限保持；旧293另列，累计358非provider请求/账单。365项机械闭包只证明工程与证据完整，四例源审和作者裁决不冒充独立Review或human gold。证据归本机忽略tradingagents-entailment-20261019的comparison.html/json及review、engineering/runtime/audit。
+
+最终发布3f8d1395完整本地BE5814 passed/87 skipped/58 subtests（pytest343.43s，外层350.081s）、pyflakes通过；先前b8b的5813通过、89d的1失败/5813通过及两个过期版本主动中断分别保留，不替代当前结果。FE默认/UTC各1772 passed/146文件（219.055/232.117s），tsc、ESLint0error/2既有warning、构建mZkGtgz3WPcxSvhLVG_tx（47.176s）通过；生成引用精确恢复后真实tsc再次通过。两个类型准备错误及原日志保留。重门串行，与部分远端模型等待重叠，负载不作可比提速证据。后置文档/账本/发布专项225项、doc-health、卫生、公开扫描和diff检查通过；准确HEAD发布事实分别由本批release与PR记录承载，不能沿用PR #301绿。
+
+Codex临时DEGRADED_FULL_CONTROL仍有效，作者/协作源审不冒充独立Review。每个新HEAD仍核降级回执、三项required CI、release_check及post-master CI；代码提交d860407cbc9095f29235277139d3211f77807fd4、后置绑定补修cb2c27ade70ad9d794d301dfae030e2c1e504f0d及共享时间修复c98f5dbea2c97b0a31862fbd72874d017a39726a，最终发布HEAD另见关联PR。无服务重启或生产采用；四份用户evolution原件/备份保留，RSH-031及原调度不变，本轮不自动领取下一业务候选。
+
+发布前反证发现累计分支可把数值借给明确别股/市场/ISO日期，已补显式对象与完整窗口绑定。对象补丁89d82214全门真实1失败/5813通过（时间权威守卫）保留，现复用共享BJ_TZ，当前3f8d1395与原矩阵b8b版本分别留档；65实际原答/203字段离线完整结果零差异、四caps不变，6反例旧PASS新FAIL、旧海欣仍红；17组/119 API、19项窄反证及29项时间/来源专项通过，无新模型调用。原03b8缺陷回执保留，新完整BE已另核通过，不将旧版本门禁当新字节通过。
+
+### 上一批完整复验（PR #301历史）
 
 2026-10-19用户直派继续修TradingAgents无源判断与仓位依据，从master `7dafe1aa19d930eef8992a1313175552f9051746`接续`codex/tradingagents-grounding`。本批已完成原完整流程及同输入对照，**暂不接入生产**。DeepSeek臂1/4完整、65次/17HTTP500的失败仍在；Codex CLI候选四例均完整12角色、7报告、最终决定、原报告树及pending记忆。三例本地IPC接入失败后仅原生续缺节点，9份成功报告hash保持；原矩阵false/三个exit1不覆盖。新臂56图调用＋2探针=58/90，原65和旧170分列，累计293；两单模型八份按准确事实/任务/契约/实际载荷与模型身份复用，时延标历史。
 
-四例可空交易/期限字段均实际null，未再编标准配置；但海欣Sentiment仍把累计偏离扩写成连续上涨，最终没沿用也不能抹去上游错误。相对最好单Codex的净提升证据不够，不因更多角色或更长报告接入；本批有限复验结束，不自动继续抽样。完整方法/有用细化/反例归[语义蓝图](ai/semantic-decisions.md#2026-10-19-tradingagents无源判断与仓位依据复验)，忽略产物根tradingagents-grounding-20261019内comparison.html/json与逐源审阅可追溯。聚合机械845项通过只证明工程与证据闭包；已见四例、人工0、历史/社交/账户/执行缺失和未成熟未来反思不伪造。RSH-030原独立效果条件及RSH-031不变；不领取普通G4/IMP-019候选。
+四例可空交易/期限字段均实际null，未再编标准配置；但海欣Sentiment仍把累计偏离扩写成连续上涨，最终没沿用也不能抹去上游错误。相对最好单Codex的净提升证据不够，不因更多角色或更长报告接入；该批当时结束，本次按用户新指令重开，不能沿用旧结束状态。完整方法/有用细化/反例归[语义蓝图](ai/semantic-decisions.md#2026-10-19-tradingagents无源判断与仓位依据复验)，忽略产物根tradingagents-grounding-20261019内comparison.html/json与逐源审阅可追溯。聚合机械845项通过只证明工程与证据闭包；已见四例、人工0、历史/社交/账户/执行缺失和未成熟未来反思不伪造。RSH-030原独立效果条件及RSH-031不变；不领取普通G4/IMP-019候选。
 
 本批业务源码/生产依赖/模型/调度diff为0，未重启服务或激活新构建；四份用户evolution原件与备份保全。Codex DEGRADED_FULL_CONTROL授权仍有效，作者/协作源审不冒充独立Review或human gold。本地完整后端5797通过/87跳过（385.26s）、pyflakes；前端默认/UTC各1772通过/146文件、类型、ESLint零error/两项既有warning及生产构建7-JU392YfbpOUpIDWzAw5通过，生成类型引用精确还原后真实复验tsc通过。两次恢复生成引用的辅助脚本错误及其修正保留，未把之前的tsc当恢复后证据。后置文档/账本/发布专项231项通过，doc-health、工作区卫生、公开仓扫描与diff检查通过；本地后端/前端重门串行，但与部分远端模型等待重叠，宿主负载未完全受控，不作速度排名。完整门与发布日志归本批release；准确HEAD DegradedRelease、新三项CI、release_check、post-master CI和同步/清理分别由关联PR与完成记录承载，不能沿用PR #300旧绿。
 
