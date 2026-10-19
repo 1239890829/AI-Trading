@@ -1,6 +1,14 @@
-# 当前交接：Luna完整TradingAgents质量、耗时与成本对照
+# 当前交接：TradingAgents三例来源修补与提速对照
 
 ## 1. 本批定位与接续
+
+2026-10-19用户明确要求修补上一批三例来源错误，并在完整原图中重新比较质量、耗时和成本、减少等待。本批从最新master `a767a56f9bc8d2a2d7cc4205ccc3a9c394056596`创建`codex/tradingagents-source-repair`，仍归W04/RSH-030。当前事实/任务/as_of保持，新V3–V6契约和确定性ledger共同提供给全图与单Luna/单Sol/DeepSeek，旧失败和旧发布证据保留。
+
+方法与结果单点为[本批语义蓝图](ai/semantic-decisions.md#2026-10-19-来源关系修复与提速复验)，初代本机忽略证据根为`artifacts/runs/tradingagents-source-repair-20261019/`，最终比较归`artifacts/runs/tradingagents-peer-reviewed-20261019/comparison.html`及同名JSON。有限验证已完成：本批162次真实/0重试/0在途，历史累计591；最终海欣13原答精确复用、只新增后五角色，十二角色/七报告/pending完整，138机械检查与七次消费前全文同伴源审通过。选定四例原三类错误未复发，但相对最好单Sol净增益证据不够，决定不接生产、不再自动抽样。N2其余三例与N4–N6海欣续段按各自版本匹配，不称一批全新同版本矩阵。准确HEAD、三项CI、DegradedRelease、release_check及合并后master CI从本提交关联PR核验，不能借旧CI。临时DEGRADED_FULL_CONTROL未撤销，作者及协作源审不是独立Review或人工gold。五份用户evolution原件已校哈希备份（10月19日为施工期间另出现的无关未跟踪文件），业务服务、031和生产模型均未变。只完成本主任务，不领取普通selector候选。
+
+本批最终代码的完整本地门：BE5857 passed/87 skipped/161 subtests（pytest422.39秒，外层429.677秒），pyflakes通过；FE默认/UTC各1772 passed/146文件（外层244.036/256.092秒），tsc、ESLint0error/2既有warning、Next16.3.8生产构建`T9JhkxkxviK-4DTGPGizO`（43.804秒）通过。全1782跟踪文件门前后零漂移，Next生成引用精确恢复后真实tsc再通过；重门串行，模型实验先全部排空，正式服务未重启/激活。doc-health、卫生、公开扫描与diff通过，计数回填后文档/账本/发布专项另验。详细日志/XML/manifest归初代证据根的release。最终比较JSON指纹`07ecde7b3fea9d8c16241e0998b0ac19063ea3b77d07e5fc1e7fc95831885424`；23项数值/版本/链接核对及18成本格的只读格式核通过。内置浏览器明确拒绝观察file协议，已停止该动作并保留原返回，没有换协议或换表面绕过；HTML目视单列未验，不冒充已显示成功。
+
+## 上一批：PR #303 Luna完整流程与同场成本（历史）
 
 2026-10-19用户明确要求以GPT-6 Luna跑完整TradingAgents，和现有DeepSeek、当前Codex同输入比较，真实净提升才接入。从最新master `b771629801f4ed9f950a7e32b9f9b680ae21879f`创建`codex/tradingagents-luna-comparison`，仍归W04/RSH-030；宿主/生产模型、业务源码、服务和RSH-031未变，四份用户evolution原件有哈希备份且保留。
 

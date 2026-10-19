@@ -39,9 +39,9 @@ FUTURE = re.compile(r'(?:随后|之后|后续|接下来|明日|明天|未来).{0
 SNAPSHOT_UNIVERSAL = re.compile(r'(?:open|开盘).{0,50}(?:low|最低).{0,35}(?:必然|必定|始终|一直|全程|废信息)', re.I)
 NEGATIVE = re.compile(
     r'(?:不能|无法|不足以|不应|不宜|尚不能|尚无法|未能|未见证据)(?:据此|仅凭|从中|直接)?'
-    r'(?:证明|认定|确认|推断|推出|说明|支持|断言|保证|还原|确定|得出|视为|判断|生成|推导|外推|理解为|当作|当成|解释为|等同于|变成|转为)'
+    r'(?:证明|认定|确认|推断|推出|说明|表示|说|验证|支持|断言|保证|还原|确定|得出|视为|判断|生成|推导|外推|理解为|当作|当成|解释为|解释成|等同于|变成|转为)'
     r'|(?:不代表|不等于|并不意味着|不意味着|不是.{0,8}证据|尚未证实|未获证实|缺乏证据证明)'
-    r'|不(?:证明|支持|保证|意味着|等于)'
+    r'|不(?:证明|说明|表示|支持|保证|意味着|等于)'
     r'|不能(?:把|将).{0,28}(?:当作|视为|解释为|等同于|推出)'
     r'|(?:不能|无法|不应)(?:直接)?(?:由|把|将).{0,30}(?:推导|推演为|推演成|说成|变成|转成|认定为)'
     r'|(?:cannot|does\s+not|insufficient\s+to)\s+(?:prove|establish|infer|confirm|guarantee)', re.I)
@@ -248,21 +248,36 @@ def _nonasserted(clause, start, end, kind, paragraph_prefix=''):
         # A denied rewrite can list several wrong conclusions. Keep this
         # limited to one local paragraph and reject a new affirmative clause.
         context = paragraph_prefix + before
-        heads = list(re.finditer(r'(?:不能|无法|不应)(?:直接)?(?:改写为|改写成|写成|解释为|当作|当成|等同于)', context))
+        heads = list(re.finditer(
+            r'(?:不能|无法|不应)(?:直接)?(?:改写为|改写成|写成|解释为|当作|当成|等同于)'
+            r'|(?:不能|无法|不应|不足以)(?:直接)?(?:把|将).{0,28}(?:解释为|解释成|外推为|外推成)'
+            r'|(?:而)?不是(?:把|将).{0,28}(?:解释为|解释成|外推为|外推成)', context))
         if heads:
             head = heads[-1]
             tail = context[head.end():]
-            if (not re.search(r'(?:不是|并非)\s*$', context[:head.start()])
+            if (not re.search(r'(?:不是|并非|不能说|无法说)\s*$', context[:head.start()])
                     and not re.search(r'但是|然而|不过|可是|但|却|反而|而是|实际|事实|因此|所以|确实|已经|现已|证明|认定|说明|意味着|可见|另一|另外|并且|而且|此外|同时|是|存在|显示|确认|肯定|可以|能够|保证', tail)
                     and not re.search(r'是事实|已成立|属实|已证实|确定|无疑|本来|存在|发生|已发生|确实', after)):
                 return 'EXPLICIT_DENIED_REWRITE_LIST_NOT_PRICE_ASSERTION'
+    if kind == 'ACCOUNT_EXECUTABILITY' and not presupposed:
+        # A future prerequisite may span a comma and "同时". Recognize only
+        # the explicit acquisition-of-evidence clause, never its contrast or
+        # a new assertion that an account currently can trade.
+        context = paragraph_prefix + before
+        future = list(re.finditer(r'(?:若|如果|只有)(?:后续|未来|之后).{0,36}(?:取得|补齐|获得|提供)', context))
+        if future:
+            tail = context[future[-1].end():]
+            if (re.search(r'(?:历史行情|执行资料|执行证据).{0,18}(?:支持|证明|证实).{0,12}$', tail)
+                    and not re.search(r'但是|然而|不过|可是|但|却|反而|而是|因此|所以|事实上|已经|现已|当前账户|该账户', tail)
+                    and not re.search(r'(?:不是|并非)\s*$', context[:future[-1].start()])):
+                return 'CONDITIONAL_FUTURE_EVIDENCE_REQUIREMENT_NOT_EXECUTION_ASSERTION'
     if re.search(r'(?:若|如果|假如|倘若|假设)\s*$', before) or re.search(
             r'(?:若|如果|假如|倘若|假设).{0,28}(?:数据|行情|逐日记录)(?:证实|证明|显示|确认|支持)\s*$', before):
         return 'CONDITIONAL_OR_EXPLICIT_UNKNOWN'
     if not presupposed and re.search(r'(?:是否|有待核实|待核验|不能排除)\s*$', before):
         return 'CONDITIONAL_OR_EXPLICIT_UNKNOWN'
     if (not presupposed and NEGATIVE.search(before[-55:])
-            and not re.search(r'(?:不是|并非|并不是)(?:不能|无法|不足以)', before[-55:])
+            and not re.search(r'(?:不是|并非|并不是)(?:不能|无法|不足以|不(?:说明|表示|证明|支持|保证|意味着|等于))', before[-55:])
             and not (kind == 'DAILY_PRICE_PATH' and DAILY.search(before[-55:]))):
         return 'EXPLICIT_NON_ENTAILMENT_OR_UNKNOWN'
     if re.match(r'\s*(?:尚未证实|未被证实|无法确认|仍待核验|并未得到证实|不是.{0,8}证据)', after):
@@ -271,6 +286,10 @@ def _nonasserted(clause, start, end, kind, paragraph_prefix=''):
         return 'EXPLICIT_NON_ENTAILMENT_OR_UNKNOWN'
     if (kind == 'DAILY_PRICE_PATH' and not presupposed
             and re.search(r'(?:并非|不是)\s*$', before) and re.match(r'(?:证明|证据)', after)):
+        return 'EXPLICIT_NON_ENTAILMENT_OR_UNKNOWN'
+    if (kind == 'DAILY_PRICE_PATH' and not presupposed
+            and re.search(r'(?:并非|不是)\s*$', before)
+            and not re.search(r'(?:并非|不是)\s*(?:并非|不是)\s*$', before)):
         return 'EXPLICIT_NON_ENTAILMENT_OR_UNKNOWN'
     if kind == 'ACCOUNT_EXECUTABILITY' and re.search(r'(?:并不|不|不能|无法|未能|不可)\s*$', before):
         return 'EXPLICIT_NON_ENTAILMENT_OR_UNKNOWN'
