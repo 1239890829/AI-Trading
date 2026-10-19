@@ -57,7 +57,7 @@
 | **FN-08** | `archive/picks-replay-baseline.md` | L1 | 快照 | 精选 60 日回放基线（08-31 评审指名保留）。**时点快照，只读** |
 | **FN-09** | `system/llm-gateway-probe.md` | L2 | 运维 | LLM 网关健康探针（`claude_cli` 别名监控） |
 | **FN-10** | `archive/jev-integration-retired-20261011.md` | L2 | 历史档案 | 已退役Jev蓝图与历史实测；不得作为当前调用/安装/评分义务，现役入口为FN-12 |
-| **FN-12** | `ai/semantic-decisions.md` | L2 | AI/Agent 架构 | 当前规则/已有LLM路径、DeepSeek新闻分类/依据有限LAB、完整语境/对象/关键条件配对、TradingAgents完整原图同输入对照及来源/账户约束复验（仍有中间无源判断、净增量未证，不准入）与人工gold；Jev退役和Decisions不接入，状态分别归W07/IMP-091、W04/RSH-030 |
+| **FN-12** | `ai/semantic-decisions.md` | L2 | AI/Agent 架构 | 当前规则/已有LLM路径、DeepSeek新闻分类/依据有限LAB、完整语境/对象/关键条件配对、TradingAgents完整原图与[海欣路径扩写修复及V2新同输入对照](ai/semantic-decisions.md#2026-10-19-海欣路径扩写修复与完整流程重验)（4例完整原图与8份同输入原答已核，有限守卫FAIL与LAB作者误拒裁决分开；真实失败保留、净增量未证不准入）与人工gold；Jev退役和Decisions不接入，状态分别归W07/IMP-091、W04/RSH-030 |
 | **FN-13** | `product/limit-up-attribution.md` | L2 | 产品/事件归因 | 多维消息证据、股票关联、市场响应、连续采集及选股/通知/复盘边界；工程状态归W00/IMP-092 |
 | **FN-11** | `system/runtime-performance.md` | L2 | 性能测量 | IMP-019 可复现入口；§23首图否决、§24重复工作/首帧、§25锁竞争测量、§26本机启动鉴权及盘前WS刷新、§27真实交易双窗/SQLite读取隔离；工程与交易窗口分层 |
 | **EX-01** | `archive/live-trading-guosen-plan.md` | L1 | 搁置历史 | 国信 miniQMT 实盘蓝图。**用户已搁置**（不接受 Windows 依赖），恢复条件见文档头 |
