@@ -237,6 +237,23 @@ class EvidenceGateTests(unittest.TestCase):
         self.assert_status('FAIL', '也不能外推到10月15日，之后持续上涨。')
         self.assert_status('FAIL', '也不能外推到10月15日。不能忽略持续上涨后的风险。')
 
+    def test_aggregate_value_cannot_bind_foreign_security_or_other_window(self):
+        packet = deepcopy(PACKET)
+        packet['facts']['market_snapshot'] = {'status': 'observed', 'received_before_as_of': True,
+            'data': {'symbol': '600001', 'market': 'SH', 'change_pct': 5.263,
+                     'received_at': '2026-10-14T09:32:46+08:00'}}
+        self.assert_status('PASS', '600001当前累计涨幅5.263%。', packet)
+        self.assert_status('PASS', '2026-10-14当前累计涨幅5.263%。', packet)
+        self.assert_status('FAIL', '000811当前累计涨幅5.263%。', packet)
+        self.assert_status('FAIL', '600001.SZ当前累计涨幅5.263%。', packet)
+        self.assert_status('FAIL', '2026-09-01当前累计涨幅5.263%。', packet)
+        self.assert_status('PASS', '无法证明000811当前累计涨幅5.263%。', packet)
+        daily = history([11, 12, 12.5])
+        self.assert_status('PASS', '600001在2026-10-09至2026-10-13累计收益率25%。', daily)
+        self.assert_status('FAIL', '000811累计收益率25%。', daily)
+        self.assert_status('FAIL', '2026-10-12至2026-10-13累计收益率25%。', daily)
+        self.assert_status('FAIL', '2026-10-12累计收益率25%。', daily)
+
 
 if __name__ == '__main__':
     unittest.main(verbosity=2)

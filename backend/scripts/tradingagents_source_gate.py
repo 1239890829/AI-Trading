@@ -15,7 +15,7 @@ published_at and available_at. The requested window must be a contiguous slice
 of that explicit calendar. A list of observed dates does not prove continuity.
 No formatted table, news tone or model report is converted into daily prices.
 """
-from datetime import datetime
+from datetime import datetime, timedelta, timezone
 from decimal import Decimal, InvalidOperation
 import hashlib
 import json
@@ -344,6 +344,20 @@ def _explicit_daily_binding_error(clause, start, semantics):
     return None
 
 
+def _aggregate_binding_error(clause, semantics, window_start, window_end):
+    # A matching number does not bind a claim to the target or source window.
+    # Only literal security codes and ISO dates are parsed, as in daily claims.
+    security = semantics['security']
+    for literal in re.findall(r'(?<![A-Za-z0-9])(\d{6}(?:\.(?:SH|SS|SZ|BJ))?)(?![A-Za-z0-9])', clause, re.I):
+        symbol, market = _identity(literal)
+        if symbol != security.get('symbol') or market and market != security.get('market'):
+            return 'EXPLICIT_OTHER_SECURITY_NOT_SUPPORTED_BY_TARGET_SOURCES'
+    dates = re.findall(r'\d{4}-\d{2}-\d{2}', clause)
+    if dates and dates not in ([window_end], [window_start, window_end]):
+        return 'EXPLICIT_ISO_DATES_DO_NOT_BIND_TO_AGGREGATE_SOURCE_WINDOW'
+    return None
+
+
 def evaluate_report(report, packet):
     """Do not alter text. FAIL blocks this bounded scope, not an entire domain."""
     if not isinstance(report, str):
@@ -395,10 +409,19 @@ def evaluate_report(report, packet):
                     if (match.group() == '累计涨幅' and current.get('supported') and number
                             and Decimal(number.group(1)) == Decimal(current['value_percent'])
                             and re.search(r'该时点|快照|截至|盘中|当前|当时|该报价|此报价', clause)):
+                        current_day = _time(semantics['as_of']).astimezone(timezone(timedelta(hours=8))).date().isoformat()
+                        binding_error = _aggregate_binding_error(clause, semantics, current_day, current_day)
+                        if binding_error:
+                            violations.append({**record, 'reason': binding_error, 'source_capability_sha256': _sha(_canonical(semantics))})
+                            continue
                         observations.append({**record, 'status': 'ATTRIBUTED_CURRENT_INTRADAY_CHANGE_NOT_DAILY_PATH',
                                              'source_pointer': current['pointer'], 'source_field_sha256': current['field_sha256']})
                         continue
                     if daily.get('supported') and number and Decimal(number.group(1)) == Decimal(daily['cumulative_return_percent']):
+                        binding_error = _aggregate_binding_error(clause, semantics, daily['sessions'][0], daily['sessions'][-1])
+                        if binding_error:
+                            violations.append({**record, 'reason': binding_error, 'source_capability_sha256': _sha(_canonical(semantics))})
+                            continue
                         observations.append({**record, 'status': 'RECOMPUTED_PROVIDED_DAILY_WINDOW_RETURN', 'source_sha256': daily['source_sha256']})
                         continue
                     reason = ('CUMULATIVE_RETURN_VALUE_OR_WINDOW_NOT_RECOMPUTABLE' if daily.get('supported')
