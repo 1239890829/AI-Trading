@@ -18,6 +18,7 @@ import asyncio
 import logging
 import re
 import json
+from datetime import timedelta
 
 from sqlalchemy import and_, or_, select, update
 from sqlalchemy.orm import aliased
@@ -95,9 +96,11 @@ def _unfulfilled_claim_conflict(source: dict, explanation: str) -> bool:
 def _pending_candidates(sf, *, theme_names: list[str], max_batch: int,
                         age_max_h: float) -> list[EventCard]:
     """候选：无复核记录的 active 解释、无非零方向、未调用过 LLM、近时发布。
-    仅收「官方目录里找得到题材名」的事件——LLM 连题材归属都判不出的事件
-    （纯数据罗列/无题材驱动）不值得花钱判，直接在扫描层排除。
+    目录约束在判读结果入库前验证；候选不要求标题预先含题材名。
+    按近时窗口流式扫描，不能让较新的无效记录占满 LIMIT、饿死有效消息。
     """
+    if max_batch <= 0:
+        return []
     now = beijing_now_naive()
     rows = []
     with sf() as db:
@@ -111,14 +114,20 @@ def _pending_candidates(sf, *, theme_names: list[str], max_batch: int,
             .where(EventCard.status == "active")
             .where(EventCard.revision_pending_at.is_(None))
             .where(EventCard.llm_judged_at.is_(None))
+            .where(EventCard.published_at <= now,
+                   EventCard.published_at >= now - timedelta(hours=age_max_h))
+            .where(~select(EventDirection.id).where(
+                EventDirection.event_id == EventCard.id,
+                EventDirection.direction != 0,
+            ).exists())
             # Filter before LIMIT so reviewed neutral cards cannot crowd out
             # older unreviewed candidates. Legacy cards have no version.
             .where(or_(current.id.is_(None), and_(
                 current.state == "active", current.review_note.is_(None),
                 current.effective_at <= now,
             )))
-            .order_by(EventCard.published_at.desc())
-            .limit(max_batch * 4)  # 放大取数：下面还要过滤有方向行/超龄
+            .order_by(EventCard.published_at.desc(), EventCard.id.desc())
+            .execution_options(yield_per=max(16, max_batch * 4))
         )
         for row, version_id in db.execute(stmt):
             if _market_action_only(row.title, row.summary):
@@ -127,9 +136,6 @@ def _pending_candidates(sf, *, theme_names: list[str], max_batch: int,
                 continue
             age_h = (now - row.published_at).total_seconds() / 3600
             if age_h < 0 or age_h > age_max_h:
-                continue
-            has_dir = any(d.direction != 0 for d in row.directions)
-            if has_dir:
                 continue
             row._llm_candidate_version_id = version_id
             rows.append(row)

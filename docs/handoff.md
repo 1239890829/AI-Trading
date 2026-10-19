@@ -1,6 +1,16 @@
-# 当前交接：TradingAgents三例来源修补与提速对照
+# 当前交接：TradingAgents新复杂场景与AI判读可见性
 
 ## 1. 本批定位与接续
+
+2026-10-19用户直派：换更多真实复杂场景优化TradingAgents速度/审核成本，并核选股AI显示。由master `9cb0543652f33a6e056ab36e9f98fa9402c3873d`接续`codex/tradingagents-new-scenarios`，owner W04/RSH-030；旧四证券未重跑。方法/结果单点归[新语义记录](ai/semantic-decisions.md#2026-10-19-新复杂场景与判读可见性)，忽略证据根`artifacts/runs/tradingagents-complex-20261019/`。
+
+108真实调用/108终态、0重试/0在途：12次旧注释污染退出质量分母、18新单模型、78原图调用；SQLite八次预调用失败未记成模型调用。六low及两medium图在真实来源/同伴错误处停止，0完整质量通过，不能称新图跑通。单Sol六份有用来源约束解释；单Luna六空答、DeepSeek过强阶段否定及数值错误保留。净提升证据不够，不接TA，不继续无限重抽。窄误报零模型回放16→14，不冒充实际E2E省费；账单/作者费用未知。原591调用另保留，累计699非供应商请求数。
+
+独立修复事件候选饥饿，以及归因读者已保存AI覆盖提示。只读审计当次见两批24条保存（11 hypothesis、13 no_direction）、一批bad_response及一次agenda生成；news分类仍rules，TA未进生产。刷新只读取保存结果，不对每股自动调用，方向未明不代表没判读。正式BE/FE服务未重启，代码改动未激活；发布前8000/3000已无监听，旧PID退出原因不推断；认证IAB仅见配对页，未为了观察另行授权，真实页面/运行单列未验。五份用户evolution原件与备份保全；RSH-031与其他业务不动。临时DEGRADED_FULL_CONTROL未撤销，作者反证/源审不冒充独立Review或human gold。
+
+本批完整本地门：BE5864 passed／87 skipped／167 subtests（pytest371.74秒，外层380.209秒），pyflakes通过；FE默认／UTC各1776 passed／146文件（外层189.645／220.811秒），tsc、ESLint零error／两项既有warning、Next生产构建`uDNnCuPjtEd5LKhHMZk3e`（36.61秒）通过，生成类型引用精确恢复后tsc再通过。重门串行且模型先排空；后端字节在全量期间不变，前端三种读法在其门禁前定稿，后置1782跟踪文件校验无漂移。doc-health、卫生、公开扫描与diff通过，计数回填另复验文档／账本／发布专项。日志归本批release。三项required CI、准确HEAD的DegradedRelease、原release_check、合并后master CI与同步清理由本提交关联PR核验；旧PR #304绿色不能代替新HEAD。本轮只处理这项直派，不领取下一业务任务。
+
+## 上一批：PR #304三例来源修补（历史）
 
 2026-10-19用户明确要求修补上一批三例来源错误，并在完整原图中重新比较质量、耗时和成本、减少等待。本批从最新master `a767a56f9bc8d2a2d7cc4205ccc3a9c394056596`创建`codex/tradingagents-source-repair`，仍归W04/RSH-030。当前事实/任务/as_of保持，新V3–V6契约和确定性ledger共同提供给全图与单Luna/单Sol/DeepSeek，旧失败和旧发布证据保留。
 

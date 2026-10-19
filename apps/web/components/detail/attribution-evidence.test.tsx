@@ -25,12 +25,40 @@ beforeEach(() => {vi.mocked(getStockAttribution).mockResolvedValue(payload());})
 afterEach(() => {cleanup(); vi.clearAllMocks(); vi.restoreAllMocks(); vi.useRealTimers();});
 
 describe("shared attribution evidence", () => {
+  it.each(["regular", "inline", "summary"] as const)("%s separates source-only records from saved neutral AI results without launching judgement", async (mode) => {
+    const auxiliary = {event_id: 18, input_version_id: 21, observation_id: 19, direction: 0, theme: null,
+      reason: "来源仍需审批", chain: "", evidence: {field: "summary" as const, quote: "尚未完成审计"},
+      state: "no_direction" as const, verification: "unverified" as const, eligibility_changed: false as const};
+    const saved = {...evidence, llm_aux: auxiliary};
+    const invalid = {...secondEvidence, llm_aux: auxiliary};
+    vi.mocked(getStockAttribution).mockResolvedValue({...payload(), items: [saved, invalid], later_items: [saved]});
+    render(<StockAttributionPanel symbol="600825" defaultExpanded inlinePrimary={mode === "inline"} primarySummary={mode === "summary"} />);
+    if (mode === "summary") fireEvent.click(await screen.findByRole("button", {name: "查看主线索完整依据"}));
+    const status = await screen.findByLabelText("AI解读读取范围");
+    expect(status.textContent).toContain("已读取 2 条消息，其中 1 条有已保存AI解读");
+    expect(status.textContent).toContain("未独立验证");
+    expect(status.textContent).toContain("刷新仅重读结果，不会启动判读");
+    expect(getStockAttribution).toHaveBeenCalledTimes(1);
+    if (mode === "inline") {
+      expect(screen.getByText("其他已保存AI解读 · 1 条")).toBeDefined();
+      expect(screen.getByText("来源仍需审批")).toBeDefined();
+    }
+  });
+
+  it("reports zero saved results without claiming the model is queued or has never run", async () => {
+    render(<StockAttributionPanel symbol="600825" defaultExpanded />);
+    const status = await screen.findByLabelText("AI解读读取范围");
+    expect(status.textContent).toContain("其中 0 条有已保存AI解读");
+    expect(status.textContent).not.toMatch(/正在排队|从未判读|判读失败/);
+  });
+
   it("inline原因默认展示绑定的已保存解读、全部关键条件与必要限制，不二跳、不默认铺弱关联", async () => {
     const item: AttributionEvidenceItem = {...evidence, stock_relation: {...evidence.stock_relation, status: "direct_symbol", label: "直接关联"}, llm_aux: {event_id: 18, input_version_id: 21, observation_id: 19, direction: 0, theme: null, reason: "合成已保存解读：收购仍需审批", chain: "合成来源传导，尚未证实", evidence: {field: "summary", quote: "尚未完成审计"}, state: "no_direction", verification: "unverified", eligibility_changed: false}};
     const primary: PrimaryAttributionReason = {status: "source_clue", label: "来源线索", reason: "直接关联待核", event_id: 18, version_id: 22, observation_id: 19, relation: "direct_symbol", timing_relation: "known_before_response", excerpt: {field: "summary", quote: "尚未完成审计", truncated: false}, qualifiers: [{kind: "approval", label: "需审批", matched_terms: []}], causality_verified: false, fact_verified: false, interpretation_view: "current"};
-    vi.mocked(getStockAttribution).mockResolvedValue({...payload("600825", item), primary_reason: {...primary, qualifiers: [...primary.qualifiers]}, items: [secondEvidence, item]});
+    vi.mocked(getStockAttribution).mockResolvedValue({...payload("600825", item), primary_reason: {...primary, qualifiers: [...primary.qualifiers]}, items: [secondEvidence, item], later_items: [{...item}]});
     render(<StockAttributionPanel symbol="600825" inlinePrimary sourceReason="拟收购"/>);
     await screen.findByLabelText("原因与依据关系");
+    expect(screen.queryByText(/其他已保存AI解读/)).toBeNull();
     expect(screen.getByText("合成已保存解读：收购仍需审批")).toBeTruthy();
     fireEvent.click(screen.getByRole("button",{name:"来源原文与完整核对"}));
     expect(screen.getAllByText(/合成已保存解读：收购仍需审批/).length).toBeGreaterThan(0);

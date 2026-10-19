@@ -217,6 +217,10 @@ export const StockAttributionPanel = memo(function StockAttributionPanel({symbol
   const options = poolDate || responseAsOf ? {poolDate, responseAsOf} : undefined;
   const resource = useResource(() => eventId ? options ? getEventAttribution(eventId, symbol, options) : getEventAttribution(eventId, symbol) : options ? getStockAttribution(symbol!, options) : getStockAttribution(symbol!), {key: identity, enabled: active && (open || primarySummary || inlinePrimary) && (!!eventId || /^\d{6}$/.test(symbol || "")), intervalMs: null, marketHours: false});
   const data = resource.data;
+  const readItems = data ? [...new Map([...data.items, ...(data.later_items || [])].map(item =>
+    [`${item.event_id}:${item.interpretation_ref.version_id}:${item.interpretation_ref.observation_id}`, item])).values()] : [];
+  const savedAI = readItems.filter(item => boundAuxiliary(item) !== null).length;
+  const coverage = data && <p className="py-1 leading-relaxed text-zinc-600 dark:text-zinc-400" aria-label="AI解读读取范围">已读取 {readItems.length} 条消息，其中 {savedAI} 条有已保存AI解读（未独立验证）。其余条目只展示来源；刷新仅重读结果，不会启动判读。</p>;
   const primary = data?.primary_reason;
   const boundItem = data ? boundPrimaryItem(data) : null;
   const sourceMatch = boundItem ? matchSourceReason(boundItem, sourceReason) : null;
@@ -225,6 +229,9 @@ export const StockAttributionPanel = memo(function StockAttributionPanel({symbol
   const otherLater = primaryItem ? (data!.later_items || []).filter(item => item.event_id !== primaryItem.event_id) : data?.later_items || [];
   if (inlinePrimary) {
     const boundAux = primaryItem ? boundAuxiliary(primaryItem) : null;
+    const otherSavedAI = readItems.filter(item => (item.event_id !== primaryItem?.event_id
+      || item.interpretation_ref.version_id !== primaryItem?.interpretation_ref.version_id
+      || item.interpretation_ref.observation_id !== primaryItem?.interpretation_ref.observation_id) && boundAuxiliary(item) !== null);
     const sourceText = [sourceReason, primaryItem?.source_context?.title, primaryItem?.source_context?.summary].filter(Boolean).join("\n");
     const sourceConditions = limitReasonView(sourceText).conditions;
     const conditionKey = (value: string) => value.replace(/\s+/g, "").replace(/[。；;！？!?]+$/, "");
@@ -245,6 +252,7 @@ export const StockAttributionPanel = memo(function StockAttributionPanel({symbol
     return <section aria-label={title} className="min-w-0 space-y-3 py-2 text-xs">
       <div className="flex items-center justify-between gap-2"><h3 className="font-medium">已保存解读{boundAux?.state === "no_direction" ? " · 无明确方向" : ""}</h3>{!!resource.error && <button type="button" data-action="secondary" disabled={resource.pending} onClick={resource.refresh}>重试解读</button>}</div>
       {resource.error ? <p role="alert" className="text-amber-800 dark:text-amber-300">解读读取失败{data ? " · 保留已有内容" : "，暂不能核对"}</p> : resource.pending && !data && <p role="status" className="text-zinc-600 dark:text-zinc-400">读取已保存解读…</p>}
+      {coverage}
       {data && !primaryItem && <p className="text-zinc-600 dark:text-zinc-400">暂无可核对的直接来源线索，不用题材标签补填原因。</p>}
       {primaryItem && <>
         <ReaderBrief label="原因与依据关系" facts={[
@@ -254,6 +262,7 @@ export const StockAttributionPanel = memo(function StockAttributionPanel({symbol
         ]} cautions={[...readerCautions(conditions), ...(conditions.length ? ["完整限制条件见依据"] : []), ...(primaryItem.timing_relation && primaryItem.timing_relation.status !== "known_before_response" ? ["消息时间未能对应首封时点"] : []), ...(boundAux ? ["AI解读仅作参考，未独立验证"] : [])]}/>
       </>}
       {!primaryItem && conditions.length > 0 && <ReaderBrief label="来源原因限制" cautions={readerCautions(conditions)}/>}
+      {otherSavedAI.length > 0 && <details><summary className="w-fit cursor-pointer text-zinc-600 dark:text-zinc-400">其他已保存AI解读 · {otherSavedAI.length} 条</summary><div className="space-y-3 py-2">{otherSavedAI.map(item => <AttributionEvidence key={`${item.event_id}:${item.interpretation_ref.version_id}:${item.interpretation_ref.observation_id}`} item={item} symbol={symbol} selectedAt={selectedAt} selectionContext={selectionContext} complete />)}</div></details>}
       <p className="text-zinc-600 dark:text-zinc-400">来源解释，尚不能确认是涨停的真正原因。</p>
       {(sourceAudit || primaryItem) && <ResearchDisclosure identity={auditIdentity} label="来源原文与完整核对"><div className="min-w-0 space-y-3 py-2"><ConditionList label="必要条件" items={conditions} tone="warning"/>
         {sourceAudit}
@@ -283,7 +292,7 @@ export const StockAttributionPanel = memo(function StockAttributionPanel({symbol
       {data && <button type="button" data-action="secondary" className="shrink-0" aria-label="查看主线索完整依据" aria-haspopup="dialog" onClick={() => setOpen(true)}>核对全文</button>}
     </div>
     {presence.value === identity && <ModalShell presentation="drawer" open={presence.active} onClose={() => setOpen(false)} label={title} size="md" zIndex={60} header={<h2 className="text-sm font-medium">{title}</h2>} bodyTabIndex={0} bodyClassName="data-scroll overflow-y-auto px-4 py-3 text-xs [overflow-wrap:anywhere]">
-      {presence.active && <><button type="button" data-action="secondary" disabled={resource.pending} onClick={resource.refresh}>刷新依据</button>{data?.response_context && <p className="py-2 text-zinc-600 dark:text-zinc-400">响应时点 {timeLabel(data.response_context.response_as_of)} · 当前解释，非历史还原。</p>}{primaryReading || <><p className="py-2">主线索未记录，不能选第一条资料冒充原因。</p>{data && (otherItems.length > 0 || otherLater.length > 0) && <details><summary className="cursor-pointer">其他关联资料 · {otherItems.length + otherLater.length} 条</summary><AttributionItems items={otherItems} laterItems={otherLater} responseContext={!!data.response_context} symbol={symbol} selectedAt={selectedAt} recordedRefs={recordedRefs} selectionContext={selectionContext} defaultSourceExpanded /></details>}</>}<p className="py-2 text-zinc-600 dark:text-zinc-400">来源解释供核对，不构成买卖建议。</p></>}
+      {presence.active && <><button type="button" data-action="secondary" disabled={resource.pending} onClick={resource.refresh}>刷新依据</button>{coverage}{data?.response_context && <p className="py-2 text-zinc-600 dark:text-zinc-400">响应时点 {timeLabel(data.response_context.response_as_of)} · 当前解释，非历史还原。</p>}{primaryReading || <><p className="py-2">主线索未记录，不能选第一条资料冒充原因。</p>{data && (otherItems.length > 0 || otherLater.length > 0) && <details><summary className="cursor-pointer">其他关联资料 · {otherItems.length + otherLater.length} 条</summary><AttributionItems items={otherItems} laterItems={otherLater} responseContext={!!data.response_context} symbol={symbol} selectedAt={selectedAt} recordedRefs={recordedRefs} selectionContext={selectionContext} defaultSourceExpanded /></details>}</>}<p className="py-2 text-zinc-600 dark:text-zinc-400">来源解释供核对，不构成买卖建议。</p></>}
     </ModalShell>}
   </section>;
   return <section className="min-w-0 py-1 text-xs" aria-label={title}>
@@ -291,6 +300,7 @@ export const StockAttributionPanel = memo(function StockAttributionPanel({symbol
     <div className="motion-disclosure" data-open={open} aria-hidden={!open || undefined} inert={!open}><div className="motion-disclosure-body">
     {presence.value === identity && <div data-attribution-reader={bounded || undefined} id={id} className={`min-w-0 ${bounded ? "data-scroll max-h-72 overflow-y-auto pr-1" : ""}`}>
       <p className="py-1 leading-relaxed text-zinc-600 dark:text-zinc-400">已采集消息可逐条查看；不改写首次入选记录。不构成买卖建议。</p>
+      {coverage}
       {!!recordedRefs?.length && <details className="py-1 text-zinc-600 dark:text-zinc-400"><summary className="w-fit cursor-pointer">{selectionContext ? "选股记录事件引用" : "列表入口事件引用"}</summary><ul className="mt-1 space-y-1 [overflow-wrap:anywhere]">{recordedRefs.map((ref, index) => <li key={`${ref.event_id}:${ref.version_id}:${index}`}>事件 #{ref.event_id} · {ref.version_id ? `原解释 #${ref.version_id}` : "原版本未知"} · {timeLabel(ref.available_at)}</li>)}</ul></details>}
       {resource.pending && !data && <div role="status" aria-label="归因依据加载中" className="space-y-2 py-3"><Skeleton className="h-3 w-3/4" /><Skeleton className="h-3 w-full" /><span className="sr-only">归因依据加载中</span></div>}
       {resource.error != null && <p role="alert" className="py-2 leading-relaxed text-amber-800 dark:text-amber-300">{data ? "依据刷新失败，保留上次读取内容。" : "归因依据读取失败，尚不能确认是否有相关消息。"}可使用上方“刷新依据”重试。</p>}
