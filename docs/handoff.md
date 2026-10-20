@@ -1,6 +1,18 @@
-# 当前交接：选股个股关联与AI适用范围
+# 当前交接：公司原文与逐股经营解释
 
 ## 1. 本批定位与接续
+
+2026-10-20用户直派补主营、产品、客户与订单真实依据，缺证据明确说，验证后接入选股。基点master `bf78c9afce4a0044bb5aee112a729de886e10a4c`，分支`codex/company-impact-evidence`，W00/IMP-092扩展；临时DEGRADED_FULL_CONTROL未撤销。五份用户evolution保全，031与其他worktree/业务数据不动。
+
+方法、真实材料和取舍单点归[语义记录](ai/semantic-decisions.md#2026-10-20-公司原文与经营传导)，运行契约归[归因蓝图](product/limit-up-attribution.md#2026-10-20-公司原文与经营传导)。四份原件4,482,886字节/23引文；两轮六次真实调用，原答越界与子项目错配保留，最后同输入任务并未证明专用提示普遍优于通用任务。仅采用正式资料与作者逐源核对/必要校正后的研究解释，原答/校正/hash分列，人工gold=0，不改变模型、方向、排序、通知或资金。完整本地门、准确HEAD的DegradedRelease/三项CI/release_check、master CI和运行激活以本轮关联PR及忽略证据核验；旧PR306绿色不代替本次通过。
+
+忽略证据根artifacts/runs/company-impact-20261020；原PDF唯一复用，production只读backend/data/company_impact的已发布对象。默认锚定各检出；明确发布到主项目才激活资料，不修改生产数据库。GET不采集/调用/写入，7日有效期和原事件状态双重限制；缺资料保留基线。完整本地门开始前曾因源审校正能力补齐主动中断一批，保留原日志，不称失败或通过。发布前不重启现役服务；运行版本一律核原runtime-identity指针及本轮运行回执。本任务结束不领取下一业务任务。
+
+本批最终本地完整门：BE5914 passed/87 skipped/167 subtests（218.97秒）、pyflakes通过；FE默认/UTC各1833 passed/146文件（105.89/123.41秒）、tsc、ESLint零error/两项既有warning及生产构建`V1_qLv8glhcaGkCaHoWoO`通过。前后端重门串行，最终源码在门禁期间无漂移，生成引用恢复后tsc再通过；现役主项目服务在门禁期间仍为旧版本。先前一批3个失败分别定位为北京时区、数据目录隔离登记和新文件未暂存的文档扫描，修正后全量复验，不隐藏失败或改断言求绿。新回执、CI、合并和运行验收归本批关联PR与忽略engineering/runtime证据，不用本文的发布前构建冒充已激活版本。
+
+# 上一批：选股个股关联与AI适用范围
+
+## 上一批定位与接续
 
 2026-10-19用户直派：已保存消息AI不能冒充个股解读，须说明本股关系及依据，验证后再接入。基点master `3d5a008de8ec37274953ea5fd21eb3b077e7c3fb`，分支`codex/picks-stock-ai-evidence`复用本任务干净worktree，owner W00/IMP-092扩展。临时DEGRADED_FULL_CONTROL未撤销，作者自审不称独立Review。五份用户evolution原件保留，RSH-031及其他worktree不动。
 
