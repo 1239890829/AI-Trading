@@ -11,7 +11,7 @@ import argparse
 from contextlib import ExitStack
 from contextvars import ContextVar
 from copy import deepcopy
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 import hashlib
 import json
 import os
@@ -22,6 +22,7 @@ import sys
 import threading
 from unittest.mock import patch
 
+from bjtime import beijing_now
 from native_codec import CodecError, ToolSpec, StructuredSpec, serialize_langchain_messages
 from codex_codec import decode_cli_output, safe_terminal_metadata
 from tradingagents_adapter_contract import validate_tool_scope, project_tool_value
@@ -29,6 +30,7 @@ from tradingagents_sentiment_adapter import make_sentiment_adapter, adapt_sentim
 
 UPSTREAM_SHA = 'e8f5503e9b86d5c2710b0c76b1f686703968c9df'
 WRITE_LOCK = threading.Lock()
+INDICATOR_LOCK = threading.Lock()
 MAX_RESPONSE_BYTES = 8 * 1024 * 1024
 ORIGINAL_OUTER_ROLE = ContextVar('original_outer_role', default=None)
 
@@ -80,6 +82,33 @@ def append_record(path: Path, value: dict):
 
 def now() -> str:
     return datetime.now(timezone.utc).isoformat()
+
+
+def mfi_scale_metadata(version, module_sha256):
+    """Describe only the implementation whose bytes were inspected.
+
+    This does not rescale a result, change a threshold strategy, or establish
+    market-data correctness. A package version without matching bytes is not
+    enough to transfer this implementation finding.
+    """
+    matched = (version == '0.6.9' and module_sha256 ==
+        'a61c7a570059558aff2c7efa9894df60e0fa731a6c11e9cd488c310081abed71')
+    result = {'dependency': 'stockstats', 'dependency_version': version,
+              'module_sha256': module_sha256, 'implementation_scale_verified': matched,
+              'values_rescaled': False, 'threshold_strategy_changed': False}
+    if matched:
+        result.update({'representation': 'ratio', 'range': [0, 1],
+            'implementation': 'positive_money_flow_sum / (positive_money_flow_sum + negative_money_flow_sum)',
+            'initial_window_default': 0.5,
+            'initialization_limit': 'The implementation default 0.5 is initialization, not an observed neutral capital flow.',
+            'upstream_description_conflict': 'The upstream textual 80/20 levels use a 0..100 scale and do not apply directly to these unchanged 0..1 values.',
+            'scale_equivalent_reference_only': {'upper': 0.8, 'lower': 0.2},
+            'interpretation_limit': 'Scale-equivalent reference levels are not a validated strategy, automatic overbought/oversold finding, capital-flow measurement, or trading instruction.'})
+    else:
+        result.update({'representation': 'unknown_for_this_implementation', 'range': None,
+            'initial_window_default': None, 'scale_equivalent_reference_only': None,
+            'interpretation_limit': 'The installed dependency bytes were not verified for this scale. Do not assume 0..1, 0..100, or transfer reference levels.'})
+    return result
 
 
 class FrozenEvidence:
@@ -135,8 +164,10 @@ class FrozenEvidence:
         if method == 'get_stock_data':
             value = self.market.get('ohlcv')
         elif method == 'get_indicators':
-            indicator = str(args[1]) if len(args) > 1 else ''
+            indicator = checked['scope']['requested_arguments'].get('indicator', '')
             value = (self.market.get('indicators') or {}).get(indicator)
+            if value is None:
+                value = self.frozen_indicator(checked['scope'])
         else:
             value = self.block(field)
         if value is None:
@@ -148,6 +179,54 @@ class FrozenEvidence:
         return self.receipt(method, list(args), {'source': 'frozen_evidence_packet',
                             'as_of': self.packet['as_of'], 'evidence_sha256': self.packet['evidence_sha256'],
                             'content': value,'requested_scope':checked['scope']})
+
+    def frozen_indicator(self, scope):
+        """Original pinned stockstats formula; frozen rows only, no vendor fetch.
+
+        The local patch is serialized inside this isolated worker process. It
+        cannot change the application provider or another research worker.
+        Values use exactly this bounded initialization, not five-year parity.
+        """
+        required = {'close_50_sma': 50, 'close_200_sma': 200, 'close_10_ema': 10,
+                    'macd': 26, 'macds': 35, 'macdh': 35, 'rsi': 14,
+                    'boll': 20, 'boll_ub': 20, 'boll_lb': 20, 'atr': 14,
+                    'vwma': 14, 'mfi': 14}
+        params = scope['requested_arguments']
+        indicator = params.get('indicator')
+        rows = self.market.get('ohlcv')
+        minimum = required.get(indicator)
+        if minimum is None or not isinstance(rows, list) or len(rows) < minimum:
+            return None
+        if indicator in {'vwma', 'mfi'} and any(row.get('Volume') is None for row in rows):
+            return None
+        import pandas as pd
+        from tradingagents.dataflows.vendors.yahoo import market as original
+        data = pd.DataFrame(deepcopy(rows))
+        data['Date'] = pd.to_datetime(data['Date'])
+        cutoff = params.get('curr_date', self.packet['trade_date'])
+        window = int(params.get('look_back_days', 30))
+        start = (datetime.fromisoformat(cutoff) - timedelta(days=window)).date().isoformat()
+        # get_stock_stats_bulk is the unchanged upstream deterministic routine.
+        # Do not call its vendor window renderer/fallback: missing dates are
+        # unknown coverage, not asserted non-trading days.
+        with INDICATOR_LOCK, patch.object(original, 'load_ohlcv', return_value=data):
+            calculated = original._get_stock_stats_bulk(self.packet['ticker'], indicator, cutoff)
+        values = {day: value for index, (day, value) in enumerate(calculated.items())
+                  if index >= minimum - 1 and start <= day <= cutoff and value != 'N/A'}
+        if not values:
+            return None
+        result = {'indicator': indicator, 'values': values,
+                'calculation': 'unchanged upstream _get_stock_stats_bulk on frozen OHLCV only',
+                'upstream_sha': UPSTREAM_SHA, 'frozen_ohlcv_sha256': sha(canonical(rows).encode()),
+                'history_provenance_sha256': sha(canonical(self.market.get('history_provenance')).encode()),
+                'initialization_rows': len(rows), 'minimum_observations': minimum,
+                'scope': 'bounded initialization; not original five-year warmup or independent source verification; no calendar completion',
+                'source_publication_clock': None, 'source_verified': False}
+        if indicator == 'mfi':
+            from importlib.metadata import version
+            import stockstats
+            result['value_scale'] = mfi_scale_metadata(version('stockstats'), sha(Path(stockstats.__file__).read_bytes()))
+        return result
 
     def snapshot(self, symbol, as_of_date, look_back_days=30):
         checked=validate_tool_scope(self.packet,'get_verified_market_snapshot',(symbol,as_of_date,look_back_days))
@@ -190,12 +269,39 @@ class FrozenEvidence:
         return pd.Series([item[1] for item in pairs], index=pd.to_datetime([item[0] for item in pairs]), dtype=float)
 
 
+def prepare_indicator_table(packet):
+    """No graph or model: exact original formulas on this frozen frame only."""
+    from importlib.metadata import version
+    import pandas
+    import stockstats
+    from tradingagents.dataflows.vendors.yahoo import market as original
+    from indicator_table import INDICATORS, build_indicator_table
+    evidence = FrozenEvidence(packet, Path('.'))
+    results = {name: evidence.frozen_indicator({'requested_arguments': {
+        'indicator': name, 'curr_date': packet['trade_date'], 'look_back_days': 400}})
+        for name in INDICATORS}
+    formula = {
+        'entry': 'FrozenEvidence.frozen_indicator -> unchanged upstream _get_stock_stats_bulk',
+        'upstream_sha': UPSTREAM_SHA, 'worker_sha256': sha(Path(__file__).read_bytes()),
+        'original_market_py_sha256': sha(Path(original.__file__).read_bytes()),
+        'stockstats_module_sha256': sha(Path(stockstats.__file__).read_bytes()),
+        'dependencies': {'stockstats': version('stockstats'), 'pandas': pandas.__version__},
+        'representation': 'Exact original rendered strings; no rounding or numeric conversion.',
+        'initialization': 'Only the actual frozen OHLCV; not original five-year warmup.',
+        'NA': 'null means original minimum observations not reached or original calculation yielded N/A; not zero.',
+        'date_scope': 'All actual frozen rows; no calendar completion or assumed non-trading dates.',
+        'units': 'Original indicator definitions on qfq CNY/share OHLC and source-normalized share volume; no independent unit conversion.',
+    }
+    return build_indicator_table(packet, results, formula)
+
+
 def main():
     parser = argparse.ArgumentParser()
     parser.add_argument('--packet', required=True)
-    parser.add_argument('--socket', required=True)
+    parser.add_argument('--socket')
     parser.add_argument('--output', required=True)
-    parser.add_argument('--config', required=True)
+    parser.add_argument('--config')
+    parser.add_argument('--prepare-indicators', action='store_true')
     parser.add_argument('--arm', choices=('ta-luna','ta-medium'),default='ta-luna')
     parser.add_argument('--tool-id-namespace-root')
     parser.add_argument('--interrupt-after-analysts', action='store_true')
@@ -233,6 +339,18 @@ def main():
     with ExitStack() as stack:
         stack.enter_context(patch.object(dotenv, 'find_dotenv', return_value=''))
         stack.enter_context(patch.object(dotenv, 'load_dotenv', return_value=False))
+        if args.prepare_indicators:
+            table = prepare_indicator_table(packet)
+            body = canonical(table).encode()
+            (output / 'indicator-table.json').write_bytes(body + b'\n')
+            receipt = {'source_packet_sha256': sha(packet_bytes),
+                       'source_evidence_sha256': packet['evidence_sha256'],
+                       'table_sha256': sha(body), 'worker_sha256': sha(Path(__file__).read_bytes()),
+                       'computed_at': now(), 'model_calls': 0, 'network_calls': 0}
+            (output / 'indicator-preparation.json').write_text(canonical(receipt) + '\n')
+            return
+        if not args.socket or not args.config:
+            raise ProtocolError('Graph execution requires config and socket')
         from langchain_core.language_models.chat_models import BaseChatModel
         from langchain_core.messages import AIMessage
         from langchain_core.outputs import ChatGeneration, ChatResult
@@ -393,6 +511,9 @@ def main():
             def get_llm(self):
                 return BrokerChatModel(socket_path=str(Path(args.socket).resolve()), case_id=packet['case_id'],
                                        arm=args.arm, output_dir=str(output), tool_id_namespace_root=args.tool_id_namespace_root if args.tool_id_namespace_root else str(output), evidence_sha256=packet['evidence_sha256'], segment=args.segment)
+        # Upstream uses the host's date.today(); this A-share adapter uses the
+        # project's real current Beijing day. No frozen packet/event-loop clock.
+        stack.enter_context(patch.object(graph_module, 'get_current_date', lambda: beijing_now().date().isoformat()))
         stack.enter_context(patch.object(graph_module, 'create_tier_client', lambda *a, **kw: Client()))
         methods = {method: {'frozen_lab': (lambda *a, _method=method, **kw: evidence.routed(_method, *a, **kw))}
                    for method in router_module.VENDOR_METHODS}

@@ -6,6 +6,7 @@ install dependencies or use the upstream's separate ChatGPT sign-in.
 """
 import hashlib
 import json
+import os
 from pathlib import Path
 import tempfile
 
@@ -101,9 +102,34 @@ def decode(stdout, stderr, exit_code, final_file):
             'actual_cost_usd': None, 'model_reported': None}
 
 
+def interpreter_binding(executable, node_executable=None, node_executable_sha256=None):
+    """Bind the interpreter required by the approved npm CLI entry point.
+
+    Native CLIs need no Node setting. A Node shebang must not discover an
+    arbitrary interpreter from the host PATH after resolving the CLI symlink.
+    """
+    with Path(executable).resolve().open('rb') as handle:
+        requires_node = handle.readline(256).strip() == b'#!/usr/bin/env node'
+    if not requires_node:
+        if node_executable is not None or node_executable_sha256 is not None:
+            raise ValueError('Unused Node interpreter configuration for native CLI')
+        return {'kind': 'native_or_os_executable'}
+    if node_executable is None or not Path(node_executable).is_absolute():
+        raise ValueError('Pinned Node interpreter required for npm CLI')
+    node = Path(node_executable).resolve()
+    if (not node.is_file() or not os.access(node, os.X_OK)
+            or sha(node.read_bytes()) != node_executable_sha256):
+        raise ValueError('Pinned Node interpreter unavailable or changed')
+    return {'kind': 'node', 'executable_sha256': node_executable_sha256}
+
+
 def codex_infer(messages, original_schema, *, model, mark_launch, executable, auth_file,
-                timeout=180, effort="medium", proxy_env=None):
+                timeout=180, effort="medium", proxy_env=None, node_executable=None,
+                node_executable_sha256=None):
     CODEX = Path(executable).resolve()
+    interpreter = interpreter_binding(CODEX, node_executable, node_executable_sha256)
+    command = [str(Path(node_executable).resolve()), str(CODEX)] if interpreter['kind'] == 'node' else [str(CODEX)]
+    runtime_path = ([str(Path(node_executable).resolve().parent)] if interpreter['kind'] == 'node' else []) + [str(CODEX.parent), '/usr/bin', '/bin']
     # Original codec checks role ordering, actual tool-result IDs and bounds.
     transcript = encode_cli_transcript(messages)
     prompt = NOTE + transcript
@@ -117,7 +143,7 @@ def codex_infer(messages, original_schema, *, model, mark_launch, executable, au
         (path / 'codex/auth.json').symlink_to(Path(auth_file).resolve())
         schema_path, answer_path = path / 'schema.json', path / 'answer.json'
         schema_path.write_text(canonical(wire))
-        env = {'PATH': str(CODEX.parent) + ':/usr/bin:/bin', 'HOME': str(path / 'home'),
+        env = {'PATH': ':'.join(runtime_path), 'HOME': str(path / 'home'),
                'CODEX_HOME': str(path / 'codex'), 'LANG': 'en_US.UTF-8', 'TMPDIR': td,
                **(proxy_env or {})}
         assert effort in ('low','medium','high')
@@ -127,12 +153,12 @@ def codex_infer(messages, original_schema, *, model, mark_launch, executable, au
                     '-c', 'features.skip_host_skill_discovery=true']
         for flag in DISABLE:
             settings += ['--disable', flag]
-        pre = subprocess.run([str(CODEX), 'features', 'list'] + settings,
+        pre = subprocess.run(command + ['features', 'list'] + settings,
             env=env, cwd=path / 'cwd', capture_output=True, text=True, timeout=15)
         flags = {line.split()[0]: line.split()[-1] for line in pre.stdout.splitlines() if line.split()}
         if pre.returncode or any(flags.get(flag) != 'false' for flag in DISABLE):
             raise ValueError('Codex isolation preflight failed before inference')
-        args = [str(CODEX), '--no-daemon', 'exec', '--ignore-user-config', '--ignore-rules', '--ephemeral',
+        args = command + ['--no-daemon', 'exec', '--ignore-user-config', '--ignore-rules', '--ephemeral',
                 '--skip-git-repo-check', '--strict-config', '--sandbox', 'read-only', '--cd', str(path / 'cwd'),
                 '--model', model, '--color', 'never', '--json', '--output-schema', str(schema_path),
                 '--output-last-message', str(answer_path)] + settings + ['-']
