@@ -189,17 +189,17 @@ async def run_company_evidence(rec, params, app):
                                or any(not isinstance(v, str) or not re.fullmatch(r"\d{6}", v) for v in symbols)):
         raise ValueError("公司任务symbols须为1至8个六位证券代码")
     sf = get_session_factory()
-    symbols = list(dict.fromkeys(symbols)) if symbols is not None else sorted(candidate_symbols(sf), key=_rotation_key)
+    symbols = list(dict.fromkeys(symbols)) if symbols is not None else sorted(await _drain_stage(candidate_symbols, sf), key=_rotation_key)
     batch_size = 8 if explicit else max(1, min(8, settings.company_evidence_batch_size))
     model = {"provider": settings.llm_provider, "model": settings.review_llm_model}
     results, pending, touched = [], [], []
-    rec.checkpoint()
+    await rec.checkpoint_async()
     with worker_lease(ci.ROOT):
         try:
             for symbol in symbols:
                 if len(touched) >= batch_size:
                     break
-                rec.checkpoint()
+                await rec.checkpoint_async()
                 item = await _drain_stage(_event, symbol, app, sf)
                 if not explicit and not _due(symbol, item):
                     continue
@@ -214,8 +214,8 @@ async def run_company_evidence(rec, params, app):
                            next_retry_at=(_now() + timedelta(minutes=30)).isoformat())
                     results.append({"symbol": symbol, "state": "source_failed"})
                     continue
-                rec.checkpoint()
-                rec.add(name="公司公开依据", input_summary=symbol,
+                await rec.checkpoint_async()
+                await rec.add_async(name="公司公开依据", input_summary=symbol,
                         output_summary=f"来源状态={profile['status']}；文档={len(profile['documents'])}",
                         duration_ms=int((monotonic() - start) * 1000), ok=profile["status"] == "ready")
                 if profile["status"] != "ready" or not profile["documents"]:
@@ -276,7 +276,7 @@ async def run_company_evidence(rec, params, app):
             if fresh:
                 packets = [v[0] for v in fresh]
                 messages = selector_messages(packets)
-                rec.checkpoint()
+                await rec.checkpoint_async()
                 lease, started = None, False
                 usage = {"value": None}
                 try:
@@ -286,8 +286,8 @@ async def run_company_evidence(rec, params, app):
                                 not settings.review_llm_base_url or not settings.review_llm_api_key))):
                         raise LLMError("configured model unavailable")
                     if not explicit:
-                        _automatic_daily_limit(sf)
-                    lease = agent_budget.reserve(agent_budget.SCOPE_AUTONOMY_LLM, purpose="company_evidence.select",
+                        await _drain_stage(_automatic_daily_limit, sf)
+                    lease = await _drain_stage(agent_budget.reserve, agent_budget.SCOPE_AUTONOMY_LLM, purpose="company_evidence.select",
                         kind="model", task_id=rec.task_id, provider=model["provider"], model=model["model"],
                         timeout_seconds=180, max_retries=0,
                         input_chars=sum(len(m["content"]) for m in messages), session_factory=sf)
@@ -296,8 +296,8 @@ async def run_company_evidence(rec, params, app):
                         _state(packet["symbol"], "generating", rec.task_id, generation_key=key, usage_id=usage_id,
                                attempt_state="reserved", selected=None, packet=packet,
                                event_ref={k: packet["event"][k] for k in ("event_id", "version_id", "observation_id")})
-                    rec.checkpoint()
-                    agent_budget.start(usage_id, sf)
+                    await rec.checkpoint_async()
+                    await _drain_stage(agent_budget.start, usage_id, sf)
                     started = True
                     for packet, _, _, _ in fresh:
                         _state(packet["symbol"], "generating", rec.task_id, attempt_state="started")
@@ -305,9 +305,9 @@ async def run_company_evidence(rec, params, app):
                         settings.review_llm_api_key, model["model"], messages, provider=model["provider"],
                         cli_path=settings.llm_cli_path, timeout=180,
                         usage_callback=lambda v: usage.__setitem__("value", v))
-                    agent_budget.finish(usage_id, state="succeeded", usage=usage["value"], output_chars=len(raw),
+                    await _drain_stage(agent_budget.finish, usage_id, state="succeeded", usage=usage["value"], output_chars=len(raw),
                                         attempts=1, session_factory=sf)
-                    rec.checkpoint()
+                    await rec.checkpoint_async()
                     selections = parse_selection_batch(raw, packets)
                     for packet, _, _, _ in fresh:
                         _state(packet["symbol"], "generating", rec.task_id, attempt_state="succeeded",
@@ -315,10 +315,10 @@ async def run_company_evidence(rec, params, app):
                                raw_response_sha256=hashlib.sha256(raw.encode("utf-8")).hexdigest())
                 except agent_budget.BudgetError:
                     if started:
-                        agent_budget.finish(usage_id, state="failed", usage=usage["value"], attempts=1,
+                        await _drain_stage(agent_budget.finish, usage_id, state="failed", usage=usage["value"], attempts=1,
                                             error_kind="output_budget_exceeded", session_factory=sf)
                     elif lease:
-                        agent_budget.release(lease["id"], sf)
+                        await _drain_stage(agent_budget.release, lease["id"], sf)
                     for packet, key, _, _ in fresh:
                         _state(packet["symbol"], "invalid_response" if started else "budget_blocked", rec.task_id,
                                generation_key=key, attempt_state="failed" if started else "not_started",
@@ -326,10 +326,10 @@ async def run_company_evidence(rec, params, app):
                     raise
                 except BaseException as error:
                     if started:
-                        agent_budget.finish(usage_id, state="canceled" if isinstance(error, asyncio.CancelledError) else "failed",
+                        await _drain_stage(agent_budget.finish, usage_id, state="canceled" if isinstance(error, asyncio.CancelledError) else "failed",
                                             usage=usage["value"], attempts=1, error_kind=type(error).__name__, session_factory=sf)
                     elif lease:
-                        agent_budget.release(lease["id"], sf)
+                        await _drain_stage(agent_budget.release, lease["id"], sf)
                     state = ("canceled" if isinstance(error, asyncio.CancelledError) else "interrupted"
                              if isinstance(error, TimeoutError) else "model_failed" if isinstance(error, LLMError) else "invalid_response")
                     for packet, key, _, _ in fresh:
@@ -340,7 +340,7 @@ async def run_company_evidence(rec, params, app):
                                next_retry_at=(_now() + timedelta(minutes=30)).isoformat())
                     raise
             for packet, key, saved, reused in pending:
-                rec.checkpoint()
+                await rec.checkpoint_async()
                 symbol = packet["symbol"]
                 selected = saved["selected"] if reused else selections[packet["id"]]
                 record = load_state(symbol)
@@ -350,7 +350,7 @@ async def run_company_evidence(rec, params, app):
                     _state(symbol, "interrupted", rec.task_id, missing=["采集后公司原文或事件版本已变，旧回答未发布。"], next_retry_at=None)
                     results.append({"symbol": symbol, "state": "interrupted"})
                     continue
-                rec.checkpoint()
+                await rec.checkpoint_async()
                 result = ci.publish_automatic(packet, selected, model=model, usage_id=record["usage_id"],
                                                generated_at=record["generated_at"])
                 analysis, _ = compile_analysis(packet, selected)
@@ -358,7 +358,7 @@ async def run_company_evidence(rec, params, app):
                 _state(symbol, state, rec.task_id, result_key=result, generation_key=key,
                        source_status="ready", missing=analysis["missing"], next_retry_at=profile.get("cache_until"))
                 results.append({"symbol": symbol, "state": state, "result_key": result})
-            rec.add(name="公司判读结果", input_summary=f"{len(symbols)}只", output_summary=f"保存/复用{len(results)}项；不改变选股资格",
+            await rec.add_async(name="公司判读结果", input_summary=f"{len(symbols)}只", output_summary=f"保存/复用{len(results)}项；不改变选股资格",
                     duration_ms=0, ok=True, llm={**model, "enhanced": bool(fresh)})
             return {"kind": "company_evidence", "symbols": results, "model_calls": int(bool(fresh)),
                     "state": "processed" if results else "no_due_candidates" if symbols else "no_candidates"}
@@ -380,7 +380,9 @@ async def scheduler_tick(app):
         item = await _drain_stage(_event, symbol, app, sf)
         if _due(symbol, item):
             try:
-                agent_tasks.create_task("company_evidence", {"automatic": True}, created_by="scheduler")
+                await agent_tasks.create_task_async("company_evidence", {"automatic": True}, created_by="scheduler")
+            except agent_tasks.TaskQueueUnavailable:
+                raise  # Registry health must observe persistence failures.
             except RuntimeError:
                 pass  # The existing task owner is still running; no parallel queue.
             return

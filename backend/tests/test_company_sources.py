@@ -20,6 +20,44 @@ BODY = (f"{COMPANY}\n证券代码：{SYMBOL}\n"
         "报告期内部分订单交付周期延长，海外业务仍存在汇率波动及回款不确定风险。")
 
 
+@pytest.fixture
+def joint_stock_identity_pages():
+    # De-identified layout of an official report's cover and physical page 7.
+    # The legal suffix is 股份公司, not a shortened company name.
+    company = "示例传动股份公司"
+    profile = (f"{company} 2026年半年度报告全文\n7\n"
+               "第二节 公司简介和主要财务指标\n一、公司简介\n"
+               f"股票简称 示例传动 股票代码 {SYMBOL}\n"
+               "股票上市证券交易所 深圳证券交易所\n"
+               f"公司的中文名称 {company}\n公司的中文简称（如有） 示例传动")
+    return company, [company + "\n2026年半年度报告", *([""] * 5), profile]
+
+
+def test_full_joint_stock_legal_suffix_keeps_same_page_code_verification(joint_stock_identity_pages):
+    company, pages = joint_stock_identity_pages
+    found, page, quote = source._identity(pages, SYMBOL)
+    assert found == company and page == 7
+    assert company in quote and SYMBOL in quote
+    assert quote in source._compact(pages[page - 1])
+
+
+def test_joint_stock_identity_never_uses_short_name_or_cross_page_code(joint_stock_identity_pages):
+    company, pages = joint_stock_identity_pages
+    with pytest.raises(source.SourceError):
+        source._identity([pages[0], f"股票简称 示例传动 股票代码 {SYMBOL}"], SYMBOL)
+    with pytest.raises(source.SourceError):
+        source._identity([f"股票简称 示例传动 股票代码 {SYMBOL}"], SYMBOL)
+    assert company not in f"股票简称 示例传动 股票代码 {SYMBOL}"
+
+
+@pytest.mark.parametrize("foreign_code", ["000002", "1000001", "0000019"])
+def test_joint_stock_foreign_or_substring_code_is_rejected(joint_stock_identity_pages, foreign_code):
+    _, pages = joint_stock_identity_pages
+    pages[6] = pages[6].replace(SYMBOL, foreign_code)
+    with pytest.raises(source.SourceError):
+        source._identity(pages, SYMBOL)
+
+
 def row(announcement_id="12345", title="2026年半年度报告", day="2026-08-26"):
     dt = datetime.fromisoformat(day).replace(tzinfo=source.BJ)
     return {"secCode": SYMBOL, "orgId": "org123", "announcementId": announcement_id,

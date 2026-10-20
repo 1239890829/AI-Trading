@@ -239,7 +239,7 @@ def _identity(pages: list[str], symbol: str) -> tuple[str, int, str]:
         # Full legal issuer names usually occur in the page header/cover. Do not
         # derive one from a news title, theme, fuzzy short name or customer table.
         for line in text.splitlines()[:6]:
-            name = re.search(r"[\u4e00-\u9fffA-Za-z（）()·]{2,60}股份有限公司", _compact(line))
+            name = re.search(r"[\u4e00-\u9fffA-Za-z（）()·]{2,60}股份(?:有限)?公司", _compact(line))
             if not name:
                 continue
             company = name[0]
