@@ -11,7 +11,7 @@
 - **取消**：只取消尚未开始/可中断的步骤；已完成的步骤与轨迹保留。
 - **审计**：任务创建/完成/取消都写 AgentAudit（actor/action/target/before/after）。
 
-当前生成任务为 L0（review / data_check / company_evidence）；L1/L2 写类任务在参数配置模块（P1）
+当前生成任务为 L0（review / data_check / company_evidence / tradingagents_research）；L1/L2 写类任务在参数配置模块（P1）
 接入时按同一套 status/audit 机制扩展，`risk_level` 字段已预留。
 """
 from __future__ import annotations
@@ -56,6 +56,10 @@ TASK_TYPES: dict[str, dict[str, str]] = {
     "company_evidence": {
         "label": "采集公司依据与判读", "risk": "L0",
         "desc": "读取当前选股或指定证券的公开公司披露，生成有界研究解释；不改变排序或资格",
+    },
+    "tradingagents_research": {
+        "label": "完整多角色研究", "risk": "L0",
+        "desc": "按单股显式运行完整TradingAgents；需准确版本质量准入及22次模型余量，报告只读待核",
     },
     "mutation": {
         "label": "系统变更留痕",
@@ -577,8 +581,15 @@ async def _h_company_evidence(rec: _StepRecorder, params: dict, app: Any) -> dic
     return await run_company_evidence(rec, params, app)
 
 
+async def _h_tradingagents_research(rec: _StepRecorder, params: dict, app: Any) -> dict:
+    from app.services.tradingagents_research import run_research
+
+    return await run_research(rec, params, app)
+
+
 _HANDLERS: dict[str, Callable[[_StepRecorder, dict, Any], Awaitable[dict]]] = {
     "company_evidence": _h_company_evidence,
+    "tradingagents_research": _h_tradingagents_research,
     "review": _h_review,
     "data_check": _h_data_check,
 }

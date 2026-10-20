@@ -8,31 +8,37 @@ review. PASS means no violation was found in this finite checked scope.
 Optional positive daily evidence uses facts.price_history with explicit symbol,
 market, version, price_basis, frequency='1d', sessions, and observations. Every
 observation has session, prev_close, close, final=True, session_close_at,
-published_at and available_at. Each day's prev_close must equal the preceding
-close, including a supplied first-day prev_close. facts.trading_calendar must
+published_at and available_at. Each day's prev_close is the prior session close in the same price_basis and
+must equal the preceding close, including a supplied first-day prev_close. Its
+base date is bound only when that previous session is present in the calendar. facts.trading_calendar must
 have market, version, complete=True, window_start, window_end, sessions,
 published_at and available_at. The requested window must be a contiguous slice
 of that explicit calendar. A list of observed dates does not prove continuity.
 No formatted table, news tone or model report is converted into daily prices.
 """
 from datetime import datetime
-from decimal import Decimal, InvalidOperation
+from decimal import Decimal, InvalidOperation, ROUND_HALF_UP, localcontext
 import hashlib
 import json
 import re
 
 from app.core.bjtime import BJ_TZ
+from scripts.tradingagents_adapter_contract import has_bound_issuer_excerpt
 
 VERSION = 'bounded-source-capability-v1'
 DAILY = re.compile(
-    r'连续(?:\s*[一二三四五六七八九十\d]+\s*(?:个)?(?:交易日|日|天))?\s*(?:上涨|收涨|走高|上行|抬升|攀升|反弹)(?:\s*[一二三四五六七八九十\d]+\s*(?:个)?(?:交易日|日|天))?'
+    r'连续(?:\s*[一二三四五六七八九十\d]+\s*(?:个)?(?:交易日|会话|日|天))?\s*(?:上涨|收涨|走高|上行|抬升|攀升|反弹)(?:\s*(?:仅)?[一二三四五六七八九十\d]+\s*(?:个)?(?:交易日|会话|日|天))?'
     r'|(?:[一二三四五六七八九十\d]+)?连涨(?:\s*[一二三四五六七八九十\d]+\s*(?:个)?(?:交易日|日|天))?'
     r'|(?:每日|每天|逐日|各交易日|每个交易日).{0,8}(?:上涨|收涨|走高|上行|抬升)'
     r'|(?:收盘价|价格).{0,5}(?:一日高过一日|一天比一天高|一日比一日高)'
     r'|(?:持续|接连)(?:上涨|上行|走高)(?:\s*[一二三四五六七八九十\d]+\s*(?:个)?(?:交易日|日|天))?'
     r'|(?:rose|rises|rising|higher).{0,12}(?:every\s+day|consecutive\s+(?:days|sessions))'
     r'|(?:consecutive|successive)\s+(?:daily\s+)?(?:gains|rises|advances)', re.I)
-AGGREGATE = re.compile(r'累计(?:收益率|收益|回报率|回报|涨跌幅|涨幅|上涨)(?!偏离)')
+AGGREGATE = re.compile(
+    r'累计(?:收益率|收益|回报率|回报|涨跌幅|涨幅|上涨)(?!偏离)'
+    r'|累计(?:跌幅|下跌|变化|变动)(?=\s*(?:为|达到|约为|约|达)?\s*'
+    r'(?:\*{1,2})?[-+−]?\d+(?:\.\d+)?\s*%)'
+    r'|累计(?=\s*(?:约)?\s*(?:上涨|下跌|上升|下降|涨|跌)?\s*[-+−]?\d+(?:\.\d+)?\s*%)')
 CONTINUOUS_TRADE = re.compile(r'(?:连续|持续|不间断|全程)(?:成交|有成交|可成交|交易(?!日))|continuous\s+(?:trading|execution)', re.I)
 EXECUTION = re.compile(r'(?:保证|必然|一定|确定|能够|可以|可)(?:顺利)?(?:成交|买到|卖出|买入|卖掉)|guaranteed\s+(?:fill|execution)', re.I)
 FUTURE = re.compile(r'(?:随后|之后|后续|接下来|明日|明天|未来).{0,14}(?:必然|一定|保证|确定|将会).{0,10}(?:封板|涨停|上涨|成交|反弹)|(?:必然|一定|保证).{0,8}(?:封板|涨停)')
@@ -79,7 +85,8 @@ def _news_subject(row, security):
     ids = {_identity(value)[0] for value in row.get('source_symbols', [])}
     body = str(row.get('title', '')) + '\n' + str(row.get('summary', ''))
     codes = set(re.findall(r'(?<!\d)\d{6}(?!\d)', body))
-    return bool(symbol and symbol in ids and (symbol in codes or security.get('name') and security['name'] in body)
+    return bool(symbol and symbol in ids and (has_bound_issuer_excerpt(row, security)
+                or symbol in codes or security.get('name') and security['name'] in body)
                 and not (codes and symbol not in codes))
 
 
@@ -134,6 +141,7 @@ def _daily_capability(facts, security, as_of):
                 or not pub or close_time > pub or row_symbol != symbol or row_market and row_market != market
                 or row.get('market', market) != market
                 or row.get('price_basis', block['price_basis']) != block['price_basis']
+                or row.get('prev_close_price_basis', block['price_basis']) != block['price_basis']
                 or row.get('version', block['version']) != block['version']):
             return {**result, 'reason': 'ROW_IDENTITY_FINALITY_VERSION_OR_DUAL_TIME_UNPROVEN'}
         try:
@@ -149,6 +157,13 @@ def _daily_capability(facts, security, as_of):
                       'published_at': row['published_at'], 'available_at': row['available_at']})
     if any(previous != prior for previous, prior in zip(previous_closes[1:], closes[:-1])):
         return {**result, 'reason': 'PREVIOUS_CLOSE_CHAIN_MISMATCH'}
+    # prev_close is the typed prior-session value in the same basis, not a
+    # guessed date or unadjusted settlement. A base date exists only when the
+    # supplied complete calendar actually contains that preceding session.
+    first_index = full_sessions.index(sessions[0])
+    base_session = full_sessions[first_index - 1] if first_index else None
+    if block.get('base_session') is not None and block['base_session'] != base_session:
+        return {**result, 'reason': 'BASE_SESSION_DOES_NOT_MATCH_PREVIOUS_CALENDAR_SESSION'}
     increases = [close > previous for previous, close in zip(previous_closes, closes)]
     trailing = 0
     for increase in reversed(increases):
@@ -161,6 +176,9 @@ def _daily_capability(facts, security, as_of):
             'calendar_pointer': '/facts/trading_calendar', 'calendar_sha256': _sha(_canonical(calendar)),
             'calendar_version': calendar['version'], 'calendar_published_at': calendar['published_at'],
             'calendar_available_at': calendar['available_at'], 'first_previous_close': str(previous_closes[0]),
+            'base_session': base_session, 'return_session_start': sessions[0], 'return_session_end': sessions[-1],
+            'base_binding': 'TYPED_SAME_BASIS_PREV_CLOSE_AND_PREVIOUS_CALENDAR_MEMBER' if base_session else None,
+            'first_close': str(closes[0]), 'last_close': str(closes[-1]),
             'positive_close_steps': increases, 'trailing_up_sessions': trailing,
             'cumulative_return_percent': str((closes[-1] / previous_closes[0] - 1) * 100),
             'limit': 'Provided final daily closes only; no intraday, future, execution or independent source-truth proof.'}
@@ -244,6 +262,11 @@ def _clauses(report):
 def _nonasserted(clause, start, end, kind, paragraph_prefix='', paragraph_suffix=''):
     before, after = clause[:start], clause[end:]
     presupposed = bool(re.match(r'\s*(?:之?后|以后|的(?:风险|回撤|抛压|压力|影响|约束))', after))
+    if (kind == 'ABSOLUTE_CUMULATIVE_RETURN' and not presupposed
+            and re.fullmatch(r'\s*(?:也|并)?不能(?:保证(?:反弹|上涨)|抵消(?:近期)?回撤)'
+                             r'(?:[（(]p\d+-f\d+-s\d+[)）])?\s*', after)
+            and not re.search(r'已|确认|证明|事实|不是|并非|不能|无法|确实|本来', before[-24:])):
+        return 'NON_NUMERIC_CUMULATIVE_CAUTION_NOT_RETURN_VERIFIED'
     if not presupposed and kind in ('DAILY_PRICE_PATH', 'ABSOLUTE_CUMULATIVE_RETURN'):
         # A denied rewrite can list several wrong conclusions. Keep this
         # limited to one local paragraph and reject a new affirmative clause.
@@ -273,7 +296,7 @@ def _nonasserted(clause, start, end, kind, paragraph_prefix='', paragraph_suffix
                                   paragraph_suffix)):
             return 'LOCAL_MISSING_EXECUTION_EVIDENCE_REQUIREMENT'
         denial = re.search(
-            r'(?:不能|无法|不足以)(?:仅)?用.{0,45}(?:证明|推断|认定|确认|保证|支持)'
+            r'(?:不能|无法|不足以)(?:仅)?(?:用|凭).{0,45}(?:证明|推断|认定|确认|保证|支持|断言)'
             r'(?:该|本|当前)?(?:账户|投资者)?\s*$', before)
         if denial and not re.search(r'(?:不是|并非)\s*$', before[:denial.start()]):
             return 'LOCAL_DENIED_EXECUTION_INFERENCE'
@@ -308,6 +331,10 @@ def _nonasserted(clause, start, end, kind, paragraph_prefix='', paragraph_suffix
             and re.search(r'(?:并非|不是)\s*$', before)
             and not re.search(r'(?:并非|不是)\s*(?:并非|不是)\s*$', before)):
         return 'EXPLICIT_NON_ENTAILMENT_OR_UNKNOWN'
+    if kind == 'DAILY_PRICE_PATH' and not presupposed:
+        denial = re.search(r'(?:并未|没有)呈现[^。；;，,]{0,16}$', before)
+        if denial and not re.search(r'(?:并非|不是)\s*$', before[:denial.start()]):
+            return 'EXPLICIT_NOT_PRESENTED_PRICE_PATH'
     if kind == 'ACCOUNT_EXECUTABILITY' and re.search(r'(?:并不|不|不能|无法|未能|不可)\s*$', before):
         return 'EXPLICIT_NON_ENTAILMENT_OR_UNKNOWN'
     if (kind == 'ACCOUNT_EXECUTABILITY' and re.search(r'(?:并非|不是).{0,12}$', before)
@@ -332,7 +359,7 @@ def _outside_daily_scope(clause, start):
 
 
 def _count(phrase):
-    counts = re.findall(r'([一二三四五六七八九十]+|\d+)\s*(?:个)?(?:交易日|日|天)', phrase)
+    counts = re.findall(r'([一二三四五六七八九十]+|\d+)\s*(?:个)?(?:交易日|会话|日|天)', phrase)
     if not counts:
         counts = re.findall(r'([一二三四五六七八九十]+|\d+)连涨', phrase)
     if not counts:
@@ -382,7 +409,7 @@ def _explicit_daily_binding_error(clause, start, semantics):
     return None
 
 
-def _aggregate_binding_error(clause, semantics, window_start, window_end):
+def _aggregate_binding_error(clause, semantics, window_start, window_end, base_session=None):
     # A matching number does not bind a claim to the target or source window.
     # Only literal security codes and ISO dates are parsed, as in daily claims.
     security = semantics['security']
@@ -390,10 +417,119 @@ def _aggregate_binding_error(clause, semantics, window_start, window_end):
         symbol, market = _identity(literal)
         if symbol != security.get('symbol') or market and market != security.get('market'):
             return 'EXPLICIT_OTHER_SECURITY_NOT_SUPPORTED_BY_TARGET_SOURCES'
-    dates = re.findall(r'\d{4}-\d{2}-\d{2}', clause)
-    if dates and dates not in ([window_end], [window_start, window_end]):
+    valid_ranges = [(window_start, window_end)]
+    if base_session:
+        valid_ranges.append((base_session, window_end))
+    full_range = re.compile(r'(\d{4}-\d{2}-\d{2})\s*(?:至|到|—|–|~|to|through)\s*'
+                            r'(\d{4}-\d{2}-\d{2})', re.I)
+    for match in full_range.finditer(clause):
+        if match.groups() not in valid_ranges:
+            return 'EXPLICIT_ISO_DATES_DO_NOT_BIND_TO_AGGREGATE_SOURCE_WINDOW'
+    explicit_dates = re.findall(r'\d{4}-\d{2}-\d{2}', clause)
+    if explicit_dates == [window_end] or tuple(explicit_dates) in valid_ranges:
+        return None  # Endpoint words/values may occur between the literal dates.
+    date_context = full_range.sub(lambda match: ' ' * len(match.group()), clause)
+    # A full ISO base followed by an abbreviated/natural end date is outside
+    # this date parser. Do not misread that base as a single-day assertion.
+    partial_range = re.compile(r'(\d{4}-\d{2}-\d{2})[^。；;\n]{0,80}?(?:至|到|—|–|~|to|through)'
+                               r'\s*(?:\d{1,2}月\d{1,2}日|\d{1,2}-\d{1,2})(?!\d)', re.I)
+    ignored = [match.span(1) for match in partial_range.finditer(date_context)]
+    dates = [match.group() for match in re.finditer(r'\d{4}-\d{2}-\d{2}', date_context)
+             if not any(start <= match.start() and match.end() <= end for start, end in ignored)]
+    if dates and dates != [window_end]:
         return 'EXPLICIT_ISO_DATES_DO_NOT_BIND_TO_AGGREGATE_SOURCE_WINDOW'
     return None
+
+
+def _aggregate_number(suffix, phrase):
+    # A finite displayed percent grammar, including Markdown emphasis and the
+    # real PM wording "累计约跌8.48%". No amount or unstated numeric is inferred.
+    match = re.match(r'\s*(?:为|达到|约为|约|达)?\s*(上涨|下跌|上升|下降|涨|跌)?\s*'
+                     r'(?:\*{1,2})?([-+−]?\d+(?:\.\d+)?)\s*%', suffix)
+    if not match:
+        return None
+    try:
+        value = Decimal(match[2].replace('−', '-'))
+    except InvalidOperation:
+        return None
+    direction = match[1] or ('上涨' if phrase.endswith('上涨') else
+                             '下跌' if phrase.endswith(('下跌', '跌幅')) else None)
+    if direction:
+        if value < 0:
+            return None  # An explicit direction plus a negative number is ambiguous.
+        if direction in ('下跌', '下降', '跌'):
+            value = -value
+    return value
+
+
+def _displayed_percent_matches(value, expected):
+    # Display precision is the rule; there is no configurable epsilon. ROUND_
+    # HALF_UP implements the stated four-five rounding for both signs.
+    try:
+        with localcontext() as context:
+            context.prec = max(28, len(value.as_tuple().digits) + 4)
+            quantum = Decimal(1).scaleb(value.as_tuple().exponent)
+            return expected.quantize(quantum, rounding=ROUND_HALF_UP) == value
+    except InvalidOperation:
+        return False
+
+
+def _explicit_close_endpoints(prefix, daily=None):
+    # Only an immediately preceding explicit first/last pair is covered. This
+    # does not claim to parse every numerical relationship or report window.
+    match = re.search(r'首末(?:收盘(?:价)?|价格|值)?\s*(?:分别)?\s*(?:为|是)?\s*'
+                      r'(\d+(?:\.\d+)?)\s*(?:元)?\s*(?:和|与|及|、)\s*'
+                      r'(\d+(?:\.\d+)?)\s*(?:元)?[，,\s]*(?:该)?(?:窗口|区间)?\s*$',
+                      prefix[-240:])
+    if not match:
+        return None
+    first, last = Decimal(match[1]), Decimal(match[2])
+    if daily is None:
+        return {'first': str(first), 'last': str(last)}
+    if (first not in (Decimal(daily['first_previous_close']), Decimal(daily['first_close']))
+            or last != Decimal(daily['last_close'])):
+        return {'error': 'EXPLICIT_ENDPOINT_VALUES_NOT_IN_SUPPORTED_SOURCE_WINDOW'}
+    uses_prior = first == Decimal(daily['first_previous_close'])
+    return {'expected': (last / first - 1) * 100, 'first': str(first), 'last': str(last),
+            'base_session': daily['base_session'] if uses_prior else daily['sessions'][0],
+            'return_session_start': daily['sessions'][0 if uses_prior else 1],
+            'return_session_end': daily['sessions'][-1]}
+
+
+def _pending_execution_cells(report):
+    """Locate nominal evidence items only in explicit pending Markdown columns."""
+    lines, offset = [], 0
+    for line in report.splitlines(keepends=True):
+        pipes = [m.start() for m in re.finditer(r'\|', line)]
+        cells = None
+        if (line.strip().startswith('|') and line.strip().endswith('|')
+                and '\\|' not in line and len(pipes) > 2):
+            cells = [(line[left + 1:right], offset + left + 1, offset + right)
+                     for left, right in zip(pipes, pipes[1:])]
+        lines.append(cells)
+        offset += len(line)
+    ranges = []
+    for index, header in enumerate(lines[:-1]):
+        divider = lines[index + 1]
+        if (not header or not divider or len(header) != len(divider)
+                or not all(re.fullmatch(r'\s*:?-{3,}:?\s*', cell[0]) for cell in divider)):
+            continue
+        pending = [i for i, cell in enumerate(header) if re.fullmatch(
+            r'(?:主要)?未知|(?:待核|待补|缺失|需补|所需)(?:数据/指标|数据|指标|材料|证据|输入)?',
+            cell[0].strip().strip('*`').strip())]
+        for row in lines[index + 2:]:
+            if not row or len(row) != len(header):
+                break
+            for column in pending:
+                text, start, end = row[column]
+                matches = list(EXECUTION.finditer(text))
+                items = [part.strip().strip('*`').strip() for part in re.split(r'[、，,/]', text)]
+                if (matches and not re.search(
+                        r'当前|现在|实际|已经|现已|具备|齐全|确认|证明|确定|必然|保证|但是|然而|但|却|所以|因此|而是|不是|并非|[。！？!?；;]', text)
+                        and all(re.fullmatch(r'(?:账户|本账户|该账户|特定账户)?可成交(?:性|证据)', part)
+                                for part in items if EXECUTION.search(part))):
+                    ranges.append((start, end))
+    return ranges
 
 
 def evaluate_report(report, packet):
@@ -406,6 +542,7 @@ def evaluate_report(report, packet):
                 ('CONTINUOUS_TRADE_PATH', CONTINUOUS_TRADE), ('ACCOUNT_EXECUTABILITY', EXECUTION),
                 ('GUARANTEED_FUTURE_PRICE', FUTURE), ('SNAPSHOT_UNIVERSAL_PATH', SNAPSHOT_UNIVERSAL)]
     daily = semantics['daily_close_capability']
+    pending_cells = _pending_execution_cells(report)
     for offset, clause in _clauses(report):
         paragraph_start = max(report.rfind('\n', 0, offset), report.rfind('。', 0, offset), report.rfind(';', 0, offset), report.rfind('；', 0, offset)) + 1
         paragraph_prefix = report[paragraph_start:offset]
@@ -415,8 +552,11 @@ def evaluate_report(report, packet):
             for match in pattern.finditer(clause):
                 record = {'kind': kind, 'start': offset + match.start(), 'end': offset + match.end(),
                           'claim_text_sha256_utf8': _sha(match.group()), 'report_sha256_utf8': _sha(report)}
-                scope = _nonasserted(clause, match.start(), match.end(), kind, paragraph_prefix,
-                                     paragraph_suffix)
+                scope = ('EXPLICIT_PENDING_TABLE_EXECUTION_NOUN'
+                         if kind == 'ACCOUNT_EXECUTABILITY' and any(
+                             start <= record['start'] and record['end'] <= end for start, end in pending_cells)
+                         else _nonasserted(clause, match.start(), match.end(), kind, paragraph_prefix,
+                                           paragraph_suffix))
                 if scope:
                     observations.append({**record, 'status': scope})
                     continue
@@ -445,26 +585,58 @@ def evaluate_report(report, packet):
                         reason = 'EXPLICIT_DAY_COUNT_AMBIGUOUS_OR_UNSUPPORTED'
                 elif kind == 'ABSOLUTE_CUMULATIVE_RETURN':
                     suffix = clause[match.end():]
-                    number = re.match(r'\s*(?:为|达到|约为|约|达)?\s*([+-]?\d+(?:\.\d+)?)\s*%', suffix)
+                    number = _aggregate_number(suffix, match.group())
+                    endpoint_prefix = paragraph_prefix + clause[:match.start()]
+                    binding_context = paragraph_prefix[-240:] + clause
+                    if (match.group() == '累计' and _explicit_close_endpoints(endpoint_prefix) is None
+                            and not re.match(r'\s*(?:约)?\s*(?:上涨|下跌|上升|下降|涨|跌)', suffix)
+                            and daily.get('supported')):
+                        binding_error = _aggregate_binding_error(
+                            binding_context, semantics, daily['return_session_start'], daily['return_session_end'], daily['base_session'])
+                        if binding_error:
+                            violations.append({**record, 'reason': binding_error,
+                                               'source_capability_sha256': _sha(_canonical(semantics))})
+                        else:
+                            observations.append({**record, 'status': 'BARE_CUMULATIVE_NUMBER_OUTSIDE_ENDPOINT_GRAMMAR_NOT_VERIFIED'})
+                        continue
                     current = semantics['current_intraday_change_capability']
-                    if (match.group() == '累计涨幅' and current.get('supported') and number
-                            and Decimal(number.group(1)) == Decimal(current['value_percent'])
+                    if (match.group() == '累计涨幅' and current.get('supported') and number is not None
+                            and number == Decimal(current['value_percent'])
                             and re.search(r'该时点|快照|截至|盘中|当前|当时|该报价|此报价', clause)):
                         current_day = _time(semantics['as_of']).astimezone(BJ_TZ).date().isoformat()
-                        binding_error = _aggregate_binding_error(clause, semantics, current_day, current_day)
+                        binding_error = _aggregate_binding_error(binding_context, semantics, current_day, current_day)
                         if binding_error:
                             violations.append({**record, 'reason': binding_error, 'source_capability_sha256': _sha(_canonical(semantics))})
                             continue
                         observations.append({**record, 'status': 'ATTRIBUTED_CURRENT_INTRADAY_CHANGE_NOT_DAILY_PATH',
                                              'source_pointer': current['pointer'], 'source_field_sha256': current['field_sha256']})
                         continue
-                    if daily.get('supported') and number and Decimal(number.group(1)) == Decimal(daily['cumulative_return_percent']):
-                        binding_error = _aggregate_binding_error(clause, semantics, daily['sessions'][0], daily['sessions'][-1])
-                        if binding_error:
-                            violations.append({**record, 'reason': binding_error, 'source_capability_sha256': _sha(_canonical(semantics))})
+                    if daily.get('supported') and number is not None:
+                        endpoints = _explicit_close_endpoints(endpoint_prefix, daily)
+                        expected = endpoints.get('expected') if endpoints else Decimal(daily['cumulative_return_percent'])
+                        endpoint_error = endpoints.get('error') if endpoints else None
+                        binding_error = _aggregate_binding_error(
+                            binding_context, semantics,
+                            endpoints.get('return_session_start') if endpoints else daily['return_session_start'],
+                            endpoints.get('return_session_end') if endpoints else daily['return_session_end'],
+                            endpoints.get('base_session') if endpoints else daily['base_session'])
+                        if endpoint_error or binding_error:
+                            violations.append({**record, 'reason': endpoint_error or binding_error,
+                                               'source_capability_sha256': _sha(_canonical(semantics))})
                             continue
-                        observations.append({**record, 'status': 'RECOMPUTED_PROVIDED_DAILY_WINDOW_RETURN', 'source_sha256': daily['source_sha256']})
-                        continue
+                        if _displayed_percent_matches(number, expected):
+                            observations.append({**record, 'status': 'RECOMPUTED_PROVIDED_DAILY_WINDOW_RETURN',
+                                                 'source_sha256': daily['source_sha256'],
+                                                 'return_session_start': endpoints['return_session_start'] if endpoints else daily['return_session_start'],
+                                                 'return_session_end': daily['return_session_end'],
+                                                 'base_session': endpoints['base_session'] if endpoints else daily['base_session'],
+                                                 'explicit_close_endpoints': {**endpoints, 'expected': str(expected)} if endpoints else None,
+                                                 'display_rounding': 'ROUND_HALF_UP_AT_REPORTED_DECIMAL_PLACES'})
+                            continue
+                        if endpoints:
+                            violations.append({**record, 'reason': 'EXPLICIT_ENDPOINT_RETURN_VALUE_MISMATCH',
+                                               'source_capability_sha256': _sha(_canonical(semantics))})
+                            continue
                     reason = ('CUMULATIVE_RETURN_VALUE_OR_WINDOW_NOT_RECOMPUTABLE' if daily.get('supported')
                               else 'RELATIVE_DEVIATION_OR_SINGLE_SNAPSHOT_NOT_ABSOLUTE_WINDOW_RETURN')
                 else:
@@ -472,8 +644,10 @@ def evaluate_report(report, packet):
                 violations.append({**record, 'reason': reason, 'source_capability_sha256': _sha(_canonical(semantics))})
     return {'status': 'FAIL' if violations else 'PASS', 'violations': violations, 'observations': observations,
             'source_semantics_sha256': _sha(_canonical(semantics)), 'gate_version': VERSION,
-            'scope_rules_version': 'local-denial-prerequisite-v2',
+            'scope_rules_version': 'local-denial-prerequisite-v5',
             'checked_scope': {'families': [name for name, _ in families], 'scope': 'finite Chinese/English proposition families and local scopes only',
                               'not_checked': ['arbitrary natural-language entailment', 'source truth', 'causality', 'investment effect', 'unknown synonyms',
-                                              'unparsed natural-language security names or dates; these still require source review'],
+                                              'unparsed natural-language security names or dates; these still require source review',
+                                              'numerical relationships outside the explicit adjacent first/last-close percent grammar',
+                                              'bare cumulative numbers without adjacent explicit close endpoints'],
                               'PASS_is_not_semantic_accuracy': True, 'no_model_calls': True, 'does_not_rewrite_report': True}}

@@ -15,6 +15,7 @@ import {
 } from "@/lib/api";
 import { dateTimeTextBJ } from "@/lib/format";
 import {ConditionList, ExplanationMap, FactTimeline, NarrativeText} from "@/components/ui/explanation-map";
+import {TradingAgentsResearchPanel} from "@/components/detail/tradingagents-research-panel";
 
 /**
  * AI 控制台 · 任务中心（docs/summary/ai-evolution.md P0）。
@@ -48,7 +49,7 @@ const REGISTRY_LABELS: Record<string, string> = {
 
 function taskLabel(type: string, types: AgentTaskType[] | undefined | null): string {
   return types?.find((x) => x.type === type)?.label
-    ?? (type === "company_evidence" ? "采集公司依据与判读" : REGISTRY_LABELS[type] ?? type);
+    ?? (type === "company_evidence" ? "采集公司依据与判读" : type === "tradingagents_research" ? "TradingAgents完整研究" : REGISTRY_LABELS[type] ?? type);
 }
 
 function taskStatusLabel(task: AgentTask): string {
@@ -473,6 +474,10 @@ export function TaskCenter() {
                   产物：{detail.result_ref.kind}{detail.result_ref.id ? ` · ${detail.result_ref.id}` : ""}
                 </p>
               )}
+              {detail.type === "tradingagents_research" && typeof detail.params.symbol === "string" && /^\d{6}$/.test(detail.params.symbol) && <div>
+                <p className="text-[11px] text-zinc-600 dark:text-zinc-400">以下读取本股最近完整研究，不表示所选任务已生成报告或通过效果验证。</p>
+                <TradingAgentsResearchPanel key={`${detail.id}:${detail.status}`} symbol={detail.params.symbol} defaultOpen allowStart={false}/>
+              </div>}
 
               <FactTimeline label="任务时点" items={[{label:"创建",value:detail.created_at ? timeText(detail.created_at) : "未记录",kind:"time"},{label:"开始",value:detail.started_at ? timeText(detail.started_at) : "未记录",kind:"time"},{label:"结束",value:detail.finished_at ? timeText(detail.finished_at) : "未记录",kind:"time"}]}/>
               {detail.steps.length === 0 ? (

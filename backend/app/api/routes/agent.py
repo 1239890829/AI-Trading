@@ -47,8 +47,12 @@ async def agent_task_types():
 
 
 @router.post("/agent/tasks", dependencies=[Depends(require_write_token)])
-async def create_task(body: TaskCreateIn):
+async def create_task(body: TaskCreateIn, request: Request):
     try:
+        if body.type == "tradingagents_research":
+            from app.services.tradingagents_research import require_start
+
+            await at._db_thread(require_start, body.params, request.app)
         return {"data": await at.create_task_async(body.type, body.params)}
     except ValueError as exc:      # 未知类型
         raise HTTPException(status_code=422, detail=str(exc))
@@ -58,7 +62,23 @@ async def create_task(body: TaskCreateIn):
             "code": "task_queue_unavailable", "task_id": exc.task_id, "persistence": exc.persistence,
         })
     except RuntimeError as exc:    # 同类型互斥
+        from app.services.tradingagents_research import ResearchBlocked
+
+        if isinstance(exc, ResearchBlocked):
+            return JSONResponse(status_code=409, content={
+                "detail": str(exc), "code": "tradingagents_blocked", "blockers": exc.blockers,
+            })
         raise HTTPException(status_code=409, detail=str(exc))
+
+
+@router.get("/agent/research/tradingagents/{symbol}")
+async def tradingagents_research_view(symbol: str, request: Request):
+    from app.services.tradingagents_research import read_view
+
+    try:
+        return {"data": await at._db_thread(read_view, symbol, request.app)}
+    except ValueError as exc:
+        raise HTTPException(status_code=422, detail=str(exc))
 
 
 

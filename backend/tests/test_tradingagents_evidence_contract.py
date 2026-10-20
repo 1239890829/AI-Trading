@@ -248,6 +248,39 @@ class EvidenceContractTests(unittest.TestCase):
         mixed['overall_band'], mixed['overall_score'] = 'Mixed', 5
         self.score_check('PASS', mixed)
 
+    def test_missing_score_can_abstain_without_inventing_neutral_or_source(self):
+        report = {'overall_score': None, 'overall_band': None, 'confidence': 'low',
+                  'narrative': '所给窗口缺少合格新闻与社交材料，无法判断，未提供分数。'}
+        value = packet()
+        value['facts']['candidate_news'] = []
+        result = self.score_check('PASS', report, value)
+        self.assertIn('EXPLICIT_NUMERIC_SCORE_ABSTENTION',
+                      [row['status'] for row in result['observations']])
+
+    def test_issuer_excerpt_closes_generic_title_gap_without_portal_inference(self):
+        value = packet()
+        row = value['facts']['candidate_news'][0]
+        row.update(title='关于公司相关事项的公告', summary='公司预计前三季度净利润增长。',
+                   document_id='notice-a', source_sha256='a' * 64)
+        self.assertIsNone(CONTRACT.build_ledger(value)['documents'][0]['subject']['eligible'])
+        quote = '证券代码：600001 样本股份有限公司'
+        row['document_issuer'] = {'document_id': 'notice-a', 'source_sha256': 'a' * 64,
+                                  'symbol': '600001', 'legal_name': '样本股份有限公司',
+                                  'physical_page': 1, 'quote': quote,
+                                  'quote_sha256': CONTRACT._sha(quote)}
+        self.assertIs(CONTRACT.build_ledger(value)['documents'][0]['subject']['eligible'], True)
+        row['document_issuer']['source_sha256'] = 'b' * 64
+        self.assertIsNone(CONTRACT.build_ledger(value)['documents'][0]['subject']['eligible'])
+
+    def test_null_pair_cannot_hide_numeric_news_score_or_half_abstention(self):
+        report = {'overall_score': None, 'overall_band': None, 'confidence': 'low',
+                  'narrative': '新闻情绪评分5.7/10，仍然偏乐观。'}
+        self.score_check('FAIL', report)
+        for band, score in [('Neutral', None), (None, 5)]:
+            report.update(overall_band=band, overall_score=score,
+                          narrative='缺少可核新闻证据，不能填中性分数。')
+            self.score_check('FAIL', report)
+
     def test_valid_news_can_report_prices_rises_and_relative_deviation(self):
         value = packet()
         value['facts']['candidate_news'][0]['summary'] = '样本股份报道股价上涨及收盘价格涨幅偏离值披露。'
@@ -385,6 +418,19 @@ class EvidenceContractTests(unittest.TestCase):
                 self.assertTrue(result['checked_scope']['does_not_rewrite_output'])
         self.assertEqual('PASS', CONTRACT.evaluate_terminal_output(
             {'content': '材料不足，保留未知。', 'tool_calls': []})['status'])
+
+    def test_terminal_punctuation_or_numeric_fragments_are_not_explanations(self):
+        for text in ('{', '{}', '[]', '```', '…', '123.45'):
+            with self.subTest(text=text):
+                value = {'content': text, 'tool_calls': []}
+                before = deepcopy(value)
+                result = CONTRACT.evaluate_terminal_output(value)
+                self.assertEqual('FAIL', result['status'])
+                self.assertEqual(before, value)
+        for text in ('证据不足。', 'Unknown: missing source.', '600001资料未提供。'):
+            with self.subTest(text=text):
+                self.assertEqual('PASS', CONTRACT.evaluate_terminal_output(
+                    {'content': text, 'tool_calls': []})['status'])
 
     def test_terminal_typed_text_is_required_but_numeric_nulls_are_preserved(self):
         for field, marker in [('narrative', {'overall_score': 6.0}),
@@ -568,6 +614,77 @@ class EvidenceContractTests(unittest.TestCase):
         result = self.peer_check('REQUIRES_PEER_REVIEW', self.peer_report(), context)
         self.assertTrue(result['review_required'])
         self.assertEqual([], result['format_findings'])
+
+
+    def clock_packet(self):
+        value = packet()
+        value['as_of'] = '2026-10-19T17:02:45.821326+08:00'
+        value['facts']['candidate_news'][0].update(
+            record_id='observation-9973', published_at='2026-10-16T22:42:22.000000+08:00',
+            available_at='2026-10-16T23:12:31.699293+08:00')
+        value['facts']['market_snapshot']['record_id'] = 'new-6-quote'
+        value['facts']['market_snapshot']['data']['received_at'] = '2026-10-19T09:02:45.820545Z'
+        return value
+
+    def test_real_explicit_source_clock_copy_errors_are_not_hidden_by_before_asof(self):
+        value = self.clock_packet()
+        for text in (
+            'observation-9973 available_at为2026-10-16T22:12:31.699293+08:00。',
+            'new-6-quote received_at为2026-10-19T16:02:45.820545Z。',
+            'new-6-quote 来源报价时间为2026-10-19 08:14:56 UTC（北京时间16:14:56），接收时间16:02:45 UTC。',
+        ):
+            with self.subTest(text=text):
+                result = self.check('FAIL', text, value)
+                self.assertIn('SOURCE_CLOCK_VALUE_CONTRADICTED',
+                              [row['reason'] for row in result['violations']])
+
+    def test_clock_restatement_original_utc_conversion_and_declared_precision(self):
+        value = self.clock_packet()
+        for text in (
+            'observation-9973 `/available_at`：2026-10-16T23:12:31.699293+08:00。',
+            'observation-9973 可用时间为2026-10-16T15:12:31.699293Z。',
+            'new-6-quote received_at=2026-10-19T09:02:45.820545Z。',
+            'new-6-quote 接收时间：2026-10-19T17:02:45.820545+08:00。',
+            'new-6-quote received_at=2026-10-19T09:02:45Z。',
+            'new-6-quote 来源报价时间为2026-10-19 08:14:56 UTC，接收时间09:02:45 UTC。',
+        ):
+            with self.subTest(text=text):
+                result = self.check('PASS', text, value)
+                self.assertTrue(any(row['kind'] == 'EXPLICIT_SOURCE_CLOCK_VALUE'
+                                    for row in result['observations']))
+        value['facts']['candidate_news'][0]['available_at'] = '2026-10-18T23:12:31.699293Z'
+        self.check('PASS', 'observation-9973 available_at为2026-10-19T07:12:31.699293+08:00。', value)
+        self.check('FAIL', 'observation-9973 available_at为2026-10-18T07:12:31.699293+08:00。', value)
+
+    def test_explicit_clock_negation_hypothesis_unknown_and_ambiguous_bindings_are_not_invented_facts(self):
+        value = self.clock_packet()
+        for text in (
+            'new-6-quote received_at不是2026-10-19T16:02:45.820545Z。',
+            '假设new-6-quote received_at为2026-10-19T16:02:45.820545Z，才需要重核时间。',
+            '旧稿误称new-6-quote received_at为2026-10-19T16:02:45.820545Z，这一时刻有误，应更正。',
+        ):
+            with self.subTest(text=text):
+                result = self.check('NOT_APPLICABLE', text, value)
+                self.assertTrue(result['observations'])
+        for text in (
+            '接收时间为2026-10-19T16:02:45.820545Z。',
+            'new-6-quote received_at未知，完整时刻仍待核验。',
+            'new-6-quote received_at为16:02:45 UTC。',
+            'observation-9973与new-6-quote的received_at为2026-10-19T16:02:45.820545Z。',
+            'new-6-quote received_at为2026-10-19T16:02:45。',
+        ):
+            with self.subTest(text=text):
+                self.check('NOT_APPLICABLE', text, value)
+        for text in (
+            'new-6-quote received_at不是2026-10-19T16:02:45.820545Z，但new-6-quote received_at为2026-10-19T16:02:45.820545Z。',
+            '并非不能确认new-6-quote received_at为2026-10-19T16:02:45.820545Z。',
+            '假设资料仍待补充，实际new-6-quote received_at为2026-10-19T16:02:45.820545Z。',
+        ):
+            with self.subTest(text=text):
+                self.check('FAIL', text, value)
+        value['facts']['market_snapshot']['data'].pop('received_at')
+        result = self.check('FAIL', 'new-6-quote received_at为2026-10-19T09:02:45.820545Z。', value)
+        self.assertEqual('SOURCE_CLOCK_FIELD_UNPROVEN', result['violations'][0]['reason'])
 
 
 if __name__ == '__main__':

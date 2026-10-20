@@ -183,6 +183,11 @@ _position_engine._PLAN_DIR = _DATA_SANDBOX / "position_plans"
 import app.events.company_impact as _company_impact  # noqa: E402
 _company_impact.ROOT = _DATA_SANDBOX / "company_impact"
 
+# Full-graph candidate readers must not inspect real saved research either.
+# Writer/driver fixtures additionally inject their own per-test roots.
+import app.services.tradingagents_research as _tradingagents_research  # noqa: E402
+_tradingagents_research.ROOT = _DATA_SANDBOX / "tradingagents_research"
+
 
 # TDX 分钟 K 是另一条独立 TCP 7709 外部边界（不受逐笔 fallback 开关控制）。
 # 默认测试必须在该边界失败；专项 minute-backfill 测试会显式 monkeypatch 自己的 fake。

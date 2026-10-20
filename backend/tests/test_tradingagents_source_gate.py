@@ -318,5 +318,182 @@ class EvidenceGateTests(unittest.TestCase):
         self.assert_status('FAIL', '2026-10-12累计收益率25%。', daily)
 
 
+    def test_real_local_execution_denial_with_ping_and_duanyan(self):
+        # Public raw call47 wording, not a human accuracy label.
+        for text in ('不能仅凭单次换手率或报价断言可成交。',
+                     '也无法仅凭报价断言该账户可成交。'):
+            with self.subTest(text=text):
+                self.assert_status('PASS', text)
+        for text in ('不是不能仅凭单次换手率或报价断言可成交。',
+                     '并非无法仅凭报价断言该账户可成交。',
+                     '不能仅凭报价断言可成交，但当前账户可成交。',
+                     '不能仅凭报价断言可成交后的风险。'):
+            with self.subTest(text=text):
+                self.assert_status('FAIL', text)
+
+    def test_real_pending_table_execution_noun_is_not_a_current_account_claim(self):
+        table = ('| 主题 | 支持度 | 待核数据/指标 |\n'
+                 '| --- | --- | --- |\n'
+                 '| 行情快照 | 仅说明单时点报价字段 | 连续日线、盘中路径、账户可成交性 |')
+        result = self.assert_status('PASS', table)
+        self.assertIn('EXPLICIT_PENDING_TABLE_EXECUTION_NOUN',
+                      [row['status'] for row in result['observations']])
+        self.assert_status('PASS', table.replace('待核数据/指标', '主要未知'))
+        for cell in ('当前账户可成交', '账户可成交性已经具备', '账户可成交性良好',
+                     '实际可成交证据齐全', '账户可成交性，所以可以成交'):
+            with self.subTest(cell=cell):
+                self.assert_status('FAIL', table.replace('连续日线、盘中路径、账户可成交性', cell))
+        self.assert_status('FAIL', table + '\n当前账户可成交。')
+        self.assert_status('FAIL', table.replace('待核数据/指标', '已知结论'))
+        self.assert_status('FAIL', table.replace('| --- | --- | --- |\n', ''))
+        self.assert_status('FAIL', table + '\n| 另一来源 | 账户可成交 | 无 |')
+
+    def test_session_count_after_only_binds_the_observed_trailing_window(self):
+        packet = history([11, 10, 11])
+        self.assert_status('PASS', '最新连续上涨仅1个会话。', packet)
+        self.assert_status('FAIL', '最新连续上涨仅2个会话。', packet)
+        self.assert_status('FAIL', '最新连续上涨仅1个会话。当前账户可成交。', packet)
+        self.assert_status('FAIL', '最新连续上涨仅1个会话。')
+
+    def test_not_presented_path_is_a_local_denial_not_a_positive_path(self):
+        self.assert_status('PASS', '市场价格并未呈现与预告幅度一致的持续上行路径。')
+        for text in ('市场价格并未呈现疲弱，但持续上行已经发生。',
+                     '市场价格并非没有呈现持续上行路径。',
+                     '市场价格并未呈现疲弱，而是持续上行。'):
+            with self.subTest(text=text):
+                self.assert_status('FAIL', text)
+
+
+    def test_cumulative_display_precision_uses_round_half_up_not_tolerance(self):
+        # Real regression values, carried in an isolated synthetic two-session
+        # fixture. They are not a claim about the fixture dates' actual prices.
+        packet = history([32.96, 35.22], first_previous=33.01)
+        for text in ('该窗口累计上涨约6.69%。', '该窗口累计收益率约6.7%。',
+                     '该窗口累计收益率约7%。', '该窗口累计收益率约 **+6.69%**。'):
+            with self.subTest(text=text):
+                self.assert_status('PASS', text, packet)
+        for value in ('6.79', '6.68', '6.70', '6'):
+            with self.subTest(value=value):
+                self.assert_status('FAIL', '该窗口累计上涨约' + value + '%。', packet)
+        negative = history([4.68, 4.21], first_previous=4.60)
+        self.assert_status('PASS', '该窗口累计变化约-8.48%。', negative)
+        self.assert_status('PASS', '该窗口累计变化约 **−8.48%**。', negative)
+        self.assert_status('PASS', '该窗口累计约跌8.48%。', negative)
+        self.assert_status('FAIL', '该窗口累计约涨8.48%。', negative)
+
+    def test_displayed_return_rounds_half_ties_away_from_zero(self):
+        positive = history([10, 10.0005], first_previous=10)
+        self.assert_status('PASS', '该窗口累计收益率0.01%。', positive)
+        self.assert_status('FAIL', '该窗口累计收益率0.00%。', positive)
+        negative = history([10, 9.9995], first_previous=10)
+        self.assert_status('PASS', '该窗口累计收益率-0.01%。', negative)
+        self.assert_status('FAIL', '该窗口累计收益率-0.00%。', negative)
+
+    def test_return_sessions_and_calendar_previous_base_are_distinct(self):
+        packet = history([32.96, 35.22], first_previous=33.01)
+        daily = source_semantics(packet)['daily_close_capability']
+        self.assertEqual('2026-10-09', daily['base_session'])
+        self.assertEqual('2026-10-12', daily['return_session_start'])
+        self.assertEqual('2026-10-13', daily['return_session_end'])
+        self.assertEqual('33.01', daily['first_previous_close'])
+        self.assert_status('PASS', '600001从2026-10-09至2026-10-13累计上涨约6.69%。', packet)
+        self.assert_status('PASS', '600001在2026-10-12至2026-10-13累计上涨约6.69%。', packet)
+        self.assert_status('FAIL', '600001从2026-10-08至2026-10-13累计上涨约6.69%。', packet)
+        packet['facts']['price_history']['base_session'] = '2026-10-08'
+        self.assert_status('FAIL', '该窗口累计上涨约6.69%。', packet)
+
+    def test_base_date_is_not_guessed_without_previous_calendar_member(self):
+        packet = history([11, 12, 12.5, 13], first_previous=10)
+        daily = source_semantics(packet)['daily_close_capability']
+        self.assertIsNone(daily['base_session'])
+        self.assert_status('PASS', '2026-10-08至2026-10-13累计收益率30%。', packet)
+        self.assert_status('FAIL', '2026-10-07至2026-10-13累计收益率30%。', packet)
+
+    def test_displayed_return_keeps_identity_chronology_and_calendar_gates(self):
+        for mutation in ('no_source', 'foreign', 'market', 'future', 'no_calendar', 'incomplete', 'prev_basis', 'chain'):
+            packet = history([32.96, 35.22], first_previous=33.01)
+            if mutation == 'no_source':
+                del packet['facts']['price_history']
+            elif mutation == 'foreign':
+                packet['facts']['price_history']['symbol'] = '000811.SZ'
+            elif mutation == 'market':
+                packet['facts']['price_history']['market'] = 'SZ'
+            elif mutation == 'future':
+                packet['facts']['price_history']['observations'][0]['available_at'] = '2026-10-15T15:02:00+08:00'
+            elif mutation == 'no_calendar':
+                del packet['facts']['trading_calendar']
+            elif mutation == 'incomplete':
+                packet['facts']['trading_calendar']['complete'] = False
+            elif mutation == 'prev_basis':
+                packet['facts']['price_history']['observations'][0]['prev_close_price_basis'] = 'other_adjustment'
+            else:
+                packet['facts']['price_history']['observations'][1]['prev_close'] = 33
+            with self.subTest(mutation=mutation):
+                self.assert_status('FAIL', '该窗口累计上涨约6.69%。', packet)
+        packet = history([32.96, 35.22], first_previous=33.01)
+        self.assert_status('FAIL', '000811累计上涨约6.69%。', packet)
+        self.assert_status('FAIL', '600001.SZ累计上涨约6.69%。', packet)
+
+    def test_non_numeric_cumulative_caution_is_scoped_not_verified_return(self):
+        for text in ('反过来，窗口累计上涨也不能保证反弹。',
+                     '区间累计涨幅不能抵消近期回撤。',
+                     '保守方指出区间累计涨幅不能抵消近期回撤（p146-f0-s10），这个比较成立。'):
+            with self.subTest(text=text):
+                result = self.assert_status('PASS', text)
+                self.assertIn('NON_NUMERIC_CUMULATIVE_CAUTION_NOT_RETURN_VERIFIED',
+                              [row['status'] for row in result['observations']])
+        for text in ('窗口已经累计上涨也不能保证反弹。',
+                     '不是窗口累计上涨也不能保证反弹。',
+                     '窗口累计上涨也不是不能保证反弹。',
+                     '窗口累计上涨6.79%也不能保证反弹。',
+                     '窗口累计上涨不能抵消回撤，但已经累计上涨6.79%。',
+                     '窗口累计上涨不能抵消回撤，并非不能证明累计上涨6.79%。'):
+            with self.subTest(text=text):
+                self.assert_status('FAIL', text)
+
+    def test_actual_pm_endpoint_percentage_contradiction_is_rejected(self):
+        packet = history([4.68, 4.21], first_previous=4.60)
+        # Actual PM138 sentence shape; -8.48% belongs to the previous base4.60,
+        # not its stated4.68 endpoint. Do not correct the frozen model answer.
+        wrong = '单次腾讯前复权61条日K首末收盘为4.68和4.21，累计约跌8.48%。'
+        result = self.assert_status('FAIL', wrong, packet)
+        self.assertIn('EXPLICIT_ENDPOINT_RETURN_VALUE_MISMATCH',
+                      [row['reason'] for row in result['violations']])
+        self.assert_status('PASS', wrong.replace('4.68和', '4.60和'), packet)
+        endpoint = self.assert_status('PASS', wrong.replace('8.48%', '10.04%'), packet)
+        self.assertEqual('2026-10-12', endpoint['observations'][0]['base_session'])
+        self.assertEqual('2026-10-13', endpoint['observations'][0]['return_session_start'])
+        self.assert_status('PASS', '2026-10-12至2026-10-13' + wrong.replace('8.48%', '10.04%'), packet)
+        self.assert_status('FAIL', wrong.replace('4.68和', '4.69和').replace('8.48%', '10.23%'), packet)
+        self.assert_status('FAIL', wrong.replace('4.21，', '4.22，').replace('8.48%', '9.83%'), packet)
+
+    def test_added_numeric_families_do_not_promote_nouns_or_unparsed_dates(self):
+        packet = history([32.96, 35.22], first_previous=33.01)
+        # Abbreviated/natural dates are explicitly outside this date parser,
+        # rather than a failed single-ISO-day binding or a date truth claim.
+        self.assert_status('PASS', '2026-10-09至10-13，累计变动约 **+6.69%**。', packet)
+        self.assert_status('PASS', '以2026-10-09为基准至10月13日，累计约+6.69%。', packet)
+        self.assert_status('PASS', '从2026-10-09收盘33.01至2026-10-13收盘35.22，累计收益率6.69%。', packet)
+        scoped = self.assert_status('PASS', '7-20收55.57至9-11收42.67，累计-23.21%。', packet)
+        self.assertIn('BARE_CUMULATIVE_NUMBER_OUTSIDE_ENDPOINT_GRAMMAR_NOT_VERIFIED',
+                      [v['status'] for v in scoped['observations']])
+        self.assert_status('FAIL', '2026-10-08至2026-10-13，累计约+6.69%。', packet)
+        self.assert_status('FAIL', '2026-10-08 至 2026-10-13，累计约+6.69%。', packet)
+        self.assert_status('FAIL', '2026-10-08至2026-10-13及2026-10-09至10-13，累计约+6.69%。', packet)
+        for text in ('| 窗口累计变化和有限指标 |', '窗口累计下跌是这里的研究描述，仍需源审。'):
+            with self.subTest(text=text):
+                result = self.assert_status('PASS', text)
+                self.assertFalse(any(v['kind'] == 'ABSOLUTE_CUMULATIVE_RETURN' for v in result['observations']))
+
+    def test_endpoint_arithmetic_cannot_borrow_other_identity_or_missing_source(self):
+        packet = history([4.68, 4.21], first_previous=4.60)
+        text = '600001首末收盘为4.60和4.21，累计约跌8.48%。'
+        self.assert_status('PASS', text, packet)
+        self.assert_status('FAIL', text.replace('600001', '000811'), packet)
+        self.assert_status('FAIL', text.replace('600001', '600001.SZ'), packet)
+        self.assert_status('FAIL', text)
+        self.assert_status('FAIL', text.replace('8.48%', '8.49%'), packet)
+
+
 if __name__ == '__main__':
     unittest.main(verbosity=2)

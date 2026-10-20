@@ -471,3 +471,15 @@ PYTHONPATH=backend backend/.venv/bin/python backend/scripts/recovery_bundle.py r
 旧版本曾把编码后的长期token交给浏览器，编码不是保密。因此统一激活时轮换backend/.env中的服务token，再由统一启动脚本最小传递；不输出token，不保留旧前端继续开放LAN，不自动信任旧浏览器。权限小库属于业务访问状态，清理工具不得删。此前普通局域网代理/长期WS凭据说明保留为历史，以上协议取代该访问边界。
 
 `local-services.py check`只读核后端服务认证、前端未配对HTTP/WS返回401、配对状态桥可验证服务端凭据；不获取长期凭据、不创建会话或工具WS。实际刷新/票据重连在隔离用户流与统一激活后的已授权页面分别验。行情源新鲜度、真实交易窗口与手机真机性能仍独立验收。
+
+## TradingAgents完整研究运行边界
+
+2026-10-20新增的工程链复用原AgentTask/任务中心及个股报告读者，固定上游v0.7.0/e8f5503；不会拆成另一套角色流程。`ASHARE_TRADINGAGENTS_RESEARCH_ENABLED=0`为默认值；关闭时bootstrap不读取可选运行环境或启动CLI。当前[真实同输入对照](../ai/semantic-decisions.md#2026-10-20-六新场景完整图与四臂对照)未证明净收益，不能把以下环境准备当作启用批准。
+
+服务器配置单点为忽略目录`backend/data/tradingagents_research/runtime.json`，只含`version=1`、`upstream_sha`、`upstream_dir`、`python`、`dependencies`、`dependency_manifest`、`transport`七键。路径仅由服务器操作员配置为绝对路径，HTTP只接受证券symbol。transport绑定现有CLI程序SHA、模型/effort和认证文件位置，仅允许四个标准代理变量；不包含或公开凭据内容。固定原图276个源码文件逐hash核实；独立venv及相对文件SHA清单由`freeze_dependency_manifest`显式准备，bootstrap不安装、升级或自动生成环境。环境首次/执行前完整核，普通读取复用已核观察；依赖、代码、CLI或准入版本漂移则拒绝新执行。
+
+启用还需`ASHARE_TRADINGAGENTS_RESEARCH_ADMISSION_DIGEST`精确绑定同目录`admission.json`。回执须绑定准确方法/评价版本、有效期、明确净收益通过；工程夹具、图完成或作者自检不能代填。此质量准入不同于源码发布的DegradedRelease。现役每日模型上限8与完整图预检22次余量冲突，已有started未知用量也继续阻断；不自动增额、清账、换scope或换模型。每次reserve/start/finish沿用原共享预算，取消先等真实模型步骤结束，partial/unknown保全并禁止自动重发，完成的相同输入/方法才可复用。
+
+正常构包当前只读已有验证公司profile，不自动抓取；缺profile在模型前阻断，行情、复权历史、社交、完整财表及账户信息明确缺失。材料截点取真实profile.checked_at，不以点击时间冒充新鲜资料。原图十二角色和七报告完整，并不证明四分析师已具备全部输入；后续行情接入须保留真实证券/市场、源钟、接收钟、质量与完整历史口径，不可把PE或单个报价当完整财表/历史。模型不能用背景常识补成可验证事实。
+
+完整待核七报告只写研究目录，绑定证券、输入/方法/结果hash和原生成/资料时刻；普通配对GET可读取，源/引用有限失败与同伴待审明示，不变成已验证结论。完成后只清该run自有的原生checkpoint数据库残页，保留报告、原答和MemoryLog；失败、中断或未知则保留恢复证据。无新调度、通知、选股评分、资金或部署动作。现役页面加载、已保存结果读取、真正模型任务及质量准入仍须分别取实际证据。

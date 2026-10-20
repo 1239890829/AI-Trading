@@ -356,6 +356,8 @@ class Settings(BaseSettings):
     company_evidence_interval_seconds: float = 900.0
     company_evidence_startup_delay_seconds: float = 90.0
     company_evidence_batch_size: int = 4  # Worker hard-caps both selected stocks and model batches at eight.
+    tradingagents_research_enabled: bool = False  # Exact-version quality admission is also required.
+    tradingagents_research_admission_digest: str = ""  # Server-pinned data/tradingagents_research/admission.json.
     agent_autonomy_enabled: bool = True
     agent_code_change_enabled: bool = False  # C 类代码执行器须由管理员独立显式开启
     agent_venv_python: str = ""             # 沙箱门禁用的 pytest 解释器（默认 backend/.venv/bin/python）

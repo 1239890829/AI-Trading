@@ -1,13 +1,13 @@
 """Typed source ledger and additive caller contract for the isolated TA LAB.
 
 No network, model, file, or state mutation occurs here. The relation checker is
-deliberately finite: explicit snapshot price-field comparisons and an explicitly
-named news record's before/after-as-of claims, and bounded explicit governance
+deliberately finite: explicit snapshot price-field comparisons, same-record
+aware clock copies, named-news before/after-as-of claims, and bounded governance
 source attributions. It does not verify arbitrary
 entailment, peer fidelity, attention, causality, source truth, or investment value.
 PASS only means no contradiction was found in that checked scope.
 """
-from datetime import datetime
+from datetime import datetime, timezone
 from collections import Counter
 from decimal import Decimal, InvalidOperation
 import hashlib
@@ -16,6 +16,7 @@ import json
 import re
 
 from app.core.bjtime import BJ_TZ
+from scripts.tradingagents_adapter_contract import has_bound_issuer_excerpt
 
 VERSION = 'typed-evidence-ledger-v1'
 
@@ -144,10 +145,13 @@ def _subject(row, security):
         status, eligible = 'LEADING_TARGET_AND_METADATA_AGREE', True
     elif metadata and all(code != symbol for code, _ in metadata):
         status, eligible = 'OTHER_DECLARED_SECURITY', False
+    elif has_bound_issuer_excerpt(row, security) and any(
+            code == symbol and (not suffix or suffix == market) for code, suffix in metadata):
+        status, eligible = 'BOUND_SAME_DOCUMENT_ISSUER_EXCERPT', True
     else:
         status, eligible = 'UNKNOWN_REQUIRES_BODY_REVIEW', None
     return {'status': status, 'eligible': eligible,
-            'method': 'finite leading-title identity plus metadata; not full body-subject proof',
+            'method': 'leading-title or bound issuer excerpt plus metadata; not full body-subject or source-truth proof',
             'do_not_infer_subject_from_metadata_alone': True}
 
 
@@ -254,8 +258,9 @@ def build_contract(packet):
                'same_snapshot_relations': [{k: row[k] for k in ('lhs', 'operator', 'rhs')}
                                            for row in ledger['snapshot']['comparisons']],
                'attention': ledger['attention']}
-    return ('EVIDENCE_RELATIONS_V1（V3追加层；原角色、schema、辩论、工具、七报告和记忆全保留）\n'
-            '1. 角色方向不要求创造相反事实。引用或反驳对方时给其准确短原句，保留若/待证/未做到等条件；'
+    return ('EVIDENCE_RELATIONS_V1（追加层；原角色、辩论、工具、七报告和记忆保留，情绪schema允许明确弃权）\n'
+            '1. 角色方向不要求创造相反事实。引用或反驳对方时按本次同伴定位协议绑定其实际原句'
+            '（逐字引用或核验短ID），保留若/待证/未做到等条件；'
             '可批评证据强度或观察价值，不得把条件说成对方已预设、已证明。没有支持的反论可直说。\n'
             '2. 研究者认为值得关注是研究建议；市场关注已存在、可观察或上升是另一个经验判断。'
             '没有合格观测就写未知，不等于市场没有关注。事件可能引发关注可作明确条件推断，'
@@ -271,7 +276,7 @@ def build_contract(packet):
             '这不是额外思维链或模型调用要求。\n'
             '6. 以下ledger是有限输入定位/比较，不是独立source truth、人工gold或语义正确率；'
             '未解析的说法仍需来源审查。\n'
-            'NEWS_SCORE_BASIS_V1：仅当输出原SentimentReport或自愿给新闻语气数值刻度时，'
+            'NEWS_SCORE_BASIS_V2：仅当SentimentReport给出非空数值或自愿给新闻语气数值刻度时，'
             '在narrative/content中恰好加入一个<NEWS_SCORE_BASIS>纯JSON</NEWS_SCORE_BASIS>块。'
             'JSON格式为{"sources":[{"record_id":"实际合格新闻ID","field":"title或summary",'
             '"quote":"该字段内4至240字逐字短引文"}],"justification":"仅据所引新闻文字解释主观语气"}。'
@@ -279,7 +284,8 @@ def build_contract(packet):
             '不得把盘中正涨幅、快照、换手或selector判断作为该刻度的方向/数值依据。'
             '独立行情背景仍可讨论，但不能在块外另写评分因行情而偏多。'
             '合格新闻原文本身报道上涨、价格或偏离可按新闻语气分析，不禁这些词；'
-            '无合格新闻仍按原约束拒绝该score消费，不编中性值。'
+            '无合格材料时overall_score与overall_band同时为null，并解释缺失；'
+            '明确弃权不需虚构来源块，不编中性值，不能在narrative另写数值刻度。'
             'Trader/PM投资评级可综合行情，不是此新闻语气刻度，不能混为一类。'
             '逐字引用只证明来源绑定，不证明解释正确；仍需全文来源审核。\n'
             'GOVERNANCE_SOURCE_SCOPE_V1：第一大股东、控股股东、实际控制人/实控人、控制权是不同概念，'
@@ -373,6 +379,84 @@ def _governance_attributions(clause, offset, text, documents, ledger):
     return violations, observations, checked
 
 
+def _source_clock_claims(clause, offset, packet):
+    """Check explicit same-record clock copies, not arbitrary time-language claims."""
+    facts = packet.get('facts') or {}
+    records = {}
+    for index, row in enumerate(facts.get('candidate_news') or []):
+        if isinstance(row, dict) and isinstance(row.get('record_id'), str):
+            records.setdefault(row['record_id'], []).append((row, '/facts/candidate_news/' + str(index)))
+    snapshot = facts.get('market_snapshot') or {}
+    if isinstance(snapshot.get('record_id'), str):
+        records.setdefault(snapshot['record_id'], []).append((snapshot.get('data') or {}, '/facts/market_snapshot/data'))
+    mentions = [(match, key) for key in records for match in re.finditer(
+        r'(?<![A-Za-z0-9_-])' + re.escape(key) + r'(?![A-Za-z0-9_-])', clause)]
+    if len({key for _, key in mentions}) != 1:
+        return [], [], 0
+    key = mentions[0][1]
+    if len(records[key]) != 1:
+        return [], [], 0
+    source, pointer = records[key][0]
+    names = {'published_at': 'published_at', 'available_at': 'available_at', 'received_at': 'received_at',
+             '发布时间': 'published_at', '可用时间': 'available_at', '接收时间': 'received_at'}
+    fields = re.compile(r'(?<![A-Za-z0-9_])(?:published_at|available_at|received_at)(?![A-Za-z0-9_])'
+                        r'|发布时间|可用时间|接收时间')
+    clock = re.compile(
+        r'[\s`"“”]*' r'(?:为|是|不是|并非|[:：=])?' r'[\s`"“”]*'
+        r'(?:(?P<day>\d{4}-\d{2}-\d{2})[T ]+)?(?P<hms>\d{2}:\d{2}:\d{2})'
+        r'(?P<fraction>\.\d{1,6})?\s*(?P<zone>Z|UTC|[+-]\d{2}:\d{2})(?![A-Za-z0-9:+-])')
+    violations, observations, checked = [], [], 0
+    for field in fields.finditer(clause):
+        prior = [match for match, _ in mentions if match.end() <= field.start()]
+        match = clock.match(clause, field.end())
+        if not prior or match is None:
+            continue
+        name = names[field.group()]
+        expected, _ = _clock(source.get(name))
+        day = match['day']
+        inherited = day is None
+        if inherited:
+            dates = set(re.findall(r'\d{4}-\d{2}-\d{2}', clause[prior[-1].end():field.start()]))
+            if len(dates) != 1:
+                continue
+            day = dates.pop()
+        zone = '+00:00' if match['zone'] in ('Z', 'UTC') else match['zone']
+        claimed, _ = _clock(day + 'T' + match['hms'] + (match['fraction'] or '') + zone)
+        if inherited and (expected is None or claimed is None
+                          or expected.astimezone(claimed.tzinfo).date().isoformat() != day):
+            continue  # A missing/ambiguous date is not manufactured from the source.
+        start, end = offset + field.start(), offset + match.end()
+        record = {'kind': 'EXPLICIT_SOURCE_CLOCK_VALUE', 'record_id': key, 'field': name,
+                  'start': start, 'end': end, 'claim_sha256_utf8': _sha(clause[field.start():match.end()]),
+                  'source_pointer': pointer + '/' + name, 'date_inherited_from_same_record_clause': inherited}
+        value_start = match.start('hms') if inherited else match.start('day')
+        assertions = list(re.finditer(r'但是|然而|但|不过|事实上|而实际|实际|现已|确已', clause[:value_start]))
+        local = assertions[-1].end() if assertions else 0
+        scope = _nonasserted(clause[local:], value_start - local, match.end() - local)
+        if scope:
+            observations.append({**record, 'status': scope})
+            continue
+        checked += 1
+        if expected is None:
+            violations.append({**record, 'reason': 'SOURCE_CLOCK_FIELD_UNPROVEN'})
+            continue
+        digits = len(match['fraction'] or '') - 1 if match['fraction'] else 0
+        unit = 10 ** (6 - digits)
+        def displayed(value):
+            if value is None:
+                return None
+            value = value.astimezone(timezone.utc)
+            return value.replace(microsecond=value.microsecond // unit * unit)
+        if claimed is not None and displayed(claimed) == displayed(expected):
+            observations.append({**record, 'status': 'SOURCE_CLOCK_MATCHES_DECLARED_PRECISION',
+                                 'fractional_digits': digits,
+                                 'source_clock_sha256': _sha(_canonical(source[name])),
+                                 'full_source_clock_and_asof_eligibility_unchanged': True})
+        else:
+            violations.append({**record, 'reason': 'SOURCE_CLOCK_VALUE_CONTRADICTED'})
+    return violations, observations, checked
+
+
 def evaluate_relations(text, packet):
     """Check finite price relations, named-news times and direct attributions.
 
@@ -383,9 +467,10 @@ def evaluate_relations(text, packet):
     result = {'status': 'NOT_APPLICABLE', 'violations': [], 'observations': [],
               'ledger_sha256': _sha(_canonical(ledger)),
               'checked_scope': {'families': ['EXPLICIT_SNAPSHOT_PRICE_RELATION', 'NAMED_NEWS_ASOF_ORDER',
-                                            'SOURCE_GOVERNANCE_ATTRIBUTION'],
+                                            'SOURCE_GOVERNANCE_ATTRIBUTION', 'EXPLICIT_SOURCE_CLOCK_VALUE'],
                                 'not_checked': ['arbitrary entailment', 'peer fidelity', 'attention measurement',
-                                                'source truth', 'causality', 'investment effect'],
+                                                'source truth', 'causality', 'investment effect',
+                                                'unbound, naive or ambiguous report clocks and natural-language dates'],
                                 'does_not_rewrite_report': True, 'PASS_is_not_semantic_accuracy': True}}
     if not isinstance(text, str):
         return result
@@ -395,6 +480,10 @@ def evaluate_relations(text, packet):
     checked = 0
     for clause_match in re.finditer(r'[^。！？\n；;]+', text):
         clause, offset = clause_match.group(), clause_match.start()
+        failures, notes, count = _source_clock_claims(clause, offset, packet)
+        result['violations'].extend(failures)
+        result['observations'].extend(notes)
+        checked += count
         failures, notes, count = _governance_attributions(clause, offset, text, docs, ledger)
         result['violations'].extend(failures)
         result['observations'].extend(notes)
@@ -477,8 +566,10 @@ def _score_nonuse(text, start, end):
 def evaluate_score_basis(value, packet, role=None):
     """Check a declared NEWS-only score, once on the whole original report.
 
-    Original SentimentReport fields/schema remain unchanged: its narrative holds
-    one bounded JSON evidence block. Trade/PM ratings do not require this block.
+    A numeric SentimentReport uses one bounded JSON evidence block in its
+    narrative. The evidence-aware schema can instead explicitly abstain with
+    paired null score/band; it must not declare a numeric score in the narrative.
+    Trade/PM ratings do not require this block.
     Other arms require it only if they voluntarily declare a numeric news-tone
     score. Exact source quotes do not establish the interpretation's entailment.
     """
@@ -513,6 +604,18 @@ def evaluate_score_basis(value, packet, role=None):
         result['violations'].append({'kind': 'NEWS_SCORE_BASIS', 'reason': reason,
                                      'json_pointer': pointer, 'start': start, 'end': end,
                                      'claim_sha256_utf8': _sha(text[start:end])})
+    if typed and (value.get('overall_score') is None or value.get('overall_band') is None):
+        if value.get('overall_score') is not None or value.get('overall_band') is not None:
+            violation('SCORE_AND_BAND_MUST_ABSTAIN_TOGETHER')
+        elif voluntary:
+            violation('NULL_SCORE_REPORT_DECLARES_NUMERIC_NEWS_SCORE', 0, min(len(text), 80))
+        elif not text.strip():
+            violation('ABSTENTION_REQUIRES_EXPLANATION')
+        else:
+            result['observations'].append({'status': 'EXPLICIT_NUMERIC_SCORE_ABSTENTION',
+                                            'does_not_establish_source_absence': True})
+        result['status'] = 'FAIL' if result['violations'] else 'PASS'
+        return result
     opening, closing = '<NEWS_SCORE_BASIS>', '</NEWS_SCORE_BASIS>'
     blocks = list(re.finditer(re.escape(opening) + r'(.*?)' + re.escape(closing), text, re.S))
     if len(blocks) != 1 or text.count(opening) != 1 or text.count(closing) != 1:
@@ -596,7 +699,7 @@ def evaluate_score_basis(value, packet, role=None):
 
 
 def evaluate_terminal_output(value):
-    """Check nonblank terminal text after the original codec/schema validates.
+    """Check explanatory terminal text after the original codec/schema validates.
 
     This does not validate tool permission, a schema, sources or semantics. A
     nonempty tool proposal is not a terminal report and still needs the caller's
@@ -604,8 +707,8 @@ def evaluate_terminal_output(value):
     null; they are not a substitute for the role's required explanatory text.
     """
     result = {'status': 'PASS', 'violations': [], 'observations': [],
-              'checked_scope': {'version': 'terminal-output-usability-v1',
-                                'scope': 'nonblank terminal report text only',
+              'checked_scope': {'version': 'terminal-output-usability-v2',
+                                'scope': 'nonblank terminal text with letters, not punctuation/numeric fragments',
                                 'not_checked': ['schema', 'tool permission', 'source truth',
                                                 'semantic correctness', 'investment value'],
                                 'requires_prior_codec_and_schema_validation': True,
@@ -642,6 +745,10 @@ def evaluate_terminal_output(value):
             result['violations'].append({'reason': 'MISSING_OR_BLANK_TERMINAL_TEXT',
                                          'json_pointer': '/' + field,
                                          'text_sha256_utf8': _sha(text) if isinstance(text, str) else None})
+        elif not any(char.isalpha() for char in text):
+            result['violations'].append({'reason': 'NONEXPLANATORY_TERMINAL_FRAGMENT',
+                                         'json_pointer': '/' + field,
+                                         'text_sha256_utf8': _sha(text)})
     result['status'] = 'FAIL' if result['violations'] else 'PASS'
     return result
 

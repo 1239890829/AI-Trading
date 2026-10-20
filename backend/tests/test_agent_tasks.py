@@ -386,7 +386,7 @@ def test_create_task_rejects_registry_only_types(monkeypatch, tmp_path):
         assert bad in str(ei.value)
 
     names = [t["type"] for t in at.creatable_task_types()]
-    assert names == ["review", "data_check", "company_evidence"]
+    assert names == ["review", "data_check", "company_evidence", "tradingagents_research"]
     assert set(names) == set(at.CREATABLE_TASK_TYPES) == set(at._HANDLERS)
     # 登记类仍留在 TASK_TYPES 里（前端/审计需要统一标签来源）
     assert {"mutation", "escalation"} <= set(at.TASK_TYPES)
