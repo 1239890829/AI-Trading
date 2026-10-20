@@ -29,7 +29,8 @@ STATIC = "https://static.cninfo.com.cn/"
 MAX_PDF = 24 * 1024 * 1024
 MAX_JSON = 1024 * 1024
 MIN_REQUEST_INTERVAL = 1.0
-EXTRACTOR = "bounded-sentences-v4"
+EXTRACTOR = "bounded-sentences-v5"
+REPORT_POLICY = "operating-period-first-v1"
 _request_lock = threading.Lock()
 _last_request = 0.0
 _PDF_PATH = re.compile(r"finalpage/(\d{4}-\d{2}-\d{2})/(\d+)\.PDF", re.I)
@@ -255,7 +256,27 @@ def _identity(pages: list[str], symbol: str) -> tuple[str, int, str]:
     raise SourceError("full issuer name and exact security code not verified on same page")
 
 
-def _excerpts(pages: list[str]) -> tuple[list[dict], list[str]]:
+def _excerpts(pages: list[str], *, periodic_report: bool = False) -> tuple[list[dict], list[str]]:
+    boundary = None
+    if periodic_report:
+        for index, text in enumerate(pages):
+            if any(_compact(line) == "目录" for line in text.splitlines()):
+                continue
+            heading = re.search(r"(?m)^[^\S\r\n]*第[^\S\r\n]*[一二三四五六七八九十百\d]+"
+                                r"[^\S\r\n]*节[^\S\r\n]*财务[^\S\r\n]*报告[^\S\r\n]*$", text)
+            if heading is None:
+                continue
+            following = next((_compact(line) for line in text[heading.end():].splitlines()
+                              if _compact(line)), "")
+            if not re.fullmatch(r"(?:(?:[一二三四五六七八九十百\d]+[、.．])|"
+                                r"(?:[（(][一二三四五六七八九十百\d]+[）)]))?"
+                                r"(?:审计报告|财务报表)", following):
+                continue  # A running header/reference alone does not prove a chapter boundary.
+            # Retain the exact preceding source prefix, including any business
+            # assertion on this same page. Empty later pages retain page numbers.
+            pages = pages[:index] + [text[:heading.start()]] + [""] * (len(pages) - index - 1)
+            boundary = index + 1
+            break
     choices = {kind: [] for kind in _PATTERNS}
     omitted = False
     for page, text in enumerate(pages, 1):
@@ -332,6 +353,12 @@ def _excerpts(pages: list[str]) -> tuple[list[dict], list[str]]:
             break
     missing = [f"本次有界抽取未取得{kind}类完整句，不代表公司未披露或不存在。"
                for kind, values in choices.items() if not values]
+    if periodic_report:
+        if boundary is None:
+            missing.append("已解析页内未定位可核实的财务报告章节起点；边界未知，不宣称已排除全部会计定义。")
+        else:
+            missing.append(f"已从第{boundary}页实际财务报告章节标题处排除后续经营摘取；"
+                           "财务附注中的真实客户、合同及其他事实也未覆盖，不代表不存在或未披露。")
     if omitted or any(len(v) > 3 for v in choices.values()) or sum(map(len, choices.values())) > len(result):
         missing.append("候选句超过长度/数量上限，已截断；未覆盖全部报告、表格或公司事实。")
     return result, missing
@@ -356,6 +383,7 @@ def collect_company(symbol: str, *, as_of: datetime, root: Path, client=None) ->
         try:
             old = _read(cache)
             if (old.get("symbol") == symbol and old.get("extractor") == EXTRACTOR
+                    and old.get("report_policy") == REPORT_POLICY
                     and datetime.fromisoformat(old["cache_until"]) > checked
                     and datetime.fromisoformat(old["as_of"]) <= as_of):
                 for doc in old["documents"]:
@@ -369,7 +397,8 @@ def collect_company(symbol: str, *, as_of: datetime, root: Path, client=None) ->
             cache_error = _failure(error)
     result = {"symbol": symbol, "company_name": None, "short_name": None, "documents": [],
               "missing": [], "status": "missing", "checked_at": checked.isoformat(),
-              "as_of": as_of.isoformat(), "extractor": EXTRACTOR, "cache_hit": False,
+              "as_of": as_of.isoformat(), "extractor": EXTRACTOR,
+              "report_policy": REPORT_POLICY, "cache_hit": False,
               "provenance": {"source": "CNINFO public website", "queries": [],
                              "point_in_time_first_seen_verified": False,
                              "automated_excerpts_are_candidates": True,
@@ -413,6 +442,20 @@ def collect_company(symbol: str, *, as_of: datetime, root: Path, client=None) ->
                     continue
                 eligible.append((published, row, precision, claimed))
             eligible.sort(key=lambda v: (v[0], v[1]["announcementId"]), reverse=True)
+            if query_name == "reports" and eligible:
+                operating = [v for v in eligible if re.search(
+                    r"20\d{2}年(?:年度|半年度)报告", v[1]["announcementTitle"])]
+                if operating:
+                    # Prefer the newest operating period, then its latest revision.
+                    # A later republished old annual must not displace a newer H1.
+                    operating.sort(key=lambda v: (_period(v[1]["announcementTitle"]),
+                                                  v[0], v[1]["announcementId"]), reverse=True)
+                    if any(_period(v[1]["announcementTitle"]) > _period(operating[0][1]["announcementTitle"])
+                           for v in eligible):
+                        result["missing"].append("已见后续季度报告；本次经营依据选用半年报/年报全文，未纳入该季度后续更新。")
+                    eligible = operating
+                else:
+                    result["missing"].append("本次有界检索未取得可用半年报/年报全文，仅选用季度报告；经营事实覆盖可能不足。")
             if eligible:
                 selected.append(eligible[0])
             elif query_name == "reports":
@@ -428,12 +471,12 @@ def collect_company(symbol: str, *, as_of: datetime, root: Path, client=None) ->
                 if result["company_name"] not in (None, company):
                     raise SourceError("issuer legal name changed between documents; needs explicit reconciliation")
                 result["company_name"] = company
-                excerpts, missing = _excerpts(parsed["pages"])
+                excerpts, missing = _excerpts(parsed["pages"], periodic_report=bool(_REPORT.search(row["announcementTitle"])))
                 result["missing"].extend(missing)
                 if parsed.get("truncated"):
                     result["missing"].append("PDF文本抽取达到页数/文本预算；只覆盖所给候选句。")
                 if not excerpts:
-                    raise SourceError("no complete extractable business sentences; scanned/empty/unsupported PDF")
+                    raise SourceError("no eligible operating excerpts in bounded text; document format failure not established")
                 result["documents"].append({"id": "cninfo-" + row["announcementId"], "symbol": symbol,
                     "company_name": company, "title": row["announcementTitle"],
                     "announcement_id": row["announcementId"], "org_id": issuer["orgId"],

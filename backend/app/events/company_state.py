@@ -133,11 +133,17 @@ def read_status(symbol: str, *, now: datetime, enabled: bool,
             task = None  # Projection cannot repair task storage or break ordinary reads.
         if not isinstance(task, dict) or task.get("status") not in {"queued", "running"}:
             state = "canceled" if isinstance(task, dict) and task.get("status") == "canceled" else "interrupted"
-    missing = value.get("missing", [])
-    if not isinstance(missing, list):
-        missing = []
+    missing = []
+    for items in (value.get("missing"), profile.get("missing") if profile else None):
+        if not isinstance(items, list):
+            continue
+        for item in items:
+            if isinstance(item, str):
+                text = item.strip()[:500]
+                if text and text not in missing and len(missing) < 12:
+                    missing.append(text)
     result = {"symbol": symbol, "state": state, "updated_at": updated,
-              "reason": REASONS[state], "missing": [s[:500] for s in missing if isinstance(s, str)][:12],
+              "reason": REASONS[state], "missing": missing,
               "task_id": value.get("task_id"), "next_retry_at": value.get("next_retry_at"),
               "source_status": value.get("source_status", "unknown"),
               "documents_count": len(profile["documents"]) if profile else 0}
