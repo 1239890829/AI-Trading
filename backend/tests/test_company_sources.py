@@ -243,6 +243,65 @@ def test_sentence_extraction_has_per_company_budget_and_explicit_missing():
     assert any("不代表" in x for x in missing)
 
 
+@pytest.mark.parametrize("kind,quote", [
+    ("customer", "公司建立了以客户为中心的项目管理机制，将项目立项与资源配置、实际应用需求紧密对接。"),
+    ("customer", "公司始终坚持以客户为中心，不断提升管理与服务水平，公正保护客户合法权益。"),
+    ("order", "根据公司与示例财务公司签订的《金融服务框架性协议》，财务公司为本公司提供存款、结算、信贷和票据等金融服务。"),
+    ("order", "董事会同意为子公司采购业务提供连带责任保证，并授权董事长与相关方签订担保协议等有关文件。"),
+    ("order", "本人承诺未来关联交易将依法签订协议，确保交易定价公允，不损害上市公司与股东的合法权益。"),
+    ("order", "对无法避免或者有合理原因而发生的关联交易，将遵循市场公平、公允、等价有偿等原则确定交易价格，并依法签订协议，履行合法程序，保证不损害上市公司及股东的合法权益。"),
+    ("order", "公司与示例有限合伙企业签订《之合伙协议》，出资参与股权投资，不属于产品销售业务。"),
+    ("order", "全体合伙人均以货币方式实缴出资，该合伙企业已完成募集和基金备案，与被投公司及相关方签署协议，对被投公司增资并完成支付。"),
+    ("order", "本公司与借出方签订协议，以承担新金融负债的方式替换原金融负债，终止确认原金融负债，同时确认一项新金融负债。"),
+    ("product", "公司物料采购周期与数量主要依据客户订单及产品需求确定，以适配公司以定制化产品为主的业务模式。"),
+    ("risk", "尚未使用的募集资金用途及去向截至报告期期末，公司募集资金账户均已注销，余额为零元。"),
+    ("risk", "公司募集资金到账金额已扣除费用，尚未支付的保荐承销费将按约定结算，净额存入募集资金账户。"),
+])
+def test_management_financing_and_funding_boilerplate_is_not_business_evidence(kind, quote):
+    values, missing = source._excerpts([quote])
+    assert not any(v["kind"] == kind for v in values)
+    assert any(kind in item and "不代表" in item for item in missing)
+
+
+@pytest.mark.parametrize("kind,quote", [
+    ("customer", "公司坚持以客户为中心，主要客户包括制造商甲和供应商乙，报告期内持续向上述客户供应精密部件。"),
+    ("customer", "报告期内主要客户采购量减少，导致公司相关业务销量下降，并对经营业绩产生不利影响。"),
+    ("order", "公司与金融客户甲签订软件开发服务合同，将按约定提供系统建设服务，合同最终履行金额取决于验收。"),
+    ("order", "本次关联交易为公司与客户甲签订设备销售合同，双方按公允价格成交，实际履行金额取决于后续交付验收。"),
+    ("order", "公司与客户甲合伙企业签订设备销售合同，客户已完成实缴出资，公司将按约定履行设备供货义务。"),
+    ("order", "公司存在金融负债，同时已与客户甲签订设备销售合同，将按约定交付设备并办理验收和结算。"),
+    ("order", "公司尚未签订任何机器人产品销售合同，本次材料不构成已获得相关营业订单的证明。"),
+    ("order", "公司投资开发自动化加工产线，为国内外主机厂提供高质量线束，已获得客户甲和客户乙项目定点且部分已实现供货。"),
+    ("business", "现阶段公司主营业务为塑化汽车外饰件，仅获得机器人外覆盖件的小批量采购订单，订单金额占营业收入比例不足千分之一，对经营业绩影响极小。"),
+    ("product", "公司产品为主控芯片及电源管理芯片，主要用于工业设备的控制与电源管理，服务下游制造企业。"),
+    ("risk", "公司尚未使用的募集资金对应项目进度延期，存在后续投入不能达到预期效益及资产减值的风险。"),
+    ("risk", "公司募集资金投资建设的项目尚未产生收益，目前仍处于建设阶段，后续商业化时间尚未明确。"),
+    ("risk", "公司机器人业务尚未产生收入，目前仍处于送样测试阶段，后续商业化进展存在不确定性。"),
+])
+def test_specific_business_facts_and_negative_evidence_survive_noise_filter(kind, quote):
+    values, _ = source._excerpts([quote])
+    assert any(v["kind"] == kind and v["quote"] == quote for v in values)
+
+
+def test_extractor_upgrade_reuses_original_and_receipt_without_pdf_download(tmp_path, prepared):
+    network, calls = transport()
+    original = collect(tmp_path, network)
+    path = tmp_path / f"{SYMBOL}.manifest.json"
+    legacy = json.loads(path.read_text())
+    legacy["extractor"] = "bounded-sentences-v3"
+    path.write_text(json.dumps(legacy))
+    pdf = (tmp_path / "12345.pdf").read_bytes()
+    receipt = (tmp_path / "12345.received.json").read_bytes()
+    before = len(calls)
+    refreshed = collect(tmp_path, network)
+    assert refreshed["extractor"] != legacy["extractor"] and not refreshed["cache_hit"]
+    assert refreshed["documents"][0]["sha256"] == original["documents"][0]["sha256"]
+    assert refreshed["documents"][0]["received_at"] == original["documents"][0]["received_at"]
+    assert not any(c.method == "GET" for c in calls[before:])
+    assert (tmp_path / "12345.pdf").read_bytes() == pdf
+    assert (tmp_path / "12345.received.json").read_bytes() == receipt
+
+
 def test_table_runs_and_navigation_are_not_source_assertions():
     table = "主要业务风险单位：元项目期初期末100,000.00200,000.00300,000.00400,000.00500,000.00600,000.00700,000.00800,000.00。"
     navigation = "三、主营业务分析概述参见一、报告期内公司从事的主要业务相关内容。"
