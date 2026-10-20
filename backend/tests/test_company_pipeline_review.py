@@ -70,15 +70,24 @@ def test_paid_success_recovery_keeps_original_capture_instead_of_retimestamping_
             "interpretation_ref": {"event_id": 10, "version_id": 20, "observation_id": 30, "state": "active"},
             "source_context": {"observation_id": 30, "title": source["event"]["title"], "summary": source["event"]["summary"]},
             "timing": {"available_at": source["event"]["available_at"]}}
-    original = worker._packet("600000", profile, item)
-    original["captured_at"] = source["captured_at"]
+    original_case = worker._case("600000", profile, [item])
+    original_case["captured_at"] = source["captured_at"]
+    from app.events.company_linkage import select_packet
+    choice = {**selected(), "id": original_case["id"], "event_id": 10,
+              "links": [{**selected()["links"][0], "bridge_fact_id": None}],
+              "assessment": {"fact_id": "h1:0", "company_phrase": "精密连接器",
+                             "event_phrase": "精密连接器采购需求增长", "reason_code": "supported"}}
+    original = select_packet(original_case, choice)
     model = {"provider": "fixture", "model": "selector"}
     key = worker.generation_key(original, model)
     state.write_state("600000", "generating", now=datetime.fromisoformat("2026-10-20T09:00:00+08:00"),
                       root=tmp_path, task_id="old-owner", event_ref=worker._event_key(item), generation_key=key,
-                      attempt_state="succeeded", selected=selected(), generated_at="2026-10-20T09:00:00+08:00",
-                      usage_id="b" * 32, packet=original)
+                      attempt_state="succeeded", selected=choice, generated_at="2026-10-20T09:00:00+08:00",
+                      usage_id="b" * 32, packet=original, case=original_case,
+                      request_key=worker.request_key(original_case, model), request_protocol=worker.PROTOCOL,
+                      candidate_refs=[worker._event_key(item)])
     monkeypatch.setattr(worker, "_event", lambda *_a, **_kw: item)
+    monkeypatch.setattr(worker, "_events", lambda *_a, **_kw: [item])
     monkeypatch.setattr(worker, "collect_company", lambda *_a, **_kw: deepcopy(profile))
     monkeypatch.setattr(worker.agent_budget, "reserve", lambda *_a, **_kw: pytest.fail("paid input was called again"))
     monkeypatch.setattr(worker, "bounded_chat_completion", lambda *_a, **_kw: pytest.fail("model called during recovery"))

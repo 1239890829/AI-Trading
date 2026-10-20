@@ -88,7 +88,8 @@ def env(monkeypatch, tmp_path):
             "timing": {"available_at": "2026-10-20T09:30:00+08:00", "received_at": "2026-10-20T09:30:00+08:00",
                        "source_published_at": "2026-10-20T09:20:00+08:00"},
             "source": {"content_hash": "c" * 64}}
-    calls, collected = [], []
+    calls, collected, items = [], [], [item]
+    real_events = worker._events
 
     def collect(symbol, **kwargs):
         collected.append((symbol, kwargs))
@@ -102,20 +103,32 @@ def env(monkeypatch, tmp_path):
         calls.append((args, kwargs))
         public = json.loads(args[3][1]["content"])
         kwargs["usage_callback"]({"input_tokens": 10, "output_tokens": 20})
-        return json.dumps([{"id": p["id"], "status": "linked", "links": [
-            {"fact_id": "report:0", "phrase": "光模块", "anchor": "光模块", "channel": "order_execution"}],
+        return json.dumps([{"id": p["id"], "event_id": p["events"][0]["event_id"], "status": "linked", "links": [
+            {"fact_id": "report:0", "phrase": "光模块", "anchor": "光模块", "channel": "order_execution", "bridge_fact_id": None}],
+            "assessment": {"fact_id": "report:0", "company_phrase": "光模块", "event_phrase": "光模块", "reason_code": "supported"},
             "missing_codes": ["order", "exposure"]} for p in public], ensure_ascii=False)
 
     monkeypatch.setattr(worker, "collect_company", collect)
-    monkeypatch.setattr(worker, "_event", lambda *a, **kw: deepcopy(item))
+    monkeypatch.setattr(worker, "_event", lambda *a, **kw: next((deepcopy(v) for v in items
+                        if kw.get("event_id") in (None, v["event_id"])), None))
+    monkeypatch.setattr(worker, "_events", lambda *a, **kw: deepcopy(items))
     monkeypatch.setattr(worker, "bounded_chat_completion", model)
     yield SimpleNamespace(sf=sf, clock=clock, item=item, profile=profile, calls=calls,
-                          collected=collected, root=ci.ROOT, model=model, app=SimpleNamespace(state=SimpleNamespace()))
+                          collected=collected, root=ci.ROOT, model=model, items=items, real_events=real_events,
+                          app=SimpleNamespace(state=SimpleNamespace()))
     engine.dispose()
 
 
 def run(env, params=None, rec=None):
     return asyncio.run(worker.run_company_evidence(rec or Recorder(), params or {"symbols": [SYMBOL]}, env.app))
+
+
+def event_item(env, event_id):
+    item = deepcopy(env.item)
+    item["event_id"] = event_id
+    item["interpretation_ref"].update(event_id=event_id, version_id=event_id + 10, observation_id=event_id + 20)
+    item["source_context"]["observation_id"] = event_id + 20
+    return item
 
 
 def receipts(env):
@@ -482,12 +495,17 @@ def test_task_wall_time_limit_after_model_is_interruption_not_false_invalid_repl
 def test_missing_source_or_event_is_explicit_and_does_not_call_model(env, monkeypatch, status):
     if status == "no_event":
         monkeypatch.setattr(worker, "_event", lambda *a, **k: None)
+        monkeypatch.setattr(worker, "_events", lambda *a, **k: [])
     else:
         env.profile.update(status=status, documents=[], missing=["来源本轮不可用或无有效披露"])
     result = run(env)
     assert result["symbols"][0]["state"] == ("source_failed" if status == "failed" else "insufficient")
     assert bool(store.read_profile(SYMBOL)) == (status == "no_event")
     assert not env.calls and not usage_rows(env)
+    monkeypatch.setattr(worker.settings, "company_evidence_enabled", True)
+    monkeypatch.setattr(worker, "candidate_symbols", lambda *a, **k: [SYMBOL])
+    repeated = run(env, {"automatic": True})
+    assert repeated["symbols"] == [] and len(env.collected) == 1
 
 
 def test_source_failure_never_replaces_previously_collected_company_facts(env, monkeypatch):
@@ -798,3 +816,130 @@ def test_scheduler_exposes_queue_persistence_failure_instead_of_claiming_busy_ow
         asyncio.run(worker.scheduler_tick(env.app))
     assert caught.value is error
     assert not env.calls and not usage_rows(env) and not env.collected
+
+
+def test_event_window_compares_six_valid_distinct_events_from_twelve_persisted_rows(env, monkeypatch):
+    rows = [event_item(env, i) for i in range(1, 10)]
+    rows[0]["state"] = "withdrawn"
+    rows[1]["timing"]["available_at"] = (NOW + timedelta(minutes=1)).isoformat()
+    rows.insert(4, deepcopy(rows[3]))
+    foreign = event_item(env, 99)
+    foreign["event_id"] = 98
+    rows.insert(0, foreign)
+    calls = []
+    def read(*args, **kwargs):
+        calls.append(kwargs)
+        return {"data": {"items": rows}}
+    monkeypatch.setattr(worker, "read_attribution", read)
+    monkeypatch.setattr(worker, "_events", env.real_events)
+    result = worker._events(SYMBOL, env.app, env.sf)
+    assert [v["event_id"] for v in result] == [3, 4, 5, 6, 7, 8]
+    assert calls[0]["limit"] == 12 and len(calls) == 1
+    assert not env.collected and not env.calls and not usage_rows(env)
+
+
+def test_request_key_binds_whole_event_window_but_not_capture_clock(env):
+    first, second = env.item, event_item(env, 11)
+    case = worker._case(SYMBOL, env.profile, [first, second])
+    model = {"provider": "fixture", "model": "selector"}
+    key = worker.request_key(case, model)
+    changed = deepcopy(case)
+    changed["captured_at"] = (NOW + timedelta(minutes=1)).isoformat()
+    assert worker.request_key(changed, model) == key
+    changed["event_candidates"][1]["summary"] += "候选事项发生真实修订。"
+    assert worker.request_key(changed, model) != key
+
+
+def choose_second(env, monkeypatch, *, after=None):
+    second = event_item(env, 11)
+    env.items.append(second)
+    def model(*args, **kwargs):
+        rows = json.loads(env.model(*args, **kwargs))
+        rows[0]["event_id"] = second["event_id"]
+        if after:
+            after()
+        return json.dumps(rows, ensure_ascii=False)
+    monkeypatch.setattr(worker, "bounded_chat_completion", model)
+    return second
+
+
+def test_nonfirst_event_choice_has_final_identity_and_never_repeats_on_discovery_reorder(env, monkeypatch):
+    second = choose_second(env, monkeypatch)
+    result = run(env)
+    prior = store.load_state(SYMBOL)
+    assert result["model_calls"] == 1 and prior["event_ref"] == worker._event_key(second)
+    assert prior["packet"]["event"]["event_id"] == 11 and prior["packet"]["id"] == "company:" + SYMBOL
+    assert "event_candidates" not in prior["packet"] and len(prior["case"]["event_candidates"]) == 2
+    assert prior["request_key"] != prior["generation_key"]
+    before = {p: p.read_bytes() for p in receipts(env)}
+    env.items.reverse()
+    env.items.insert(0, event_item(env, 12))
+    assert run(env)["symbols"][0]["cached"] is True
+    monkeypatch.setattr(worker.settings, "company_evidence_enabled", True)
+    monkeypatch.setattr(worker, "candidate_symbols", lambda *a, **k: [SYMBOL])
+    automatic = run(env, {"automatic": True})
+    assert automatic["state"] == "no_due_candidates" and automatic["model_calls"] == 0
+    assert len(env.calls) == len(usage_rows(env)) == 1
+    assert {p: p.read_bytes() for p in receipts(env)} == before
+
+
+def test_selected_event_outside_new_window_stays_reusable_but_withdrawal_refreshes(env, monkeypatch):
+    second = choose_second(env, monkeypatch)
+    run(env)
+    env.items[:] = [event_item(env, 12)]
+    monkeypatch.setattr(worker, "_event", lambda *a, **kw: deepcopy(second))
+    assert asyncio.run(worker._current_due(SYMBOL, env.items, env.app, env.sf)) is False
+    assert run(env)["model_calls"] == 0 and len(env.calls) == 1
+    monkeypatch.setattr(worker, "_event", lambda *a, **kw: None)
+    assert asyncio.run(worker._current_due(SYMBOL, env.items, env.app, env.sf)) is True
+
+
+def test_paid_selection_recovers_original_case_after_discovery_window_changes(env, monkeypatch):
+    choose_second(env, monkeypatch)
+    original_publish = ci.publish_automatic
+    monkeypatch.setattr(ci, "publish_automatic", lambda *a, **k: (_ for _ in ()).throw(OSError("fixture publication interrupted")))
+    with pytest.raises(OSError):
+        run(env)
+    prior = store.load_state(SYMBOL)
+    env.items.reverse()
+    env.items.insert(0, event_item(env, 12))
+    env.clock[0] += timedelta(minutes=10)
+    monkeypatch.setattr(ci, "publish_automatic", original_publish)
+    result = run(env)
+    now = store.load_state(SYMBOL)
+    assert result["model_calls"] == 0 and len(env.calls) == len(usage_rows(env)) == 1
+    assert now["case"] == prior["case"] and now["packet"] == prior["packet"]
+    assert now["request_key"] == prior["request_key"] and now["generated_at"] == prior["generated_at"]
+    assert ci.read_saved(env.items[1], SYMBOL, now=env.clock[0])["generated_at"] == prior["generated_at"]
+
+
+def test_unknown_window_overlap_never_shrinks_unconfirmed_identity_or_resends(env):
+    second, third = event_item(env, 11), event_item(env, 12)
+    original_refs = [worker._event_key(env.item), worker._event_key(second)]
+    store.write_state(SYMBOL, "interrupted", now=NOW, candidate_refs=original_refs, root=env.root,
+                      event_ref=None, attempt_state="unknown")
+    env.items[:] = [second, third]
+    assert run(env)["symbols"][0]["state"] == "interrupted"
+    assert store.load_state(SYMBOL)["candidate_refs"] == original_refs
+    env.items[:] = [env.item, event_item(env, 13)]
+    assert run(env)["symbols"][0]["state"] == "interrupted"
+    assert not env.calls and not usage_rows(env) and not receipts(env)
+
+
+def test_author_on_second_candidate_is_retained_before_model(env):
+    key = publish_author(env)
+    env.items.insert(0, event_item(env, 11))
+    result = run(env)
+    assert result["symbols"][0]["verification"] == "author_source_reviewed_not_gold"
+    assert store.load_state(SYMBOL)["event_ref"] == worker._event_key(env.item)
+    assert (env.root / SYMBOL / "10-20-30.current").read_text() == key
+    assert not env.calls and not usage_rows(env)
+
+
+def test_unselected_event_changes_during_model_do_not_rebind_or_block_selected_packet(env, monkeypatch):
+    second = choose_second(env, monkeypatch, after=lambda: env.item["source_context"].update(summary="未选事件后来修订。"))
+    result = run(env)
+    assert result["symbols"][0]["state"] == "ready" and len(env.calls) == 1
+    prior = store.load_state(SYMBOL)
+    assert prior["event_ref"] == worker._event_key(second)
+    assert prior["case"]["event_candidates"][0]["summary"] != env.item["source_context"]["summary"]

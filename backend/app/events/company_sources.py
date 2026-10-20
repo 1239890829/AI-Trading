@@ -29,7 +29,7 @@ STATIC = "https://static.cninfo.com.cn/"
 MAX_PDF = 24 * 1024 * 1024
 MAX_JSON = 1024 * 1024
 MIN_REQUEST_INTERVAL = 1.0
-EXTRACTOR = "bounded-sentences-v5"
+EXTRACTOR = "bounded-sentences-v6"
 REPORT_POLICY = "operating-period-first-v1"
 _request_lock = threading.Lock()
 _last_request = 0.0
@@ -37,9 +37,16 @@ _PDF_PATH = re.compile(r"finalpage/(\d{4}-\d{2}-\d{2})/(\d+)\.PDF", re.I)
 _REPORT = re.compile(r"20\d{2}年(?:年度|半年度|第[一二三四]季度)报告(?:全文)?(?:[（(][^）)]{0,24}[）)])?$")
 _NOTICE = re.compile(r"(?:签订|签署|中标|重大合同|订单|项目投资|投资建设)")
 _PATTERNS = {
-    "business": r"(?:主要业务|主营业务|主要从事|专注于|专注从事|公司致力于)",
-    "product": r"(?:主要产品|产品包括|产品主要|产品为(?!主(?:的|[，,。；;]))|业务涉及)",
-    "customer": r"(?:主要客户|客户包括|客户涵盖|客户为(?!中心|导向)|客户有)",
+    "business": (r"(?:主要业务|主营业务|主要从事|专注于|专注从事|公司致力于|业务(?:聚焦|涵盖|确立)|"
+                 r"(?:控股|全资).{0,8}成立.{0,80}(?:聚焦|从事|主营|研发|生产))"),
+    "product": (r"(?:主要(?:在研)?产品|核心产品(?:包含|包括|涵盖|为)|产品(?:包括|包含|涵盖|主要|有|布局)|"
+                r"(?:构建|形成).{0,70}产品矩阵|"
+                r"产品为(?!主(?:的|[，,。；;]))|业务涉及|(?:产品|服务).{0,6}主要通过|"
+                r"(?:产品|服务)(?:可|主要)?(?:用于|应用于|适配)|"
+                r"公司的.{4,70}是.{0,40}(?:部件|零部件)|"
+                r"(?:公司|本公司|子公司).{0,110}(?:生产(?!线|体系|效率|模式|计划|设备|出样品|工艺|管理|流程)|推出|研制)[^，。；]{1,35}产品)"),
+    "customer": (r"(?:主要客户|客户包括|客户涵盖|客户为(?!中心|导向)|客户有|"
+                 r"(?:公司|本公司|子公司)(?:已经|目前已|已)(?:与|同).{0,100}(?:联合研发|达成(?:深度)?合作))"),
     "order": r"(?:签订.{0,40}(?:合同|协议)|签署.{0,40}(?:合同|协议)|中标|在手订单|订单交付|定点)",
     "risk": r"(?:风险|不确定|未产生|尚未|不代表|不构成|不保证|交付周期延长)",
 }
@@ -256,6 +263,36 @@ def _identity(pages: list[str], symbol: str) -> tuple[str, int, str]:
     raise SourceError("full issuer name and exact security code not verified on same page")
 
 
+def _priority(kind: str, quote: str) -> tuple:
+    # Prefer a literal operating assertion to an earlier industry introduction.
+    # This only selects source excerpts; it neither proves a customer identity
+    # nor upgrades a plan, sample or conditional statement to an actual order.
+    background = bool(re.search(r"行业分类|所属行业|行业环境|行业发展|行业趋势|市场规模|愿景|使命|"
+                                r"生产模式|采购模式|销售模式|全球化布局", quote))
+    denial = bool(re.search(r"公司.{0,55}(?:尚未|暂未|未(?:获得|取得|形成|实现|开展)|不(?:涉及|存在))"
+                            r".{0,50}(?:订单|收入|业务|销售|客户|合作|量产)", quote))
+    if kind == "risk":
+        gate_risk = bool(re.search(r"认证失败|研发失败|技术路线.{0,12}(?:尚未|不确定)", quote))
+        return (not (denial or gate_risk), background,
+                not bool(re.search(r"汇率|回款|延长|下降|下滑|减值|亏损|违约|集中", quote)))
+    if kind == "product":
+        progress = bool(re.search(r"(?:已|成功).{0,20}(?:量产|供货|切入|实现|推出)|目前推出的商业化", quote))
+        concrete = bool(re.search(r"主要(?:在研)?产品|核心产品|产品(?:包括|包含|涵盖|有|为)|"
+                                  r"公司的.{4,70}是.{0,40}(?:部件|零部件)|"
+                                  r"生产(?!线|体系|效率|模式|计划|设备|出样品|工艺|管理|流程)[^，。；]{1,35}产品", quote))
+        return (background, not concrete, not progress)
+    if kind == "customer":
+        return (background, not bool(re.search(r"客户(?:包括|涵盖|有|为(?!中心|导向))|"
+                                              r"(?:公司|本公司|子公司)(?:已经|目前已|已)(?:与|同)", quote)))
+    if kind == "order":
+        return (background or bool(re.search(r"生产模式|采购模式|销售流程|采购框架|质量保证协议", quote)),
+                not bool(re.search(r"已.{0,20}(?:获得|实现|交付)|顺利中标|新增定点|订单.{0,20}(?:增长|放量|释放)", quote)))
+    return (background,
+            not bool(re.search(r"核心产品|产品矩阵|产品布局|产品(?:包括|包含|涵盖|有|主要|用于|适配)|"
+                               r"(?:公司|子公司).{0,25}(?:主营|从事|生产|制造|开发|推出)|"
+                               r"(?:控股|全资).{0,8}成立|主要客户|联合研发|供货", quote)))
+
+
 def _excerpts(pages: list[str], *, periodic_report: bool = False) -> tuple[list[dict], list[str]]:
     boundary = None
     if periodic_report:
@@ -307,6 +344,18 @@ def _excerpts(pages: list[str], *, periodic_report: bool = False) -> tuple[list[
                     quote = sentences[index - 1][0] + quote
                 if re.search(r"(?:参见.{0,30}相关内容|公司需遵守|本公司及董事会全体成员保证)", quote):
                     continue  # Navigation/legal boilerplate is not business evidence.
+                if kind != "risk" and re.search(r"同业竞争|相同(?:或者|或)相似的.{0,30}竞争关系|"
+                                                r"承诺人.{0,180}(?:相竞争|竞争威胁)|"
+                                                r"首次公开发行.{0,30}承诺|关联交易.{0,30}承诺", quote):
+                    continue  # A shareholder's governance promise is not issuer operating activity.
+                if (kind in {"business", "product", "customer"} and "经营范围" in quote
+                        and not re.search(r"主营业务|主要产品|核心产品|实现.{0,10}(?:收入|销售|量产|交付|供货)", quote)):
+                    continue  # Registration permits alone do not prove an active business.
+                if (kind == "product" and re.search(r"(?:上述|以上)产品为公司(?:正在销售|未来布局)", quote)):
+                    continue  # A catalogue scope footnote names no actual product.
+                if (kind == "order" and re.search(r"在通过.{0,40}定点.{0,30}获得.{0,20}订单后", quote)
+                        and re.search(r"依据订单组织|组织采购.{0,20}生产", quote)):
+                    continue  # A conditional sales process does not announce an order.
                 if kind == "risk" and re.search(r"(?:前瞻性陈述|请查阅|敬请|详见|重大风险提示|请投资者认真阅读|特别提示投资者关注)", quote):
                     continue  # Navigation/disclaimers are not operating risks.
                 if kind == "order" and re.search(
@@ -333,20 +382,21 @@ def _excerpts(pages: list[str], *, periodic_report: bool = False) -> tuple[list[
                 if quote not in [v["quote"] for v in choices[kind]]:
                     choices[kind].append({"kind": kind, "page": page, "quote": quote})
     for kind, values in choices.items():
-        if kind == "risk":
-            values.sort(key=lambda v: not bool(re.search(r"汇率|回款|延长|下降|下滑|减值|亏损|违约|集中", v["quote"])))
-        elif kind == "order":
-            values.sort(key=lambda v: bool(re.search(r"生产模式|采购模式|销售流程|采购框架|质量保证协议", v["quote"])))
+        values.sort(key=lambda v: _priority(kind, v["quote"]))
     result, seen = [], set()
-    candidates = {k: list(v[:3]) for k, v in choices.items()}
+    candidates = {k: list(v) for k, v in choices.items()}
+    picked = {k: 0 for k in choices}
     for _ in range(12):
         progress = False
         for kind in _PATTERNS:
+            if picked[kind] == 3:
+                continue
             while candidates[kind] and candidates[kind][0]["quote"] in seen:
                 candidates[kind].pop(0)
             if candidates[kind] and len(result) < 12:
                 item = candidates[kind].pop(0)
                 result.append(item)
+                picked[kind] += 1
                 seen.add(item["quote"])
                 progress = True
         if not progress or len(result) == 12:

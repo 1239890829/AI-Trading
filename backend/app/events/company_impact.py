@@ -266,7 +266,12 @@ def publication_lock(folder: Path):
 def publish_automatic(packet: dict, selected: dict, *, model: dict, usage_id: str,
                       generated_at: str, root: Path | None = None) -> str:
     """Publish only canonical compiled prose; never create an author review."""
-    from app.events.company_reasoning import compile_analysis, PROTOCOL
+    # Preserve the frozen v3 compiler for legacy callers/receipts. The normal
+    # worker uses v4, whose literal assessment is a separate protocol identity.
+    if "assessment" in selected:
+        from app.events.company_linkage import compile_analysis, PROTOCOL
+    else:
+        from app.events.company_reasoning import compile_analysis, PROTOCOL
 
     validate_packet(packet)
     analysis, rejected = compile_analysis(packet, selected)
@@ -427,11 +432,18 @@ def read_saved(item: dict, symbol: str, *, now: datetime,
         now = now.replace(tzinfo=BJ_TZ) if now.tzinfo is None else now
         automatic = value["schema"] == AUTO_SCHEMA
         if automatic:
-            from app.events.company_reasoning import compile_analysis, PROTOCOL, METHOD, VERIFICATION
+            from app.events import company_linkage, company_reasoning
 
+            if value.get("protocol") == company_linkage.PROTOCOL:
+                compiler = company_linkage.compile_analysis
+            elif value.get("protocol") == company_reasoning.PROTOCOL:
+                compiler = company_reasoning.compile_analysis
+            else:
+                return None
+            METHOD, VERIFICATION = company_reasoning.METHOD, company_reasoning.VERIFICATION
             validate_packet(packet)
-            expected_analysis, rejected = compile_analysis(packet, value["selected"])
-            if (value.get("protocol") != PROTOCOL or expected_analysis != analysis
+            expected_analysis, rejected = compiler(packet, value["selected"])
+            if (expected_analysis != analysis
                     or rejected != value.get("rejected_links")
                     or value.get("company_evidence_sha256") != digest(packet["documents"])
                     or not re.fullmatch(r"[a-f0-9]{32}", value.get("usage_id", ""))):
