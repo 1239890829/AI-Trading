@@ -25,7 +25,7 @@ from app.core.db import get_session_factory
 from app.core.llm_client import LLMError, bounded_chat_completion, resolve_cli_path
 from app.events import company_impact as ci
 from app.events.attribution import read_attribution
-from app.events.company_reasoning import PROTOCOL, compile_analysis, parse_selection_batch, selector_messages
+from app.events.company_linkage import PROTOCOL, compile_analysis, parse_selection_batch, select_packet, selector_messages
 from app.events.company_sources import collect_company
 from app.events.company_state import load_state, put_profile, read_profile, write_state
 from app.services import agent_budget
@@ -147,19 +147,35 @@ def _automatic_daily_limit(sf):
         raise agent_budget.BudgetError("company_daily_budget", "公司自动判读当日已有4次调用；保留共享预算给其他消费者")
 
 
-def _event(symbol, app, sf, *, event_id=None):
+def _events(symbol, app, sf, *, event_id=None):
     catalog = getattr(getattr(app, "state", None), "theme_catalog", None)
     themes = {v["theme_name"] for v in catalog.get_official_for_symbol(symbol)} if catalog else set()
     result = read_attribution(sf, symbol=symbol, theme_names=themes, event_id=event_id,
-                              limit=3 if event_id is None else 1, now=_now())["data"]
+                              limit=12 if event_id is None else 1, now=_now())["data"]
+    items, seen = [], set()
     for item in result["items"]:
         ref, context = item.get("interpretation_ref", {}), item.get("source_context", {})
         if (item.get("state") == "active" and item.get("is_active") is True
                 and ref.get("state") == "active" and ref.get("observation_id") == context.get("observation_id")
+                and ref.get("event_id") == item.get("event_id")
                 and all(type(ref.get(k)) is int and ref[k] > 0 for k in ("event_id", "version_id", "observation_id"))
                 and item.get("timing", {}).get("available_at")):
-            return item
-    return None
+            try:
+                if ci.clock(item["timing"]["available_at"]) > _now():
+                    continue
+            except (ValueError, TypeError):
+                continue
+            if ref["event_id"] not in seen:
+                items.append(item)
+                seen.add(ref["event_id"])
+            if len(items) == (6 if event_id is None else 1):
+                break
+    return items
+
+
+def _event(symbol, app, sf, *, event_id=None):
+    items = _events(symbol, app, sf, event_id=event_id)
+    return items[0] if items else None
 
 
 def _event_key(item):
@@ -174,6 +190,12 @@ def generation_key(packet: dict, model: dict) -> str:
                       "protocol": PROTOCOL, "model": model})
 
 
+def request_key(case: dict, model: dict) -> str:
+    return ci.digest({"symbol": case["symbol"], "company_name": case["company_name"],
+                      "short_name": case.get("short_name", ""), "documents": case["documents"],
+                      "event_candidates": case["event_candidates"], "protocol": PROTOCOL, "model": model})
+
+
 def _packet(symbol, profile, item):
     ref, source, timing = item["interpretation_ref"], item["source_context"], item["timing"]
     return {"schema": ci.SCHEMA, "id": f"{symbol}:{ref['event_id']}:{ref['version_id']}:{ref['observation_id']}",
@@ -185,16 +207,35 @@ def _packet(symbol, profile, item):
                       "content_hash": item.get("source", {}).get("content_hash")}}
 
 
+def _case(symbol, profile, items):
+    packet = _packet(symbol, profile, items[0])
+    packet["id"] = "company:" + symbol
+    packet["event_candidates"] = [_packet(symbol, profile, item)["event"] for item in items]
+    for event in packet["event_candidates"]:
+        ci.validate_packet({**packet, "event": event})
+    return packet
+
+
 def _state(symbol, state, task_id, **fields):
     return write_state(symbol, state, now=_now(), task_id=task_id, **fields)
 
 
 def _due(symbol, item, *, explicit=False):
     prior = load_state(symbol)
-    if prior.get("event_ref") != _event_key(item):
-        return True
-    if prior.get("attempt_state") in {"started", "unknown"} or (not explicit and prior.get("state") == "canceled"):
+    items = item if isinstance(item, list) else [item] if item else []
+    refs = [_event_key(v) for v in items]
+    prior_refs = prior.get("candidate_refs") or ([prior["event_ref"]] if prior.get("event_ref") else [])
+    overlap = not refs or any(ref in refs for ref in prior_refs)
+    if prior.get("attempt_state") in {"started", "unknown"} and overlap:
         return False
+    if not explicit and prior.get("state") == "canceled" and overlap:
+        return False
+    # A completed multi-event choice follows its refresh deadline, not the
+    # first row of a changing discovery window. The saved event is rechecked
+    # exactly before reuse/publication.
+    if not prior or (not prior.get("request_key") and not prior.get("candidate_refs")
+                     and prior.get("event_ref") not in (refs or [None])):
+        return True
     from app.events.company_sources import EXTRACTOR
 
     profile = read_profile(symbol)
@@ -206,6 +247,19 @@ def _due(symbol, item, *, explicit=False):
         return not prior.get("next_retry_at") or ci.clock(prior["next_retry_at"]) <= _now()
     except (ValueError, TypeError):
         return False
+
+
+async def _current_due(symbol, items, app, sf):
+    prior = load_state(symbol)
+    ref = prior.get("event_ref")
+    if (prior.get("request_key") and prior.get("attempt_state") == "succeeded"
+            and prior.get("state") in {"ready", "insufficient"} and isinstance(ref, dict)):
+        selected = next((item for item in items if _event_key(item) == ref), None)
+        if selected is None:
+            selected = await _drain_stage(_event, symbol, app, sf, event_id=ref["event_id"])
+        if selected is None or _event_key(selected) != ref:
+            return True  # A withdrawn/revised choice must not stay frozen until its cache deadline.
+    return _due(symbol, items)
 
 
 async def run_company_evidence(rec, params, app):
@@ -233,12 +287,14 @@ async def run_company_evidence(rec, params, app):
                 if len(touched) >= batch_size:
                     break
                 await rec.checkpoint_async()
-                item = await _drain_stage(_event, symbol, app, sf)
+                items = await _drain_stage(_events, symbol, app, sf)
                 previous = load_state(symbol)
-                if not explicit and not _due(symbol, item):
+                if not explicit and not await _current_due(symbol, items, app, sf):
                     continue
                 touched.append(symbol)
-                _state(symbol, "collecting", rec.task_id, event_ref=_event_key(item))
+                previous_refs = previous.get("candidate_refs") or ([previous["event_ref"]] if previous.get("event_ref") else [])
+                _state(symbol, "collecting", rec.task_id, candidate_refs=(previous_refs
+                       if previous.get("attempt_state") in {"started", "unknown"} else [_event_key(item) for item in items]))
                 start = monotonic()
                 try:
                     profile = await _drain_stage(collect_company, symbol, as_of=_now(), root=ci.ROOT / "sources")
@@ -268,58 +324,68 @@ async def run_company_evidence(rec, params, app):
                     results.append({"symbol": symbol, "state": "source_failed"})
                     continue
                 put_profile(profile)
-                if item is None:
+                if not items:
                     _state(symbol, "insufficient", rec.task_id, source_status="ready",
                            missing=["当前已采集资料中没有可绑定的现役事件。"], next_retry_at=profile.get("cache_until"))
                     results.append({"symbol": symbol, "state": "insufficient"})
                     continue
-                retained = ci.read_saved(item, symbol, now=_now())
-                if retained is not None and retained["verification"] == "author_source_reviewed_not_gold":
+                author = next(((item, saved) for item in items
+                               if (saved := ci.read_saved(item, symbol, now=_now())) is not None
+                               and saved["verification"] == "author_source_reviewed_not_gold"), None)
+                if author is not None:
+                    item, retained = author
                     _state(symbol, "ready", rec.task_id, source_status="ready", result_key=None,
+                           event_ref=_event_key(item),
                            missing=retained["analysis"]["missing"], next_retry_at=profile.get("cache_until"))
                     results.append({"symbol": symbol, "state": "ready", "cached": True,
                                     "verification": retained["verification"]})
                     continue
+                refs = [_event_key(item) for item in items]
                 if (previous.get("attempt_state") in {"started", "unknown"}
-                        and previous.get("event_ref") == _event_key(item)):
+                        and any(ref in refs for ref in previous_refs)):
                     _state(symbol, "interrupted", rec.task_id, source_status="ready",
                            missing=["本事件前次模型调用尚未确认；新资料已保存，未因原文变化自动重发。"],
                            next_retry_at=profile.get("cache_until"))
                     results.append({"symbol": symbol, "state": "interrupted"})
                     continue
-                packet = _packet(symbol, profile, item)
-                ci.validate_packet(packet)
-                key, prior = generation_key(packet, model), load_state(symbol)
-                if prior.get("generation_key") == key and prior.get("attempt_state") != "not_started":
-                    # Reuse the exact selection after interrupted publication. A
-                    # started/failed/unknown call without a selection is not resent.
-                    if prior.get("attempt_state") == "succeeded" and isinstance(prior.get("selected"), dict):
-                        cached = ci.read_saved(item, symbol, now=_now())
+                case = _case(symbol, profile, items)
+                key, prior = request_key(case, model), load_state(symbol)
+                old_packet, old_case = prior.get("packet"), prior.get("case")
+                # Valid results do not need the same discovery ordering to stay
+                # readable. Reuse only their exact original selected event/input.
+                if (prior.get("attempt_state") == "succeeded" and isinstance(old_case, dict)
+                        and isinstance(old_packet, dict) and prior.get("request_protocol") == PROTOCOL):
+                    current = await _drain_stage(_event, symbol, app, sf, event_id=old_packet["event"]["event_id"])
+                    if current is not None and generation_key(_packet(symbol, profile, current), model) == prior.get("generation_key"):
+                        cached = ci.read_saved(current, symbol, now=_now())
                         if cached is not None:
                             state = "ready" if cached["analysis"]["status"] == "conditional" else "insufficient"
                             _state(symbol, state, rec.task_id, source_status="ready", missing=cached["analysis"]["missing"],
                                    next_retry_at=profile.get("cache_until"))
                             results.append({"symbol": symbol, "state": state, "cached": True,
                                             "result_key": prior.get("result_key")})
-                        else:
-                            original = prior.get("packet")
-                            try:
-                                ci.validate_packet(original)
-                                if generation_key(original, model) != key or not (
-                                    ci.clock(original["captured_at"]) <= ci.clock(prior["generated_at"]) <= _now()
-                                    < ci.clock(prior["generated_at"]) + timedelta(days=7)
-                                ):
-                                    raise ValueError("stale saved selection")
-                                pending.append((original, key, prior, True))
-                            except (ValueError, TypeError, KeyError):
-                                _state(symbol, "interrupted", rec.task_id, missing=["原始输入或生成时间无法恢复；未重发模型或延长有效期。"],
-                                       next_retry_at=profile.get("cache_until"))
-                                results.append({"symbol": symbol, "state": "interrupted"})
-                    else:
-                        _state(symbol, "interrupted", rec.task_id, next_retry_at=profile.get("cache_until"))
-                        results.append({"symbol": symbol, "state": "interrupted"})
+                            continue
+                        try:
+                            ci.validate_packet(old_packet)
+                            if (request_key(old_case, model) != prior.get("request_key")
+                                    or select_packet(old_case, prior["selected"]) != old_packet
+                                    or generation_key(old_packet, model) != prior.get("generation_key") or not (
+                                        ci.clock(old_packet["captured_at"]) <= ci.clock(prior["generated_at"]) <= _now()
+                                        < ci.clock(prior["generated_at"]) + timedelta(days=7))):
+                                raise ValueError("stale saved selection")
+                            pending.append((old_case, prior["request_key"], prior, True))
+                        except (ValueError, TypeError, KeyError):
+                            _state(symbol, "interrupted", rec.task_id, missing=["原始输入或生成时间无法恢复；未重发模型或延长有效期。"],
+                                   next_retry_at=profile.get("cache_until"))
+                            results.append({"symbol": symbol, "state": "interrupted"})
+                        continue
+                if prior.get("request_key") == key and prior.get("attempt_state") != "not_started":
+                    # An unconfirmed/failed selection is never resent for the
+                    # same frozen request, even after a publication interruption.
+                    _state(symbol, "interrupted", rec.task_id, next_retry_at=profile.get("cache_until"))
+                    results.append({"symbol": symbol, "state": "interrupted"})
                     continue
-                pending.append((packet, key, profile, False))
+                pending.append((case, key, profile, False))
             fresh = [v for v in pending if not v[3]]
             selections = {}
             usage_id = None
@@ -343,9 +409,11 @@ async def run_company_evidence(rec, params, app):
                         input_chars=sum(len(m["content"]) for m in messages), session_factory=sf)
                     usage_id = lease["id"]
                     for packet, key, _, _ in fresh:
-                        _state(packet["symbol"], "generating", rec.task_id, generation_key=key, usage_id=usage_id,
-                               attempt_state="reserved", selected=None, packet=packet,
-                               event_ref={k: packet["event"][k] for k in ("event_id", "version_id", "observation_id")})
+                        _state(packet["symbol"], "generating", rec.task_id, request_key=key, request_protocol=PROTOCOL,
+                               generation_key=None, usage_id=usage_id, case=packet,
+                               attempt_state="reserved", selected=None, packet=None, generated_at=None, event_ref=None,
+                               candidate_refs=[{k: event[k] for k in ("event_id", "version_id", "observation_id")}
+                                               for event in packet["event_candidates"]])
                     await rec.checkpoint_async()
                     await _drain_stage(agent_budget.start, usage_id, sf)
                     started = True
@@ -360,8 +428,13 @@ async def run_company_evidence(rec, params, app):
                     await rec.checkpoint_async()
                     selections = parse_selection_batch(raw, packets)
                     for packet, _, _, _ in fresh:
+                        selected = selections[packet["id"]]
+                        final = select_packet(packet, selected)
+                        ci.validate_packet(final)
                         _state(packet["symbol"], "generating", rec.task_id, attempt_state="succeeded",
-                               selected=selections[packet["id"]], generated_at=_now().isoformat(),
+                               selected=selected, packet=final, generation_key=generation_key(final, model),
+                               event_ref={k: final["event"][k] for k in ("event_id", "version_id", "observation_id")},
+                               generated_at=_now().isoformat(),
                                raw_response_sha256=hashlib.sha256(raw.encode("utf-8")).hexdigest())
                 except agent_budget.BudgetError:
                     if started:
@@ -371,7 +444,7 @@ async def run_company_evidence(rec, params, app):
                         await _drain_stage(agent_budget.release, lease["id"], sf)
                     for packet, key, _, _ in fresh:
                         _state(packet["symbol"], "invalid_response" if started else "budget_blocked", rec.task_id,
-                               generation_key=key, attempt_state="failed" if started else "not_started",
+                               request_key=key, attempt_state="failed" if started else "not_started",
                                next_retry_at=(_now() + timedelta(minutes=30)).isoformat())
                     raise
                 except BaseException as error:
@@ -383,20 +456,24 @@ async def run_company_evidence(rec, params, app):
                     state = ("canceled" if isinstance(error, asyncio.CancelledError) else "interrupted"
                              if isinstance(error, TimeoutError) else "model_failed" if isinstance(error, LLMError) else "invalid_response")
                     for packet, key, _, _ in fresh:
-                        _state(packet["symbol"], state, rec.task_id, generation_key=key,
+                        _state(packet["symbol"], state, rec.task_id, request_key=key,
                                attempt_state=("unknown" if isinstance(error, asyncio.CancelledError) else "failed") if started else "not_started",
                                missing=["任务时间已用尽；当前步骤已结束，未发布回答。" if isinstance(error, TimeoutError)
                                         else "本轮模型调用或选择未通过，未发布回答。"],
                                next_retry_at=(_now() + timedelta(minutes=30)).isoformat())
                     raise
-            for packet, key, saved, reused in pending:
+            for case, key, saved, reused in pending:
                 await rec.checkpoint_async()
-                symbol = packet["symbol"]
-                selected = saved["selected"] if reused else selections[packet["id"]]
+                symbol = case["symbol"]
+                selected = saved["selected"] if reused else selections[case["id"]]
                 record = load_state(symbol)
+                packet = record["packet"]
+                final_key = generation_key(packet, model)
                 current = await _drain_stage(_event, symbol, app, sf, event_id=packet["event"]["event_id"])
                 profile = read_profile(symbol)
-                if current is None or profile is None or generation_key(_packet(symbol, profile, current), model) != key:
+                if (current is None or profile is None or record.get("request_key") != key
+                        or record.get("generation_key") != final_key
+                        or generation_key(_packet(symbol, profile, current), model) != final_key):
                     _state(symbol, "interrupted", rec.task_id, missing=["采集后公司原文或事件版本已变，旧回答未发布。"], next_retry_at=None)
                     results.append({"symbol": symbol, "state": "interrupted"})
                     continue
@@ -405,7 +482,7 @@ async def run_company_evidence(rec, params, app):
                                                generated_at=record["generated_at"])
                 analysis, _ = compile_analysis(packet, selected)
                 state = "ready" if analysis["status"] == "conditional" else "insufficient"
-                _state(symbol, state, rec.task_id, result_key=result, generation_key=key,
+                _state(symbol, state, rec.task_id, result_key=result, generation_key=final_key,
                        source_status="ready", missing=analysis["missing"], next_retry_at=profile.get("cache_until"))
                 results.append({"symbol": symbol, "state": state, "result_key": result})
             await rec.add_async(name="公司判读结果", input_summary=f"{len(symbols)}只", output_summary=f"保存/复用{len(results)}项；不改变选股资格",
@@ -427,8 +504,8 @@ async def scheduler_tick(app):
     sf = get_session_factory()
     symbols = await _drain_stage(candidate_symbols, sf)
     for symbol in symbols:
-        item = await _drain_stage(_event, symbol, app, sf)
-        if _due(symbol, item):
+        items = await _drain_stage(_events, symbol, app, sf)
+        if await _current_due(symbol, items, app, sf):
             try:
                 await agent_tasks.create_task_async("company_evidence", {"automatic": True}, created_by="scheduler")
             except agent_tasks.TaskQueueUnavailable:

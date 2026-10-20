@@ -600,6 +600,29 @@ describe("company evidence and saved impact", () => {
     expect(company.getByText(/fixture-provider \/ fixture-model/)).toBeTruthy();
   });
 
+  it("shows specific unsupported-event comparison without labelling it a supported transmission", () => {
+    const value = {...impact, analysis: {...impact.analysis, status: "no_supported_link" as const,
+      summary: "公司披露精密传动产品；消息是其他公司设立，缺本公司供货关系。",
+      chain: [{text: "公司产品与外部主体的关系尚无来源，不能只凭同题材补链。", evidence_ids: ["event:summary", "company:business"]}]}};
+    render(<AttributionEvidence item={item(value)} symbol="600825"/>);
+    expect(screen.getByLabelText("事件与公司关系核对").textContent).toContain(value.analysis.summary);
+    expect(screen.queryByLabelText("AI经营传导假设")).toBeNull();
+    expect(screen.getByText("未取得客户名称与已签订单。")).toBeTruthy();
+  });
+
+  it("keeps cited source facts first and makes uncited report material optional", () => {
+    const extraFacts = Array.from({length: 5}, (_, index) => ({...impact.facts[0], id: `other:${index}`, quote: `其他原文${index}`}));
+    render(<AttributionEvidence item={item({...impact, facts: [...extraFacts, ...impact.facts]})} symbol="600825"/>);
+    const primary = screen.getByLabelText("公司原文事实");
+    expect(within(primary).getByText(impact.facts[0].quote)).toBeTruthy();
+    expect(within(primary).queryByText("其他原文0")).toBeNull();
+    const other = screen.getByText("其他公司原文（5条）").closest("details");
+    expect(other).toBeTruthy();
+    expect(other!.hasAttribute("open")).toBe(false);
+    fireEvent.click(screen.getByText("其他公司原文（5条）"));
+    expect(screen.getByLabelText("其他公司原文").textContent).toContain("其他原文0");
+  });
+
   it("scopes the original relationship check to its old message while showing new company evidence with day-only disclosure time", () => {
     const stockReasoning: NonNullable<AttributionEvidenceItem["stock_reasoning"]> = {
       symbol: "600825", event_id: 18, version_id: 22, observation_id: 19, status: "theme_only",

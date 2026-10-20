@@ -58,7 +58,7 @@
 | **FN-09** | `system/llm-gateway-probe.md` | L2 | 运维 | LLM 网关健康探针（`claude_cli` 别名监控） |
 | **FN-10** | `archive/jev-integration-retired-20261011.md` | L2 | 历史档案 | 已退役Jev蓝图与历史实测；不得作为当前调用/安装/评分义务，现役入口为FN-12 |
 | **FN-12** | `ai/semantic-decisions.md` | L2 | AI/Agent 架构 | 当前规则/已有LLM与有限LAB；[六个新复杂场景与判读可见性](ai/semantic-decisions.md#2026-10-19-新复杂场景与判读可见性)：108真实调用含失败、八图0完整质量通过，净增量未证不接TA；事件候选饥饿与已保存AI覆盖提示独立修复；旧四例/71调用留历史，状态归W07/IMP-091、W04/RSH-030 |
-| **FN-13** | `product/limit-up-attribution.md` | L2 | 产品/事件归因 | 多维消息证据、逐股依据与AI适用范围、经营报告选择/缓存分层与[公司依据常规管线](product/limit-up-attribution.md#2026-10-20-公司依据常规管线)、市场响应、连续采集及选股/通知/复盘边界；工程状态归W00/IMP-092 |
+| **FN-13** | `product/limit-up-attribution.md` | L2 | 产品/事件归因 | 多维消息证据、逐股依据与AI适用范围、经营报告选择/缓存分层、[八股联系复核候选](ai/semantic-decisions.md#2026-10-20-事件与公司联系复核)与[公司依据常规管线](product/limit-up-attribution.md#2026-10-20-公司依据常规管线)、市场响应、连续采集及选股/通知/复盘边界；工程状态归W00/IMP-092 |
 | **FN-11** | `system/runtime-performance.md` | L2 | 性能测量 | IMP-019 可复现入口；§23首图否决、§24重复工作/首帧、§25锁竞争测量、§26本机启动鉴权及盘前WS刷新、§27真实交易双窗/SQLite读取隔离；工程与交易窗口分层 |
 | **EX-01** | `archive/live-trading-guosen-plan.md` | L1 | 搁置历史 | 国信 miniQMT 实盘蓝图。**用户已搁置**（不接受 Windows 依赖），恢复条件见文档头 |
 | **RV-01** | `review/review-agent.md` | L2 | 复盘 | 盘后复盘 Agent 架构 |
@@ -355,4 +355,4 @@ IMP-054动效用途/静态弃权、反向退出、焦点/IO即时性、CSS+JS减
 
 2026-10-16 分类与候选真实性补充：实施范围见[W04/BUG-034](stages/w04-research.md#bug-034)，合同见[猎场决策](product/hunting-decision-design.md)、[数据来源](data/data-sources.md)和[细功能覆盖](product/feature-closure-audit.md)。原计划与版本证据归Git；行情真实运行验收仍归W06/IMP-019。
 
-公司经营解释工程入口：`backend/app/events/company_impact.py`（有界已发布读取）、`backend/app/events/company_sources.py`（CNINFO公共原件与有界经营片段）、`backend/app/services/company_evidence.py`（原任务中心与单调度，推荐及通过硬门的题材参与股研究阅读）、`backend/scripts/company_impact.py`（显式采集/对照/作者源审）。[常规管线](product/limit-up-attribution.md#2026-10-20-公司依据常规管线)取代旧仅CLI限制，新自动解释不冒充旧作者源审；前端复用原attribution-evidence只读者，无新页面。来源与有界PDF依赖见[数据源说明](data/data-sources.md#2026-10-20-公司依据常规管线)，模型对照/未知见[语义记录](ai/semantic-decisions.md#2026-10-20-公司依据常规管线)，状态只归W00/IMP-092。
+公司经营解释工程入口：`backend/app/events/company_impact.py`（有界已发布读取）、`backend/app/events/company_linkage.py`（未准入v4候选：有来源用途/客户交集与具体缺边，旧v3不改标）、`backend/app/events/company_sources.py`（CNINFO公共原件与有界经营片段）、`backend/app/services/company_evidence.py`（原任务中心与单调度，推荐及通过硬门的题材参与股研究阅读）、`backend/scripts/company_impact.py`（显式采集/对照/作者源审）。[常规管线](product/limit-up-attribution.md#2026-10-20-公司依据常规管线)取代旧仅CLI限制，新自动解释不冒充旧作者源审；前端复用原attribution-evidence只读者，无新页面。来源与有界PDF依赖见[数据源说明](data/data-sources.md#2026-10-20-公司依据常规管线)，模型对照/未知见[语义记录](ai/semantic-decisions.md#2026-10-20-公司依据常规管线)，状态只归W00/IMP-092。

@@ -126,9 +126,9 @@ function checkedCompanyFacts(value: CompanyImpact["facts"] | undefined, knownAt:
   return value;
 }
 
-function CompanySourceFacts({facts}: {facts: CompanyImpact["facts"]}) {
+function CompanySourceFacts({facts, label = "公司原文事实"}: {facts: CompanyImpact["facts"]; label?: string}) {
   const labels: Record<string, string> = {business: "主营业务", main_business: "主营业务", product: "产品", products: "产品", customer: "客户", customers: "客户", order: "订单", orders: "订单", risk: "限制与反证", limitation: "限制与反证"};
-  return <section aria-label="公司原文事实"><h5 className="font-medium">公司原文事实</h5><ol className="space-y-3">{facts.map(fact => <li key={fact.id} className="min-w-0 space-y-1">
+  return <section aria-label={label}><h5 className="font-medium">{label}</h5><ol className="space-y-3">{facts.map(fact => <li key={fact.id} className="min-w-0 space-y-1">
     <p>{labels[fact.kind] || "公司原文"} · 依据 {fact.id}</p>
     <blockquote className={styles.sourceCopy}>{fact.quote}</blockquote>
     <p className="text-zinc-600 dark:text-zinc-400">{fact.document_title} · 第 {fact.page} 页 · 报告期：{fact.period} · 披露日期：{bjDate(fact.published_at)}</p>
@@ -191,12 +191,20 @@ function CompanyImpactEvidence({item, symbol, now}: {item: AttributionEvidenceIt
   }
   const status = {conditional: "有条件影响", mixed: "双向影响", insufficient: "证据不够", no_supported_link: "尚无材料支持直接传导"}[value.analysis.status];
   const reference = (id: string) => id === "event:title" ? "消息标题" : id === "event:summary" ? "消息摘要" : `公司依据 ${id}`;
+  const mechanism = value.analysis.status === "conditional" || value.analysis.status === "mixed";
+  const reasoningLabel = mechanism ? "AI经营传导假设" : "事件与公司关系核对";
+  const referenced = new Set(value.analysis.chain.flatMap(step => step.evidence_ids));
+  const referencedFacts = value.facts.filter(fact => referenced.has(fact.id));
+  const shownFacts = (referencedFacts.length ? referencedFacts : value.facts).slice(0, 3);
+  const shownIds = new Set(shownFacts.map(fact => fact.id));
+  const otherFacts = value.facts.filter(fact => !shownIds.has(fact.id));
   return <section aria-label="公司经营依据与AI传导" className="space-y-3 py-2">
     <header><h4 className="font-medium">{value.company_name} · 公司经营判读</h4><p>{status} · 仅用于当前研究</p><p className="text-zinc-600 dark:text-zinc-400">{value.verification === "automated_evidence_bound_not_gold" ? "自动引用约束研究解释 · 未经作者逐案源审" : "AI生成、作者核对并校正的研究解释"}</p></header>
-    <section aria-label="AI经营传导假设"><h5 className="font-medium">AI经营传导假设</h5><p className={styles.sourceCopy}>{value.analysis.summary}</p>
+    <section aria-label={reasoningLabel}><h5 className="font-medium">{reasoningLabel}</h5><p className={styles.sourceCopy}>{value.analysis.summary}</p>
       {value.analysis.chain.length ? <ol className="space-y-2">{value.analysis.chain.map((step, index) => <li key={index}><p className={styles.sourceCopy}>{index + 1}. {step.text}</p><p className="text-zinc-600 dark:text-zinc-400">引用依据：{step.evidence_ids.map(reference).join("；")}</p></li>)}</ol> : <p>现有材料不足以建立公司经营传导链，未补写。</p>}
     </section>
-    <CompanySourceFacts facts={value.facts}/>
+    <CompanySourceFacts facts={shownFacts}/>
+    {otherFacts.length > 0 && <details className="min-w-0"><summary className="cursor-pointer py-2">其他公司原文（{otherFacts.length}条）</summary><CompanySourceFacts facts={otherFacts} label="其他公司原文"/></details>}
     <ConditionList label="反例与成立条件" items={value.analysis.counterarguments.length ? value.analysis.counterarguments : ["本次判读未列出反例与成立条件，不等于影响没有条件。"]} tone="warning"/>
     <ConditionList label="经营证据缺失" items={value.analysis.missing.length ? value.analysis.missing : ["本次材料未列出额外缺项，不代表资料完整。"]} tone="warning"/>
     <p className="text-zinc-600 dark:text-zinc-400">公司原文与AI推演分别展示。{value.verification === "automated_evidence_bound_not_gold" ? "模型选择引用后由代码编译条件机制，只完成自动引用约束，未经作者逐案源审或独立效果验证。" : "这是AI生成、作者核对并校正的研究解释，尚无独立效果验证。"}不回填原入选依据，不改变排序、评分、入选或通知资格。</p>

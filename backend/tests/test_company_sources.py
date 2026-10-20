@@ -590,6 +590,130 @@ def test_collect_periodic_report_applies_financial_boundary(tmp_path, prepared, 
     assert any("财务附注" in value for value in result["missing"])
 
 
+@pytest.mark.parametrize("kind,quote", [
+    # Literal public report sentences; physical pages and original identities
+    # are recorded in the task's source audit, not inferred from stock themes.
+    ("product", "数字化产品及服务主要通过全息影像、裸眼3D、CGI特效等技术手段，AR/VR/MR、4K/8K超高清视频等媒介形式，为客户和消费者提供商业展览、数字艺术消费品及各类数字视觉服务。"),
+    ("product", "在灵巧手产品布局上，公司同时覆盖全驱动与欠驱动两种技术路线，构建了A17、B21、B06、C06多层次产品矩阵，以满足不同应用场景对精准操控、及成本的差异化需求。"),
+    ("product", "公司核心产品包含柔性传感器薄膜、触觉传感组件等，产品可精准模拟人体皮肤，实现压力、纹理、温度多维度感知与实时反馈，核心适配人形机器人灵巧手、数据采集设备、医疗康养等高端应用场景。"),
+    ("customer", "目前公司已与具身智能、灵巧手领域多家头部企业达成深度合作，开展联合研发工作，相关产品已实现小批量量产，市场拓展与产品迭代工作稳步推进。"),
+    ("business", "公司已将机器人业务确立为第三大战略支柱，系统布局具身智能精密部件、专用轴承与关节总成，将深厚的轴承、传动与电控技术深度融合，为机器人产业提供高可靠、高性能的运动解决方案。"),
+    ("product", "2)公司的精密齿轮、减速机及其配件是机器人的关键传动部件和核心零部件，公司将紧跟把握机器人行业快速、持续增长的趋势，加强新业务的合作，截至目前公司已经与云深处科技等多家机器人公司达成合作。"),
+    ("product", "公司研发投入延续高增长态势，在以下方面取得重要突破：谐波减速机柔轮初坯技术，创新采用精密冲压替代锻造工艺生产谐波减速机柔轮初坯产品，成功实现进口材料替代。"),
+    ("product", "其中，感知类产品有各类传感器，传输类产品有车用线束，控制类产品有天窗控制器，执行类产品有洗涤系统等产品，另外还有精密注塑产品。"),
+])
+def test_specific_operating_sentences_are_recalled_without_rewriting(kind, quote):
+    values, _ = source._excerpts([quote])
+    assert any(v["kind"] == kind and v["quote"] == quote and v["page"] == 1 for v in values)
+
+
+def test_product_scope_footnote_is_not_a_specific_product_assertion():
+    quote = "注：1、上述产品为公司正在销售或者未来布局的产品；"
+    values, _ = source._excerpts([quote])
+    assert not values
+
+
+def test_sales_model_is_not_an_actual_order_assertion():
+    quote = "在通过客户定点并获得销售订单后，公司依据订单组织采购、生产，并完成产品交付。"
+    values, _ = source._excerpts([quote])
+    assert not any(v["kind"] in {"order", "product"} for v in values)
+
+
+def test_specific_business_precedes_industry_classification_with_same_budget():
+    background = ("公司从事的主要业务行业情况根据行业分类指引，公司所属行业为电气机械和器材制造业。"
+                  "报告期内主要业务行业环境分析，行业发展进入结构调整阶段，下游行业需求存在周期性波动。"
+                  "公司主营业务所处行业分类情况说明，公司所属细分行业为制造业相关行业。")
+    operating = "公司主营业务聚焦胶粘功能性材料，核心产品涵盖工业胶粘材料、电子级胶粘材料、光学胶膜及光学材料、特种纸、高性能化工材料等，形成多品类、一站式的功能性材料解决方案供应体系。"
+    values, _ = source._excerpts([background, operating])
+    assert any(v["kind"] == "business" and v["quote"] == operating and v["page"] == 2 for v in values)
+    assert len(values) <= 12 and sum(v["kind"] == "business" for v in values) <= 3
+
+
+def test_explicit_business_denial_precedes_generic_risk_background():
+    background = ("公司所处行业竞争日益激烈，行业未来发展具有一定的不确定性，可能存在市场竞争风险。"
+                  "公司所处行业正在快速发展，行业技术路线尚未完全确定，市场发展存在不确定性风险。"
+                  "公司所处行业的宏观环境较为复杂，行业景气变化可能带来一定的经营不确定性风险。")
+    denial = "截至目前，公司尚未获得相关项目订单，未形成产品销售收入，未来合作仍存在不确定性。"
+    values, _ = source._excerpts([background, denial])
+    assert any(v["kind"] == "risk" and v["quote"] == denial and v["page"] == 2 for v in values)
+
+
+@pytest.mark.parametrize("kind,quote", [
+    ("product", "公司以“数据驱动、协同高效”为核心，构建覆盖研发、生产、运营全生命周期的集成管控体系，通过多层级系统协同与全流程数据贯通，实现精细化运营与动态优化。"),
+    ("product", "公司结合自身多年累积的技术储备及设计与制造经验，对下游客户新产品的研发需求进行快速回应、解决和反馈，满足客户对新产品高标准的要求，从而提高产品附加值，提升毛利率水平。"),
+    ("product", "为提升生产效率和产品质量，公司引进了国外先进的热模锻压力机、辊底式自动热处理生产线、100%荧光渗透探伤生产线、球头柔性半自动装配生产线，以及各类总成测试与检验设备，构建了高度自动化的生产体系。"),
+    ("business", "2022年6月15日是长期是不适用不适用与首次公开发行相关的承诺其他控股股东金帝咨询就避免同业竞争的承诺（1）截至本承诺函签署之日，本企业（含控制的其他企业、组织或机构，公司及其子公司除外，下同）没有直接或者间接地从事任何与公司（包括其子公司，下同）主营业务或者主要产品相同或者相似的业务，或者构成竞争关系的业务活动，不存在同业竞争或潜在同业竞争的情形。"),
+    ("customer", "公司营销部门与整车厂洽谈合作可能性，整车厂对公司的产品质量、工艺和配套生产能力初步满意，双方初步达成合作意向。"),
+    ("product", "在确认设计可以冻结后，公司按照正式方案进行开模、组装与试验后，生产出样品（“C样”，工装样件，认可产品状态）提交整车厂进行OTS审核。"),
+    ("product", "公司搭建全流程标准化品控体系，迭代核心生产工艺，保障产品高良率与高稳定性。"),
+])
+def test_internal_process_governance_and_hypothetical_customer_are_not_operating_objects(kind, quote):
+    values, _ = source._excerpts([quote])
+    assert not any(v["kind"] == kind for v in values)
+
+
+def test_concrete_product_progress_is_not_crowded_out_by_earlier_application_overview():
+    overview = ("公司的轴承保持架产品主要在汽车工业、家用电器、工程机械、机床工业、轨道交通、航空航天、高端装备等行业中广泛应用；"
+                "精密零部件产品主要在燃油汽车及混动汽车的汽车变速箱、发动机系统以及在新能源汽车电驱动系统应用，另外在乘用车的门锁、座椅等系统进行平台化应用。"
+                "公司精密零部件产品主要应用于汽车动力系统以及乘用车的门锁、座椅等安全系统。")
+    progress = "公司研发投入延续高增长态势，在以下方面取得重要突破：谐波减速机柔轮初坯技术，创新采用精密冲压替代锻造工艺生产谐波减速机柔轮初坯产品，成功实现进口材料替代。"
+    values, _ = source._excerpts([overview, progress])
+    assert any(v["kind"] == "product" and v["quote"] == progress and v["page"] == 2 for v in values)
+
+
+def test_specific_product_acceptance_failure_risk_keeps_a_bounded_slot():
+    earlier = ("公司在产能爬坡阶段成本上升，叠加汇率波动形成汇兑损失，导致利润空间下降。"
+               "公司产品价格存在年度下降的风险，原材料价格变化可能导致毛利率下滑。"
+               "公司客户回款周期可能延长，资金占用增加并带来坏账减值风险。")
+    risk = "新的汽车产品必须经过客户严格的质量认证，认证周期长、环节多，不确定风险大，公司存在因新产品认证失败导致业绩下滑或中断与客户合作的风险。"
+    values, _ = source._excerpts([earlier, risk])
+    assert any(v["kind"] == "risk" and v["quote"] == risk and v["page"] == 2 for v in values)
+
+
+def test_explicit_core_product_list_is_not_displaced_by_earlier_progress_slogans():
+    earlier = ("汽车内外饰领域，公司已推出系列胶粘材料用于汽车内外饰，轮胎的功能性材料粘接，新产品已具备量产能力，批量应用于国内车企，成功实现进口替代，后续将持续开拓市场。"
+               "OCA产品已形成覆盖LCDOCA、OLEDOCA、车载OCA、折叠OCA、返修OCA、防窥OCA、TPOCA等全场景产品矩阵。"
+               "公司产品可应用于消费电子、新型显示、智能制造等领域，相关产品已实现批量供货。")
+    core = "公司核心产品包含柔性传感器薄膜、触觉传感组件等，产品可精准模拟人体皮肤，实现压力、纹理、温度多维度感知与实时反馈，核心适配人形机器人灵巧手、数据采集设备、医疗康养等高端应用场景。"
+    values, _ = source._excerpts([earlier, core])
+    assert any(v["kind"] == "product" and v["quote"] == core and v["page"] == 2 for v in values)
+
+
+def test_actual_customer_lists_precede_customer_location_description():
+    location = "为压缩服务半径，公司在主要客户所在地建立生产基地，及时响应客户需求并有效降低运输成本。"
+    chassis = "底盘零部件业务，主要客户包括比亚迪、万都、采埃孚、耐世特、豫北机械、博世等整车厂和一级供应商。"
+    aluminium = "铝合金轻量化业务，主要客户包括比亚迪、采埃孚、一汽东机工等知名整车厂和一级供应商。"
+    compressor = "空调压缩机业务，主要客户涵盖福田汽车、一汽奔腾、北汽股份、中国重汽、徐工集团、上汽集团、三一重工等知名整车厂。"
+    values, _ = source._excerpts([location + chassis + aluminium, compressor])
+    assert any(v["kind"] == "customer" and v["quote"] == compressor for v in values)
+    assert not any(v["kind"] == "customer" and v["quote"] == location for v in values)
+
+
+def test_disclosed_controlled_subsidiary_business_keeps_its_entity_scope():
+    quote = "为培育全新业绩增长点、延伸主业版图、突破新兴领域，公司于2025年6月控股成立北京晶智感新材料有限公司，聚焦多模态柔性触觉传感器核心赛道，精准切入人形机器人、具身智能等高景气新兴领域。"
+    values, _ = source._excerpts([quote])
+    assert any(v["kind"] == "business" and v["quote"] == quote for v in values)
+
+
+def test_governance_comparison_fragment_is_not_a_company_business_assertion():
+    quote = "公司主营业务或者主要产品相同或者相似的、存在直接或者间接竞争关系的任何业务活动。"
+    values, _ = source._excerpts([quote])
+    assert not any(v["kind"] in {"business", "product", "customer"} for v in values)
+
+
+def test_shareholder_noncompetition_promise_is_not_a_product_assertion():
+    # Literal report sentence from the final bounded real-source comparison.
+    quote = "（2）自本承诺函签署之日起，承诺人及承诺人控制的其他企业或经济组织不以任何形式直接或间接从事与公司的主营业务或者主营产品相竞争或者构成竞争威胁的业务活动，包括不投资、收购、兼并从事/生产与公司的主营业务或者主营产品相同或者相似的企业或者其他经济组织。"
+    values, _ = source._excerpts([quote])
+    assert not any(v["kind"] in {"business", "product", "customer", "order"} for v in values)
+
+
+def test_actual_operating_competition_risk_remains_a_risk_assertion():
+    quote = "五、市场竞争加剧风险全球胶粘材料行业竞争格局较为集中，国际龙头企业在高端市场占据先发优势，国内行业集中度偏低、同质化竞争较为突出。"
+    values, _ = source._excerpts([quote])
+    assert any(v["kind"] == "risk" and v["quote"] == quote for v in values)
+
+
 def test_sampled_rss_guard_kills_only_its_own_parser(tmp_path, monkeypatch):
     path = tmp_path / "fake.pdf"
     path.write_bytes(b"%PDF-test")
