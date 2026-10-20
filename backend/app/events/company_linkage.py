@@ -183,7 +183,10 @@ def _application_relation(quote: str, phrase: str, anchor: str) -> bool:
                     continue
                 if re.search(r"客户|其他产品|行业|下游企业|供应商", prefix):
                     continue
-                if phrase in clause or re.search(r"(?:产品|部件|组件|系统|其|主要|可)$", prefix):
+                same_product_subject = prefix and re.fullmatch(
+                    r"(?:其|该|本|上述|这些)?(?:(?:主要|核心)?(?:产品|部件|组件|系统))?"
+                    r"(?:主要|核心|均|也|还|亦)?可?", prefix)
+                if phrase in clause or same_product_subject:
                     return True
     return False
 

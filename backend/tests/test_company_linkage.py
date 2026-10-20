@@ -172,3 +172,25 @@ def test_exact_security_code_still_binds_an_issuer_event():
     analysis, rejected = compile_analysis(source, selected(channel="order_execution", phrase="精密齿轮",
                             anchor="精密齿轮", bridge=None, event_phrase=title))
     assert analysis["status"] == "conditional" and not rejected
+
+
+
+def test_disclosed_core_application_keeps_its_same_product_subject():
+    # CNINFO H1 physical page12, quote SHA d803dd15cf80c8dfd2a01de8ee552bc72d64e9c6f7c14abe29ae28e3c2e96c17;
+    # event20763/11900/12118. Author-selected compiler regression, not model output/gold.
+    quote = "公司核心产品包含柔性传感器薄膜、触觉传感组件等，产品可精准模拟人体皮肤，实现压力、纹理、温度多维度感知与实时反馈，核心适配人形机器人灵巧手、数据采集设备、医疗康养等高端应用场景。"
+    title = "上半年全球人形机器人销量达到3.6万台，机器人ETF鹏华(159278)标的指数涨超5%"
+    summary = "近日，国际咨询机构弗若斯特沙利文发布《2026年全球人形机器人市场研究报告》。今年上半年，全球人形机器人销量达到3.6万台，市场收入达到5.4亿美元。"
+    source = case(quote, title=title, summary=summary)
+    analysis, rejected = compile_analysis(source, selected(phrase="柔性传感器薄膜",
+                            event_phrase="上半年全球人形机器人销量达到3.6万台"))
+    assert not rejected and analysis["status"] == "conditional"
+    assert "本次未证明本公司参与该事件或已获订单" in analysis["chain"][1]["text"]
+    assert "行业销量不能直接换算本公司订单或利润" in "".join(analysis["counterarguments"])
+
+
+@pytest.mark.parametrize("other", ["另一产品可", "其他传感器核心"])
+def test_implicit_application_subject_cannot_borrow_a_named_other_product(other):
+    source = case(f"本公司主要产品为精密齿轮，{other}用于人形机器人。")
+    analysis, rejected = compile_analysis(source, selected())
+    assert analysis["status"] == "insufficient" and rejected
