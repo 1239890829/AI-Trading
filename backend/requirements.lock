@@ -42,6 +42,7 @@ pydantic==2.13.4
 pydantic-settings==2.15.0
 pydantic_core==2.46.4
 pyflakes==3.4.0
+pypdf==6.21.1
 Pygments==2.21.0
 pytest==9.1.1
 pytest-xdist==3.8.0

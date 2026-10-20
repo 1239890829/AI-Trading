@@ -11,7 +11,7 @@
 - **取消**：只取消尚未开始/可中断的步骤；已完成的步骤与轨迹保留。
 - **审计**：任务创建/完成/取消都写 AgentAudit（actor/action/target/before/after）。
 
-P0 只注册 L0 任务（review / data_check）；L1/L2 写类任务在参数配置模块（P1）
+当前生成任务为 L0（review / data_check / company_evidence）；L1/L2 写类任务在参数配置模块（P1）
 接入时按同一套 status/audit 机制扩展，`risk_level` 字段已预留。
 """
 from __future__ import annotations
@@ -50,6 +50,10 @@ TASK_TYPES: dict[str, dict[str, str]] = {
         "label": "数据体检",
         "risk": "L0",
         "desc": "只读检查数据源能力、全市场快照规模、今日告警计数，输出健康摘要",
+    },
+    "company_evidence": {
+        "label": "采集公司依据与判读", "risk": "L0",
+        "desc": "读取当前选股或指定证券的公开公司披露，生成有界研究解释；不改变排序或资格",
     },
     "mutation": {
         "label": "系统变更留痕",
@@ -557,7 +561,14 @@ async def _h_data_check(rec: _StepRecorder, params: dict, app: Any) -> dict:
     return {"kind": "artifact", "id": f"data-check-{int(time.time())}"}
 
 
+async def _h_company_evidence(rec: _StepRecorder, params: dict, app: Any) -> dict:
+    from app.services.company_evidence import run_company_evidence
+
+    return await run_company_evidence(rec, params, app)
+
+
 _HANDLERS: dict[str, Callable[[_StepRecorder, dict, Any], Awaitable[dict]]] = {
+    "company_evidence": _h_company_evidence,
     "review": _h_review,
     "data_check": _h_data_check,
 }

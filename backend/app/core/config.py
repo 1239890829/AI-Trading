@@ -352,6 +352,10 @@ class Settings(BaseSettings):
     # 只保留建议/议程/patch 预览能力，不得修改工作区、提交或合并。
     # ⚠️ 变量名以 `.env.example` 为准（`env_prefix="ASHARE_"` + 字段名大写）；
     # 手册里长期写作 `ASHARE_AGENT_AUTONOMY=0` 的短名**照旧生效但会告警**（R10 兼容层）。
+    company_evidence_enabled: bool = False  # Only automatic scheduling; maintenance tasks remain explicit.
+    company_evidence_interval_seconds: float = 900.0
+    company_evidence_startup_delay_seconds: float = 90.0
+    company_evidence_batch_size: int = 4  # Worker hard-caps both selected stocks and model batches at eight.
     agent_autonomy_enabled: bool = True
     agent_code_change_enabled: bool = False  # C 类代码执行器须由管理员独立显式开启
     agent_venv_python: str = ""             # 沙箱门禁用的 pytest 解释器（默认 backend/.venv/bin/python）

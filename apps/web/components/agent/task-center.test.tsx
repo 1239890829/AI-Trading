@@ -406,3 +406,84 @@ describe("任务入口读取状态", () => {
     expect(screen.queryByLabelText("可选任务参数（JSON）")).toBeNull();
   });
 });
+
+describe("公司依据任务 · 处理状态不等于判读通过", () => {
+  function companyTask(result: unknown, extra: Partial<AgentTask> = {}): AgentTask {
+    return {...ESCALATION_TODO, id: "company-batch", type: "company_evidence", status: "succeeded",
+      params: {symbols: ["000725", "603197", "000070"]},
+      result_ref: result as AgentTask["result_ref"], ...extra};
+  }
+  async function show(task: AgentTask) {
+    vi.mocked(getAgentTasks).mockResolvedValue([task]);
+    vi.mocked(getAgentTaskTypes).mockResolvedValue([{type: "company_evidence", label: "采集公司依据与判读", risk: "L0", desc: ""}]);
+    render(<TaskCenter />);
+    fireEvent.click((await screen.findAllByText("采集公司依据与判读"))[0]);
+  }
+
+  it("读取没有产物id的混合逐股结果，保留任务范围与真实调用数", async () => {
+    await show(companyTask({kind: "company_evidence", state: "processed", model_calls: 1, symbols: [
+      {symbol: "000725", state: "ready", result_key: "saved-key"},
+      {symbol: "603197", state: "insufficient"},
+      {symbol: "000070", state: "source_failed"},
+    ]}));
+    expect(screen.getAllByText("处理完成")).toHaveLength(2);
+    const result = screen.getByRole("region", {name: "公司资料任务处理结果"});
+    expect(result.textContent).toContain("000725 · 经营解释已保存");
+    expect(result.textContent).toContain("603197 · 依据不足");
+    expect(result.textContent).toContain("000070 · 来源采集失败");
+    expect(result.textContent).toContain("模型调用：1 次");
+    expect(result.textContent).toContain("不代表所有个股判读通过");
+    expect(screen.getByText("000725、603197、000070")).toBeTruthy();
+    expect(screen.queryByText(/产物：company_evidence/)).toBeNull();
+    expect(screen.queryByText("成功")).toBeNull();
+  });
+
+  it.each([undefined, null])("缺少模型调用计数%s时不补为0", async model_calls => {
+    await show(companyTask({kind: "company_evidence", state: "processed", symbols: [], model_calls}));
+    const result = screen.getByRole("region", {name: "公司资料任务处理结果"});
+    expect(result.textContent).toContain("模型调用：未记录");
+    expect(result.textContent).not.toContain("模型调用：0 次");
+    expect(result.textContent).toContain("未保存逐股处理结果");
+  });
+
+  it.each([
+    ["no_candidates", "本轮没有当前候选"],
+    ["no_due_candidates", "当前候选均未到处理时点"],
+    ["disabled", "自动采集已停用"],
+  ])("%s保持实际批次状态，不说完成全部判读", async (state, message) => {
+    await show(companyTask({kind: "company_evidence", state, symbols: []}));
+    expect(screen.getByRole("region", {name: "公司资料任务处理结果"}).textContent).toContain(message);
+    expect(screen.queryByText(/全部判读通过/)).toBeNull();
+    expect(screen.queryByText(/任务刚创建，等待执行/)).toBeNull();
+  });
+
+  it("失败结果与具体错误保留，不把未返回结果说成没有候选", async () => {
+    await show(companyTask(null, {status: "failed", error: {code: "LLMError", message: "模型暂不可用", retryable: true}}));
+    expect(screen.getByText("失败：模型暂不可用（LLMError）")).toBeTruthy();
+    expect(screen.getByRole("region", {name: "公司资料任务处理结果"}).textContent).toContain("尚未保存本批逐股处理结果");
+    expect(screen.queryByText("本轮没有当前候选")).toBeNull();
+  });
+
+  it("只显示有界合法标的，未知逐股状态不伪装成ready", async () => {
+    await show(companyTask({kind: "company_evidence", state: "processed", symbols: [
+      {symbol: "000725", state: "interrupted"}, {symbol: "603197", state: "future_state"},
+      {symbol: "../private", state: "ready"},
+    ]}, {params: {symbols: ["000725", "000725", "603197", "../private", 600000, ...Array.from({length: 12}, (_, i) => String(100000 + i))]}}));
+    const result = screen.getByRole("region", {name: "公司资料任务处理结果"});
+    expect(result.textContent).toContain("000725 · 处理中断");
+    expect(result.textContent).toContain("603197 · 状态未确认");
+    expect(result.textContent).not.toContain("../private");
+    expect(screen.queryByText(/100006/)).toBeNull();
+    expect(screen.queryByText(/\.\.\/private/)).toBeNull();
+    expect(screen.getByText(/部分标的参数无效或超出展示上限/)).toBeTruthy();
+  });
+
+  it("原有报告任务仍显示原产物身份", async () => {
+    vi.mocked(getAgentTasks).mockResolvedValue([{...ESCALATION_TODO, type: "review", status: "succeeded",
+      result_ref: {kind: "report", id: "20261020"}}]);
+    render(<TaskCenter />);
+    fireEvent.click((await screen.findAllByText("生成复盘报告"))[0]);
+    expect(screen.getByText("产物：report · 20261020")).toBeTruthy();
+    expect(screen.queryByRole("region", {name: "公司资料任务处理结果"})).toBeNull();
+  });
+});

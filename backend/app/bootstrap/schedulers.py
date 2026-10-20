@@ -496,3 +496,13 @@ def register_schedulers(reg: SchedulerRegistry, app: FastAPI, services: AppServi
         enabled=settings.llm_probe_interval_seconds > 0,
         reason="llm_probe_interval_seconds <= 0",
     )
+
+    company_stop = asyncio.Event()
+    from app.services.company_evidence import scheduler_tick as company_evidence_tick
+
+    reg.add_periodic(
+        "company-evidence", lambda: company_evidence_tick(app),
+        interval=max(60.0, settings.company_evidence_interval_seconds), stop=company_stop,
+        switch="company_evidence_enabled",
+        first_delay=max(1.0, settings.company_evidence_startup_delay_seconds),
+    )

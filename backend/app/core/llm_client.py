@@ -18,8 +18,11 @@ from __future__ import annotations
 
 import json
 import logging
+import os
 import shutil
 import subprocess
+import sys
+import tempfile
 import threading
 from time import monotonic
 from collections import OrderedDict
@@ -211,12 +214,13 @@ def chat_completion_via_cli(
     timeout: float = 120.0,
     usage_callback: Callable[[dict[str, int] | None], None] | None = None,
     observe_health: bool = True,
+    env: dict[str, str] | None = None,
 ) -> str:
     """Stateless CLI completion; optional transport observation never changes its result."""
     try:
         content = _chat_completion_via_cli(
             model, messages, cli_path=cli_path, timeout=timeout,
-            usage_callback=usage_callback,
+            usage_callback=usage_callback, env=env,
         )
     except LLMError:
         if observe_health:
@@ -234,6 +238,7 @@ def _chat_completion_via_cli(
     cli_path: str = "",
     timeout: float = 120.0,
     usage_callback: Callable[[dict[str, int] | None], None] | None = None,
+    env: dict[str, str] | None = None,
 ) -> str:
     """子进程调 `claude -p` 无头模式，返回最终回复文本。
 
@@ -264,8 +269,9 @@ def _chat_completion_via_cli(
     if system:
         cmd += ["--system-prompt", system]
     try:
+        options = {"env": env} if env is not None else {}
         proc = subprocess.run(
-            cmd, capture_output=True, text=True, timeout=timeout, check=False,
+            cmd, capture_output=True, text=True, timeout=timeout, check=False, **options,
         )
     except subprocess.TimeoutExpired:
         # TimeoutExpired.__str__ includes the complete argv, including all input
@@ -383,6 +389,77 @@ def chat_completion(
         raise LLMError("LLM 回复为空", LLMFailure.EMPTY)
     _emit_usage(usage_callback, body.get("usage"))
     return content
+
+
+# Preserve only the existing CLI's user authentication and execution essentials.
+# In particular, ASHARE_*, PYTHONPATH and unrelated service/account credentials
+# must not reach even the temporary Python adapter process.
+_BOUNDED_CLI_ENV = frozenset({
+    "HOME", "PATH", "LANG", "LC_ALL", "LC_CTYPE", "LC_MESSAGES", "TZ",
+    "TMPDIR", "TMP", "TEMP", "SYSTEMROOT", "WINDIR", "PATHEXT",
+    "ANTHROPIC_API_KEY", "ANTHROPIC_AUTH_TOKEN", "ANTHROPIC_BASE_URL",
+    "CLAUDE_CODE_OAUTH_TOKEN", "CLAUDE_CONFIG_DIR",
+})
+
+
+def bounded_chat_completion(
+    base_url: str,
+    api_key: str,
+    model: str,
+    messages: list[dict[str, str]],
+    *,
+    provider: str,
+    cli_path: str = "",
+    timeout: float = 180.0,
+    usage_callback: Callable[[dict[str, int] | None], None] | None = None,
+) -> str:
+    """One existing-model call with no project discovery or persistent CLI session.
+
+    The CLI adapter changes only its child process's cwd. Its input environment
+    is filtered before Python starts; the parent ASGI cwd/environment never
+    changes. This is a transport boundary, not an operating-system sandbox or a
+    semantic verifier. Non-CLI providers retain the existing HTTP transport.
+    """
+    try:
+        if provider != "claude_cli":
+            return chat_completion(
+                base_url, api_key, model, messages, provider=provider,
+                cli_path=cli_path, timeout=timeout, usage_callback=usage_callback,
+            )
+        cli = resolve_cli_path(cli_path)
+        if not cli:
+            raise LLMError("受限 CLI 不可用", LLMFailure.UNAVAILABLE)
+        cli = str(Path(cli).resolve())
+        child_env = {key: value for key, value in os.environ.items() if key in _BOUNDED_CLI_ENV}
+        with tempfile.TemporaryDirectory(prefix="ashare-bounded-llm-") as temporary:
+            directory = Path(temporary)
+            adapter = directory / "bounded-cli"
+            flags = [
+                "--setting-sources", "user", "--settings", '{"disableAllHooks":true}',
+                "--strict-mcp-config", "--mcp-config", '{"mcpServers":{}}',
+                "--disable-slash-commands", "--max-turns", "1",
+            ]
+            adapter.write_text(
+                f"#!{sys.executable}\n"
+                "import os, sys\n"
+                f"os.chdir({str(directory)!r})\n"
+                f"cmd = [{cli!r}] + sys.argv[1:] + {flags!r}\n"
+                f"os.execv({cli!r}, cmd)\n",
+                encoding="utf-8",
+            )
+            adapter.chmod(0o700)
+            return chat_completion_via_cli(
+                model, messages, cli_path=str(adapter), timeout=timeout,
+                usage_callback=usage_callback, observe_health=False, env=child_env,
+            )
+    except LLMError as exc:
+        # Existing transports can include stdout, body, argv or upstream text in
+        # their exception. Preserve its classification without forwarding text.
+        raise LLMError(f"受限模型调用失败（{exc.kind.value}）", exc.kind) from None
+    except OSError:
+        raise LLMError("受限模型调用无法启动", LLMFailure.UNAVAILABLE) from None
+    except Exception:
+        raise LLMError("受限模型返回无法处理", LLMFailure.BAD_RESPONSE) from None
 
 
 class ChatStream:

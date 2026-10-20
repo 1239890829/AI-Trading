@@ -47,7 +47,48 @@ const REGISTRY_LABELS: Record<string, string> = {
 };
 
 function taskLabel(type: string, types: AgentTaskType[] | undefined | null): string {
-  return types?.find((x) => x.type === type)?.label ?? REGISTRY_LABELS[type] ?? type;
+  return types?.find((x) => x.type === type)?.label
+    ?? (type === "company_evidence" ? "采集公司依据与判读" : REGISTRY_LABELS[type] ?? type);
+}
+
+function taskStatusLabel(task: AgentTask): string {
+  return task.outcome?.label ?? (task.type === "company_evidence" && task.status === "succeeded"
+    ? "处理完成" : STATUS_META[task.status].label);
+}
+
+const COMPANY_RESULT_LABELS: Record<string, string> = {
+  idle: "尚未开始", queued: "排队中", collecting: "采集公司资料中", generating: "生成经营解释中",
+  ready: "经营解释已保存", insufficient: "依据不足", source_failed: "来源采集失败",
+  model_failed: "模型调用失败", invalid_response: "模型回答未通过校验", budget_blocked: "预算阻止调用",
+  canceled: "已取消", interrupted: "处理中断", disabled: "自动采集已停用",
+  historical_excluded: "历史时点资料不可用",
+};
+
+function CompanyTaskResult({task}: {task: AgentTask}) {
+  const result = task.result_ref?.kind === "company_evidence" ? task.result_ref : null;
+  const batchLabels: Record<string, string> = {
+    processed: "本批处理已结束", no_candidates: "本轮没有当前候选",
+    no_due_candidates: "当前候选均未到处理时点", disabled: "自动采集已停用",
+    failed: "本批处理失败", canceled: "本批已取消", interrupted: "本批处理中断",
+  };
+  const seen = new Set<string>();
+  const rows = (Array.isArray(result?.symbols) ? result.symbols : []).filter(row => {
+    if (!row || typeof row.symbol !== "string" || !/^\d{6}$/.test(row.symbol) || seen.has(row.symbol)) return false;
+    seen.add(row.symbol);
+    return true;
+  }).slice(0, 8);
+  const calls = typeof result?.model_calls === "number" && Number.isInteger(result.model_calls) && result.model_calls >= 0
+    ? `${result.model_calls} 次` : "未记录";
+  return <section aria-label="公司资料任务处理结果" className="mb-3 space-y-1.5 rounded-md border border-zinc-200 px-2 py-1.5 text-[11px] text-zinc-700 dark:border-zinc-800 dark:text-zinc-300">
+    <h4 className="font-medium">公司资料任务处理结果</h4>
+    <p>{result ? batchLabels[result.state ?? ""] ?? "本批结果状态未确认" : "尚未保存本批逐股处理结果"}。</p>
+    <p>模型调用：{calls}。</p>
+    {rows.length > 0 ? <ul aria-label="逐股处理状态" className="space-y-1">{rows.map(row => <li key={row.symbol}>
+      <span className="font-mono tabular-nums">{row.symbol}</span> · {typeof row.state === "string" ? COMPANY_RESULT_LABELS[row.state] ?? "状态未确认" : "状态未确认"}
+      {row.cached === true && <span> · 复用已存结果</span>}
+    </li>)}</ul> : result && result.state === "processed" ? <p>未保存逐股处理结果，不能确认本批个股判读状态。</p> : null}
+    <p className="text-zinc-600 dark:text-zinc-400">任务处理完成不代表所有个股判读通过。经营解释仅供当前研究，未验证实际效果，不改变排序或入选资格。</p>
+  </section>;
 }
 
 /** params 键的中文标签（登记类条目的正文靠它才读得懂；未知键回退原样显示）。 */
@@ -193,6 +234,11 @@ export function TaskCenter() {
   const paramRows = Object.entries(detail?.params ?? {}).filter(
     ([, v]) => typeof v === "string" || typeof v === "number",
   );
+  const companySymbols = detail?.type === "company_evidence" && Array.isArray(detail.params.symbols)
+    ? [...new Set(detail.params.symbols.filter((v): v is string => typeof v === "string" && /^\d{6}$/.test(v)))].slice(0, 8) : [];
+  const invalidCompanySymbols = detail?.type === "company_evidence" && Array.isArray(detail.params.symbols)
+    && (detail.params.symbols.some(v => typeof v !== "string" || !/^\d{6}$/.test(v))
+      || detail.params.symbols.length > 8);
   const needsDisposition = detail !== null && !detail.read_only && detail.status === "needs_confirm";
   const resolveReceipt = detail ? resolveReceipts[detail.id] : undefined;
   const actionable = needsDisposition && !taskReading && !taskPending && taskError == null && !resolving && !resolveReceipt;
@@ -249,7 +295,7 @@ export function TaskCenter() {
                     {taskLabel(t.type, types)}
                   </span>
                   <span className={`shrink-0 rounded px-1 py-0.5 text-[10px] ${t.outcome ? STATUS_META.needs_confirm.cls : STATUS_META[t.status].cls}`}>
-                    {t.outcome?.label ?? STATUS_META[t.status].label}
+                    {taskStatusLabel(t)}
                   </span>
                 </div>
                 <div className="mt-0.5 flex items-center gap-1.5 text-[10px] text-zinc-600 dark:text-zinc-400">
@@ -325,7 +371,7 @@ export function TaskCenter() {
                     {taskLabel(detail.type, types)}
                   </span>
                   <span className={`rounded px-1.5 py-0.5 text-[10px] ${detail.outcome ? STATUS_META.needs_confirm.cls : STATUS_META[detail.status].cls}`}>
-                    {detail.outcome?.label ?? STATUS_META[detail.status].label}
+                    {taskStatusLabel(detail)}
                   </span>
                   {detail.read_only && (
                     <span className="rounded bg-zinc-500/10 px-1.5 py-0.5 text-[10px] text-zinc-600 dark:text-zinc-400">
@@ -412,20 +458,25 @@ export function TaskCenter() {
                   ))}
                 </dl>
               )}
+              {companySymbols.length > 0 && <dl className="mb-3 rounded-lg border border-zinc-100 px-2 py-1.5 text-[11px] dark:border-zinc-800">
+                <div className="flex gap-2 py-0.5"><dt className="w-[72px] shrink-0 text-zinc-600 dark:text-zinc-400">任务标的</dt>
+                  <dd className="min-w-0 flex-1 break-words font-mono tabular-nums">{companySymbols.join("、")}</dd></div>
+              </dl>}
+              {invalidCompanySymbols && <p className="mb-2 text-[11px] text-amber-700 dark:text-amber-300">部分标的参数无效或超出展示上限，仅展示前8个合法证券代码。</p>}
               {detail.error && (
                 <p className="mb-2 rounded-md bg-red-500/5 px-2 py-1.5 text-[11px] text-red-700 dark:text-red-300">
                   失败：{detail.error.message}（{detail.error.code}）
                 </p>
               )}
-              {detail.result_ref && (
+              {detail.type === "company_evidence" ? <CompanyTaskResult task={detail}/> : detail.result_ref && (
                 <p className="mb-2 rounded-md bg-emerald-500/5 px-2 py-1.5 text-[11px] text-emerald-700 dark:text-emerald-300">
-                  产物：{detail.result_ref.kind} · {detail.result_ref.id}
+                  产物：{detail.result_ref.kind}{detail.result_ref.id ? ` · ${detail.result_ref.id}` : ""}
                 </p>
               )}
 
               <FactTimeline label="任务时点" items={[{label:"创建",value:detail.created_at ? timeText(detail.created_at) : "未记录",kind:"time"},{label:"开始",value:detail.started_at ? timeText(detail.started_at) : "未记录",kind:"time"},{label:"结束",value:detail.finished_at ? timeText(detail.finished_at) : "未记录",kind:"time"}]}/>
               {detail.steps.length === 0 ? (
-                <p className="text-[11px] text-zinc-600 dark:text-zinc-400">暂无步骤（任务刚创建，等待执行）。</p>
+                <p className="text-[11px] text-zinc-600 dark:text-zinc-400">{detail.type === "company_evidence" ? "本任务未记录执行步骤；请结合批次结果与错误查看实际处理状态。" : "暂无步骤（任务刚创建，等待执行）。"}</p>
               ) : (
                 <ExplanationMap label="执行轨迹" identity={detail.id} steps={traceGroups.map(group=>({id:`step-${group[0].index}`,label:`${group[0].index}. ${group[0].name}${group.length > 1 ? `等 ${group.length} 步` : ""}`,icon:"check",content:<div className="space-y-3">{group.map(step=><section key={step.index}><h4 className="text-xs font-medium">{step.index}. {step.name}</h4><ConditionList label="步骤记录" items={[`步骤状态：${typeof step.ok === "boolean" ? step.ok ? "通过" : "未通过" : "未记录"}；耗时：${step.duration_ms ?? "未记录"}ms。`,...(step.llm ? [`模型：${step.llm.model || "rules"}${step.llm.enhanced ? " · LLM 增强" : ""}`] : [])]}/>{step.input_summary && <NarrativeText text={step.input_summary} label="输入原记录"/>}{step.output_summary && <NarrativeText text={step.output_summary} label="输出原记录"/>}</section>)}</div>}))}/>
               )}
