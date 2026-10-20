@@ -147,6 +147,13 @@ def _automatic_daily_limit(sf):
         raise agent_budget.BudgetError("company_daily_budget", "公司自动判读当日已有4次调用；保留共享预算给其他消费者")
 
 
+def _model_admission(sf, *, explicit=False):
+    """Reject known day restrictions before work; this does not reserve a slot."""
+    if not explicit:
+        _automatic_daily_limit(sf)
+    agent_budget.ensure_model_usage_known(sf)
+
+
 def _event(symbol, app, sf, *, event_id=None):
     catalog = getattr(getattr(app, "state", None), "theme_catalog", None)
     themes = {v["theme_name"] for v in catalog.get_official_for_symbol(symbol)} if catalog else set()
@@ -223,6 +230,9 @@ async def run_company_evidence(rec, params, app):
         raise ValueError("公司任务symbols须为1至8个六位证券代码")
     sf = get_session_factory()
     symbols = list(dict.fromkeys(symbols)) if symbols is not None else sorted(await _drain_stage(candidate_symbols, sf), key=_rotation_key)
+    if not explicit and symbols:
+        await rec.checkpoint_async()
+        await _drain_stage(_model_admission, sf)
     batch_size = 8 if explicit else max(1, min(8, settings.company_evidence_batch_size))
     model = {"provider": settings.llm_provider, "model": settings.review_llm_model}
     results, pending, touched = [], [], []
@@ -335,8 +345,7 @@ async def run_company_evidence(rec, params, app):
                             or (model["provider"] != "claude_cli" and (
                                 not settings.review_llm_base_url or not settings.review_llm_api_key))):
                         raise LLMError("configured model unavailable")
-                    if not explicit:
-                        await _drain_stage(_automatic_daily_limit, sf)
+                    await _drain_stage(_model_admission, sf, explicit=explicit)
                     lease = await _drain_stage(agent_budget.reserve, agent_budget.SCOPE_AUTONOMY_LLM, purpose="company_evidence.select",
                         kind="model", task_id=rec.task_id, provider=model["provider"], model=model["model"],
                         timeout_seconds=180, max_retries=0,
@@ -425,6 +434,12 @@ async def scheduler_tick(app):
     from app.services import agent_tasks
 
     sf = get_session_factory()
+    try:
+        await _drain_stage(_model_admission, sf)
+    except agent_budget.BudgetError as error:
+        if error.code not in {"company_daily_budget", "usage_unknown"}:
+            raise
+        return  # Re-read next tick; no task, source refresh or cached block is created.
     symbols = await _drain_stage(candidate_symbols, sf)
     for symbol in symbols:
         item = await _drain_stage(_event, symbol, app, sf)

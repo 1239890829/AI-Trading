@@ -120,6 +120,52 @@ def test_known_usage_counts_real_tokens_not_zero_placeholders(sf):
     assert status["token_usage_unknown_calls"] == 0
 
 
+@pytest.mark.parametrize("scope", [ab.SCOPE_AUTONOMY_LLM, ab.SCOPE_ALERT_TRIAGE_LLM])
+def test_read_only_known_usage_admission_rechecks_started_and_finished_receipts_without_writing(sf, scope):
+    row = ab.reserve(scope, purpose="fixture.inflight", kind="model", session_factory=sf)
+    ab.start(row["id"], sf)
+    before = ab.recent_usage(sf)
+    for _ in range(2):
+        with pytest.raises(ab.BudgetError) as error:
+            ab.ensure_model_usage_known(sf)
+        assert error.value.code == "usage_unknown"
+    assert ab.recent_usage(sf) == before
+    ab.finish(row["id"], state="succeeded", usage={"input_tokens": 2, "output_tokens": 1}, session_factory=sf)
+    finished = ab.recent_usage(sf)
+    assert ab.ensure_model_usage_known(sf) is None
+    assert ab.recent_usage(sf) == finished
+
+
+def test_read_only_known_usage_admission_ignores_telemetry_and_keeps_previous_day_unknown(sf, monkeypatch):
+    monkeypatch.setattr(ab, "_today", lambda: "2026-10-20")
+    ab.record_unmetered(purpose="fixture.auxiliary", provider="fixture", model="fixture", state="failed",
+                        usage=None, session_factory=sf)
+    assert ab.ensure_model_usage_known(sf) is None
+    row = ab.reserve(ab.SCOPE_AUTONOMY_LLM, purpose="fixture.timeout", kind="model", session_factory=sf)
+    ab.start(row["id"], sf)
+    ab.finish(row["id"], state="failed", usage=None, session_factory=sf)
+    before = ab.recent_usage(sf)
+    with pytest.raises(ab.BudgetError) as error:
+        ab.ensure_model_usage_known(sf)
+    assert error.value.code == "usage_unknown"
+    monkeypatch.setattr(ab, "_today", lambda: "2026-10-21")
+    assert ab.ensure_model_usage_known(sf) is None
+    assert ab.recent_usage(sf) == before
+
+
+def test_read_only_known_usage_admission_does_not_hide_database_failure():
+    from sqlalchemy.exc import OperationalError
+
+    failure = OperationalError("fixture admission read", {}, RuntimeError("isolated read unavailable"))
+
+    def unavailable():
+        raise failure
+
+    with pytest.raises(OperationalError) as error:
+        ab.ensure_model_usage_known(unavailable)
+    assert error.value is failure
+
+
 def test_task_budget_is_cross_process_slot_based(sf, monkeypatch):
     monkeypatch.setattr(settings, "agent_daily_task_budget", 1)
     row = ab.reserve(

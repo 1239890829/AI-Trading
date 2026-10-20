@@ -108,15 +108,16 @@ async def fetch_market_snapshot(page_size: int = 100, concurrency: int = 6, time
                 *(page(p) for p in range(chunk_start, min(chunk_start + concurrency, pages + 1))),
                 return_exceptions=True,
             )
+            # An earlier timeout cannot hide a 456 already observed in this
+            # same completed batch and bypass the owner's long cooldown.
             for item in chunk:
+                if isinstance(item, SinaRateLimited):
+                    raise item
+            for page_number, item in enumerate(chunk, start=chunk_start):
                 if isinstance(item, Exception):
-                    if isinstance(item, SinaRateLimited):
-                        # 限流必须**保留原类型**冒泡：调用方据此改用长冷却。
-                        # 若在此处统一转成 ProviderError，最明确的限流信号就被
-                        # 降级成「普通失败」，退避会退回常规节奏（2026-09-14 实测：
-                        # 常规退避两轮（120s/240s）都仍在限流窗口内）。
-                        raise item
-                    raise ProviderError(f"sina page fetch failed: {item}")
+                    raise ProviderError(
+                        f"sina page {page_number} fetch failed ({type(item).__name__}): {item}"
+                    ) from None
                 results.extend(item)
     rows = [r for r in (parse_row(x) for x in results) if r]
     identities = {(r.get("market"), r.get("symbol")) for r in rows}

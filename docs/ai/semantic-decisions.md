@@ -672,3 +672,15 @@ PR #310准确HEAD d8a5f164合入8b29ec28，三项CI和master CI 39370141869通�
 最终在当前8家同原件执行v4/v5一次离线对照：80→79片段，删3条会计定义、补2条原文风险、77条保留。新增603009行业需求压力不是公司已损失，001306供应商/成本应对不是已实现节约。6个财务章起点有原页证据，000559/603270在解析窗之外，仅据目录不能截断；边界明确未知。原件SHA、实收回执和23份现存状态文件未变，模型/网络0。这是素材及分类改善，不证明新解释整体更优、独立准确率或投资收益。
 
 发布前读链反证发现profile来源缺项未传普通company_status；最小合并当前时点可用profile的覆盖限制与原事件/任务缺项，去重并有界显示。旧冻结analysis/模型回执不改，历史/未来资料不提前可见，GET不写或调用。原首HEAD的完整门和主动取消CI单列，新HEAD另核适用完整BE/三项CI；前端字节未变，本轮完整前端结果按精确字节复用。
+
+### 2026-10-20 Vibe-Trading状态澄清与验证边界
+
+**Vibe-Trading尚未整包接入，也未完成整体验证。** 2026-10-18固定`c546e877274e7d36056c042808e1a875d9081eb9`，只读保存58份源码/资料并核哈希；本次针对该快照的执行、测试及完整集成均为0。忽略证据标识为`artifacts/radar/20261018-open-source-review/vibe/manifest.json`。历史grounding思想借鉴和ChinaAEngine费用金标不等于该版本完整平台验收。
+
+近期多轮真实完整图、DeepSeek/Codex/Luna对照及故障接续属于TradingAgents，不是Vibe-Trading的运行证据。旧归档的“轻量单Agent、1–2次调用”不能作为该快照的现役判断：其[五worker研究DAG](https://github.com/HKUDS/Vibe-Trading/blob/c546e877274e7d36056c042808e1a875d9081eb9/agent/src/swarm/presets/quant_strategy_desk.yaml)保留筛选/因子研究、策略生成回测、风险审计和报告，另有记忆及证据管理，不是单纯生成或美化App。
+
+其[A股来源回退链](https://github.com/HKUDS/Vibe-Trading/blob/c546e877274e7d36056c042808e1a875d9081eb9/agent/backtest/loaders/registry.py)复用Tencent、东方财富、BaoStock、AKShare等，并有凭据/收费末端；包装源数量不等于独立来源数量。来源回退、复权标签和grounding可供比较，但不能证明上游数据真值、新闻首见或本系统错误率改善，AI也不能补造缺失事实。
+
+完整采用仍须保留原研究闭环，先获准隔离运行[生成代码执行器](https://github.com/HKUDS/Vibe-Trading/blob/c546e877274e7d36056c042808e1a875d9081eb9/agent/src/core/runner.py)，验证对象/时点/版本/账户scope、工具权限、预算、失败/取消/恢复及同输入基线净增量；不能禁掉核心执行后声称整体验证，也不拆片集成。当前没有本机实跑质量、时间或费用结论，不据此安装、开通新收费或扩大生产权限。
+
+本节只更正候选定位，不形成正式采用或新实验派工，不改原阶段状态、调度或生产消费者。框架未接入是事实；等待具体净收益证据不是当前数据错误修复的前置，来源异常和错误缓存等正确性问题继续独立处理。

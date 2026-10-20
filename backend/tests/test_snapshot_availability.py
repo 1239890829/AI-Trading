@@ -156,6 +156,39 @@ def test_snapshot_missing_one_page_is_not_published_as_complete(monkeypatch):
         asyncio.run(sina_market.fetch_market_snapshot(page_size=100, concurrency=6))
 
 
+def test_empty_transport_error_preserves_page_and_failure_type(monkeypatch):
+    import httpx
+
+    def handler(url, params):
+        if "getHQNodeStockCount" in url:
+            return _Resp(200, text='"101"')
+        if params["page"] == 2:
+            raise httpx.ReadTimeout("")
+        return _Resp(200, payload=[])
+
+    _patch_http(monkeypatch, handler)
+    with pytest.raises(ProviderError, match=r"page 2.*ReadTimeout"):
+        asyncio.run(sina_market.fetch_market_snapshot(page_size=100, concurrency=6))
+
+
+@pytest.mark.parametrize("first_failure", ["timeout", "http500"])
+def test_any_observed_rate_limit_beats_an_earlier_page_failure(monkeypatch, first_failure):
+    import httpx
+
+    def handler(url, params):
+        if "getHQNodeStockCount" in url:
+            return _Resp(200, text='"200"')
+        if params["page"] == 1:
+            if first_failure == "timeout":
+                raise httpx.ReadTimeout("")
+            return _Resp(500)
+        return _Resp(RATE_LIMIT_STATUS)
+
+    _patch_http(monkeypatch, handler)
+    with pytest.raises(SinaRateLimited):
+        asyncio.run(sina_market.fetch_market_snapshot(page_size=100, concurrency=6))
+
+
 # ---------------------------------------------------------------- ② 退避判据
 
 

@@ -400,6 +400,10 @@ def test_intraday_aggregate_shares_merge_and_spacing(monkeypatch, aggregate_stat
 
 
 def test_watcher_failure_uses_one_board_read_per_kind_per_beat(monkeypatch):
+    from app.core import ttl_cache
+
+    clock = [0.0]
+    monkeypatch.setattr(ttl_cache, "monotonic", lambda: clock[0])
     now = datetime(2026, 9, 7, 10, 0, tzinfo=BJ_TZ)
     monkeypatch.setattr(wt, "beijing_now", lambda: now)
     monkeypatch.setattr(bf, "beijing_now", lambda: now)
@@ -434,6 +438,10 @@ def test_watcher_failure_uses_one_board_read_per_kind_per_beat(monkeypatch):
         assert Counter(calls) == Counter({bf._KIND_FS["concept"]: 1, bf._KIND_FS["industry"]: 1})
         assert result["board_count"] == 0 and result["board_flows"] == {} and result["themes"] == {}
         await wt.collect_beat_inputs(state, {}, env_refresh_seconds=60)
-        assert len(calls) == 4  # A distinct later beat may retry; failure is never success-cached.
+        assert len(calls) == 2  # Another consumer/beat shares the known unavailable state.
+        clock[0] = 30.0
+        result = await wt.collect_beat_inputs(state, {}, env_refresh_seconds=60)
+        assert len(calls) == 4  # The next eligible beat can retry both kinds after cooldown.
+        assert result["board_count"] == 0 and result["board_flows"] == {} and result["themes"] == {}
 
     asyncio.run(go())

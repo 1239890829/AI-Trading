@@ -220,7 +220,7 @@ class _BoardListUnavailable(Exception):
 
 
 async def get_board_list(kind: str) -> tuple[list[dict] | None, list[str]]:
-    """全量板块行（concept/industry）。缓存盘中 30s / 盘外 300s；失败不缓存。"""
+    """成功缓存盘中30s/盘外300s；失败保留不可用并退避30s，期满单飞复查。"""
     if kind not in _KIND_FS:
         return None, [f"kind 非法：{kind!r}"]
     cache, key = board_list_read_identity(kind)
@@ -236,9 +236,19 @@ async def get_board_list(kind: str) -> tuple[list[dict] | None, list[str]]:
             raise _BoardListUnavailable(degraded + ["板块列表解析为空"])
         return {"rows": rows, "degraded": degraded, "source": host}
 
+    async def read() -> tuple[bool, dict]:
+        try:
+            return await cache.get_or_set(key, load)
+        except _BoardListUnavailable as exc:
+            # Store the failure before this shared task completes. Consumers
+            # still receive unavailable, never an empty successful source pool.
+            payload = {"rows": None, "degraded": list(exc.degraded), "source": None}
+            cache.set(key, payload, ttl=30.0)
+            return False, payload
+
     task = _LIST_READS.get(pending_key)
     if task is None or task.done():
-        task = asyncio.create_task(cache.get_or_set(key, load))
+        task = asyncio.create_task(read())
         _LIST_READS[pending_key] = task
 
         def completed(done: asyncio.Task) -> None:
@@ -248,10 +258,9 @@ async def get_board_list(kind: str) -> tuple[list[dict] | None, list[str]]:
                 done.exception()
 
         task.add_done_callback(completed)
-    try:
-        _, payload = await asyncio.shield(task)
-    except _BoardListUnavailable as exc:
-        return None, list(exc.degraded)
+    _, payload = await asyncio.shield(task)
+    if payload["rows"] is None:
+        return None, list(payload["degraded"])
     # 各消费者会排序、补榜位/连续流入；这些写操作不能污染源缓存和其他消费者。
     return [dict(row) for row in payload["rows"]], list(payload["degraded"])
 
