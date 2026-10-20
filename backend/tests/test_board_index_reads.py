@@ -44,6 +44,10 @@ async def _second_reader(started):
 
 
 def test_staggered_failure_index_is_shared_and_next_read_recovers(monkeypatch, index_scope):
+    from app.core import ttl_cache
+
+    clock = [0.0]
+    monkeypatch.setattr(ttl_cache, "monotonic", lambda: clock[0])
     async def scenario():
         concept_entered, release, second_started = asyncio.Event(), asyncio.Event(), asyncio.Event()
         calls = Counter()
@@ -77,6 +81,11 @@ def test_staggered_failure_index_is_shared_and_next_read_recovers(monkeypatch, i
             assert calls[(False, "concept", "primary")] == 1
             assert calls[(False, "concept", "delay")] == 1
             recovered = True
+            # Source recovery does not cause every consumer to bypass the
+            # bounded failure cooldown; one shared read probes after expiry.
+            assert await ts._board_index() == {}
+            assert calls[(True, "industry", "primary")] == 0
+            clock[0] = 30.0
             result = await ts._board_index()
             assert set(result) == {"industry", "concept"}
             assert calls[(True, "industry", "primary")] == 1

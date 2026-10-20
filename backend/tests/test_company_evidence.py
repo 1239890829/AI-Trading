@@ -752,7 +752,8 @@ def test_automatic_consumer_cap_uses_existing_receipts_and_shared_slots(env, mon
     with pytest.raises(agent_budget.BudgetError) as error:
         run(env, {"automatic": True})
     assert error.value.code == "company_daily_budget" and not env.calls
-    assert store.load_state(SYMBOL)["state"] == "budget_blocked" and len(usage_rows(env)) == 4
+    assert not store.load_state(SYMBOL) and not env.collected and not env.root.exists()
+    assert len(usage_rows(env)) == 4
     # Explicit maintenance still shares the same existing slots, no second budget table.
     run(env)
     assert len(env.calls) == 1 and len(usage_rows(env)) == 5
@@ -798,3 +799,234 @@ def test_scheduler_exposes_queue_persistence_failure_instead_of_claiming_busy_ow
         asyncio.run(worker.scheduler_tick(env.app))
     assert caught.value is error
     assert not env.calls and not usage_rows(env) and not env.collected
+
+
+def _charge_company_calls(env, count):
+    for _ in range(count):
+        lease = agent_budget.reserve("autonomy_llm", purpose="company_evidence.select", kind="model",
+                                     session_factory=env.sf)
+        agent_budget.start(lease["id"], env.sf)
+        agent_budget.finish(lease["id"], state="succeeded", usage={"input_tokens": 1, "output_tokens": 1},
+                            session_factory=env.sf)
+
+
+@pytest.mark.parametrize("block", ["company_cap", "autonomy_unknown", "triage_unknown"])
+def test_known_admission_block_skips_repeated_scheduler_and_automatic_work_without_touching_saved_result(env, monkeypatch, block):
+    from app.services import agent_tasks
+
+    run(env)
+    env.clock[0] += timedelta(hours=7)  # The saved explanation is valid, but its source refresh is due.
+    if block == "company_cap":
+        _charge_company_calls(env, 3)
+        expected = "company_daily_budget"
+    else:
+        scope = "autonomy_llm" if block == "autonomy_unknown" else "alert_triage_llm"
+        lease = agent_budget.reserve(scope, purpose="fixture.inflight", kind="model", session_factory=env.sf)
+        agent_budget.start(lease["id"], env.sf)
+        expected = "usage_unknown"
+    files = {p: p.read_bytes() for p in env.root.rglob("*") if p.is_file()}
+    saved = ci.read_saved(env.item, SYMBOL, now=env.clock[0])
+    assert saved is not None
+    usage = agent_budget.recent_usage(env.sf)
+    collected, calls = len(env.collected), len(env.calls)
+    enqueued, candidates = [], []
+
+    async def enqueue(*args, **kwargs):
+        enqueued.append((args, kwargs))
+
+    def symbols(*args, **kwargs):
+        candidates.append(True)
+        return [SYMBOL]
+
+    monkeypatch.setattr(worker.settings, "company_evidence_enabled", True)
+    monkeypatch.setattr(worker, "candidate_symbols", symbols)
+    monkeypatch.setattr(agent_tasks, "create_task_async", enqueue)
+
+    async def ticks():
+        await asyncio.gather(worker.scheduler_tick(env.app), worker.scheduler_tick(env.app))
+
+    asyncio.run(ticks())
+    assert not enqueued and not candidates
+    with pytest.raises(agent_budget.BudgetError) as error:
+        run(env, {"automatic": True})
+    assert error.value.code == expected
+    assert len(env.collected) == collected and len(env.calls) == calls
+    assert {p: p.read_bytes() for p in env.root.rglob("*") if p.is_file()} == files
+    assert agent_budget.recent_usage(env.sf) == usage
+    assert ci.read_saved(env.item, SYMBOL, now=env.clock[0]) == saved
+
+
+def test_scheduler_rechecks_active_usage_after_completion_without_reserving_or_caching_block(env, monkeypatch):
+    from app.services import agent_tasks
+
+    lease = agent_budget.reserve("alert_triage_llm", purpose="fixture.inflight", kind="model", session_factory=env.sf)
+    agent_budget.start(lease["id"], env.sf)
+    enqueued = []
+
+    async def enqueue(*args, **kwargs):
+        enqueued.append((args, kwargs))
+
+    monkeypatch.setattr(worker.settings, "company_evidence_enabled", True)
+    monkeypatch.setattr(worker, "candidate_symbols", lambda *a, **k: [SYMBOL])
+    monkeypatch.setattr(agent_tasks, "create_task_async", enqueue)
+    asyncio.run(worker.scheduler_tick(env.app))
+    assert not enqueued
+    agent_budget.finish(lease["id"], state="succeeded", usage={"input_tokens": 3, "output_tokens": 2},
+                        session_factory=env.sf)
+    asyncio.run(worker.scheduler_tick(env.app))
+    assert enqueued == [(("company_evidence", {"automatic": True}), {"created_by": "scheduler"})]
+    assert not env.collected and not env.calls and len(usage_rows(env)) == 1
+    assert not env.root.exists()
+
+
+@pytest.mark.parametrize("block", ["company_cap", "unknown"])
+def test_scheduler_rechecks_beijing_day_without_rewriting_previous_day_budget(env, monkeypatch, block):
+    from app.services import agent_tasks
+
+    env.clock[0] = datetime.fromisoformat("2026-10-20T23:59:00+08:00")
+    if block == "company_cap":
+        _charge_company_calls(env, 4)
+    else:
+        lease = agent_budget.reserve("autonomy_llm", purpose="fixture.timeout", kind="model", session_factory=env.sf)
+        agent_budget.start(lease["id"], env.sf)
+        agent_budget.finish(lease["id"], state="failed", usage=None, session_factory=env.sf)
+    before = agent_budget.recent_usage(env.sf)
+    enqueued = []
+
+    async def enqueue(*args, **kwargs):
+        enqueued.append((args, kwargs))
+
+    monkeypatch.setattr(worker.settings, "company_evidence_enabled", True)
+    monkeypatch.setattr(worker, "candidate_symbols", lambda *a, **k: [SYMBOL])
+    monkeypatch.setattr(agent_tasks, "create_task_async", enqueue)
+    asyncio.run(worker.scheduler_tick(env.app))
+    assert not enqueued
+    env.clock[0] = datetime.fromisoformat("2026-10-21T00:01:00+08:00")
+    asyncio.run(worker.scheduler_tick(env.app))
+    assert len(enqueued) == 1
+    assert agent_budget.recent_usage(env.sf) == before
+    assert not env.collected and not env.calls and not env.root.exists()
+
+
+def test_auxiliary_telemetry_unknown_does_not_block_scheduler_or_automatic_company(env, monkeypatch):
+    from app.services import agent_tasks
+
+    agent_budget.record_unmetered(purpose="fixture.auxiliary", provider="fixture", model="fixture",
+                                 state="failed", usage=None, session_factory=env.sf)
+    enqueued = []
+
+    async def enqueue(*args, **kwargs):
+        enqueued.append((args, kwargs))
+
+    monkeypatch.setattr(worker.settings, "company_evidence_enabled", True)
+    monkeypatch.setattr(worker, "candidate_symbols", lambda *a, **k: [SYMBOL])
+    monkeypatch.setattr(agent_tasks, "create_task_async", enqueue)
+    asyncio.run(worker.scheduler_tick(env.app))
+    assert len(enqueued) == 1
+    assert run(env, {"automatic": True})["model_calls"] == 1
+    assert len(env.calls) == 1 and len(usage_rows(env)) == 2
+
+
+def test_admission_database_failure_is_exposed_without_queue_or_collection(env, monkeypatch):
+    from app.services import agent_tasks
+    from sqlalchemy.exc import OperationalError
+
+    failure = OperationalError("fixture admission read", {}, RuntimeError("isolated read unavailable"))
+    enqueued = []
+
+    def unavailable():
+        raise failure
+
+    async def enqueue(*args, **kwargs):
+        enqueued.append((args, kwargs))
+
+    monkeypatch.setattr(worker.settings, "company_evidence_enabled", True)
+    monkeypatch.setattr(worker, "get_session_factory", lambda: unavailable)
+    monkeypatch.setattr(worker, "candidate_symbols", lambda *a, **k: [SYMBOL])
+    monkeypatch.setattr(agent_tasks, "create_task_async", enqueue)
+    with pytest.raises(OperationalError) as scheduler_error:
+        asyncio.run(worker.scheduler_tick(env.app))
+    assert scheduler_error.value is failure
+    with pytest.raises(OperationalError) as run_error:
+        run(env, {"automatic": True})
+    assert run_error.value is failure
+    assert not enqueued and not env.calls and not env.collected and not env.root.exists()
+
+
+@pytest.mark.parametrize("recovery", ["cached", "unpublished"])
+def test_explicit_known_paid_output_can_recover_while_another_call_usage_is_unknown(env, monkeypatch, recovery):
+    publisher = ci.publish_automatic
+    if recovery == "unpublished":
+        def unavailable(*args, **kwargs):
+            raise OSError("fixture publication unavailable")
+        monkeypatch.setattr(ci, "publish_automatic", unavailable)
+        with pytest.raises(OSError):
+            run(env)
+        monkeypatch.setattr(ci, "publish_automatic", publisher)
+    else:
+        run(env)
+    prior = store.load_state(SYMBOL)
+    assert prior["attempt_state"] == "succeeded"
+    lease = agent_budget.reserve("alert_triage_llm", purpose="fixture.inflight", kind="model", session_factory=env.sf)
+    agent_budget.start(lease["id"], env.sf)
+    before = agent_budget.recent_usage(env.sf)
+    env.clock[0] += timedelta(minutes=2)
+    result = run(env)
+    assert result["model_calls"] == 0 and len(env.calls) == 1
+    assert agent_budget.recent_usage(env.sf) == before
+    saved = ci.read_saved(env.item, SYMBOL, now=env.clock[0])
+    assert saved is not None and saved["analysis"]["status"] == "conditional"
+    assert store.load_state(SYMBOL)["generated_at"] == prior["generated_at"]
+    assert len(receipts(env)) == 1
+
+
+def test_automatic_company_cap_is_rechecked_when_other_calls_finish_during_collection(env, monkeypatch):
+    collector = worker.collect_company
+
+    def collect_after_other_calls(*args, **kwargs):
+        profile = collector(*args, **kwargs)
+        _charge_company_calls(env, 4)
+        return profile
+
+    monkeypatch.setattr(worker.settings, "company_evidence_enabled", True)
+    monkeypatch.setattr(worker, "candidate_symbols", lambda *a, **k: [SYMBOL])
+    monkeypatch.setattr(worker, "collect_company", collect_after_other_calls)
+    with pytest.raises(agent_budget.BudgetError) as error:
+        run(env, {"automatic": True})
+    assert error.value.code == "company_daily_budget"
+    assert len(env.collected) == 1 and not env.calls and len(usage_rows(env)) == 4
+    state = store.load_state(SYMBOL)
+    assert state["state"] == "budget_blocked" and state["attempt_state"] == "not_started"
+    assert store.read_profile(SYMBOL) and not receipts(env)
+
+
+@pytest.mark.parametrize("race", ["reserve", "start"])
+def test_late_unknown_after_admission_is_still_blocked_by_original_atomic_gate(env, monkeypatch, race):
+    reserve, start = agent_budget.reserve, agent_budget.start
+    interloper = []
+
+    def unknown_call():
+        lease = reserve("alert_triage_llm", purpose="fixture.concurrent", kind="model", session_factory=env.sf)
+        start(lease["id"], env.sf)
+        interloper.append(lease["id"])
+
+    if race == "reserve":
+        def raced_reserve(*args, **kwargs):
+            unknown_call()
+            return reserve(*args, **kwargs)
+        monkeypatch.setattr(agent_budget, "reserve", raced_reserve)
+    else:
+        def raced_start(*args, **kwargs):
+            unknown_call()
+            return start(*args, **kwargs)
+        monkeypatch.setattr(agent_budget, "start", raced_start)
+    with pytest.raises(agent_budget.BudgetError) as error:
+        run(env)
+    assert error.value.code == "usage_unknown"
+    assert len(interloper) == 1 and not env.calls
+    rows = usage_rows(env)
+    assert len(rows) == 1 and rows[0].id == interloper[0]
+    assert rows[0].state == "started" and rows[0].usage_known == 0
+    state = store.load_state(SYMBOL)
+    assert state["state"] == "budget_blocked" and state["attempt_state"] == "not_started"
+    assert store.read_profile(SYMBOL) and not receipts(env)

@@ -131,6 +131,20 @@ def _unknown_usage_exists(sf, date: str) -> bool:
         return rows is not None
 
 
+def ensure_model_usage_known(session_factory=None, *, date: str | None = None) -> None:
+    """Read the existing shared model gate without reserving, recovering or writing.
+
+    Admission is only a current observation. ``reserve`` and atomic ``start``
+    still enforce the gate when another process changes usage after this read.
+    """
+    sf = session_factory or get_session_factory()
+    if _unknown_usage_exists(sf, date or _today()):
+        raise BudgetError(
+            "usage_unknown",
+            "今日已有自主或告警判读模型调用的 token 用量未知；拒绝继续消耗，须先核实/跨日恢复",
+        )
+
+
 def _triage_numbered_slots(sf, date: str, limit: int) -> list[int]:
     """Keep today's existing triage usage when a finite cap is configured later.
 
@@ -197,11 +211,8 @@ def reserve(
         )
 
     date = _today()
-    if scope in _MODEL_BUDGET_SCOPES and _unknown_usage_exists(sf, date):
-        raise BudgetError(
-            "usage_unknown",
-            "今日已有自主或告警判读模型调用的 token 用量未知；拒绝继续消耗，须先核实/跨日恢复",
-        )
+    if scope in _MODEL_BUDGET_SCOPES:
+        ensure_model_usage_known(sf, date=date)
 
     now = beijing_now_naive()
     if limit is None:

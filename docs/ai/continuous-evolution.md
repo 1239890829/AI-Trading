@@ -346,3 +346,13 @@ JEV研发共审保留现状/修补/复用/替换/弃权，与实际业务凭证�
 ### 2026-10-19 新复杂场景有限复验
 
 用户授权换六个真实新场景，原完整图不拆核心，新增low候选与两份medium控制；实际失败、两项作者方法错误、同输入单模型、耗时/官方估价与未知账单见[语义蓝图](semantic-decisions.md#2026-10-19-新复杂场景与判读可见性)。108次已排空、八图无完整质量通过，净增量未证，不接入、不自动追加一代或重跑旧四例。窄有限误报离线减少不代替真实全文同伴源审；事件队列和阅读提示为独立修复。RSH-030原状态与复审期限保留，未来独立效果不冒充本批工程阻塞。
+
+### 2026-10-20 Vibe-Trading只读重核
+
+当前定位见[语义蓝图的状态澄清](semantic-decisions.md#2026-10-20-vibe-trading状态澄清与验证边界)：固定`c546e877274e7d36056c042808e1a875d9081eb9`的58份文件只完成静态核查，执行/测试为0、完整集成为0；证据标识为`artifacts/radar/20261018-open-source-review/vibe/manifest.json`。近期多轮实际实验是TradingAgents，不得转记为Vibe-Trading已验证。
+
+旧归档只留历史身份，不能据“轻量1–2调用”自动维持采用或拒绝结论。[五worker研究DAG](https://github.com/HKUDS/Vibe-Trading/blob/c546e877274e7d36056c042808e1a875d9081eb9/agent/src/swarm/presets/quant_strategy_desk.yaml)有完整研究闭环，不是单纯美化App；[数据链](https://github.com/HKUDS/Vibe-Trading/blob/c546e877274e7d36056c042808e1a875d9081eb9/agent/backtest/loaders/registry.py)仍共用Tencent、东方财富等来源并含凭据/收费末端，不能据回退机制宣称真值或错误率已经改善。
+
+后续若有具体消费者和可证伪增量，须保留整体闭环，另获准隔离[代码执行与结果采集](https://github.com/HKUDS/Vibe-Trading/blob/c546e877274e7d36056c042808e1a875d9081eb9/agent/src/core/runner.py)，验证权限、预算、故障/取消/恢复与同输入净增量，不能拆片集成。当前无本机实跑质量、时间或费用结论；本次定位更正不授权安装、新收费、生产扩权或自动新实验。
+
+框架尚未接入不代表当前数据正确性修复必须等待它；错误缓存、来源失败和陈旧展示按原消费者独立修复。既有任务状态、门序、复核规则和生产消费者不变，本页不另建准入账本。

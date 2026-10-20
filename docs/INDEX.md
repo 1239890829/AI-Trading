@@ -37,7 +37,7 @@
 | **MD-09** | `research/limit-up-dragon-research.md` | L2 | 选股研究 | 历史涨停/强连板/龙头研究协议与证据；§30 纠正未来筛选，§32 为已纠错的旧裁决，§33 为价格基线，§34–35 为近期多路径案例与样本纠错，§36–38 为首板后候选状态、共同机制及 2016–2025 跨年份反证；§39 为持续观察、猎场消费和复盘契约，§39.4为隔离前向运行入口与覆盖限制；状态归 W04/RSH-031 |
 | **KW-00..11** | `kb/00-INDEX.md` … `kb/11-doc-catalog.md` | L2/L3 | 知识 | 见下方「KB 知识库」分表 |
 | **SM-01..08** | `summary/stock-strategy` · `factor-system` · `data-market` · `architecture-design` · `ai-evolution` · `review-governance` · `system-final-blueprint` · `pick-signal-chain` | L2 | 主题汇总 | **查主题先看这里**；`system-final-blueprint` 是任务四后目标架构与验收总纲，§5.1给KB正文回执与有限对照协议；**`pick-signal-chain` = 选股提醒链路（`dispatch_alert` 扇出 / 双家族断点 / §11 通知读侧 / §12 来源事件与投递合同）**。维护：主题结论更新 |
-| **DT-01** | `data/data-source-comparison.md` | L2 | 数据源 | 四源实测对比与选型。**改数据源前必读，改完回填** |
+| **DT-01** | `data/data-source-comparison.md` | L2 | 数据源 | 四源实测对比与选型；§17工作台个股/指数故障分母与身份/失败契约。**改数据源前必读，改完回填** |
 | **DT-02** | `data/data-sources.md` | L2 | 数据源 | 接入策略：主源 → 备源 → 降级链 |
 | **DT-03** | `archive/external-data-source-survey-2026-09-11.md` | L1 | 调研 | 外部付费源调研。§0–§7 = 官方公开信息（零实测，📎）；**§8 = 2026-09-16 复评（本机实测）**：FTShare 免费档实测 + 1000 次/天预算精算 + 四家价格/覆盖横向对比 + **升级决策 = 不升级**。**已拍板不接入付费档** ⇒ 只读留痕 |
 | **MD-01** | `strategy/theme-sentiment-methodology.md` | L2 | 方法论 | A 股热点题材与情绪分析 v1 |
@@ -59,7 +59,7 @@
 | **FN-10** | `archive/jev-integration-retired-20261011.md` | L2 | 历史档案 | 已退役Jev蓝图与历史实测；不得作为当前调用/安装/评分义务，现役入口为FN-12 |
 | **FN-12** | `ai/semantic-decisions.md` | L2 | AI/Agent 架构 | 当前规则/已有LLM与有限LAB；[六个新复杂场景与判读可见性](ai/semantic-decisions.md#2026-10-19-新复杂场景与判读可见性)：108真实调用含失败、八图0完整质量通过，净增量未证不接TA；事件候选饥饿与已保存AI覆盖提示独立修复；旧四例/71调用留历史，状态归W07/IMP-091、W04/RSH-030 |
 | **FN-13** | `product/limit-up-attribution.md` | L2 | 产品/事件归因 | 多维消息证据、逐股依据与AI适用范围、经营报告选择/缓存分层与[公司依据常规管线](product/limit-up-attribution.md#2026-10-20-公司依据常规管线)、市场响应、连续采集及选股/通知/复盘边界；工程状态归W00/IMP-092 |
-| **FN-11** | `system/runtime-performance.md` | L2 | 性能测量 | IMP-019 可复现入口；§23首图否决、§24重复工作/首帧、§25锁竞争测量、§26本机启动鉴权及盘前WS刷新、§27真实交易双窗/SQLite读取隔离；工程与交易窗口分层 |
+| **FN-11** | `system/runtime-performance.md` | L2 | 性能测量 | IMP-019 可复现入口；§23首图否决、§24重复工作/首帧、§25锁竞争测量、§26本机启动鉴权及盘前WS刷新、§27真实交易双窗/SQLite读取隔离；工程与交易窗口分层；§31工作台身份/重复失败纠偏 |
 | **EX-01** | `archive/live-trading-guosen-plan.md` | L1 | 搁置历史 | 国信 miniQMT 实盘蓝图。**用户已搁置**（不接受 Windows 依赖），恢复条件见文档头 |
 | **RV-01** | `review/review-agent.md` | L2 | 复盘 | 盘后复盘 Agent 架构 |
 | **RV-02** | `review/daily-review-sop.md` | L2 | 复盘 | 每日复盘 SOP（怎么判） |
@@ -242,6 +242,8 @@
 | 策略进化（信号健康 / 筹码引擎 / 复盘闭环） | `summary/ai-evolution.md`（09-08；**P0 全落地**：`backend/app/picks/signal_health.py` + `backend/app/market/chip.py` + `backend/app/review/strategy_health.py`；P2 按设计延后） |
 | trading 分组仓库值不值得用 | `kb/05-repo-tracker.md`（A/B 证据分级 + 台账 diff） |
 | trading 分组新增 star 怎么处理 | `summary/ai-evolution.md`（09-09 diff：22 仓去重已评后真新增 8 仓；告警时区修复+KB 补录+分级计划） |
+
+> 2026-10-20工作台故障接续：[数据源核对§17](data/data-source-comparison.md#17-工作台数据故障核对2026-10-20) → [运行报告§31](system/runtime-performance.md#31-2026-10-20-工作台数据故障与重复失败)；Vibe-Trading仅有[静态重核](ai/semantic-decisions.md#2026-10-20-vibe-trading状态澄清与验证边界)，不混用TradingAgents运行结果。
 
 ## 1. 总纲与运维
 

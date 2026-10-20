@@ -181,7 +181,13 @@ def test_board_cancelled_reader_keeps_shared_read(monkeypatch, isolated_list_rea
     _run(go())
 
 
-def test_board_failed_shared_read_does_not_cache_failure(monkeypatch, isolated_list_reads):
+@pytest.mark.parametrize("in_session", [True, False])
+def test_board_failure_cooldown_is_bounded_and_recovery_is_shared(monkeypatch, isolated_list_reads, in_session):
+    from app.core import ttl_cache
+
+    clock = [0.0]
+    monkeypatch.setattr(ttl_cache, "monotonic", lambda: clock[0])
+    monkeypatch.setattr(bf, "_in_session", lambda: in_session)
     calls = []
 
     class HTTP:
@@ -198,8 +204,45 @@ def test_board_failed_shared_read_does_not_cache_failure(monkeypatch, isolated_l
         failed = await asyncio.gather(*(bf.get_board_list("concept") for _ in range(8)))
         assert all(rows is None and degraded == ["东财板块列表不可用（双域已重试）"] for rows, degraded in failed)
         assert len(calls) == 2
-        rows, degraded = await bf.get_board_list("concept")
-        assert len(rows) == 1 and degraded == [] and len(calls) == 3
+        failed[0][1].append("caller-local note")
+        clock[0] = 29.0
+        result = await bf.get_board_fund_flow("concept", "intraday")
+        assert result["available"] is False and result["rows"] == []
+        assert result["degraded"] == ["东财板块列表不可用（双域已重试）"]
+        assert len(calls) == 2
+        clock[0] = 30.0
+        recovered = await asyncio.gather(*(bf.get_board_list("concept") for _ in range(8)))
+        assert all(len(rows) == 1 and degraded == [] for rows, degraded in recovered)
+        assert len(calls) == 3
+        # Reading a failure must not restart its cooldown or shorten success TTL.
+        clock[0] = 59.0 if in_session else 329.0
+        rows, _ = await bf.get_board_list("concept")
+        assert len(rows) == 1 and len(calls) == 3
+
+    _run(go())
+
+
+def test_board_failure_does_not_block_other_kind_or_next_day(monkeypatch, isolated_list_reads):
+    from datetime import timedelta
+
+    calls = []
+
+    async def pages(fs, fields):
+        calls.append(fs)
+        if "t:3" in fs:
+            return None, None
+        return [_em_board(kind="industry")], bf._HOSTS[0]
+
+    monkeypatch.setattr(bf, "_clist_pages", pages)
+
+    async def go():
+        assert (await bf.get_board_list("concept"))[0] is None
+        assert len((await bf.get_board_list("industry"))[0]) == 1
+        assert (await bf.get_board_list("concept"))[0] is None
+        assert len(calls) == 2
+        isolated_list_reads["now"] += timedelta(days=1)
+        assert (await bf.get_board_list("concept"))[0] is None
+        assert len(calls) == 3
 
     _run(go())
 

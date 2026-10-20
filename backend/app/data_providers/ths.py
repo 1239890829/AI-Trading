@@ -4,7 +4,8 @@
 - thscode 格式：600519.SH / 000001.SZ
 - **已实现**能力（须与下方方法一一对应）：行情快照 / 指数快照 / 交易日历 /
   涨停池 / 炸板池 / 连板天梯 / 龙虎榜（含概念标签）/ 集合竞价（快照 + 基准）/
-  异动（列表 + 个股）/ 热榜（人气 + 飙升 + 排名趋势 + 历史）/ 日K（含复权）
+  异动（列表 + 个股）/ 热榜（人气 + 飙升 + 排名趋势 + 历史）/
+  股票日K（含复权）与中央目录显式市场指数日K（无复权）
 - **官方有端点但本项目未接入**（勿据此认为可用；判据见
   `tests/test_provider_capabilities.py::test_ths_docstring_unimplemented_endpoints_stay_unwired`）：
   跌停池 `special-data/limit-down-pool`、财务四端点 `financials/indicators` /
@@ -23,6 +24,7 @@
 from __future__ import annotations
 
 import logging
+import re
 from datetime import date, datetime, timedelta, timezone
 
 import httpx
@@ -54,6 +56,28 @@ def to_thscode(symbol: str) -> str:
 
 def from_thscode(thscode: str) -> str:
     return thscode.split(".")[0]
+
+
+def _daily_kline_identity(symbol: str) -> tuple[str, bool]:
+    """Keep explicit index markets separate from the existing bare-stock contract."""
+    if not isinstance(symbol, str):
+        raise ProviderError("ths kline 证券身份非法")
+    match = re.fullmatch(
+        r"(?:(sh|sz|bj)([0-9]{6})|([0-9]{6})(?:\.(SH|SZ|BJ))?)", symbol.strip(), re.I,
+    )
+    if match is None:
+        raise ProviderError("ths kline 证券身份非法")
+    prefix, prefixed_code, code, suffix = match.groups()
+    code = prefixed_code or code
+    market = (prefix or suffix or "").upper()
+    if market and any(code == c and market == m for c, m, _ in INDEX_CATALOG):
+        return f"{code}.{market}", True
+    stock = to_thscode(code)
+    if market and (stock != f"{code}.{market}" or (market == "SZ" and code.startswith("399"))):
+        # Unregistered explicit indices cannot silently become an identically
+        # numbered stock. Other existing providers can still serve that input.
+        raise ProviderError("ths kline 尚未支持此显式市场证券身份")
+    return stock, False
 
 
 def _parse_heat_items(data: dict) -> tuple[str | None, list[dict]]:
@@ -590,6 +614,7 @@ class ThsFuyaoProvider:
     async def _get_daily_kline(
         self, symbol: str, start: datetime | None, end: datetime | None, *, adjust: str
     ) -> list[Kline]:
+        thscode, is_index = _daily_kline_identity(symbol)
         end_dt = _as_shanghai(end) if end is not None else beijing_now()
         start_dt = _as_shanghai(start) if start is not None else end_dt - timedelta(days=730)
         if start_dt > end_dt:
@@ -598,14 +623,20 @@ class ThsFuyaoProvider:
             raise ProviderError("ths kline 时间窗口 ≤10 年（code=1003）")
         if adjust not in {"none", "forward", "backward"}:
             raise ProviderError(f"ths kline adjust 非法：{adjust}")
-        data = await self._get(
-            "/api/a-share/prices/historical",
-            {
-                "thscode": to_thscode(symbol), "interval": "1d",
-                "start": int(start_dt.timestamp() * 1000),
-                "end": int(end_dt.timestamp() * 1000), "adjust": adjust,
-            },
-        )
+        params = {
+            "thscode": thscode, "interval": "1d",
+            "start": int(start_dt.timestamp() * 1000),
+            "end": int(end_dt.timestamp() * 1000),
+        }
+        if not is_index:
+            params["adjust"] = adjust
+        path = "/api/a-share-index/prices/historical" if is_index else "/api/a-share/prices/historical"
+        data = await self._get(path, params)
+        if is_index and (data.get("thscode") != thscode or data.get("interval") != "1d"
+                         or data.get("adjust") is not None):
+            raise ProviderError("ths index kline 返回证券身份或日线无复权口径不一致")
+        if not is_index and data.get("thscode") not in (None, thscode):
+            raise ProviderError("ths stock kline 返回证券身份不一致")
         bars: list[Kline] = []
         prev_close: float | None = None
         for it in data.get("item") or []:
@@ -633,7 +664,7 @@ class ThsFuyaoProvider:
         self, symbol: str, timeframe: str, start: datetime | None = None,
         end: datetime | None = None,
     ) -> list[Kline]:
-        """A股历史日K；既有消费者保持 forward/qfq 语义。"""
+        """股票日K保留forward/qfq；中央目录的显式市场指数无复权。"""
         if timeframe != "1d":
             raise ProviderError(f"ths kline 仅支持日线 1d，收到 {timeframe}")
         return await self._get_daily_kline(symbol, start, end, adjust="forward")
