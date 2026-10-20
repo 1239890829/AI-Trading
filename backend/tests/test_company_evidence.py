@@ -39,8 +39,14 @@ class Recorder:
         if self.canceled:
             raise asyncio.CancelledError
 
+    async def checkpoint_async(self):
+        self.checkpoint()
+
     def add(self, **step):
         self.steps.append(step)
+
+    async def add_async(self, **step):
+        self.add(**step)
 
 
 @pytest.fixture
@@ -526,7 +532,9 @@ def test_scheduler_uses_registered_switch_existing_task_and_does_no_work_when_of
     assert Settings.model_fields["company_evidence_enabled"].default is False
     assert "company_evidence_enabled" in SCHEDULER_SWITCH_ATTRS
     enqueued = []
-    monkeypatch.setattr(agent_tasks, "create_task", lambda *a, **k: enqueued.append((a, k)))
+    async def enqueue(*args, **kwargs):
+        enqueued.append((args, kwargs))
+    monkeypatch.setattr(agent_tasks, "create_task_async", enqueue)
     monkeypatch.setattr(worker, "candidate_symbols", lambda *a, **k: [SYMBOL])
     asyncio.run(worker.scheduler_tick(env.app))
     assert not enqueued and not env.collected and not env.calls
@@ -541,3 +549,20 @@ def test_empty_current_window_is_reported_without_source_or_model(env, monkeypat
     result = run(env, {"automatic": False})
     assert result["state"] == "no_candidates" and result["symbols"] == []
     assert not env.collected and not env.calls
+
+
+def test_scheduler_exposes_queue_persistence_failure_instead_of_claiming_busy_owner(env, monkeypatch):
+    from app.services import agent_tasks
+
+    monkeypatch.setattr(worker.settings, "company_evidence_enabled", True)
+    monkeypatch.setattr(worker, "candidate_symbols", lambda *a, **k: [SYMBOL])
+    error = agent_tasks.TaskQueueUnavailable("f" * 32, "unknown")
+
+    async def unavailable(*args, **kwargs):
+        raise error
+
+    monkeypatch.setattr(agent_tasks, "create_task_async", unavailable)
+    with pytest.raises(agent_tasks.TaskQueueUnavailable) as caught:
+        asyncio.run(worker.scheduler_tick(env.app))
+    assert caught.value is error
+    assert not env.calls and not usage_rows(env) and not env.collected

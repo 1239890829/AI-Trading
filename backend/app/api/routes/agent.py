@@ -18,6 +18,7 @@ import asyncio
 from datetime import datetime
 
 from fastapi import APIRouter, Depends, HTTPException, Query, Request
+from fastapi.responses import JSONResponse
 from pydantic import BaseModel, Field
 
 from app.api.deps import require_promotion_approval_token, require_write_token
@@ -48,9 +49,14 @@ async def agent_task_types():
 @router.post("/agent/tasks", dependencies=[Depends(require_write_token)])
 async def create_task(body: TaskCreateIn):
     try:
-        return {"data": at.create_task(body.type, body.params)}
+        return {"data": await at.create_task_async(body.type, body.params)}
     except ValueError as exc:      # 未知类型
         raise HTTPException(status_code=422, detail=str(exc))
+    except at.TaskQueueUnavailable as exc:
+        return JSONResponse(status_code=503, content={
+            "detail": f"{exc} 任务ID={exc.task_id}；持久状态={exc.persistence}。",
+            "code": "task_queue_unavailable", "task_id": exc.task_id, "persistence": exc.persistence,
+        })
     except RuntimeError as exc:    # 同类型互斥
         raise HTTPException(status_code=409, detail=str(exc))
 

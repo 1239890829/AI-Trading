@@ -85,7 +85,11 @@ def test_paid_success_recovery_keeps_original_capture_instead_of_retimestamping_
     async def immediate(fn, *args, **kwargs):
         return fn(*args, **kwargs)
     monkeypatch.setattr(worker, "_drain_stage", immediate)
-    rec = SimpleNamespace(task_id="recovery-owner", checkpoint=lambda: None, add=lambda **_: None)
+    async def checkpoint_async():
+        return None
+    async def add_async(**_):
+        return None
+    rec = SimpleNamespace(task_id="recovery-owner", checkpoint_async=checkpoint_async, add_async=add_async)
     result = asyncio.run(worker.run_company_evidence(rec, {"symbols": ["600000"]}, None))
     assert result["model_calls"] == 0 and result["symbols"][0]["state"] == "ready"
     saved = ci.read_saved(item, "600000", now=current, root=tmp_path)

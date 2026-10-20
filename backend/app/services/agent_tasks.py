@@ -20,11 +20,13 @@ import asyncio
 import contextlib
 import json
 import logging
+import sqlite3
 import time
 import uuid
 from typing import Any, Awaitable, Callable
 
 from sqlalchemy import select
+from sqlalchemy.exc import OperationalError, SQLAlchemyError
 
 from app.core.bjtime import beijing_now_naive
 from app.core.config import settings
@@ -224,7 +226,7 @@ def record_audit(
             ))
             db.commit()
     except Exception as exc:  # noqa: BLE001  审计失败不阻断业务
-        log.warning("agent audit write failed (%s/%s): %s", action, target, exc)
+        log.warning("agent audit write failed (%s/%s): %s", action, target, type(exc).__name__)
 
 
 #: 议程留痕条目的 ID 前缀（`agenda:2026-09-10`）。与真实任务（uuid hex）天然不冲突，
@@ -433,6 +435,14 @@ class _StepRecorder:
         if self.deadline_monotonic is not None and time.monotonic() >= self.deadline_monotonic:
             raise TaskWallTimeout
 
+    async def checkpoint_async(self) -> None:
+        """Current pipeline checkpoints wait for SQLite off the event loop."""
+        await _lifecycle_db(self.checkpoint)
+
+    async def add_async(self, **step) -> None:
+        # add() owns its best-effort trace semantics; do not duplicate a step.
+        await _db_thread(self.add, **step)
+
     def add(self, *, name: str, input_summary: str, output_summary: str,
             duration_ms: int, ok: bool, llm: dict | None = None) -> None:
         self.index += 1
@@ -621,7 +631,7 @@ def _set_status(task_id: str, status: str, **fields: Any) -> None:
     with get_session_factory()() as db:
         row = db.get(AgentTask, task_id)
         if row is None:
-            return
+            raise LookupError("task row unavailable for status persistence")
         row.status = status
         for k, v in fields.items():
             if k == "result_ref" or k == "error":
@@ -631,61 +641,140 @@ def _set_status(task_id: str, status: str, **fields: Any) -> None:
         db.commit()
 
 
+_LIFECYCLE_LOCK_DELAYS = (0.1, 0.25, 0.5)  # Four DB attempts; existing SQLite timeout bounds each attempt.
+
+
+def _sqlite_busy(error: BaseException) -> bool:
+    original = error.orig if isinstance(error, OperationalError) else error
+    if not isinstance(original, sqlite3.OperationalError):
+        return False
+    code = getattr(original, "sqlite_errorcode", None)
+    if isinstance(code, int):
+        return code & 255 in {sqlite3.SQLITE_BUSY, sqlite3.SQLITE_LOCKED}
+    return str(original).lower() in {"database is locked", "database table is locked", "database schema is locked"}
+
+
+async def _db_thread(operation, *args, **kwargs):
+    step = asyncio.create_task(asyncio.to_thread(operation, *args, **kwargs))
+    try:
+        return await asyncio.shield(step)
+    except asyncio.CancelledError:
+        while not step.done():
+            try:
+                await asyncio.shield(step)
+            except asyncio.CancelledError:
+                continue
+            except Exception:
+                break
+        if not step.cancelled():
+            step.exception()
+        raise
+
+
+async def _lifecycle_db(operation, *args, defer_cancel=False, **kwargs):
+    """Retry only SQLite contention, never a handler; keep waiting off the ASGI loop.
+
+    A canceled owner drains its current DB operation. Final persistence defers
+    cancellation so a late cancel cannot overwrite an already computed ending.
+    Exhaustion leaves the durable row untouched and requires startup/operator
+    reconciliation; a log cannot stand in for a committed terminal state.
+    """
+    async def retry():
+        for attempt in range(len(_LIFECYCLE_LOCK_DELAYS) + 1):
+            try:
+                return await _db_thread(operation, *args, **kwargs)
+            except (OperationalError, sqlite3.OperationalError) as error:
+                if not _sqlite_busy(error) or attempt == len(_LIFECYCLE_LOCK_DELAYS):
+                    raise
+                await asyncio.sleep(_LIFECYCLE_LOCK_DELAYS[attempt])
+
+    pending = asyncio.create_task(retry())
+    try:
+        return await asyncio.shield(pending)
+    except asyncio.CancelledError:
+        while not pending.done():
+            try:
+                await asyncio.shield(pending)
+            except asyncio.CancelledError:
+                continue
+            except Exception:
+                break
+        if defer_cancel:
+            return pending.result()
+        if not pending.cancelled():
+            pending.exception()
+        raise
+
+
+async def _task_audit(task_id: str, type_: str, status: str, *, before_start=False) -> None:
+    action = "task.finish" if status == "succeeded" else "task.cancel" if status == "canceled" else "task.fail"
+    after = {"status": status}
+    if status == "canceled":
+        after.update(confirmed=True, owner="before_start" if before_start else "cooperative_checkpoint")
+    try:
+        await _lifecycle_db(record_audit, actor="user" if status == "canceled" else "ai", action=action,
+                            target=type_, after=after, task_id=task_id, defer_cancel=True)
+    except (Exception, asyncio.CancelledError) as error:
+        # Audit availability cannot rewrite the independently committed result.
+        log.warning("[AGENT-TASK] %s %s audit=unavailable error=%s", type_, task_id, type(error).__name__)
+
+
 async def _execute(task_id: str, type_: str, params: dict) -> None:
     timeout = max(0.1, float(settings.agent_task_timeout_seconds))
     rec = _StepRecorder(task_id, deadline_monotonic=time.monotonic() + timeout)
-    if _cancel_requested(task_id):
-        _set_status(task_id, "canceled", finished_at=beijing_now_naive())
-        record_audit(actor="user", action="task.cancel", target=type_,
-                     after={"status": "canceled", "confirmed": True, "owner": "before_start"},
-                     task_id=task_id)
-        _RUNNING.pop(type_, None)
-        _HANDLES.pop(task_id, None)
-        return
-
-    _set_status(task_id, "running", started_at=beijing_now_naive())
+    before_start = True
     try:
-        rec.checkpoint()
-        handler = _HANDLERS[type_]
-        result = await handler(rec, params, _APP)
-        rec.checkpoint()
-        _set_status(task_id, "succeeded", result_ref=result, finished_at=beijing_now_naive())
-        record_audit(actor="ai", action="task.finish", target=type_, after={"status": "succeeded"},
-                     task_id=task_id)
-        log.warning("[AGENT-TASK] %s %s 完成", type_, task_id)
-    except asyncio.CancelledError:
-        _set_status(task_id, "canceled", finished_at=beijing_now_naive())
-        record_audit(actor="user", action="task.cancel", target=type_,
-                     after={"status": "canceled", "confirmed": True,
-                            "owner": "cooperative_checkpoint"}, task_id=task_id)
-    except TaskWallTimeout:
-        _set_status(
-            task_id, "failed",
-            error={"code": "TaskTimeout",
-                   "message": f"任务超过 {float(settings.agent_task_timeout_seconds):g}s wall-time 上限；当前不可中断步骤已收尾",
-                   "retryable": True},
-            finished_at=beijing_now_naive(),
-        )
-        record_audit(actor="ai", action="task.fail", target=type_,
-                     after={"status": "failed", "error": "TaskTimeout"}, task_id=task_id)
-        log.warning("[AGENT-TASK] %s %s 超时（bounded stage drained）", type_, task_id)
-    except Exception as exc:
-        _set_status(task_id, "failed", error={"code": type(exc).__name__, "message": str(exc),
-                                              "retryable": True}, finished_at=beijing_now_naive())
-        record_audit(actor="ai", action="task.fail", target=type_,
-                     after={"status": "failed", "error": str(exc)}, task_id=task_id)
-        log.warning("[AGENT-TASK] %s %s 失败：%s", type_, task_id, exc)
+        try:
+            if await _lifecycle_db(_cancel_requested, task_id):
+                raise asyncio.CancelledError
+            await _lifecycle_db(_set_status, task_id, "running", started_at=beijing_now_naive())
+            await rec.checkpoint_async()
+            before_start = False
+            result = await _HANDLERS[type_](rec, params, _APP)
+            await rec.checkpoint_async()
+            status, fields = "succeeded", {"result_ref": result}
+        except asyncio.CancelledError:
+            status, fields = "canceled", {}
+        except TaskWallTimeout:
+            status, fields = "failed", {"error": {"code": "TaskTimeout",
+                "message": f"任务超过 {float(settings.agent_task_timeout_seconds):g}s wall-time 上限；当前不可中断步骤已收尾",
+                "retryable": True}}
+        except Exception as error:
+            database_error = isinstance(error, (SQLAlchemyError, sqlite3.Error))
+            status, fields = "failed", {"error": {"code": type(error).__name__,
+                "message": "任务数据库操作失败；已发生的工作未自动重试。" if database_error else str(error),
+                "retryable": not database_error}}
+        try:
+            await _lifecycle_db(_set_status, task_id, status, **fields,
+                                finished_at=beijing_now_naive(), defer_cancel=True)
+        except (Exception, asyncio.CancelledError) as error:
+            log.error("[AGENT-TASK] %s %s persistence=unknown intended=%s error=%s; "
+                      "handler_not_replayed; recovery=reconcile_on_startup/operator",
+                      type_, task_id, status, type(error).__name__)
+            return
+        await _task_audit(task_id, type_, status, before_start=before_start)
+        log.warning("[AGENT-TASK] %s %s persisted=%s", type_, task_id, status)
     finally:
+        current = asyncio.current_task()
+        if _RUNNING.get(type_) is current:
+            _RUNNING.pop(type_, None)
+        if _HANDLES.get(task_id) is current:
+            _HANDLES.pop(task_id, None)
+
+
+def _retrieve_execution(task_id: str, type_: str, handle: asyncio.Task) -> None:
+    """Final bounded fallback, including cancellation before _execute entered."""
+    if _RUNNING.get(type_) is handle:
         _RUNNING.pop(type_, None)
+    if _HANDLES.get(task_id) is handle:
         _HANDLES.pop(task_id, None)
+    if not handle.cancelled():
+        error = handle.exception()
+        if error is not None:
+            log.error("[AGENT-TASK] %s %s runtime_error=%s persistence=unknown; "
+                      "recovery=reconcile_on_startup/operator", type_, task_id, type(error).__name__)
 
-def create_task(type_: str, params: dict | None = None, *, created_by: str = "user") -> dict:
-    """创建并启动任务（同类型互斥）。返回任务 dict。
-
-    只接受 `CREATABLE_TASK_TYPES`（有 handler 的类型）；登记类条目
-    （mutation / escalation）走 record_* 入口，不经此处——否则任务会创建成功
-    却在 `_HANDLERS[type_]` 处立刻失败，留下一条无意义的 failed 记录。
-    """
+def _check_creation(type_: str) -> None:
     if type_ not in CREATABLE_TASK_TYPES:
         raise ValueError(
             f"未知任务类型：{type_}"
@@ -697,6 +786,20 @@ def create_task(type_: str, params: dict | None = None, *, created_by: str = "us
             _RUNNING.pop(type_, None)
         else:
             raise RuntimeError(f"「{TASK_TYPES[type_]['label']}」正在运行中，请等待完成")
+
+
+def _launch_handler(task_id: str, type_: str, params: dict) -> None:
+    # Called only on the owner event loop, never from a DB worker thread.
+    loop = asyncio.get_event_loop()
+    handle = loop.create_task(_execute(task_id, type_, params), name=f"agent-task-{type_}")
+    handle.add_done_callback(lambda done: _retrieve_execution(task_id, type_, done))
+    _RUNNING[type_] = handle
+    _HANDLES[task_id] = handle
+
+
+def create_task(type_: str, params: dict | None = None, *, created_by: str = "user") -> dict:
+    """Legacy synchronous creation. Async request/scheduler consumers use the async entry."""
+    _check_creation(type_)
     params = params or {}
     task_id = uuid.uuid4().hex
     with get_session_factory()() as db:
@@ -708,11 +811,80 @@ def create_task(type_: str, params: dict | None = None, *, created_by: str = "us
         db.commit()
     record_audit(actor=created_by, action="task.create", target=type_, after=params, task_id=task_id)
 
-    loop = asyncio.get_event_loop()
-    handle = loop.create_task(_execute(task_id, type_, params), name=f"agent-task-{type_}")
-    _RUNNING[type_] = handle
-    _HANDLES[task_id] = handle
+    _launch_handler(task_id, type_, params)
     return get_task(task_id) or {"id": task_id, "type": type_, "status": "queued"}
+
+
+class TaskQueueUnavailable(RuntimeError):
+    def __init__(self, task_id: str, persistence: str):
+        super().__init__("任务未启动；请先核对该任务记录，不要自动重发。")
+        self.task_id, self.persistence = task_id, persistence
+
+
+def _persist_queued_task(task_id: str, type_: str, packed: str, created_by: str) -> dict:
+    """A fixed ID makes retries of an uncertain queue commit idempotent."""
+    with get_session_factory()() as db:
+        row = db.get(AgentTask, task_id)
+        if row is None:
+            row = AgentTask(id=task_id, type=type_, status="queued", params=packed,
+                            risk_level=TASK_TYPES[type_]["risk"], created_by=created_by)
+            db.add(row)
+            db.commit()
+        elif row.type != type_ or row.params != packed or row.created_by != created_by:
+            raise ValueError("queued task identity mismatch")
+        return _load(row)
+
+
+def _cancel_unlaunched_task(task_id: str) -> str:
+    with get_session_factory()() as db:
+        row = db.get(AgentTask, task_id)
+        if row is None:
+            return "not_created"
+        if row.status != "queued":
+            return "unknown"  # Do not invent cancellation of externally changed work.
+        row.cancel_requested_at = row.cancel_requested_at or beijing_now_naive()
+        row.status, row.finished_at = "canceled", beijing_now_naive()
+        db.commit()
+        return "canceled"
+
+
+async def create_task_async(type_: str, params: dict | None = None, *, created_by: str = "user") -> dict:
+    """Reserve the existing type mutex before waiting; DB waits never own the loop.
+
+    No handler is scheduled until its fixed-ID queued row is committed. If the
+    creator stops before that handoff, drain the write and cancel only an actual
+    unlaunched queued row. Unavailable persistence remains explicitly unknown.
+    """
+    _check_creation(type_)
+    packed = json.dumps(params or {}, ensure_ascii=False, default=str)
+    frozen_params, task_id = json.loads(packed), uuid.uuid4().hex
+    owner = asyncio.current_task()
+    _RUNNING[type_] = owner
+    try:
+        try:
+            row = await _lifecycle_db(_persist_queued_task, task_id, type_, packed, created_by)
+            if row["status"] == "queued":
+                _launch_handler(task_id, type_, frozen_params)
+        except (Exception, asyncio.CancelledError) as error:
+            try:
+                persistence = await _lifecycle_db(_cancel_unlaunched_task, task_id, defer_cancel=True)
+            except (Exception, asyncio.CancelledError):
+                persistence = "unknown"
+            log.warning("[AGENT-TASK] %s %s queue_not_launched persistence=%s error=%s; "
+                        "recovery=reconcile_on_startup/operator", type_, task_id, persistence, type(error).__name__)
+            if isinstance(error, asyncio.CancelledError):
+                raise
+            raise TaskQueueUnavailable(task_id, persistence) from None
+        try:
+            await _lifecycle_db(record_audit, actor=created_by, action="task.create", target=type_,
+                                after=frozen_params, task_id=task_id, defer_cancel=True)
+        except (Exception, asyncio.CancelledError) as error:
+            log.warning("[AGENT-TASK] %s %s create_audit=unavailable error=%s; accepted=true",
+                        type_, task_id, type(error).__name__)
+        return row
+    finally:
+        if _RUNNING.get(type_) is owner:
+            _RUNNING.pop(type_, None)
 
 
 def get_task(task_id: str) -> dict | None:

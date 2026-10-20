@@ -54,13 +54,15 @@ def test_create_task_persists_and_runs_to_success(monkeypatch, tmp_path):
 
     async def main():
         task = at.create_task("review", {"trade_date": "20260908"})
+        owner = at._HANDLES[task["id"]]
         assert task["status"] == "queued"
         for _ in range(50):
             await asyncio.sleep(0.02)
             cur = at.get_task(task["id"])
             if cur["status"] != "running":
                 break
-        return cur
+        await owner  # A committed terminal row can precede the owner's audit/cleanup.
+        return at.get_task(task["id"])
 
     done = asyncio.run(main())
     assert done["status"] == "succeeded", done
@@ -88,9 +90,11 @@ def test_same_type_mutex(monkeypatch, tmp_path):
     _patch(monkeypatch, tmp_path, review=Slow())
 
     async def main():
-        at.create_task("review")
+        created = at.create_task("review")
+        owner = at._HANDLES[created["id"]]
         with pytest.raises(RuntimeError):
             at.create_task("review")
+        await owner
 
     asyncio.run(main())
 
@@ -104,12 +108,14 @@ def test_failure_records_error_and_steps(monkeypatch, tmp_path):
 
     async def main():
         t = at.create_task("review")
+        owner = at._HANDLES[t["id"]]
         for _ in range(50):
             await asyncio.sleep(0.02)
             cur = at.get_task(t["id"])
             if cur["status"] in ("failed", "succeeded"):
-                return cur
-        return cur
+                break
+        await owner
+        return at.get_task(t["id"])
 
     done = asyncio.run(main())
     assert done["status"] == "failed"
@@ -121,11 +127,13 @@ def test_audit_records_create_and_finish(monkeypatch, tmp_path):
 
     async def main():
         t = at.create_task("data_check")
+        owner = at._HANDLES[t["id"]]
         for _ in range(60):
             await asyncio.sleep(0.02)
             cur = at.get_task(t["id"])
             if cur["status"] != "running":
                 break
+        await owner
         return t
 
     t = asyncio.run(main())
@@ -431,7 +439,8 @@ def test_owner_observes_cross_process_cancel_at_cooperative_checkpoint(monkeypat
             await asyncio.sleep(0.03)
             cur = at.get_task(tid)
             if cur["status"] == "canceled":
-                return cur
+                break
+        await handle
         return at.get_task(tid)
 
     done = asyncio.run(main())
@@ -456,12 +465,14 @@ def test_task_wall_timeout_is_failed_not_canceled(monkeypatch, tmp_path):
 
     async def main():
         created = at.create_task("review")
+        owner = at._HANDLES[created["id"]]
         for _ in range(80):
             await asyncio.sleep(0.02)
             cur = at.get_task(created["id"])
             if cur["status"] in ("failed", "canceled", "succeeded"):
-                return cur
-        return cur
+                break
+        await owner
+        return at.get_task(created["id"])
 
     done = asyncio.run(main())
     assert done["status"] == "failed"
@@ -495,13 +506,18 @@ def test_immediate_cancel_before_execute_enters_eventually_confirms_canceled(mon
 
     async def main():
         created = at.create_task("review")
+        owner = at._HANDLES[created["id"]]
         requested = at.cancel_task(created["id"])
         assert requested["cancel_requested_at"] is not None
         for _ in range(40):
             await asyncio.sleep(0.02)
             cur = at.get_task(created["id"])
             if cur["status"] == "canceled":
-                return cur
+                break
+        try:
+            await owner
+        except asyncio.CancelledError:  # Only queued-before-entry cancellation is expected.
+            pass
         return at.get_task(created["id"])
 
     done = asyncio.run(main())
@@ -534,6 +550,7 @@ def test_running_cancel_waits_for_inflight_thread_to_drain_before_terminal(monke
 
     async def main():
         created = at.create_task("review")
+        owner = at._HANDLES[created["id"]]
         for _ in range(100):
             await asyncio.sleep(0.01)
             if entered.is_set():
@@ -553,7 +570,8 @@ def test_running_cancel_waits_for_inflight_thread_to_drain_before_terminal(monke
             await asyncio.sleep(0.01)
             cur = at.get_task(created["id"])
             if cur["status"] == "canceled":
-                return cur
+                break
+        await owner
         return at.get_task(created["id"])
 
     done = asyncio.run(main())
@@ -590,6 +608,7 @@ def test_task_timeout_waits_for_inflight_thread_to_drain_before_failed(monkeypat
 
     async def main():
         created = at.create_task("review")
+        owner = at._HANDLES[created["id"]]
         for _ in range(100):
             await asyncio.sleep(0.01)
             if entered.is_set():
@@ -604,7 +623,8 @@ def test_task_timeout_waits_for_inflight_thread_to_drain_before_failed(monkeypat
             await asyncio.sleep(0.01)
             cur = at.get_task(created["id"])
             if cur["status"] == "failed":
-                return cur
+                break
+        await owner
         return at.get_task(created["id"])
 
     done = asyncio.run(main())
