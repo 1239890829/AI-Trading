@@ -107,6 +107,65 @@ def test_model_failure_retains_only_public_facts_and_bounded_missing(profile, tm
     assert result["facts"] == ci.facts(profile)
 
 
+@pytest.mark.parametrize("current_state", ["ready", "insufficient", "model_failed", "invalid_response"])
+def test_current_profile_coverage_is_visible_without_changing_lifecycle(profile, tmp_path, monkeypatch, current_state):
+    coverage = ["reports检索尚有后续页，本次只取前30条。", "财务附注中的真实客户及合同未覆盖。"]
+    profile["missing"] = coverage
+    state.put_profile(profile, root=tmp_path)
+    state.write_state("600001", current_state, now=NOW, root=tmp_path,
+                      missing=["模型事件关系证据不够。"], reason="internal detail")
+    before = snapshot(tmp_path)
+    monkeypatch.setattr(state, "atomic_json", lambda *_: pytest.fail("coverage projection wrote state"))
+    result = state.read_status("600001", now=NOW, enabled=True, root=tmp_path)
+    assert result["state"] == current_state and result["reason"] == state.REASONS[current_state]
+    assert result["missing"] == ["模型事件关系证据不够。", *coverage]
+    assert result["updated_at"] == NOW.isoformat()
+    assert snapshot(tmp_path) == before
+
+
+def test_coverage_merge_deduplicates_after_truncation_and_keeps_state_priority(profile, tmp_path):
+    long_reason = "状态错误" + "甲" * 600
+    duplicate = "本次尚未覆盖季度后续更新。"
+    profile["missing"] = ["", duplicate, "  " + duplicate + "  ", long_reason + "不同尾部", None, {"unsafe": "not text"},
+                          *[f"来源覆盖限制{index}。" for index in range(20)]]
+    state.put_profile(profile, root=tmp_path)
+    state.write_state("600001", "model_failed", now=NOW, root=tmp_path,
+                      missing=[" \n ", long_reason, duplicate, duplicate, None, 42])
+    before = snapshot(tmp_path)
+    result = state.read_status("600001", now=NOW, enabled=True, root=tmp_path)
+    assert result["missing"] == [long_reason[:500], duplicate,
+                                 *[f"来源覆盖限制{index}。" for index in range(10)]]
+    assert len(result["missing"]) == 12 and all(len(x) <= 500 for x in result["missing"])
+    assert snapshot(tmp_path) == before
+
+
+@pytest.mark.parametrize("malformed", [None, "not a list", {"missing": "not a list"}])
+def test_coverage_merge_ignores_malformed_containers(profile, tmp_path, malformed):
+    profile["missing"] = ["已见来源分页，但未读取后续页。"]
+    state.put_profile(profile, root=tmp_path)
+    state.write_state("600001", "ready", now=NOW, root=tmp_path, missing=malformed)
+    assert state.read_status("600001", now=NOW, enabled=True, root=tmp_path)["missing"] == profile["missing"]
+    profile["missing"] = malformed
+    state.put_profile(profile, root=tmp_path)
+    state.write_state("600001", "model_failed", now=NOW, root=tmp_path, missing=["状态失败原因。"])
+    assert state.read_status("600001", now=NOW, enabled=True, root=tmp_path)["missing"] == ["状态失败原因。"]
+
+
+@pytest.mark.parametrize("mode", ["future-source", "historical-response"])
+def test_profile_coverage_cannot_leak_before_its_checked_time(profile, tmp_path, mode):
+    profile["missing"] = ["不得回填的来源覆盖限制。"]
+    profile["checked_at"] = "2026-10-20T11:00:00+08:00" if mode == "future-source" else "2026-10-20T08:00:00+08:00"
+    state.put_profile(profile, root=tmp_path)
+    state.write_state("600001", "model_failed", now=datetime.fromisoformat("2026-10-20T07:00:00+08:00"),
+                      root=tmp_path, missing=["当时的状态失败原因。"])
+    before = snapshot(tmp_path)
+    cutoff = datetime.fromisoformat("2026-10-20T07:30:00+08:00") if mode == "historical-response" else None
+    result = state.read_status("600001", now=NOW, enabled=True, root=tmp_path, response_as_of=cutoff)
+    assert result["state"] == "model_failed" and result["missing"] == ["当时的状态失败原因。"]
+    assert result["documents_count"] == 0 and "facts" not in result
+    assert snapshot(tmp_path) == before
+
+
 @pytest.mark.parametrize("change", ["content", "foreign", "pointer", "symlink", "future"])
 def test_bad_or_future_profile_falls_back_without_hiding_state(profile, tmp_path, change):
     if change == "future":
