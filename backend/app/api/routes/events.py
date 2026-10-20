@@ -640,6 +640,25 @@ def _read_attribution(store: EventStore, catalog, *, symbol: str | None = None,
     result = read_attribution(store._sf, symbol=symbol, theme_names=themes,
                               event_id=event_id, limit=limit, now=now,
                               pool_date=pool_date, response_as_of=response_as_of)
+    if symbol:
+        from app.events.company_impact import published_event_ids, read_saved
+
+        # Published public research only. Missing/invalid enhancements preserve
+        # the existing reader; this path never fetches, generates or publishes.
+        for item in result["data"]["items"] + result["data"].get("later_items", []):
+            item["company_impact"] = read_saved(item, symbol, now=now, response_as_of=response_as_of)
+        result["data"]["company_items"] = []
+        if event_id is None:
+            visible_ids = {v["event_id"] for v in result["data"]["items"] + result["data"].get("later_items", [])}
+            for identity in published_event_ids(symbol):
+                if identity in visible_ids:
+                    continue
+                extra = read_attribution(store._sf, symbol=symbol, theme_names=themes, event_id=identity,
+                                         limit=1, now=now, pool_date=pool_date, response_as_of=response_as_of)
+                for item in extra["data"]["items"] + extra["data"].get("later_items", []):
+                    item["company_impact"] = read_saved(item, symbol, now=now, response_as_of=response_as_of)
+                    if item["company_impact"] is not None:
+                        result["data"]["company_items"].append(item)
     if event_id is not None and not result["data"]["items"] and store.get_event(event_id) is None:
         raise HTTPException(status_code=404, detail="事件不存在")
     return result

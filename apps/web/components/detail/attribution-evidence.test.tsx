@@ -571,3 +571,185 @@ describe("stock-bound reasoning", () => {
     expect(screen.getByText("个股关系证据尚未对应完整，不将消息AI观点当成本股判断。")).toBeTruthy();
   });
 });
+
+describe("company evidence and saved impact", () => {
+  const impact: NonNullable<AttributionEvidenceItem["company_impact"]> = {
+    symbol: "600825", event_id: 18, version_id: 22, observation_id: 19,
+    input_sha256: "a".repeat(64), company_name: "合成样例公司",
+    facts_captured_at: "2026-10-20T09:00:00+08:00", generated_at: "2026-10-20T09:05:00+08:00", valid_until: "2026-10-20T10:00:00+08:00",
+    facts: [{id: "company:business", kind: "business", quote: "合成原文：主营精密传动产品，尚未形成太空机器人订单。", document_title: "合成公司2026年半年度报告", url: "https://static.cninfo.com.cn/finalpage/2026-08-30/fixture.PDF", published_at: "2026-08-30T00:00:00+08:00", period: "2026年上半年", page: 18, sha256: "b".repeat(64)}],
+    analysis: {status: "conditional", summary: "合成推演：交易若完成，才可能扩展产品应用，现有订单不能确认。", chain: [{text: "消息仍需审批；结合已披露产品，收购完成后可能扩展应用，不能视为订单已落地。", evidence_ids: ["event:summary", "company:business"]}], counterarguments: ["若审批未通过，传导不成立。"], missing: ["未取得客户名称与已签订单。"]},
+    model: {provider: "fixture-provider", model: "fixture-model"}, verification: "author_source_reviewed_not_gold", eligibility_changed: false, current_context_only: true, business_effect_verified: false,
+  };
+  const item = (value = impact): AttributionEvidenceItem => ({...evidence, company_impact: value});
+  beforeEach(() => {vi.useFakeTimers({toFake: ["Date"]}); vi.setSystemTime(new Date("2026-10-20T09:30:00+08:00"));});
+
+  it.each([false, true])("separates published company facts from conditional AI transmission in complete=%s", complete => {
+    render(<AttributionEvidence item={item()} symbol="600825" complete={complete}/>);
+    const company = within(screen.getByLabelText("公司经营依据与AI传导"));
+    const source = within(company.getByLabelText("公司原文事实"));
+    expect(source.getByText(impact.facts[0].quote)).toBeTruthy();
+    expect(source.getByText(/第 18 页 · 报告期：2026年上半年/)).toBeTruthy();
+    expect(source.getByRole("link", {name: "公司依据 company:business 原文"}).getAttribute("href")).toBe(impact.facts[0].url);
+    expect(company.getByLabelText("AI经营传导假设").textContent).toContain(impact.analysis.summary);
+    expect(company.getByText(/引用依据：消息摘要；公司依据 company:business/)).toBeTruthy();
+    expect(company.getByText("若审批未通过，传导不成立。")).toBeTruthy();
+    expect(company.getByText("未取得客户名称与已签订单。")).toBeTruthy();
+    expect(company.getByText(/AI生成、作者核对并校正的研究解释，尚无独立效果验证/)).toBeTruthy();
+    expect(company.getByText(/不改变排序、评分、入选或通知资格/)).toBeTruthy();
+    expect(company.getByText(/fixture-provider \/ fixture-model/)).toBeTruthy();
+  });
+
+  it("scopes the original relationship check to its old message while showing new company evidence with day-only disclosure time", () => {
+    const stockReasoning: NonNullable<AttributionEvidenceItem["stock_reasoning"]> = {
+      symbol: "600825", event_id: 18, version_id: 22, observation_id: 19, status: "theme_only",
+      explanation: "仅题材关联，没有公司经营关系证明", basis: ["原消息保留的题材成员关联依据"], transmission: null,
+      ai_scope: "not_applicable", ai_scope_reason: "原消息AI只判断题材，不能直接当逐股结论", missing: "缺主营、客户与订单资料",
+      source_excerpt: {field: "summary", quote: "尚未完成审计"}, eligibility_changed: false, method: "saved_evidence_projection", business_effect_verified: false,
+    };
+    render(<AttributionEvidence item={{...item({...impact, facts: [{...impact.facts[0], published_at: "2026-08-30T23:59:59+08:00", published_precision: "day"}]}), stock_reasoning: stockReasoning}} symbol="600825"/>);
+    const original = screen.getByLabelText("原消息关系核对");
+    expect(original.textContent).toContain(stockReasoning.basis[0]);
+    expect(original.textContent).toContain("本段只核对原消息的关联与AI适用范围");
+    expect(original.textContent).not.toContain(stockReasoning.explanation);
+    expect(original.textContent).not.toContain(stockReasoning.missing);
+    expect(original.textContent).not.toContain("尚不能从现有材料建立公司经营传导链");
+    const company = screen.getByLabelText("公司经营依据与AI传导");
+    expect(company.textContent).toContain(impact.analysis.summary);
+    const facts = within(company).getByLabelText("公司原文事实");
+    expect(facts.textContent).toContain("披露日期：2026-08-30");
+    expect(facts.textContent).not.toContain("23:59");
+  });
+
+  it.each([
+    {symbol: "600826"}, {event_id: 21}, {version_id: 21}, {observation_id: 20},
+    {verification: "unverified" as never}, {eligibility_changed: true as never}, {business_effect_verified: true as never},
+    {generated_at: "2026-10-20T09:31:00+08:00"}, {facts_captured_at: "2026-10-20T09:06:00+08:00"},
+    {valid_until: "2026-10-20T09:30:00+08:00"}, {generated_at: "2026-10-20T09:05:00"},
+    {facts_captured_at: "2026-02-30T09:00:00+08:00"}, {generated_at: "2026-10-20Z"},
+    {input_sha256: "not-a-hash"},
+  ])("hides invalid stock/version/review/time receipts without denying company business %j", patch => {
+    render(<AttributionEvidence item={item({...impact, ...patch})} symbol="600825"/>);
+    expect(screen.queryByLabelText("公司经营依据与AI传导")).toBeNull();
+    expect(screen.queryByText(impact.analysis.summary)).toBeNull();
+    expect(screen.getByText(/这不代表公司没有相关业务/)).toBeTruthy();
+  });
+
+  it.each([
+    {state: "expired", is_active: false}, {state: "revision_pending"},
+    {interpretation_ref: {...evidence.interpretation_ref, state: "withdrawn" as const}},
+    {interpretation_ref: {...evidence.interpretation_ref, event_id: 21}},
+    {timing: {...evidence.timing, available_at: "2026-10-20T09:06:00+08:00"}},
+    {timing: {...evidence.timing, interpretation_effective_at: "2026-10-20T09:06:00+08:00"}},
+    {source_context: {...evidence.source_context!, observation_id: 20}},
+  ])("does not display a saved impact for inactive or mismatched source context %j", patch => {
+    render(<AttributionEvidence item={{...item(), ...patch}} symbol="600825"/>);
+    expect(screen.queryByLabelText("公司经营依据与AI传导")).toBeNull();
+    expect(screen.queryByText(impact.facts[0].quote)).toBeNull();
+  });
+
+  it.each([
+    "http://static.cninfo.com.cn/test.pdf", "https://static.cninfo.com.cn.evil.example/test.pdf",
+    "https://reader@static.cninfo.com.cn/test.pdf", "https://static.cninfo.com.cn:444/test.pdf", "javascript:alert(1)",
+  ])("rejects an unapproved company source instead of rendering its link: %s", url => {
+    render(<AttributionEvidence item={item({...impact, facts: [{...impact.facts[0], url}]})} symbol="600825"/>);
+    expect(screen.queryByLabelText("公司经营依据与AI传导")).toBeNull();
+    expect(screen.queryByRole("link", {name: "公司依据 company:business 原文"})).toBeNull();
+  });
+
+  it.each([
+    {evidence_ids: ["company:unknown", "event:summary"]},
+    {evidence_ids: ["company:business"]},
+    {evidence_ids: ["event:title"]},
+  ])("rejects missing, company-only or event-only chain references %j", patch => {
+    render(<AttributionEvidence item={item({...impact, analysis: {...impact.analysis, chain: [{...impact.analysis.chain[0], ...patch}]}})} symbol="600825"/>);
+    expect(screen.queryByLabelText("公司经营依据与AI传导")).toBeNull();
+    expect(screen.queryByText(impact.analysis.summary)).toBeNull();
+  });
+
+  it("rejects a summary citation when the bound source has no summary", () => {
+    render(<AttributionEvidence item={{...item(), source_context: {...evidence.source_context!, summary: null}}} symbol="600825"/>);
+    expect(screen.queryByLabelText("公司经营依据与AI传导")).toBeNull();
+  });
+
+  it.each([
+    {...impact, facts: [impact.facts[0], {...impact.facts[0]}]},
+    {...impact, facts: [{...impact.facts[0], published_at: "2026-10-20T09:01:00+08:00"}]},
+    {...impact, facts: [{...impact.facts[0], page: 0}]},
+    {...impact, facts: [{...impact.facts[0], sha256: "unknown"}]},
+    {...impact, facts: Array.from({length: 13}, (_, i) => ({...impact.facts[0], id: `company:${i}`}))},
+    {...impact, analysis: {...impact.analysis, chain: Array.from({length: 7}, () => impact.analysis.chain[0])}},
+  ])("rejects duplicate, future or invalid facts and oversized receipts", value => {
+    render(<AttributionEvidence item={item(value)} symbol="600825"/>);
+    expect(screen.queryByLabelText("公司经营依据与AI传导")).toBeNull();
+  });
+
+  it("keeps insufficient evidence explicit without inventing a transmission or declaring no business", () => {
+    render(<AttributionEvidence item={item({...impact, analysis: {...impact.analysis, status: "insufficient", summary: "证据不够：没有已披露客户或订单证明这条消息会影响本公司。", chain: []}})} symbol="600825"/>);
+    const company = within(screen.getByLabelText("公司经营依据与AI传导"));
+    expect(company.getByText(/现有材料不足以建立公司经营传导链，未补写/)).toBeTruthy();
+    expect(company.getByText(impact.facts[0].quote)).toBeTruthy();
+    expect(company.queryByText(/公司没有相关业务/)).toBeNull();
+  });
+
+  it("counts a company-impact receipt without requiring an old event-only AI result", async () => {
+    vi.mocked(getStockAttribution).mockResolvedValue(payload("600825", item()));
+    render(<StockAttributionPanel symbol="600825" defaultExpanded/>);
+    const coverage = await screen.findByLabelText("AI解读读取范围");
+    expect(coverage.textContent).toContain("其中 1 条有已保存AI解读");
+    expect(coverage.textContent).toContain("含 1 条本股经营判读");
+    fireEvent.click(screen.getByRole("button", {name: `查看归因消息：${evidence.title}`}));
+    expect(screen.getByLabelText("公司经营依据与AI传导")).toBeTruthy();
+    expect(getStockAttribution).toHaveBeenCalledTimes(1);
+  });
+
+  it.each([
+    {mode: "regular", emptyWindow: false}, {mode: "inline", emptyWindow: false}, {mode: "summary", emptyWindow: false},
+    {mode: "regular", emptyWindow: true}, {mode: "inline", emptyWindow: true}, {mode: "summary", emptyWindow: true},
+  ])("reads a source-reviewed company supplement outside the ordinary window in $mode (empty=$emptyWindow)", async ({mode, emptyWindow}) => {
+    vi.mocked(getStockAttribution).mockResolvedValue({...payload("600825", secondEvidence), items: emptyWindow ? [] : [secondEvidence], count: emptyWindow ? 0 : 1, company_items: [item()]});
+    render(<StockAttributionPanel symbol="600825" defaultExpanded={mode !== "summary"} inlinePrimary={mode === "inline"} primarySummary={mode === "summary"}/>);
+    if (mode === "summary") fireEvent.click(await screen.findByRole("button", {name: "查看主线索完整依据"}));
+    const supplement = await screen.findByLabelText("已源审经营补充（原消息窗口外）");
+    expect(supplement.textContent).toContain("不替换最新消息、市场触发线索或历史入选依据");
+    expect(screen.getByLabelText("AI解读读取范围").textContent).toContain(`已读取 ${emptyWindow ? 1 : 2} 条消息，其中 1 条有已保存AI解读`);
+    expect(screen.queryByText(/已采集资料中暂未找到关联事件/)).toBeNull();
+    fireEvent.click(within(supplement).getByRole("button", {name: `查看归因消息：${evidence.title}`}));
+    expect(within(supplement).getByLabelText("公司经营依据与AI传导").textContent).toContain(impact.analysis.summary);
+    expect(getStockAttribution).toHaveBeenCalledTimes(1);
+    expect(getEventAttribution).not.toHaveBeenCalled();
+  });
+
+  it.each([true, false])("deduplicates supplements by event ID with an existing ordinary row=%s", async ordinary => {
+    vi.mocked(getStockAttribution).mockResolvedValue({...payload(), items: ordinary ? [item()] : [], count: ordinary ? 1 : 0, company_items: [item(), item()]});
+    render(<StockAttributionPanel symbol="600825" defaultExpanded/>);
+    const coverage = await screen.findByLabelText("AI解读读取范围");
+    expect(coverage.textContent).toContain("已读取 1 条消息，其中 1 条有已保存AI解读");
+    expect(screen.getAllByRole("button", {name: `查看归因消息：${evidence.title}`})).toHaveLength(1);
+    expect(screen.queryByLabelText("已源审经营补充（原消息窗口外）") !== null).toBe(!ordinary);
+  });
+
+  it("does not make a foreign-stock supplement readable or count it as this stock's saved result", async () => {
+    vi.mocked(getStockAttribution).mockResolvedValue({...payload(), company_items: [item({...impact, symbol: "600826"})]});
+    render(<StockAttributionPanel symbol="600825" defaultExpanded/>);
+    const coverage = await screen.findByLabelText("AI解读读取范围");
+    expect(coverage.textContent).toContain("其中 0 条有已保存AI解读");
+    expect(screen.queryByLabelText("已源审经营补充（原消息窗口外）")).toBeNull();
+  });
+
+  it("expires a visible receipt without another network read", () => {
+    vi.useFakeTimers(); vi.setSystemTime(new Date("2026-10-20T09:59:59+08:00"));
+    render(<AttributionEvidence item={item()} symbol="600825"/>);
+    expect(screen.getByLabelText("公司经营依据与AI传导")).toBeTruthy();
+    act(() => {vi.advanceTimersByTime(1000);});
+    expect(screen.queryByLabelText("公司经营依据与AI传导")).toBeNull();
+    expect(getStockAttribution).not.toHaveBeenCalled();
+  });
+
+  it("preserves the existing reader when no company-impact receipt is saved", () => {
+    render(<AttributionEvidence item={evidence} symbol="600825"/>);
+    expect(screen.getByLabelText("消息与个股说明")).toBeTruthy();
+    expect(screen.queryByLabelText("公司经营依据与AI传导")).toBeNull();
+    expect(screen.queryByText(/本股经营判读的身份/)).toBeNull();
+  });
+});

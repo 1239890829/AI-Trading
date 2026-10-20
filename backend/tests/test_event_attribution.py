@@ -685,6 +685,52 @@ def test_new_get_routes_are_authenticated_and_validate_bounds(store, monkeypatch
     assert client.get("/api/events/symbol/not-a-symbol/attribution", headers=headers).status_code == 400
 
 
+def test_company_receipt_is_read_by_both_existing_routes_without_new_generation(store, monkeypatch):
+    """The real router assembly must consume saved enhancement, with original auth."""
+    from fastapi.testclient import TestClient
+    from app.core.config import settings
+    from app.main import app
+
+    row = add(store)
+    calls = []
+    def saved(value, symbol, **context):
+        calls.append((value["event_id"], value["interpretation_ref"]["observation_id"], symbol, context))
+        return {"fixture": "published research projection"}
+
+    monkeypatch.setattr("app.events.company_impact.read_saved", saved)
+    monkeypatch.setattr(settings, "auth_mode", "local")
+    monkeypatch.setattr(settings, "api_token", "company-reader-fixture")
+    monkeypatch.setattr(app.state, "theme_catalog", None, raising=False)
+    monkeypatch.setitem(app.dependency_overrides, routes.get_store, lambda: store)
+    client = TestClient(app)
+    paths = ["/api/events/symbol/600001/attribution", f"/api/events/{row.id}/attribution?symbol=600001"]
+    for path in paths:
+        assert client.get(path).status_code == 401
+        assert not calls or len(calls) == 1
+        response = client.get(path, headers={"X-API-Token": "company-reader-fixture"})
+        assert response.status_code == 200
+        assert response.json()["data"]["items"][0]["company_impact"]["fixture"] == "published research projection"
+    assert len(calls) == 2 and all(call[0] == row.id and call[2] == "600001" for call in calls)
+
+
+def test_reviewed_operating_context_outside_recent_window_remains_readable(store, monkeypatch):
+    older = add(store, published=NOW - timedelta(hours=2), source_item_id="old-reviewed")
+    for n in range(13):
+        add(store, published=NOW - timedelta(minutes=n), source_item_id=f"fresh-{n}")
+    baseline = read_attribution(store._sf, symbol="600001", now=NOW)["data"]
+    assert older.id not in {i["event_id"] for i in baseline["items"]}
+    monkeypatch.setattr("app.events.company_impact.published_event_ids", lambda _: [older.id])
+    def saved(value, symbol, **_):
+        return {"fixture": "source-reviewed current context"} if value["event_id"] == older.id else None
+    monkeypatch.setattr("app.events.company_impact.read_saved", saved)
+    data = routes._read_attribution(store, None, symbol="600001", now=NOW)["data"]
+    assert [v["event_id"] for v in data["items"]] == [v["event_id"] for v in baseline["items"]]
+    assert data["count"] == baseline["count"] and data["primary_reason"] == baseline["primary_reason"]
+    assert [v["event_id"] for v in data["company_items"]] == [older.id]
+    monkeypatch.setattr("app.events.company_impact.read_saved", lambda *a, **k: None)
+    assert routes._read_attribution(store, None, symbol="600001", now=NOW)["data"]["company_items"] == []
+
+
 def test_response_context_is_not_historical_replay_and_keeps_late_evidence(store):
     before = NOW - timedelta(hours=1)
     late = add(store, source_published=before, source_item_id='late-response')

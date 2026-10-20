@@ -178,6 +178,11 @@ import app.picks.position_engine as _position_engine  # noqa: E402
 
 _position_engine._PLAN_DIR = _DATA_SANDBOX / "position_plans"
 
+# Company explanations are explicitly published by an operator, never a GET.
+# Isolate the shared default as well as each writer test's injected tmp root.
+import app.events.company_impact as _company_impact  # noqa: E402
+_company_impact.ROOT = _DATA_SANDBOX / "company_impact"
+
 
 # TDX 分钟 K 是另一条独立 TCP 7709 外部边界（不受逐笔 fallback 开关控制）。
 # 默认测试必须在该边界失败；专项 minute-backfill 测试会显式 monkeypatch 自己的 fake。

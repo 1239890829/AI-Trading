@@ -49,6 +49,22 @@ export interface StockReasoning {
   eligibility_changed: false; method: "saved_evidence_projection"; business_effect_verified: false;
 }
 
+/** A saved, source-reviewed current explanation; it is not a historical selection basis. */
+export interface CompanyImpact {
+  symbol: string; event_id: number; version_id: number; observation_id: number;
+  input_sha256: string; generated_at: string; valid_until: string; facts_captured_at: string;
+  company_name: string;
+  facts: {id: string; kind: string; quote: string; document_title: string; url: string; published_at: string; published_precision?: "day"; period: string; page: number; sha256: string}[];
+  analysis: {
+    status: "conditional" | "mixed" | "insufficient" | "no_supported_link";
+    summary: string; chain: {text: string; evidence_ids: string[]}[];
+    counterarguments: string[]; missing: string[];
+  };
+  model: {provider: string; model: string};
+  verification: "author_source_reviewed_not_gold"; eligibility_changed: false;
+  current_context_only: true; business_effect_verified: false;
+}
+
 export interface AttributionEvidenceItem {
   event_id: number;
   title: string;
@@ -87,6 +103,7 @@ export interface AttributionEvidenceItem {
   limitations: string[];
   llm_aux?: AttributionAuxJudgment | null;
   stock_reasoning?: StockReasoning | null;
+  company_impact?: CompanyImpact | null;
 }
 
 export interface StockAttributionPayload {
@@ -95,6 +112,8 @@ export interface StockAttributionPayload {
   count: number;
   items: AttributionEvidenceItem[];
   later_items?: AttributionEvidenceItem[];
+  /** Source-reviewed current research outside the ordinary message window; never a primary trigger. */
+  company_items?: AttributionEvidenceItem[];
   primary_reason?: PrimaryAttributionReason;
   evidence_counts?: {scope: "returned_rows_only"; returned: number; theme_only: number; unknown: number; source_time_unknown: number};
   response_context?: {pool_date: string | null; response_as_of: string | null; view: "current_with_response_context"; historical_replay: false};
@@ -111,7 +130,8 @@ function contextQuery(options?: AttributionOptions): string {
 export async function getStockAttribution(symbol: string, options?: AttributionOptions): Promise<StockAttributionPayload> {
   const result = (await getJson<StockAttributionPayload>(`/api/events/symbol/${encodeURIComponent(symbol)}/attribution?limit=12${contextQuery(options)}`)).data;
   // A response identity mismatch must never put another security's evidence under this title.
-  if (result.symbol !== symbol || result.schema_version !== 1 || !Array.isArray(result.items) || (result.later_items !== undefined && !Array.isArray(result.later_items))) {
+  if (result.symbol !== symbol || result.schema_version !== 1 || !Array.isArray(result.items) || (result.later_items !== undefined && !Array.isArray(result.later_items))
+    || (result.company_items !== undefined && (!Array.isArray(result.company_items) || result.company_items.length > 4))) {
     throw new Error("归因资料身份不匹配，请重新读取");
   }
   return result;
@@ -120,7 +140,9 @@ export async function getStockAttribution(symbol: string, options?: AttributionO
 export async function getEventAttribution(eventId: number, symbol?: string | null, options?: AttributionOptions): Promise<StockAttributionPayload> {
   const query = `?${symbol ? `symbol=${encodeURIComponent(symbol)}&` : ""}limit=12${contextQuery(options)}`;
   const result = (await getJson<StockAttributionPayload>(`/api/events/${eventId}/attribution${query}`)).data;
-  if (result.symbol !== (symbol || null) || result.schema_version !== 1 || !Array.isArray(result.items) || (result.later_items !== undefined && !Array.isArray(result.later_items)) || [...result.items, ...(result.later_items || [])].some(item => item.event_id !== eventId)) {
+  if (result.symbol !== (symbol || null) || result.schema_version !== 1 || !Array.isArray(result.items) || (result.later_items !== undefined && !Array.isArray(result.later_items))
+    || (result.company_items !== undefined && (!Array.isArray(result.company_items) || result.company_items.length > 4))
+    || [...result.items, ...(result.later_items || []), ...(result.company_items || [])].some(item => item.event_id !== eventId)) {
     throw new Error("事件归因资料身份不匹配，请重新读取");
   }
   return result;
