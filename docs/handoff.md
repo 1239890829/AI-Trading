@@ -10,9 +10,11 @@ PR #308已按3999b3bc准确回执/三项CI/release_check合并401b95d3，master 
 
 从401b95d3建立codex/company-pipeline-runtime-fixes，仍归W00/IMP-092，临时DEGRADED_FULL_CONTROL有效。前端源码不变但重新跑完整门；最终BE/FE/文档、准确HEAD新回执/三项CI/release_check、master CI与真实任务/页面分别验收。批准方向、预算、模型、治理及Skills读取链不变，总方案/登记册无需新增重大决策；INDEX继续指向原专题，原stage静态元数据不变。完成这项直派后不领第二业务任务。
 
-修复后首轮完整BE实际1 failed/6120 passed/87 skipped/167 subtests（477.83秒，外层488.180秒），失败是既有恢复测试替身仍仅有同步checkpoint/add，未跟上真实异步契约；修正替身，不删原模型不重发/原采集时刻保持等断言。失败日志/XML与1798跟踪文件零漂移回执保留。随后一批在1653通过时因作者发现503错误detail对象不符合现役前端字符串契约而主动中断；已改为可读detail、机器code及独立任务ID/persistence字段，原模型不重发等断言保留，13项接口/持久化专项通过；该中断不称全量通过。最终完整门另核。最终修复版本完整BE为6121 passed/87 skipped/167 subtests（447.05秒，外层457.783秒），1798跟踪文件在门禁期间零漂移；pyflakes、后置文档/卫生/公开扫描与准确HEAD发布条件另验。此处本地门不代替新HEAD三项CI、release_check、master CI及正常调度/配对页面。
+修复后首轮完整BE实际1 failed/6120 passed/87 skipped/167 subtests（477.83秒，外层488.180秒），失败是既有恢复测试替身仍仅有同步checkpoint/add，未跟上真实异步契约；修正替身，不删原模型不重发/原采集时刻保持等断言。失败日志/XML与1798跟踪文件零漂移回执保留。随后一批在1653通过时因作者发现503错误detail对象不符合现役前端字符串契约而主动中断；已改为可读detail、机器code及独立任务ID/persistence字段，原模型不重发等断言保留，13项接口/持久化专项通过；该中断不称全量通过。最终完整门另核。修复版本61e44145的完整单worker BE为6121 passed/87 skipped/167 subtests（447.05秒，外层457.783秒），1798跟踪文件在门禁期间零漂移；pyflakes、后置文档/卫生/公开扫描与准确HEAD发布条件另验。此处本地门不代替新HEAD三项CI、release_check、master CI及正常调度/配对页面。
 
 前端源码不变，当前默认/UTC完整各1862 passed/146文件（外层318.192/278.535秒），类型/ESLint零error两项既有warning/生产构建11.170秒及引用精确恢复后tsc通过；不作性能对照。
+
+PR #309首次CI（39363526209）前端/文档通过，后端1 failed/6120 passed：取消测试在DB终态可见时即退出asyncio.run，把尚在收尾的owner/audit取消。按真实“业务终态提交、后续审计独立”契约修正测试owner生命周期，保留原线程drain与取消审计断言，不增大超时，不改工作流/生产代码；修正后同CI四worker/loadfile完整本地门6121 passed/87 skipped/167 subtests（309.35秒，外层311.504秒），1798跟踪文件零漂移；原单worker完整通过仍单列，模式/负载不同不作提速结论。新HEAD的CI/回执及运行另验。旧HEAD回执和失败原日志保留，不用旧绿替代。
 
 # 上一批工程交接：公司依据常规采集与判读
 
