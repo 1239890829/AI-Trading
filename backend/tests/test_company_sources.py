@@ -425,6 +425,171 @@ def test_revision_report_is_eligible_and_summary_is_not_selected(tmp_path, prepa
     assert [d["title"] for d in result["documents"]] == ["2026年半年度报告（修订后）"]
 
 
+def test_operating_report_uses_halfyear_before_newer_quarter_and_keeps_two_doc_budget(tmp_path, prepared):
+    # De-identified form of the actual Q3/H1/annual announcement response.
+    reports = [row("12345", "2026年第三季度报告", "2026-10-17"),
+               row("12346", "2026年半年度报告", "2026-08-27"),
+               row("12347", "2025年年度报告", "2026-04-21")]
+    notice = row("12348", "关于签订设备销售合同的公告", "2026-10-16")
+    network, calls = transport(rows=reports, recent=[notice])
+    result = collect(tmp_path, network)
+    assert [d["announcement_id"] for d in result["documents"]] == ["12346", "12348"]
+    assert result["documents"][0]["period"] == "2026-01-01至2026-06-30"
+    assert any("未纳入该季度后续更新" in value for value in result["missing"])
+    assert len([c for c in calls if c.method == "POST"]) == 3
+    assert len([c for c in calls if c.method == "GET"]) == 2
+    assert not (tmp_path / "12345.pdf").exists()
+
+
+def test_operating_report_ranks_coverage_before_later_republished_old_annual(tmp_path, prepared):
+    reports = [row("12345", "2025年年度报告（修订后）", "2026-10-18"),
+               row("12346", "2026年半年度报告", "2026-08-27"),
+               row("12347", "2026年半年度报告（修订后）", "2026-09-10")]
+    network, _ = transport(rows=reports)
+    result = collect(tmp_path, network)
+    assert [d["announcement_id"] for d in result["documents"]] == ["12347"]
+
+
+@pytest.mark.parametrize("ineligible_title,day", [
+    ("2026年半年度报告", "2026-10-20"),
+    ("2026年半年度报告摘要", "2026-10-18"),
+    ("2026年半年度报告英文版", "2026-10-18"),
+    ("关于2026年半年度募集资金使用情况的专项报告", "2026-10-18"),
+], ids=["future-day", "summary", "english", "special-report"])
+def test_quarterly_report_is_used_when_no_eligible_full_operating_report(tmp_path, prepared, ineligible_title, day):
+    reports = [row("12345", "2026年第三季度报告", "2026-10-17"),
+               row("12346", ineligible_title, day)]
+    network, calls = transport(rows=reports)
+    result = collect(tmp_path, network)
+    assert [d["announcement_id"] for d in result["documents"]] == ["12345"]
+    assert len([c for c in calls if c.method == "GET"]) == 1
+    assert any("季度" in value for value in result["missing"])
+
+
+def test_quarterly_report_with_financial_text_does_not_claim_format_failure(tmp_path, prepared, monkeypatch):
+    text = f"{COMPANY}\n股票代码 {SYMBOL}\n一、主要财务数据\n营业收入100万元净利润20万元。"
+    monkeypatch.setattr(source, "_parse_pdf", lambda path: {"pages": [text], "truncated": False})
+    network, _ = transport(rows=[row(title="2026年第三季度报告", day="2026-10-17")])
+    result = collect(tmp_path, network)
+    assert result["status"] == "failed" and not result["documents"]
+    assert any("no eligible operating excerpts" in value for value in result["missing"])
+    assert not any("scanned/empty/unsupported" in value for value in result["missing"])
+
+
+def test_report_policy_migrates_failed_quarter_selection_without_touching_its_original(tmp_path, prepared, monkeypatch):
+    quarter = row("12345", "2026年第三季度报告", "2026-10-17")
+    halfyear = row("12346", "2026年半年度报告", "2026-08-27")
+    text = f"{COMPANY}\n股票代码 {SYMBOL}\n主要财务数据\n营业收入100万元净利润20万元。"
+    monkeypatch.setattr(source, "_parse_pdf", lambda path: {"pages": [text if path.stem == "12345" else BODY]})
+    failed = collect(tmp_path, transport(rows=[quarter])[0])
+    assert failed["status"] == "failed"
+    manifest = tmp_path / f"{SYMBOL}.manifest.json"
+    legacy = json.loads(manifest.read_text())
+    legacy.pop("report_policy", None)
+    manifest.write_text(json.dumps(legacy))
+    raw, receipt = (tmp_path / "12345.pdf").read_bytes(), (tmp_path / "12345.received.json").read_bytes()
+    network, calls = transport(rows=[quarter, halfyear])
+    result = collect(tmp_path, network)
+    assert result["status"] == "ready" and not result["cache_hit"]
+    assert result.get("report_policy")
+    assert [d["announcement_id"] for d in result["documents"]] == ["12346"]
+    assert (tmp_path / "12345.pdf").read_bytes() == raw
+    assert (tmp_path / "12345.received.json").read_bytes() == receipt
+    assert len([c for c in calls if c.method == "GET"]) == 1
+
+
+def test_report_policy_migration_keeps_unchanged_document_identity_and_extraction_method(tmp_path, prepared):
+    network, calls = transport()
+    original = collect(tmp_path, network)
+    manifest = tmp_path / f"{SYMBOL}.manifest.json"
+    legacy = json.loads(manifest.read_text())
+    legacy.pop("report_policy", None)
+    manifest.write_text(json.dumps(legacy))
+    before = len(calls)
+    result = collect(tmp_path, network)
+    assert not result["cache_hit"] and result.get("report_policy")
+    assert result["documents"] == original["documents"]
+    assert result["extractor"] == source.EXTRACTOR
+    assert result["documents"][0]["extraction_method"] == source.EXTRACTOR
+    assert not any(c.method == "GET" for c in calls[before:])
+
+
+FINANCIAL_HEADING = (f"{COMPANY}2026年半年度报告\n34/143\n第八节 财务报告\n"
+                     "一、审计报告\n□适用 √不适用\n二、财务报表\n合并资产负债表\n")
+ACCOUNTING_ORDER = ("出售极可能发生，已经就一项出售计划作出决议且获得确定的购买承诺，"
+                    "确定的购买承诺是指企业与其他方签订的具有法律约束力的购买协议，"
+                    "该协议包含交易价格、时间和违约惩罚等条款。")
+ACCOUNTING_RISK = ("对初始确认后信用风险显著增加的金融工具，公司按照相当于该金融工具整个存续期内"
+                   "预期信用损失的金额计量其损失准备。")
+
+
+def test_periodic_financial_chapter_preserves_same_page_prefix_and_physical_page():
+    business = "公司主营业务为数字内容设计与展示项目实施，主要服务于文化场馆和展览设施建设。"
+    order = "公司签订展览设备销售合同，合同已经生效并按实际交付和客户验收确认履约进度。"
+    pages = ["目录\n第八节 财务报告 ................ 34\n" + order,
+             business + "\n" + FINANCIAL_HEADING + ACCOUNTING_ORDER,
+             ACCOUNTING_RISK]
+    values, missing = source._excerpts(pages, periodic_report=True)
+    assert any(v["quote"] == business and v["page"] == 2 for v in values)
+    assert any(v["quote"].endswith(order) and v["page"] == 1 for v in values)
+    assert all("购买承诺" not in v["quote"] and "损失准备" not in v["quote"] for v in values)
+    assert any("第2页" in value and "财务附注" in value for value in missing)
+
+
+@pytest.mark.parametrize("navigation", [
+    "目录\n第八节 财务报告 ................ 34\n",
+    "目录\n第八节 财务报告\n34\n一、审计报告\n二、财务报表\n",
+    "具体会计信息详见第八节财务报告，本文仍为经营情况说明。\n",
+    "第八节 财务报告\n本页只有重复章节页眉，没有审计及报表正文标题。\n",
+], ids=["toc-leader", "toc-wrapped-page", "narrative-reference", "running-header"])
+def test_periodic_financial_navigation_does_not_end_business_coverage(navigation):
+    quote = "主要客户包括汽车制造商及一级供应商，本段未按产品或型号披露具体客户。"
+    values, missing = source._excerpts([navigation, quote], periodic_report=True)
+    assert any(v["quote"] == quote and v["page"] == 2 for v in values)
+    assert any("未定位" in value and "财务报告" in value for value in missing)
+
+
+def test_periodic_financial_boundary_outside_parsed_window_stays_unknown():
+    quote = "公司主营业务为汽车外饰件的研发生产和销售，本报告期内主营业务未发生重大变化。"
+    pages = ["目录\n第八节 财务报告 ................ 71\n", *([""] * 68), quote]
+    values, missing = source._excerpts(pages, periodic_report=True)
+    assert any(v["quote"] == quote and v["page"] == 70 for v in values)
+    assert any("未定位" in value for value in missing)
+    assert not any(value.startswith("已从") for value in missing)
+
+
+@pytest.mark.parametrize("initial_heading", ["一、审计报告", "财务报表"])
+def test_periodic_financial_boundary_handles_long_annual_audit_before_later_statements(initial_heading):
+    business = "公司主营业务为数字内容设计与展示项目实施，主要服务于文化场馆和展览设施建设。"
+    # Annual audits can span pages. The initial chapter heading does not require
+    # the later financial statements to occur in a short arbitrary text window.
+    title = "第十节 财务报告\n" + initial_heading + "\n"
+    audit = "我们依照中国注册会计师审计准则执行审计工作，相关意见与依据如下。" * 35
+    values, missing = source._excerpts([
+        business + "\n" + title + audit, ACCOUNTING_ORDER,
+        "二、财务报表\n合并资产负债表\n" + ACCOUNTING_RISK], periodic_report=True)
+    assert any(v["quote"] == business and v["page"] == 1 for v in values)
+    assert all("购买承诺" not in v["quote"] and "损失准备" not in v["quote"] for v in values)
+    assert any(value.startswith("已从第1页") for value in missing)
+
+
+def test_independent_notice_keeps_contract_and_denial_without_report_boundary_claim():
+    quote = ("公司签订软件服务合同，合同金额未经审计并以财务报告为准，"
+             "该项目尚未获得后续批量订单，不代表已形成确定收入。")
+    values, missing = source._excerpts([quote], periodic_report=False)
+    assert any(v["kind"] == "order" and v["quote"] == quote for v in values)
+    assert not any("财务报告章节" in value or "财务附注" in value for value in missing)
+
+
+def test_collect_periodic_report_applies_financial_boundary(tmp_path, prepared, monkeypatch):
+    monkeypatch.setattr(source, "_parse_pdf", lambda path: {
+        "pages": [BODY, FINANCIAL_HEADING, ACCOUNTING_ORDER], "truncated": False})
+    result = collect(tmp_path, transport()[0])
+    assert result["status"] == "ready"
+    assert all("购买承诺" not in x["quote"] for d in result["documents"] for x in d["excerpts"])
+    assert any("财务附注" in value for value in result["missing"])
+
+
 def test_sampled_rss_guard_kills_only_its_own_parser(tmp_path, monkeypatch):
     path = tmp_path / "fake.pdf"
     path.write_bytes(b"%PDF-test")
