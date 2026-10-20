@@ -648,6 +648,18 @@ def _read_attribution(store: EventStore, catalog, *, symbol: str | None = None,
         for item in result["data"]["items"] + result["data"].get("later_items", []):
             item["company_impact"] = read_saved(item, symbol, now=now, response_as_of=response_as_of)
         result["data"]["company_items"] = []
+        from app.core.config import settings
+        from app.events.company_state import read_status
+        from app.models.agent import AgentTask
+
+        def resolve_company_task(task_id):
+            with store._sf() as db:
+                task = db.get(AgentTask, task_id)
+                return {"status": task.status} if task else None
+
+        result["data"]["company_status"] = read_status(
+            symbol, now=now, enabled=getattr(settings, "company_evidence_enabled", False),
+            response_as_of=response_as_of, task_resolver=resolve_company_task)
         if event_id is None:
             visible_ids = {v["event_id"] for v in result["data"]["items"] + result["data"].get("later_items", [])}
             for identity in published_event_ids(symbol):

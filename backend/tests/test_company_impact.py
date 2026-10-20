@@ -124,11 +124,19 @@ def test_interrupted_publish_and_single_writer_preserve_previous(packet, analysi
     (folder / ".publish.lock").write_text("owner")
     with pytest.raises(FileExistsError): publish(packet, analysis, tmp_path)
     (folder / ".publish.lock").unlink()
-    def failed_replace(*_): raise OSError("injected power-loss before manifest replacement")
+    replacements = []
+    def failed_replace(*args):
+        replacements.append(args)
+        raise OSError("injected power-loss before manifest replacement")
     monkeypatch.setattr(ci.os, "replace", failed_replace)
-    with pytest.raises(OSError): publish(packet, analysis, tmp_path)
+    amended = deepcopy(analysis)
+    amended["summary"] = "补充条件仍待后续证据核实。"
+    with pytest.raises(OSError): publish(packet, amended, tmp_path)
+    assert len(replacements) == 1
     assert ci.read_saved(item(packet), "003021", now=NOW, root=tmp_path)["analysis"] == analysis
-    assert not (folder / ".publish.lock").exists()
+    assert (folder / ".publish.lock").stat().st_size == 0
+    with ci.publication_lock(folder):
+        pass  # The exception released the OS lease; its stable inode is retained.
 
 
 @pytest.mark.parametrize("change", ["foreign", "url", "date", "future", "quote", "missing", "citation", "fields"])

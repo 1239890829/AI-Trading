@@ -1,14 +1,16 @@
-"""Saved, source-reviewed company explanations. Never a direction/eligibility writer.
+"""Saved company research. Never a direction/eligibility writer.
 
-Only the explicit operator CLI publishes these public research receipts. Ordinary
-reads validate content identities again and fall back to the existing attribution.
-Source review is author review, not independent gold or measured investment effect.
+Legacy CLI receipts retain author source review. The bounded background worker
+publishes a separate automatic selection/compilation identity. Ordinary reads
+revalidate both and preserve the baseline; neither identity is independent gold.
 """
 from __future__ import annotations
 
 import hashlib
 import json
 import os
+import fcntl
+from contextlib import contextmanager
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 import re
@@ -19,6 +21,7 @@ from app.core.bjtime import BJ_TZ
 
 ROOT = Path(__file__).resolve().parents[2] / "data" / "company_impact"
 SCHEMA = "company-impact-v1"
+AUTO_SCHEMA = "company-impact-automatic-v1"
 KINDS = {"business", "product", "customer", "order", "risk"}
 SOURCE = re.compile(r"/finalpage/(\d{4}-\d{2}-\d{2})/\d+\.(?:PDF|pdf)$")
 
@@ -66,12 +69,19 @@ def validate_packet(packet: dict) -> None:
         raise ValueError("source summary too large")
     if clock(event["available_at"]) > captured:
         raise ValueError("event unavailable at capture")
-    docs = packet["documents"]
+    validate_documents(packet["symbol"], packet["company_name"], packet["documents"], captured)
+
+
+def validate_documents(symbol: str, company_name: str, docs: list, captured: datetime) -> None:
+    """Validate the same issuer/source contract for profiles without an event."""
+    if not isinstance(symbol, str) or not re.fullmatch(r"\d{6}", symbol):
+        raise ValueError("invalid company identity")
+    _text(company_name, 100)
     if not isinstance(docs, list) or not 1 <= len(docs) <= 6:
         raise ValueError("company documents required (1-6)")
     ids = set()
     for doc in docs:
-        if doc["symbol"] != packet["symbol"] or doc["company_name"] != packet["company_name"]:
+        if doc["symbol"] != symbol or doc["company_name"] != company_name:
             raise ValueError("foreign document issuer")
         if not source_url(doc["url"]) or not re.fullmatch(r"[a-f0-9]{64}", doc["sha256"]):
             raise ValueError("official source and raw hash required")
@@ -101,6 +111,17 @@ def facts(packet: dict) -> list[dict]:
              "document_title": d["title"], "url": d["url"], "published_at": d["published_at"],
              "period": d["period"], "page": q["page"], "sha256": d["sha256"]}
             for d in packet["documents"] for i, q in enumerate(d["excerpts"])]
+
+
+def validate_company_profile(profile: dict) -> None:
+    """Collected profiles bind the literal issuer, separately from legacy reviews."""
+    symbol, company = profile["symbol"], profile["company_name"]
+    validate_documents(symbol, company, profile["documents"], clock(profile["checked_at"]))
+    for doc in profile["documents"]:
+        identity = re.sub(r"\s+", "", doc["identity_quote"])
+        if (re.sub(r"\s+", "", company) not in identity
+                or not re.search(r"(?<!\d)" + re.escape(symbol) + r"(?!\d)", identity)):
+            raise ValueError("collected profile issuer identity is not bound")
 
 
 def messages(packet: dict, *, baseline=False) -> list[dict]:
@@ -219,14 +240,89 @@ def publish(packet: dict, analysis: dict, review: dict, *, model: dict,
     if folder.is_symlink() or root.is_symlink():
         raise ValueError("store cannot be a symlink")
     folder.mkdir(parents=True, exist_ok=True)
-    lock = folder / ".publish.lock"
-    lock_fd = os.open(lock, os.O_CREAT | os.O_EXCL | os.O_WRONLY, 0o600)
-    os.close(lock_fd)
-    try:
+    with publication_lock(folder):
         _publish_object(folder, key, receipt, packet["event"])
-    finally:
-        lock.unlink()
     return key
+
+
+@contextmanager
+def publication_lock(folder: Path):
+    """Crash-released OS lease. Keep its inode; never unlink an active lease."""
+    fd = os.open(folder / ".publish.lock", os.O_CREAT | os.O_RDWR | os.O_NOFOLLOW, 0o600)
+    try:
+        # Old nonempty owner markers have no verifiable process identity. Keep
+        # them for operator recovery rather than silently overriding their owner.
+        if os.fstat(fd).st_size:
+            raise FileExistsError("legacy publication owner marker requires reconciliation")
+        try:
+            fcntl.flock(fd, fcntl.LOCK_EX | fcntl.LOCK_NB)
+        except BlockingIOError:
+            raise FileExistsError("company publication is already owned") from None
+        yield
+    finally:
+        os.close(fd)
+
+
+def publish_automatic(packet: dict, selected: dict, *, model: dict, usage_id: str,
+                      generated_at: str, root: Path | None = None) -> str:
+    """Publish only canonical compiled prose; never create an author review."""
+    from app.events.company_reasoning import compile_analysis, PROTOCOL
+
+    validate_packet(packet)
+    analysis, rejected = compile_analysis(packet, selected)
+    validate_analysis(analysis, packet)
+    generated, now = clock(generated_at), datetime.now(timezone.utc)
+    if not clock(packet["captured_at"]) <= generated <= now:
+        raise ValueError("automatic explanation time conflict")
+    for key in ("provider", "model"):
+        _text(model.get(key), 100)
+    if not re.fullmatch(r"[a-f0-9]{32}", usage_id):
+        raise ValueError("durable model usage receipt required")
+    receipt = {"schema": AUTO_SCHEMA, "packet": packet, "selected": selected,
+               "analysis": analysis, "rejected_links": rejected, "model": model,
+               "protocol": PROTOCOL, "usage_id": usage_id, "generated_at": generated_at,
+               "published_at": now.isoformat(), "valid_until": (generated + timedelta(days=7)).isoformat(),
+               "company_evidence_sha256": digest(packet["documents"])}
+    key = digest(receipt)
+    root = root if root is not None else ROOT
+    folder = root / packet["symbol"]
+    if root.is_symlink() or folder.is_symlink():
+        raise ValueError("store cannot be a symlink")
+    folder.mkdir(parents=True, exist_ok=True)
+    with publication_lock(folder):
+        event = packet["event"]
+        current = read_saved({"event_id": event["event_id"], "state": "active", "is_active": True,
+                              "interpretation_ref": {k: event[k] for k in ("event_id", "version_id", "observation_id")},
+                              "source_context": {"observation_id": event["observation_id"],
+                                                 "title": event["title"], "summary": event.get("summary")}},
+                             packet["symbol"], now=now, root=root)
+        if current is not None and current["verification"] == "author_source_reviewed_not_gold":
+            raise ValueError("active author-reviewed explanation cannot be replaced automatically")
+        profile = read_company_profile(packet["symbol"], root=root)
+        if (profile is None or profile["documents"] != packet["documents"]
+                or clock(profile["checked_at"]) > now):
+            raise ValueError("automatic publication requires current collected official profile")
+        _publish_object(folder, key, receipt, packet["event"])
+    return key
+
+
+def read_company_profile(symbol: str, *, root: Path | None = None) -> dict | None:
+    """Pure bounded read; the profile writer is the verified-source pipeline."""
+    root = root if root is not None else ROOT
+    if not re.fullmatch(r"\d{6}", symbol) or root.is_symlink() or (root / symbol).is_symlink():
+        return None
+    try:
+        folder = root / symbol
+        key = _read(folder / "profile.json")["key"]
+        if not isinstance(key, str) or not re.fullmatch(r"[a-f0-9]{64}", key):
+            return None
+        value = _read(folder / ("profile-" + key + ".json"))
+        if digest(value) != key or value.get("symbol") != symbol:
+            return None
+        validate_company_profile(value)
+        return value
+    except (OSError, ValueError, TypeError, KeyError):
+        return None
 
 
 def _publish_object(folder, key, receipt, event):
@@ -325,11 +421,33 @@ def read_saved(item: dict, symbol: str, *, now: datetime,
         if not re.fullmatch(r"[a-f0-9]{64}", key):
             return None
         value = _read(folder / (key + ".json"))
-        if digest(value) != key or value.get("schema") != SCHEMA:
+        if digest(value) != key or value.get("schema") not in {SCHEMA, AUTO_SCHEMA}:
             return None
-        packet, analysis, review = value["packet"], value["analysis"], value["review"]
+        packet, analysis = value["packet"], value["analysis"]
         now = now.replace(tzinfo=BJ_TZ) if now.tzinfo is None else now
-        _validate_review(packet, analysis, review, value["model"], value["generated_at"], now)
+        automatic = value["schema"] == AUTO_SCHEMA
+        if automatic:
+            from app.events.company_reasoning import compile_analysis, PROTOCOL, METHOD, VERIFICATION
+
+            validate_packet(packet)
+            expected_analysis, rejected = compile_analysis(packet, value["selected"])
+            if (value.get("protocol") != PROTOCOL or expected_analysis != analysis
+                    or rejected != value.get("rejected_links")
+                    or value.get("company_evidence_sha256") != digest(packet["documents"])
+                    or not re.fullmatch(r"[a-f0-9]{32}", value.get("usage_id", ""))):
+                return None
+            profile = read_company_profile(symbol, root=root)
+            if (profile is None or digest(profile["documents"]) != value["company_evidence_sha256"]
+                    or clock(profile["checked_at"]) > now):
+                return None
+            validate_analysis(analysis, packet)
+            for field in ("provider", "model"):
+                _text(value["model"].get(field), 100)
+            reviewed_at = value["generated_at"]  # No author-review event is invented.
+        else:
+            review = value["review"]
+            _validate_review(packet, analysis, review, value["model"], value["generated_at"], now)
+            reviewed_at = review["reviewed_at"]
         if packet["symbol"] != symbol:
             return None
         event = packet["event"]
@@ -341,7 +459,7 @@ def read_saved(item: dict, symbol: str, *, now: datetime,
             return None
         generated, published = clock(value["generated_at"]), clock(value["published_at"])
         cutoff = clock(value["valid_until"])
-        if not clock(packet["captured_at"]) <= generated <= clock(review["reviewed_at"]) <= published <= now < cutoff:
+        if not clock(packet["captured_at"]) <= generated <= clock(reviewed_at) <= published <= now < cutoff:
             return None
         if cutoff - generated > timedelta(days=7):
             return None
@@ -353,7 +471,9 @@ def read_saved(item: dict, symbol: str, *, now: datetime,
                 "input_sha256": digest(packet), "generated_at": value["generated_at"],
                 "valid_until": value["valid_until"], "facts_captured_at": packet["captured_at"],
                 "company_name": packet["company_name"], "facts": facts(packet), "analysis": analysis,
-                "model": value["model"], "verification": "author_source_reviewed_not_gold",
+                "model": value["model"],
+                "verification": VERIFICATION if automatic else "author_source_reviewed_not_gold",
+                **({"generation_method": METHOD} if automatic else {}),
                 "eligibility_changed": False, "current_context_only": True, "business_effect_verified": False}
     except (OSError, ValueError, TypeError, KeyError, AttributeError):
         return None

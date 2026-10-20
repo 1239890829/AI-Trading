@@ -1,0 +1,359 @@
+from datetime import datetime, timedelta, timezone
+import json
+from pathlib import Path
+import subprocess
+
+import httpx
+import pytest
+
+from app.events import company_sources as source
+
+
+AT = datetime(2026, 10, 20, 9, 30, tzinfo=source.BJ)
+COMPANY = "示例科技股份有限公司"
+SYMBOL = "000001"
+BODY = (f"{COMPANY}\n证券代码：{SYMBOL}\n"
+        "公司主营业务为汽车电子产品的研发、生产和销售，服务国内外汽车制造客户。"
+        "主要产品包括汽车传感器和控制系统，为下游生产制造提供配套解决方案。"
+        "主要客户包括汽车制造商及一级供应商，本段未按产品或型号披露具体客户。"
+        "公司签订服务合同，合同最终履行金额仍取决于验收情况，不能作为固定收益承诺。"
+        "报告期内部分订单交付周期延长，海外业务仍存在汇率波动及回款不确定风险。")
+
+
+def row(announcement_id="12345", title="2026年半年度报告", day="2026-08-26"):
+    dt = datetime.fromisoformat(day).replace(tzinfo=source.BJ)
+    return {"secCode": SYMBOL, "orgId": "org123", "announcementId": announcement_id,
+            "announcementTitle": title, "announcementTime": int(dt.timestamp() * 1000),
+            "adjunctType": "PDF", "adjunctUrl": f"finalpage/{day}/{announcement_id}.PDF"}
+
+
+@pytest.fixture
+def prepared(monkeypatch):
+    monkeypatch.setattr(source, "MIN_REQUEST_INTERVAL", 0)
+    monkeypatch.setattr(source, "_now", lambda: AT.astimezone(timezone.utc))
+    monkeypatch.setattr(source, "_parse_pdf", lambda path: {"pages": [BODY], "truncated": False})
+
+
+def transport(rows=None, *, identity=None, pdf=b"%PDF-test", recent=None):
+    rows = [row()] if rows is None else rows
+    calls = []
+
+    def handler(request):
+        calls.append(request)
+        if request.url.path.endswith("topSearch/query"):
+            value = [{"code": SYMBOL, "category": "A股", "orgId": "org123", "zwjc": "示例科技"}]
+            return httpx.Response(200, json=value if identity is None else identity)
+        if request.url.path.endswith("hisAnnouncement/query"):
+            # Report query and optional recent direct notices are separate scopes.
+            current = recent if b"searchkey=&" in request.content else rows
+            if current is None:
+                current = []
+            return httpx.Response(200, json={"announcements": current or None,
+                                             "totalAnnouncement": len(current), "hasMore": False})
+        return httpx.Response(200, content=pdf)
+
+    return httpx.MockTransport(handler), calls
+
+
+def collect(tmp_path, network):
+    with httpx.Client(transport=network) as client:
+        return source.collect_company(SYMBOL, as_of=AT, root=tmp_path, client=client)
+
+
+def test_company_is_discovered_and_pdf_identity_and_quotes_are_bound(tmp_path, prepared):
+    network, calls = transport()
+    result = collect(tmp_path, network)
+    assert result["status"] == "ready"
+    assert result["company_name"] == COMPANY
+    assert datetime.fromisoformat(result["checked_at"]) >= datetime.fromisoformat(result["documents"][0]["received_at"])
+    doc = result["documents"][0]
+    assert doc["published_at"] == "2026-08-26T23:59:59+08:00"
+    assert doc["published_precision"] == "day"
+    assert COMPANY in doc["identity_quote"] and SYMBOL in doc["identity_quote"]
+    assert all(q["quote"] in source._compact(BODY) for q in doc["excerpts"])
+    assert {q["kind"] for q in doc["excerpts"]} >= {"business", "product", "customer", "order", "risk"}
+    assert result["provenance"]["point_in_time_first_seen_verified"] is False
+    assert len([c for c in calls if c.method == "GET"]) == 1
+
+
+def test_warm_cache_does_not_query_or_download_again(tmp_path, prepared):
+    network, calls = transport()
+    original = collect(tmp_path, network)
+    before = len(calls)
+    cached = collect(tmp_path, network)
+    assert cached["cache_hit"] is True and len(calls) == before
+    assert cached["documents"] == original["documents"]
+    assert len(list(tmp_path.glob("*.pdf"))) == 1
+
+
+def test_cached_original_drift_fails_without_redownload(tmp_path, prepared):
+    network, calls = transport()
+    collect(tmp_path, network)
+    (tmp_path / "12345.pdf").write_bytes(b"changed")
+    before = len(calls)
+    result = collect(tmp_path, network)
+    assert result["status"] == "failed" and not result["documents"]
+    assert len(calls) == before
+    assert any("drift" in value for value in result["missing"])
+
+
+def test_symlink_manifest_is_not_read_overwritten_or_followed(tmp_path, prepared):
+    target = tmp_path / "private.json"
+    target.write_text('{"private":"unchanged"}')
+    manifest = tmp_path / f"{SYMBOL}.manifest.json"
+    manifest.symlink_to(target)
+    network, calls = transport()
+    result = collect(tmp_path, network)
+    assert result["status"] == "failed" and not calls
+    assert manifest.is_symlink() and target.read_text() == '{"private":"unchanged"}'
+
+
+@pytest.mark.parametrize("scope", ["root", "metadata"])
+def test_symlink_cache_directory_is_rejected(tmp_path, scope):
+    target = tmp_path / "elsewhere"
+    target.mkdir()
+    root = tmp_path / "cache"
+    if scope == "root":
+        root.symlink_to(target, target_is_directory=True)
+    else:
+        root.mkdir()
+        (root / "metadata").symlink_to(target, target_is_directory=True)
+    with pytest.raises(source.SourceError, match="symlink"):
+        source.collect_company(SYMBOL, as_of=AT, root=root)
+    assert not list(target.iterdir())
+
+
+def test_orphaned_original_receipt_is_kept_without_redownload(tmp_path, prepared):
+    stamp = tmp_path / "12345.received.json"
+    stamp.write_text('{"recovery":"keep"}')
+    network, calls = transport()
+    result = collect(tmp_path, network)
+    assert result["status"] == "failed"
+    assert not any(c.method == "GET" for c in calls)
+    assert stamp.read_text() == '{"recovery":"keep"}'
+    assert any("receipt conflict" in x for x in result["missing"])
+
+
+def test_valid_null_empty_is_missing_not_no_business(tmp_path, prepared):
+    network, calls = transport(rows=[])
+    result = collect(tmp_path, network)
+    assert result["status"] == "missing" and result["documents"] == []
+    assert any("不代表公司没有业务" in value for value in result["missing"])
+    assert not any(c.method == "GET" for c in calls)
+
+
+@pytest.mark.parametrize("change", ["foreign", "duplicate", "null_nonzero", "count_drift"])
+def test_invalid_source_envelope_never_silently_becomes_empty(change):
+    rows = [row()]
+    total = 1
+    if change == "foreign":
+        rows[0]["secCode"] = "000002"
+    elif change == "duplicate":
+        rows.append(row())
+        total = 2
+    elif change == "null_nonzero":
+        rows = None
+    else:
+        total = 2
+    with pytest.raises(source.SourceError):
+        source._rows({"totalAnnouncement": total, "hasMore": False, "announcements": rows}, SYMBOL, "org123")
+
+
+def test_foreign_pdf_does_not_reuse_news_identity(tmp_path, prepared, monkeypatch):
+    monkeypatch.setattr(source, "_parse_pdf", lambda path: {"pages": [BODY.replace(SYMBOL, "000002")]})
+    network, _ = transport()
+    result = collect(tmp_path, network)
+    assert result["status"] == "failed" and not result["documents"]
+    assert any("identity" in value or "same page" in value for value in result["missing"])
+
+
+def test_future_day_precision_is_not_backfilled_to_midnight(tmp_path, prepared):
+    network, calls = transport(rows=[row(day="2026-10-20")])
+    result = collect(tmp_path, network)
+    assert result["status"] == "missing" and not result["documents"]
+    assert any("不倒填" in value for value in result["missing"])
+    assert not any(c.method == "GET" for c in calls)
+
+
+@pytest.mark.parametrize("pdf", [b"<html>login required</html>", b"x" * (source.MAX_PDF + 1)])
+def test_non_pdf_and_oversized_original_are_failures(tmp_path, prepared, pdf):
+    network, _ = transport(pdf=pdf)
+    result = collect(tmp_path, network)
+    assert result["status"] == "failed" and not result["documents"]
+    assert not list(tmp_path.glob("*.pdf"))
+
+
+@pytest.mark.parametrize("status", [302, 429])
+def test_no_redirect_or_rate_limit_retry(tmp_path, prepared, status):
+    calls = []
+
+    def handler(request):
+        calls.append(request)
+        return httpx.Response(status, headers={"Location": "http://127.0.0.1/secret"})
+
+    result = collect(tmp_path, httpx.MockTransport(handler))
+    assert result["status"] == "failed" and len(calls) == 1
+    assert str(status) in result["missing"][0]
+
+
+def test_sentence_extraction_has_per_company_budget_and_explicit_missing():
+    page = "\n".join(f"公司主营业务为第{i}类产品研发生产及配套服务，为国内外客户提供解决方案。" for i in range(20))
+    values, missing = source._excerpts([page])
+    assert len(values) <= 12
+    assert all(x["quote"] in source._compact(page) for x in values)
+    assert any("截断" in x for x in missing)
+    assert any("不代表" in x for x in missing)
+
+
+def test_table_runs_and_navigation_are_not_source_assertions():
+    table = "主要业务风险单位：元项目期初期末100,000.00200,000.00300,000.00400,000.00500,000.00600,000.00700,000.00800,000.00。"
+    navigation = "三、主营业务分析概述参见一、报告期内公司从事的主要业务相关内容。"
+    page = table + navigation + BODY
+    values, missing = source._excerpts([page])
+    assert not any(table == v["quote"] or navigation == v["quote"] for v in values)
+    assert any(v["kind"] == "business" and "汽车电子" in v["quote"] for v in values)
+    assert any("截断" in value for value in missing)
+
+
+def test_pdf_page_limit_is_rejected_in_isolated_parser(tmp_path):
+    from pypdf import PdfWriter
+
+    path = tmp_path / "too-many-pages.pdf"
+    writer = PdfWriter()
+    for _ in range(351):
+        writer.add_blank_page(width=10, height=10)
+    writer.write(path)
+    with pytest.raises(source.SourceError, match="oversized PDF"):
+        source._parse_pdf(path)
+    assert not list(tmp_path.glob(".pdf-*"))
+
+
+def test_empty_scanned_pdf_and_timeout_remain_explicit(tmp_path, prepared, monkeypatch):
+    def fail(path):
+        raise source.SourceError("bounded PDF parser timed out after 25 seconds")
+
+    monkeypatch.setattr(source, "_parse_pdf", fail)
+    network, _ = transport()
+    result = collect(tmp_path, network)
+    assert result["status"] == "failed"
+    assert any("timed out" in x for x in result["missing"])
+
+
+def test_private_parser_path_is_not_exposed_in_service_missing(tmp_path, prepared, monkeypatch):
+    def fail(path):
+        raise OSError("private-local-path/backend/.env")
+
+    monkeypatch.setattr(source, "_parse_pdf", fail)
+    network, _ = transport()
+    result = collect(tmp_path, network)
+    assert result["status"] == "failed"
+    assert "private-local-path" not in json.dumps(result)
+    assert any("OSError" in x for x in result["missing"])
+
+
+def test_two_documents_share_twelve_excerpt_budget(tmp_path, prepared, monkeypatch):
+    # More different full source sentences must not overflow the legacy consumer.
+    pages = [BODY + BODY.replace("公司", "本公司") + BODY.replace("公司", "该公司")]
+    monkeypatch.setattr(source, "_parse_pdf", lambda path: {"pages": pages})
+    notice = row("12346", "关于签订重大服务合同的公告", "2026-09-01")
+    network, _ = transport(recent=[notice])
+    result = collect(tmp_path, network)
+    assert result["status"] == "ready" and len(result["documents"]) == 2
+    assert sum(len(x["excerpts"]) for x in result["documents"]) <= 12
+    assert all(x["excerpts"] for x in result["documents"])
+
+
+def test_parser_process_has_no_model_keys_and_isolated_python(tmp_path, monkeypatch):
+    path = tmp_path / "fake.pdf"
+    path.write_bytes(b"%PDF-test")
+    observed = {}
+
+    class Completed:
+        returncode = 0
+        pid = 123
+
+        def __init__(self, args, **kwargs):
+            observed.update(args=args, **kwargs)
+            Path(args[-1]).write_text(json.dumps({"pages": [BODY], "truncated": False}))
+
+        def poll(self):
+            return 0
+
+    monkeypatch.setenv("DEEPSEEK_API_KEY", "do-not-inherit")
+    monkeypatch.setattr(subprocess, "Popen", Completed)
+    assert source._parse_pdf(path)["pages"] == [BODY]
+    assert observed["args"][1] == "-I"
+    assert set(observed["env"]) == {"PATH", "LANG", "PYTHONUTF8"}
+    assert "DEEPSEEK_API_KEY" not in observed["env"]
+    assert not list(tmp_path.glob(".pdf-*"))
+
+
+def test_real_blank_pdf_is_bounded_and_reports_absent_text(tmp_path):
+    from pypdf import PdfWriter
+
+    path = tmp_path / "blank.pdf"
+    writer = PdfWriter()
+    writer.add_blank_page(width=100, height=100)
+    writer.write(path)
+    parsed = source._parse_pdf(path)
+    assert parsed["pages"] == [""]
+    assert "parent_sampled_rss_768MiB" in parsed["memory_limit_mode"]
+    with pytest.raises(source.SourceError):
+        source._identity(parsed["pages"], SYMBOL)
+
+
+@pytest.mark.parametrize("symbol,as_of", [("abc", AT), ("../../000001", AT), (SYMBOL, AT.replace(tzinfo=None))])
+def test_invalid_symbols_and_naive_time_rejected(tmp_path, symbol, as_of):
+    with pytest.raises(ValueError):
+        source.collect_company(symbol, as_of=as_of, root=tmp_path)
+
+
+def test_source_timestamp_and_path_date_must_agree():
+    changed = row()
+    changed["announcementTime"] += int(timedelta(days=1).total_seconds() * 1000)
+    with pytest.raises(source.SourceError, match="conflict"):
+        source._publication(changed)
+
+
+def test_empty_has_more_is_not_a_successful_empty_window():
+    with pytest.raises(source.SourceError):
+        source._rows({"announcements": [], "totalAnnouncement": 0, "hasMore": True}, SYMBOL, "org123")
+
+
+def test_revision_report_is_eligible_and_summary_is_not_selected(tmp_path, prepared):
+    revised = row(title="2026年半年度报告（修订后）")
+    network, _ = transport(rows=[revised, row("12346", "2026年半年度报告摘要")])
+    result = collect(tmp_path, network)
+    assert result["status"] == "ready"
+    assert [d["title"] for d in result["documents"]] == ["2026年半年度报告（修订后）"]
+
+
+def test_sampled_rss_guard_kills_only_its_own_parser(tmp_path, monkeypatch):
+    path = tmp_path / "fake.pdf"
+    path.write_bytes(b"%PDF-test")
+    children = []
+
+    class Child:
+        pid = 123
+        returncode = None
+
+        def __init__(self, *args, **kwargs):
+            children.append(self)
+
+        def poll(self):
+            return self.returncode
+
+        def wait(self, timeout=None):
+            if self.returncode is None:
+                raise subprocess.TimeoutExpired("parser", timeout)
+            return self.returncode
+
+        def kill(self):
+            self.returncode = -9
+
+    monkeypatch.setattr(subprocess, "Popen", Child)
+    monkeypatch.setattr(subprocess, "run", lambda *a, **k: subprocess.CompletedProcess(a, 0, "999999999", ""))
+    with pytest.raises(source.SourceError, match="sampled RSS"):
+        source._parse_pdf(path)
+    assert len(children) == 1 and children[0].returncode == -9
+    assert not list(tmp_path.glob(".pdf-*"))

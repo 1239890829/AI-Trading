@@ -855,3 +855,45 @@ def test_stock_reasoning_missing_ai_does_not_erase_real_source_relationship(stor
     assert reason["basis"] == ["对应公司公告"]
     assert "没有可用的已保存AI判读" in reason["ai_scope_reason"]
     assert "没有可核对的个股关系" not in reason["ai_scope_reason"]
+
+
+def test_company_status_visible_without_any_event_and_get_never_starts_work(store, monkeypatch):
+    from app.core.config import settings
+    from app.events import company_state, company_sources
+
+    monkeypatch.setattr(settings, "company_evidence_enabled", True, raising=False)
+    calls = []
+    def projection(symbol, **kwargs):
+        calls.append((symbol, kwargs))
+        return {"symbol": symbol, "state": "source_failed", "missing": ["正式披露来源失败"],
+                "updated_at": NOW.isoformat(), "documents_count": 0}
+    monkeypatch.setattr(company_state, "read_status", projection)
+    def forbidden(*args, **kwargs):
+        pytest.fail("ordinary GET must not collect, generate or enqueue")
+    monkeypatch.setattr(company_sources, "collect_company", forbidden)
+    monkeypatch.setattr("app.services.agent_tasks.create_task", forbidden)
+    monkeypatch.setattr("app.core.llm_client.bounded_chat_completion", forbidden)
+    before = list(company_state.ci.ROOT.glob("**/*"))
+    data = routes._read_attribution(store, None, symbol="600001", now=NOW)["data"]
+    assert data["items"] == []
+    assert data["company_status"]["state"] == "source_failed"
+    assert calls[0][0] == "600001" and calls[0][1]["enabled"] is True
+    assert callable(calls[0][1]["task_resolver"])
+    assert list(company_state.ci.ROOT.glob("**/*")) == before
+
+
+def test_company_status_uses_same_stock_clock_and_history_cutoff(store, monkeypatch):
+    from app.events import company_state
+    cutoff = NOW - timedelta(minutes=3)
+    seen = []
+    monkeypatch.setattr(company_state, "read_status", lambda symbol, **kw: seen.append((symbol, kw)) or
+                        {"symbol": symbol, "state": "historical_excluded", "documents_count": 0})
+    direct = add(store)
+    result = routes._read_attribution(store, None, symbol="600001", event_id=direct.id,
+                                      now=NOW, response_as_of=cutoff)
+    assert result["data"]["company_status"]["symbol"] == "600001"
+    assert seen[0][1]["now"] == NOW
+    assert seen[0][1]["response_as_of"] == cutoff
+    without_symbol = routes._read_attribution(store, None, event_id=direct.id, now=NOW)
+    assert "company_status" not in without_symbol["data"]
+    assert len(seen) == 1

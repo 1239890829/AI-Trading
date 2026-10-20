@@ -28,6 +28,28 @@ export interface AgentTaskStep {
 
 export interface AgentOutcome { label: string; note: string }
 
+export type AgentCompanyEvidenceState =
+  | "idle" | "queued" | "collecting" | "generating" | "ready" | "insufficient"
+  | "source_failed" | "model_failed" | "invalid_response" | "budget_blocked"
+  | "canceled" | "interrupted" | "disabled" | "historical_excluded";
+
+export interface AgentCompanyEvidenceResult {
+  symbol: string;
+  state: AgentCompanyEvidenceState;
+  cached?: boolean;
+  result_key?: string | null;
+}
+
+export interface AgentTaskResult {
+  kind: string;
+  /** 公司任务返回批次和逐股状态，不生成单个产物 id。 */
+  id?: string;
+  state?: string;
+  symbols?: AgentCompanyEvidenceResult[];
+  /** 缺失表示未记录，不能当成零调用。 */
+  model_calls?: number | null;
+}
+
 export interface AgentTask {
   outcome?: AgentOutcome | null;
   id: string;
@@ -35,7 +57,7 @@ export interface AgentTask {
   status: AgentTaskStatus;
   params: Record<string, unknown>;
   steps: AgentTaskStep[];
-  result_ref: { kind: string; id: string } | null;
+  result_ref: AgentTaskResult | null;
   error: { code: string; message: string; retryable: boolean } | null;
   risk_level: "L0" | "L1" | "L2";
   created_by: string;

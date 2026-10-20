@@ -49,7 +49,7 @@ export interface StockReasoning {
   eligibility_changed: false; method: "saved_evidence_projection"; business_effect_verified: false;
 }
 
-/** A saved, source-reviewed current explanation; it is not a historical selection basis. */
+/** A saved current research explanation; verification records its actual review scope. */
 export interface CompanyImpact {
   symbol: string; event_id: number; version_id: number; observation_id: number;
   input_sha256: string; generated_at: string; valid_until: string; facts_captured_at: string;
@@ -61,8 +61,18 @@ export interface CompanyImpact {
     counterarguments: string[]; missing: string[];
   };
   model: {provider: string; model: string};
-  verification: "author_source_reviewed_not_gold"; eligibility_changed: false;
+  verification: "author_source_reviewed_not_gold" | "automated_evidence_bound_not_gold";
+  generation_method?: "model_selection_and_deterministic_compilation";
+  eligibility_changed: false;
   current_context_only: true; business_effect_verified: false;
+}
+
+export interface CompanyStatus {
+  symbol: string;
+  state: "idle" | "queued" | "collecting" | "generating" | "ready" | "insufficient" | "source_failed" | "model_failed" | "invalid_response" | "budget_blocked" | "canceled" | "interrupted" | "disabled" | "historical_excluded";
+  updated_at: string; reason: string; missing: string[]; documents_count: number;
+  task_id?: string | null; next_retry_at?: string | null; source_status?: string;
+  facts?: CompanyImpact["facts"];
 }
 
 export interface AttributionEvidenceItem {
@@ -114,6 +124,7 @@ export interface StockAttributionPayload {
   later_items?: AttributionEvidenceItem[];
   /** Source-reviewed current research outside the ordinary message window; never a primary trigger. */
   company_items?: AttributionEvidenceItem[];
+  company_status?: CompanyStatus;
   primary_reason?: PrimaryAttributionReason;
   evidence_counts?: {scope: "returned_rows_only"; returned: number; theme_only: number; unknown: number; source_time_unknown: number};
   response_context?: {pool_date: string | null; response_as_of: string | null; view: "current_with_response_context"; historical_replay: false};

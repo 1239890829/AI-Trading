@@ -692,6 +692,97 @@ describe("company evidence and saved impact", () => {
     expect(company.queryByText(/公司没有相关业务/)).toBeNull();
   });
 
+  it("distinguishes automatic citation-bound research from an actual author-reviewed receipt", () => {
+    const automatic = {...impact, verification: "automated_evidence_bound_not_gold" as const, generation_method: "model_selection_and_deterministic_compilation" as const};
+    render(<AttributionEvidence item={item(automatic)} symbol="600825"/>);
+    const company = screen.getByLabelText("公司经营依据与AI传导");
+    expect(company.textContent).toContain("自动引用约束研究解释 · 未经作者逐案源审");
+    expect(company.textContent).toContain("未经作者逐案源审或独立效果验证");
+    expect(company.textContent).not.toContain("AI生成、作者核对并校正");
+    expect(within(company).getByText(impact.facts[0].quote)).toBeTruthy();
+  });
+
+  it.each([undefined, "unreviewed_free_text"])("rejects an automatic receipt without the exact generation method %s", generation_method => {
+    const automatic = {...impact, verification: "automated_evidence_bound_not_gold" as const, generation_method: generation_method as never};
+    render(<AttributionEvidence item={item(automatic)} symbol="600825"/>);
+    expect(screen.queryByLabelText("公司经营依据与AI传导")).toBeNull();
+    expect(screen.queryByText(impact.analysis.summary)).toBeNull();
+  });
+
+  const companyState = (state: NonNullable<StockAttributionPayload["company_status"]>["state"]): NonNullable<StockAttributionPayload["company_status"]> => ({
+    symbol: "600825", state, updated_at: "2026-10-20T09:15:00+08:00", reason: "本轮处理未能生成有效经营解释，保留真实公司资料", missing: ["本轮片段未取得可核对的客户、订单与贡献金额"], documents_count: 1, facts: impact.facts,
+  });
+
+  it.each(["source_failed", "model_failed", "budget_blocked"] as const)("retains true company facts and specific gaps with no events after %s", async state => {
+    vi.mocked(getStockAttribution).mockResolvedValue({...payload(), items: [], count: 0, company_status: companyState(state)});
+    render(<StockAttributionPanel symbol="600825" defaultExpanded/>);
+    const status = await screen.findByLabelText("公司资料与判读状态");
+    expect(status.textContent).toContain("本轮处理未能生成有效经营解释");
+    expect(status.textContent).toContain(companyState(state).missing[0]);
+    expect(within(status).getByLabelText("已保存公司原文").textContent).toContain(impact.facts[0].quote);
+    expect(status.textContent).toContain("尚不能据此补出本条事件的经营传导");
+    expect(screen.queryByLabelText("AI经营传导假设")).toBeNull();
+    expect(screen.queryByRole("button", {name: /生成|重试判读|维护授权/})).toBeNull();
+    fireEvent.click(screen.getByRole("button", {name: "刷新依据"}));
+    await act(async () => {});
+    expect(getStockAttribution).toHaveBeenCalledTimes(2);
+    expect(getEventAttribution).not.toHaveBeenCalled();
+  });
+
+  it.each(["queued", "collecting", "generating"] as const)("shows actual %s progress without calling it an unjudged or reviewed result", async state => {
+    vi.mocked(getStockAttribution).mockResolvedValue({...payload(), items: [], count: 0, company_status: {...companyState(state), reason: "后台任务已记录当前进展", documents_count: 0, facts: []}});
+    render(<StockAttributionPanel symbol="600825" defaultExpanded/>);
+    const status = await screen.findByLabelText("公司资料与判读状态");
+    expect(within(status).getByRole("status").textContent).toContain("后台任务已记录当前进展");
+    expect(status.textContent).not.toMatch(/暂未判读|作者核对并校正/);
+    expect(screen.queryByLabelText("公司经营依据与AI传导")).toBeNull();
+    expect(getStockAttribution).toHaveBeenCalledTimes(1);
+  });
+
+  it.each([{symbol: "600826"}, {updated_at: "2026-10-20T09:31:00+08:00"}, {updated_at: "2026-10-20T09:15:00"}])("does not disclose foreign or invalid-time company status %j", async patch => {
+    vi.mocked(getStockAttribution).mockResolvedValue({...payload(), company_status: {...companyState("model_failed"), ...patch}});
+    render(<StockAttributionPanel symbol="600825" defaultExpanded/>);
+    await screen.findByLabelText("AI解读读取范围");
+    expect(screen.queryByLabelText("公司资料与判读状态")).toBeNull();
+    expect(screen.queryByText(impact.facts[0].quote)).toBeNull();
+    expect(screen.getByRole("button", {name: `查看归因消息：${evidence.title}`})).toBeTruthy();
+  });
+
+  it.each([
+    {...impact.facts[0], url: "https://evil.example/company.pdf"},
+    {...impact.facts[0], published_at: "2026-10-20T09:16:00+08:00"},
+    {...impact.facts[0], sha256: "unknown"},
+  ])("keeps failure state but hides company facts with an invalid source or clock", async fact => {
+    vi.mocked(getStockAttribution).mockResolvedValue({...payload(), items: [], count: 0, company_status: {...companyState("model_failed"), facts: [fact]}});
+    render(<StockAttributionPanel symbol="600825" defaultExpanded/>);
+    const status = await screen.findByLabelText("公司资料与判读状态");
+    expect(status.textContent).toContain("模型判读失败");
+    expect(screen.queryByText(fact.quote)).toBeNull();
+    expect(status.textContent).toContain("公司原文未通过来源或时间核对");
+  });
+
+  it("does not backfill newly acquired company facts into an older response time", async () => {
+    vi.mocked(getStockAttribution).mockResolvedValue({...payload(), items: [], count: 0, company_status: companyState("historical_excluded")});
+    render(<StockAttributionPanel symbol="600825" defaultExpanded responseAsOf="2026-10-19T09:30:00+08:00"/>);
+    const status = await screen.findByLabelText("公司资料与判读状态");
+    expect(status.textContent).toContain("公司资料的可得时刻无法对应所查历史时点");
+    expect(screen.queryByText(impact.facts[0].quote)).toBeNull();
+  });
+
+  it("keeps the ordinary primary message while labeling an automatic supplement outside its window", async () => {
+    const automatic = {...impact, event_id: secondEvidence.event_id, verification: "automated_evidence_bound_not_gold" as const, generation_method: "model_selection_and_deterministic_compilation" as const};
+    const primary: PrimaryAttributionReason = {status: "source_clue", label: "来源线索", reason: "保留原主线索", event_id: 18, version_id: 22, observation_id: 19, relation: "direct_symbol", timing_relation: "known_before_response", excerpt: {field: "summary", quote: "尚未完成审计", truncated: false}, qualifiers: [], causality_verified: false, fact_verified: false, interpretation_view: "current"};
+    vi.mocked(getStockAttribution).mockResolvedValue({...payload(), primary_reason: primary, company_items: [{...secondEvidence, company_impact: automatic}]});
+    render(<StockAttributionPanel symbol="600825" primarySummary/>);
+    fireEvent.click(await screen.findByRole("button", {name: "查看主线索完整依据"}));
+    expect(screen.getByText("保留原主线索", {exact: false})).toBeTruthy();
+    const supplement = screen.getByLabelText("自动引用约束经营补充（原消息窗口外）");
+    expect(screen.queryByLabelText("已源审经营补充（原消息窗口外）")).toBeNull();
+    fireEvent.click(within(supplement).getByRole("button", {name: `查看归因消息：${secondEvidence.title}`}));
+    expect(within(supplement).getByLabelText("公司经营依据与AI传导").textContent).toContain("未经作者逐案源审");
+    expect(getStockAttribution).toHaveBeenCalledTimes(1);
+  });
+
   it("counts a company-impact receipt without requiring an old event-only AI result", async () => {
     vi.mocked(getStockAttribution).mockResolvedValue(payload("600825", item()));
     render(<StockAttributionPanel symbol="600825" defaultExpanded/>);
@@ -743,7 +834,53 @@ describe("company evidence and saved impact", () => {
     expect(screen.getByLabelText("公司经营依据与AI传导")).toBeTruthy();
     act(() => {vi.advanceTimersByTime(1000);});
     expect(screen.queryByLabelText("公司经营依据与AI传导")).toBeNull();
+    expect(screen.getByText(/已保存的本股经营判读已于.*过期/)).toBeTruthy();
     expect(getStockAttribution).not.toHaveBeenCalled();
+  });
+
+  it("keeps rendering pure and cancels its expiry observation on unmount", () => {
+    vi.useFakeTimers(); vi.setSystemTime(new Date("2026-10-20T09:59:59+08:00"));
+    const readClock = vi.spyOn(Date, "now");
+    const view = render(<AttributionEvidence item={item()} symbol="600825"/>);
+    const initialReads = readClock.mock.calls.length;
+    view.rerender(<AttributionEvidence item={item()} symbol="600825" complete/>);
+    view.rerender(<AttributionEvidence item={item()} symbol="600825"/>);
+    expect(readClock).toHaveBeenCalledTimes(initialReads);
+    expect(screen.getByLabelText("公司经营依据与AI传导").textContent).toContain(impact.analysis.summary);
+    view.unmount();
+    act(() => {vi.advanceTimersByTime(2000);});
+    expect(readClock).toHaveBeenCalledTimes(initialReads);
+    expect(getStockAttribution).not.toHaveBeenCalled();
+  });
+
+  it("replaces the old deadline and expires a newer receipt at its own actual valid_until", () => {
+    vi.useFakeTimers(); vi.setSystemTime(new Date("2026-10-20T09:59:59+08:00"));
+    const view = render(<AttributionEvidence item={item()} symbol="600825"/>);
+    act(() => {vi.advanceTimersByTime(500);});
+    const newer = {...impact, valid_until: "2026-10-20T10:01:00+08:00",
+      analysis: {...impact.analysis, summary: "新回执只在自己的有效期内展示。"}};
+    view.rerender(<AttributionEvidence item={item(newer)} symbol="600825"/>);
+    act(() => {vi.advanceTimersByTime(500);});
+    expect(screen.getByLabelText("公司经营依据与AI传导").textContent).toContain(newer.analysis.summary);
+    expect(screen.queryByText(/已保存的本股经营判读已于.*过期/)).toBeNull();
+    act(() => {vi.advanceTimersByTime(60000);});
+    expect(screen.queryByLabelText("公司经营依据与AI传导")).toBeNull();
+    expect(screen.getByText(/已保存的本股经营判读已于.*过期/)).toBeTruthy();
+    view.rerender(<AttributionEvidence item={item()} symbol="600825"/>);
+    expect(screen.queryByLabelText("公司经营依据与AI传导")).toBeNull();
+    expect(screen.getByText(/已保存的本股经营判读已于.*过期/)).toBeTruthy();
+  });
+
+  it("expires the saved-result coverage even when no receipt reader is opened", async () => {
+    vi.useFakeTimers(); vi.setSystemTime(new Date("2026-10-20T09:59:59+08:00"));
+    vi.mocked(getStockAttribution).mockResolvedValue(payload("600825", item()));
+    render(<StockAttributionPanel symbol="600825" defaultExpanded/>);
+    await act(async () => {});
+    expect(screen.getByLabelText("AI解读读取范围").textContent).toContain("其中 1 条有已保存AI解读");
+    act(() => {vi.advanceTimersByTime(1000);});
+    expect(screen.getByLabelText("AI解读读取范围").textContent).toContain("其中 0 条有已保存AI解读");
+    expect(getStockAttribution).toHaveBeenCalledTimes(1);
+    expect(getEventAttribution).not.toHaveBeenCalled();
   });
 
   it("preserves the existing reader when no company-impact receipt is saved", () => {
