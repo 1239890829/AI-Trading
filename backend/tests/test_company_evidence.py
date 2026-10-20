@@ -229,6 +229,7 @@ def test_repeating_same_evidence_adds_neither_model_call_nor_receipt_or_validity
     before = {p: p.read_bytes() for p in receipts(env)}
     saved = ci.read_saved(env.item, SYMBOL, now=NOW)
     env.clock[0] += timedelta(minutes=10)
+    env.profile["checked_at"] = env.clock[0].isoformat()
     result = run(env)
     assert {p: p.read_bytes() for p in receipts(env)} == before
     assert ci.read_saved(env.item, SYMBOL, now=env.clock[0])["valid_until"] == saved["valid_until"]
@@ -268,13 +269,70 @@ def test_stable_key_excludes_collection_clock_but_changes_for_real_evidence(env)
     key = worker.generation_key(packet, model)
     changed = deepcopy(packet)
     changed["captured_at"] = "2026-10-21T10:00:00+08:00"
-    changed["documents"][0]["received_at"] = "2026-10-21T09:00:00+08:00"
     assert worker.generation_key(changed, model) == key
     for field in ("event", "source", "model"):
         value = deepcopy(packet)
         if field == "event": value["event"]["version_id"] += 1
         if field == "source": value["documents"][0]["sha256"] = "d" * 64
         assert worker.generation_key(value, {**model, "model": "other"} if field == "model" else model) != key
+
+
+@pytest.mark.parametrize("field,value", [
+    ("title", "2026年半年度报告（修订）"),
+    ("published_at", "2026-08-15T12:00:00+08:00"),
+    ("received_at", "2026-10-20T09:01:00+08:00"),
+    ("extraction_method", "changed-extractor"),
+])
+def test_generation_key_binds_full_document_identity_used_by_reader_and_publisher(env, field, value):
+    packet = worker._packet(SYMBOL, env.profile, env.item)
+    changed = deepcopy(packet)
+    changed["documents"][0][field] = value
+    model = {"provider": "fixture", "model": "fixture"}
+    assert worker.generation_key(changed, model) != worker.generation_key(packet, model)
+
+
+def test_legacy_projection_key_and_v3_receipt_migrate_to_valid_v4_without_republishing_old_input(env, monkeypatch):
+    from app.events import company_sources
+
+    current_method = company_sources.EXTRACTOR
+    old_method = "bounded-sentences-v3"
+    env.profile["extractor"] = old_method
+    env.profile["documents"][0]["extraction_method"] = old_method
+
+    def historical_projection(packet, model):
+        # Exact pre-migration algorithm, independent of the current helper.
+        documents = [{key: d[key] for key in ("id", "symbol", "company_name", "url", "sha256", "period", "excerpts")}
+                     for d in packet["documents"]]
+        return ci.digest({"symbol": packet["symbol"], "company_name": packet["company_name"],
+                          "short_name": packet.get("short_name", ""), "event": packet["event"],
+                          "documents": documents, "protocol": worker.PROTOCOL, "model": model})
+
+    with monkeypatch.context() as old_runtime:
+        old_runtime.setattr(company_sources, "EXTRACTOR", old_method)
+        old_runtime.setattr(worker, "generation_key", historical_projection)
+        assert run(env)["model_calls"] == 1
+    prior = store.load_state(SYMBOL)
+    model = {"provider": worker.settings.llm_provider, "model": worker.settings.review_llm_model}
+    assert prior["generation_key"] == historical_projection(prior["packet"], model)
+    assert ci.read_saved(env.item, SYMBOL, now=NOW) is not None
+    originals = {p: p.read_bytes() for p in receipts(env)}
+    old_excerpts = deepcopy(env.profile["documents"][0]["excerpts"])
+    env.profile["extractor"] = current_method
+    env.profile["documents"][0]["extraction_method"] = current_method
+    assert historical_projection(worker._packet(SYMBOL, env.profile, env.item), model) == prior["generation_key"]
+
+    result = run(env)
+    current = store.load_state(SYMBOL)
+    assert result["model_calls"] == 1 and result["symbols"][0]["state"] == "ready"
+    assert len(env.calls) == len(usage_rows(env)) == 2
+    assert current["generation_key"] != prior["generation_key"]
+    assert current["packet"]["documents"][0]["extraction_method"] == current_method
+    assert current["packet"]["documents"][0]["excerpts"] == old_excerpts
+    assert all(p.read_bytes() == raw for p, raw in originals.items())
+    assert len(receipts(env)) == 2
+    saved = ci.read_saved(env.item, SYMBOL, now=NOW)
+    assert saved is not None and saved["verification"] == "automated_evidence_bound_not_gold"
+    assert run(env)["model_calls"] == 0 and len(env.calls) == 2
 
 
 @pytest.mark.parametrize("raw", ["not JSON", "[]", '[{"id":"foreign"}]', '[{"id":"003021:10:20:30"},{"id":"003021:10:20:30"}]'])
@@ -493,6 +551,180 @@ def test_future_daily_pick_save_is_not_a_current_candidate(env):
                             items=json.dumps([{"symbol": SYMBOL}])))
         db.commit()
     assert worker.candidate_symbols(env.sf, now=NOW) == []
+
+
+def _add_low_participant(db, run, at, symbol, *, theme="机器人", change=None):
+    common = dict(run_id=run, trade_date="2026-10-20", as_of=at, scenario="intraday_opportunity",
+                  symbol=symbol, source_theme=theme, strategy_version="fixture", feature_version="fixture", data_state="ready")
+    for stage, decision in [("candidate", "included"), ("hard_gate", "passed"), ("rank", "rejected")]:
+        fields = {**common, "snapshot_id": f"{run}-{symbol}-{theme}-{stage}", "stage": stage, "decision": decision,
+                  "rank": None, "evidence": json.dumps({"gate_decision": "passed", "linkage_level": "低"})}
+        if change:
+            change(stage, fields)
+        db.add(Snapshot(**fields))
+
+
+def test_real_low_participant_is_read_after_ranked_before_daily_with_no_new_qualification(env):
+    at = NOW.replace(tzinfo=None) - timedelta(minutes=1)
+    with env.sf() as db:
+        _add_run(db, "current", at, symbols=["600001"])
+        _add_low_participant(db, "current", at, "000002")
+        _add_low_participant(db, "current", at, "000002", theme="精密制造")
+        db.add(DailyPickSet(date="2026-10-20", created_at=NOW.astimezone(timezone.utc).replace(tzinfo=None),
+                            items=json.dumps([{"symbol": "600001"}, {"symbol": "600003"}])))
+        db.commit()
+    assert worker.candidate_symbols(env.sf, now=NOW) == ["600001", "000002", "600003"]
+    with env.sf() as db:
+        rows = db.query(Snapshot).filter(Snapshot.symbol == "000002", Snapshot.stage == "rank").all()
+        assert all(row.decision == "rejected" and row.rank is None for row in rows)
+
+
+def test_universe_caps_distinct_intraday_at_32_then_daily_at_8_without_renaming_rank(env):
+    at = NOW.replace(tzinfo=None) - timedelta(minutes=1)
+    ranked = [f"{600000 + i:06d}" for i in range(1, 31)]
+    daily = [f"{601000 + i:06d}" for i in range(1, 10)]
+    with env.sf() as db:
+        _add_run(db, "current", at, symbols=ranked)
+        for i in range(1, 7):
+            _add_low_participant(db, "current", at, f"{i:06d}")
+        db.add(DailyPickSet(date="2026-10-20", created_at=NOW.astimezone(timezone.utc).replace(tzinfo=None),
+                            items=json.dumps([{"symbol": s} for s in daily])))
+        db.commit()
+    assert worker.candidate_symbols(env.sf, now=NOW) == ranked + ["000001", "000002"] + daily[:8]
+
+
+def test_first_unprocessed_ranked_consumer_precedes_unprocessed_low_participant(env, monkeypatch):
+    at = NOW.replace(tzinfo=None) - timedelta(minutes=1)
+    with env.sf() as db:
+        _add_run(db, "current", at, symbols=["600001"])
+        _add_low_participant(db, "current", at, "000002")
+        db.commit()
+    monkeypatch.setattr(worker.settings, "company_evidence_enabled", True)
+    monkeypatch.setattr(worker.settings, "company_evidence_batch_size", 1)
+    assert run(env, {"automatic": True})["symbols"][0]["symbol"] == "600001"
+
+
+@pytest.mark.parametrize("change", ["audit_rejected", "hard_gate_rejected", "foreign_theme", "foreign_day",
+                                     "foreign_time", "foreign_scenario", "low_quality", "unknown_linkage", "malformed", "no_rank"])
+def test_low_consumer_requires_exact_current_participant_not_audit_or_unknown(env, change):
+    at = NOW.replace(tzinfo=None) - timedelta(minutes=1)
+
+    def corrupt(stage, fields):
+        if change == "audit_rejected" and stage == "candidate": fields["decision"] = "rejected"
+        if change == "hard_gate_rejected" and stage == "hard_gate": fields["decision"] = "rejected"
+        if change == "foreign_theme" and stage == "hard_gate": fields["source_theme"] = "另一题材"
+        if change == "foreign_day" and stage == "hard_gate": fields["trade_date"] = "2026-10-19"
+        if change == "foreign_time" and stage == "hard_gate": fields["as_of"] += timedelta(seconds=1)
+        if change == "foreign_scenario" and stage == "hard_gate": fields["scenario"] = "other"
+        if change == "low_quality" and stage == "hard_gate": fields["data_state"] = "stale"
+        if change == "unknown_linkage" and stage == "rank": fields["evidence"] = json.dumps({"gate_decision": "passed", "linkage_level": "unknown"})
+        if change == "malformed" and stage == "rank": fields["evidence"] = "not json"
+        if change == "no_rank" and stage == "rank": fields["stage"] = "notification"
+
+    with env.sf() as db:
+        _add_run(db, "current", at)
+        _add_low_participant(db, "current", at, "000002", change=corrupt)
+        db.commit()
+    assert worker.candidate_symbols(env.sf, now=NOW) == []
+
+
+@pytest.mark.parametrize("successor", ["empty", "degraded"])
+def test_new_empty_or_degraded_run_does_not_revive_low_participant(env, successor):
+    at = NOW.replace(tzinfo=None)
+    with env.sf() as db:
+        _add_run(db, "old", at - timedelta(minutes=1))
+        _add_low_participant(db, "old", at - timedelta(minutes=1), "000002")
+        _add_run(db, "new", at, state="ready" if successor == "empty" else "degraded")
+        db.commit()
+    assert worker.candidate_symbols(env.sf, now=NOW) == []
+
+
+def test_changed_extractor_expires_cached_profile_once_but_not_unknown_model_attempt(env):
+    profile = deepcopy(env.profile)
+    profile["extractor"] = "old-extractor"
+    store.put_profile(profile)
+    store.write_state(SYMBOL, "ready", now=NOW, event_ref=worker._event_key(env.item),
+                      source_status="ready", next_retry_at=(NOW + timedelta(hours=6)).isoformat())
+    assert worker._due(SYMBOL, env.item) is True
+    from app.events.company_sources import EXTRACTOR
+    profile["extractor"] = EXTRACTOR
+    store.put_profile(profile)
+    assert worker._due(SYMBOL, env.item) is False
+    profile["extractor"] = "old-extractor"
+    store.put_profile(profile)
+    store.write_state(SYMBOL, "generating", now=NOW, attempt_state="unknown")
+    assert worker._due(SYMBOL, env.item) is False
+
+
+@pytest.mark.parametrize("attempt", ["started", "unknown"])
+def test_explicit_refresh_of_changed_facts_cannot_resend_same_event_unknown_attempt(env, attempt):
+    store.write_state(SYMBOL, "interrupted", now=NOW, event_ref=worker._event_key(env.item),
+                      attempt_state=attempt, generation_key="old-key")
+    result = run(env)
+    assert result["model_calls"] == 0 and result["symbols"][0]["state"] == "interrupted"
+    assert store.read_profile(SYMBOL) and not env.calls and not usage_rows(env)
+
+
+def test_extractor_refresh_with_same_public_input_never_repeats_model_or_receipt(env, monkeypatch):
+    from app.events.company_sources import EXTRACTOR
+
+    run(env)
+    old_profile = deepcopy(env.profile)
+    old_profile["extractor"] = "old-extractor"
+    store.put_profile(old_profile)
+    before = {p: p.read_bytes() for p in receipts(env)}
+    env.profile["extractor"] = EXTRACTOR
+    monkeypatch.setattr(worker.settings, "company_evidence_enabled", True)
+    monkeypatch.setattr(worker, "candidate_symbols", lambda *a, **k: [SYMBOL])
+    assert worker._due(SYMBOL, env.item) is True
+    result = run(env, {"automatic": True})
+    assert result["model_calls"] == 0 and result["symbols"][0]["cached"] is True
+    assert len(env.calls) == 1 and {p: p.read_bytes() for p in receipts(env)} == before
+    assert store.read_profile(SYMBOL)["extractor"] == EXTRACTOR and worker._due(SYMBOL, env.item) is False
+
+
+@pytest.mark.parametrize("status", ["source_failed", "model_failed", "invalid_response", "budget_blocked", "interrupted", "canceled"])
+def test_old_extractor_never_bypasses_failure_or_cancellation_backoff(env, status):
+    old = deepcopy(env.profile)
+    old["extractor"] = "old-extractor"
+    store.put_profile(old)
+    store.write_state(SYMBOL, status, now=NOW, event_ref=worker._event_key(env.item),
+                      next_retry_at=(NOW + timedelta(hours=1)).isoformat())
+    assert worker._due(SYMBOL, env.item) is False
+
+
+def test_collector_returning_old_ready_profile_gets_backoff_without_model_or_tick_loop(env, monkeypatch):
+    env.profile["extractor"] = "old-extractor"
+    store.put_profile(env.profile)
+    store.write_state(SYMBOL, "ready", now=NOW, event_ref=worker._event_key(env.item),
+                      source_status="ready", next_retry_at=(NOW + timedelta(hours=6)).isoformat())
+    monkeypatch.setattr(worker.settings, "company_evidence_enabled", True)
+    monkeypatch.setattr(worker, "candidate_symbols", lambda *a, **k: [SYMBOL])
+    result = run(env, {"automatic": True})
+    assert result["symbols"][0]["state"] == "source_failed" and not env.calls
+    assert worker._due(SYMBOL, env.item) is False
+    run(env, {"automatic": True})
+    assert len(env.collected) == 1 and store.read_profile(SYMBOL) == env.profile
+
+
+def test_extractor_refresh_missing_source_preserves_old_profile_and_honors_retry(env, monkeypatch):
+    old = deepcopy(env.profile)
+    old["extractor"] = "old-extractor"
+    store.put_profile(old)
+    store.write_state(SYMBOL, "ready", now=NOW, event_ref=worker._event_key(env.item),
+                      source_status="ready", next_retry_at=(NOW + timedelta(hours=6)).isoformat())
+    env.profile.update(status="missing", documents=[], missing=["正式披露暂未取得。"])
+    monkeypatch.setattr(worker.settings, "company_evidence_enabled", True)
+    monkeypatch.setattr(worker, "candidate_symbols", lambda *a, **k: [SYMBOL])
+
+    result = run(env, {"automatic": True})
+    state = store.load_state(SYMBOL)
+    assert result["symbols"][0]["state"] == "insufficient" and state["source_status"] == "missing"
+    assert state["next_retry_at"] == env.profile["cache_until"] and store.read_profile(SYMBOL) == old
+    assert worker._due(SYMBOL, env.item) is False
+    repeated = run(env, {"automatic": True})
+    assert repeated["symbols"] == [] and len(env.collected) == 1
+    assert not env.calls and not usage_rows(env)
 
 
 def test_automatic_selection_rotates_past_top_four_and_backfills_not_due(env, monkeypatch):

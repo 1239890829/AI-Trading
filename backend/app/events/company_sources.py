@@ -29,7 +29,7 @@ STATIC = "https://static.cninfo.com.cn/"
 MAX_PDF = 24 * 1024 * 1024
 MAX_JSON = 1024 * 1024
 MIN_REQUEST_INTERVAL = 1.0
-EXTRACTOR = "bounded-sentences-v3"
+EXTRACTOR = "bounded-sentences-v4"
 _request_lock = threading.Lock()
 _last_request = 0.0
 _PDF_PATH = re.compile(r"finalpage/(\d{4}-\d{2}-\d{2})/(\d+)\.PDF", re.I)
@@ -37,8 +37,8 @@ _REPORT = re.compile(r"20\d{2}年(?:年度|半年度|第[一二三四]季度)报
 _NOTICE = re.compile(r"(?:签订|签署|中标|重大合同|订单|项目投资|投资建设)")
 _PATTERNS = {
     "business": r"(?:主要业务|主营业务|主要从事|专注于|专注从事|公司致力于)",
-    "product": r"(?:主要产品|产品包括|产品主要|产品为|业务涉及)",
-    "customer": r"(?:主要客户|客户包括|客户涵盖|客户为|客户有)",
+    "product": r"(?:主要产品|产品包括|产品主要|产品为(?!主(?:的|[，,。；;]))|业务涉及)",
+    "customer": r"(?:主要客户|客户包括|客户涵盖|客户为(?!中心|导向)|客户有)",
     "order": r"(?:签订.{0,40}(?:合同|协议)|签署.{0,40}(?:合同|协议)|中标|在手订单|订单交付|定点)",
     "risk": r"(?:风险|不确定|未产生|尚未|不代表|不构成|不保证|交付周期延长)",
 }
@@ -288,10 +288,24 @@ def _excerpts(pages: list[str]) -> tuple[list[dict], list[str]]:
                     continue  # Navigation/legal boilerplate is not business evidence.
                 if kind == "risk" and re.search(r"(?:前瞻性陈述|请查阅|敬请|详见|重大风险提示|请投资者认真阅读|特别提示投资者关注)", quote):
                     continue  # Navigation/disclaimers are not operating risks.
-                if kind == "order" and re.search(r"(?:一致行动协议|有限合伙协议|捐赠资金|买卖合同纠纷)", quote):
+                if kind == "order" and re.search(
+                        r"(?:一致行动协议|合伙协议|捐赠资金|买卖合同纠纷|担保协议|金融服务(?:框架性?)?协议)", quote):
                     continue  # Governance/investment/disputes are not customer orders.
-                if kind == "customer" and re.search(r"(?:以客户为导向|客户导向)", quote):
-                    continue  # Customer-oriented marketing does not identify customers.
+                if (kind == "order" and re.search(r"关联交易", quote)
+                        and re.search(r"本人|承诺|无法避免|有合理原因", quote)
+                        and re.search(r"公允|公平|依法签订", quote)):
+                    continue  # A governance promise is not an actual sales contract.
+                if (kind == "order" and re.search(r"合伙企业|合伙人|基金", quote)
+                        and re.search(r"增资|认缴|实缴出资|股权投资", quote)
+                        and not re.search(r"销售|供货|采购|中标|订单|定点", quote)):
+                    continue  # A fund's capital contribution is not an operating order.
+                if (kind == "order" and re.search(r"借入方|借出方|金融负债", quote)
+                        and not re.search(r"销售|供货|采购|中标|订单|定点|软件|服务", quote)):
+                    continue  # Borrowing/accounting policies are not operating orders.
+                if (kind == "risk" and re.search(r"募集资金|保荐承销费", quote)
+                        and not re.search(r"风险|不确定|违约|减值|延期|延缓|停滞|未达预期|无法偿|资金短缺|"
+                                          r"未产生(?:收入|收益|效益|利润)|尚未(?:投产|达产|运营|明确)", quote)):
+                    continue  # Unused funds/unpaid issuance fees alone are not an operating risk.
                 if not 24 <= len(quote) <= 1000:
                     omitted = True
                     continue

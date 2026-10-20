@@ -16,7 +16,8 @@ from pathlib import Path
 import re
 from time import monotonic
 
-from sqlalchemy import select
+from sqlalchemy import case, func, select
+from sqlalchemy.orm import aliased
 
 from app.core.bjtime import beijing_now, to_beijing, to_beijing_naive
 from app.core.config import settings
@@ -69,7 +70,7 @@ async def _drain_stage(fn, *args, **kwargs):
 
 
 def candidate_symbols(session_factory=None, *, now=None, limit=40) -> list[str]:
-    """Only today's persisted rank/list consumers; no provider or full-market scan."""
+    """Today's ranked picks and real displayed participants; no provider/universe scan."""
     from app.models.daily_pick import DailyPickSet
     from app.models.opportunity_learning import OpportunityDecisionRun as Run, OpportunityDecisionSnapshot as Snapshot
 
@@ -84,12 +85,35 @@ def candidate_symbols(session_factory=None, *, now=None, limit=40) -> list[str]:
         ).order_by(Run.as_of.desc(), Run.run_id.desc()).limit(1)).scalar_one_or_none()
         if latest_run:
             if latest_run.data_state == "ready":
-                symbols.extend(db.execute(select(Snapshot.symbol).where(
+                current_rows = (
                     Snapshot.run_id == latest_run.run_id, Snapshot.trade_date == day,
                     Snapshot.scenario == "intraday_opportunity", Snapshot.as_of <= current,
                     Snapshot.as_of == latest_run.as_of, Snapshot.stage == "rank", Snapshot.data_state == "ready",
+                    Snapshot.symbol.regexp_match(r"^[0-9]{6}$"),
+                )
+                symbols.extend(db.execute(select(Snapshot.symbol).where(*current_rows,
                     Snapshot.decision == "ranked", Snapshot.rank >= 1,
-                ).order_by(Snapshot.rank.asc(), Snapshot.id.asc()).limit(32)).scalars().all())
+                ).distinct().order_by(Snapshot.rank.asc(), Snapshot.id.asc()).limit(32)).scalars().all())
+                # rank rows are written only for themes[].participants. Audit
+                # gate rows alone include many non-displayed symbols and cannot
+                # grant this research-reading consumer identity.
+                def exact_stage(stage, decision):
+                    other = aliased(Snapshot)
+                    return select(other.id).where(
+                        other.run_id == Snapshot.run_id, other.trade_date == Snapshot.trade_date,
+                        other.as_of == Snapshot.as_of, other.scenario == Snapshot.scenario,
+                        other.symbol == Snapshot.symbol, other.source_theme == Snapshot.source_theme,
+                        other.data_state == "ready", other.stage == stage, other.decision == decision,
+                    ).exists()
+
+                safe_evidence = case((func.json_valid(Snapshot.evidence), Snapshot.evidence), else_="{}")
+                if len(symbols) < 32:
+                    symbols.extend(db.execute(select(Snapshot.symbol).where(*current_rows,
+                        Snapshot.symbol.not_in(symbols), Snapshot.decision == "rejected", Snapshot.rank.is_(None),
+                        Snapshot.source_theme != "", func.json_extract(safe_evidence, "$.gate_decision") == "passed",
+                        func.json_extract(safe_evidence, "$.linkage_level") == "低",
+                        exact_stage("candidate", "included"), exact_stage("hard_gate", "passed"),
+                    ).distinct().order_by(Snapshot.id.asc()).limit(32 - len(symbols))).scalars().all())
         pick = db.execute(select(DailyPickSet.items).where(
             DailyPickSet.date == day, DailyPickSet.created_at <= recorded_cutoff,
         ).limit(1)).scalar_one_or_none()
@@ -105,7 +129,9 @@ def candidate_symbols(session_factory=None, *, now=None, limit=40) -> list[str]:
 
 def _rotation_key(symbol):
     prior = load_state(symbol)
-    return (bool(prior), str(prior.get("next_retry_at") or ""), str(prior.get("updated_at") or ""), symbol)
+    # Stable sorting preserves ranked→participant→daily order within each
+    # lifecycle bucket while untouched symbols still precede refresh retries.
+    return (bool(prior), str(prior.get("next_retry_at") or ""), str(prior.get("updated_at") or ""))
 
 
 def _automatic_daily_limit(sf):
@@ -141,10 +167,10 @@ def _event_key(item):
 
 
 def generation_key(packet: dict, model: dict) -> str:
-    documents = [{key: d[key] for key in ("id", "symbol", "company_name", "url", "sha256", "period", "excerpts")}
-                 for d in packet["documents"]]
+    # Readers and publishers bind the complete document identity, including its
+    # extraction version and original receipt. Collection-check clocks stay out.
     return ci.digest({"symbol": packet["symbol"], "company_name": packet["company_name"],
-                      "short_name": packet.get("short_name", ""), "event": packet["event"], "documents": documents,
+                      "short_name": packet.get("short_name", ""), "event": packet["event"], "documents": packet["documents"],
                       "protocol": PROTOCOL, "model": model})
 
 
@@ -169,6 +195,13 @@ def _due(symbol, item, *, explicit=False):
         return True
     if prior.get("attempt_state") in {"started", "unknown"} or (not explicit and prior.get("state") == "canceled"):
         return False
+    from app.events.company_sources import EXTRACTOR
+
+    profile = read_profile(symbol)
+    extractor = profile.get("extractor") if profile else None
+    if (prior.get("state") in {"ready", "insufficient"} and prior.get("source_status") == "ready"
+            and isinstance(extractor, str) and extractor and extractor != EXTRACTOR):
+        return True
     try:
         return not prior.get("next_retry_at") or ci.clock(prior["next_retry_at"]) <= _now()
     except (ValueError, TypeError):
@@ -201,6 +234,7 @@ async def run_company_evidence(rec, params, app):
                     break
                 await rec.checkpoint_async()
                 item = await _drain_stage(_event, symbol, app, sf)
+                previous = load_state(symbol)
                 if not explicit and not _due(symbol, item):
                     continue
                 touched.append(symbol)
@@ -224,6 +258,15 @@ async def run_company_evidence(rec, params, app):
                            source_status=profile["status"], next_retry_at=profile.get("cache_until"))
                     results.append({"symbol": symbol, "state": state})
                     continue
+                from app.events.company_sources import EXTRACTOR
+
+                extractor = profile.get("extractor")
+                if isinstance(extractor, str) and extractor and extractor != EXTRACTOR:
+                    _state(symbol, "source_failed", rec.task_id, source_status="failed",
+                           missing=["采集返回的公司资料仍为旧提取版本；保留旧资料，等待来源重试。"],
+                           next_retry_at=(_now() + timedelta(minutes=30)).isoformat())
+                    results.append({"symbol": symbol, "state": "source_failed"})
+                    continue
                 put_profile(profile)
                 if item is None:
                     _state(symbol, "insufficient", rec.task_id, source_status="ready",
@@ -236,6 +279,13 @@ async def run_company_evidence(rec, params, app):
                            missing=retained["analysis"]["missing"], next_retry_at=profile.get("cache_until"))
                     results.append({"symbol": symbol, "state": "ready", "cached": True,
                                     "verification": retained["verification"]})
+                    continue
+                if (previous.get("attempt_state") in {"started", "unknown"}
+                        and previous.get("event_ref") == _event_key(item)):
+                    _state(symbol, "interrupted", rec.task_id, source_status="ready",
+                           missing=["本事件前次模型调用尚未确认；新资料已保存，未因原文变化自动重发。"],
+                           next_retry_at=profile.get("cache_until"))
+                    results.append({"symbol": symbol, "state": "interrupted"})
                     continue
                 packet = _packet(symbol, profile, item)
                 ci.validate_packet(packet)
