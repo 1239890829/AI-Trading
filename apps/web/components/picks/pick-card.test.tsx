@@ -870,6 +870,8 @@ it("keeps the compact card short, exposes late limitations before the full recor
   expect(brief.textContent).toContain("注意适用范围与限制");
   expect(screen.queryByLabelText("入选依据核对")).toBeNull();
   fireEvent.click(screen.getByRole("button",{name:"入选解读"}));
+  expect(screen.queryByLabelText("入选依据核对")).toBeNull();
+  fireEvent.click(screen.getByRole("button",{name:"原筛选完整依据"}));
   expect(screen.getByLabelText("入选依据核对").textContent).toContain(basis);
   expect(item.basisRows[0].value).toBe(basis);
 });
@@ -882,6 +884,7 @@ it("keeps decision references outside the collapsed evidence: quote, boards, dis
  expect(screen.getByLabelText("个股关键参考").textContent).toContain("4.99（-8%）");
  expect(screen.queryByLabelText("入选依据核对")).toBeNull();
  fireEvent.click(screen.getByRole("button",{name:"入选解读"}));
+ fireEvent.click(screen.getByRole("button",{name:"原筛选完整依据"}));
  expect(screen.getByText("档位基准 8% → 取 8.0%（clamp 3%~12%）")).toBeTruthy();
 });
 
@@ -910,6 +913,9 @@ it("has one selection reader and loads related messages only after opening it", 
  fireEvent.click(screen.getByRole("button",{name:"入选解读"}));
  expect(screen.getByLabelText("本次筛选考虑")).toBeTruthy();
  expect(screen.getByLabelText("相关消息与AI解读")).toBeTruthy();
+ expect(screen.queryByLabelText("入选依据核对")).toBeNull();
+ expect(screen.getByLabelText("TradingAgents完整研究").textContent).toContain("未读取");
+ fireEvent.click(screen.getByRole("button",{name:"原筛选完整依据"}));
  expect(screen.getByLabelText("入选依据核对")).toBeTruthy();
 });
 
@@ -921,6 +927,8 @@ it("keeps exact archived event references in the combined reader and performs on
   fireEvent.click(screen.getByRole("button",{name:"入选解读"}));
   await waitFor(()=>expect(spy).toHaveBeenCalledTimes(1));
   expect(spy).toHaveBeenCalledWith("600995");
+  fireEvent.click(screen.getByRole("button",{name:"公司依据、完整传导与相关消息"}));
+  fireEvent.click(screen.getByText("选股记录事件引用"));
   expect(screen.getByText(/原解释 #20/).textContent).toContain("事件 #18");
   fireEvent.click(within(screen.getByRole("dialog")).getByRole("button",{name:"关闭"}));
   expect(screen.getByRole("button",{name:"入选解读"}).getAttribute("aria-expanded")).toBe("false");

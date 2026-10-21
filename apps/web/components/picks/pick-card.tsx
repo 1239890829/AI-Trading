@@ -7,6 +7,7 @@ import { CardHead, CardShell } from "@/components/picks/card-shell";
 import { CardEntryRow } from "@/components/picks/card-entries";
 import { LimitReason } from "@/components/detail/limit-reason";
 import {StockAttributionPanel} from "@/components/detail/attribution-evidence";
+import {TradingAgentsResearchPanel} from "@/components/detail/tradingagents-research-panel";
 import { useStockRowNav } from "@/components/stock-link";
 import { bjDate, fmt, formatLegacyLimitDistance, pctColor, pctText, timeTextBJ, triText } from "@/lib/format";
 import { clockOf, compareGates, gateActive, type GateComparison } from "@/lib/picks-gate";
@@ -423,10 +424,13 @@ export function PickCard({
   const readingOpen = !evidenceExpanded && readingIdentity === readingKey;
   const presence = useExitPresence(readingOpen ? readingKey : null);
   const evidence = <>
-      <ReaderBrief label="本次筛选考虑" facts={[{label: "选择理由", value: reading.why}, ...reading.supports, {label: "失效条件", value: reading.limit}]}/>
-      <p className="text-xs leading-relaxed text-zinc-600 dark:text-zinc-400">上方解释来自本次保存的筛选记录。下方消息用于核对关联，晚到或更新的消息不替换当时的入选理由。</p>
-      <StockAttributionPanel symbol={item.symbol} title="相关消息与AI解读" defaultExpanded bounded={false}
+      <ReaderBrief label="本次筛选考虑" facts={[{label: reading.why.endsWith("…") ? "理由节选" : "选择理由", value: reading.why}, {label: reading.limit.endsWith("…") ? "条件节选" : "失效条件", value: reading.limit}]}/>
+      <p className="text-xs text-zinc-600 dark:text-zinc-400">入选依据保留原记录；下方公司资料与研究是补充，不回填当时理由。</p>
+      <StockAttributionPanel symbol={item.symbol} title="相关消息与AI解读" defaultExpanded bounded={false} concise
         selectedAt={item.selectionEntry?.selected_at} recordedRefs={item.relatedEventRefs} selectionContext/>
+      <TradingAgentsResearchPanel symbol={item.symbol} compact allowStart={false}/>
+      <ResearchDisclosure label="原筛选完整依据" identity={readingKey} defaultOpen={evidenceExpanded}>
+      <ReaderBrief label="筛选支持项" facts={reading.supports}/>
       {/* 估值（仅盘前名单）：数据源确实不提供时（新股/亏损/长期停牌）显示"暂无"并注明原因，
           不留白、不臆造，与个股详情页口径一致。 */}
       {(item.pe_ttm != null || item.pb != null) && (
@@ -585,6 +589,7 @@ export function PickCard({
         </p>
       )}
 
+      </ResearchDisclosure>
   </>;
 
   return (

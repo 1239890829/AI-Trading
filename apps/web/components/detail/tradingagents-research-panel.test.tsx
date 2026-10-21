@@ -123,4 +123,115 @@ describe("完整TradingAgents研究读者", () => {
     expect(screen.queryByRole("region", {name: "TradingAgents完整研究"})).toBeNull();
     expect(getTradingAgentsResearch).not.toHaveBeenCalled();
   });
+
+  it("keeps the compact entry unread until opened and never offers a model start even when executable", async () => {
+    vi.mocked(getTradingAgentsResearch).mockResolvedValue({...view(), enabled: true, executable: true, blockers: []});
+    render(<TradingAgentsResearchPanel symbol="002121" compact/>);
+    expect(screen.getByText(/未读取 · 展开只查已有结果/)).toBeTruthy();
+    expect(getTradingAgentsResearch).not.toHaveBeenCalled();
+    fireEvent.click(screen.getByRole("button", {name: "TradingAgents 研究记录 · 查看"}));
+    await screen.findByText("002121 · 未查到研究记录");
+    expect(screen.queryByRole("button", {name: "显式启动完整研究"})).toBeNull();
+    expect(screen.queryByRole("link", {name: "任务中心查看或取消"})).toBeNull();
+    expect(screen.getByText("为什么尚未运行或更新").closest("details")?.open).toBe(false);
+    fireEvent.click(screen.getByRole("button", {name: "重新读取研究"}));
+    await waitFor(() => expect(getTradingAgentsResearch).toHaveBeenCalledTimes(2));
+    expect(createAgentTask).not.toHaveBeenCalled();
+  });
+
+  it("shows the compact final report before six full originals without opening long prose or losing evidence", async () => {
+    const result = saved();
+    result.latest!.review_state = "finite_failed_requires_review";
+    result.latest!.review_summary.finite_failures = 2;
+    vi.mocked(getTradingAgentsResearch).mockResolvedValue(result);
+    const panel = render(<TradingAgentsResearchPanel symbol="002121" defaultOpen compact allowStart={false}/>);
+    await screen.findByText("002121 · 已有保存报告 · 历史报告 · 待核");
+    const final = screen.getByText("查看最终研究结论").closest("details")!;
+    const others = screen.getByText("查看其余6份完整报告").closest("details")!;
+    expect(final.open).toBe(false);
+    expect(others.open).toBe(false);
+    expect(final.compareDocumentPosition(others) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
+    fireEvent.click(screen.getByText("查看最终研究结论"));
+    expect(final.open).toBe(true);
+    expect(final.textContent).toContain("最终原文不证明未来收益");
+    expect(final.textContent).toContain("尚未独立验收，不构成买卖建议");
+    fireEvent.click(screen.getByText("查看其余6份完整报告"));
+    for (const label of ["行情分析", "新闻与情绪分析", "新闻分析", "基本面分析", "研究辩论结论", "交易员研究方案"]) {
+      fireEvent.click(screen.getByText(label));
+      expect(screen.getByText(label).closest("details")?.open).toBe(true);
+    }
+    expect(panel.container.textContent).toContain("材料截点：2026-10-19 15:00");
+    expect(panel.container.textContent).toContain("old-method");
+    expect(screen.getByText(/自动来源或引用检查有2项未通过/)).toBeTruthy();
+    expect(screen.getByText(/报告方法与当前执行器不同/)).toBeTruthy();
+    expect(createAgentTask).not.toHaveBeenCalled();
+  });
+
+  it("distinguishes compact initial loading, failed reads and budget blocks from an unrun stock", async () => {
+    let finish!: (value: TradingAgentsResearchView) => void;
+    vi.mocked(getTradingAgentsResearch).mockImplementationOnce(() => new Promise(resolve => {finish = resolve;}));
+    render(<TradingAgentsResearchPanel symbol="002121" defaultOpen compact/>);
+    expect(screen.getByText("002121 · 读取中")).toBeTruthy();
+    expect(screen.queryByText("002121 · 未查到研究记录")).toBeNull();
+    await act(async () => {finish({...view(), blockers: [{code: "budget_insufficient", message: "完整图需22次，剩余8次"}]});});
+    await screen.findByText("002121 · 未查到研究记录");
+    expect(screen.getByText("预算不足，当前不能新增完整研究。")).toBeTruthy();
+    vi.mocked(getTradingAgentsResearch).mockRejectedValue(new Error("read failed"));
+    fireEvent.click(screen.getByRole("button", {name: "重新读取研究"}));
+    await screen.findByText("002121 · 读取失败");
+    expect(screen.queryByText("002121 · 未查到研究记录")).toBeNull();
+    expect(screen.queryByText("预算不足，当前不能新增完整研究。")).toBeNull();
+    expect(screen.getByText(/尚不能确认是否有已保存报告/)).toBeTruthy();
+    expect(createAgentTask).not.toHaveBeenCalled();
+  });
+
+  it("retains a compact same-stock report on failed refresh and rejects a delayed previous-stock response", async () => {
+    vi.mocked(getTradingAgentsResearch).mockResolvedValueOnce(saved());
+    const panel = render(<TradingAgentsResearchPanel symbol="002121" defaultOpen compact/>);
+    await screen.findByText("002121 · 已有保存报告 · 历史报告 · 待核");
+    vi.mocked(getTradingAgentsResearch).mockRejectedValueOnce(new Error("read failed"));
+    fireEvent.click(screen.getByRole("button", {name: "重新读取研究"}));
+    await screen.findByText(/保留本股上次读取报告/);
+    expect(panel.container.textContent).toContain("002121 行情原报告");
+    let finish!: (value: TradingAgentsResearchView) => void;
+    vi.mocked(getTradingAgentsResearch).mockImplementationOnce(() => new Promise(resolve => {finish = resolve;})).mockResolvedValueOnce(saved("600276"));
+    fireEvent.click(screen.getByRole("button", {name: "重新读取研究"}));
+    await waitFor(() => expect(getTradingAgentsResearch).toHaveBeenCalledTimes(3));
+    panel.rerender(<TradingAgentsResearchPanel symbol="600276" defaultOpen compact/>);
+    await screen.findByText("600276 · 已有保存报告 · 历史报告 · 待核");
+    await act(async () => {finish(saved());});
+    expect(panel.container.textContent).not.toContain("002121 行情原报告");
+    expect(panel.container.textContent).toContain("600276 行情原报告");
+    expect(createAgentTask).not.toHaveBeenCalled();
+  });
+
+  it("shows a completed cancellation as canceled while keeping a failed new run separate from a historical report", async () => {
+    const result = saved();
+    result.task = {id: "task", status: "canceled", cancel_requested: true, failed: false, created_at: "2026-10-20T10:00:00+08:00", finished_at: "2026-10-20T10:01:00+08:00", error: null};
+    vi.mocked(getTradingAgentsResearch).mockResolvedValueOnce(result);
+    render(<TradingAgentsResearchPanel symbol="002121" defaultOpen compact/>);
+    await screen.findByText("002121 · 已取消 · 历史报告 · 待核");
+    expect(screen.queryByText(/等待当前步骤结束/)).toBeNull();
+    vi.mocked(getTradingAgentsResearch).mockResolvedValueOnce({...result, task: {...result.task!, status: "failed", failed: true, error: {code: "SourceError", message: "本轮来源失败"}}});
+    fireEvent.click(screen.getByRole("button", {name: "重新读取研究"}));
+    await screen.findByText("002121 · 研究失败 · 历史报告 · 待核");
+    expect(screen.getByText(/本轮来源失败/)).toBeTruthy();
+    expect(screen.getByText("查看最终研究结论")).toBeTruthy();
+    expect(createAgentTask).not.toHaveBeenCalled();
+  });
+
+  it("does not poll compact static reports but still supports an explicit reread", async () => {
+    vi.useFakeTimers();
+    vi.mocked(getTradingAgentsResearch).mockResolvedValue(saved());
+    render(<TradingAgentsResearchPanel symbol="002121" defaultOpen compact/>);
+    await act(async () => { await Promise.resolve(); });
+    expect(screen.getByText("002121 · 已有保存报告 · 历史报告 · 待核")).toBeTruthy();
+    expect(getTradingAgentsResearch).toHaveBeenCalledTimes(1);
+    await act(async () => { await vi.advanceTimersByTimeAsync(180_000); });
+    expect(getTradingAgentsResearch).toHaveBeenCalledTimes(1);
+    fireEvent.click(screen.getByRole("button", {name: "重新读取研究"}));
+    await act(async () => { await Promise.resolve(); });
+    expect(getTradingAgentsResearch).toHaveBeenCalledTimes(2);
+    expect(createAgentTask).not.toHaveBeenCalled();
+  });
 });

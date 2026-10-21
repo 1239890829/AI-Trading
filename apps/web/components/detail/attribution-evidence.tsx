@@ -179,7 +179,7 @@ function boundCompanyImpact(item: AttributionEvidenceItem, symbol: string | null
   return value;
 }
 
-function CompanyImpactEvidence({item, symbol, now}: {item: AttributionEvidenceItem; symbol?: string | null; now: number}) {
+function CompanyImpactEvidence({item, symbol, now, compact = false}: {item: AttributionEvidenceItem; symbol?: string | null; now: number; compact?: boolean}) {
   const deadline = companyClock(item.company_impact?.valid_until);
   const value = boundCompanyImpact(item, symbol, now);
   if (!value) {
@@ -191,6 +191,33 @@ function CompanyImpactEvidence({item, symbol, now}: {item: AttributionEvidenceIt
   }
   const status = {conditional: "有条件影响", mixed: "双向影响", insufficient: "证据不够", no_supported_link: "尚无材料支持直接传导"}[value.analysis.status];
   const reference = (id: string) => id === "event:title" ? "消息标题" : id === "event:summary" ? "消息摘要" : `公司依据 ${id}`;
+  if (compact) {
+    // Do not slice free prose: its last clause can contain the decisive denial.
+    // Oversized prose stays intact in the complete reader; this layer reports
+    // only the validated status, rather than inventing a shorter causal claim.
+    const statusReading = {
+      conditional: "已保存本股的有条件传导解释，尚不能认定已获单、增收或盈利。",
+      mixed: "现有解释包含双向影响，不能只按受益方向理解。",
+      insufficient: "证据不够，尚不能建立这条消息到本股的具体经营传导。",
+      no_supported_link: "本次材料未支持直接经营传导，不代表公司没有相关业务。",
+    }[value.analysis.status];
+    const condition = value.analysis.missing[0] || value.analysis.counterarguments[0]
+      || "本次回执未列出具体缺项，不代表资料完整或经营效果已验证。";
+    const cited = new Set(value.analysis.chain.flatMap(step => step.evidence_ids));
+    const companyFact = value.facts.find(fact => cited.has(fact.id) && ["business", "main_business", "product", "products"].includes(fact.kind));
+    return <section aria-label="公司经营依据与AI传导" className="min-w-0 space-y-2 py-2">
+      <h4 className="font-medium">{value.company_name} · {status}</h4>
+      <p className={styles.sourceCopy}>{value.analysis.summary.length <= 180 ? value.analysis.summary : statusReading}</p>
+      <ReaderBrief label="本股关键待核" facts={[{label: "还需核实", value: condition}]}/>
+      {companyFact ? <section aria-label="本条传导引用的公司依据" className="min-w-0 space-y-1">
+        <p className="text-zinc-600 dark:text-zinc-400">{companyFact.document_title} · 第 {companyFact.page} 页</p>
+        {companyFact.quote.length <= 160 ? <blockquote className={styles.sourceCopy}>{companyFact.quote}</blockquote>
+          : <details><summary className="w-fit cursor-pointer">查看这条依据</summary><blockquote className={styles.sourceCopy}>{companyFact.quote}</blockquote></details>}
+        <a href={`${companySourceUrl(companyFact.url)}#page=${companyFact.page}`} target="_blank" rel="noopener noreferrer" data-action="quiet" className={`quiet-action ${styles.action}`} aria-label="查看本条传导引用的公司原文">查看披露原文</a>
+      </section> : <p className="text-zinc-600 dark:text-zinc-400">本条传导未引用主营或产品原句，暂无可展示的直接经营依据。</p>}
+      <p className="text-zinc-600 dark:text-zinc-400">公司资料AI解释 · {value.verification === "automated_evidence_bound_not_gold" ? "自动引用约束，未经逐案源审" : "作者已核对来源"} · 未独立验证</p>
+    </section>;
+  }
   return <section aria-label="公司经营依据与AI传导" className="space-y-3 py-2">
     <header><h4 className="font-medium">{value.company_name} · 公司经营判读</h4><p>{status} · 仅用于当前研究</p><p className="text-zinc-600 dark:text-zinc-400">{value.verification === "automated_evidence_bound_not_gold" ? "自动引用约束研究解释 · 未经作者逐案源审" : "AI生成、作者核对并校正的研究解释"}</p></header>
     <section aria-label="AI经营传导假设"><h5 className="font-medium">AI经营传导假设</h5><p className={styles.sourceCopy}>{value.analysis.summary}</p>
@@ -421,13 +448,15 @@ function AttributionItems({items, laterItems = [], responseContext = false, symb
 }
 
 /** Toolbar reads only on open; visible reason fallbacks read once, with no polling. */
-export const StockAttributionPanel = memo(function StockAttributionPanel({symbol, eventId, active = true, title = "驱动线索", defaultExpanded = false, bounded = true, selectedAt, recordedRefs, selectionContext = false, defaultSourceExpanded = false, poolDate, responseAsOf, primarySummary = false, inlinePrimary = false, sourceReason, sourceCore, sourceAudit}: {
+export const StockAttributionPanel = memo(function StockAttributionPanel({symbol, eventId, active = true, title = "驱动线索", defaultExpanded = false, bounded = true, selectedAt, recordedRefs, selectionContext = false, defaultSourceExpanded = false, poolDate, responseAsOf, primarySummary = false, inlinePrimary = false, sourceReason, sourceCore, sourceAudit, concise = false}: {
   symbol?: string | null; eventId?: number | null; active?: boolean; title?: string; defaultExpanded?: boolean; bounded?: boolean;
   selectedAt?: string | null; recordedRefs?: EventInterpretationRef[];
   selectionContext?: boolean; defaultSourceExpanded?: boolean;
   poolDate?: string; responseAsOf?: string; primarySummary?: boolean; inlinePrimary?: boolean; sourceReason?: string | null;
   /** Inline cause readers keep their already-visible source core and full audit in one reading flow. */
   sourceCore?: string; sourceAudit?: ReactNode;
+  /** Selected-stock readers open with company evidence; reading never starts generation. */
+  concise?: boolean;
 }) {
   const [open, setOpen] = useState(defaultExpanded);
   const [readingCycle, setReadingCycle] = useState(0);
@@ -438,7 +467,7 @@ export const StockAttributionPanel = memo(function StockAttributionPanel({symbol
   if (openedIdentity !== identity) {setOpenedIdentity(identity); if (primarySummary) setOpen(false);}
   if (primarySummary && !active && open) setOpen(false);
   const options = poolDate || responseAsOf ? {poolDate, responseAsOf} : undefined;
-  const resource = useResource(() => eventId ? options ? getEventAttribution(eventId, symbol, options) : getEventAttribution(eventId, symbol) : options ? getStockAttribution(symbol!, options) : getStockAttribution(symbol!), {key: identity, enabled: active && (open || primarySummary || inlinePrimary) && (!!eventId || /^\d{6}$/.test(symbol || "")), intervalMs: null, marketHours: false});
+  const resource = useResource(() => eventId ? options ? getEventAttribution(eventId, symbol, options) : getEventAttribution(eventId, symbol) : options ? getStockAttribution(symbol!, options) : getStockAttribution(symbol!), {key: identity, enabled: active && (open || primarySummary || inlinePrimary || concise) && (!!eventId || /^\d{6}$/.test(symbol || "")), intervalMs: null, marketHours: false});
   const data = resource.data;
   const companyNow = useCompanyEvidenceClock([data?.company_status?.updated_at, ...[...(data?.items || []), ...(data?.later_items || []), ...(data?.company_items || [])]
     .flatMap(item => [item.company_impact?.generated_at, item.company_impact?.valid_until])].filter(Boolean).join("|"));
@@ -470,6 +499,47 @@ export const StockAttributionPanel = memo(function StockAttributionPanel({symbol
     <p className="text-zinc-600 dark:text-zinc-400">当前研究补充，不替换最新消息、市场触发线索或历史入选依据。</p>
     <AttributionItems key={`${identity}:${readingCycle}:company`} items={companyItems} symbol={symbol} selectedAt={selectedAt} recordedRefs={recordedRefs} selectionContext={selectionContext} defaultSourceExpanded={defaultSourceExpanded}/>
   </section>;
+  if (concise) {
+    if (!active) return null;
+    const companyResults = readItems.filter(item => boundCompanyImpact(item, symbol, companyNow) !== null);
+    const currentCompany = companyResults[0];
+    const currentStatus = boundCompanyStatus(data?.company_status, symbol, companyNow);
+    const statusCutoff = companyClock(statusAsOf);
+    const historicalStatusExcluded = !!currentStatus && !!statusAsOf && (statusCutoff === null || companyClock(currentStatus.updated_at)! > statusCutoff);
+    const unavailableCompany = readItems.find(item => !!item.company_impact);
+    const detailsIdentity = `${identity}:${currentCompany?.company_impact?.input_sha256 || ""}:${currentCompany?.company_impact?.generated_at || ""}:${currentCompany?.company_impact?.valid_until || ""}:${currentStatus?.updated_at || ""}:${readItems.map(item => `${item.event_id}:${item.interpretation_ref.version_id}:${item.interpretation_ref.observation_id}`).join("|")}`;
+    return <section aria-label={title} className="min-w-0 space-y-2 py-2 text-xs">
+      <div className="flex min-h-8 flex-wrap items-center justify-between gap-2">
+        <h3 className="font-medium">本股经营解读</h3>
+        <button type="button" data-action="quiet" className={`quiet-action ${styles.action}`} disabled={resource.pending} onClick={resource.refresh}>{resource.pending && data ? "更新中" : "刷新依据"}</button>
+      </div>
+      {resource.pending && !data && <p role="status">正在读取本股已保存的解释…</p>}
+      {resource.error != null && <p role="alert" className="text-amber-800 dark:text-amber-300">{data ? "读取失败，下方保留上次结果，当前状态待核。" : "本股解释读取失败，暂不能确认是否有已保存结果。"}可用“刷新依据”重试。</p>}
+      {currentCompany ? <>
+        <CompanyImpactEvidence item={currentCompany} symbol={symbol} now={companyNow} compact/>
+        <p className="text-zinc-600 dark:text-zinc-400">当前公司资料解释，不替换入选当时的理由。{companyResults.length > 1 ? `另有 ${companyResults.length - 1} 条本股经营解释，见完整依据。` : ""}</p>
+      </> : data && <>
+        {historicalStatusExcluded ? <p role="note" className="text-zinc-600 dark:text-zinc-400">公司资料的可得时刻无法对应所查历史时点，不回填当时依据。</p> : currentStatus ? <>
+          <section aria-label="公司资料与判读状态摘要" className="min-w-0 space-y-2 py-2"><h4 className="font-medium">公司资料与判读</h4><p role={["queued", "collecting", "generating"].includes(currentStatus.state) ? "status" : "note"}>{COMPANY_STATES[currentStatus.state]}</p></section>
+          {currentStatus.missing[0] && <ReaderBrief label="本股关键待核" facts={[{label: "还缺什么", value: currentStatus.missing[0]}]}/>}
+          {currentStatus.state === "ready" && <p className="text-zinc-600 dark:text-zinc-400">处理记录称结果已保存，但本次未读取到有效绑定的本股经营解释；不将消息AI观点代替本股结论。</p>}
+        </> : <p role="note" className="text-zinc-600 dark:text-zinc-400">本次尚无可读取的本股经营解释或有效处理状态，不代表公司没有相关业务。</p>}
+        {unavailableCompany && <CompanyImpactEvidence item={unavailableCompany} symbol={symbol} now={companyNow} compact/>}
+        {data.company_status && !currentStatus && <CompanyStatusEvidence value={data.company_status} symbol={symbol} now={companyNow} showFacts={false} responseAsOf={statusAsOf} compact/>}
+      </>}
+      {data && <ResearchDisclosure label="公司依据、完整传导与相关消息" identity={detailsIdentity}>
+        <p className="text-zinc-600 dark:text-zinc-400">已读取 {readItems.length} 条消息，含 {companyResults.length} 条有效绑定的本股经营解释。公司资料、消息AI与完整TradingAgents是不同结果；本次刷新只重读保存记录。</p>
+        {!!recordedRefs?.length && <details className="py-1 text-zinc-600 dark:text-zinc-400"><summary className="w-fit cursor-pointer">{selectionContext ? "选股记录事件引用" : "列表入口事件引用"}</summary><ul className="mt-1 space-y-1 [overflow-wrap:anywhere]">{recordedRefs.map((ref, index) => <li key={`${ref.event_id}:${ref.version_id}:${index}`}>事件 #{ref.event_id} · {ref.version_id ? `原解释 #${ref.version_id}` : "原版本未知"} · {timeLabel(ref.available_at)}</li>)}</ul></details>}
+        {!currentCompany && companyStatusReading}
+        {companyResults.map(item => <AttributionEvidence key={`${item.event_id}:${item.interpretation_ref.version_id}:${item.interpretation_ref.observation_id}`} item={item} symbol={symbol} selectedAt={selectedAt} recordedRef={recordedRefs?.find(ref => ref.event_id === item.event_id)} selectionContext={selectionContext} defaultSourceExpanded complete/>)}
+        {readItems.filter(item => !companyResults.includes(item)).length > 0 && <section aria-label="原消息与关系核对">
+          <h4 className="font-medium">原消息与关系核对</h4>
+          <AttributionItems key={`${identity}:concise-messages`} items={readItems.filter(item => !companyResults.includes(item))} symbol={symbol} selectedAt={selectedAt} recordedRefs={recordedRefs} selectionContext={selectionContext} defaultSourceExpanded/>
+        </section>}
+        {readItems.length === 0 && <p>本次读取范围未找到关联消息，不代表市场上没有相关事件。</p>}
+      </ResearchDisclosure>}
+    </section>;
+  }
   if (inlinePrimary) {
     const boundAux = primaryItem ? boundAuxiliary(primaryItem) : null;
     const otherSavedAI = readItems.filter(item => (item.event_id !== primaryItem?.event_id
