@@ -6,6 +6,7 @@ P1 参数配置模块接入后按同一套状态机/审计机制扩展。
 端点：
 - GET  /agent/task-types    可创建任务类型清单（前端表单用，含风险等级与说明）
 - POST /agent/tasks         创建任务（写操作 → require_write_token）
+- POST /agent/tasks/{id}/recover  恢复绑定的原生研究 checkpoint（维护操作）
 - GET  /agent/tasks         任务列表（?type=&limit=）
 - GET  /agent/tasks/{id}    任务详情（含步骤轨迹）
 - POST /agent/tasks/{id}/cancel   取消（写操作）
@@ -17,9 +18,9 @@ from __future__ import annotations
 import asyncio
 from datetime import datetime
 
-from fastapi import APIRouter, Depends, HTTPException, Query, Request
+from fastapi import APIRouter, Depends, HTTPException, Path, Query, Request
 from fastapi.responses import JSONResponse
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, ConfigDict, Field
 
 from app.api.deps import require_promotion_approval_token, require_write_token
 from app.services import agent_tasks as at
@@ -34,6 +35,13 @@ router = APIRouter(tags=["agent"])
 class TaskCreateIn(BaseModel):
     type: str = Field(..., description="任务类型，见 GET /agent/task-types")
     params: dict = Field(default_factory=dict, description="任务入参（各类型字段见类型清单）")
+
+
+class TaskRecoveryIn(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    run_id: str = Field(..., strict=True, min_length=32, max_length=32,
+                        pattern=r"^[0-9a-f]{32}$")
 
 
 @router.get("/agent/task-types")
@@ -69,6 +77,33 @@ async def create_task(body: TaskCreateIn, request: Request):
                 "detail": str(exc), "code": "tradingagents_blocked", "blockers": exc.blockers,
             })
         raise HTTPException(status_code=409, detail=str(exc))
+
+
+@router.post("/agent/tasks/{source_task_id}/recover", dependencies=[Depends(require_write_token)])
+async def recover_task(
+    body: TaskRecoveryIn, request: Request,
+    source_task_id: str = Path(..., min_length=32, max_length=32, pattern=r"^[0-9a-f]{32}$"),
+):
+    """Recover one server-authorized native run; no client runtime overrides."""
+    from app.services.tradingagents_research import ResearchBlocked
+
+    try:
+        from app.services.tradingagents_recovery import create_recovery
+
+        return {"data": await create_recovery(source_task_id, body.run_id, request.app)}
+    except ResearchBlocked as exc:
+        return JSONResponse(status_code=409, content={
+            "detail": str(exc), "code": "tradingagents_blocked", "blockers": exc.blockers,
+        })
+    except ValueError as exc:
+        raise HTTPException(status_code=422, detail=str(exc))
+    except at.TaskQueueUnavailable as exc:
+        return JSONResponse(status_code=503, content={
+            "detail": f"{exc} 任务ID={exc.task_id}；持久状态={exc.persistence}。",
+            "code": "task_queue_unavailable", "task_id": exc.task_id, "persistence": exc.persistence,
+        })
+    except Exception:
+        raise HTTPException(status_code=500, detail="tradingagents_recovery_unavailable") from None
 
 
 @router.get("/agent/research/tradingagents/{symbol}")

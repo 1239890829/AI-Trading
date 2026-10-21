@@ -69,6 +69,7 @@ function ResearchReader({symbol, allowStart, compact}: {symbol: string; allowSta
   }
 
   const report = view?.latest;
+  const lineage = report?.recovery_lineage;
   const selectedResearch = view?.admission.state === "research_only_authorized";
   const methodChanged = report && view?.admission.method_sha256 && report.method_sha256 !== view.admission.method_sha256;
   const runtimeConditions = view && <>
@@ -95,10 +96,12 @@ function ResearchReader({symbol, allowStart, compact}: {symbol: string; allowSta
         {report.review_state === "finite_failed_requires_review" && <p role="alert" className="text-amber-800 dark:text-amber-300">自动来源或引用检查有{report.review_summary.finite_failures}项未通过，原报告保留待复核，不能视为已验证结论。</p>}
         {!compact && <p>同伴释义待审：{report.review_summary.peer_review_required}项。尚无独立人工验收，不代表投资正确率。</p>}
         <p>生成：{dateTimeTextBJ(report.generated_at)} · 材料截点：{dateTimeTextBJ(report.as_of)}。来源披露日期见各原报告。</p>
+        {lineage && <p aria-label="原答复用与接续">{lineage.reused_original_outputs > 0 ? `已复用${lineage.reused_original_outputs}份原答，仅接续未完成步骤` : "从未完成步骤接续，未复用已保存原答"}；材料截点保持不变。</p>}
+        {lineage && lineage.inherited_unknown_usage_count > 0 && <p role="note" aria-label="研究用量缺口" className="text-amber-800 dark:text-amber-300">仍有{lineage.inherited_unknown_usage_count}次历史用量未知，总用量与费用不完整。</p>}
         {!report.generated_today && <p className="text-amber-800 dark:text-amber-300">历史生成报告，不代表今天已重新判读。</p>}
         {methodChanged && <p className="text-amber-800 dark:text-amber-300">报告方法与当前执行器不同，仅供历史阅读。</p>}
         {compact && <details key={`${report.run_id}:final`} className="py-2"><summary className="cursor-pointer font-medium">查看最终研究结论</summary><p className="mt-2 text-zinc-600 dark:text-zinc-400">完整流程原答，尚未独立验收，不构成买卖建议。</p><div className="mt-2 whitespace-pre-wrap leading-relaxed [overflow-wrap:anywhere]">{report.reports.final_trade_decision}</div></details>}
-        <details><summary className="cursor-pointer">报告版本与核验身份</summary><p className="break-all">报告方法：{report.method_sha256}<br/>上游：{report.upstream_sha}<br/>输入：{report.input_sha256}<br/>核验身份：完整原图未验证研究；原答与结论仍待复核。</p>{compact && <p>同伴释义待审：{report.review_summary.peer_review_required}项。尚无独立人工验收，不代表投资正确率。</p>}</details>
+        <details><summary className="cursor-pointer">报告版本与核验身份</summary><p className="break-all">报告方法：{report.method_sha256}<br/>上游：{report.upstream_sha}<br/>输入：{report.input_sha256}<br/>核验身份：完整原图未验证研究；原答与结论仍待复核。</p>{lineage && <p aria-label="恢复任务与方法来源" className="break-all">原任务：{lineage.source_task_id}<br/>原运行：{lineage.source_run_id}<br/>接续任务：{lineage.recovery_task_id}<br/>原方法：{lineage.source_method_sha256}<br/>接续方法：{lineage.recovery_method_sha256}<br/>新增调用编号：{lineage.new_call_from}–{lineage.new_call_to}</p>}{compact && <p>同伴释义待审：{report.review_summary.peer_review_required}项。尚无独立人工验收，不代表投资正确率。</p>}</details>
         {compact ? <details><summary className="cursor-pointer">查看其余6份完整报告</summary><div className="mt-2 space-y-2">{REPORTS.filter(([key]) => key !== "final_trade_decision").map(([key, label]) => <details key={`${report.run_id}:${key}`} className="py-1"><summary className="cursor-pointer font-medium">{label}</summary><div className="mt-2 whitespace-pre-wrap leading-relaxed [overflow-wrap:anywhere]">{report.reports[key]}</div></details>)}</div></details>
           : <div className="space-y-2">{REPORTS.map(([key, label]) => <details key={`${report.run_id}:${key}`} className="rounded border border-zinc-200 p-2 dark:border-zinc-800"><summary className="cursor-pointer font-medium">{label}</summary><div className="mt-2 whitespace-pre-wrap [overflow-wrap:anywhere]">{report.reports[key]}</div></details>)}</div>}
       </div>}

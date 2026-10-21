@@ -20,6 +20,14 @@ const saved = (symbol = "002121"): TradingAgentsResearchView => ({...view(symbol
     fundamentals_report: "冻结比例基期未经审计，当前现金流未知", investment_plan: "研究辩论原文", trader_investment_plan: "无账户，不给仓位",
     final_trade_decision: "最终原文不证明未来收益"},
 }});
+const recovered = (symbol = "002121"): TradingAgentsResearchView => {
+  const value = saved(symbol);
+  value.latest!.method_sha256 = "b".repeat(64);
+  value.latest!.recovery_lineage = {version: 1, source_task_id: "1".repeat(32), source_run_id: "2".repeat(32), recovery_task_id: "3".repeat(32),
+    source_method_sha256: "a".repeat(64), recovery_method_sha256: "b".repeat(64), reused_original_outputs: 9,
+    new_call_from: 11, new_call_to: 24, inherited_unknown_usage_count: 1};
+  return value;
+};
 beforeEach(() => {vi.clearAllMocks(); vi.mocked(getTradingAgentsResearch).mockResolvedValue(view());});
 afterEach(() => {cleanup(); vi.useRealTimers();});
 
@@ -62,6 +70,35 @@ describe("完整TradingAgents研究读者", () => {
     expect(container.textContent).toContain("报告方法与当前执行器不同");
     expect(container.textContent).toContain("old-method");
     expect(container.textContent).toContain("不构成买卖建议");
+    expect(screen.queryByLabelText("原答复用与接续")).toBeNull();
+    expect(screen.queryByLabelText("研究用量缺口")).toBeNull();
+    expect(createAgentTask).not.toHaveBeenCalled();
+  });
+
+  it.each([false, true])("keeps recovered originals, frozen cutoff and inherited unknown visible in compact=%s without starting recovery", async compact => {
+    vi.mocked(getTradingAgentsResearch).mockResolvedValue(recovered());
+    const panel = render(<TradingAgentsResearchPanel symbol="002121" defaultOpen compact={compact} allowStart={false}/>);
+    expect((await screen.findByLabelText("原答复用与接续")).textContent).toContain("已复用9份原答，仅接续未完成步骤；材料截点保持不变");
+    expect(screen.getByLabelText("研究用量缺口").textContent).toBe("仍有1次历史用量未知，总用量与费用不完整。");
+    expect(panel.container.textContent).toContain("材料截点：2026-10-19 15:00");
+    fireEvent.click(screen.getByText("报告版本与核验身份"));
+    const source = screen.getByLabelText("恢复任务与方法来源");
+    for (const value of ["1".repeat(32), "2".repeat(32), "3".repeat(32), "a".repeat(64), "b".repeat(64), "新增调用编号：11–24"]) expect(source.textContent).toContain(value);
+    fireEvent.click(screen.getByRole("button", {name: "重新读取研究"}));
+    await waitFor(() => expect(getTradingAgentsResearch).toHaveBeenCalledTimes(2));
+    expect(screen.getByLabelText("研究用量缺口").textContent).toContain("用量未知");
+    expect(screen.queryByRole("button", {name: /启动|恢复|接续/})).toBeNull();
+    expect(createAgentTask).not.toHaveBeenCalled();
+  });
+
+  it("does not invent reused answers or a complete bill from zero inherited unknown", async () => {
+    const result = recovered();
+    result.latest!.recovery_lineage = {...result.latest!.recovery_lineage!, reused_original_outputs: 0, inherited_unknown_usage_count: 0};
+    vi.mocked(getTradingAgentsResearch).mockResolvedValue(result);
+    const panel = render(<TradingAgentsResearchPanel symbol="002121" defaultOpen compact/>);
+    expect((await screen.findByLabelText("原答复用与接续")).textContent).toContain("从未完成步骤接续，未复用已保存原答");
+    expect(screen.queryByLabelText("研究用量缺口")).toBeNull();
+    expect(panel.container.textContent).not.toMatch(/费用已完整|总用量已完整|重新判读全部|第11步/);
     expect(createAgentTask).not.toHaveBeenCalled();
   });
 
@@ -72,9 +109,10 @@ describe("完整TradingAgents研究读者", () => {
     await waitFor(() => expect(getTradingAgentsResearch).toHaveBeenCalledWith("002121"));
     panel.rerender(<TradingAgentsResearchPanel symbol="600276" defaultOpen/>);
     await screen.findByText(/600276 · 已保存/);
-    await act(async () => {finish(saved());});
+    await act(async () => {finish(recovered());});
     expect(panel.container.textContent).not.toContain("002121 行情原报告");
     expect(panel.container.textContent).toContain("600276 行情原报告");
+    expect(screen.queryByLabelText("原答复用与接续")).toBeNull();
     expect(createAgentTask).not.toHaveBeenCalled();
   });
 

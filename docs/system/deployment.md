@@ -476,7 +476,7 @@ PYTHONPATH=backend backend/.venv/bin/python backend/scripts/recovery_bundle.py r
 
 2026-10-20新增的工程链复用原AgentTask/任务中心及个股报告读者，固定上游v0.7.0/e8f5503；不会拆成另一套角色流程。`ASHARE_TRADINGAGENTS_RESEARCH_ENABLED=0`为默认值；关闭时bootstrap不读取可选运行环境或启动CLI。旧[同输入对照](../ai/semantic-decisions.md#2026-10-20-六新场景完整图与四臂对照)和新[三主模型筛选](../ai/semantic-decisions.md#用户改为三主模型整图筛选)分别保留，候选及参数试验不是生产净收益准入，不能把以下环境准备当作启用批准。
 
-服务器配置单点为忽略目录`backend/data/tradingagents_research/runtime.json`，只含`version=1`、`upstream_sha`、`upstream_dir`、`python`、`dependencies`、`dependency_manifest`、`transport`七键。路径仅由服务器操作员配置为绝对路径，HTTP只接受证券symbol。transport绑定现有CLI程序SHA、模型/effort和认证文件位置，仅允许四个标准代理变量；不包含或公开凭据内容。若CLI是Node脚本，transport还须绑定`node_executable`及`node_executable_sha256`，使用准确已有解释器执行；缺失/漂移在推理前拒绝。原生CLI不额外要求Node。固定原图276个源码文件逐hash核实；独立venv及相对文件SHA清单由`freeze_dependency_manifest`显式准备，bootstrap不安装、升级或自动生成环境。环境首次/执行前完整核，普通读取复用已核观察；依赖、代码、CLI或准入版本漂移则拒绝新执行。
+服务器配置单点为忽略目录`backend/data/tradingagents_research/runtime.json`，只含`version=1`、`upstream_sha`、`upstream_dir`、`python`、`dependencies`、`dependency_manifest`、`transport`七键。路径仅由服务器操作员配置为绝对路径；正常新建HTTP只接受证券symbol，专用维护恢复仅接受原task及run身份，不接受主机路径。transport绑定现有CLI程序SHA、模型/effort和认证文件位置，仅允许四个标准代理变量；不包含或公开凭据内容。若CLI是Node脚本，transport还须绑定`node_executable`及`node_executable_sha256`，使用准确已有解释器执行；缺失/漂移在推理前拒绝。原生CLI不额外要求Node。固定原图276个源码文件逐hash核实；独立venv及相对文件SHA清单由`freeze_dependency_manifest`显式准备，bootstrap不安装、升级或自动生成环境。环境首次/执行前完整核，普通读取复用已核观察；依赖、代码、CLI或准入版本漂移则拒绝新执行。
 
 2026-10-21真实CLI预检发现npm入口解析symlink后丢失Node搜索路径，原返回127及`env: node: No such file or directory`保全；没有发出Codex模型请求。显式绑定既有Node后，同CLI/同隔离参数的实际features预检返回0，全部禁止项仍false，并在模型启动标记前停止验证；不是放宽隔离或换模型通道。完整图零模型预演不能代替这条实际传输入口检查。
 
@@ -489,3 +489,10 @@ PYTHONPATH=backend backend/.venv/bin/python backend/scripts/recovery_bundle.py r
 完整待核七报告只写研究目录，绑定证券、输入/方法/结果hash和原生成/资料时刻；普通配对GET可读取，源/引用有限失败与同伴待审明示，不变成已验证结论。完成后只清该run自有的原生checkpoint数据库残页，保留报告、原答和MemoryLog；失败、中断或未知则保留恢复证据。初版无自动调度；当前仅增加上述真正入选研究调度，不发新通知、不改变选股评分、资金或部署边界。现役页面加载、已保存结果读取、真正模型任务及质量准入仍须分别取实际证据。
 
 超时不算成功。CLI先真实TERM/必要KILL并等待排空，再仅从有界typed流中提取严格单轮最终`turn.completed`用量和安全终态投影；原始请求/context不落日志。缺最终、截断、多轮、非法计数仍为unknown，安全/授权停止优先且不取用量。超时失败与本地drain事实分开保存，不能推断远端已取消。2026-10-21已丢失原流的call11无法由此追溯恢复，原unknown和停止回执永久保留。用户随后明确授权在原100预约内有限接续，准确边界见[三主模型记录](../ai/semantic-decisions.md#用户改为三主模型整图筛选)；这不是超时修补自身产生的权限，也不豁免任何新unknown、权限或安全停止。该有限LAB例外不改变历史账；当前选股后研究的独立启动授权与无次数配额规则以上文为准，效果门不变。
+
+
+### 完整研究的显式原生恢复
+
+正常新建与后台领取不自动重试失败/unknown。维护恢复复用`tradingagents_research`任务类型和原单写者、逐调用授权/记账、取消排空与墙钟边界；专用`POST /agent/tasks/{source_task_id}/recover`不属于普通设备读权限，body只声明`run_id`。当前服务器已pin的`authorization.json`必须包含该原任务/run的单次精确恢复grant，不以HTTP写入授权或任意换输入。
+
+恢复前核当前方法/授权、原失败任务、selection claim、冻结packet/config/staged代码/checkpoint及全部已保存输出/回执，登记旧/新方法兼容依据。队列与单次claim按owner/CAS处理部分失败，不把不明dispatch当成新任务重新领取；执行从原生未完成节点继续，新计数接续，已完成角色在模型预留前拒绝重生成。旧failed任务终态不改，原失败历史先保全，结果带有界恢复lineage；GET继续只读取，结果完成也不使来源或投资效果自动通过。授权撤销/漂移、新unknown、输入或checkpoint漂移、安全失败照常停止。实际执行须在准确HEAD工程发布后另核原答哈希、首次新角色、调用区间、七报告与普通页面读取。

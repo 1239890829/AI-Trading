@@ -96,6 +96,14 @@ export async function cancelAgentTask(id: string): Promise<AgentTask> {
 export type TradingAgentsReportKey = "market_report" | "sentiment_report" | "news_report" | "fundamentals_report"
   | "investment_plan" | "trader_investment_plan" | "final_trade_decision";
 
+export interface TradingAgentsRecoveryLineage {
+  version: 1;
+  source_task_id: string; source_run_id: string; recovery_task_id: string;
+  source_method_sha256: string; recovery_method_sha256: string;
+  reused_original_outputs: number; new_call_from: number; new_call_to: number;
+  inherited_unknown_usage_count: number;
+}
+
 export interface TradingAgentsResearchReport {
   version: number; state: "completed"; symbol: string; run_id: string;
   generated_at: string; as_of: string; generated_today: boolean;
@@ -104,6 +112,7 @@ export interface TradingAgentsResearchReport {
   review_state: "unreviewed" | "finite_failed_requires_review";
   review_summary: {finite_failures: number; peer_review_required: number; source_verified: false; independent_human_gold: false};
   reports: Record<TradingAgentsReportKey, string>;
+  recovery_lineage?: TradingAgentsRecoveryLineage;
 }
 
 export interface TradingAgentsResearchView {
@@ -124,12 +133,24 @@ export async function getTradingAgentsResearch(symbol: string): Promise<TradingA
   if (!/^\d{6}$/.test(symbol)) throw new Error("完整研究需要六位证券代码");
   const data = (await getJson<TradingAgentsResearchView>(`/api/agent/research/tradingagents/${symbol}`)).data;
   const keys: TradingAgentsReportKey[] = ["market_report", "sentiment_report", "news_report", "fundamentals_report", "investment_plan", "trader_investment_plan", "final_trade_decision"];
+  const lineage = data?.latest?.recovery_lineage;
+  const lineageKeys = ["version", "source_task_id", "source_run_id", "recovery_task_id", "source_method_sha256", "recovery_method_sha256",
+    "reused_original_outputs", "new_call_from", "new_call_to", "inherited_unknown_usage_count"];
+  const invalidLineage = lineage !== undefined && (!lineage || typeof lineage !== "object" || Array.isArray(lineage)
+    || Object.keys(lineage).length !== lineageKeys.length || Object.keys(lineage).some(key => !lineageKeys.includes(key))
+    || lineage.version !== 1
+    || ![lineage.source_task_id, lineage.source_run_id, lineage.recovery_task_id].every(value => typeof value === "string" && /^[0-9a-f]{32}$/.test(value))
+    || ![lineage.source_method_sha256, lineage.recovery_method_sha256].every(value => typeof value === "string" && /^[0-9a-f]{64}$/.test(value))
+    || lineage.recovery_method_sha256 !== data.latest!.method_sha256
+    || ![lineage.reused_original_outputs, lineage.inherited_unknown_usage_count].every(value => Number.isSafeInteger(value) && value >= 0 && value <= 10000)
+    || !Number.isSafeInteger(lineage.new_call_from) || lineage.new_call_from < 1
+    || !Number.isSafeInteger(lineage.new_call_to) || lineage.new_call_to < lineage.new_call_from);
   if (!data || data.symbol !== symbol || typeof data.enabled !== "boolean" || typeof data.executable !== "boolean"
     || !Array.isArray(data.blockers) || data.blockers.some(row => !row || typeof row.code !== "string" || typeof row.message !== "string")
     || data.executable && (!data.enabled || data.blockers.length > 0)
     || !data.admission || typeof data.admission.state !== "string"
     || data.latest === undefined || data.task === undefined
-    || data.verification !== "unverified_full_graph_research" || data.production_eligible !== false
+    || data.verification !== "unverified_full_graph_research" || data.production_eligible !== false || invalidLineage
     || data.latest && (data.latest.symbol !== symbol || data.latest.verification !== data.verification
       || data.latest.production_eligible !== false || !data.latest.reports
       || !["unreviewed", "finite_failed_requires_review"].includes(data.latest.review_state)

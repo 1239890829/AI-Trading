@@ -395,7 +395,20 @@ def _latest(symbol: str) -> dict | None:
             selected = {"authorization_mode": "RESEARCH_ONLY_AUTHORIZED", "net_gain_verified": False,
                         "selection": {key: binding[key] for key in (
                             "symbol", "trade_date", "selected_at", "source", "source_version", "selection_key")}}
-        return {**{key: result[key] for key in keys}, **selected,
+        lineage = {}
+        if "recovery_lineage" in result:
+            from app.services.tradingagents_recovery import public_lineage, completed_recovery
+            try:
+                value = public_lineage(result["recovery_lineage"])
+                if not selected:
+                    return None
+                completed_recovery(_selection_records(result["selection"]), result["selection"], result["method_sha256"])
+            except ResearchBlocked:
+                return None
+            if value["source_run_id"] != run_id or value["recovery_method_sha256"] != result["method_sha256"]:
+                return None
+            lineage = {"recovery_lineage": value}
+        return {**{key: result[key] for key in keys}, **selected, **lineage,
                 "review_summary": {key: review[key] for key in (
                     "finite_failures", "peer_review_required", "source_verified", "independent_human_gold")},
                 "generated_today": generated.astimezone(_now().tzinfo).date() == _now().date()}
@@ -531,7 +544,8 @@ def _selection_records(binding):
                     or value.get("task_id") is not None and (not isinstance(value["task_id"], str) or not 0 < len(value["task_id"]) <= 160)
                     or value.get("dispatch_owner") is not None and (not isinstance(value["dispatch_owner"], str) or not 0 < len(value["dispatch_owner"]) <= 160)
                     or value.get("state") not in {"dispatching", "queued", "started", "running", "completed",
-                                                   "needs_recovery", "dispatch_unknown", "unknown", "failed", "canceled"}):
+                                                   "needs_recovery", "dispatch_unknown", "unknown", "failed", "canceled",
+                                                   "recovery_dispatching", "recovery_queued", "recovery_dispatch_unknown", "recovering"}):
                 raise ValueError("selection claim identity drift")
             selected_at, updated_at = _clock(selection["selected_at"]), _clock(value.get("updated_at"))
             if (selected_at.astimezone(_now().tzinfo).date().isoformat() != selection["trade_date"]
@@ -551,7 +565,8 @@ def _execution_prior(binding, method):
     with worker_lease(ROOT / "selection-claims"):
         records = _selection_records(binding)
         if any(row["method_sha256"] != method for row in records):
-            raise ResearchBlocked([{"code": "selection_needs_recovery", "message": "这次真实入选已有其他方法的执行或调度记录；更换方法不会重新付费，旧报告保留原身份可读。"}])
+            from app.services.tradingagents_recovery import completed_recovery
+            return completed_recovery(records, binding, method)
         return next(iter(records), None)
 
 
@@ -597,6 +612,9 @@ def _completed_selection(prior, binding):
                 or value.get("production_eligible") is not False
                 or set(value.get("reports", {})) != set(REPORTS)):
             raise ValueError("completed artifact drift")
+        if "recovery_lineage" in value:
+            from app.services.tradingagents_recovery import completed_recovery
+            completed_recovery(_selection_records(binding), binding, prior["method_sha256"])
         return {"kind": "tradingagents_research", "state": "completed", "symbol": binding["symbol"],
                 "run_id": run_id, "reused_identical_selection": True, "production_eligible": False}
     except (OSError, ValueError, KeyError, TypeError):

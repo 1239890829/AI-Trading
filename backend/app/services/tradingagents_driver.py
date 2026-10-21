@@ -558,20 +558,25 @@ def _sentiment_meta(packet):
     return {"has_evidence": bool(eligible), "source_label": label[:160] or "No eligible frozen news source"}
 
 
-def _stage_worker(target):
-    target.mkdir(mode=0o700)
+def _worker_bodies():
     files = {}
     for name in ("worker.py", "native_codec.py", "cli_codec.py", "codex_codec.py", "indicator_table.py"):
         data = (NATIVE / name).read_bytes()
         if name in {"cli_codec.py", "codex_codec.py"}:
             data = data.replace(b"from .native_codec import", b"from native_codec import").replace(b"from .cli_codec import", b"from cli_codec import")
-        (target / name).write_bytes(data)
-        files[name] = hashlib.sha256(data).hexdigest()
+        files[name] = data
     for module in (adapter, sentiment, bjtime):
         path = Path(module.__file__)
-        (target / path.name).write_bytes(path.read_bytes())
-        files[path.name] = file_sha(path)
+        files[path.name] = path.read_bytes()
     return files
+
+
+def _stage_worker(target):
+    target.mkdir(mode=0o700)
+    bodies = _worker_bodies()
+    for name, data in bodies.items():
+        (target / name).write_bytes(data)
+    return {name: hashlib.sha256(data).hexdigest() for name, data in bodies.items()}
 
 
 def sandbox_policy(*, python, dependencies, upstream, code, run, socket_path):
@@ -659,7 +664,7 @@ class NativeTradingAgentsDriver:
         files = {p.name: file_sha(p) for p in NATIVE.glob("*.py")}
         files["upstream-manifest.json"] = file_sha(NATIVE / "upstream-manifest.json")
         files["driver.py"] = file_sha(__file__)
-        for name in ("tradingagents_research.py", "agent_budget.py"):
+        for name in ("tradingagents_research.py", "agent_budget.py", "tradingagents_recovery.py"):
             files[name] = file_sha(Path(__file__).with_name(name))
         for module in (adapter, evidence, sentiment, source_gate, bjtime):
             files[Path(module.__file__).name] = file_sha(module.__file__)
@@ -955,7 +960,7 @@ class NativeTradingAgentsDriver:
             raise DriverUnavailable("completed_role_regeneration_refused")
 
     async def _execute(self, *, rec, packet, run, budget, identity, max_calls,
-                       interrupt_after_analysts=False, budget_scope=None, usage_authorizer=None):
+                       interrupt_after_analysts=False, budget_scope=None, usage_authorizer=None, recovery_guard=None):
         """Real original graph; separately callable for isolated offline fixture checks.
 
         Production entry is run_accounted, which always rechecks admission. This
@@ -1016,6 +1021,8 @@ class NativeTradingAgentsDriver:
                             raise DriverUnavailable("graph_already_stopped")
                         await rec.checkpoint_async()
                         self._guard_request(request, packet, completed_peers)
+                        if recovery_guard is not None:
+                            await drain_thread(recovery_guard, request, physical_calls)
                         schema = build_cli_schema(tools=request.get("tools"), schema=request.get("schema"))
                         messages = deepcopy(request["messages"])
                         context = self._peer_context(request, completed_peers)
@@ -1069,6 +1076,8 @@ class NativeTradingAgentsDriver:
             command = [str(self.sandbox), "-f", str(policy_path), str(self.python), str(code / "worker.py"),
                 "--packet", str(packet_path), "--config", str(config_path), "--socket", str(socket_path),
                 "--output", str(output), "--arm", "ta-luna"]
+            if recovery_guard is not None:
+                command.extend(("--segment", "resume"))
             if interrupt_after_analysts:
                 command.append("--interrupt-after-analysts")
             proc = None
