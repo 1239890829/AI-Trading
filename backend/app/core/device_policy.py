@@ -37,6 +37,7 @@ READ_PATHS = frozenset({
     "/picks/watcher/state", "/picks/signal-health",
     "/picks/strategy-health", "/picks/strategy-registry",
     "/agent/kb/tree", "/agent/kb/file",
+    "/agent/research/tradingagents/{symbol}",
     '/announcements/{symbol}',
     '/assistant/daily-summary',
     '/assistant/entity-dict',

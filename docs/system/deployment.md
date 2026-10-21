@@ -471,3 +471,19 @@ PYTHONPATH=backend backend/.venv/bin/python backend/scripts/recovery_bundle.py r
 旧版本曾把编码后的长期token交给浏览器，编码不是保密。因此统一激活时轮换backend/.env中的服务token，再由统一启动脚本最小传递；不输出token，不保留旧前端继续开放LAN，不自动信任旧浏览器。权限小库属于业务访问状态，清理工具不得删。此前普通局域网代理/长期WS凭据说明保留为历史，以上协议取代该访问边界。
 
 `local-services.py check`只读核后端服务认证、前端未配对HTTP/WS返回401、配对状态桥可验证服务端凭据；不获取长期凭据、不创建会话或工具WS。实际刷新/票据重连在隔离用户流与统一激活后的已授权页面分别验。行情源新鲜度、真实交易窗口与手机真机性能仍独立验收。
+
+## TradingAgents完整研究运行边界
+
+2026-10-20新增的工程链复用原AgentTask/任务中心及个股报告读者，固定上游v0.7.0/e8f5503；不会拆成另一套角色流程。`ASHARE_TRADINGAGENTS_RESEARCH_ENABLED=0`为默认值；关闭时bootstrap不读取可选运行环境或启动CLI。旧[同输入对照](../ai/semantic-decisions.md#2026-10-20-六新场景完整图与四臂对照)和新[三主模型筛选](../ai/semantic-decisions.md#用户改为三主模型整图筛选)分别保留，候选及参数试验不是生产净收益准入，不能把以下环境准备当作启用批准。
+
+服务器配置单点为忽略目录`backend/data/tradingagents_research/runtime.json`，只含`version=1`、`upstream_sha`、`upstream_dir`、`python`、`dependencies`、`dependency_manifest`、`transport`七键。路径仅由服务器操作员配置为绝对路径，HTTP只接受证券symbol。transport绑定现有CLI程序SHA、模型/effort和认证文件位置，仅允许四个标准代理变量；不包含或公开凭据内容。若CLI是Node脚本，transport还须绑定`node_executable`及`node_executable_sha256`，使用准确已有解释器执行；缺失/漂移在推理前拒绝。原生CLI不额外要求Node。固定原图276个源码文件逐hash核实；独立venv及相对文件SHA清单由`freeze_dependency_manifest`显式准备，bootstrap不安装、升级或自动生成环境。环境首次/执行前完整核，普通读取复用已核观察；依赖、代码、CLI或准入版本漂移则拒绝新执行。
+
+2026-10-21真实CLI预检发现npm入口解析symlink后丢失Node搜索路径，原返回127及`env: node: No such file or directory`保全；没有发出Codex模型请求。显式绑定既有Node后，同CLI/同隔离参数的实际features预检返回0，全部禁止项仍false，并在模型启动标记前停止验证；不是放宽隔离或换模型通道。完整图零模型预演不能代替这条实际传输入口检查。
+
+启用还需`ASHARE_TRADINGAGENTS_RESEARCH_ADMISSION_DIGEST`精确绑定同目录`admission.json`。回执须绑定准确方法/评价版本、有效期、明确净收益通过；工程夹具、图完成或作者自检不能代填。此质量准入不同于源码发布的DegradedRelease。现役每日模型上限8与完整图预检22次余量冲突；当日若有started未知用量，仍按原规则阻断，跨日不虚称旧未知还占新日额度。不自动增额、清账、换scope或换模型。每次reserve/start/finish沿用原共享预算，取消先等真实模型步骤结束，partial/unknown保全并禁止自动重发，完成的相同输入/方法才可复用。
+
+正常构包要求已有验证公司profile，缺失在模型前阻断。显式任务可复用现有免费实例，单次取得400日历日内最多300根qfq日线及8期财务摘要；有效报价只读现有Hub缓存，新闻只读已有库的原始公开观察，普通GET不触发这些操作。来源/证券/单位/质量/真实源钟与接收钟按[构包契约](../data/data-sources.md#tradingagents显式研究构包2026-10-21)分别绑定；实际采集后按真实截点冻结，不把新行情填入旧profile时刻。日线形成中尾条排除，原指标公式对冻结历史计算，完整财表、首次发布精确时刻、独立最终性、社交及账户仍明确缺失。新来源与方法身份改变后须重新验证准入，不能沿用旧149次模型结果或旧质量digest。
+
+完整待核七报告只写研究目录，绑定证券、输入/方法/结果hash和原生成/资料时刻；普通配对GET可读取，源/引用有限失败与同伴待审明示，不变成已验证结论。完成后只清该run自有的原生checkpoint数据库残页，保留报告、原答和MemoryLog；失败、中断或未知则保留恢复证据。无新调度、通知、选股评分、资金或部署动作。现役页面加载、已保存结果读取、真正模型任务及质量准入仍须分别取实际证据。
+
+超时不算成功。CLI先真实TERM/必要KILL并等待排空，再仅从有界typed流中提取严格单轮最终`turn.completed`用量和安全终态投影；原始请求/context不落日志。缺最终、截断、多轮、非法计数仍为unknown，安全/授权停止优先且不取用量。超时失败与本地drain事实分开保存，不能推断远端已取消。2026-10-21已丢失原流的call11无法由此追溯恢复，原unknown和停止回执永久保留。用户随后明确授权在原100预约内有限接续，准确边界见[三主模型记录](../ai/semantic-decisions.md#用户改为三主模型整图筛选)；这不是超时修补自身产生的权限，也不豁免任何新unknown、权限或安全停止。生产预算和启用条件不变。

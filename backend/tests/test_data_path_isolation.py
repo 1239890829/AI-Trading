@@ -62,6 +62,8 @@ def _is_real_data_path(p: Path) -> bool:
 #: 「是」= 必须在 conftest 里改指沙箱（本文件第 2 项守卫会验）；
 #: 「否」= 保留真实路径，理由写清楚（新增常量时必须逐条判断，不许默认填否）。
 _DECLARED: dict[str, tuple[bool, str]] = {
+    "services/tradingagents_research.py:ROOT": (
+        True, "完整图读取与写入替身统一沙箱隔离，普通GET及冒烟也不读真实研究报告"),
     "events/company_impact.py:ROOT": (
         True, "显式发布CLI的默认落盘与普通读取统一沙箱隔离，专项另注入tmp根，禁止读写实际已发布资料"),
     "core/device_access.py:STORE_PATH": (True, "设备会话 API 及全端点冒烟统一隔离到测试沙箱"),
@@ -383,11 +385,13 @@ def test_test_writable_paths_are_sandboxed():
     import app.events.company_impact as company_impact
     import app.review.storage as review_storage
     import app.services.leader_archive as leader_archive
+    import app.services.tradingagents_research as tradingagents_research
 
     writable = [k for k, (flag, _) in _DECLARED.items() if flag]
     assert writable, "登记表里没有任何「测试可写」项，疑似登记被误清空"
 
     modules = {
+        "services/tradingagents_research.py:ROOT": tradingagents_research,
         "events/company_impact.py:ROOT": company_impact,
         "core/device_access.py:STORE_PATH": device_access,
         "services/leader_archive.py:ARCHIVE_PATH": leader_archive,

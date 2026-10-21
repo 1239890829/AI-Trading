@@ -26,6 +26,7 @@ import {useSymbolDetail} from "@/components/detail/symbol-detail-context";
 import {useDetailModal} from "@/components/detail/detail-modal";
 import {quoteQualityView} from "@/lib/quote-quality-view";
 import { StockEventsRow } from "@/components/detail/stock-events";
+import { TradingAgentsResearchPanel } from "@/components/detail/tradingagents-research-panel";
 import {
   addToWatchlist,
   getAuction,
@@ -1040,7 +1041,7 @@ export const StockDetailPanel = memo(function StockDetailPanel({
           }}>
             {([["info", "新闻公告"], ["events", "相关事件"]] as const).map(([key, label]) => <button key={key} type="button" role="tab" tabIndex={viewRightTab === key ? 0 : -1} aria-selected={viewRightTab === key} aria-controls={`${perspectiveId}-information`} data-action={viewRightTab === key ? "secondary" : "quiet"} onClick={() => {if (onRightTabChange) onRightTabChange(key); else setRightTab(key);}}>{label}</button>)}
           </div>}
-          {viewRightTab === "events" && <div id={`${perspectiveId}-information`} className="px-3 py-2"><StockEventsRow symbol={symbol} active={rightActive} /></div>}
+          {viewRightTab === "events" && <div id={`${perspectiveId}-information`} className="px-3 py-2"><StockEventsRow symbol={symbol} active={rightActive} /><TradingAgentsResearchPanel key={symbol} symbol={symbol} active={rightActive}/></div>}
           {viewRightTab === "reason" && <div className="px-3 py-2"><LimitUpReasonPanel symbol={symbol} quote={quote} active={rightActive} sharedResource={reasonResource} standalone /></div>}
           {rightTab === "reason" && !qualification.eligible && (!!reasonResource.error || reasonResource.data?.coverage && Object.values(reasonResource.data.coverage).some(side => side.state !== "success")) && <div className="flex flex-wrap items-center gap-2 px-3 py-2 text-xs"><p role="alert" className="text-amber-800 dark:text-amber-300">涨停与炸板资格待恢复，暂未展示原因。</p><button type="button" data-action="secondary" onClick={reasonResource.refresh}>重试资格</button></div>}
           {viewRightTab === "real" && (

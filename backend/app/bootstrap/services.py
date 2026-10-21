@@ -227,6 +227,10 @@ def build_services(app: FastAPI) -> AppServices:
     )
     app.state.review = review_svc
 
+    from app.services.tradingagents_research import configure_driver
+
+    configure_driver(app)
+
     # AI 控制台运行时（任务执行器需要 state 上的服务）+ 启动对账：
     # 残留 running/queued 任务标为 failed（进程重启=任务已中断，不假装还在跑）
     from app.services.agent_tasks import init_agent_runtime, reconcile_on_startup

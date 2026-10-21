@@ -93,6 +93,57 @@ export async function cancelAgentTask(id: string): Promise<AgentTask> {
   return (await sendJson<AgentTask>(`/api/agent/tasks/${id}/cancel`, "POST")).data;
 }
 
+export type TradingAgentsReportKey = "market_report" | "sentiment_report" | "news_report" | "fundamentals_report"
+  | "investment_plan" | "trader_investment_plan" | "final_trade_decision";
+
+export interface TradingAgentsResearchReport {
+  version: number; state: "completed"; symbol: string; run_id: string;
+  generated_at: string; as_of: string; generated_today: boolean;
+  upstream_sha: string; input_sha256: string; method_sha256: string;
+  verification: "unverified_full_graph_research"; production_eligible: false;
+  review_state: "unreviewed" | "finite_failed_requires_review";
+  review_summary: {finite_failures: number; peer_review_required: number; source_verified: false; independent_human_gold: false};
+  reports: Record<TradingAgentsReportKey, string>;
+}
+
+export interface TradingAgentsResearchView {
+  symbol: string; enabled: boolean; executable: boolean;
+  blockers: {code: string; message: string}[];
+  required_model_slots: number;
+  budget: {date: string; limit: number; used: number; remaining: number; scope: string} | null;
+  admission: {state: string; method_sha256: string | null; valid_until?: string};
+  verification: "unverified_full_graph_research"; production_eligible: false;
+  latest: TradingAgentsResearchReport | null;
+  task: {id: string; status: AgentTaskStatus; cancel_requested: boolean; failed: boolean;
+    created_at: string; finished_at: string | null; error: {code: string; message: string} | null} | null;
+  task_read_unavailable?: boolean;
+}
+
+/** Ordinary paired read. Opening this reader never creates a research task. */
+export async function getTradingAgentsResearch(symbol: string): Promise<TradingAgentsResearchView> {
+  if (!/^\d{6}$/.test(symbol)) throw new Error("完整研究需要六位证券代码");
+  const data = (await getJson<TradingAgentsResearchView>(`/api/agent/research/tradingagents/${symbol}`)).data;
+  const keys: TradingAgentsReportKey[] = ["market_report", "sentiment_report", "news_report", "fundamentals_report", "investment_plan", "trader_investment_plan", "final_trade_decision"];
+  if (!data || data.symbol !== symbol || typeof data.enabled !== "boolean" || typeof data.executable !== "boolean"
+    || !Array.isArray(data.blockers) || data.blockers.some(row => !row || typeof row.code !== "string" || typeof row.message !== "string")
+    || data.executable && (!data.enabled || data.blockers.length > 0)
+    || !data.admission || typeof data.admission.state !== "string"
+    || data.latest === undefined || data.task === undefined
+    || data.verification !== "unverified_full_graph_research" || data.production_eligible !== false
+    || data.latest && (data.latest.symbol !== symbol || data.latest.verification !== data.verification
+      || data.latest.production_eligible !== false || !data.latest.reports
+      || !["unreviewed", "finite_failed_requires_review"].includes(data.latest.review_state)
+      || !data.latest.review_summary || data.latest.review_summary.source_verified !== false
+      || data.latest.review_summary.independent_human_gold !== false
+      || !Number.isSafeInteger(data.latest.review_summary.finite_failures) || data.latest.review_summary.finite_failures < 0
+      || !Number.isSafeInteger(data.latest.review_summary.peer_review_required) || data.latest.review_summary.peer_review_required < 0
+      || (data.latest.review_state === "unreviewed") !== (data.latest.review_summary.finite_failures === 0)
+      || keys.some(key => typeof data.latest!.reports[key] !== "string" || !data.latest!.reports[key].trim()))) {
+    throw new Error("完整研究响应身份或报告不完整，未展示");
+  }
+  return data;
+}
+
 export async function resolveAgentTask(
   id: string,
   outcome: "done" | "dismissed",
