@@ -32,7 +32,7 @@ from app.services.tradingagents_news_packet import read_news_packet
 from app.services.tradingagents_native import codex_transport
 from app.services.tradingagents_native.cli_codec import build_cli_schema
 from app.services.tradingagents_native.native_codec import decode_wire_json
-from app.services.tradingagents_native.transport_process import _project_usage
+from app.services.tradingagents_native.transport_process import project_usage_evidence
 from app.services.tradingagents_research import REPORTS, ROLES, UPSTREAM_SHA
 from scripts import tradingagents_adapter_contract as adapter
 from scripts import tradingagents_evidence_contract as evidence
@@ -1179,7 +1179,7 @@ class NativeTradingAgentsDriver:
 
     @staticmethod
     def _save_usage_receipt(path, *, receipt, rec, role, call_id, method_sha256, transport,
-                            response, failure, usage, output_sha256):
+                            response, failure, usage, usage_observation, output_sha256):
         """Retain provider accounting before DB writes, without request/context text.
 
         This is recovery evidence, not permission to amend an unknown DB row or
@@ -1192,12 +1192,13 @@ class NativeTradingAgentsDriver:
         kind = ("typed_response" if isinstance(response, dict) else
                 "verified_transport_failure" if isinstance(failure, codex_transport.TransportError)
                 and failure.final_usage_verified else "unknown_transport_failure")
-        terminal = {"kind": kind, "usage": usage, "output_sha256": output_sha256, **hashes}
+        terminal = {"kind": kind, "usage": usage, "usage_observation": usage_observation,
+                    "output_sha256": output_sha256, **hashes}
         atomic_json(path, {"version": 1, "kind": "tradingagents_model_usage", "usage_id": receipt["id"],
             "task_id": rec.task_id, "role": role, "call_id": call_id,
             "method_sha256": method_sha256, "transport_sha256": digest(transport),
             "recorded_at": beijing_now().isoformat(), "output_sha256": output_sha256,
-            "usage": usage, "usage_known": usage is not None,
+            "usage": usage, "usage_known": usage is not None, "usage_observation": usage_observation,
             "terminal_kind": kind, "terminal_sha256": digest(terminal), **hashes,
             "automatic_reconciliation": False, "complete_context_logged": False})
 
@@ -1262,9 +1263,12 @@ class NativeTradingAgentsDriver:
         if not launched:
             await drain_thread(budget.release, receipt["id"])
             raise outcome_error or DriverUnavailable("transport_did_not_start_accounted_call")
-        actual_usage = _project_usage(response.get("usage")) if isinstance(response, dict) else None
+        actual_usage, usage_observation = project_usage_evidence(response.get("usage") if isinstance(response, dict) else None)
+        usage_observation["terminal_evidence"] = "typed_terminal_response" if isinstance(response, dict) else "unobserved_transport_failure"
+        if isinstance(failure, codex_transport.TransportError):
+            usage_observation = failure.usage_observation
         if actual_usage is None and isinstance(failure, codex_transport.TransportError) and failure.final_usage_verified:
-            actual_usage = _project_usage(failure.usage)
+            actual_usage = project_usage_evidence(failure.usage)[0]
         try:
             if isinstance(response, dict) and isinstance(response.get("structured_output"), dict):
                 output_chars = len(canonical(response["structured_output"]))
@@ -1277,7 +1281,8 @@ class NativeTradingAgentsDriver:
             try:
                 await drain_thread(self._save_usage_receipt, usage_receipt_path, receipt=receipt, rec=rec,
                     role=role, call_id=call_id, method_sha256=method_sha256, transport=method,
-                    response=response, failure=failure, usage=actual_usage, output_sha256=output_sha)
+                    response=response, failure=failure, usage=actual_usage,
+                    usage_observation=usage_observation, output_sha256=output_sha)
             except BaseException as error:
                 outcome_error = outcome_error or error
         # Original answers remain independently recoverable even if receipt

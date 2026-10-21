@@ -4,6 +4,16 @@
 
 ## 1. 本轮范围与已核现场
 
+### 当前修补：真实终端用量契约
+
+PR #317准确HEAD `4b65bc86cc4968348a7591bc05eb3db234189703`已合入master `42f4c833c9e7e07e74370d75a0d417b8de60a8b9`；PR CI 39553767983及master CI 39554735386三项成功，DegradedRelease 6309449237、release_check exit0。主树安全快进，五份用户原件SHA不变，原分支本地删除且远端不存在；launcher加载build `UZhLRzcqj7laxSe9phPgu`，已配对Chrome实际读取入选读者。HTTP/代理检查不代替真实WS和源时效；初步锁观测无新lock_error不证明全日稳定。运行回执见PR评论6309949702。
+
+新入选002178真实自动任务只保存一份Fundamentals Analyst原答，随后因新unknown停止，没有完整七报告；原两任务没有重跑。该新unknown不属于用户此前具名授权，当时正确阻断新调用。用户随后另行明示允许永久保留这条unknown，并仅在修复发布后继续未运行的新入选研究；两条具名例外不扩到后续新unknown。确认的实现回归是正常终态投影遗漏真实`cache_write_input_tokens`：既有65份成功Codex元数据均含此字段（其值均为0），足以证明契约误拒，不能证明非零字段计费语义。新调用原始usage已丢失，哈希不能恢复数值；本次确切拒绝字段和tokens证据不够，不估算/补账/借历史样本。
+
+由上述master建立`codex/typed-usage-evidence`最小修补：严格真实字段校验及有界数字终端元数据/投影原因保全；原unknown/任务不改，继续授权只绑定两条已获用户分别明示许可的ID/日期/scope；后续新unknown仍停。普通读者无有效公司资料时改为“尚无可读取的公司依据”，保留诊断按需读取，不把开关内部状态当公司事实或完整研究完成。定向先红8项、证据边界再红2项，修后230项通过；既有65份真实用量元数据原值原字段65/65接受，没有模型调用。准确新HEAD门禁、发布与实际加载另核，不复用旧CI。
+
+本批前端完整门：默认/UTC各1970 passed、150文件；tsc、ESLint零error/两既有warning、生产构建通过，build `frbzgtlhBCOhSPLr7aW1Y`。370个前端跟踪输入门内零漂移，生成引用逐字恢复后tsc通过；未加载前不称实页已更新。后端完整门6693 passed／87 skipped／309 subtests（pytest610.01秒、外层621.242秒），pyflakes9.331秒通过；1829个跟踪输入门内零漂移。doc-health、卫生及公开仓扫描通过。全门后只回填本段事实，文档守卫与最终暂存差异另核；准确HEAD发布及实际运行不由本地绿色替代。
+
 ### 发布后真实验收与修补
 
 PR #316准确HEAD `1144b64441d9d93b35f59c5be1c023980a45e923`已合入master `cebe64529efbd3f6581dd57a513b587677ae0075`；PR CI 39546380586、master CI 39547041124三项成功，DegradedRelease 6308422837及release_check exit0。安全同步后由项目launcher加载build `50UDLBNJUaEFuGVeck6PN`。真实8股主卡有原测量刻度；鼠标/Tab就地切换依据，事件点击/方向键切换原句，Esc返回原入口已核。390/320页面不借旧截图；320详细刻度标签拥挤由本次小修承接。

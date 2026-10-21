@@ -721,11 +721,13 @@ describe("company evidence and saved impact", () => {
     const company = within(explorer).getByLabelText("公司联系");
     expect(company.textContent).toContain("公司原文已保存");
     expect(company.textContent).toContain("经营关系仍需依据");
-    expect(company.textContent).not.toMatch(/常规采集未启用|已排队|正在生成|研究已完成/);
+    expect(company.textContent).not.toMatch(/常规采集未启用|旧版|已排队|正在生成|研究已完成/);
     expect(explorer.textContent).not.toContain(impact.facts[0].quote);
     fireEvent.click(screen.getByRole("button", {name: "公司依据、完整传导与相关消息"}));
     const status = screen.getByLabelText("公司资料与判读状态");
     expect(status.textContent).toContain("旧版独立");
+    expect(within(status).getByRole("note").textContent).toBe("公司原文已保存");
+    expect(within(status).getByText("查看资料处理记录").closest("details")?.open).toBe(false);
     expect(within(status).getByLabelText("已保存公司原文").textContent).toContain(impact.facts[0].quote);
     expect(screen.queryByLabelText("AI经营传导假设")).toBeNull();
     expect(getStockAttribution).toHaveBeenCalledTimes(1);
@@ -738,10 +740,30 @@ describe("company evidence and saved impact", () => {
     const explorer = await screen.findByRole("region", {name: "入选决策核对台"});
     await act(async () => {});
     const company = within(explorer).getByLabelText("公司联系");
-    expect(company.textContent).toContain("旧版独立自动判读已停用");
+    expect(company.textContent).toContain("尚无可读取的公司依据");
     expect(company.textContent).not.toContain("公司原文已保存");
+    expect(company.textContent).not.toMatch(/旧版|停用|TradingAgents|已排队|正在生成|研究已完成/);
     expect(explorer.textContent).not.toContain(impact.facts[0].quote);
     expect(getStockAttribution).toHaveBeenCalledTimes(1);
+  });
+
+  it.each(["regular", "concise"] as const)("%s reader describes unavailable company evidence without inferring the separate research task state", async mode => {
+    const reason = "旧版独立worker停用；完整TradingAgents任务状态独立。";
+    vi.mocked(getStockAttribution).mockResolvedValue({...payload(), items: [], count: 0, company_status: {...companyState("disabled"), documents_count: 0, facts: [], reason}});
+    render(<StockAttributionPanel symbol="600825" defaultExpanded concise={mode === "concise"}/>);
+    const summary = await screen.findByLabelText(mode === "concise" ? "公司资料与判读状态摘要" : "公司资料与判读状态");
+    const statusText = within(summary).getByRole("note").textContent;
+    expect(statusText).toBe("尚无可读取的公司依据");
+    expect(statusText).not.toMatch(/新|旧|停用|TradingAgents|失败|等待|排队|成功|完成/);
+    if (mode === "concise") fireEvent.click(screen.getByRole("button", {name: "公司依据、完整传导与相关消息"}));
+    const details = within(screen.getByLabelText("公司资料与判读状态")).getByText("查看资料处理记录").closest("details")!;
+    expect(details.open).toBe(false);
+    fireEvent.click(within(details).getByText("查看资料处理记录"));
+    expect(details.open).toBe(true);
+    expect(details.textContent).toContain(reason);
+    expect(screen.queryByLabelText("AI经营传导假设")).toBeNull();
+    expect(getStockAttribution).toHaveBeenCalledTimes(1);
+    expect(getEventAttribution).not.toHaveBeenCalled();
   });
 
   it("concise selected-stock reader shows a bound company explanation immediately and keeps every original behind one disclosure", async () => {

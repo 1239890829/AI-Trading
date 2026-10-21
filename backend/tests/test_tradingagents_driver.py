@@ -561,6 +561,37 @@ def test_receipt_survives_output_capture_failure_and_preserves_known_finish(tmp_
     asyncio.run(run())
 
 
+@pytest.mark.parametrize("usage,reason", [
+    ({"input_tokens": 152010, "output_tokens": 288, "cached_input_tokens": 75776,
+      "cache_write_input_tokens": 0, "reasoning_output_tokens": 77}, None),
+    ({"input_tokens": 17, "output_tokens": 3, "cached_input_tokens": 18}, "cache_tokens_exceed_input"),
+    ({"input_tokens": 17, "output_tokens": 3, "total_tokens": 20}, "unsupported_usage_field"),
+    ({"input_tokens": 17, "output_tokens": True}, "noninteger_token_count"),
+])
+def test_receipt_keeps_terminal_numeric_evidence_before_database_failure(tmp_path, usage, reason):
+    path = tmp_path / "usage-receipts/1.json"
+    class Observed(Typed):
+        def infer(self, *args, **kwargs):
+            return {**super().infer(*args, **kwargs), "usage": usage}
+    class Locked(Budget):
+        def finish(self, key, **row):
+            saved = json.loads(path.read_text())
+            observed = saved["usage_observation"]
+            assert observed["version"] == 1 and observed["projection_rejection"] == reason
+            assert observed["numeric_fields"]["input_tokens"] == usage["input_tokens"]
+            assert saved["usage_known"] is (reason is None)
+            assert row["usage"] == (usage if reason is None else None)
+            raise sqlite3.OperationalError("database is locked")
+    async def run():
+        typed, budget = Observed(), Locked()
+        with pytest.raises(sqlite3.OperationalError, match="database is locked"):
+            await native(tmp_path, typed)._infer_accounted(Recorder(), budget,
+                [{"role": "user", "content": "PRIVATE_REQUEST_MUST_NOT_BE_SAVED"}], build_cli_schema(),
+                "Fundamentals Analyst", 1, usage_receipt_path=path, method_sha256="f" * 64)
+        assert typed.calls == 1 and "PRIVATE_REQUEST" not in path.read_text()
+    asyncio.run(run())
+
+
 @pytest.mark.parametrize("verified", [True, False, "untyped"])
 def test_failed_transport_journal_never_promotes_unverified_usage(tmp_path, verified):
     path = tmp_path / "usage-receipts/1.json"
@@ -586,6 +617,29 @@ def test_failed_transport_journal_never_promotes_unverified_usage(tmp_path, veri
         assert saved["usage"] == (usage if verified is True else None)
         assert saved["output_sha256"] is None and budget.unknown is (verified is not True)
         assert "NEVER_SAVE_CONTEXT" not in path.read_text()
+    asyncio.run(run())
+
+
+def test_observed_timeout_counts_are_retained_without_promoting_unverified_stream(tmp_path):
+    usage = {"input_tokens": 17, "output_tokens": 3, "cache_write_input_tokens": 0}
+    class Unverified(Typed):
+        def infer(self, *args, **kwargs):
+            super().infer(*args, **kwargs)
+            raise TransportError({"kind": "timeout", "usage_evidence": "single_final_turn_not_established"},
+                                 observed_terminal_usage=usage)
+    async def run():
+        path = tmp_path / "usage-receipts/1.json"
+        typed, budget = Unverified(), Budget()
+        with pytest.raises(TransportError, match="timeout"):
+            await native(tmp_path, typed)._infer_accounted(Recorder(), budget,
+                [{"role": "user", "content": "fixture"}], build_cli_schema(), "Bull Researcher", 1,
+                usage_receipt_path=path, method_sha256="f" * 64)
+        saved = json.loads(path.read_text())
+        assert saved["usage"] is None and not saved["usage_known"] and budget.unknown
+        assert saved["usage_observation"]["numeric_fields"] == usage
+        assert saved["usage_observation"]["projection_rejection"] is None
+        assert saved["usage_observation"]["terminal_evidence"] == "single_final_turn_not_established"
+        assert typed.calls == 1 and budget.events[-1][1]["usage"] is None
     asyncio.run(run())
 
 
