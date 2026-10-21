@@ -1,24 +1,26 @@
 """Explicit, evidence-gated full TradingAgents research in the existing task runtime.
 
-This is a consumer boundary, not another graph, scheduler or model router. The
-reviewed native driver is supplied by the application; there is no fake fallback.
+This is a consumer boundary, not another graph, task system or model router. The
+native driver is supplied by the application; there is no fake fallback.
 Ordinary reads never collect evidence, reserve budget or call that driver.
 """
 from __future__ import annotations
 
-from datetime import datetime
+from datetime import datetime, timezone
 import hashlib
 import json
 from pathlib import Path
 import re
+import uuid
 
 from sqlalchemy import case, func, select
 
 from app.core.bjtime import beijing_now
-from app.core.config import settings
+from app.core.config import TRADINGAGENTS_SELECTED_MODEL, settings
 from app.core.db import get_session_factory
 from app.models.agent import AgentTask
 from app.services import agent_budget
+from app.events.company_state import atomic_json
 
 ROOT = Path(__file__).resolve().parents[2] / "data" / "tradingagents_research"
 REQUIRED_MODEL_SLOTS = 22
@@ -137,6 +139,28 @@ def _quality(app) -> tuple[dict, list[dict]]:
     if identity is None:
         blockers.append({"code": "driver_unavailable", "message": "完整原图执行器尚未安装或版本无法核实；不会用简化流程替代。"})
     admitted = {"state": "not_admitted", "method_sha256": _digest(identity) if identity else None}
+    if settings.tradingagents_research_authorization_digest:
+        try:
+            artifact, actual = _read_bound(ROOT / "authorization.json")
+            created, until = (_clock(artifact[key]) for key in ("created_at", "valid_until"))
+            transport = (identity or {}).get("transport", {})
+            if (actual != settings.tradingagents_research_authorization_digest
+                    or not created <= _now() < until or artifact.get("version") != 1
+                    or artifact.get("mode") != "RESEARCH_ONLY_AUTHORIZED"
+                    or artifact.get("consumer") != "selected_stock_explanation"
+                    or artifact.get("user_authorization") != "EXPLICIT"
+                    or artifact.get("net_gain_verified") is not False
+                    or artifact.get("production_eligible") is not False
+                    or identity is None or artifact.get("method_identity") != identity
+                    or transport.get("provider") != "codex_cli"
+                    or transport.get("model") != TRADINGAGENTS_SELECTED_MODEL or transport.get("effort") != "medium"):
+                raise ValueError("selected research authorization mismatch")
+            admitted = {"state": "research_only_authorized", "method_sha256": _digest(identity),
+                        "artifact_sha256": actual, "valid_until": artifact["valid_until"],
+                        "net_gain_verified": False, "production_eligible": False}
+        except (OSError, ValueError, TypeError, KeyError):
+            blockers.append({"code": "research_not_authorized", "message": "准确版本的选股后研究授权缺失、失效或漂移；没有冒充效果准入。"})
+        return admitted, blockers
     try:
         expected = settings.tradingagents_research_admission_digest
         if not re.fullmatch(r"[0-9a-f]{64}", expected):
@@ -159,29 +183,104 @@ def _quality(app) -> tuple[dict, list[dict]]:
     return admitted, blockers
 
 
+def selected_bindings(session_factory=None) -> dict[str, dict]:
+    """Current daily/top membership; first recorded entry identifies the paid observation.
+
+    Theme participants, reference ladders, audit-only rows and historical notices
+    do not grant this narrower consumer identity. No source or model is touched.
+    """
+    from app.models.daily_pick import DailyPickSet
+    from app.models.opportunity_learning import OpportunityDecisionRun as Run, OpportunityDecisionSnapshot as Snapshot
+    from app.picks.selection_entry import intraday_entries
+
+    sf, now = session_factory or get_session_factory(), _now()
+    day = now.date().isoformat()
+    current = now.replace(tzinfo=None)
+    cutoff = now.astimezone(timezone.utc).replace(tzinfo=None)
+    active, first = set(), {}
+    def remember(symbol, entry):
+        if not isinstance(entry, dict) or entry.get("state") not in {"recorded", "partial"}:
+            return
+        try:
+            at = _clock(entry["selected_at"])
+            if (at.astimezone(now.tzinfo).date().isoformat() != day or at > now
+                    or not isinstance(entry.get("source_version"), str) or not entry["source_version"]
+                    or entry.get("source") not in {"daily_generation", "intraday_rank_archive"}):
+                return
+        except (KeyError, ValueError, TypeError):
+            return
+        value = {"symbol": symbol, "trade_date": day, "selected_at": at.isoformat(),
+                 "source": entry.get("source"), "source_version": entry["source_version"]}
+        if symbol not in first or _clock(first[symbol]["selected_at"]) > at:
+            first[symbol] = value
+    with sf() as db:
+        daily = db.scalar(select(DailyPickSet).where(DailyPickSet.date == day, DailyPickSet.created_at <= cutoff))
+        if daily:
+            try:
+                items, meta = json.loads(daily.items or "[]"), json.loads(daily.meta or "{}")
+                if isinstance(items, list) and isinstance(meta, dict):
+                    generated = _clock(meta.get("generated_at"))
+                    from app.services.selection_notifications import daily_selection_version
+                    if (generated <= now and generated.astimezone(now.tzinfo).date().isoformat() == day
+                            and meta.get("selection_version") == daily_selection_version(day, meta["generated_at"], items)):
+                        active.update(item["symbol"] for item in items if isinstance(item, dict)
+                                      and isinstance(item.get("symbol"), str) and re.fullmatch(r"[0-9]{6}", item["symbol"]))
+                    entries = meta.get("selection_entries", {})
+                    for symbol, entry in entries.items() if isinstance(entries, dict) else []:
+                        remember(symbol, entry)
+            except (ValueError, TypeError):
+                pass
+        run = db.scalar(select(Run).where(Run.trade_date == day, Run.scenario == "intraday_opportunity",
+            Run.as_of <= current).order_by(Run.as_of.desc(), Run.run_id.desc()).limit(1))
+        if run and run.data_state == "ready":
+            safe = case((func.json_valid(Snapshot.evidence), Snapshot.evidence), else_="{}")
+            active.update(db.scalars(select(Snapshot.symbol).where(Snapshot.run_id == run.run_id,
+                Snapshot.trade_date == day, Snapshot.as_of == run.as_of, Snapshot.scenario == run.scenario,
+                Snapshot.stage == "rank", Snapshot.decision == "ranked", Snapshot.data_state == "ready",
+                Snapshot.created_at <= cutoff, Snapshot.rank >= 1,
+                func.json_extract(safe, "$.selection_entry_contract") == "selection-entry-v1",
+                func.json_type(safe, "$.within_display_capacity") == "true",
+                func.json_type(safe, "$.effective_limit") == "integer",
+                Snapshot.rank <= func.json_extract(safe, "$.effective_limit"))).all())
+    active = {symbol for symbol in active if isinstance(symbol, str) and re.fullmatch(r"[0-9]{6}", symbol)}
+    for symbol, entry in intraday_entries(day, active, session_factory=sf).items():
+        remember(symbol, entry)
+    return {symbol: {**first[symbol], "selection_key": _digest(first[symbol])}
+            for symbol in sorted(active) if symbol in first}
+
+
 def preflight(symbol: str, app, *, session_factory=None) -> dict:
     """Read-only snapshot. Original reserve/start still owns concurrency admission."""
     validate_params({"symbol": symbol})
     admission, blockers = _quality(app)
-    budget = None
+    budget, selection = None, None
     try:
         sf = session_factory or get_session_factory()
         summary = agent_budget.budget_status(sf)
+        research_only = bool(settings.tradingagents_research_authorization_digest)
+        selection = selected_bindings(sf).get(symbol) if research_only else None
+        if research_only:
+            budget = {"date": summary["date"], "limit": None, "remaining": None,
+                      "used": summary["selected_research_used"], "scope": agent_budget.SCOPE_SELECTED_RESEARCH_LLM}
+            if selection is None:
+                blockers.append({"code": "not_selected", "message": "本股不在今日真实入选名单或首次入选证据未记录；不对候选/参考股自动研究。"})
         remaining = max(0, summary["llm_budget"] - summary["llm_used"])
-        budget = {"date": summary["date"], "limit": summary["llm_budget"],
+        if not research_only:
+            budget = {"date": summary["date"], "limit": summary["llm_budget"],
                   "used": summary["llm_used"], "remaining": remaining,
                   "scope": agent_budget.SCOPE_AUTONOMY_LLM}
         try:
             agent_budget.ensure_model_usage_known(sf, date=summary["date"])
         except agent_budget.BudgetError:
             blockers.append({"code": "usage_unknown", "message": "今日共享模型用量尚未核实；不得重新调用或换通道。"})
-        if remaining < REQUIRED_MODEL_SLOTS:
+        if not research_only and remaining < REQUIRED_MODEL_SLOTS:
             blockers.append({"code": "budget_insufficient", "message": f"完整图至少需{REQUIRED_MODEL_SLOTS}次可用模型余量，当前只有{remaining}次；未启动半图。"})
     except Exception:
         blockers.append({"code": "budget_unavailable", "message": "模型预算事实暂不可读取；未将不可用当作有余额。"})
     return {"symbol": symbol, "enabled": bool(settings.tradingagents_research_enabled),
             "executable": not blockers, "blockers": blockers,
-            "required_model_slots": REQUIRED_MODEL_SLOTS, "budget": budget,
+            "required_model_slots": None if settings.tradingagents_research_authorization_digest else REQUIRED_MODEL_SLOTS, "budget": budget,
+            "selection": selection,
             "preflight_reserves_budget": False,
             "admission": admission, "verification": VERIFICATION, "production_eligible": False,
             "flow": {"roles": list(ROLES), "reports": list(REPORTS), "upstream_sha": UPSTREAM_SHA}}
@@ -228,7 +327,23 @@ def _latest(symbol: str) -> dict | None:
         # accidentally turn context, request logs or host paths into API fields.
         keys = ("version", "state", "symbol", "run_id", "generated_at", "as_of", "upstream_sha",
                 "input_sha256", "method_sha256", "verification", "production_eligible", "reports", "review_state")
-        return {**{key: result[key] for key in keys},
+        selected = {}
+        if "authorization_mode" in result:
+            binding = result.get("selection", {})
+            if (result["authorization_mode"] != "RESEARCH_ONLY_AUTHORIZED"
+                    or result.get("net_gain_verified") is not False
+                    or not isinstance(binding, dict) or binding.get("symbol") != symbol
+                    or binding.get("source") not in {"daily_generation", "intraday_rank_archive"}
+                    or not isinstance(binding.get("source_version"), str) or not binding["source_version"]
+                    or _clock(binding.get("selected_at")) > as_of
+                    or not re.fullmatch(r"[0-9a-f]{64}", binding.get("selection_key", ""))
+                    or binding["selection_key"] != _digest({key: binding[key] for key in (
+                        "symbol", "trade_date", "selected_at", "source", "source_version")})):
+                return None
+            selected = {"authorization_mode": "RESEARCH_ONLY_AUTHORIZED", "net_gain_verified": False,
+                        "selection": {key: binding[key] for key in (
+                            "symbol", "trade_date", "selected_at", "source", "source_version", "selection_key")}}
+        return {**{key: result[key] for key in keys}, **selected,
                 "review_summary": {key: review[key] for key in (
                     "finite_failures", "peer_review_required", "source_verified", "independent_human_gold")},
                 "generated_today": generated.astimezone(_now().tzinfo).date() == _now().date()}
@@ -280,7 +395,7 @@ async def run_research(rec, params: dict, app) -> dict:
     await rec.checkpoint_async()
     driver = _driver(app)
     try:
-        same_method = _digest(driver.method_identity()) == admitted["admission"]["method_sha256"]
+        same_method = _digest(await agent_tasks._db_thread(driver.method_identity)) == admitted["admission"]["method_sha256"]
     except Exception:
         same_method = False
     if not same_method or not callable(getattr(driver, "run_accounted", None)):
@@ -288,7 +403,145 @@ async def run_research(rec, params: dict, app) -> dict:
                                 "message": "完整原图的逐调用执行接口未就绪或版本已变；未调用任何模型。"}])
     # This contract must be provided by the real full-graph adapter. No fake
     # fallback, direct CLI launch or model-budget bypass exists in this module.
-    return await driver.run_accounted(rec=rec, params=dict(params), app=app,
-                                      budget=agent_budget, store_root=ROOT,
-                                      required_model_slots=REQUIRED_MODEL_SLOTS,
-                                      verification=VERIFICATION)
+    if admitted["admission"]["state"] != "research_only_authorized":
+        return await driver.run_accounted(rec=rec, params=dict(params), app=app,
+                                          budget=agent_budget, store_root=ROOT,
+                                          required_model_slots=REQUIRED_MODEL_SLOTS,
+                                          verification=VERIFICATION)
+    from app.services.company_evidence import worker_lease
+    binding = admitted["selection"]
+    claim = _selection_claim(binding, admitted["admission"]["method_sha256"])
+    # One cross-process execution owner. A queued task is not authority to
+    # regenerate a paid answer or replace a failed/unknown native checkpoint.
+    with worker_lease(ROOT / "selected-execution"):
+        prior = await agent_tasks._db_thread(lambda: _read(claim) if claim.exists() else None)
+        if prior and prior.get("state") == "completed":
+            return await agent_tasks._db_thread(_completed_selection, prior, binding)
+        if prior and (prior.get("state") not in {"dispatching", "queued"}
+                      or prior.get("task_id") not in {None, rec.task_id}):
+            raise ResearchBlocked([{"code": "selection_needs_recovery", "message": "这次真实入选已有执行或失败/未知记录；保留原任务，不能自动重新付费。"}])
+        await agent_tasks._db_thread(_write_selection_claim, claim, binding, admitted["admission"]["method_sha256"],
+                                     "running", task_id=rec.task_id)
+        try:
+            result = await driver.run_accounted(rec=rec, params=dict(params), app=app,
+                budget=agent_budget, store_root=ROOT, required_model_slots=None, verification=VERIFICATION,
+                selection_binding=binding)
+            # Validate the real published artifact, not just a driver's return text.
+            published = await agent_tasks._db_thread(_read_bound, _folder(binding["symbol"]) / result["run_id"] / "result.json")
+            if (published[0].get("state") != "completed" or published[0].get("symbol") != binding["symbol"]
+                    or published[0].get("method_sha256") != admitted["admission"]["method_sha256"]
+                    or published[0].get("selection") != binding
+                    or published[0].get("authorization_mode") != "RESEARCH_ONLY_AUTHORIZED"
+                    or published[0].get("net_gain_verified") is not False
+                    or published[0].get("production_eligible") is not False):
+                raise ValueError("selected result identity mismatch")
+            await agent_tasks._db_thread(_write_selection_claim, claim, binding, admitted["admission"]["method_sha256"],
+                "completed", task_id=rec.task_id, run_id=result["run_id"], result_sha256=published[1])
+            return result
+        except BaseException:
+            # Use the task runner's drain discipline even when cancellation has
+            # arrived; the claim prevents a later quote/date refresh from retrying.
+            from app.services.tradingagents_driver import drain_thread
+            await drain_thread(_write_selection_claim, claim, binding, admitted["admission"]["method_sha256"],
+                               "needs_recovery", task_id=rec.task_id)
+            raise
+
+
+def _selection_claim(binding, method_sha):
+    key = _digest({"selection_key": binding["selection_key"], "method_sha256": method_sha})
+    return _folder(binding["symbol"]) / ("selection-" + key + ".json")
+
+
+def _write_selection_claim(path, binding, method_sha, state, *, task_id=None, dispatch_owner=None, **extra):
+    from app.services.company_evidence import worker_lease
+    with worker_lease(ROOT / "selection-claims"):
+        prior = _read(path) if path.exists() else None
+        if state == "dispatching":
+            if prior is not None:
+                return False  # Absent-CAS: a manual execution may have won after the scheduler's read.
+            if not dispatch_owner:
+                raise ValueError("dispatch owner required")
+        elif state in {"queued", "dispatch_unknown"}:
+            if (not prior or prior.get("state") != "dispatching" or not dispatch_owner
+                    or prior.get("dispatch_owner") != dispatch_owner):
+                return False  # Only this unstarted dispatch can advance; never downgrade real execution.
+        path.parent.mkdir(parents=True, exist_ok=True)
+        atomic_json(path, {"version": 1, "selection": binding, "method_sha256": method_sha,
+                           "state": state, "task_id": task_id,
+                           "dispatch_owner": dispatch_owner or (prior or {}).get("dispatch_owner"),
+                           "updated_at": _now().isoformat(), **extra})
+        return True
+
+
+def _completed_selection(prior, binding):
+    try:
+        if prior.get("selection", {}).get("selection_key") != binding["selection_key"]:
+            raise ValueError("selection drift")
+        run_id = prior["run_id"]
+        if not isinstance(run_id, str) or not re.fullmatch(r"[0-9a-f]{32}", run_id):
+            raise ValueError("invalid run")
+        value, digest = _read_bound(_folder(binding["symbol"]) / run_id / "result.json")
+        if (digest != prior.get("result_sha256") or value.get("symbol") != binding["symbol"]
+                or value.get("state") != "completed" or value.get("method_sha256") != prior.get("method_sha256")
+                or value.get("selection") != binding or value.get("net_gain_verified") is not False
+                or value.get("authorization_mode") != "RESEARCH_ONLY_AUTHORIZED"
+                or value.get("production_eligible") is not False
+                or set(value.get("reports", {})) != set(REPORTS)):
+            raise ValueError("completed artifact drift")
+        return {"kind": "tradingagents_research", "state": "completed", "symbol": binding["symbol"],
+                "run_id": run_id, "reused_identical_selection": True, "production_eligible": False}
+    except (OSError, ValueError, KeyError, TypeError):
+        raise ResearchBlocked([{"code": "selection_needs_recovery", "message": "原入选报告无法核实，保留旧记录；未重新调用模型。"}]) from None
+
+
+async def scheduler_tick(app):
+    """Drain actual selected stocks through the existing single task runtime.
+
+    No daily count quota and no model on reads. Durable claims retain dispatch
+    uncertainty and failures; new snapshots are not new paid observations.
+    """
+    from app.services import agent_tasks
+    from app.services.company_evidence import worker_lease
+    admission, blockers = await agent_tasks._db_thread(_quality, app)
+    if blockers or admission["state"] != "research_only_authorized":
+        return
+    sf = get_session_factory()
+    try:
+        await agent_tasks._db_thread(agent_budget.ensure_model_usage_known, sf)
+    except agent_budget.BudgetError:
+        return
+    lease = worker_lease(ROOT / "selected-dispatch")
+    try:
+        lease.__enter__()
+    except RuntimeError:
+        return  # Another process already owns this short dispatch stage.
+    try:
+        if await agent_tasks._db_thread(_task_active, sf):
+            return
+        for binding in (await agent_tasks._db_thread(selected_bindings, sf)).values():
+            claim = _selection_claim(binding, admission["method_sha256"])
+            if await agent_tasks._db_thread(claim.exists):
+                continue
+            dispatch_owner = uuid.uuid4().hex
+            owned = await agent_tasks._db_thread(_write_selection_claim, claim, binding,
+                admission["method_sha256"], "dispatching", dispatch_owner=dispatch_owner)
+            if not owned:
+                continue
+            try:
+                task = await agent_tasks.create_task_async("tradingagents_research", {"symbol": binding["symbol"]}, created_by="scheduler")
+                await agent_tasks._db_thread(_write_selection_claim, claim, binding, admission["method_sha256"],
+                    "queued", task_id=task["id"], dispatch_owner=dispatch_owner)
+            except BaseException:
+                from app.services.tradingagents_driver import drain_thread
+                await drain_thread(_write_selection_claim, claim, binding, admission["method_sha256"],
+                                   "dispatch_unknown", dispatch_owner=dispatch_owner)
+                raise
+            return
+    finally:
+        lease.__exit__(None, None, None)
+
+
+def _task_active(sf):
+    with sf() as db:
+        return bool(db.scalar(select(AgentTask.id).where(AgentTask.type == "tradingagents_research",
+                            AgentTask.status.in_(("queued", "running"))).limit(1)))

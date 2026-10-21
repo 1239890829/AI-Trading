@@ -335,9 +335,9 @@ class TencentProvider:
         await self._snapshot_reads.close()
         await self._client.aclose()
 
-    async def _snapshot(self, symbols: list[str]) -> dict[str, tuple[str, list[str]]]:
+    async def _raw_snapshot(self, symbols: list[str]) -> list[tuple[str, str, list[str]]]:
         if not symbols:
-            return {}
+            return []
         codes = tuple(dict.fromkeys(to_tencent_symbol(s) for s in symbols))
         key = ("tencent.raw-snapshot", tuple(sorted(codes)))
         requested = set(codes)
@@ -357,10 +357,17 @@ class TencentProvider:
             found = _ROW_RE.findall(resp.content.decode("gbk", errors="replace"))
             if not found:
                 raise ProviderError("tencent snapshot empty reply")
-            return {prefix + code: (prefix, fields) for prefix, code, raw in found
-                    if (fields := raw.split("~"))}
+            return [(prefix, code, fields) for prefix, code, raw in found
+                    if (fields := raw.split("~"))]
 
-        by_code = await self._snapshot_reads.read(key, load)
+        rows = await self._snapshot_reads.read(key, load)
+        owner_requested = set(key[1])
+        # 复用上位请求时略去其合法额外标的；源头擅自加入的行仍交身份门核验。
+        return [(prefix, code, fields) for prefix, code, fields in rows
+                if prefix + code in requested or prefix + code not in owner_requested]
+
+    async def _snapshot(self, symbols: list[str]) -> dict[str, tuple[str, list[str]]]:
+        by_code = {prefix + code: (prefix, fields) for prefix, code, fields in await self._raw_snapshot(symbols)}
         # key 用调用方传入的原始 symbol：个股（裸 6 位）与指数（sh000001 等带前缀）
         # 都能命中。旧实现 key 是响应里的裸代码，带前缀查询永远 miss——
         # 表现为"tencent snapshot no rows"假象而非"不支持"，2026-08-31 修复。
@@ -392,17 +399,13 @@ class TencentProvider:
         return quotes[0] if quotes else None
 
     async def get_indices(self) -> list[Quote]:
-        # 指数用全量快照（s_ 简版字段不同，复用同一解析）
-        codes = ",".join(c.removeprefix("s_") for c in INDEX_SECIDS)
-        resp = await self._client.get(f"https://qt.gtimg.cn/q={codes}")
-        if resp.status_code != 200:
-            raise ProviderError(f"tencent indices HTTP {resp.status_code}")
-        text = resp.content.decode("gbk", errors="replace")
+        # 与详情/盘口复用同一在飞原始快照；完成后不缓存价格。
+        codes = [code.removeprefix("s_") for code in INDEX_SECIDS]
+        rows = await self._raw_snapshot(codes)
         quotes = []
-        for prefix, code, raw in _ROW_RE.findall(text):
-            fields = raw.split("~")
+        for prefix, code, fields in rows:
             q = parse_quote(prefix, fields)
-            q.symbol = code
+            q.symbol = code  # 重复行保留给Hub原身份门，不在共享层折成最后一条。
             quotes.append(q)
         if not quotes:
             raise ProviderError("tencent indices empty reply")

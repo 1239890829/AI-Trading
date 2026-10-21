@@ -9,9 +9,9 @@ Finite budgets reserve a numbered slot under a DB unique constraint.  Competing 
 race, but only one can commit the last slot.  A reservation is started immediately before external
 I/O or an autonomous action.  Unstarted stale reservations can be deleted and reused; a started
 row is never silently released because the external side effect may already have happened.
-Unlimited alert triage still reserves a durable receipt, with no numbered slot. Unknown token usage
-is never represented as zero. A started autonomous/triage model receipt with unknown usage blocks
-later model reservations in both scopes for the same Beijing day (fail closed).
+Unlimited alert triage and authorized selected-stock research still reserve durable receipts,
+with no numbered slot. Unknown token usage is never represented as zero. A started model receipt
+with unknown usage blocks later reservations in all model scopes for the same Beijing day.
 """
 from __future__ import annotations
 
@@ -28,13 +28,14 @@ from app.models.agent import AgentResourceUsage
 
 SCOPE_AUTONOMY_LLM = "autonomy_llm"
 SCOPE_ALERT_TRIAGE_LLM = "alert_triage_llm"
+SCOPE_SELECTED_RESEARCH_LLM = "selected_research_llm"
 SCOPE_AUTONOMY_TASK = "autonomy_task"
 SCOPE_CODE_PROPOSAL = "code_proposal"
 SCOPE_TELEMETRY = "telemetry"
 
 _STARTED_OR_TERMINAL = {"started", "succeeded", "failed", "canceled", "unknown"}
 _TERMINAL = {"succeeded", "failed", "canceled", "unknown"}
-_MODEL_BUDGET_SCOPES = {SCOPE_AUTONOMY_LLM, SCOPE_ALERT_TRIAGE_LLM}
+_MODEL_BUDGET_SCOPES = {SCOPE_AUTONOMY_LLM, SCOPE_ALERT_TRIAGE_LLM, SCOPE_SELECTED_RESEARCH_LLM}
 
 
 class BudgetError(RuntimeError):
@@ -48,6 +49,8 @@ def _today() -> str:
 
 
 def _limit_for(scope: str) -> int | None:
+    if scope == SCOPE_SELECTED_RESEARCH_LLM:
+        return None  # Explicit selected-stock research authorization removes only the daily count cap.
     if scope == SCOPE_AUTONOMY_LLM:
         return max(0, int(settings.agent_daily_llm_budget))
     if scope == SCOPE_ALERT_TRIAGE_LLM:
@@ -141,7 +144,7 @@ def ensure_model_usage_known(session_factory=None, *, date: str | None = None) -
     if _unknown_usage_exists(sf, date or _today()):
         raise BudgetError(
             "usage_unknown",
-            "今日已有自主或告警判读模型调用的 token 用量未知；拒绝继续消耗，须先核实/跨日恢复",
+            "今日已有模型调用的 token 用量未知；拒绝继续消耗，须先核实/跨日恢复",
         )
 
 
@@ -183,11 +186,13 @@ def reserve(
 ) -> dict:
     """Reserve a durable receipt; finite daily slots are atomic across processes.
 
-    Both model-budget scopes refuse a new call when either has a started receipt with unknown
-    token usage. Unlimited triage removes only the daily count ceiling, not model-call limits or
-    durable reservation/start/finish accounting.
+    All model scopes refuse a new call when any has a started receipt with unknown token usage.
+    Unlimited scopes remove only the daily count ceiling, not model-call limits or durable
+    reservation/start/finish accounting.
     """
     sf = session_factory or get_session_factory()
+    if scope == SCOPE_SELECTED_RESEARCH_LLM and (kind != "model" or not purpose.startswith("tradingagents.")):
+        raise ValueError("selected research scope is reserved for complete TradingAgents model calls")
     recover_stale_reservations(sf)
     limit = _limit_for(scope)
     if scope == SCOPE_TELEMETRY:
@@ -293,7 +298,7 @@ def start(usage_id: str, session_factory=None) -> dict:
             if row is not None and row.state == "reserved" and row.scope in _MODEL_BUDGET_SCOPES:
                 raise BudgetError(
                     "usage_unknown",
-                    "今日已有自主或告警判读模型调用的 token 用量未知；拒绝继续消耗，须先核实/跨日恢复",
+                    "今日已有模型调用的 token 用量未知；拒绝继续消耗，须先核实/跨日恢复",
                 )
             raise BudgetError("reservation_lost", "预算预留已失效或被回收；拒绝启动")
         db.commit()
@@ -448,6 +453,8 @@ def budget_status(session_factory=None, *, date: str | None = None) -> dict:
     return {
         "date": date,
         "llm_used": len(llm),
+        "selected_research_used": sum(r.scope == SCOPE_SELECTED_RESEARCH_LLM for r in rows),
+        "selected_research_budget": None,
         "llm_budget": llm_limit,
         "llm_exhausted": len(llm) >= llm_limit,
         "llm_reserved": sum(r.state == "reserved" for r in llm),

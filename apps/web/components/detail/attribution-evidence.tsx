@@ -12,6 +12,7 @@ import {limitReasonView, matchSourceReason} from "@/lib/limit-reason-view";
 import {ReaderBrief, ResearchDisclosure} from "@/components/ui/reader-brief";
 import {readerExcerpt, readerCautions} from "@/lib/reader-copy";
 import {ModalShell} from "@/components/ui/modal-shell";
+import {SelectionDecisionExplorer, type SelectionSummary, type SelectionDecisionEvent} from "./selection-decision-explorer";
 
 /** A primary clue must bind a saved source and its exact interpretation. */
 function boundPrimaryItem(data: StockAttributionPayload): AttributionEvidenceItem | null {
@@ -448,7 +449,7 @@ function AttributionItems({items, laterItems = [], responseContext = false, symb
 }
 
 /** Toolbar reads only on open; visible reason fallbacks read once, with no polling. */
-export const StockAttributionPanel = memo(function StockAttributionPanel({symbol, eventId, active = true, title = "驱动线索", defaultExpanded = false, bounded = true, selectedAt, recordedRefs, selectionContext = false, defaultSourceExpanded = false, poolDate, responseAsOf, primarySummary = false, inlinePrimary = false, sourceReason, sourceCore, sourceAudit, concise = false}: {
+export const StockAttributionPanel = memo(function StockAttributionPanel({symbol, eventId, active = true, title = "驱动线索", defaultExpanded = false, bounded = true, selectedAt, recordedRefs, selectionContext = false, defaultSourceExpanded = false, poolDate, responseAsOf, primarySummary = false, inlinePrimary = false, sourceReason, sourceCore, sourceAudit, concise = false, selectionSummary}: {
   symbol?: string | null; eventId?: number | null; active?: boolean; title?: string; defaultExpanded?: boolean; bounded?: boolean;
   selectedAt?: string | null; recordedRefs?: EventInterpretationRef[];
   selectionContext?: boolean; defaultSourceExpanded?: boolean;
@@ -457,6 +458,7 @@ export const StockAttributionPanel = memo(function StockAttributionPanel({symbol
   sourceCore?: string; sourceAudit?: ReactNode;
   /** Selected-stock readers open with company evidence; reading never starts generation. */
   concise?: boolean;
+  selectionSummary?: SelectionSummary;
 }) {
   const [open, setOpen] = useState(defaultExpanded);
   const [readingCycle, setReadingCycle] = useState(0);
@@ -492,8 +494,11 @@ export const StockAttributionPanel = memo(function StockAttributionPanel({symbol
   const companyLabel = companyItems.every(item => item.company_impact?.verification === "author_source_reviewed_not_gold")
     ? "已源审经营补充（原消息窗口外）" : companyItems.every(item => item.company_impact?.verification === "automated_evidence_bound_not_gold")
       ? "自动引用约束经营补充（原消息窗口外）" : "经营研究补充（原消息窗口外）";
-  const statusAsOf = responseAsOf || data?.response_context?.response_as_of || undefined;
-  const companyStatusReading = <CompanyStatusEvidence value={data?.company_status} symbol={symbol} now={companyNow} showFacts={savedCompanyAI === 0} responseAsOf={statusAsOf}/>;
+  // A current response clock cannot repair a missing observation clock in an archived selection.
+  const statusAsOf = selectionSummary?.historical ? responseAsOf : responseAsOf || data?.response_context?.response_as_of || undefined;
+  const historicalClockUnknown = !!selectionSummary?.historical && companyClock(responseAsOf) === null;
+  const companyStatusReading = historicalClockUnknown ? <p role="note" className="text-zinc-600 dark:text-zinc-400">原提醒未保存有效资料时点，无法确认公司状态与原文当时可得；不以当前响应时刻回填。</p>
+    : <CompanyStatusEvidence value={data?.company_status} symbol={symbol} now={companyNow} showFacts={savedCompanyAI === 0} responseAsOf={statusAsOf}/>;
   const companyReading = companyItems.length > 0 && <section aria-label={companyLabel} className="min-w-0 space-y-2 py-2">
     <h4 className="font-medium">{companyLabel} · {companyItems.length} 条</h4>
     <p className="text-zinc-600 dark:text-zinc-400">当前研究补充，不替换最新消息、市场触发线索或历史入选依据。</p>
@@ -501,13 +506,40 @@ export const StockAttributionPanel = memo(function StockAttributionPanel({symbol
   </section>;
   if (concise) {
     if (!active) return null;
-    const companyResults = readItems.filter(item => boundCompanyImpact(item, symbol, companyNow) !== null);
+    const companyResults = readItems.filter(item => {
+      const company = boundCompanyImpact(item, symbol, companyNow);
+      if (!company) return false;
+      if (!selectionSummary?.historical) return true;
+      const cutoff = companyClock(statusAsOf);
+      return cutoff !== null && companyClock(company.generated_at)! <= cutoff && companyClock(company.facts_captured_at)! <= cutoff
+        && !!recordedRefs?.some(ref => ref.event_id === company.event_id && ref.version_id === company.version_id && ref.observation_id === company.observation_id);
+    });
     const currentCompany = companyResults[0];
     const currentStatus = boundCompanyStatus(data?.company_status, symbol, companyNow);
     const statusCutoff = companyClock(statusAsOf);
-    const historicalStatusExcluded = !!currentStatus && !!statusAsOf && (statusCutoff === null || companyClock(currentStatus.updated_at)! > statusCutoff);
+    const historicalStatusExcluded = !!currentStatus && (historicalClockUnknown || !!statusAsOf && (statusCutoff === null || companyClock(currentStatus.updated_at)! > statusCutoff));
     const unavailableCompany = readItems.find(item => !!item.company_impact);
     const detailsIdentity = `${identity}:${currentCompany?.company_impact?.input_sha256 || ""}:${currentCompany?.company_impact?.generated_at || ""}:${currentCompany?.company_impact?.valid_until || ""}:${currentStatus?.updated_at || ""}:${readItems.map(item => `${item.event_id}:${item.interpretation_ref.version_id}:${item.interpretation_ref.observation_id}`).join("|")}`;
+    const historicalGap = historicalClockUnknown ? "原提醒未保存有效资料时点，无法确认公司依据当时可得；后来资料未用于回填。"
+      : selectionSummary?.historical ? "原提醒时点缺少同版本公司依据，后来生成的资料未用于回填。" : null;
+    const decisionRows = selectionSummary?.historical ? readItems.filter(item => {
+      const cutoff = companyClock(statusAsOf);
+      return cutoff !== null && clock(item.timing.available_at) !== null && clock(item.timing.available_at)! <= cutoff
+        && clock(item.timing.interpretation_effective_at) !== null && clock(item.timing.interpretation_effective_at)! <= cutoff
+        && !!recordedRefs?.some(ref => ref.event_id === item.event_id && ref.version_id === item.interpretation_ref.version_id && ref.observation_id === item.interpretation_ref.observation_id);
+    }) : readItems;
+    const decisionEvents: SelectionDecisionEvent[] = decisionRows.map(item => {
+      const company = companyResults.includes(item) ? item.company_impact! : null;
+      const sourceBound = Number.isSafeInteger(item.interpretation_ref.version_id) && Number(item.interpretation_ref.version_id) > 0
+        && Number.isSafeInteger(item.interpretation_ref.observation_id) && item.interpretation_ref.observation_id === item.source_context?.observation_id;
+      return {id: `${item.event_id}:${item.interpretation_ref.version_id}:${item.interpretation_ref.observation_id}`, title: item.title,
+        relation: item.stock_relation.label, availableAt: timeLabel(item.timing.available_at),
+        source: sourceBound && item.source_context ? {title: item.source_context.title, quote: item.source_context.summary || item.source_context.title, url: sourceUrl(item.source_context.url)} : null,
+        company, status: historicalGap ? "原提醒时点的公司联系待核" : currentStatus && !historicalStatusExcluded ? COMPANY_STATES[currentStatus.state] : "公司关系待核",
+        gap: historicalGap || currentStatus?.missing[0] || "缺少本股与事件的同版本公司依据；未据此认定没有相关业务。",
+        temporalNote: company ? `资料采集 ${timeLabel(company.facts_captured_at)} · 解释生成 ${timeLabel(company.generated_at)}。${selectionSummary?.historical ? "仅使用原提醒时点之前且与原事件版本绑定的资料。" : "当前补充资料，不回填入选当时的理由。"}` : historicalGap || "来源关联仍待核，不把题材同名当作经营影响。"};
+    });
+    const otherReadingItems = readItems.filter(item => !companyResults.includes(item)).map(item => selectionSummary?.historical ? {...item, company_impact: null} : item);
     return <section aria-label={title} className="min-w-0 space-y-2 py-2 text-xs">
       <div className="flex min-h-8 flex-wrap items-center justify-between gap-2">
         <h3 className="font-medium">本股经营解读</h3>
@@ -515,7 +547,8 @@ export const StockAttributionPanel = memo(function StockAttributionPanel({symbol
       </div>
       {resource.pending && !data && <p role="status">正在读取本股已保存的解释…</p>}
       {resource.error != null && <p role="alert" className="text-amber-800 dark:text-amber-300">{data ? "读取失败，下方保留上次结果，当前状态待核。" : "本股解释读取失败，暂不能确认是否有已保存结果。"}可用“刷新依据”重试。</p>}
-      {currentCompany ? <>
+      {selectionSummary ? <SelectionDecisionExplorer key={`${identity}:${selectionSummary.version || ""}:${selectedAt || ""}`} summary={selectionSummary} events={decisionEvents} originalClock={timeLabel(selectedAt || responseAsOf)} fallback={<p>{historicalGap || (currentStatus && !historicalStatusExcluded ? `${COMPANY_STATES[currentStatus.state]}；本条事件的经营关系仍需依据。` : "尚无可读取的本股经营依据，不代表公司没有相关业务。")}</p>}/>
+        : currentCompany ? <>
         <CompanyImpactEvidence item={currentCompany} symbol={symbol} now={companyNow} compact/>
         <p className="text-zinc-600 dark:text-zinc-400">当前公司资料解释，不替换入选当时的理由。{companyResults.length > 1 ? `另有 ${companyResults.length - 1} 条本股经营解释，见完整依据。` : ""}</p>
       </> : data && <>
@@ -532,9 +565,9 @@ export const StockAttributionPanel = memo(function StockAttributionPanel({symbol
         {!!recordedRefs?.length && <details className="py-1 text-zinc-600 dark:text-zinc-400"><summary className="w-fit cursor-pointer">{selectionContext ? "选股记录事件引用" : "列表入口事件引用"}</summary><ul className="mt-1 space-y-1 [overflow-wrap:anywhere]">{recordedRefs.map((ref, index) => <li key={`${ref.event_id}:${ref.version_id}:${index}`}>事件 #{ref.event_id} · {ref.version_id ? `原解释 #${ref.version_id}` : "原版本未知"} · {timeLabel(ref.available_at)}</li>)}</ul></details>}
         {!currentCompany && companyStatusReading}
         {companyResults.map(item => <AttributionEvidence key={`${item.event_id}:${item.interpretation_ref.version_id}:${item.interpretation_ref.observation_id}`} item={item} symbol={symbol} selectedAt={selectedAt} recordedRef={recordedRefs?.find(ref => ref.event_id === item.event_id)} selectionContext={selectionContext} defaultSourceExpanded complete/>)}
-        {readItems.filter(item => !companyResults.includes(item)).length > 0 && <section aria-label="原消息与关系核对">
+        {otherReadingItems.length > 0 && <section aria-label="原消息与关系核对">
           <h4 className="font-medium">原消息与关系核对</h4>
-          <AttributionItems key={`${identity}:concise-messages`} items={readItems.filter(item => !companyResults.includes(item))} symbol={symbol} selectedAt={selectedAt} recordedRefs={recordedRefs} selectionContext={selectionContext} defaultSourceExpanded/>
+          <AttributionItems key={`${identity}:concise-messages`} items={otherReadingItems} symbol={symbol} selectedAt={selectedAt} recordedRefs={recordedRefs} selectionContext={selectionContext} defaultSourceExpanded/>
         </section>}
         {readItems.length === 0 && <p>本次读取范围未找到关联消息，不代表市场上没有相关事件。</p>}
       </ResearchDisclosure>}

@@ -28,7 +28,7 @@ vi.mock("@/hooks/use-quote-stream", () => ({
 // A fresh items array on every render repeatedly triggers the REST fallback effect.
 vi.mock("@/hooks/use-real-positions", () => ({useRealPositions: () => ({data: state.realPositions, error: null, reload: state.reloadReal})}));
 vi.mock("@/components/stock-detail", () => ({StockDetailPanel: ({symbol, chartTab, rightTab, active, realPositions, quoteFeed, watchlistMembership, onWatchlistAdded, indexQuote}: {symbol: string; chartTab?: string; rightTab?: string; active?: boolean; realPositions?: {reload: () => Promise<void>}; quoteFeed?: unknown; watchlistMembership?: boolean | null; onWatchlistAdded?: (symbol: string) => void; indexQuote?: Quote | null}) => <><div data-testid="stock-detail" data-active={String(active)} data-shared-positions={String(realPositions?.reload === state.reloadReal)} data-shared-quote-feed={String(quoteFeed === state.quoteStream.quoteFeed)} data-membership={String(watchlistMembership)} data-index-source={indexQuote === null ? "missing" : indexQuote?.source ?? "no-owner"}>{symbol}/{chartTab}/{rightTab}</div><button onClick={() => onWatchlistAdded?.(symbol)}>确认加入回执</button></>}));
-vi.mock("@/components/index-cards", () => ({IndexCards: ({onSelect, indices}: {onSelect: (symbol: string) => void; indices: Quote[]}) => <div data-testid="index-cards">指数摘要{indices.map(q => <span key={q.symbol}>{q.price}</span>)}<button onClick={() => onSelect("sh000688")}>查看科创50</button></div>}));
+vi.mock("@/components/index-cards", () => ({IndexCards: ({onSelect, indices}: {onSelect: (symbol: string) => void; indices: Quote[]}) => <div data-testid="index-cards">指数摘要{indices.map(q => <span key={q.symbol} data-testid={`index-${q.market?.toLowerCase()}${q.symbol.replace(/^(sh|sz|bj)/, "")}`} data-observation={JSON.stringify(q)}>{q.price}</span>)}<button onClick={() => onSelect("sh000688")}>查看科创50</button></div>}));
 vi.mock("@/components/detail/account-scope-panel", () => ({AccountScopePanel: ({account}: {account: string}) => <div>账户结果 {account}</div>}));
 vi.mock("@/components/picks/pick-detail-modal", () => ({PickDetailModal: ({target}: {target: {kind: string; item: {symbol: string}} | null}) => target ? <div role="dialog">{target.kind}/{target.item.symbol}</div> : null}));
 vi.mock("@/lib/api", () => ({
@@ -65,6 +65,68 @@ async function selectList(name: string) {
 }
 
 describe("B+C workbench production consumers", () => {
+  it.each([
+    {name: "午休", overviewTime: "11:30:00", overviewPrice: 3000, streamTime: "11:30:00", streamPrice: 3000, reason: "market_closed", expectedPrice: 3000},
+    {name: "新的真实源观测", overviewTime: "13:00:01", overviewPrice: 3002, streamTime: "11:30:00", streamPrice: 3000, reason: "", expectedPrice: 3002},
+    {name: "真实拒旧故障", overviewTime: "11:30:00", overviewPrice: 3000, streamTime: "11:30:00", streamPrice: 3000, reason: "source_time_regress_ignored", expectedPrice: 3000},
+    {name: "仅较新阶段上下文", overviewTime: "11:29:00", overviewPrice: 2900, streamTime: "11:30:00", streamPrice: 3001, reason: "quote_age_exceeded", expectedPrice: 3001},
+    {name: "较旧源的当前故障", overviewTime: "11:29:00", overviewPrice: 2900, streamTime: "11:30:00", streamPrice: 3001, reason: "source_time_regress_ignored", expectedPrice: 3001},
+  ])("指数以源钟和展示钟合并 $name，不按接收钟让旧WS覆盖新概览", async sample => {
+    const overviewAsOf = sample.overviewTime.startsWith("13:") ? "13:00:02" : "12:00:00";
+    const overview: Quote = {symbol: "000001", market: "SH", source: "tencent", price: sample.overviewPrice,
+      quality: sample.reason ? "stale" : "high", quality_reasons: sample.reason ? [sample.reason] : [],
+      data_timestamp: `2026-10-21T${sample.overviewTime}+08:00`, received_at: "2026-10-21T11:30:01+08:00",
+      display_session: {phase: sample.overviewTime.startsWith("13:") ? "continuous" : "closed", trade_date: "2026-10-21", trade_day_result: true,
+        as_of: `2026-10-21T${overviewAsOf}+08:00`, expected_source_date: "2026-10-21", expected_source_after: "2026-10-21T11:29:50+08:00"}};
+    const streamed: Quote = {...overview, symbol: "sh000001", price: sample.streamPrice, quality: "high", quality_reasons: [],
+      data_timestamp: `2026-10-21T${sample.streamTime}+08:00`, received_at: "2026-10-21T13:01:00+08:00",
+      display_session: {...overview.display_session!, phase: "continuous", as_of: "2026-10-21T11:30:02+08:00"}};
+    const before = JSON.stringify({overview, streamed});
+    const previous = state.quoteStream.quotes;
+    state.quoteStream.quotes = {...previous, sh000001: streamed};
+    vi.mocked(api.getMarketOverview).mockResolvedValueOnce({indices: [overview], total_amount: null, total_amount_freshness: null});
+    try {
+      render(<WorkbenchPage/>);
+      await waitFor(() => expect(api.getMarketOverview).toHaveBeenCalledTimes(1));
+      const element = await screen.findByTestId("index-sh000001");
+      const displayed = JSON.parse(element.dataset.observation!) as Quote;
+      expect(displayed.price).toBe(sample.expectedPrice);
+      expect(displayed.data_timestamp).toBe(`2026-10-21T${sample.expectedPrice === sample.overviewPrice ? sample.overviewTime : sample.streamTime}+08:00`);
+      expect(displayed.display_session?.as_of).toBe(overview.display_session!.as_of);
+      expect(displayed.display_session?.phase).toBe(overview.display_session!.phase);
+      if (sample.reason === "source_time_regress_ignored") {
+        expect(displayed.quality).toBe("stale");
+        expect(displayed.quality_reasons).toContain(sample.reason);
+      }
+      expect(JSON.stringify({overview, streamed})).toBe(before);
+    } finally {
+      state.quoteStream.quotes = previous;
+    }
+  });
+
+  it("不能把早于新源观测的概览阶段或旧故障移植给无阶段的新源帧", async () => {
+    const old: Quote = {symbol: "000001", market: "SH", source: "tencent", price: 2900, quality: "stale", quality_reasons: ["source_time_regress_ignored"],
+      data_timestamp: "2026-10-21T11:30:00+08:00", received_at: "2026-10-21T13:01:00+08:00",
+      display_session: {phase: "closed", trade_date: "2026-10-21", trade_day_result: true, as_of: "2026-10-21T12:00:00+08:00"}};
+    const newer: Quote = {...old, symbol: "sh000001", price: 3001, quality: "high", quality_reasons: [],
+      data_timestamp: "2026-10-21T13:00:01+08:00", display_session: null};
+    const previous = state.quoteStream.quotes;
+    state.quoteStream.quotes = {...previous, sh000001: newer};
+    vi.mocked(api.getMarketOverview).mockResolvedValueOnce({indices: [old], total_amount: null, total_amount_freshness: null});
+    try {
+      render(<WorkbenchPage/>);
+      const element = await screen.findByTestId("index-sh000001");
+      const displayed = JSON.parse(element.dataset.observation!) as Quote;
+      expect(displayed.price).toBe(3001);
+      expect(displayed.data_timestamp).toBe(newer.data_timestamp);
+      expect(displayed.display_session).toBeNull();
+      expect(displayed.quality).toBe("high");
+      expect(displayed.quality_reasons).toEqual([]);
+    } finally {
+      state.quoteStream.quotes = previous;
+    }
+  });
+
   it("指数卡复用同一行情连接的最新帧，不必等下一次10秒概览", async () => {
     const sh: Quote = {symbol:"000001",market:"SH",price:3000,source:"tencent",quality:"high",quality_reasons:[],received_at:"2026-10-15T10:00:00+08:00",data_timestamp:"2026-10-15T10:00:00+08:00"};
     vi.mocked(api.getMarketOverview).mockResolvedValueOnce({indices:[sh],total_amount:null,total_amount_freshness:null});

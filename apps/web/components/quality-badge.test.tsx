@@ -34,6 +34,24 @@ afterEach(cleanup);
  */
 
 describe("QualityBadge 可见性策略（唯一决策点）", () => {
+  it("午间主时段不随质量与拒旧提示交替，真实拒旧独立可见且保留原质量", () => {
+    const session = {phase: "closed" as const, trade_date: "2026-10-13", as_of: "2026-10-13T12:20:00+08:00", trade_day_result: true, expected_source_date: "2026-10-13", expected_source_after: "2026-10-13T11:29:50+08:00"};
+    const props = {session, symbol: "600519", dataTimestamp: "2026-10-13T11:30:00+08:00"};
+    const view = render(<QualityBadge {...props} quality="high" reasons={[]}/>);
+    const slot = view.container.firstElementChild;
+    expect(screen.getByText("午间休息")).toBeTruthy();
+    expect(screen.queryByText("正常")).toBeNull();
+    view.rerender(<QualityBadge {...props} quality="stale" reasons={["quote_age_exceeded"]}/>);
+    expect(view.container.firstElementChild).toBe(slot);
+    expect(screen.getByText("午间休息")).toBeTruthy();
+    expect(screen.queryByRole("img")).toBeNull();
+    view.rerender(<QualityBadge {...props} quality="stale" reasons={["source_time_regress_ignored"]}/>);
+    expect(view.container.firstElementChild).toBe(slot);
+    expect(screen.getByText("午间休息")).toBeTruthy();
+    expect(slot?.getAttribute("data-quality")).toBe("stale");
+    const problem = screen.getByRole("img", {name: "行情提示：保留可信值"});
+    expect(problem.getAttribute("title")).toContain("源返回晚到旧行情");
+  });
   it.each(["auction", "pre_open_gap"] as const)("正常%s等待仅文字变色，stale与源钟保留，真实失败仍有警告底色", phase => {
     const asOf = phase === "auction" ? "2026-10-14T09:20:00+08:00" : "2026-10-14T09:27:00+08:00";
     const props = {quality: "stale", reasons: ["quote_age_exceeded"], symbol: "sh000001", dataTimestamp: "2026-10-13T15:00:00+08:00", session: {phase, trade_date: "2026-10-14", as_of: asOf, trade_day_result: true}};
@@ -43,7 +61,8 @@ describe("QualityBadge 可见性策略（唯一决策点）", () => {
     expect(badge.getAttribute("data-quality")).toBe("stale");
     expect(badge.title).toContain("2026-10-13");
     view.rerender(<QualityBadge {...props} reasons={["quote_age_exceeded", "refresh_failed"]}/>);
-    expect(screen.getByText("刷新异常").className).not.toContain("bg-");
+    expect(screen.getByRole("img", {name: "行情提示：刷新异常"}).className).not.toContain("bg-");
+    expect(screen.getByText(phase === "auction" ? "竞价等待" : "开盘等待")).toBeTruthy();
   });
   it("high（正常）渲染为静音灰「正常」——不得静默消失，否则与「字段缺失」不可辨", () => {
     render(<QualityBadge quality="high" />);
@@ -72,13 +91,14 @@ describe("QualityBadge 可见性策略（唯一决策点）", () => {
   it("收盘日历不能把上个交易日的源故障降成静音休市", () => {
     const session = {phase: "closed" as const, trade_date: "2026-10-14", as_of: "2026-10-14T19:34:00+08:00", trade_day_result: true, expected_source_date: "2026-10-14", expected_source_after: "2026-10-14T14:59:50+08:00"};
     const view = render(<QualityBadge quality="stale" reasons={["market_closed"]} dataTimestamp="2026-10-13T15:00:00+08:00" session={session} />);
-    const warning = screen.getByText("时点待核");
+    const warning = screen.getByRole("img", {name: "行情提示：时点待核"});
+    expect(screen.getByText("已收盘")).toBeTruthy();
     expect(warning.className).not.toContain("bg-");
     expect(warning.getAttribute("data-quality")).toBe("stale");
     expect(warning.title).toContain("2026-10-13");
     view.rerender(<QualityBadge quality="stale" reasons={["market_closed"]} dataTimestamp="2026-10-14T10:00:00+08:00" session={session} />);
-    expect(screen.getByText("时点待核").className).not.toContain("bg-");
-    expect(screen.getByText("时点待核").title).toContain("10:00:00");
+    expect(screen.getByRole("img", {name: "行情提示：时点待核"}).className).not.toContain("bg-");
+    expect(screen.getByRole("img", {name: "行情提示：时点待核"}).title).toContain("10:00:00");
     view.rerender(<QualityBadge quality="stale" reasons={["market_closed"]} dataTimestamp="2026-10-14T15:00:00+08:00" session={session} />);
     const closed = screen.getByText("已收盘");
     expect(closed.className).not.not.toContain("bg-");
@@ -99,12 +119,12 @@ describe("QualityBadge 可见性策略（唯一决策点）", () => {
 
   it("闭市首次报价缺源钟保留stale警告，说明本次数值而不假称旧可信值", () => {
     const view = render(<QualityBadge quality="stale" reasons={["source_time_unknown", "market_closed"]} dataTimestamp={null} session={{phase: "closed", trade_date: "2026-10-13", as_of: "2026-10-13T19:34:00+08:00", trade_day_result: true}} />);
-    const badge = screen.getByText("时间待核");
+    const badge = screen.getByRole("img", {name: "行情提示：时间待核"});
     expect(badge.getAttribute("data-quality")).toBe("stale");
     expect(badge.getAttribute("title")).toContain("保留本次返回数值");
     expect(badge.getAttribute("title")).toContain("无法确认时点与新鲜度");
     expect(screen.queryByText("正常")).toBeNull();
-    expect(screen.queryByText("已收盘")).toBeNull();
+    expect(screen.getByText("已收盘")).toBeTruthy();
     view.rerender(<QualityBadge quality="stale" reasons={["source_time_unknown", "market_closed", "refresh_failed"]} dataTimestamp={null} />);
     expect(screen.getByText("刷新异常").getAttribute("data-quality")).toBe("stale");
   });

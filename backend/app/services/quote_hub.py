@@ -800,6 +800,45 @@ class QuoteHub:
         session = self._display_session()
         return [self._visible_quote(q, session) for q in self.indices.values()]
 
+    def present_quote(self, quote: Quote, symbol: str) -> Quote:
+        """校验单次读取身份并复用展示上下文；不写入Hub或刷新健康事实。"""
+        requested = symbol.lower()
+        prefixed = len(requested) == 8 and requested[:2] in {"sh", "sz", "bj"}
+        code = requested[2:] if prefixed else requested
+        if len(code) != 6 or not code.isdigit():
+            raise ValueError("invalid requested quote identity")
+        market = (requested[:2].upper() if prefixed else
+                  "BJ" if code.startswith(("4", "8", "920")) else
+                  "SH" if code.startswith(("6", "9", "5")) else "SZ")
+        if quote.symbol.lower() not in {code, requested} or quote.market != market:
+            raise ValueError("source quote identity mismatch")
+        previous = (self.indices.get(code) if requested in INDEX_SUBSCRIPTIONS
+                    else self.quotes.get(code))
+        if previous is not None and previous.market != market:
+            previous = None
+        # validator验证裸代码；不能把指数前缀当成非法股票代码，也不能改源对象。
+        row = quote.model_copy(update={"symbol": code, "quality_reasons": list(quote.quality_reasons)})
+        original_quality, original_reasons = row.quality, list(row.quality_reasons)
+        validate_quote(row, previous)
+        if original_quality != Quality.high:
+            if original_quality == Quality.invalid or row.quality == Quality.invalid:
+                row.quality = Quality.invalid
+            elif original_quality == Quality.stale or row.quality == Quality.high:
+                row.quality = original_quality
+            row.quality_reasons = list(dict.fromkeys(original_reasons + row.quality_reasons))
+        rejection = _rejected_source_observation(row, previous)
+        if previous is not None and rejection is not None:
+            row = previous.model_copy(update={"quality_reasons": list(previous.quality_reasons)})
+            _mark_retained_rejected(row, rejection)
+            if original_quality != Quality.high:
+                row.quality_reasons = list(dict.fromkeys(row.quality_reasons + original_reasons))
+        session = self._display_session()
+        if session.phase == "closed" and session.trade_day_result is not None:
+            _mark_confirmed_closed(row)
+        if row.quality == Quality.high and row.data_timestamp is None:
+            mark_stale(row, "source_time_unknown")
+        return self._visible_quote(row.model_copy(update={"symbol": symbol}), session)
+
     def get_quotes(self, symbols: list[str] | None = None) -> list[Quote]:
         session = self._display_session()
         # 指数兜底：带前缀查询（sh000001，指数详情链路的规范形态）归一化成裸代码查

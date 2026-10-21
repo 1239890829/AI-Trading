@@ -693,7 +693,7 @@ export const StockDetailPanel = memo(function StockDetailPanel({
 
   const qualityView = liveQuote ? quoteQualityView({quality: liveQuote.quality, reasons: liveQuote.quality_reasons,
     symbol, market: liveQuote.market, dataTimestamp: liveQuote.data_timestamp, session: liveQuote.display_session}) : null;
-  const pausedLabel = qualityView && ["已收盘", "午间休息", "未开盘", "休市", "竞价等待", "开盘等待"].includes(qualityView.label);
+  const pausedLabel = !!qualityView?.sessionLabel;
   // 首个Hub缓存快照可能尚无新订阅证券；从未见过该证券报价时不能称“恢复/保留上次”。
   // 首报仍由原REST加载/失败及Quote自身质量呈现，不把REST补价当作live恢复。
   const missingObservedQuote = active && immediateQuote === null && retainedLive !== undefined;

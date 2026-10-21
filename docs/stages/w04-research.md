@@ -160,6 +160,8 @@
 
 ## RSH-030
 
+> 2026-10-21当前授权修订：真正daily/top入选后完整Sol medium研究采用RESEARCH_ONLY_AUTHORIZED，专属scope取消固定次数/22余量门；旧LAB账和unknown保留。该身份net_gain_verified=false、production_eligible=false，只允许解释/复盘，不冒充VALIDATED或选股增益。当前运行门见语义专题同日新节，原状态与效果评价任务不改。
+
 **新闻语义、判断依据与独立效果验证**
 
 - **状态**：待条件

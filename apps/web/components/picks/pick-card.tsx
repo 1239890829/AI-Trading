@@ -8,6 +8,7 @@ import { CardEntryRow } from "@/components/picks/card-entries";
 import { LimitReason } from "@/components/detail/limit-reason";
 import {StockAttributionPanel} from "@/components/detail/attribution-evidence";
 import {TradingAgentsResearchPanel} from "@/components/detail/tradingagents-research-panel";
+import {SELECTION_SCORE_LABELS, SelectionMeasurements, SelectionScores, readSelectionMetrics} from "@/components/detail/selection-decision-explorer";
 import { useStockRowNav } from "@/components/stock-link";
 import { bjDate, fmt, formatLegacyLimitDistance, pctColor, pctText, timeTextBJ, triText } from "@/lib/format";
 import { clockOf, compareGates, gateActive, type GateComparison } from "@/lib/picks-gate";
@@ -21,6 +22,7 @@ import type {
   ExecutionDecisionContract,
   ExitDiscipline,
   IntradayTopStock,
+  SelectionMetrics,
   OpportunityStock,
   StandAsideGate,
   StopLossRef,
@@ -51,14 +53,7 @@ import type {
  * 红线 3：全部为可解释依据与条件陈述，不构成买卖建议。
  */
 
-export const SUB_LABELS: [string, string][] = [
-  ["sentiment", "情绪"],
-  ["news", "消息"],
-  ["tech", "技术"],
-  ["fundamental", "基本"],
-  ["capital", "资金"],
-  ["echelon", "梯队"],
-];
+export const SUB_LABELS: [string, string][] = SELECTION_SCORE_LABELS.map(([key, label]) => [key, label]);
 
 /** 梯队地位配色：唯一权威表在 `@/lib/role-style`（S2-10 合并，跨端由后端测试守卫）。 */
 
@@ -109,6 +104,7 @@ export interface TradingCard {
   pb: number | null;
   score: number | null;
   sub_scores: Record<string, number> | null;
+  selectionMetrics?: SelectionMetrics | null;
   dimensionEvidence?: DailyPickItem["dimension_evidence"];
   themeSources?: IntradayTopStock["theme_sources"];
   confidence: DailyPickItem["confidence"];
@@ -273,6 +269,7 @@ export function fromIntradayStock(it: IntradayTopStock | OpportunityStock): Trad
     pb: null,
     score: null,
     sub_scores: null,
+    selectionMetrics: readSelectionMetrics(it.selection_metrics),
     themeSources: "theme_sources" in it ? it.theme_sources : undefined,
     confidence: null,
     role: it.role ?? null,
@@ -404,6 +401,10 @@ export function PickCard({
         : `空仓闸门已触发：本条不给买入范围，仅供复盘与观察。${item.followReasons.join("；")}`;
 
   const reading = selectionReading(item);
+  const selectionScores = item.sub_scores ? SUB_LABELS.map(([key, label]) => ({key, label: label === "基本" ? "基本面" : label,
+    value: typeof item.sub_scores?.[key] === "number" && Number.isFinite(item.sub_scores[key]) && item.sub_scores[key] >= 0 && item.sub_scores[key] <= 100 ? item.sub_scores[key] : null, maximum: 100 as const,
+    state: item.dimensionEvidence?.[key]?.state || "unknown",
+    basis: item.dimensionEvidence?.[key]?.reason || item.basisRows.find(row => row.label === label)?.value || "原记录未保存此项依据。"})) : undefined;
   const executionState = readError && item.execution ? "stale" : item.execution?.executable_snapshot.state ?? null;
   const executionStateText =
     executionState === "ready"
@@ -427,7 +428,14 @@ export function PickCard({
       <ReaderBrief label="本次筛选考虑" facts={[{label: reading.why.endsWith("…") ? "理由节选" : "选择理由", value: reading.why}, {label: reading.limit.endsWith("…") ? "条件节选" : "失效条件", value: reading.limit}]}/>
       <p className="text-xs text-zinc-600 dark:text-zinc-400">入选依据保留原记录；下方公司资料与研究是补充，不回填当时理由。</p>
       <StockAttributionPanel symbol={item.symbol} title="相关消息与AI解读" defaultExpanded bounded={false} concise
-        selectedAt={item.selectionEntry?.selected_at} recordedRefs={item.relatedEventRefs} selectionContext/>
+        selectedAt={item.selectionEntry?.selected_at} recordedRefs={item.relatedEventRefs} selectionContext selectionSummary={{
+          reason: item.basisRows.find(row => ["入选", "来源", "联动"].includes(row.label))?.value || reading.why,
+          reasonRecorded: item.basisRows.some(row => ["入选", "来源", "联动"].includes(row.label)),
+          condition: [...item.vetoes, ...item.followReasons, ...item.invalidations].join("\n") || reading.limit,
+          supports: item.basisRows, version: item.selectionEntry?.source_version,
+          measurements: item.selectionMetrics,
+          scores: selectionScores,
+        }}/>
       <TradingAgentsResearchPanel symbol={item.symbol} compact allowStart={false}/>
       <ResearchDisclosure label="原筛选完整依据" identity={readingKey} defaultOpen={evidenceExpanded}>
       <ReaderBrief label="筛选支持项" facts={reading.supports}/>
@@ -483,12 +491,14 @@ export function PickCard({
               const v = item.sub_scores?.[key];
               const evidence = item.dimensionEvidence?.[key];
               const absent = evidence?.state === "missing" || evidence?.state === "error";
+              const measured = typeof v === "number" && Number.isFinite(v) && v >= 0 && v <= 100
+                && (evidence?.state === "success" || evidence?.state === "valid_empty" || evidence?.state === "partial");
               return (
-                <div key={key} className="flex-1" title={`${label}：${item.basisRows.find((r) => r.label === label)?.value ?? "--"}`}>
-                  {absent ? <span className="block text-center text-[9px] text-zinc-600 dark:text-zinc-400" aria-label={`${label}依据缺失，计算占位 ${v ?? "未知"}`} title={evidence.reason}>缺项</span> : v == null ? <span className="block text-center text-[9px] text-zinc-600 dark:text-zinc-400" aria-label={`${label}评分缺失`}>暂无</span> : <div role="meter" aria-label={`${label}评分`} aria-valuemin={0} aria-valuemax={100} aria-valuenow={v} className="score-track h-1 w-full overflow-hidden rounded bg-zinc-100 dark:bg-zinc-800">
-                    <div className="h-full rounded bg-zinc-500 dark:bg-zinc-400" style={{ width: `${Math.max(0, Math.min(100, v))}%` }} />
+                <div key={key} className="flex-1" title={`${label}：${evidence?.reason || item.basisRows.find((r) => r.label === label)?.value || "--"}`}>
+                  {absent ? <span className="block text-center text-[9px] text-zinc-600 dark:text-zinc-400" aria-label={`${label}依据缺失，计算占位 ${v ?? "未知"}`} title={evidence.reason}>缺项</span> : !measured ? <span className="block text-center text-[9px] text-zinc-600 dark:text-zinc-400" aria-label={v == null ? `${label}评分缺失` : `${label}原值 ${v}，读取状态待核`}>{v == null ? "暂无" : `${v}·待核`}</span> : <div role="meter" aria-label={`${label}评分`} aria-valuemin={0} aria-valuemax={100} aria-valuenow={v} className="score-track h-1 w-full overflow-hidden rounded bg-zinc-100 dark:bg-zinc-800">
+                    <div className="h-full rounded bg-zinc-500 dark:bg-zinc-400" style={{ width: `${v}%` }} />
                   </div>}
-                  <div className="mt-0.5 text-center text-[9px] text-zinc-600 dark:text-zinc-400">{label}{evidence?.state === "partial" ? "·部分" : ""}</div>
+                  <div className="mt-0.5 text-center text-[9px] text-zinc-600 dark:text-zinc-400">{label}{evidence?.state === "partial" ? "·部分" : evidence?.state === "valid_empty" ? "·有效空集" : ""}</div>
                 </div>
               );
             })}
@@ -820,6 +830,9 @@ export function PickCard({
         {item.stopLoss && <span>止损参考 <strong className="font-medium">{fmt(item.stopLoss.price)}（-{item.stopLoss.pct}%）</strong></span>}
         {item.buyRange && <span>参考区间 {fmt(item.buyRange.low)}–{fmt(item.buyRange.high)}</span>}
       </div>
+      {!evidenceExpanded && !item.referenceOnly && (item.selectionMetrics?.items.length
+        ? <SelectionMeasurements key={`${readingKey}:measurements`} value={item.selectionMetrics} compact/>
+        : selectionScores?.length ? <SelectionScores key={`${readingKey}:scores`} scores={selectionScores} compact/> : null)}
       <ReaderBrief label="入选简述"
         headline={item.theme ? `${item.theme}${item.role ? ` · ${item.role}` : ""}` : "已进入观察名单"}
         facts={[{label: "为什么关注", value: readerExcerpt(reading.why, 60)}, {label: "还需留意", value: readerExcerpt(reading.limit, 36)}]}

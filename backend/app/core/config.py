@@ -9,6 +9,8 @@ from pydantic import model_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 REPO_ROOT = Path(__file__).resolve().parents[3]
+# Approved selected-stock research model; authorization must bind this exact transport.
+TRADINGAGENTS_SELECTED_MODEL = "gpt-6.1-sol"
 
 log = logging.getLogger(__name__)
 
@@ -356,8 +358,12 @@ class Settings(BaseSettings):
     company_evidence_interval_seconds: float = 900.0
     company_evidence_startup_delay_seconds: float = 90.0
     company_evidence_batch_size: int = 4  # Worker hard-caps both selected stocks and model batches at eight.
-    tradingagents_research_enabled: bool = False  # Exact-version quality admission is also required.
+    tradingagents_research_enabled: bool = False  # Requires exact-method research authorization or quality admission.
     tradingagents_research_admission_digest: str = ""  # Server-pinned data/tradingagents_research/admission.json.
+    tradingagents_research_authorization_digest: str = ""  # Independent selected-stock research authorization; never quality approval.
+    tradingagents_research_interval_seconds: float = 60.0
+    tradingagents_research_startup_delay_seconds: float = 90.0
+    tradingagents_research_timeout_seconds: float = 1800.0  # Complete selected-stock graph, including free evidence capture; not a call quota.
     agent_autonomy_enabled: bool = True
     agent_code_change_enabled: bool = False  # C 类代码执行器须由管理员独立显式开启
     agent_venv_python: str = ""             # 沙箱门禁用的 pytest 解释器（默认 backend/.venv/bin/python）

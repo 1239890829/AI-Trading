@@ -91,6 +91,7 @@ def switch_env_var(attr: str) -> str:
 #: 其中 `llm-aux-judge` 的开关（`event_llm_aux_enabled`）在**循环内部**逐拍读取，
 #: 属运行时可切；挪到启动期门控会改变"运行时能开关"的语义，故保持原样。
 SCHEDULER_SWITCH_ATTRS: tuple[str, ...] = (
+    "tradingagents_research_enabled",
     "company_evidence_enabled",
     "review_scheduler_enabled",
     "picks_autogen_enabled",

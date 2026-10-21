@@ -260,6 +260,51 @@ def test_actual_limit_distance_reaches_participant_and_top_watch_consumers():
     assert "距实际涨停价还需上涨 2.61%" in top["pick_basis"]
 
 
+def test_selection_metrics_keep_real_values_effective_thresholds_and_source_clocks(monkeypatch):
+    from app.market import price_rules
+    from app.picks import tradability
+    from app.picks.intraday_opportunity import top_watch_stocks
+    at = datetime.fromisoformat("2026-10-21T10:00:00+08:00")
+    monkeypatch.setattr(price_rules, "beijing_now", lambda: at)
+    monkeypatch.setattr(tradability, "LINKAGE_MIN_PCT", 1.25)
+    monkeypatch.setattr(tradability, "LINKAGE_MID_PCT", 3.25)
+    quote = {**_snap("600002", "甲", 7.2, amount=8e7, price=10.72), "limit_up_price": 11,
+             "quality": "high", "source": "fixture_quote", "data_timestamp": at.isoformat(),
+             "received_at": "2026-10-21T10:00:02+08:00"}
+    candidate = linkage_candidates(container={"code": "X", "name": "算力"}, member_symbols=["600002"],
+        snapshot_by={"600002": quote}, theme_limit_ups=4, theme_limit_up_total=20, theme_stage="发酵",
+        snapshot_state="ready", snapshot_as_of="2026-10-21T10:00:03+08:00")[0]
+    metrics = candidate["selection_metrics"]
+    by = {row["key"]: row for row in metrics["items"]}
+    assert metrics["snapshot_version"] == "2026-10-21T10:00:03+08:00"
+    assert by["change_pct"]["value"] == 7.2 and by["change_pct"]["unit"] == "%"
+    assert [r["value"] for r in by["change_pct"]["thresholds"]] == [1.25, 3.25, 6.5, 9.7]
+    assert by["change_pct"]["as_of"] == at.isoformat()
+    assert by["change_pct"]["received_at"] == quote["received_at"]
+    assert by["amount"]["value"] == 8e7 and by["amount"]["unit"] == "元"
+    assert by["theme_limit_ups"]["value"] == 4
+    assert by["theme_share"]["value"] == 20 and by["theme_share"]["unit"] == "%"
+    assert by["theme_share"]["as_of"] is None
+    assert by["limit_up_gap_pct"]["value"] == 2.61 and by["limit_up_gap_pct"]["thresholds"] == []
+    top = top_watch_stocks({"themes": [{"theme": "算力", "participants": [candidate]}]})["items"][0]
+    assert top["selection_metrics"] == metrics
+    assert top["theme_sources"][0]["selection_metrics"] == metrics
+    assert top["tier"] == 1 and candidate["linkage"]["level"] == "高"
+
+
+def test_selection_metrics_leave_missing_denominator_limit_price_and_source_clock_unknown():
+    for denominator in (None, 0, 2):
+        candidate = linkage_candidates(container={"code": "X", "name": "算力"}, member_symbols=["600002"],
+            snapshot_by={"600002": _snap("600002", "甲", 6.8)}, theme_limit_ups=4,
+            theme_limit_up_total=denominator, theme_stage="发酵")[0]
+        by = {row["key"]: row for row in candidate["selection_metrics"]["items"]}
+        assert by["theme_share"]["value"] is None and by["theme_share"]["state"] == "unknown"
+        assert by["limit_up_gap_pct"]["value"] is None and by["limit_up_gap_pct"]["state"] == "unknown"
+        assert by["change_pct"]["source"] is None and by["change_pct"]["as_of"] is None
+        assert by["change_pct"]["received_at"] is None
+        assert candidate["linkage"]["level"] == "高", "missing display evidence must not alter existing qualification"
+
+
 def test_linkage_candidates_per_theme_cap():
     rows = [_snap(f"6000{i:02d}", f"票{i}", 2.0 + i * 0.1) for i in range(20)]
     got = _candidates([r["symbol"] for r in rows], snaps=rows)

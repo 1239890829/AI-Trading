@@ -116,10 +116,16 @@ describe("PickCard · 盘前名单（fromDailyPick）", () => {
     expect(entry.textContent).not.toMatch(/NaN|Infinity/);
   });
   it("distinguishes a missing dimension from a real zero score", () => {
-    render(<PickCard evidenceExpanded item={fromDailyPick({...base, sub_scores: {news: 0}})} />);
+    render(<PickCard evidenceExpanded item={fromDailyPick({...base, sub_scores: {news: 0}, dimension_evidence: {news: {state: "success", reason: "消息维度已读取，原评分为0"}}})} />);
     expect(screen.getByLabelText("情绪评分缺失")).toBeTruthy();
     expect(screen.queryByRole("meter", {name: "情绪评分"})).toBeNull();
     expect(screen.getByRole("meter", {name: "消息评分"}).getAttribute("aria-valuenow")).toBe("0");
+  });
+  it("keeps a legacy unknown 50 as a raw value without a filled score meter", () => {
+    render(<PickCard evidenceExpanded item={fromDailyPick({...base, sub_scores: {news: 50}})} />);
+    expect(screen.queryByRole("meter", {name: "消息评分"})).toBeNull();
+    expect(screen.getByLabelText("消息原值 50，读取状态待核")).toBeTruthy();
+    expect(screen.getByText(/历史记录未保存各维读取状态/)).toBeTruthy();
   });
   it("展示六维评分条（含梯队第六维）", () => {
     render(<PickCard evidenceExpanded item={fromDailyPick(base)} />);

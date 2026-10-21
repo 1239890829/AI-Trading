@@ -665,15 +665,20 @@ class NativeTradingAgentsDriver:
                 "python_executable_sha256": file_sha(self.python.resolve()),
                 "dependencies": self._dependency_identity(),
                 "packet_builder": self.packet_builder.method_identity(),
-                "semantic_quality": "requires_exact_version_admission"}
+                "semantic_quality": "not_established_by_research_authorization"}
 
-    async def run_accounted(self, *, rec, params, app, budget, store_root, required_model_slots, verification):
+    async def run_accounted(self, *, rec, params, app, budget, store_root, required_model_slots, verification,
+                            selection_binding=None):
         from app.services.tradingagents_research import require_start, validate_params
         symbol = validate_params(params)
         admitted = await drain_thread(require_start, params, app)
-        identity = self.method_identity()
-        if digest(identity) != admitted["admission"]["method_sha256"] or required_model_slots != 22:
+        identity = await drain_thread(self.method_identity)
+        selected_research = admitted["admission"].get("state") == "research_only_authorized"
+        expected_slots = None if selected_research else 22
+        if digest(identity) != admitted["admission"]["method_sha256"] or required_model_slots != expected_slots:
             raise DriverUnavailable("method_admission_drift")
+        if selected_research and (not selection_binding or admitted.get("selection") != selection_binding):
+            raise DriverUnavailable("selected_entry_changed_before_start")
         await rec.checkpoint_async()
         folder = Path(store_root) / symbol
         if Path(store_root).is_symlink():
@@ -681,6 +686,8 @@ class NativeTradingAgentsDriver:
         with worker_lease(folder):
             # Reuse only an already completed identical method/input, never a
             # partial/unknown checkpoint. Explicit recovery needs separate review.
+            if selected_research:
+                await self._prepare_selected_company(symbol, rec)
             packet = self.packet_builder(symbol, beijing_now(), app)
             if inspect.isawaitable(packet):
                 packet = await packet
@@ -707,7 +714,8 @@ class NativeTradingAgentsDriver:
                                 "method_sha256": digest(identity)})
             try:
                 final = await self._execute(rec=rec, packet=packet, run=run, budget=budget,
-                                            identity=identity, max_calls=required_model_slots)
+                    identity=identity, max_calls=required_model_slots,
+                    **({"budget_scope": budget.SCOPE_SELECTED_RESEARCH_LLM} if selected_research else {}))
                 audits = [json.loads(line) for line in (run / "source-audit.jsonl").read_text().splitlines()]
                 review_summary = self._review_summary(audits)
                 failures = review_summary["finite_failures"]
@@ -718,6 +726,10 @@ class NativeTradingAgentsDriver:
                     "production_eligible": False, "reports": {key: final[key] for key in REPORTS},
                     "review_state": "finite_failed_requires_review" if failures else "unreviewed",
                     "review_summary": review_summary}
+                if selected_research:
+                    result["selection"] = selection_binding
+                    result["authorization_mode"] = "RESEARCH_ONLY_AUTHORIZED"
+                    result["net_gain_verified"] = False
                 await rec.checkpoint_async()
                 atomic_json(run / "result.json", result)
                 result_sha = file_sha(run / "result.json")
@@ -734,6 +746,39 @@ class NativeTradingAgentsDriver:
                     "finished_at": beijing_now().isoformat(), "automatic_retry": False,
                     "native_checkpoint_files_present": any((run / "graph/cache/checkpoints").glob(symbol + ".db*"))})
                 raise
+
+    @staticmethod
+    async def _prepare_selected_company(symbol, rec):
+        """Collect only existing free public documents; never invoke the old selector model."""
+        from app.events import company_impact
+        from app.events.company_sources import collect_company, EXTRACTOR
+        from app.events.company_state import put_profile
+        def collect():
+            with worker_lease(company_impact.ROOT):
+                at = beijing_now()
+                profile = read_profile(symbol)
+                if profile and profile.get("extractor") == EXTRACTOR:
+                    try:
+                        if datetime.fromisoformat(profile["cache_until"]) > at:
+                            return profile
+                    except (KeyError, ValueError, TypeError):
+                        pass
+                profile = collect_company(symbol, as_of=at, root=company_impact.ROOT / "sources")
+                if profile.get("status") == "ready" and profile.get("documents"):
+                    put_profile(profile)
+                return profile
+        await rec.checkpoint_async()
+        began = monotonic()
+        profile = await drain_thread(collect)
+        await rec.checkpoint_async()
+        ready = profile.get("status") == "ready" and bool(profile.get("documents"))
+        await rec.add_async(name="TradingAgents 公司公开依据", input_summary=symbol,
+            output_summary=canonical({"source_status": profile.get("status"),
+                "documents": len(profile.get("documents") or []),
+                "missing": [text[:350] for text in (profile.get("missing") or []) if isinstance(text, str)][:12]}),
+            duration_ms=round((monotonic() - began) * 1000), ok=ready)
+        if not ready:
+            raise DriverUnavailable("selected_company_source_unavailable")
 
     async def _prepare_indicators(self, packet, *, rec, folder):
         """Explicit-task CPU stage in the fixed isolated formula environment.
@@ -904,7 +949,7 @@ class NativeTradingAgentsDriver:
             raise DriverUnavailable("completed_role_regeneration_refused")
 
     async def _execute(self, *, rec, packet, run, budget, identity, max_calls,
-                       interrupt_after_analysts=False):
+                       interrupt_after_analysts=False, budget_scope=None):
         """Real original graph; separately callable for isolated offline fixture checks.
 
         Production entry is run_accounted, which always rechecks admission. This
@@ -969,13 +1014,13 @@ class NativeTradingAgentsDriver:
                         messages = deepcopy(request["messages"])
                         context = self._peer_context(request, completed_peers)
                         messages.append({"role": "system", "content": adapter.build_predecessor_contract(context)})
-                        if physical_calls >= max_calls:
+                        if max_calls is not None and physical_calls >= max_calls:
                             raise DriverUnavailable("full_graph_call_cap_reached")
                         physical_calls += 1
                         atomic_json(counter_path, {"reserved": physical_calls})
                         call_id = physical_calls
                         response = await self._infer_accounted(rec, budget, messages, schema, request["role"], call_id,
-                            capture_output=lambda value: self._record_output(run, request, value, call_id))
+                            capture_output=lambda value: self._record_output(run, request, value, call_id), budget_scope=budget_scope)
                         value = response["structured_output"]
                         self._audit_output(run, packet, request, value, context, call_id)
                         if not value.get("tool_calls"):
@@ -1124,7 +1169,7 @@ class NativeTradingAgentsDriver:
         if terminal["status"] == "FAIL":
             raise DriverUnavailable("terminal_report_unusable")
 
-    async def _infer_accounted(self, rec, budget, messages, schema, role, call_id, *, capture_output=None):
+    async def _infer_accounted(self, rec, budget, messages, schema, role, call_id, *, capture_output=None, budget_scope=None):
         # Exact outer transport prompt + schema is bounded before reserve/start.
         prompt = codex_transport.NOTE + codex_transport.encode_cli_transcript(messages)
         wire_schema, _ = codex_transport.strict_wire_schema(schema)
@@ -1134,7 +1179,7 @@ class NativeTradingAgentsDriver:
         if timeout <= 0:
             raise DriverUnavailable("model_timeout_unavailable")
         method = self.transport.method_identity()
-        receipt = await drain_thread(budget.reserve, budget.SCOPE_AUTONOMY_LLM,
+        receipt = await drain_thread(budget.reserve, budget_scope or budget.SCOPE_AUTONOMY_LLM,
             purpose="tradingagents." + role.replace(" ", "_").lower(), kind="model", task_id=rec.task_id,
             provider=method["provider"], model=method["model"], timeout_seconds=timeout,
             max_retries=0, input_chars=input_chars)

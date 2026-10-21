@@ -69,3 +69,65 @@ def test_shared_failure_is_visible_to_both_and_next_read_retries():
         finally:
             await provider.aclose()
     asyncio.run(run())
+
+
+@pytest.mark.parametrize("cancel_indices", [False, True])
+def test_indices_share_active_raw_snapshot_with_index_detail_but_never_cache_completed(cancel_indices):
+    from app.market.indices import INDEX_CATALOG
+
+    async def run():
+        provider = TencentProvider()
+        await provider._client.aclose()
+        entered, release = asyncio.Event(), asyncio.Event()
+        calls = []
+
+        async def handle(request):
+            calls.append(str(request.url))
+            entered.set()
+            await release.wait()
+            body = "".join(f'v_{market.lower()}{code}="{raw(code)}";' for code, market, _ in INDEX_CATALOG)
+            return httpx.Response(200, content=body.encode("gbk"))
+
+        provider._client = httpx.AsyncClient(transport=httpx.MockTransport(handle))
+        try:
+            indices = asyncio.create_task(provider.get_indices())
+            await entered.wait()
+            detail = asyncio.create_task(provider.get_quote("sh000001"))
+            await asyncio.sleep(0)
+            if cancel_indices:
+                indices.cancel()
+                with pytest.raises(asyncio.CancelledError):
+                    await indices
+            release.set()
+            result = await detail
+            if not cancel_indices:
+                rows = await indices
+                assert {(row.symbol, row.market) for row in rows} == {(code, market) for code, market, _ in INDEX_CATALOG}
+            assert result.symbol == "sh000001" and result.market == "SH"
+            assert len(calls) == 1
+            await provider.get_quote("sh000001")
+            assert len(calls) == 2  # A finished payload must not become a price TTL.
+        finally:
+            release.set()
+            await provider.aclose()
+
+    asyncio.run(run())
+
+
+def test_shared_index_read_preserves_duplicate_rows_for_the_hub_identity_gate():
+    async def run():
+        provider = TencentProvider()
+        await provider._client.aclose()
+
+        def handle(request):
+            body = f'v_sh000001="{raw("000001")}";v_sh000001="{raw("000001")}";v_sz000001="{raw("000001")}";'
+            return httpx.Response(200, content=body.encode("gbk"))
+
+        provider._client = httpx.AsyncClient(transport=httpx.MockTransport(handle))
+        try:
+            rows = await provider.get_indices()
+            assert [(row.symbol, row.market) for row in rows] == [("000001", "SH"), ("000001", "SH"), ("000001", "SZ")]
+        finally:
+            await provider.aclose()
+
+    asyncio.run(run())

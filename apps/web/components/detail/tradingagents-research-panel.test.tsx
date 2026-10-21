@@ -24,6 +24,18 @@ beforeEach(() => {vi.clearAllMocks(); vi.mocked(getTradingAgentsResearch).mockRe
 afterEach(() => {cleanup(); vi.useRealTimers();});
 
 describe("完整TradingAgents研究读者", () => {
+  it("shows explicit selected-stock research authorization without a call quota or an effect-admission claim", async () => {
+    vi.mocked(getTradingAgentsResearch).mockResolvedValue({...view(), enabled:true, executable:true, blockers:[],
+      admission:{state:"research_only_authorized",method_sha256:"current-method"},
+      budget:{date:"2026-10-21",limit:null,used:31,remaining:null,scope:"selected_stock_research"}});
+    const panel=render(<TradingAgentsResearchPanel symbol="002121" compact defaultOpen/>);
+    await screen.findByText("002121 · 未查到研究记录");
+    fireEvent.click(screen.getByText("运行条件与承接状态"));
+    expect(panel.container.textContent).toContain("已授权入选后完整研究");
+    expect(panel.container.textContent).toContain("不代表选股或投资效果已通过验证");
+    expect(panel.container.textContent).not.toMatch(/预算不足|剩余|所需模型余量|null次/);
+    expect(createAgentTask).not.toHaveBeenCalled();
+  });
   it("opens an ordinary read only on request and exposes actual blockers without running models", async () => {
     render(<TradingAgentsResearchPanel symbol="002121"/>);
     expect(getTradingAgentsResearch).not.toHaveBeenCalled();
@@ -133,7 +145,7 @@ describe("完整TradingAgents研究读者", () => {
     await screen.findByText("002121 · 未查到研究记录");
     expect(screen.queryByRole("button", {name: "显式启动完整研究"})).toBeNull();
     expect(screen.queryByRole("link", {name: "任务中心查看或取消"})).toBeNull();
-    expect(screen.getByText("为什么尚未运行或更新").closest("details")?.open).toBe(false);
+    expect(screen.getByText("运行条件与承接状态").closest("details")?.open).toBe(false);
     fireEvent.click(screen.getByRole("button", {name: "重新读取研究"}));
     await waitFor(() => expect(getTradingAgentsResearch).toHaveBeenCalledTimes(2));
     expect(createAgentTask).not.toHaveBeenCalled();
@@ -167,20 +179,22 @@ describe("完整TradingAgents研究读者", () => {
     expect(createAgentTask).not.toHaveBeenCalled();
   });
 
-  it("distinguishes compact initial loading, failed reads and budget blocks from an unrun stock", async () => {
+  it("distinguishes compact initial loading, failed reads and runtime blockers from an absent report", async () => {
     let finish!: (value: TradingAgentsResearchView) => void;
     vi.mocked(getTradingAgentsResearch).mockImplementationOnce(() => new Promise(resolve => {finish = resolve;}));
     render(<TradingAgentsResearchPanel symbol="002121" defaultOpen compact/>);
     expect(screen.getByText("002121 · 读取中")).toBeTruthy();
     expect(screen.queryByText("002121 · 未查到研究记录")).toBeNull();
-    await act(async () => {finish({...view(), blockers: [{code: "budget_insufficient", message: "完整图需22次，剩余8次"}]});});
+    await act(async () => {finish({...view(), blockers: [{code: "driver_unavailable", message: "完整执行器尚未装配"}]});});
     await screen.findByText("002121 · 未查到研究记录");
-    expect(screen.getByText("预算不足，当前不能新增完整研究。")).toBeTruthy();
+    fireEvent.click(screen.getByText("运行条件与承接状态"));
+    fireEvent.click(screen.getByText(/查看启动阻断原因/));
+    expect(screen.getByText("完整执行器尚未装配")).toBeTruthy();
     vi.mocked(getTradingAgentsResearch).mockRejectedValue(new Error("read failed"));
     fireEvent.click(screen.getByRole("button", {name: "重新读取研究"}));
     await screen.findByText("002121 · 读取失败");
     expect(screen.queryByText("002121 · 未查到研究记录")).toBeNull();
-    expect(screen.queryByText("预算不足，当前不能新增完整研究。")).toBeNull();
+    expect(screen.queryByText(/预算不足|所需模型余量/)).toBeNull();
     expect(screen.getByText(/尚不能确认是否有已保存报告/)).toBeTruthy();
     expect(createAgentTask).not.toHaveBeenCalled();
   });

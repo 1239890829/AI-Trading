@@ -392,6 +392,7 @@ def attach_participants(
             snapshot_as_of=snapshot_as_of,
             theme_limit_ups=count,
             theme_stage=t.get("stage"),
+            theme_limit_up_total=limit_up_total,
             per_theme=per_theme,
             stats=stats,
             audit_rows=audit_rows,
@@ -449,7 +450,7 @@ def _unique_stock_sources(rows: list[dict]) -> list[dict]:
     """Keep original sorted priority; one stock occupies one display/rank slot."""
     by_symbol: dict[str, dict] = {}
     source_fields = ("theme", "stage", "strength_tier", "linkage", "pick_basis", "tradability",
-                     "seal_state", "distinctiveness", "certainty", "role", "boards", "reason")
+                     "seal_state", "distinctiveness", "certainty", "role", "boards", "reason", "selection_metrics")
     for row in rows:
         symbol = str(row.get("symbol") or "")
         if not symbol:
@@ -526,6 +527,7 @@ def top_watch_stocks(payload: dict, *, limit: int | None = None) -> dict:
                     "linkage": s.get("linkage"),
                     "tradability": s.get("tradability"),
                     "seal_state": s.get("seal_state"),
+                    **({"selection_metrics": deepcopy(s["selection_metrics"])} if "selection_metrics" in s else {}),
                     "board": s.get("board"),
                     "tier": tier,
                     "price": s.get("price"),

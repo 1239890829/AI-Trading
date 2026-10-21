@@ -246,7 +246,8 @@ describe("StockDetailPanel · 即时报价复用", () => {
     view.rerender(<StockDetailPanel {...props} streamStatus="error" />); await settle();
     expect(view.container.querySelector(".quote-source")?.getAttribute("title")).toContain("失败");
     view.rerender(<StockDetailPanel {...props} streamStatus="live" liveQuote={{...quote, quality_reasons: ["market_closed", "refresh_failed"]}} />); await settle();
-    expect(view.getByRole("button", {name: "查看行情问题"}).textContent).toBe("刷新异常");
+    expect(view.getByRole("button", {name: "查看行情问题"}).textContent).toBe("未开盘");
+    expect(within(view.getByRole("button", {name: "查看行情问题"})).getByRole("img", {name: "行情提示：刷新异常"})).toBeTruthy();
     expect(api.getNewsDigest).not.toHaveBeenCalled();
   });
 

@@ -69,11 +69,12 @@ function ResearchReader({symbol, allowStart, compact}: {symbol: string; allowSta
   }
 
   const report = view?.latest;
+  const selectedResearch = view?.admission.state === "research_only_authorized";
   const methodChanged = report && view?.admission.method_sha256 && report.method_sha256 !== view.admission.method_sha256;
   const runtimeConditions = view && <>
-    <p>{resource.error ? "启动条件读取失败，当前资格未确认" : resource.pending ? "正在校准启动条件，暂不能启动" : `${view.enabled ? "研究功能已配置" : "当前未启用完整研究"} · ${view.executable ? "启动条件当前满足，仍需显式提交" : "当前不能启动"}`}。</p>
+    <p>{resource.error ? "启动条件读取失败，当前资格未确认" : resource.pending ? "正在校准启动条件，暂不能启动" : selectedResearch ? "已授权入选后完整研究；后台按真实入选记录承接，不代表选股或投资效果已通过验证" : `${view.enabled ? "研究功能已配置" : "当前未启用完整研究"} · ${view.executable ? "启动条件当前满足，仍需显式提交" : "当前不能启动"}`}。</p>
     {view.blockers.length > 0 && <details><summary className="cursor-pointer">查看启动阻断原因（{view.blockers.length}项）</summary><ul className="list-disc space-y-1 pl-4">{view.blockers.map((item, index) => <li key={`${item.code}:${index}`}>{item.message}</li>)}</ul></details>}
-    <p>完整图所需模型余量：{view.required_model_slots}次；{view.budget ? `预算快照剩余 ${view.budget.remaining}/${view.budget.limit} 次（${view.budget.date}）。` : "共享预算未能核实。"}</p>
+    {selectedResearch && <p>只研究真正入选股；复用同次入选的已有任务和报告，行情刷新不会重复生成。</p>}
   </>;
   const reportTitle = resource.error ? "读取失败" : resource.pending ? "读取中" : view?.task_read_unavailable ? "运行状态未确认"
     : canceling ? "取消处理中" : task ? STATUS[task.status] ?? "任务状态未知"
@@ -85,7 +86,6 @@ function ResearchReader({symbol, allowStart, compact}: {symbol: string; allowSta
     {!view && resource.pending && <p role="status">正在读取 {symbol} 的完整研究…</p>}
     {view && <>
       {!compact && runtimeConditions}
-      {compact && !resource.error && !resource.pending && view.blockers.some(item => item.code === "budget_insufficient") && <p className="text-amber-800 dark:text-amber-300">预算不足，当前不能新增完整研究。</p>}
       {view.task_read_unavailable && <p role="alert">任务状态读取失败，不能确认是否仍有研究在运行。</p>}
       {task && (!compact || task.error || canceling || task.status === "succeeded" && !report) && <p role="status">本股最近任务{resource.error ? "（上次读取）" : ""}：{canceling ? "取消请求已记录，等待当前步骤结束" : STATUS[task.status] ?? "状态未知"}{task.error ? ` · ${task.error.message}（${task.error.code}）` : ""}。{task.status === "succeeded" && !report ? "尚无可读取的完整七报告，不能据任务状态当作研究通过。" : ""}</p>}
       {receiptPending && <p role="status">任务已提交，持久状态待校准；不会重复提交。</p>}
@@ -102,7 +102,7 @@ function ResearchReader({symbol, allowStart, compact}: {symbol: string; allowSta
         {compact ? <details><summary className="cursor-pointer">查看其余6份完整报告</summary><div className="mt-2 space-y-2">{REPORTS.filter(([key]) => key !== "final_trade_decision").map(([key, label]) => <details key={`${report.run_id}:${key}`} className="py-1"><summary className="cursor-pointer font-medium">{label}</summary><div className="mt-2 whitespace-pre-wrap leading-relaxed [overflow-wrap:anywhere]">{report.reports[key]}</div></details>)}</div></details>
           : <div className="space-y-2">{REPORTS.map(([key, label]) => <details key={`${report.run_id}:${key}`} className="rounded border border-zinc-200 p-2 dark:border-zinc-800"><summary className="cursor-pointer font-medium">{label}</summary><div className="mt-2 whitespace-pre-wrap [overflow-wrap:anywhere]">{report.reports[key]}</div></details>)}</div>}
       </div>}
-      {compact && <details><summary className="cursor-pointer">为什么尚未运行或更新</summary><div className="mt-2 space-y-2">{runtimeConditions}<p>此处只读已保存结果；查看或重读都不会发起模型调用。</p></div></details>}
+      {compact && <details><summary className="cursor-pointer">运行条件与承接状态</summary><div className="mt-2 space-y-2">{runtimeConditions}<p>此处只读已保存结果；查看或重读都不会发起模型调用。</p></div></details>}
     </>}
     {error && <p role="alert" className="text-amber-800 dark:text-amber-300">{error.message}。请先核对任务状态；提交失败不表示已执行研究。</p>}
     <div className="flex flex-wrap gap-2">

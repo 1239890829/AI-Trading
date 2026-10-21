@@ -24,6 +24,16 @@ function quote(limitUp: number | null): Quote {
 afterEach(() => {cleanup(); vi.unstubAllGlobals(); vi.useRealTimers();});
 
 describe("QuoteStrip 限价展示", () => {
+  it("午间时段保留在固定槽，拒旧和备用读取失败另行告知并可打开完整诊断", () => {
+    const paused = {...quote(4344.9), quality: "stale" as const, quality_reasons: ["source_time_regress_ignored"],
+      data_timestamp: "2026-10-13T11:30:00+08:00", display_session: {phase: "closed" as const, trade_date: "2026-10-13", as_of: "2026-10-13T12:20:00+08:00", trade_day_result: true}};
+    const view = render(<QuoteStrip quote={paused} inWatchlist={false} onAdd={() => {}} connectionStatus="error" issue={{label: "保留可信值", title: "旧源钟被拒绝"}} diagnostics={<p>原始拒旧与备用请求失败记录</p>}/>);
+    const slot = view.container.querySelector("[data-quote-status-slot]");
+    expect(slot?.textContent).toContain("午间休息");
+    expect(screen.getByRole("img", {name: "行情提示：保留可信值；备用读取失败"})).toBeTruthy();
+    fireEvent.click(screen.getByRole("button", {name: "查看行情问题"}));
+    expect(screen.getByRole("dialog", {name: "行情诊断"}).textContent).toContain("原始拒旧与备用请求失败记录");
+  });
   it("真实质量与恢复共用固定槽，异常入口复用诊断抽屉，正常不留诊断按钮", () => {
     const raw = {...quote(4344.9), quality: "stale" as const, quality_reasons: ["source_time_regress_ignored"]};
     const before = JSON.stringify(raw);
