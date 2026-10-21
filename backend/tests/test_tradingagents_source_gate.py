@@ -209,6 +209,59 @@ class EvidenceGateTests(unittest.TestCase):
         self.assert_status('PASS', '营业收入连续上涨，仍待逐年财务报表核实。')
         self.assert_status('FAIL', '股价连续上涨，营收仍待核验。')
 
+    def test_actual_storage_price_passages_are_outside_equity_path_scope(self):
+        for text in (
+            '材料同时存在明确的不利经营背景：半年报称2026年上半年存储短缺、价格持续上涨，'
+            '终端电子产品特别是消费类产品承压；公司通过完善不同存储方案的适配，增加客户选型空间。',
+            '有直接来源支持的经营链条是：公司报告称，2026年上半年存储短缺、价格持续上涨，'
+            '使终端电子产品尤其消费类产品承压；公司持续完善AIoT芯片平台对不同存储方案的适配，'
+            '为客户增加存储选型选择。',
+            '存储价格持续上涨。', '存储芯片价格持续上涨。', '存储器的价格持续上涨。',
+        ):
+            with self.subTest(text=text):
+                result = self.assert_status('PASS', text)
+                self.assertEqual([x['status'] for x in result['observations']],
+                                 ['EXPLICIT_COMMODITY_PRICE_OUTSIDE_DAILY_EQUITY_SCOPE_NOT_VERIFIED'])
+
+    def test_unbound_price_subject_is_explicitly_unknown_not_a_stock_observation(self):
+        for text in ('价格持续上涨。', '半年报称价格持续上涨。', '公司价格持续上涨。',
+                     '存储市场存在风险，价格持续上涨。'):
+            with self.subTest(text=text):
+                for packet in (PACKET, history([11, 12, 12.5])):
+                    result = self.assert_status('PASS', text, packet)
+                    self.assertEqual([x['status'] for x in result['observations']],
+                                     ['DAILY_PRICE_SUBJECT_UNKNOWN_NOT_VERIFIED'])
+
+    def test_explicit_stock_price_subjects_keep_the_original_daily_evidence_gate(self):
+        for text in ('股价持续上涨。', '本股价格持续上涨。', '该股价格持续上涨。',
+                     '个股价格持续上涨。', '股票价格持续上涨。', '标的价格持续上涨。',
+                     '证券价格持续上涨。', '样本股份价格持续上涨。',
+                     '600001价格持续上涨。', '000811价格持续上涨。'):
+            with self.subTest(text=text):
+                self.assert_status('FAIL', text)
+
+    def test_commodity_word_cannot_pardon_a_separate_stock_path_claim(self):
+        for text in ('存储价格持续上涨，但600001股价连续3个交易日上涨。',
+                     '存储短缺、价格持续上涨，股价连续3个交易日上涨。',
+                     '存储短缺、价格持续上涨、600001股价持续上涨。',
+                     '存储价格持续上涨和本股价格持续上涨。',
+                     '600001股价持续上涨、存储价格持续上涨。',
+                     '存储价格持续上涨；000811价格持续上涨。'):
+            with self.subTest(text=text):
+                result = self.assert_status('FAIL', text)
+                self.assertEqual(len(result['violations']), 1)
+                self.assertEqual([x['status'] for x in result['observations']],
+                                 ['EXPLICIT_COMMODITY_PRICE_OUTSIDE_DAILY_EQUITY_SCOPE_NOT_VERIFIED'])
+
+    def test_commodity_and_stock_paths_do_not_borrow_each_others_evidence(self):
+        text = '存储价格持续上涨，但600001股价连续3个交易日上涨。'
+        result = self.assert_status('PASS', text, history([11, 12, 12.5]))
+        self.assertEqual([x['status'] for x in result['observations']],
+                         ['EXPLICIT_COMMODITY_PRICE_OUTSIDE_DAILY_EQUITY_SCOPE_NOT_VERIFIED',
+                          'SUPPORTED_IN_PROVIDED_DAILY_CLOSE_WINDOW'])
+        wrong = self.assert_status('FAIL', text, history([11, 12, 11.5]))
+        self.assertEqual(wrong['violations'][0]['reason'], 'DAILY_HISTORY_DOES_NOT_SHOW_REQUIRED_CLOSE_PATH')
+
     def test_intraday_cumulative_field_is_not_historical_return(self):
         packet = deepcopy(PACKET)
         packet['facts']['market_snapshot'] = {'status': 'observed', 'received_before_as_of': True,

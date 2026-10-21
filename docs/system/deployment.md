@@ -474,7 +474,7 @@ PYTHONPATH=backend backend/.venv/bin/python backend/scripts/recovery_bundle.py r
 
 ## TradingAgents完整研究运行边界
 
-2026-10-20新增的工程链复用原AgentTask/任务中心及个股报告读者，固定上游v0.7.0/e8f5503；不会拆成另一套角色流程。`ASHARE_TRADINGAGENTS_RESEARCH_ENABLED=0`为默认值；关闭时bootstrap不读取可选运行环境或启动CLI。当前[真实同输入对照](../ai/semantic-decisions.md#2026-10-20-六新场景完整图与四臂对照)未证明净收益，不能把以下环境准备当作启用批准。
+2026-10-20新增的工程链复用原AgentTask/任务中心及个股报告读者，固定上游v0.7.0/e8f5503；不会拆成另一套角色流程。`ASHARE_TRADINGAGENTS_RESEARCH_ENABLED=0`为默认值；关闭时bootstrap不读取可选运行环境或启动CLI。旧[同输入对照](../ai/semantic-decisions.md#2026-10-20-六新场景完整图与四臂对照)和新[三主模型筛选](../ai/semantic-decisions.md#用户改为三主模型整图筛选)分别保留，候选及参数试验不是生产净收益准入，不能把以下环境准备当作启用批准。
 
 服务器配置单点为忽略目录`backend/data/tradingagents_research/runtime.json`，只含`version=1`、`upstream_sha`、`upstream_dir`、`python`、`dependencies`、`dependency_manifest`、`transport`七键。路径仅由服务器操作员配置为绝对路径，HTTP只接受证券symbol。transport绑定现有CLI程序SHA、模型/effort和认证文件位置，仅允许四个标准代理变量；不包含或公开凭据内容。若CLI是Node脚本，transport还须绑定`node_executable`及`node_executable_sha256`，使用准确已有解释器执行；缺失/漂移在推理前拒绝。原生CLI不额外要求Node。固定原图276个源码文件逐hash核实；独立venv及相对文件SHA清单由`freeze_dependency_manifest`显式准备，bootstrap不安装、升级或自动生成环境。环境首次/执行前完整核，普通读取复用已核观察；依赖、代码、CLI或准入版本漂移则拒绝新执行。
 
@@ -486,4 +486,4 @@ PYTHONPATH=backend backend/.venv/bin/python backend/scripts/recovery_bundle.py r
 
 完整待核七报告只写研究目录，绑定证券、输入/方法/结果hash和原生成/资料时刻；普通配对GET可读取，源/引用有限失败与同伴待审明示，不变成已验证结论。完成后只清该run自有的原生checkpoint数据库残页，保留报告、原答和MemoryLog；失败、中断或未知则保留恢复证据。无新调度、通知、选股评分、资金或部署动作。现役页面加载、已保存结果读取、真正模型任务及质量准入仍须分别取实际证据。
 
-超时不算成功。CLI先真实TERM/必要KILL并等待排空，再仅从有界typed流中提取严格单轮最终`turn.completed`用量和安全终态投影；原始请求/context不落日志。缺最终、截断、多轮、非法计数仍为unknown，安全/授权停止优先且不取用量。超时失败与本地drain事实分开保存，不能推断远端已取消。2026-10-21已丢失原流的call11无法由此追溯恢复，原LAB全局unknown停止记录仍在；后续推理不得借本修补自行重开。
+超时不算成功。CLI先真实TERM/必要KILL并等待排空，再仅从有界typed流中提取严格单轮最终`turn.completed`用量和安全终态投影；原始请求/context不落日志。缺最终、截断、多轮、非法计数仍为unknown，安全/授权停止优先且不取用量。超时失败与本地drain事实分开保存，不能推断远端已取消。2026-10-21已丢失原流的call11无法由此追溯恢复，原unknown和停止回执永久保留。用户随后明确授权在原100预约内有限接续，准确边界见[三主模型记录](../ai/semantic-decisions.md#用户改为三主模型整图筛选)；这不是超时修补自身产生的权限，也不豁免任何新unknown、权限或安全停止。生产预算和启用条件不变。

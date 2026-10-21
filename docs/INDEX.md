@@ -124,7 +124,7 @@
 
 ---
 
-当前TradingAgents接续：见[六新场景完整图与四臂对照](ai/semantic-decisions.md#2026-10-20-六新场景完整图与四臂对照)、[完整研究读者](product/hunting-decision-design.md#2026-10-20-tradingagents完整研究读者)和[运行前置](system/deployment.md#tradingagents完整研究运行边界)，状态仍在W04/RSH-030。工程、真实模型、净收益准入与现役加载分开；旧批不替代新HEAD验收或启用。 最新[正常输入四臂](ai/semantic-decisions.md#2026-10-21-正常输入四臂验证与运行阻断)因真实超时及未知用量停止，保留不完整图与源错，尚未启用。
+当前TradingAgents接续：见[六新场景完整图与四臂对照](ai/semantic-decisions.md#2026-10-20-六新场景完整图与四臂对照)、[完整研究读者](product/hunting-decision-design.md#2026-10-20-tradingagents完整研究读者)和[运行前置](system/deployment.md#tradingagents完整研究运行边界)，状态仍在W04/RSH-030。工程、真实模型、净收益准入与现役加载分开；旧批不替代新HEAD验收或启用。 最新[三主模型整图筛选](ai/semantic-decisions.md#用户改为三主模型整图筛选)已按来源质量与完整性选Sol作本例候选；Luna完整有复权口径错，DeepSeek受原输入上限阻断。两项完整速度试验均未提速，保留medium；原四臂失败/unknown保留，gold0、暂不启用。
 
 ## 0. 主题路由（我要做什么 → 去读什么）
 

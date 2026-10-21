@@ -358,6 +358,25 @@ def _outside_daily_scope(clause, start):
                 or re.search(r'(?:营收|收入|净利润|利润|订单量).{0,8}$', before))
 
 
+def _daily_price_subject_scope(clause, start, security):
+    # Only the immediately attached price object is classified. A commodity
+    # elsewhere in the clause cannot pardon a later explicit equity claim.
+    price = re.search(r'价格\s*$', clause[:start])
+    if not price:
+        return None
+    before_price = clause[:price.start()].rstrip()
+    names = [re.escape(str(value)) for value in (security.get('name'), security.get('symbol')) if value]
+    equity = r'(?:本股|该股|个股|股票|股价|收盘|A股|标的|证券|\d{6}(?:\.(?:SH|SS|SZ|BJ))?'
+    equity += ('|' + '|'.join(names)) if names else ''
+    if re.search(equity + r')(?:的)?\s*$', before_price, re.I):
+        return None
+    if re.search(r'存储(?:芯片|器)?(?:市场)?(?:短缺、)?(?:的)?\s*$', before_price):
+        return 'EXPLICIT_COMMODITY_PRICE_OUTSIDE_DAILY_EQUITY_SCOPE_NOT_VERIFIED'
+    # A bare price is not automatically the target stock, nor a proved
+    # commodity statement. Leave its subject and source truth to source review.
+    return 'DAILY_PRICE_SUBJECT_UNKNOWN_NOT_VERIFIED'
+
+
 def _count(phrase):
     counts = re.findall(r'([一二三四五六七八九十]+|\d+)\s*(?:个)?(?:交易日|会话|日|天)', phrase)
     if not counts:
@@ -561,6 +580,10 @@ def evaluate_report(report, packet):
                     observations.append({**record, 'status': scope})
                     continue
                 if kind == 'DAILY_PRICE_PATH':
+                    subject_scope = _daily_price_subject_scope(clause, match.start(), semantics['security'])
+                    if subject_scope:
+                        observations.append({**record, 'status': subject_scope})
+                        continue
                     if _outside_daily_scope(clause, match.start()):
                         observations.append({**record, 'status': 'OUTSIDE_DAILY_PRICE_FAMILY_NOT_VERIFIED'})
                         continue
@@ -644,10 +667,11 @@ def evaluate_report(report, packet):
                 violations.append({**record, 'reason': reason, 'source_capability_sha256': _sha(_canonical(semantics))})
     return {'status': 'FAIL' if violations else 'PASS', 'violations': violations, 'observations': observations,
             'source_semantics_sha256': _sha(_canonical(semantics)), 'gate_version': VERSION,
-            'scope_rules_version': 'local-denial-prerequisite-v5',
+            'scope_rules_version': 'local-denial-prerequisite-v6',
             'checked_scope': {'families': [name for name, _ in families], 'scope': 'finite Chinese/English proposition families and local scopes only',
                               'not_checked': ['arbitrary natural-language entailment', 'source truth', 'causality', 'investment effect', 'unknown synonyms',
                                               'unparsed natural-language security names or dates; these still require source review',
                                               'numerical relationships outside the explicit adjacent first/last-close percent grammar',
-                                              'bare cumulative numbers without adjacent explicit close endpoints'],
+                                              'bare cumulative numbers without adjacent explicit close endpoints',
+                                              'commodity-price source truth and unbound generic price subjects'],
                               'PASS_is_not_semantic_accuracy': True, 'no_model_calls': True, 'does_not_rewrite_report': True}}
