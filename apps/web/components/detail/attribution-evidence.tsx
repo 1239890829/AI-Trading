@@ -236,7 +236,7 @@ const COMPANY_STATES: Record<CompanyStatus["state"], string> = {
   idle: "等待采集条件", queued: "已排队", collecting: "正在采集公司原文", generating: "正在生成研究解释",
   ready: "本次研究结果已保存", insufficient: "证据不够", source_failed: "公司原文采集失败", model_failed: "模型判读失败",
   invalid_response: "模型结果未通过引用核对", budget_blocked: "模型预算已阻断", canceled: "任务已取消",
-  interrupted: "任务中断，等待恢复", disabled: "旧版独立自动判读已停用", historical_excluded: "所查时点无可用资料",
+  interrupted: "任务中断，等待恢复", disabled: "尚无可读取的公司依据", historical_excluded: "所查时点无可用资料",
 };
 
 /** A legacy worker switch cannot erase public facts saved by the complete research task. */
@@ -270,7 +270,8 @@ function CompanyStatusEvidence({value, symbol, now, showFacts, responseAsOf, com
   const busy = ["queued", "collecting", "generating"].includes(current.state);
   return <section aria-label={compact ? "公司资料与判读状态摘要" : "公司资料与判读状态"} className="min-w-0 space-y-2 py-2">
     <h4 className="font-medium">公司资料与判读</h4>
-    <p role={busy ? "status" : "note"}>{companyStatusLabel(current, !historicalUnknown)}{current.reason ? `：${current.reason}` : ""}</p>
+    <p role={busy ? "status" : "note"}>{companyStatusLabel(current, !historicalUnknown)}{current.reason && current.state !== "disabled" ? `：${current.reason}` : ""}</p>
+    {current.state === "disabled" && current.reason && <details className="text-zinc-600 dark:text-zinc-400"><summary className="w-fit cursor-pointer">查看资料处理记录</summary><p className={styles.sourceCopy}>{current.reason}</p></details>}
     {!compact && <>
       <ConditionList label="本轮具体缺项" items={current.missing.length ? current.missing : ["本轮未列出额外缺项，不代表资料完整或经营效果已验证。"]} tone="warning"/>
       <p className="text-zinc-600 dark:text-zinc-400">已保存 {current.documents_count} 份公司原文 · 状态记录于 {timeLabel(current.updated_at)}{current.next_retry_at ? ` · 下次可重试时点：${timeLabel(current.next_retry_at)}` : ""}</p>

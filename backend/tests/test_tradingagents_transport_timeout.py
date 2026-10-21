@@ -54,6 +54,72 @@ def test_timeout_drains_and_preserves_only_verified_final_usage(monkeypatch):
     assert "private prompt" not in saved and "not retained" not in saved and "fixture stderr" not in saved
 
 
+@pytest.mark.parametrize("usage", [
+    {"input_tokens": 152010, "output_tokens": 288, "cached_input_tokens": 75776,
+     "cache_write_input_tokens": 0, "reasoning_output_tokens": 77},
+    {"input_tokens": 85219, "output_tokens": 1067, "cached_input_tokens": 0,
+     "cache_write_input_tokens": 0, "reasoning_output_tokens": 0},
+    {"input_tokens": 17, "output_tokens": 3, "cached_input_tokens": 7,
+     "cache_creation_input_tokens": 2, "cache_write_input_tokens": 3},
+])
+def test_real_terminal_usage_contract_survives_timeout(monkeypatch, usage):
+    # First two rows retain the numeric shapes observed in existing CLI LAB
+    # metadata. The nonzero write row is a boundary fixture, not billing proof.
+    error, _, _ = timed_out(monkeypatch, stream(usage))
+    assert error.final_usage_verified and error.usage == usage
+
+
+def test_invalid_terminal_usage_keeps_numeric_observation_without_text(monkeypatch):
+    usage = {"input_tokens": 17, "output_tokens": 3, "cached_input_tokens": 18,
+             "PRIVATE_CONTEXT_MUST_NOT_BE_SAVED": "PRIVATE_VALUE_MUST_NOT_BE_SAVED"}
+    error, _, _ = timed_out(monkeypatch, stream(usage))
+    assert error.usage is None and not error.final_usage_verified
+    observed = error.usage_observation
+    assert observed["numeric_fields"] == {"input_tokens": 17, "output_tokens": 3, "cached_input_tokens": 18}
+    assert observed["projection_rejection"] == "unsupported_usage_field"
+    assert observed["unrecognized_fields"][0]["value_type"] == "string"
+    assert "PRIVATE_" not in json.dumps(error.diagnostic) + json.dumps(observed)
+
+
+def test_observation_is_bounded_and_does_not_copy_unknown_field_names():
+    usage = {"PRIVATE_KEY_" + str(n): "PRIVATE_VALUE_" + str(n) for n in range(100)}
+    usage.update(input_tokens=17, output_tokens=3)
+    projected, observed = process.project_usage_evidence(usage)
+    assert projected is None and observed["projection_rejection"] == "usage_field_count_exceeds_bound"
+    assert observed["numeric_fields"] == {"input_tokens": 17, "output_tokens": 3}
+    assert observed["omitted_field_count"] > 0 and not observed["raw_complete"]
+    assert (len(observed["field_types"]) + len(observed["unrecognized_fields"])
+            + observed["omitted_field_count"] == observed["field_count"])
+    assert len(observed["unrecognized_fields"]) <= 16
+    assert "PRIVATE_" not in json.dumps(observed) and len(json.dumps(observed)) < 5000
+
+
+def test_non_utf8_field_name_cannot_discard_terminal_accounting_observation():
+    projected, observed = process.project_usage_evidence({"input_tokens": 17, "output_tokens": 3, "\ud800": 2})
+    assert projected is None and observed["projection_rejection"] == "unsupported_usage_field"
+    assert observed["numeric_fields"] == {"input_tokens": 17, "output_tokens": 3}
+    assert len(json.dumps(observed, allow_nan=False)) < 5000
+
+
+@pytest.mark.parametrize("usage,reason", [
+    (None, "missing_usage"), ([], "nonobject_usage"),
+    ({"output_tokens": 3}, "missing_required_token_count"),
+    ({"input_tokens": "17", "output_tokens": 3}, "noninteger_token_count"),
+    ({"input_tokens": 17, "output_tokens": True}, "noninteger_token_count"),
+    ({"input_tokens": 17, "output_tokens": 1.5}, "noninteger_token_count"),
+    ({"input_tokens": -1, "output_tokens": 3}, "token_count_out_of_range"),
+    ({"input_tokens": 2**63, "output_tokens": 3}, "token_count_out_of_range"),
+    ({"input_tokens": 17, "output_tokens": 3, "cache_write_input_tokens": 18}, "cache_tokens_exceed_input"),
+    ({"input_tokens": 17, "output_tokens": 3, "cached_input_tokens": 7,
+      "cache_creation_input_tokens": 7, "cache_write_input_tokens": 4}, "cache_tokens_exceed_input"),
+    ({"input_tokens": 17, "output_tokens": 3, "reasoning_output_tokens": 4}, "reasoning_tokens_exceed_output"),
+])
+def test_projection_rejection_is_specific_and_never_repairs_usage(usage, reason):
+    projected, observed = process.project_usage_evidence(usage)
+    assert projected is None and observed["projection_rejection"] == reason
+    assert len(json.dumps(observed, allow_nan=False)) < 5000
+
+
 @pytest.mark.parametrize("kill,gone", [(True, False), (False, True)])
 def test_timeout_kill_or_exit_race_still_drains(monkeypatch, kill, gone):
     error, child, signals = timed_out(monkeypatch, stream(), kill=kill, gone=gone)
