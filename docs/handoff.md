@@ -4,15 +4,31 @@
 
 ## 1. 本轮范围与已核现场
 
-### 当前修补：CLI启动警告兼容与再次显式恢复
+### 已发布修补与本轮原生恢复
 
-PR #320准确HEAD `1e56a3b907866e149c5cf203e2a150e882962f3d`已合入master `121549a9d92213ed0608e42976c2cea681af6dc2`；PR CI 39576104814及master CI 39577003142三项成功，DegradedRelease 6312614863、release_check exit0。主树安全快进，五份用户原件SHA不变，launcher已加载build `A8U18e9NOHuElaAH3AzWY`及方法`7a833d7091cac9e0d06838dec151a55e3ad9e171569eb340fb75c900db1342d0`，HTTP/代理验收通过；它不代替实际WS与源时效。前批完整门为后端6792 passed／87 skipped／309 subtests、前端默认/UTC各1994 passed／150文件；当前新HEAD与发布须另核。
+PR #321准确HEAD `ad8c067a5baa71948594b934410d4a37526292ca`已合入master `33b3592dd7235cf0bfddc4f906e07584c363ac14`；PR CI 39583487935及master CI 39584121501三项成功，DegradedRelease 6313644549、release_check exit0。主树安全快进，五份用户原件SHA不变，原分支本地删除且远端缺失；launcher已加载方法`6ea490cef881a83b914750091b1a0e91c860f528f53b2af4cbb195900c5c3ef8`，前端仍为build `A8U18e9NOHuElaAH3AzWY`。HTTP/代理验收通过，不代替当前真实WS或源时效；PR #321运行回执6313788171记录的是授权与解锁到达前的现场。
 
-用户允许保留第三unknown后，正式维护恢复返回新task `dcc100e15eaa4ab98cfecfca4d33eddd`，从第11次Bear Researcher继续原图；九原答、十原回执、旧failed任务和selection claim及原前缀哈希均保持。约56秒后出现新unknown `668d2e1594a44cd68f2e92af778d033e`，失败点terminal_order：exit0、1 started/1 completed、6事件、2 item.error警告、无typed error。数字观察input86737/output1178/reasoning124已保全但未核实，不能补账；完整七报告仍未完成。新unknown不在前三条许可内，已暂停模型调用并另问用户，授权未到前只做工程修补。实际页面被Mac锁屏阻挡，已请用户手动解锁，不自动解锁或换浏览器绕过。
+历史失败保留：PR #320发布后，正式维护恢复task `dcc100e15eaa4ab98cfecfca4d33eddd`从第11次Bear Researcher继续原图，约56秒后因terminal_order产生unknown `668d2e1594a44cd68f2e92af778d033e`。exit0、1 started/1 completed、6事件、2 item.error警告、无typed error；数字观察input86737/output1178/reasoning124已保全但未核实，不能补账。当时没有完整七报告，且新unknown不在前三条许可内，故暂停模型调用；Mac锁屏也曾阻挡页面。用户随后单独允许永久保留该条unknown并在修复后继续未完成步骤，现已手动解锁并允许实际Chrome验收；这些旧阻挡不再冒充当前状态，未来新unknown仍单独停止。
 
-精确官方CLI `rust-v0.162.1` 将启动Warning映射为非致命item.completed/error；当前顺序守卫在turn.started前只允许thread.started，存在过强兼容门。本次未保留具体原流顺序，不能声称已还原它的唯一失败原因。本批`codex/typed-terminal-order-repair`只修官方允许的启动警告并保存固定枚举顺序/违规分支；终端后追加、实质输出乱序、权限/安全/工具、最终消息绑定硬门继续拒绝。另补原维护恢复的历史链精确绑定，保留每次失败的task/method/claim/receipt，后续明确授权只能续未完成节点，不手工清掉旧claim或改账。正式发布、授权与实际续跑分别核验，未新增模型试验，不领取下一业务任务。
+精确官方CLI `rust-v0.162.1` 将启动Warning映射为非致命item.completed/error；旧顺序前缀在turn.started前只允许thread.started，兼容门过强。PR #321仅补官方允许的启动警告并保存固定枚举顺序/违规分支；终端后追加、实质输出乱序、权限/安全/工具及最终消息绑定硬门继续拒绝。原始失败流已丢失，不能声称已还原唯一原因。再次恢复显式绑定各次失败的task/method/grant/claim/receipt与调用区间，保留真正原source，不删claim、不改账、不重跑成功回答。
 
-本批完整后端门6824 passed／87 skipped／309 subtests（pytest245.65秒、外层250.266秒），pyflakes3.554秒；1833个跟踪输入门内无漂移。前端370个跟踪输入与PR #320两时区各1994项及build `A8U18e9NOHuElaAH3AzWY`逐字相同，只复用同字节本地证据；新HEAD三项CI仍重取。启动warning相关179项通过，恢复链59项通过；旧前缀缺陷注入先红且恢复原字节后通过，无模型调用。doc-health、卫生、公开扫描通过；完整门后仅回填本段事实，最终文档守卫、准确HEAD发布与真实加载另核。
+本轮通过正式维护入口创建task `b5541f06a2b4427ebbddef265bc4e13e`，北京时间19:14:31.739752至19:18:56.656070实际成功；从第12次Bear Researcher继续，新增7次调用（12–18），12角色与七报告完成。新增调用input592803/output6595均known；九份原答与十一份旧回执逐字保留，此前四条分别获准保留的历史unknown、本run继承两条仍保留。该新增用量不是全任务费用，不能把旧未知清账，也不能推出准确率、胜率或选股收益提升。
+
+只读核验103项全部通过，覆盖原答/回执/任务/历史链与完整保存结果；辅助脚本核验不代替HTTP或界面。实际两次普通GET均200，同run/task/lineage及七报告哈希/长度一致，目标counter/answer/receipt/claim/result均无变化，没有请求模型生成。返回的保存结果为completed，后续生成预检因下述第5unknown显示usage_unknown；该新条目没有被前四条许可覆盖，保存结果仍正常可读。这是未核实用量的停止边界，不是固定次数额度不足。
+
+实际配对Chrome已核8只入选卡、五个原量纲刻度、同区依据、事件方向键与Esc焦点；002264主卡及原入选通知均读到同一已保存结果。通知内最终结论和其余六份报告已逐项展开、正文非空，主卡同一六报告入口可达，复用九答和继承两条unknown可见。页面分别标明生成19:18、材料截至15:30；原15:00:44通知的公司/事件缺项保持，后生成研究是当前补充，并非严格按通知时点过滤或重写首次入选依据。单run验收不代表8股全部完成，也不把当前收盘读取当连续盘中稳定性；没有重新进行模型对照试验或领取下一业务任务。
+
+新的真实阻挡：002355自动task `f9833bf533ae479b99f3bb5beead44a3`在19:20:55失败，call1/2只保存已知用量的分析师工具提案，尚非两份最终角色报告；call3/News Analyst新增第5unknown `262c6b809cc4446e865550e9b5c3d6ee`，未获原四条具名例外许可，后续调用停止。完整7事件顺序已保全：两个合法启动warning后，turn内顶层error、agent_message、turn.completed；CLI exit0、非超时/流截断，失败点为typed_error_count硬拒，最终原答未通过完整绑定/schema核验。仅有input76902/output1650等数字观察，不按known补账、不重抽已保存回答。
+
+精确官方CLI 0.162.1的Error分支仅在`will_retry=false`时置error_seen，而JSONL会把可恢复与终止Error都压成顶层error并省略will_retry，原一律拒绝存在兼容缺口。本条具体错误原文与will_retry未保存，原因不清楚；顺序符合可恢复路径不等于已证明它是误报。本分支已补`--version`实核，先于mark_launch确认固定0.162.1；decoder仅在该已核版本、exit0、唯一有序且最后的完成终态下，接受turn内严格`{type,message}`且非serde fallback的顶层error。其余版本、未知形状、真实失败、越序/完成后追加、权限/安全/工具、最终原答绑定与schema硬门继续拒绝。相关202项定向及本批完整本地门已通过（详见下段），新准确HEAD CI、发布与加载仍另核；不凭此回填第5unknown，付费接续另待其明确授权。002264已完成可读不因新股失败撤销，也不代表整体运行收口。
+
+同次恢复预检还发现真实工程缺口：002355只有两份工具提案，`role-outputs`为零；原生四分析师子图已保存提案与工具结果，四个agent同时pending。零终答不等于没有可复用检查点，首个新调用也不能猜定为News。本分支已补与旧单角色grant互斥的四pending角色集合及逐角色冻结消息指纹；仅新pending集合模式、显式冻结数量0与emptySHA时允许终答目录不存在，每个pending角色首请求在新reserve/counter前核原消息尾序列，旧单角色授权继续兼容且不扩大空流接纳。固定有向兼容补齐后恢复最终84项定向通过（6.71秒）；真实LangGraph与SqliteSaver临时合成库演练四角色续完，原两份工具提案前后各一次、零模型调用，这是合成行为证据，不是002355生产记录已恢复。实际检查点的AI/工具匹配与哈希另已保存，原提案/回执/工具结果/检查点与权限身份不放宽；第5unknown仍未获授权；本批完整本地门通过，新准确HEAD CI、发布与加载尚待验。证据归忽略的artifacts/runs/retryable-terminal-contract-20261021。
+
+同批实际002178也为零终答/四pending，旧741具名unknown保留的Fundamentals工具提案已类型化，输出/回执/原检查点AI及工具哈希匹配。精确复用要求known提案沿原校验，unknown的typed_response须receipt/wrapper/payload三SHA一致，并匹配quality已验证的完整历史具名许可facts中的准确ID/原北京日/scope；原答跨日读取不再误用当天active集合，新调用仍核当日active例外，不放行跨日新unknown。账行与旧回执不改、不升known；未许可、terminal failure或错hash仍拒，不授予旧c98整体兼容，也不越过第5unknown。用户追问“为什么一直unknown”只是要求解释原因，不是第5ID授权。原四组件allowlist不变，另仅接受transport_process.py已审的固定有向9281…→d88…hash对，涵盖有界诊断及严格cache_write字段契约；未来hash、反向或缺old均拒绝，旧unknown不回账。
+
+PR #321完整后端门6824 passed／87 skipped／309 subtests（pytest245.65秒、外层250.266秒），pyflakes3.554秒；1833个跟踪输入门内无漂移。前端370个跟踪输入与PR #320两时区各1994项及build `A8U18e9NOHuElaAH3AzWY`逐字相同，只复用同字节本地证据，PR #321准确新HEAD三项CI另已通过。启动warning相关179项、恢复链59项、最终文档守卫146项通过，旧前缀缺陷注入先红且恢复原字节后通过，工程测试无模型调用；doc-health、卫生和公开扫描通过。这些是已发布版本的工程证据。本轮最终源码完整后端6872 passed／87 skipped／309 subtests（pytest290.55秒、外层297.278秒），pyflakes4.244秒、doc-health7.296秒、卫生0.073秒、公开扫描2.462秒均exit0；1833个跟踪输入门内零漂移。前端370个跟踪输入与PR #320默认/UTC各1994 passed及build `A8U18e9NOHuElaAH3AzWY`逐字相同，复用其完整本地证据。本PR准确新HEAD的backend/frontend/docs三CI、回执、发布、合并及加载仍另核，不借PR #321旧CI替代；补固定有向pair前的完整成功批只保留于忽略artifacts，不冒充最终源验收。
+
+本轮完整后端首批因复用读取误绑当天例外、次日将自锁的P2反证而主动SIGINT，保留102.869秒中断证据；它不是完整通过，也不当产品断言失败。旧答读取与当日新调用分开修补后，已用独立basetemp完成上述最终完整门；中断证据与补pair前成功批均保留原层级。
 
 前批9项已完成pytest临时payload/旧构建副本已精确清理，磁盘可用实测约增3.721GiB；PR #320运行回执另记其真实失败。本批旧构建备份尚待新运行验收，业务/研究/unknown/checkpoint/Memory、用户原件和其他worktree继续保留。
 
@@ -28,7 +44,7 @@ PR #318准确HEAD `256cae58a305981653438147ff92c464bd475502`已合入master `d94
 
 前端370个跟踪输入与PR #318完整两时区1970项/生产构建逐字相同，复用相同源码本地证据；本批新HEAD三项CI仍重新取得。本批后端完整门6711 passed／87 skipped／309 subtests（pytest594.73秒、外层606.592秒），pyflakes7.931秒通过；1830个跟踪输入门内零漂移。doc-health、卫生及公开扫描通过，全门后仅回填本段事实并另跑最终文档守卫。精确HEAD发布和新运行另核；无重跑旧答、手动改账、付费新源、真实外发或交易操作。
 
-### 当前修补：真实终端用量契约
+### 历史修补：真实终端用量契约
 
 PR #317准确HEAD `4b65bc86cc4968348a7591bc05eb3db234189703`已合入master `42f4c833c9e7e07e74370d75a0d417b8de60a8b9`；PR CI 39553767983及master CI 39554735386三项成功，DegradedRelease 6309449237、release_check exit0。主树安全快进，五份用户原件SHA不变，原分支本地删除且远端不存在；launcher加载build `UZhLRzcqj7laxSe9phPgu`，已配对Chrome实际读取入选读者。HTTP/代理检查不代替真实WS和源时效；初步锁观测无新lock_error不证明全日稳定。运行回执见PR评论6309949702。
 

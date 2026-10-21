@@ -30,9 +30,13 @@
 
 ## IMP-092
 
-> PR #319已合入并实际加载，第三unknown仍正确阻断；用户随后明确只为该条授权继续原未完成步骤。补正式维护原生恢复入口及服务器精确单次grant，复用九答、旧task/失败/用量保留，新unknown照常停；工程发布与七报告实际读取分开核，不改原任务状态和调度字段。
+> 历史接续：PR #319加载后第三unknown正确阻断，用户随后仅为该条授权继续原未完成步骤；PR #320补正式维护原生恢复入口及服务器单次grant，保留九答、旧task/失败/用量。实际call11/Bear仍因terminal_order失败，新增第四unknown；数字观察未核实、当时全七报告未完成。失败与unknown保留，不能被后续成功覆盖。
 >
-> PR #320及master三CI已通过并加载；正式接续call11/Bear后terminal_order失败新增unknown，九原答/十旧回执/旧任务与claim哈希不变，数字观察未核实、全七报告未完成。新unknown授权单独核；启动warning按精确官方合同窄修，后续维护恢复显式保全各次失败历史链。只记工程/运行事实，不改任务状态或调度字段；现役边界见[语义纠错](../ai/semantic-decisions.md#2026-10-21-cli启动警告与重复失败恢复纠错)。
+> PR #321准确HEAD发布、PR/master三CI及release_check均通过，方法6ea已加载；用户单独允许保留第四unknown后，正式维护task b5541f06实际从call12/Bear续至call18成功，12角色/七报告完成，103项只读核验通过。九原答/十一旧回执逐字保留；新增7调用用量known不代表全任务费用，继承unknown不清账，未来新unknown仍停。两次普通GET同结果且目标文件零变，配对Chrome的002264主卡/原入选通知均读到同一保存结果，通知七份非空报告及复用/unknown说明已逐项核。生成19:18/材料截至15:30与原15:00:44通知分开，原缺项不借后来材料补齐；单run可读不等全部入选股已完成或后续生成可用。只记本轮事实，不改任务状态或调度字段，见[语义纠错](../ai/semantic-decisions.md#2026-10-21-cli启动警告与重复失败恢复纠错)及handoff。
+>
+> 同轮正常002355任务call3/News因顶层error拒绝，产生第5unknown 262c6b80；此前两次只是已保存工具提案，未完成角色报告。精确CLI合同允许可恢复Error且JSONL省略will_retry，原一律拒绝存在兼容缺口；本条具体原因不清楚，不称已证误报。已补mark_launch前实核0.162.1，仅在exit0、唯一有序最后完成、turn内严格形状且非serde fallback时按该合同处理；其他硬门保留，定向通过。本批完整本地门已通过（见handoff），新准确HEAD CI/发布/加载另核，新ID另待授权，原unknown不补账；不影响002264已存七报告读取，不是固定额度不足。
+>
+> 正式恢复另暴露零终答边界：两提案/工具结果已入原生四分析师检查点，`role-outputs`为空、四agent同时pending，不能猜首个新调用为News。已补互斥pending集合与逐角色消息指纹，仅新集合模式的显式0/emptySHA允许目录缺失；每角色首次请求在新reserve/counter前核原消息尾，旧单角色grant兼容且空流边界不扩。固定有向兼容补齐后最终84项定向（6.71秒）及真实LangGraph/SqliteSaver临时合成库四角色续接通过，原两提案前后各一次、零模型调用，不冒充002355实际恢复。实际002178旧741的unknown typed_response仅在receipt/wrapper/payload三SHA一致且quality已验证的完整历史具名许可facts匹配原ID/日/scope时复用，账行/旧回执不改；新调用另核当天active例外，未许可/terminal failure/错hash仍拒。原四组件allowlist不变，transport_process.py仅接受已审9281…→d88…有向对（含严格cache_write契约与诊断），未来/反向/缺old仍拒、旧unknown不回账。本批完整本地门通过（见handoff），准确HEAD CI/发布/加载及第5ID授权分别待核；用户追问原因不构成授权。
 
 > PR #318真实新研究前9次known，第10普通传输失败新增unknown，图仅5角色终答/4分析报告；没有完整成功。补普通失败/解析/schema安全诊断与数字观察缺口，失败仍unknown，不重放旧答、不补账。原任务状态/调度/效果前置不变，完整工程与运行分别核验。
 

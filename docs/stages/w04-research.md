@@ -160,9 +160,13 @@
 
 ## RSH-030
 
-> PR #319已合入并实际加载，第三unknown仍正确阻断；用户随后明确只为该条授权继续原未完成步骤。补正式维护原生恢复入口及服务器精确单次grant，复用九答、旧task/失败/用量保留，新unknown照常停；工程发布与七报告实际读取分开核，不改原任务状态和调度字段。
+> 历史接续：PR #319加载后第三unknown正确阻断，用户随后仅为该条授权继续原未完成步骤；PR #320补正式维护原生恢复入口及服务器单次grant，保留九答、旧task/失败/用量。实际call11/Bear仍因terminal_order失败，新增第四unknown；数字观察未核实、当时全七报告未完成。失败与unknown保留，不能被后续成功覆盖。
 >
-> PR #320及master三CI已通过并加载；正式接续call11/Bear后terminal_order失败新增unknown，九原答/十旧回执/旧任务与claim哈希不变，数字观察未核实、全七报告未完成。新unknown授权单独核；启动warning按精确官方合同窄修，后续维护恢复显式保全各次失败历史链。只记工程/运行事实，不改任务状态或调度字段；现役边界见[语义纠错](../ai/semantic-decisions.md#2026-10-21-cli启动警告与重复失败恢复纠错)。
+> PR #321准确HEAD发布、PR/master三CI及release_check均通过，方法6ea已加载；用户单独允许保留第四unknown后，正式维护task b5541f06从call12/Bear续至call18成功，12角色/七报告完成，103项只读核验通过。九原答/十一旧回执逐字保留；新增7调用用量known、此前四条获准保留的unknown及本run继承两条保留，不能推出全任务费用。两次普通GET同七报告且目标文件零变，配对Chrome的002264主卡/原通知读取同结果，通知七正文及复用/unknown已逐项核。生成19:18/材料截至15:30是当前补充，不回写15:00:44首次理由，不声称严格按通知时点过滤、全部入选股已齐或后续生成可用。RESEARCH_ONLY_AUTHORIZED、net_gain_verified=false、production_eligible=false、人工gold0及本任务原状态/独立效果条件不变，见[语义纠错](../ai/semantic-decisions.md#2026-10-21-cli启动警告与重复失败恢复纠错)及handoff。
+>
+> 随后正常002355任务call3/News出现第5unknown 262c6b80，现役预检停后续调用，原四条许可不扩用。精确CLI省略顶层error的will_retry，原全拒存在兼容缺口；本次具体原因不清楚，不能据exit0/完成顺序补账。已补mark_launch前实核0.162.1，仅按固定版本、exit0、唯一有序最后完成、turn内严格形状且非serde fallback处理，其他硬门不变。定向及本批完整本地门通过（见handoff），新准确HEAD CI、发布/加载及第5ID授权分别待核，旧两份工具提案和checkpoint保留；不改研究身份、独立效果条件或任务元数据。
+>
+> 此run无角色终答，但原生子图保有两提案/工具结果且四agent同时pending，首个新调用不能从失败的News倒推。正式恢复已补互斥四pending角色/逐角色消息指纹，仅新集合模式显式0/emptySHA允许目录缺失，每角色首请求在新reserve/counter前核原消息尾，旧单角色grant兼容且空流边界不扩。固定有向兼容补齐后最终84项定向通过（6.71秒）；真实LangGraph/SqliteSaver临时合成库四角色续完、两原提案前后各一次且零模型调用，只证明合成行为。同批实际002178旧741也是零终答四pending，其unknown typed_response提案须三SHA一致并匹配quality已验证的完整历史具名许可facts的原ID/日/scope，旧账/回执不改；新调用仍核当日active例外，不放跨日新unknown或未许可/terminal failure/错hash。原四组件allowlist不变，transport_process.py仅接受已审9281…→d88…有向对，含严格cache_write契约及诊断，未来/反向/缺old不放行、旧unknown不回账。实际002355未恢复；本批完整本地门通过（见handoff），准确HEAD CI/发布/加载和第5unknown许可独立待核，用户追问原因不是许可。
 
 > PR #318真实新研究前9次known，第10普通传输失败新增unknown，图仅5角色终答/4分析报告；没有完整成功。补普通失败/解析/schema安全诊断与数字观察缺口，失败仍unknown，不重放旧答、不补账。原任务状态/调度/效果前置不变，完整工程与运行分别核验。
 

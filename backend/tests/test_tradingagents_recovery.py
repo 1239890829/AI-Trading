@@ -119,6 +119,157 @@ def consumed(e):
 
 def params(c,owner): return dict(symbol=SYMBOL,native_recovery=dict(source_task_id=OLD,run_id=RUN,grant_sha256=c['grant_sha256'],dispatch_owner=owner))
 
+PARALLEL_ROLES=('Market Analyst','Sentiment Analyst','News Analyst','Fundamentals Analyst')
+
+def parallel_env(e):
+    """Four failed native subgraphs; two paid tool proposals already checkpointed."""
+    b=e.grant['binding']; b.pop('expected_pending_role'); b['completed_roles']=[]
+    b['expected_pending_roles']=list(PARALLEL_ROLES)
+    e.messages={role:[dict(role='user',content='frozen initial message')] for role in PARALLEL_ROLES}
+    for n,role in enumerate(('Fundamentals Analyst','Market Analyst'),1):
+        output=dict(content=f'original {role} tool proposal',tool_calls=[dict(id=f'original{n}',name='get_news',arguments={'symbol':SYMBOL})])
+        put(e.run/'model-outputs'/f'{n}.json',dict(call_id=n,role=role,structured_output=output,output_sha256=research._digest(output)))
+        put(e.run/'usage-receipts'/f'{n}.json',dict(task_id=OLD,method_sha256=research._digest(e.grant['source_method_identity']),call_id=n,
+            role=role,usage_id=f'{n:032x}',usage_known=True,usage={'input_tokens':1,'output_tokens':1}))
+        e.messages[role]+=[dict(role='assistant',content=output['content'],tool_calls=[dict(name='get_news',args={'symbol':SYMBOL},id=f'mapped{n}',type='tool_call')]),
+            dict(role='tool',content=f'frozen result {n}',name='get_news',status='success',tool_call_id=f'mapped{n}')]
+    put(e.run/'usage-receipts/3.json',dict(task_id=OLD,method_sha256=research._digest(e.grant['source_method_identity']),call_id=3,usage_id=f'{3:032x}',usage_known=False,usage=None))
+    with e.sf() as db:
+        db.get(AgentResourceUsage,f'{2:032x}').usage_known=1
+        db.add(AgentResourceUsage(id=f'{3:032x}',budget_date=NOW.date().isoformat(),scope=agent_budget.SCOPE_SELECTED_RESEARCH_LLM,
+            kind='model',purpose='fixture.unknown',task_id=OLD,state='failed',usage_known=0,started_at=(NOW-timedelta(minutes=15)).replace(tzinfo=None)));db.commit()
+    e.auth['unknown_usage_exception']['allowed_unknown_usage'][0]['usage_id']=f'{3:032x}'
+    (e.run/'role-outputs.jsonl').unlink();put(e.run/'call-counter.json',{'reserved':3})
+    b['call_counter']=3;b['outputs']={str(n):recovery._sha(e.run/'model-outputs'/f'{n}.json') for n in (1,2)}
+    b['usage_receipts']={str(n):recovery._sha(e.run/'usage-receipts'/f'{n}.json') for n in (1,2,3)}
+    b['prefixes']['role-outputs.jsonl']=dict(bytes=0,sha256=hashlib.sha256(b'').hexdigest())
+    b['pending_message_fingerprints']={role:[research._digest(row) for row in rows] for role,rows in e.messages.items()}
+    cp=e.run/'graph/cache/checkpoints'/f'{SYMBOL}.db'
+    with sqlite3.connect(cp) as db:
+        thread=db.execute('SELECT thread_id FROM checkpoints').fetchone()[0]
+        db.execute('UPDATE checkpoints SET metadata=?',(json.dumps({'step':0}),))
+        for i,role in enumerate(PARALLEL_ROLES):
+            ns=role+':'+str(i)*8+'-1111-1111-1111-111111111111'; cid=f'child-{i}'
+            db.execute('INSERT INTO checkpoints VALUES(?,?,?,?,?,?,?)',(thread,ns,cid,None,'msgpack',b'opaque native messages',json.dumps({'step':2 if len(e.messages[role])>1 else 0,'parents':{'':'checkpoint-1'}})))
+            db.execute('INSERT INTO writes VALUES(?,?,?,?,?,?,?,?,?)',(thread,ns,cid,f'task-{i}','~__pregel_pull, agent',-1,'__error__','msgpack',b'failed'))
+            db.execute('INSERT INTO writes VALUES(?,?,?,?,?,?,?,?,?)',(thread,'','checkpoint-1',f'outer-{i}','~__pregel_pull, '+role,-1,'__error__','msgpack',b'failed'))
+    b['checkpoint']=recovery.checkpoint_snapshot(e.run,SYMBOL);e.pin();return e
+
+def test_parallel_zero_final_answers_are_valid_without_creating_role_stream(env):
+    e=parallel_env(env);assert context(e)['binding']['expected_pending_roles']==list(PARALLEL_ROLES)
+    assert not (e.run/'role-outputs.jsonl').exists()
+
+@pytest.mark.parametrize('roles',[['News Analyst'],list(PARALLEL_ROLES)+['News Analyst'],['Bull Researcher',*PARALLEL_ROLES[1:]]])
+def test_parallel_pending_set_must_match_native_four_subgraphs(env,roles):
+    e=parallel_env(env);e.grant['binding']['expected_pending_roles']=roles;e.pin()
+    with pytest.raises(research.ResearchBlocked):context(e)
+
+def test_parallel_guard_resumes_two_paid_tool_proposals_in_any_role_order(env):
+    e=parallel_env(env);originals={p:p.read_bytes() for p in (e.run/'model-outputs').glob('*.json')};seen=[]
+    async def continuation(*,recovery_guard,**kwargs):
+        for i,role in enumerate(('Sentiment Analyst','Market Analyst','Fundamentals Analyst','News Analyst')):
+            recovery_guard(dict(role=role,messages=[dict(role='system',content='same pinned prompt')]+e.messages[role]),3+i);seen.append(role)
+        raise RuntimeError('stop fixture before any paid generation')
+    e.native._execute=continuation;c,owner=consumed(e)
+    with pytest.raises(RuntimeError,match='stop fixture'):asyncio.run(recovery.run_recovery(e.rec,params(c,owner),e.app))
+    assert seen==['Sentiment Analyst','Market Analyst','Fundamentals Analyst','News Analyst']
+    assert all(p.read_bytes()==body for p,body in originals.items()) and json.loads((e.run/'call-counter.json').read_text())=={'reserved':3}
+
+@pytest.mark.parametrize('mutation',['missing_proposal','alter_tool_result','duplicate_old_proposal'])
+def test_parallel_first_request_requires_full_frozen_message_continuation(env,mutation):
+    e=parallel_env(env);called=[]
+    async def continuation(*,recovery_guard,**kwargs):
+        messages=deepcopy(e.messages['Market Analyst'])
+        if mutation=='missing_proposal':messages=messages[:1]
+        elif mutation=='alter_tool_result':messages[-1]['content']='changed tool result'
+        else:messages=messages+[messages[1]]
+        recovery_guard(dict(role='Market Analyst',messages=messages),3);called.append(True)
+    e.native._execute=continuation;c,owner=consumed(e)
+    with pytest.raises(research.ResearchBlocked):asyncio.run(recovery.run_recovery(e.rec,params(c,owner),e.app))
+    assert called==[] and json.loads((e.run/'call-counter.json').read_text())=={'reserved':3}
+
+def test_parallel_empty_stream_allows_only_later_append(env):
+    e=parallel_env(env);context(e)
+    (e.run/'role-outputs.jsonl').write_text(json.dumps({'peer':dict(role='Market Analyst',call_id=4,output_sha256='a'*64)})+'\n')
+    with pytest.raises(research.ResearchBlocked):context(e)
+    assert recovery._context(OLD,RUN,e.app,e.sf,initial=False)['binding']['completed_roles']==[]
+    (e.run/'role-outputs.jsonl').write_text(json.dumps({'peer':dict(role='Market Analyst',call_id=2,output_sha256='a'*64)})+'\n')
+    with pytest.raises(research.ResearchBlocked):recovery._context(OLD,RUN,e.app,e.sf,initial=False)
+
+@pytest.mark.parametrize('mode',['missing_nonempty_audit','empty_fingerprints','changed_subgraph','non_tool_original'])
+def test_parallel_freeze_rejects_non_equivalent_source(env,mode):
+    e=parallel_env(env)
+    if mode=='missing_nonempty_audit':(e.run/'source-audit.jsonl').unlink()
+    elif mode=='empty_fingerprints':e.grant['binding']['pending_message_fingerprints']['News Analyst']=[]
+    elif mode=='changed_subgraph':
+        cp=e.run/'graph/cache/checkpoints'/f'{SYMBOL}.db'
+        with sqlite3.connect(cp) as db:db.execute("DELETE FROM writes WHERE task_path='~__pregel_pull, News Analyst'")
+        e.grant['binding']['checkpoint']=recovery.checkpoint_snapshot(e.run,SYMBOL)
+    else:
+        value=json.loads((e.run/'model-outputs/1.json').read_text());value['structured_output']['tool_calls']=[]
+        value['output_sha256']=research._digest(value['structured_output']);put(e.run/'model-outputs/1.json',value)
+        e.grant['binding']['outputs']['1']=recovery._sha(e.run/'model-outputs/1.json')
+    e.pin()
+    with pytest.raises(research.ResearchBlocked):context(e)
+
+def test_parallel_zero_final_continuation_publishes_complete_without_replaying_proposals(env):
+    e=parallel_env(env);originals={p:p.read_bytes() for p in (e.run/'model-outputs').glob('*.json')}
+    async def continuation(*,rec,recovery_guard,**kwargs):
+        for n,role in enumerate([*PARALLEL_ROLES,*[r for r in research.ROLES if r not in PARALLEL_ROLES]],4):
+            recovery_guard(dict(role=role,messages=e.messages.get(role,[])),n-1)
+            output=dict(content='new fixture final '+role,tool_calls=[]);outsha=research._digest(output)
+            put(e.run/'model-outputs'/f'{n}.json',dict(call_id=n,role=role,structured_output=output,output_sha256=outsha))
+            put(e.run/'usage-receipts'/f'{n}.json',dict(task_id=rec.task_id,method_sha256=research._digest(e.current),call_id=n,
+                role=role,output_sha256=outsha,usage_known=True,usage={'input_tokens':1,'output_tokens':1}))
+            with (e.run/'role-outputs.jsonl').open('a') as h:h.write(json.dumps({'peer':dict(role=role,call_id=n,output_sha256=outsha)})+'\n')
+            put(e.run/'call-counter.json',dict(reserved=n))
+        with (e.run/'graph/node-trace.jsonl').open('a') as h:h.write(json.dumps({'node':'Memory Log','event':'end'})+'\n')
+        return {key:'complete seven-report fixture' for key in research.REPORTS}
+    e.native._execute=continuation;c,owner=consumed(e)
+    result=asyncio.run(recovery.run_recovery(e.rec,params(c,owner),e.app))
+    assert result['state']=='completed' and all(p.read_bytes()==body for p,body in originals.items())
+    view=research._latest(SYMBOL)
+    assert view['recovery_lineage']['reused_original_outputs']==2 and view['recovery_lineage']['new_call_from']==4
+    assert len(view['reports'])==7 and view['recovery_lineage']['inherited_unknown_usage_count']==1
+
+@pytest.mark.parametrize('mode',['permitted','not_named','terminal_failure','receipt_hash_drift'])
+def test_typed_proposal_with_named_unknown_is_reused_without_reconciling_usage(env,mode):
+    e=parallel_env(env);path=e.run/'usage-receipts/2.json';usage=json.loads(path.read_text());output=json.loads((e.run/'model-outputs/2.json').read_text())
+    usage.update(usage_known=False,usage=None,terminal_kind='typed_response',output_sha256=output['output_sha256'])
+    if mode=='terminal_failure':usage['terminal_kind']='unknown_transport_failure'
+    if mode=='receipt_hash_drift':usage['output_sha256']='f'*64
+    put(path,usage);e.grant['binding']['usage_receipts']['2']=recovery._sha(path)
+    with e.sf() as db:db.get(AgentResourceUsage,f'{2:032x}').usage_known=0;db.commit()
+    if mode!='not_named':e.auth['unknown_usage_exception']['allowed_unknown_usage'].append(dict(usage_id=f'{2:032x}',budget_date=NOW.date().isoformat(),scope=agent_budget.SCOPE_SELECTED_RESEARCH_LLM))
+    e.pin();before=path.read_bytes()
+    if mode=='permitted':assert context(e)['binding']['outputs']['2']==recovery._sha(e.run/'model-outputs/2.json')
+    else:
+        with pytest.raises(research.ResearchBlocked):context(e)
+    with e.sf() as db:assert db.get(AgentResourceUsage,f'{2:032x}').usage_known==0
+    assert path.read_bytes()==before
+
+def test_cross_day_named_typed_reuse_does_not_exempt_new_day_unknown(env,monkeypatch):
+    e=parallel_env(env);path=e.run/'usage-receipts/2.json';usage=json.loads(path.read_text())
+    usage.update(usage_known=False,usage=None,terminal_kind='typed_response',
+        output_sha256=json.loads((e.run/'model-outputs/2.json').read_text())['output_sha256'])
+    put(path,usage);e.grant['binding']['usage_receipts']['2']=recovery._sha(path)
+    with e.sf() as db:db.get(AgentResourceUsage,f'{2:032x}').usage_known=0;db.commit()
+    e.auth['unknown_usage_exception']['allowed_unknown_usage'].append(dict(usage_id=f'{2:032x}',budget_date=NOW.date().isoformat(),scope=agent_budget.SCOPE_SELECTED_RESEARCH_LLM))
+    tomorrow=NOW+timedelta(days=1)
+    e.auth['valid_until']=(tomorrow+timedelta(hours=2)).isoformat();e.grant['valid_until']=(tomorrow+timedelta(hours=1)).isoformat();e.pin()
+    monkeypatch.setattr(research,'_now',lambda:tomorrow);monkeypatch.setattr(agent_budget,'beijing_now',lambda:tomorrow)
+    monkeypatch.setattr(agent_budget,'beijing_now_naive',lambda:tomorrow.replace(tzinfo=None))
+    c=context(e);assert c['binding']['outputs']['2']==recovery._sha(e.run/'model-outputs/2.json')
+    assert research._allowed_unknown_usage(c['admission'])==()
+    with e.sf() as db:
+        assert db.get(AgentResourceUsage,f'{2:032x}').usage_known==0
+        db.add(AgentResourceUsage(id='9'*32,budget_date=tomorrow.date().isoformat(),scope=agent_budget.SCOPE_SELECTED_RESEARCH_LLM,
+            kind='model',purpose='tradingagents.new_day',task_id=NEW,state='failed',usage_known=0,started_at=tomorrow.replace(tzinfo=None)));db.commit()
+    with pytest.raises(agent_budget.BudgetError,match='token 用量未知'):
+        agent_budget.ensure_model_usage_known(e.sf,consumer_scope=agent_budget.SCOPE_SELECTED_RESEARCH_LLM,
+            allowed_unknown_usage=research._allowed_unknown_usage(c['admission']))
+    with pytest.raises(research.ResearchBlocked):context(e)
+
 def test_mutable_checkpoint_and_counter_only_frozen_before_start(env):
     assert context(env)['binding']['call_counter']==2
     put(env.run/'call-counter.json',{'reserved':3})
@@ -222,6 +373,22 @@ def test_component_compatibility_never_waives_native_model_or_data_drift(env,tar
     env.auth['unknown_usage_exception']['method_sha256']=research._digest(env.current); env.pin()
     with pytest.raises(research.ResearchBlocked): context(env)
     assert env.native.calls==0
+
+@pytest.mark.parametrize('mutation',[None,'future_hash','reverse','missing_old','wrong_grant_pair','worker_drift'])
+def test_reviewed_transport_usage_transition_is_exact_and_directed(env,mutation):
+    grant=deepcopy(env.grant);old=grant['source_method_identity'];new=grant['continuation_method_identity']
+    old['source_files']['transport_process.py']='9281aeaf1fc31d8b668392d99388f755043bbb191c5e27e39d4e3c1c053da3d2'
+    new['source_files']['transport_process.py']='d88bdea9ecc8f9a854f02d92ed448d08fe3995074d4f130d805ab4d88aca7881'
+    if mutation=='future_hash':new['source_files']['transport_process.py']='f'*64
+    elif mutation=='reverse':old['source_files']['transport_process.py'],new['source_files']['transport_process.py']=new['source_files']['transport_process.py'],old['source_files']['transport_process.py']
+    elif mutation=='missing_old':old['source_files'].pop('transport_process.py')
+    elif mutation=='worker_drift':new['source_files']['worker.py']='f'*64
+    grant['compatibility']['source_hash_pairs']={k:dict(old=old['source_files'].get(k),new=new['source_files'].get(k))
+        for k in old['source_files'].keys()|new['source_files'].keys() if old['source_files'].get(k)!=new['source_files'].get(k)}
+    if mutation=='wrong_grant_pair':grant['compatibility']['source_hash_pairs']['transport_process.py']['new']='e'*64
+    if mutation is None:assert recovery._compatibility(grant,new)==(research._digest(old),research._digest(new))
+    else:
+        with pytest.raises(research.ResearchBlocked):recovery._compatibility(grant,new)
 
 
 def test_grant_cannot_omit_existing_original_paid_output(env):
