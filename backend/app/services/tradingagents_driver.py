@@ -32,6 +32,7 @@ from app.services.tradingagents_news_packet import read_news_packet
 from app.services.tradingagents_native import codex_transport
 from app.services.tradingagents_native.cli_codec import build_cli_schema
 from app.services.tradingagents_native.native_codec import decode_wire_json
+from app.services.tradingagents_native.transport_process import _project_usage
 from app.services.tradingagents_research import REPORTS, ROLES, UPSTREAM_SHA
 from scripts import tradingagents_adapter_contract as adapter
 from scripts import tradingagents_evidence_contract as evidence
@@ -658,6 +659,8 @@ class NativeTradingAgentsDriver:
         files = {p.name: file_sha(p) for p in NATIVE.glob("*.py")}
         files["upstream-manifest.json"] = file_sha(NATIVE / "upstream-manifest.json")
         files["driver.py"] = file_sha(__file__)
+        for name in ("tradingagents_research.py", "agent_budget.py"):
+            files[name] = file_sha(Path(__file__).with_name(name))
         for module in (adapter, evidence, sentiment, source_gate, bjtime):
             files[Path(module.__file__).name] = file_sha(module.__file__)
         return {"upstream_sha": UPSTREAM_SHA, "native_full_graph": True, "adapter_version": 1,
@@ -669,7 +672,7 @@ class NativeTradingAgentsDriver:
 
     async def run_accounted(self, *, rec, params, app, budget, store_root, required_model_slots, verification,
                             selection_binding=None):
-        from app.services.tradingagents_research import require_start, validate_params
+        from app.services.tradingagents_research import authorized_unknown_usage, require_start, validate_params
         symbol = validate_params(params)
         admitted = await drain_thread(require_start, params, app)
         identity = await drain_thread(self.method_identity)
@@ -715,7 +718,10 @@ class NativeTradingAgentsDriver:
             try:
                 final = await self._execute(rec=rec, packet=packet, run=run, budget=budget,
                     identity=identity, max_calls=required_model_slots,
-                    **({"budget_scope": budget.SCOPE_SELECTED_RESEARCH_LLM} if selected_research else {}))
+                    **({"budget_scope": budget.SCOPE_SELECTED_RESEARCH_LLM,
+                        "usage_authorizer": lambda: authorized_unknown_usage(app,
+                            method_sha256=digest(identity), authorization_sha256=admitted["admission"]["artifact_sha256"])}
+                       if selected_research else {}))
                 audits = [json.loads(line) for line in (run / "source-audit.jsonl").read_text().splitlines()]
                 review_summary = self._review_summary(audits)
                 failures = review_summary["finite_failures"]
@@ -949,7 +955,7 @@ class NativeTradingAgentsDriver:
             raise DriverUnavailable("completed_role_regeneration_refused")
 
     async def _execute(self, *, rec, packet, run, budget, identity, max_calls,
-                       interrupt_after_analysts=False, budget_scope=None):
+                       interrupt_after_analysts=False, budget_scope=None, usage_authorizer=None):
         """Real original graph; separately callable for isolated offline fixture checks.
 
         Production entry is run_accounted, which always rechecks admission. This
@@ -1020,7 +1026,9 @@ class NativeTradingAgentsDriver:
                         atomic_json(counter_path, {"reserved": physical_calls})
                         call_id = physical_calls
                         response = await self._infer_accounted(rec, budget, messages, schema, request["role"], call_id,
-                            capture_output=lambda value: self._record_output(run, request, value, call_id), budget_scope=budget_scope)
+                            capture_output=lambda value: self._record_output(run, request, value, call_id), budget_scope=budget_scope,
+                            usage_receipt_path=run / "usage-receipts" / (str(call_id) + ".json"), method_sha256=digest(identity),
+                            usage_authorizer=usage_authorizer)
                         value = response["structured_output"]
                         self._audit_output(run, packet, request, value, context, call_id)
                         if not value.get("tool_calls"):
@@ -1169,7 +1177,41 @@ class NativeTradingAgentsDriver:
         if terminal["status"] == "FAIL":
             raise DriverUnavailable("terminal_report_unusable")
 
-    async def _infer_accounted(self, rec, budget, messages, schema, role, call_id, *, capture_output=None, budget_scope=None):
+    @staticmethod
+    def _save_usage_receipt(path, *, receipt, rec, role, call_id, method_sha256, transport,
+                            response, failure, usage, output_sha256):
+        """Retain provider accounting before DB writes, without request/context text.
+
+        This is recovery evidence, not permission to amend an unknown DB row or
+        replay a paid call. Only the exact original usage ID may be reconciled.
+        """
+        proof = response if isinstance(response, dict) else getattr(failure, "metadata", {})
+        proof = proof if isinstance(proof, dict) else {}
+        hashes = {key: value for key in ("stdout_sha256", "stderr_sha256", "final_file_sha256")
+                  if isinstance(value := proof.get(key), str) and re.fullmatch(r"[0-9a-f]{64}", value)}
+        kind = ("typed_response" if isinstance(response, dict) else
+                "verified_transport_failure" if isinstance(failure, codex_transport.TransportError)
+                and failure.final_usage_verified else "unknown_transport_failure")
+        terminal = {"kind": kind, "usage": usage, "output_sha256": output_sha256, **hashes}
+        atomic_json(path, {"version": 1, "kind": "tradingagents_model_usage", "usage_id": receipt["id"],
+            "task_id": rec.task_id, "role": role, "call_id": call_id,
+            "method_sha256": method_sha256, "transport_sha256": digest(transport),
+            "recorded_at": beijing_now().isoformat(), "output_sha256": output_sha256,
+            "usage": usage, "usage_known": usage is not None,
+            "terminal_kind": kind, "terminal_sha256": digest(terminal), **hashes,
+            "automatic_reconciliation": False, "complete_context_logged": False})
+
+    async def _infer_accounted(self, rec, budget, messages, schema, role, call_id, *, capture_output=None,
+                               budget_scope=None, usage_receipt_path=None, method_sha256=None, usage_authorizer=None):
+        from app.services.agent_tasks import _lifecycle_db
+
+        # The real graph always supplies its exact-method receipt destination.
+        # An existing receipt is recovery work, never permission to regenerate.
+        if usage_receipt_path is not None:
+            usage_receipt_path = Path(usage_receipt_path)
+            if (not isinstance(method_sha256, str) or not re.fullmatch(r"[0-9a-f]{64}", method_sha256)
+                    or usage_receipt_path.exists() or usage_receipt_path.is_symlink()):
+                raise DriverUnavailable("usage_receipt_identity_or_replay")
         # Exact outer transport prompt + schema is bounded before reserve/start.
         prompt = codex_transport.NOTE + codex_transport.encode_cli_transcript(messages)
         wire_schema, _ = codex_transport.strict_wire_schema(schema)
@@ -1179,46 +1221,79 @@ class NativeTradingAgentsDriver:
         if timeout <= 0:
             raise DriverUnavailable("model_timeout_unavailable")
         method = self.transport.method_identity()
+        allowed_unknown_usage = await drain_thread(usage_authorizer) if usage_authorizer is not None else ()
         receipt = await drain_thread(budget.reserve, budget_scope or budget.SCOPE_AUTONOMY_LLM,
             purpose="tradingagents." + role.replace(" ", "_").lower(), kind="model", task_id=rec.task_id,
             provider=method["provider"], model=method["model"], timeout_seconds=timeout,
-            max_retries=0, input_chars=input_chars)
+            max_retries=0, input_chars=input_chars,
+            **({"allowed_unknown_usage": allowed_unknown_usage} if allowed_unknown_usage else {}))
         launched = False
         response = None
+        failure = None
+        interrupted = None
         output_chars = 0
+        output_sha = None
         started_at = monotonic()
         def mark_launch():
             nonlocal launched
             rec.checkpoint()
-            budget.start(receipt["id"])
+            # A reserve is not permission to use a changed authorization. Fresh
+            # facts may shrink after true reconciliation, never silently expand.
+            current = usage_authorizer() if usage_authorizer is not None else ()
+            if any(fact not in allowed_unknown_usage for fact in current):
+                raise DriverUnavailable("unknown_usage_authorization_changed_before_start")
+            budget.start(receipt["id"], **({"allowed_unknown_usage": current} if current else {}))
             launched = True
+        inference = asyncio.create_task(asyncio.to_thread(self.transport.infer, messages, schema,
+            mark_launch=mark_launch, timeout=timeout, role=role))
         try:
-            response = await drain_thread(self.transport.infer, messages, schema,
-                                          mark_launch=mark_launch, timeout=timeout, role=role)
-            if not launched:
-                raise DriverUnavailable("transport_did_not_start_accounted_call")
-            # Capture the untouched paid typed response before task-step DB
-            # observations, finite checks, or downstream native validation.
-            if capture_output is not None:
-                await drain_thread(capture_output, response["structured_output"])
-            output_chars = len(canonical(response["structured_output"]))
-            await drain_thread(budget.finish, receipt["id"], state="succeeded", usage=response.get("usage"),
-                               output_chars=output_chars, attempts=1)
+            response = await asyncio.shield(inference)
+        except asyncio.CancelledError as error:
+            interrupted = error
+            try:
+                # Cancellation still waits for the actual process. Preserve its
+                # returned accounting instead of discarding it after draining.
+                response = await wait_drained(inference)
+            except BaseException as error:
+                failure = error
         except BaseException as error:
-            if launched:
-                # Even a failed output disk/observation must not discard usage
-                # already reported by the real provider or substitute zero.
-                actual_usage = response.get("usage") if isinstance(response, dict) else None
-                if (actual_usage is None and isinstance(error, codex_transport.TransportError)
-                        and error.final_usage_verified):
-                    actual_usage = error.usage
-                if isinstance(response, dict) and isinstance(response.get("structured_output"), dict):
-                    output_chars = len(canonical(response["structured_output"]))
-                await drain_thread(budget.finish, receipt["id"], state="failed", usage=actual_usage,
-                                   output_chars=output_chars, error_kind=type(error).__name__, attempts=1)
-            else:
-                await drain_thread(budget.release, receipt["id"])
-            raise
+            failure = error
+        outcome_error = interrupted or failure
+        if not launched:
+            await drain_thread(budget.release, receipt["id"])
+            raise outcome_error or DriverUnavailable("transport_did_not_start_accounted_call")
+        actual_usage = _project_usage(response.get("usage")) if isinstance(response, dict) else None
+        if actual_usage is None and isinstance(failure, codex_transport.TransportError) and failure.final_usage_verified:
+            actual_usage = _project_usage(failure.usage)
+        try:
+            if isinstance(response, dict) and isinstance(response.get("structured_output"), dict):
+                output_chars = len(canonical(response["structured_output"]))
+                output_sha = digest(response["structured_output"])
+            elif outcome_error is None:
+                raise DriverUnavailable("typed_response_unavailable")
+        except BaseException as error:
+            outcome_error = outcome_error or error
+        if usage_receipt_path is not None:
+            try:
+                await drain_thread(self._save_usage_receipt, usage_receipt_path, receipt=receipt, rec=rec,
+                    role=role, call_id=call_id, method_sha256=method_sha256, transport=method,
+                    response=response, failure=failure, usage=actual_usage, output_sha256=output_sha)
+            except BaseException as error:
+                outcome_error = outcome_error or error
+        # Original answers remain independently recoverable even if receipt
+        # storage fails. Neither failure may discard reported provider usage.
+        if capture_output is not None and isinstance(response, dict) and isinstance(response.get("structured_output"), dict):
+            try:
+                await drain_thread(capture_output, response["structured_output"])
+            except BaseException as error:
+                outcome_error = outcome_error or error
+        # Only this idempotent DB operation retries on SQLite BUSY/LOCKED. The
+        # process and the metadata capture above are never replayed by retries.
+        await _lifecycle_db(budget.finish, receipt["id"], state="failed" if outcome_error else "succeeded",
+            usage=actual_usage, output_chars=output_chars, attempts=1,
+            **({"error_kind": type(outcome_error).__name__} if outcome_error else {}))
+        if outcome_error is not None:
+            raise outcome_error
         await rec.add_async(name="TradingAgents " + role, input_summary="冻结公开资料与原图角色",
                             output_summary="typed模型返回；语义未独立验证",
                             duration_ms=round((monotonic() - started_at) * 1000), ok=True,

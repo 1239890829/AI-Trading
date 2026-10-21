@@ -12,11 +12,14 @@ row is never silently released because the external side effect may already have
 Unlimited alert triage and authorized selected-stock research still reserve durable receipts,
 with no numbered slot. Unknown token usage is never represented as zero. A started model receipt
 with unknown usage blocks later reservations in all model scopes for the same Beijing day.
+An explicit server authorization may name retained unknown rows for selected-stock research
+only; those rows remain unknown, consumed and visible in the original accounting.
 """
 from __future__ import annotations
 
 import uuid
-from datetime import timedelta
+import re
+from datetime import date as date_type, timedelta
 from sqlalchemy import and_, delete, or_, select, update
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import aliased
@@ -119,7 +122,37 @@ def recover_stale_reservations(session_factory=None, *, now=None) -> int:
         return int(result.rowcount or 0)
 
 
-def _unknown_usage_exists(sf, date: str) -> bool:
+def validate_unknown_usage_exceptions(values) -> tuple[dict, ...]:
+    """Project an explicit server authorization; never discover or grant one.
+
+    The caller verifies the pinned authorization and method. These facts only
+    name immutable unknown rows; the SQL gates still match their ID/date/scope.
+    """
+    if not isinstance(values, (tuple, list)) or len(values) > 16:
+        raise ValueError("invalid named unknown usage exceptions")
+    facts, seen = [], set()
+    for item in values:
+        if (not isinstance(item, dict) or set(item) != {"usage_id", "budget_date", "scope"}
+                or not isinstance(item["usage_id"], str) or not re.fullmatch(r"[0-9a-f]{32}", item["usage_id"])
+                or item["usage_id"] in seen or not isinstance(item["budget_date"], str)
+                or date_type.fromisoformat(item["budget_date"]).isoformat() != item["budget_date"]
+                or item["scope"] != SCOPE_SELECTED_RESEARCH_LLM):
+            raise ValueError("invalid named unknown usage exception identity")
+        seen.add(item["usage_id"])
+        facts.append(dict(item))
+    return tuple(facts)
+
+
+def _unexcepted_unknown(model, date, consumer_scope, allowed_unknown_usage):
+    facts = validate_unknown_usage_exceptions(allowed_unknown_usage)
+    permitted = [and_(model.id == fact["usage_id"], model.budget_date == fact["budget_date"],
+                      model.scope == fact["scope"]) for fact in facts
+                 if consumer_scope == SCOPE_SELECTED_RESEARCH_LLM and fact["budget_date"] == date]
+    return ~or_(*permitted) if permitted else True
+
+
+def _unknown_usage_exists(sf, date: str, *, consumer_scope=None, allowed_unknown_usage=()) -> bool:
+    retained = _unexcepted_unknown(AgentResourceUsage, date, consumer_scope, allowed_unknown_usage)
     with sf() as db:
         rows = db.execute(
             select(AgentResourceUsage.id).where(
@@ -129,19 +162,24 @@ def _unknown_usage_exists(sf, date: str) -> bool:
                 AgentResourceUsage.started_at.is_not(None),
                 AgentResourceUsage.kind == "model",
                 AgentResourceUsage.usage_known == 0,
+                retained,
             ).limit(1)
         ).first()
         return rows is not None
 
 
-def ensure_model_usage_known(session_factory=None, *, date: str | None = None) -> None:
+def ensure_model_usage_known(session_factory=None, *, date: str | None = None,
+                             consumer_scope=None, allowed_unknown_usage=()) -> None:
     """Read the existing shared model gate without reserving, recovering or writing.
 
     Admission is only a current observation. ``reserve`` and atomic ``start``
     still enforce the gate when another process changes usage after this read.
+    Exact named exceptions affect only the selected research consumer, never
+    the truth of the original row or another model scope's gate.
     """
     sf = session_factory or get_session_factory()
-    if _unknown_usage_exists(sf, date or _today()):
+    if _unknown_usage_exists(sf, date or _today(), consumer_scope=consumer_scope,
+                             allowed_unknown_usage=allowed_unknown_usage):
         raise BudgetError(
             "usage_unknown",
             "今日已有模型调用的 token 用量未知；拒绝继续消耗，须先核实/跨日恢复",
@@ -183,14 +221,17 @@ def reserve(
     max_retries: int = 0,
     input_chars: int = 0,
     session_factory=None,
+    allowed_unknown_usage=(),
 ) -> dict:
     """Reserve a durable receipt; finite daily slots are atomic across processes.
 
-    All model scopes refuse a new call when any has a started receipt with unknown token usage.
+    Unknown usage blocks a new call, except explicitly named retained rows for
+    the selected research consumer. Every other unknown continues to block.
     Unlimited scopes remove only the daily count ceiling, not model-call limits or durable
     reservation/start/finish accounting.
     """
     sf = session_factory or get_session_factory()
+    allowed_unknown_usage = validate_unknown_usage_exceptions(allowed_unknown_usage)
     if scope == SCOPE_SELECTED_RESEARCH_LLM and (kind != "model" or not purpose.startswith("tradingagents.")):
         raise ValueError("selected research scope is reserved for complete TradingAgents model calls")
     recover_stale_reservations(sf)
@@ -217,7 +258,7 @@ def reserve(
 
     date = _today()
     if scope in _MODEL_BUDGET_SCOPES:
-        ensure_model_usage_known(sf, date=date)
+        ensure_model_usage_known(sf, date=date, consumer_scope=scope, allowed_unknown_usage=allowed_unknown_usage)
 
     now = beijing_now_naive()
     if limit is None:
@@ -261,8 +302,9 @@ def reserve(
     raise BudgetError("budget_exhausted", f"{scope} 今日预算已用尽（{limit}/{limit}）")
 
 
-def start(usage_id: str, session_factory=None) -> dict:
+def start(usage_id: str, session_factory=None, *, allowed_unknown_usage=()) -> dict:
     sf = session_factory or get_session_factory()
+    allowed_unknown_usage = validate_unknown_usage_exceptions(allowed_unknown_usage)
     now = beijing_now_naive()
     with sf() as db:
         row = db.get(AgentResourceUsage, usage_id)
@@ -271,6 +313,8 @@ def start(usage_id: str, session_factory=None) -> dict:
             AgentResourceUsage.state == "reserved",
         ]
         if row is not None and row.scope in _MODEL_BUDGET_SCOPES:
+            conditions.extend((AgentResourceUsage.scope == row.scope,
+                               AgentResourceUsage.budget_date == row.budget_date))
             if row.state == "reserved" and row.budget_date != _today():
                 raise BudgetError(
                     "reservation_expired",
@@ -285,6 +329,7 @@ def start(usage_id: str, session_factory=None) -> dict:
                 other.kind == "model",
                 other.usage_known == 0,
                 other.id != usage_id,
+                _unexcepted_unknown(other, row.budget_date, row.scope, allowed_unknown_usage),
             ).exists())
         result = db.execute(
             update(AgentResourceUsage).where(*conditions)
@@ -333,6 +378,8 @@ def finish(
         if row is None:
             raise ValueError("usage reservation 不存在")
         if row.state in _TERMINAL:
+            if output_budget_error is not None:
+                raise output_budget_error  # Idempotent accounting never turns an oversized answer into acceptance.
             return dump(row)
         if row.state != "started":
             raise BudgetError("not_started", "usage reservation 尚未 start，不能写终态")

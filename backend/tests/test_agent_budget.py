@@ -259,6 +259,153 @@ def test_output_budget_records_failed_and_refuses_success(sf, monkeypatch, scope
     assert receipt["output_chars"] == 6
 
 
+def test_output_hard_limit_survives_idempotent_finish_after_commit_refresh_busy(sf, monkeypatch):
+    import asyncio
+    import sqlite3
+    from sqlalchemy.exc import OperationalError
+    from sqlalchemy.orm import Session
+    from app.models.agent import AgentResourceUsage
+    from app.services.agent_tasks import _lifecycle_db
+    faults = []
+    class RefreshBusy(Session):
+        def refresh(self, instance, *args, **kwargs):
+            if isinstance(instance, AgentResourceUsage) and instance.state == "failed" and not faults:
+                faults.append(instance.id)
+                raise OperationalError("isolated postcommit refresh", {}, sqlite3.OperationalError("database is locked"))
+            return super().refresh(instance, *args, **kwargs)
+    contended = sessionmaker(bind=sf.kw["bind"], class_=RefreshBusy)
+    monkeypatch.setattr(settings, "agent_model_max_output_chars", 5)
+    row = ab.reserve(ab.SCOPE_SELECTED_RESEARCH_LLM, purpose="tradingagents.output-boundary", kind="model",
+        input_chars=1, timeout_seconds=30, session_factory=contended)
+    ab.start(row["id"], contended)
+    async def finish():
+        await _lifecycle_db(ab.finish, row["id"], state="succeeded", usage={"input_tokens": 3, "output_tokens": 2},
+                            output_chars=6, session_factory=contended)
+    with pytest.raises(ab.BudgetError) as error:
+        asyncio.run(finish())
+    assert error.value.code == "output_budget_exceeded" and faults == [row["id"]]
+    receipt = ab.recent_usage(sf, limit=1)[0]
+    assert receipt["id"] == row["id"] and receipt["state"] == "failed"
+    assert receipt["error_kind"] == "output_budget_exceeded" and receipt["output_chars"] == 6
+    assert receipt["usage_known"] is True and receipt["input_tokens"] == 3 and receipt["output_tokens"] == 2
+    assert len(ab.recent_usage(sf)) == 1
+    with pytest.raises(ab.BudgetError, match="超过 Agent 上限"):
+        asyncio.run(finish())
+    assert ab.recent_usage(sf)[0] == receipt, "Hard rejection must not rewrite the already committed usage receipt"
+
+
+def _named_selected_unknown(sf, *, source_scope=ab.SCOPE_SELECTED_RESEARCH_LLM):
+    row = ab.reserve(source_scope, purpose="tradingagents.fixture", kind="model", session_factory=sf)
+    started = ab.start(row["id"], sf)
+    fact = {"usage_id": row["id"], "budget_date": row["budget_date"], "scope": ab.SCOPE_SELECTED_RESEARCH_LLM}
+    return started, (fact,)
+
+
+def test_named_unknown_exception_only_allows_new_selected_research_and_keeps_original_unknown(sf):
+    original, allowed = _named_selected_unknown(sf)
+    ab.ensure_model_usage_known(sf, consumer_scope=ab.SCOPE_SELECTED_RESEARCH_LLM, allowed_unknown_usage=allowed)
+    assert ab.recent_usage(sf) == [original]
+    row = ab.reserve(ab.SCOPE_SELECTED_RESEARCH_LLM, purpose="tradingagents.new", kind="model",
+                     allowed_unknown_usage=allowed, session_factory=sf)
+    ab.start(row["id"], sf, allowed_unknown_usage=allowed)
+    ab.finish(row["id"], state="succeeded", usage={"input_tokens": 7, "output_tokens": 3}, session_factory=sf)
+    receipts = {item["id"]: item for item in ab.recent_usage(sf)}
+    assert receipts[original["id"]] == original
+    assert original["usage_known"] is False and original["state"] == "started"
+    assert ab.release(original["id"], sf) is False
+    summary = ab.budget_status(sf)
+    assert summary["selected_research_used"] == 2 and summary["token_usage_unknown_calls"] == 1
+    assert summary["token_accounting_complete"] is False and summary["input_tokens"] == 7
+    with pytest.raises(ab.BudgetError, match="用量未知"):
+        ab.ensure_model_usage_known(sf, allowed_unknown_usage=allowed)
+
+
+@pytest.mark.parametrize("scope", [ab.SCOPE_AUTONOMY_LLM, ab.SCOPE_ALERT_TRIAGE_LLM])
+def test_selected_exception_cannot_unblock_another_model_scope_even_at_atomic_start(sf, scope):
+    pending = ab.reserve(scope, purpose="other.fixture", kind="model", session_factory=sf)
+    original, allowed = _named_selected_unknown(sf)
+    with pytest.raises(ab.BudgetError, match="用量未知"):
+        ab.ensure_model_usage_known(sf, consumer_scope=scope, allowed_unknown_usage=allowed)
+    with pytest.raises(ab.BudgetError, match="用量未知"):
+        ab.reserve(scope, purpose="other.later", kind="model", allowed_unknown_usage=allowed, session_factory=sf)
+    with pytest.raises(ab.BudgetError, match="用量未知"):
+        ab.start(pending["id"], sf, allowed_unknown_usage=allowed)
+    receipts = {item["id"]: item for item in ab.recent_usage(sf)}
+    assert receipts[original["id"]] == original and receipts[pending["id"]]["state"] == "reserved"
+
+
+@pytest.mark.parametrize("mismatch", ["id", "date", "source_scope"])
+def test_exception_matches_exact_persisted_id_date_and_source_scope(sf, mismatch):
+    original, allowed = _named_selected_unknown(sf,
+        source_scope=ab.SCOPE_AUTONOMY_LLM if mismatch == "source_scope" else ab.SCOPE_SELECTED_RESEARCH_LLM)
+    if mismatch == "id":
+        allowed[0]["usage_id"] = "f" * 32
+    if mismatch == "date":
+        allowed[0]["budget_date"] = "2000-01-01"
+    with pytest.raises(ab.BudgetError, match="用量未知"):
+        ab.reserve(ab.SCOPE_SELECTED_RESEARCH_LLM, purpose="tradingagents.later", kind="model",
+                   allowed_unknown_usage=allowed, session_factory=sf)
+    assert ab.recent_usage(sf) == [original]
+
+
+def test_new_unknown_after_exception_admission_still_blocks_reserve_and_atomic_start(sf):
+    original, allowed = _named_selected_unknown(sf)
+    pending = ab.reserve(ab.SCOPE_SELECTED_RESEARCH_LLM, purpose="tradingagents.pending", kind="model",
+                         allowed_unknown_usage=allowed, session_factory=sf)
+    racing = ab.reserve(ab.SCOPE_SELECTED_RESEARCH_LLM, purpose="tradingagents.racing", kind="model",
+                        allowed_unknown_usage=allowed, session_factory=sf)
+    ab.start(racing["id"], sf, allowed_unknown_usage=allowed)
+    for operation in (
+        lambda: ab.ensure_model_usage_known(sf, consumer_scope=ab.SCOPE_SELECTED_RESEARCH_LLM, allowed_unknown_usage=allowed),
+        lambda: ab.reserve(ab.SCOPE_SELECTED_RESEARCH_LLM, purpose="tradingagents.later", kind="model",
+                           allowed_unknown_usage=allowed, session_factory=sf),
+        lambda: ab.start(pending["id"], sf, allowed_unknown_usage=allowed),
+    ):
+        with pytest.raises(ab.BudgetError, match="用量未知"):
+            operation()
+    receipts = {item["id"]: item for item in ab.recent_usage(sf)}
+    assert len(receipts) == 3 and receipts[original["id"]] == original
+    assert receipts[pending["id"]]["state"] == "reserved" and receipts[racing["id"]]["usage_known"] is False
+
+
+def test_named_exception_does_not_allow_two_concurrent_new_unknown_calls(sf):
+    original, allowed = _named_selected_unknown(sf)
+    pending = [ab.reserve(ab.SCOPE_SELECTED_RESEARCH_LLM, purpose="tradingagents.concurrent", kind="model",
+        allowed_unknown_usage=allowed, session_factory=sf) for _ in range(2)]
+    def launch(row):
+        try:
+            return ab.start(row["id"], sf, allowed_unknown_usage=allowed)["state"]
+        except ab.BudgetError as error:
+            return error.code
+    with ThreadPoolExecutor(max_workers=2) as pool:
+        results = list(pool.map(launch, pending))
+    assert sorted(results) == ["started", "usage_unknown"]
+    receipts = {item["id"]: item for item in ab.recent_usage(sf)}
+    assert len(receipts) == 3 and receipts[original["id"]] == original
+    assert sorted(receipts[row["id"]]["state"] for row in pending) == ["reserved", "started"]
+
+
+@pytest.mark.parametrize("bad", [
+    None, {}, [{"usage_id": "f" * 32}],
+    [{"usage_id": "F" * 32, "budget_date": "2026-10-21", "scope": ab.SCOPE_SELECTED_RESEARCH_LLM}],
+    [{"usage_id": "f" * 31, "budget_date": "2026-10-21", "scope": ab.SCOPE_SELECTED_RESEARCH_LLM}],
+    [{"usage_id": "f" * 32, "budget_date": "2026-02-30", "scope": ab.SCOPE_SELECTED_RESEARCH_LLM}],
+    [{"usage_id": "f" * 32, "budget_date": "20261021", "scope": ab.SCOPE_SELECTED_RESEARCH_LLM}],
+    [{"usage_id": "f" * 32, "budget_date": "", "scope": ab.SCOPE_SELECTED_RESEARCH_LLM}],
+    [{"usage_id": "f" * 32, "budget_date": "2026-10-21", "scope": ab.SCOPE_AUTONOMY_LLM}],
+    [{"usage_id": "f" * 32, "budget_date": "2026-10-21", "scope": ab.SCOPE_SELECTED_RESEARCH_LLM, "extra": True}],
+    [{"usage_id": "f" * 32, "budget_date": "2026-10-21", "scope": ab.SCOPE_SELECTED_RESEARCH_LLM}] * 2,
+])
+def test_malformed_named_unknown_authorization_is_rejected_without_budget_mutation(sf, bad):
+    original, _ = _named_selected_unknown(sf)
+    with pytest.raises(ValueError):
+        ab.ensure_model_usage_known(sf, consumer_scope=ab.SCOPE_SELECTED_RESEARCH_LLM, allowed_unknown_usage=bad)
+    with pytest.raises(ValueError):
+        ab.reserve(ab.SCOPE_SELECTED_RESEARCH_LLM, purpose="tradingagents.invalid", kind="model",
+                   allowed_unknown_usage=bad, session_factory=sf)
+    assert ab.recent_usage(sf) == [original]
+
+
 def test_recent_usage_is_metadata_only(sf):
     ab.record_unmetered(
         purpose="review.llm", provider="openai", model="m", state="succeeded",

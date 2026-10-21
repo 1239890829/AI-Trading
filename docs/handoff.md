@@ -4,6 +4,20 @@
 
 ## 1. 本轮范围与已核现场
 
+### 发布后真实验收与修补
+
+PR #316准确HEAD `1144b64441d9d93b35f59c5be1c023980a45e923`已合入master `cebe64529efbd3f6581dd57a513b587677ae0075`；PR CI 39546380586、master CI 39547041124三项成功，DegradedRelease 6308422837及release_check exit0。安全同步后由项目launcher加载build `50UDLBNJUaEFuGVeck6PN`。真实8股主卡有原测量刻度；鼠标/Tab就地切换依据，事件点击/方向键切换原句，Esc返回原入口已核。390/320页面不借旧截图；320详细刻度标签拥挤由本次小修承接。
+
+正常自动研究启动后暴露SQLite锁冲突，000032、000665两任务失败，保留原生checkpoint及3份typed原答；完整七报告尚未产生，不称研究运行验收成功。三次调用中两份用量已知，一份unknown；用户已明确授权永久保留这份具名unknown后继续新的真实入选研究。例外只绑定原ID/北京日/selected研究scope，不扩到新unknown或其他消费者，不清账、不估算tokens、不重跑旧答。新分支`codex/selected-research-durability`修补源代码，不手工改业务库：真实模型返回先原子保存仅身份/方法/原答哈希/终端用量的回执，再写DB；仅幂等finish做有界锁重试，取消仍真实drain。没有新增模型试验。
+
+运行观测发现leader-followthrough历史查询耗时约14–18秒，连接持有可到24秒，其他读写同时锁失败；入口/时长不是唯一锁owner证明。实库仅短时只读EXPLAIN核索引；隔离反例确认原query扫描历史payload，计算与逐条写共处一事务。现改现有覆盖索引列举与每股最新合格id点查；计算/JSON移出连接，短写锁重核主键水位，漂移批次明确跳过；收盘全集不再读候选历史。未改策略阈值、schema、journal模式或busy timeout。
+
+已存公司原文不再被旧独立自动worker关闭状态遮盖：原文、事件经营关系和完整研究任务分开表达。原文不证明客户/订单/利润传导；disabled契约保留，仅收窄说明身份。新准确HEAD门禁与实际运行结果由本批PR续记，不能用此前CI绿色覆盖上述运行失败。
+
+修补批完整本地门：后端6671 passed／87 skipped／309 subtests（pytest596.42秒，外层606.578秒），pyflakes9.872秒；前端默认/UTC各1968 passed／150文件（外层421.160／365.696秒），tsc、ESLint零error/两既有warning、生产构建14.972秒通过，build `UZhLRzcqj7laxSe9phPgu`。1829个跟踪输入在完整后端门期间零漂移，370个前端输入在其完整门期间零漂移；前后端重门串行。doc-health、卫生、公开扫描和diff通过；本段事实回填后再核文档守卫。方法摘要`c98d15dbcb59757ffc9322498220bf565ad3deec826ffecfa525d12b6f832516`，包含研究授权与预算策略源码；已准备的具名例外用SQLite只读模式核到唯一准确unknown，尚不以此冒充模型调用/运行成功。完整门期间未新增真实模型调用。
+
+### 原批实现与本地门证据
+
 用户在PR #315发布过程中追加：修复指数/个股时段频繁变为正常/保留可信值，优化请求；明确真正入选就运行完整TradingAgents、不设这个消费者的固定次数门；并否决文字折叠/流程图主导界面，要求真实分项刻度与事件联动证据。由最新master `eda56ad5656fff44b5ffb3c6027177a3061663c4`建立`codex/workbench-session-stability`，原W00/IMP-092、W04/RSH-030和W06/IMP-019分别承接，不新建任务或改状态/调度字段。DEGRADED_FULL_CONTROL未撤销，作者团队不是独立Review。
 
 PR #315准确HEAD `bc0bafd77586b66edb3280b19a0b5bc592d7cead`已合入上述master；PR CI 39538181914及master CI 39538784377三项通过，DegradedRelease 6307283861与release_check exit0。前端build `iY1BLK-R2x1ML_7xq9LiI`已加载；实际发现旧backend缺已合入TA GET路由，核所有在途任务为零后按launcher正常重启，HTTP200与配对页纯读取恢复。桌面/390/320原通知、原版本、展开和Esc焦点已验，但用户明确其视觉未达要求，本轮重做，不能拿旧截图充新设计。五份用户evolution原件哈希及备份保全，其他工作树/原PDF/研究原件不动。

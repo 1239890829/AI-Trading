@@ -135,11 +135,38 @@ def decide(row: dict, *, as_of: datetime, market_median: float,
 
 
 def _latest(db, start: str, end: datetime) -> list[Observation]:
-    ids = select(func.max(Observation.id)).where(
+    # GROUP BY symbol with the date/version predicates makes SQLite walk every
+    # historical payload through its symbol index. Enumerate the covering index
+    # instead, then seek backwards to each symbol's first eligible id.
+    symbols = select(Observation.symbol).distinct().subquery()
+    latest_id = select(Observation.id).where(
+        Observation.symbol == symbols.c.symbol,
         Observation.trade_date >= start, Observation.as_of <= end,
         Observation.version == VERSION,
-    ).group_by(Observation.symbol)
+    ).order_by(Observation.id.desc()).limit(1).correlate(symbols).scalar_subquery()
+    ids = select(latest_id).select_from(symbols)
     return list(db.scalars(select(Observation).where(Observation.id.in_(ids))).all())
+
+
+def _newer_watermark(db, symbols, *, as_of: datetime, source_as_of: datetime) -> bool:
+    """Inspect only each affected symbol's latest current-version payload.
+
+    Historical readers keep their prefix. Writers must also see a newer frame
+    that committed before this older capture began, outside that prefix.
+    """
+    symbols = sorted(set(symbols))
+    for offset in range(0, len(symbols), 500):
+        scoped = select(Observation.symbol).where(
+            Observation.symbol.in_(symbols[offset:offset + 500])).distinct().subquery()
+        latest_id = select(Observation.id).where(Observation.symbol == scoped.c.symbol,
+            Observation.version == VERSION).order_by(Observation.id.desc()).limit(1).correlate(scoped).scalar_subquery()
+        watermarks = db.execute(select(Observation.as_of,
+            func.json_extract(Observation.payload, "$.source_as_of")).where(
+                Observation.id.in_(select(latest_id).select_from(scoped)))).all()
+        for captured, source in watermarks:
+            if captured > as_of or bj(datetime.fromisoformat(source)) >= source_as_of:
+                return True
+    return False
 
 
 def capture(rows: list[dict], refs_by_symbol: dict[str, list[dict]], *,
@@ -163,54 +190,73 @@ def capture(rows: list[dict], refs_by_symbol: dict[str, list[dict]], *,
     relative_cut = ordered[min(len(ordered) - 1, math.ceil(len(ordered) * RELATIVE_PERCENTILE) - 1)]
     start = days[max(0, len(days) - FOLLOW_SESSIONS - 1)].isoformat()
     sf = session_factory or get_session_factory()
-    inserted = 0
     closing = now.time() >= time(15) and source_time.time() >= time(15)
-    with sf.begin() as db:
-        previous = {r.symbol: r for r in _latest(db, start, now)}
-        # Closing census is a result-only observation; never retrospectively create intraday picks.
-        if closing:
-            payload = {"source": source, "source_as_of": source_time.isoformat(),
-                       "universe": prices, "input_rows": len(rows), "valid_rows": len(prices),
-                       "trading_days": [d.isoformat() for d in sorted(set(trading_days))],
-                       "basis": "unadjusted_closing_snapshot_proxy"}
+    # Closing census is independent of candidate history; never read that
+    # history just to write a single immutable closing result.
+    if closing:
+        payload = {"source": source, "source_as_of": source_time.isoformat(),
+                   "universe": prices, "input_rows": len(rows), "valid_rows": len(prices),
+                   "trading_days": [d.isoformat() for d in sorted(set(trading_days))],
+                   "basis": "unadjusted_closing_snapshot_proxy"}
+        encoded = dumps(payload)
+        with sf.begin() as db:
             db.execute(insert(Session).values(
                 trade_date=now.date().isoformat(), as_of=now, version=VERSION,
-                payload=dumps(payload),
+                payload=encoded,
             ).on_conflict_do_nothing(index_elements=["trade_date"]))
-            return {"state": "closing_census", "inserted": 0, "universe_count": len(prices), "source_as_of": source_time.isoformat(),
-                    "as_of": now.isoformat(), "observed_symbols": sorted(prices)}
+        return {"state": "closing_census", "inserted": 0, "universe_count": len(prices), "source_as_of": source_time.isoformat(),
+                "as_of": now.isoformat(), "observed_symbols": sorted(prices)}
+    with sf() as db:
+        generation = db.scalar(select(func.max(Observation.id)))
+        previous = {r.symbol: r for r in _latest(db, start, now)}
         baseline_session = db.get(Session, days[-6].isoformat()) if len(days) >= 6 else None
         baseline = json.loads(baseline_session.payload)["universe"] if baseline_session else {}
-        for symbol, row in prices.items():
-            prior = previous.get(symbol)
-            old = json.loads(prior.payload) if prior else None
-            if prior and sum(d >= prior.first_seen.date() for d in days) > FOLLOW_SESSIONS + 1:
-                prior, old = None, None
-            refs = refs_by_symbol.get(symbol, [])
-            card = decide(row, as_of=now, market_median=market_median,
-                          relative_cut=relative_cut, refs=refs, previous=old,
-                          trend_change=(row["price"] / baseline[symbol]["price"] - 1) * 100
-                          if symbol in baseline else None)
-            if not prior and not (card["strong"] or card["relative"] or card["sustained"] or card["event_refs"]):
-                continue
-            if prior and source_time <= datetime.fromisoformat(old["source_as_of"]):
-                continue
-            signature = digest({key: card[key] for key in (
-                "state", "routes", "relative", "strong", "continuity", "sustained", "event_refs", "no_entry")})
-            if prior and prior.trade_date == now.date().isoformat() and prior.signature == signature:
-                continue
-            first = prior.first_seen if prior else now
-            card.update({"first_seen": first.isoformat(), "source": source,
-                         "source_as_of": source_time.isoformat(),
-                         "reference_price": old["reference_price"] if old else row["price"],
-                         "previous_id": prior.observation_id if prior else None})
-            identity = digest({"symbol": symbol, "source_as_of": source_time.isoformat(),
-                               "version": VERSION})
-            result = db.execute(insert(Observation).values(
-                observation_id=identity, symbol=symbol, trade_date=now.date().isoformat(),
-                as_of=now, first_seen=first, version=VERSION, signature=signature, payload=dumps(card),
-            ).on_conflict_do_nothing(index_elements=["observation_id"]))
-            inserted += result.rowcount
+    prepared = []
+    for symbol, row in prices.items():
+        prior = previous.get(symbol)
+        old = json.loads(prior.payload) if prior else None
+        if prior and sum(d >= prior.first_seen.date() for d in days) > FOLLOW_SESSIONS + 1:
+            prior, old = None, None
+        refs = refs_by_symbol.get(symbol, [])
+        card = decide(row, as_of=now, market_median=market_median,
+                      relative_cut=relative_cut, refs=refs, previous=old,
+                      trend_change=(row["price"] / baseline[symbol]["price"] - 1) * 100
+                      if symbol in baseline else None)
+        if not prior and not (card["strong"] or card["relative"] or card["sustained"] or card["event_refs"]):
+            continue
+        if prior and source_time <= datetime.fromisoformat(old["source_as_of"]):
+            continue
+        signature = digest({key: card[key] for key in (
+            "state", "routes", "relative", "strong", "continuity", "sustained", "event_refs", "no_entry")})
+        if prior and prior.trade_date == now.date().isoformat() and prior.signature == signature:
+            continue
+        first = prior.first_seen if prior else now
+        card.update({"first_seen": first.isoformat(), "source": source,
+                     "source_as_of": source_time.isoformat(),
+                     "reference_price": old["reference_price"] if old else row["price"],
+                     "previous_id": prior.observation_id if prior else None})
+        identity = digest({"symbol": symbol, "source_as_of": source_time.isoformat(),
+                           "version": VERSION})
+        prepared.append(dict(observation_id=identity, symbol=symbol, trade_date=now.date().isoformat(),
+            as_of=now, first_seen=first, version=VERSION, signature=signature, payload=dumps(card)))
+    inserted = 0
+    if prepared:
+        with sf.begin() as db:
+            # Only this short stage owns the SQLite writer. Recheck the primary
+            # key watermark under the same lock so a concurrent/newer capture
+            # cannot acquire an older prepared frame after its latest transition.
+            db.connection().exec_driver_sql("BEGIN IMMEDIATE")
+            if db.scalar(select(func.max(Observation.id))) != generation:
+                return {"state": "concurrent_update", "inserted": 0, "universe_count": len(prices),
+                        "source_as_of": source_time.isoformat(), "as_of": now.isoformat(),
+                        "observed_symbols": sorted(prices)}
+            if _newer_watermark(db, [row["symbol"] for row in prepared], as_of=now, source_as_of=source_time):
+                return {"state": "out_of_order", "inserted": 0, "universe_count": len(prices),
+                        "source_as_of": source_time.isoformat(), "as_of": now.isoformat(),
+                        "observed_symbols": sorted(prices)}
+            result = db.execute(insert(Observation.__table__).on_conflict_do_nothing(
+                index_elements=["observation_id"]), prepared)
+            inserted = result.rowcount
     return {"state": "ready", "inserted": inserted, "universe_count": len(prices), "source_as_of": source_time.isoformat(),
                     "as_of": now.isoformat(), "observed_symbols": sorted(prices)}
 

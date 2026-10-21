@@ -14,11 +14,12 @@ import re
 import uuid
 
 from sqlalchemy import case, func, select
+from sqlalchemy.exc import SQLAlchemyError
 
 from app.core.bjtime import beijing_now
 from app.core.config import TRADINGAGENTS_SELECTED_MODEL, settings
 from app.core.db import get_session_factory
-from app.models.agent import AgentTask
+from app.models.agent import AgentResourceUsage, AgentTask
 from app.services import agent_budget
 from app.events.company_state import atomic_json
 
@@ -70,12 +71,12 @@ def validate_params(params: dict) -> str:
     return params["symbol"]
 
 
-def _read_bound(path: Path) -> tuple[dict, str]:
+def _read_bound(path: Path, *, limit: int = MAX_FILE_BYTES) -> tuple[dict, str]:
     if path.is_symlink() or path.parent.is_symlink():
         raise ValueError("invalid research artifact")
     with path.open("rb") as handle:
-        body = handle.read(MAX_FILE_BYTES + 1)
-    if len(body) > MAX_FILE_BYTES:
+        body = handle.read(limit + 1)
+    if len(body) > limit:
         raise ValueError("oversized research artifact")
     value = json.loads(body)
     if not isinstance(value, dict):
@@ -120,7 +121,38 @@ def configure_driver(app) -> None:
         app.state.tradingagents_research_driver = None
 
 
-def _quality(app) -> tuple[dict, list[dict]]:
+def _unknown_usage_exception(value, method_sha256, session_factory=None):
+    """Validate a separately explicit continuation; never rewrite the named usage."""
+    keys = {"version", "user_authorization", "reason", "authorized_at", "method_sha256", "allowed_unknown_usage"}
+    if (not isinstance(value, dict) or set(value) != keys or type(value["version"]) is not int
+            or value["version"] != 1 or value["user_authorization"] != "EXPLICIT"
+            or not isinstance(value["reason"], str) or not 0 < len(value["reason"].strip()) <= 2000
+            or value["method_sha256"] != method_sha256):
+        raise ValueError("unknown usage continuation authorization mismatch")
+    authorized_at = _clock(value["authorized_at"])
+    if authorized_at > _now():
+        raise ValueError("future unknown usage continuation")
+    facts = agent_budget.validate_unknown_usage_exceptions(value["allowed_unknown_usage"])
+    if not facts:
+        raise ValueError("named original unknown usage required")
+    sf, active = session_factory or get_session_factory(), []
+    with sf() as db:
+        for fact in facts:
+            row = db.get(AgentResourceUsage, fact["usage_id"])
+            if (row is None or row.kind != "model" or row.started_at is None
+                    or row.scope != fact["scope"] or row.budget_date != fact["budget_date"]
+                    or row.state not in agent_budget._STARTED_OR_TERMINAL):
+                raise ValueError("named original usage identity drift")
+            started = row.started_at.replace(tzinfo=_now().tzinfo) if row.started_at.tzinfo is None else row.started_at
+            if started > authorized_at:
+                raise ValueError("usage started after its continuation authorization")
+            if not row.usage_known and fact["budget_date"] == _now().date().isoformat():
+                active.append(dict(fact))
+    return {**value, "allowed_unknown_usage": [dict(fact) for fact in facts],
+            "active_allowed_unknown_usage": active}
+
+
+def _quality(app, *, session_factory=None) -> tuple[dict, list[dict]]:
     """A server-side pinned admission is required; request params cannot grant it."""
     blockers = []
     if not settings.tradingagents_research_enabled:
@@ -158,7 +190,10 @@ def _quality(app) -> tuple[dict, list[dict]]:
             admitted = {"state": "research_only_authorized", "method_sha256": _digest(identity),
                         "artifact_sha256": actual, "valid_until": artifact["valid_until"],
                         "net_gain_verified": False, "production_eligible": False}
-        except (OSError, ValueError, TypeError, KeyError):
+            if "unknown_usage_exception" in artifact:
+                admitted["unknown_usage_exception"] = _unknown_usage_exception(
+                    artifact["unknown_usage_exception"], _digest(identity), session_factory)
+        except (OSError, ValueError, TypeError, KeyError, SQLAlchemyError, RuntimeError):
             blockers.append({"code": "research_not_authorized", "message": "准确版本的选股后研究授权缺失、失效或漂移；没有冒充效果准入。"})
         return admitted, blockers
     try:
@@ -181,6 +216,21 @@ def _quality(app) -> tuple[dict, list[dict]]:
     except (OSError, ValueError, TypeError, KeyError):
         blockers.append({"code": "quality_not_admitted", "message": "该准确版本尚无有效净增益准入回执；工程测试和图完成不等于质量准入。"})
     return admitted, blockers
+
+
+def _allowed_unknown_usage(admission):
+    return tuple(admission.get("unknown_usage_exception", {}).get("active_allowed_unknown_usage", ()))
+
+
+def authorized_unknown_usage(app, *, method_sha256, authorization_sha256):
+    """Recheck server authorization at each physical reserve/start boundary."""
+    admission, blockers = _quality(app)
+    if (blockers or admission.get("state") != "research_only_authorized"
+            or admission.get("method_sha256") != method_sha256
+            or admission.get("artifact_sha256") != authorization_sha256):
+        raise ResearchBlocked(blockers or [{"code": "research_not_authorized",
+            "message": "本图的准确方法或服务端授权已变；保留原调用，未换授权继续付费。"}])
+    return _allowed_unknown_usage(admission)
 
 
 def selected_bindings(session_factory=None) -> dict[str, dict]:
@@ -252,7 +302,7 @@ def selected_bindings(session_factory=None) -> dict[str, dict]:
 def preflight(symbol: str, app, *, session_factory=None) -> dict:
     """Read-only snapshot. Original reserve/start still owns concurrency admission."""
     validate_params({"symbol": symbol})
-    admission, blockers = _quality(app)
+    admission, blockers = _quality(app, session_factory=session_factory)
     budget, selection = None, None
     try:
         sf = session_factory or get_session_factory()
@@ -270,7 +320,9 @@ def preflight(symbol: str, app, *, session_factory=None) -> dict:
                   "used": summary["llm_used"], "remaining": remaining,
                   "scope": agent_budget.SCOPE_AUTONOMY_LLM}
         try:
-            agent_budget.ensure_model_usage_known(sf, date=summary["date"])
+            agent_budget.ensure_model_usage_known(sf, date=summary["date"],
+                **({"consumer_scope": agent_budget.SCOPE_SELECTED_RESEARCH_LLM,
+                    "allowed_unknown_usage": _allowed_unknown_usage(admission)} if research_only else {}))
         except agent_budget.BudgetError:
             blockers.append({"code": "usage_unknown", "message": "今日共享模型用量尚未核实；不得重新调用或换通道。"})
         if not research_only and remaining < REQUIRED_MODEL_SLOTS:
@@ -414,7 +466,7 @@ async def run_research(rec, params: dict, app) -> dict:
     # One cross-process execution owner. A queued task is not authority to
     # regenerate a paid answer or replace a failed/unknown native checkpoint.
     with worker_lease(ROOT / "selected-execution"):
-        prior = await agent_tasks._db_thread(lambda: _read(claim) if claim.exists() else None)
+        prior = await agent_tasks._db_thread(_execution_prior, binding, admitted["admission"]["method_sha256"])
         if prior and prior.get("state") == "completed":
             return await agent_tasks._db_thread(_completed_selection, prior, binding)
         if prior and (prior.get("state") not in {"dispatching", "queued"}
@@ -452,12 +504,64 @@ def _selection_claim(binding, method_sha):
     return _folder(binding["symbol"]) / ("selection-" + key + ".json")
 
 
+def _selection_records(binding):
+    """Read every method's claim for one selection under the existing claim lease.
+
+    An unreadable claim may contain a paid observation. Reject it rather than
+    treating corruption, another method, or a repaired driver as a new budget.
+    Valid adjacent selections remain independent. No claim is rewritten here.
+    """
+    try:
+        folder = _folder(binding["symbol"])
+        records = []
+        for count, path in enumerate(folder.glob("selection-*.json"), 1):
+            if count > 4096:
+                raise ValueError("selection history requires bounded review")
+            value = _read_bound(path, limit=16_384)[0]
+            selection, method = value.get("selection"), value.get("method_sha256")
+            keys = ("symbol", "trade_date", "selected_at", "source", "source_version")
+            if (type(value.get("version")) is not int or value["version"] != 1
+                    or not isinstance(selection, dict) or set(selection) != {*keys, "selection_key"}
+                    or selection["symbol"] != binding["symbol"]
+                    or selection["source"] not in {"daily_generation", "intraday_rank_archive"}
+                    or not isinstance(selection["source_version"], str) or not 0 < len(selection["source_version"]) <= 512
+                    or selection["selection_key"] != _digest({key: selection[key] for key in keys})
+                    or not isinstance(method, str) or not re.fullmatch(r"[0-9a-f]{64}", method)
+                    or path != _selection_claim(selection, method)
+                    or value.get("task_id") is not None and (not isinstance(value["task_id"], str) or not 0 < len(value["task_id"]) <= 160)
+                    or value.get("dispatch_owner") is not None and (not isinstance(value["dispatch_owner"], str) or not 0 < len(value["dispatch_owner"]) <= 160)
+                    or value.get("state") not in {"dispatching", "queued", "started", "running", "completed",
+                                                   "needs_recovery", "dispatch_unknown", "unknown", "failed", "canceled"}):
+                raise ValueError("selection claim identity drift")
+            selected_at, updated_at = _clock(selection["selected_at"]), _clock(value.get("updated_at"))
+            if (selected_at.astimezone(_now().tzinfo).date().isoformat() != selection["trade_date"]
+                    or not selected_at <= updated_at <= _now()):
+                raise ValueError("selection claim time drift")
+            if selection["selection_key"] == binding["selection_key"]:
+                if selection != binding:
+                    raise ValueError("selection claim binding drift")
+                records.append(value)
+        return records
+    except (OSError, ValueError, TypeError, KeyError):
+        raise ResearchBlocked([{"code": "selection_needs_recovery", "message": "原入选执行记录无法核实，保留原记录；未重新调用模型。"}]) from None
+
+
+def _execution_prior(binding, method):
+    from app.services.company_evidence import worker_lease
+    with worker_lease(ROOT / "selection-claims"):
+        records = _selection_records(binding)
+        if any(row["method_sha256"] != method for row in records):
+            raise ResearchBlocked([{"code": "selection_needs_recovery", "message": "这次真实入选已有其他方法的执行或调度记录；更换方法不会重新付费，旧报告保留原身份可读。"}])
+        return next(iter(records), None)
+
+
 def _write_selection_claim(path, binding, method_sha, state, *, task_id=None, dispatch_owner=None, **extra):
     from app.services.company_evidence import worker_lease
     with worker_lease(ROOT / "selection-claims"):
-        prior = _read(path) if path.exists() else None
+        records = _selection_records(binding)
+        prior = next((row for row in records if row["method_sha256"] == method_sha), None)
         if state == "dispatching":
-            if prior is not None:
+            if records:
                 return False  # Absent-CAS: a manual execution may have won after the scheduler's read.
             if not dispatch_owner:
                 raise ValueError("dispatch owner required")
@@ -465,6 +569,11 @@ def _write_selection_claim(path, binding, method_sha, state, *, task_id=None, di
             if (not prior or prior.get("state") != "dispatching" or not dispatch_owner
                     or prior.get("dispatch_owner") != dispatch_owner):
                 return False  # Only this unstarted dispatch can advance; never downgrade real execution.
+        elif state == "running":
+            if (any(row["method_sha256"] != method_sha for row in records)
+                    or prior and (prior.get("state") not in {"dispatching", "queued"}
+                                  or prior.get("task_id") not in {None, task_id})):
+                raise ResearchBlocked([{"code": "selection_needs_recovery", "message": "这次真实入选已有执行或失败/未知记录；保留原任务，不能自动重新付费。"}])
         path.parent.mkdir(parents=True, exist_ok=True)
         atomic_json(path, {"version": 1, "selection": binding, "method_sha256": method_sha,
                            "state": state, "task_id": task_id,
@@ -507,7 +616,9 @@ async def scheduler_tick(app):
         return
     sf = get_session_factory()
     try:
-        await agent_tasks._db_thread(agent_budget.ensure_model_usage_known, sf)
+        await agent_tasks._db_thread(agent_budget.ensure_model_usage_known, sf,
+            consumer_scope=agent_budget.SCOPE_SELECTED_RESEARCH_LLM,
+            allowed_unknown_usage=_allowed_unknown_usage(admission))
     except agent_budget.BudgetError:
         return
     lease = worker_lease(ROOT / "selected-dispatch")
@@ -523,8 +634,11 @@ async def scheduler_tick(app):
             if await agent_tasks._db_thread(claim.exists):
                 continue
             dispatch_owner = uuid.uuid4().hex
-            owned = await agent_tasks._db_thread(_write_selection_claim, claim, binding,
-                admission["method_sha256"], "dispatching", dispatch_owner=dispatch_owner)
+            try:
+                owned = await agent_tasks._db_thread(_write_selection_claim, claim, binding,
+                    admission["method_sha256"], "dispatching", dispatch_owner=dispatch_owner)
+            except ResearchBlocked:
+                continue  # An uncertain symbol cannot authorize payment; another selection may still proceed.
             if not owned:
                 continue
             try:

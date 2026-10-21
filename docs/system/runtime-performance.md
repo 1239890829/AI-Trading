@@ -1163,3 +1163,14 @@ popup两条正常UI WS均101，原生Destroy寿命19.430/11.997秒。collector�
 工作台指数合并反例还证明旧WS可覆盖较新overview：价格按data_timestamp比较，日历按合法较新display_session.as_of更新；接收时钟不用于推进价格。保留新价格仍保留当前真实源故障，不移植早于该源观测的旧上下文。该项只覆盖指数卡/指数观察，主详情即时owner、真实源故障、全域SLO仍按实际证据分别核。
 
 对应先红为后端14项、重复身份1项、指数消费5项和前端时段23项；各修后定向结果分别保存在本批忽略证据，重叠测试不相加冒充全量。完整门、准确HEAD发布/master CI与真实运行由本批handoff/PR回执承接；未新增来源、报价TTL、付费服务、模型试跑或交易操作。
+
+
+## 33. 2026-10-21 研究锁冲突与已付费回执保全
+
+PR #316激活后，真实watcher提交、watchlist读取、新闻写入和研究任务均报SQLite database is locked。既有64条观测中leader-followthrough的_latest入口有14–18秒语句、最长约24秒连接持有；write_seen涵盖整个capture，不能称SELECT自己写库，也不能据此断言它是唯一锁owner。只读EXPLAIN确认现有symbol单列索引扫描历史payload；没有对实库执行大表对照、改schema/WAL/timeout。
+
+最小修补复用现有覆盖symbol索引列举，再逐股倒序点查首个符合日期/as_of/版本的id，保持原max eligible id语义。计算/JSON在连接外完成，BEGIN IMMEDIATE短写只复核主键水位再批量upsert；并发漂移返回concurrent_update，不将旧准备结果插在新帧后。收盘census独立唯一写，不读候选历史。
+
+隔离8003历史行、每行约2KB payload：相同100个id，当前窗口VM操作67,800→28,800，25.18→6.03ms；历史窗口59,800→35,100，26.74→7.36ms。计算中独立writer约2.93ms真实提交，旧版50ms busy timeout失败；4项原缺陷判红、修后20项通过。这是夹具证据，不是生产提速倍数或锁已消失的证明；真实新版加载后另看源龄、请求失败及锁观测。
+
+首批完整TA任务已保存3份typed原答但因DB冲突未产完整七报告。未来每调用在DB前原子保存最小usage回执（原usage_id、任务/角色/调用/方法与输出哈希、真实终端用量或unknown），不保存完整请求/context；取消先等待实际线程返回再保全。finish复用原4次有界SQLite锁重试，只重试同一幂等DB操作，不重放infer/整图。原失败/unknown和checkpoint保留，不凭文字估算tokens。旧worker关闭不再遮盖已保存公司原文；这不代表事件关联或完整研究完成。

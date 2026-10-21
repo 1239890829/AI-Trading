@@ -63,4 +63,5 @@
 .score:focus-visible,.event:focus-visible,.heading button:focus-visible,.sourceText:focus-visible,.scoreEvidence:focus-visible {outline:2px solid var(--ui-accent);outline-offset:3px;border-radius:5px;}
 @media(max-width:600px) {.columns {grid-template-columns:1fr;gap:10px;}.sourceText {max-height:9rem;}.scores {gap:3px 14px;}.event {min-height:84px;}}
 @container(max-width:600px) {.columns {grid-template-columns:1fr;gap:10px;}.sourceText {max-height:9rem;}.scores {gap:3px 14px;}.event {min-height:84px;}}
+@container(max-width:340px) {.scoreSection:not(.compact) .scores {grid-template-columns:1fr;}.scoreTop {flex-wrap:wrap;gap:2px 8px;}}
 @media(prefers-reduced-motion:reduce) {.track>span {transition:none;}}
