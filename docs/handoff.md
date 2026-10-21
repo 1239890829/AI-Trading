@@ -4,6 +4,18 @@
 
 ## 1. 本轮范围与已核现场
 
+### 当前修补：普通传输失败诊断保全
+
+PR #318准确HEAD `256cae58a305981653438147ff92c464bd475502`已合入master `d9454572bf68bb58484dc04eceb9ba6b31f45586`；PR CI 39560997016及master CI 39561498368三项成功，DegradedRelease 6310424491、release_check exit0。主树安全快进、五份用户原件SHA不变、分支本地删除及远端缺失已核；launcher加载build `frbzgtlhBCOhSPLr7aW1Y`，方法`a40b9737eba0f5105129646d59cdff56faea07e7ac1e6ef878dc2672accabf57`，服务器授权仅绑定两条分别获准的历史unknown。
+
+真实新研究002264约15:30:12–15:39:08，前9次用量均known且无投影拒绝，已证实cache-write字段修复起效；第10次Bear Researcher以`codex_typed_terminal_failure`失败，新增unknown使后续调用停止。实际只有5角色终答、4分析报告，非完整12角色/7报告；原生checkpoint/Memory及已付费原答保留，不重放。已知部分input729009/output9791不代表全任务用量或费用。有限来源检查与peer身份仍unverified，不冒充独立语义gold或投资效果。
+
+普通decoder已有退出码/计数等诊断，但未传数字观察，driver又只保存hash；原始流随临时目录退出而丢失。本次确切网络/上下文/退出原因及可能存在的终端数字证据不够；missing_usage不是CLI确无用量的证明。这是前次修补覆盖不完整，不能归咎平台或按哈希补账。当前`codex/terminal-failure-evidence`补齐普通失败、解析与schema退场前的安全诊断及数字观察，失败不新增known路径，auth/safety继续停止。新增unknown未自动获例外，不新增真实模型验证。
+
+实际Chrome普通读取已核：现有工作台完整刷新取得101及包含当前002384的非空行情帧；源为腾讯、quality=stale/market_closed，源钟与display_session均保留，不升级成实时。今日002264入选通知原版本`946d6745fdbef7e95ef340d7caa3fd15`、15:00:44记录仍可读，刻度占比切换为10%=5/50、距实际涨停价无档值仍缺失。页面与纯读不产生研究；003007窄屏320像素实页已核五原测量、点击切换同区依据、缺失不填条、Esc返回原通知焦点；完整报告读取尚未成功，不能写本任务全部完成。PR #318运行回执6311276884保留上述失败。
+
+前端370个跟踪输入与PR #318完整两时区1970项/生产构建逐字相同，复用相同源码本地证据；本批新HEAD三项CI仍重新取得。本批后端完整门6711 passed／87 skipped／309 subtests（pytest594.73秒、外层606.592秒），pyflakes7.931秒通过；1830个跟踪输入门内零漂移。doc-health、卫生及公开扫描通过，全门后仅回填本段事实并另跑最终文档守卫。精确HEAD发布和新运行另核；无重跑旧答、手动改账、付费新源、真实外发或交易操作。
+
 ### 当前修补：真实终端用量契约
 
 PR #317准确HEAD `4b65bc86cc4968348a7591bc05eb3db234189703`已合入master `42f4c833c9e7e07e74370d75a0d417b8de60a8b9`；PR CI 39553767983及master CI 39554735386三项成功，DegradedRelease 6309449237、release_check exit0。主树安全快进，五份用户原件SHA不变，原分支本地删除且远端不存在；launcher加载build `UZhLRzcqj7laxSe9phPgu`，已配对Chrome实际读取入选读者。HTTP/代理检查不代替真实WS和源时效；初步锁观测无新lock_error不证明全日稳定。运行回执见PR评论6309949702。
