@@ -1192,13 +1192,15 @@ class NativeTradingAgentsDriver:
         kind = ("typed_response" if isinstance(response, dict) else
                 "verified_transport_failure" if isinstance(failure, codex_transport.TransportError)
                 and failure.final_usage_verified else "unknown_transport_failure")
+        diagnostic = codex_transport.safe_diagnostic(proof.get("transport_diagnostic", proof))
         terminal = {"kind": kind, "usage": usage, "usage_observation": usage_observation,
-                    "output_sha256": output_sha256, **hashes}
+                    "transport_diagnostic": diagnostic, "output_sha256": output_sha256, **hashes}
         atomic_json(path, {"version": 1, "kind": "tradingagents_model_usage", "usage_id": receipt["id"],
             "task_id": rec.task_id, "role": role, "call_id": call_id,
             "method_sha256": method_sha256, "transport_sha256": digest(transport),
             "recorded_at": beijing_now().isoformat(), "output_sha256": output_sha256,
             "usage": usage, "usage_known": usage is not None, "usage_observation": usage_observation,
+            "transport_diagnostic": diagnostic,
             "terminal_kind": kind, "terminal_sha256": digest(terminal), **hashes,
             "automatic_reconciliation": False, "complete_context_logged": False})
 

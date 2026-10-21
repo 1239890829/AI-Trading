@@ -248,14 +248,14 @@ def events(value, *, host=None, status=None):
 def test_typed_protocol_does_not_accept_prose_or_host_tools():
     value = {"content": "fixture", "tool_calls": []}
     assert transport.decode(events(value), "", 0, json.dumps(value))["wire_structured_output"] == value
-    with pytest.raises(ValueError, match="mismatch"):
+    with pytest.raises(TransportError, match="final_schema_failure"):
         transport.decode(events(value), "", 0, '{}')
     for host in ("command_execution", "mcp_tool_call", "web_search"):
         with pytest.raises(TransportError):
             transport.decode(events(value, host=host), "", 0, json.dumps(value))
     with pytest.raises(TransportError, match="auth_or_permission"):
         transport.decode(events(value, status=401), "", 1, json.dumps(value))
-    with pytest.raises(ValueError):
+    with pytest.raises(TransportError, match="event_stream_failure"):
         transport.decode('plain result', "", 0, '{}')
 
 
@@ -589,6 +589,35 @@ def test_receipt_keeps_terminal_numeric_evidence_before_database_failure(tmp_pat
                 [{"role": "user", "content": "PRIVATE_REQUEST_MUST_NOT_BE_SAVED"}], build_cli_schema(),
                 "Fundamentals Analyst", 1, usage_receipt_path=path, method_sha256="f" * 64)
         assert typed.calls == 1 and "PRIVATE_REQUEST" not in path.read_text()
+    asyncio.run(run())
+
+
+def test_generic_terminal_failure_diagnostic_is_durable_before_locked_finish(tmp_path):
+    path = tmp_path / "usage-receipts/1.json"
+    usage = {"input_tokens": 7, "output_tokens": 9}
+    class Rejected(Typed):
+        def infer(self, *args, **kwargs):
+            super().infer(*args, **kwargs)
+            body = events({"content": "PRIVATE_ANSWER", "tool_calls": []}, status=429)
+            return transport.decode(body, "PRIVATE_STDERR", 1, None)
+    class Locked(Budget):
+        def finish(self, key, **row):
+            saved = json.loads(path.read_text())
+            diagnostic = saved["transport_diagnostic"]
+            assert diagnostic["kind"] == "codex_typed_terminal_failure"
+            assert diagnostic["exit_code"] == 1 and diagnostic["http_status"] == 429
+            assert diagnostic["turn_count"] == 1
+            assert saved["usage_observation"]["numeric_fields"] == usage
+            assert saved["usage"] is None and not saved["usage_known"] and row["usage"] is None
+            assert "PRIVATE_" not in path.read_text()
+            raise sqlite3.OperationalError("database is locked")
+    async def run():
+        typed = Rejected()
+        with pytest.raises(sqlite3.OperationalError, match="database is locked"):
+            await native(tmp_path, typed)._infer_accounted(Recorder(), Locked(),
+                [{"role": "user", "content": "PRIVATE_REQUEST"}], build_cli_schema(), "Bear Researcher", 1,
+                usage_receipt_path=path, method_sha256="f" * 64)
+        assert typed.calls == 1
     asyncio.run(run())
 
 

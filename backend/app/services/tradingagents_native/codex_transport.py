@@ -8,6 +8,7 @@ import hashlib
 import json
 import os
 from pathlib import Path
+import re
 import tempfile
 
 import subprocess
@@ -17,6 +18,18 @@ from .transport_process import DISABLE, TransportError, launch
 from .schema_projection import strict_wire_schema, restore_original_omissions
 
 MAX_BYTES = 8 * 1024 * 1024
+MAX_EVENTS = 4096
+_AUTH_CODES = {'authentication_failed', 'authorization_failed', 'invalid_api_key', 'unauthorized',
+               'permission_denied', 'account_deactivated'}
+_SAFETY_CODES = {'safety_refusal', 'content_policy_violation', 'content_filter', 'policy_violation'}
+_KNOWN_CODES = _AUTH_CODES | _SAFETY_CODES | {'context_length_exceeded', 'rate_limit_exceeded',
+    'rate_limit_error', 'insufficient_quota', 'model_not_found', 'server_error', 'internal_server_error',
+    'connection_error', 'request_timeout', 'service_unavailable', 'overloaded_error'}
+_KINDS = {'timeout', 'codex_auth_or_permission_stop', 'codex_safety_refusal', 'codex_typed_terminal_failure',
+          'codex_event_stream_failure', 'codex_final_schema_failure', 'codex_original_schema_failure',
+          'codex_final_file_failure', 'codex_process_failure', 'codex_typed_terminal_success'}
+_STAGES = {'event_stream', 'terminal', 'terminal_order', 'final_message_parse', 'final_message_missing', 'final_message_binding',
+           'original_schema_restore', 'final_file_read', 'process_launch_or_drain'}
 NOTE = ('Transport protocol only: the following lossless ordered JSON transcript contains the original graph roles, '
         'messages, tool declarations and actual tool-result history. Continue only the current assistant turn. '
         'No host tools are available. Graph functions are data declarations, never native Codex tools. '
@@ -50,53 +63,171 @@ def parse(text):
                       parse_constant=lambda _: (_ for _ in ()).throw(ValueError('Nonfinite JSON')))
 
 
-def decode(stdout, stderr, exit_code, final_file):
-    events = [parse(line) for line in stdout.splitlines() if line.strip()]
-    if len(stdout.encode()) > MAX_BYTES or not events or not all(isinstance(row, dict) for row in events):
-        raise ValueError('Invalid Codex event stream')
+def _opaque(value):
+    types = {str: 'string', int: 'integer', bool: 'boolean', type(None): 'null', float: 'float',
+             dict: 'object', list: 'array'}
+    body = value if isinstance(value, str) else str(value) if (type(value) in (bool, type(None))
+        or type(value) is int and -(2**63) <= value <= 2**63 - 1) else None
+    return {'sha256': sha(body.encode('utf-8', errors='surrogatepass')) if body is not None else None,
+            'value_type': types.get(type(value), 'other')}
+
+
+def safe_diagnostic(value):
+    """Fixed vocabulary, bounded scalars and opaque codes; no provider text."""
+    value = value if isinstance(value, dict) else {}
+    result = {'version': 1}
+    for key, allowed in [('kind', _KINDS), ('failure_stage', _STAGES),
+        ('parse_failure', {'invalid_encoding', 'stream_exceeds_bound', 'event_count_exceeds_bound',
+                           'invalid_event_stream', 'nonobject_event'}),
+        ('exception_type', {'ValueError', 'JSONDecodeError', 'UnicodeError', 'UnicodeDecodeError',
+                            'RecursionError', 'ProjectionError', 'OSError', 'FileNotFoundError', 'PermissionError'})]:
+        if isinstance(value.get(key), str) and value[key] in allowed:
+            result[key] = value[key]
+    for key in ('exit_code', 'turn_count', 'turn_started_count', 'parsed_event_count', 'invalid_event_count',
+                'typed_error_count', 'warning_count', 'stream_bytes', 'http_status'):
+        number = value.get(key)
+        lower, upper = ((-(2**31), 2**31 - 1) if key == 'exit_code' else
+                        (100, 599) if key == 'http_status' else (0, 2**63 - 1) if key == 'stream_bytes'
+                        else (0, MAX_EVENTS))
+        if type(number) is int and lower <= number <= upper:
+            result[key] = number
+    for key in ('no_fallback', 'timed_out', 'termination_requested', 'kill_requested', 'local_drain_complete',
+                'stream_truncated', 'event_count_truncated', 'final_file_present', 'refusal_present'):
+        if type(value.get(key)) is bool:
+            result[key] = value[key]
+    for key in ('stdout_sha256', 'stderr_sha256', 'final_file_sha256'):
+        if isinstance(value.get(key), str) and re.fullmatch('[a-f0-9]{64}', value[key]):
+            result[key] = value[key]
+    codes = value.get('explicit_error_codes')
+    codes = codes if isinstance(codes, list) else []
+    known = list(dict.fromkeys(code for code in codes if isinstance(code, str) and code in _KNOWN_CODES))
+    result['explicit_error_codes'] = known[:16]
+    omitted = value.get('explicit_error_codes_omitted', 0)
+    result['explicit_error_codes_omitted'] = max(0, len(known) - 16) + (omitted if type(omitted) is int and 0 <= omitted <= 2**31 else 0)
+    unknown_codes = [code for code in codes if not isinstance(code, str) or code not in _KNOWN_CODES]
+    for key, raw in [('unknown_error_codes', unknown_codes), ('host_tool_types', value.get('host_tool_types')),
+                     ('unknown_event_types', value.get('unknown_event_types'))]:
+        raw = raw if isinstance(raw, list) else []
+        # Retain already sanitized observations when the driver projects again.
+        if key == 'unknown_error_codes' and not raw:
+            raw = value.get(key) if isinstance(value.get(key), list) else []
+        observations = []
+        for item in raw[:16]:
+            if (isinstance(item, dict) and set(item) == {'sha256', 'value_type'}
+                    and isinstance(item['value_type'], str)
+                    and item['value_type'] in {'string', 'integer', 'boolean', 'null', 'float', 'object', 'array', 'other'}
+                    and (item['sha256'] is None or isinstance(item['sha256'], str)
+                         and re.fullmatch('[a-f0-9]{64}', item['sha256']))):
+                observations.append(dict(item))
+            else:
+                observations.append(_opaque(item))
+        result[key] = observations
+        omitted = value.get(key + '_omitted', 0)
+        result[key + '_omitted'] = max(0, len(raw) - 16) + (omitted if type(omitted) is int and 0 <= omitted <= 2**31 else 0)
+    return result
+
+
+def _terminal_context(stdout, stderr, exit_code, final_file):
+    """Inspect a bounded stream, including valid rows after a malformed row."""
+    events, invalid, reason = [], 0, None
+    try:
+        body = stdout.encode('utf-8')
+    except (AttributeError, UnicodeError):
+        body = stdout.encode('utf-8', errors='surrogatepass') if isinstance(stdout, str) else b''
+        reason = 'invalid_encoding'
+    if len(body) > MAX_BYTES:
+        reason = 'stream_exceeds_bound'
+    inspected, event_truncated = 0, False
+    for line in body[:MAX_BYTES].decode('utf-8', errors='ignore').splitlines():
+        if not line.strip():
+            continue
+        if inspected >= MAX_EVENTS:
+            reason = reason or 'event_count_exceeds_bound'
+            event_truncated = True
+            break
+        inspected += 1
+        try:
+            row = parse(line)
+            if not isinstance(row, dict):
+                invalid += 1
+                reason = reason or 'nonobject_event'
+            else:
+                events.append(row)
+        except (ValueError, UnicodeError, RecursionError):
+            invalid += 1
+            reason = reason or 'invalid_event_stream'
     turns = [row for row in events if row.get('type') == 'turn.completed']
     starts = [row for row in events if row.get('type') == 'turn.started']
     allowed_events = {'thread.started', 'turn.started', 'turn.completed', 'turn.failed',
                       'item.started', 'item.updated', 'item.completed', 'error'}
-    unknown_events = sorted({str(row.get('type')) for row in events if row.get('type') not in allowed_events})
+    unknown_events = [row.get('type') for row in events if not isinstance(row.get('type'), str) or row['type'] not in allowed_events]
     bad = [row for row in events if row.get('type') in ('error', 'turn.failed')]
-    items = [row['item'] for row in events if row.get('type', '').startswith('item.') and isinstance(row.get('item'), dict)]
+    items = [row['item'] for row in events if isinstance(row.get('type'), str)
+             and row['type'].startswith('item.') and isinstance(row.get('item'), dict)]
     host = [item.get('type') for item in items if item.get('type') not in ('agent_message', 'reasoning', 'error')]
-    errors = items + bad + [row.get('error') for row in bad if isinstance(row.get('error'), dict)]
+    errors = items + bad + [row['error'] for row in events if isinstance(row.get('error'), dict)]
     codes = [row.get('code', row.get('error_code')) for row in errors if isinstance(row, dict)]
-    codes = {code for code in codes if isinstance(code, str)}
-    auth_codes = {'authentication_failed', 'authorization_failed', 'invalid_api_key', 'unauthorized', 'permission_denied', 'account_deactivated'}
-    safety_codes = {'safety_refusal', 'content_policy_violation', 'content_filter', 'policy_violation'}
+    codes = [code for code in codes if code is not None]
+    code_set = {code for code in codes if isinstance(code, str)}
     statuses = [row.get('http_status', row.get('status_code')) for row in errors if isinstance(row, dict)]
-    statuses = [value for value in statuses if isinstance(value, int) and not isinstance(value, bool)]
+    statuses = [value for value in statuses if type(value) is int and 100 <= value <= 599]
     auth_status = next((value for value in statuses if value in (401, 403)), None)
     status = auth_status if auth_status is not None else next(iter(statuses), None)
-    if codes & auth_codes or auth_status is not None:
-        raise TransportError({'kind': 'codex_auth_or_permission_stop', 'http_status': status,
-                              'explicit_error_codes': sorted(codes & auth_codes), 'no_fallback': True})
-    if codes & safety_codes or any(item.get('refusal') for item in items):
-        raise TransportError({'kind': 'codex_safety_refusal', 'no_fallback': True})
-    if exit_code or bad or len(turns) != 1 or len(starts) != 1 or host or unknown_events:
-        raise TransportError({'kind': 'codex_typed_terminal_failure', 'exit_code': exit_code,
-                              'turn_count': len(turns), 'turn_started_count': len(starts), 'host_tool_types': host,
-                              'unknown_event_types': unknown_events, 'http_status': status,
-                              'explicit_error_codes': sorted(codes), 'no_fallback': True,
-                              'stdout_sha256': sha(stdout.encode()), 'stderr_sha256': sha(stderr.encode())})
+    diagnostic = {'exit_code': exit_code, 'turn_count': len(turns), 'turn_started_count': len(starts),
+        'parsed_event_count': len(events), 'invalid_event_count': invalid, 'typed_error_count': len(bad),
+        'warning_count': sum(item.get('type') == 'error' for item in items), 'http_status': status,
+        'host_tool_types': host, 'unknown_event_types': unknown_events, 'explicit_error_codes': codes,
+        'no_fallback': True, 'stream_bytes': len(body), 'stream_truncated': len(body) > MAX_BYTES,
+        'event_count_truncated': event_truncated,
+        'final_file_present': isinstance(final_file, str), 'refusal_present': any(bool(item.get('refusal')) for item in items),
+        'stdout_sha256': sha(body), 'stderr_sha256': sha(stderr.encode('utf-8', errors='surrogatepass')) if isinstance(stderr, str) else None}
+    if isinstance(final_file, str):
+        diagnostic['final_file_sha256'] = sha(final_file.encode('utf-8', errors='surrogatepass'))
+    if reason:
+        diagnostic['parse_failure'] = reason
+    stop = ('codex_auth_or_permission_stop' if code_set & _AUTH_CODES or auth_status is not None else
+            'codex_safety_refusal' if code_set & _SAFETY_CODES or diagnostic['refusal_present'] else None)
+    return events, diagnostic, turns[0].get('usage') if len(turns) == 1 else None, stop
+
+
+def _failure(diagnostic, observed_usage, kind, stage, error=None):
+    return TransportError(safe_diagnostic({**diagnostic, 'kind': kind, 'failure_stage': stage,
+        'no_fallback': True,
+        'exception_type': type(error).__name__ if error is not None else None}), observed_terminal_usage=observed_usage)
+
+
+def decode(stdout, stderr, exit_code, final_file):
+    events, diagnostic, observed, stop = _terminal_context(stdout, stderr, exit_code, final_file)
+    if stop:
+        raise _failure(diagnostic, observed, stop, 'terminal')
+    if diagnostic.get('parse_failure') or not events:
+        raise _failure(diagnostic, observed, 'codex_event_stream_failure', 'event_stream')
+    if (exit_code or diagnostic['typed_error_count'] or diagnostic['turn_count'] != 1
+            or diagnostic['turn_started_count'] != 1 or diagnostic['host_tool_types'] or diagnostic['unknown_event_types']):
+        raise _failure(diagnostic, observed, 'codex_typed_terminal_failure', 'terminal')
+    types = [row.get('type') for row in events]
+    if (types[-1] != 'turn.completed' or types.index('turn.started') >= types.index('turn.completed')
+            or any(kind != 'thread.started' for kind in types[:types.index('turn.started')])):
+        raise _failure(diagnostic, observed, 'codex_typed_terminal_failure', 'terminal_order')
     texts = [row['item'].get('text') for row in events if row.get('type') == 'item.completed'
              and isinstance(row.get('item'), dict) and row['item'].get('type') == 'agent_message']
     if not texts or not isinstance(texts[-1], str) or not isinstance(final_file, str):
-        raise ValueError('Schema-shaped final message and output file required')
+        raise _failure(diagnostic, observed, 'codex_final_schema_failure', 'final_message_missing')
     # The documented last-message file binds the final agent message. Earlier
     # commentary is never parsed as protocol or repaired into a schema result.
-    value, file_value = parse(texts[-1]), parse(final_file)
+    try:
+        value, file_value = parse(texts[-1]), parse(final_file)
+    except (ValueError, UnicodeError, RecursionError) as error:
+        raise _failure(diagnostic, observed, 'codex_final_schema_failure', 'final_message_parse', error) from None
     if not isinstance(value, dict) or value != file_value:
-        raise ValueError('Codex final file/message mismatch or nonobject result')
-    return {'wire_structured_output': value, 'usage': turns[0].get('usage'),
+        raise _failure(diagnostic, observed, 'codex_final_schema_failure', 'final_message_binding')
+    return {'wire_structured_output': value, 'usage': observed,
             'codex_terminal': {'type': 'turn.completed', 'turn_count': 1,
-                               'warning_count': sum(item.get('type') == 'error' for item in items)},
-            'item_warning_details_unknown': any(item.get('type') == 'error' for item in items),
+                               'warning_count': diagnostic['warning_count']},
+            'transport_diagnostic': safe_diagnostic({**diagnostic, 'kind': 'codex_typed_terminal_success', 'no_fallback': False}),
+            'item_warning_details_unknown': diagnostic['warning_count'] > 0,
             'earlier_agent_message_count': len(texts) - 1,
-            'stdout_sha256': sha(stdout.encode()), 'stderr_sha256': sha(stderr.encode()),
+            'stdout_sha256': diagnostic['stdout_sha256'], 'stderr_sha256': diagnostic['stderr_sha256'],
             'final_file_sha256': sha(final_file.encode()), 'host_tool_event_count': 0,
             'provider_request_count': None, 'internal_retries': None,
             'actual_cost_usd': None, 'model_reported': None}
@@ -163,10 +294,26 @@ def codex_infer(messages, original_schema, *, model, mark_launch, executable, au
                 '--model', model, '--color', 'never', '--json', '--output-schema', str(schema_path),
                 '--output-last-message', str(answer_path)] + settings + ['-']
         mark_launch()
-        stdout, stderr, code = launch(args, prompt, env=env, cwd=path / 'cwd', timeout=timeout)
-        final = answer_path.read_text() if answer_path.exists() else None
+        try:
+            stdout, stderr, code = launch(args, prompt, env=env, cwd=path / 'cwd', timeout=timeout)
+        except TransportError as error:
+            error.metadata = safe_diagnostic(error.metadata)
+            error.diagnostic = error.metadata
+            raise
+        except Exception as error:
+            raise _failure({}, None, 'codex_process_failure', 'process_launch_or_drain', error) from None
+        try:
+            final = answer_path.read_text() if answer_path.exists() else None
+        except (OSError, UnicodeError) as error:
+            _, diagnostic, observed, stop = _terminal_context(stdout, stderr, code, None)
+            diagnostic['final_file_present'] = True
+            raise _failure(diagnostic, observed, stop or 'codex_final_file_failure', 'final_file_read', error) from None
         result = decode(stdout, stderr, code, final)
-    value, omissions = restore_original_omissions(result.pop('wire_structured_output'), original_schema)
+        try:
+            value, omissions = restore_original_omissions(result.pop('wire_structured_output'), original_schema)
+        except Exception as error:
+            raise _failure(result['transport_diagnostic'], result.get('usage'), 'codex_original_schema_failure',
+                           'original_schema_restore', error) from None
     result.update(structured_output=value, wire_schema_sha256=sha(canonical(wire).encode()),
                   original_schema_sha256=sha(canonical(original_schema).encode()),
                   schema_projection=projection, wire_null_omitted_original_keys=omissions,
