@@ -4,6 +4,7 @@ from copy import deepcopy
 from datetime import date, timedelta
 import json
 from pathlib import Path
+import sqlite3
 from threading import Event
 from types import SimpleNamespace
 
@@ -276,6 +277,24 @@ def test_upstream_source_changes_or_additions_block(tmp_path, monkeypatch):
         d.method_identity()
 
 
+@pytest.mark.parametrize("changed_policy", ["tradingagents_research.py", "agent_budget.py"])
+def test_actual_method_identity_pins_selected_authorization_and_atomic_budget_policy(tmp_path, monkeypatch, changed_policy):
+    upstream, native_root = tmp_path / "upstream", tmp_path / "native"
+    upstream.mkdir(); native_root.mkdir(); (upstream / "a.py").write_text("fixture = 1\n")
+    manifest = {"upstream_sha": research.UPSTREAM_SHA, "source_hashes": {"a.py": driver.file_sha(upstream / "a.py")}}
+    (native_root / "upstream-manifest.json").write_text(json.dumps(manifest))
+    monkeypatch.setattr(driver, "NATIVE", native_root)
+    d = driver.NativeTradingAgentsDriver(upstream_dir=upstream, python=Path(__file__),
+        dependencies=tmp_path, transport=Typed(), sandbox_executable=__file__)
+    monkeypatch.setattr(d, "_dependency_identity", lambda: {"fixture_dependency_tested_separately": True})
+    original = d.method_identity()
+    owner_path = Path(driver.__file__).with_name(changed_policy)
+    assert original["source_files"][changed_policy] == driver.file_sha(owner_path)
+    original_sha = driver.file_sha
+    monkeypatch.setattr(driver, "file_sha", lambda path: "e" * 64 if Path(path) == owner_path else original_sha(path))
+    assert driver.digest(d.method_identity()) != driver.digest(original)
+
+
 def test_peer_fail_and_pending_review_are_distinct():
     good = {"peer": {"status": "REQUIRES_PEER_REVIEW"}, "score_basis": {"status": "PASS"}, "source_fields": []}
     bad = deepcopy(good); bad["peer"]["status"] = "FAIL"
@@ -437,6 +456,229 @@ def test_failed_original_capture_still_finishes_reported_usage(tmp_path):
         assert budget.events[-1][1]["usage"] == {"input_tokens": 17, "output_tokens": 8}
         assert budget.events[-1][1]["output_chars"] > 0 and budget.unknown is False
     asyncio.run(run())
+
+
+def test_finish_busy_retries_only_the_database_not_the_paid_transport(tmp_path):
+    class Contended(Budget):
+        def __init__(self):
+            super().__init__()
+            self.finishes = 0
+        def finish(self, key, **row):
+            self.finishes += 1
+            if self.finishes <= 2:
+                raise sqlite3.OperationalError("database is locked")
+            return super().finish(key, **row)
+    async def run():
+        budget, typed = Contended(), Typed()
+        result = await native(tmp_path, typed)._infer_accounted(Recorder(), budget,
+            [{"role": "user", "content": "fixture"}], build_cli_schema(), "Bull Researcher", 1)
+        assert result["call_id"] == 1 and typed.calls == 1
+        assert budget.finishes == 3 and budget.unknown is False
+        assert budget.events[-1][1]["state"] == "succeeded"
+    asyncio.run(run())
+
+
+def test_cancel_during_real_transport_drain_preserves_returned_usage(tmp_path):
+    entered, release = Event(), Event()
+    class Delayed(Typed):
+        def infer(self, *args, **kwargs):
+            result = super().infer(*args, **kwargs)
+            entered.set()
+            assert release.wait(5)
+            return result
+    async def run():
+        budget, typed = Budget(), Delayed()
+        task = asyncio.create_task(native(tmp_path, typed)._infer_accounted(Recorder(), budget,
+            [{"role": "user", "content": "fixture"}], build_cli_schema(), "Bull Researcher", 1))
+        try:
+            assert await asyncio.to_thread(entered.wait, 5)
+            task.cancel()
+            await asyncio.sleep(0.01)
+            assert not task.done()
+            task.cancel()
+        finally:
+            release.set()
+        with pytest.raises(asyncio.CancelledError):
+            await task
+        assert typed.calls == 1 and budget.unknown is False
+        assert budget.events[-1][1]["state"] == "failed"
+        assert budget.events[-1][1]["usage"] == {"input_tokens": 17, "output_tokens": 8}
+    asyncio.run(run())
+
+
+def test_paid_usage_receipt_precedes_output_and_exhausted_database_writes(tmp_path):
+    path = tmp_path / "usage-receipts/1.json"
+    class Locked(Budget):
+        def __init__(self):
+            super().__init__()
+            self.finishes = 0
+        def finish(self, key, **row):
+            self.finishes += 1
+            saved = json.loads(path.read_text())
+            assert saved["usage_id"] == key and saved["usage"] == row["usage"]
+            assert saved["output_sha256"] == driver.digest({"content": "isolated engineering fixture", "tool_calls": []})
+            raise sqlite3.OperationalError("database is locked")
+    async def run():
+        budget, typed = Locked(), Typed()
+        originals = []
+        def capture(value):
+            assert json.loads(path.read_text())["usage_known"] is True
+            originals.append(value)
+        with pytest.raises(sqlite3.OperationalError, match="database is locked"):
+            await native(tmp_path, typed)._infer_accounted(Recorder(), budget,
+                [{"role": "user", "content": "PRIVATE_REQUEST_MUST_NOT_BE_SAVED"}], build_cli_schema(),
+                "Bull Researcher", 1, capture_output=capture, usage_receipt_path=path, method_sha256="f" * 64)
+        saved = json.loads(path.read_text())
+        assert typed.calls == 1 and budget.finishes == 4 and budget.unknown is True
+        assert len(originals) == 1 and saved["usage"] == {"input_tokens": 17, "output_tokens": 8}
+        assert saved["task_id"] == Recorder.task_id and saved["role"] == "Bull Researcher" and saved["call_id"] == 1
+        assert saved["method_sha256"] == "f" * 64 and len(saved["terminal_sha256"]) == 64
+        assert saved["terminal_kind"] == "typed_response" and saved["automatic_reconciliation"] is False
+        assert "PRIVATE_REQUEST" not in path.read_text() and "isolated engineering fixture" not in path.read_text()
+        assert not {"messages", "prompt", "context", "structured_output", "auth_file"} & saved.keys()
+        with pytest.raises(driver.DriverUnavailable, match="usage_receipt_identity_or_replay"):
+            await native(tmp_path, typed)._infer_accounted(Recorder(), budget,
+                [{"role": "user", "content": "fixture"}], build_cli_schema(), "Bull Researcher", 1,
+                usage_receipt_path=path, method_sha256="f" * 64)
+        assert typed.calls == 1
+    asyncio.run(run())
+
+
+def test_receipt_survives_output_capture_failure_and_preserves_known_finish(tmp_path):
+    path = tmp_path / "usage-receipts/1.json"
+    def fail_capture(value):
+        assert json.loads(path.read_text())["usage_known"] is True
+        raise OSError("original output disk failed")
+    async def run():
+        typed, budget = Typed(), Budget()
+        with pytest.raises(OSError, match="output disk failed"):
+            await native(tmp_path, typed)._infer_accounted(Recorder(), budget,
+                [{"role": "user", "content": "fixture"}], build_cli_schema(), "Bull Researcher", 1,
+                usage_receipt_path=path, method_sha256="f" * 64, capture_output=fail_capture)
+        assert typed.calls == 1 and budget.unknown is False
+        assert budget.events[-1][1]["state"] == "failed"
+        assert json.loads(path.read_text())["terminal_kind"] == "typed_response"
+    asyncio.run(run())
+
+
+@pytest.mark.parametrize("verified", [True, False, "untyped"])
+def test_failed_transport_journal_never_promotes_unverified_usage(tmp_path, verified):
+    path = tmp_path / "usage-receipts/1.json"
+    usage = {"input_tokens": 17, "output_tokens": 3}
+    class Failed(Typed):
+        def infer(self, messages, schema, *, mark_launch, **kwargs):
+            mark_launch()
+            self.calls += 1
+            if verified == "untyped":
+                error = RuntimeError("untrusted usage")
+                error.usage, error.final_usage_verified = usage, True
+                raise error
+            raise TransportError({"kind": "timeout", "usage": usage, "context": "NEVER_SAVE_CONTEXT"},
+                                 verified_final_usage=usage if verified else None)
+    async def run():
+        typed, budget = Failed(), Budget()
+        with pytest.raises(RuntimeError):
+            await native(tmp_path, typed)._infer_accounted(Recorder(), budget,
+                [{"role": "user", "content": "fixture"}], build_cli_schema(), "Bull Researcher", 1,
+                usage_receipt_path=path, method_sha256="f" * 64)
+        saved = json.loads(path.read_text())
+        assert typed.calls == 1 and saved["usage_known"] is (verified is True)
+        assert saved["usage"] == (usage if verified is True else None)
+        assert saved["output_sha256"] is None and budget.unknown is (verified is not True)
+        assert "NEVER_SAVE_CONTEXT" not in path.read_text()
+    asyncio.run(run())
+
+
+@pytest.mark.parametrize("transport_failed", [False, True])
+def test_cancel_drain_journals_returned_usage_before_failed_finish(tmp_path, transport_failed):
+    path = tmp_path / "usage-receipts/1.json"
+    entered, release = Event(), Event()
+    class Delayed(Typed):
+        def infer(self, *args, **kwargs):
+            result = super().infer(*args, **kwargs)
+            entered.set()
+            assert release.wait(5)
+            if transport_failed:
+                raise TransportError({"kind": "timeout"},
+                    verified_final_usage={"input_tokens": 17, "output_tokens": 3})
+            return result
+    async def run():
+        typed, budget, originals = Delayed(), Budget(), []
+        task = asyncio.create_task(native(tmp_path, typed)._infer_accounted(Recorder(), budget,
+            [{"role": "user", "content": "fixture"}], build_cli_schema(), "Bull Researcher", 1,
+            usage_receipt_path=path, method_sha256="f" * 64, capture_output=originals.append))
+        try:
+            assert await asyncio.to_thread(entered.wait, 5)
+            task.cancel()
+            await asyncio.sleep(0.01)
+            assert not task.done() and not path.exists()
+        finally:
+            release.set()
+        with pytest.raises(asyncio.CancelledError):
+            await task
+        saved = json.loads(path.read_text())
+        assert typed.calls == 1 and len(originals) == (0 if transport_failed else 1)
+        assert saved["usage_known"] is True
+        assert saved["usage"] == {"input_tokens": 17, "output_tokens": 3 if transport_failed else 8}
+        assert budget.unknown is False and budget.events[-1][1]["state"] == "failed"
+    asyncio.run(run())
+
+
+@pytest.mark.parametrize("usage", [None, {"input_tokens": "17", "output_tokens": 8},
+                                 {"input_tokens": 17, "output_tokens": True}])
+def test_terminal_receipt_keeps_missing_or_invalid_usage_unknown(tmp_path, usage):
+    class Uncertain(Typed):
+        def infer(self, *args, **kwargs):
+            return {**super().infer(*args, **kwargs), "usage": usage}
+    async def run():
+        budget, typed = Budget(), Uncertain()
+        path = tmp_path / "usage-receipts/1.json"
+        await native(tmp_path, typed)._infer_accounted(Recorder(), budget,
+            [{"role": "user", "content": "fixture"}], build_cli_schema(), "Bull Researcher", 1,
+            usage_receipt_path=path, method_sha256="f" * 64)
+        saved = json.loads(path.read_text())
+        assert typed.calls == 1 and budget.unknown is True
+        assert saved["usage"] is None and saved["usage_known"] is False
+        assert budget.events[-1][1]["usage"] is None
+    asyncio.run(run())
+
+
+def test_finish_commit_then_refresh_lock_is_idempotent_without_model_replay(tmp_path, monkeypatch):
+    from sqlalchemy import create_engine
+    from sqlalchemy.exc import OperationalError
+    from sqlalchemy.orm import Session, sessionmaker
+    from app.models.agent import AgentResourceUsage
+    from app.models.watchlist import Base
+    from app.services import agent_budget
+    faults = []
+    class RefreshLocked(Session):
+        def refresh(self, instance, *args, **kwargs):
+            if isinstance(instance, AgentResourceUsage) and instance.state == "succeeded" and not faults:
+                faults.append(instance.id)
+                raise OperationalError("redacted finish refresh", {}, sqlite3.OperationalError("database is locked"))
+            return super().refresh(instance, *args, **kwargs)
+    engine = create_engine(f"sqlite:///{tmp_path / 'isolated-budget.db'}")
+    Base.metadata.create_all(engine)
+    sf = sessionmaker(bind=engine, class_=RefreshLocked)
+    monkeypatch.setattr(agent_budget, "get_session_factory", lambda: sf)
+    monkeypatch.setattr(driver.settings, "agent_daily_llm_budget", 8)
+    async def run():
+        typed = Typed()
+        path = tmp_path / "usage-receipts/1.json"
+        result = await native(tmp_path, typed)._infer_accounted(Recorder(), agent_budget,
+            [{"role": "user", "content": "fixture"}], build_cli_schema(), "Bull Researcher", 1,
+            usage_receipt_path=path, method_sha256="f" * 64)
+        saved = json.loads(path.read_text())
+        with sf() as db:
+            rows = db.query(AgentResourceUsage).all()
+            assert len(rows) == 1 and rows[0].id == saved["usage_id"] == faults[0]
+            assert rows[0].state == "succeeded" and rows[0].usage_known == 1
+            assert rows[0].input_tokens == 17 and rows[0].output_tokens == 8
+        assert result["call_id"] == 1 and typed.calls == 1
+    try:
+        asyncio.run(run())
+    finally:
+        engine.dispose()
 
 
 def _public_profile(symbol, at):

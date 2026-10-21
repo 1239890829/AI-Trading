@@ -73,6 +73,9 @@ def test_disabled_projection_keeps_facts_without_touching_task(profile, tmp_path
     result = state.read_status("600001", now=NOW, enabled=False, root=tmp_path,
                                task_resolver=lambda _: pytest.fail("disabled read resolved task"))
     assert result["state"] == "disabled" and len(result["facts"]) == 1
+    assert "旧版独立" in result["reason"]
+    assert "完整TradingAgents" in result["reason"]
+    assert "后台公司采集与判读已停用" not in result["reason"]
     assert snapshot(tmp_path) == before
 
 

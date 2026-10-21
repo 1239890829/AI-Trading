@@ -236,8 +236,15 @@ const COMPANY_STATES: Record<CompanyStatus["state"], string> = {
   idle: "等待采集条件", queued: "已排队", collecting: "正在采集公司原文", generating: "正在生成研究解释",
   ready: "本次研究结果已保存", insufficient: "证据不够", source_failed: "公司原文采集失败", model_failed: "模型判读失败",
   invalid_response: "模型结果未通过引用核对", budget_blocked: "模型预算已阻断", canceled: "任务已取消",
-  interrupted: "任务中断，等待恢复", disabled: "常规采集未启用", historical_excluded: "所查时点无可用资料",
+  interrupted: "任务中断，等待恢复", disabled: "旧版独立自动判读已停用", historical_excluded: "所查时点无可用资料",
 };
+
+/** A legacy worker switch cannot erase public facts saved by the complete research task. */
+function companyStatusLabel(value: CompanyStatus, profileInScope = true) {
+  const savedFacts = profileInScope && value.state === "disabled" && value.documents_count > 0
+    && checkedCompanyFacts(value.facts, companyClock(value.updated_at)!)?.length;
+  return savedFacts ? "公司原文已保存" : COMPANY_STATES[value.state];
+}
 
 function boundCompanyStatus(value: CompanyStatus | undefined, symbol: string | null | undefined, now: number) {
   if (!value || !symbol || value.symbol !== symbol || !Object.hasOwn(COMPANY_STATES, value.state)
@@ -263,7 +270,7 @@ function CompanyStatusEvidence({value, symbol, now, showFacts, responseAsOf, com
   const busy = ["queued", "collecting", "generating"].includes(current.state);
   return <section aria-label={compact ? "公司资料与判读状态摘要" : "公司资料与判读状态"} className="min-w-0 space-y-2 py-2">
     <h4 className="font-medium">公司资料与判读</h4>
-    <p role={busy ? "status" : "note"}>{COMPANY_STATES[current.state]}{current.reason ? `：${current.reason}` : ""}</p>
+    <p role={busy ? "status" : "note"}>{companyStatusLabel(current, !historicalUnknown)}{current.reason ? `：${current.reason}` : ""}</p>
     {!compact && <>
       <ConditionList label="本轮具体缺项" items={current.missing.length ? current.missing : ["本轮未列出额外缺项，不代表资料完整或经营效果已验证。"]} tone="warning"/>
       <p className="text-zinc-600 dark:text-zinc-400">已保存 {current.documents_count} 份公司原文 · 状态记录于 {timeLabel(current.updated_at)}{current.next_retry_at ? ` · 下次可重试时点：${timeLabel(current.next_retry_at)}` : ""}</p>
@@ -535,7 +542,7 @@ export const StockAttributionPanel = memo(function StockAttributionPanel({symbol
       return {id: `${item.event_id}:${item.interpretation_ref.version_id}:${item.interpretation_ref.observation_id}`, title: item.title,
         relation: item.stock_relation.label, availableAt: timeLabel(item.timing.available_at),
         source: sourceBound && item.source_context ? {title: item.source_context.title, quote: item.source_context.summary || item.source_context.title, url: sourceUrl(item.source_context.url)} : null,
-        company, status: historicalGap ? "原提醒时点的公司联系待核" : currentStatus && !historicalStatusExcluded ? COMPANY_STATES[currentStatus.state] : "公司关系待核",
+        company, status: historicalGap ? "原提醒时点的公司联系待核" : currentStatus && !historicalStatusExcluded ? companyStatusLabel(currentStatus) : "公司关系待核",
         gap: historicalGap || currentStatus?.missing[0] || "缺少本股与事件的同版本公司依据；未据此认定没有相关业务。",
         temporalNote: company ? `资料采集 ${timeLabel(company.facts_captured_at)} · 解释生成 ${timeLabel(company.generated_at)}。${selectionSummary?.historical ? "仅使用原提醒时点之前且与原事件版本绑定的资料。" : "当前补充资料，不回填入选当时的理由。"}` : historicalGap || "来源关联仍待核，不把题材同名当作经营影响。"};
     });
@@ -547,13 +554,13 @@ export const StockAttributionPanel = memo(function StockAttributionPanel({symbol
       </div>
       {resource.pending && !data && <p role="status">正在读取本股已保存的解释…</p>}
       {resource.error != null && <p role="alert" className="text-amber-800 dark:text-amber-300">{data ? "读取失败，下方保留上次结果，当前状态待核。" : "本股解释读取失败，暂不能确认是否有已保存结果。"}可用“刷新依据”重试。</p>}
-      {selectionSummary ? <SelectionDecisionExplorer key={`${identity}:${selectionSummary.version || ""}:${selectedAt || ""}`} summary={selectionSummary} events={decisionEvents} originalClock={timeLabel(selectedAt || responseAsOf)} fallback={<p>{historicalGap || (currentStatus && !historicalStatusExcluded ? `${COMPANY_STATES[currentStatus.state]}；本条事件的经营关系仍需依据。` : "尚无可读取的本股经营依据，不代表公司没有相关业务。")}</p>}/>
+      {selectionSummary ? <SelectionDecisionExplorer key={`${identity}:${selectionSummary.version || ""}:${selectedAt || ""}`} summary={selectionSummary} events={decisionEvents} originalClock={timeLabel(selectedAt || responseAsOf)} fallback={<p>{historicalGap || (currentStatus && !historicalStatusExcluded ? `${companyStatusLabel(currentStatus)}；本条事件的经营关系仍需依据。` : "尚无可读取的本股经营依据，不代表公司没有相关业务。")}</p>}/>
         : currentCompany ? <>
         <CompanyImpactEvidence item={currentCompany} symbol={symbol} now={companyNow} compact/>
         <p className="text-zinc-600 dark:text-zinc-400">当前公司资料解释，不替换入选当时的理由。{companyResults.length > 1 ? `另有 ${companyResults.length - 1} 条本股经营解释，见完整依据。` : ""}</p>
       </> : data && <>
         {historicalStatusExcluded ? <p role="note" className="text-zinc-600 dark:text-zinc-400">公司资料的可得时刻无法对应所查历史时点，不回填当时依据。</p> : currentStatus ? <>
-          <section aria-label="公司资料与判读状态摘要" className="min-w-0 space-y-2 py-2"><h4 className="font-medium">公司资料与判读</h4><p role={["queued", "collecting", "generating"].includes(currentStatus.state) ? "status" : "note"}>{COMPANY_STATES[currentStatus.state]}</p></section>
+          <section aria-label="公司资料与判读状态摘要" className="min-w-0 space-y-2 py-2"><h4 className="font-medium">公司资料与判读</h4><p role={["queued", "collecting", "generating"].includes(currentStatus.state) ? "status" : "note"}>{companyStatusLabel(currentStatus)}</p></section>
           {currentStatus.missing[0] && <ReaderBrief label="本股关键待核" facts={[{label: "还缺什么", value: currentStatus.missing[0]}]}/>}
           {currentStatus.state === "ready" && <p className="text-zinc-600 dark:text-zinc-400">处理记录称结果已保存，但本次未读取到有效绑定的本股经营解释；不将消息AI观点代替本股结论。</p>}
         </> : <p role="note" className="text-zinc-600 dark:text-zinc-400">本次尚无可读取的本股经营解释或有效处理状态，不代表公司没有相关业务。</p>}

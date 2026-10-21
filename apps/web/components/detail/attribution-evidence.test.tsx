@@ -713,6 +713,37 @@ describe("company evidence and saved impact", () => {
     symbol: "600825", state, updated_at: "2026-10-20T09:15:00+08:00", reason: "本轮处理未能生成有效经营解释，保留真实公司资料", missing: ["本轮片段未取得可核对的客户、订单与贡献金额"], documents_count: 1, facts: impact.facts,
   });
 
+  it("keeps independently saved company facts separate from the disabled legacy selector and unestablished event link", async () => {
+    vi.mocked(getStockAttribution).mockResolvedValue({...payload(), company_status: {...companyState("disabled"), reason: "旧版独立worker停用；完整TradingAgents任务状态独立。"}});
+    render(<StockAttributionPanel symbol="600825" concise selectionSummary={{reason: "原选择理由", condition: "原失效条件"}}/>);
+    const explorer = await screen.findByRole("region", {name: "入选决策核对台"});
+    await act(async () => {});
+    const company = within(explorer).getByLabelText("公司联系");
+    expect(company.textContent).toContain("公司原文已保存");
+    expect(company.textContent).toContain("经营关系仍需依据");
+    expect(company.textContent).not.toMatch(/常规采集未启用|已排队|正在生成|研究已完成/);
+    expect(explorer.textContent).not.toContain(impact.facts[0].quote);
+    fireEvent.click(screen.getByRole("button", {name: "公司依据、完整传导与相关消息"}));
+    const status = screen.getByLabelText("公司资料与判读状态");
+    expect(status.textContent).toContain("旧版独立");
+    expect(within(status).getByLabelText("已保存公司原文").textContent).toContain(impact.facts[0].quote);
+    expect(screen.queryByLabelText("AI经营传导假设")).toBeNull();
+    expect(getStockAttribution).toHaveBeenCalledTimes(1);
+    expect(getEventAttribution).not.toHaveBeenCalled();
+  });
+
+  it.each([{facts: []}, {facts: [{...impact.facts[0], published_at: "2026-10-21T00:00:00+08:00"}]}])("does not call absent or invalid saved facts collected when the legacy selector is disabled %j", async ({facts}) => {
+    vi.mocked(getStockAttribution).mockResolvedValue({...payload(), company_status: {...companyState("disabled"), facts}});
+    render(<StockAttributionPanel symbol="600825" concise selectionSummary={{reason: "原选择理由", condition: "原失效条件"}}/>);
+    const explorer = await screen.findByRole("region", {name: "入选决策核对台"});
+    await act(async () => {});
+    const company = within(explorer).getByLabelText("公司联系");
+    expect(company.textContent).toContain("旧版独立自动判读已停用");
+    expect(company.textContent).not.toContain("公司原文已保存");
+    expect(explorer.textContent).not.toContain(impact.facts[0].quote);
+    expect(getStockAttribution).toHaveBeenCalledTimes(1);
+  });
+
   it("concise selected-stock reader shows a bound company explanation immediately and keeps every original behind one disclosure", async () => {
     const missing = ["未取得客户名称与已签订单。", "项目贡献金额尚无依据。"];
     const value = {...impact, analysis: {...impact.analysis, missing}};

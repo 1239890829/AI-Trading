@@ -1,6 +1,10 @@
 """Forward-only research evidence, isolated from live data and notifications."""
 import asyncio
+from concurrent.futures import ThreadPoolExecutor
 from datetime import date, datetime, timedelta, timezone
+import json
+import sqlite3
+from time import perf_counter
 from types import SimpleNamespace as NS
 
 import pytest
@@ -222,3 +226,153 @@ def test_no_census_does_not_invent_future_calendar(sf):
     assert outcomes["d0"]["target_date"] == "2026-09-29"
     assert outcomes["d0"]["state"] == "missing"
     assert outcomes["d1"]["state"] == "unknown"
+
+
+def test_latest_uses_indexed_latest_per_symbol_without_reading_all_history_payloads(sf, tmp_path):
+    from app.research import leader_followthrough as module
+    start_day = date(2026, 8, 1)
+    seed = []
+    for day_index in range(80):
+        day = start_day + timedelta(days=day_index)
+        for n in range(100):
+            seed.append({"observation_id": f"{day_index:04}-{n:04}", "symbol": f"600{n:03}",
+                "trade_date": day.isoformat(), "as_of": datetime.combine(day, datetime.min.time()).replace(hour=10),
+                "first_seen": datetime(2026, 8, 1, 10), "version": module.VERSION,
+                "signature": "fixture", "payload": json.dumps({"fixture": "x" * 2000})})
+    with sf.begin() as db:
+        db.execute(Obs.__table__.insert(), seed)
+        db.add(Obs(observation_id="future", symbol="600000", trade_date="2026-10-20", as_of=datetime(2026, 10, 20, 10),
+            first_seen=datetime(2026, 8, 1, 10), version=module.VERSION, signature="fixture", payload="{}"))
+        db.add(Obs(observation_id="other-version", symbol="600001", trade_date="2026-10-19", as_of=datetime(2026, 10, 19, 11),
+            first_seen=datetime(2026, 8, 1, 10), version="other", signature="fixture", payload="{}"))
+        db.add(Obs(observation_id="backdated-high-id", symbol="600002", trade_date="2026-10-01", as_of=datetime(2026, 10, 1, 10),
+            first_seen=datetime(2026, 8, 1, 10), version=module.VERSION, signature="fixture", payload="{}"))
+    comparisons = []
+    with sf() as db:
+        raw = db.connection().connection.driver_connection
+        def measured(operation):
+            steps = 0
+            def progress():
+                nonlocal steps
+                steps += 100
+                return 0
+            raw.set_progress_handler(progress, 100)
+            began = perf_counter()
+            try:
+                result = operation()
+                return {row.id for row in result}, steps, (perf_counter() - began) * 1000
+            finally:
+                raw.set_progress_handler(None, 0)
+        for end in (datetime(2026, 10, 19, 10), datetime(2026, 10, 10, 10)):
+            start = "2026-09-20"
+            old_ids = select(func.max(Obs.id)).where(Obs.trade_date >= start, Obs.as_of <= end,
+                Obs.version == module.VERSION).group_by(Obs.symbol)
+            original = measured(lambda: list(db.scalars(select(Obs).where(Obs.id.in_(old_ids))).all()))
+            revised = measured(lambda: module._latest(db, start, end))
+            assert revised[0] == original[0]
+            comparisons.append({"end": end.isoformat(), "rows": len(revised[0]),
+                "original_vm_steps": original[1], "revised_vm_steps": revised[1],
+                "original_ms": original[2], "revised_ms": revised[2]})
+        assert comparisons[0]["revised_vm_steps"] < comparisons[0]["original_vm_steps"] * .65
+        inspected_payloads = []
+        def source_clock(payload, path):
+            assert path == "$.source_as_of"
+            inspected_payloads.append(payload)
+            return json.loads(payload).get("source_as_of")
+        raw.create_function("json_extract", 2, source_clock)
+        assert module._newer_watermark(db, ["600000"],
+            as_of=datetime(2026, 10, 19, 10), source_as_of=datetime(2026, 10, 19, 10)) is True
+        assert len(inspected_payloads) == 1, "Only the affected symbol's winning row may decode its payload"
+    (tmp_path / "query-comparison.json").write_text(json.dumps(comparisons, indent=2))
+
+
+def test_capture_computes_transitions_without_holding_a_sqlite_writer(sf, monkeypatch, tmp_path):
+    from app.research import leader_followthrough as module
+    original = module.decide
+    measured = []
+    calls = 0
+    path = sf.kw["bind"].url.database
+    def competing_writer():
+        began = perf_counter()
+        try:
+            with sqlite3.connect(path, timeout=.05) as db:
+                db.execute("INSERT INTO leader_research_session VALUES (?, ?, ?, ?)",
+                    ("2020-01-01", "2020-01-01 15:00:00.000000", module.VERSION, '{"universe":{}}'))
+            return {"committed": True, "ms": (perf_counter() - began) * 1000}
+        except sqlite3.OperationalError:
+            return {"committed": False, "ms": (perf_counter() - began) * 1000}
+    with ThreadPoolExecutor(max_workers=1) as workers:
+        def decide(*args, **kwargs):
+            nonlocal calls
+            calls += 1
+            if calls == 2:
+                measured.append(workers.submit(competing_writer).result(timeout=2))
+            return original(*args, **kwargs)
+        monkeypatch.setattr(module, "decide", decide)
+        assert run(sf)["inserted"] == 1
+    assert measured[0]["committed"] is True
+    (tmp_path / "writer-comparison.json").write_text(json.dumps(measured, indent=2))
+
+
+def test_capture_rechecks_generation_before_applying_a_prepared_older_frame(sf, monkeypatch):
+    from app.research import leader_followthrough as module
+    original, nested = module.decide, []
+    def decide(*args, **kwargs):
+        if not nested:
+            nested.append(run(sf, at(minute=1), data=rows(7, 11)))
+        return original(*args, **kwargs)
+    # Set the guard before entering the inner capture; this hook represents a
+    # separate caller that commits while the original frame is being computed.
+    entered = False
+    def interleaved(*args, **kwargs):
+        nonlocal entered
+        if not entered:
+            entered = True
+            return decide(*args, **kwargs)
+        return original(*args, **kwargs)
+    monkeypatch.setattr(module, "decide", interleaved)
+    result = run(sf)
+    assert result["state"] == "concurrent_update" and result["inserted"] == 0
+    assert count(sf) == 1
+    card = summary("2026-09-29", sf)["cards"][0]
+    assert card["reference_price"] == 11 and card["as_of"] == at(minute=1).replace(tzinfo=None).isoformat()
+
+
+def test_closing_census_does_not_read_observation_history(sf, monkeypatch):
+    from app.research import leader_followthrough as module
+    monkeypatch.setattr(module, "_latest", lambda *a: pytest.fail("Closing census must not read prior observations"))
+    assert run(sf, at(hour=15))["state"] == "closing_census"
+    assert count(sf) == 0 and count(sf, Census) == 1
+
+
+def test_late_frame_cannot_append_after_newer_frame_committed_before_capture_started(sf):
+    assert run(sf, at(minute=1), rows(7, 11))["inserted"] == 1
+    result = run(sf, at(), rows(6, 10))
+    assert result["state"] == "out_of_order" and result["inserted"] == 0
+    assert count(sf) == 1
+    card = summary("2026-09-29", sf)["cards"][0]
+    assert card["reference_price"] == 11 and card["as_of"] == at(minute=1).replace(tzinfo=None).isoformat()
+    assert run(sf, at(minute=1), rows(7, 11))["inserted"] == 0
+    assert count(sf) == 1
+
+
+def test_future_watermarks_for_unrelated_symbols_or_versions_do_not_block_current_capture(sf):
+    from app.research import leader_followthrough as module
+    future = at(minute=2).replace(tzinfo=None)
+    with sf.begin() as db:
+        for symbol, version in (("600825", module.VERSION), ("600127", "other-version")):
+            db.add(Obs(observation_id=symbol + version, symbol=symbol, trade_date="2026-09-29", as_of=future,
+                first_seen=future, version=version, signature="future", payload=json.dumps({"source_as_of": future.isoformat()})))
+    result = run(sf)
+    assert result["state"] == "ready" and result["inserted"] == 1
+    with sf() as db:
+        row = db.scalar(select(Obs).where(Obs.symbol == "600127", Obs.version == module.VERSION))
+        card = json.loads(row.payload)
+    assert card["reference_price"] == 10 and card["as_of"] == at().replace(tzinfo=None).isoformat()
+
+
+def test_empty_calendar_still_exits_before_watermark_or_any_write(sf):
+    result = capture(rows(), {}, as_of=at(), source_as_of=at(), trading_days=[],
+        source="中文来源", session_factory=sf)
+    assert result == {"state": "outside_session", "inserted": 0}
+    assert count(sf) == 0 and count(sf, Census) == 0

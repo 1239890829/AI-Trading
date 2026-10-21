@@ -160,6 +160,8 @@
 
 ## RSH-030
 
+> 2026-10-21发布后实际研究因SQLite锁失败，3原答/2份known/1份unknown保留。用户明确授权只对原具名未知作继续新入选研究例外；新未知仍停，旧答不重跑。精确服务端方法与授权绑定贯穿预检/预约/原子启动，跨方法同次入选防重发；终端用量先于DB落盘。工程门与实际完整报告分别核验，原状态/效果前置不变，见handoff与语义专题本日故障窗口。
+
 > 2026-10-21当前授权修订：真正daily/top入选后完整Sol medium研究采用RESEARCH_ONLY_AUTHORIZED，专属scope取消固定次数/22余量门；旧LAB账和unknown保留。该身份net_gain_verified=false、production_eligible=false，只允许解释/复盘，不冒充VALIDATED或选股增益。当前运行门见语义专题同日新节，原状态与效果评价任务不改。
 
 **新闻语义、判断依据与独立效果验证**
