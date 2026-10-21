@@ -30,6 +30,8 @@ GRANT_KEYS = {"version", "grant_id", "user_authorization", "authorized_at", "val
 BINDING_KEYS = {"selection", "source_claim_sha256", "packet_sha256", "config_sha256", "staged_code_sha256",
     "manifest_sha256", "worker_terminal_sha256", "checkpoint", "call_counter", "outputs", "usage_receipts",
     "prefixes", "completed_roles", "expected_pending_role"}
+HISTORY_KEYS = {"grant_id", "grant_sha256", "task_id", "method_identity", "call_from", "call_to", "claim_sha256"}
+MAX_RECOVERY_HISTORY = 8  # Bounded artifact parsing, not a model-call allowance.
 
 
 def _blocked(code):
@@ -184,12 +186,140 @@ def _grant(source_task_id, run_id, app, sf):
     return grant, admission, driver, old_method, method
 
 
+def _binding(value):
+    if (not isinstance(value, dict) or set(value) not in (BINDING_KEYS, BINDING_KEYS | {"recovery_history"})
+            or any(not isinstance(value.get(key), dict) for key in ("selection", "outputs", "usage_receipts", "prefixes", "checkpoint"))):
+        raise _blocked("recovery_binding_invalid")
+    return value
+
+
+def _prefixes(run, expected):
+    if not isinstance(expected, dict) or set(expected) != {"role-outputs.jsonl", "source-audit.jsonl", "graph/node-trace.jsonl"}:
+        raise _blocked("recovery_prefix_invalid")
+    for name, prefix in expected.items():
+        body = _body(run / name)
+        length = prefix.get("bytes") if isinstance(prefix, dict) else None
+        if (type(length) is not int or length < 0 or length > len(body)
+                or hashlib.sha256(body[:length]).hexdigest() != prefix.get("sha256")):
+            raise _blocked("recovery_original_prefix_drift")
+
+
+def _history_segments(grant, run, sf=None):
+    """Verify a small, explicitly granted chain; each old claim stays its owner.
+
+    Archived grants are the existing recovery history, not a new registry. A
+    segment may contain no calls when a consumed recovery failed before launch.
+    """
+    binding = _binding(grant["binding"])
+    history = binding.get("recovery_history", [])
+    if not isinstance(history, list) or len(history) > MAX_RECOVERY_HISTORY:
+        raise _blocked("recovery_history_invalid")
+    root_method = research._digest(grant["source_method_identity"])
+    current_method = research._digest(grant["continuation_method_identity"])
+    counter = binding["call_counter"]
+    if type(counter) is not int or not 0 < counter <= 4096:
+        raise _blocked("recovery_counter_invalid")
+    segments, seen_methods, seen_tasks, seen_grants = [], {root_method, current_method}, {grant["source_task_id"]}, {grant["grant_id"]}
+    previous_end = None
+    for index, entry in enumerate(history):
+        if (not isinstance(entry, dict) or set(entry) != HISTORY_KEYS
+                or not isinstance(entry["method_identity"], dict)
+                or not _hash(entry["claim_sha256"]) or not _hash(entry["grant_sha256"])
+                or type(entry["call_from"]) is not int or type(entry["call_to"]) is not int
+                or not 1 < entry["call_from"] <= 4097 or not entry["call_from"] - 1 <= entry["call_to"] <= counter):
+            raise _blocked("recovery_history_invalid")
+        task_id, grant_id = _id(entry["task_id"]), _id(entry["grant_id"])
+        method = research._digest(entry["method_identity"])
+        if method in seen_methods or task_id in seen_tasks or grant_id in seen_grants:
+            raise _blocked("recovery_history_duplicate")
+        seen_methods.add(method); seen_tasks.add(task_id); seen_grants.add(grant_id)
+        if previous_end is None:
+            segments.append({"task_id": grant["source_task_id"], "method_sha256": root_method,
+                             "call_from": 1, "call_to": entry["call_from"] - 1})
+        elif entry["call_from"] != previous_end + 1:
+            raise _blocked("recovery_history_range_drift")
+        archive = _safe(run / "recovery-history" / grant_id)
+        old = _json(archive / "grant.json")
+        if (set(old) != GRANT_KEYS or type(old.get("version")) is not int or old["version"] != 1
+                or old.get("user_authorization") != "EXPLICIT" or old.get("grant_id") != grant_id
+                or research._digest(old) != entry["grant_sha256"]
+                or any(old.get(key) != grant.get(key) for key in ("source_task_id", "symbol", "run_id", "source_method_identity"))):
+            raise _blocked("recovery_history_grant_drift")
+        old_root, old_method = _compatibility(old, entry["method_identity"])
+        prior = _binding(old["binding"])
+        if (old_root != root_method or old_method != method
+                or prior.get("recovery_history", []) != history[:index]
+                or type(prior["call_counter"]) is not int or prior["call_counter"] != entry["call_from"] - 1
+                or any(prior[key] != binding[key] for key in ("selection", "source_claim_sha256", "packet_sha256", "config_sha256", "staged_code_sha256"))
+                or prior["usage_receipts"] != {key: value for key, value in binding["usage_receipts"].items() if int(key) < entry["call_from"]}
+                or prior["outputs"] != {key: value for key, value in binding["outputs"].items() if int(key) < entry["call_from"]}
+                or _sha(archive / "worker-terminal.json") != prior["worker_terminal_sha256"]
+                or _sha(archive / "graph-run-manifest.json") != prior["manifest_sha256"]):
+            raise _blocked("recovery_history_binding_drift")
+        start = _json(archive / "start.json")
+        if start != {"source_task_id": grant["source_task_id"], "recovery_task_id": task_id,
+                     "grant_sha256": entry["grant_sha256"], "checkpoint": prior["checkpoint"], "counter": prior["call_counter"]}:
+            raise _blocked("recovery_history_start_drift")
+        _prefixes(run, prior["prefixes"])
+        path = _safe(research._selection_claim(binding["selection"], method))
+        claim = _json(path)
+        info = _recovery_info(claim)
+        if (_sha(path) != entry["claim_sha256"] or claim.get("state") != "needs_recovery"
+                or type(claim.get("version")) is not int or claim["version"] != 1
+                or claim.get("selection") != binding["selection"] or claim.get("method_sha256") != method
+                or claim.get("task_id") != task_id or info["grant_sha256"] != entry["grant_sha256"]
+                or info["source_task_id"] != grant["source_task_id"] or info["run_id"] != grant["run_id"]
+                or info["source_method_sha256"] != root_method or info["source_claim_sha256"] != binding["source_claim_sha256"]):
+            raise _blocked("recovery_history_claim_drift")
+        if sf is not None:
+            with sf() as db:
+                task = db.get(AgentTask, task_id)
+                expected = {"symbol": grant["symbol"], "native_recovery": {"source_task_id": grant["source_task_id"],
+                    "run_id": grant["run_id"], "grant_sha256": entry["grant_sha256"], "dispatch_owner": info["dispatch_owner"]}}
+                if (task is None or task.type != "tradingagents_research" or task.status not in {"failed", "canceled"}
+                        or task.finished_at is None or json.loads(task.params) != expected):
+                    raise _blocked("recovery_history_task_drift")
+        segments.append({"task_id": task_id, "method_sha256": method,
+                         "call_from": entry["call_from"], "call_to": entry["call_to"]})
+        previous_end = entry["call_to"]
+    if history:
+        if previous_end != counter:
+            raise _blocked("recovery_history_range_drift")
+    else:
+        segments.append({"task_id": grant["source_task_id"], "method_sha256": root_method, "call_from": 1, "call_to": counter})
+    return segments
+
+
+def _frozen_records(run, binding, segments):
+    counter = binding["call_counter"]
+    outputs, usages = binding["outputs"], binding["usage_receipts"]
+    if (not isinstance(outputs, dict) or not isinstance(usages, dict) or not outputs
+            or set(usages) != {str(n) for n in range(1, counter + 1)} or not set(outputs) <= set(usages)):
+        raise _blocked("recovery_original_index_invalid")
+    for folder, expected in (("model-outputs", outputs), ("usage-receipts", usages)):
+        actual = set()
+        for count, path in enumerate(_safe(run / folder).iterdir(), 1):
+            if count > 4096 or not re.fullmatch(r"[1-9][0-9]{0,3}\.json", path.name) or path.is_symlink():
+                raise _blocked("recovery_original_index_invalid")
+            if int(path.stem) <= counter:
+                actual.add(path.stem)
+        if actual != set(expected):
+            raise _blocked("recovery_original_index_invalid")
+        for number, expected_hash in expected.items():
+            if not _hash(expected_hash) or _sha(run / folder / (number + ".json")) != expected_hash:
+                raise _blocked("recovery_original_drift")
+    for segment in segments:
+        for number in range(segment["call_from"], segment["call_to"] + 1):
+            usage = _json(run / "usage-receipts" / (str(number) + ".json"))
+            if (usage.get("task_id") != segment["task_id"] or usage.get("method_sha256") != segment["method_sha256"]
+                    or type(usage.get("call_id")) is not int or usage["call_id"] != number):
+                raise _blocked("recovery_original_usage_identity_drift")
+
+
 def _load_context(source_task_id, run_id, app, sf, *, initial=True):
     _id(source_task_id); _id(run_id)
     grant, admission, driver, old_method, method = _grant(source_task_id, run_id, app, sf)
-    binding, symbol = grant["binding"], grant["symbol"]
-    if not isinstance(binding, dict) or set(binding) != BINDING_KEYS:
-        raise _blocked("recovery_binding_invalid")
+    binding, symbol = _binding(grant["binding"]), grant["symbol"]
     _source_task(source_task_id, symbol, sf)
     run = _safe(research.ROOT / symbol / run_id)
     packet = _json(run / "packet.json")
@@ -216,40 +346,9 @@ def _load_context(source_task_id, run_id, app, sf, *, initial=True):
         if not re.fullmatch(r"[a-z_]+\.py", name) or not _hash(expected) or _sha(run / "code" / name) != expected:
             raise _blocked("recovery_staged_code_drift")
     counter = binding["call_counter"]
-    if type(counter) is not int or not 0 < counter <= 4096:
-        raise _blocked("recovery_counter_invalid")
-    outputs, usages = binding["outputs"], binding["usage_receipts"]
-    if (not isinstance(outputs, dict) or not isinstance(usages, dict) or not outputs
-            or set(usages) != {str(n) for n in range(1, counter + 1)}
-            or not set(outputs) <= set(usages)):
-        raise _blocked("recovery_original_index_invalid")
-    for folder, expected in (("model-outputs", outputs), ("usage-receipts", usages)):
-        actual = set()
-        for count, path in enumerate(_safe(run / folder).iterdir(), 1):
-            if count > 4096 or not re.fullmatch(r"[1-9][0-9]{0,3}\.json", path.name) or path.is_symlink():
-                raise _blocked("recovery_original_index_invalid")
-            if int(path.stem) <= counter:
-                actual.add(path.stem)
-        if actual != set(expected):
-            raise _blocked("recovery_original_index_invalid")
-    for mapping, folder in ((outputs, "model-outputs"), (usages, "usage-receipts")):
-        for number, expected in mapping.items():
-            if not _hash(expected) or _sha(run / folder / (number + ".json")) != expected:
-                raise _blocked("recovery_original_drift")
-    for number in usages:
-        usage = _json(run / "usage-receipts" / (number + ".json"))
-        if (usage.get("task_id") != source_task_id or usage.get("method_sha256") != old_method
-                or usage.get("call_id") != int(number)):
-            raise _blocked("recovery_original_usage_identity_drift")
-    prefixes = binding["prefixes"]
-    if not isinstance(prefixes, dict) or set(prefixes) != {"role-outputs.jsonl", "source-audit.jsonl", "graph/node-trace.jsonl"}:
-        raise _blocked("recovery_prefix_invalid")
-    for name, expected in prefixes.items():
-        body = _body(run / name)
-        length = expected.get("bytes") if isinstance(expected, dict) else None
-        if (type(length) is not int or length < 0 or length > len(body)
-                or hashlib.sha256(body[:length]).hexdigest() != expected.get("sha256")):
-            raise _blocked("recovery_original_prefix_drift")
+    segments = _history_segments(grant, run, sf)
+    _frozen_records(run, binding, segments)
+    _prefixes(run, binding["prefixes"])
     completed = [json.loads(line)["peer"] for line in _body(run / "role-outputs.jsonl").splitlines() if line.strip()]
     original_roles = [{key: peer[key] for key in ("role", "call_id", "output_sha256")}
                       for peer in completed if peer["call_id"] <= counter]
@@ -261,7 +360,7 @@ def _load_context(source_task_id, run_id, app, sf, *, initial=True):
         _initial_snapshot(run, binding, symbol, packet)
     return {"grant": grant, "grant_sha256": research._digest(grant), "admission": admission, "driver": driver,
             "old_method": old_method, "method": method, "run": run, "packet": packet, "binding": binding,
-            "source_claim": source_claim, "source": source,
+            "source_claim": source_claim, "source": source, "segments": segments,
             "claim": _safe(research._selection_claim(binding["selection"], method))}
 
 
@@ -313,10 +412,12 @@ def _owned(context, owner, task_id=None):
 def _dispatch(context):
     with worker_lease(research.ROOT / "selection-claims"):
         records = research._selection_records(context["binding"]["selection"])
+        segments = _history_segments(context["grant"], context["run"])
+        prior_methods = {row["method_sha256"] for row in segments}
         if (_sha(context["source_claim"]) != context["binding"]["source_claim_sha256"]
-                or sum(row["method_sha256"] == context["old_method"] for row in records) != 1):
+                or {row["method_sha256"] for row in records if row["method_sha256"] in prior_methods} != prior_methods):
             raise _blocked("recovery_selection_drift")
-        others = [row for row in records if row["method_sha256"] != context["old_method"]]
+        others = [row for row in records if row["method_sha256"] not in prior_methods]
         if others:
             info = _recovery_info(others[0]) if len(others) == 1 else {}
             if (len(others) == 1 and others[0].get("method_sha256") == context["method"]
@@ -405,15 +506,51 @@ def public_lineage(value):
 
 
 def completed_recovery(records, binding, method):
+    try:
+        return _completed_recovery(records, binding, method)
+    except (OSError, ValueError, TypeError, KeyError):
+        raise _blocked("recovery_completion_drift") from None
+
+
+def _completed_recovery(records, binding, method):
     current = [row for row in records if row.get("method_sha256") == method]
-    if len(records) != 2 or len(current) != 1 or current[0].get("state") != "completed":
+    if len(current) != 1 or current[0].get("state") != "completed":
         raise _blocked("selection_needs_recovery")
     claim = current[0]
     info = _recovery_info(claim)
-    source = next(row for row in records if row is not claim)
-    path = research._selection_claim(binding, source["method_sha256"])
-    result, actual = research._read_bound(_safe(research._folder(binding["symbol"]) / claim["run_id"] / "result.json"))
+    run = _safe(research._folder(binding["symbol"]) / _id(claim["run_id"]))
+    result, actual = research._read_bound(run / "result.json")
     lineage = public_lineage(result.get("recovery_lineage"))
+    if "recovery_grant_id" in result:
+        grant = _json(run / "recovery-history" / _id(result["recovery_grant_id"]) / "grant.json")
+        if (set(grant) != GRANT_KEYS or type(grant.get("version")) is not int or grant["version"] != 1
+                or grant.get("user_authorization") != "EXPLICIT" or research._digest(grant) != info["grant_sha256"]
+                or grant["grant_id"] != result["recovery_grant_id"] or grant["run_id"] != claim["run_id"]
+                or grant["symbol"] != binding["symbol"] or grant["source_task_id"] != lineage["source_task_id"]
+                or grant["binding"]["selection"] != binding):
+            raise _blocked("recovery_completion_drift")
+        old_method, current_method = _compatibility(grant, grant["continuation_method_identity"])
+        if (current_method != method or old_method != lineage["source_method_sha256"]
+                or lineage["new_call_from"] != grant["binding"]["call_counter"] + 1
+                or lineage["reused_original_outputs"] != len(grant["binding"]["outputs"])):
+            raise _blocked("recovery_completion_drift")
+        segments = _history_segments(grant, run)
+        _frozen_records(run, grant["binding"], segments)
+        if lineage["inherited_unknown_usage_count"] != sum(
+                _json(run / "usage-receipts" / (number + ".json")).get("usage_known") is not True
+                for number in grant["binding"]["usage_receipts"]):
+            raise _blocked("recovery_completion_drift")
+        expected_methods = {row["method_sha256"] for row in segments} | {method}
+        if len(records) != len(expected_methods) or {row["method_sha256"] for row in records} != expected_methods:
+            raise _blocked("recovery_completion_drift")
+    elif len(records) != 2:
+        # Legacy first recoveries predate the internal archive pointer.
+        raise _blocked("recovery_completion_drift")
+    sources = [row for row in records if row["method_sha256"] == lineage["source_method_sha256"]]
+    if len(sources) != 1:
+        raise _blocked("recovery_completion_drift")
+    source = sources[0]
+    path = research._selection_claim(binding, source["method_sha256"])
     if (actual != claim.get("result_sha256") or lineage["recovery_method_sha256"] != method
             or lineage["source_method_sha256"] != source["method_sha256"] or source.get("state") != "needs_recovery"
             or source.get("task_id") != lineage["source_task_id"] or claim.get("task_id") != lineage["recovery_task_id"]
@@ -521,7 +658,7 @@ async def run_recovery(rec, params, app):
                     "production_eligible": False, "reports": {key: final[key] for key in research.REPORTS},
                     "review_state": "finite_failed_requires_review" if review["finite_failures"] else "unreviewed",
                     "review_summary": review, "selection": binding["selection"], "authorization_mode": "RESEARCH_ONLY_AUTHORIZED",
-                    "net_gain_verified": False, "recovery_lineage": lineage}
+                    "net_gain_verified": False, "recovery_lineage": lineage, "recovery_grant_id": grant["grant_id"]}
                 atomic_json(run / "result.json", result)
                 result_sha = file_sha(run / "result.json")
                 atomic_json(research._folder(params["symbol"]) / "latest.json", {"run_id": grant["run_id"], "result_sha256": result_sha})

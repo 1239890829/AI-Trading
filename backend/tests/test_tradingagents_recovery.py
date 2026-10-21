@@ -53,7 +53,7 @@ def env(tmp_path,monkeypatch):
         source_files={'driver.py':'1'*64,'codex_transport.py':'2'*64,'worker.py':'3'*64},dependencies={'frozen':'4'*64},packet_builder={'frozen':'5'*64})
     current=deepcopy(old); current['source_files'].update({'driver.py':'6'*64,'codex_transport.py':'7'*64,'tradingagents_recovery.py':'8'*64})
     class Native:
-        calls=0; fail=None; first_role='Bear Researcher'; revoke=False
+        calls=0; fail=None; first_role='Bear Researcher'; revoke=False; resume_counter=2
         def method_identity(self): return deepcopy(current)
         async def run_accounted(self,**kwargs): raise AssertionError('fresh run forbidden')
         def _review_summary(self,rows): return dict(finite_failures=0,peer_review_required=len(rows),source_verified=False,independent_human_gold=False)
@@ -61,8 +61,9 @@ def env(tmp_path,monkeypatch):
             self.calls+=1
             if self.fail: raise self.fail
             if self.revoke: monkeypatch.setattr(settings,'tradingagents_research_authorization_digest','f'*64)
-            recovery_guard({'role':self.first_role},2); usage_authorizer(); n=2
-            for role in [self.first_role]+[r for r in research.ROLES if r not in {'Bull Researcher',self.first_role}]:
+            recovery_guard({'role':self.first_role},self.resume_counter); usage_authorizer(); n=self.resume_counter
+            completed={json.loads(row)['peer']['role'] for row in (run/'role-outputs.jsonl').read_text().splitlines() if row.strip()}
+            for role in [self.first_role]+[r for r in research.ROLES if r not in completed|{self.first_role}]:
                 n+=1; output={'content':role+' engineering continuation','tool_calls':[]}
                 put(run/'model-outputs'/f'{n}.json',dict(structured_output=output,call_id=n,role=role,output_sha256=research._digest(output)))
                 put(run/'usage-receipts'/f'{n}.json',dict(task_id=rec.task_id,method_sha256=research._digest(current),call_id=n,
@@ -269,3 +270,171 @@ def test_new_output_and_usage_checksum_must_agree_before_completion(env,monkeypa
     monkeypatch.setattr(env.native,'_execute',execute)
     with pytest.raises(research.ResearchBlocked): asyncio.run(recovery.run_recovery(env.rec,params(c,owner),env.app))
     assert not (env.run/'result.json').exists() and recovery._json(c['claim'])['state']=='needs_recovery'
+
+
+def failed_recovery_chain(e, monkeypatch, *, progress=False):
+    """A real handler failure appends one unknown receipt, never another answer."""
+    c, owner = consumed(e)
+    original_execute = e.native._execute
+    async def failed(**kwargs):
+        kwargs['recovery_guard']({'role':'Bear Researcher'},2)
+        if progress:
+            output={'content':'saved recovery answer','tool_calls':[]}; output_hash=research._digest(output)
+            put(e.run/'model-outputs/3.json',dict(call_id=3,role='Bear Researcher',structured_output=output,output_sha256=output_hash))
+            put(e.run/'usage-receipts/3.json',dict(task_id=NEW,method_sha256=research._digest(e.current),call_id=3,
+                usage_id=f'{3:032x}',role='Bear Researcher',output_sha256=output_hash,usage_known=True,usage={'input_tokens':1,'output_tokens':1}))
+            with (e.run/'role-outputs.jsonl').open('a') as handle:
+                handle.write(json.dumps({'peer':dict(role='Bear Researcher',call_id=3,output_sha256=output_hash)})+'\n')
+        last=4 if progress else 3
+        put(e.run/'usage-receipts'/f'{last}.json',dict(task_id=NEW,method_sha256=research._digest(e.current),
+            call_id=last,usage_id=f'{last:032x}',usage_known=False,usage=None))
+        put(e.run/'call-counter.json',{'reserved':last})
+        raise RuntimeError('isolated terminal failure')
+    monkeypatch.setattr(e.native,'_execute',failed)
+    with pytest.raises(RuntimeError): asyncio.run(recovery.run_recovery(e.rec,params(c,owner),e.app))
+    monkeypatch.setattr(e.native,'_execute',original_execute)
+    with e.sf() as db:
+        db.add(AgentTask(id=NEW,type='tradingagents_research',status='failed',params=json.dumps(params(c,owner)),finished_at=NOW.replace(tzinfo=None)))
+        db.add(AgentResourceUsage(id=f'{4 if progress else 3:032x}',budget_date=NOW.date().isoformat(),scope=agent_budget.SCOPE_SELECTED_RESEARCH_LLM,
+            kind='model',purpose='failed recovery',task_id=NEW,state='failed',usage_known=0,started_at=(NOW-timedelta(seconds=1)).replace(tzinfo=None)))
+        db.commit()
+    previous_identity=deepcopy(e.current)
+    history=dict(grant_id=GRANT,grant_sha256=c['grant_sha256'],task_id=NEW,method_identity=previous_identity,
+        call_from=3,call_to=4 if progress else 3,claim_sha256=recovery._sha(c['claim']))
+    e.current['source_files']['codex_transport.py']='9'*64
+    e.current['source_files']['tradingagents_recovery.py']='a'*64
+    e.grant['grant_id']='e'*32
+    e.grant['continuation_method_identity']=e.current
+    e.grant['compatibility']['source_hash_pairs']={k:dict(old=e.grant['source_method_identity']['source_files'].get(k),new=e.current['source_files'].get(k))
+        for k in e.grant['source_method_identity']['source_files'].keys()|e.current['source_files'].keys()
+        if e.grant['source_method_identity']['source_files'].get(k)!=e.current['source_files'].get(k)}
+    last=4 if progress else 3
+    e.grant['binding'].update(call_counter=last,recovery_history=[history],
+        usage_receipts={str(n):recovery._sha(e.run/'usage-receipts'/f'{n}.json') for n in range(1,last+1)},
+        outputs={path.stem:recovery._sha(path) for path in (e.run/'model-outputs').glob('*.json')},
+        prefixes={name:dict(bytes=len((e.run/name).read_bytes()),sha256=recovery._sha(e.run/name)) for name in ('role-outputs.jsonl','source-audit.jsonl','graph/node-trace.jsonl')},
+        completed_roles=[{key:json.loads(line)['peer'][key] for key in ('role','call_id','output_sha256')} for line in (e.run/'role-outputs.jsonl').read_text().splitlines()])
+    if progress: e.grant['binding']['expected_pending_role']='Market Analyst'; e.native.first_role='Market Analyst'
+    e.auth['unknown_usage_exception']['method_sha256']=research._digest(e.current)
+    e.auth['unknown_usage_exception']['authorized_at']=NOW.isoformat()
+    e.auth['unknown_usage_exception']['allowed_unknown_usage'].append(dict(usage_id=f'{last:032x}',budget_date=NOW.date().isoformat(),scope=agent_budget.SCOPE_SELECTED_RESEARCH_LLM))
+    e.native.resume_counter=last
+    e.pin()
+    return c, history
+
+
+def test_second_authorized_recovery_retains_failed_chain_and_true_original_source(env,monkeypatch):
+    first, history = failed_recovery_chain(env,monkeypatch)
+    originals={p:p.read_bytes() for p in [env.source_claim,first['claim'],*(env.run/'usage-receipts'/f'{n}.json' for n in (1,2,3)),env.run/'model-outputs/1.json']}
+    c=context(env); claim,fresh=recovery._dispatch(c); assert fresh
+    task='f'*32; owner=claim['native_recovery']['dispatch_owner']
+    recovery._advance(c,owner,'recovery_queued',task_id=task)
+    rec=Recorder(); rec.task_id=task
+    result=asyncio.run(recovery.run_recovery(rec,params(c,owner),env.app))
+    assert result['recovery_lineage']['source_task_id']==OLD
+    assert result['recovery_lineage']['source_method_sha256']==research._digest(env.grant['source_method_identity'])
+    assert result['recovery_lineage']['new_call_from']==4
+    assert result['recovery_lineage']['inherited_unknown_usage_count']==2
+    assert all(p.read_bytes()==body for p,body in originals.items())
+    assert research._latest(SYMBOL)['recovery_lineage']==result['recovery_lineage']
+    prior=research._execution_prior(env.selection,research._digest(env.current))
+    assert research._completed_selection(prior,env.selection)['reused_identical_selection']
+    repeated,fresh=recovery._dispatch(recovery._context(OLD,RUN,env.app,env.sf,initial=False))
+    assert not fresh and repeated['task_id']==task
+
+
+@pytest.mark.parametrize('field',['task_id','method_sha256'])
+def test_chain_receipt_requires_exact_historical_task_and_method(env,monkeypatch,field):
+    failed_recovery_chain(env,monkeypatch)
+    path=env.run/'usage-receipts/3.json'; value=recovery._json(path); value[field]='f'*(32 if field=='task_id' else 64); put(path,value)
+    env.grant['binding']['usage_receipts']['3']=recovery._sha(path); env.pin()
+    with pytest.raises(research.ResearchBlocked): context(env)
+
+
+def test_historical_claim_drift_prevents_completed_reader_and_reuse(env,monkeypatch):
+    first,_=failed_recovery_chain(env,monkeypatch)
+    c=context(env); claim,fresh=recovery._dispatch(c); assert fresh
+    task='f'*32; owner=claim['native_recovery']['dispatch_owner']; recovery._advance(c,owner,'recovery_queued',task_id=task)
+    rec=Recorder(); rec.task_id=task
+    asyncio.run(recovery.run_recovery(rec,params(c,owner),env.app))
+    changed=recovery._json(first['claim']); changed['native_recovery']['source_claim_sha256']='f'*64; put(first['claim'],changed)
+    assert research._latest(SYMBOL) is None
+    with pytest.raises(research.ResearchBlocked): research._execution_prior(env.selection,research._digest(env.current))
+
+
+@pytest.mark.parametrize('change',['gap','overlap','source_task','task_running','history_bound'])
+def test_chain_cannot_hide_gap_other_source_active_task_or_unbounded_history(env,monkeypatch,change):
+    _,history=failed_recovery_chain(env,monkeypatch)
+    if change=='gap': history['call_to']=2
+    elif change=='overlap': history['call_from']=2
+    elif change=='source_task': history['task_id']='f'*32
+    elif change=='history_bound': env.grant['binding']['recovery_history']*=9
+    else:
+        with env.sf() as db: db.get(AgentTask,NEW).status='running'; db.commit()
+    env.pin()
+    with pytest.raises(research.ResearchBlocked): context(env)
+
+
+def test_historical_expiry_is_not_retroactive_but_current_grant_must_be_live(env,monkeypatch):
+    failed_recovery_chain(env,monkeypatch)
+    later=NOW+timedelta(hours=2); monkeypatch.setattr(research,'_now',lambda:later)
+    env.grant.update(authorized_at=(later-timedelta(minutes=1)).isoformat(),valid_until=(later+timedelta(hours=1)).isoformat())
+    env.auth['valid_until']=(later+timedelta(hours=2)).isoformat(); env.auth['unknown_usage_exception']['authorized_at']=later.isoformat(); env.pin()
+    assert context(env)['binding']['call_counter']==3
+    env.grant['valid_until']=later.isoformat(); env.pin()
+    with pytest.raises(research.ResearchBlocked) as error: context(env)
+    assert error.value.code=='recovery_grant_expired'
+
+
+def test_chain_allowance_does_not_implicitly_cover_new_unknown(env,monkeypatch):
+    failed_recovery_chain(env,monkeypatch)
+    env.auth['unknown_usage_exception']['allowed_unknown_usage'].pop(); env.pin()
+    with pytest.raises(research.ResearchBlocked) as error: context(env)
+    assert error.value.code=='usage_unknown'
+
+
+def test_next_recovery_reuses_roles_saved_by_failed_recovery_without_replay(env,monkeypatch):
+    first,_=failed_recovery_chain(env,monkeypatch,progress=True)
+    old=(env.run/'model-outputs/3.json').read_bytes(); c=context(env); claim,fresh=recovery._dispatch(c); assert fresh
+    task='f'*32; owner=claim['native_recovery']['dispatch_owner']; recovery._advance(c,owner,'recovery_queued',task_id=task)
+    rec=Recorder(); rec.task_id=task
+    result=asyncio.run(recovery.run_recovery(rec,params(c,owner),env.app))
+    assert result['recovery_lineage']['new_call_from']==5 and result['recovery_lineage']['reused_original_outputs']==2
+    assert (env.run/'model-outputs/3.json').read_bytes()==old and recovery._json(first['claim'])['state']=='needs_recovery'
+    new_roles=[recovery._json(p)['role'] for p in (env.run/'model-outputs').glob('*.json') if int(p.stem)>4]
+    assert 'Bull Researcher' not in new_roles and 'Bear Researcher' not in new_roles
+
+
+def test_bounded_chain_can_recover_another_consumed_prelaunch_failure(env,monkeypatch):
+    failed_recovery_chain(env,monkeypatch)
+    c=context(env); claim,fresh=recovery._dispatch(c); assert fresh
+    task='f'*32; owner=claim['native_recovery']['dispatch_owner']; recovery._advance(c,owner,'recovery_queued',task_id=task)
+    rec=Recorder(); rec.task_id=task; env.native.fail=RuntimeError('failed before model launch')
+    with pytest.raises(RuntimeError): asyncio.run(recovery.run_recovery(rec,params(c,owner),env.app))
+    with env.sf() as db:
+        db.add(AgentTask(id=task,type='tradingagents_research',status='failed',params=json.dumps(params(c,owner)),finished_at=NOW.replace(tzinfo=None))); db.commit()
+    entry=dict(grant_id=env.grant['grant_id'],grant_sha256=c['grant_sha256'],task_id=task,
+        method_identity=deepcopy(env.current),call_from=4,call_to=3,claim_sha256=recovery._sha(c['claim']))
+    env.grant['binding']['recovery_history'].append(entry)
+    env.grant['grant_id']='1'*32; env.current['source_files']['tradingagents_recovery.py']='b'*64
+    env.grant['compatibility']['source_hash_pairs']={k:dict(old=env.grant['source_method_identity']['source_files'].get(k),new=env.current['source_files'].get(k))
+        for k in env.grant['source_method_identity']['source_files'].keys()|env.current['source_files'].keys()
+        if env.grant['source_method_identity']['source_files'].get(k)!=env.current['source_files'].get(k)}
+    env.auth['unknown_usage_exception']['method_sha256']=research._digest(env.current); env.native.fail=None; env.pin()
+    current=context(env); claim,fresh=recovery._dispatch(current); assert fresh
+    rec.task_id='2'*32; owner=claim['native_recovery']['dispatch_owner']; recovery._advance(current,owner,'recovery_queued',task_id=rec.task_id)
+    result=asyncio.run(recovery.run_recovery(rec,params(current,owner),env.app))
+    assert result['recovery_lineage']['source_task_id']==OLD and result['recovery_lineage']['inherited_unknown_usage_count']==2
+    assert research._latest(SYMBOL)['recovery_lineage']==result['recovery_lineage']
+
+
+def test_new_grant_cannot_reseal_a_changed_historical_prefix(env,monkeypatch):
+    failed_recovery_chain(env,monkeypatch)
+    path=env.run/'source-audit.jsonl'; original=path.read_bytes()
+    path.write_text('{"changed":true}\n')
+    env.grant['binding']['prefixes']['source-audit.jsonl']=dict(bytes=len(path.read_bytes()),sha256=recovery._sha(path)); env.pin()
+    with pytest.raises(research.ResearchBlocked): context(env)
+    # Restore the actual old bytes, not a relaxed old SHA or rewritten grant.
+    path.write_bytes(original)
+    env.grant['binding']['prefixes']['source-audit.jsonl']=dict(bytes=len(original),sha256=recovery._sha(path)); env.pin()
+    assert context(env)['binding']['call_counter']==3

@@ -496,3 +496,8 @@ PYTHONPATH=backend backend/.venv/bin/python backend/scripts/recovery_bundle.py r
 正常新建与后台领取不自动重试失败/unknown。维护恢复复用`tradingagents_research`任务类型和原单写者、逐调用授权/记账、取消排空与墙钟边界；专用`POST /agent/tasks/{source_task_id}/recover`不属于普通设备读权限，body只声明`run_id`。当前服务器已pin的`authorization.json`必须包含该原任务/run的单次精确恢复grant，不以HTTP写入授权或任意换输入。
 
 恢复前核当前方法/授权、原失败任务、selection claim、冻结packet/config/staged代码/checkpoint及全部已保存输出/回执，登记旧/新方法兼容依据。队列与单次claim按owner/CAS处理部分失败，不把不明dispatch当成新任务重新领取；执行从原生未完成节点继续，新计数接续，已完成角色在模型预留前拒绝重生成。旧failed任务终态不改，原失败历史先保全，结果带有界恢复lineage；GET继续只读取，结果完成也不使来源或投资效果自动通过。授权撤销/漂移、新unknown、输入或checkpoint漂移、安全失败照常停止。实际执行须在准确HEAD工程发布后另核原答哈希、首次新角色、调用区间、七报告与普通页面读取。
+
+
+2026-10-21正式恢复实际失败后补充：再次续恢复仍使用同一维护POST与服务器digest-pin授权；每个已发生恢复段的任务、方法、原grant归档、调用区间和claim哈希显式进入当前恢复绑定。只接受连续、无重叠且失败/取消终态的历史段；旧claim及原用量不可删除或改写，未知队列不能当失败重领。普通读者和调度复用时核完整历史链及结果身份，公开lineage继续保留真正原source与所有继承unknown数量。新增unknown另获授权前不启动，历史grant过期不回写旧事实，当前grant仍须在其有效窗口内。
+
+CLI启动warning的兼容依据与固定版本见[语义纠错记录](../ai/semantic-decisions.md#2026-10-21-cli启动警告与重复失败恢复纠错)。只接受官方非致命启动警告，不放行终端后追加或权限/安全错误；有界顺序诊断不保存警告原文或完整请求。

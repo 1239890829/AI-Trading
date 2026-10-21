@@ -154,3 +154,96 @@ def test_infer_retains_schema_and_file_failures_before_temporary_cleanup(tmp_pat
     assert error.metadata["no_fallback"]
     assert error.metadata["failure_stage"] == ("original_schema_restore" if failure == "restore" else "final_file_read")
     assert "PRIVATE_" not in json.dumps(error.metadata) + json.dumps(error.usage_observation)
+
+
+def startup_stream(*, warning_type='item.completed', item_type='error'):
+    rows = list(map(json.loads, stream().splitlines()))
+    rows[1:1] = [{"type": warning_type, "item": {"type": item_type, "message": "PRIVATE_STARTUP_WARNING"}} for _ in range(2)]
+    return "\n".join(map(json.dumps, rows))
+
+
+def test_official_0162_startup_warnings_are_nonfatal_before_turn_started():
+    result = transport.decode(startup_stream(), "", 0, json.dumps(VALUE))
+    assert result["wire_structured_output"] == VALUE and result["usage"] == USAGE
+    assert result["codex_terminal"]["warning_count"] == 2
+    diagnostic = result["transport_diagnostic"]
+    assert diagnostic["event_order"] == [
+        {"event_type": "thread.started", "item_type": "none"},
+        {"event_type": "item.completed", "item_type": "error"},
+        {"event_type": "item.completed", "item_type": "error"},
+        {"event_type": "turn.started", "item_type": "none"},
+        {"event_type": "item.completed", "item_type": "agent_message"},
+        {"event_type": "turn.completed", "item_type": "none"},
+    ]
+    assert diagnostic["event_order_omitted"] == 0 and diagnostic["event_order_complete"] is True
+    assert transport.safe_diagnostic(diagnostic) == diagnostic
+    assert "PRIVATE_" not in json.dumps(diagnostic)
+
+
+@pytest.mark.parametrize('warning_type,item_type', [
+    ('item.started', 'error'), ('item.updated', 'error'),
+    ('item.completed', 'agent_message'), ('item.completed', 'reasoning'),
+    ('item.completed', 'command_execution'),
+])
+def test_startup_exception_never_allows_turn_external_work(warning_type, item_type):
+    with pytest.raises(TransportError) as raised:
+        transport.decode(startup_stream(warning_type=warning_type, item_type=item_type), "", 0, json.dumps(VALUE))
+    diagnostic = raised.value.metadata
+    assert diagnostic['no_fallback'] and not raised.value.final_usage_verified
+    if item_type == 'command_execution': assert diagnostic['failure_stage'] == 'terminal'
+    else: assert diagnostic['order_violation'] == 'invalid_startup_event'
+
+
+@pytest.mark.parametrize('trailing', [
+    {"type": "item.completed", "item": {"type": "error", "message": "PRIVATE_TRAILING_WARNING"}},
+    {"type": "item.completed", "item": {"type": "agent_message", "text": "{}"}},
+    {"type": "item.updated", "item": {"type": "reasoning"}}, {"type": "thread.started"},
+])
+def test_no_event_can_follow_terminal_completed_even_if_a_warning(trailing):
+    with pytest.raises(TransportError) as raised:
+        transport.decode(startup_stream()+"\n"+json.dumps(trailing), "", 0, json.dumps(VALUE))
+    diagnostic = raised.value.metadata
+    assert diagnostic['failure_stage'] == 'terminal_order' and diagnostic['order_violation'] == 'completed_not_last'
+    assert diagnostic['no_fallback'] and not raised.value.final_usage_verified
+    assert transport.safe_diagnostic(diagnostic) == diagnostic
+
+
+def test_reversed_turn_is_distinguishable_without_raw_stream():
+    rows = list(map(json.loads, stream().splitlines())); rows[1], rows[-1] = rows[-1], rows[1]
+    with pytest.raises(TransportError) as raised:
+        transport.decode('\n'.join(map(json.dumps,rows)), '', 0, json.dumps(VALUE))
+    assert raised.value.metadata['order_violation'] == 'reversed_turn'
+
+
+def test_order_diagnostic_is_bounded_and_cannot_store_injected_fields():
+    rows = [{'type':'item.completed','item':{'type':'error','message':'PRIVATE_CONTEXT'}} for _ in range(70)]
+    diagnostic = transport.decode(stream(extra=rows), '', 0, json.dumps(VALUE))['transport_diagnostic']
+    assert len(diagnostic['event_order']) == 64 and diagnostic['event_order_omitted'] == 10
+    assert diagnostic['event_order_complete'] is False and transport.safe_diagnostic(diagnostic) == diagnostic
+    bad = {**diagnostic, 'order_violation': 'PRIVATE_CONTEXT', 'event_order': [
+        {'event_type':'PRIVATE_EVENT','item_type':'PRIVATE_SECRET'},
+        {'event_type':'item.completed','item_type':'error','message':'PRIVATE_CONTEXT'},
+    ]}
+    projected = transport.safe_diagnostic(bad)
+    assert 'PRIVATE_' not in json.dumps(projected) and 'order_violation' not in projected
+
+
+@pytest.mark.parametrize('code,kind', [('authentication_failed','codex_auth_or_permission_stop'),('content_filter','codex_safety_refusal')])
+def test_startup_warning_permission_or_safety_code_remains_hard_stop(code, kind):
+    body = startup_stream().replace('"message": "PRIVATE_STARTUP_WARNING"', '"code": "'+code+'"')
+    with pytest.raises(TransportError, match=kind) as raised: transport.decode(body, '', 0, json.dumps(VALUE))
+    assert raised.value.metadata['no_fallback'] and not raised.value.final_usage_verified
+
+
+@pytest.mark.parametrize('final,stage', [(None,'final_message_missing'), ('PRIVATE_NON_JSON','final_message_parse'), ('{}','final_message_binding')])
+def test_startup_warning_does_not_bypass_final_message_binding(final,stage):
+    with pytest.raises(TransportError) as raised: transport.decode(startup_stream(), '', 0, final)
+    assert raised.value.metadata['failure_stage'] == stage and not raised.value.final_usage_verified
+
+
+def test_warning_before_initial_thread_is_not_a_general_prefix_exception():
+    rows = list(map(json.loads,startup_stream().splitlines()))
+    rows[0],rows[1] = rows[1],rows[0]
+    with pytest.raises(TransportError) as raised:
+        transport.decode('\n'.join(map(json.dumps,rows)), '', 0, json.dumps(VALUE))
+    assert raised.value.metadata['order_violation'] == 'invalid_startup_event'
