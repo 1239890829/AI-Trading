@@ -582,6 +582,9 @@ async def _h_company_evidence(rec: _StepRecorder, params: dict, app: Any) -> dic
 
 
 async def _h_tradingagents_research(rec: _StepRecorder, params: dict, app: Any) -> dict:
+    if "native_recovery" in params:
+        from app.services.tradingagents_recovery import run_recovery
+        return await run_recovery(rec, params, app)
     from app.services.tradingagents_research import run_research
 
     return await run_research(rec, params, app)
