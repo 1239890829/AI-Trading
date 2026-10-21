@@ -886,3 +886,10 @@ PR #318已加载后，002264完整研究前9次用量正确保留，第10 Bear�
 PR #319已发布并加载普通失败诊断修补，实际第三unknown仍正确阻断。用户随后单独明确允许保留该条并继续002264未完成步骤，原9答不重新生成；此许可不覆盖后续unknown、别的scope或效果准入。旧原生checkpoint可续不等于产品已有恢复入口，内部执行函数不可作为正常权限链的替代。
 
 本批在原AgentTask/完整图上补正式维护恢复：当前服务器digest-pin授权承载单次精确grant，绑定原task/run、原/当前方法及兼容映射、冻结packet/selection/config、staged代码、checkpoint逻辑状态、counter及旧输出/回执索引；HTTP不接受自授兼容或主机路径。模型/图/依赖/输入漂移不借源码修复放行。新任务关联原failed任务，旧用量和失败历史保留；首个未完成角色与后续计数逐项核，不从起点重抽。结果保留旧/新方法lineage，完整七报告仍待来源与独立效果核验，不影响选股资格、评分、消息或资金。
+
+
+### 2026-10-21 CLI启动警告与重复失败恢复纠错
+
+正式恢复已实际接续第11次Bear，但terminal_order拒绝且新增unknown，未产出新完整角色回答。已有数字观察未核实，不按已知补账；原九答和全部历史失败保留，新unknown需要单独授权。精确CLI版本的[官方事件映射](https://github.com/openai/codex/blob/rust-v0.162.1/codex-rs/exec/src/event_processor_with_jsonl_output.rs#L409-L445)与[非致命警告测试](https://github.com/openai/codex/blob/rust-v0.162.1/codex-rs/exec/src/event_processor_with_jsonl_output_tests.rs#L67-L90)证明启动警告可独立于模型turn发出。适配器只补合法启动warning兼容；完成后追加事件、模型内容乱序、真实错误/拒绝/工具和最终消息绑定硬门保留。仅存固定枚举顺序、有限计数与哈希，不留完整context或警告原文。本次具体原流已丢失，不能把合同缺口写成实际失败序列的完整还原。
+
+原单次恢复失败仍保留其任务、方法、claim及回执；再次维护恢复由现有服务器pin授权显式绑定有界历史链、各段调用区间与哈希，逐段核原身份及失败终态。原source身份不换、不删除中间claim，已经成功的角色继续复用。历史段数是元数据解析边界，不是研究次数预算；新unknown、输入/模型/图漂移和效果门不变。完整报告和实际普通读取尚须真实续跑验收，修补不形成质量或投资效果准入。

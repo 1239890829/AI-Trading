@@ -19,6 +19,12 @@ from .schema_projection import strict_wire_schema, restore_original_omissions
 
 MAX_BYTES = 8 * 1024 * 1024
 MAX_EVENTS = 4096
+MAX_ORDER_EVENTS = 64
+_EVENT_TYPES = {'thread.started', 'turn.started', 'turn.completed', 'turn.failed',
+                'item.started', 'item.updated', 'item.completed', 'error'}
+_ORDER_EVENT_TYPES = _EVENT_TYPES | {'unknown'}
+_ORDER_ITEM_TYPES = {'agent_message', 'reasoning', 'error', 'none', 'missing', 'unknown'}
+_ORDER_VIOLATIONS = {'reversed_turn', 'completed_not_last', 'invalid_startup_event'}
 _AUTH_CODES = {'authentication_failed', 'authorization_failed', 'invalid_api_key', 'unauthorized',
                'permission_denied', 'account_deactivated'}
 _SAFETY_CODES = {'safety_refusal', 'content_policy_violation', 'content_filter', 'policy_violation'}
@@ -79,6 +85,7 @@ def safe_diagnostic(value):
     for key, allowed in [('kind', _KINDS), ('failure_stage', _STAGES),
         ('parse_failure', {'invalid_encoding', 'stream_exceeds_bound', 'event_count_exceeds_bound',
                            'invalid_event_stream', 'nonobject_event'}),
+        ('order_violation', _ORDER_VIOLATIONS),
         ('exception_type', {'ValueError', 'JSONDecodeError', 'UnicodeError', 'UnicodeDecodeError',
                             'RecursionError', 'ProjectionError', 'OSError', 'FileNotFoundError', 'PermissionError'})]:
         if isinstance(value.get(key), str) and value[key] in allowed:
@@ -92,12 +99,29 @@ def safe_diagnostic(value):
         if type(number) is int and lower <= number <= upper:
             result[key] = number
     for key in ('no_fallback', 'timed_out', 'termination_requested', 'kill_requested', 'local_drain_complete',
-                'stream_truncated', 'event_count_truncated', 'final_file_present', 'refusal_present'):
+                'stream_truncated', 'event_count_truncated', 'final_file_present', 'refusal_present', 'event_order_complete'):
         if type(value.get(key)) is bool:
             result[key] = value[key]
     for key in ('stdout_sha256', 'stderr_sha256', 'final_file_sha256'):
         if isinstance(value.get(key), str) and re.fullmatch('[a-f0-9]{64}', value[key]):
             result[key] = value[key]
+    order = value.get('event_order')
+    if isinstance(order, list):
+        retained = []
+        invalid = 0
+        for item in order[:MAX_ORDER_EVENTS]:
+            if (isinstance(item, dict) and set(item) == {'event_type', 'item_type'}
+                    and isinstance(item['event_type'], str) and item['event_type'] in _ORDER_EVENT_TYPES
+                    and isinstance(item['item_type'], str) and item['item_type'] in _ORDER_ITEM_TYPES):
+                retained.append(dict(item))
+            else:
+                invalid += 1
+        omitted = value.get('event_order_omitted', 0)
+        omitted = omitted if type(omitted) is int and 0 <= omitted <= MAX_EVENTS else 0
+        result['event_order'] = retained
+        result['event_order_omitted'] = min(MAX_EVENTS, omitted + invalid + max(0, len(order) - MAX_ORDER_EVENTS))
+        if invalid or len(order) > MAX_ORDER_EVENTS or result['event_order_omitted']:
+            result['event_order_complete'] = False
     codes = value.get('explicit_error_codes')
     codes = codes if isinstance(codes, list) else []
     known = list(dict.fromkeys(code for code in codes if isinstance(code, str) and code in _KNOWN_CODES))
@@ -125,6 +149,35 @@ def safe_diagnostic(value):
         omitted = value.get(key + '_omitted', 0)
         result[key + '_omitted'] = max(0, len(raw) - 16) + (omitted if type(omitted) is int and 0 <= omitted <= 2**31 else 0)
     return result
+
+
+def _event_label(row):
+    event = row.get('type')
+    event = event if isinstance(event, str) and event in _EVENT_TYPES else 'unknown'
+    item = row.get('item')
+    kind = 'none'
+    if event.startswith('item.'):
+        subtype = item.get('type') if isinstance(item, dict) else None
+        kind = subtype if isinstance(subtype, str) and subtype in {'agent_message', 'reasoning', 'error'} else (
+            'missing' if subtype is None else 'unknown')
+    return {'event_type': event, 'item_type': kind}
+
+
+def _order_violation(events):
+    types = [row.get('type') for row in events]
+    start, completed = types.index('turn.started'), types.index('turn.completed')
+    if start >= completed:
+        return 'reversed_turn'
+    if completed != len(events) - 1:
+        return 'completed_not_last'
+    thread_seen = False
+    for row in events[:start]:
+        if row.get('type') == 'thread.started':
+            thread_seen = True
+        elif (not thread_seen or row.get('type') != 'item.completed'
+                or not isinstance(row.get('item'), dict) or row['item'].get('type') != 'error'):
+            return 'invalid_startup_event'
+    return None
 
 
 def _terminal_context(stdout, stderr, exit_code, final_file):
@@ -158,9 +211,7 @@ def _terminal_context(stdout, stderr, exit_code, final_file):
             reason = reason or 'invalid_event_stream'
     turns = [row for row in events if row.get('type') == 'turn.completed']
     starts = [row for row in events if row.get('type') == 'turn.started']
-    allowed_events = {'thread.started', 'turn.started', 'turn.completed', 'turn.failed',
-                      'item.started', 'item.updated', 'item.completed', 'error'}
-    unknown_events = [row.get('type') for row in events if not isinstance(row.get('type'), str) or row['type'] not in allowed_events]
+    unknown_events = [row.get('type') for row in events if not isinstance(row.get('type'), str) or row['type'] not in _EVENT_TYPES]
     bad = [row for row in events if row.get('type') in ('error', 'turn.failed')]
     items = [row['item'] for row in events if isinstance(row.get('type'), str)
              and row['type'].startswith('item.') and isinstance(row.get('item'), dict)]
@@ -181,6 +232,9 @@ def _terminal_context(stdout, stderr, exit_code, final_file):
         'event_count_truncated': event_truncated,
         'final_file_present': isinstance(final_file, str), 'refusal_present': any(bool(item.get('refusal')) for item in items),
         'stdout_sha256': sha(body), 'stderr_sha256': sha(stderr.encode('utf-8', errors='surrogatepass')) if isinstance(stderr, str) else None}
+    diagnostic['event_order'] = [_event_label(row) for row in events[:MAX_ORDER_EVENTS]]
+    diagnostic['event_order_omitted'] = max(0, len(events) - MAX_ORDER_EVENTS)
+    diagnostic['event_order_complete'] = reason is None and invalid == 0 and len(events) <= MAX_ORDER_EVENTS
     if isinstance(final_file, str):
         diagnostic['final_file_sha256'] = sha(final_file.encode('utf-8', errors='surrogatepass'))
     if reason:
@@ -205,9 +259,9 @@ def decode(stdout, stderr, exit_code, final_file):
     if (exit_code or diagnostic['typed_error_count'] or diagnostic['turn_count'] != 1
             or diagnostic['turn_started_count'] != 1 or diagnostic['host_tool_types'] or diagnostic['unknown_event_types']):
         raise _failure(diagnostic, observed, 'codex_typed_terminal_failure', 'terminal')
-    types = [row.get('type') for row in events]
-    if (types[-1] != 'turn.completed' or types.index('turn.started') >= types.index('turn.completed')
-            or any(kind != 'thread.started' for kind in types[:types.index('turn.started')])):
+    violation = _order_violation(events)
+    if violation:
+        diagnostic['order_violation'] = violation
         raise _failure(diagnostic, observed, 'codex_typed_terminal_failure', 'terminal_order')
     texts = [row['item'].get('text') for row in events if row.get('type') == 'item.completed'
              and isinstance(row.get('item'), dict) and row['item'].get('type') == 'agent_message']

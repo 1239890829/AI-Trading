@@ -4,15 +4,17 @@
 
 ## 1. 本轮范围与已核现场
 
-### 当前修补：正式原生检查点恢复
+### 当前修补：CLI启动警告兼容与再次显式恢复
 
-PR #319准确HEAD `45376758773c58eddb4c530f49c47d0a2d035757`已合入master `f3471b4dd36af4df822867c9972d6709a4819652`；PR CI 39567936963及master CI 39568723325三项成功，DegradedRelease 6311424137、release_check exit0，运行回执6311635584。主树安全快进、五份用户原件SHA不变，已合分支本地/远端缺失。新后端由launcher加载方法`396007fe51061b7cafb116efdba77d564087740fdd6b10af341a513621482e75`，前端build仍为已验同字节`frbzgtlhBCOhSPLr7aW1Y`；实际配对Chrome普通GET核到enabled=true、executable=false、唯一阻断usage_unknown，专属研究次数上限仍null。该状态没有被新源码静默放宽。
+PR #320准确HEAD `1e56a3b907866e149c5cf203e2a150e882962f3d`已合入master `121549a9d92213ed0608e42976c2cea681af6dc2`；PR CI 39576104814及master CI 39577003142三项成功，DegradedRelease 6312614863、release_check exit0。主树安全快进，五份用户原件SHA不变，launcher已加载build `A8U18e9NOHuElaAH3AzWY`及方法`7a833d7091cac9e0d06838dec151a55e3ad9e171569eb340fb75c900db1342d0`，HTTP/代理验收通过；它不代替实际WS与源时效。前批完整门为后端6792 passed／87 skipped／309 subtests、前端默认/UTC各1994 passed／150文件；当前新HEAD与发布须另核。
 
-用户随后明确允许永久保留第三条unknown并继续恢复，绑定002264原task/run及第10次调用；旧9答不得重生成，丢失用量不估算、不清账，新unknown仍停。旧原生checkpoint、4分析报告、Memory、9原答及10回执一致性已只读核准；但现产品没有正式恢复入口，不能从内部执行函数绕过权限直接运行。本批`codex/tradingagents-native-recovery`补单次、精确版本和原始输入绑定的维护恢复入口；新恢复任务关联原failed任务、原图只继续未完成节点，旧失败历史及旧答/回执保留。工程、发布和实际续跑分别取证，未完成七报告前不称全任务完成。
+用户允许保留第三unknown后，正式维护恢复返回新task `dcc100e15eaa4ab98cfecfca4d33eddd`，从第11次Bear Researcher继续原图；九原答、十原回执、旧failed任务和selection claim及原前缀哈希均保持。约56秒后出现新unknown `668d2e1594a44cd68f2e92af778d033e`，失败点terminal_order：exit0、1 started/1 completed、6事件、2 item.error警告、无typed error。数字观察input86737/output1178/reasoning124已保全但未核实，不能补账；完整七报告仍未完成。新unknown不在前三条许可内，已暂停模型调用并另问用户，授权未到前只做工程修补。实际页面被Mac锁屏阻挡，已请用户手动解锁，不自动解锁或换浏览器绕过。
 
-本批完整本地门：后端6792 passed／87 skipped／309 subtests（pytest244.02秒，外层249.257秒），pyflakes3.536秒；1833个跟踪输入门内零漂移。前端默认/UTC各1994 passed／150文件（外层300.658／313.946秒），tsc5.426秒、ESLint零error/两既有warning、生产构建15.283秒，build `A8U18e9NOHuElaAH3AzWY`；370个前端输入门内零漂移，生成引用恢复后tsc通过。前后端重门串行，完整门后仅回填本段事实，最终文档守卫及准确HEAD发布另核；没有用模型调用验证工程。
+精确官方CLI `rust-v0.162.1` 将启动Warning映射为非致命item.completed/error；当前顺序守卫在turn.started前只允许thread.started，存在过强兼容门。本次未保留具体原流顺序，不能声称已还原它的唯一失败原因。本批`codex/typed-terminal-order-repair`只修官方允许的启动警告并保存固定枚举顺序/违规分支；终端后追加、实质输出乱序、权限/安全/工具、最终消息绑定硬门继续拒绝。另补原维护恢复的历史链精确绑定，保留每次失败的task/method/claim/receipt，后续明确授权只能续未完成节点，不手工清掉旧claim或改账。正式发布、授权与实际续跑分别核验，未新增模型试验，不领取下一业务任务。
 
-9项已完成pytest临时payload/旧构建副本按精确计划指纹、单次执行标记、外置证据SHA、UID/真实路径及无cwd/open handles复核后清理；allocated约3.635GiB，磁盘可用实测约增3.721GiB。当前服务/build、依赖、全部业务/研究/unknown/checkpoint/Memory、用户原件和其他worktree保留；卫生与launcher检查通过。清理回执6311709754。不领取下一业务任务。
+本批完整后端门6824 passed／87 skipped／309 subtests（pytest245.65秒、外层250.266秒），pyflakes3.554秒；1833个跟踪输入门内无漂移。前端370个跟踪输入与PR #320两时区各1994项及build `A8U18e9NOHuElaAH3AzWY`逐字相同，只复用同字节本地证据；新HEAD三项CI仍重取。启动warning相关179项通过，恢复链59项通过；旧前缀缺陷注入先红且恢复原字节后通过，无模型调用。doc-health、卫生、公开扫描通过；完整门后仅回填本段事实，最终文档守卫、准确HEAD发布与真实加载另核。
+
+前批9项已完成pytest临时payload/旧构建副本已精确清理，磁盘可用实测约增3.721GiB；PR #320运行回执另记其真实失败。本批旧构建备份尚待新运行验收，业务/研究/unknown/checkpoint/Memory、用户原件和其他worktree继续保留。
 
 ### 已发布修补：普通传输失败诊断保全
 
