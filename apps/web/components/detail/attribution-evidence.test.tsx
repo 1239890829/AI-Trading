@@ -713,6 +713,198 @@ describe("company evidence and saved impact", () => {
     symbol: "600825", state, updated_at: "2026-10-20T09:15:00+08:00", reason: "本轮处理未能生成有效经营解释，保留真实公司资料", missing: ["本轮片段未取得可核对的客户、订单与贡献金额"], documents_count: 1, facts: impact.facts,
   });
 
+  it("concise selected-stock reader shows a bound company explanation immediately and keeps every original behind one disclosure", async () => {
+    const missing = ["未取得客户名称与已签订单。", "项目贡献金额尚无依据。"];
+    const value = {...impact, analysis: {...impact.analysis, missing}};
+    vi.mocked(getStockAttribution).mockResolvedValue({...payload("600825", item(value)), company_status: companyState("ready")});
+    render(<StockAttributionPanel symbol="600825" concise selectionContext selectedAt="2026-10-12T09:30:00+08:00"/>);
+    const company = await screen.findByLabelText("公司经营依据与AI传导");
+    expect(company.textContent).toContain(impact.analysis.summary);
+    expect(company.textContent).toContain(missing[0]);
+    expect(company.textContent).toContain("作者已核对来源");
+    expect(company.textContent).not.toContain("TradingAgents");
+    expect(screen.queryByLabelText("公司原文事实")).toBeNull();
+    expect(within(screen.getByLabelText("本条传导引用的公司依据")).getByText(impact.facts[0].quote)).toBeTruthy();
+    expect(screen.queryByText(impact.analysis.chain[0].text)).toBeNull();
+    expect(screen.queryByText(missing[1])).toBeNull();
+    expect(screen.queryByText(/fixture-provider/)).toBeNull();
+    expect(screen.queryByLabelText("原消息关系核对")).toBeNull();
+    expect(screen.getByText(/当前公司资料解释，不替换入选当时的理由/)).toBeTruthy();
+    fireEvent.click(screen.getByRole("button", {name: "公司依据、完整传导与相关消息"}));
+    expect(within(screen.getByLabelText("公司原文事实")).getByText(impact.facts[0].quote)).toBeTruthy();
+    expect(screen.getByText(impact.analysis.chain[0].text, {exact: false})).toBeTruthy();
+    for (const text of [...impact.analysis.counterarguments, ...missing]) expect(screen.getAllByText(text).length).toBeGreaterThan(0);
+    expect(screen.getByText(/fixture-provider \/ fixture-model/)).toBeTruthy();
+    expect(screen.getByLabelText("完整来源核对").textContent).toContain(evidence.source_context!.summary);
+    expect(screen.getByText(/消息可用时间晚于首次加入/)).toBeTruthy();
+    expect(getStockAttribution).toHaveBeenCalledTimes(1);
+    expect(getEventAttribution).not.toHaveBeenCalled();
+  });
+
+  it("concise reader never cuts a long positive opening away from its decisive denial", async () => {
+    const summary = "消息与产品存在字面交集，仍需核对适用范围。".repeat(10) + "公司明确否认这批订单属于本股，不能认定已经获单。";
+    vi.mocked(getStockAttribution).mockResolvedValue(payload("600825", item({...impact, analysis: {...impact.analysis, summary}})));
+    render(<StockAttributionPanel symbol="600825" concise/>);
+    const company = await screen.findByLabelText("公司经营依据与AI传导");
+    expect(company.textContent).toContain("尚不能认定已获单、增收或盈利");
+    expect(company.textContent).not.toContain("消息与产品存在字面交集");
+    expect(company.textContent).not.toContain("…");
+    expect(screen.queryByText(summary)).toBeNull();
+    fireEvent.click(screen.getByRole("button", {name: "公司依据、完整传导与相关消息"}));
+    expect(screen.getByText(summary)).toBeTruthy();
+    expect(getStockAttribution).toHaveBeenCalledTimes(1);
+  });
+
+  it.each([true, false])("concise full evidence preserves original event references without filling unknown versions (selection=%s)", async selectionContext => {
+    const refs = [{event_id: 18, version_id: 20, observation_id: 19, state: "active" as const, available_at: "2026-10-12T09:31:00+08:00"},
+      {event_id: 23, version_id: null, observation_id: null, state: "active" as const, available_at: null}];
+    render(<StockAttributionPanel symbol="600825" concise selectionContext={selectionContext} recordedRefs={refs}/>);
+    fireEvent.click(await screen.findByRole("button", {name: "公司依据、完整传导与相关消息"}));
+    const disclosure = screen.getByText(selectionContext ? "选股记录事件引用" : "列表入口事件引用");
+    fireEvent.click(disclosure);
+    expect(disclosure.closest("details")?.open).toBe(true);
+    expect(screen.getByText(/事件 #18 · 原解释 #20/).textContent).toContain("2026-10-12 09:31");
+    expect(screen.getByText(/事件 #23 · 原版本未知/).textContent).toBe("事件 #23 · 原版本未知 · --");
+    expect(getStockAttribution).toHaveBeenCalledTimes(1);
+  });
+
+  it("concise company evidence uses only a business/product fact cited by this transmission", async () => {
+    const unrelated = {...impact.facts[0], id: "unused:product", kind: "product", quote: "这条产品资料没有被本次传导引用。"};
+    vi.mocked(getStockAttribution).mockResolvedValue(payload("600825", item({...impact, facts: [unrelated, ...impact.facts]})));
+    render(<StockAttributionPanel symbol="600825" concise/>);
+    const source = await screen.findByLabelText("本条传导引用的公司依据");
+    expect(source.textContent).toContain(impact.facts[0].quote);
+    expect(source.textContent).toContain(`${impact.facts[0].document_title} · 第 18 页`);
+    expect(source.textContent).not.toContain(unrelated.quote);
+    expect(within(source).getByRole("link", {name: "查看本条传导引用的公司原文"}).getAttribute("href")).toBe(`${impact.facts[0].url}#page=18`);
+    expect(getStockAttribution).toHaveBeenCalledTimes(1);
+  });
+
+  it("concise long cited company sentences retain their final denial behind a visible exact-source entry", async () => {
+    const quote = "公司主营精密传动产品，产品应用范围仍需核对。".repeat(10) + "公司明确说明尚未取得本次项目订单。";
+    vi.mocked(getStockAttribution).mockResolvedValue(payload("600825", item({...impact, facts: [{...impact.facts[0], quote}]})));
+    render(<StockAttributionPanel symbol="600825" concise/>);
+    const source = await screen.findByLabelText("本条传导引用的公司依据");
+    const entry = within(source).getByText("查看这条依据");
+    expect(entry.closest("details")?.open).toBe(false);
+    expect(within(source).getByRole("link", {name: "查看本条传导引用的公司原文"})).toBeTruthy();
+    fireEvent.click(entry);
+    expect(entry.closest("details")?.open).toBe(true);
+    expect(within(source).getByText(quote)).toBeTruthy();
+    expect(within(source).getByText(quote).textContent).not.toContain("…");
+    expect(getStockAttribution).toHaveBeenCalledTimes(1);
+  });
+
+  it("concise reader does not promote unreferenced business facts when its chain cites only another fact kind", async () => {
+    const customer = {...impact.facts[0], id: "company:customer", kind: "customer", quote: "片段列示一项客户关系。"};
+    const analysis = {...impact.analysis, chain: [{...impact.analysis.chain[0], evidence_ids: ["event:summary", customer.id]}]};
+    vi.mocked(getStockAttribution).mockResolvedValue(payload("600825", item({...impact, facts: [...impact.facts, customer], analysis})));
+    render(<StockAttributionPanel symbol="600825" concise/>);
+    await screen.findByText("本条传导未引用主营或产品原句，暂无可展示的直接经营依据。");
+    expect(screen.queryByLabelText("本条传导引用的公司依据")).toBeNull();
+    expect(screen.queryByText(impact.facts[0].quote)).toBeNull();
+    expect(getStockAttribution).toHaveBeenCalledTimes(1);
+  });
+
+  it.each(["source_failed", "model_failed", "budget_blocked", "insufficient"] as const)("concise reader keeps %s and the actual missing evidence visible without dumping company excerpts", async state => {
+    vi.mocked(getStockAttribution).mockResolvedValue({...payload(), items: [], count: 0, company_status: companyState(state)});
+    render(<StockAttributionPanel symbol="600825" concise/>);
+    const status = await screen.findByLabelText("公司资料与判读状态摘要");
+    expect(status.textContent).not.toContain(companyState(state).reason);
+    expect(screen.getByLabelText("本股关键待核").textContent).toContain(companyState(state).missing[0]);
+    expect(screen.queryByText(impact.facts[0].quote)).toBeNull();
+    expect(screen.queryByLabelText("公司经营依据与AI传导")).toBeNull();
+    expect(screen.queryByRole("button", {name: /生成|维护授权/})).toBeNull();
+    fireEvent.click(screen.getByRole("button", {name: "公司依据、完整传导与相关消息"}));
+    expect(screen.getByText(impact.facts[0].quote)).toBeTruthy();
+    expect(screen.getByLabelText("公司资料与判读状态").textContent).toContain(companyState(state).reason);
+    fireEvent.click(screen.getByRole("button", {name: "刷新依据"}));
+    await act(async () => {});
+    expect(getStockAttribution).toHaveBeenCalledTimes(2);
+    expect(getEventAttribution).not.toHaveBeenCalled();
+  });
+
+  it("concise ready status without a usable company receipt is not presented as a completed explanation", async () => {
+    vi.mocked(getStockAttribution).mockResolvedValue({...payload(), company_status: companyState("ready")});
+    render(<StockAttributionPanel symbol="600825" concise/>);
+    await screen.findByText(/本次未读取到有效绑定的本股经营解释/);
+    expect(screen.queryByLabelText("公司经营依据与AI传导")).toBeNull();
+    expect(screen.queryByText(impact.facts[0].quote)).toBeNull();
+    expect(getStockAttribution).toHaveBeenCalledTimes(1);
+  });
+
+  it("concise source-only state neither invents an AI result nor denies company business", async () => {
+    render(<StockAttributionPanel symbol="600825" concise/>);
+    await screen.findByText(/尚无可读取的本股经营解释或有效处理状态，不代表公司没有相关业务/);
+    expect(screen.queryByLabelText("消息与个股说明")).toBeNull();
+    expect(screen.queryByLabelText("公司经营依据与AI传导")).toBeNull();
+    fireEvent.click(screen.getByRole("button", {name: "公司依据、完整传导与相关消息"}));
+    fireEvent.click(screen.getByRole("button", {name: `查看归因消息：${evidence.title}`}));
+    expect(screen.getByLabelText("消息与个股说明")).toBeTruthy();
+    expect(getStockAttribution).toHaveBeenCalledTimes(1);
+  });
+
+  it("concise reader rejects another stock's status and keeps future-acquired facts outside an older response", async () => {
+    vi.mocked(getStockAttribution).mockResolvedValue({...payload(), company_status: {...companyState("ready"), symbol: "600826"}});
+    const view = render(<StockAttributionPanel symbol="600825" concise/>);
+    await screen.findByText(/尚无可读取的本股经营解释或有效处理状态/);
+    expect(screen.queryByLabelText("本股关键待核")).toBeNull();
+    expect(screen.queryByText(companyState("ready").reason)).toBeNull();
+    view.unmount();
+    vi.mocked(getStockAttribution).mockResolvedValue({...payload(), company_status: companyState("ready")});
+    render(<StockAttributionPanel symbol="600825" concise responseAsOf="2026-10-19T09:30:00+08:00"/>);
+    await screen.findByText(/公司资料的可得时刻无法对应所查历史时点，不回填当时依据/);
+    expect(screen.queryByLabelText("公司资料与判读状态摘要")).toBeNull();
+    expect(screen.queryByText(companyState("ready").missing[0])).toBeNull();
+    expect(screen.queryByText(impact.facts[0].quote)).toBeNull();
+  });
+
+  it("concise reader hides inactive panels and expires a visible company receipt without another GET", async () => {
+    vi.useFakeTimers(); vi.setSystemTime(new Date("2026-10-20T09:59:59+08:00"));
+    vi.mocked(getStockAttribution).mockResolvedValue(payload("600825", item()));
+    const view = render(<StockAttributionPanel symbol="600825" concise active={false}/>);
+    expect(view.container.textContent).toBe("");
+    expect(getStockAttribution).not.toHaveBeenCalled();
+    view.rerender(<StockAttributionPanel symbol="600825" concise/>);
+    await act(async () => {});
+    expect(screen.getByLabelText("公司经营依据与AI传导")).toBeTruthy();
+    act(() => {vi.advanceTimersByTime(1000);});
+    expect(screen.queryByLabelText("公司经营依据与AI传导")).toBeNull();
+    expect(screen.getByText(/已保存的本股经营判读已于.*过期/)).toBeTruthy();
+    expect(getStockAttribution).toHaveBeenCalledTimes(1);
+  });
+
+  it("concise reader preserves the same-stock saved result on read failure and names its uncertain freshness", async () => {
+    vi.mocked(getStockAttribution).mockResolvedValueOnce(payload("600825", item())).mockRejectedValueOnce(new Error("ordinary read failed"));
+    render(<StockAttributionPanel symbol="600825" concise/>);
+    await screen.findByLabelText("公司经营依据与AI传导");
+    fireEvent.click(screen.getByRole("button", {name: "刷新依据"}));
+    const alert = await screen.findByRole("alert");
+    expect(alert.textContent).toContain("保留上次结果，当前状态待核");
+    expect(screen.getByLabelText("公司经营依据与AI传导").textContent).toContain(impact.analysis.summary);
+    expect(getStockAttribution).toHaveBeenCalledTimes(2);
+    expect(getEventAttribution).not.toHaveBeenCalled();
+  });
+
+  it("concise stock changes close old evidence and ignore the previous stock's late refresh", async () => {
+    let finish!: (value: StockAttributionPayload) => void;
+    vi.mocked(getStockAttribution).mockResolvedValueOnce(payload("600825", item()))
+      .mockImplementationOnce(() => new Promise(resolve => {finish = resolve;}))
+      .mockResolvedValueOnce({...payload("600826"), items: [], count: 0});
+    const view = render(<StockAttributionPanel symbol="600825" concise/>);
+    await screen.findByLabelText("公司经营依据与AI传导");
+    fireEvent.click(screen.getByRole("button", {name: "公司依据、完整传导与相关消息"}));
+    expect(within(screen.getByLabelText("公司原文事实")).getByText(impact.facts[0].quote)).toBeTruthy();
+    fireEvent.click(screen.getByRole("button", {name: "刷新依据"}));
+    view.rerender(<StockAttributionPanel symbol="600826" concise/>);
+    await screen.findByText(/尚无可读取的本股经营解释或有效处理状态/);
+    await act(async () => {finish(payload("600825", item()));});
+    expect(screen.queryByText(impact.facts[0].quote)).toBeNull();
+    expect(screen.queryByText(impact.analysis.summary)).toBeNull();
+    expect(screen.getByRole("button", {name: "公司依据、完整传导与相关消息"}).getAttribute("aria-expanded")).toBe("false");
+    expect(getStockAttribution).toHaveBeenCalledTimes(3);
+  });
+
   it.each(["source_failed", "model_failed", "budget_blocked"] as const)("retains true company facts and specific gaps with no events after %s", async state => {
     vi.mocked(getStockAttribution).mockResolvedValue({...payload(), items: [], count: 0, company_status: companyState(state)});
     render(<StockAttributionPanel symbol="600825" defaultExpanded/>);

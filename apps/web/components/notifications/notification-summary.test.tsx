@@ -10,6 +10,7 @@ const openSymbol = vi.fn();
 vi.mock("@/lib/api", async () => ({
   ...await vi.importActual<typeof import("@/lib/api")>("@/lib/api"),
   getNotifications: vi.fn(async () => payload),
+  getStockAttribution: vi.fn(async (symbol: string) => ({schema_version:1, symbol, count:0, items:[]})),
   getNotificationReadState: vi.fn(async () => {throw new Error("isolated browser");}),
   saveNotificationReadState: vi.fn(async () => {throw new Error("isolated browser");}),
 }));

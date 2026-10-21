@@ -18,6 +18,7 @@ from app.events import company_impact as ci
 from app.events import company_state as store
 from app.events.company_reasoning import compile_analysis
 from app.models.agent import AgentResourceUsage
+from app.models.alert import AlertEvent, AlertRule
 from app.models.daily_pick import DailyPickSet
 from app.models.opportunity_learning import OpportunityDecisionRun as Run, OpportunityDecisionSnapshot as Snapshot
 from app.models.watchlist import Base
@@ -577,6 +578,58 @@ def test_real_low_participant_is_read_after_ranked_before_daily_with_no_new_qual
     with env.sf() as db:
         rows = db.query(Snapshot).filter(Snapshot.symbol == "000002", Snapshot.stage == "rank").all()
         assert all(row.decision == "rejected" and row.rank is None for row in rows)
+
+
+def test_real_display_producer_keeps_participants_without_collecting_audit_reference_or_history(env, monkeypatch):
+    from app.core import runtime_params
+    from app.picks.intraday_opportunity import top_watch_stocks
+    from app.picks.opportunity_learning import archive_intraday_pipeline
+
+    monkeypatch.setattr(runtime_params, "get", lambda key, default: 1 if key == "picks_intraday_top_limit" else default)
+    at = NOW.replace(tzinfo=None) - timedelta(minutes=1)
+    participants = [
+        {"symbol": symbol, "name": symbol, "price": 10, "change_pct": pct,
+         "tradability": {"level": "可参与", "basis": "未封板"},
+         "linkage": {"level": level, "basis": "原联动依据"}}
+        for symbol, level, pct in [("600001", "高", 8), ("600002", "中", 6), ("600003", "低", 2)]
+    ]
+    payload = {"hot_available": True, "linkage_stats": {"snapshot_state": "ready", "snapshot_as_of": NOW.isoformat()},
+               "themes": [{"theme": "机器人", "stage": "发酵", "participants": participants,
+                           "stocks": [{"symbol": "600004", "name": "参考股", "boards": 2,
+                                       "tradability": {"level": "不可参与"}}],
+                           "_candidate_audit": [
+                               {"symbol": symbol, "name": symbol, "price": 10,
+                                "candidate_decision": "included", "hard_gate_decision": "passed"}
+                               for symbol in ["600001", "600002", "600003", "600005"]]}]}
+    assert [row["symbol"] for row in top_watch_stocks(payload)["items"]] == ["600001"]
+    archived = archive_intraday_pipeline(payload, trade_date="2026-10-20", as_of=at, session_factory=env.sf)
+    with env.sf() as db:
+        ranks = {row.symbol: row for row in db.scalars(select(Snapshot).where(
+            Snapshot.run_id == archived["run_id"], Snapshot.stage == "rank"))}
+        assert set(ranks) == {"600001", "600002", "600003"}
+        assert json.loads(ranks["600002"].evidence)["within_display_capacity"] is False
+        assert ranks["600003"].decision == "rejected" and ranks["600003"].rank is None
+        db.add(DailyPickSet(date="2026-10-20", created_at=NOW.astimezone(timezone.utc).replace(tzinfo=None),
+                            items=json.dumps([{"symbol": "600006"}])))
+        rule = AlertRule(name="__selection_notifications__", condition_type="source_event", scope="all")
+        db.add(rule)
+        db.flush()
+        db.add(AlertEvent(rule_id=rule.id, symbol="600007", trigger_value=0, threshold=0,
+                          triggered_at=at - timedelta(days=1), snapshot=json.dumps({
+                              "kind": "selection", "trade_date": "2026-10-19", "selection_source": "daily",
+                              "source_id": "daily:2026-10-19", "source_version": "old-version",
+                              "source_as_of": (NOW - timedelta(days=1)).isoformat(), "selection_evidence": {}})))
+        db.commit()
+    # The accordion really displays every participant, including medium beyond
+    # the top list and low linkage; audit-only and sealed reference rows do not.
+    assert worker.candidate_symbols(env.sf, now=NOW) == ["600001", "600002", "600003", "600006"]
+    empty = {**payload, "themes": []}
+    archive_intraday_pipeline(empty, trade_date="2026-10-20", as_of=at + timedelta(seconds=1), session_factory=env.sf)
+    assert worker.candidate_symbols(env.sf, now=NOW) == ["600006"]
+    assert not env.collected and not env.calls
+    with env.sf() as db:
+        assert len(db.scalars(select(AlertEvent)).all()) == 1
+        assert db.scalars(select(AgentResourceUsage)).all() == []
 
 
 def test_universe_caps_distinct_intraday_at_32_then_daily_at_8_without_renaming_rank(env):

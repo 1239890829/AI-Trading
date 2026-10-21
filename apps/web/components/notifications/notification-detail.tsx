@@ -1,6 +1,6 @@
 "use client";
 
-import type {NotificationItem} from "@/lib/api";
+import type {EventInterpretationRef, NotificationItem} from "@/lib/api";
 import {dateTimeTextBJ, dateTimesInTextBJ, formatLegacyLimitDistance, sourceLabel} from "@/lib/format";
 import {workbenchUrl} from "@/lib/routing";
 import {ModalShell} from "@/components/ui/modal-shell";
@@ -12,6 +12,8 @@ import {inspectionClick, useInspection} from "@/components/inspection/inspection
 import {symbolDetailClick, useSymbolDetail} from "@/components/detail/symbol-detail-context";
 import {ChannelStatus} from "./channel-status";
 import type {NewsModalItem} from "@/components/news-modal";
+import {StockAttributionPanel} from "@/components/detail/attribution-evidence";
+import {TradingAgentsResearchPanel} from "@/components/detail/tradingagents-research-panel";
 
 const object = (value: unknown): Record<string, unknown> => value && typeof value === "object" && !Array.isArray(value) ? value as Record<string, unknown> : {};
 const text = (value: unknown) => typeof value === "string" ? value.trim() : "";
@@ -79,10 +81,38 @@ function evidenceLines(evidence: Record<string, unknown>): string[] {
   return lines.length ? lines.map(visibleProse) : ["原结构化依据未提供；不使用最新行情回填。"];
 }
 
-/** One reading surface: all supplied facts are visible without a second evidence menu. */
+/** Notification IDs and financial-event IDs belong to different journals. */
+function selectionContext(item: NotificationItem) {
+  if (!item.symbol || !/^\d{6}$/.test(item.symbol)) return null;
+  const refs = (item.references ?? []).filter(ref => ref.kind === "selection"
+    && (ref.selection_source === "daily" || ref.selection_source === "intraday"));
+  if (!refs.length) return null;
+  const events = new Map<string, EventInterpretationRef>();
+  for (const ref of refs.slice(0, 1)) {
+    const related = object(ref.evidence).related_event_refs;
+    if (!Array.isArray(related)) continue;
+    for (const raw of related) {
+      const event = object(raw);
+      if (!Number.isSafeInteger(event.event_id) || Number(event.event_id) <= 0
+        || !Number.isSafeInteger(event.version_id) || Number(event.version_id) <= 0
+        || !Number.isSafeInteger(event.observation_id) || Number(event.observation_id) <= 0
+        || !["active", "pending", "withdrawn", "unknown"].includes(String(event.state))) continue;
+      events.set(`${event.event_id}:${event.version_id}:${event.observation_id}`, {event_id: Number(event.event_id), version_id: Number(event.version_id),
+        observation_id: Number(event.observation_id), state: event.state as EventInterpretationRef["state"],
+        available_at: typeof event.available_at === "string" ? event.available_at : null});
+    }
+  }
+  // source_as_of is an observation clock, never the stock's first selection time.
+  const asOf = refs[0].source_as_of;
+  return {identity: `${refs[0].source_id ?? ""}:${refs[0].source_version ?? ""}`, events: [...events.values()], asOf: asOf && /(?:Z|[+-]\d{2}:\d{2})$/.test(asOf)
+    && Number.isFinite(Date.parse(asOf)) ? asOf : undefined};
+}
+
+/** Short saved selection context first; original records remain available for review. */
 export function NotificationDetail({item, open, onClose, onOpenNews}: {item: NotificationItem; open: boolean; onClose: () => void; onOpenNews: (item: NewsModalItem) => void}) {
   const {open: inspect} = useInspection();
   const {open: openSymbol} = useSymbolDetail();
+  const selection = selectionContext(item);
   const actionClass = `${readingRowClasses.action} quiet-action inline-flex min-h-9 items-center rounded px-2 py-1`;
   return <ModalShell open={open} onClose={onClose} presentation="drawer" zIndex={60} label={item.title} testid="notification-detail" size="md"
     header={<div className="min-w-0"><h3 className="break-words text-sm font-semibold">{item.title}</h3><p className="mt-1 text-xs text-zinc-600 dark:text-zinc-400">{item.label} · {dateTimeTextBJ(item.ts)}</p></div>}
@@ -90,9 +120,16 @@ export function NotificationDetail({item, open, onClose, onOpenNews}: {item: Not
     footer={<p className="text-xs text-zinc-600 dark:text-zinc-400">不构成买卖建议。</p>}>
     <div className="space-y-5 break-words text-sm leading-relaxed [overflow-wrap:anywhere]">
       <ReaderBrief label="提醒简述" headline={notificationSummary(item)} facts={[
-        {label:"这条提醒",value:item.category === "risk" ? "提醒你核对风险" : item.category === "reminder" ? "你设置的条件曾触发" : "选股系统曾把它列入观察"},
+        {label:"这条提醒",value:item.category === "risk" ? "提醒你核对风险" : item.category === "reminder" ? "你设置的条件曾触发" : selection ? "选股系统曾把它列入观察" : "保存的消息或条件观察记录"},
         {label:"发生时间",value:clock(item.source_as_of ?? item.ts, "原时点未记录")},
+        {label:"关键条件",value:visibleProse(item.validity || "原记录未保存失效条件，须重新核对")},
       ]} cautions={[...readerCautions([item.body, item.validity || ""]), "这是当时的记录，不代表现在可以买入"]}/>
+      {open && selection && <section aria-label="原选股对应的公司与研究" className="min-w-0 border-t border-zinc-200 pt-3 dark:border-zinc-800">
+        <p className="text-xs text-zinc-600 dark:text-zinc-400">原选择理由及版本保存在下方原记录。公司资料与研究是补充，不回填当时理由。</p>
+        <StockAttributionPanel key={`${item.id}:${item.symbol}:${selection.identity}`} symbol={item.symbol} title="公司关联与依据" defaultExpanded bounded={false} concise
+          responseAsOf={selection.asOf} recordedRefs={selection.events} selectionContext/>
+        <TradingAgentsResearchPanel key={`${item.id}:${item.symbol}:research`} symbol={item.symbol!} compact allowStart={false}/>
+      </section>}
       <ResearchDisclosure identity={`${item.id}:${JSON.stringify(item)}`} label="完整依据与研究记录">
       <section aria-label="原提醒内容"><h4 className="mb-1 font-medium">提醒依据</h4><p className="whitespace-pre-wrap">{visibleProse(item.body) || "原提醒内容未提供。"}</p></section>
       <section aria-label="来源与时点" className="space-y-1 text-xs text-zinc-600 dark:text-zinc-400">
