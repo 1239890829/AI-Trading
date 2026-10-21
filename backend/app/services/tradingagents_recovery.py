@@ -7,6 +7,7 @@ No import, preflight or ordinary read starts a worker or collects new inputs.
 from __future__ import annotations
 
 from copy import deepcopy
+from datetime import datetime
 import hashlib
 import json
 from pathlib import Path
@@ -14,7 +15,9 @@ import re
 import sqlite3
 import uuid
 
-from app.models.agent import AgentTask
+from sqlalchemy import select
+
+from app.models.agent import AgentResourceUsage, AgentTask
 from app.services import agent_budget
 from app.services import tradingagents_research as research
 from app.events.company_state import atomic_json
@@ -35,6 +38,17 @@ MAX_RECOVERY_HISTORY = 8  # Bounded artifact parsing, not a model-call allowance
 PARALLEL_ANALYSTS = {"Market Analyst", "Sentiment Analyst", "News Analyst", "Fundamentals Analyst"}
 PARALLEL_BINDING_KEYS = (BINDING_KEYS - {"expected_pending_role"}) | {"expected_pending_roles", "pending_message_fingerprints"}
 EMPTY_SHA = hashlib.sha256(b"").hexdigest()
+PRELAUNCH_TAIL_KEYS = {"version", "call_id", "source_task_error_sha256", "source_execution_sha256",
+    "source_model_usage_facts_sha256", "model_receipts_prefix", "first_broker_error_record_sha256"}
+# The reviewed historical chain persisted the counter before reserve, serialized
+# calls through finish, and could not launch a model before the atomic start gate.
+# No other old or future implementation inherits this missing-receipt exception.
+PRELAUNCH_SOURCE = {
+    "driver.py": "939e0de30999ac2b6e93b947e581e82f5e430a1134a2b51c5af8748cafb09b9d",
+    "agent_budget.py": "5b292c8d675f71e97a86116b6e3250c7a15af8e2bde34ec6492875105c519923",
+    "codex_transport.py": "1876b45f0636e4305fb1df97ea2306134aacdc338a357b20e88e3cb0ad205101",
+}
+PRELAUNCH_UNKNOWN_MESSAGE_SHA = "34d06a06ea8588936d4206fb06ae1d378e72478ff047424e72b659b084ca05f2"
 # Reviewed 256cae58 usage contract migration: strict cache-write accounting and
 # bounded observations; no graph/process/timeout-proof change. Not a blanket
 # permission to migrate any future version of this transport component.
@@ -199,8 +213,7 @@ def _grant(source_task_id, run_id, app, sf):
 
 
 def _binding(value):
-    if (not isinstance(value, dict) or set(value) not in (BINDING_KEYS, BINDING_KEYS | {"recovery_history"},
-            PARALLEL_BINDING_KEYS, PARALLEL_BINDING_KEYS | {"recovery_history"})
+    if (not isinstance(value, dict) or set(value) - {"recovery_history", "prelaunch_tail"} not in (BINDING_KEYS, PARALLEL_BINDING_KEYS)
             or any(not isinstance(value.get(key), dict) for key in ("selection", "outputs", "usage_receipts", "prefixes", "checkpoint"))):
         raise _blocked("recovery_binding_invalid")
     if "expected_pending_roles" in value:
@@ -285,6 +298,7 @@ def _history_segments(grant, run, sf=None):
                 or prior.get("recovery_history", []) != history[:index]
                 or type(prior["call_counter"]) is not int or prior["call_counter"] != entry["call_from"] - 1
                 or any(prior[key] != binding[key] for key in ("selection", "source_claim_sha256", "packet_sha256", "config_sha256", "staged_code_sha256"))
+                or prior.get("prelaunch_tail") != binding.get("prelaunch_tail")
                 or prior["usage_receipts"] != {key: value for key, value in binding["usage_receipts"].items() if int(key) < entry["call_from"]}
                 or prior["outputs"] != {key: value for key, value in binding["outputs"].items() if int(key) < entry["call_from"]}
                 or _sha(archive / "worker-terminal.json") != prior["worker_terminal_sha256"]
@@ -324,11 +338,118 @@ def _history_segments(grant, run, sf=None):
     return segments
 
 
-def _frozen_records(run, binding, segments):
+def _prelaunch_tail(grant, run, segments, sf=None):
+    """Verify one explicitly pinned, never-launched original source tail.
+
+    This is not a usage receipt or zero-cost accounting. Counter and missing
+    files stay untouched. Readers recheck the same DB facts and original archive
+    without depending on a still-live authorization or on the mutable execution.
+    """
+    binding = grant["binding"]
+    if "prelaunch_tail" not in binding:
+        return None
+    tail, origin = binding["prelaunch_tail"], segments[0]
+    if (not isinstance(tail, dict) or set(tail) != PRELAUNCH_TAIL_KEYS
+            or type(tail.get("version")) is not int or tail["version"] != 1
+            or type(tail.get("call_id")) is not int or not 1 < tail["call_id"] == origin["call_to"] <= 4096
+            or origin["call_from"] != 1 or origin["task_id"] != grant["source_task_id"]
+            or any(not _hash(tail.get(key)) for key in PRELAUNCH_TAIL_KEYS - {"version", "call_id", "model_receipts_prefix"})
+            or any(grant["source_method_identity"]["source_files"].get(key) != value for key, value in PRELAUNCH_SOURCE.items())
+            or str(tail["call_id"]) in binding["outputs"] or str(tail["call_id"]) in binding["usage_receipts"]
+            or any(_safe(run / folder / (str(tail["call_id"]) + ".json")).exists() for folder in ("model-outputs", "usage-receipts"))):
+        raise _blocked("recovery_prelaunch_tail_invalid")
+    history = binding.get("recovery_history", [])
+    first_id = history[0]["grant_id"] if history else grant["grant_id"]
+    expected_grant_sha = history[0]["grant_sha256"] if history else research._digest(grant)
+    archive = _safe(run / "recovery-history" / _id(first_id))
+    if archive.exists():
+        original = _json(archive / "grant.json")
+        start = _json(archive / "start.json")
+        if (research._digest(original) != expected_grant_sha or original["binding"].get("prelaunch_tail") != tail
+                or original["source_task_id"] != grant["source_task_id"] or original["run_id"] != grant["run_id"]
+                or original["source_method_identity"] != grant["source_method_identity"]
+                or start.get("source_task_id") != grant["source_task_id"] or start.get("grant_sha256") != expected_grant_sha
+                or start.get("counter") != origin["call_to"] or start.get("checkpoint") != original["binding"]["checkpoint"]):
+            raise _blocked("recovery_prelaunch_archive_drift")
+        _id(start.get("recovery_task_id"))
+        execution = archive / "execution.json"
+        original_binding = _binding(original["binding"])
+    else:
+        if history:
+            raise _blocked("recovery_prelaunch_archive_drift")
+        execution, original_binding = run / "execution.json", binding
+    if ("expected_pending_roles" not in original_binding or original_binding["completed_roles"] != []
+            or original_binding["call_counter"] != tail["call_id"]
+            or _sha(execution) != tail["source_execution_sha256"]
+            or _json(execution).get("state") != "needs_native_recovery" or _json(execution).get("error_kind") != "BudgetError"):
+        raise _blocked("recovery_prelaunch_execution_drift")
+
+    source_receipts = {number: _json(run / "usage-receipts" / (number + ".json"))
+                       for number in binding["usage_receipts"] if int(number) < tail["call_id"]}
+    if (set(source_receipts) != {str(n) for n in range(1, tail["call_id"])}
+            or not set(source_receipts) <= set(binding["outputs"])):
+        raise _blocked("recovery_prelaunch_source_usage_drift")
+    expected_ids = {_id(row.get("usage_id")) for row in source_receipts.values()}
+    with (sf or research.get_session_factory())() as db:
+        task = db.get(AgentTask, grant["source_task_id"])
+        rows = db.execute(select(AgentResourceUsage).where(AgentResourceUsage.task_id == grant["source_task_id"],
+            AgentResourceUsage.kind == "model").order_by(AgentResourceUsage.id).limit(4097)).scalars().all()
+        facts = [{column.name: (value.isoformat() if isinstance(value, datetime) else value)
+                  for column in AgentResourceUsage.__table__.columns for value in (getattr(row, column.name),)} for row in rows]
+        error = json.loads(task.error) if task and isinstance(task.error, str) and len(task.error) <= MAX_BYTES else None
+        if (task is None or task.type != "tradingagents_research" or task.status != "failed" or task.finished_at is None
+                or json.loads(task.params) != {"symbol": grant["symbol"]} or not isinstance(error, dict)
+                or error.get("code") != "BudgetError" or not isinstance(error.get("message"), str)
+                or hashlib.sha256(error["message"].encode()).hexdigest() != PRELAUNCH_UNKNOWN_MESSAGE_SHA
+                or hashlib.sha256(task.error.encode()).hexdigest() != tail["source_task_error_sha256"]
+                or len(rows) > 4096 or len(rows) != len(expected_ids) or {row.id for row in rows} != expected_ids
+                or research._digest(facts) != tail["source_model_usage_facts_sha256"]
+                or any(row.started_at is None or row.finished_at is None or row.state != "succeeded"
+                       or row.scope != agent_budget.SCOPE_SELECTED_RESEARCH_LLM for row in rows)):
+            raise _blocked("recovery_prelaunch_source_usage_drift")
+
+    prefix = tail["model_receipts_prefix"]
+    if (not isinstance(prefix, dict) or set(prefix) != {"bytes", "sha256"} or type(prefix.get("bytes")) is not int
+            or not 0 < prefix["bytes"] <= MAX_BYTES or not _hash(prefix.get("sha256"))):
+        raise _blocked("recovery_prelaunch_stream_drift")
+    with _safe(run / "graph/model-receipts.jsonl").open("rb") as handle:
+        body = handle.read(prefix["bytes"])
+    if len(body) != prefix["bytes"] or hashlib.sha256(body).hexdigest() != prefix["sha256"]:
+        raise _blocked("recovery_prelaunch_stream_drift")
+    records = [json.loads(line) for line in body.splitlines() if line.strip()]
+    error_index = next((i for i, row in enumerate(records) if isinstance(row, dict) and row.get("status") == "broker_error"), -1)
+    if error_index < 1:
+        raise _blocked("recovery_prelaunch_stream_drift")
+    first_error = records[error_index]
+    if (research._digest(first_error) != tail["first_broker_error_record_sha256"]
+            or first_error.get("role") not in PARALLEL_ANALYSTS or first_error.get("call_id") is not None
+            or first_error.get("error_type") != "{'kind': 'BudgetError'}"
+            or {row.get("call_id") for row in records[:error_index] if isinstance(row, dict)} != {int(n) for n in source_receipts}
+            or len(records[:error_index]) != len(source_receipts)):
+        raise _blocked("recovery_prelaunch_stream_drift")
+    for index, row in enumerate(records):
+        if not isinstance(row, dict) or row.get("case_id") != grant["symbol"] or row.get("arm") != "ta-luna":
+            raise _blocked("recovery_prelaunch_stream_drift")
+        if index < error_index:
+            number = row.get("call_id")
+            if (type(number) is not int or row.get("status") != "returned" or str(number) not in source_receipts
+                    or row.get("role") != source_receipts[str(number)].get("role")
+                    or row.get("response_sha256") != _json(run / "model-outputs" / (str(number) + ".json")).get("output_sha256")):
+                raise _blocked("recovery_prelaunch_stream_drift")
+        elif index > error_index and (row.get("status") != "broker_error" or row.get("call_id") is not None
+                                     or row.get("error_type") != "{'kind': 'DriverUnavailable'}"):
+            raise _blocked("recovery_prelaunch_stream_drift")
+    return tail["call_id"]
+
+
+def _frozen_records(run, binding, segments, *, grant=None, sf=None):
     counter = binding["call_counter"]
     outputs, usages = binding["outputs"], binding["usage_receipts"]
+    gap = _prelaunch_tail(grant, run, segments, sf) if "prelaunch_tail" in binding and grant is not None else None
+    if "prelaunch_tail" in binding and gap is None:
+        raise _blocked("recovery_prelaunch_tail_invalid")
     if (not isinstance(outputs, dict) or not isinstance(usages, dict) or not outputs
-            or set(usages) != {str(n) for n in range(1, counter + 1)} or not set(outputs) <= set(usages)):
+            or set(usages) != {str(n) for n in range(1, counter + 1) if n != gap} or not set(outputs) <= set(usages)):
         raise _blocked("recovery_original_index_invalid")
     for folder, expected in (("model-outputs", outputs), ("usage-receipts", usages)):
         actual = set()
@@ -344,6 +465,8 @@ def _frozen_records(run, binding, segments):
                 raise _blocked("recovery_original_drift")
     for segment in segments:
         for number in range(segment["call_from"], segment["call_to"] + 1):
+            if number == gap:
+                continue
             usage = _json(run / "usage-receipts" / (str(number) + ".json"))
             if (usage.get("task_id") != segment["task_id"] or usage.get("method_sha256") != segment["method_sha256"]
                     or type(usage.get("call_id")) is not int or usage["call_id"] != number):
@@ -381,7 +504,7 @@ def _load_context(source_task_id, run_id, app, sf, *, initial=True):
             raise _blocked("recovery_staged_code_drift")
     counter = binding["call_counter"]
     segments = _history_segments(grant, run, sf)
-    _frozen_records(run, binding, segments)
+    _frozen_records(run, binding, segments, grant=grant, sf=sf)
     _prefixes(run, binding["prefixes"], binding)
     completed = [json.loads(line)["peer"] for line in _stream_body(run, "role-outputs.jsonl", binding).splitlines() if line.strip()]
     original_roles = [{key: peer[key] for key in ("role", "call_id", "output_sha256")}
@@ -649,7 +772,7 @@ def _completed_recovery(records, binding, method):
                 or lineage["reused_original_outputs"] != len(grant["binding"]["outputs"])):
             raise _blocked("recovery_completion_drift")
         segments = _history_segments(grant, run)
-        _frozen_records(run, grant["binding"], segments)
+        _frozen_records(run, grant["binding"], segments, grant=grant)
         if lineage["inherited_unknown_usage_count"] != sum(
                 _json(run / "usage-receipts" / (number + ".json")).get("usage_known") is not True
                 for number in grant["binding"]["usage_receipts"]):
