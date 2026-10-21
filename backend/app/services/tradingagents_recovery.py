@@ -32,6 +32,16 @@ BINDING_KEYS = {"selection", "source_claim_sha256", "packet_sha256", "config_sha
     "prefixes", "completed_roles", "expected_pending_role"}
 HISTORY_KEYS = {"grant_id", "grant_sha256", "task_id", "method_identity", "call_from", "call_to", "claim_sha256"}
 MAX_RECOVERY_HISTORY = 8  # Bounded artifact parsing, not a model-call allowance.
+PARALLEL_ANALYSTS = {"Market Analyst", "Sentiment Analyst", "News Analyst", "Fundamentals Analyst"}
+PARALLEL_BINDING_KEYS = (BINDING_KEYS - {"expected_pending_role"}) | {"expected_pending_roles", "pending_message_fingerprints"}
+EMPTY_SHA = hashlib.sha256(b"").hexdigest()
+# Reviewed 256cae58 usage contract migration: strict cache-write accounting and
+# bounded observations; no graph/process/timeout-proof change. Not a blanket
+# permission to migrate any future version of this transport component.
+USAGE_OBSERVATION_TRANSITION = (
+    "9281aeaf1fc31d8b668392d99388f755043bbb191c5e27e39d4e3c1c053da3d2",
+    "d88bdea9ecc8f9a854f02d92ed448d08fe3995074d4f130d805ab4d88aca7881",
+)
 
 
 def _blocked(code):
@@ -101,7 +111,9 @@ def _compatibility(grant, identity):
     allowed = {"driver.py", "codex_transport.py", "tradingagents_research.py", "tradingagents_recovery.py"}
     changed = {key for key in old_files.keys() | new_files.keys() if old_files.get(key) != new_files.get(key)}
     pairs = {key: {"old": old_files.get(key), "new": new_files.get(key)} for key in changed}
-    if (not changed or not changed <= allowed or compatibility["source_hash_pairs"] != pairs
+    reviewed_usage_transition = (changed - allowed == {"transport_process.py"}
+        and (old_files.get("transport_process.py"), new_files.get("transport_process.py")) == USAGE_OBSERVATION_TRANSITION)
+    if (not changed or not (changed <= allowed or reviewed_usage_transition) or compatibility["source_hash_pairs"] != pairs
             or any(not _hash(v) for v in new_files.values()) or any(not _hash(v) for v in old_files.values())):
         raise _blocked("recovery_component_mapping_drift")
     # Names never grant compatibility. Exact old/new pairs are server-pinned;
@@ -187,17 +199,39 @@ def _grant(source_task_id, run_id, app, sf):
 
 
 def _binding(value):
-    if (not isinstance(value, dict) or set(value) not in (BINDING_KEYS, BINDING_KEYS | {"recovery_history"})
+    if (not isinstance(value, dict) or set(value) not in (BINDING_KEYS, BINDING_KEYS | {"recovery_history"},
+            PARALLEL_BINDING_KEYS, PARALLEL_BINDING_KEYS | {"recovery_history"})
             or any(not isinstance(value.get(key), dict) for key in ("selection", "outputs", "usage_receipts", "prefixes", "checkpoint"))):
         raise _blocked("recovery_binding_invalid")
+    if "expected_pending_roles" in value:
+        roles, fingerprints = value["expected_pending_roles"], value["pending_message_fingerprints"]
+        if (not isinstance(roles, list) or len(roles) != 4 or any(not isinstance(r, str) for r in roles)
+                or set(roles) != PARALLEL_ANALYSTS or value["completed_roles"] != []
+                or value["prefixes"].get("role-outputs.jsonl") != {"bytes": 0, "sha256": EMPTY_SHA}
+                or not isinstance(fingerprints, dict) or set(fingerprints) != PARALLEL_ANALYSTS
+                or any(not isinstance(rows, list) or not 1 <= len(rows) <= 128 or any(not _hash(v) for v in rows)
+                       for rows in fingerprints.values())):
+            raise _blocked("recovery_parallel_binding_invalid")
     return value
 
 
-def _prefixes(run, expected):
+def _stream_body(run, name, binding):
+    try:
+        return _body(run / name)
+    except FileNotFoundError:
+        # Only the explicitly frozen empty streams of a zero-final parallel
+        # checkpoint may be absent. Permission/IO/symlink errors still escape.
+        if ("expected_pending_roles" in binding and name in {"role-outputs.jsonl", "source-audit.jsonl"}
+                and binding["prefixes"].get(name) == {"bytes": 0, "sha256": EMPTY_SHA}):
+            return b""
+        raise
+
+
+def _prefixes(run, expected, binding=None):
     if not isinstance(expected, dict) or set(expected) != {"role-outputs.jsonl", "source-audit.jsonl", "graph/node-trace.jsonl"}:
         raise _blocked("recovery_prefix_invalid")
     for name, prefix in expected.items():
-        body = _body(run / name)
+        body = _stream_body(run, name, binding) if binding is not None else _body(run / name)
         length = prefix.get("bytes") if isinstance(prefix, dict) else None
         if (type(length) is not int or length < 0 or length > len(body)
                 or hashlib.sha256(body[:length]).hexdigest() != prefix.get("sha256")):
@@ -260,7 +294,7 @@ def _history_segments(grant, run, sf=None):
         if start != {"source_task_id": grant["source_task_id"], "recovery_task_id": task_id,
                      "grant_sha256": entry["grant_sha256"], "checkpoint": prior["checkpoint"], "counter": prior["call_counter"]}:
             raise _blocked("recovery_history_start_drift")
-        _prefixes(run, prior["prefixes"])
+        _prefixes(run, prior["prefixes"], prior)
         path = _safe(research._selection_claim(binding["selection"], method))
         claim = _json(path)
         info = _recovery_info(claim)
@@ -348,23 +382,23 @@ def _load_context(source_task_id, run_id, app, sf, *, initial=True):
     counter = binding["call_counter"]
     segments = _history_segments(grant, run, sf)
     _frozen_records(run, binding, segments)
-    _prefixes(run, binding["prefixes"])
-    completed = [json.loads(line)["peer"] for line in _body(run / "role-outputs.jsonl").splitlines() if line.strip()]
+    _prefixes(run, binding["prefixes"], binding)
+    completed = [json.loads(line)["peer"] for line in _stream_body(run, "role-outputs.jsonl", binding).splitlines() if line.strip()]
     original_roles = [{key: peer[key] for key in ("role", "call_id", "output_sha256")}
                       for peer in completed if peer["call_id"] <= counter]
-    pending = binding["expected_pending_role"]
-    if (original_roles != binding["completed_roles"] or pending not in research.ROLES
-            or any(row["role"] == pending for row in original_roles)):
+    pending = binding.get("expected_pending_roles", [binding.get("expected_pending_role")])
+    if (original_roles != binding["completed_roles"] or any(role not in research.ROLES for role in pending)
+            or any(row["role"] in pending for row in original_roles)):
         raise _blocked("recovery_pending_or_completed_roles_drift")
     if initial:
-        _initial_snapshot(run, binding, symbol, packet)
+        _initial_snapshot(run, binding, symbol, packet, admission)
     return {"grant": grant, "grant_sha256": research._digest(grant), "admission": admission, "driver": driver,
             "old_method": old_method, "method": method, "run": run, "packet": packet, "binding": binding,
             "source_claim": source_claim, "source": source, "segments": segments,
             "claim": _safe(research._selection_claim(binding["selection"], method))}
 
 
-def _initial_snapshot(run, binding, symbol, packet):
+def _initial_snapshot(run, binding, symbol, packet, admission=None):
     counter = binding["call_counter"]
     if (_json(run / "call-counter.json") != {"reserved": counter}
             or checkpoint_snapshot(run, symbol) != binding["checkpoint"]
@@ -376,6 +410,86 @@ def _initial_snapshot(run, binding, symbol, packet):
     expected_thread = hashlib.sha256((symbol + ":" + packet["trade_date"] + ":" + manifest["config_signature"]).encode()).hexdigest()[:16]
     if binding["checkpoint"].get("thread_id") != expected_thread:
         raise _blocked("recovery_checkpoint_thread_drift")
+    if "expected_pending_roles" in binding:
+        for name in ("role-outputs.jsonl", "source-audit.jsonl"):
+            if binding["prefixes"].get(name) == {"bytes": 0, "sha256": EMPTY_SHA} and _stream_body(run, name, binding):
+                raise _blocked("recovery_parallel_original_role_stream_drift")
+        historical = (admission or {}).get("unknown_usage_exception", {}).get("allowed_unknown_usage", ())
+        _parallel_checkpoint(run, symbol, binding, historical)
+
+
+def _parallel_checkpoint(run, symbol, binding, allowed_unknown_usage=()):
+    """Validate the one supported zero-final native fan-out, without loading context."""
+    if binding["checkpoint"].get("step") != 0:
+        raise _blocked("recovery_parallel_checkpoint_invalid")
+    thread, root_id = (binding["checkpoint"][key] for key in ("thread_id", "checkpoint_id"))
+    connection = sqlite3.connect(_safe(run / "graph/cache/checkpoints" / (symbol + ".db")).absolute().as_uri() + "?mode=ro", uri=True)
+    try:
+        connection.execute("PRAGMA query_only=ON")
+        namespaces = connection.execute("SELECT checkpoint_ns,MAX(checkpoint_id) FROM checkpoints "
+            "WHERE thread_id=? AND checkpoint_ns<>'' GROUP BY checkpoint_ns LIMIT 5", (thread,)).fetchall()
+        if len(namespaces) != 4:
+            raise _blocked("recovery_parallel_checkpoint_invalid")
+        found = set()
+        for namespace, checkpoint_id in namespaces:
+            role, separator, suffix = namespace.partition(":")
+            metadata = connection.execute("SELECT metadata FROM checkpoints WHERE thread_id=? AND checkpoint_ns=? AND checkpoint_id=?",
+                (thread, namespace, checkpoint_id)).fetchone()
+            meta = json.loads(metadata[0])
+            if (not separator or not re.fullmatch(r"[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}", suffix)
+                    or role not in PARALLEL_ANALYSTS or role in found
+                    or not isinstance(meta, dict) or meta.get("parents") != {"": root_id}
+                    or type(meta.get("step")) is not int or meta["step"] not in (0, 2)
+                    or not connection.execute("SELECT 1 FROM writes WHERE thread_id=? AND checkpoint_ns=? AND checkpoint_id=? "
+                        "AND task_path='~__pregel_pull, agent' AND channel='__error__' LIMIT 1", (thread, namespace, checkpoint_id)).fetchone()
+                    or not connection.execute("SELECT 1 FROM writes WHERE thread_id=? AND checkpoint_ns='' AND checkpoint_id=? "
+                        "AND task_path=? AND channel='__error__' LIMIT 1", (thread, root_id, "~__pregel_pull, " + role)).fetchone()):
+                raise _blocked("recovery_parallel_checkpoint_invalid")
+            found.add(role)
+    finally:
+        connection.close()
+    # These facts came from _grant -> _quality's exact-method, ID/date/scope
+    # validation and the shared ensure_model_usage_known gate. Use the full
+    # historical ID/date/scope facts only to reuse an old typed answer; physical
+    # reserve/start still receive the separate active-today projection.
+    permitted_unknown = {fact["usage_id"] for fact in allowed_unknown_usage
+                         if fact["scope"] == agent_budget.SCOPE_SELECTED_RESEARCH_LLM}
+    for number in binding["outputs"]:
+        output = _json(run / "model-outputs" / (number + ".json"))
+        value = output.get("structured_output")
+        usage = _json(run / "usage-receipts" / (number + ".json"))
+        reusable_unknown = (usage.get("usage_known") is False and usage.get("usage_id") in permitted_unknown
+                            and usage.get("terminal_kind") == "typed_response" and isinstance(value, dict)
+                            and usage.get("output_sha256") == output.get("output_sha256") == research._digest(value))
+        if (output.get("role") not in PARALLEL_ANALYSTS or type(output.get("call_id")) is not int or output["call_id"] != int(number)
+                or not isinstance(value, dict) or not isinstance(value.get("tool_calls"), list) or not value["tool_calls"]
+                or output.get("output_sha256") != research._digest(value)
+                or not (usage.get("usage_known") is True or reusable_unknown)
+                or len(binding["pending_message_fingerprints"][output["role"]]) < 3):
+            raise _blocked("recovery_parallel_original_proposal_invalid")
+
+
+def _pending_guard(binding):
+    first = True
+    pending = set(binding.get("expected_pending_roles", []))
+    def check(request, counter):
+        nonlocal first
+        role = request.get("role")
+        if first and counter != binding["call_counter"]:
+            raise _blocked("recovery_fresh_or_pending_role_mismatch")
+        if "expected_pending_roles" not in binding:
+            if first and role != binding["expected_pending_role"]:
+                raise _blocked("recovery_fresh_or_pending_role_mismatch")
+        elif role in pending:
+            expected, messages = binding["pending_message_fingerprints"][role], request.get("messages")
+            if (not isinstance(messages, list) or len(messages) < len(expected)
+                    or [research._digest(row) for row in messages[-len(expected):]] != expected):
+                raise _blocked("recovery_checkpoint_messages_drift")
+            pending.remove(role)
+        elif first or role not in PARALLEL_ANALYSTS and pending:
+            raise _blocked("recovery_fresh_or_pending_role_mismatch")
+        first = False
+    return check
 
 
 def _context(source_task_id, run_id, app, sf, *, initial=True):
@@ -427,7 +541,7 @@ def _dispatch(context):
                     and info.get("source_claim_sha256") == context["binding"]["source_claim_sha256"]):
                 return _owned(context, info["dispatch_owner"]), False
             raise _blocked("recovery_selection_already_owned")
-        _initial_snapshot(context["run"], context["binding"], context["grant"]["symbol"], context["packet"])
+        _initial_snapshot(context["run"], context["binding"], context["grant"]["symbol"], context["packet"], context["admission"])
         owner = uuid.uuid4().hex
         claim = {"version": 1, "selection": context["binding"]["selection"], "method_sha256": context["method"],
             "state": "recovery_dispatching", "task_id": None, "updated_at": research._now().isoformat(),
@@ -626,16 +740,12 @@ async def run_recovery(rec, params, app):
                 atomic_json(history / "grant.json", grant)
                 atomic_json(history / "start.json", {"source_task_id": grant["source_task_id"], "recovery_task_id": rec.task_id,
                     "grant_sha256": context["grant_sha256"], "checkpoint": binding["checkpoint"], "counter": binding["call_counter"]})
-                first = True
+                pending_guard = _pending_guard(binding)
                 def authorize():
                     return _authorizer(context, supplied, rec.task_id, app, sf)
                 def before_request(request, counter):
-                    nonlocal first
                     authorize()
-                    if first:
-                        if counter != binding["call_counter"] or request.get("role") != binding["expected_pending_role"]:
-                            raise _blocked("recovery_fresh_or_pending_role_mismatch")
-                        first = False
+                    pending_guard(request, counter)
                 final = await context["driver"]._execute(rec=rec, packet=context["packet"], run=run,
                     budget=agent_budget, identity=grant["continuation_method_identity"], max_calls=None,
                     budget_scope=agent_budget.SCOPE_SELECTED_RESEARCH_LLM, usage_authorizer=authorize,

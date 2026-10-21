@@ -75,6 +75,105 @@ def test_success_preserves_sanitized_terminal_counts():
     assert "PRIVATE_" not in json.dumps(diagnostic)
 
 
+def offline_infer(tmp_path, monkeypatch, *, version='codex-cli 0.162.1', version_code=0, body=None, schema_override=None):
+    entry, auth = tmp_path / 'cli', tmp_path / 'auth'
+    entry.write_bytes(b'native offline fixture'); auth.write_text('PRIVATE_CREDENTIAL_REFERENCE')
+    calls, marks = [], []
+    def preflight(args, **kwargs):
+        calls.append((args, kwargs))
+        assert kwargs['env']['CODEX_HOME'] != str(tmp_path) and kwargs['timeout'] == 15
+        if args[-1] == '--version':
+            return SimpleNamespace(returncode=version_code, stdout=version, stderr='PRIVATE_STDERR')
+        return SimpleNamespace(returncode=0, stdout='\n'.join(flag + ' stable false' for flag in transport.DISABLE), stderr='')
+    def launch(args, prompt, **kwargs):
+        Path(args[args.index('--output-last-message') + 1]).write_text(json.dumps(VALUE))
+        return body if body is not None else stream(), '', 0
+    monkeypatch.setattr(transport.subprocess, 'run', preflight)
+    monkeypatch.setattr(transport, 'launch', launch)
+    schema={'type':'object','properties':{'content':{'type':'string'},'tool_calls':{'type':'array','items':{'type':'object','properties':{}}}},'required':['content','tool_calls']}
+    def invoke():
+        return transport.codex_infer([{'role':'user','content':'PRIVATE_REQUEST'}], schema_override or schema,
+            model='fixture', mark_launch=lambda: marks.append(True), executable=entry, auth_file=auth)
+    return invoke, calls, marks
+
+
+def test_verified_0162_retry_error_and_final_success_complete_without_paid_retry(tmp_path, monkeypatch):
+    body = stream(extra=[{'type':'error','message':'PRIVATE_TRANSIENT_ERROR'}])
+    invoke, calls, marks = offline_infer(tmp_path, monkeypatch, body=body)
+    result = invoke()
+    assert result['structured_output'] == VALUE and result['usage'] == USAGE and marks == [True]
+    assert calls[0][0][-1] == '--version' and calls[1][0][1:3] == ['features','list']
+    diagnostic=result['transport_diagnostic']
+    assert diagnostic['typed_error_count'] == 1 and diagnostic['recovered_error_count'] == 1
+    assert diagnostic['error_contract_version'] == '0.162.1' and diagnostic['error_disposition'] == 'recovered_under_verified_cli'
+    assert transport.safe_diagnostic(diagnostic) == diagnostic
+    assert 'PRIVATE_' not in json.dumps(diagnostic)
+    assert result['internal_retries'] is None and result['provider_request_count'] is None
+
+
+@pytest.mark.parametrize('version,code',[('codex-cli 0.162.2',0),('unverified wrapper',0),('codex-cli 0.162.1',1)])
+def test_cli_contract_version_drift_blocks_before_mark_launch(tmp_path,monkeypatch,version,code):
+    invoke,calls,marks=offline_infer(tmp_path,monkeypatch,version=version,version_code=code)
+    with pytest.raises(ValueError,match='version'): invoke()
+    assert marks == [] and len(calls) == 1 and calls[0][0][-1] == '--version'
+
+
+@pytest.mark.parametrize('event',[
+    {'type':'error','message':'failed to serialize exec json event: PRIVATE_DETAIL'},
+    {'type':'error','message':'PRIVATE_MESSAGE','unexpected':'PRIVATE_FIELD'},
+    {'type':'error','message':''}, {'type':'error','message':None}, {'type':'error','message':'\ud800'},
+])
+def test_successful_turn_does_not_waive_serialization_or_untyped_error(event):
+    with pytest.raises(TransportError) as raised:
+        transport.decode(stream(extra=[event]),'',0,json.dumps(VALUE),verified_cli_version='0.162.1')
+    assert raised.value.usage is None and not raised.value.final_usage_verified and raised.value.metadata['no_fallback']
+    assert 'PRIVATE_' not in json.dumps(raised.value.metadata)
+
+
+def test_unverified_decode_still_refuses_an_error_with_successful_turn():
+    with pytest.raises(TransportError):
+        transport.decode(stream(extra=[{'type':'error','message':'PRIVATE_TRANSIENT'}]),'',0,json.dumps(VALUE))
+
+
+@pytest.mark.parametrize('case',['exit_nonzero','turn_failed','auth','safety','refusal','host','unknown','final_binding','final_parse','before_turn','after_completed'])
+def test_verified_retry_contract_keeps_every_failure_and_unknown_boundary(case):
+    extra=[{'type':'error','message':'PRIVATE_TRANSIENT'}]; code=0; final=json.dumps(VALUE); text=None
+    if case=='exit_nonzero': code=1
+    elif case=='turn_failed': extra.append({'type':'turn.failed','error':{'message':'PRIVATE_FATAL'}})
+    elif case=='auth': extra[0]['http_status']=403
+    elif case=='safety': extra[0]['code']='content_filter'
+    elif case=='refusal': extra.append({'type':'item.completed','item':{'type':'agent_message','refusal':True}})
+    elif case=='host': extra.append({'type':'item.completed','item':{'type':'command_execution'}})
+    elif case=='unknown': extra.append({'type':'PRIVATE_EVENT'})
+    elif case=='final_binding': final='{}'
+    elif case=='final_parse': text='PRIVATE_NON_JSON'; final=text
+    body=stream(extra=extra,text=text)
+    if case in {'before_turn','after_completed'}:
+        rows=list(map(json.loads,stream().splitlines())); rows.insert(1 if case=='before_turn' else len(rows),extra[0]); body='\n'.join(map(json.dumps,rows))
+    with pytest.raises(TransportError) as raised:
+        transport.decode(body,'',code,final,verified_cli_version='0.162.1')
+    error=raised.value
+    assert error.usage is None and not error.final_usage_verified and error.metadata['no_fallback']
+    assert error.usage_observation['numeric_fields']==USAGE and 'recovered_error_count' not in error.metadata
+    assert 'PRIVATE_' not in json.dumps(error.metadata)
+
+
+def test_version_probe_timeout_never_marks_a_model_launch(tmp_path,monkeypatch):
+    invoke,_,marks=offline_infer(tmp_path,monkeypatch)
+    def timeout(*args,**kwargs): raise transport.subprocess.TimeoutExpired('PRIVATE_COMMAND',15)
+    monkeypatch.setattr(transport.subprocess,'run',timeout)
+    with pytest.raises(ValueError,match='version') as error: invoke()
+    assert not marks and 'PRIVATE_' not in str(error.value)
+
+
+def test_retry_error_does_not_waive_original_schema_restoration(tmp_path,monkeypatch):
+    schema={'type':'object','properties':{'content':{'type':'string'}},'required':['content']}
+    invoke,_,marks=offline_infer(tmp_path,monkeypatch,body=stream(extra=[{'type':'error','message':'PRIVATE_TRANSIENT'}]),schema_override=schema)
+    with pytest.raises(TransportError,match='original_schema_failure') as raised: invoke()
+    assert marks==[True] and raised.value.usage is None and not raised.value.final_usage_verified
+    assert raised.value.usage_observation['numeric_fields']==USAGE and raised.value.metadata['no_fallback']
+
+
 @pytest.mark.parametrize("rows", [
     [{"type": "turn.completed", "usage": USAGE}, {"type": "turn.started"},
      {"type": "item.completed", "item": {"type": "agent_message", "text": "{}"}}],
@@ -127,8 +226,8 @@ def test_infer_retains_schema_and_file_failures_before_temporary_cleanup(tmp_pat
     auth.write_text("PRIVATE_CREDENTIAL_REFERENCE")
     schema = {"type": "object", "properties": {"content": {"type": "string"}}, "required": ["content"]}
     calls, locations = [], []
-    monkeypatch.setattr(transport.subprocess, "run", lambda *a, **k: SimpleNamespace(returncode=0,
-        stdout="\n".join(flag + " stable false" for flag in transport.DISABLE)))
+    monkeypatch.setattr(transport.subprocess, "run", lambda args, **k: SimpleNamespace(returncode=0,
+        stdout='codex-cli 0.162.1' if args[-1] == '--version' else "\n".join(flag + " stable false" for flag in transport.DISABLE)))
     def launch(args, prompt, **kwargs):
         calls.append(True)
         locations.append(Path(kwargs["cwd"]).parent)

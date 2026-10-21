@@ -19,6 +19,8 @@ from .schema_projection import strict_wire_schema, restore_original_omissions
 
 MAX_BYTES = 8 * 1024 * 1024
 MAX_EVENTS = 4096
+RECOVERABLE_ERROR_CLI_VERSION = '0.162.1'
+_SERIALIZATION_ERROR_PREFIX = 'failed to serialize exec json event:'
 MAX_ORDER_EVENTS = 64
 _EVENT_TYPES = {'thread.started', 'turn.started', 'turn.completed', 'turn.failed',
                 'item.started', 'item.updated', 'item.completed', 'error'}
@@ -86,12 +88,14 @@ def safe_diagnostic(value):
         ('parse_failure', {'invalid_encoding', 'stream_exceeds_bound', 'event_count_exceeds_bound',
                            'invalid_event_stream', 'nonobject_event'}),
         ('order_violation', _ORDER_VIOLATIONS),
+        ('error_contract_version', {RECOVERABLE_ERROR_CLI_VERSION}),
+        ('error_disposition', {'recovered_under_verified_cli', 'unverified_error_stop', 'serialization_failure_stop', 'malformed_error_stop', 'error_outside_active_turn'}),
         ('exception_type', {'ValueError', 'JSONDecodeError', 'UnicodeError', 'UnicodeDecodeError',
                             'RecursionError', 'ProjectionError', 'OSError', 'FileNotFoundError', 'PermissionError'})]:
         if isinstance(value.get(key), str) and value[key] in allowed:
             result[key] = value[key]
     for key in ('exit_code', 'turn_count', 'turn_started_count', 'parsed_event_count', 'invalid_event_count',
-                'typed_error_count', 'warning_count', 'stream_bytes', 'http_status'):
+                'typed_error_count', 'warning_count', 'recovered_error_count', 'stream_bytes', 'http_status'):
         number = value.get(key)
         lower, upper = ((-(2**31), 2**31 - 1) if key == 'exit_code' else
                         (100, 599) if key == 'http_status' else (0, 2**63 - 1) if key == 'stream_bytes'
@@ -250,15 +254,47 @@ def _failure(diagnostic, observed_usage, kind, stage, error=None):
         'exception_type': type(error).__name__ if error is not None else None}), observed_terminal_usage=observed_usage)
 
 
-def decode(stdout, stderr, exit_code, final_file):
+def _error_disposition(events, verified_cli_version):
+    """JSONL drops will_retry; only the verified CLI's exit0 supplies it.
+
+    The second error emitter is JSON serialization fallback. It never sets the
+    CLI fatal flag, so its fixed prefix must stay fatal even with a final turn.
+    """
+    if verified_cli_version != RECOVERABLE_ERROR_CLI_VERSION:
+        return 'unverified_error_stop'
+    types = [row.get('type') for row in events]
+    start, end = types.index('turn.started'), types.index('turn.completed')
+    for index, row in enumerate(events):
+        if row.get('type') != 'error':
+            continue
+        message = row.get('message')
+        if set(row) != {'type', 'message'} or not isinstance(message, str) or not message.strip():
+            return 'malformed_error_stop'
+        try:
+            message.encode('utf-8')
+        except UnicodeError:
+            return 'malformed_error_stop'
+        if message.lstrip().startswith(_SERIALIZATION_ERROR_PREFIX):
+            return 'serialization_failure_stop'
+        if not start < index < end:
+            return 'error_outside_active_turn'
+    return 'recovered_under_verified_cli'
+
+
+def decode(stdout, stderr, exit_code, final_file, *, verified_cli_version=None):
     events, diagnostic, observed, stop = _terminal_context(stdout, stderr, exit_code, final_file)
     if stop:
         raise _failure(diagnostic, observed, stop, 'terminal')
     if diagnostic.get('parse_failure') or not events:
         raise _failure(diagnostic, observed, 'codex_event_stream_failure', 'event_stream')
-    if (exit_code or diagnostic['typed_error_count'] or diagnostic['turn_count'] != 1
+    if (exit_code or any(row.get('type') == 'turn.failed' for row in events) or diagnostic['turn_count'] != 1
             or diagnostic['turn_started_count'] != 1 or diagnostic['host_tool_types'] or diagnostic['unknown_event_types']):
         raise _failure(diagnostic, observed, 'codex_typed_terminal_failure', 'terminal')
+    if diagnostic['typed_error_count']:
+        disposition = _error_disposition(events, verified_cli_version)
+        diagnostic['error_disposition'] = disposition
+        if disposition != 'recovered_under_verified_cli':
+            raise _failure(diagnostic, observed, 'codex_typed_terminal_failure', 'terminal')
     violation = _order_violation(events)
     if violation:
         diagnostic['order_violation'] = violation
@@ -275,6 +311,9 @@ def decode(stdout, stderr, exit_code, final_file):
         raise _failure(diagnostic, observed, 'codex_final_schema_failure', 'final_message_parse', error) from None
     if not isinstance(value, dict) or value != file_value:
         raise _failure(diagnostic, observed, 'codex_final_schema_failure', 'final_message_binding')
+    if diagnostic['typed_error_count']:
+        diagnostic.update(error_contract_version=verified_cli_version,
+                          recovered_error_count=diagnostic['typed_error_count'])
     return {'wire_structured_output': value, 'usage': observed,
             'codex_terminal': {'type': 'turn.completed', 'turn_count': 1,
                                'warning_count': diagnostic['warning_count']},
@@ -338,6 +377,16 @@ def codex_infer(messages, original_schema, *, model, mark_launch, executable, au
                     '-c', 'features.skip_host_skill_discovery=true']
         for flag in DISABLE:
             settings += ['--disable', flag]
+        # The npm wrapper and pinned Node can remain unchanged while its native
+        # package changes. Verify the actual invoked CLI before any model start.
+        try:
+            version = subprocess.run(command + ['--version'], env=env, cwd=path / 'cwd',
+                capture_output=True, text=True, timeout=15)
+        except (OSError, subprocess.TimeoutExpired):
+            raise ValueError('Codex CLI contract version preflight failed before inference') from None
+        if (version.returncode or not isinstance(version.stdout, str)
+                or version.stdout.strip() != 'codex-cli ' + RECOVERABLE_ERROR_CLI_VERSION):
+            raise ValueError('Codex CLI contract version mismatch before inference')
         pre = subprocess.run(command + ['features', 'list'] + settings,
             env=env, cwd=path / 'cwd', capture_output=True, text=True, timeout=15)
         flags = {line.split()[0]: line.split()[-1] for line in pre.stdout.splitlines() if line.split()}
@@ -362,7 +411,7 @@ def codex_infer(messages, original_schema, *, model, mark_launch, executable, au
             _, diagnostic, observed, stop = _terminal_context(stdout, stderr, code, None)
             diagnostic['final_file_present'] = True
             raise _failure(diagnostic, observed, stop or 'codex_final_file_failure', 'final_file_read', error) from None
-        result = decode(stdout, stderr, code, final)
+        result = decode(stdout, stderr, code, final, verified_cli_version=RECOVERABLE_ERROR_CLI_VERSION)
         try:
             value, omissions = restore_original_omissions(result.pop('wire_structured_output'), original_schema)
         except Exception as error:

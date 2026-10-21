@@ -1134,9 +1134,13 @@ def test_exact_interpreter_prefix_keeps_feature_preflight_before_start(tmp_path,
     def preflight(args, **kwargs):
         calls.append((args, kwargs))
         expected = [str(node.resolve()), str(entry.resolve())] if npm else [str(entry.resolve())]
-        assert args[:len(expected)] == expected and args[len(expected):len(expected)+2] == ['features', 'list']
-        assert all(args[args.index('--disable', i)+1] in transport.DISABLE for i in [args.index('--disable')])
+        assert args[:len(expected)] == expected
         assert kwargs['env']['PATH'].split(':')[0] == str((node if npm else entry).resolve().parent)
+        if len(calls) == 1:
+            assert args[len(expected):] == ['--version'] and not marks
+            return SimpleNamespace(returncode=0, stdout='codex-cli 0.162.1', stderr='')
+        assert args[len(expected):len(expected)+2] == ['features', 'list'] and not marks
+        assert all(args[args.index('--disable', i)+1] in transport.DISABLE for i in [args.index('--disable')])
         output = '\n'.join(flag + ' stable ' + ('true' if not isolated and index == 0 else 'false') for index, flag in enumerate(transport.DISABLE))
         return SimpleNamespace(returncode=0, stdout=output, stderr='')
     class BeforeModel(Exception): pass
@@ -1147,7 +1151,7 @@ def test_exact_interpreter_prefix_keeps_feature_preflight_before_start(tmp_path,
         transport.codex_infer([{'role': 'user', 'content': 'unused synthetic'}], build_cli_schema(),
             model='fixture-fixed', effort='medium', mark_launch=mark, executable=entry, auth_file=auth,
             node_executable=node if npm else None, node_executable_sha256=driver.file_sha(node) if npm else None)
-    assert len(calls) == 1 and len(marks) == int(isolated)
+    assert len(calls) == 2 and len(marks) == int(isolated)
 
 
 def test_server_manifest_preserves_explicit_interpreter_identity(tmp_path, monkeypatch):
