@@ -4,33 +4,35 @@
 
 ## 1. 本轮范围与已核现场
 
-### 已发布修补与本轮原生恢复
+### 已发布修补与当前恢复现场
 
-PR #321准确HEAD `ad8c067a5baa71948594b934410d4a37526292ca`已合入master `33b3592dd7235cf0bfddc4f906e07584c363ac14`；PR CI 39583487935及master CI 39584121501三项成功，DegradedRelease 6313644549、release_check exit0。主树安全快进，五份用户原件SHA不变，原分支本地删除且远端缺失；launcher已加载方法`6ea490cef881a83b914750091b1a0e91c860f528f53b2af4cbb195900c5c3ef8`，前端仍为build `A8U18e9NOHuElaAH3AzWY`。HTTP/代理验收通过，不代替当前真实WS或源时效；PR #321运行回执6313788171记录的是授权与解锁到达前的现场。
+PR #322准确HEAD `6d27e2db650a0c5080f0f9ec49abafb305901948`已合入master `6a764f842c75ec1fb53ce9aee873ee9688f7140e`；PR CI 39599388560与master CI 39600286010的backend/frontend/docs均成功，DegradedRelease 6315925940、release_check exit0。运行回执为[6316203578](https://github.com/1239890829/AI-Trading/pull/322#issuecomment-6316203578)。主树已安全快进，五份用户原件SHA不变，原功能分支本地、远端均已删除。launcher当前加载方法`1102a209e507f22c81f4fb374bdb40ac4e7edf3865f62868dc99a3c959c256a4`，前端仍为build `A8U18e9NOHuElaAH3AzWY`。官方HTTP/代理检查通过，不代替本次真实WS或行情源时效验收。
 
-历史失败保留：PR #320发布后，正式维护恢复task `dcc100e15eaa4ab98cfecfca4d33eddd`从第11次Bear Researcher继续原图，约56秒后因terminal_order产生unknown `668d2e1594a44cd68f2e92af778d033e`。exit0、1 started/1 completed、6事件、2 item.error警告、无typed error；数字观察input86737/output1178/reasoning124已保全但未核实，不能补账。当时没有完整七报告，且新unknown不在前三条许可内，故暂停模型调用；Mac锁屏也曾阻挡页面。用户随后单独允许永久保留该条unknown并在修复后继续未完成步骤，现已手动解锁并允许实际Chrome验收；这些旧阻挡不再冒充当前状态，未来新unknown仍单独停止。
+PR #322已发布的边界包括：mark_launch前实核CLI 0.162.1；按精确官方合同接纳有序成功turn内的可恢复error形状；零终答/四分析师pending的逐角色消息指纹恢复；已获具名许可的历史unknown工具提案复用。其他版本、未知事件/形状、真实失败、权限/安全/工具、终态顺序、最终消息绑定和schema硬门保持；固定组件兼容有向hash对不扩大。旧unknown不升known、不回账，完整上游12角色/七报告/Memory不拆分。具体合同和历史拒绝见[语义纠错](ai/semantic-decisions.md#2026-10-21-cli启动警告与重复失败恢复纠错)。
 
-精确官方CLI `rust-v0.162.1` 将启动Warning映射为非致命item.completed/error；旧顺序前缀在turn.started前只允许thread.started，兼容门过强。PR #321仅补官方允许的启动警告并保存固定枚举顺序/违规分支；终端后追加、实质输出乱序、权限/安全/工具及最终消息绑定硬门继续拒绝。原始失败流已丢失，不能声称已还原唯一原因。再次恢复显式绑定各次失败的task/method/grant/claim/receipt与调用区间，保留真正原source，不删claim、不改账、不重跑成功回答。
+该版本完整本地后端6872 passed／87 skipped／309 subtests（pytest290.55秒、外层297.278秒），pyflakes4.244秒、doc-health7.296秒、卫生0.073秒、公开扫描2.462秒均exit0；1833个跟踪输入门内零漂移。前端370个跟踪输入与PR #320默认/UTC各1994 passed及上述build逐字相同，复用其完整本地证据；PR #322准确HEAD的三项CI另已取得。CLI相关202项、恢复84项（6.71秒）及真实LangGraph/SqliteSaver临时合成库四角色续接通过，原两提案前后各一次、零模型调用；合成行为不冒充实际证券恢复。首批因跨日旧答读取自锁反证而主动SIGINT的102.869秒中断、补固定pair前的成功批均保留，不当最终完整绿色。
 
-本轮通过正式维护入口创建task `b5541f06a2b4427ebbddef265bc4e13e`，北京时间19:14:31.739752至19:18:56.656070实际成功；从第12次Bear Researcher继续，新增7次调用（12–18），12角色与七报告完成。新增调用input592803/output6595均known；九份原答与十一份旧回执逐字保留，此前四条分别获准保留的历史unknown、本run继承两条仍保留。该新增用量不是全任务费用，不能把旧未知清账，也不能推出准确率、胜率或选股收益提升。
+### 002264：已保存完整结果及实际读取
 
-只读核验103项全部通过，覆盖原答/回执/任务/历史链与完整保存结果；辅助脚本核验不代替HTTP或界面。实际两次普通GET均200，同run/task/lineage及七报告哈希/长度一致，目标counter/answer/receipt/claim/result均无变化，没有请求模型生成。返回的保存结果为completed，后续生成预检因下述第5unknown显示usage_unknown；该新条目没有被前四条许可覆盖，保存结果仍正常可读。这是未核实用量的停止边界，不是固定次数额度不足。
+PR #321发布后，用户单独允许保留第四unknown，正式维护task `b5541f06a2b4427ebbddef265bc4e13e`于北京时间19:14:31.739752至19:18:56.656070成功；从call12/Bear继续至call18，12角色与七报告完成。新增7次调用input592803/output6595均known，九份原答与十一份旧回执逐字保留；本run继承两条unknown不回填，不能据新增部分补算全任务费用。此前PR #320的call11/Bear因terminal_order失败、第四unknown及数字观察未核实的历史仍保留，不能被成功覆盖。
 
-实际配对Chrome已核8只入选卡、五个原量纲刻度、同区依据、事件方向键与Esc焦点；002264主卡及原入选通知均读到同一已保存结果。通知内最终结论和其余六份报告已逐项展开、正文非空，主卡同一六报告入口可达，复用九答和继承两条unknown可见。页面分别标明生成19:18、材料截至15:30；原15:00:44通知的公司/事件缺项保持，后生成研究是当前补充，并非严格按通知时点过滤或重写首次入选依据。单run验收不代表8股全部完成，也不把当前收盘读取当连续盘中稳定性；没有重新进行模型对照试验或领取下一业务任务。
+103项持久只读核验通过。实际两次普通GET均200，同run/task/lineage及七报告哈希/长度一致，counter/answer/receipt/claim/result无变化；PR #322激活后纯读取再次通过，没有请求生成。已配对Chrome核8只入选卡、五个原量纲刻度、同区依据、事件方向键与Esc焦点；002264主卡与原入选通知读取同一保存结果，通知七份正文非空、复用九答和继承两条unknown可见。页面分别标明生成19:18、材料截至15:30；原15:00:44通知的公司/事件缺项保留，后来研究是当前补充，不是严格按原通知时点过滤或重写首次理由。此前锁屏与人工输入阻挡已经解除，旧页面验收不冒充本次重启后的新WS证据。 本次Chrome另点“重新读取研究”，由读取中回到002264历史报告/待核，方法不同、九原答复用、两历史用量unknown、生成/材料时点及最终正文非空均可见；002355显示研究失败/无七报告，实际阻挡为“今日共享模型用量尚未核实；不得重新调用或换通道。”，Esc回原入口，0新task。这是当前纯读取复验，没有重复全部七报告或交互全验，也不是待发布尾槽修补的加载证据；记录归忽略的`artifacts/runs/prelaunch-tail-recovery-20261021/read-only-browser-check.json`。
 
-新的真实阻挡：002355自动task `f9833bf533ae479b99f3bb5beead44a3`在19:20:55失败，call1/2只保存已知用量的分析师工具提案，尚非两份最终角色报告；call3/News Analyst新增第5unknown `262c6b809cc4446e865550e9b5c3d6ee`，未获原四条具名例外许可，后续调用停止。完整7事件顺序已保全：两个合法启动warning后，turn内顶层error、agent_message、turn.completed；CLI exit0、非超时/流截断，失败点为typed_error_count硬拒，最终原答未通过完整绑定/schema核验。仅有input76902/output1650等数字观察，不按known补账、不重抽已保存回答。
+### 002355：第5许可已执行，第6超时仍阻断
 
-精确官方CLI 0.162.1的Error分支仅在`will_retry=false`时置error_seen，而JSONL会把可恢复与终止Error都压成顶层error并省略will_retry，原一律拒绝存在兼容缺口。本条具体错误原文与will_retry未保存，原因不清楚；顺序符合可恢复路径不等于已证明它是误报。本分支已补`--version`实核，先于mark_launch确认固定0.162.1；decoder仅在该已核版本、exit0、唯一有序且最后的完成终态下，接受turn内严格`{type,message}`且非serde fallback的顶层error。其余版本、未知形状、真实失败、越序/完成后追加、权限/安全/工具、最终原答绑定与schema硬门继续拒绝。相关202项定向及本批完整本地门已通过（详见下段），新准确HEAD CI、发布与加载仍另核；不凭此回填第5unknown，付费接续另待其明确授权。002264已完成可读不因新股失败撤销，也不代表整体运行收口。
+原自动task `f9833bf533ae479b99f3bb5beead44a3`的call3/News产生第5unknown `262c6b809cc4446e865550e9b5c3d6ee`，当时原四条许可不能覆盖。两个合法启动warning后，turn内出现顶层error、agent_message、turn.completed，exit0且未截断；适配器按typed_error_count拒绝，第三答未通过最终绑定/schema。官方JSONL省略will_retry，证明旧全拒合同存在缺口，但该条原错误原因不清楚，不能称已证误报或把input76902/output1650观察补账。call1/2是已保存工具提案，不是两份最终角色报告。
 
-同次恢复预检还发现真实工程缺口：002355只有两份工具提案，`role-outputs`为零；原生四分析师子图已保存提案与工具结果，四个agent同时pending。零终答不等于没有可复用检查点，首个新调用也不能猜定为News。本分支已补与旧单角色grant互斥的四pending角色集合及逐角色冻结消息指纹；仅新pending集合模式、显式冻结数量0与emptySHA时允许终答目录不存在，每个pending角色首请求在新reserve/counter前核原消息尾序列，旧单角色授权继续兼容且不扩大空流接纳。固定有向兼容补齐后恢复最终84项定向通过（6.71秒）；真实LangGraph与SqliteSaver临时合成库演练四角色续完，原两份工具提案前后各一次、零模型调用，这是合成行为证据，不是002355生产记录已恢复。实际检查点的AI/工具匹配与哈希另已保存，原提案/回执/工具结果/检查点与权限身份不放宽；第5unknown仍未获授权；本批完整本地门通过，新准确HEAD CI、发布与加载尚待验。证据归忽略的artifacts/runs/retryable-terminal-contract-20261021。
+用户随后明确允许永久保留第5条，在PR #322已发布加载后继续未完成步骤。精确单次grant实际创建恢复task `27be01c0f47843d3b62b435853c386f1`（北京时间22:00:25.843024）；call4/Fundamentals于22:00:32.729620启动，22:03:33.049612失败。此次是实际180秒超时：1 started、0 completed，无最终答或usage，终止后本机进程已排空；exit0不代表成功。新增第6unknown `bca2e7d808734d1a99cc2d94f2d14b0f`尚未获具名许可，后续模型调用停止，不能扩用第5许可。超时上游具体原因不清楚，不补算tokens或自动重试。原两提案/工具结果保全，counter为4，最终角色仍为0；只读证据核到0 active、9份原始文件哈希不变，本次没有重抽已存提案。
 
-同批实际002178也为零终答/四pending，旧741具名unknown保留的Fundamentals工具提案已类型化，输出/回执/原检查点AI及工具哈希匹配。精确复用要求known提案沿原校验，unknown的typed_response须receipt/wrapper/payload三SHA一致，并匹配quality已验证的完整历史具名许可facts中的准确ID/原北京日/scope；原答跨日读取不再误用当天active集合，新调用仍核当日active例外，不放行跨日新unknown。账行与旧回执不改、不升known；未许可、terminal failure或错hash仍拒，不授予旧c98整体兼容，也不越过第5unknown。用户追问“为什么一直unknown”只是要求解释原因，不是第5ID授权。原四组件allowlist不变，另仅接受transport_process.py已审的固定有向9281…→d88…hash对，涵盖有界诊断及严格cache_write字段契约；未来hash、反向或缺old均拒绝，旧unknown不回账。
+### 002178：启动前尾槽修补已实现，待发布与恢复
 
-PR #321完整后端门6824 passed／87 skipped／309 subtests（pytest245.65秒、外层250.266秒），pyflakes3.554秒；1833个跟踪输入门内无漂移。前端370个跟踪输入与PR #320两时区各1994项及build `A8U18e9NOHuElaAH3AzWY`逐字相同，只复用同字节本地证据，PR #321准确新HEAD三项CI另已通过。启动warning相关179项、恢复链59项、最终文档守卫146项通过，旧前缀缺陷注入先红且恢复原字节后通过，工程测试无模型调用；doc-health、卫生和公开扫描通过。这些是已发布版本的工程证据。本轮最终源码完整后端6872 passed／87 skipped／309 subtests（pytest290.55秒、外层297.278秒），pyflakes4.244秒、doc-health7.296秒、卫生0.073秒、公开扫描2.462秒均exit0；1833个跟踪输入门内零漂移。前端370个跟踪输入与PR #320默认/UTC各1994 passed及build `A8U18e9NOHuElaAH3AzWY`逐字相同，复用其完整本地证据。本PR准确新HEAD的backend/frontend/docs三CI、回执、发布、合并及加载仍另核，不借PR #321旧CI替代；补固定有向pair前的完整成功批只保留于忽略artifacts，不冒充最终源验收。
+只读核对原task `a3b95a144a43474b855da321cb596f20`发现counter为2，却只有call1提案/回执；已获许可的unknown `7416826c91574764b58cd12e71a32100`和原生工具结果仍保留。固定旧源码先写counter、再reserve；原任务固定BudgetError、首个Market broker错误及全量模型账行共同证明slot2未物理启动。没有slot2直接阶段回执，reserve分支是代码/数据推论；原生检查点的ProtocolError包装本身不证明启动阶段。现行恢复仍要求完整receipt索引，因此尚不能恢复此run。
 
-本轮完整后端首批因复用读取误绑当天例外、次日将自锁的P2反证而主动SIGINT，保留102.869秒中断证据；它不是完整通过，也不当产品断言失败。旧答读取与当日新调用分开修补后，已用独立basetemp完成上述最终完整门；中断证据与补pair前成功批均保留原层级。
+本分支已实现该既有恢复边界修补：仅允许服务器单次grant显式绑定精确原source最后槽、旧源码/失败/全模型账行和原生流前缀；counter不退、不造receipt2或账行，原提案/工具不重跑，新物理调用从3开始且继续严格验收。历史链及完成后的普通读取须使用同一原始证明；未声明缺口、内部缺口和任何新调用缺回执继续拒绝。定向104 passed（9.10秒）、pyflakes及diff检查通过；旧合同先红1 failed（0.50秒，binding_invalid），首绿1 passed（0.45秒）。真实178旧run在OS禁止网络/模型CLI执行、仅允许证明文件写入下，以RO/query_only完成`_binding`/`_frozen_records`核验，23份原regular文件和1条原模型账行不变，counter2及缺失2.json保留；这不是完整grant、`_quality`/`_context`或模型恢复通过。本批完整本地门已通过：后端6892 passed／87 skipped／309 subtests（pytest303.41秒、外层311.513秒），pyflakes4.418秒、doc-health7.224秒、卫生0.076秒、公开扫描2.622秒均exit0；1833个跟踪输入零漂移。前端370个输入逐字不变，复用默认/UTC各1994 passed及tsc、ESLint、生产build `A8U18e9NOHuElaAH3AzWY`的成功证据。当前新准确HEAD的三项CI、发布/激活及实际恢复仍待核，不复用PR #322旧CI，不把完整工程门或局部原run核验写成运行完成。新工程证据归忽略的`artifacts/runs/prelaunch-tail-recovery-20261021/actual-178-tail-validation.json`，原证据沿`artifacts/runs/tradingagents-parallel-recovery-20261021/`保留。
 
-前批9项已完成pytest临时payload/旧构建副本已精确清理，磁盘可用实测约增3.721GiB；PR #320运行回执另记其真实失败。本批旧构建备份尚待新运行验收，业务/研究/unknown/checkpoint/Memory、用户原件和其他worktree继续保留。
+当前8只真正入选中，002264完整结果已可读，002355与002178尚未完成，其余5只尚未启动；不能称全部接入或运行收口。研究仍为`RESEARCH_ONLY_AUTHORIZED`、`net_gain_verified=false`、`production_eligible=false`、独立人工gold为0，不改评分、消息资格、策略或模拟执行。新unknown停止与固定次数额度无关；不再重复旧LAB对照，也未领取下一业务任务。
+
+本轮已精确清理4项完成且无活引用的pytest临时payload，约2.951GiB已分配空间；日志/XML/哈希及所有模型原答、失败、unknown、checkpoint/Memory和用户原件保留。旧恢复构建副本仍保留，其他worktree及RSH资产不动。
 
 ### 已发布修补：普通传输失败诊断保全
 

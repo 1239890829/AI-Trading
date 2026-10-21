@@ -164,9 +164,11 @@
 >
 > PR #321准确HEAD发布、PR/master三CI及release_check均通过，方法6ea已加载；用户单独允许保留第四unknown后，正式维护task b5541f06从call12/Bear续至call18成功，12角色/七报告完成，103项只读核验通过。九原答/十一旧回执逐字保留；新增7调用用量known、此前四条获准保留的unknown及本run继承两条保留，不能推出全任务费用。两次普通GET同七报告且目标文件零变，配对Chrome的002264主卡/原通知读取同结果，通知七正文及复用/unknown已逐项核。生成19:18/材料截至15:30是当前补充，不回写15:00:44首次理由，不声称严格按通知时点过滤、全部入选股已齐或后续生成可用。RESEARCH_ONLY_AUTHORIZED、net_gain_verified=false、production_eligible=false、人工gold0及本任务原状态/独立效果条件不变，见[语义纠错](../ai/semantic-decisions.md#2026-10-21-cli启动警告与重复失败恢复纠错)及handoff。
 >
-> 随后正常002355任务call3/News出现第5unknown 262c6b80，现役预检停后续调用，原四条许可不扩用。精确CLI省略顶层error的will_retry，原全拒存在兼容缺口；本次具体原因不清楚，不能据exit0/完成顺序补账。已补mark_launch前实核0.162.1，仅按固定版本、exit0、唯一有序最后完成、turn内严格形状且非serde fallback处理，其他硬门不变。定向及本批完整本地门通过（见handoff），新准确HEAD CI、发布/加载及第5ID授权分别待核，旧两份工具提案和checkpoint保留；不改研究身份、独立效果条件或任务元数据。
+> PR #322已发布并加载：准确HEAD `6d27e2db650a0c5080f0f9ec49abafb305901948`、合并master `6a764f842c75ec1fb53ce9aee873ee9688f7140e`，PR/master三项CI、DegradedRelease及release_check通过；完整本地6872/87跳过/309 subtests，同字节前端证据与运行回执见handoff。已发布精确CLI 0.162.1合同、零终答四pending/消息指纹恢复及获准unknown工具提案复用，不放宽权限、终态/schema、源码兼容或新unknown边界。原第5条262c的具体错误原因仍不清楚，不补账或称已证误报。
 >
-> 此run无角色终答，但原生子图保有两提案/工具结果且四agent同时pending，首个新调用不能从失败的News倒推。正式恢复已补互斥四pending角色/逐角色消息指纹，仅新集合模式显式0/emptySHA允许目录缺失，每角色首请求在新reserve/counter前核原消息尾，旧单角色grant兼容且空流边界不扩。固定有向兼容补齐后最终84项定向通过（6.71秒）；真实LangGraph/SqliteSaver临时合成库四角色续完、两原提案前后各一次且零模型调用，只证明合成行为。同批实际002178旧741也是零终答四pending，其unknown typed_response提案须三SHA一致并匹配quality已验证的完整历史具名许可facts的原ID/日/scope，旧账/回执不改；新调用仍核当日active例外，不放跨日新unknown或未许可/terminal failure/错hash。原四组件allowlist不变，transport_process.py仅接受已审9281…→d88…有向对，含严格cache_write契约及诊断，未来/反向/缺old不放行、旧unknown不回账。实际002355未恢复；本批完整本地门通过（见handoff），准确HEAD CI/发布/加载和第5unknown许可独立待核，用户追问原因不是许可。
+> 用户随后单独允许保留第5unknown，002355正式恢复task `27be01c0f47843d3b62b435853c386f1`于北京时间22:00:25创建；call4/Fundamentals在22:03:33因真实180秒超时失败，1 started/0 completed、无最终答和usage、进程已排空。新增第6unknown `bca2e7d808734d1a99cc2d94f2d14b0f`尚未获许可，后续调用停止；counter4、原两提案/工具结果保留，最终角色0，不把两提案当两份终答或自动重试。第5许可已执行，不再写成当前未授权；第6许可不能由它推定。
+>
+> 002178旧counter2只有call1回执/工具提案；只读固定旧源码、原失败、全模型账行及原生流支持slot2在物理启动前因BudgetError停止，无直接slot2阶段回执。原恢复连续索引不支持该末槽，本批已实现显式grant精确绑定的原source启动前尾槽修补，counter不退、不造receipt/账行、不重跑原提案/工具，新3及以后仍严格；历史链/完成读取继承同一证明。定向104 passed（9.10秒）、pyflakes及diff检查通过；OS禁网络/模型CLI的真实旧run只读`_binding`/`_frozen_records`通过且23原文件/1模型账行不变，不代表完整grant、`_quality`/`_context`或模型恢复通过；本批完整本地门已通过（准确计数及同字节前端证据见handoff），新准确HEAD三项CI、发布/激活及实际恢复仍待核，不复用PR #322旧CI。详见[语义记录](../ai/semantic-decisions.md#2026-10-21-第5许可执行与启动前尾槽核对)。002264完整12角色/七报告和实页证据保留，不代表8股均完成；另5股尚未启动。原任务状态、调度及独立效果条件不变。
 
 > PR #318真实新研究前9次known，第10普通传输失败新增unknown，图仅5角色终答/4分析报告；没有完整成功。补普通失败/解析/schema安全诊断与数字观察缺口，失败仍unknown，不重放旧答、不补账。原任务状态/调度/效果前置不变，完整工程与运行分别核验。
 

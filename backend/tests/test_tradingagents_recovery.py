@@ -605,3 +605,203 @@ def test_new_grant_cannot_reseal_a_changed_historical_prefix(env,monkeypatch):
     path.write_bytes(original)
     env.grant['binding']['prefixes']['source-audit.jsonl']=dict(bytes=len(original),sha256=recovery._sha(path)); env.pin()
     assert context(env)['binding']['call_counter']==3
+
+
+def prelaunch_tail_env(e):
+    """Historical accounted gate failure after counter2, before any second row."""
+    parallel_env(e); b=e.grant['binding']; old=e.grant['source_method_identity']
+    old['source_files'].update({'driver.py':'939e0de30999ac2b6e93b947e581e82f5e430a1134a2b51c5af8748cafb09b9d',
+        'codex_transport.py':'1876b45f0636e4305fb1df97ea2306134aacdc338a357b20e88e3cb0ad205101',
+        'agent_budget.py':'5b292c8d675f71e97a86116b6e3250c7a15af8e2bde34ec6492875105c519923'})
+    e.current['source_files']['agent_budget.py']=old['source_files']['agent_budget.py']
+    source=recovery._json(e.source_claim); e.source_claim.unlink()
+    source['method_sha256']=research._digest(old); e.source_claim=research._selection_claim(e.selection,source['method_sha256'])
+    put(e.source_claim,source); b['source_claim_sha256']=recovery._sha(e.source_claim)
+    e.grant['compatibility']['source_hash_pairs']={k:dict(old=old['source_files'].get(k),new=e.current['source_files'].get(k))
+        for k in old['source_files'].keys()|e.current['source_files'].keys() if old['source_files'].get(k)!=e.current['source_files'].get(k)}
+    (e.run/'model-outputs/2.json').unlink()
+    for n in (2,3): (e.run/'usage-receipts'/f'{n}.json').unlink()
+    receipt=recovery._json(e.run/'usage-receipts/1.json'); output=recovery._json(e.run/'model-outputs/1.json')
+    receipt.update(method_sha256=research._digest(old),usage_known=False,usage=None,terminal_kind='typed_response',output_sha256=output['output_sha256'])
+    put(e.run/'usage-receipts/1.json',receipt)
+    error=dict(code='BudgetError',message='今日已有模型调用的 token 用量未知；拒绝继续消耗，须先核实/跨日恢复',retryable=False)
+    with e.sf() as db:
+        for row in db.query(AgentResourceUsage).all(): db.delete(row)
+        db.add(AgentResourceUsage(id=f'{1:032x}',budget_date=NOW.date().isoformat(),scope=agent_budget.SCOPE_SELECTED_RESEARCH_LLM,
+            kind='model',purpose='tradingagents.fundamentals_analyst',provider='codex_cli',model='gpt-6.1-sol',task_id=OLD,
+            state='succeeded',usage_known=0,attempts=1,started_at=(NOW-timedelta(minutes=16)).replace(tzinfo=None),
+            finished_at=(NOW-timedelta(minutes=15)).replace(tzinfo=None)))
+        db.get(AgentTask,OLD).error=json.dumps(error); db.commit()
+        task_error=db.get(AgentTask,OLD).error
+        rows=db.query(AgentResourceUsage).order_by(AgentResourceUsage.id).all()
+        facts=[{c.name:(v.isoformat() if isinstance(v,datetime) else v) for c in AgentResourceUsage.__table__.columns
+                for v in (getattr(row,c.name),)} for row in rows]
+    put(e.run/'execution.json',dict(state='needs_native_recovery',error_kind='BudgetError',automatic_retry=False))
+    returned=dict(case_id=SYMBOL,arm='ta-luna',status='returned',call_id=1,role='Fundamentals Analyst',response_sha256=output['output_sha256'])
+    failed=dict(case_id=SYMBOL,arm='ta-luna',status='broker_error',call_id=None,role='Market Analyst',error_type="{'kind': 'BudgetError'}")
+    records=[returned,failed,dict(failed,role='News Analyst',error_type="{'kind': 'DriverUnavailable'}")]
+    (e.run/'graph/model-receipts.jsonl').write_text(''.join(json.dumps(row,sort_keys=True,separators=(',',':'))+'\n' for row in records))
+    e.messages['Market Analyst']=e.messages['Market Analyst'][:1]
+    cp=e.run/'graph/cache/checkpoints'/f'{SYMBOL}.db'
+    with sqlite3.connect(cp) as db:db.execute("UPDATE checkpoints SET metadata=? WHERE checkpoint_ns LIKE 'Market Analyst:%'",(json.dumps({'step':0,'parents':{'':'checkpoint-1'}}),))
+    b.update(call_counter=2,checkpoint=recovery.checkpoint_snapshot(e.run,SYMBOL),outputs={'1':recovery._sha(e.run/'model-outputs/1.json')},
+        usage_receipts={'1':recovery._sha(e.run/'usage-receipts/1.json')},
+        pending_message_fingerprints={role:[research._digest(row) for row in rows] for role,rows in e.messages.items()})
+    put(e.run/'call-counter.json',{'reserved':2})
+    b['prelaunch_tail']=dict(version=1,call_id=2,source_task_error_sha256=hashlib.sha256(task_error.encode()).hexdigest(),
+        source_execution_sha256=recovery._sha(e.run/'execution.json'),source_model_usage_facts_sha256=research._digest(facts),
+        model_receipts_prefix=dict(bytes=(e.run/'graph/model-receipts.jsonl').stat().st_size,sha256=recovery._sha(e.run/'graph/model-receipts.jsonl')),
+        first_broker_error_record_sha256=research._digest(failed))
+    e.auth['unknown_usage_exception'].update(method_sha256=research._digest(e.current),
+        allowed_unknown_usage=[dict(usage_id=f'{1:032x}',budget_date=NOW.date().isoformat(),scope=agent_budget.SCOPE_SELECTED_RESEARCH_LLM)])
+    e.pin(); return e
+
+
+def complete_tail_continuation(e):
+    async def continuation(*,rec,recovery_guard,usage_authorizer,**kwargs):
+        for n,role in enumerate([*PARALLEL_ROLES,*[r for r in research.ROLES if r not in PARALLEL_ROLES]],e.grant['binding']['call_counter']+1):
+            recovery_guard(dict(role=role,messages=e.messages.get(role,[])),n-1); usage_authorizer()
+            output=dict(content='new fixture final '+role,tool_calls=[]); outsha=research._digest(output)
+            put(e.run/'model-outputs'/f'{n}.json',dict(call_id=n,role=role,structured_output=output,output_sha256=outsha))
+            put(e.run/'usage-receipts'/f'{n}.json',dict(task_id=rec.task_id,method_sha256=research._digest(e.current),call_id=n,
+                usage_id=f'{n:032x}',role=role,output_sha256=outsha,usage_known=True,usage={'input_tokens':1,'output_tokens':1}))
+            with (e.run/'role-outputs.jsonl').open('a') as handle:handle.write(json.dumps({'peer':dict(role=role,call_id=n,output_sha256=outsha)})+'\n')
+        with (e.run/'graph/node-trace.jsonl').open('a') as handle:handle.write(json.dumps({'node':'Memory Log','event':'end'})+'\n')
+        put(e.run/'call-counter.json',{'reserved':n}); return {key:'complete resumed report' for key in research.REPORTS}
+    e.native._execute=continuation
+
+
+def test_declared_prelaunch_tail_preserves_gap_and_completed_read_reuses_result(env,monkeypatch):
+    e=prelaunch_tail_env(env); complete_tail_continuation(e)
+    originals={p:p.read_bytes() for p in (e.run/'model-outputs/1.json',e.run/'usage-receipts/1.json',e.source_claim)}
+    c,owner=consumed(e); result=asyncio.run(recovery.run_recovery(e.rec,params(c,owner),e.app))
+    assert result['recovery_lineage']['new_call_from']==3 and result['recovery_lineage']['inherited_unknown_usage_count']==1
+    assert not (e.run/'usage-receipts/2.json').exists() and not (e.run/'model-outputs/2.json').exists()
+    assert all(p.read_bytes()==body for p,body in originals.items())
+    assert research._latest(SYMBOL)['recovery_lineage']==result['recovery_lineage']
+    prior=research._execution_prior(e.selection,research._digest(e.current)); assert research._completed_selection(prior,e.selection)['reused_identical_selection']
+    monkeypatch.setattr(research,'selected_bindings',lambda *args:{SYMBOL:e.selection})
+    async def no_create(*args,**kwargs):raise AssertionError('saved completion must not regenerate')
+    monkeypatch.setattr(agent_tasks,'create_task_async',no_create); asyncio.run(research.scheduler_tick(e.app))
+
+
+@pytest.mark.parametrize('mutation',['undeclared','interior','new_gap','source_driver','task_error','execution','native_error','receipt2'])
+def test_prelaunch_tail_requires_exact_original_proof_before_dispatch(env,mutation):
+    e=prelaunch_tail_env(env); b=e.grant['binding']; tail=b['prelaunch_tail']
+    if mutation=='undeclared':b.pop('prelaunch_tail')
+    elif mutation=='interior':tail['call_id']=1
+    elif mutation=='new_gap':b['call_counter']=3;put(e.run/'call-counter.json',{'reserved':3})
+    elif mutation=='source_driver':
+        e.grant['source_method_identity']['source_files']['driver.py']='f'*64
+        e.grant['compatibility']['source_hash_pairs']['driver.py']['old']='f'*64
+        row=recovery._json(e.source_claim);e.source_claim.unlink();row['method_sha256']=research._digest(e.grant['source_method_identity'])
+        e.source_claim=research._selection_claim(e.selection,row['method_sha256']);put(e.source_claim,row)
+        b['source_claim_sha256']=recovery._sha(e.source_claim)
+        receipt=recovery._json(e.run/'usage-receipts/1.json');receipt['method_sha256']=row['method_sha256'];put(e.run/'usage-receipts/1.json',receipt)
+        b['usage_receipts']['1']=recovery._sha(e.run/'usage-receipts/1.json')
+    elif mutation=='task_error':
+        with e.sf() as db:
+            task=db.get(AgentTask,OLD);task.error=json.dumps(dict(code='BudgetError',message='another failure'))
+            db.commit();tail['source_task_error_sha256']=hashlib.sha256(task.error.encode()).hexdigest()
+    elif mutation=='execution':
+        put(e.run/'execution.json',dict(state='needs_native_recovery',error_kind='TransportError'))
+        tail['source_execution_sha256']=recovery._sha(e.run/'execution.json')
+    elif mutation=='native_error':
+        p=e.run/'graph/model-receipts.jsonl';rows=[json.loads(line) for line in p.read_text().splitlines()]
+        rows[1]['error_type']="{'kind': 'TransportError'}";p.write_text(''.join(json.dumps(row)+'\n' for row in rows))
+        tail['model_receipts_prefix']=dict(bytes=p.stat().st_size,sha256=recovery._sha(p));tail['first_broker_error_record_sha256']=research._digest(rows[1])
+    else:put(e.run/'usage-receipts/2.json',dict(call_id=2,usage_known=False))
+    e.pin()
+    with pytest.raises(research.ResearchBlocked):context(e)
+    assert e.native.calls==0
+
+
+@pytest.mark.parametrize('mutation',['extra_reserved','extra_started_other_scope','tokens','purpose','started_at'])
+def test_prelaunch_source_query_includes_all_model_rows_and_exact_facts(env,mutation):
+    e=prelaunch_tail_env(env)
+    with e.sf() as db:
+        if mutation.startswith('extra_'):
+            db.add(AgentResourceUsage(id='f'*32,budget_date='2026-10-20',scope=agent_budget.SCOPE_AUTONOMY_LLM,
+                kind='model',purpose='not in original receipts',task_id=OLD,state='reserved' if mutation=='extra_reserved' else 'succeeded',
+                usage_known=1,started_at=None if mutation=='extra_reserved' else NOW.replace(tzinfo=None)))
+        else:
+            row=db.get(AgentResourceUsage,f'{1:032x}')
+            if mutation=='tokens':row.input_tokens=123
+            elif mutation=='purpose':row.purpose='silently another role'
+            else:row.started_at=NOW.replace(tzinfo=None)
+        db.commit()
+    with pytest.raises(research.ResearchBlocked):context(e)
+
+
+@pytest.mark.parametrize('mutation',['missing','unknown'])
+def test_old_prelaunch_tail_never_exempts_new_call_receipts(env,mutation):
+    e=prelaunch_tail_env(env);complete_tail_continuation(e);execute=e.native._execute
+    async def corrupt(**kwargs):
+        result=await execute(**kwargs);p=e.run/'usage-receipts/3.json'
+        if mutation=='missing':p.unlink()
+        else:
+            row=recovery._json(p);row.update(usage_known=False,usage=None);put(p,row)
+        return result
+    e.native._execute=corrupt;c,owner=consumed(e)
+    failure=FileNotFoundError if mutation=='missing' else research.ResearchBlocked
+    with pytest.raises(failure):asyncio.run(recovery.run_recovery(e.rec,params(c,owner),e.app))
+    assert not (e.run/'result.json').exists() and not (e.run/'usage-receipts/2.json').exists()
+
+
+def failed_tail_chain(e):
+    c,owner=consumed(e)
+    async def failed(*,rec,recovery_guard,usage_authorizer,**kwargs):
+        recovery_guard(dict(role='Market Analyst',messages=e.messages['Market Analyst']),2);usage_authorizer()
+        put(e.run/'usage-receipts/3.json',dict(task_id=rec.task_id,method_sha256=research._digest(e.current),
+            call_id=3,usage_id=f'{3:032x}',usage_known=False,usage=None))
+        put(e.run/'call-counter.json',{'reserved':3})
+        raise RuntimeError('new terminal usage unknown retained')
+    e.native._execute=failed
+    with pytest.raises(RuntimeError):asyncio.run(recovery.run_recovery(e.rec,params(c,owner),e.app))
+    with e.sf() as db:
+        db.add(AgentTask(id=NEW,type='tradingagents_research',status='failed',params=json.dumps(params(c,owner)),finished_at=NOW.replace(tzinfo=None)))
+        db.add(AgentResourceUsage(id=f'{3:032x}',budget_date=NOW.date().isoformat(),scope=agent_budget.SCOPE_SELECTED_RESEARCH_LLM,
+            kind='model',purpose='new failed recovery',task_id=NEW,state='failed',usage_known=0,started_at=(NOW-timedelta(seconds=1)).replace(tzinfo=None)));db.commit()
+    prior=deepcopy(e.current)
+    e.grant['binding']['recovery_history']=[dict(grant_id=GRANT,grant_sha256=c['grant_sha256'],task_id=NEW,method_identity=prior,
+        call_from=3,call_to=3,claim_sha256=recovery._sha(c['claim']))]
+    e.grant['grant_id']='e'*32;e.current['source_files']['codex_transport.py']='9'*64;e.current['source_files']['tradingagents_recovery.py']='a'*64
+    e.grant['compatibility']['source_hash_pairs']={k:dict(old=e.grant['source_method_identity']['source_files'].get(k),new=e.current['source_files'].get(k))
+        for k in e.grant['source_method_identity']['source_files'].keys()|e.current['source_files'].keys()
+        if e.grant['source_method_identity']['source_files'].get(k)!=e.current['source_files'].get(k)}
+    e.grant['binding'].update(call_counter=3,usage_receipts={str(n):recovery._sha(e.run/'usage-receipts'/f'{n}.json') for n in (1,3)})
+    e.auth['unknown_usage_exception'].update(method_sha256=research._digest(e.current),authorized_at=NOW.isoformat())
+    e.auth['unknown_usage_exception']['allowed_unknown_usage'].append(dict(usage_id=f'{3:032x}',budget_date=NOW.date().isoformat(),scope=agent_budget.SCOPE_SELECTED_RESEARCH_LLM))
+    e.pin();return c
+
+
+def test_original_prelaunch_tail_survives_growing_history_and_completed_reader(env):
+    e=prelaunch_tail_env(env);first=failed_tail_chain(e);complete_tail_continuation(e)
+    c=context(e);claim,fresh=recovery._dispatch(c);assert fresh
+    rec=Recorder();rec.task_id='f'*32;owner=claim['native_recovery']['dispatch_owner'];recovery._advance(c,owner,'recovery_queued',task_id=rec.task_id)
+    result=asyncio.run(recovery.run_recovery(rec,params(c,owner),e.app))
+    assert result['recovery_lineage']['new_call_from']==4 and result['recovery_lineage']['inherited_unknown_usage_count']==2
+    assert research._latest(SYMBOL)['recovery_lineage']==result['recovery_lineage'] and recovery._json(first['claim'])['state']=='needs_recovery'
+    assert not (e.run/'usage-receipts/2.json').exists() and not (e.run/'model-outputs/2.json').exists()
+
+
+@pytest.mark.parametrize('mutation',['drop','reseal'])
+def test_history_must_keep_exact_original_prelaunch_tail(env,mutation):
+    e=prelaunch_tail_env(env);failed_tail_chain(e)
+    if mutation=='drop':e.grant['binding'].pop('prelaunch_tail')
+    else:e.grant['binding']['prelaunch_tail']['source_model_usage_facts_sha256']='f'*64
+    e.pin()
+    with pytest.raises(research.ResearchBlocked):context(e)
+
+
+def test_completed_tail_reader_rechecks_old_db_and_archived_execution(env):
+    e=prelaunch_tail_env(env);complete_tail_continuation(e);c,owner=consumed(e)
+    asyncio.run(recovery.run_recovery(e.rec,params(c,owner),e.app))
+    assert research._latest(SYMBOL) is not None
+    with e.sf() as db:
+        row=db.get(AgentResourceUsage,f'{1:032x}');purpose=row.purpose;row.purpose='changed after completion';db.commit()
+    assert research._latest(SYMBOL) is None
+    with e.sf() as db:db.get(AgentResourceUsage,f'{1:032x}').purpose=purpose;db.commit()
+    assert research._latest(SYMBOL) is not None
+    put(e.run/'recovery-history'/GRANT/'execution.json',dict(state='needs_native_recovery',error_kind='TransportError'))
+    assert research._latest(SYMBOL) is None
