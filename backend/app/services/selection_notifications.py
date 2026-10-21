@@ -92,10 +92,10 @@ def _record(items: list[dict], *, trade_date: str, source: str, source_id: str,
     created = 0
     for item in items:
         symbol = str(item.get('symbol') or '')
-        evidence = {key: item[key] for key in ('bases', 'pick_basis', 'source_basis', 'confidence', 'linkage',
+        evidence = {key: item[key] for key in ('bases', 'pick_basis', 'source_basis', 'score', 'sub_scores', 'confidence', 'linkage',
             'quote_audit', 'invalidations', 'vetoes', 'buy_range', 'tradability', 'seal_state',
             'related_event_refs', 'observation_only', 'dimension_evidence', 'theme_sources',
-            'effective_limit') if key in item}
+            'effective_limit', 'selection_metrics') if key in item}
         basis = item.get('pick_basis') or item.get('source_basis') or '；'.join(
             str(v) for v in (item.get('bases') or {}).values() if v)
         tier = (item.get('confidence') or {}).get('label') or (item.get('confidence') or {}).get('tier') or (item.get('linkage') or {}).get('level')

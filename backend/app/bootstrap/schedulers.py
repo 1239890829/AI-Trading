@@ -506,3 +506,12 @@ def register_schedulers(reg: SchedulerRegistry, app: FastAPI, services: AppServi
         switch="company_evidence_enabled",
         first_delay=max(1.0, settings.company_evidence_startup_delay_seconds),
     )
+    research_stop = asyncio.Event()
+    from app.services.tradingagents_research import scheduler_tick as selected_research_tick
+
+    reg.add_periodic(
+        "tradingagents-selected-research", lambda: selected_research_tick(app),
+        interval=max(30.0, settings.tradingagents_research_interval_seconds), stop=research_stop,
+        switch="tradingagents_research_enabled",
+        first_delay=max(1.0, settings.tradingagents_research_startup_delay_seconds),
+    )

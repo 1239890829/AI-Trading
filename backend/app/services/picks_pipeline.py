@@ -452,6 +452,7 @@ async def mine_theme_linkage(
             snapshot_as_of=snapshot_as_of,
             theme_limit_ups=f["count"],
             theme_stage=_theme_stage_of(lu_ctx, f["theme"]).get("stage"),
+            theme_limit_up_total=len(records),
             per_theme=per_theme,
         )
         items.extend(cands)

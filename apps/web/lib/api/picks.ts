@@ -671,7 +671,23 @@ export interface SealState {
   version: string | null;
 }
 
+/** Producer measurements and original rule thresholds, not normalized or AI scores. */
+export interface SelectionMetrics {
+  schema_version: 1;
+  producer: "linkage_candidates";
+  snapshot_version: string | null;
+  items: {
+    key: "change_pct" | "amount" | "theme_limit_ups" | "theme_share" | "limit_up_gap_pct";
+    label: string; value: number | null; unit: "%" | "元" | "家";
+    state: "ready" | "missing" | "unknown";
+    source: string | null; as_of: string | null; received_at: string | null;
+    thresholds: {key: string; label: string; value: number; operator: ">=" | "<"}[];
+    basis: string;
+  }[];
+}
+
 export interface OpportunityStock {
+  selection_metrics?: SelectionMetrics | null;
   related_event_refs?: EventInterpretationRef[];
   selection_entry?: SelectionEntry | null;
   symbol: string;
@@ -831,6 +847,7 @@ export async function getIntradayOpportunities(): Promise<IntradayOpportunities>
 }
 
 export interface IntradayThemeSource {
+  selection_metrics?: SelectionMetrics | null;
   theme: string | null;
   stage: string | null;
   strength_tier: string | null;
@@ -841,6 +858,7 @@ export interface IntradayThemeSource {
 }
 
 export interface IntradayTopStock {
+  selection_metrics?: SelectionMetrics | null;
   related_event_refs?: EventInterpretationRef[];
   selection_entry?: SelectionEntry | null;
   theme_sources?: IntradayThemeSource[];

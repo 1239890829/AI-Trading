@@ -81,6 +81,62 @@ def test_daily_results_durable_once_with_frozen_facts_and_no_outbox(sf):
         assert list(db.scalars(select(BuyPointConsumption))) == []
 
 
+def test_daily_notification_preserves_original_score_dimensions_without_recalculating_or_overwriting(sf):
+    from app.services.selection_notifications import publish_daily_selection
+    from app.api.routes.notifications import _alert_items
+
+    scores = {'sentiment': 80, 'news': 61.5, 'tech': 72, 'fundamental': 50, 'capital': 64, 'echelon': 70}
+    dimensions = {'fundamental': {'state': 'missing', 'reason': '原财务未取得，50是计算占位'}}
+    first = item(score=67.2, sub_scores=scores, dimension_evidence=dimensions)
+    assert publish_daily_selection([first], trade_date='2026-10-09', generated_at=NOW.isoformat(), session_factory=sf)['created'] == 1
+    # Same selection cannot acquire later scores while retaining its old source clock/version.
+    assert publish_daily_selection([item(score=99, sub_scores={'news': 100})], trade_date='2026-10-09',
+        generated_at=(NOW + timedelta(seconds=1)).isoformat(), session_factory=sf)['created'] == 0
+    repo = AlertRepository(sf)
+    snapshot = json.loads(repo.list_events()[0].snapshot)['selection_evidence']
+    assert snapshot['score'] == 67.2
+    assert snapshot['sub_scores'] == scores
+    assert snapshot['dimension_evidence'] == dimensions
+    assert first['sub_scores'] == scores
+    rows, _ = _alert_items(repo, 50)
+    assert rows[0]['references'][0]['evidence']['sub_scores'] == scores
+    assert rows[0]['references'][0]['evidence']['dimension_evidence'] == dimensions
+
+
+def test_real_linkage_measurements_reach_original_rank_and_immutable_selection_message(sf):
+    from app.picks.intraday_opportunity import attach_participants, top_watch_stocks
+    from app.picks.opportunity_learning import archive_intraday_pipeline
+    from app.services.selection_notifications import publish_intraday_selection
+    from app.models.opportunity_learning import OpportunityDecisionSnapshot
+    from app.api.routes.notifications import _alert_items
+    themes = [{'theme': '算力', 'stage': '发酵', 'limit_up_count': 4,
+               'candidate_catalog_code': 'X', 'stocks': []}]
+    quote = {'symbol': '600001', 'name': '甲公司', 'price': 10, 'change_pct': 7.2,
+             'amount': 8e7, 'source': 'fixture_quote', 'data_timestamp': NOW.isoformat(),
+             'received_at': NOW.isoformat()}
+    stats = attach_participants(themes, snapshot_by={'600001': quote}, limit_up_total=20,
+        members_by_code={'X': ['600001']}, snapshot_state='ready', snapshot_as_of=NOW.isoformat())
+    payload = {'trade_date': '2026-10-09', 'themes': themes, 'linkage_stats': stats, 'hot_available': True}
+    original = top_watch_stocks(payload)['items'][0]['selection_metrics']
+    archived = archive_intraday_pipeline(payload, trade_date='2026-10-09', as_of=NOW.replace(tzinfo=None), session_factory=sf)
+    with sf() as db:
+        rank = db.scalar(select(OpportunityDecisionSnapshot).where(OpportunityDecisionSnapshot.run_id == archived['run_id'],
+                         OpportunityDecisionSnapshot.stage == 'rank'))
+        assert json.loads(rank.evidence)['selection_metrics'] == original
+    result = publish_intraday_selection(payload, trade_date='2026-10-09', snapshot_as_of=NOW.isoformat(),
+        snapshot_state='ready', run_id=archived['run_id'], fresh_within=180, session_factory=sf)
+    assert result['created'] == 1
+    themes[0]['participants'][0]['selection_metrics']['items'][0]['value'] = 99
+    assert publish_intraday_selection(payload, trade_date='2026-10-09', snapshot_as_of=NOW.isoformat(),
+        snapshot_state='ready', run_id=archived['run_id'], fresh_within=180, session_factory=sf)['created'] == 0
+    repo = AlertRepository(sf)
+    snap = json.loads(repo.list_events()[0].snapshot)
+    assert snap['selection_evidence']['selection_metrics']['items'][0]['value'] == 7.2
+    rows, _ = _alert_items(repo, 50)
+    assert rows[0]['references'][0]['evidence']['selection_metrics']['items'][0]['value'] == 7.2
+    assert snap['source_version'] == archived['run_id'] and snap['source_as_of'] == NOW.isoformat()
+
+
 @pytest.mark.parametrize('audit', [None, {'quality': 'high'},
     {'source': 'fixture', 'quality': 'stale', 'data_timestamp': NOW.isoformat()},
     {'source': 'fixture', 'quality': 'high', 'data_timestamp': (NOW - timedelta(minutes=5)).isoformat()}])

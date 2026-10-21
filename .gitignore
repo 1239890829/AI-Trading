@@ -116,6 +116,8 @@ backend/data/lhb/
 backend/data/minute_decisions/
 backend/data/position_plans/
 backend/data/company_impact/
+# Local native research manifests, authorization, claims and reports.
+backend/data/tradingagents_research/
 
 # ⚠️ 上面两条 `data/…` 规则**当前从不匹配**（2026-09-14 实测 `git check-ignore` 判定为未忽略）：
 # 生产常量写的是**相对路径**（`app/market/board_flow.py` / `app/picks/board_surge.py` 里的

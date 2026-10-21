@@ -330,47 +330,49 @@ X编号仅用于批准来源与设计覆盖，不是任务编号；历史证据�
 | `ui/selection-rail.tsx` | M01/M03/全域 | C01/C02/C06 | 计划验导航/值选择语义、全族选中面与键盘、窄屏排版 |
 | `ui/spatial-surface.tsx` | M01/全域 | C03/C13/C14 | 计划验容器/层叠边界、材质可读与降动效；不以组件名证明真实折射 |
 | `ui/task-browser.tsx` | M01 | C01/C02 | 计划验顶部任务菜单、分组、命令关联与手机可达；无侧边主导航 |
+| `detail/selection-decision-explorer.tsx` | M06/M14 | C03/C07/C08/C09 | 2026-10-21：选股与原通知共享真实分项刻度、事件切换和公司/影响/反证联动；原时点缺项不补造 |
 
 公共支持位于hooks/use-overlay-focus、lib/task-navigation，各有真实消费者与测试；临时原型/观测器不进入生产源清单。
 
 ## 14. 后台声明的目标消费者
 
-当前 `backend/app/bootstrap/schedulers.py` AST共32条声明（2026-10-01静态注册调用；原批准30条及09-30的31条为历史口径）；这是注册与设计映射，不是开启/存活/业务进展证明。每条均验原开关、单拥有者、触发/输入、版本/水位、失败/取消/恢复、预算与消费者。后台接管先于退出按钮；无页面进展与GET无副作用另验。
+当前 `backend/app/bootstrap/schedulers.py` AST共33条声明（2026-10-21）；原批准30条、09-30的31条和10-01的32条为历史口径。这是注册与设计映射，不是开启/存活/业务进展证明。退役的alert-triage不再作为现役声明；公司资料和真正入选后的完整研究各有真实消费者。每条继续核原开关、单拥有者、触发/输入、版本/水位、失败/取消/恢复、用量与消费者；后台接管先于退出按钮，GET无副作用另验。
 
 | 声明 | 源行 | 目标消费者 |
 |---|---|---|
-| `alert-triage` | 143 | 共享消息解释 |
-| `evolution-agenda` | 150 | 受控议程，H05结果 |
-| `review-scheduler` | 163 | H05复盘 |
-| `quote-poller` | 176 | H01/H03/详情 |
-| `market-snapshot` | 179 | 市场事实消费者 |
-| `picks-autogen` | 190 | H02盘前结果 |
-| `opportunity-evidence` | 206 | H02决定/H05证据 |
-| `data-health-sentinel` | 218 | 就地影响/维护 |
-| `pre-limit-radar` | 228 | H02观察/已授权消息 |
-| `leader-research` | 233 | H05持续研究观察，RSH-031拥有；不晋级交易 |
-| `llm-aux-judge` | 240 | 事件辅助解释；仅实际Jev参与才有Jev凭证 |
-| `position-monitor` | 246 | H04风险 |
-| `paper-matcher` | 253 | H04订单/成交 |
-| `alert-quotes-feeder` | 260 | 提醒输入 |
-| `alert-engine` | 264 | 共享消息/风险 |
-| `risk-refresher` | 271 | H04/H02约束 |
-| `event-collector` | 296 | H01事件/H02证据 |
-| `metric-history-backfill` | 303 | H01历史/研究 |
-| `premarket-brief` | 317 | H02计划/H01上下文 |
-| `picks-watcher` | 333 | H02条件/参考/消息 |
-| `picks-buy-point` | 344 | H02决定/动作重检 |
-| `board-surge` | 358 | H01变化/H02线索 |
-| `lhb-archive` | 369 | H01龙虎榜/H05历史 |
-| `picks-intraday-review` | 380 | H05结果标签 |
-| `ths-reason-sentinel` | 397 | 事件覆盖/维护 |
-| `sentiment-monitor` | 408 | H01环境 |
-| `picks-shadow` | 419 | H04每日精选影子，非hunting-shadow |
-| `hunting-shadow` | 431 | H04独立猎场成交/H05复盘；默认关闭，IMP-053 |
-| `marketdb-sync` | 440 | 历史/H05研究 |
-| `factor-eval` | 458 | 受控研究/H05结果 |
-| `news-flash` | 475 | H01事件 |
-| `llm-gateway-probe` | 486 | 维护健康，不证明业务效果 |
+| `evolution-agenda` | 148 | 受控议程，H05结果 |
+| `review-scheduler` | 161 | H05复盘 |
+| `quote-poller` | 174 | H01/H03/详情 |
+| `market-snapshot` | 177 | 市场事实消费者 |
+| `picks-autogen` | 188 | H02盘前结果 |
+| `opportunity-evidence` | 211 | H02决定/H05证据 |
+| `data-health-sentinel` | 223 | 就地影响/维护 |
+| `pre-limit-radar` | 233 | H02观察/已授权消息 |
+| `leader-research` | 238 | H05持续研究观察，RSH-031拥有；不晋级交易 |
+| `llm-aux-judge` | 245 | 现役事件辅助解释；退役Jev凭证不再产生 |
+| `position-monitor` | 251 | H04风险 |
+| `paper-matcher` | 258 | H04订单/成交 |
+| `alert-quotes-feeder` | 265 | 提醒输入 |
+| `alert-engine` | 269 | 共享消息/风险 |
+| `risk-refresher` | 276 | H04/H02约束 |
+| `event-collector` | 301 | H01事件/H02证据 |
+| `metric-history-backfill` | 308 | H01历史/研究 |
+| `premarket-brief` | 322 | H02计划/H01上下文 |
+| `picks-watcher` | 338 | H02条件/参考/消息 |
+| `picks-buy-point` | 349 | H02决定/动作重检 |
+| `board-surge` | 363 | H01变化/H02线索 |
+| `lhb-archive` | 374 | H01龙虎榜/H05历史 |
+| `picks-intraday-review` | 385 | H05结果标签 |
+| `ths-reason-sentinel` | 402 | 事件覆盖/维护 |
+| `sentiment-monitor` | 413 | H01环境 |
+| `picks-shadow` | 424 | H04每日精选影子，非hunting-shadow |
+| `hunting-shadow` | 436 | H04独立猎场成交/H05复盘；默认关闭，IMP-053 |
+| `marketdb-sync` | 445 | 历史/H05研究 |
+| `factor-eval` | 463 | 受控研究/H05结果 |
+| `news-flash` | 480 | H01事件 |
+| `llm-gateway-probe` | 491 | 维护健康，不证明业务效果 |
+| `company-evidence` | 503 | H02公司原文采集；新入选研究配置后停止旧自动模型selector |
+| `tradingagents-selected-research` | 512 | H02真正daily/top入选后的完整图及H05复盘；专属研究授权，不晋级评分/通知资格 |
 
 ## 15. RSH-031 持续研究细功能（2026-09-29）
 
@@ -1098,4 +1100,15 @@ W00/IMP-092用户直派扩展在既有读者增加主营/产品/客户/订单原
 
 契约归[猎场完整研究读者](hunting-decision-design.md#2026-10-20-tradingagents完整研究读者)。须分别核：固定原图十二角色/七报告/记忆与真实中断接续；逐调用预算/未知不重发、取消实际drain、跨进程单写者；同资料/同方法完成复用及partial保全；严格服务器环境与方法身份；证券/日期/输入/结果hash、未核失败元数据及只读权限；换股乱序、失败留旧、历史/方法变更、任务回执不确定和重复提交隔离。纯DOM/测试夹具、零模型实际上游运行、真实模型LAB及现役页面证据分开，不把任何一种替代其他。
 
-当前完整同输入实验未证明净增益，默认关闭且无质量准入回执；工程可运行/报告可读不当作质量胜出或生产启用。原AI消息解释与公司依据读者继续保留；无评分、通知、资金或自动研究消费者。完整门禁和准确HEAD发布/运行结果由handoff及本批PR核验。 [2026-10-21真实输入续验](../ai/semantic-decisions.md#2026-10-21-正常输入四臂验证与运行阻断)的不完整图、未知用量和来源错误保持未关闭，不将机械覆盖算成验收。
+10月20日版本的完整同输入实验未证明净增益，当时默认关闭且无质量准入回执；历史工程可运行/报告可读不当作质量胜出或当时生产启用。10月21日用户另行授权真正入选后的研究解释消费者，见下节；不追溯改写历史效果结论，仍无评分、通知资格或资金晋级。完整门禁和准确HEAD发布/运行结果由handoff及本批PR核验。 [2026-10-21真实输入续验](../ai/semantic-decisions.md#2026-10-21-正常输入四臂验证与运行阻断)的不完整图、未知用量和来源错误保持未关闭，不将机械覆盖算成验收。
+
+
+### 2026-10-21 入选交互与完整研究承接
+
+沿X03/X12/X25/X38/X39/X45原消费者增加分项刻度和事件联动，未新增一级页面、组件族或平行账本。六维规则分取原入选版本；缺项/错误占位不填条，分值不当上涨概率；每日通知只冻结原分项，旧通知不套当前值。悬停/焦点/点选同区更新评分依据，事件切换直接更新公司原句、条件影响与反证缺项；原文和七份完整报告继续按需核对，不为交互发起研究。
+
+真正daily/top入选后的完整TradingAgents沿原固定图和任务中心承接，只有这一消费者采用明示研究授权和无固定次数配额。自动范围排除题材participants、参考股与历史通知；同入选身份/方法持久去重，真实用量与unknown保留。新增后台声明使当前注册数为33，结构映射不当运行健康证据。显示/读取/桌面与窄屏交互、完整门禁和实际激活分别在handoff及关联PR留证；不宣称策略胜率、净增益或全部资料齐备。
+
+盘中名单原本没有六维分数，现将原筛选已使用的涨幅、成交额、题材涨停家数/占比及实际涨停距离按原单位与生效门槛透传成刻度。量程不当跨项强弱、胜率或AI分；缺分母、源钟或实际涨停价保持未知。该同版测量沿participants、top、rank证据和新通知原样保存，历史记录不补算。
+
+主卡无需打开抽屉即可核紧凑刻度，悬停/聚焦/点击直接换同区原依据，不新增归因请求。详细来源和全部研究仍在原读者；六维有效空集与真实零分保留读取身份，未知数字不填实测条。

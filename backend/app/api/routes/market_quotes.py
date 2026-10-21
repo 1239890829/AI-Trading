@@ -179,11 +179,9 @@ async def quote(
         if target is None:
             raise HTTPException(status_code=400, detail=f"source {source} 不在链中")
         try:
-            from app.data_quality.validator import validate_quote
-
             q = await target.get_quote(symbol)
             if q is not None:
-                return {"data": validate_quote(q).model_dump(mode="json"), "meta": meta_payload(hub)}
+                return {"data": hub.present_quote(q, symbol).model_dump(mode="json"), "meta": meta_payload(hub)}
         except HTTPException:
             raise
         except Exception as exc:
@@ -198,8 +196,6 @@ async def quote(
         # 非自选股：实时经 Provider 链拉取（不进缓存，质量校验照常）
         import logging as _log
 
-        from app.data_quality.validator import validate_quote
-
         try:
             live = await hub.provider.get_quote(symbol)
         except Exception as exc:
@@ -210,10 +206,18 @@ async def quote(
         # ths 快照缺涨跌停价，从腾讯补齐——撮合与前端拒单提示都依赖它；
         # 同理缺 pe/pb/市值（2026-09-01：详情行情条 PE 不再缺失）
         live = await enrich_quote(hub.provider, live)
-        return {"data": validate_quote(live).model_dump(mode="json"), "meta": meta_payload(hub)}
+        try:
+            visible = hub.present_quote(live, symbol)
+        except ValueError:
+            raise HTTPException(status_code=502, detail="行情来源证券身份不匹配") from None
+        return {"data": visible.model_dump(mode="json"), "meta": meta_payload(hub)}
     # 缓存命中：先拷贝再补价，enrich_quote 是原地修改，不能动共享缓存对象
     cached = await enrich_quote(hub.provider, found[0].model_copy())
-    return {"data": cached.model_dump(mode="json"), "meta": meta_payload(hub)}
+    try:
+        visible = hub.present_quote(cached, symbol)
+    except ValueError:
+        raise HTTPException(status_code=502, detail="行情来源证券身份不匹配") from None
+    return {"data": visible.model_dump(mode="json"), "meta": meta_payload(hub)}
 
 
 async def _trading_status_payload(hub: QuoteHub, bars, timeframe: str) -> dict | None:

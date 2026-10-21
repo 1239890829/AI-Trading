@@ -37,6 +37,9 @@
 """
 from __future__ import annotations
 
+from datetime import datetime
+import math
+
 from app.picks.halt_risk import board_of
 from app.picks.pre_limit_radar import board_limit_pct, pre_limit_floor, seal_threshold
 from app.market.price_rules import limit_up_distance, limit_up_distance_text
@@ -316,6 +319,54 @@ def resolve_containers(
 # ---------------------------------------------------------------- 联动候选
 
 
+def _selection_metrics(row, distance, *, theme_limit_ups, theme_limit_up_total, snapshot_version):
+    """Read-only original observations and active thresholds; never a new score or gate."""
+    def number(value):
+        return float(value) if isinstance(value, (int, float)) and not isinstance(value, bool) and math.isfinite(value) else None
+    def clock(value):
+        try:
+            at = value if isinstance(value, datetime) else datetime.fromisoformat(str(value))
+            return at.isoformat() if at.tzinfo is not None and at.utcoffset() is not None else None
+        except (TypeError, ValueError):
+            return None
+    source = row.get("source") if isinstance(row.get("source"), str) and row["source"] else None
+    as_of = clock(row.get("data_timestamp") or row.get("ticktime"))
+    received = clock(row.get("received_at"))
+    def threshold(key, label, value, operator=">="):
+        return {"key": key, "label": label, "value": value, "operator": operator}
+    def observation(key, label, value, unit, thresholds, basis, *, origin=source, at=as_of, receipt=received, missing="missing"):
+        measured = number(value)
+        return {"key": key, "label": label, "value": measured, "unit": unit,
+                "state": "ready" if measured is not None else missing, "thresholds": thresholds,
+                "source": origin, "as_of": at, "received_at": receipt, "basis": basis}
+    count, total = number(theme_limit_ups), number(theme_limit_up_total)
+    share = count / total * 100 if count is not None and total is not None and 0 <= count <= total and total > 0 else None
+    limit = board_limit_pct(str(row.get("symbol") or ""), str(row.get("name") or ""))
+    gap = distance.get("limit_up_gap_pct") if distance.get("limit_up_gap_state") == "ready" else None
+    return {"schema_version": 1, "producer": "linkage_candidates", "snapshot_version": snapshot_version,
+        "items": [
+            observation("change_pct", "当日涨幅", row.get("change_pct"), "%", [
+                threshold("candidate_min", "候选下沿", LINKAGE_MIN_PCT),
+                threshold("follow", "跟进线", LINKAGE_MID_PCT),
+                threshold("pre_limit", "临板下沿", pre_limit_floor(limit)),
+                threshold("seal", "未封板线", seal_threshold(limit), "<")],
+                "原筛选报价涨幅；经验门槛未经回测校准，不是评分或上涨概率。"),
+            observation("amount", "当日成交额", row.get("amount"), "元", [
+                threshold("min", "流动性下限", LINKAGE_MIN_AMOUNT)], "原筛选报价的累计成交额。"),
+            observation("theme_limit_ups", "题材涨停家数", count, "家", [
+                threshold("min", "集中家数下限", MIN_THEME_LIMIT_UPS)],
+                "来自题材看板统计；独立源时刻未透出，不用快照版本补填。", origin="theme_board", at=None, receipt=None),
+            observation("theme_share", "题材涨停占比", share, "%", [
+                threshold("min", "集中占比下限", MIN_THEME_SHARE * 100)],
+                f"题材涨停家数 / 当日涨停总数（{theme_limit_ups}/{theme_limit_up_total}）；分母缺失时该维不参与原筛选。",
+                origin="theme_board", at=None, receipt=None, missing="unknown"),
+            observation("limit_up_gap_pct", "距实际涨停价", gap, "%", [],
+                "同次报价实际涨停价相对现价还需上涨的百分数；缺失不拿百分点差代替。",
+                origin=distance.get("limit_up_gap_source"), at=distance.get("limit_up_gap_as_of"),
+                receipt=received if gap is not None else None, missing="unknown"),
+        ]}
+
+
 def linkage_confidence(
     *, theme_limit_ups: int, theme_stage: str | None, pct: float | None, limit_pct: float,
     distance: dict | None = None,
@@ -362,6 +413,7 @@ def linkage_candidates(
     snapshot_by: dict[str, dict] | None = None,
     theme_limit_ups: int,
     theme_stage: str | None,
+    theme_limit_up_total: int | None = None,
     per_theme: int = PER_THEME,
     stats: dict | None = None,
     audit_rows: list[dict] | None = None,
@@ -479,6 +531,8 @@ def linkage_candidates(
             "change_pct": round(pct, 2), "price": row.get("price"), "amount": amount_f or None,
             "turnover_rate": row.get("turnover_rate"), **metrics,
             "tradability": tradability, "seal_state": seal_state, "linkage": conf,
+            "selection_metrics": _selection_metrics(row, metrics, theme_limit_ups=theme_limit_ups,
+                theme_limit_up_total=theme_limit_up_total, snapshot_version=snapshot_as_of),
             "basis": (
                 ("今日曾封板后已开板重评；" if ever else "")
                 + f"题材内涨停 {theme_limit_ups} 家形成集中，本股当前未封板（{pct:.1f}%，{limit_up_distance_text(metrics)}）——"

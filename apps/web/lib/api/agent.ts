@@ -109,8 +109,8 @@ export interface TradingAgentsResearchReport {
 export interface TradingAgentsResearchView {
   symbol: string; enabled: boolean; executable: boolean;
   blockers: {code: string; message: string}[];
-  required_model_slots: number;
-  budget: {date: string; limit: number; used: number; remaining: number; scope: string} | null;
+  required_model_slots: number | null;
+  budget: {date: string; limit: number | null; used: number; remaining: number | null; scope: string} | null;
   admission: {state: string; method_sha256: string | null; valid_until?: string};
   verification: "unverified_full_graph_research"; production_eligible: false;
   latest: TradingAgentsResearchReport | null;

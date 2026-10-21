@@ -12,6 +12,7 @@ import { isPositivePrice } from "@/lib/minute-axis";
 import type { Quote, TradingStatusInfo } from "@/types/market";
 import {STREAM_STATUS_LABEL, type StreamStatus} from "@/hooks/use-quote-stream";
 import {ModalShell} from "@/components/ui/modal-shell";
+import {quoteQualityView} from "@/lib/quote-quality-view";
 
 const COMPACT_QUERY = "(max-width: 767px), (min-width: 1024px) and (max-height: 740px)";
 function compactSnapshot() {return typeof window.matchMedia === "function" && window.matchMedia(COMPACT_QUERY).matches;}
@@ -58,6 +59,10 @@ export function QuoteStrip({
   const transportIssue = connectionStatus && connectionStatus !== "live" && !issue && !["stale", "invalid"].includes(quote.quality)
     ? STREAM_STATUS_LABEL[connectionStatus] : null;
   const statusTitle = [issue?.title, connectionStatus ? STREAM_STATUS_LABEL[connectionStatus].title : null].filter(Boolean).join("；");
+  const qualityInput = {quality: quote.quality, reasons: quote.quality_reasons, symbol: quote.symbol, market: quote.market, dataTimestamp: quote.data_timestamp, session: quote.display_session};
+  const qualityView = quoteQualityView(qualityInput);
+  const sessionNotice = [issue?.label, connectionStatus && connectionStatus !== "live" ? STREAM_STATUS_LABEL[connectionStatus].text : null].filter(Boolean).join("；");
+  const sessionDiagnostic = qualityView.sessionIssue !== null || !!sessionNotice;
   const peMissing = "数据源未提供市盈率（常见于新股、亏损股）";
   const strip: [string, string, string?][] = [
     ["今开", fmt(quote.open)],
@@ -89,7 +94,9 @@ export function QuoteStrip({
               low/medium 瞬态不出（2026-09-02 闪烁修复），stale/invalid 常显。
               2026-09-14 口径统一：此前调用点各自判断，导致同一数据在盘面/工作台表现相反。 */}
           <span data-quote-status-slot className="inline-flex h-7 w-[6.4em] shrink-0 items-center text-xs">
-            {issue ? <button type="button" aria-label="查看行情问题" aria-haspopup="dialog" title={statusTitle} data-quality={quote.quality} onClick={() => setOpenedFor(quote.symbol)} className={`inline-flex h-6 w-full items-center justify-center whitespace-nowrap rounded px-1 text-xs ${quote.quality === "invalid" ? "text-red-700 dark:text-red-400" : "text-orange-800 dark:text-orange-400"}`}>{issue.label}</button>
+            {qualityView.sessionLabel ? sessionDiagnostic ? <button type="button" aria-label="查看行情问题" aria-haspopup="dialog" title={statusTitle} data-quality={quote.quality} onClick={() => setOpenedFor(quote.symbol)} className="inline-flex h-6 w-full items-center justify-center whitespace-nowrap rounded text-xs"><QualityBadge {...qualityInput} notice={sessionNotice ? {label: sessionNotice, title: statusTitle} : undefined}/></button>
+              : <QualityBadge {...qualityInput}/>
+              : issue ? <button type="button" aria-label="查看行情问题" aria-haspopup="dialog" title={statusTitle} data-quality={quote.quality} onClick={() => setOpenedFor(quote.symbol)} className={`inline-flex h-6 w-full items-center justify-center whitespace-nowrap rounded px-1 text-xs ${quote.quality === "invalid" ? "text-red-700 dark:text-red-400" : "text-orange-800 dark:text-orange-400"}`}>{issue.label}</button>
               : transportIssue ? <span data-transport={connectionStatus} title={transportIssue.title} className={`whitespace-nowrap ${transportIssue.cls}`}>{transportIssue.text}</span>
               : <QualityBadge quality={quote.quality} reasons={quote.quality_reasons} symbol={quote.symbol} market={quote.market} dataTimestamp={quote.data_timestamp} session={quote.display_session} />}
           </span>

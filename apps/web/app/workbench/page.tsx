@@ -49,7 +49,7 @@ import {
   type RiskState,
   type SymbolBoardFund,
 } from "@/lib/api";
-import { fmt, pctColor, pctText, signedYi, sourceLabel, timeText, triAmount, triText } from "@/lib/format";
+import { bjDate, fmt, pctColor, pctText, signedYi, sourceLabel, timeText, triAmount, triText } from "@/lib/format";
 import { subscribeWatchlist, notifyWatchlistChanged } from "@/lib/watchlist-sync";
 import { LAST_SYMBOL_KEY, originLabel } from "@/lib/routing";
 import { indexDetailSymbol } from "@/lib/api/client";
@@ -63,6 +63,39 @@ function subscribeMobile(listener: () => void) {
   const query = window.matchMedia(MOBILE_QUERY);
   query.addEventListener("change", listener);
   return () => query.removeEventListener("change", listener);
+}
+
+/** Source time orders prices; the backend display clock orders calendar/reading state. */
+function indexQuoteForDisplay(overview: Quote, streamed: Quote | undefined): Quote {
+  if (!streamed || streamed.market !== overview.market
+    || indexDetailSymbol(streamed.symbol, streamed.market) !== indexDetailSymbol(overview.symbol, overview.market)) return overview;
+  const clock = (value: string | null | undefined) => value && /(?:Z|[+-]\d{2}:\d{2})$/.test(value) ? Date.parse(value) : NaN;
+  const sourceTime = (quote: Quote) => clock(quote.data_timestamp);
+  const contextTime = (quote: Quote) => {
+    const session = quote.display_session;
+    const time = clock(session?.as_of);
+    return session && bjDate(session.as_of) === session.trade_date
+      && (!Number.isFinite(sourceTime(quote)) || sourceTime(quote) <= time) ? time : NaN;
+  };
+  const overviewSource = sourceTime(overview), streamSource = sourceTime(streamed);
+  const overviewContext = contextTime(overview), streamContext = contextTime(streamed);
+  let facts = Number.isFinite(overviewSource) && (!Number.isFinite(streamSource) || overviewSource > streamSource) ? overview : streamed;
+  const currentView = Number.isFinite(overviewContext) && (!Number.isFinite(streamContext) || overviewContext > streamContext) ? overview : streamed;
+  const hasCurrentContext = Number.isFinite(contextTime(currentView));
+  // Same source second can have later quality or amount observations. No receipt
+  // clock is used to advance a price, or to invent a newer source timestamp.
+  if (hasCurrentContext && Number.isFinite(overviewSource) && overviewSource === streamSource) facts = currentView;
+  const reasons = currentView.quality_reasons ?? [];
+  const sourceIssue = currentView.quality === "invalid" || currentView.quality === "low" || currentView.quality === "medium"
+    || currentView.quality === "stale" && reasons.length === 0
+    || reasons.some(reason => !["quote_age_exceeded", "market_closed", "off_session"].includes(reason));
+  const contextCanCoverFacts = !Number.isFinite(sourceTime(facts)) || contextTime(currentView) >= sourceTime(facts);
+  const context = hasCurrentContext && contextCanCoverFacts ? currentView.display_session : facts.display_session;
+  if (currentView !== facts && sourceIssue && (!hasCurrentContext || contextCanCoverFacts)) return {
+    ...facts, display_session: context, quality: facts.quality === "invalid" ? "invalid" : "stale",
+    quality_reasons: [...new Set([...(facts.quality_reasons ?? []), ...(currentView.quality === "invalid" ? ["source_invalid_ignored"] : []), ...reasons])],
+  };
+  return context === facts.display_session ? facts : {...facts, display_session: context};
 }
 
 // ?ct= / ?rt= 深链参数解析（2026-09-11 抽到 lib/detail-tabs.ts：这是与
@@ -173,7 +206,7 @@ function WorkbenchInner() {
   // WS 每 5s tick 全量替换 quotes：merged/列表查找都必须 memo 化，
   // 否则每次 tick 触发整列表 O(n²) 重算（评审 F2）
   const merged: Record<string, Quote> = useMemo(() => ({ ...extra, ...quotes }), [extra, quotes]);
-  const displayedIndices = useMemo(() => indices?.map(q => merged[indexDetailSymbol(q.symbol, q.market)] ?? q), [indices, merged]);
+  const displayedIndices = useMemo(() => indices?.map(q => indexQuoteForDisplay(q, merged[indexDetailSymbol(q.symbol, q.market)])), [indices, merged]);
 
   const [risk, setRisk] = useState<RiskState | null>(null);
 

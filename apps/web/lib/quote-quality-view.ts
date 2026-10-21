@@ -19,8 +19,16 @@ function beijingMinute(timestamp: string): number | null {
   return shifted.getUTCHours() * 60 + shifted.getUTCMinutes();
 }
 
+function validSessionClock(session: QuoteDisplaySession | null | undefined): boolean {
+  if (!session || !/^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(?:\.\d{1,6})?(?:Z|[+-]\d{2}:\d{2})$/.test(session.as_of)
+    || !Number.isFinite(Date.parse(session.as_of)) || bjDate(session.as_of) !== session.trade_date) return false;
+  // Date.parse repairs February 30 and 24:00. Do not treat that repair as calendar evidence.
+  const local = new Date(`${session.as_of.slice(0, 19)}Z`);
+  return Number.isFinite(local.getTime()) && local.toISOString().slice(0, 19) === session.as_of.slice(0, 19);
+}
+
 function calendarPhase(session: QuoteDisplaySession | null | undefined): "auction" | "pre_open_gap" | null {
-  if (session?.trade_day_result !== true || bjDate(session.as_of) !== session.trade_date) return null;
+  if (session?.trade_day_result !== true || !validSessionClock(session)) return null;
   const minute = beijingMinute(session.as_of);
   if (minute === null) return null;
   if (session.phase === "auction" && minute >= 555 && minute < 565) return "auction";
@@ -30,7 +38,7 @@ function calendarPhase(session: QuoteDisplaySession | null | undefined): "auctio
 
 export function calendarPause(session: QuoteDisplaySession | null | undefined): "未开盘" | "午间休息" | "已收盘" | "休市" | null {
   if (!session || session.phase !== "closed" || (session.trade_day_result !== true && session.trade_day_result !== false)
-    || !/(?:Z|[+-]\d{2}:\d{2})$/.test(session.as_of) || bjDate(session.as_of) !== session.trade_date) return null;
+    || !validSessionClock(session)) return null;
   const minute = beijingMinute(session.as_of);
   if (minute === null) return null;
   if (session.trade_day_result === false) return "休市";
@@ -63,6 +71,10 @@ function hasExpectedPausedSource(dataTimestamp: string | null | undefined, sessi
 /** Presentation only. Neither source time nor business quality is changed. */
 export function quoteQualityView(input: QuoteQualityInput) {
   const {quality, reasons = [], dataTimestamp, session} = input;
+  const phase = calendarPhase(session);
+  // Exchange phase and source quality are independent facts. A rejected quote
+  // cannot end lunch, and a lunch label cannot validate a rejected quote.
+  const sessionLabel = phase === "auction" ? "竞价等待" : phase === "pre_open_gap" ? "开盘等待" : calendarPause(session);
   const has = (reason: string) => reasons.includes(reason);
   let label = quality === "high" ? "正常" : quality === "invalid" ? "非法" : "时点待核";
   let tone: "quiet" | "warning" | "danger" = quality === "invalid" ? "danger" : quality === "high" ? "quiet" : "warning";
@@ -118,5 +130,9 @@ export function quoteQualityView(input: QuoteQualityInput) {
   const sourceTime = dataTimestamp ? `${bjDate(dataTimestamp) || "未知日期"} ${timeText(dataTimestamp)}` : "未提供";
   const age = dataTimestamp && session ? (Date.parse(session.as_of) - Date.parse(dataTimestamp)) / 1000 : NaN;
   const detail = dataTimestamp || session ? `源数据时间：${sourceTime}${Number.isFinite(age) && age >= 0 ? `；源时间距展示时刻 ${Math.floor(age)} 秒` : ""}` : "";
-  return {label, tone, expectedSession, title: [context, explanation, detail].filter(Boolean).join("；") || undefined};
+  const title = [context, explanation, detail].filter(Boolean).join("；") || undefined;
+  const hasSessionIssue = sessionLabel !== null && (!!quality && quality !== "high" && label !== sessionLabel
+    || reasons.some(reason => !["quote_age_exceeded", "market_closed", "off_session"].includes(reason)));
+  const sessionIssue = hasSessionIssue ? {label: label === "正常" ? "源数据待核" : label, title} : null;
+  return {label, tone, expectedSession, sessionLabel, sessionIssue, title};
 }

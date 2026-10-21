@@ -17,6 +17,8 @@ calling a market-data provider or consulting today's mutable configuration.
 """
 from __future__ import annotations
 
+from copy import deepcopy
+
 import hashlib
 import json
 import math
@@ -440,6 +442,7 @@ def build_intraday_records(
                 "expected_rank": rank,
                 "selection_identity_version": SELECTION_IDENTITY_VERSION,
                 "theme_sources": sources_by_symbol.get(symbol) or [],
+                **({"selection_metrics": deepcopy(stock["selection_metrics"])} if isinstance(stock.get("selection_metrics"), dict) else {}),
             }
             records.append({**common, "stage": "rank", "decision": rank_decision,
                             "rank": rank, "evidence": rank_evidence})

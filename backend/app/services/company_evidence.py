@@ -431,6 +431,8 @@ async def run_company_evidence(rec, params, app):
 async def scheduler_tick(app):
     if not settings.company_evidence_enabled:
         return
+    if settings.tradingagents_research_enabled and settings.tradingagents_research_authorization_digest:
+        return  # No fallback selector when selected research is configured, even if its authorization has expired.
     from app.services import agent_tasks
 
     sf = get_session_factory()

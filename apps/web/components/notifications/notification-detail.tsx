@@ -14,6 +14,7 @@ import {ChannelStatus} from "./channel-status";
 import type {NewsModalItem} from "@/components/news-modal";
 import {StockAttributionPanel} from "@/components/detail/attribution-evidence";
 import {TradingAgentsResearchPanel} from "@/components/detail/tradingagents-research-panel";
+import {SELECTION_SCORE_LABELS, readSelectionMetrics, type SelectionSummary} from "@/components/detail/selection-decision-explorer";
 
 const object = (value: unknown): Record<string, unknown> => value && typeof value === "object" && !Array.isArray(value) ? value as Record<string, unknown> : {};
 const text = (value: unknown) => typeof value === "string" ? value.trim() : "";
@@ -104,7 +105,20 @@ function selectionContext(item: NotificationItem) {
   }
   // source_as_of is an observation clock, never the stock's first selection time.
   const asOf = refs[0].source_as_of;
-  return {identity: `${refs[0].source_id ?? ""}:${refs[0].source_version ?? ""}`, events: [...events.values()], asOf: asOf && /(?:Z|[+-]\d{2}:\d{2})$/.test(asOf)
+  const evidence = object(refs[0].evidence);
+  const archivedScores = object(evidence.sub_scores);
+  const archivedStates = object(evidence.dimension_evidence);
+  const bases = object(evidence.bases);
+  const originalReason = text(evidence.pick_basis) || text(evidence.source_basis);
+  const summary: SelectionSummary = {reason: originalReason || item.body || "原记录未单列入选理由。", reasonRecorded: !!originalReason,
+    condition: [item.validity, ...["invalidations", "vetoes"].flatMap(key => Array.isArray(evidence[key]) ? evidence[key].filter(value => typeof value === "string") as string[] : [])].filter(Boolean).join("\n") || "原记录未保存具体失效条件。",
+    supports: Object.entries(bases).filter(([, value]) => typeof value === "string").map(([key, value]) => ({label: SELECTION_SCORE_LABELS.find(([id]) => id === key)?.[1] || key, value: value as string})),
+    historical: true, version: refs[0].source_version,
+    measurements: readSelectionMetrics(evidence.selection_metrics),
+    scores: SELECTION_SCORE_LABELS.some(([key]) => key in archivedScores) ? SELECTION_SCORE_LABELS.map(([key, label]) => ({key, label: label === "基本" ? "基本面" : label,
+      value: typeof archivedScores[key] === "number" && Number.isFinite(archivedScores[key]) && archivedScores[key] >= 0 && archivedScores[key] <= 100 ? archivedScores[key] as number : null, maximum: 100,
+      state: text(object(archivedStates[key]).state) || "unknown", basis: text(object(archivedStates[key]).reason) || text(bases[key])})) : undefined};
+  return {identity: `${refs[0].source_id ?? ""}:${refs[0].source_version ?? ""}`, summary, events: [...events.values()], asOf: asOf && /(?:Z|[+-]\d{2}:\d{2})$/.test(asOf)
     && Number.isFinite(Date.parse(asOf)) ? asOf : undefined};
 }
 
@@ -127,7 +141,7 @@ export function NotificationDetail({item, open, onClose, onOpenNews}: {item: Not
       {open && selection && <section aria-label="原选股对应的公司与研究" className="min-w-0 border-t border-zinc-200 pt-3 dark:border-zinc-800">
         <p className="text-xs text-zinc-600 dark:text-zinc-400">原选择理由及版本保存在下方原记录。公司资料与研究是补充，不回填当时理由。</p>
         <StockAttributionPanel key={`${item.id}:${item.symbol}:${selection.identity}`} symbol={item.symbol} title="公司关联与依据" defaultExpanded bounded={false} concise
-          responseAsOf={selection.asOf} recordedRefs={selection.events} selectionContext/>
+          responseAsOf={selection.asOf} recordedRefs={selection.events} selectionContext selectionSummary={selection.summary}/>
         <TradingAgentsResearchPanel key={`${item.id}:${item.symbol}:research`} symbol={item.symbol!} compact allowStart={false}/>
       </section>}
       <ResearchDisclosure identity={`${item.id}:${JSON.stringify(item)}`} label="完整依据与研究记录">

@@ -11,6 +11,36 @@ function closedSession(clock: string, expectedSourceDate: string | null, day: bo
 }
 const aged = {quality: "stale", reasons: ["quote_age_exceeded"], symbol: "sh000001", dataTimestamp: "2026-10-12T15:00:00+08:00"};
 
+describe("calendar session and source quality are independent", () => {
+  it.each(["high", "medium", "low", "stale", "invalid"])("%s cannot replace a confirmed lunch session or upgrade source quality", quality => {
+    const input = {...aged, quality, reasons: ["source_time_regress_ignored"], dataTimestamp: null,
+      session: closedSession("12:20:00", "2026-10-13", true, "2026-10-13T11:29:50+08:00")};
+    const before = JSON.stringify(input);
+    expect(quoteQualityView(input).sessionLabel).toBe("午间休息");
+    expect(JSON.stringify(input)).toBe(before);
+  });
+  it.each([
+    [session("09:20:00", "auction"), "竞价等待"],
+    [session("09:27:00", "pre_open_gap"), "开盘等待"],
+    [session("08:00:00", "closed"), "未开盘"],
+    [session("19:00:00", "closed"), "已收盘"],
+    [session("10:00:00", "closed", false), "休市"],
+  ] as const)("session %j remains visible even with no source observation", (context, label) => {
+    expect(quoteQualityView({quality: "high", session: context}).sessionLabel).toBe(label);
+  });
+  it.each([
+    {...session("09:20:00", "auction"), as_of: "2026-10-13T09:20:00"},
+    {...session("09:20:00", "auction"), as_of: "2026-02-30T09:20:00+08:00", trade_date: "2026-03-02"},
+    {...session("09:20:00", "auction"), as_of: "2026-10-13T24:00:00+08:00", trade_date: "2026-10-14"},
+    session("10:00:00", "closed"), session("09:30:00", "auction"), session("09:27:00", "auction"),
+    session("09:20:00", "auction", false), session("09:20:00", "auction", null),
+    {...session("09:20:00", "auction"), trade_date: "2026-10-12"},
+    session("10:00:00", "continuous"), session("12:00:00", "unknown"),
+  ])("invalid, unknown or continuous phase does not invent a pause %j", context => {
+    expect(quoteQualityView({quality: "high", session: context}).sessionLabel).toBeNull();
+  });
+});
+
 describe("Quote quality display is explanatory, not trading eligibility", () => {
   it.each([
     ["09:15:00", "auction", "竞价等待"],

@@ -30,7 +30,7 @@
 | **AG-12** | `product/product-closure-design.md` | L2 | 产品闭环 | 全模块用途、前后台分工、业务/研究/工程链和确认流程图；非已上线报告 |
 | **AG-13** | `product/feature-closure-audit.md` | L2 | 细功能审计 | 大小动作/接口/后台任务的覆盖、源码发现与未验边界；§21离线恢复、§22四层验收55要求/六闭环；任务状态仍归阶段 |
 | **AG-14** | `ai/continuous-evolution.md` | L2 | 持续演进 | 外部模型/工具/量化方法/数据/工程创新的发现、证据梯度与准入前治理，并规定已采用内部机制的阶段性有效/衰退重验；状态归 GOV-025/GOV-027/真实 owner stage |
-| **MD-08** | `product/hunting-decision-design.md` | L2 | 选股与呈现 | 开放情境、候选/时机/反证、§4.2同版证据、选股与对应通知短读层及分层验收 |
+| **MD-08** | `product/hunting-decision-design.md` | L2 | 选股与呈现 | 开放情境、候选/时机/反证、§4.2同版证据、选股真实评分刻度、事件联动证据与分层验收 |
 | **MD-10** | `product/ui-audit-20261003.md` | L2 | UI审查与设计 | 初次79图设计审查；IMP-055正式暗色玻璃全域实施另79张新图/50子项/87来源，实源、夹具、空错状态和未验分支明确分层；§13为四任务工作区与折叠工具收纳；§14为按需场景动效与交互验收；§15为全域工作台重设计；§16为真实3D/来源转场、卡片底部与逐输入纠偏审计；§17为差异化工作区、光学玻璃和工具搜索；§18为保存基线后的独立Nocturne视觉与工具柜；§19为拒绝反馈后的黑银阅读面与工具控制条；§20为认可基线上的控件与窄屏精修；§21为市场/机会/工作台与共享浮层精修；§22为控件断行、窄列与有数据图表精修；§23为搜索浮层与反馈状态精修；§24为移动端密度与工作台对齐精修；§25为对象连续性、命令查找与深墨阅读面全域重设计；§26为手机控件/表格局部精修、石墨冰蓝及外部动效取舍；§27为GSAP/Radix真实消费者准入、许可及连续输入验收；§28为89要求/21技能组/15资源组全量对账、50细功能映射及实测缺陷修复；§29为黑银冷青搭配、明暗可读性与同尺寸对照；§30为银色材质、同向浅叠层、触点/滚动退出与全部采用对账；§31为全域按钮层级、按键材质、状态与手机精修；§32为紧凑可见面/触点分离、选择细线与工具/研究布局重设计 |
 | **MD-11** | `product/ui-skill-redesign-20261007.md` | L2 | UI技能职责与新设计 | 原版技能顺序、来源取舍、烟晶暖银设计、同类控件整改与验收边界 |
 | **MD-12** | `product/ui-original-skills-plan-20261008.md` | L2 | 原版技能重设计方案 | 逐技能原文流程与独立产物、清晰来源与具体组合、107候选及跨切面/细功能附录、原生与宿主适配边界；当前为方案审计交付 |
@@ -57,9 +57,9 @@
 | **FN-08** | `archive/picks-replay-baseline.md` | L1 | 快照 | 精选 60 日回放基线（08-31 评审指名保留）。**时点快照，只读** |
 | **FN-09** | `system/llm-gateway-probe.md` | L2 | 运维 | LLM 网关健康探针（`claude_cli` 别名监控） |
 | **FN-10** | `archive/jev-integration-retired-20261011.md` | L2 | 历史档案 | 已退役Jev蓝图与历史实测；不得作为当前调用/安装/评分义务，现役入口为FN-12 |
-| **FN-12** | `ai/semantic-decisions.md` | L2 | AI/Agent 架构 | 当前规则/已有LLM；[六新场景完整图与四臂对照](ai/semantic-decisions.md#2026-10-20-六新场景完整图与四臂对照)：114真实调用加35已见修复回归，净增益未证；原图执行/任务中心/七报告读取工程默认关闭，[运行前置](system/deployment.md#tradingagents完整研究运行边界)；旧四例等保留历史，状态归W07/IMP-091、W04/RSH-030 |
+| **FN-12** | `ai/semantic-decisions.md` | L2 | AI/Agent 架构 | 当前规则/已有LLM；[六新场景完整图与四臂对照](ai/semantic-decisions.md#2026-10-20-六新场景完整图与四臂对照)：114真实调用加35已见修复回归，净增益未证；原图/七报告保留；真正入选研究按[独立授权](ai/semantic-decisions.md#2026-10-21-真正入选后完整研究与交互纠偏)，[运行前置](system/deployment.md#tradingagents完整研究运行边界)；旧四例等保留历史，状态归W07/IMP-091、W04/RSH-030 |
 | **FN-13** | `product/limit-up-attribution.md` | L2 | 产品/事件归因 | 多维消息证据、逐股依据与AI适用范围、经营报告选择/缓存分层与[公司依据常规管线](product/limit-up-attribution.md#2026-10-20-公司依据常规管线)、市场响应、连续采集及选股/通知/复盘边界；工程状态归W00/IMP-092 |
-| **FN-11** | `system/runtime-performance.md` | L2 | 性能测量 | IMP-019 可复现入口；§23首图否决、§24重复工作/首帧、§25锁竞争测量、§26本机启动鉴权及盘前WS刷新、§27真实交易双窗/SQLite读取隔离；工程与交易窗口分层；§31工作台身份/重复失败纠偏 |
+| **FN-11** | `system/runtime-performance.md` | L2 | 性能测量 | IMP-019 可复现入口；§23首图否决、§24重复工作/首帧、§25锁竞争测量、§26本机启动鉴权及盘前WS刷新、§27真实交易双窗/SQLite读取隔离；工程与交易窗口分层；§31工作台身份/重复失败纠偏；§32时段稳定/同源在飞复用 |
 | **EX-01** | `archive/live-trading-guosen-plan.md` | L1 | 搁置历史 | 国信 miniQMT 实盘蓝图。**用户已搁置**（不接受 Windows 依赖），恢复条件见文档头 |
 | **RV-01** | `review/review-agent.md` | L2 | 复盘 | 盘后复盘 Agent 架构 |
 | **RV-02** | `review/daily-review-sop.md` | L2 | 复盘 | 每日复盘 SOP（怎么判） |
@@ -124,7 +124,7 @@
 
 ---
 
-当前TradingAgents接续：见[六新场景完整图与四臂对照](ai/semantic-decisions.md#2026-10-20-六新场景完整图与四臂对照)、[完整研究读者](product/hunting-decision-design.md#2026-10-20-tradingagents完整研究读者)和[运行前置](system/deployment.md#tradingagents完整研究运行边界)，状态仍在W04/RSH-030。工程、真实模型、净收益准入与现役加载分开；旧批不替代新HEAD验收或启用。 最新[三主模型整图筛选](ai/semantic-decisions.md#用户改为三主模型整图筛选)已按来源质量与完整性选Sol作本例候选；Luna完整有复权口径错，DeepSeek受原输入上限阻断。两项完整速度试验均未提速，保留medium；原四臂失败/unknown保留，gold0、暂不启用。
+当前TradingAgents接续：见[六新场景完整图与四臂对照](ai/semantic-decisions.md#2026-10-20-六新场景完整图与四臂对照)、[完整研究读者](product/hunting-decision-design.md#2026-10-20-tradingagents完整研究读者)和[运行前置](system/deployment.md#tradingagents完整研究运行边界)，状态仍在W04/RSH-030。工程、真实模型、净收益准入与现役加载分开；旧批不替代新HEAD验收或启用。 最新[三主模型整图筛选](ai/semantic-decisions.md#用户改为三主模型整图筛选)已按来源质量与完整性选Sol作本例候选；Luna完整有复权口径错，DeepSeek受原输入上限阻断。两项完整速度试验均未提速，保留medium；原四臂失败/unknown保留，gold0；用户随后明确授权真正入选后的未验证完整研究，当前[研究授权](ai/semantic-decisions.md#2026-10-21-真正入选后完整研究与交互纠偏)与效果准入分开。
 
 ## 0. 主题路由（我要做什么 → 去读什么）
 
@@ -343,7 +343,7 @@
 
 ## 7. U52–U55确认后的产品入口
 
-总方案v9.13记录批准取舍；product/product-closure-design.md定义B/C任务导航、前后台、组件与六闭环；product/feature-closure-audit.md保存50项/18域去向，原批准73源/30声明为历史基线；§13–14现行机械盘点76份生产TSX/31条调度声明；ai/semantic-decisions.md定义现役语义边界，退役档案附录B仅保留历史共审/业务凭证设计。批准来源、Skill传播及未验边界见RV-09。
+总方案v9.13记录批准取舍；product/product-closure-design.md定义B/C任务导航、前后台、组件与六闭环；product/feature-closure-audit.md保存50项/18域去向，原批准73源/30声明为历史基线；§13–14保存组件映射及当前33条调度声明（旧76/31为历史口径）；ai/semantic-decisions.md定义现役语义边界，退役档案附录B仅保留历史共审/业务凭证设计。批准来源、Skill传播及未验边界见RV-09。
 Governor短入口连接按需手册、决策卡与历史示例；设计/状态/Canvas/选型/雷达/对账/接续/健康Skills随PR #172同步。技能文本与引用检查的实际结果见RV-09及PR回执；宿主加载、真实UI/Canvas和业务效果仍按原stage验收。阶段状态与顺位不由下载报告或导航命名替代。
 
 

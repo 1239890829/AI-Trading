@@ -59,7 +59,7 @@ TASK_TYPES: dict[str, dict[str, str]] = {
     },
     "tradingagents_research": {
         "label": "完整多角色研究", "risk": "L0",
-        "desc": "按单股显式运行完整TradingAgents；需准确版本质量准入及22次模型余量，报告只读待核",
+        "desc": "真正入选后运行完整TradingAgents；独立研究授权不设每日次数配额，保留用量/来源/恢复核验；报告待核",
     },
     "mutation": {
         "label": "系统变更留痕",
@@ -731,7 +731,9 @@ async def _task_audit(task_id: str, type_: str, status: str, *, before_start=Fal
 
 
 async def _execute(task_id: str, type_: str, params: dict) -> None:
-    timeout = max(0.1, float(settings.agent_task_timeout_seconds))
+    timeout = max(0.1, float(settings.tradingagents_research_timeout_seconds
+        if type_ == "tradingagents_research" and settings.tradingagents_research_authorization_digest
+        else settings.agent_task_timeout_seconds))
     rec = _StepRecorder(task_id, deadline_monotonic=time.monotonic() + timeout)
     before_start = True
     try:
@@ -748,7 +750,7 @@ async def _execute(task_id: str, type_: str, params: dict) -> None:
             status, fields = "canceled", {}
         except TaskWallTimeout:
             status, fields = "failed", {"error": {"code": "TaskTimeout",
-                "message": f"任务超过 {float(settings.agent_task_timeout_seconds):g}s wall-time 上限；当前不可中断步骤已收尾",
+                "message": f"任务超过 {timeout:g}s wall-time 上限；当前不可中断步骤已收尾",
                 "retryable": True}}
         except Exception as error:
             database_error = isinstance(error, (SQLAlchemyError, sqlite3.Error))
