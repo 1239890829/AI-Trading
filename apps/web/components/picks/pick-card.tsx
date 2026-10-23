@@ -71,6 +71,13 @@ export interface CardJudgement {
   basis: string;
 }
 
+/** Candidate eligibility wording is shared; an unknown enum never becomes permission. */
+export function tradabilityLabel(value: CardJudgement | null, readError = false) {
+  return readError ? "可参与性待重新核实"
+    : value?.level === "可参与" ? "可参与评估 · 当前未封板"
+      : value?.level === "不可参与" ? "当前不可参与" : "可参与性未判定";
+}
+
 /**
  * 出场纪律（归一）。
  *
@@ -372,72 +379,38 @@ function Row({ k, v, title }: { k: string; v: ReactNode; title?: string }) {
   );
 }
 
-export function PickCard({
-  item,
-  positionLabel = null,
-  dailyEvidence,
-  onShowDailyEvidence,
-  readError = false,
-  evidenceExpanded = false,
-}: {
-  item: TradingCard;
-  /** 闭环「标签」：sim=已模拟持仓 / real=已真实持仓（持仓状态派生，卖出自动消失） */
-  positionLabel?: "sim" | "real" | null;
-  dailyEvidence?: {item: DailyPickItem; date: string; generatedAt: string | null; version: string | null};
-  onShowDailyEvidence?: (item: DailyPickItem) => void;
-  /** Retained read-only snapshot after a failed refresh, never current eligibility. */
-  readError?: boolean;
-  evidenceExpanded?: boolean;
-}) {
-  // 整行点击跳工作台（2026-09-09 用户反馈：盘中跟踪条目标点击无响应——两卡现已统一）
-  const stockNav = useStockRowNav();
-  const followChipText =
-    item.followState === "followable" ? "可跟" : item.followState === "blocked" ? "禁买" : "仅观察";
-  const followChipTitle =
-    item.followState === "followable"
-      ? `空仓闸门日龙头判据全满足（连板高度+梯队地位+题材催化，无红线）。可跟 ≠ 可买：不给买入范围，参与须经影子持仓先验证。${item.followReasons.join("；")}`
-      : item.followState === "blocked"
-        ? `空仓闸门日红线压制（禁买）：${item.followReasons.join("；") || "命中否决/异动风险"}`
-        : `空仓闸门已触发：本条不给买入范围，仅供复盘与观察。${item.followReasons.join("；")}`;
+export type DailySelectionEvidence = {item: DailyPickItem; date: string; generatedAt: string | null; version: string | null};
 
-  const reading = selectionReading(item);
-  const selectionScores = item.sub_scores ? SUB_LABELS.map(([key, label]) => ({key, label: label === "基本" ? "基本面" : label,
+/** Project saved score states once for the card and the comparison workspace. */
+export function selectionScoreItems(item: TradingCard) {
+  return item.sub_scores ? SUB_LABELS.map(([key, label]) => ({key, label: label === "基本" ? "基本面" : label,
     value: typeof item.sub_scores?.[key] === "number" && Number.isFinite(item.sub_scores[key]) && item.sub_scores[key] >= 0 && item.sub_scores[key] <= 100 ? item.sub_scores[key] : null, maximum: 100 as const,
     state: item.dimensionEvidence?.[key]?.state || "unknown",
     basis: item.dimensionEvidence?.[key]?.reason || item.basisRows.find(row => row.label === label)?.value || "原记录未保存此项依据。"})) : undefined;
-  const executionState = readError && item.execution ? "stale" : item.execution?.executable_snapshot.state ?? null;
-  const executionStateText =
-    executionState === "ready"
-      ? "可判"
-      : executionState === "stale"
-        ? "陈旧"
-        : executionState === "degraded"
-          ? "降级"
-          : executionState === "unavailable"
-            ? "不可用"
-            : executionState
-              ? "未判定"
-              : null;
+}
 
+/** The original card and in-place workspace share the same source-bound reader. */
+export function PickSelectionEvidence({item, dailyEvidence, onShowDailyEvidence, originalOpen = false, presentation = "default"}: {
+  item: TradingCard; dailyEvidence?: DailySelectionEvidence; onShowDailyEvidence?: (item: DailyPickItem) => void;
+  originalOpen?: boolean; presentation?: "default" | "workspace";
+}) {
+  const reading = selectionReading(item);
+  const selectionScores = selectionScoreItems(item);
   const readingKey = `${item.symbol}:${item.origin}:${item.selectionEntry?.selected_at || ""}:${item.selectionEntry?.source_version || ""}`;
-  const [readingIdentity, setReadingIdentity] = useState<string | null>(null);
-  if (readingIdentity !== null && readingIdentity !== readingKey) setReadingIdentity(null);
-  const readingOpen = !evidenceExpanded && readingIdentity === readingKey;
-  const presence = useExitPresence(readingOpen ? readingKey : null);
-  const evidence = <>
-      <ReaderBrief label="本次筛选考虑" facts={[{label: reading.why.endsWith("…") ? "理由节选" : "选择理由", value: reading.why}, {label: reading.limit.endsWith("…") ? "条件节选" : "失效条件", value: reading.limit}]}/>
-      <p className="text-xs text-zinc-600 dark:text-zinc-400">入选依据保留原记录；下方公司资料与研究是补充，不回填当时理由。</p>
-      <StockAttributionPanel symbol={item.symbol} title="相关消息与AI解读" defaultExpanded bounded={false} concise
+  return <>
+      {presentation === "default" && <><ReaderBrief label="本次筛选考虑" facts={[{label: reading.why.endsWith("…") ? "理由节选" : "选择理由", value: reading.why}, {label: reading.limit.endsWith("…") ? "条件节选" : "失效条件", value: reading.limit}]}/>
+      <p className="text-xs text-zinc-600 dark:text-zinc-400">入选依据保留原记录；下方公司资料与研究是补充，不回填当时理由。</p></>}
+      <StockAttributionPanel symbol={item.symbol} title="相关消息与AI解读" defaultExpanded bounded={false} concise presentation={presentation}
         selectedAt={item.selectionEntry?.selected_at} recordedRefs={item.relatedEventRefs} selectionContext selectionSummary={{
           reason: item.basisRows.find(row => ["入选", "来源", "联动"].includes(row.label))?.value || reading.why,
           reasonRecorded: item.basisRows.some(row => ["入选", "来源", "联动"].includes(row.label)),
           condition: [...item.vetoes, ...item.followReasons, ...item.invalidations].join("\n") || reading.limit,
           supports: item.basisRows, version: item.selectionEntry?.source_version,
-          measurements: item.selectionMetrics,
-          scores: selectionScores,
+          measurements: presentation === "workspace" ? undefined : item.selectionMetrics,
+          scores: presentation === "workspace" ? undefined : selectionScores,
         }}/>
-      <TradingAgentsResearchPanel symbol={item.symbol} compact allowStart={false}/>
-      <ResearchDisclosure label="原筛选完整依据" identity={readingKey} defaultOpen={evidenceExpanded}>
+      <TradingAgentsResearchPanel symbol={item.symbol} compact allowStart={false} defaultOpen={presentation === "workspace"}/>
+      <ResearchDisclosure label="原筛选完整依据" identity={readingKey} defaultOpen={originalOpen}>
       <ReaderBrief label="筛选支持项" facts={reading.supports}/>
       {/* 估值（仅盘前名单）：数据源确实不提供时（新股/亏损/长期停牌）显示"暂无"并注明原因，
           不留白、不臆造，与个股详情页口径一致。 */}
@@ -601,6 +574,58 @@ export function PickCard({
 
       </ResearchDisclosure>
   </>;
+}
+
+export function PickCard({
+  item,
+  positionLabel = null,
+  dailyEvidence,
+  onShowDailyEvidence,
+  readError = false,
+  evidenceExpanded = false,
+}: {
+  item: TradingCard;
+  /** 闭环「标签」：sim=已模拟持仓 / real=已真实持仓（持仓状态派生，卖出自动消失） */
+  positionLabel?: "sim" | "real" | null;
+  dailyEvidence?: {item: DailyPickItem; date: string; generatedAt: string | null; version: string | null};
+  onShowDailyEvidence?: (item: DailyPickItem) => void;
+  /** Retained read-only snapshot after a failed refresh, never current eligibility. */
+  readError?: boolean;
+  evidenceExpanded?: boolean;
+}) {
+  // 整行点击跳工作台（2026-09-09 用户反馈：盘中跟踪条目标点击无响应——两卡现已统一）
+  const stockNav = useStockRowNav();
+  const followChipText =
+    item.followState === "followable" ? "可跟" : item.followState === "blocked" ? "禁买" : "仅观察";
+  const followChipTitle =
+    item.followState === "followable"
+      ? `空仓闸门日龙头判据全满足（连板高度+梯队地位+题材催化，无红线）。可跟 ≠ 可买：不给买入范围，参与须经影子持仓先验证。${item.followReasons.join("；")}`
+      : item.followState === "blocked"
+        ? `空仓闸门日红线压制（禁买）：${item.followReasons.join("；") || "命中否决/异动风险"}`
+        : `空仓闸门已触发：本条不给买入范围，仅供复盘与观察。${item.followReasons.join("；")}`;
+
+  const reading = selectionReading(item);
+  const selectionScores = selectionScoreItems(item);
+  const executionState = readError && item.execution ? "stale" : item.execution?.executable_snapshot.state ?? null;
+  const executionStateText =
+    executionState === "ready"
+      ? "可判"
+      : executionState === "stale"
+        ? "陈旧"
+        : executionState === "degraded"
+          ? "降级"
+          : executionState === "unavailable"
+            ? "不可用"
+            : executionState
+              ? "未判定"
+              : null;
+
+  const readingKey = `${item.symbol}:${item.origin}:${item.selectionEntry?.selected_at || ""}:${item.selectionEntry?.source_version || ""}`;
+  const [readingIdentity, setReadingIdentity] = useState<string | null>(null);
+  if (readingIdentity !== null && readingIdentity !== readingKey) setReadingIdentity(null);
+  const readingOpen = !evidenceExpanded && readingIdentity === readingKey;
+  const presence = useExitPresence(readingOpen ? readingKey : null);
+  const evidence = <PickSelectionEvidence item={item} dailyEvidence={dailyEvidence} onShowDailyEvidence={onShowDailyEvidence} originalOpen={evidenceExpanded}/>;
 
   return (
     <>
@@ -723,15 +748,7 @@ export function PickCard({
       {item.tradability && (
         <div className="mt-1.5">
           <Chip
-            text={
-              readError
-                ? "可参与性待重新核实"
-                : item.tradability.level === "可参与"
-                ? "可参与评估 · 当前未封板"
-                : item.tradability.level === "不可参与"
-                  ? "当前不可参与"
-                  : "可参与性未判定"
-            }
+            text={tradabilityLabel(item.tradability, readError)}
             title={`${readError ? "上次读取的" : ""}可参与性判定（候选资格，不代表成交保证）：${item.tradability.basis}`}
             className={
               readError

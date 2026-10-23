@@ -63,6 +63,14 @@ export function useIncremental<T>(
     setVisible((v) => (v >= total ? v : v + step));
   }, [total, step]);
 
+  const check = useCallback(() => {
+    const sentinel = sentinelRef.current;
+    if (!sentinel) return;
+    const r = sentinel.getBoundingClientRect();
+    const vh = window.innerHeight || 800;
+    if (r.top <= vh + VIEWPORT_MARGIN && r.bottom >= -VIEWPORT_MARGIN) loadMore();
+  }, [loadMore]);
+
   useEffect(() => {
     if (!active) return;
     const sentinel = sentinelRef.current;
@@ -71,16 +79,17 @@ export function useIncremental<T>(
     while (rootEl && rootEl.scrollHeight <= rootEl.clientHeight + 1) {
       rootEl = rootEl.parentElement as HTMLElement | null;
     }
-    const check = () => {
-      const r = sentinel.getBoundingClientRect();
-      const vh = window.innerHeight || 800;
-      if (r.top <= vh + VIEWPORT_MARGIN && r.bottom >= -VIEWPORT_MARGIN) loadMore();
-    };
     const target: HTMLElement | Window = rootEl ?? window;
     target.addEventListener("scroll", check, { passive: true });
-    check(); // 首帧：内容不足一屏时立即补载到撑满
     return () => target.removeEventListener("scroll", check);
-  }, [active, loadMore, total]);
+    // An initial fill can create inner overflow where none existed at binding.
+    // Rediscover after an append, not on every scroll frame.
+  }, [active, check, total, visible]);
+
+  useEffect(() => {
+    // Check once for a new list/activation; rebinding alone must not cascade pages.
+    if (active) check();
+  }, [active, check, total, resetKey]);
 
   return {
     shown: items.slice(0, visible) as T[],

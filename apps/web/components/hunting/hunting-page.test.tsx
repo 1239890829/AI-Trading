@@ -14,6 +14,7 @@ vi.mock("@/hooks/use-polling-fetch", () => ({ usePollingFetch: (fn: () => Promis
 } }));
 vi.mock("@/components/ui/modal-shell", () => ({ ModalShell: () => null }));
 vi.mock("@/components/ui/candidate-collection", () => ({ CandidateCollection: ({children}: {children: React.ReactNode}) => <div>{children}</div> }));
+vi.mock("@/components/picks/selection-workspace", () => ({SelectionWorkspace: ({groups, dailyEvidence, onShowDailyEvidence}: {groups: {key: string; title: string; description: string; readError?: boolean; items: {symbol: string}[]}[]; dailyEvidence?: Map<string, {item: api.DailyPickItem}>; onShowDailyEvidence?: (item: api.DailyPickItem) => void}) => <section data-testid="selection-comparison-workspace">{groups.map(group => <section key={group.key}><h3>{group.title}</h3><p>{group.description}</p>{group.items.map(item => <article key={item.symbol} data-read-error={String(!!group.readError)}>候选 {item.symbol}<CardEntryRow symbol={item.symbol}/>{dailyEvidence?.has(item.symbol) && <button onClick={() => onShowDailyEvidence?.(dailyEvidence.get(item.symbol)!.item)}>每日依据 {item.symbol}</button>}</article>)}</section>)}</section>}));
 vi.mock("@/components/ui/loading", () => ({ FadeIn: ({children}: {children: React.ReactNode}) => <div>{children}</div>, CardListSkeleton: () => <div>读取候选中</div>, PageSkeletonFallback: () => null, StatGridSkeleton: () => null, StatsSkeleton: () => null, TableSkeleton: () => null }));
 vi.mock("@/components/picks/pick-card", () => ({ PickCard: ({item, readError, dailyEvidence, onShowDailyEvidence}: {item: {symbol: string}; readError?: boolean; dailyEvidence?: {item: api.DailyPickItem}; onShowDailyEvidence?: (item: api.DailyPickItem) => void}) => <article data-read-error={String(!!readError)}>候选 {item.symbol}<CardEntryRow symbol={item.symbol} />{dailyEvidence && <button onClick={() => onShowDailyEvidence?.(dailyEvidence.item)}>每日依据 {item.symbol}</button>}</article>, fromDailyPick: (item: unknown) => item, fromIntradayStock: (item: unknown) => item, StandAsideBanner: () => <div data-testid="risk-gate">原风险闸门</div> }));
 vi.mock("@/components/picks/pick-detail-modal", () => ({PickDetailModal: ({target, readError}: {target: {item: api.DailyPickItem} | null; readError?: boolean}) => target ? <div data-testid="daily-detail" data-read-error={String(!!readError)}>原依据 {target.item.symbol} · 执行价 {target.item.execution?.executable_snapshot.price}</div> : null}));
@@ -53,6 +54,7 @@ describe("真实选股消费者迁移", () => {
     expect(await screen.findByText("候选 600127")).toBeTruthy();
     expect(screen.getAllByText("候选 600127")).toHaveLength(1);
     expect(screen.getByText("候选 002636")).toBeTruthy();
+    expect(screen.getAllByTestId("selection-comparison-workspace")).toHaveLength(1);
     expect(screen.getByRole("heading", {name: "每日精选"})).toBeTruthy();
     expect(screen.getByText(/2026-10-08 · 当日持久候选/)).toBeTruthy();
     expect(screen.getByText("题材原消费者：台账嵌入 false")).toBeTruthy();

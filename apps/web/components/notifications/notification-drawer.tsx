@@ -9,7 +9,7 @@ import { SelectionRail } from "@/components/ui/selection-rail";
 import { useExitPresence } from "@/hooks/use-exit-presence";
 import { useOverlayFocus } from "@/hooks/use-overlay-focus";
 
-import { useCallback, useEffect, useRef, useMemo, useState, useSyncExternalStore } from "react";
+import { useCallback, useEffect, useRef, useMemo, useState, useSyncExternalStore, type KeyboardEvent } from "react";
 import { createPortal } from "react-dom";
 
 import {
@@ -40,7 +40,8 @@ import { useResource } from "@/hooks/use-resource";
 import { NewsModal, type NewsModalItem } from "@/components/news-modal";
 import { EventFeed } from "@/components/notifications/event-feed";
 import { dateTimeTextBJ, dateTimesInTextBJ } from "@/lib/format";
-import { NotificationDetail, notificationKeyState, notificationSummary, notificationDeliveryHint } from "./notification-detail";
+import { NotificationDetailContent, notificationKeyState, notificationSummary, notificationDeliveryHint, notificationEvidenceFingerprint } from "./notification-detail";
+import styles from "./notification-workspace.module.css";
 import { ExplanationMap, NarrativeText } from "@/components/ui/explanation-map";
 import { ReadingRow, readingRowClasses } from "@/components/ui/reading-row";
 
@@ -80,7 +81,7 @@ import { ReadingRow, readingRowClasses } from "@/components/ui/reading-row";
  * 一律先 `parseTs` 转 epoch 再比大小。
  *
  * 阅读落点：行体与详情直接打开这条消息的原依据；行情为独立动作。
- * 原时点、条件、风险、来源与渠道完整保留在同一详情中，列表只给短摘要。
+ * 列表保留短摘要与原证据指纹；选中项在同层解释席读取。原时点、条件、风险、来源与渠道完整保留，独立详情消费者仍可复用。
  */
 
 /** 顶层模式：个股消息、风险、自设提醒 ↔ 资讯 / 事件浏览。 */
@@ -314,37 +315,45 @@ function NotificationEmptyState({ payload, tab, clearBefore }: {
 }
 
 
-function NotificationRow({item, unread, onOpen}: {
-  item: NotificationItem;
-  unread: boolean;
-  onOpen: () => void;
+// Match the owned CSS boundary: a mobile explanation replaces its list.
+const compactNoticeSnapshot = () => typeof window !== "undefined" && typeof window.matchMedia === "function"
+  && window.matchMedia("(max-width: 760px)").matches;
+const serverNoticeSnapshot = () => false;
+function subscribeNoticeLayout(changed: () => void) {
+  if (typeof window.matchMedia !== "function") return () => {};
+  const media = window.matchMedia("(max-width: 760px)");
+  media.addEventListener("change", changed);
+  return () => media.removeEventListener("change", changed);
+}
+
+function NotificationRow({item, unread, selected, onOpen, onNavigate, primaryRef}: {
+  item: NotificationItem; unread: boolean; selected: boolean; onOpen: () => void;
+  onNavigate: (event: KeyboardEvent<HTMLButtonElement>) => void;
+  primaryRef: (button: HTMLButtonElement | null) => void;
 }) {
   const summary = notificationSummary(item);
-  const shell = `rounded-lg border p-3 transition-colors ${unread
-    ? "border-rose-200 bg-rose-50/40 dark:border-rose-500/25 dark:bg-rose-500/5"
-    : "border-zinc-100 dark:border-zinc-800/60"}`;
-  return <ReadingRow className={shell} data-testid="notification-row">
-    <button type="button" data-reading-primary onClick={onOpen}
-      className={`${readingRowClasses.primary} block w-full text-left`}>
-      <div className="flex flex-wrap items-center gap-1.5 text-xs">
-        {unread && <span data-testid="notification-unread-dot" aria-label="未读" title="未读" className="h-1.5 w-1.5 shrink-0 rounded-full bg-rose-500" />}
-        <span className={`rounded px-1.5 py-0.5 font-medium ${CATEGORY_TONE[item.category]}`}>{item.label}</span>
-        <time className="ml-auto font-mono tabular-nums text-zinc-600 dark:text-zinc-400">{dateTimeTextBJ(item.ts)}</time>
+  const fingerprint = notificationEvidenceFingerprint(item);
+  return <ReadingRow className={styles.row} data-testid="notification-row" data-selected={selected || undefined}>
+    <button ref={primaryRef} type="button" data-reading-primary onClick={onOpen} onKeyDown={onNavigate} aria-pressed={selected}
+      className={`${readingRowClasses.primary} ${styles.rowPrimary}`}>
+      <div className={styles.rowMeta}>
+        {unread && <span data-testid="notification-unread-dot" aria-label="未读" title="未读" className={styles.unreadDot}/>}
+        <span className={CATEGORY_TONE[item.category]}>{item.label}</span>
+        <span className={styles.rowSymbol}>{item.symbol || CATEGORY_LABEL[item.category]}</span>
+        <time>{dateTimeTextBJ(item.ts)}</time>
       </div>
-      <p className="mt-2 break-words text-sm font-medium text-zinc-900 dark:text-zinc-50" title={item.title}>{item.title}</p>
-      <p data-testid="notification-summary" title={summary.endsWith("…") ? "摘要节选；打开详情查看完整依据与限定。" : undefined}
-        className="mt-1 line-clamp-2 break-words text-xs leading-relaxed text-zinc-600 dark:text-zinc-400">依据节选：{summary}</p>
+      <p className={styles.rowTitle} title={item.title}>{item.title}</p>
+      <p data-testid="notification-summary" className={styles.rowSummary} title={summary.endsWith("…") ? "依据节选；选中后核对完整原记录与限制。" : undefined}>依据节选：{summary}</p>
+      {fingerprint.length > 0 && <div className={styles.fingerprint} aria-label="原入选证据指纹">{fingerprint.map(value => <span key={value.key} className={styles.fingerprintItem} data-state={value.state} title={`${value.label}：${value.value}（原记录）`}>
+        <span>{value.label}</span><strong>{value.value}</strong>
+        {value.score !== null && <span className={styles.fingerprintTrack} role="meter" aria-label={`${value.label}原规则分值`} aria-valuemin={0} aria-valuemax={100} aria-valuenow={value.score}><i style={{width:`${value.score}%`}}/></span>}
+      </span>)}</div>}
     </button>
-    <p data-testid="notification-facts" className="mt-2 break-words text-xs leading-relaxed text-zinc-600 dark:text-zinc-400" title={notificationKeyState(item)}>当时记录 · 当前条件需核对{notificationDeliveryHint(item) ? ` · ${notificationDeliveryHint(item)}` : ""}</p>
-    <div className="mt-2 flex flex-wrap items-center gap-2 text-xs text-zinc-600 dark:text-zinc-400">
-      <span>{item.symbol || CATEGORY_LABEL[item.category]} · 条件见详情</span>
-      <div data-reading-action data-testid="notification-actions" className="ml-auto flex items-stretch gap-1">
-        {item.symbol && <StockLink symbol={item.symbol} preferModal
-          className={`${readingRowClasses.action} inline-flex min-h-9 items-center px-2 py-1`}
-          title={`查看 ${item.symbol} 行情详情`}>行情 ↗</StockLink>}
-        <button type="button" data-reading-action data-testid="notification-judgment" title="查看原提醒、完整依据与条件"
-          className={`${readingRowClasses.action} min-h-9 rounded px-2 py-1`}
-          onClick={event => {event.stopPropagation(); onOpen();}}>详情</button>
+    <div className={styles.rowFooter}>
+      <p data-testid="notification-facts" title={notificationKeyState(item)}>原时点 · 当前条件需核对{notificationDeliveryHint(item) ? ` · ${notificationDeliveryHint(item)}` : ""}</p>
+      <div data-reading-action data-testid="notification-actions" className={styles.rowActions}>
+        {item.symbol && <StockLink symbol={item.symbol} preferModal className={readingRowClasses.action} title={`查看 ${item.symbol} 行情详情`}>行情 ↗</StockLink>}
+        <button type="button" data-reading-action data-testid="notification-judgment" className={readingRowClasses.action} onClick={event => {event.stopPropagation(); onOpen();}}>核对</button>
       </div>
     </div>
   </ReadingRow>;
@@ -352,6 +361,7 @@ function NotificationRow({item, unread, onOpen}: {
 
 export function NotificationBell() {
   const [open, setOpen] = useState(false);
+  const compactLayout = useSyncExternalStore(subscribeNoticeLayout, compactNoticeSnapshot, serverNoticeSnapshot);
   const presence = useExitPresence(open ? true : null);
   const drawerRef = useRef<HTMLDivElement>(null);
   useOverlayFocus(drawerRef, () => setOpen(false), open);
@@ -373,8 +383,10 @@ export function NotificationBell() {
   // 三态（items/countsAll/error）搬进本组件，而它们只在那个 tab 里有意义。
   const [eventsRefresh, setEventsRefresh] = useState(0);
   const [newsItem, setNewsItem] = useState<NewsModalItem | null>(null);
-  const [detailItem, setDetailItem] = useState<NotificationItem | null>(null);
-  const detailPresence = useExitPresence(detailItem);
+  const [detailId, setDetailId] = useState<string | null>(null);
+  const rowButtons = useRef(new Map<string, HTMLButtonElement>());
+  const detailHeading = useRef<HTMLHeadingElement>(null);
+  const returnToRow = useRef<string | null>(null);
   // 已读偏好（水位 + 逐条 id + 清除水位）：**外部存储订阅**，见 lib/notification-read.ts。
   // 首帧（含 hydration）给服务端空快照，hydration 后自动切到 localStorage 真实值。
   const prefs = useSyncExternalStore(subscribePrefs, getPrefsSnapshot, getServerPrefsSnapshot);
@@ -447,10 +459,30 @@ export function NotificationBell() {
   // 增量渲染（#55）：/api/notifications 默认 60 条（实测 16KB），每条是富文本卡片，
   // 一次性全铺会拖慢抽屉打开的首帧。切换时段 tab / 清空历史时重置到首页。
   const activeList = bySession[tab];
+  const selectedNotice = activeList.find(item => item.id === detailId) ?? null;
+  const selectedNoticeId = selectedNotice?.id;
   const { shown: shownNotices, visible, sentinelRef, loadMore } = useIncremental(activeList, {
     resetKey: `${tab}/${clearBefore}`,
-    active: open && mode === "opportunity",
+    active: open && mode === "opportunity" && (!compactLayout || !selectedNoticeId),
   });
+  const selectNotice = (item: NotificationItem) => {markOneRead(item); setDetailId(item.id);};
+  const navigateNotice = (event: KeyboardEvent<HTMLButtonElement>, index: number) => {
+    if (event.nativeEvent.isComposing || event.keyCode === 229 || event.altKey || event.ctrlKey || event.metaKey
+      || !["ArrowDown", "ArrowUp", "Home", "End"].includes(event.key)) return;
+    event.preventDefault(); event.stopPropagation();
+    const next = event.key === "Home" ? 0 : event.key === "End" ? shownNotices.length - 1
+      : Math.max(0, Math.min(shownNotices.length - 1, index + (event.key === "ArrowDown" ? 1 : -1)));
+    const item = shownNotices[next];
+    if (item) {rowButtons.current.get(item.id)?.focus(); selectNotice(item);}
+  };
+  const backToList = () => {returnToRow.current = detailId; setDetailId(null);};
+  useEffect(() => {
+    if (!open || mode !== "opportunity") return;
+    if (selectedNoticeId && compactLayout) detailHeading.current?.focus({preventScroll:true});
+    else if (!selectedNoticeId && returnToRow.current) {
+      rowButtons.current.get(returnToRow.current)?.focus({preventScroll:true}); returnToRow.current = null;
+    }
+  }, [selectedNoticeId, open, mode, compactLayout]);
 
   return (
     <>
@@ -475,7 +507,7 @@ export function NotificationBell() {
       {presence.value &&
         createPortal(
           <div ref={drawerRef} tabIndex={-1} data-motion-state={open ? "open" : "closed"} aria-hidden={!open || undefined} inert={!open} className="motion-overlay fixed inset-0 z-50 flex justify-end bg-black/40 backdrop-blur-sm" onMouseDown={(e) => { if (e.target === e.currentTarget) setOpen(false); }} role="dialog" aria-modal={open || undefined} aria-label="通知中心" data-testid="notification-drawer">
-            <div className="ui-glass-overlay motion-drawer flex h-full w-full max-w-sm flex-col border-l border-zinc-200 bg-white shadow-2xl dark:border-zinc-800 dark:bg-zinc-950">
+            <div data-mode={mode} className={`ui-glass-overlay motion-drawer ${styles.shell}`}>
               {/* 头：标题 + 未读数 + 操作 */}
               <div className="flex flex-wrap items-center justify-between gap-2 border-b border-zinc-100 px-4 py-3 dark:border-zinc-800/80">
                 <h2 className="flex shrink-0 items-center gap-1.5 whitespace-nowrap text-sm font-semibold text-zinc-900 dark:text-zinc-50">
@@ -541,12 +573,13 @@ export function NotificationBell() {
                       const index = MODE_TABS.findIndex(item => item.key === m.key);
                       const next = event.key === "Home" ? 0 : event.key === "End" ? MODE_TABS.length - 1 : (index + offset + MODE_TABS.length) % MODE_TABS.length;
                       const key = MODE_TABS[next].key;
+                      if (key !== mode) setDetailId(null);
                       setMode(key);
                       event.currentTarget.parentElement?.querySelector<HTMLButtonElement>(`[data-testid="notification-mode-${key}"]`)?.focus();
                     }}
                     aria-selected={mode === m.key}
                     data-testid={`notification-mode-${m.key}`}
-                    onClick={() => setMode(m.key)}
+                    onClick={() => {if (m.key !== mode) setDetailId(null); setMode(m.key);}}
                     title={m.title}
                     className={`flex-1 rounded-md px-3 py-1 text-xs transition-colors ${
                       mode === m.key
@@ -562,7 +595,8 @@ export function NotificationBell() {
               {mode === "events" ? (
                 <EventFeed active={open && mode === "events"} refreshToken={eventsRefresh} />
               ) : (
-                <>
+                <div className={styles.workspace} data-testid="notification-workspace" data-view={selectedNotice ? "detail" : "list"}>
+                <section className={styles.listColumn} aria-label="提醒列表与时段">
               <div className="border-b border-zinc-100 px-4 py-2 text-[11px] dark:border-zinc-800/80">
                 <button type="button" onClick={() => diagnosis ? setDiagnosis(null) : void loadDiagnosis()} disabled={diagnosisLoading}
                   className="text-sky-700 hover:underline disabled:opacity-50 dark:text-sky-400"
@@ -582,7 +616,7 @@ export function NotificationBell() {
                   <button
                     key={t.key}
                     aria-pressed={tab === t.key}
-                    onClick={() => setTab(t.key)}
+                    onClick={() => {setTab(t.key); setDetailId(null);}}
                     className={`flex items-center gap-1 rounded-full px-3 py-1 text-xs transition-colors ${
                       tab === t.key
                         ? "bg-zinc-900 font-medium text-white dark:bg-zinc-100 dark:text-zinc-900"
@@ -603,7 +637,7 @@ export function NotificationBell() {
               </SelectionRail>
 
               {/* 列表 */}
-              <div className="min-h-0 flex-1 space-y-2 overflow-y-auto px-4 py-3" data-testid="notification-list">
+              <div className={styles.list} data-testid="notification-list">
                 {loading && !payload && (
                   <div className="space-y-2">
                     {[0, 1, 2].map((i) => (
@@ -625,12 +659,14 @@ export function NotificationBell() {
                     「行情 ↗」与「判读」两个独立按钮 ⇒ 视觉上三块互不相干、且与卡片
                     不对齐。现两者收进卡片内成为**一个操作组**（见 `NotificationRow`），
                     故这里不再需要分支与包裹层。 */}
-                {shownNotices.map((i) => (
+                {shownNotices.map((i, index) => (
                   <NotificationRow
                     key={i.id}
                     item={i}
-                    unread={isItemUnread(i)}
-                    onOpen={() => {markOneRead(i); setDetailItem(i);}}
+                    unread={isItemUnread(i)} selected={selectedNotice?.id === i.id}
+                    primaryRef={button => {if (button) rowButtons.current.set(i.id, button); else rowButtons.current.delete(i.id);}}
+                    onNavigate={event => navigateNotice(event, index)}
+                    onOpen={() => selectNotice(i)}
                   />
                 ))}
                 {/* 哨兵须在滚动容器内部（本 div overflow-y-auto），否则不随滚动移动、只触发一次 */}
@@ -648,7 +684,25 @@ export function NotificationBell() {
                   </p>
                 )}
               </div>
-                </>
+                </section>
+                <aside className={styles.explanation} aria-label="提醒解释席">
+                  {selectedNotice ? <section role="region" aria-label={selectedNotice.title} data-testid="notification-detail" className={styles.selectedDetail}>
+                    <header className={styles.detailHeader}>
+                      <button type="button" className={styles.backButton} onClick={backToList} aria-label="返回通知列表"><svg aria-hidden="true" width="16" height="16" viewBox="0 0 20 20" fill="none" stroke="currentColor" strokeWidth="1.5"><path d="m12 4-6 6 6 6"/></svg>列表</button>
+                      <div><h3 ref={detailHeading} tabIndex={-1}>{selectedNotice.title}</h3><p>{selectedNotice.symbol || CATEGORY_LABEL[selectedNotice.category]} · {selectedNotice.label}</p></div>
+                    </header>
+                    <div className={styles.detailScroll}>
+                      {pollError && <p role="alert" className={styles.retainedWarning}>通知刷新失败，正在核对上次保存的记录；当前通知状态未确认。</p>}
+                      <NotificationDetailContent key={selectedNotice.id} item={selectedNotice} active={open && mode === "opportunity"} inline onClose={() => setDetailId(null)} onOpenNews={setNewsItem}/>
+                    </div>
+                  </section> : <div className={styles.emptySeat}>
+                    <h3>把提醒与依据放在一起核对</h3>
+                    <p>从左侧选一条提醒，原选择理由、公司联系和待核条件会在这里逐项对应。</p>
+                    <dl><div><dt>原记录</dt><dd>为何列入观察，哪条条件曾满足</dd></div><div><dt>公司联系</dt><dd>只读已保存的同股、同版本依据</dd></div><div><dt>反证与缺项</dt><dd>哪些事实仍不能确认</dd></div></dl>
+                    <span>选择前不读取公司资料，不会启动模型</span>
+                  </div>}
+                </aside>
+                </div>
               )}
 
               <div className="border-t border-zinc-100 px-4 py-2 text-[10px] leading-relaxed text-zinc-600 dark:text-zinc-400 dark:border-zinc-800/80">
@@ -669,8 +723,6 @@ export function NotificationBell() {
           </div>,
           document.body,
         )}
-
-      {detailPresence.value && <NotificationDetail item={detailPresence.value} open={detailPresence.active} onClose={() => setDetailItem(null)} onOpenNews={setNewsItem} />}
 
       {/* 原文仅在用户明确打开后读取。 */}
       <NewsModal item={newsItem} onClose={() => setNewsItem(null)} />

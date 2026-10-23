@@ -1,5 +1,5 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { act, cleanup, fireEvent, render, screen } from "@testing-library/react";
+import { act, cleanup, fireEvent, render, screen, within } from "@testing-library/react";
 import { IndexCards } from "@/components/index-cards";
 import type { Quote } from "@/types/market";
 
@@ -19,6 +19,40 @@ const indices = [
 ];
 
 describe("IndexCards 指数点击交互", () => {
+  it("同一零轴只用已加载的有限涨跌幅，未知不绘条也不冒充零涨幅", () => {
+    render(<IndexCards indices={[
+      {...indices[0],change_pct:2}, idx("sh000688","科创50","SH",1000), {...indices[2],change_pct:-1},
+    ]}/>);
+    const up = screen.getByTitle(/上证指数 · 来源/).querySelector('[aria-hidden="true"]') as HTMLElement;
+    const down = screen.getByTitle(/创业板指 · 来源/).querySelector('[aria-hidden="true"]') as HTMLElement;
+    expect(up.style.getPropertyValue("--index-range-width")).toBe("50%");
+    expect(up.style.getPropertyValue("--index-range-start")).toBe("50%");
+    expect(down.style.getPropertyValue("--index-range-width")).toBe("25%");
+    expect(down.style.getPropertyValue("--index-range-start")).toBe("25%");
+    expect(screen.getByLabelText("指数涨跌幅共同零轴").textContent).toContain("2.00%");
+    cleanup();
+    render(<IndexCards indices={[{...indices[0],change_pct:Number.NaN}]}/>);
+    const missing = screen.getByTitle(/上证指数 · 来源/);
+    expect(within(missing).getByText("--")).toBeTruthy();
+    expect(missing.querySelector('[aria-hidden="true"] b')).toBeNull();
+    expect(missing.textContent).not.toContain("NaN");
+  });
+
+  it("悬停与聚焦只联动已有来源和双时钟，明确点击才切换证券", () => {
+    const select = vi.fn();
+    const dated = indices.map((quote,i) => ({...quote, source:i===2?"tencent":"ths", data_timestamp:`2026-10-23T10:00:0${i}+08:00`,received_at:`2026-10-23T10:00:1${i}+08:00`}));
+    render(<IndexCards indices={dated} onSelect={select}/>);
+    const evidence = () => within(screen.getByLabelText("当前指数来源与时点"));
+    fireEvent.mouseEnter(screen.getByTitle(/创业板指 · 来源/));
+    expect(evidence().getByText("10:00:02", {exact:false})).toBeTruthy();
+    expect(evidence().getByText("10:00:12", {exact:false})).toBeTruthy();
+    expect(select).not.toHaveBeenCalled();
+    fireEvent.focus(screen.getByTitle(/上证指数 · 来源/));
+    expect(evidence().getByText("10:00:00", {exact:false})).toBeTruthy();
+    expect(select).not.toHaveBeenCalled();
+    fireEvent.click(screen.getByTitle(/上证指数 · 来源/));
+    expect(select).toHaveBeenCalledExactlyOnceWith("sh000001");
+  });
   it("点击指数卡 → 回调收到带市场前缀的详情 symbol（与自选股点击同一交互）", () => {
     const onSelect = vi.fn();
     render(<IndexCards indices={indices} onSelect={onSelect} />);

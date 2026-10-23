@@ -120,7 +120,7 @@ function EvidenceColumn({title, icon, active, children}: {title: string; icon: "
 
 const FACT_KINDS: Record<string, string> = {business: "主营", product: "产品", customer: "客户", order: "订单", capacity: "产能", financial: "财务"};
 
-function CompanyEvidenceWorkspace({event, facts, fallback, scoreKey}: {event: SelectionDecisionEvent | undefined; facts: CompanyImpact["facts"]; fallback: ReactNode; scoreKey: string | undefined}) {
+function CompanyEvidenceWorkspace({event, facts, fallback, scoreKey, presentation}: {event: SelectionDecisionEvent | undefined; facts: CompanyImpact["facts"]; fallback: ReactNode; scoreKey: string | undefined; presentation: "default" | "workspace"}) {
   const company = event?.company;
   const [factKey, setFactKey] = useState(facts[0]?.id ?? "");
   const [wholeQuote, setWholeQuote] = useState(false);
@@ -138,6 +138,7 @@ function CompanyEvidenceWorkspace({event, facts, fallback, scoreKey}: {event: Se
     if (cited) setFactKey(cited);
   }
   return <div className={styles.columns}>
+    {presentation === "workspace" && <EvidenceColumn title="事件原句" icon="fact"><div className={styles.sourceText} aria-label="当前事件原句" tabIndex={0}>{event?.source ? <blockquote><p>{researchExcerpt(event.source.quote)}</p><cite>{event.source.title}</cite>{researchExcerpt(event.source.quote) !== event.source.quote.trim() && <details><summary>核对完整事件原句</summary><p>{event.source.quote}</p></details>}{event.source.url && <a href={event.source.url} target="_blank" rel="noopener noreferrer">查看消息来源</a>}</blockquote> : <p>本事件缺少已对应的原句，不用其他消息补齐。</p>}</div></EvidenceColumn>}
     <EvidenceColumn title="公司联系" icon="fact" active={scoreKey === "fundamental"}>
       {fact ? <>
         <div role="group" aria-label="选择公司依据原句" className={styles.evidenceLocator}>{facts.map((item, index) => <button key={item.id} type="button" aria-pressed={fact.id === item.id} onClick={() => {setFactKey(item.id); setWholeQuote(false);}} title={item.document_title}><span>{FACT_KINDS[item.kind] ?? "披露"}</span><small>{index + 1}</small></button>)}</div>
@@ -165,8 +166,8 @@ function CompanyEvidenceWorkspace({event, facts, fallback, scoreKey}: {event: Se
 }
 
 /** A read-only explorer of saved scores and exact event/company bindings. */
-export function SelectionDecisionExplorer({summary, events, fallback, originalClock, children}: {
-  summary: SelectionSummary; events: SelectionDecisionEvent[]; fallback: ReactNode; originalClock: string; children?: ReactNode;
+export function SelectionDecisionExplorer({summary, events, fallback, originalClock, children, presentation = "default"}: {
+  summary: SelectionSummary; events: SelectionDecisionEvent[]; fallback: ReactNode; originalClock: string; children?: ReactNode; presentation?: "default" | "workspace";
 }) {
   const uid = useId();
   const [scoreKey, setScoreKey] = useState(summary.scores?.[0]?.key ?? "");
@@ -194,24 +195,24 @@ export function SelectionDecisionExplorer({summary, events, fallback, originalCl
       rail.scrollLeft = Math.max(0, Math.min(rail.scrollWidth - rail.clientWidth, rail.scrollLeft + delta));
     }
   }
-  return <section aria-label="入选决策核对台" className={styles.explorer}>
-    {summary.measurements?.items.length ? <SelectionMeasurements value={summary.measurements}/> : <SelectionScores scores={scores} onSelect={setScoreKey}/>}
+  return <section aria-label="入选决策核对台" className={`${styles.explorer} ${presentation === "workspace" ? styles.workspace : ""}`}>
+    {presentation !== "workspace" && (summary.measurements?.items.length ? <SelectionMeasurements value={summary.measurements}/> : <SelectionScores scores={scores} onSelect={setScoreKey}/>)}
     <section aria-label="入选与事件核对" className={styles.eventSection}>
       <div className={styles.heading}><h3>事件与这只股票</h3><span>{summary.historical ? "原提醒时点" : "当前补充资料"} · {originalClock}</span></div>
       {events.length ? <div role="tablist" aria-label="关联事件选择" className={styles.events}>{events.map((item, index) => <button key={item.id} type="button" role="tab" id={`${uid}-event-${index}`} aria-controls={`${uid}-detail`} aria-selected={event?.id === item.id} tabIndex={event?.id === item.id ? 0 : -1} className={styles.event} data-active={event?.id === item.id} onMouseEnter={() => setEventKey(item.id)} onFocus={() => setEventKey(item.id)} onClick={() => setEventKey(item.id)} onKeyDown={key => chooseEvent(key, index)}>
         <strong>{item.title}</strong><span>{item.relation}</span><small>{item.availableAt}</small>
       </button>)}</div> : <p className={styles.empty}>未找到符合所查时点与版本的可核对事件；没有用其他消息填补。</p>}
       <div data-event-id={event?.id} id={`${uid}-detail`} role={event ? "tabpanel" : undefined} aria-labelledby={event ? `${uid}-event-${events.indexOf(event)}` : undefined}>
-        <CompanyEvidenceWorkspace key={event?.id ?? "no-event"} event={event} facts={facts} fallback={fallback} scoreKey={score?.key}/>
+        <CompanyEvidenceWorkspace key={event?.id ?? "no-event"} event={event} facts={facts} fallback={fallback} scoreKey={score?.key} presentation={presentation}/>
       </div>
       {event?.temporalNote && <p className={styles.note}>{event.temporalNote}</p>}
-      {event?.source && <section className={styles.eventSource} aria-label="当前事件原句"><strong>事件原句</strong><p className={styles.sourceText} tabIndex={0}>{event.source.quote}</p>{event.source.url && <a href={event.source.url} target="_blank" rel="noopener noreferrer" data-action="quiet">查看消息来源</a>}</section>}
+      {presentation !== "workspace" && event?.source && <section className={styles.eventSource} aria-label="当前事件原句"><strong>事件原句</strong><p className={styles.sourceText} tabIndex={0}>{event.source.quote}</p>{event.source.url && <a href={event.source.url} target="_blank" rel="noopener noreferrer" data-action="quiet">查看消息来源</a>}</section>}
     </section>
     <section aria-label="原选择核对" className={styles.original}>
-      <div className={styles.heading}><h3>{summary.reasonRecorded ? "原选择记录" : "原理由未单列"}</h3><button type="button" aria-expanded={showOriginal} onClick={() => setShowOriginal(value => !value)}>{showOriginal ? "收起原选择" : "核对原选择"}</button></div>
-      <div className={styles.originalChoices} role="group" aria-label="原选择核对视角"><button type="button" aria-pressed={originalView === "reason"} onClick={() => setOriginalView("reason")}>为何入选</button><button type="button" aria-pressed={originalView === "condition"} onClick={() => setOriginalView("condition")}>失效条件</button></div>
+      <div className={styles.heading}><h3>{summary.reasonRecorded ? "原选择记录" : "原理由未单列"}</h3><button type="button" aria-expanded={showOriginal} onClick={() => setShowOriginal(value => !value)}>{showOriginal ? "收起原选择" : presentation === "workspace" ? "核对完整理由与条件" : "核对原选择"}</button></div>
+      {presentation !== "workspace" && <><div className={styles.originalChoices} role="group" aria-label="原选择核对视角"><button type="button" aria-pressed={originalView === "reason"} onClick={() => setOriginalView("reason")}>为何入选</button><button type="button" aria-pressed={originalView === "condition"} onClick={() => setOriginalView("condition")}>失效条件</button></div>
       <p aria-label="当前原选择摘录" className={styles.originalExcerpt}>{researchExcerpt(originalView === "reason" ? summary.reason : summary.condition)}</p>
-      <p className={styles.note}>原版本：{summary.version || "未记录"}。完整理由与全部条件可在本区核对。</p>
+      <p className={styles.note}>原版本：{summary.version || "未记录"}。完整理由与全部条件可在本区核对。</p></>}
       {showOriginal && <div className={styles.originalText}><p>{summary.reason}</p><p>{summary.condition}</p>{summary.supports?.map((support, index) => <p key={index}><strong>{support.label}：</strong>{support.value}</p>)}<p>原版本：{summary.version || "未记录"}。公司补充资料不改写原选择。</p></div>}
     </section>
     {children}

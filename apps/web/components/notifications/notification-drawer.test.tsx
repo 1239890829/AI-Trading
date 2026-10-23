@@ -181,7 +181,7 @@ describe("通知中心：未读计数与红点", () => {
       await act(async () => resolveNotifications(payload));
       fireEvent.click(await target);
       if (action === "通知正文") {
-        const original = await screen.findByRole("dialog", {name:"来源通知"});
+        const original = await screen.findByRole("region", {name:"来源通知"});
   fireEvent.click(within(original).getByRole("button",{name:"完整依据与研究记录"}));
         expect(original.textContent).toContain("正文");
         expect(screen.queryByTestId("notification-security-detail")).toBeNull();
@@ -212,7 +212,7 @@ describe("通知中心：未读计数与红点", () => {
     expect(screen.getByTestId("notification-list").textContent).toContain(displayed);
 
     fireEvent.click(screen.getByTestId("notification-judgment"));
-    expect((await screen.findByRole("dialog", { name: "距离通知" })).textContent).toContain(displayed);
+    expect((await screen.findByRole("region", { name: "距离通知" })).textContent).toContain(displayed);
     expect(payload.items[0].body).toBe(body);
   });
 
@@ -569,12 +569,12 @@ describe("通知事实与浏览状态分离（BUG-016）", () => {
     expect(facts.textContent).toContain("外部待确认");
     expect(facts.getAttribute("title")).toContain("渠道已受理，未确认送达");
     fireEvent.click(screen.getByTestId("notification-judgment"));
-    const detail = await screen.findByRole("dialog", {name:"示例通知"});
+    const detail = await screen.findByRole("region", {name:"示例通知"});
   fireEvent.click(within(detail).getByRole("button",{name:"完整依据与研究记录"}));
     expect(detail.textContent).toContain("盘中买点判定");
     expect(detail.textContent).toContain("渠道已受理（未确认送达）");
     expect(detail.textContent).toContain("未读仅表示站内尚未点开");
-    fireEvent.click(within(detail).getByRole("button", {name:"关闭"}));
+    fireEvent.click(within(detail).getByRole("button", {name:"返回通知列表"}));
     payload.diagnostics = {
       ...ranRejectedDiag,
       decisions: { ...ranRejectedDiag.decisions, latest: [{
@@ -624,7 +624,7 @@ it("user-defined reminders have their own category while stock opportunities, ri
   for (const text of ["自设条件提醒", "600519", "原个股消息", "个股机会", "原风险消息", "策略风险", "2026-09-11 12:35", "当前条件需核对"])
     expect(list.textContent).toContain(text);
   fireEvent.click(within(screen.getByText("显式个股阈值").closest('[data-testid="notification-row"]') as HTMLElement).getByTestId("notification-judgment"));
-  const detail = await screen.findByRole("dialog", {name: "显式个股阈值"});
+  const detail = await screen.findByRole("region", {name: "显式个股阈值"});
   fireEvent.click(within(detail).getByRole("button",{name:"完整依据与研究记录"}));
   for (const text of ["研究观察，不构成买卖建议", "用户条件规则", "原触发条件需重验"]) expect(detail.textContent).toContain(text);
 });
@@ -648,7 +648,7 @@ it("shows the original evidence and both clocks without claiming current eligibi
   expect(screen.getByTestId("notification-facts").textContent).toContain("当前条件需核对");
   expect(screen.getByTestId("notification-row").textContent).not.toContain("version-A");
   fireEvent.click(screen.getByTestId("notification-judgment"));
-  const original = await screen.findByRole("dialog", {name: "原入选A"});
+  const original = await screen.findByRole("region", {name: "原入选A"});
   fireEvent.click(within(original).getByRole("button",{name:"完整依据与研究记录"}));
   expect(original.textContent).toContain("原观察：2026-10-09 09:40:00");
   expect(original.textContent).toContain("记录：2026-10-09 10:10:00");
@@ -678,7 +678,7 @@ it("one detail opening shows the entire message and all original references with
   expect(dots()).toHaveLength(1);
   const calls = vi.mocked(getNotifications).mock.calls.length;
   fireEvent.click(screen.getByText("长消息核对"));
-  const detail = await screen.findByRole("dialog", {name:"长消息核对"});
+  const detail = await screen.findByRole("region", {name:"长消息核对"});
   fireEvent.click(within(detail).getByRole("button",{name:"完整依据与研究记录"}));
   expect(detail.textContent).toContain(body);
   expect(detail.textContent).toContain("第四条件不能省略");

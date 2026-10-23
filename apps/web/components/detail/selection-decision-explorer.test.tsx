@@ -3,7 +3,7 @@ import {afterEach, beforeEach, expect, it, vi} from "vitest";
 import {PickCard, fromDailyPick, fromIntradayStock} from "@/components/picks/pick-card";
 import {NotificationDetail} from "@/components/notifications/notification-detail";
 import {getStockAttribution, type AttributionEvidenceItem, type DailyPickItem, type IntradayTopStock, type NotificationItem, type SelectionMetrics} from "@/lib/api";
-import {readSelectionMetrics, SelectionMeasurements} from "./selection-decision-explorer";
+import {readSelectionMetrics, SelectionMeasurements, SelectionDecisionExplorer} from "./selection-decision-explorer";
 
 vi.mock("@/lib/api", async () => ({...await vi.importActual<typeof import("@/lib/api")>("@/lib/api"), getStockAttribution: vi.fn()}));
 const reason = "原选择记录：产品线有观察线索，尚不能确认新增订单。";
@@ -62,6 +62,22 @@ function mount(kind: "pick" | "notice", asOf = "2026-10-20T09:20:00+08:00", refs
 }
 beforeEach(() => {vi.useFakeTimers({toFake: ["Date"]}); vi.setSystemTime(new Date("2026-10-20T10:00:00+08:00")); vi.mocked(getStockAttribution).mockResolvedValue({schema_version: 1, symbol: "600825", count: 1, items: [source]});});
 afterEach(() => {cleanup(); vi.clearAllMocks(); vi.useRealTimers();});
+
+it("workspace source spread keeps exact event/company quotes and follows only declared transmission citations", () => {
+  const company = source.company_impact!;
+  const order = {...company.facts[0], id: "company:order", kind: "order", quote: "本次项目尚未签署订单。", page: 26};
+  render(<SelectionDecisionExplorer presentation="workspace" summary={{reason, condition, reasonRecorded: true}} originalClock="原入选时刻" fallback={<p>待核</p>} events={[{id: "18:22:19", title: source.title, relation: "原题材关联", availableAt: "08:31", source: {title: source.source_context!.title, quote: "项目仍为应用计划，尚未落地。", url: source.url},
+    company: {...company, facts: [...company.facts, order], analysis: {...company.analysis, chain: [...company.analysis.chain, {text: "订单未签署，不能推导新增收入。", evidence_ids: [order.id]}]}}, status: "有条件推演", gap: "缺订单归属", temporalNote: "当前补充，不回填入选理由"}]}/>);
+  const explorer = screen.getByRole("region", {name: "入选决策核对台"});
+  expect(within(explorer).getByLabelText("当前事件原句").textContent).toContain("项目仍为应用计划，尚未落地。");
+  expect(within(explorer).getByLabelText("当前事件公司原句").textContent).toContain(company.facts[0].quote);
+  fireEvent.click(within(explorer).getByRole("button", {name: "核对传导第2条"}));
+  expect(within(explorer).getByLabelText("当前事件公司原句").getAttribute("data-evidence-id")).toBe(order.id);
+  expect(within(explorer).getByLabelText("当前事件公司原句").textContent).toContain(order.quote);
+  expect(within(explorer).getByLabelText("当前事件原句").textContent).toContain("项目仍为应用计划，尚未落地。");
+  expect(within(explorer).queryByRole("region", {name: "关键分项评分"})).toBeNull();
+  expect(getStockAttribution).not.toHaveBeenCalled();
+});
 
 it.each(["pick", "notice"] as const)("%s shows company evidence, conditional impact and risks without requiring an expansion", async kind => {
   mount(kind);
