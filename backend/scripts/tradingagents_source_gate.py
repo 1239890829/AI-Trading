@@ -300,6 +300,19 @@ def _nonasserted(clause, start, end, kind, paragraph_prefix='', paragraph_suffix
             r'(?:该|本|当前)?(?:账户|投资者)?\s*$', before)
         if denial and not re.search(r'(?:不是|并非)\s*$', before[:denial.start()]):
             return 'LOCAL_DENIED_EXECUTION_INFERENCE'
+        # A local "not constitute A or a definite sale conclusion" denies
+        # both coordinated conclusions. Do not carry it past a risk premise,
+        # an affirmative tail or an outer negation of that very denial.
+        coordinated_denial = re.search(r'不构成(?P<items>[^。；;，,\n|]{1,24})(?:或|、)\s*$', before)
+        if coordinated_denial and clause[start:end] == '确定卖出':
+            denial_prefix = before[:coordinated_denial.start()]
+            if (NEGATIVE.search(denial_prefix[-55:])
+                    or re.search(r'(?:不是|并非)[^。；;，,\n]{0,55}$', denial_prefix)
+                    or not re.fullmatch(r'\s*(?:的)?结论\s*', after)
+                    or re.search(r'当前账户|该账户|本账户|能够|可以|确定|已经|现已|成立|具备|是事实',
+                                 coordinated_denial['items'])):
+                return None  # Do not fall through to a broader negative-word waiver.
+            return 'LOCAL_DENIED_COORDINATED_EXECUTION_CONCLUSION'
         # A denied decision or order-price inference is not a promised fill.
         # Bind the denial directly to this claim; retain double negations,
         # affirmative suffixes and presupposed post-sale risks as violations.

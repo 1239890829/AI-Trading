@@ -173,11 +173,33 @@ def isolate_calendar(monkeypatch):
     empty/error/跨日 unknown 在 pause-state 用例中单独测试，不能伪当开放。
     """
 
+    from app.core import freshness
+    from app.data_quality import validator
+    from app.schemas import market
+
+    now = datetime.fromisoformat("2026-10-13T10:00:00+08:00")
+    days = [(now - timedelta(days=1)).date(), now.date()]
+
+    class SourceClock(datetime):
+        @classmethod
+        def now(cls, tz=None):
+            return now.astimezone(tz) if tz is not None else now.replace(tzinfo=None)
+
     async def _no_days(_provider, lookback_days: int = 120):
         return []
 
+    # Source creation, validation, freshness and the independent display-session
+    # reader must share the same clock. Event-loop/monotonic time stays real.
+    monkeypatch.setitem(globals(), "datetime", SourceClock)
+    monkeypatch.setattr(market, "datetime", SourceClock)
+    monkeypatch.setattr(freshness, "datetime", SourceClock)
+    monkeypatch.setattr(validator, "utcnow", lambda: now.astimezone(timezone.utc))
+    monkeypatch.setattr(qh, "utcnow", lambda: now.astimezone(timezone.utc))
+    monkeypatch.setattr(qh, "beijing_now", lambda: now)
+    monkeypatch.setattr(qh.tc, "beijing_now", lambda: now)
+    monkeypatch.setattr(qh.tc, "known_trade_days", lambda: list(days))
+    monkeypatch.setattr(qh.tc, "_load_persisted", lambda: list(days))
     monkeypatch.setattr(qh.tc, "trading_days", _no_days)
-    monkeypatch.setattr(qh.tc, "market_open_state", lambda *a, **k: qh.tc.MARKET_OPEN)
 
 
 def _hub_with(quotes: list[Quote]) -> tuple[QuoteHub, _BatchProvider]:
@@ -188,6 +210,24 @@ def _hub_with(quotes: list[Quote]) -> tuple[QuoteHub, _BatchProvider]:
         get_watchlist=lambda: ["600105", "600519"],
     )
     return hub, prov
+
+
+def test_batch_fixture_quote_and_hub_share_confirmed_continuous_clock(isolate_calendar):
+    """The fixture must establish its premise through the actual session reader."""
+    from app.data_quality.validator import validate_quote
+
+    expected = datetime.fromisoformat("2026-10-13T10:00:00+08:00")
+    quote = make_q("600105", "甲", 10.0)
+    hub, _ = _hub_with([quote])
+    session = hub._display_session()
+
+    assert session.as_of == expected and session.trade_date == expected.date()
+    assert session.trade_day_result is True and session.phase == "continuous"
+    assert qh.tc.market_open_state(qh.tc.known_trade_days(), session.as_of) == qh.tc.MARKET_OPEN
+    assert qh.tc.in_trading_window()
+    assert quote.data_timestamp == quote.received_at == expected.astimezone(timezone.utc)
+    validate_quote(quote)
+    assert quote.quality == Quality.high and quote.freshness().state == "ready"
 
 
 def test_batch_missing_symbol_with_old_cache_is_marked_stale(isolate_calendar):

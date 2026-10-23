@@ -609,6 +609,24 @@ def test_reviewed_current_source_and_timeout_transitions_are_exact(env,component
     assert env.native.calls==0
 
 
+@pytest.mark.parametrize('mutation',[None,'future_hash','reverse','missing_old','wrong_grant_pair','codec_drift'])
+def test_reviewed_coordinated_disclaimer_source_transition_is_exact(env,mutation):
+    grant=deepcopy(env.grant);old=grant['source_method_identity'];new=grant['continuation_method_identity'];name='tradingagents_source_gate.py'
+    old['source_files'][name]='0655bee3b5138cb354e69ee9c0c8cf9f7d627c58898952a2140a7237e14d7f83'
+    new['source_files'][name]='5554522f2f9b601f3e91443459eb6874c65466b88ca57bad9728029ebace6604'
+    if mutation=='future_hash':new['source_files'][name]='f'*64
+    elif mutation=='reverse':old['source_files'][name],new['source_files'][name]=new['source_files'][name],old['source_files'][name]
+    elif mutation=='missing_old':old['source_files'].pop(name)
+    elif mutation=='codec_drift':old['source_files']['cli_codec.py']='a'*64;new['source_files']['cli_codec.py']='b'*64
+    grant['compatibility']['source_hash_pairs']={key:dict(old=old['source_files'].get(key),new=new['source_files'].get(key))
+        for key in old['source_files'].keys()|new['source_files'].keys() if old['source_files'].get(key)!=new['source_files'].get(key)}
+    if mutation=='wrong_grant_pair':grant['compatibility']['source_hash_pairs'][name]['new']='e'*64
+    if mutation is None:assert recovery._compatibility(grant,new)==(research._digest(old),research._digest(new))
+    else:
+        with pytest.raises(research.ResearchBlocked):recovery._compatibility(grant,new)
+    assert env.native.calls==0
+
+
 def test_grant_cannot_omit_existing_original_paid_output(env):
     put(env.run/'model-outputs/2.json',{'structured_output':{'content':'another saved original'}})
     with pytest.raises(research.ResearchBlocked): context(env)
@@ -1104,6 +1122,152 @@ def test_known_input_prelaunch_tail_preserves_six_answers_without_inventing_seve
     guard=recovery._pending_guard(c['binding']);guard(dict(role='Market Analyst',messages=e.input_request_messages),7)
     assert all(p.read_bytes()==body for p,body in before.items())
     assert not (e.run/'model-outputs/7.json').exists() and not (e.run/'usage-receipts/7.json').exists()
+
+
+def input_wrapup_wire(e):
+    """Pinned turn.py _as_text output, then the unchanged native codec.
+
+    Upstream turn.py SHA 94fa9514… turns tool calls/results into text only
+    for wrap_up. Raw checkpoint fingerprints remain separately authoritative.
+    """
+    proposal=e.input_messages[1]
+    call=proposal['tool_calls'][0]
+    tool=e.input_messages[2]
+    wire=[deepcopy(e.input_messages[0]),
+        dict(role='assistant',content=proposal['content']+'\n[Called '+call['name']+'('+json.dumps(call['arguments'],default=str)+')]'),
+        dict(role='user',content='['+tool['name']+' returned]\n'+tool['content']),
+        deepcopy(e.input_request_messages[-1])]
+    e.grant['binding']['input_wrapup_message_fingerprints']=[research._digest(row) for row in wire]
+    return wire
+
+
+def test_input_wrapup_accepts_reviewed_actual_upstream_text_without_rewriting_checkpoint(env):
+    e=input_prelaunch_env(env);raw=deepcopy(e.grant['binding']['input_prelaunch_tail']);wire=input_wrapup_wire(e)
+    assert wire[1]!=e.input_messages[1] and wire[2]!=e.input_messages[2]
+    recovery._pending_guard(e.grant['binding'])(dict(role='Market Analyst',messages=wire),7)
+    assert e.grant['binding']['input_prelaunch_tail']==raw
+    e.pin();assert context(e)['binding']['call_counter']==7
+
+
+def input_wrapup_failed_history(e,monkeypatch):
+    """Original grant rejected real _as_text before reserve; preserve that failure."""
+    e=input_prelaunch_env(e);wire=input_wrapup_wire(e)
+    e.grant['binding'].pop('input_wrapup_message_fingerprints');e.pin()
+    original_execute=e.native._execute;c,owner=consumed(e)
+    async def failed(*,recovery_guard,**kwargs):
+        recovery_guard(dict(role='Market Analyst',messages=wire),7)
+        raise AssertionError('old raw-message guard must reject actual wrap_up')
+    monkeypatch.setattr(e.native,'_execute',failed)
+    with pytest.raises(research.ResearchBlocked) as error:
+        asyncio.run(recovery.run_recovery(e.rec,params(c,owner),e.app))
+    assert error.value.code=='recovery_checkpoint_messages_drift'
+    diagnostic=recovery._json(e.run/'execution.json')
+    assert diagnostic['error_code']=='recovery_checkpoint_messages_drift'
+    assert recovery._json(e.run/'call-counter.json')=={'reserved':7}
+    with e.sf() as db:
+        assert db.query(AgentResourceUsage).filter(AgentResourceUsage.task_id==NEW).count()==0
+        db.add(AgentTask(id=NEW,type='tradingagents_research',status='failed',params=json.dumps(params(c,owner)),
+            error=json.dumps(dict(code='ResearchBlocked',message=str(error.value),retryable=False)),finished_at=NOW.replace(tzinfo=None)));db.commit()
+    previous=deepcopy(e.current)
+    history=dict(grant_id=GRANT,grant_sha256=c['grant_sha256'],task_id=NEW,method_identity=previous,
+        call_from=8,call_to=7,claim_sha256=recovery._sha(c['claim']))
+    e.current['source_files']['tradingagents_recovery.py']='f'*64
+    e.grant['grant_id']='e'*32
+    e.grant['compatibility']['source_hash_pairs']={key:dict(old=e.grant['source_method_identity']['source_files'].get(key),new=e.current['source_files'].get(key))
+        for key in e.grant['source_method_identity']['source_files'].keys()|e.current['source_files'].keys()
+        if e.grant['source_method_identity']['source_files'].get(key)!=e.current['source_files'].get(key)}
+    e.grant['binding'].update(recovery_history=[history],checkpoint=recovery.checkpoint_snapshot(e.run,SYMBOL),
+        worker_terminal_sha256=recovery._sha(e.run/'worker-terminal.json'))
+    input_wrapup_wire(e)
+    e.auth['unknown_usage_exception']['method_sha256']=research._digest(e.current)
+    e.native.resume_counter=7;e.native.first_role='Market Analyst'
+    async def continuation(*,recovery_guard,**kwargs):
+        def checked(request,counter):recovery_guard(dict(request,messages=wire),counter)
+        return await original_execute(recovery_guard=checked,**kwargs)
+    monkeypatch.setattr(e.native,'_execute',continuation);e.pin()
+    return e,c,history,wire
+
+
+def test_input_wrapup_zero_call_failure_history_continues_at_eight_preserving_six_answers(env,monkeypatch):
+    e,first,history,_=input_wrapup_failed_history(env,monkeypatch)
+    originals={p:p.read_bytes() for p in [e.source_claim,first['claim'],
+        *(e.run/folder/f'{n}.json' for folder in ('model-outputs','usage-receipts') for n in range(1,7)),
+        *(e.run/'recovery-history'/GRANT/name for name in ('grant.json','execution.json','worker-terminal.json','start.json'))]}
+    c=context(e);assert len(c['segments'])==2 and c['segments'][1]['call_from']==8 and c['segments'][1]['call_to']==7
+    claim,fresh=recovery._dispatch(c);assert fresh
+    owner=claim['native_recovery']['dispatch_owner'];rec=Recorder();rec.task_id='1'*32
+    recovery._advance(c,owner,'recovery_queued',task_id=rec.task_id)
+    result=asyncio.run(recovery.run_recovery(rec,params(c,owner),e.app))
+    assert result['recovery_lineage']['new_call_from']==8 and result['recovery_lineage']['reused_original_outputs']==6
+    assert result['recovery_lineage']['inherited_unknown_usage_count']==0
+    assert all(p.read_bytes()==raw for p,raw in originals.items())
+    assert not (e.run/'model-outputs/7.json').exists() and not (e.run/'usage-receipts/7.json').exists()
+    assert research._latest(SYMBOL)['recovery_lineage']==result['recovery_lineage']
+    assert e.grant['binding']['recovery_history']==[history]
+
+
+@pytest.mark.parametrize('mutation',['role','message','order','wrap_up','counter','raw_checkpoint','missing_wire','length','bad_hash','wrong_wrap_hash'])
+def test_input_wrapup_reviewed_wire_never_accepts_changed_role_messages_or_binding(env,mutation):
+    e=input_prelaunch_env(env);wire=input_wrapup_wire(e);b=e.grant['binding'];request=dict(role='Market Analyst',messages=deepcopy(wire));counter=7
+    if mutation=='role':request['role']='Fundamentals Analyst'
+    elif mutation=='message':request['messages'][2]['content']='different source'
+    elif mutation=='order':request['messages'][0],request['messages'][1]=request['messages'][1],request['messages'][0]
+    elif mutation=='wrap_up':request['messages'][-1]['content']='write fresh research'
+    elif mutation=='counter':counter=6
+    elif mutation=='raw_checkpoint':request['messages']=e.input_request_messages
+    elif mutation=='missing_wire':b.pop('input_wrapup_message_fingerprints')
+    elif mutation=='length':b['input_wrapup_message_fingerprints'].pop(0)
+    elif mutation=='bad_hash':b['input_wrapup_message_fingerprints'][0]=False
+    else:b['input_wrapup_message_fingerprints'][-1]='f'*64
+    with pytest.raises(research.ResearchBlocked):
+        recovery._binding(b);recovery._pending_guard(b)(request,counter)
+    assert e.native.calls==0
+
+
+@pytest.mark.parametrize('mutation',['paid_range','source_range','extra_reserved','extra_started','extra_known','extra_unknown','running','canceled',
+    'wrong_error','wrong_execution','wrong_recovery_task','changed_raw_tail','changed_old_answer','changed_native_error','unindexed_answer','unindexed_receipt','missing_grant','missing_old_wire'])
+def test_input_wrapup_zero_call_history_cannot_hide_paid_or_unbound_attempt(env,monkeypatch,mutation):
+    e,_,entry,_=input_wrapup_failed_history(env,monkeypatch);b=e.grant['binding']
+    if mutation=='paid_range':entry['call_to']=8;b['call_counter']=8
+    elif mutation=='source_range':entry['call_from']=7
+    elif mutation.startswith('extra_'):
+        state={'extra_reserved':'reserved','extra_started':'started','extra_known':'succeeded','extra_unknown':'failed'}[mutation]
+        with e.sf() as db:
+            db.add(AgentResourceUsage(id='7'*32,budget_date=NOW.date().isoformat(),scope=agent_budget.SCOPE_SELECTED_RESEARCH_LLM,
+                kind='model',purpose='must not be hidden',task_id=NEW,state=state,usage_known=int(mutation=='extra_known'),
+                started_at=None if state=='reserved' else NOW.replace(tzinfo=None)));db.commit()
+    elif mutation in {'running','canceled','wrong_error'}:
+        with e.sf() as db:
+            task=db.get(AgentTask,NEW)
+            if mutation=='wrong_error':task.error=json.dumps(dict(code='TransportError'))
+            else:task.status=mutation
+            db.commit()
+    elif mutation in {'wrong_execution','wrong_recovery_task'}:
+        value=recovery._json(e.run/'execution.json');value['error_kind' if mutation=='wrong_execution' else 'recovery_task_id']='BudgetError' if mutation=='wrong_execution' else '2'*32
+        put(e.run/'execution.json',value)
+    elif mutation=='changed_raw_tail':b['input_prelaunch_tail']['pending_message_fingerprints'][0]='e'*64
+    elif mutation=='changed_old_answer':
+        put(e.run/'model-outputs/1.json',dict(call_id=1,role='Fundamentals Analyst',structured_output={'content':'changed'}));b['outputs']['1']=recovery._sha(e.run/'model-outputs/1.json')
+    elif mutation=='changed_native_error':
+        with sqlite3.connect(e.run/'graph/cache/checkpoints'/f'{SYMBOL}.db') as db:db.execute("UPDATE writes SET value=? WHERE channel='__error__'",(b'changed native failure',))
+        b['checkpoint']=recovery.checkpoint_snapshot(e.run,SYMBOL)
+    elif mutation in {'unindexed_answer','unindexed_receipt'}:
+        put(e.run/('model-outputs' if mutation=='unindexed_answer' else 'usage-receipts')/'8.json',dict(unbound=True))
+    elif mutation=='missing_grant':(e.run/'recovery-history'/GRANT/'grant.json').unlink()
+    else:b.pop('input_wrapup_message_fingerprints')
+    e.pin()
+    with pytest.raises(research.ResearchBlocked):context(e)
+    assert e.native.calls==0 and recovery._json(e.run/'call-counter.json')=={'reserved':7}
+
+
+def test_input_wrapup_authorizer_rechecks_expiry_before_each_new_call(env,monkeypatch):
+    e=input_prelaunch_env(env);input_wrapup_wire(e);e.pin();c,owner=consumed(e)
+    recovery._advance(c,owner,'recovering',task_id=NEW)
+    assert recovery._authorizer(c,params(c,owner)['native_recovery'],NEW,e.app,e.sf)
+    monkeypatch.setattr(research,'_now',lambda:NOW+timedelta(hours=1))
+    with pytest.raises(research.ResearchBlocked) as error:
+        recovery._authorizer(c,params(c,owner)['native_recovery'],NEW,e.app,e.sf)
+    assert error.value.code=='recovery_grant_expired' and e.native.calls==0
 
 
 def test_known_input_prelaunch_continuation_starts_at_eight_without_replaying_completed_roles(env):

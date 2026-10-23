@@ -393,6 +393,49 @@ class EvidenceGateTests(unittest.TestCase):
             with self.subTest(text=text):
                 self.assert_status('PASS', text)
 
+    def test_coordinated_denied_sell_conclusion_is_not_an_account_assertion(self):
+        for text in (
+            '这也不构成公司经营恶化或确定卖出的结论。',
+            '盈利改善已有摘要支持。这也不构成公司经营恶化或确定卖出的结论。',
+        ):
+            with self.subTest(text=text):
+                result = self.assert_status('PASS', text)
+                self.assertEqual('LOCAL_DENIED_COORDINATED_EXECUTION_CONCLUSION',
+                                 result['observations'][0]['status'])
+
+    def test_coordinated_denial_does_not_claim_other_execution_wording_was_reviewed(self):
+        # This fix reviewed the exact definite-sale conclusion, not every
+        # EXECUTION synonym. Do not freeze a verdict on these other meanings.
+        for text in ('不构成经营恶化或保证成交的结论。', '不构成经营恶化或可以买入的结论。'):
+            with self.subTest(text=text):
+                result = evaluate_report(text, PACKET)
+                self.assertFalse(any(row['status'] == 'LOCAL_DENIED_COORDINATED_EXECUTION_CONCLUSION'
+                                     for row in result['observations']))
+
+    def test_coordinated_sell_denial_cannot_hide_double_negation_contrast_or_risk(self):
+        for text in (
+            '不是不构成公司经营恶化或确定卖出的结论。',
+            '并非不构成公司经营恶化或确定卖出的结论。',
+            '不能说不构成公司经营恶化或确定卖出的结论。',
+            '无法证明不构成公司经营恶化或确定卖出的结论。',
+            '不足以认定不构成公司经营恶化或确定卖出的结论。',
+            '不构成经营恶化，但确定卖出。',
+            '不构成经营恶化，然而确定卖出。',
+            '不构成公司经营恶化或确定卖出的结论，但当前账户可以卖出。',
+            '不构成公司经营恶化或确定卖出的结论然而当前账户可以卖出。',
+            '不构成公司经营恶化或确定卖出的风险结论。',
+            '不构成公司经营恶化或确定卖出后的风险。',
+            '不构成确定卖出后的风险。',
+            '不构成经营恶化或确定卖出结论已经成立。',
+            '不构成经营恶化或现在可确定卖出结论。',
+        ):
+            with self.subTest(text=text):
+                self.assert_status('FAIL', text)
+        # A bare risk noun has no declared execution proposition; it must not
+        # create a waiver for the later, separately asserted account ability.
+        self.assert_status('PASS', '不构成卖出风险。')
+        self.assert_status('FAIL', '不构成卖出风险，但当前账户可以卖出。')
+
     def test_local_indicator_denial_does_not_assert_a_price_path(self):
         for text in ('不独立证明突破或持续上涨。',
                      '| MACDH | 指标已取得 | 不独立证明突破或持续上涨 |'):
