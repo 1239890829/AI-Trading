@@ -1320,16 +1320,17 @@ describe("StockDetailPanel · 已有指数观察驱动一次恢复校准", () =>
   });
 
   it("新成功父观察只校准一次；同引用和后续同状态新对象不循环", async () => {
+    vi.setSystemTime(new Date("2026-10-09T10:00:03+08:00"));
     api.getMarketOverview.mockResolvedValueOnce({indices: [missing()]}).mockResolvedValue({indices: [{...indexQuote(), prev_close: 3020}]});
     api.getMinuteLine.mockResolvedValueOnce(minute(3000).points).mockResolvedValue([{ts: "2026-10-09T02:00:01Z", price: 3030, source: "tencent"}]);
     const view = render(<StockDetailPanel symbol="600519" chartTab="minute" indexQuote={null}/>);
     await settle();
     expect(view.getByRole("alert").textContent).toContain("指数叠加读取失败");
-    const recovered = indexQuote();
+    const recovered = {...indexQuote(), prev_close: 3020};
     view.rerender(<StockDetailPanel symbol="600519" chartTab="minute" indexQuote={recovered}/>);
     await settle();
     expect(api.getMinuteLine).toHaveBeenCalledTimes(2);
-    expect(api.getMarketOverview).toHaveBeenCalledTimes(2);
+    expect(api.getMarketOverview).not.toHaveBeenCalled();
     expect(view.queryByText(/指数叠加读取失败/)).toBeNull();
     expect(view.getByTestId("minute-price").getAttribute("data-index-last")).toBe("3030");
     expect(view.getByTestId("minute-price").getAttribute("data-index-clock")).toBe("2026-10-09T02:00:01Z");
@@ -1374,7 +1375,7 @@ describe("StockDetailPanel · 已有指数观察驱动一次恢复校准", () =>
 
   it("后台flight的pending未置位也不并发补读，补读失败后同状态新对象不循环", async () => {
     api.getMarketOverview.mockResolvedValue({indices: [indexQuote()]});
-    const view = render(<StockDetailPanel symbol="600519" chartTab="minute" indexQuote={null}/>);
+    const view = render(<StockDetailPanel symbol="600519" chartTab="minute" indexQuote={indexQuote()}/>);
     await settle();
     const old = deferred<MinutePoint[]>(); api.getMinuteLine.mockReturnValueOnce(old.promise);
     await advance(60_000);
@@ -1393,7 +1394,7 @@ describe("StockDetailPanel · 已有指数观察驱动一次恢复校准", () =>
 
   it("手动换代不会冒充旧flight已排空，旧成功不能清新失败或并发第三次恢复读", async () => {
     api.getMarketOverview.mockResolvedValue({indices: [indexQuote()]});
-    const view = render(<StockDetailPanel symbol="600519" chartTab="minute" indexQuote={null}/>); await settle();
+    const view = render(<StockDetailPanel symbol="600519" chartTab="minute" indexQuote={indexQuote()}/>); await settle();
     api.getMinuteLine.mockRejectedValueOnce(new Error("earlier failure"));
     await advance(60_000);
     const old = deferred<MinutePoint[]>(), manual = deferred<MinutePoint[]>(), recovery = deferred<MinutePoint[]>();
@@ -1417,7 +1418,7 @@ describe("StockDetailPanel · 已有指数观察驱动一次恢复校准", () =>
     const overview = deferred<{indices: Quote[]}>();
     api.getMinuteLine.mockRejectedValueOnce(new Error("minute failed early"));
     api.getMarketOverview.mockReturnValueOnce(overview.promise).mockResolvedValue({indices: [indexQuote()]});
-    const view = render(<StockDetailPanel symbol="600519" chartTab="minute" indexQuote={null}/>); await settle();
+    const view = render(<StockDetailPanel symbol="600519" chartTab="minute"/>); await settle();
     expect(view.getByRole("alert").textContent).toContain("指数叠加读取失败");
     view.rerender(<StockDetailPanel symbol="600519" chartTab="minute" indexQuote={indexQuote("2026-10-09T10:00:03+08:00")}/>); await settle();
     expect(api.getMinuteLine).toHaveBeenCalledTimes(1);
@@ -1428,7 +1429,7 @@ describe("StockDetailPanel · 已有指数观察驱动一次恢复校准", () =>
 
   it.each(["index_batch_missing", "source_time_regress_ignored", "quote_age_exceeded"])("父观察的%s不能触发恢复，冻结旧as_of也不触发", async reason => {
     api.getMarketOverview.mockResolvedValue({indices: [missing()]});
-    const view = render(<StockDetailPanel symbol="600519" chartTab="minute" indexQuote={null}/>); await settle();
+    const view = render(<StockDetailPanel symbol="600519" chartTab="minute" indexQuote={missing()}/>); await settle();
     view.rerender(<StockDetailPanel symbol="600519" chartTab="minute" indexQuote={{...indexQuote(), quality: "stale", quality_reasons: [reason]}}/>); await settle();
     view.rerender(<StockDetailPanel symbol="600519" chartTab="minute" indexQuote={indexQuote("2026-10-09T10:00:00+08:00")}/>); await settle();
     expect(api.getMinuteLine).toHaveBeenCalledTimes(1);
@@ -1611,4 +1612,263 @@ it("复用指数面板打开明确的股票资料深链时保留该意图，不�
   await advance(20);
   expect(view.getByRole("tab", {name: "资料", selected: true})).toBeTruthy();
   expect(api.getFinancials).toHaveBeenCalledTimes(1);
+});
+
+describe("StockDetailPanel · 同owner请求复用", () => {
+  const currentIndex = (): Quote => ({...audit, symbol: "000001", market: "SH", source: "tencent", price: 3000,
+    prev_close: 2990, data_timestamp: "2026-10-09T02:00:00Z",
+    display_session: {phase: "continuous", trade_date: "2026-10-09", as_of: "2026-10-09T10:00:00+08:00", trade_day_result: true}});
+  const completeQuote = (symbol = "600519"): Quote => ({...audit, symbol, source: "tencent", price: 22,
+    data_timestamp: "2026-10-09T02:00:00Z", pe_ttm: -2, pb: 1, total_mktcap_yi: 100, float_mktcap_yi: 50});
+  beforeEach(() => {
+    vi.stubGlobal("fetch", vi.fn(() => {throw new Error("offline request ownership test: unexpected fetch");}));
+    api.getMinuteLine.mockResolvedValue(minute(3000).points);
+    api.getMarketOverview.mockResolvedValue({indices: [currentIndex()]});
+  });
+
+  it("父指数与完整live估值在60秒内不重复请求，资料消费者仍正常读取", async () => {
+    const view = render(<StockDetailPanel symbol="600519" chartTab="minute" rightTab="profile"
+      liveQuote={completeQuote()} indexQuote={currentIndex()}/>);
+    await settle();
+    await advance(60_000);
+    expect({overview: api.getMarketOverview.mock.calls.length, valuation: api.getQuote.mock.calls.length})
+      .toEqual({overview: 0, valuation: 0});
+    expect(api.getFinancials).toHaveBeenCalledTimes(1);
+    expect(api.getCompanyProfile).toHaveBeenCalledTimes(1);
+    expect(view.getByTestId("minute-price").getAttribute("data-index-last")).toBe("3000");
+    expect(fetch).not.toHaveBeenCalled();
+  });
+
+  it.each(["missing", "stale", "wrong_symbol", "wrong_day"])("父指数%s不能通过独立overview洗白", async kind => {
+    const index = kind === "missing" ? null : {...currentIndex(),
+      ...(kind === "stale" ? {quality: "stale" as const, quality_reasons: ["index_batch_missing"]} : {}),
+      ...(kind === "wrong_symbol" ? {symbol: "000001", market: "SZ"} : {}),
+      ...(kind === "wrong_day" ? {data_timestamp: "2026-10-08T02:00:00Z"} : {})};
+    const view = render(<StockDetailPanel symbol="600519" chartTab="minute" indexQuote={index}/>); await settle();
+    expect({overview: api.getMarketOverview.mock.calls.length,
+      index: view.getByTestId("minute-price").getAttribute("data-index-last"),
+      failed: !!view.queryByRole("alert")}).toEqual({overview: 0, index: "none", failed: true});
+  });
+
+  it("没有父owner的独立详情保留overview回退", async () => {
+    const view = render(<StockDetailPanel symbol="600519" chartTab="minute"/>); await settle();
+    expect(api.getMarketOverview).toHaveBeenCalledTimes(1);
+    expect(view.getByTestId("minute-price").getAttribute("data-index-last")).toBe("3000");
+  });
+
+  it("独立overview在途时新增父缺项不能被旧成功覆盖", async () => {
+    const pending = deferred<{indices: Quote[]}>(); api.getMarketOverview.mockReturnValueOnce(pending.promise);
+    const view = render(<StockDetailPanel symbol="600519" chartTab="minute"/>); await settle();
+    view.rerender(<StockDetailPanel symbol="600519" chartTab="minute" indexQuote={null}/>); await settle();
+    await act(async () => {pending.resolve({indices: [currentIndex()]});});
+    expect(api.getMarketOverview).toHaveBeenCalledTimes(1);
+    expect(view.getByTestId("minute-price").getAttribute("data-index-last")).toBe("none");
+    expect(view.getByRole("alert").textContent).toContain("指数叠加读取失败");
+  });
+
+  it("真实live补齐后跳过估值，后来再次缺项仍按原30秒节拍读取", async () => {
+    const feed = testQuoteFeed(); feed.publish("600519", completeQuote());
+    const view = render(<StockDetailPanel symbol="600519" quoteFeed={feed}/>); await settle();
+    expect(api.getQuote).not.toHaveBeenCalled();
+    await act(async () => {feed.publish("600519", {...completeQuote(), pe_ttm: null});});
+    await advance(30_000); expect(api.getQuote).toHaveBeenCalledTimes(1);
+    await act(async () => {feed.publish("600519", completeQuote());});
+    await advance(30_000); expect(api.getQuote).toHaveBeenCalledTimes(1);
+    view.unmount(); await advance(60_000); expect(api.getQuote).toHaveBeenCalledTimes(1);
+  });
+
+  it("REST补齐不会冒充原始live齐备而永久停掉低频校准", async () => {
+    api.getQuote.mockResolvedValue(completeQuote());
+    const view = render(<StockDetailPanel symbol="600519" liveQuote={{...completeQuote(), pe_ttm: null}}/>);
+    await settle(); await advance(60_000);
+    expect(api.getQuote).toHaveBeenCalledTimes(3);
+    expect(within(view.getByRole("region", {name: "行情详细指标"})).getByText("-2.00")).toBeTruthy();
+  });
+
+  it("已有可信指数报价时不为不存在的估值消费者周期补源", async () => {
+    const view = render(<StockDetailPanel symbol="sh000001" liveQuote={{...currentIndex(), symbol: "sh000001"}}/>);
+    await settle(); await advance(60_000);
+    expect(api.getQuote).not.toHaveBeenCalled();
+    expect(view.container.querySelector(".quote-sheet")?.textContent).toContain("3,000.00");
+    expect(api.getFinancials).not.toHaveBeenCalled();
+    expect(api.getCompanyProfile).not.toHaveBeenCalled();
+  });
+
+  it.each(["undefined", "null"])("指数首帧%s只bootstrap一次，失败仍按原节拍重试", async kind => {
+    const feed = testQuoteFeed();
+    if (kind === "null") feed.publish("sh000001", null);
+    api.getQuote.mockRejectedValueOnce(new Error("isolated bootstrap failure"))
+      .mockResolvedValue({...currentIndex(), symbol: "sh000001"});
+    const view = render(<StockDetailPanel symbol="sh000001" quoteFeed={feed}/>);
+    await settle(); expect(api.getQuote).toHaveBeenCalledTimes(1);
+    expect(view.getByText(/行情数据暂不可用/)).toBeTruthy();
+    await advance(30_000); expect(api.getQuote).toHaveBeenCalledTimes(2);
+    expect(view.container.querySelector(".quote-sheet")?.textContent).toContain("3,000.00");
+    await advance(30_000); expect(api.getQuote).toHaveBeenCalledTimes(2);
+  });
+
+  it("指数首帧REST成功后60秒内只读一次", async () => {
+    api.getQuote.mockResolvedValue({...currentIndex(), symbol: "sh000001"});
+    render(<StockDetailPanel symbol="sh000001"/>); await settle(); await advance(60_000);
+    expect(api.getQuote).toHaveBeenCalledTimes(1);
+  });
+
+  it("A→指数B过渡的外股live不能阻止B首次bootstrap", async () => {
+    const previous = completeQuote();
+    api.getQuote.mockResolvedValue({...currentIndex(), symbol: "sh000001"});
+    const view = render(<StockDetailPanel symbol="600519" liveQuote={previous}/>); await settle();
+    expect(api.getQuote).not.toHaveBeenCalled();
+    view.rerender(<StockDetailPanel symbol="sh000001" liveQuote={previous}/>); await settle(); await advance(60_000);
+    expect(api.getQuote).toHaveBeenCalledExactlyOnceWith("sh000001", "tencent");
+    expect(view.container.querySelector(".quote-sheet")?.textContent).toContain("3,000.00");
+  });
+
+  it.each(["valid", "unknown_clock", "wrong_day", "before_tail"])("无feed的指数REST午休快照%s只按源证据完成bootstrap", async kind => {
+    vi.setSystemTime(new Date("2026-10-09T12:00:00+08:00"));
+    const paused: Quote = {...currentIndex(), symbol: "sh000001", quality: "stale", quality_reasons: ["market_closed"],
+      data_timestamp: kind === "unknown_clock" ? null : kind === "wrong_day" ? "2026-10-08T11:30:00+08:00"
+        : kind === "before_tail" ? "2026-10-09T11:28:00+08:00" : "2026-10-09T11:30:00+08:00",
+      display_session: {phase: "closed", trade_date: "2026-10-09", as_of: "2026-10-09T12:00:00+08:00", trade_day_result: true,
+        expected_source_date: "2026-10-09", expected_source_after: "2026-10-09T11:29:00+08:00"}};
+    api.getQuote.mockResolvedValue(paused);
+    const view = render(<StockDetailPanel symbol="sh000001"/>); await settle(); await advance(60_000);
+    expect(api.getQuote).toHaveBeenCalledTimes(kind === "valid" ? 1 : 3);
+    expect(view.container.querySelector('[data-quality="stale"]')).toBeTruthy();
+    expect(paused.quality).toBe("stale");
+  });
+
+  it("指数真实live后的缺项及坏帧不被周期REST洗白，隐藏后恢复仍不重读", async () => {
+    const feed = testQuoteFeed(); feed.publish("sh000001", {...currentIndex(), symbol: "sh000001"});
+    const view = render(<StockDetailPanel symbol="sh000001" quoteFeed={feed}/>); await settle();
+    await act(async () => {feed.publish("sh000001", null);}); await advance(30_000);
+    expect(view.getByRole("button", {name: "查看行情问题"}).textContent).toBe("报价待恢复");
+    await act(async () => {feed.publish("sh000001", {...currentIndex(), symbol: "sh000001", quality: "invalid"});});
+    await advance(30_000);
+    expect(view.container.querySelector('[data-quality="invalid"]')).toBeTruthy();
+    view.rerender(<StockDetailPanel symbol="sh000001" quoteFeed={feed} active={false}/>); await settle();
+    await act(async () => {feed.publish("sh000001", null);});
+    view.rerender(<StockDetailPanel symbol="sh000001" quoteFeed={feed}/>); await settle();
+    await advance(30_000);
+    expect(api.getQuote).not.toHaveBeenCalled();
+    expect(view.getByRole("button", {name: "查看行情问题"}).textContent).toBe("报价待恢复");
+  });
+
+  it("新live的NaN估值不覆盖已补齐的有限值", async () => {
+    api.getQuote.mockResolvedValue({...completeQuote(), pe_ttm: 32, pb: 3});
+    const feed = testQuoteFeed(); feed.publish("600519", {...completeQuote(), pe_ttm: null, pb: null});
+    const view = render(<StockDetailPanel symbol="600519" quoteFeed={feed}/>); await settle();
+    await act(async () => {feed.publish("600519", {...completeQuote(), price: 23, pe_ttm: NaN, pb: NaN,
+      total_mktcap_yi: NaN, float_mktcap_yi: NaN, data_timestamp: "2026-10-09T02:00:01Z"});});
+    const metrics = within(view.getByRole("region", {name: "行情详细指标"}));
+    expect(metrics.getByText("32.00")).toBeTruthy();
+    expect(metrics.getByText("3.00")).toBeTruthy();
+    expect(metrics.getByText("100.00亿")).toBeTruthy();
+    expect(api.getQuote).toHaveBeenCalledTimes(1);
+  });
+
+  it("连接失败时完整旧live不能永久停掉股票REST校准", async () => {
+    api.getQuote.mockResolvedValue({...completeQuote(), pe_ttm: 32});
+    const current = completeQuote();
+    const view = render(<StockDetailPanel symbol="600519" liveQuote={current} streamStatus="live"/>); await settle();
+    expect(api.getQuote).not.toHaveBeenCalled();
+    view.rerender(<StockDetailPanel symbol="600519" liveQuote={current} streamStatus="error"/>);
+    await advance(30_000); expect(api.getQuote).toHaveBeenCalledTimes(1);
+    expect(within(view.getByRole("region", {name: "行情详细指标"})).getByText("32.00")).toBeTruthy();
+  });
+
+  it("指数已知午间源观察不触发无消费者的估值补源，也不升级质量", async () => {
+    const paused: Quote = {...currentIndex(), symbol: "sh000001", quality: "stale", quality_reasons: ["market_closed"],
+      data_timestamp: "2026-10-09T11:30:00+08:00", display_session: {phase: "closed", trade_date: "2026-10-09",
+        as_of: "2026-10-09T12:00:00+08:00", trade_day_result: true, expected_source_date: "2026-10-09",
+        expected_source_after: "2026-10-09T11:29:00+08:00"}};
+    const view = render(<StockDetailPanel symbol="sh000001" liveQuote={paused}/>); await settle(); await advance(60_000);
+    expect(api.getQuote).not.toHaveBeenCalled();
+    expect(view.container.querySelector('[data-quality="stale"]')).toBeTruthy();
+    expect(view.container.querySelector(".quote-sheet")?.textContent).toContain("午间休息");
+  });
+
+  it("在途估值补源不能覆盖后来完整live的四项估值", async () => {
+    const pending = deferred<Quote>(); api.getQuote.mockReturnValueOnce(pending.promise);
+    const feed = testQuoteFeed(); feed.publish("600519", {...completeQuote(), pe_ttm: null});
+    const view = render(<StockDetailPanel symbol="600519" quoteFeed={feed} streamStatus="error"/>); await settle();
+    await act(async () => {feed.publish("600519", {...completeQuote(), price: 23, pe_ttm: 8,
+      data_timestamp: "2026-10-09T02:00:01Z"});});
+    view.rerender(<StockDetailPanel symbol="600519" quoteFeed={feed} streamStatus="live"/>); await settle();
+    await act(async () => {pending.resolve({...completeQuote(), pe_ttm: 99, pb: 99,
+      total_mktcap_yi: 999, float_mktcap_yi: 999});});
+    const metrics = view.getByRole("region", {name: "行情详细指标"});
+    expect(within(metrics).getByText("8.00")).toBeTruthy();
+    expect(within(metrics).queryByText("99.00")).toBeNull();
+    expect(view.container.querySelector(".quote-sheet")?.textContent).toContain("23.00");
+    expect(api.getQuote).toHaveBeenCalledTimes(1);
+  });
+
+  it.each(["stale", "invalid", "no_clock", "invalid_cap"])("%s的估值字段不当作可信live齐备", async kind => {
+    const quote = {...completeQuote(),
+      ...(kind === "stale" || kind === "invalid" ? {quality: kind as "stale" | "invalid"} : {}),
+      ...(kind === "no_clock" ? {data_timestamp: null} : {}),
+      ...(kind === "invalid_cap" ? {total_mktcap_yi: 0} : {})};
+    render(<StockDetailPanel symbol="600519" liveQuote={quote}/>); await settle();
+    expect(api.getQuote).toHaveBeenCalledTimes(1);
+  });
+
+  it("A→B→A的完整live不继承B的补源，隐藏和卸载不新增读取", async () => {
+    const pending = deferred<Quote>(); api.getQuote.mockReturnValueOnce(pending.promise);
+    const first = completeQuote();
+    const view = render(<StockDetailPanel symbol="600519" liveQuote={first}/>); await settle();
+    view.rerender(<StockDetailPanel symbol="000001" liveQuote={{...completeQuote("000001"), pe_ttm: null}}/>); await settle();
+    view.rerender(<StockDetailPanel symbol="600519" liveQuote={first}/>); await settle();
+    await act(async () => {pending.resolve({...completeQuote("000001"), pe_ttm: 99});});
+    expect(api.getQuote).toHaveBeenCalledTimes(1);
+    expect(view.container.querySelector(".quote-sheet")?.textContent).toContain("600519");
+    expect(within(view.getByRole("region", {name: "行情详细指标"})).getByText("-2.00")).toBeTruthy();
+    view.rerender(<StockDetailPanel symbol="600519" active={false} liveQuote={{...first, pe_ttm: null}}/>);
+    await advance(60_000); expect(api.getQuote).toHaveBeenCalledTimes(1);
+    view.unmount(); await advance(60_000); expect(api.getQuote).toHaveBeenCalledTimes(1);
+  });
+});
+
+describe("StockDetailPanel · 指数竞价等待与真实失败", () => {
+  function auctionIndex(clock: string, phase: "auction" | "pre_open_gap" | "continuous", sourceClock = clock): Quote {
+    return {...audit, symbol: "000001", market: "SH", source: "tencent", price: 3000, prev_close: 2990,
+      data_timestamp: `2026-10-09T${sourceClock}+08:00`, quality: "stale", quality_reasons: ["quote_age_exceeded"],
+      display_session: {phase, trade_date: "2026-10-09", as_of: `2026-10-09T${clock}+08:00`, trade_day_result: true}};
+  }
+  beforeEach(() => {
+    vi.stubGlobal("fetch", vi.fn(() => {throw new Error("offline auction test: unexpected fetch");}));
+    api.getMinuteLineWithBaseline.mockResolvedValue({points: [{ts: "2026-10-09T09:15:00+08:00", price: 20, source: "tdx"}], vr_baseline_5m: null});
+  });
+  it("开盘空连续点显示等待，阶段转连续交易只补一次真实指数读", async () => {
+    vi.setSystemTime(new Date("2026-10-09T09:20:00+08:00")); api.getMinuteLine.mockResolvedValue([]);
+    const view = render(<StockDetailPanel symbol="600519" chartTab="minute" indexQuote={auctionIndex("09:20:00", "auction", "09:15:00")}/>); await settle();
+    expect(view.getByText(/上证叠加 · 开盘竞价等待 · 尚无连续分时/)).toBeTruthy();
+    expect(view.queryByText(/指数叠加读取失败/)).toBeNull();
+    expect(view.getByTestId("minute-price").getAttribute("data-index-last")).toBe("none");
+    vi.setSystemTime(new Date("2026-10-09T09:30:00+08:00"));
+    api.getMinuteLine.mockResolvedValue([{ts: "2026-10-09T09:30:00+08:00", price: 3005, source: "tencent"}]);
+    const live = {...auctionIndex("09:30:00", "continuous"), quality: "high" as const, quality_reasons: []};
+    view.rerender(<StockDetailPanel symbol="600519" chartTab="minute" indexQuote={live}/>); await settle();
+    expect(api.getMinuteLine).toHaveBeenCalledTimes(2);
+    expect(view.queryByText(/开盘竞价等待/)).toBeNull();
+    expect(view.getByTestId("minute-price").getAttribute("data-index-last")).toBe("3005");
+    expect(api.getMarketOverview).not.toHaveBeenCalled();
+  });
+  it("收盘竞价保留有据尾点，随后HTTP失败仍真实报警，不改成等待", async () => {
+    vi.setSystemTime(new Date("2026-10-09T14:58:00+08:00"));
+    api.getMinuteLineWithBaseline.mockResolvedValue({points: [{ts: "2026-10-09T14:57:00+08:00", price: 20, source: "tdx"}], vr_baseline_5m: null});
+    api.getMinuteLine.mockResolvedValue([{ts: "2026-10-09T14:57:00+08:00", price: 3000, source: "tencent"}]);
+    const view = render(<StockDetailPanel symbol="600519" chartTab="minute" indexQuote={auctionIndex("14:58:00", "auction", "14:57:00")}/>); await settle();
+    expect(view.getByText(/上证叠加 · 收盘竞价等待/)).toBeTruthy();
+    expect(view.getByTestId("minute-price").getAttribute("data-index-last")).toBe("3000");
+    api.getMinuteLine.mockRejectedValueOnce(new Error("isolated real index failure")); await advance(60_000);
+    expect(view.getByRole("alert").textContent).toContain("指数叠加读取失败 · 保留结果");
+    expect(view.queryByText(/上证叠加 · 收盘竞价等待/)).toBeNull();
+    expect(view.getByTestId("minute-price").getAttribute("data-index-last")).toBe("3000");
+  });
+  it("竞价期间实际HTTP失败不能冒充无连续点的正常等待", async () => {
+    vi.setSystemTime(new Date("2026-10-09T09:20:00+08:00")); api.getMinuteLine.mockRejectedValueOnce(new Error("isolated auction read failure"));
+    const view = render(<StockDetailPanel symbol="600519" chartTab="minute" indexQuote={auctionIndex("09:20:00", "auction", "09:15:00")}/>); await settle();
+    expect(view.getByRole("alert").textContent).toContain("指数叠加读取失败");
+    expect(view.queryByText(/上证叠加 · 开盘竞价等待/)).toBeNull();
+  });
 });

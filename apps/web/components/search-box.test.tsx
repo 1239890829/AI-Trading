@@ -426,3 +426,67 @@ it("方向键浏览多条搜索结果，打开详情前保留稳定回焦位置"
     expect(screen.queryByRole("region", {name: "证券搜索结果"})).toBeNull();
   } finally { vi.useRealTimers(); }
 });
+
+describe("SearchBox 有界本地成功选择历史", () => {
+  const key = "ashare-security-search-history-v1";
+  beforeEach(() => {localStorage.removeItem(key); vi.useFakeTimers();});
+  afterEach(() => {vi.useRealTimers(); vi.restoreAllMocks(); localStorage.removeItem(key);});
+  async function choose(query: string, symbol: string, name: string) {
+    vi.mocked(searchSymbols).mockResolvedValueOnce([item(symbol, name)]);
+    typeQuery(query); await act(async () => {vi.advanceTimersByTime(250);});
+    fireEvent.click(screen.getByRole("button", {name: new RegExp(`${name}${symbol}`)}));
+  }
+  it("只在有效结果选中后保存，重挂载可用历史重搜且焦点稳定", async () => {
+    const view = render(<SearchBox/>); await act(async () => {});
+    await choose("guizhoumaotai", "600519", "贵州茅台");
+    expect(JSON.parse(localStorage.getItem(key)!)).toEqual([{query: "guizhoumaotai", symbol: "600519", name: "贵州茅台", market: "SH"}]);
+    view.unmount(); render(<SearchBox/>); await act(async () => {});
+    const input = screen.getByRole("textbox"); fireEvent.focus(input);
+    const history = screen.getByRole("button", {name: /重搜 贵州茅台/});
+    expect(searchSymbols).toHaveBeenCalledTimes(1);
+    fireEvent.keyDown(input, {key: "ArrowDown"}); expect(document.activeElement).toBe(history);
+    fireEvent.keyDown(history, {key: "ArrowUp"}); expect(document.activeElement).toBe(input);
+    vi.mocked(searchSymbols).mockResolvedValueOnce([item("600519", "贵州茅台")]); fireEvent.click(history);
+    expect(document.activeElement).toBe(input); await act(async () => {vi.advanceTimersByTime(250);});
+    expect(searchSymbols).toHaveBeenLastCalledWith("guizhoumaotai");
+    expect(JSON.parse(localStorage.getItem(key)!)).toHaveLength(1);
+  });
+  it("成功记录最多12条且按证券去重移到最近，未命中和输入片段不留历史", async () => {
+    render(<SearchBox/>); await act(async () => {});
+    for (let n = 0; n < 14; n++) await choose(`kw${n}`, String(600000 + n), `成员${n}`);
+    let saved = JSON.parse(localStorage.getItem(key)!);
+    expect(saved).toHaveLength(12); expect(saved[0].query).toBe("kw13"); expect(saved.at(-1).query).toBe("kw2");
+    await choose("quanjiancheng", "600005", "成员5"); saved = JSON.parse(localStorage.getItem(key)!);
+    expect(saved).toHaveLength(12); expect(saved[0].query).toBe("quanjiancheng");
+    expect(saved.filter((entry: {symbol: string}) => entry.symbol === "600005")).toHaveLength(1);
+    vi.mocked(searchSymbols).mockResolvedValueOnce([]); typeQuery("zz_no_hit");
+    await act(async () => {vi.advanceTimersByTime(250);});
+    expect(JSON.parse(localStorage.getItem(key)!)).toEqual(saved);
+  });
+  it("坏存储、超长或无效身份不显示为历史；storage拒绝不阻断正常选择", async () => {
+    localStorage.setItem(key, JSON.stringify([{query: "x".repeat(100), symbol: "600519", market: "SH"},
+      {query: "bad", symbol: "not-a-symbol", market: "SH"}, {query: "gmt", symbol: "600519", name: "贵州茅台", market: "SH"}]));
+    const view = render(<SearchBox/>); await act(async () => {}); fireEvent.focus(screen.getByRole("textbox"));
+    expect(screen.getAllByRole("button", {name: /重搜/})).toHaveLength(1);
+    fireEvent.click(screen.getByRole("button", {name: "清除搜索历史"}));
+    expect(localStorage.getItem(key)).toBeNull();
+    view.unmount();
+    vi.spyOn(Storage.prototype, "getItem").mockImplementation(() => {throw new Error("storage unavailable");});
+    vi.spyOn(Storage.prototype, "setItem").mockImplementation(() => {throw new Error("storage unavailable");});
+    render(<SearchBox/>); await act(async () => {}); await choose("gzmts", "600519", "贵州茅台");
+    expect(screen.queryByRole("region", {name: "证券搜索结果"})).toBeNull();
+  });
+  it("历史不抢IME的Enter/Escape，未完成组合不发请求或新增记录", async () => {
+    const saved = [{query: "gmt", symbol: "600519", name: "贵州茅台", market: "SH"}]; localStorage.setItem(key, JSON.stringify(saved));
+    render(<SearchBox/>); await act(async () => {}); const input = screen.getByRole("textbox"); fireEvent.focus(input);
+    fireEvent.compositionStart(input); fireEvent.change(input, {target: {value: "guizhou"}});
+    fireEvent.keyDown(input, {key: "Enter"}); fireEvent.keyDown(input, {key: "Escape"});
+    await act(async () => {vi.advanceTimersByTime(500);});
+    expect(searchSymbols).not.toHaveBeenCalled(); expect(JSON.parse(localStorage.getItem(key)!)).toEqual(saved);
+  });
+  it.each(["not-json", "{}", "x".repeat(16_385)])("异常历史输入不生成可操作记录", async value => {
+    localStorage.setItem(key, value); render(<SearchBox/>); await act(async () => {});
+    fireEvent.focus(screen.getByRole("textbox"));
+    expect(screen.queryByRole("button", {name: /重搜/})).toBeNull(); expect(searchSymbols).not.toHaveBeenCalled();
+  });
+});

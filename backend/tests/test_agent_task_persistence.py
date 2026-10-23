@@ -34,15 +34,18 @@ def database(tmp_path, monkeypatch):
     engine.dispose()
 
 
-@pytest.mark.parametrize("phase", ["before_start", "after_handler"])
-def test_released_exclusive_lock_eventually_saves_one_handler_result(database, monkeypatch, phase):
+@pytest.mark.parametrize(("phase", "handler_start_delay"), [("before_start", 0), ("after_handler", 0), ("after_handler", 0.08)])
+def test_released_exclusive_lock_eventually_saves_one_handler_result(database, monkeypatch, phase, handler_start_delay):
     _, blocker = database
     calls, loop_errors = [], []
+    acquired = asyncio.Event()
 
     async def handler(rec, params, app):
         calls.append(rec.task_id)
         if phase == "after_handler":
+            await asyncio.sleep(handler_start_delay)
             blocker.execute("BEGIN EXCLUSIVE")
+            acquired.set()
         return {"kind": "fixture", "completed": True}
 
     monkeypatch.setitem(at._HANDLERS, "data_check", handler)
@@ -53,8 +56,12 @@ def test_released_exclusive_lock_eventually_saves_one_handler_result(database, m
         handle = at._HANDLES[created["id"]]
         if phase == "before_start":
             blocker.execute("BEGIN EXCLUSIVE")
+            acquired.set()
 
         async def release():
+            # Count the same hold duration from real acquisition. Under load,
+            # task creation can precede the handler's BEGIN by more than 50ms.
+            await asyncio.wait_for(acquired.wait(), timeout=2)
             await asyncio.sleep(0.05)
             blocker.rollback()
 

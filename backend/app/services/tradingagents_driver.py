@@ -115,12 +115,12 @@ class CodexTypedTransport:
                 "proxy_configuration_sha256": digest(self.proxy_env or {}),
                 "internal_retries": "unknown", "billing": "unknown"}
 
-    def infer(self, messages, schema, *, mark_launch, timeout, role=None):
+    def infer(self, messages, schema, *, mark_launch, timeout, role=None, selected_facts_sha256=None):
         self.method_identity()  # Detect executable/configuration drift before start.
         return codex_transport.codex_infer(messages, schema, model=self.model, effort=self.effort,
             mark_launch=mark_launch, executable=self.executable, auth_file=self.auth_file,
             timeout=timeout, proxy_env=self.proxy_env, node_executable=self.node_executable,
-            node_executable_sha256=self.node_executable_sha256)
+            node_executable_sha256=self.node_executable_sha256, selected_facts_sha256=selected_facts_sha256)
 
 
 class StoredCompanyPacketBuilder:
@@ -1043,7 +1043,8 @@ class NativeTradingAgentsDriver:
                         response = await self._infer_accounted(rec, budget, messages, schema, request["role"], call_id,
                             capture_output=lambda value: self._record_output(run, request, value, call_id), budget_scope=budget_scope,
                             usage_receipt_path=run / "usage-receipts" / (str(call_id) + ".json"), method_sha256=digest(identity),
-                            usage_authorizer=usage_authorizer)
+                            usage_authorizer=usage_authorizer,
+                            selected_facts_sha256=packet['evidence_sha256'] if budget_scope == 'selected_research_llm' else None)
                         value = response["structured_output"]
                         self._audit_output(run, packet, request, value, context, call_id)
                         if not value.get("tool_calls"):
@@ -1222,7 +1223,8 @@ class NativeTradingAgentsDriver:
             "automatic_reconciliation": False, "complete_context_logged": False})
 
     async def _infer_accounted(self, rec, budget, messages, schema, role, call_id, *, capture_output=None,
-                               budget_scope=None, usage_receipt_path=None, method_sha256=None, usage_authorizer=None):
+                               budget_scope=None, usage_receipt_path=None, method_sha256=None, usage_authorizer=None,
+                               selected_facts_sha256=None):
         from app.services.agent_tasks import _lifecycle_db
 
         # The real graph always supplies its exact-method receipt destination.
@@ -1233,8 +1235,10 @@ class NativeTradingAgentsDriver:
                     or usage_receipt_path.exists() or usage_receipt_path.is_symlink()):
                 raise DriverUnavailable("usage_receipt_identity_or_replay")
         # Exact outer transport prompt + schema is bounded before reserve/start.
-        prompt = codex_transport.NOTE + codex_transport.encode_cli_transcript(messages)
-        wire_schema, _ = codex_transport.strict_wire_schema(schema)
+        if selected_facts_sha256 is not None and budget_scope != 'selected_research_llm':
+            raise DriverUnavailable('selected_wire_scope_invalid')
+        prompt, wire_schema, _ = codex_transport.prepare_cli_request(messages, schema,
+            selected_facts_sha256=selected_facts_sha256)
         input_chars = len(prompt) + len(canonical(wire_schema))
         await drain_thread(budget.check_model_input, input_chars)
         timeout = float(settings.agent_model_max_timeout_seconds)
@@ -1264,8 +1268,10 @@ class NativeTradingAgentsDriver:
                 raise DriverUnavailable("unknown_usage_authorization_changed_before_start")
             budget.start(receipt["id"], **({"allowed_unknown_usage": current} if current else {}))
             launched = True
-        inference = asyncio.create_task(asyncio.to_thread(self.transport.infer, messages, schema,
-            mark_launch=mark_launch, timeout=timeout, role=role))
+        infer_options = {'mark_launch': mark_launch, 'timeout': timeout, 'role': role}
+        if selected_facts_sha256 is not None:
+            infer_options['selected_facts_sha256'] = selected_facts_sha256
+        inference = asyncio.create_task(asyncio.to_thread(self.transport.infer, messages, schema, **infer_options))
         try:
             response = await asyncio.shield(inference)
         except asyncio.CancelledError as error:

@@ -150,6 +150,48 @@ def test_durable_call_lifecycle_and_unknown_not_zero(tmp_path):
     asyncio.run(run())
 
 
+def test_selected_wire_hash_is_shared_by_accounting_preflight_and_transport(tmp_path):
+    facts = {'price_history': {'observations': [
+        {'date': str(i), 'close': i + 0.5, 'volume': i * 100, 'available': None} for i in range(30)]}}
+    messages = [{'role': 'user', 'content': 'original role\n<UNTRUSTED_FROZEN_EVIDENCE>\n'
+        + driver.canonical(facts) + '\n</UNTRUSTED_FROZEN_EVIDENCE>\noriginal restriction'}]
+    original = deepcopy(messages); schema = build_cli_schema(); binding = driver.digest(facts)
+    class WireTyped(Typed):
+        def infer(self, messages, schema, *, mark_launch, timeout, role=None, selected_facts_sha256=None):
+            self.binding = selected_facts_sha256
+            self.prompt, self.wire, _ = transport.prepare_cli_request(messages, schema,
+                selected_facts_sha256=selected_facts_sha256)
+            return super().infer(messages, schema, mark_launch=mark_launch, timeout=timeout, role=role)
+    async def run():
+        typed, budget = WireTyped(), Budget()
+        await native(tmp_path, typed)._infer_accounted(Recorder(), budget, messages, schema, 'Market Analyst', 1,
+            budget_scope='selected_research_llm', selected_facts_sha256=binding)
+        assert typed.binding == binding and messages == original
+        assert budget.events[0][1]['input_chars'] == len(typed.prompt) + len(driver.canonical(typed.wire))
+        assert transport.FROZEN_TABLE_NOTE in typed.prompt
+        for scope, fact_hash in [('selected_research_llm', '0' * 64), ('autonomy_llm', binding)]:
+            blocked = Budget(); model = WireTyped()
+            with pytest.raises((ValueError, driver.DriverUnavailable)):
+                await native(tmp_path, model)._infer_accounted(Recorder(), blocked, messages, schema,
+                    'Market Analyst', 1, budget_scope=scope, selected_facts_sha256=fact_hash)
+            assert blocked.events == [] and model.calls == 0
+        baseline, baseline_budget = WireTyped(), Budget()
+        await native(tmp_path, baseline)._infer_accounted(Recorder(), baseline_budget, messages, schema,
+            'Market Analyst', 1)
+        assert baseline.binding is None
+        assert baseline.prompt == transport.NOTE + transport.encode_cli_transcript(messages)
+        oversized_facts = {**facts, 'noncompressible_text': 'x' * 250001}
+        oversized = [{'role': 'user', 'content': '<UNTRUSTED_FROZEN_EVIDENCE>\n'
+            + driver.canonical(oversized_facts) + '\n</UNTRUSTED_FROZEN_EVIDENCE>'}]
+        blocked, model = Budget(), WireTyped()
+        with pytest.raises(ValueError, match='input bound'):
+            await native(tmp_path, model)._infer_accounted(Recorder(), blocked, oversized, schema,
+                'Market Analyst', 1, budget_scope='selected_research_llm',
+                selected_facts_sha256=driver.digest(oversized_facts))
+        assert blocked.events == [] and model.calls == 0
+    asyncio.run(run())
+
+
 def test_started_failure_unknown_and_unstarted_release(tmp_path):
     async def run():
         for started in (True, False):

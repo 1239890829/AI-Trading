@@ -539,20 +539,35 @@ class TencentProvider:
         return []  # 由链上东财 datacenter 提供
 
     async def search(self, query: str) -> list[SymbolSearchItem]:
+        import json
+
         resp = await self._client.get(
             "https://smartbox.gtimg.cn/s3/", params={"v": "2", "q": query, "t": "all"}
         )
         if resp.status_code != 200:
             raise ProviderError(f"tencent search HTTP {resp.status_code}")
-        text = resp.content.decode("gbk", errors="replace")
-        body = text.split('"', 1)
-        if len(body) < 2:
-            return []
+        try:
+            text = resp.content.decode("gbk")
+            assignment, separator, payload = text.partition("=")
+            if not separator or assignment.strip() not in {"v_hint", "var v_hint"}:
+                raise ValueError("unexpected search assignment")
+            hints = json.loads(payload.strip().removesuffix(";").rstrip())
+            if not isinstance(hints, str):
+                raise ValueError("search hints must be a string")
+        except (UnicodeDecodeError, ValueError) as exc:
+            raise ProviderError("invalid tencent search response") from exc
         items = []
-        for group in body[1].rsplit('"', 1)[0].split("^"):
+        for group in hints.split("^"):
             parts = group.split("~")
-            if len(parts) >= 2:
-                item = parse_search_row(parts[1], parts[0])
-                if item:
-                    items.append(item)
+            if len(parts) >= 5:
+                code, name = parts[0].strip().lower() + parts[1].strip(), parts[2].strip()
+            elif len(parts) == 2:
+                code, name = parts[1].strip().lower(), parts[0].strip()
+            else:
+                continue
+            if not name or re.fullmatch(r"(?:sh|sz|bj)[0-9]{6}", code) is None:
+                continue
+            item = parse_search_row(code, name)
+            if item:
+                items.append(item)
         return items

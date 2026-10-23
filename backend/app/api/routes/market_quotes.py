@@ -8,7 +8,8 @@ from __future__ import annotations
 
 import asyncio
 import logging
-from datetime import date
+import math
+from datetime import date, datetime, timezone
 from fastapi import APIRouter, Depends, HTTPException, Query, Request
 from app.api.deps import get_hub
 from app.core.ttl_cache import cache_on
@@ -43,6 +44,92 @@ from app.api.routes.market_envelope import (
 )
 
 
+def _index_member_quote_observations(items, snapshot_service, hub):
+    """Join existing in-memory observations; never fetch or cache member prices."""
+    now = datetime.now(timezone.utc)
+    def clock(value):
+        if isinstance(value, datetime):
+            result = value
+        elif isinstance(value, str):
+            try:
+                result = datetime.fromisoformat(value)
+            except ValueError:
+                return None
+        else:
+            return None
+        return result if result.tzinfo is not None and result <= now else None
+
+    def number(value):
+        return type(value) in (int, float) and math.isfinite(value)
+
+    captured, state, rows = None, "unavailable", []
+    if snapshot_service is not None:
+        try:
+            rows, captured = snapshot_service.versioned_snapshot()
+            captured = clock(captured)
+            freshness = snapshot_service.freshness()
+            state = freshness.state if captured is not None and freshness.as_of == captured else "unknown"
+        except Exception as exc:
+            log.warning("member snapshot observation unavailable: %s", type(exc).__name__)
+            rows, captured, state = [], None, "error"
+    observed = {}
+    duplicate = set()
+
+    def observation(row, default_observed):
+        price, prev, pct = row.get("price"), row.get("prev_close"), row.get("change_pct")
+        source, quality = row.get("source"), row.get("quality")
+        if (not number(price) or price <= 0 or not number(prev) or prev <= 0 or not number(pct)
+                or not isinstance(source, str) or not source or source == "mock" or quality == "invalid"
+                or quality is not None and not isinstance(quality, str)):
+            return None
+        supplied_clock = row.get("data_timestamp")
+        source_clock = clock(supplied_clock)
+        received_at = row.get("received_at")
+        observed_at = clock(received_at) if received_at is not None else default_observed
+        if (observed_at is None or supplied_clock is not None and source_clock is None
+                or source_clock is not None and source_clock > observed_at):
+            return None
+        return {"change_pct": pct, "quote_source": source,
+                "source_clock": source_clock.isoformat() if source_clock is not None else None,
+                "quote_observed_at": observed_at.isoformat(),
+                "quote_quality": "stale" if state == "stale" else quality if quality in {"high", "medium", "low", "stale"} else None}
+
+    if captured is not None:
+        for row in rows:
+            if not isinstance(row, dict):
+                continue
+            symbol, market = row.get("symbol"), row.get("market")
+            if (not isinstance(symbol, str) or len(symbol) != 6 or not symbol.isascii() or not symbol.isdigit()
+                    or not isinstance(market, str) or market not in {"SH", "SZ", "BJ"}):
+                continue
+            key = (symbol, market)
+            if key in observed:
+                duplicate.add(key)
+            observed[key] = observation(row, captured)
+    for key in duplicate:
+        observed[key] = None
+    # The Hub is a passive fallback for members absent from this full-market
+    # version. Unknown source clocks never justify replacing another version.
+    if hub is not None:
+        for quote in hub.get_quotes([item["symbol"] for item in items]):
+            key = (quote.symbol, quote.market)
+            if key not in observed and quote.data_timestamp is not None:
+                observed[key] = observation(quote.model_dump(mode="python"), None)
+    missing = {"change_pct": None, "quote_source": None, "source_clock": None,
+               "quote_observed_at": None, "quote_quality": None}
+    output = [{**item, **(observed.get((item["symbol"], item["market"])) or missing)} for item in items]
+    known = [row for row in output if row["change_pct"] is not None]
+    sources = {row["quote_source"] for row in known}
+    clocks = [row["source_clock"] for row in known]
+    qualities = {row["quote_quality"] for row in known}
+    return output, {"known_count": len(known), "total": len(items),
+                    "source": next(iter(sources)) if len(sources) == 1 else "mixed" if sources else None,
+                    "source_clock": min(clocks, key=datetime.fromisoformat) if clocks and all(clocks) else None,
+                    "observed_at": captured.isoformat() if captured is not None else None,
+                    "quality": next(iter(qualities)) if len(qualities) == 1 and None not in qualities else "unknown",
+                    "snapshot_state": state}
+
+
 @router.get("/indices/{symbol}/members")
 async def index_members(symbol: str, request: Request) -> dict:
     """Six displayed indices only. Cache membership, never security prices."""
@@ -62,7 +149,10 @@ async def index_members(symbol: str, request: Request) -> dict:
     except Exception as exc:
         log.warning("index members unavailable %s: %s", symbol, type(exc).__name__)
         raise HTTPException(status_code=502, detail="指数成分读取失败，请稍后重试") from None
-    return {"data": {**snapshot, "symbol": symbol, "name": name, "source": "ths", "cached": hit}}
+    items, quote_snapshot = _index_member_quote_observations(snapshot["items"],
+        getattr(request.app.state, "snapshot_service", None), getattr(request.app.state, "hub", None))
+    return {"data": {**snapshot, "items": items, "quote_snapshot": quote_snapshot,
+                     "symbol": symbol, "name": name, "source": "ths", "cached": hit}}
 
 
 @router.get("/sparkline", response_model=Envelope[SparklinePayload])

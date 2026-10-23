@@ -12,7 +12,6 @@
 from __future__ import annotations
 
 import asyncio
-import contextlib
 import time
 
 import logging
@@ -258,6 +257,12 @@ class CompositeProvider:
                 scope = asyncio.timeout(left)
                 async with scope:
                     result = await call
+            # 源可能吞掉 timeout 的取消，或同步阻塞到事件循环来不及投递取消。
+            # 正常返回也要核原 deadline，不能把迟到结果记作预算内成功。
+            if deadline is not None and (scope.expired() or time.monotonic() >= deadline):
+                self._observe_attempt(method, p.name, "method_budget_exhausted", "BudgetExhausted")
+                log.warning("provider %s %s phase=method_budget_exhausted error_type=BudgetExhausted", p.name, method)
+                return p, None, BudgetExhausted("请求预算耗尽（源返回已超时）")
             self._observe_attempt(method, p.name, "method_returned")
             return p, result, None
         except asyncio.CancelledError:
@@ -328,11 +333,12 @@ class CompositeProvider:
           快速失败/空 → 记账后串行走剩余源（主源活着只是这把没给数据，无须并发）。
         - 主源超宽限：备源起跑，两路先归且可用者得；备源抢先时放弃主源
           （cancel + 记一次失败，连续挂起 3 次同样进熔断，不会无限挂账）。
+          备源失败时保留仍在预算内的主源，并按原顺序轮换下一备源，每源只试一次。
         - 两路都受同一 `deadline` 约束（S2-3）：并发只缩短等待，不取消上界。
         """
         primary, backup = live[0], live[1]
         p_task = asyncio.create_task(self._attempt(method, primary, args, deadline))
-        b_task = None
+        owned = [p_task]
         try:
             done, _ = await asyncio.wait({p_task}, timeout=HEDGE_DELAY)
             if done:
@@ -344,40 +350,45 @@ class CompositeProvider:
                 return await self._call_serial(method, args, live[1:], errors, deadline)
 
             b_task = asyncio.create_task(self._attempt(method, backup, args, deadline))
+            owned.append(b_task)
             tasks = {p_task: primary, b_task: backup}
+            next_index = 2
             while tasks:
                 done, _ = await asyncio.wait(set(tasks), return_when=asyncio.FIRST_COMPLETED)
-                for t in done:
+                winner = None
+                # 同轮完成时按原源顺序收割，也保留已完成失败的真实观测。
+                for t in [task for task in tasks if task in done]:
                     p = tasks.pop(t)
                     _, result, exc = t.result()
                     if exc is None and not self._is_empty(result):
-                        # 主源被超车仍按原策略记失败；放弃备源不计失败。
-                        other = p_task if t is b_task else b_task
-                        if not other.done():
-                            other.cancel()
-                            with contextlib.suppress(asyncio.CancelledError):
-                                await other
-                            if other is p_task:
+                        if winner is None:
+                            winner = p, result
+                    else:
+                        self._note_failure(method, p.name, exc, errors)
+                if winner is not None:
+                    # 主源被可用备源超车仍按原策略记失败；放弃备源不计失败。
+                    for task in tasks:
+                        if not task.done():
+                            task.cancel()
+                            if task is p_task:
                                 self._note_failure(
                                     method, primary.name,
                                     TimeoutError(f"超 {HEDGE_DELAY:.2f}s 未应答（备源已接手）"), errors,
                                 )
-                        self._settle_last_good(method, p.name)
-                        return result
-                    self._note_failure(method, p.name, exc, errors)
+                    await asyncio.gather(*tasks, return_exceptions=True)
+                    p, result = winner
+                    self._settle_last_good(method, p.name)
+                    return result
                 if tasks == {p_task: primary}:
-                    p_task.cancel()
-                    with contextlib.suppress(asyncio.CancelledError):
-                        await p_task
-                    self._note_failure(
-                        method, primary.name,
-                        TimeoutError(f"超 {HEDGE_DELAY:.2f}s 未应答（备源未接住）"), errors,
-                    )
-                    break
-            return await self._call_serial(method, args, live[2:], errors, deadline)
+                    if next_index < len(live) and (deadline is None or time.monotonic() < deadline):
+                        backup = live[next_index]
+                        next_index += 1
+                        b_task = asyncio.create_task(self._attempt(method, backup, args, deadline))
+                        owned.append(b_task)
+                        tasks[b_task] = backup
+            return await self._call_serial(method, args, live[next_index:], errors, deadline)
         finally:
-            # owner 取消时也收口两条对冲协程；不声称能终止源内部不可中断线程。
-            owned = [p_task] + ([b_task] if b_task is not None else [])
+            # owner 取消时也收口轮换过的全部协程；不声称能终止不可中断线程。
             for task in owned:
                 if not task.done():
                     task.cancel()

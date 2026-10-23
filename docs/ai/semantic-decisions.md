@@ -930,12 +930,25 @@ PR #324实际恢复002178已完成12角色/七报告/Memory，新增14调用know
 
 ### 2026-10-23 终态用量与答复准入分离
 
-原8只真正入选中，002178、002264、002355、002777已保存完整12角色/七报告/Memory。新增002777的task `824292a4dcae488e958b42204016c729`、run `ce20d717c4174da2853a85548738091e`完成16次known调用；这不等于新承接合同已发布、全部入选已齐或语义效果已验证。777原有限审计的1个FAIL经逐源反证为cell“不独立证明突破或持续上涨”的局部否定误报；旧审计和原文件保留，同批未发布v7只补该范围。新派生85字段审计仅call8/content由FAIL变PASS，旧73份文件（其中21份核心）哈希不变；这不是整体语义gold，也不是用量unknown。002803的run `fd47…`／task `f8a…`在首调用于2026-10-21北京时间23:34:50至23:34:57.735970、约7.709秒后真实turn.failed，exit1、1 started/0 completed、usage=null，没有可验证最终用量；并非此前002355的180秒超时。新unknown `9e8d059b891647cdab1f81a1d3abfeae`已获用户单独许可，修补发布前仍不新增模型调用；600410、603171、603598尚未启动。
+PR #325施工时原8只中4只完整；这是历史快照，不代表当前分母。原002803首调用约7.709秒真实turn.failed，第7unknown已获具名许可；本节用量/答案分离与v7局部否定修补随后随PR #325发布加载，准确HEAD、完整门、双CI与后续实际恢复读取见[handoff](../handoff.md#1-本轮范围与已核现场)及原RSH-030。777原有限审计1个FAIL为“不独立证明突破或持续上涨”的局部否定误报，派生85字段仅call8/content由FAIL变PASS；原73文件/其中21核心哈希与原finite1保留，不能当整体语义gold或用量unknown。
 
 用量unknown、答复拒绝、来源有限FAIL和语义未验证是不同状态。原始错误或顺序未保全的旧条，具体原因仍须写“证据不够”：741确有可复现的cache_write白名单遗漏，但该条当时的字段已丢，不能确定就是它的实际原因；debe只存TransportError/hash/missing_usage；668的terminal_order计数不能还原原顺序；262的typed_error_count和有序retry形态不能恢复原error语义。不能把这三条CLI拒绝一律称误报。第7条没有完成终态，保留unknown正确，上游具体失败原因不清楚；七条历史账、失败和具名许可均不回写。
 
-零模型反例另证实一个面向未来的缺陷通路：唯一完整可信终态的合法用量，与最后答案JSON、最终文件绑定或原schema准入耦合，使答复拒绝连带失去known资格。这不是上述任一旧条的已证原因。本分支待验修补将两者分开：只有先通过现役精确CLI、完整流、唯一有序终态和严格tokens合同，失败答复才可按failed且usage_known=1保全用量；答案仍拒绝，不作为可用报告。不能把数字观察直接升格为已验证用量。auth/safety、turn.failed、乱序、多终态、截断、无终态、未知事件或非法tokens仍unknown；未终结账行的回执恢复不扩成自动核账或历史unknown清账。
+零模型反例另证实一个面向未来的缺陷通路：唯一完整可信终态的合法用量，与最后答案JSON、最终文件绑定或原schema准入耦合，使答复拒绝连带失去known资格。这不是上述任一旧条的已证原因。PR #325已发布的修补将两者分开：只有先通过现役精确CLI、完整流、唯一有序终态和严格tokens合同，失败答复才可按failed且usage_known=1保全用量；答案仍拒绝，不作为可用报告。不能把数字观察直接升格为已验证用量。auth/safety、turn.failed、乱序、多终态、截断、无终态、未知事件或非法tokens仍unknown；未终结账行的回执恢复不扩成自动核账或历史unknown清账。
 
 未来安全诊断只保留固定、有界的`error_observations`：类别、事件/消息类型、长度、位置和哈希，明确`channel_report_only`。无明确类别即未分类；观察不是根因证明，不授权重试或调用。禁止保存错误原文、URL、路径、请求/context；重复安全投影不得丢失同一有界观察。共因反例与原始核验定位在本机忽略的`artifacts/runs/unknown-common-audit-20261023/`，不为诊断重跑旧请求。
 
-这项修补不换模型、不拆完整图、不加研究次数配额或新权限，不改变评分、通知、策略、资金或独立效果准入。本节为2026-10-23施工快照；本批完整本地门、准确HEAD CI、DegradedRelease、release_check、发布和运行事实由关联PR及回执核验，施工快照不证明已加载，不以前次通过代替；下一条新unknown仍须单独许可，当前人工gold0、net_gain_verified=false、production_eligible=false。
+这项修补不换模型、不拆完整图、不加研究次数配额或新权限，不改变评分、通知、策略、资金或独立效果准入。PR #325准确HEAD的完整本地门、CI、DegradedRelease、release_check、合并后CI及加载均已核；后续代码仍须自己的准确HEAD发布门，不能沿用旧绿；下一条新unknown仍须单独许可，当前人工gold0、net_gain_verified=false、production_eligible=false。
+
+
+### 2026-10-23 无损证据呈现与输入前失败续接
+
+真实600410第7次请求在reserve/start之前因250349字符超过原250000保护线而停止；前六次有答、有严格known回执，原counter7/缺失7.json保留。它不是上游超时或新增unknown，也不能用旧178的unknown前置尾槽例外放行。原任务和实页状态归RSH-030/handoff，不在此维护第二份进度。
+
+selected消费者在原request/恢复指纹核验之后，由driver传已核packet的evidence SHA给统一wire准备函数；预检与实际CLI发送使用同一结果。仅price_history.observations和fundamentals.periods的同字段行表可改为有明确列名的行值表示；保留全部键/类型/值/null/行序，恢复后的canonical事实SHA须完全相同，异构列表原样、冲突tag/多块/伪标记/重复键/非有限/错SHA拒绝，小表不得因格式说明扩容。原packet、checkpoint、ordered角色消息、schema、工具、原答及peer引用不改；没有selected显式参数的其他消费者原样。原250000输入门仍在预留和启动前执行，不提高单次输入/输出/墙钟，不压缩或隐藏被拒安全载荷。22份既存原答/两包、覆盖12角色的零模型表示核验净省47986字符；250349→202363是投影，不是新模型速度或质量结论。
+
+新input_prelaunch_tail合同单独绑定PR #325四个固定源码、完整input_budget_exceeded数字模板、原task全部model账行与N−1份严格known回执闭合、原broker前缀、唯一末槽N无文件/账行、原生root0/三分析已完及Market wrap_up。pending首请求须保留原checkpoint消息指纹并以已pin上游WRAP_UP收尾；既成角色禁止重跑，新物理调用从N+1继续。真实410为12原消息＋固定第13条WRAP_UP，不重建检查点或回退counter。失败任务/worker终态、文件哈希和wal/shm双absence齐全才可用正式immutable读取，读取前后核相同；不删sidecar求通过。每次仍须服务器EXPLICIT单次精确grant，不造槽N的0用量或known，不把新unknown纳入旧许可。
+
+原compatibility kind继续严格比较整个packet_builder；新增独立frozen-packet-owner kind只为上述原packet续行，服务器固定白名单只含本批quote_hub展示修补与Tencent纯search修补的准确正向old/new对，显式pair必须恰等于真实非空变化集合。Tencent全部非search函数和search外源码/AST不变；其报价与构包路径没有改动。其余owner/packet_builder字段、model、graph、依赖、staged代码、工具、原packet/config及全部原答/回执严格不变，未审/反向/未来hash/缺pair拒绝，不允许重新采集材料。源码兼容不会自动迁移授权、原选择或unknown许可。
+
+传播沿现有语义、部署、数据源、运行性能、RSH-030/BUG-020、INDEX和handoff；总方案现役定位仍为真正入选后的RESEARCH_ONLY_AUTHORIZED及原完整图，不新增模型、数据源、评分/通知/资金晋级或新业务任务，AGENTS/Skills无规则变更。发布、真实续接/当前方法和剩余限制按本批准确HEAD回执分别核验，零模型表示等价不当效果gold。

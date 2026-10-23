@@ -61,16 +61,23 @@ def clock_and_calendar(monkeypatch):
     monkeypatch.setattr(qh.tc, "market_open_state", lambda *a, **k: qh.tc.MARKET_OPEN)
 
 
-def hub_for(primary_rows, backup_rows, *, indices=False):
+def hub_for(primary_rows, backup_rows, *, indices=False, current_age=2):
     primary = Source("primary", primary_rows)
     backup = Source("backup", backup_rows)
     hub = qh.QuoteHub(cp.CompositeProvider([primary, backup]), 1,
                       get_watchlist=lambda: ["600105", "600002"])
     if indices:
-        hub.indices = {s: quote(s, market=m, age=2) for s, m in INDEX_MARKETS.items()}
+        hub.indices = {s: quote(s, market=m, age=current_age) for s, m in INDEX_MARKETS.items()}
     else:
-        hub.quotes = {s: quote(s, age=2) for s in ["600105", "600002"]}
+        hub.quotes = {s: quote(s, age=current_age) for s in ["600105", "600002"]}
     return hub, primary, backup
+
+
+def assert_retained_source_unchanged(current, before, *, expired=False):
+    expected = dict(before)
+    if expired:
+        expected.update(quality=Quality.stale, quality_reasons=["source_time_regress_ignored"])
+    assert current.model_dump() == expected
 
 
 def test_regressed_stock_uses_fresh_backup_without_touching_normal_primary_row():
@@ -101,30 +108,47 @@ def test_regressed_stock_uses_fresh_backup_without_touching_normal_primary_row()
     {"quality": Quality.stale}, {"quality": Quality.invalid}, {"source": "source_unknown"},
     {"age": -1},
 ])
-def test_untrusted_backup_cannot_clear_original_regression(change):
+@pytest.mark.parametrize("current_age", [2, 20])
+def test_untrusted_backup_cannot_clear_original_regression(change, current_age):
     async def check():
         kwargs = {"source": "backup", "age": 1, **change}
-        hub, _, backup = hub_for([quote(age=3), quote("600002")], [quote(**kwargs)])
+        if change.get("age") in {2, 3}:
+            kwargs["age"] = current_age + change["age"] - 2
+        hub, _, backup = hub_for([quote(age=current_age + 1), quote("600002")],
+                                 [quote(**kwargs)], current_age=current_age)
         old = hub.quotes["600105"].model_dump()
         await hub._refresh_domain("quotes")
         current = hub.quotes["600105"]
-        assert current.price == old["price"] and current.data_timestamp == old["data_timestamp"]
-        assert current.quality == Quality.stale
-        assert current.quality_reasons == ["source_time_regress_ignored"]
+        assert_retained_source_unchanged(current, old, expired=current_age == 20)
         assert hub.last_quote_rejections == {"600105": "source_time_regress_ignored"}
+        assert hub.last_batch_coverage == 0.5 and hub.last_missing_symbols == ["600105"]
         assert backup.calls == {"get_quotes": 1}
+        expected_failures = 0 if current_age == 2 and change.get("age") in {2, 3} else 1
+        assert hub.provider._failures.get(("get_quotes", "backup"), 0) == expected_failures
+        assert len(hub.quote_history) == 1 and hub.quote_history[0][0] == "600002"
     asyncio.run(check())
 
 
 @pytest.mark.parametrize(("previous_age", "backup_age"), [(20, 15), (172800, 86400)])
-def test_newer_but_expired_or_previous_day_backup_is_not_recovery(previous_age, backup_age):
+@pytest.mark.parametrize("indices", [False, True])
+def test_newer_but_expired_or_previous_day_backup_is_not_recovery(previous_age, backup_age, indices):
     async def check():
-        hub, _, _ = hub_for([quote(age=previous_age + 1), quote("600002")],
-                            [quote(source="backup", age=backup_age)])
-        hub.quotes["600105"] = quote(age=previous_age)
-        await hub._refresh_domain("quotes")
-        assert hub.quotes["600105"].data_timestamp == NOW - timedelta(seconds=previous_age)
-        assert hub.quotes["600105"].quality_reasons == ["source_time_regress_ignored"]
+        if indices:
+            primary_rows = [quote(s, market=m, age=previous_age + 1 if s == "000001" else 1)
+                            for s, m in INDEX_MARKETS.items()]
+            backup_rows = [quote("000001", source="backup", age=backup_age)]
+        else:
+            primary_rows = [quote(age=previous_age + 1), quote("600002")]
+            backup_rows = [quote(source="backup", age=backup_age)]
+        hub, _, backup = hub_for(primary_rows, backup_rows, indices=indices, current_age=previous_age)
+        domain, symbol = ("indices", "000001") if indices else ("quotes", "600105")
+        current = hub.indices if indices else hub.quotes
+        before = current[symbol].model_dump()
+        await hub._refresh_domain(domain)
+        assert_retained_source_unchanged(current[symbol], before, expired=True)
+        assert (hub.last_index_rejections if indices else hub.last_quote_rejections) == {symbol: "source_time_regress_ignored"}
+        assert backup.calls == {"get_indices" if indices else "get_quotes": 1}
+        assert hub.provider._failures["get_indices" if indices else "get_quotes", "backup"] == 1
     asyncio.run(check())
 
 
@@ -161,8 +185,9 @@ def test_remaining_budget_is_not_restarted_and_exhaustion_never_starts_backup(mo
             monkeypatch.setattr(cp, "REALTIME_BUDGET_SECONDS", 1)
             async def primary_rows(method, symbols):
                 clock[0] += consumed
-                return [quote(age=3), quote("600002")]
+                return [quote(age=3, price=10.3), quote("600002", price=10.1)]
             hub, _, backup = hub_for(primary_rows, [quote(source="backup")])
+            before = {symbol: row.model_dump() for symbol, row in hub.quotes.items()}
             attempts = []
             original = hub.provider._attempt
             async def tracked(method, source, args, deadline=None):
@@ -175,12 +200,23 @@ def test_remaining_budget_is_not_restarted_and_exhaustion_never_starts_backup(mo
                 assert attempts == [("primary", 101.0), ("backup", 101.0)]
                 assert hub.quotes["600105"].source == "backup"
             else:
+                assert attempts == [("primary", 101.0)]
                 assert not backup.calls
-                assert hub.quotes["600105"].quality_reasons == ["source_time_regress_ignored"]
+                # The primary itself returned beyond the original deadline;
+                # none of its rows reached Hub admission or regression recovery.
+                for symbol, current in hub.quotes.items():
+                    expected = {**before[symbol], "quality": Quality.stale, "quality_reasons": ["refresh_failed"]}
+                    assert current.model_dump() == expected
+                assert not hub.last_quote_rejections and not hub.quote_history
+                assert hub._domains["quotes"].consecutive_failures == 1
+                assert hub._domains["quotes"].last_error_type == "ProviderError"
+                counts = hub.provider.provider_health()["method_attempts"]["get_quotes@primary"]
+                assert counts["method_budget_exhausted"] == 1 and counts["method_returned"] == 0
     asyncio.run(check())
 
 
-def test_hung_backup_is_cancelled_with_original_stale_evidence(monkeypatch):
+@pytest.mark.parametrize("current_age", [2, 20])
+def test_hung_backup_is_cancelled_without_rewriting_retained_source_evidence(monkeypatch, current_age):
     async def check():
         monkeypatch.setattr(cp, "REALTIME_BUDGET_SECONDS", 0.03)
         cancelled = []
@@ -189,11 +225,16 @@ def test_hung_backup_is_cancelled_with_original_stale_evidence(monkeypatch):
                 await asyncio.Event().wait()
             finally:
                 cancelled.append(True)
-        hub, _, _ = hub_for([quote(age=3), quote("600002")], hung)
+        hub, _, _ = hub_for([quote(age=current_age + 1), quote("600002")], hung, current_age=current_age)
+        before = hub.quotes["600105"].model_dump()
         await asyncio.wait_for(hub._refresh_domain("quotes"), timeout=1)
         assert cancelled == [True]
-        assert hub.quotes["600105"].quality_reasons == ["source_time_regress_ignored"]
+        assert_retained_source_unchanged(hub.quotes["600105"], before, expired=current_age == 20)
+        assert hub.last_quote_rejections == {"600105": "source_time_regress_ignored"}
+        assert hub.last_batch_coverage == 0.5
         assert hub.provider.provider_health()["method_attempts"]["get_quotes@backup"]["method_budget_exhausted"] == 1
+        assert hub.provider._failures["get_quotes", "backup"] == 1
+        assert asyncio.all_tasks() == {asyncio.current_task()}
     asyncio.run(check())
 
 
@@ -232,7 +273,8 @@ def test_bad_backup_falls_through_existing_order_to_next_trusted_source(bad_rows
     asyncio.run(check())
 
 
-def test_cancelling_recovery_preserves_normal_primary_progress_and_rejection():
+@pytest.mark.parametrize("current_age", [2, 20])
+def test_cancelling_recovery_preserves_normal_primary_progress_and_rejection(current_age):
     async def check():
         entered, cancelled = asyncio.Event(), []
         async def hung(method, symbols):
@@ -241,7 +283,9 @@ def test_cancelling_recovery_preserves_normal_primary_progress_and_rejection():
                 await asyncio.Event().wait()
             finally:
                 cancelled.append(True)
-        hub, _, _ = hub_for([quote(age=3), quote("600002", price=10.2)], hung)
+        hub, _, _ = hub_for([quote(age=current_age + 1), quote("600002", price=10.2)], hung,
+                            current_age=current_age)
+        before = hub.quotes["600105"].model_dump()
         # Regressions require a previous accepted observation in production.
         # Keep that completed round distinct from this still-in-flight recovery.
         previous_completed = NOW - timedelta(seconds=1)
@@ -252,7 +296,9 @@ def test_cancelling_recovery_preserves_normal_primary_progress_and_rejection():
         task = asyncio.create_task(hub._refresh_domain("quotes"))
         await asyncio.wait_for(entered.wait(), 1)
         assert hub.quotes["600002"].price == 10.2
-        assert hub.quotes["600105"].quality_reasons == ["source_time_regress_ignored"]
+        assert_retained_source_unchanged(hub.quotes["600105"], before, expired=current_age == 20)
+        assert hub.last_quote_rejections == {"600105": "source_time_regress_ignored"}
+        assert hub.last_batch_coverage == 0.5
         assert len(hub.quote_history) == 1
         assert "quotes" in hub._pending_domains
         assert hub._domains["quotes"].last_success == previous_completed
@@ -264,10 +310,12 @@ def test_cancelling_recovery_preserves_normal_primary_progress_and_rejection():
         task.cancel()
         await asyncio.gather(task, return_exceptions=True)
         assert cancelled == [True]
-        assert hub.quotes["600105"].quality == Quality.stale
+        assert_retained_source_unchanged(hub.quotes["600105"], before, expired=current_age == 20)
         assert hub.quotes["600002"].price == 10.2
         assert len(hub.quote_history) == 1
         assert hub.provider.provider_health()["method_attempts"]["get_quotes@backup"]["method_cancelled"] == 1
+        assert ("get_quotes", "backup") not in hub.provider._failures
+        assert asyncio.all_tasks() == {asyncio.current_task()}
     asyncio.run(check())
 
 
@@ -429,9 +477,8 @@ def test_nonadvancing_trusted_recovery_does_not_disable_normal_fallback(indices,
         original = current[symbol].model_dump()
         for _ in range(cp.FAILURE_THRESHOLD):
             await hub._refresh_domain(domain)
-            assert current[symbol].data_timestamp == original["data_timestamp"]
-            assert current[symbol].price == original["price"]
-            assert current[symbol].quality_reasons == ["source_time_regress_ignored"]
+            assert_retained_source_unchanged(current[symbol], original)
+            assert (hub.last_index_rejections if indices else hub.last_quote_rejections) == {symbol: "source_time_regress_ignored"}
 
         async def unavailable(method, symbols):
             raise RuntimeError("real primary transport failure")
@@ -466,24 +513,32 @@ def test_nonadvancing_recovery_preserves_real_failure_history_without_incrementi
     {"price": None}, {"price": -1}, {"quality": Quality.stale},
     {"quality": Quality.invalid}, {"data_timestamp": None}, {"volume": -1},
 ])
-def test_nonadvancing_but_untrusted_recovery_still_counts_as_source_failure(change):
+@pytest.mark.parametrize("current_age", [2, 20])
+def test_nonadvancing_but_untrusted_recovery_still_counts_as_source_failure(change, current_age):
     async def check():
-        hub, _, _ = hub_for([quote(age=3), quote("600002")],
-                            [quote(source="backup", age=2, **change)])
+        hub, _, _ = hub_for([quote(age=current_age + 1), quote("600002")],
+                            [quote(source="backup", age=current_age, **change)], current_age=current_age)
+        before = hub.quotes["600105"].model_dump()
         await hub._refresh_domain("quotes")
         assert hub.provider._failures["get_quotes", "backup"] == 1
-        assert hub.quotes["600105"].quality_reasons == ["source_time_regress_ignored"]
+        assert_retained_source_unchanged(hub.quotes["600105"], before, expired=current_age == 20)
+        assert hub.last_quote_rejections == {"600105": "source_time_regress_ignored"}
     asyncio.run(check())
 
 
-def test_nonadvancing_row_does_not_hide_another_invalid_recovery_target():
+@pytest.mark.parametrize("current_age", [2, 20])
+def test_nonadvancing_row_does_not_hide_another_invalid_recovery_target(current_age):
     async def check():
-        hub, _, _ = hub_for([quote(age=3), quote("600002", age=3)],
-                            [quote(source="backup", age=2),
-                             quote("600002", source="backup", age=2, price=None)])
+        hub, _, _ = hub_for([quote(age=current_age + 1), quote("600002", age=current_age + 1)],
+                            [quote(source="backup", age=current_age),
+                             quote("600002", source="backup", age=current_age, price=None)], current_age=current_age)
+        before = {symbol: row.model_dump() for symbol, row in hub.quotes.items()}
         await hub._refresh_domain("quotes")
         assert hub.provider._failures["get_quotes", "backup"] == 1
-        assert all(q.quality_reasons == ["source_time_regress_ignored"] for q in hub.quotes.values())
+        for symbol, current in hub.quotes.items():
+            assert_retained_source_unchanged(current, before[symbol], expired=current_age == 20)
+        assert hub.last_quote_rejections == {symbol: "source_time_regress_ignored" for symbol in before}
+        assert hub.last_batch_coverage == 0 and not hub.quote_history
     asyncio.run(check())
 
 

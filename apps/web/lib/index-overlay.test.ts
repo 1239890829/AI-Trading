@@ -18,6 +18,65 @@ beforeEach(() => {
 afterEach(() => vi.unstubAllGlobals());
 
 describe("index overlay historical display is separate from live eligibility", () => {
+  it.each(["09:20:00", "09:27:00"])("confirmed opening phase at%s treats an empty continuous series as waiting", clock => {
+    const at = new Date(`2026-10-14T${clock}+08:00`);
+    const quote: Quote = {...closedQuote(), data_timestamp: "2026-10-14T09:15:00+08:00", quality_reasons: ["quote_age_exceeded"],
+      display_session: {...session, phase: clock === "09:20:00" ? "auction" as const : "pre_open_gap" as const, as_of: at.toISOString()}};
+    const before = JSON.stringify(quote);
+    expect(buildIndexOverlay([], quote, "2026-10-14", at)).toMatchObject({points: [], mode: "waiting"});
+    expect(JSON.stringify(quote)).toBe(before);
+  });
+
+  it("confirmed closing auction keeps only a same-day proven tail and does not upgrade stale", () => {
+    const at = new Date("2026-10-14T14:58:00+08:00");
+    const quote = {...closedQuote(), data_timestamp: "2026-10-14T14:57:00+08:00", quality_reasons: ["quote_age_exceeded"],
+      display_session: {...session, phase: "auction" as const, as_of: at.toISOString()}};
+    const tail = [{...points[0], ts: "2026-10-14T14:57:00+08:00"}];
+    expect(buildIndexOverlay(tail, quote, "2026-10-14", at)).toMatchObject({points: tail, mode: "waiting", waitingPhase: "closing_auction"});
+    expect(quote.quality).toBe("stale");
+    for (const value of [[], [{...tail[0], ts: "2026-10-14T10:00:00+08:00"}]])
+      expect(() => buildIndexOverlay(value, quote, "2026-10-14", at)).toThrow();
+    expect(() => buildIndexOverlay(tail, {...quote, data_timestamp: "2026-10-14T10:00:00+08:00"}, "2026-10-14", at)).toThrow();
+  });
+
+  it.each([false, true])("closing boundary accepts the final continuous-minute bucket, end-labelled=%s", endLabel => {
+    const at = new Date("2026-10-14T14:57:00+08:00");
+    const quote = {...closedQuote(), quality: "high" as const, quality_reasons: [], data_timestamp: "2026-10-14T14:56:59+08:00",
+      display_session: {...session, phase: "auction" as const, as_of: at.toISOString()}};
+    const tail: MinutePoint[] = [{...points[0], ts: `2026-10-14T${endLabel ? "14:57:00" : "14:56:00"}+08:00`,
+      ...(endLabel ? {time_label: "interval_end" as const, observation_ts: quote.data_timestamp} : {})}];
+    expect(buildIndexOverlay(tail, quote, "2026-10-14", at)).toMatchObject({points: tail, mode: "waiting"});
+    expect(quote.quality).toBe("high");
+    const aged = {...quote, quality: "stale" as const, quality_reasons: ["quote_age_exceeded"]};
+    expect(buildIndexOverlay(tail, aged, "2026-10-14", new Date("2026-10-14T14:59:59+08:00")).mode).toBe("waiting");
+    expect(aged.quality).toBe("stale");
+    expect(() => buildIndexOverlay([{...tail[0], time_label: null, observation_ts: null, ts: "2026-10-14T14:55:00+08:00"}], quote, "2026-10-14", at)).toThrow();
+    expect(() => buildIndexOverlay(tail, {...quote, data_timestamp: "2026-10-14T14:55:59+08:00"}, "2026-10-14", at)).toThrow();
+  });
+
+  it("a genuine interval-end label needs its same-response observation clock even during auction", () => {
+    const at = new Date("2026-10-14T14:57:30+08:00");
+    const quote = {...closedQuote(), quality: "high" as const, quality_reasons: [], data_timestamp: "2026-10-14T14:57:25+08:00",
+      display_session: {...session, phase: "auction" as const, as_of: at.toISOString()}};
+    const tail: MinutePoint[] = [{...points[0], ts: "2026-10-14T14:58:00+08:00", time_label: "interval_end", observation_ts: quote.data_timestamp}];
+    expect(buildIndexOverlay(tail, quote, "2026-10-14", at)).toMatchObject({points: tail, mode: "waiting"});
+    expect(buildIndexOverlay([{...tail[0], observation_ts: "2026-10-14T14:57:00+08:00"}], quote, "2026-10-14", at).mode).toBe("waiting");
+    expect(() => buildIndexOverlay([{...tail[0], observation_ts: undefined}], quote, "2026-10-14", at)).toThrow();
+    expect(() => buildIndexOverlay([{...tail[0], source: "tdx"}], quote, "2026-10-14", at)).toThrow();
+    expect(() => buildIndexOverlay([{...tail[0], observation_ts: "2026-10-14T14:59:00+08:00"}], quote, "2026-10-14", at)).toThrow();
+  });
+
+  it.each(["identity", "wrong_day", "future_clock", "price", "read_failure", "calendar", "continuous", "expired_phase"])("auction waiting never hides%s", kind => {
+    const at = new Date("2026-10-14T09:20:00+08:00");
+    const quote: Quote = {...closedQuote(), data_timestamp: "2026-10-14T09:15:00+08:00", quality_reasons: ["quote_age_exceeded"],
+      display_session: {...session, phase: "auction" as const, as_of: at.toISOString()},
+      ...(kind === "identity" ? {market: "SZ"} : {}), ...(kind === "wrong_day" ? {data_timestamp: "2026-10-13T15:00:00+08:00"} : {}),
+      ...(kind === "future_clock" ? {quality: "high" as const, data_timestamp: "2026-10-14T09:21:00+08:00"} : {}),
+      ...(kind === "price" ? {price: 0} : {}), ...(kind === "read_failure" ? {quality_reasons: ["refresh_failed"]} : {})};
+    if (kind === "calendar") quote.display_session!.trade_day_result = null;
+    if (kind === "continuous") quote.display_session = {...quote.display_session!, phase: "continuous"};
+    expect(() => buildIndexOverlay([], quote, "2026-10-14", kind === "expired_phase" ? new Date("2026-10-14T09:30:00+08:00") : at)).toThrow();
+  });
   it("recovery quote reference uses the same live/historical gate without borrowing stock minutes", () => {
     const quote = closedQuote(), before = JSON.stringify(quote);
     expect(indexQuoteReference(quote, "2026-10-13", now)).toEqual({referenceDate: "2026-10-13", mode: "historical"});

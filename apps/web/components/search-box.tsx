@@ -16,6 +16,22 @@ import type { SymbolSearchItem } from "@/types/market";
 const DEBOUNCE_MS = 250;
 /** 触发搜索的最小关键词长度（少于 2 字符不发请求）。 */
 const MIN_QUERY_LEN = 2;
+const HISTORY_KEY = "ashare-security-search-history-v1";
+const HISTORY_LIMIT = 12;
+type SearchHistory = {query: string; symbol: string; name: string; market: string};
+function validHistory(value: unknown): SearchHistory[] {
+  if (!Array.isArray(value)) return [];
+  const result: SearchHistory[] = [];
+  for (const entry of value.slice(0, HISTORY_LIMIT * 4)) {
+    if (!entry || typeof entry !== "object" || typeof entry.query !== "string" || entry.query.trim().length < MIN_QUERY_LEN
+      || entry.query.length > 64 || typeof entry.symbol !== "string" || !/^(?:(?:sh|sz|bj))?\d{6}$/i.test(entry.symbol)
+      || !["SH", "SZ", "BJ"].includes(entry.market) || typeof entry.name !== "string" || entry.name.length > 80
+      || result.some(row => row.symbol === entry.symbol && row.market === entry.market)) continue;
+    result.push({query: entry.query.trim(), symbol: entry.symbol, name: entry.name, market: entry.market});
+    if (result.length === HISTORY_LIMIT) break;
+  }
+  return result;
+}
 // 中文 IME：组合（拼音）期间不调度搜索——拼音片段（"xing"/"xingw"…）是垃圾查询，
 // 搜不到结果还消耗上游配额；选字 Enter 属于 IME 操作不是搜索指令。
 // compositionEnd 后用最终上屏词立即搜索（跳过防抖）。
@@ -37,6 +53,17 @@ export function SearchBox({collapsible = false}: {collapsible?: boolean}) {
   const [error, setError] = useState<string | null>(null);
   /** 是否已对当前关键词发起过搜索：空结果提示只在「确实搜过且没搜到」时出现。 */
   const [searched, setSearched] = useState(false);
+  const [history, setHistory] = useState<SearchHistory[]>([]);
+  useEffect(() => {
+    let alive = true;
+    queueMicrotask(() => {
+      try {
+        const saved = localStorage.getItem(HISTORY_KEY);
+        if (alive) setHistory(saved && saved.length <= 16_384 ? validHistory(JSON.parse(saved)) : []);
+      } catch {}
+    });
+    return () => {alive = false;};
+  }, []);
   const boxRef = useRef<HTMLDivElement>(null);
   const inputRef = useRef<HTMLInputElement>(null);
   const panelId = useId();
@@ -50,6 +77,7 @@ export function SearchBox({collapsible = false}: {collapsible?: boolean}) {
   const timerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   /** 中文 IME 组合中（拼音未上屏）：期间不调度搜索、Enter/Escape 归 IME 所有。 */
   const composingRef = useRef(false);
+  const [composing, setComposing] = useState(false);
 
   const runSearch = useCallback((kw: string) => {
     const seq = ++seqRef.current;
@@ -132,12 +160,31 @@ export function SearchBox({collapsible = false}: {collapsible?: boolean}) {
   }, [dismiss]);
 
   function go(item: SymbolSearchItem) {
+    const entry = validHistory([{query: q.trim(), symbol: item.symbol, name: item.name ?? item.symbol, market: item.market}])[0];
+    if (entry && resultQuery === q.trim() && results.some(row => row.symbol === item.symbol && row.market === item.market)) {
+      const next = [entry, ...history.filter(row => row.symbol !== entry.symbol || row.market !== entry.market)].slice(0, HISTORY_LIMIT);
+      setHistory(next);
+      try {localStorage.setItem(HISTORY_KEY, JSON.stringify(next));} catch {}
+    }
     // The result disappears. Give the detail overlay a stable return target.
     inputRef.current?.focus();
     setOpen(false);
     setQ("");
     resetTransient(); // 弹窗后清空，飞行中的旧请求若返回不得再弹开面板
     openSymbolDetail({ symbol: item.symbol });
+  }
+
+  function recall(entry: SearchHistory) {
+    resetTransient(); setItems([]); setResultQuery(""); setQ(entry.query); setOpen(true);
+    inputRef.current?.focus();
+  }
+
+  function moveChoice(event: React.KeyboardEvent<HTMLButtonElement>) {
+    if (event.nativeEvent.isComposing || event.key !== "ArrowDown" && event.key !== "ArrowUp") return;
+    event.preventDefault();
+    const choices = [...(boxRef.current?.querySelectorAll<HTMLButtonElement>(".search-result-open, .search-history-open") ?? [])];
+    const next = choices.indexOf(event.currentTarget) + (event.key === "ArrowDown" ? 1 : -1);
+    (choices[next] ?? inputRef.current)?.focus();
   }
 
   /** 关键词变短到阈值以下时的状态清理（onChange 删字 / go 跳转清空两条路径）。 */
@@ -172,9 +219,9 @@ export function SearchBox({collapsible = false}: {collapsible?: boolean}) {
 
   function onKeyDown(e: React.KeyboardEvent<HTMLInputElement>) {
     if (composingRef.current || e.nativeEvent.isComposing || e.keyCode === 229) return; // IME 组合中：Enter=选字上屏、Escape=取消组合，不是搜索指令
-    if ((e.key === "ArrowDown" || e.key === "ArrowUp") && open && results.length) {
+    if ((e.key === "ArrowDown" || e.key === "ArrowUp") && open && (results.length || q.trim().length < MIN_QUERY_LEN && history.length)) {
       e.preventDefault();
-      const choices = boxRef.current?.querySelectorAll<HTMLButtonElement>(".search-result-open");
+      const choices = boxRef.current?.querySelectorAll<HTMLButtonElement>(".search-result-open, .search-history-open");
       choices?.[e.key === "ArrowDown" ? 0 : choices.length - 1]?.focus();
       return;
     }
@@ -198,12 +245,12 @@ export function SearchBox({collapsible = false}: {collapsible?: boolean}) {
   }
 
   const kw = q.trim();
+  const historyMode = kw.length < MIN_QUERY_LEN && !composing && history.length > 0;
   const showPanel =
     open &&
-    kw.length >= MIN_QUERY_LEN &&
-    (results.length > 0 || loading || error !== null || searched);
+    (historyMode || kw.length >= MIN_QUERY_LEN && (results.length > 0 || loading || error !== null || searched));
   // Closing cancels the query immediately; its last visible reading stays intact during exit.
-  const panelSnapshot = useMemo(() => ({results, loading, error, searched, addNote, adding, kw}), [results, loading, error, searched, addNote, adding, kw]);
+  const panelSnapshot = useMemo(() => ({results, loading, error, searched, addNote, adding, kw, historyMode, history}), [results, loading, error, searched, addNote, adding, kw, historyMode, history]);
   const panelPresence = useExitPresence(showPanel ? panelSnapshot : null);
   const panel = panelPresence.value;
 
@@ -236,12 +283,14 @@ export function SearchBox({collapsible = false}: {collapsible?: boolean}) {
         }}
         onCompositionStart={() => {
           composingRef.current = true;
+          setComposing(true);
           seqRef.current += 1;
           setResultQuery("");
         }}
         onCompositionEnd={(e) => {
           if (!composingRef.current) return;
           composingRef.current = false;
+          setComposing(false);
           const v = e.currentTarget.value;
           if (v !== q) {
             // 个别环境（Safari 部分版本）组合结束不补发 change：把终值写回状态，
@@ -253,10 +302,11 @@ export function SearchBox({collapsible = false}: {collapsible?: boolean}) {
           const kw = v.trim();
           if (kw.length >= MIN_QUERY_LEN) runSearch(kw);
         }}
-        onFocus={() => results.length > 0 && setOpen(true)}
+        onFocus={() => (results.length > 0 || historyMode) && setOpen(true)}
         onKeyDown={onKeyDown}
         aria-label="搜索证券代码或名称"
         placeholder="搜索代码 / 名称"
+        title="支持证券代码、名称、拼音全拼与缩写"
         aria-busy={loading}
         className="w-full rounded-md border border-zinc-200 bg-transparent px-3 py-1.5 pr-8 text-sm outline-none placeholder:text-zinc-600 dark:placeholder:text-zinc-400 focus:border-up/60 dark:border-zinc-700"
       />
@@ -270,10 +320,12 @@ export function SearchBox({collapsible = false}: {collapsible?: boolean}) {
       {panel && (
         <section id={panelId} data-motion-state={showPanel ? "open" : "closed"} aria-hidden={!showPanel || undefined} inert={!showPanel} className="ui-glass-overlay search-popover motion-float" aria-label="证券搜索结果">
           <header className="search-popover-heading">
-            <div><strong>证券搜索</strong><span>匹配代码或名称</span></div>
+            <div><strong>证券搜索</strong><span>{panel.historyMode ? "最近成功选择" : "代码、名称或拼音"}</span></div>
             <CloseButton onClose={closeAndFocus} label="关闭搜索结果" autoFocus={false} />
           </header>
         <ul className="search-result-list">
+          {panel.historyMode && <li className="flex items-center justify-between px-3 py-2 text-xs text-zinc-600 dark:text-zinc-400"><span>仅保存在本机</span><button type="button" className="quiet-action" aria-label="清除搜索历史" onClick={() => {setHistory([]); try {localStorage.removeItem(HISTORY_KEY);} catch {} inputRef.current?.focus();}}>清除历史</button></li>}
+          {panel.historyMode && panel.history.map(entry => <li key={`${entry.market}:${entry.symbol}`}><button type="button" className="search-result-open search-history-open" aria-label={`重搜 ${entry.name} ${entry.query}`} onKeyDown={moveChoice} onClick={() => recall(entry)}><span className="search-result-name">{entry.name}</span><span className="search-result-code">{entry.query}<span>{entry.symbol}</span></span></button></li>)}
           {panel.addNote && <li role="status" className="px-3 py-2 text-xs">{panel.addNote}</li>}
           {panel.error !== null && (
             <li className="px-3 py-2 text-xs text-red-700 dark:text-red-400" role="alert">
@@ -294,14 +346,7 @@ export function SearchBox({collapsible = false}: {collapsible?: boolean}) {
           {panel.results.map((it) => (
             <li key={`${it.source}-${it.symbol}`}>
               <div className="search-result-row">
-                <button type="button" onClick={() => go(it)} className="search-result-open" onKeyDown={event => {
-                  if (event.nativeEvent.isComposing) return;
-                  if (event.key !== "ArrowDown" && event.key !== "ArrowUp") return;
-                  event.preventDefault();
-                  const choices = [...(boxRef.current?.querySelectorAll<HTMLButtonElement>(".search-result-open") ?? [])];
-                  const next = choices.indexOf(event.currentTarget) + (event.key === "ArrowDown" ? 1 : -1);
-                  (choices[next] ?? inputRef.current)?.focus();
-                }}>
+                <button type="button" onClick={() => go(it)} className="search-result-open" onKeyDown={moveChoice}>
                   <span className="search-result-name">{it.name ?? it.symbol}</span>
                   <span className="search-result-code">{it.symbol}<span>{it.market}</span></span>
                 </button>

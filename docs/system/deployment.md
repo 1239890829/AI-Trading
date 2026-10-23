@@ -505,9 +505,18 @@ PYTHONPATH=backend backend/.venv/bin/python backend/scripts/recovery_bundle.py r
 
 冻结checkpoint读取不能仅以SQLite `mode=ro`声称无写入：WAL格式但无sidecar的原库仍可能被创建wal/shm。只有EXPLICIT首call1零答/step0、源failed、已绑定worker终态与checkpoint.files、主DB SHA一致，且绑定及现场wal/shm同时缺失，才走正式窄`immutable=1`入口；前后都核哈希与absence。默认、活动库或已有WAL不自动immutable，不删sidecar求通过、不在实服stub。2026-10-23因此主动中断的144.111秒pytest不是完整绿色；原142/244定向范围、新helper门与准确HEAD发布/加载各自留证，详见上述语义合同。
 
-2026-10-23当前方法迁移只增加已审`tradingagents_source_gate.py`与`transport_process.py`的两个准确有向hash对，完整值归[语义迁移记录](../ai/semantic-decisions.md#2026-10-21-cli启动警告与重复失败恢复纠错)。原9281→d88对保留，四个通用host组件allowlist不扩；旧许可不自动迁移，graph/model/deps/packet/tools及原答/账行不变。当前服务器grant须完整pin准确old/new，未来hash、逆向或缺old均拒绝。源码兼容不是803恢复已执行或新授权；完整门、准确HEAD发布与加载事实按本轮关联PR及回执核验。
+PR #325历史方法迁移只增加已审`tradingagents_source_gate.py`与`transport_process.py`的两个准确有向hash对，完整值归[语义迁移记录](../ai/semantic-decisions.md#2026-10-21-cli启动警告与重复失败恢复纠错)。原9281→d88对保留，四个通用host组件allowlist不扩；旧许可不自动迁移，graph/model/deps/packet/tools及原答/账行不变。当前服务器grant须完整pin准确old/new，未来hash、逆向或缺old均拒绝。源码兼容不是803恢复已执行或新授权；完整门、准确HEAD发布与加载事实按本轮关联PR及回执核验。
 
 
 2026-10-21正式恢复实际失败后补充：再次续恢复仍使用同一维护POST与服务器digest-pin授权；每个已发生恢复段的任务、方法、原grant归档、调用区间和claim哈希显式进入当前恢复绑定。只接受连续、无重叠且失败/取消终态的历史段；旧claim及原用量不可删除或改写，未知队列不能当失败重领。普通读者和调度复用时核完整历史链及结果身份，公开lineage继续保留真正原source与所有继承unknown数量。新增unknown另获授权前不启动，历史grant过期不回写旧事实，当前grant仍须在其有效窗口内。
 
 CLI启动warning的兼容依据与固定版本见[语义纠错记录](../ai/semantic-decisions.md#2026-10-21-cli启动警告与重复失败恢复纠错)。只接受官方非致命启动警告，不放行终端后追加或权限/安全错误；有界顺序诊断不保存警告原文或完整请求。
+
+
+### 2026-10-23 发送前输入失败的精确续接
+
+本轮仅对原counter已前移但reserve/start尚未发生的input_budget_exceeded增加独立input_prelaunch_tail证明。完整合同在[语义蓝图](../ai/semantic-decisions.md#2026-10-23-无损证据呈现与输入前失败续接)：原源码/数字模板、全部已知账与N−1回执、单末槽absence、原三角色终答及Market wrap_up指纹、worker失败终态和原packet/checkpoint/config/staged身份均须精确绑定。新调用从N+1继续，不重跑原答、不造槽N用量；不是自动重试或新unknown的许可。无sidecar的已终止检查点仍走正式immutable窄入口，前后哈希/absence一致，不在运行服务中stub读取。
+
+服务器单次grant采用独立frozen-packet-owner compatibility kind时，显式差异集合只可为服务端已审的quote_hub展示修补与Tencent纯search的准确正向hash对，声明恰等于实际变化；其余packet_builder、model/graph/依赖/工具与原packet严格不变，执行不得重新调用builder。原kind保持原约束。授权安装前核发布的准确HEAD、本地完整门、required CI、release_check与master CI，核0 active及dispatch单写者；保留原授权备份和七条具名unknown原账，不改变原外层到期或单次资源门。
+
+调用维护POST只能声明source_task_id/run_id，实际源/目标方法与grant由服务器pin；准备grant和离线读取器成功不等恢复已执行。激活后另核首个新物理调用、原件哈希、known账闭合、12角色/七报告/Memory及普通GET/实页读取；旧报告继续可读，研究效果和人工gold不因工程修补晋级。

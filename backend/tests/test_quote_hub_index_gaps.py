@@ -89,7 +89,7 @@ def test_index_gap_recovers_when_provider_returns(hub):
     assert hub.indices["000001"].price == 3001
 
 
-def test_late_index_observation_keeps_newer_value_and_marks_degraded(hub):
+def test_late_index_keeps_fresh_value_quality_and_reports_rejection(hub):
     refresh(hub)
     current = hub.indices["000001"].model_copy(deep=True)
     late = quote("000001", 2999)
@@ -101,9 +101,9 @@ def test_late_index_observation_keeps_newer_value_and_marks_degraded(hub):
     kept = hub.indices["000001"]
     assert kept.price == current.price
     assert kept.data_timestamp == current.data_timestamp
-    assert kept.quality == Quality.stale
-    assert kept.quality_reasons == ["source_time_regress_ignored"]
-    assert kept.freshness(fresh_within=600).state == "stale"
+    assert kept.model_dump() == current.model_dump() and kept.quality == Quality.high
+    assert kept.freshness(fresh_within=hub.stale_after).state == "ready"
+    assert hub.last_index_rejections["000001"] == "source_time_regress_ignored"
     assert "000001" in hub.last_missing_indices
 
 

@@ -1023,3 +1023,371 @@ def test_completed_tail_reader_rechecks_old_db_and_archived_execution(env):
     assert research._latest(SYMBOL) is not None
     put(e.run/'recovery-history'/GRANT/'execution.json',dict(state='needs_native_recovery',error_kind='TransportError'))
     assert research._latest(SYMBOL) is None
+
+
+def input_prelaunch_env(e):
+    """Reviewed input check failed before reserve; six known answers already exist."""
+    b=e.grant['binding'];old=e.grant['source_method_identity']
+    old['source_files'].update({
+        'driver.py':'af48f1ce70b37e474e2359daa25eb789ea092693e32147298d6f7d6f6e84c6ee',
+        'codex_transport.py':'033af2af08a2c0aca013fb9be301e65bb74a7965a0a4ad6a59a23632bfd48970',
+        'agent_budget.py':'5b292c8d675f71e97a86116b6e3250c7a15af8e2bde34ec6492875105c519923',
+        'transport_process.py':'ff2812c801be847b6c6e83b0edf109f82fb7fe65ea9077e4473597437af4e592'})
+    e.current['source_files'].update({key:old['source_files'][key] for key in ('agent_budget.py','transport_process.py')})
+    method=research._digest(old);source=recovery._json(e.source_claim);e.source_claim.unlink()
+    source['method_sha256']=method;e.source_claim=research._selection_claim(e.selection,method);put(e.source_claim,source)
+    b['source_claim_sha256']=recovery._sha(e.source_claim)
+    e.grant['compatibility']['source_hash_pairs']={key:dict(old=old['source_files'].get(key),new=e.current['source_files'].get(key))
+        for key in old['source_files'].keys()|e.current['source_files'].keys() if old['source_files'].get(key)!=e.current['source_files'].get(key)}
+    roles=('Fundamentals Analyst','News Analyst','Market Analyst','Sentiment Analyst','Fundamentals Analyst','Market Analyst')
+    completed=[];records=[]
+    for number,role in enumerate(roles,1):
+        final=number in (2,4,5);value=dict(content='saved independent output '+str(number),tool_calls=[] if final else [dict(id=f't{number}',name='get_news',arguments={'symbol':SYMBOL})])
+        outsha=research._digest(value)
+        put(e.run/'model-outputs'/f'{number}.json',dict(call_id=number,role=role,structured_output=value,output_sha256=outsha))
+        put(e.run/'usage-receipts'/f'{number}.json',dict(task_id=OLD,method_sha256=method,call_id=number,role=role,
+            usage_id=f'{number:032x}',usage_known=True,usage={'input_tokens':number+10,'output_tokens':number+1},terminal_kind='typed_response',output_sha256=outsha))
+        records.append(dict(case_id=SYMBOL,arm='ta-luna',status='returned',call_id=number,role=role,response_sha256=outsha))
+        if final:completed.append(dict(role=role,call_id=number,output_sha256=outsha))
+    (e.run/'role-outputs.jsonl').write_text(''.join(json.dumps({'peer':peer})+'\n' for peer in completed))
+    failed=dict(case_id=SYMBOL,arm='ta-luna',status='broker_error',call_id=None,role='Market Analyst',error_type="{'kind': 'BudgetError'}")
+    records.append(failed);path=e.run/'graph/model-receipts.jsonl';path.write_text(''.join(json.dumps(row,sort_keys=True,separators=(',',':'))+'\n' for row in records))
+    task_error=json.dumps(dict(code='BudgetError',message='模型输入 250349 字符超过 Agent 上限 250000',retryable=False))
+    with e.sf() as db:
+        for row in db.query(AgentResourceUsage).all():db.delete(row)
+        for number,role in enumerate(roles,1):
+            db.add(AgentResourceUsage(id=f'{number:032x}',budget_date=NOW.date().isoformat(),scope=agent_budget.SCOPE_SELECTED_RESEARCH_LLM,kind='model',
+                purpose='tradingagents.'+role.replace(' ','_').lower(),task_id=OLD,provider='codex_cli',model=old['transport']['model'],state='succeeded',attempts=1,
+                usage_known=1,input_tokens=number+10,output_tokens=number+1,started_at=(NOW-timedelta(minutes=16)).replace(tzinfo=None),finished_at=(NOW-timedelta(minutes=15)).replace(tzinfo=None)))
+        db.add(AgentResourceUsage(id='9'*32,budget_date=NOW.date().isoformat(),scope=agent_budget.SCOPE_SELECTED_RESEARCH_LLM,kind='model',purpose='retained_other_task_unknown',
+            task_id='8'*32,state='failed',usage_known=0,started_at=(NOW-timedelta(minutes=30)).replace(tzinfo=None),finished_at=(NOW-timedelta(minutes=25)).replace(tzinfo=None)))
+        db.get(AgentTask,OLD).error=task_error;db.commit()
+        facts=[{column.name:(value.isoformat() if isinstance(value,datetime) else value) for column in AgentResourceUsage.__table__.columns for value in (getattr(row,column.name),)}
+            for row in db.query(AgentResourceUsage).filter(AgentResourceUsage.task_id==OLD).order_by(AgentResourceUsage.id).all()]
+    put(e.run/'execution.json',dict(state='needs_native_recovery',error_kind='BudgetError',automatic_retry=False))
+    put(e.run/'call-counter.json',{'reserved':7})
+    cp=e.run/'graph/cache/checkpoints'/f'{SYMBOL}.db'
+    native_error=b'\xd97'+b"ProtocolError('Approved broker reported model failure')"
+    with sqlite3.connect(cp) as db:
+        thread=db.execute('SELECT thread_id FROM checkpoints').fetchone()[0]
+        db.execute('UPDATE checkpoints SET metadata=?',(json.dumps({'step':0}),))
+        for index,role in enumerate(PARALLEL_ROLES):
+            ns=role+':'+str(index)*8+'-1111-1111-1111-111111111111';cid=f'child-{index}'
+            step={'Market Analyst':4,'Fundamentals Analyst':3,'Sentiment Analyst':1,'News Analyst':1}[role]
+            db.execute('INSERT INTO checkpoints VALUES(?,?,?,?,?,?,?)',(thread,ns,cid,None,'msgpack',b'frozen native messages',json.dumps({'step':step,'parents':{'':'checkpoint-1'}})))
+            if role=='Market Analyst':
+                db.execute('INSERT INTO writes VALUES(?,?,?,?,?,?,?,?,?)',(thread,ns,cid,'pending-market','~__pregel_pull, wrap_up',-1,'__error__','msgpack',native_error))
+                db.execute('INSERT INTO writes VALUES(?,?,?,?,?,?,?,?,?)',(thread,'','checkpoint-1','root-market','~__pregel_pull, Market Analyst',-1,'__error__','msgpack',native_error))
+            else:
+                channel={'News Analyst':'news_report','Sentiment Analyst':'sentiment_report','Fundamentals Analyst':'fundamentals_report'}[role]
+                db.execute('INSERT INTO writes VALUES(?,?,?,?,?,?,?,?,?)',(thread,'','checkpoint-1','root-'+str(index),'~__pregel_pull, '+role,index,channel,'msgpack',b'frozen completed report'))
+    e.input_messages=[dict(role='user',content='frozen stock evidence'),dict(role='assistant',content='saved tool proposal',tool_calls=[dict(id='t6',name='get_news',arguments={'symbol':SYMBOL})]),
+        dict(role='tool',tool_call_id='t6',name='get_news',status='success',content='frozen available public source')]
+    wrap_up=dict(role='user',content='You have used every tool round this report allows. Write your final report now from the tool results above, and say which data you could not retrieve.')
+    assert research._digest(wrap_up)=='a6a32b933c43bd17a43fa277e12d9ba9eb480d87008d2289b35c67efe14c0790'
+    e.input_request_messages=[*e.input_messages,wrap_up]
+    b.update(call_counter=7,checkpoint=recovery.checkpoint_snapshot(e.run,SYMBOL),completed_roles=completed,expected_pending_role='Market Analyst',
+        outputs={str(n):recovery._sha(e.run/'model-outputs'/f'{n}.json') for n in range(1,7)},
+        usage_receipts={str(n):recovery._sha(e.run/'usage-receipts'/f'{n}.json') for n in range(1,7)},
+        prefixes={name:dict(bytes=(e.run/name).stat().st_size,sha256=recovery._sha(e.run/name)) for name in b['prefixes']})
+    b['input_prelaunch_tail']=dict(version=1,call_id=7,source_task_error_sha256=hashlib.sha256(task_error.encode()).hexdigest(),
+        source_execution_sha256=recovery._sha(e.run/'execution.json'),source_model_usage_facts_sha256=research._digest(facts),
+        model_receipts_prefix=dict(bytes=path.stat().st_size,sha256=recovery._sha(path)),first_broker_error_record_sha256=research._digest(failed),
+        input_chars=250349,input_limit_chars=250000,pending_message_fingerprints=[research._digest(row) for row in e.input_messages])
+    e.auth['unknown_usage_exception'].update(method_sha256=research._digest(e.current),allowed_unknown_usage=[dict(usage_id='9'*32,budget_date=NOW.date().isoformat(),scope=agent_budget.SCOPE_SELECTED_RESEARCH_LLM)])
+    e.pin();return e
+
+
+def test_known_input_prelaunch_tail_preserves_six_answers_without_inventing_seventh(env):
+    e=input_prelaunch_env(env);before={p:p.read_bytes() for folder in ('model-outputs','usage-receipts') for p in (e.run/folder).iterdir()}
+    c=context(e);assert c['binding']['call_counter']==7 and len(c['binding']['outputs'])==6 and len(c['binding']['completed_roles'])==3
+    guard=recovery._pending_guard(c['binding']);guard(dict(role='Market Analyst',messages=e.input_request_messages),7)
+    assert all(p.read_bytes()==body for p,body in before.items())
+    assert not (e.run/'model-outputs/7.json').exists() and not (e.run/'usage-receipts/7.json').exists()
+
+
+def test_known_input_prelaunch_continuation_starts_at_eight_without_replaying_completed_roles(env):
+    e=input_prelaunch_env(env);before={p:p.read_bytes() for folder in ('model-outputs','usage-receipts') for p in (e.run/folder).iterdir()}
+    e.native.resume_counter=7;e.native.first_role='Market Analyst';original_execute=e.native._execute
+    async def continuation(*,recovery_guard,**kwargs):
+        def checked(request,counter):recovery_guard(dict(request,messages=e.input_request_messages),counter)
+        return await original_execute(recovery_guard=checked,**kwargs)
+    e.native._execute=continuation;c,owner=consumed(e)
+    result=asyncio.run(recovery.run_recovery(e.rec,params(c,owner),e.app))
+    assert result['recovery_lineage']['new_call_from']==8 and result['recovery_lineage']['reused_original_outputs']==6 and result['recovery_lineage']['inherited_unknown_usage_count']==0
+    assert all(p.read_bytes()==body for p,body in before.items())
+    assert not (e.run/'model-outputs/7.json').exists() and not (e.run/'usage-receipts/7.json').exists()
+    assert research._latest(SYMBOL)['recovery_lineage']==result['recovery_lineage']
+
+
+def reseal_input_source_facts(e):
+    tail=e.grant['binding']['input_prelaunch_tail']
+    with e.sf() as db:
+        facts=[{column.name:(value.isoformat() if isinstance(value,datetime) else value) for column in AgentResourceUsage.__table__.columns for value in (getattr(row,column.name),)}
+            for row in db.query(AgentResourceUsage).filter(AgentResourceUsage.task_id==OLD,AgentResourceUsage.kind=='model').order_by(AgentResourceUsage.id).all()]
+        tail['source_model_usage_facts_sha256']=research._digest(facts)
+        tail['source_task_error_sha256']=hashlib.sha256(db.get(AgentTask,OLD).error.encode()).hexdigest()
+
+
+@pytest.mark.parametrize('key',['driver.py','codex_transport.py','agent_budget.py','transport_process.py'])
+def test_input_prelaunch_accepts_only_reviewed_check_before_reserve_sources(env,key):
+    e=input_prelaunch_env(env);e.grant['source_method_identity']['source_files'][key]='f'*64
+    with pytest.raises(research.ResearchBlocked):
+        recovery._input_prelaunch_tail(e.grant,e.run,recovery._history_segments(e.grant,e.run,e.sf),e.sf)
+
+
+@pytest.mark.parametrize('mutation',['undeclared','old_tail','history','bool_counter','tail_count','input_bool','input_zero','input_not_over_limit','input_too_large',
+    'unknown_error','loose_input_text','error_code','execution','worker_success','pending_role','completed_role','empty_fingerprints','invalid_fingerprint','receipt7','output7','missing_old_output'])
+def test_input_prelaunch_requires_exact_declared_terminal_and_input_rejection(env,mutation):
+    e=input_prelaunch_env(env);b=e.grant['binding'];tail=b['input_prelaunch_tail']
+    if mutation=='undeclared':b.pop('input_prelaunch_tail')
+    elif mutation=='old_tail':b['prelaunch_tail']={key:value for key,value in tail.items() if key in recovery.PRELAUNCH_TAIL_KEYS}
+    elif mutation=='history':b['recovery_history']=[{}]
+    elif mutation=='bool_counter':b['call_counter']=True
+    elif mutation=='tail_count':tail['call_id']=6
+    elif mutation=='input_bool':tail['input_chars']=True
+    elif mutation=='input_zero':tail['input_limit_chars']=0
+    elif mutation=='input_not_over_limit':tail['input_chars']=tail['input_limit_chars']
+    elif mutation=='input_too_large':tail['input_chars']=recovery.MAX_BYTES+1
+    elif mutation in {'unknown_error','loose_input_text','error_code'}:
+        with e.sf() as db:
+            task=db.get(AgentTask,OLD);error=json.loads(task.error)
+            if mutation=='unknown_error':error['message']='今日已有模型调用的 token 用量未知；拒绝继续消耗，须先核实/跨日恢复'
+            elif mutation=='loose_input_text':error['message']='prefix '+error['message']+' input'
+            else:error['code']='TransportError'
+            task.error=json.dumps(error);db.commit()
+        reseal_input_source_facts(e)
+    elif mutation=='execution':
+        put(e.run/'execution.json',dict(state='needs_native_recovery',error_kind='TransportError',automatic_retry=False));tail['source_execution_sha256']=recovery._sha(e.run/'execution.json')
+    elif mutation=='worker_success':
+        put(e.run/'worker-terminal.json',{'exit_code':0});b['worker_terminal_sha256']=recovery._sha(e.run/'worker-terminal.json')
+    elif mutation=='pending_role':b['expected_pending_role']='Bull Researcher'
+    elif mutation=='completed_role':b['completed_roles'][0]['role']='Market Analyst'
+    elif mutation=='empty_fingerprints':tail['pending_message_fingerprints']=[]
+    elif mutation=='invalid_fingerprint':tail['pending_message_fingerprints'][0]='not-a-sha'
+    elif mutation=='receipt7':put(e.run/'usage-receipts/7.json',{'usage_known':False})
+    elif mutation=='output7':put(e.run/'model-outputs/7.json',{'structured_output':{}})
+    else:(e.run/'model-outputs/3.json').unlink()
+    e.pin()
+    with pytest.raises(research.ResearchBlocked):context(e)
+    assert e.native.calls==0
+
+
+@pytest.mark.parametrize('mutation',['extra_reserved','extra_started','usage_unknown','tokens','purpose','provider','model','attempts','retries','scope','date','state','started','finished'])
+def test_input_prelaunch_full_db_closure_rejects_even_resealed_reservations_and_usage_drift(env,mutation):
+    e=input_prelaunch_env(env)
+    with e.sf() as db:
+        row=db.get(AgentResourceUsage,f'{1:032x}')
+        if mutation.startswith('extra_'):
+            db.add(AgentResourceUsage(id='7'*32,budget_date=NOW.date().isoformat(),scope=agent_budget.SCOPE_AUTONOMY_LLM,kind='model',purpose='extra unaccounted source call',
+                task_id=OLD,state='reserved' if mutation=='extra_reserved' else 'started',usage_known=0,started_at=None if mutation=='extra_reserved' else NOW.replace(tzinfo=None)))
+        elif mutation=='usage_unknown':row.usage_known=0
+        elif mutation=='tokens':row.input_tokens+=1
+        elif mutation=='purpose':row.purpose='other'
+        elif mutation=='provider':row.provider='other'
+        elif mutation=='model':row.model='other'
+        elif mutation=='attempts':row.attempts=2
+        elif mutation=='retries':row.max_retries=1
+        elif mutation=='scope':row.scope=agent_budget.SCOPE_AUTONOMY_LLM
+        elif mutation=='date':row.budget_date='2026-10-20'
+        elif mutation=='state':row.state='failed'
+        elif mutation=='started':row.started_at=None
+        else:row.finished_at=None
+        db.commit()
+    reseal_input_source_facts(e)
+    with pytest.raises(research.ResearchBlocked):recovery._input_prelaunch_tail(e.grant,e.run,recovery._history_segments(e.grant,e.run,e.sf),e.sf)
+
+
+@pytest.mark.parametrize('mutation',['known_false','usage_none','usage_bool','usage_string','negative_usage','duplicate_id','receipt_call_bool','output_role','output_call_bool','saved_final_market'])
+def test_input_prelaunch_receipts_and_original_outputs_must_be_strict_and_closed(env,mutation):
+    e=input_prelaunch_env(env);b=e.grant['binding'];path=e.run/'usage-receipts/6.json';usage=recovery._json(path);outpath=e.run/'model-outputs/6.json';output=recovery._json(outpath)
+    if mutation=='known_false':usage['usage_known']=False
+    elif mutation=='usage_none':usage['usage']=None
+    elif mutation=='usage_bool':usage['usage']['input_tokens']=True
+    elif mutation=='usage_string':usage['usage']['input_tokens']='16'
+    elif mutation=='negative_usage':usage['usage']['input_tokens']=-1
+    elif mutation=='duplicate_id':usage['usage_id']=f'{5:032x}'
+    elif mutation=='receipt_call_bool':usage['call_id']=True
+    elif mutation=='output_role':output['role']='Trader'
+    elif mutation=='output_call_bool':output['call_id']=True
+    else:
+        output['structured_output']['tool_calls']=[];output['output_sha256']=research._digest(output['structured_output']);usage['output_sha256']=output['output_sha256']
+    put(path,usage);put(outpath,output);b['usage_receipts']['6']=recovery._sha(path);b['outputs']['6']=recovery._sha(outpath)
+    e.pin()
+    with pytest.raises(research.ResearchBlocked):context(e)
+
+
+@pytest.mark.parametrize('mutation',['error_type','error_role','error_call','missing_return','duplicate_return','returned_role','returned_sha','trailing_error'])
+def test_input_prelaunch_broker_stream_cannot_infer_nonlaunch_from_a_generic_error(env,mutation):
+    e=input_prelaunch_env(env);tail=e.grant['binding']['input_prelaunch_tail'];path=e.run/'graph/model-receipts.jsonl';rows=[json.loads(line) for line in path.read_text().splitlines()]
+    if mutation=='error_type':rows[-1]['error_type']="{'kind': 'TransportError'}"
+    elif mutation=='error_role':rows[-1]['role']='News Analyst'
+    elif mutation=='error_call':rows[-1]['call_id']=7
+    elif mutation=='missing_return':rows.pop(0)
+    elif mutation=='duplicate_return':rows[0]=deepcopy(rows[1])
+    elif mutation=='returned_role':rows[0]['role']='Market Analyst'
+    elif mutation=='returned_sha':rows[0]['response_sha256']='f'*64
+    else:rows.append(dict(rows[-1],error_type="{'kind': 'DriverUnavailable'}"))
+    path.write_text(''.join(json.dumps(row)+'\n' for row in rows));tail['model_receipts_prefix']=dict(bytes=path.stat().st_size,sha256=recovery._sha(path));tail['first_broker_error_record_sha256']=research._digest(rows[-1]);e.pin()
+    with pytest.raises(research.ResearchBlocked):context(e)
+
+
+@pytest.mark.parametrize('mutation',['root_step','pending_node','pending_error','missing_report','completed_error','native_parent','native_step','missing_branch'])
+def test_input_prelaunch_requires_native_three_results_and_market_wrapup_checkpoint(env,mutation):
+    e=input_prelaunch_env(env);b=e.grant['binding'];cp=e.run/'graph/cache/checkpoints'/f'{SYMBOL}.db'
+    with sqlite3.connect(cp) as db:
+        if mutation=='root_step':db.execute("UPDATE checkpoints SET metadata=? WHERE checkpoint_ns=''",(json.dumps({'step':1}),))
+        elif mutation=='pending_node':db.execute("UPDATE writes SET task_path='~__pregel_pull, agent' WHERE task_path='~__pregel_pull, wrap_up'")
+        elif mutation=='pending_error':db.execute("UPDATE writes SET value=? WHERE task_path='~__pregel_pull, wrap_up'",(b'another failure',))
+        elif mutation=='missing_report':db.execute("DELETE FROM writes WHERE channel='news_report'")
+        elif mutation=='completed_error':
+            thread,ns,cid=db.execute("SELECT thread_id,checkpoint_ns,checkpoint_id FROM checkpoints WHERE checkpoint_ns LIKE 'News Analyst:%'").fetchone()
+            db.execute('INSERT INTO writes VALUES(?,?,?,?,?,?,?,?,?)',(thread,ns,cid,'bad','~__pregel_pull, agent',-1,'__error__','msgpack',b'failed'))
+        elif mutation in {'native_parent','native_step'}:
+            meta=json.loads(db.execute("SELECT metadata FROM checkpoints WHERE checkpoint_ns LIKE 'Market Analyst:%'").fetchone()[0]);meta['parents']={'':'other'} if mutation=='native_parent' else meta['parents'];meta['step']=5 if mutation=='native_step' else meta['step']
+            db.execute("UPDATE checkpoints SET metadata=? WHERE checkpoint_ns LIKE 'Market Analyst:%'",(json.dumps(meta),))
+        else:db.execute("DELETE FROM checkpoints WHERE checkpoint_ns LIKE 'News Analyst:%'")
+    b['checkpoint']=recovery.checkpoint_snapshot(e.run,SYMBOL);e.pin()
+    with pytest.raises(research.ResearchBlocked):context(e)
+
+
+@pytest.mark.parametrize('mutation',['role','counter','messages','missing_messages','missing_wrap_up','changed_wrap_up','completed_role_after_first'])
+def test_input_prelaunch_first_request_uses_frozen_market_messages_and_never_replays_three_finals(env,mutation):
+    e=input_prelaunch_env(env);guard=recovery._pending_guard(context(e)['binding']);request=dict(role='Market Analyst',messages=deepcopy(e.input_request_messages));counter=7
+    if mutation=='role':request['role']='News Analyst'
+    elif mutation=='counter':counter=6
+    elif mutation=='messages':request['messages'][-2]['content']='different source'
+    elif mutation=='missing_messages':request.pop('messages')
+    elif mutation=='missing_wrap_up':request['messages'].pop()
+    elif mutation=='changed_wrap_up':request['messages'][-1]['content']='write a fresh report'
+    else:
+        guard(request,7);request['role']='Fundamentals Analyst';counter=8
+    with pytest.raises(research.ResearchBlocked):guard(request,counter)
+    assert not (e.run/'usage-receipts/7.json').exists()
+
+
+def test_input_prelaunch_offline_wal_reads_create_no_sidecars_or_context_files(env):
+    e=input_prelaunch_env(env);b=e.grant['binding'];cp=e.run/'graph/cache/checkpoints'/f'{SYMBOL}.db'
+    with sqlite3.connect(cp) as db:assert db.execute('PRAGMA journal_mode=WAL').fetchone()[0]=='wal'
+    b['checkpoint']['files']={'db':recovery._sha(cp),'-wal':None,'-shm':None}
+    b['checkpoint']=recovery.checkpoint_snapshot(e.run,SYMBOL,offline={'grant':e.grant,'session_factory':e.sf});e.pin()
+    original={p.relative_to(e.run):p.read_bytes() for p in e.run.rglob('*') if p.is_file()}
+    context(e);context(e)
+    assert {p.relative_to(e.run):p.read_bytes() for p in e.run.rglob('*') if p.is_file()}==original
+    assert not (cp.with_name(cp.name+'-wal')).exists() and not (cp.with_name(cp.name+'-shm')).exists()
+
+
+def frozen_packet_owner_env(e):
+    e=input_prelaunch_env(e);old=e.grant['source_method_identity'];b=e.grant['binding']
+    before='8ef2086885ae17cf52a5c720705251a2b956b91f401ca8604b655182053308bf'
+    after='5d970afc948ea70e8d5ef3cc6a1efe68d2a3df09d3044fc1c92c405c864db0b0'
+    old['packet_builder']=dict(kind='frozen-free-source-fixture',implicit_collection=False,history_calendar_days=400,
+        owner_sources={'services/quote_hub.py':before,'schemas/market.py':'c'*64})
+    e.current['packet_builder']=deepcopy(old['packet_builder']);e.current['packet_builder']['owner_sources']['services/quote_hub.py']=after
+    source=recovery._json(e.source_claim);e.source_claim.unlink();source['method_sha256']=research._digest(old)
+    e.source_claim=research._selection_claim(e.selection,source['method_sha256']);put(e.source_claim,source);b['source_claim_sha256']=recovery._sha(e.source_claim)
+    for number in b['usage_receipts']:
+        path=e.run/'usage-receipts'/(number+'.json');usage=recovery._json(path);usage['method_sha256']=source['method_sha256'];put(path,usage);b['usage_receipts'][number]=recovery._sha(path)
+    e.grant['compatibility'].update(kind='reviewed_frozen_packet_owner_v1',packet_owner_hash_pairs={'services/quote_hub.py':dict(old=before,new=after)})
+    e.auth['unknown_usage_exception']['method_sha256']=research._digest(e.current)
+    e.pin();return e
+
+
+@pytest.mark.parametrize('two_owners',[False,True])
+def test_frozen_packet_owner_continuation_uses_exact_saved_packet_and_never_calls_builder(env,monkeypatch,two_owners):
+    e=(frozen_packet_two_owner_env if two_owners else frozen_packet_owner_env)(env);packet=(e.run/'packet.json').read_bytes();originals={p:p.read_bytes() for folder in ('model-outputs','usage-receipts') for p in (e.run/folder).iterdir()}
+    async def no_builder(*args,**kwargs):raise AssertionError('frozen continuation must never recollect or build new input')
+    monkeypatch.setattr(driver.StoredCompanyPacketBuilder,'__call__',no_builder);e.native.packet_builder=no_builder
+    e.native.resume_counter=7;e.native.first_role='Market Analyst';execute=e.native._execute
+    async def continuation(*,recovery_guard,**kwargs):
+        def checked(request,counter):recovery_guard(dict(request,messages=e.input_request_messages),counter)
+        return await execute(recovery_guard=checked,**kwargs)
+    e.native._execute=continuation;c,owner=consumed(e);result=asyncio.run(recovery.run_recovery(e.rec,params(c,owner),e.app))
+    assert result['recovery_lineage']['new_call_from']==8 and result['recovery_lineage']['reused_original_outputs']==6
+    assert (e.run/'packet.json').read_bytes()==packet and all(p.read_bytes()==body for p,body in originals.items())
+    assert research._latest(SYMBOL)['recovery_lineage']==result['recovery_lineage']
+
+
+@pytest.mark.parametrize('mutation',['default_kind','missing_pair','extra_pair','future_pair','reverse_pair','missing_old_owner','missing_new_owner','other_owner','new_owner',
+    'packet_field','packet_kind','model','graph','dependencies','missing_binding','missing_tail','bad_packet_sha','bad_config_sha','bad_staged_sha','bad_manifest_sha','source_mapping'])
+def test_frozen_packet_owner_transition_is_one_forward_pair_only_for_a_bound_old_packet(env,mutation):
+    e=frozen_packet_owner_env(env);grant=e.grant;compat=grant['compatibility'];old=grant['source_method_identity'];new=e.current
+    if mutation=='default_kind':compat.update(kind='reviewed_host_diagnostics_and_recovery_v1');compat.pop('packet_owner_hash_pairs')
+    elif mutation=='missing_pair':compat.pop('packet_owner_hash_pairs')
+    elif mutation=='extra_pair':compat['packet_owner_hash_pairs']['schemas/market.py']=dict(old='c'*64,new='c'*64)
+    elif mutation=='future_pair':new['packet_builder']['owner_sources']['services/quote_hub.py']='f'*64;compat['packet_owner_hash_pairs']['services/quote_hub.py']['new']='f'*64
+    elif mutation=='reverse_pair':
+        owners=(old['packet_builder']['owner_sources'],new['packet_builder']['owner_sources']);owners[0]['services/quote_hub.py'],owners[1]['services/quote_hub.py']=owners[1]['services/quote_hub.py'],owners[0]['services/quote_hub.py']
+        pair=compat['packet_owner_hash_pairs']['services/quote_hub.py'];pair['old'],pair['new']=pair['new'],pair['old']
+    elif mutation=='missing_old_owner':old['packet_builder']['owner_sources'].pop('services/quote_hub.py')
+    elif mutation=='missing_new_owner':new['packet_builder']['owner_sources'].pop('services/quote_hub.py')
+    elif mutation=='other_owner':new['packet_builder']['owner_sources']['schemas/market.py']='f'*64
+    elif mutation=='new_owner':new['packet_builder']['owner_sources']['services/unreviewed.py']='f'*64
+    elif mutation=='packet_field':new['packet_builder']['history_calendar_days']=401
+    elif mutation=='packet_kind':new['packet_builder']['kind']='new input builder'
+    elif mutation=='model':new['transport']['model']='another-model'
+    elif mutation=='graph':new['upstream_sha']='f'*40
+    elif mutation=='dependencies':new['dependencies']['frozen']='f'*64
+    elif mutation=='missing_binding':grant.pop('binding')
+    elif mutation=='missing_tail':grant['binding'].pop('input_prelaunch_tail')
+    elif mutation.startswith('bad_'):
+        key={'bad_packet_sha':'packet_sha256','bad_config_sha':'config_sha256','bad_staged_sha':'staged_code_sha256','bad_manifest_sha':'manifest_sha256'}[mutation];grant['binding'][key]='unbound'
+    else:compat['source_hash_pairs'].pop('driver.py')
+    with pytest.raises(research.ResearchBlocked):recovery._compatibility(grant,new)
+
+
+def test_frozen_packet_owner_compatibility_is_readonly_and_old_kind_stays_strict(env):
+    e=frozen_packet_owner_env(env);before=deepcopy(e.grant)
+    assert recovery._compatibility(e.grant,e.current)==(research._digest(e.grant['source_method_identity']),research._digest(e.current))
+    assert e.grant==before
+    e.grant['compatibility'].pop('packet_owner_hash_pairs');e.grant['compatibility']['kind']='reviewed_host_diagnostics_and_recovery_v1'
+    with pytest.raises(research.ResearchBlocked):recovery._compatibility(e.grant,e.current)
+
+
+def test_frozen_packet_owner_does_not_accept_replaced_or_recaptured_packet(env):
+    e=frozen_packet_owner_env(env);put(e.run/'packet.json',dict(recovery._json(e.run/'packet.json'),as_of=NOW.isoformat()));e.pin()
+    with pytest.raises(research.ResearchBlocked):context(e)
+    assert e.native.calls==0
+
+
+def frozen_packet_two_owner_env(e):
+    e=frozen_packet_owner_env(e);old=e.grant['source_method_identity'];b=e.grant['binding'];name='data_providers/tencent.py'
+    pair=dict(old='69d6380eab0e4ffc228d08391a8a815bfb37e304ee9cac70271d04ed58bc3a43',new='32699b46cc03f0038e8e9d4969461bd336d9465c0363f984f8dca56b0b828aa9')
+    old['packet_builder']['owner_sources'][name]=pair['old'];e.current['packet_builder']['owner_sources'][name]=pair['new']
+    e.grant['compatibility']['packet_owner_hash_pairs'][name]=pair
+    source=recovery._json(e.source_claim);e.source_claim.unlink();source['method_sha256']=research._digest(old)
+    e.source_claim=research._selection_claim(e.selection,source['method_sha256']);put(e.source_claim,source);b['source_claim_sha256']=recovery._sha(e.source_claim)
+    for number in b['usage_receipts']:
+        path=e.run/'usage-receipts'/(number+'.json');usage=recovery._json(path);usage['method_sha256']=source['method_sha256'];put(path,usage);b['usage_receipts'][number]=recovery._sha(path)
+    e.auth['unknown_usage_exception']['method_sha256']=research._digest(e.current);e.pin();return e
+
+
+@pytest.mark.parametrize('mutation',['missing_tencent_pair','missing_quote_pair','unchanged_tencent_pair','empty_changes','future_tencent','reverse_tencent','no_old_tencent','other_owner'])
+def test_frozen_packet_owner_pairs_exactly_match_nonempty_reviewed_changes(env,mutation):
+    e=frozen_packet_two_owner_env(env);compat=e.grant['compatibility'];old=e.grant['source_method_identity']['packet_builder']['owner_sources'];new=e.current['packet_builder']['owner_sources'];name='data_providers/tencent.py'
+    if mutation=='missing_tencent_pair':compat['packet_owner_hash_pairs'].pop(name)
+    elif mutation=='missing_quote_pair':compat['packet_owner_hash_pairs'].pop('services/quote_hub.py')
+    elif mutation=='unchanged_tencent_pair':new[name]=old[name]
+    elif mutation=='empty_changes':
+        e.current['packet_builder']['owner_sources']=deepcopy(old);compat['packet_owner_hash_pairs']={}
+    elif mutation=='future_tencent':new[name]='f'*64;compat['packet_owner_hash_pairs'][name]['new']='f'*64
+    elif mutation=='reverse_tencent':
+        old[name],new[name]=new[name],old[name];pair=compat['packet_owner_hash_pairs'][name];pair['old'],pair['new']=pair['new'],pair['old']
+    elif mutation=='no_old_tencent':old.pop(name);compat['packet_owner_hash_pairs'][name]['old']=None
+    else:new['events/company_state.py']='f'*64;compat['packet_owner_hash_pairs']['events/company_state.py']=dict(old=None,new='f'*64)
+    with pytest.raises(research.ResearchBlocked):recovery._compatibility(e.grant,e.current)
+
+
+def test_frozen_search_owner_pair_refuses_an_unreviewed_quote_function_change(env,tmp_path):
+    import ast
+    from pathlib import Path
+    from app.data_providers import tencent
+    e=frozen_packet_two_owner_env(env);path=Path(tencent.__file__);body=path.read_text();tree=ast.parse(body)
+    cls=next(node for node in tree.body if isinstance(node,ast.ClassDef) and node.name=='TencentProvider')
+    function=next(node for node in cls.body if isinstance(node,ast.AsyncFunctionDef) and node.name=='get_quotes')
+    lines=body.splitlines(keepends=True);lines.insert(function.body[0].lineno-1,"        raise RuntimeError('unreviewed quote change')\n")
+    candidate=tmp_path/'tampered_tencent.py';candidate.write_text(''.join(lines));ast.parse(candidate.read_text())
+    changed=hashlib.sha256(candidate.read_bytes()).hexdigest();assert changed!=hashlib.sha256(path.read_bytes()).hexdigest()
+    e.current['packet_builder']['owner_sources']['data_providers/tencent.py']=changed
+    e.grant['compatibility']['packet_owner_hash_pairs']['data_providers/tencent.py']['new']=changed
+    with pytest.raises(research.ResearchBlocked):recovery._compatibility(e.grant,e.current)
