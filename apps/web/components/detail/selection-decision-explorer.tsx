@@ -3,6 +3,7 @@
 import {useId, useState, type KeyboardEvent, type ReactNode} from "react";
 import type {CompanyImpact, SelectionMetrics} from "@/lib/api";
 import {dateTimeTextBJ} from "@/lib/format";
+import {researchExcerpt} from "@/lib/research-presentation";
 import styles from "./selection-decision-explorer.module.css";
 
 export interface SelectionScore {
@@ -50,7 +51,9 @@ function metricValue(value: number | null, unit: string) {
 
 export function SelectionMeasurements({value, compact = false}: {value: SelectionMetrics; compact?: boolean}) {
   const [selected, setSelected] = useState(value.items[0]?.key);
+  const [thresholdKey, setThresholdKey] = useState("");
   const item = value.items.find(item => item.key === selected) ?? value.items[0];
+  const threshold = item?.thresholds.find(value => value.key === thresholdKey) ?? item?.thresholds[0];
   return <section aria-label={compact ? "盘中关键选择项概览" : "盘中关键选择项"} className={`${styles.scoreSection} ${compact ? styles.compact : ""}`}>
     <div className={styles.heading}><h3>盘中关键选择项</h3><span>{compact ? "原测量，非AI评分" : "真实量纲与原门槛，不是六维评分或AI分"}</span></div>
     <div className={styles.scores}>{value.items.map(metric => {
@@ -68,7 +71,13 @@ export function SelectionMeasurements({value, compact = false}: {value: Selectio
       </button>;
     })}</div>
     {item && <section aria-label="当前原测量依据" className={styles.scoreEvidence} aria-live="polite" tabIndex={0}>
-      <strong>{item.label} · {item.state === "ready" ? metricValue(item.value, item.unit) : "原测量待核"}</strong><p>{item.basis || "原记录未保存该项具体依据。"}</p>
+      <strong>{item.label} · {item.state === "ready" ? metricValue(item.value, item.unit) : "原测量待核"}</strong><p><span className={styles.note}>摘录：</span>{researchExcerpt(item.basis || "原记录未保存该项具体依据。")}</p>
+      {item.basis.trim() && <details key={JSON.stringify([value.snapshot_version, item.key, item.basis])} className={styles.metricBasis}>
+        <summary>核对{item.label}完整依据</summary>
+        <div role="region" aria-label={`${item.label}完整原测量依据`} tabIndex={0}>{item.basis}</div>
+      </details>}
+      {!compact && item.thresholds.length > 0 && <><div className={styles.thresholdChoices} role="group" aria-label="选择原门槛对照">{item.thresholds.map(value => <button type="button" key={value.key} aria-pressed={threshold?.key === value.key} onClick={() => setThresholdKey(value.key)}>{value.label}</button>)}</div>
+        {threshold && <div className={styles.thresholdComparison} aria-label="当前原门槛对照"><span>原测量 <strong>{metricValue(item.value, item.unit)}</strong></span><span>{threshold.operator === ">=" ? "≥" : "<"}</span><span>{threshold.label} <strong>{metricValue(threshold.value, item.unit)}</strong></span><output>{item.state !== "ready" || item.value === null ? "待核，暂不比较" : (threshold.operator === ">=" ? item.value >= threshold.value : item.value < threshold.value) ? "数值满足" : "数值未满足"}</output></div>}</>}
       {compact && <p>{item.thresholds.map(threshold => `${threshold.label} ${threshold.operator === ">=" ? "≥" : "<"}${metricValue(threshold.value, item.unit)}`).join(" · ") || "原记录未设数值门槛"}</p>}
       {!compact && <p>来源：{item.source || "未记录"} · 源时刻：{item.as_of ? dateTimeTextBJ(item.as_of, {seconds: true}) : "未提供"} · 接收时刻：{item.received_at ? dateTimeTextBJ(item.received_at, {seconds: true}) : "未提供"}</p>}
     </section>}
@@ -109,6 +118,52 @@ function EvidenceColumn({title, icon, active, children}: {title: string; icon: "
   return <section className={styles.column} aria-label={title} data-highlight={active || undefined}><h4><Icon kind={icon}/>{title}</h4>{children}</section>;
 }
 
+const FACT_KINDS: Record<string, string> = {business: "主营", product: "产品", customer: "客户", order: "订单", capacity: "产能", financial: "财务"};
+
+function CompanyEvidenceWorkspace({event, facts, fallback, scoreKey}: {event: SelectionDecisionEvent | undefined; facts: CompanyImpact["facts"]; fallback: ReactNode; scoreKey: string | undefined}) {
+  const company = event?.company;
+  const [factKey, setFactKey] = useState(facts[0]?.id ?? "");
+  const [wholeQuote, setWholeQuote] = useState(false);
+  const [stepIndex, setStepIndex] = useState(0);
+  const [riskView, setRiskView] = useState<"compare" | "counter" | "missing">("compare");
+  const [riskIndex, setRiskIndex] = useState(0);
+  const fact = facts.find(item => item.id === factKey) ?? facts[0];
+  const quoteExcerpt = fact ? researchExcerpt(fact.quote, 150) : "";
+  const step = company?.analysis.chain[stepIndex] ?? company?.analysis.chain[0];
+  const riskItems = riskView === "counter" ? company?.analysis.counterarguments ?? [] : company?.analysis.missing ?? [];
+  function chooseStep(index: number) {
+    setStepIndex(index);
+    setWholeQuote(false);
+    const cited = company?.analysis.chain[index]?.evidence_ids.find(id => facts.some(item => item.id === id));
+    if (cited) setFactKey(cited);
+  }
+  return <div className={styles.columns}>
+    <EvidenceColumn title="公司联系" icon="fact" active={scoreKey === "fundamental"}>
+      {fact ? <>
+        <div role="group" aria-label="选择公司依据原句" className={styles.evidenceLocator}>{facts.map((item, index) => <button key={item.id} type="button" aria-pressed={fact.id === item.id} onClick={() => {setFactKey(item.id); setWholeQuote(false);}} title={item.document_title}><span>{FACT_KINDS[item.kind] ?? "披露"}</span><small>{index + 1}</small></button>)}</div>
+        <div className={styles.sourceText} tabIndex={0} aria-label="当前事件公司原句" data-evidence-id={fact.id}><blockquote><p>{wholeQuote ? fact.quote : quoteExcerpt === "这段原答较长，请在原文中核对完整表述。" ? "披露原句较长，可核对整段。" : quoteExcerpt}</p><cite>{fact.document_title} · 第 {fact.page} 页</cite>{quoteExcerpt !== fact.quote.trim() && <button type="button" className={styles.quoteToggle} aria-expanded={wholeQuote} onClick={() => setWholeQuote(value => !value)}>{wholeQuote ? "返回原句摘录" : "核对整段原句"}</button>}<a href={fact.url} target="_blank" rel="noopener noreferrer" data-action="quiet">查看披露原文</a></blockquote></div>
+        <p className={styles.note}>传导引用了 {facts.length} 条公司原句；点击依据可逐条核对。</p>
+      </> : <><p className={styles.state}>{event?.status || "公司关系待核"}</p><div className={styles.sourceText}>{fallback}</div></>}
+    </EvidenceColumn>
+    <EvidenceColumn title="可能影响" icon="impact" active={scoreKey === "news"}>
+      <p className={styles.state}>{company ? {conditional: "有条件推演", mixed: "双向影响待核", insufficient: "证据不够", no_supported_link: "暂无直接传导支持"}[company.analysis.status] : "尚不能建立具体经营传导"}</p>
+      <div className={styles.sourceText} tabIndex={0} aria-label="当前事件影响解释">{company ? <p>{researchExcerpt(company.analysis.summary)}</p> : <p>缺少同股、同版本的事件和公司依据，不补写客户、订单或利润结论。</p>}</div>
+      {!!company?.analysis.chain.length && <><div className={styles.chainChoices} role="group" aria-label="传导核对项">{company.analysis.chain.map((item, index) => <button type="button" key={index} aria-pressed={stepIndex === index} aria-label={`核对传导第${index + 1}条`} onClick={() => chooseStep(index)}><span>{index + 1}</span><small>{item.evidence_ids.length} 条引用</small></button>)}</div>
+        {step && <div className={styles.chainDetail} aria-label="当前传导条件"><p>{researchExcerpt(step.text)}</p><div role="group" aria-label="定位传导引用">{step.evidence_ids.map(id => {
+          const citation = facts.find(item => item.id === id);
+          return citation ? <button type="button" key={id} aria-pressed={citation.id === fact?.id} onClick={() => {setFactKey(id); setWholeQuote(false);}}>定位{FACT_KINDS[citation.kind] ?? "公司"}原句</button> : <span key={id}>{id.startsWith("event:") ? "引用事件原句" : "引用原句未提供"}</span>;
+        })}</div></div>}</>}
+      {company && <p className={styles.note}>经营效果未验证。</p>}
+    </EvidenceColumn>
+    <EvidenceColumn title="反证与缺项" icon="risk">
+      {company ? <><div role="group" aria-label="反证缺项核对方式" className={styles.riskModes}>{([['compare', '并排对照'], ['counter', `反证 ${company.analysis.counterarguments.length}`], ['missing', `缺项 ${company.analysis.missing.length}`]] as const).map(([key, label]) => <button type="button" key={key} aria-pressed={riskView === key} onClick={() => {setRiskView(key); setRiskIndex(0);}}>{label}</button>)}</div>
+        <div aria-label="当前事件反证与缺项" className={styles.riskContent}>
+          {riskView === "compare" ? <div className={styles.riskCompare}><div><strong>不能据此推出</strong><p>{researchExcerpt(company.analysis.counterarguments[0] ?? "原记录未单列反证，不代表不存在风险。")}</p></div><div><strong>还缺哪条证据</strong><p>{researchExcerpt(company.analysis.missing[0] ?? "原记录未单列缺项，不代表证据已完整。")}</p></div></div> : <><div className={styles.riskNumbers} role="group" aria-label={riskView === "counter" ? "选择反证" : "选择缺项"}>{riskItems.map((_, index) => <button type="button" key={index} aria-pressed={riskIndex === index} onClick={() => setRiskIndex(index)}>{index + 1}</button>)}</div><p>{researchExcerpt(riskItems[riskIndex] ?? "原记录未提供该项。")}</p></>}
+        </div></> : <div className={styles.sourceText} tabIndex={0} aria-label="当前事件反证与缺项"><p>{event?.gap || "尚无可读取的本股经营证据；不代表公司没有相关业务。"}</p></div>}
+    </EvidenceColumn>
+  </div>;
+}
+
 /** A read-only explorer of saved scores and exact event/company bindings. */
 export function SelectionDecisionExplorer({summary, events, fallback, originalClock, children}: {
   summary: SelectionSummary; events: SelectionDecisionEvent[]; fallback: ReactNode; originalClock: string; children?: ReactNode;
@@ -123,6 +178,7 @@ export function SelectionDecisionExplorer({summary, events, fallback, originalCl
   const cited = new Set(company?.analysis.chain.flatMap(step => step.evidence_ids) ?? []);
   const facts = company?.facts.filter(fact => cited.has(fact.id)) ?? [];
   const [showOriginal, setShowOriginal] = useState(false);
+  const [originalView, setOriginalView] = useState<"reason" | "condition">("reason");
   function chooseEvent(key: KeyboardEvent<HTMLButtonElement>, index: number) {
     if (key.nativeEvent.isComposing || key.keyCode === 229 || !["ArrowRight", "ArrowLeft", "Home", "End"].includes(key.key)) return;
     key.preventDefault(); key.stopPropagation();
@@ -145,24 +201,16 @@ export function SelectionDecisionExplorer({summary, events, fallback, originalCl
       {events.length ? <div role="tablist" aria-label="关联事件选择" className={styles.events}>{events.map((item, index) => <button key={item.id} type="button" role="tab" id={`${uid}-event-${index}`} aria-controls={`${uid}-detail`} aria-selected={event?.id === item.id} tabIndex={event?.id === item.id ? 0 : -1} className={styles.event} data-active={event?.id === item.id} onMouseEnter={() => setEventKey(item.id)} onFocus={() => setEventKey(item.id)} onClick={() => setEventKey(item.id)} onKeyDown={key => chooseEvent(key, index)}>
         <strong>{item.title}</strong><span>{item.relation}</span><small>{item.availableAt}</small>
       </button>)}</div> : <p className={styles.empty}>未找到符合所查时点与版本的可核对事件；没有用其他消息填补。</p>}
-      <div className={styles.columns} data-event-id={event?.id} id={`${uid}-detail`} role={event ? "tabpanel" : undefined} aria-labelledby={event ? `${uid}-event-${events.indexOf(event)}` : undefined}>
-        <EvidenceColumn title="公司联系" icon="fact" active={score?.key === "fundamental"}>
-          {facts.length ? <><p className={styles.state}>传导引用了 {facts.length} 条公司原句</p><div className={styles.sourceText} tabIndex={0} aria-label="当前事件公司原句">{facts.map(fact => <blockquote key={fact.id}><p>{fact.quote}</p><cite>{fact.document_title} · 第 {fact.page} 页</cite><a href={fact.url} target="_blank" rel="noopener noreferrer" data-action="quiet">查看披露原文</a></blockquote>)}</div></> : <><p className={styles.state}>{event?.status || "公司关系待核"}</p><div className={styles.sourceText}>{fallback}</div></>}
-        </EvidenceColumn>
-        <EvidenceColumn title="可能影响" icon="impact" active={score?.key === "news"}>
-          <p className={styles.state}>{company ? {conditional: "有条件推演", mixed: "双向影响待核", insufficient: "证据不够", no_supported_link: "暂无直接传导支持"}[company.analysis.status] : "尚不能建立具体经营传导"}</p>
-          <div className={styles.sourceText} tabIndex={0} aria-label="当前事件影响解释">{company ? <><p>{company.analysis.summary}</p><p className={styles.note}>这是研究假设，尚未验证经营效果。</p></> : <p>缺少同股、同版本的事件和公司依据，不补写客户、订单或利润结论。</p>}</div>
-        </EvidenceColumn>
-        <EvidenceColumn title="反证与缺项" icon="risk">
-          <p className={styles.state}>{company ? `${company.analysis.missing.length} 项缺口 · ${company.analysis.counterarguments.length} 条反证` : "证据边界未闭合"}</p>
-          <div className={styles.sourceText} tabIndex={0} aria-label="当前事件反证与缺项"><ul>{company ? [...company.analysis.counterarguments, ...company.analysis.missing].map((value, index) => <li key={index}>{value}</li>) : <li>{event?.gap || "尚无可读取的本股经营证据；不代表公司没有相关业务。"}</li>}</ul></div>
-        </EvidenceColumn>
+      <div data-event-id={event?.id} id={`${uid}-detail`} role={event ? "tabpanel" : undefined} aria-labelledby={event ? `${uid}-event-${events.indexOf(event)}` : undefined}>
+        <CompanyEvidenceWorkspace key={event?.id ?? "no-event"} event={event} facts={facts} fallback={fallback} scoreKey={score?.key}/>
       </div>
       {event?.temporalNote && <p className={styles.note}>{event.temporalNote}</p>}
       {event?.source && <section className={styles.eventSource} aria-label="当前事件原句"><strong>事件原句</strong><p className={styles.sourceText} tabIndex={0}>{event.source.quote}</p>{event.source.url && <a href={event.source.url} target="_blank" rel="noopener noreferrer" data-action="quiet">查看消息来源</a>}</section>}
     </section>
     <section aria-label="原选择核对" className={styles.original}>
       <div className={styles.heading}><h3>{summary.reasonRecorded ? "原选择记录" : "原理由未单列"}</h3><button type="button" aria-expanded={showOriginal} onClick={() => setShowOriginal(value => !value)}>{showOriginal ? "收起原选择" : "核对原选择"}</button></div>
+      <div className={styles.originalChoices} role="group" aria-label="原选择核对视角"><button type="button" aria-pressed={originalView === "reason"} onClick={() => setOriginalView("reason")}>为何入选</button><button type="button" aria-pressed={originalView === "condition"} onClick={() => setOriginalView("condition")}>失效条件</button></div>
+      <p aria-label="当前原选择摘录" className={styles.originalExcerpt}>{researchExcerpt(originalView === "reason" ? summary.reason : summary.condition)}</p>
       <p className={styles.note}>原版本：{summary.version || "未记录"}。完整理由与全部条件可在本区核对。</p>
       {showOriginal && <div className={styles.originalText}><p>{summary.reason}</p><p>{summary.condition}</p>{summary.supports?.map((support, index) => <p key={index}><strong>{support.label}：</strong>{support.value}</p>)}<p>原版本：{summary.version || "未记录"}。公司补充资料不改写原选择。</p></div>}
     </section>

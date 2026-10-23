@@ -60,11 +60,11 @@ describe("完整TradingAgents研究读者", () => {
     vi.mocked(getTradingAgentsResearch).mockResolvedValue(saved());
     const {container} = render(<TradingAgentsResearchPanel symbol="002121" defaultOpen/>);
     await screen.findByText(/已保存完整七报告/);
-    for (const label of ["行情分析", "新闻与情绪分析", "新闻分析", "基本面分析", "研究辩论结论", "交易员研究方案", "风险辩论与最终研究结论"]) {
-      const summary = screen.getByText(label); fireEvent.click(summary);
-      expect(summary.closest("details")?.open).toBe(true);
+    for (const [key, label] of [["market_report", "行情"], ["sentiment_report", "情绪"], ["news_report", "新闻"], ["fundamentals_report", "公司"], ["investment_plan", "多空研究"], ["trader_investment_plan", "交易研究"], ["final_trade_decision", "最终判断"]] as const) {
+      fireEvent.click(screen.getByRole("tab", {name: new RegExp(label)}));
+      fireEvent.click(screen.getByRole("button", {name: `核对${label}完整原文`}));
+      expect(screen.getByLabelText(`${label}完整原文`).querySelector("pre")?.textContent).toBe(saved().latest!.reports[key]);
     }
-    expect(container.textContent).toContain("冻结比例基期未经审计，当前现金流未知");
     expect(container.textContent).toContain("材料截点：2026-10-19 15:00");
     expect(container.textContent).toContain("历史生成报告，不代表今天已重新判读");
     expect(container.textContent).toContain("报告方法与当前执行器不同");
@@ -111,6 +111,7 @@ describe("完整TradingAgents研究读者", () => {
     await screen.findByText(/600276 · 已保存/);
     await act(async () => {finish(recovered());});
     expect(panel.container.textContent).not.toContain("002121 行情原报告");
+    fireEvent.click(screen.getByRole("tab", {name: /^行情/}));
     expect(panel.container.textContent).toContain("600276 行情原报告");
     expect(screen.queryByLabelText("原答复用与接续")).toBeNull();
     expect(createAgentTask).not.toHaveBeenCalled();
@@ -135,6 +136,7 @@ describe("完整TradingAgents研究读者", () => {
     fireEvent.click(screen.getByRole("button", {name: "重新读取研究"}));
     await screen.findByText(/保留本股上次读取报告/);
     expect(panel.container.textContent).toContain("启动条件读取失败，当前资格未确认");
+    fireEvent.click(screen.getByRole("tab", {name: /^行情/}));
     expect(panel.container.textContent).toContain("002121 行情原报告");
     expect((screen.getByRole("button", {name: "显式启动完整研究"}) as HTMLButtonElement).disabled).toBe(true);
     expect(createAgentTask).not.toHaveBeenCalled();
@@ -147,6 +149,7 @@ describe("完整TradingAgents研究读者", () => {
     await screen.findByText(/已保存完整七报告/);
     const labels = {queued: "排队中", running: "取消请求已记录，等待当前步骤结束", canceled: "已取消", failed: "研究失败"};
     expect(panel.container.textContent).toContain(labels[status]);
+    fireEvent.click(screen.getByRole("tab", {name: /^行情/}));
     expect(panel.container.textContent).toContain("002121 行情原报告");
     expect(createAgentTask).not.toHaveBeenCalled();
   });
@@ -196,19 +199,15 @@ describe("完整TradingAgents研究读者", () => {
     vi.mocked(getTradingAgentsResearch).mockResolvedValue(result);
     const panel = render(<TradingAgentsResearchPanel symbol="002121" defaultOpen compact allowStart={false}/>);
     await screen.findByText("002121 · 已有保存报告 · 历史报告 · 待核");
-    const final = screen.getByText("查看最终研究结论").closest("details")!;
-    const others = screen.getByText("查看其余6份完整报告").closest("details")!;
-    expect(final.open).toBe(false);
-    expect(others.open).toBe(false);
-    expect(final.compareDocumentPosition(others) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
-    fireEvent.click(screen.getByText("查看最终研究结论"));
-    expect(final.open).toBe(true);
-    expect(final.textContent).toContain("最终原文不证明未来收益");
-    expect(final.textContent).toContain("尚未独立验收，不构成买卖建议");
-    fireEvent.click(screen.getByText("查看其余6份完整报告"));
-    for (const label of ["行情分析", "新闻与情绪分析", "新闻分析", "基本面分析", "研究辩论结论", "交易员研究方案"]) {
-      fireEvent.click(screen.getByText(label));
-      expect(screen.getByText(label).closest("details")?.open).toBe(true);
+    expect(screen.getByRole("tab", {name: /最终判断/}).getAttribute("aria-selected")).toBe("true");
+    expect(screen.queryByLabelText("最终判断完整原文")).toBeNull();
+    fireEvent.click(screen.getByRole("button", {name: "核对最终判断完整原文"}));
+    expect(screen.getByLabelText("最终判断完整原文").textContent).toContain("最终原文不证明未来收益");
+    for (const [key, label] of [["market_report", "行情"], ["sentiment_report", "情绪"], ["news_report", "新闻"], ["fundamentals_report", "公司"], ["investment_plan", "多空研究"], ["trader_investment_plan", "交易研究"]] as const) {
+      fireEvent.click(screen.getByRole("tab", {name: new RegExp(label)}));
+      expect(screen.queryByLabelText("最终判断完整原文")).toBeNull();
+      fireEvent.click(screen.getByRole("button", {name: `核对${label}完整原文`}));
+      expect(screen.getByLabelText(`${label}完整原文`).querySelector("pre")?.textContent).toBe(result.latest!.reports[key]);
     }
     expect(panel.container.textContent).toContain("材料截点：2026-10-19 15:00");
     expect(panel.container.textContent).toContain("old-method");
@@ -244,6 +243,7 @@ describe("完整TradingAgents研究读者", () => {
     vi.mocked(getTradingAgentsResearch).mockRejectedValueOnce(new Error("read failed"));
     fireEvent.click(screen.getByRole("button", {name: "重新读取研究"}));
     await screen.findByText(/保留本股上次读取报告/);
+    fireEvent.click(screen.getByRole("tab", {name: /^行情/}));
     expect(panel.container.textContent).toContain("002121 行情原报告");
     let finish!: (value: TradingAgentsResearchView) => void;
     vi.mocked(getTradingAgentsResearch).mockImplementationOnce(() => new Promise(resolve => {finish = resolve;})).mockResolvedValueOnce(saved("600276"));
@@ -253,6 +253,7 @@ describe("完整TradingAgents研究读者", () => {
     await screen.findByText("600276 · 已有保存报告 · 历史报告 · 待核");
     await act(async () => {finish(saved());});
     expect(panel.container.textContent).not.toContain("002121 行情原报告");
+    fireEvent.click(screen.getByRole("tab", {name: /^行情/}));
     expect(panel.container.textContent).toContain("600276 行情原报告");
     expect(createAgentTask).not.toHaveBeenCalled();
   });
@@ -268,7 +269,7 @@ describe("完整TradingAgents研究读者", () => {
     fireEvent.click(screen.getByRole("button", {name: "重新读取研究"}));
     await screen.findByText("002121 · 研究失败 · 历史报告 · 待核");
     expect(screen.getByText(/本轮来源失败/)).toBeTruthy();
-    expect(screen.getByText("查看最终研究结论")).toBeTruthy();
+    expect(screen.getByRole("tab", {name: /最终判断/})).toBeTruthy();
     expect(createAgentTask).not.toHaveBeenCalled();
   });
 

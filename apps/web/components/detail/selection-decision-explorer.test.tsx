@@ -3,7 +3,7 @@ import {afterEach, beforeEach, expect, it, vi} from "vitest";
 import {PickCard, fromDailyPick, fromIntradayStock} from "@/components/picks/pick-card";
 import {NotificationDetail} from "@/components/notifications/notification-detail";
 import {getStockAttribution, type AttributionEvidenceItem, type DailyPickItem, type IntradayTopStock, type NotificationItem, type SelectionMetrics} from "@/lib/api";
-import {readSelectionMetrics} from "./selection-decision-explorer";
+import {readSelectionMetrics, SelectionMeasurements} from "./selection-decision-explorer";
 
 vi.mock("@/lib/api", async () => ({...await vi.importActual<typeof import("@/lib/api")>("@/lib/api"), getStockAttribution: vi.fn()}));
 const reason = "原选择记录：产品线有观察线索，尚不能确认新增订单。";
@@ -76,6 +76,92 @@ it.each(["pick", "notice"] as const)("%s shows company evidence, conditional imp
   expect(within(explorer).getByRole("tabpanel")).toBeTruthy();
   if (kind === "notice") expect(within(explorer).getByText(/原记录未存分项评分/)).toBeTruthy();
   expect(getStockAttribution).toHaveBeenCalledTimes(1);
+});
+
+it("selecting a transmission step locates its exact company source and keeps event changes isolated", async () => {
+  const company = source.company_impact!;
+  const order = {...company.facts[0], id: "company:order", kind: "order", quote: "合成公司披露项目尚未签署订单。", page: 26};
+  const expanded = {...source, company_impact: {...company, facts: [...company.facts, order], analysis: {...company.analysis,
+    chain: [...company.analysis.chain, {text: "订单尚未签署，不能推导新增收入。", evidence_ids: [order.id]}],
+    missing: ["缺少本次客户或订单归属。", "尚无项目金额及验收时点。"], counterarguments: [...company.analysis.counterarguments, "计划可能推迟，不能按计划规模计收入。"]}}};
+  vi.mocked(getStockAttribution).mockResolvedValue({schema_version: 1, symbol: "600825", count: 2, items: [expanded, secondSource()]});
+  mount("notice", undefined, [originalRef, secondRef]);
+  const explorer = await screen.findByRole("region", {name: "入选决策核对台"});
+  const step = await within(explorer).findByRole("button", {name: "核对传导第2条"});
+  fireEvent.click(step);
+  expect(within(explorer).getByLabelText("当前传导条件").textContent).toContain("订单尚未签署，不能推导新增收入。");
+  expect(within(explorer).getByLabelText("当前事件公司原句").textContent).toContain(order.quote);
+  expect(within(explorer).getByLabelText("当前事件公司原句").getAttribute("data-evidence-id")).toBe(order.id);
+  fireEvent.click(within(explorer).getByRole("button", {name: "缺项 2"}));
+  fireEvent.click(within(explorer).getByRole("group", {name: "选择缺项"}).querySelectorAll("button")[1]);
+  expect(within(explorer).getByLabelText("当前事件反证与缺项").textContent).toContain("尚无项目金额及验收时点。");
+  fireEvent.click(within(explorer).getByRole("button", {name: "反证 2"}));
+  fireEvent.click(within(explorer).getByRole("group", {name: "选择反证"}).querySelectorAll("button")[1]);
+  expect(within(explorer).getByLabelText("当前事件反证与缺项").textContent).toContain("计划可能推迟，不能按计划规模计收入。");
+  fireEvent.click(within(explorer).getByRole("tab", {name: /应用项目暂缓/}));
+  expect(within(explorer).getByLabelText("当前事件公司原句").textContent).not.toContain(order.quote);
+  expect(within(explorer).queryByRole("button", {name: "核对传导第2条"})).toBeNull();
+  expect(getStockAttribution).toHaveBeenCalledTimes(1);
+});
+
+it("switches original reason and invalidation without turning review into a business confirmation", async () => {
+  mount("notice");
+  const explorer = await screen.findByRole("region", {name: "入选决策核对台"});
+  expect(within(explorer).getByLabelText("当前原选择摘录").textContent).toBe(reason);
+  fireEvent.click(within(explorer).getByRole("button", {name: "失效条件"}));
+  expect(within(explorer).getByLabelText("当前原选择摘录").textContent).toContain(condition);
+  expect(within(explorer).queryByRole("checkbox")).toBeNull();
+  expect(getStockAttribution).toHaveBeenCalledTimes(1);
+});
+
+it("compares original units and each selected operator without treating missing measurement as zero", () => {
+  const panel = render(<SelectionMeasurements value={measurements}/>);
+  const comparison = screen.getByLabelText("当前原门槛对照");
+  expect(comparison.textContent).toContain("7.26%");
+  expect(comparison.textContent).toContain("候选下沿");
+  expect(comparison.textContent).toContain("数值满足");
+  fireEvent.click(screen.getByRole("button", {name: "封板线"}));
+  expect(comparison.textContent).toContain("<");
+  expect(comparison.textContent).toContain("9.4%");
+  const changed = {...measurements, items: measurements.items.map(item => item.key === "change_pct" ? {...item, value: 10.1} : item)};
+  panel.rerender(<SelectionMeasurements value={changed}/>);
+  expect(comparison.textContent).toContain("数值未满足");
+  panel.rerender(<SelectionMeasurements value={{...changed, items: changed.items.map(item => item.key === "change_pct" ? {...item, value: null, state: "unknown"} : item)}}/>);
+  expect(comparison.textContent).toContain("未记录");
+  expect(comparison.textContent).toContain("待核，暂不比较");
+  expect(comparison.textContent).not.toContain("0%");
+});
+
+it.each([false, true])("keeps the complete original metric qualifiers reachable with compact=%s", compact => {
+  const basis = "当日涨幅跨过候选门槛。尚未满足真实可执行价格与流动性要求。";
+  const original = {...measurements, items: measurements.items.map(item => item.key === "change_pct" ? {...item, basis} : item)};
+  const panel = render(<SelectionMeasurements value={original} compact={compact}/>);
+  const disclosure = screen.getByText("核对当日涨幅完整依据").closest("details")!;
+  expect(disclosure.open).toBe(false);
+  expect(screen.getByText("当日涨幅跨过候选门槛。").textContent).toContain("摘录：");
+  fireEvent.click(within(disclosure).getByText("核对当日涨幅完整依据"));
+  expect(disclosure.open).toBe(true);
+  expect(screen.getByRole("region", {name: "当日涨幅完整原测量依据"}).textContent).toBe(basis);
+
+  fireEvent.focus(screen.getByRole("button", {name: "核对当日成交额原测量"}));
+  const amount = screen.getByText("核对当日成交额完整依据").closest("details")!;
+  expect(amount.open).toBe(false);
+  expect(screen.queryByText(basis)).toBeNull();
+  fireEvent.click(within(amount).getByText("核对当日成交额完整依据"));
+  expect(screen.getByRole("region", {name: "当日成交额完整原测量依据"}).textContent).toBe(measurements.items[1].basis);
+
+  fireEvent.mouseEnter(screen.getByRole("button", {name: "核对当日涨幅原测量"}));
+  expect(screen.getByText("核对当日涨幅完整依据").closest("details")!.open).toBe(false);
+  fireEvent.click(screen.getByText("核对当日涨幅完整依据"));
+  const replacement = `${"更长的原始依据必须完整保留，".repeat(20)}缺少订单和成交执行证据。`;
+  panel.rerender(<SelectionMeasurements value={{...original, snapshot_version: "snapshot-replacement", items: original.items.map(item => item.key === "change_pct" ? {...item, basis: replacement} : item)}} compact={compact}/>);
+  const refreshed = screen.getByText("核对当日涨幅完整依据").closest("details")!;
+  expect(refreshed.open).toBe(false);
+  expect(screen.getByText("这段原答较长，请在原文中核对完整表述。")).toBeTruthy();
+  fireEvent.click(within(refreshed).getByText("核对当日涨幅完整依据"));
+  expect(screen.getByRole("region", {name: "当日涨幅完整原测量依据"}).textContent).toBe(replacement);
+  expect(screen.queryByText(basis)).toBeNull();
+  expect(getStockAttribution).not.toHaveBeenCalled();
 });
 
 it("real saved score values fill bars, missing placeholders do not; hover/focus/click link the exact basis", async () => {

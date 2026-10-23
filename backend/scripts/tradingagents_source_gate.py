@@ -313,6 +313,19 @@ def _nonasserted(clause, start, end, kind, paragraph_prefix='', paragraph_suffix
                                  coordinated_denial['items'])):
                 return None  # Do not fall through to a broader negative-word waiver.
             return 'LOCAL_DENIED_COORDINATED_EXECUTION_CONCLUSION'
+        # Two reviewed research-to-decision denials. Keep the exact object/
+        # transform forms and conclusion local; do not waive an outer denial,
+        # account-execution premise, risk noun, or subsequent assertion.
+        transform_denial = re.search(r'不足以把(?:它直接转成|研究低配转译为)\s*$', before)
+        if transform_denial and clause[start:end] == '确定卖出':
+            prefix = before[:transform_denial.start()]
+            context = paragraph_prefix + prefix
+            if (prefix.strip() not in {'', '现有证据'} or len(context) > 160
+                    or NEGATIVE.search(context)
+                    or re.search(r'不是|并非|不能|无法|不足以|账户|投资者|执行|持仓|现金|成交|交割', context)
+                    or not re.fullmatch(r'\s*(?:结论)?\s*', after)):
+                return None  # An ambiguous scope cannot inherit a broader waiver.
+            return 'LOCAL_DENIED_RESEARCH_TO_SELL_TRANSFORM'
         # A denied decision or order-price inference is not a promised fill.
         # Bind the denial directly to this claim; retain double negations,
         # affirmative suffixes and presupposed post-sale risks as violations.
@@ -699,7 +712,7 @@ def evaluate_report(report, packet):
                 violations.append({**record, 'reason': reason, 'source_capability_sha256': _sha(_canonical(semantics))})
     return {'status': 'FAIL' if violations else 'PASS', 'violations': violations, 'observations': observations,
             'source_semantics_sha256': _sha(_canonical(semantics)), 'gate_version': VERSION,
-            'scope_rules_version': 'local-denial-prerequisite-v7',
+            'scope_rules_version': 'local-denial-prerequisite-v8',
             'checked_scope': {'families': [name for name, _ in families], 'scope': 'finite Chinese/English proposition families and local scopes only',
                               'not_checked': ['arbitrary natural-language entailment', 'source truth', 'causality', 'investment effect', 'unknown synonyms',
                                               'unparsed natural-language security names or dates; these still require source review',

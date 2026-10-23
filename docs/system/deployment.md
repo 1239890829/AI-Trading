@@ -520,3 +520,8 @@ CLI启动warning的兼容依据与固定版本见[语义纠错记录](../ai/sema
 服务器单次grant采用独立frozen-packet-owner compatibility kind时，显式差异集合只可为服务端已审的quote_hub展示修补与Tencent纯search的准确正向hash对，声明恰等于实际变化；其余packet_builder、model/graph/依赖/工具与原packet严格不变，执行不得重新调用builder。原kind保持原约束。授权安装前核发布的准确HEAD、本地完整门、required CI、release_check与master CI，核0 active及dispatch单写者；保留原授权备份和七条具名unknown原账，不改变原外层到期或单次资源门。
 
 调用维护POST只能声明source_task_id/run_id，实际源/目标方法与grant由服务器pin；准备grant和离线读取器成功不等恢复已执行。激活后另核首个新物理调用、原件哈希、known账闭合、12角色/七报告/Memory及普通GET/实页读取；旧报告继续可读，研究效果和人工gold不因工程修补晋级。
+
+
+### 2026-10-23 快照故障承接与只读界面更新
+
+全市场普通ProviderError/httpx故障且原快照unavailable/stale时，复用已配置批量备源一次；新鲜degraded不发额外全量，456冷却和主源退避保留。采集等待复用原新鲜窗；共享HTTP owner与保存不冒称同一硬期限，详见性能§35。成员仅active/可见时读取原内存快照。组件交互、报告对照或刷新仍不创建模型任务；短视图和完整原文共用原证券/日期/方法身份。源守卫v8变更需准确新方法授权及原未调用pending承接；旧八报告/原恢复grant/七unknown保留，安装前只读验证，发布/主干CI/停止旧进程/启动器加载与实际页面分别记证。

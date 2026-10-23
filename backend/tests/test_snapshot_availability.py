@@ -30,6 +30,7 @@ import time
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
+import httpx
 import pytest
 
 from app.data_providers.eastmoney import ProviderError
@@ -307,6 +308,10 @@ def test_refresh_success_clears_rate_limited(monkeypatch, tmp_path):
     s = MarketSnapshotService(60.0, 60.0, tmp_path)
     s.rate_limited = True
     s.consecutive_failures = 3
+    s.last_error = "primary source failure"
+    s.last_snapshot_source = "quote_fallback"
+    s.last_degraded_reason = "source failure fallback"
+    s.last_fallback_coverage = 0.95
     monkeypatch.setattr(s, "_maybe_save", lambda: None)
 
     async def _fake_snapshot(**kwargs):
@@ -319,6 +324,8 @@ def test_refresh_success_clears_rate_limited(monkeypatch, tmp_path):
     assert s.rate_limited is False
     assert s.consecutive_failures == 0
     assert s.breadth is not None
+    assert s.last_error is None and s.last_degraded_reason is None
+    assert s.last_snapshot_source == "sina" and s.last_fallback_coverage is None
     assert s._next_delay(live=True) == 60.0  # 回到正常节奏
 
 
@@ -783,3 +790,278 @@ def test_bootstrap_injects_quote_hub_into_snapshot_service():
     assert len(calls) == 1
     kw = {item.arg: ast.unparse(item.value) for item in calls[0].keywords}
     assert kw.get("quote_hub") == "hub"
+
+
+@pytest.mark.parametrize("source_error", [
+    ProviderError("sina snapshot incomplete: rows=100 unique=100 expected=101"),
+    httpx.ReadTimeout("stock count source timeout"),
+])
+def test_source_failure_cold_start_uses_existing_parquet_fallback_once(monkeypatch, tmp_path, source_error):
+    import polars as pl
+    from app.services import quote_enrich
+
+    day = tmp_path / "snapshots" / "20261023"
+    day.mkdir(parents=True)
+    pl.DataFrame(_base_rows()).write_parquet(day / "020000.parquet")
+    svc = MarketSnapshotService(60.0, 300.0, tmp_path, quote_hub=object())
+    calls, sleeps = [], []
+
+    async def primary():
+        raise source_error
+
+    async def quotes(_hub, symbols, **kwargs):
+        calls.append((symbols, kwargs))
+        return {symbol: _quote(symbol) for symbol in symbols}
+
+    async def stop(delay):
+        sleeps.append(delay)
+        raise asyncio.CancelledError
+
+    monkeypatch.setattr(svc, "refresh", primary)
+    monkeypatch.setattr(svc, "_maybe_save", lambda: None)
+    monkeypatch.setattr(quote_enrich, "fetch_quotes_batched", quotes)
+    monkeypatch.setattr(snapshot_service, "in_trading_window", lambda: True)
+    monkeypatch.setattr(snapshot_service.asyncio, "sleep", stop)
+    with pytest.raises(asyncio.CancelledError):
+        asyncio.run(svc.run())
+
+    assert calls == [(["600001", "600002"], {"prefer_cache": False, "batch_size": 50})]
+    assert sleeps == [120.0]
+    assert svc.last_snapshot_source == "quote_fallback"
+    assert svc.consecutive_failures == 1 and svc.rate_limited is False
+    assert svc.last_error == str(source_error)
+    assert svc.freshness(live=True).state == "degraded"
+    assert "源失败" in svc.freshness(live=True).reason
+    assert "限流" not in svc.freshness(live=True).reason
+
+
+@pytest.mark.parametrize("previous_fallback", [False, True])
+def test_source_failure_keeps_fresh_version_without_extra_fallback(monkeypatch, previous_fallback):
+    svc = _svc()
+    rows = _base_rows()
+    svc.snapshot = rows
+    svc.breadth = compute_breadth(rows)
+    svc.last_success = datetime.now(timezone.utc)
+    svc._snapshot_version = (svc.last_success, tuple(dict(row) for row in rows))
+    if previous_fallback:
+        svc.last_snapshot_source = "quote_fallback"
+        svc.last_degraded_reason = "previous fallback"
+    original = svc.versioned_snapshot()
+
+    async def primary():
+        raise ProviderError("sina incomplete")
+
+    async def forbidden():
+        pytest.fail("a fresh ready/degraded version must not trigger another all-market batch")
+
+    async def stop(delay):
+        assert delay == 120.0
+        raise asyncio.CancelledError
+
+    monkeypatch.setattr(svc, "refresh", primary)
+    monkeypatch.setattr(svc, "refresh_fallback", forbidden)
+    monkeypatch.setattr(snapshot_service, "in_trading_window", lambda: True)
+    monkeypatch.setattr(snapshot_service.asyncio, "sleep", stop)
+    with pytest.raises(asyncio.CancelledError):
+        asyncio.run(svc.run())
+    assert svc.versioned_snapshot() == original
+    assert svc.freshness(live=True).state == "degraded"
+    assert svc.last_error == "sina incomplete" and svc.consecutive_failures == 1
+
+
+def test_source_failure_stale_version_can_use_one_fallback(monkeypatch, tmp_path):
+    from app.services import quote_enrich
+
+    svc = MarketSnapshotService(60.0, 300.0, tmp_path, quote_hub=object())
+    svc.snapshot = _base_rows()
+    svc.breadth = compute_breadth(svc.snapshot)
+    svc.last_success = datetime.now(timezone.utc) - timedelta(seconds=181)
+    svc._snapshot_version = (svc.last_success, tuple(dict(row) for row in svc.snapshot))
+    calls = []
+
+    async def primary():
+        raise ProviderError("sina incomplete")
+
+    async def quotes(_hub, symbols, **_kwargs):
+        calls.append(symbols)
+        return {symbol: _quote(symbol, pct=3.0) for symbol in symbols}
+
+    async def stop(delay):
+        assert delay == 120.0
+        raise asyncio.CancelledError
+
+    monkeypatch.setattr(svc, "refresh", primary)
+    monkeypatch.setattr(svc, "_maybe_save", lambda: None)
+    monkeypatch.setattr(quote_enrich, "fetch_quotes_batched", quotes)
+    monkeypatch.setattr(snapshot_service, "in_trading_window", lambda: True)
+    monkeypatch.setattr(snapshot_service.asyncio, "sleep", stop)
+    with pytest.raises(asyncio.CancelledError):
+        asyncio.run(svc.run())
+    assert calls == [["600001", "600002"]]
+    assert svc.snapshot[0]["change_pct"] == 3.0
+    assert svc.last_snapshot_source == "quote_fallback" and svc.freshness(live=True).state == "degraded"
+
+
+@pytest.mark.parametrize("fallback_error", [
+    RuntimeError("fallback coverage 80% < 90%"),
+    TimeoutError("fallback collection deadline"),
+])
+def test_source_failure_failed_backup_keeps_original_version_and_retry(monkeypatch, fallback_error):
+    svc = _svc()
+    svc.snapshot = _base_rows()
+    svc.breadth = compute_breadth(svc.snapshot)
+    svc.last_success = datetime.now(timezone.utc) - timedelta(seconds=181)
+    svc._snapshot_version = (svc.last_success, tuple(dict(row) for row in svc.snapshot))
+    before = svc.versioned_snapshot()
+    calls = []
+
+    async def primary():
+        raise ProviderError("sina incomplete")
+
+    async def backup():
+        calls.append("fallback")
+        raise fallback_error
+
+    async def stop(delay):
+        assert delay == 120.0
+        raise asyncio.CancelledError
+
+    monkeypatch.setattr(svc, "refresh", primary)
+    monkeypatch.setattr(svc, "refresh_fallback", backup)
+    monkeypatch.setattr(snapshot_service, "in_trading_window", lambda: True)
+    monkeypatch.setattr(snapshot_service.asyncio, "sleep", stop)
+    with pytest.raises(asyncio.CancelledError):
+        asyncio.run(svc.run())
+    assert calls == ["fallback"] and svc.versioned_snapshot() == before
+    assert svc.freshness(live=True).state == "stale"
+    assert svc.last_error == "sina incomplete" and svc.rate_limited is False
+
+
+def test_source_failure_primary_recovery_clears_fallback_and_resumes_normal_delay(monkeypatch):
+    from app.services import quote_enrich
+
+    svc = _svc()
+    svc.quote_hub = object()
+    svc.snapshot = _base_rows()
+    primary_calls, backup_calls, sleeps = [], [], []
+
+    async def primary():
+        primary_calls.append(True)
+        if len(primary_calls) == 1:
+            raise ProviderError("sina incomplete")
+        return _base_rows()
+
+    async def backup(_hub, symbols, **_kwargs):
+        backup_calls.append(True)
+        return {symbol: _quote(symbol) for symbol in symbols}
+
+    async def stop(delay):
+        sleeps.append(delay)
+        if len(sleeps) == 2:
+            raise asyncio.CancelledError
+
+    monkeypatch.setattr(sina_market, "fetch_market_snapshot", primary)
+    monkeypatch.setattr(quote_enrich, "fetch_quotes_batched", backup)
+    monkeypatch.setattr(svc, "_maybe_save", lambda: None)
+    monkeypatch.setattr(snapshot_service, "in_trading_window", lambda: True)
+    monkeypatch.setattr(snapshot_service.asyncio, "sleep", stop)
+    with pytest.raises(asyncio.CancelledError):
+        asyncio.run(svc.run())
+    assert len(primary_calls) == 2 and backup_calls == [True]
+    assert sleeps == [120.0, 60.0]
+    assert svc.last_snapshot_source == "sina" and svc.last_degraded_reason is None
+    assert svc.last_error is None and svc.last_fallback_coverage is None
+    assert svc.consecutive_failures == 0 and svc.rate_limited is False
+    assert svc.freshness(live=True).state == "ready"
+
+
+def test_source_failure_does_not_treat_programming_error_as_source_failure(monkeypatch):
+    svc = _svc()
+
+    async def primary():
+        raise ValueError("invalid local calculation")
+
+    async def forbidden():
+        pytest.fail("a local programming failure is not source failover permission")
+
+    async def stop(_delay):
+        raise asyncio.CancelledError
+
+    monkeypatch.setattr(svc, "refresh", primary)
+    monkeypatch.setattr(svc, "refresh_fallback", forbidden)
+    monkeypatch.setattr(snapshot_service.asyncio, "sleep", stop)
+    with pytest.raises(asyncio.CancelledError):
+        asyncio.run(svc.run())
+    assert svc.breadth is None and svc.last_error == "invalid local calculation"
+
+
+@pytest.mark.parametrize("suppress_cancel", [False, True])
+def test_fallback_collection_deadline_drains_and_never_publishes_late(monkeypatch, suppress_cancel):
+    from app.services import quote_enrich
+
+    svc = _svc()
+    svc.quote_hub = object()
+    svc.snapshot = _base_rows()
+    svc.breadth = compute_breadth(svc.snapshot)
+    svc.last_success = datetime.now(timezone.utc) - timedelta(seconds=181)
+    svc._snapshot_version = (svc.last_success, tuple(dict(row) for row in svc.snapshot))
+    before = svc.versioned_snapshot()
+    real_wait_for = asyncio.wait_for
+    drained, collections, configured = [], [], []
+
+    async def quotes(_hub, symbols, **_kwargs):
+        collections.append(asyncio.current_task())
+        try:
+            await asyncio.Event().wait()
+        except asyncio.CancelledError:
+            if suppress_cancel:
+                return {symbol: _quote(symbol) for symbol in symbols}
+            raise
+        finally:
+            drained.append(True)
+
+    async def expire(awaitable, *, timeout):
+        assert timeout == 180.0  # Existing freshness window; no new arbitrary setting.
+        configured.append(timeout)
+        return await real_wait_for(awaitable, timeout=0.01)
+
+    ticks = iter([0.0, 181.0])
+    monkeypatch.setattr(snapshot_service, "monotonic", lambda: next(ticks), raising=False)
+    monkeypatch.setattr(quote_enrich, "fetch_quotes_batched", quotes)
+    monkeypatch.setattr(snapshot_service.asyncio, "wait_for", expire)
+    with pytest.raises(TimeoutError):
+        asyncio.run(real_wait_for(svc.refresh_fallback(), timeout=0.1))
+    assert drained == [True] and all(task.done() for task in collections)
+    assert configured == [180.0]
+    assert svc.versioned_snapshot() == before and svc.last_snapshot_source is None
+
+
+def test_fallback_collection_cancellation_drains_without_publishing(monkeypatch):
+    from app.services import quote_enrich
+
+    svc = _svc()
+    svc.quote_hub = object()
+    svc.snapshot = _base_rows()
+    before = svc.versioned_snapshot()
+    drained = []
+
+    async def scenario():
+        entered = asyncio.Event()
+
+        async def quotes(_hub, _symbols, **_kwargs):
+            try:
+                entered.set()
+                await asyncio.Event().wait()
+            finally:
+                drained.append(True)
+
+        monkeypatch.setattr(quote_enrich, "fetch_quotes_batched", quotes)
+        task = asyncio.create_task(svc.refresh_fallback())
+        await entered.wait()
+        task.cancel()
+        with pytest.raises(asyncio.CancelledError):
+            await task
+        assert task.done()
+
+    asyncio.run(scenario())
+    assert drained == [True] and svc.versioned_snapshot() == before

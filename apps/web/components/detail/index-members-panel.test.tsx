@@ -5,9 +5,59 @@ const read = vi.hoisted(() => vi.fn());
 vi.mock("@/lib/api", () => ({getIndexMembers: read}));
 const snapshot = (symbol: string, name = "沪深300") => ({symbol, name, source: "ths", snapshot_at: "2026-10-15T07:29:07+00:00", items: Array.from({length: 61}, (_, n) => ({symbol: String(600000 + n), name: `成分${n}`, market: "SH"}))});
 beforeEach(() => {read.mockReset(); read.mockImplementation(async symbol => snapshot(symbol));});
-afterEach(cleanup);
+afterEach(() => {cleanup(); vi.useRealTimers(); Object.defineProperty(document, "visibilityState", {configurable: true, value: "visible"});});
 
 describe("指数成分列表", () => {
+  it("压缩常驻说明，键盘可读取完整来源口径，Escape后焦点留在入口", async () => {
+    render(<div style={{height: 260, width: 260}}><IndexMembersPanel symbol="sh000300" active onSelect={() => {}}/></div>);
+    await screen.findByText("61 只");
+    expect(screen.queryByText(/全部返回成员排序/)).toBeNull();
+    const evidence = screen.getByRole("button", {name: "查看数据来源与排序口径"});
+    evidence.focus(); fireEvent.focus(evidence);
+    const tooltip = await screen.findByRole("tooltip");
+    expect(tooltip.textContent).toContain("全部返回成员排序");
+    expect(tooltip.textContent).toContain("未知置后");
+    expect(tooltip.textContent).toContain("同花顺");
+    expect(screen.getAllByTitle(/查看成分.*盘口/)).toHaveLength(30);
+    fireEvent.keyDown(evidence, {key: "Escape"});
+    await waitFor(() => expect(screen.queryByRole("tooltip")).toBeNull());
+    expect(document.activeElement).toBe(evidence);
+  });
+
+  it("仅激活且文档可见时每60秒读取已有快照，失败保留查询、方向、页码和焦点", async () => {
+    vi.useFakeTimers();
+    read.mockImplementation(async symbol => {const data = snapshot(symbol); return {...data, items: data.items.map((row, n) => ({...row, change_pct: n / 10}))};});
+    Object.defineProperty(document, "visibilityState", {configurable: true, value: "visible"});
+    const view = render(<IndexMembersPanel symbol="sh000300" active onSelect={() => {}}/>);
+    await act(async () => {await vi.advanceTimersByTimeAsync(0);});
+    fireEvent.click(screen.getByRole("button", {name: "涨跌幅升序"}));
+    fireEvent.change(screen.getByRole("searchbox"), {target: {value: "成分"}});
+    fireEvent.click(screen.getByRole("button", {name: "下一页"}));
+    const input = screen.getByRole("searchbox"); input.focus();
+    read.mockRejectedValueOnce(new Error("refresh failed"));
+    await act(async () => {await vi.advanceTimersByTimeAsync(60_000);});
+    expect(read).toHaveBeenCalledTimes(2);
+    expect(screen.getByRole("status").textContent).toContain("保留上次列表");
+    expect(screen.getByTitle("查看成分30盘口")).toBeTruthy();
+    expect((input as HTMLInputElement).value).toBe("成分");
+    expect(screen.getByRole("button", {name: "涨跌幅升序"}).getAttribute("aria-pressed")).toBe("true");
+    expect(document.activeElement).toBe(input);
+    view.rerender(<IndexMembersPanel symbol="sh000300" active={false} onSelect={() => {}}/>);
+    await act(async () => {await vi.advanceTimersByTimeAsync(120_000);});
+    expect(read).toHaveBeenCalledTimes(2);
+    Object.defineProperty(document, "visibilityState", {configurable: true, value: "hidden"});
+    view.rerender(<IndexMembersPanel symbol="sh000300" active onSelect={() => {}}/>);
+    await act(async () => {await vi.advanceTimersByTimeAsync(120_000);});
+    expect(read).toHaveBeenCalledTimes(2);
+    await act(async () => {
+      Object.defineProperty(document, "visibilityState", {configurable: true, value: "visible"});
+      document.dispatchEvent(new Event("visibilitychange"));
+      await vi.advanceTimersByTimeAsync(0);
+    });
+    expect(read).toHaveBeenCalledTimes(3);
+    expect(screen.getByTitle("查看成分30盘口")).toBeTruthy();
+  });
+
   it("默认按全返回成员的有限涨幅降序，升序仍把未知置尾并保留同值源顺序", async () => {
     const values = [null, -2, 0, 3, 3, NaN, Infinity];
     read.mockResolvedValue({...snapshot("sh000300"), items: values.map((change_pct, n) => ({symbol: `60000${n}`, name: `成员${n}`, market: "SH", change_pct,
@@ -15,18 +65,23 @@ describe("指数成分列表", () => {
       quote_snapshot: {source: "tencent", source_clock: "2026-10-23T10:00:00+08:00", observed_at: "2026-10-23T10:00:01+08:00", quality: "high", known_count: 4, total: 7}});
     render(<IndexMembersPanel symbol="sh000300" active onSelect={() => {}}/>);
     await screen.findByText("7 只");
-    const names = () => screen.getAllByTitle(/查看成员.*盘口/).map(row => row.textContent);
-    expect(names().map(name => name?.slice(0, 3))).toEqual(["成员3", "成员4", "成员2", "成员1", "成员0", "成员5", "成员6"]);
+    const names = () => screen.getAllByTitle(/查看成员.*盘口/).map(row => row.getAttribute("title")?.replace(/^查看|盘口$/g, ""));
+    expect(names()).toEqual(["成员3", "成员4", "成员2", "成员1", "成员0", "成员5", "成员6"]);
     expect(screen.getByRole("button", {name: "涨跌幅降序"}).getAttribute("aria-pressed")).toBe("true");
     expect(within(screen.getByTitle("查看成员2盘口")).getByText("0.00%")).toBeTruthy();
     expect(within(screen.getByTitle("查看成员0盘口")).getByText("--")).toBeTruthy();
+    const negative = screen.getByTitle("查看成员1盘口").querySelector<HTMLElement>('span[aria-hidden="true"]')!;
+    expect(Number.parseFloat(negative.style.getPropertyValue("--change-width"))).toBeCloseTo(100 / 3);
+    expect(Number.parseFloat(negative.style.getPropertyValue("--change-start"))).toBeCloseTo(50 - 100 / 3);
+    expect(screen.getByTitle("查看成员0盘口").querySelector('span[aria-hidden="true"]')).toBeNull();
     const ascending = screen.getByRole("button", {name: "涨跌幅升序"}); ascending.focus();
     fireEvent.click(ascending, {detail: 0});
     expect(document.activeElement).toBe(ascending);
     expect(ascending.getAttribute("aria-pressed")).toBe("true");
-    expect(names().map(name => name?.slice(0, 3))).toEqual(["成员1", "成员2", "成员3", "成员4", "成员0", "成员5", "成员6"]);
-    expect(screen.getByText(/涨跌幅已知 4 \/ 7/)).toBeTruthy();
-    expect(screen.getByText(/全部返回成员排序/)).toBeTruthy();
+    expect(names()).toEqual(["成员1", "成员2", "成员3", "成员4", "成员0", "成员5", "成员6"]);
+    expect(screen.getByText("已知 4/7")).toBeTruthy();
+    const detail = screen.getByRole("button", {name: "查看数据来源与排序口径"}); detail.focus(); fireEvent.focus(detail);
+    expect((await screen.findByRole("tooltip")).textContent).toContain("全部返回成员排序");
     expect(read).toHaveBeenCalledTimes(1);
   });
 
@@ -42,9 +97,10 @@ describe("指数成分列表", () => {
     expect(screen.getAllByTitle(/查看成分.*盘口/)).toHaveLength(1);
     expect(screen.getByText("1 / 1")).toBeTruthy();
     expect(screen.getByText("61 只")).toBeTruthy();
-    expect(screen.getByText(/涨跌幅已知 61 \/ 61/)).toBeTruthy();
-    expect(screen.getByText(/源时刻未提供/)).toBeTruthy();
-    expect(screen.getByText(/观察于.*10:00:01.*源时刻未提供/)).toBeTruthy();
+    expect(screen.getByText("已知 61/61")).toBeTruthy();
+    expect(screen.getByText(/旧观察.*新浪.*观察 10:00:01/)).toBeTruthy();
+    const detail = screen.getByRole("button", {name: "查看数据来源与排序口径"}); detail.focus(); fireEvent.focus(detail);
+    expect((await screen.findByRole("tooltip")).textContent).toMatch(/观察于.*10:00:01.*源时刻未提供/);
     expect(read).toHaveBeenCalledTimes(1);
   });
   it("只读取成员一次，分页/搜索不发行情请求，点成员交给工作台切换", async () => {

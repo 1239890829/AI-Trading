@@ -2,19 +2,22 @@
 from __future__ import annotations
 
 import asyncio
-from datetime import timedelta
+from datetime import datetime, timedelta, timezone
 from types import SimpleNamespace
 
 import pytest
 
 from app.api.routes.market_themes import market_overview
-from app.schemas.market import Quality, Quote, utcnow
+from app.core import freshness
+from app.data_quality import validator
+from app.schemas.market import Quality, Quote
 from app.services import quote_hub as qh
 
 
 def quote(symbol: str, price: float) -> Quote:
+    stamp = qh.utcnow()
     return Quote(symbol=symbol, market="SH", price=price, prev_close=price,
-                 change_pct=0, data_timestamp=utcnow(), source="isolated-test")
+                 change_pct=0, data_timestamp=stamp, received_at=stamp, source="isolated-test")
 
 
 class Provider:
@@ -30,9 +33,22 @@ class Provider:
 
 @pytest.fixture
 def hub(monkeypatch):
+    now = datetime.fromisoformat("2026-10-13T10:00:00+08:00")
+
+    class SourceClock(datetime):
+        @classmethod
+        def now(cls, tz=None):
+            return now.astimezone(tz) if tz is not None else now.replace(tzinfo=None)
+
     async def no_calendar(*args, **kwargs):
         return []
 
+    # 同时固定源钟、年龄及阶段：仅声明 MARKET_OPEN 不会固定展示层的北京时间。
+    monkeypatch.setattr(freshness, "datetime", SourceClock)
+    monkeypatch.setattr(qh, "beijing_now", lambda: now)
+    monkeypatch.setattr(qh, "utcnow", lambda: now.astimezone(timezone.utc))
+    monkeypatch.setattr(validator, "utcnow", lambda: now.astimezone(timezone.utc))
+    monkeypatch.setattr(qh.tc, "known_trade_days", lambda: [now.date()])
     monkeypatch.setattr(qh.tc, "trading_days", no_calendar)
     monkeypatch.setattr(qh.tc, "in_trading_window", lambda: True)
     # 本组核盘中指数缺失/接纳；专用 closed 用例在各自测试内覆盖此裁决。
