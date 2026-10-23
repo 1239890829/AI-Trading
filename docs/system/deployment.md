@@ -525,3 +525,11 @@ CLI启动warning的兼容依据与固定版本见[语义纠错记录](../ai/sema
 ### 2026-10-23 快照故障承接与只读界面更新
 
 全市场普通ProviderError/httpx故障且原快照unavailable/stale时，复用已配置批量备源一次；新鲜degraded不发额外全量，456冷却和主源退避保留。采集等待复用原新鲜窗；共享HTTP owner与保存不冒称同一硬期限，详见性能§35。成员仅active/可见时读取原内存快照。组件交互、报告对照或刷新仍不创建模型任务；短视图和完整原文共用原证券/日期/方法身份。源守卫v8变更需准确新方法授权及原未调用pending承接；旧八报告/原恢复grant/七unknown保留，安装前只读验证，发布/主干CI/停止旧进程/启动器加载与实际页面分别记证。
+
+## RSH-031确定性前向采集
+
+采集合同、授权期限及证据限制归[研究§39.5](../research/limit-up-dragon-research.md#395-准点采集修复与有限新批2026-10-23)。`backend/scripts/rsh031_capture_service.py`只运行原免费早/收盘叶脚本，输出限忽略artifacts；不启动完整后端、不读取.env或模型、不改生产库。
+
+本机user LaunchAgent参数固定为现有解释器、已发布小型Python源码副本、批次、日历和宇宙。源码副本只含两脚本与backend/app，清单绑定发布commit和文件hash；不复制.env、依赖树或业务库。活动输出为安装回执指向的该副本artifacts/rsh031-forward，外层不复制health/PID作为另一事实源。RunAtLoad与工作日09:45/15:10预先启动，09:55/15:25才取源；失败由launchd有界节奏重启，STOP/期限/容量正常停止。不要手写第二个collector或让聊天再次调叶脚本。用脚本`--help`核当前参数及`print-plist`生成结果，核JSON/锁/PID/health和launchctl实际状态，不能只看旧manifest。
+
+停止先在确认批次输出写STOP，待进程排空，再卸载确认属于该批的用户LaunchAgent；不删除样本或旧missing。睡眠醒后已过窗口记missing，不回填。启动/落盘权限被拒时保留原错误、停止对应动作并恢复现有入口，不修改macOS安全设置或换路径规避。实际安装参数、版本与进程核验归handoff/本批PR；未来第一笔真实样本另验。
