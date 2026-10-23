@@ -120,7 +120,7 @@ describe("通知中心：原提醒与独立行情落点", () => {
   it("行体直接打开原提醒全文，不隐式打开当前行情", async () => {
     payload = makePayload([item()]); renderBell(); await openDrawer();
     fireEvent.click(screen.getByText("示例个股提醒"));
-    const detail = await screen.findByRole("dialog", {name:"示例个股提醒"});
+    const detail = await screen.findByRole("region", {name:"示例个股提醒"});
   fireEvent.click(within(detail).getByRole("button",{name:"完整依据与研究记录"}));
     expect(detail.textContent).toContain("AI 判读（建议关注）：放量突破前高，量比 2.3");
     expect(spies.symbolOpen).not.toHaveBeenCalled();
@@ -131,14 +131,14 @@ describe("通知中心：原提醒与独立行情落点", () => {
     fireEvent.click(screen.getByText(/行情/));
     expect(spies.symbolOpen).toHaveBeenCalledTimes(1);
     expect(spies.symbolOpen).toHaveBeenCalledWith({symbol:SYMBOL, preferModal:true});
-    expect(screen.queryByRole("dialog", {name:"示例个股提醒"})).toBeNull();
+    expect(screen.queryByRole("region", {name:"示例个股提醒"})).toBeNull();
     expect(dots()).toHaveLength(1);
   });
 
   it("详情保留旧记录正文、分类与评分，不假装重新生成AI", async () => {
     payload = makePayload([item()]); renderBell(); await openDrawer();
     fireEvent.click(screen.getByTestId("notification-judgment"));
-    const detail = await screen.findByRole("dialog", {name:"示例个股提醒"});
+    const detail = await screen.findByRole("region", {name:"示例个股提醒"});
   fireEvent.click(within(detail).getByRole("button",{name:"完整依据与研究记录"}));
     expect(detail.textContent).toContain("AI 判读");
     expect(detail.textContent).toContain("确认");
@@ -149,7 +149,7 @@ describe("通知中心：原提醒与独立行情落点", () => {
   it("无代码条目仍可读完整记录，不能打开空证券", async () => {
     payload = makePayload([item({symbol:null, category:"news", label:"快讯", title:"某条快讯"})]); renderBell(); await openDrawer();
     fireEvent.click(screen.getByText("某条快讯"));
-    const detail = await screen.findByRole("dialog", {name:"某条快讯"});
+    const detail = await screen.findByRole("region", {name:"某条快讯"});
   fireEvent.click(within(detail).getByRole("button",{name:"完整依据与研究记录"}));
     expect(detail.textContent).toContain("AI 判读");
     expect(within(detail).queryByRole("link", {name:"查看行情"})).toBeNull();

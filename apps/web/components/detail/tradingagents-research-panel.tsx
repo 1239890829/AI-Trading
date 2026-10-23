@@ -2,14 +2,10 @@
 
 import {useEffect, useRef, useState} from "react";
 import {useResource} from "@/hooks/use-resource";
-import {createAgentTask, getTradingAgentsResearch, type AgentTask, type TradingAgentsResearchView, type TradingAgentsReportKey} from "@/lib/api/agent";
+import {createAgentTask, getTradingAgentsResearch, type AgentTask, type TradingAgentsResearchView} from "@/lib/api/agent";
 import {dateTimeTextBJ} from "@/lib/format";
+import {TradingAgentsReportExplorer} from "./tradingagents-report-explorer";
 
-const REPORTS: [TradingAgentsReportKey, string][] = [
-  ["market_report", "行情分析"], ["sentiment_report", "新闻与情绪分析"], ["news_report", "新闻分析"],
-  ["fundamentals_report", "基本面分析"], ["investment_plan", "研究辩论结论"],
-  ["trader_investment_plan", "交易员研究方案"], ["final_trade_decision", "风险辩论与最终研究结论"],
-];
 const STATUS: Record<string, string> = {queued: "排队中", running: "执行中", succeeded: "任务已结束", failed: "研究失败", canceled: "已取消", needs_confirm: "待确认"};
 
 /** Existing stock drawer and task center share the same read-only report consumer. */
@@ -100,10 +96,9 @@ function ResearchReader({symbol, allowStart, compact}: {symbol: string; allowSta
         {lineage && lineage.inherited_unknown_usage_count > 0 && <p role="note" aria-label="研究用量缺口" className="text-amber-800 dark:text-amber-300">仍有{lineage.inherited_unknown_usage_count}次历史用量未知，总用量与费用不完整。</p>}
         {!report.generated_today && <p className="text-amber-800 dark:text-amber-300">历史生成报告，不代表今天已重新判读。</p>}
         {methodChanged && <p className="text-amber-800 dark:text-amber-300">报告方法与当前执行器不同，仅供历史阅读。</p>}
-        {compact && <details key={`${report.run_id}:final`} className="py-2"><summary className="cursor-pointer font-medium">查看最终研究结论</summary><p className="mt-2 text-zinc-600 dark:text-zinc-400">完整流程原答，尚未独立验收，不构成买卖建议。</p><div className="mt-2 whitespace-pre-wrap leading-relaxed [overflow-wrap:anywhere]">{report.reports.final_trade_decision}</div></details>}
+        <TradingAgentsReportExplorer key={report.run_id} report={report}/>
         <details><summary className="cursor-pointer">报告版本与核验身份</summary><p className="break-all">报告方法：{report.method_sha256}<br/>上游：{report.upstream_sha}<br/>输入：{report.input_sha256}<br/>核验身份：完整原图未验证研究；原答与结论仍待复核。</p>{lineage && <p aria-label="恢复任务与方法来源" className="break-all">原任务：{lineage.source_task_id}<br/>原运行：{lineage.source_run_id}<br/>接续任务：{lineage.recovery_task_id}<br/>原方法：{lineage.source_method_sha256}<br/>接续方法：{lineage.recovery_method_sha256}<br/>新增调用编号：{lineage.new_call_from}–{lineage.new_call_to}</p>}{compact && <p>同伴释义待审：{report.review_summary.peer_review_required}项。尚无独立人工验收，不代表投资正确率。</p>}</details>
-        {compact ? <details><summary className="cursor-pointer">查看其余6份完整报告</summary><div className="mt-2 space-y-2">{REPORTS.filter(([key]) => key !== "final_trade_decision").map(([key, label]) => <details key={`${report.run_id}:${key}`} className="py-1"><summary className="cursor-pointer font-medium">{label}</summary><div className="mt-2 whitespace-pre-wrap leading-relaxed [overflow-wrap:anywhere]">{report.reports[key]}</div></details>)}</div></details>
-          : <div className="space-y-2">{REPORTS.map(([key, label]) => <details key={`${report.run_id}:${key}`} className="rounded border border-zinc-200 p-2 dark:border-zinc-800"><summary className="cursor-pointer font-medium">{label}</summary><div className="mt-2 whitespace-pre-wrap [overflow-wrap:anywhere]">{report.reports[key]}</div></details>)}</div>}
+
       </div>}
       {compact && <details><summary className="cursor-pointer">运行条件与承接状态</summary><div className="mt-2 space-y-2">{runtimeConditions}<p>此处只读已保存结果；查看或重读都不会发起模型调用。</p></div></details>}
     </>}

@@ -1,0 +1,22 @@
+.comparison {flex:none;min-width:0;padding:8px 12px 6px;border-bottom:1px solid var(--ui-line);color:var(--ui-ink);}
+.heading {display:flex;align-items:center;justify-content:space-between;flex-wrap:wrap;gap:6px 12px;}
+.heading>div {display:flex;align-items:baseline;gap:8px;}
+.heading span {font-size:10px;color:var(--ui-muted);}
+.heading strong {font-size:12px;font-weight:600;font-variant-numeric:tabular-nums;}
+.heading button {min-height:28px;padding:3px 8px;border:1px solid var(--ui-line);border-radius:5px;background:transparent;color:var(--ui-muted);font-size:10px;}
+.heading button[aria-pressed=true] {background:var(--ui-selected);border-color:var(--ui-accent);color:var(--ui-ink);}
+.values {display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:12px;margin:6px 0;}
+.values>div {display:flex;flex-direction:column;gap:1px;min-width:0;}
+.values span,.values small {font-size:10px;color:var(--ui-muted);overflow-wrap:anywhere;}
+.values strong {font-size:18px;line-height:1.3;font-weight:600;font-variant-numeric:tabular-nums;}
+.scrub {display:flex;align-items:center;gap:8px;min-height:24px;font-size:9px;color:var(--ui-muted);font-variant-numeric:tabular-nums;}
+.scrub input {flex:1;min-width:0;height:20px;accent-color:var(--ui-accent);cursor:ew-resize;}
+.context {display:flex;align-items:center;flex-wrap:wrap;gap:3px 12px;font-size:10px;color:var(--ui-muted);font-variant-numeric:tabular-nums;}
+.context>span {width:auto;min-height:16px;padding:0;}
+.hint {margin:2px 0 0;font-size:9px;line-height:1.5;color:var(--ui-muted);}
+.warning {margin:4px 0;color:var(--ui-ink);font-size:11px;line-height:1.5;}
+.surface:focus-visible {outline:2px solid var(--ui-accent);outline-offset:-2px;}
+.heading button:focus-visible,.scrub input:focus-visible {outline:2px solid var(--ui-accent);outline-offset:2px;}
+@media(max-height:740px) {.comparison {padding-block:5px;}.values {margin:3px 0;}.values strong {font-size:15px;}.scrub {min-height:20px;}}
+@media(max-width:420px) {.comparison {padding-inline:8px;}.values {gap:7px;}.values strong {font-size:15px;}.hint {font-size:10px;}.heading button {min-height:34px;}}
+@media(pointer:coarse) {.scrub,.scrub input {min-height:40px;}.heading button {min-height:40px;}}

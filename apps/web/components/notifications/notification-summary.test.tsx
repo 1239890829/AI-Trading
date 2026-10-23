@@ -40,7 +40,8 @@ it("visibly labels the summary on touch screens and preserves a qualification be
   await open({references:[{event_id:17,kind:"selection",trade_date:null,source_as_of:null,recorded_at:null,source_id:"daily:A",source_version:"version-A",evidence:{pick_basis:basis}}]});
   const row=screen.getByTestId("notification-row");
   expect(within(row).getByTestId("notification-summary").textContent).toContain("依据节选：");
-  expect(within(row).getByText("600127 · 条件见详情")).toBeTruthy();
+  expect(row.textContent).toContain("600127");
+  expect(row.textContent).toContain("当前条件需核对");
   expect(within(row).getByTestId("notification-summary").textContent).not.toContain(condition);
   fireEvent.click(within(row).getByTestId("notification-judgment"));
   await waitFor(()=>expect(screen.getByTestId("notification-detail")).toBeTruthy());
@@ -66,7 +67,7 @@ it("shows the object, original reason including its limitation and key state wit
 it("one click opens every original condition and both clocks; it does not open stock quotes", async () => {
   const item = await open();
   fireEvent.click(screen.getByText(item.title));
-  const detail = await screen.findByRole("dialog", {name:item.title});
+  const detail = await screen.findByRole("region", {name:item.title});
   fireEvent.click(within(detail).getByRole("button",{name:"完整依据与研究记录"}));
   expect(detail.textContent).toContain("最终限制：不代表当前可以参与。");
   expect(detail.textContent).toContain("供应链入选；但尚未确认公司直接受益");
@@ -86,7 +87,7 @@ it("the quote action owns its click and does not open notification detail or bub
   fireEvent.click(within(screen.getByTestId("notification-row")).getByRole("link", {name:/行情/}));
   expect(openSymbol).toHaveBeenCalledTimes(1);
   expect(openSymbol).toHaveBeenCalledWith({symbol:"600127", preferModal:true});
-  expect(screen.queryByRole("dialog", {name:item.title})).toBeNull();
+  expect(screen.queryByRole("region", {name:item.title})).toBeNull();
   expect(screen.getByTestId("notification-unread-dot")).toBeTruthy();
   expect(fetch).not.toHaveBeenCalled();
 });
@@ -96,7 +97,7 @@ it("unknown channel results remain visible in a compact risk row and the full re
   expect(screen.getByTestId("notification-row").textContent).toContain("外部结果待核");
   expect(within(screen.getByTestId("notification-row")).queryByRole("link", {name:/行情/})).toBeNull();
   fireEvent.click(screen.getByText("成本信息待核"));
-  const detail = await screen.findByRole("dialog", {name:"成本信息待核"});
+  const detail = await screen.findByRole("region", {name:"成本信息待核"});
   fireEvent.click(within(detail).getByRole("button",{name:"完整依据与研究记录"}));
   expect(detail.textContent).toContain("平台受理回执未确认");
   expect(detail.textContent).toContain("成本缺失，不能完成本轮风险核对。");

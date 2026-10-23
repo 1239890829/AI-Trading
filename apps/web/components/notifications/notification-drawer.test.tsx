@@ -17,6 +17,7 @@ vi.mock("@/lib/api", async () => {
   return {
     ...actual,
     getNotifications: vi.fn(async () => payload),
+    getImpactEvents: vi.fn(async () => ({items: [], count: 0, countsAll: {}, fourCounts: {}, tagCounts: {}})),
     getNotificationDiagnostics: vi.fn(async () => payload.diagnostics ?? ranRejectedDiag),
     // 已读状态的服务端同步（2026-09-12）：组件挂载即触发 hydration。
     // 本文件只验「渲染结果」，把服务端桩成不可达 ⇒ 快照退回纯 localStorage 语义，
@@ -104,6 +105,41 @@ afterEach(() => {
   vi.clearAllMocks();
 });
 
+it.each(["scroll", "manual", "mode-return"] as const)("48 already-read notifications remain reachable through %s without another notification request", async method => {
+  let top = 5000;
+  const heights = vi.spyOn(HTMLElement.prototype, "scrollHeight", "get").mockReturnValue(2000);
+  const clients = vi.spyOn(HTMLElement.prototype, "clientHeight", "get").mockReturnValue(300);
+  const rect = vi.spyOn(HTMLElement.prototype, "getBoundingClientRect").mockImplementation(() => ({top, bottom: top + 1, left: 0, right: 100, width: 100, height: 1, x: 0, y: top, toJSON: () => ({})}));
+  try {
+    payload = makePayload(Array.from({length: 48}, (_, index) => item({id: `local-${index}`, title: `原通知第${index + 1}条`})));
+    render(<NotificationBell/>);
+    await waitFor(() => expect(badge()?.textContent).toBe("48"));
+    await openDrawer();
+    await act(async () => {});
+    expect(screen.getAllByTestId("notification-row")).toHaveLength(30);
+    expect(screen.queryByText("原通知第48条")).toBeNull();
+    const requests = vi.mocked(getNotifications).mock.calls.length;
+    if (method === "mode-return") {
+      fireEvent.click(screen.getByTestId("notification-mode-events"));
+      await screen.findByTestId("event-feed");
+      fireEvent.click(screen.getByTestId("notification-mode-opportunity"));
+    }
+    if (method === "manual") {
+      const more = screen.getByRole("button", {name: "继续加载"});
+      more.focus(); expect(document.activeElement).toBe(more);
+      fireEvent.click(more);
+    } else {
+      top = 200;
+      fireEvent.scroll(screen.getByTestId("notification-list"));
+    }
+    expect(screen.getAllByTestId("notification-row")).toHaveLength(48);
+    expect(screen.getByText("原通知第48条")).toBeTruthy();
+    expect(screen.getByText("已全部加载（48 条通知）")).toBeTruthy();
+    expect(screen.queryByRole("button", {name: "继续加载"})).toBeNull();
+    expect(vi.mocked(getNotifications).mock.calls.length).toBe(requests);
+  } finally {rect.mockRestore(); clients.mockRestore(); heights.mockRestore();}
+});
+
 describe("通知中心：未读计数与红点", () => {
   it("关闭立即撤销模态和焦点占用，保留完整列表160ms后移除", async () => {
     vi.useFakeTimers();
@@ -145,7 +181,7 @@ describe("通知中心：未读计数与红点", () => {
       await act(async () => resolveNotifications(payload));
       fireEvent.click(await target);
       if (action === "通知正文") {
-        const original = await screen.findByRole("dialog", {name:"来源通知"});
+        const original = await screen.findByRole("region", {name:"来源通知"});
   fireEvent.click(within(original).getByRole("button",{name:"完整依据与研究记录"}));
         expect(original.textContent).toContain("正文");
         expect(screen.queryByTestId("notification-security-detail")).toBeNull();
@@ -176,7 +212,7 @@ describe("通知中心：未读计数与红点", () => {
     expect(screen.getByTestId("notification-list").textContent).toContain(displayed);
 
     fireEvent.click(screen.getByTestId("notification-judgment"));
-    expect((await screen.findByRole("dialog", { name: "距离通知" })).textContent).toContain(displayed);
+    expect((await screen.findByRole("region", { name: "距离通知" })).textContent).toContain(displayed);
     expect(payload.items[0].body).toBe(body);
   });
 
@@ -533,12 +569,12 @@ describe("通知事实与浏览状态分离（BUG-016）", () => {
     expect(facts.textContent).toContain("外部待确认");
     expect(facts.getAttribute("title")).toContain("渠道已受理，未确认送达");
     fireEvent.click(screen.getByTestId("notification-judgment"));
-    const detail = await screen.findByRole("dialog", {name:"示例通知"});
+    const detail = await screen.findByRole("region", {name:"示例通知"});
   fireEvent.click(within(detail).getByRole("button",{name:"完整依据与研究记录"}));
     expect(detail.textContent).toContain("盘中买点判定");
     expect(detail.textContent).toContain("渠道已受理（未确认送达）");
     expect(detail.textContent).toContain("未读仅表示站内尚未点开");
-    fireEvent.click(within(detail).getByRole("button", {name:"关闭"}));
+    fireEvent.click(within(detail).getByRole("button", {name:"返回通知列表"}));
     payload.diagnostics = {
       ...ranRejectedDiag,
       decisions: { ...ranRejectedDiag.decisions, latest: [{
@@ -588,7 +624,7 @@ it("user-defined reminders have their own category while stock opportunities, ri
   for (const text of ["自设条件提醒", "600519", "原个股消息", "个股机会", "原风险消息", "策略风险", "2026-09-11 12:35", "当前条件需核对"])
     expect(list.textContent).toContain(text);
   fireEvent.click(within(screen.getByText("显式个股阈值").closest('[data-testid="notification-row"]') as HTMLElement).getByTestId("notification-judgment"));
-  const detail = await screen.findByRole("dialog", {name: "显式个股阈值"});
+  const detail = await screen.findByRole("region", {name: "显式个股阈值"});
   fireEvent.click(within(detail).getByRole("button",{name:"完整依据与研究记录"}));
   for (const text of ["研究观察，不构成买卖建议", "用户条件规则", "原触发条件需重验"]) expect(detail.textContent).toContain(text);
 });
@@ -612,7 +648,7 @@ it("shows the original evidence and both clocks without claiming current eligibi
   expect(screen.getByTestId("notification-facts").textContent).toContain("当前条件需核对");
   expect(screen.getByTestId("notification-row").textContent).not.toContain("version-A");
   fireEvent.click(screen.getByTestId("notification-judgment"));
-  const original = await screen.findByRole("dialog", {name: "原入选A"});
+  const original = await screen.findByRole("region", {name: "原入选A"});
   fireEvent.click(within(original).getByRole("button",{name:"完整依据与研究记录"}));
   expect(original.textContent).toContain("原观察：2026-10-09 09:40:00");
   expect(original.textContent).toContain("记录：2026-10-09 10:10:00");
@@ -642,7 +678,7 @@ it("one detail opening shows the entire message and all original references with
   expect(dots()).toHaveLength(1);
   const calls = vi.mocked(getNotifications).mock.calls.length;
   fireEvent.click(screen.getByText("长消息核对"));
-  const detail = await screen.findByRole("dialog", {name:"长消息核对"});
+  const detail = await screen.findByRole("region", {name:"长消息核对"});
   fireEvent.click(within(detail).getByRole("button",{name:"完整依据与研究记录"}));
   expect(detail.textContent).toContain(body);
   expect(detail.textContent).toContain("第四条件不能省略");

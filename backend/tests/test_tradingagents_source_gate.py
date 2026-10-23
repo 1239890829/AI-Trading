@@ -403,6 +403,49 @@ class EvidenceGateTests(unittest.TestCase):
                 self.assertEqual('LOCAL_DENIED_COORDINATED_EXECUTION_CONCLUSION',
                                  result['observations'][0]['status'])
 
+    def test_real_research_to_sell_transform_denials_are_not_execution_assertions(self):
+        # Exact two saved 600410 finite-FAIL sentences; source review, not gold.
+        for text in (
+            '这支持低配研究倾向，但不足以把它直接转成确定卖出结论。',
+            '现有证据不足以把研究低配转译为确定卖出，也不足以确认盈利修复。',
+        ):
+            with self.subTest(text=text):
+                result = self.assert_status('PASS', text)
+                observation = result['observations'][0]
+                self.assertEqual('LOCAL_DENIED_RESEARCH_TO_SELL_TRANSFORM', observation['status'])
+                self.assertEqual(text.index('确定卖出'), observation['start'])
+                self.assertEqual(text.index('确定卖出') + 4, observation['end'])
+
+    def test_research_to_sell_transform_denial_cannot_waive_outer_negation_or_execution(self):
+        for text in (
+            '不是不足以把它直接转成确定卖出结论。',
+            '并非证据不足以把研究低配转译为确定卖出。',
+            '不能说现有证据不足以把研究低配转译为确定卖出。',
+            '无法证明不足以把它直接转成确定卖出结论。',
+            '不足以认定现有证据不足以把研究低配转译为确定卖出。',
+            '当前账户的执行能力不足以把它直接转成确定卖出结论。',
+            '账户已经成交的事实不足以把研究低配转译为确定卖出。',
+            '不足以把研究低配转译为确定卖出后的风险。',
+            '不足以把它直接转成确定卖出的风险结论。',
+            '不足以把它直接转成确定卖出结论已经成立。',
+            '不足以把研究低配转译为确定卖出，但当前账户可以卖出。',
+            '不足以把它直接转成确定卖出结论然而当前账户可以卖出。',
+            '不足以把研究低配转译为确定卖出，当前账户确定卖出。',
+        ):
+            with self.subTest(text=text):
+                self.assert_status('FAIL', text)
+
+    def test_research_to_sell_transform_fix_does_not_claim_other_synonyms_were_reviewed(self):
+        for text in (
+            '不足以把它直接转成保证成交结论。',
+            '不足以把研究低配转译为可以买入。',
+            '不足以把研究低配升级为确定卖出。',
+        ):
+            with self.subTest(text=text):
+                result = evaluate_report(text, PACKET)
+                self.assertFalse(any(row['status'] == 'LOCAL_DENIED_RESEARCH_TO_SELL_TRANSFORM'
+                                     for row in result['observations']))
+
     def test_coordinated_denial_does_not_claim_other_execution_wording_was_reviewed(self):
         # This fix reviewed the exact definite-sale conclusion, not every
         # EXECUTION synonym. Do not freeze a verdict on these other meanings.

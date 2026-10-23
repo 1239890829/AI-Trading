@@ -5,6 +5,10 @@ import { IconButton } from "@/components/ui/icon-button";
 import { HugeiconsIcon } from "@hugeicons/react";
 import Sun03Icon from "@hugeicons/core-free-icons/Sun03Icon";
 import Moon02Icon from "@hugeicons/core-free-icons/Moon02Icon";
+import DashboardSquare01Icon from "@hugeicons/core-free-icons/DashboardSquare01Icon";
+import Target02Icon from "@hugeicons/core-free-icons/Target02Icon";
+import Analytics01Icon from "@hugeicons/core-free-icons/Analytics01Icon";
+import BookOpen01Icon from "@hugeicons/core-free-icons/BookOpen01Icon";
 import { ControlHint } from "@/components/ui/control-hint";
 import Link from "next/link";
 import { usePathname, useSearchParams } from "next/navigation";
@@ -14,6 +18,13 @@ import { TaskBrowser } from "@/components/ui/task-browser";
 import { activeTask, TASK_LINKS } from "@/lib/task-navigation";
 import { SearchBox } from "@/components/search-box";
 import { NotificationBell } from "@/components/notifications/notification-drawer";
+
+const TASK_ICONS = {
+  workspace: DashboardSquare01Icon,
+  opportunity: Target02Icon,
+  market: Analytics01Icon,
+  research: BookOpen01Icon,
+};
 
 function NavBarInner() {
   const {device} = useDeviceAccess();
@@ -76,7 +87,8 @@ function NavBarInner() {
                     : "text-zinc-600 hover:text-zinc-900 dark:text-zinc-400 dark:hover:text-zinc-100"
                 }`}
               >
-                {l.label}
+                <HugeiconsIcon icon={TASK_ICONS[l.id]} size={16} strokeWidth={1.6} aria-hidden="true" />
+                <span>{l.label}</span>
               </Link>
             );
           })}

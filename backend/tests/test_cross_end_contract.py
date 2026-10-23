@@ -139,6 +139,9 @@ EXEMPT = {
     ("format.ts", "QUALITY_REASON_LABELS"),
     # 路由来源标签：键是**前端路由路径**（/hunting、/agent…），不是后端枚举。
     ("routing.ts", "labels"),
+    # 上游研究原文的 Rating 是自由文本，不是后端枚举或交易动作；
+    # 这里只为已知英文写法提供展示标签，未知写法保留原评级并提示核对。
+    ("research-presentation.ts", "labels"),
 }
 
 

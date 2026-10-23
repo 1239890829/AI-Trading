@@ -1,11 +1,12 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { act, cleanup, fireEvent, render, screen } from "@testing-library/react";
+import { act, cleanup, fireEvent, render, screen, within } from "@testing-library/react";
 import { hydrateRoot } from "react-dom/client";
 import { renderToString } from "react-dom/server";
 import { MinuteChart } from "./minute-chart";
 import type { MinutePoint } from "@/lib/api";
 import { mergeQuoteIntoMinutes } from "@/lib/kline-live";
 import type { Quote } from "@/types/market";
+import { ModalShell } from "./ui/modal-shell";
 
 const charts = vi.hoisted(() => [] as ReturnType<typeof makeChart>[]);
 type Options = Record<string, unknown> & { autoscaleInfoProvider?: () => { priceRange: { minValue: number; maxValue: number } } };
@@ -17,11 +18,12 @@ function makeSeries(kind: string, options: Options) {
     applyOptions: vi.fn((next: Options) => { Object.assign(opts, next); }),
     setData: vi.fn(function(this: { values: SeriesPoint[] }, values: SeriesPoint[]) { this.values = values; }),
     createPriceLine: vi.fn((opts: Options) => ({ opts, applyOptions: vi.fn() })),
+    priceToCoordinate: vi.fn(() => 100),
   };
 }
 function makeChart(opts: Options) {
   const series: ReturnType<typeof makeSeries>[] = [];
-  const timeScale = { fitContent: vi.fn(), setVisibleLogicalRange: vi.fn() };
+  const timeScale = { fitContent: vi.fn(), setVisibleLogicalRange: vi.fn(), timeToCoordinate: vi.fn(() => 100) };
   const add = (kind: string, opts: Options) => {
     const s = makeSeries(kind, opts); series.push(s); return s;
   };
@@ -47,6 +49,137 @@ const point = (price: number, minute = "30", avg: number | null = null, day = "1
   ts: `2026-09-${day}T09:${minute}:00+08:00`, price, avg, source: "test_fixture",
 });
 const range = (s: ReturnType<typeof makeSeries>) => s.opts.autoscaleInfoProvider?.().priceRange;
+
+describe("MinuteChart 已载分钟对照与固定", () => {
+  const reading = () => within(screen.getByRole("region", {name: "同分钟分时对照"}));
+  const surface = () => screen.getByRole("group", {name: "样本公司分时读点"});
+  const props = {symbol: "600410", name: "样本公司", prevClose: 10, referenceDate: "2026-09-17"};
+
+  it("只对照同日同分钟和各自有效昨收；缺槽不拿最近指数分钟补齐", () => {
+    const points = [point(10), point(10.5, "31")];
+    const view = render(<MinuteChart {...props} points={points} index={{prevClose: 3000, referenceDate: "2026-09-17", points: [point(3000), point(3030, "31")]}}/>);
+    expect(reading().getByText("+5.00%")).toBeTruthy();
+    expect(reading().getByText("+1.00%")).toBeTruthy();
+    expect(reading().getByText("+4.00")).toBeTruthy();
+    view.rerender(<MinuteChart {...props} points={points} index={{prevClose: 3000, referenceDate: "2026-09-17", points: [point(3000)]}}/>);
+    expect(reading().getByText("同日同分钟缺项")).toBeTruthy();
+    expect(reading().getAllByText("--")).toHaveLength(2);
+    view.rerender(<MinuteChart {...props} points={points} referenceDate={null} index={{prevClose: 3000, referenceDate: "2026-09-18", points: [point(3030, "31", null, "18")]}}/>);
+    expect(reading().getAllByText("--")).toHaveLength(3);
+    expect(screen.getByText("参考日未知，仅展示价格")).toBeTruthy();
+    expect(screen.getByText("叠加指数与主图非同一交易日")).toBeTruthy();
+  });
+
+  it("横移与已有分钟滑杆联动；键盘逐点且不制造空白槽", () => {
+    render(<MinuteChart {...props} points={[point(10), point(10.5, "33")]}/>);
+    fireEvent.pointerEnter(surface());
+    const callback = charts[0].subscribeCrosshairMove.mock.calls[0][0] as (p: {time:number; point:{x:number;y:number}}) => void;
+    act(() => callback({time:Date.UTC(2026,8,17,9,30)/1000,point:{x:100,y:100}}));
+    const slider = screen.getByRole("slider", {name:"选择已有交易分钟"}) as HTMLInputElement;
+    expect(slider.getAttribute("aria-valuetext")).toBe("2026-09-17 09:30");
+    expect(slider.max).toBe("1");
+    fireEvent.keyDown(surface(), {key:"ArrowRight"});
+    expect(slider.getAttribute("aria-valuetext")).toBe("2026-09-17 09:33");
+    fireEvent.keyDown(surface(), {key:"Home", isComposing:true});
+    expect(slider.value).toBe("1");
+    fireEvent.keyDown(surface(), {key:"Home", keyCode:229});
+    expect(slider.value).toBe("1");
+    fireEvent.keyDown(surface(), {key:"Home"});
+    expect(slider.value).toBe("0");
+    fireEvent.change(slider, {target:{value:"1"}});
+    expect(charts[0].setCrosshairPosition).toHaveBeenLastCalledWith(10.5, Date.UTC(2026,8,17,9,33)/1000, charts[0].series[0]);
+    fireEvent.pointerLeave(surface());
+    expect(reading().getByText("跟随最新")).toBeTruthy();
+  });
+
+  it("固定的是分钟身份；该分钟校准仍更新，最新已有分钟继续前进", () => {
+    const view = render(<MinuteChart {...props} points={[point(10), point(10.5, "31")]}/>);
+    fireEvent.keyDown(surface(), {key:"Home"});
+    fireEvent.keyDown(surface(), {key:" "});
+    expect(reading().getByText("固定分钟")).toBeTruthy();
+    view.rerender(<MinuteChart {...props} points={[{...point(10.2), ts:"2026-09-17T09:30:12+08:00"}, point(10.5, "31"), point(10.8, "32")]}/>);
+    expect(reading().getByText("+2.00%")).toBeTruthy();
+    expect(reading().getByText("最新已有 09:32")).toBeTruthy();
+    expect(screen.getByRole("slider").getAttribute("aria-valuetext")).toBe("2026-09-17 09:30");
+    expect(charts).toHaveLength(1);
+    fireEvent.pointerEnter(surface());
+    const callback = charts[0].subscribeCrosshairMove.mock.calls[0][0] as (p: {time:number; point:{x:number;y:number}}) => void;
+    act(() => callback({time:Date.UTC(2026,8,17,9,32)/1000,point:{x:150,y:100}}));
+    expect(screen.getByRole("slider").getAttribute("aria-valuetext")).toBe("2026-09-17 09:30");
+    fireEvent.pointerLeave(surface());
+    expect(reading().getByText("固定分钟")).toBeTruthy();
+    fireEvent.keyDown(surface(), {key:"Escape"});
+    expect(reading().getByText("跟随最新")).toBeTruthy();
+    expect(reading().getByText("+8.00%")).toBeTruthy();
+  });
+
+  it("固定分钟消失时明确缺失，证券或可用日期变化才清除固定", () => {
+    const view = render(<MinuteChart {...props} points={[point(10), point(10.5, "31")]}/>);
+    fireEvent.keyDown(surface(), {key:"Home"});
+    fireEvent.click(reading().getByRole("button", {name:"固定当前分钟"}));
+    view.rerender(<MinuteChart {...props} points={[point(10.5, "31")]}/>);
+    expect(reading().getByRole("status").textContent).toContain("没有用近邻分钟替代");
+    expect(reading().getByText("原分钟未提供")).toBeTruthy();
+    expect((screen.getByRole("slider") as HTMLInputElement).disabled).toBe(true);
+    view.rerender(<MinuteChart {...props} symbol="600411" points={[point(10.5, "31")]}/>);
+    expect(reading().getByText("跟随最新")).toBeTruthy();
+    fireEvent.click(reading().getByRole("button", {name:"固定当前分钟"}));
+    view.rerender(<MinuteChart {...props} symbol="600411" referenceDate={null} points={[point(10.5, "31")]}/>);
+    expect(reading().getByText("跟随最新")).toBeTruthy();
+    expect(screen.queryByText("固定分钟已不在当前资料中；没有用近邻分钟替代。")).toBeNull();
+  });
+
+  it("固定状态不掩盖真实行情过期、源观察钟或竞价等待", () => {
+    const quote: Quote = {symbol:"600410", source:"tencent", quality:"stale", quality_reasons:["refresh_failed"], received_at:"2026-09-17T09:31:01+08:00"};
+    const points = [{...point(10), observation_ts:"2026-09-17T09:30:12+08:00"}];
+    const view = render(<MinuteChart {...props} points={points} quoteState={quote}/>);
+    fireEvent.click(reading().getByRole("button", {name:"固定当前分钟"}));
+    expect(reading().getByText("刷新异常")).toBeTruthy();
+    expect(reading().getByText(/该点源观察.*09:30:12/)).toBeTruthy();
+    view.rerender(<MinuteChart {...props} points={points} quoteState={{...quote, quality_reasons:["auction_pending"], display_session:{phase:"auction", trade_date:"2026-09-17",as_of:"2026-09-17T09:20:00+08:00",trade_day_result:true}}}/>);
+    expect(reading().getByText("固定分钟")).toBeTruthy();
+    expect(reading().getByText(/竞价/)).toBeTruthy();
+    expect(reading().queryByText("正常")).toBeNull();
+  });
+
+  it("真实弹窗组装：聚焦读点时首个Esc恢复跟随，第二个才关闭最顶层", () => {
+    const close = vi.fn();
+    render(<ModalShell label="证券详情" onClose={close}><MinuteChart {...props} points={[point(10),point(10.5,"31")]}/></ModalShell>);
+    act(() => surface().focus());
+    fireEvent.keyDown(surface(), {key:"ArrowLeft"});
+    fireEvent.keyDown(surface(), {key:" "});
+    fireEvent.keyDown(surface(), {key:"Escape", isComposing:true});
+    fireEvent.keyDown(surface(), {key:"Escape", keyCode:229});
+    expect(close).not.toHaveBeenCalled();
+    expect(reading().getByText("固定分钟")).toBeTruthy();
+    fireEvent.keyDown(surface(), {key:"Escape"});
+    expect(close).not.toHaveBeenCalled();
+    expect(reading().getByText("跟随最新")).toBeTruthy();
+    fireEvent.keyDown(surface(), {key:"Escape"});
+    expect(close).toHaveBeenCalledOnce();
+  });
+
+  it("图表未查点、表单和图表子控件不会夺走弹窗Esc或表单键盘", () => {
+    const close = vi.fn();
+    render(<ModalShell label="证券详情" onClose={close}><label>笔记<input aria-label="笔记"/></label><MinuteChart {...props} points={[point(10),point(10.5,"31")]}/></ModalShell>);
+    act(() => surface().focus());
+    fireEvent.keyDown(surface(), {key:"Escape"});
+    expect(close).toHaveBeenCalledTimes(1);
+    fireEvent.keyDown(surface(), {key:"Home"});
+    const input = screen.getByRole("textbox", {name:"笔记"});
+    act(() => input.focus());
+    fireEvent.keyDown(input, {key:"End"});
+    expect(screen.getByRole("slider").getAttribute("aria-valuetext")).toBe("2026-09-17 09:30");
+    fireEvent.keyDown(input, {key:"Escape", isComposing:true});
+    expect(close).toHaveBeenCalledTimes(1);
+    fireEvent.keyDown(input, {key:"Escape"});
+    expect(close).toHaveBeenCalledTimes(2);
+    const slider = screen.getByRole("slider");
+    act(() => slider.focus());
+    fireEvent.keyDown(slider, {key:"Escape"});
+    expect(close).toHaveBeenCalledTimes(3);
+  });
+});
 
 describe("MinuteChart 首提交主题工作", () => {
   beforeEach(() => document.documentElement.classList.remove("dark"));

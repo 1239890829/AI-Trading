@@ -1,6 +1,9 @@
 "use client";
 
 import { Component, type ErrorInfo, type ReactNode } from "react";
+import { HugeiconsIcon } from "@hugeicons/react";
+import Alert02Icon from "@hugeicons/core-free-icons/Alert02Icon";
+import ReloadIcon from "@hugeicons/core-free-icons/ReloadIcon";
 
 /**
  * 组件级错误边界（S2-6，2026-09-11）。
@@ -87,25 +90,18 @@ export class PanelBoundary extends Component<PanelBoundaryProps, PanelBoundarySt
       <div
         role="alert"
         className={
-          "flex flex-col items-start gap-2 rounded-lg border border-dashed border-amber-500/50 bg-amber-500/[0.04] p-3 text-left " +
+          "panel-error text-left " +
           (this.props.className ?? "")
         }
       >
-        <div className="text-xs font-medium text-amber-800 dark:text-amber-300">
-          {this.props.label ? `${this.props.label} · 局部加载失败` : "局部加载失败"}
+        <div className="panel-error-heading">
+          <span className="panel-error-title"><HugeiconsIcon icon={Alert02Icon} size={16} strokeWidth={1.6} aria-hidden="true" />{this.props.label ? `${this.props.label} · 局部加载失败` : "局部加载失败"}</span>
+          <button type="button" onClick={this.retry} className="panel-retry"><HugeiconsIcon icon={ReloadIcon} size={14} strokeWidth={1.6} aria-hidden="true" />重试</button>
         </div>
-        <p className="w-full break-all text-[11px] leading-5 text-zinc-600 dark:text-zinc-400">
+        <p className="panel-error-message">
           {error.message || String(error)}
         </p>
-        <p className="text-[11px] leading-5 text-zinc-600 dark:text-zinc-400">
-          其余面板不受影响；若持续失败，多半是该接口响应结构异常（HTTP 200 但响应体不是预期格式）。
-        </p>
-        <button
-          onClick={this.retry}
-          className="rounded-md border border-zinc-300 px-2.5 py-1 text-[11px] text-zinc-700 hover:bg-zinc-100 dark:border-zinc-700 dark:text-zinc-200 dark:hover:bg-zinc-800"
-        >
-          重试
-        </button>
+        <p className="panel-error-note">其余内容可继续使用。</p>
       </div>
     );
   }

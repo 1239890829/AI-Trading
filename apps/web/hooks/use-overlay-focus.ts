@@ -56,9 +56,13 @@ export function useOverlayFocus(ref: RefObject<HTMLElement | null>, onClose: () 
     isolateTop();
     if (topLayer() === layer) focusFirst(layer);
     function key(event: KeyboardEvent) {
-      if (topLayer() !== layer || event.isComposing || (!layer.modal() && !layer.root.contains(document.activeElement))) return;
+      if (topLayer() !== layer || event.isComposing || event.keyCode === 229 || (!layer.modal() && !layer.root.contains(document.activeElement))) return;
       // Radix owns a nested menu's Escape and Tab; the first Escape must not close its drawer.
       if (event.target instanceof Element && event.target.closest('[role="menu"]') && layer.root.contains(event.target)) return;
+      // A focused minute reader consumes its first Escape to resume following.
+      // Only the declared keyboard surface can own it, never a nested form control.
+      if (event.key === "Escape" && event.target === document.activeElement && event.target instanceof HTMLElement
+        && event.target.matches('[data-escape-owner="minute-chart"][data-escape-active="true"]') && layer.root.contains(event.target)) return;
       if (event.key === "Escape") {
         event.preventDefault(); event.stopImmediatePropagation(); layer.close();
       } else if (event.key === "Tab" && layer.modal()) {

@@ -10,9 +10,13 @@ import asyncio
 import logging
 from datetime import datetime, timezone
 from pathlib import Path
+from time import monotonic
 from typing import Any
 
+import httpx
+
 from app.core.freshness import Freshness
+from app.data_providers.eastmoney import ProviderError
 from app.market import sina_market
 from app.market.breadth import compute_breadth
 from app.market.sina_market import SinaRateLimited
@@ -48,12 +52,13 @@ RATE_LIMIT_COOLDOWN_SECONDS = 240.0
 #: 限流冷却上限：显著高于 `BACKOFF_CAP_SECONDS`，体现"限流比普通失败更该退让"。
 RATE_LIMIT_COOLDOWN_CAP_SECONDS = 900.0
 
-#: 新浪主源限流时的降级快照完整度门。低于主源自身 90% 完整性纪律就拒绝发布，
+#: 新浪主源失败时的降级快照完整度门。低于既有 90% 覆盖率就拒绝发布，
 #: 不用一小撮报价冒充“全市场”。
 FALLBACK_MIN_COVERAGE = 0.90
 FALLBACK_BATCH_SIZE = 50
 FALLBACK_SOURCE = "quote_fallback"
 FALLBACK_REASON = "新浪全市场源限流，使用既有股票池 + 批量行情备源降级快照"
+SOURCE_FAILURE_FALLBACK_REASON = "新浪全市场源失败，使用既有股票池 + 批量行情备源降级快照"
 
 
 class MarketSnapshotService:
@@ -180,7 +185,7 @@ class MarketSnapshotService:
         return row
 
     async def refresh_fallback(self) -> float:
-        """新浪限流时用既有 universe + 批量行情备源生成**显式 degraded**快照。"""
+        """新浪失败时用既有 universe + 批量行情备源生成**显式 degraded**快照。"""
         if self.quote_hub is None:
             raise RuntimeError("snapshot fallback 未注入 quote_hub")
 
@@ -196,13 +201,23 @@ class MarketSnapshotService:
         if not symbols:
             raise RuntimeError("snapshot fallback 股票池无有效 symbol")
 
-        found = await fetch_quotes_batched(
-            self.quote_hub, symbols, prefer_cache=False, batch_size=FALLBACK_BATCH_SIZE
-        )
+        fresh_within = max(self.poll_interval * 3, 60.0)
+        collection_started = monotonic()
+        try:
+            # Bound only quote collection. wait_for drains this coroutine on
+            # cancellation; shared provider HTTP owners keep their own deadline.
+            found = await asyncio.wait_for(fetch_quotes_batched(
+                self.quote_hub, symbols, prefer_cache=False, batch_size=FALLBACK_BATCH_SIZE
+            ), timeout=fresh_within)
+            # A collector which suppresses cancellation still cannot publish a
+            # response after the original collection deadline.
+            if monotonic() - collection_started >= fresh_within:
+                raise TimeoutError
+        except TimeoutError:
+            raise TimeoutError("snapshot fallback quote collection exceeded freshness window") from None
         # 盘中只把“当前可据此下结论”的报价计入覆盖率。HTTP 200 也可能
         # 携带旧时点/invalid 行，不能把它们算成 100% 的假覆盖。
         if in_trading_window():
-            fresh_within = max(self.poll_interval * 3, 60.0)
             found = {
                 symbol: quote for symbol, quote in found.items()
                 if quote is not None
@@ -227,9 +242,9 @@ class MarketSnapshotService:
         self.last_success = now
         self._snapshot_version = (now, tuple(dict(row) for row in rows))
         self.last_snapshot_source = FALLBACK_SOURCE
-        self.last_degraded_reason = FALLBACK_REASON
+        self.last_degraded_reason = FALLBACK_REASON if self.rate_limited else SOURCE_FAILURE_FALLBACK_REASON
         self.last_fallback_coverage = round(coverage, 4)
-        # 主源仍处于限流；刻意不清 consecutive_failures / rate_limited / last_error。
+        # 主源故障仍在；刻意不清 consecutive_failures / rate_limited / last_error。
         await asyncio.to_thread(self._maybe_save)
         log.warning(
             "market snapshot fallback refreshed: %s/%s (%.1f%%), universe=%s",
@@ -357,6 +372,15 @@ class MarketSnapshotService:
                 self.last_error = str(exc)
                 self.rate_limited = False
                 log.warning("snapshot refresh failed (%s): %s", type(exc).__name__, exc)
+                # Reuse current fresh facts before adding a full-market backup
+                # batch. Local calculation/save failures are not source failover.
+                if (isinstance(exc, (ProviderError, httpx.HTTPError))
+                        and self.freshness(live=live).state in {"unavailable", "stale"}):
+                    try:
+                        await self.refresh_fallback()
+                    except Exception as fallback_exc:  # noqa: BLE001
+                        log.warning("snapshot fallback after source failure failed (%s): %s",
+                                    type(fallback_exc).__name__, fallback_exc)
             await asyncio.sleep(self._next_delay(live=live))
 
     def _nominal_interval(self, *, live: bool | None = None) -> float:

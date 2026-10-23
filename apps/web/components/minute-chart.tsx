@@ -1,6 +1,6 @@
 "use client";
 
-import { useCallback, useEffect, useMemo, useRef } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState, type KeyboardEvent } from "react";
 import {
   createChart,
   CrosshairMode,
@@ -19,7 +19,10 @@ import {
   isPositivePrice,
   minuteLimitPriceState,
 } from "@/lib/minute-axis";
-import { bjDate } from "@/lib/format";
+import { bjDate, dateTimeTextBJ, pctColor, sourceLabel } from "@/lib/format";
+import { QualityBadge } from "@/components/quality-badge";
+import type { Quote } from "@/types/market";
+import styles from "./minute-chart.module.css";
 import { tradingSeqFromHHMM } from "@/lib/market-hours";
 import { getMinuteAmount } from "@/lib/kline-live";
 import { readChartTheme, useChartTheme, type ChartTheme } from "@/lib/chart-theme";
@@ -179,6 +182,16 @@ function bjHHMM(p: { ts: string }): string {
   return new Date(new Date(p.ts).getTime() + BJ_OFFSET * 1000).toISOString().slice(11, 16);
 }
 
+function sameMinute(point: P, ts: string | null) {
+  return ts !== null && Math.floor(Date.parse(point.ts) / 60000) === Math.floor(Date.parse(ts) / 60000);
+}
+
+function relativePct(point: P | undefined, reference: number | null) {
+  if (!point || !isPositivePrice(reference)) return null;
+  const value = (point.price / reference - 1) * 100;
+  return Number.isFinite(value) ? value : null;
+}
+
 type SeriesBundle = {
   chart: IChartApi | null;
   /** 有昨收 → BaselineSeries（红涨绿跌分段）；降级（无昨收）→ AreaSeries 单色。 */
@@ -213,6 +226,9 @@ const emptyBundle = (): SeriesBundle => ({
 });
 
 export function MinuteChart({
+  symbol,
+  name,
+  quoteState,
   points,
   prevClose,
   referenceDate,
@@ -226,6 +242,10 @@ export function MinuteChart({
   lowerPrice,
   className,
 }: {
+  symbol?: string;
+  name?: string;
+  /** Existing quote state only; reading a minute never requests another quote. */
+  quoteState?: Quote | null;
   points: P[];
   prevClose?: number | null;
   /**
@@ -253,6 +273,8 @@ export function MinuteChart({
 }) {
   const ref = useRef<HTMLDivElement>(null);
   const tipRef = useRef<HTMLDivElement>(null);
+  const focusMinuteRef = useRef<((point: P) => void) | null>(null);
+  const inspectionRef = useRef<{ts: string | null; fixed: boolean}>({ts: null, fixed: false});
   // 画布配色随主题走（P2-26）：theme 变化 → applyTheme 把新色套到既有 series 上，不重建图表。
   const theme = useChartTheme();
 
@@ -325,6 +347,34 @@ export function MinuteChart({
     index && indexIssue === null && isPositivePrice(index.prevClose) && index.points.length > 0
       ? index
       : null;
+
+  const inspectionIdentity = `${symbol ?? ""}:${sessionDate ?? "unknown"}:${referenceDate ?? "unknown"}:${indexSessionDate ?? "unknown"}:${index?.referenceDate ?? "unknown"}`;
+  const [seenIdentity, setSeenIdentity] = useState(inspectionIdentity);
+  const [inspection, setInspection] = useState<{ts: string | null; fixed: boolean}>({ts: null, fixed: false});
+  if (seenIdentity !== inspectionIdentity) {
+    setSeenIdentity(inspectionIdentity);
+    setInspection({ts: null, fixed: false});
+  }
+  useEffect(() => {inspectionRef.current = inspection;}, [inspection]);
+  const inspectionPoints = useMemo(() => {
+    const byMinute = new Map<string, P>();
+    if (sessionDate) for (const point of points) if (isPositivePrice(point.price)) byMinute.set(bjHHMM(point), point);
+    return [...byMinute.values()].sort((a, b) => Date.parse(a.ts) - Date.parse(b.ts));
+  }, [points, sessionDate]);
+  const latestPoint = inspectionPoints.at(-1);
+  const inspectedPoint = inspection.ts ? inspectionPoints.find(point => sameMinute(point, inspection.ts)) : latestPoint;
+  const inspectedIndex = inspectedPoint && usableIndex
+    ? usableIndex.points.findLast(point => bjHHMM(point) === bjHHMM(inspectedPoint) && isPositivePrice(point.price)) : undefined;
+  const inspectedPct = relativePct(inspectedPoint, effectivePrevClose);
+  const inspectedIndexPct = relativePct(inspectedIndex, usableIndex?.prevClose ?? null);
+  const difference = inspectedPct !== null && inspectedIndexPct !== null ? inspectedPct - inspectedIndexPct : null;
+  const quoteReading = quoteState && (!symbol || quoteState.symbol === symbol) ? quoteState : null;
+  const inspectPoint = useCallback((point: P, moveChart = true, fixed = inspectionRef.current.fixed) => {
+    const next = {ts: point.ts, fixed};
+    inspectionRef.current = next;
+    setInspection(previous => previous.ts === next.ts && previous.fixed === next.fixed ? previous : next);
+    if (moveChart) focusMinuteRef.current?.(point);
+  }, []);
 
   const axis = useMemo(() => {
     if (!isPositivePrice(effectivePrevClose)) return null;
@@ -843,6 +893,11 @@ export function MinuteChart({
     let snapping = false;
     const onMove = (param: { time?: Time; point?: { x: number; y: number } }) => {
       if (snapping) return;
+      if (inspectionRef.current.fixed) {
+        const fixed = pointsRef.current.findLast(point => sameMinute(point, inspectionRef.current.ts) && isPositivePrice(point.price));
+        if (fixed && isPositivePrice(fixed.price)) focusMinuteRef.current?.(fixed);
+        return;
+      }
       if (!tooltip) return;
       if (!param.time || !param.point) {
         // 空 param：真实离开（库 mouseleave）或数据更新瞬态。悬停中一律忽略，
@@ -858,7 +913,17 @@ export function MinuteChart({
         finally { snapping = false; }
       }
       lastParamRef.current = { time, point: param.point };
+      if (best) inspectPoint(best, false, false);
       renderTip(time, param.point);
+    };
+    focusMinuteRef.current = (selected) => {
+      const time = (Math.floor(Date.parse(selected.ts) / 60000) * 60 + BJ_OFFSET) as Time;
+      const point = {x: chart.timeScale().timeToCoordinate(time) ?? 0, y: series.priceToCoordinate(selected.price) ?? 0};
+      lastParamRef.current = {time, point};
+      snapping = true;
+      try {chart.setCrosshairPosition(selected.price, time, series as never);}
+      finally {snapping = false;}
+      if (insideRef.current) renderTip(time, point);
     };
 
     // 容器原生指针跟踪：区分"离开"与"数据更新瞬态"的判据；真实离开时同步
@@ -868,13 +933,15 @@ export function MinuteChart({
     };
     const markOutside = () => {
       insideRef.current = false;
-      lastParamRef.current = null;
+      if (!inspectionRef.current.fixed) {
+        lastParamRef.current = null;
+        inspectionRef.current = {ts: null, fixed: false};
+        setInspection(previous => previous.ts === null && !previous.fixed ? previous : {ts: null, fixed: false});
+      }
       focusAnimation?.cancel();
       if (focus) focus.hidden = true;
       if (tooltip && tooltip.style.opacity !== "0") tooltip.style.opacity = "0";
-      try {
-        chart.clearCrosshairPosition();
-      } catch {}
+      if (!inspectionRef.current.fixed) try {chart.clearCrosshairPosition();} catch {}
     };
     const boxEl = ref.current!;
     boxEl.addEventListener("pointerenter", markInside);
@@ -890,15 +957,15 @@ export function MinuteChart({
 
     // 图表低频重建（基线/竞价晚到）后：若指针仍悬停，恢复十字线与浮层，
     // 否则重建后十字线消失、浮层停留旧数据，直到下次鼠标移动。
-    if (insideRef.current && lastParamRef.current) {
+    if ((insideRef.current || inspectionRef.current.fixed) && lastParamRef.current) {
       const lp = lastParamRef.current;
-      const best = nearestPoint(lp.time);
+      const best = inspectionRef.current.fixed ? pointsRef.current.findLast(point => sameMinute(point, inspectionRef.current.ts) && isPositivePrice(point.price)) : nearestPoint(lp.time);
       if (best) {
         try {
           chart.setCrosshairPosition(best.price, lp.time, series as never);
         } catch {}
       }
-      renderTip(lp.time, lp.point);
+      if (best && insideRef.current) renderTip(lp.time, lp.point);
     }
 
     appliedThemeRef.current = { chart, palette: p, baseline: hasBase };
@@ -913,7 +980,9 @@ export function MinuteChart({
       focusAnimation?.cancel();
       motionQuery?.removeEventListener("change", stopFocusMotion);
       if (focus) focus.hidden = true;
+      if (tooltip) tooltip.style.opacity = "0";
       renderTipRef.current = null;
+      focusMinuteRef.current = null;
       delete dbg.__minuteChart;
       delete dbg.__minuteRange;
       delete dbg.__minuteOutOfBand;
@@ -925,7 +994,7 @@ export function MinuteChart({
       void unsub;
     };
     // 低频配置变化才重建；points 走增量 effect（下）。evByHHMM 供 crosshair 闭包。
-  }, [hasPoints, pointDate, effectivePrevClose, auction, exactBaseline, newsEvents, limitPct, upperPrice, lowerPrice, limitState, fillIndex]);
+  }, [hasPoints, pointDate, effectivePrevClose, auction, exactBaseline, newsEvents, limitPct, upperPrice, lowerPrice, limitState, fillIndex, inspectPoint]);
 
   // An index observation changes series data, never the chart or reading position.
   useEffect(() => {fillIndex(seriesRef.current, usableIndex);}, [usableIndex, hasPoints, pointDate, effectivePrevClose, fillIndex]);
@@ -974,7 +1043,11 @@ export function MinuteChart({
     cursorRef.current = bjHHMM(points[points.length - 1]);
     // 悬停中数据被整体替换：主动刷新浮层数值（库的 updateCrosshair 重放通常
     // 也会触发 onMove，此处兜底保证刷新不依赖重放行为；手术式 patch 零开销）
-    if (insideRef.current && lastParamRef.current) {
+    if (inspectionRef.current.fixed) {
+      const fixed = points.findLast(point => sameMinute(point, inspectionRef.current.ts) && isPositivePrice(point.price));
+      if (fixed && isPositivePrice(fixed.price)) focusMinuteRef.current?.(fixed);
+      else s.chart.clearCrosshairPosition();
+    } else if (insideRef.current && lastParamRef.current) {
       renderTipRef.current?.(lastParamRef.current.time, lastParamRef.current.point);
     }
   }, [points, effectivePrevClose]);
@@ -1035,8 +1108,53 @@ export function MinuteChart({
     appliedThemeRef.current = { chart, palette: p, baseline };
   }, [theme, effectivePrevClose, applyTheme]);
 
+  function followLatest() {
+    const next = {ts: null, fixed: false};
+    inspectionRef.current = next;
+    setInspection(next);
+    lastParamRef.current = null;
+    seriesRef.current.chart?.clearCrosshairPosition();
+    if (tipRef.current) tipRef.current.style.opacity = "0";
+    if (focusRef.current) focusRef.current.hidden = true;
+  }
+  function toggleFixedMinute() {
+    if (inspection.fixed) followLatest();
+    else if (inspectedPoint) inspectPoint(inspectedPoint, true, true);
+  }
+  function readWithKeyboard(event: KeyboardEvent<HTMLDivElement>) {
+    if (event.nativeEvent.isComposing || event.keyCode === 229 || event.altKey || event.ctrlKey || event.metaKey || event.target !== event.currentTarget) return;
+    if (event.key === "Escape") {
+      if (!inspection.fixed && inspection.ts === null) return;
+      event.preventDefault(); event.stopPropagation(); followLatest(); return;
+    }
+    if (event.key === " " || event.code === "Space") {
+      event.preventDefault(); event.stopPropagation(); toggleFixedMinute(); return;
+    }
+    if (!inspectionPoints.length || !["ArrowLeft", "ArrowRight", "Home", "End"].includes(event.key)) return;
+    event.preventDefault(); event.stopPropagation();
+    const current = inspectedPoint ? inspectionPoints.indexOf(inspectedPoint) : inspectionPoints.length - 1;
+    const next = event.key === "Home" ? 0 : event.key === "End" ? inspectionPoints.length - 1 : Math.max(0, Math.min(inspectionPoints.length - 1, current + (event.key === "ArrowRight" ? 1 : -1)));
+    inspectPoint(inspectionPoints[next]);
+  }
+  const inspectionIndex = inspectedPoint ? inspectionPoints.indexOf(inspectedPoint) : 0;
+  const fixedMissing = inspection.fixed && !inspectedPoint;
+
   return (
     <div className="flex h-full w-full flex-col">
+      <section className={styles.comparison} aria-label="同分钟分时对照">
+        <div className={styles.heading}><div><span>{inspection.fixed ? "固定分钟" : inspection.ts ? "查看分钟" : "跟随最新"}</span><strong>{inspectedPoint ? bjHHMM(inspectedPoint) : fixedMissing && inspection.ts ? `${bjHHMM({ts: inspection.ts})} · 当前资料缺失` : "暂无可读分钟"}</strong></div>
+          <button type="button" aria-pressed={inspection.fixed} disabled={!inspectedPoint && !inspection.fixed} onClick={toggleFixedMinute}>{inspection.fixed ? "恢复跟随" : "固定当前分钟"}</button>
+        </div>
+        <div className={styles.values}>
+          <div><span>{name ?? symbol ?? "当前证券"}</span><strong className={pctColor(inspectedPct)}>{fmtPct(inspectedPct)}</strong><small>{inspectedPoint ? `${inspectedPoint.price.toFixed(2)} · ${sourceLabel(inspectedPoint.source)}` : "原分钟未提供"}</small></div>
+          <div><span>上证 · 同分钟</span><strong className={pctColor(inspectedIndexPct)}>{fmtPct(inspectedIndexPct)}</strong><small>{inspectedIndex ? sourceLabel(inspectedIndex.source) : "同日同分钟缺项"}</small></div>
+          <div><span>相对上证</span><strong className={pctColor(difference)}>{difference === null ? "--" : fmtPct(difference).replace("%", "")}</strong><small>百分点，非收益</small></div>
+        </div>
+        <div className={styles.scrub}><span>{inspectionPoints[0] ? bjHHMM(inspectionPoints[0]) : "--"}</span><input type="range" aria-label="选择已有交易分钟" min={0} max={Math.max(0, inspectionPoints.length - 1)} step={1} value={inspectionIndex} disabled={!inspectedPoint} aria-valuetext={inspectedPoint ? `${bjDate(inspectedPoint.ts)} ${bjHHMM(inspectedPoint)}` : "暂无可读分钟"} onChange={event => {const point = inspectionPoints[Number(event.target.value)]; if (point) inspectPoint(point);}}/><span>{latestPoint ? bjHHMM(latestPoint) : "--"}</span></div>
+        <div className={styles.context}><span>最新已有 {latestPoint ? bjHHMM(latestPoint) : "--"}</span>{quoteReading ? <QualityBadge compact quality={quoteReading.quality} reasons={quoteReading.quality_reasons} symbol={symbol ?? quoteReading.symbol} market={quoteReading.market} dataTimestamp={quoteReading.data_timestamp} session={quoteReading.display_session}/> : <span>行情状态未提供</span>}<span>{sessionDate ?? "交易日待核"}</span></div>
+        {fixedMissing && <p role="status" className={styles.warning}>固定分钟已不在当前资料中；没有用近邻分钟替代。</p>}
+        <p className={styles.hint}>画布聚焦：← → 逐点 · 空格固定分钟 · Esc 跟随{inspectedPoint?.observation_ts ? ` · 该点源观察 ${dateTimeTextBJ(inspectedPoint.observation_ts, {seconds: true})}` : ""}</p>
+      </section>
       {/* 角标行：量比 + 竞价 + 上证叠加图例——独立文档流行（原 absolute right-2 top-1.5
           浮层压在图表右上角价格标签/最新价区域），不占图表绘制空间、互不遮挡 */}
       <div className="flex shrink-0 flex-wrap items-center justify-end gap-2 px-2 pb-0.5 pt-1 text-[11px]">
@@ -1100,9 +1218,10 @@ export function MinuteChart({
         )}
       </div>
       <div className="relative min-h-0 w-full flex-1">
-        <div ref={ref} data-chart-surface="true" className={`h-full w-full ${className ?? ""}`} />
+        <div ref={ref} data-chart-surface="true" data-escape-owner="minute-chart" data-escape-active={inspection.fixed || inspection.ts !== null ? "true" : undefined} role="group" aria-label={`${name ?? symbol ?? "当前证券"}分时读点`} tabIndex={inspectionPoints.length ? 0 : -1} onKeyDown={readWithKeyboard} className={`h-full w-full ${styles.surface} ${className ?? ""}`} />
         <div
           ref={tipRef}
+          hidden={fixedMissing}
           className="pointer-events-none absolute left-0 top-0 z-10 min-w-[150px] rounded-lg border border-zinc-200 bg-white/95 px-2.5 py-1.5 opacity-0 shadow-sm transition-opacity dark:border-zinc-700 dark:bg-zinc-900/95"
         />
       </div>
