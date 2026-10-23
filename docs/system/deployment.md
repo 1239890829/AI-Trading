@@ -515,7 +515,7 @@ CLI启动warning的兼容依据与固定版本见[语义纠错记录](../ai/sema
 
 ### 2026-10-23 发送前输入失败的精确续接
 
-本轮仅对原counter已前移但reserve/start尚未发生的input_budget_exceeded增加独立input_prelaunch_tail证明。完整合同在[语义蓝图](../ai/semantic-decisions.md#2026-10-23-无损证据呈现与输入前失败续接)：原源码/数字模板、全部已知账与N−1回执、单末槽absence、原三角色终答及Market wrap_up指纹、worker失败终态和原packet/checkpoint/config/staged身份均须精确绑定。新调用从N+1继续，不重跑原答、不造槽N用量；不是自动重试或新unknown的许可。无sidecar的已终止检查点仍走正式immutable窄入口，前后哈希/absence一致，不在运行服务中stub读取。
+本轮仅对原counter已前移但reserve/start尚未发生的input_budget_exceeded增加独立input_prelaunch_tail证明。完整合同在[语义蓝图](../ai/semantic-decisions.md#2026-10-23-无损证据呈现与输入前失败续接)：原源码/数字模板、全部已知账与N−1回执、单末槽absence、原三角色终答及Market wrap_up指纹、worker失败终态和原packet/checkpoint/config/staged身份均须精确绑定。新调用从N+1继续，不重跑原答、不造槽N用量；不是自动重试或新unknown的许可。Market wrap_up先经已钉上游`_as_text`再经native serializer，新grant单独绑定实际wire指纹，原tail/checkpoint指纹不覆盖。继承已失败恢复只限原输入前tail的准确零调用history：每段N+1→N、已失败task/claim/grant/归档与整task model账0均实核，任何reservation也拒绝。原BudgetError从首archive证明，当前失败与终态另绑定；未来既有execution保存有界具体ResearchBlocked code。无sidecar的已终止检查点仍走正式immutable窄入口，前后哈希/absence一致，不在运行服务中stub读取。
 
 服务器单次grant采用独立frozen-packet-owner compatibility kind时，显式差异集合只可为服务端已审的quote_hub展示修补与Tencent纯search的准确正向hash对，声明恰等于实际变化；其余packet_builder、model/graph/依赖/工具与原packet严格不变，执行不得重新调用builder。原kind保持原约束。授权安装前核发布的准确HEAD、本地完整门、required CI、release_check与master CI，核0 active及dispatch单写者；保留原授权备份和七条具名unknown原账，不改变原外层到期或单次资源门。
 

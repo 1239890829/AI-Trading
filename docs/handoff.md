@@ -6,9 +6,17 @@
 
 ### 已发布修补与当前恢复现场
 
-2026-10-23本批最终完整本地后端7264 passed／87 skipped／336 subtests（pytest486.88秒、外层488.899秒），pyflakes9.227秒、doc-health15.193秒、卫生0.160秒、公开扫描7.003秒均exit0；1836个跟踪输入全门内零漂移。使用与required CI相同的四worker/loadfile，全量用例与断言保留，和前端完整门串行。前端默认/UTC各2054通过及tsc/ESLint/build的370输入仍逐字不变。此前失败及受控反例不删除；本段只是最终事实回填，应用/测试字节不变，提交前另复核文档守卫。准确HEAD、三项CI、DegradedRelease、release_check、master CI与实际加载以本批PR回执为准，本地门不冒称已合并或生效。
+PR #326准确HEAD `6c1278981ed13506d6b3ff7bc3db5b77909b6546`已合入master `695a35558f6d0afc10cd552aeda157850c447405`；PR CI 39892206377、master CI 39892678005三项均成功，DegradedRelease 6356280008、release_check exit0。用户暂停并行执行者后，官方launcher已加载同版后端与生产build `13LSzZxPkmMVNO49lVegr`，check exit0。实际Chrome全拼/缩写、刷新保留历史、历史重搜/Esc、成员默认降序/升序/筛选通过；午间分时叠加、盘口与非空行情可见，源钟/刷新钟分开。有限午间观察不外推全天性能或竞价自然时段；服务端WS accepted与客户端非空帧不冒充Network原始101抓取。具体见[实际运行回执6357418127](https://github.com/1239890829/AI-Trading/pull/326#issuecomment-6357418127)。本节下方PR #325及更早计数均为历史快照，不能覆盖该加载版本。
 
-本分支前端11文件冻结后已完成tsc、ESLint（仅既有warning）、默认/UTC各2054 passed／150文件、生产build与生成引用逐字恢复后tsc；370个前端输入零漂移。受控请求计数和竞价夹具不冒充实服提升；新版尚待发布后实页核验。搜索全拼/缩写修复复用Tencent既有接口，成功选择历史仅存本浏览器；指数成员涨跌幅只消费已有内存行情，不增加逐股订阅。
+600410本次正式恢复task `1801afa5a2944052bceedffc7eb9dbdf`在模型前被ResearchBlocked拒绝，counter仍7、新增model/unknown均0，六原答与七历史unknown不变。真实冻结checkpoint经已钉上游`_as_text`和native serializer的纯函数反例确认：wrap_up转换工具消息，而原grant/夹具使用转换前指纹；这不是费用/上游超时。旧task/broker仅持久通用错误，具体code原证据缺失；后续修补需单独准确HEAD发布，保留失败/grant并只续未完成节点。603171原Oct21意图已由正式scheduler task `cc681c67bef74387a705b4f14ded347f`／run `8c7b91c9b64b447cb7cdadd21bddb71d`于12:40:06成功，15次均known、12角色/七报告/Memory完成，707.815秒；官方只读核验和两次普通GET均通过，原run/claim及七旧unknown不变。真实保存状态仍finite_failed_requires_review（1项finite失败、7项需审）；唯一失败已对原句、packet及offset定位为“不构成…或确定卖出的结论”的局部否定误报，本批最小守卫纠错另经发布，原报告/原FAIL保留，不称来源或语义通过。原批目前7/8工程完成，余600410未完成，不预写八只全齐或效果通过。
+
+本轮wrap_up/局部否定及夹具修正的最终完整本地后端7305 passed／87 skipped／354 subtests，pytest446.12秒、外层447.763秒；pyflakes8.318秒、doc-health12.581秒、卫生0.153秒、公开扫描6.177秒均exit0。1836跟踪输入全门内零漂移。前端370输入与PR #326完整门逐字一致，复用默认/UTC各2054项及类型、ESLint、生产build证据；新HEAD required CI仍独立取得。本段只回填实测事实，应用/测试字节不变；回填后文档门和准确HEAD发布/加载由本批PR回执列明。方法`f0b1433fc9761b2bb2384eedac2287e4c394f923251ce23bcdb7ab8f7907252f`仅恢复校验/source-gate两项host源码变化；只读候选已核原八只中七份完成结果可读、六原答和七旧unknown不变，尚未把准备成功冒充600410恢复完成。
+
+本轮wrap_up/局部否定修补的首次完整后端为7 failed／7297 passed／87 skipped／354 subtests，408.24秒；失败全在未改动的quote_hub测试：fixture只声明market_open_state=OPEN，却让展示时钟/已知日历继续取真实午休。同树不改应用，固定12:00重现同7失败、固定10:00则7通过；真实13点后原7例亦通过，证实测试前提未隔离，不能放宽质量断言或改生产午休规则。本轮只补绝对时钟与日历夹具，后续完整门另列；失败日志/原JUnit保留，不当绿色或归因模型/额度。
+
+2026-10-23 PR #326最终完整本地后端7264 passed／87 skipped／336 subtests（pytest486.88秒、外层488.899秒），pyflakes9.227秒、doc-health15.193秒、卫生0.160秒、公开扫描7.003秒均exit0；1836个跟踪输入全门内零漂移。使用与required CI相同的四worker/loadfile，全量用例与断言保留，和前端完整门串行。前端默认/UTC各2054通过及tsc/ESLint/build的370输入仍逐字不变。此前失败及受控反例不删除；本段只是最终事实回填，应用/测试字节不变，提交前另复核文档守卫。准确HEAD、三项CI、DegradedRelease、release_check、master CI与实际加载以本批PR回执为准，本地门不冒称已合并或生效。
+
+PR #326前端11文件冻结后已完成tsc、ESLint（仅既有warning）、默认/UTC各2054 passed／150文件、生产build与生成引用逐字恢复后tsc；370个前端输入零漂移。受控请求计数和竞价夹具不冒充实服提升；发布后实页范围与限制见顶部当前回执。搜索全拼/缩写修复复用Tencent既有接口，成功选择历史仅存本浏览器；指数成员涨跌幅只消费已有内存行情，不增加逐股订阅。
 
 首次完整后端保留26 failed／7214 passed／87 skipped／336 subtests，pytest639.27秒、外层657.856秒。逐类复核为25项旧fresh-current强制stale期望与1项真正超deadline主源拒绝；只同步两份消费者测试并增加fresh/aged对照，原字段、拒绝摘要/coverage、失败计数、取消排空与原deadline均保留，超时方法仍须refresh_failed。两文件连retained_state共122 passed，pyflakes/diff通过；应用源码未因本次失败改变。该失败不当作最终完整绿色，不借PR #325门禁发布。
 
@@ -56,7 +64,7 @@ PR #325已发布加载的未派发承接合同：当日发现真实daily/top入�
 
 PR #325的803恢复入口只补原call1失败、零答、counter1/原生step0四分析pending且原错误/消息指纹、精确receipt/DB unknown、具名许可和完整源绑定一致的初始情形；物理absence不造占位，实际已从call2续未完成节点并成功，见上文正式task证据。已有答、普通单角色、非初始、缺许可、预置未来答或漂移仍拒绝；两对源码兼容不自动迁移许可。详见[恢复合同](ai/semantic-decisions.md#2026-10-21-cli启动警告与重复失败恢复纠错)及[运行入口](system/deployment.md#完整研究的显式原生恢复)，单项成功不外推全部余项。
 
-本轮行情纠偏已在隔离工作树区分被拒观测与当前事实：仍high且在原新鲜窗内的可信值保持自己的质量；严格匹配现役应有源日和尾点的正常pause保持原状态。拒绝记录、coverage、无来源和真实缺项仍可见，源钟、fresh window及采集频率均不延长。该补丁尚须本轮完整门、准确HEAD发布和实际页面验收；PR #325运行并不表示这份工作树补丁已加载，详见[性能报告§34](system/runtime-performance.md#34-2026-10-23-被拒观测与当前事实分离)。
+本轮行情纠偏已在隔离工作树区分被拒观测与当前事实：仍high且在原新鲜窗内的可信值保持自己的质量；严格匹配现役应有源日和尾点的正常pause保持原状态。拒绝记录、coverage、无来源和真实缺项仍可见，源钟、fresh window及采集频率均不延长。该补丁已随PR #326完整门及准确HEAD发布加载，实际午间验收和其限制见顶部回执；PR #325只是前版运行，详见[性能报告§34](system/runtime-performance.md#34-2026-10-23-被拒观测与当前事实分离)。
 
 本轮已精确清理4项完成且无活引用的pytest临时payload，约2.951GiB已分配空间；日志/XML/哈希及所有模型原答、失败、unknown、checkpoint/Memory和用户原件保留。旧恢复构建副本仍保留，其他worktree及RSH资产不动。
 

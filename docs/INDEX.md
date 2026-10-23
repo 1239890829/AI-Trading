@@ -124,7 +124,7 @@
 
 ---
 
-当前TradingAgents接续：见[六新场景完整图与四臂对照](ai/semantic-decisions.md#2026-10-20-六新场景完整图与四臂对照)、[完整研究读者](product/hunting-decision-design.md#2026-10-20-tradingagents完整研究读者)和[运行前置](system/deployment.md#tradingagents完整研究运行边界)，状态仍在W04/RSH-030。工程、真实模型、净收益准入与现役加载分开；旧批不替代新HEAD验收或启用。 最新[三主模型整图筛选](ai/semantic-decisions.md#用户改为三主模型整图筛选)已按来源质量与完整性选Sol作本例候选；Luna完整有复权口径错，DeepSeek受原输入上限阻断。两项完整速度试验均未提速，保留medium；原四臂失败/unknown保留，gold0；用户随后明确授权真正入选后的未验证完整研究，当前[研究授权](ai/semantic-decisions.md#2026-10-21-真正入选后完整研究与交互纠偏)与效果准入分开。 原真实入选pending的跨日承接及局部否定守卫边界查[当前承接纠错](ai/semantic-decisions.md#2026-10-21-未派发研究承接与否定范围纠错)，原日期/排名及历史失败不改。原批状态归RSH-030/handoff，第7unknown具名许可、已发布用量/答复分离及后续无损呈现合同查[共因与未来合同](ai/semantic-decisions.md#2026-10-23-终态用量与答复准入分离)；旧七账不回写；PR #325的发布/加载与后续新HEAD分别查关联PR回执，历史施工快照不代当前运行。
+当前TradingAgents接续：见[六新场景完整图与四臂对照](ai/semantic-decisions.md#2026-10-20-六新场景完整图与四臂对照)、[完整研究读者](product/hunting-decision-design.md#2026-10-20-tradingagents完整研究读者)和[运行前置](system/deployment.md#tradingagents完整研究运行边界)，状态仍在W04/RSH-030。工程、真实模型、净收益准入与现役加载分开；旧批不替代新HEAD验收或启用。 最新[三主模型整图筛选](ai/semantic-decisions.md#用户改为三主模型整图筛选)已按来源质量与完整性选Sol作本例候选；Luna完整有复权口径错，DeepSeek受原输入上限阻断。两项完整速度试验均未提速，保留medium；原四臂失败/unknown保留，gold0；用户随后明确授权真正入选后的未验证完整研究，当前[研究授权](ai/semantic-decisions.md#2026-10-21-真正入选后完整研究与交互纠偏)与效果准入分开。 原真实入选pending的跨日承接及局部否定守卫边界查[当前承接纠错](ai/semantic-decisions.md#2026-10-21-未派发研究承接与否定范围纠错)，原日期/排名及历史失败不改。原批状态归RSH-030/handoff，第7unknown具名许可、已发布用量/答复分离及后续无损呈现合同查[共因与未来合同](ai/semantic-decisions.md#2026-10-23-终态用量与答复准入分离)；旧七账不回写；PR #325的发布/加载与后续新HEAD分别查关联PR回执，历史施工快照不代当前运行。 PR #326已加载及实际搜索/成员/午间读取范围见handoff；wrap_up原消息与实际wire指纹的纠错及零调用恢复history，仍归[原输入前续接合同](ai/semantic-decisions.md#2026-10-23-无损证据呈现与输入前失败续接)，不改原答/账或自动重试。
 
 ## 0. 主题路由（我要做什么 → 去读什么）
 

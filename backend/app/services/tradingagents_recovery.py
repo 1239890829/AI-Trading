@@ -90,6 +90,8 @@ REVIEWED_COMPONENT_TRANSITIONS = {
     "tradingagents_source_gate.py": {
         ("862dd58539f17698a8feabf04218acb41681f7381350007e6b630692d0fbbafc",
          "0655bee3b5138cb354e69ee9c0c8cf9f7d627c58898952a2140a7237e14d7f83"),
+        ("0655bee3b5138cb354e69ee9c0c8cf9f7d627c58898952a2140a7237e14d7f83",
+         "5554522f2f9b601f3e91443459eb6874c65466b88ca57bad9728029ebace6604"),
     },
 }
 
@@ -310,11 +312,21 @@ def _grant(source_task_id, run_id, app, sf):
 
 
 def _binding(value):
-    if (not isinstance(value, dict) or set(value) - {"recovery_history", "prelaunch_tail", "input_prelaunch_tail"} not in (BINDING_KEYS, PARALLEL_BINDING_KEYS)
+    if (not isinstance(value, dict) or set(value) - {"recovery_history", "prelaunch_tail", "input_prelaunch_tail", "input_wrapup_message_fingerprints"} not in (BINDING_KEYS, PARALLEL_BINDING_KEYS)
             or any(not isinstance(value.get(key), dict) for key in ("selection", "outputs", "usage_receipts", "prefixes", "checkpoint"))):
         raise _blocked("recovery_binding_invalid")
-    if "input_prelaunch_tail" in value and ("prelaunch_tail" in value or "expected_pending_roles" in value or value.get("recovery_history")):
+    if "input_prelaunch_tail" in value and ("prelaunch_tail" in value or "expected_pending_roles" in value):
         raise _blocked("recovery_input_prelaunch_tail_invalid")
+    if "input_wrapup_message_fingerprints" in value:
+        wire = value["input_wrapup_message_fingerprints"]
+        tail = value.get("input_prelaunch_tail")
+        raw = tail.get("pending_message_fingerprints") if isinstance(tail, dict) else None
+        # A separately reviewed grant binds the pinned upstream _as_text wire
+        # representation. The raw checkpoint/tail is never rewritten to match it.
+        if (not isinstance(raw, list) or not isinstance(wire, list) or not 4 <= len(wire) <= 129
+                or len(wire) != len(raw) + 1 or any(not _hash(row) for row in wire)
+                or wire[-1] != INPUT_PRELAUNCH_WRAP_UP_SHA):
+            raise _blocked("recovery_input_wrapup_binding_invalid")
     if "expected_pending_roles" in value:
         roles, fingerprints = value["expected_pending_roles"], value["pending_message_fingerprints"]
         if (not isinstance(roles, list) or len(roles) != 4 or any(not isinstance(r, str) for r in roles)
@@ -399,6 +411,9 @@ def _history_segments(grant, run, sf=None):
                 or any(prior[key] != binding[key] for key in ("selection", "source_claim_sha256", "packet_sha256", "config_sha256", "staged_code_sha256"))
                 or prior.get("prelaunch_tail") != binding.get("prelaunch_tail")
                 or prior.get("input_prelaunch_tail") != binding.get("input_prelaunch_tail")
+                or prior.get("input_wrapup_message_fingerprints") is not None
+                    and prior["input_wrapup_message_fingerprints"] != binding.get("input_wrapup_message_fingerprints")
+                or index > 0 and "input_prelaunch_tail" in binding and "input_wrapup_message_fingerprints" not in prior
                 or prior["usage_receipts"] != {key: value for key, value in binding["usage_receipts"].items() if int(key) < entry["call_from"]}
                 or prior["outputs"] != {key: value for key, value in binding["outputs"].items() if int(key) < entry["call_from"]}
                 or _sha(archive / "worker-terminal.json") != prior["worker_terminal_sha256"]
@@ -419,14 +434,23 @@ def _history_segments(grant, run, sf=None):
                 or info["source_task_id"] != grant["source_task_id"] or info["run_id"] != grant["run_id"]
                 or info["source_method_sha256"] != root_method or info["source_claim_sha256"] != binding["source_claim_sha256"]):
             raise _blocked("recovery_history_claim_drift")
-        if sf is not None:
-            with sf() as db:
+        if sf is not None or "input_prelaunch_tail" in binding:
+            with (sf or research.get_session_factory())() as db:
                 task = db.get(AgentTask, task_id)
                 expected = {"symbol": grant["symbol"], "native_recovery": {"source_task_id": grant["source_task_id"],
                     "run_id": grant["run_id"], "grant_sha256": entry["grant_sha256"], "dispatch_owner": info["dispatch_owner"]}}
                 if (task is None or task.type != "tradingagents_research" or task.status not in {"failed", "canceled"}
                         or task.finished_at is None or json.loads(task.params) != expected):
                     raise _blocked("recovery_history_task_drift")
+                if "input_prelaunch_tail" in binding:
+                    # This tail can inherit only failures before a new reserve,
+                    # never a paid/unknown continuation disguised as an empty range.
+                    error = json.loads(task.error) if isinstance(task.error, str) else None
+                    usage = db.execute(select(AgentResourceUsage.id).where(
+                        AgentResourceUsage.task_id == task_id, AgentResourceUsage.kind == "model").limit(1)).first()
+                    if (task.status != "failed" or entry["call_from"] != counter + 1 or entry["call_to"] != counter
+                            or not isinstance(error, dict) or error.get("code") != "ResearchBlocked" or usage is not None):
+                        raise _blocked("recovery_input_prelaunch_history_drift")
         segments.append({"task_id": task_id, "method_sha256": method,
                          "call_from": entry["call_from"], "call_to": entry["call_to"]})
         previous_end = entry["call_to"]
@@ -557,9 +581,10 @@ def _input_prelaunch_tail(grant, run, segments, sf=None):
     fingerprints = tail.get("pending_message_fingerprints") if isinstance(tail, dict) else None
     if (not isinstance(tail, dict) or set(tail) != INPUT_PRELAUNCH_TAIL_KEYS or type(tail.get("version")) is not int or tail["version"] != 1
             or type(counter) is not int or not 3 < counter <= 4096 or type(tail.get("call_id")) is not int or tail["call_id"] != counter
-            or binding.get("expected_pending_role") != "Market Analyst" or "expected_pending_roles" in binding or "prelaunch_tail" in binding or binding.get("recovery_history")
+            or binding.get("expected_pending_role") != "Market Analyst" or "expected_pending_roles" in binding or "prelaunch_tail" in binding
             or any(grant["source_method_identity"]["source_files"].get(key) != value for key, value in INPUT_PRELAUNCH_SOURCE.items())
-            or len(segments) != 1 or segments[0] != {"task_id": grant["source_task_id"], "method_sha256": research._digest(grant["source_method_identity"]), "call_from": 1, "call_to": counter}
+            or not segments or segments[0] != {"task_id": grant["source_task_id"], "method_sha256": research._digest(grant["source_method_identity"]), "call_from": 1, "call_to": counter}
+            or any(row["call_from"] != counter + 1 or row["call_to"] != counter for row in segments[1:])
             or any(not _hash(tail.get(key)) for key in PRELAUNCH_TAIL_KEYS - {"version", "call_id", "model_receipts_prefix"})
             or type(tail.get("input_chars")) is not int or type(tail.get("input_limit_chars")) is not int
             or not 0 < tail["input_limit_chars"] < tail["input_chars"] <= MAX_BYTES
@@ -571,22 +596,49 @@ def _input_prelaunch_tail(grant, run, segments, sf=None):
     if (not isinstance(completed, list) or len(completed) != 3 or any(not isinstance(row, dict) for row in completed)
             or {row.get("role") for row in completed} != PARALLEL_ANALYSTS - {"Market Analyst"}):
         raise _blocked("recovery_input_prelaunch_roles_invalid")
-    archive = _safe(run / "recovery-history" / _id(grant["grant_id"]))
+    history = binding.get("recovery_history", [])
+    if history and "input_wrapup_message_fingerprints" not in binding:
+        raise _blocked("recovery_input_prelaunch_history_drift")
+    first_id = history[0]["grant_id"] if history else grant["grant_id"]
+    first_sha = history[0]["grant_sha256"] if history else research._digest(grant)
+    archive = _safe(run / "recovery-history" / _id(first_id))
+    original_binding = binding
     if archive.exists():
+        original = _json(archive / "grant.json")
+        original_binding = _binding(original["binding"])
         start = _json(archive / "start.json")
-        if (research._digest(_json(archive / "grant.json")) != research._digest(grant)
+        if (research._digest(original) != first_sha or original_binding.get("input_prelaunch_tail") != tail
+                or any(original.get(key) != grant.get(key) for key in ("source_task_id", "run_id", "source_method_identity"))
                 or start != {"source_task_id": grant["source_task_id"], "recovery_task_id": _id(start.get("recovery_task_id")),
-                    "grant_sha256": research._digest(grant), "checkpoint": binding["checkpoint"], "counter": counter}):
+                    "grant_sha256": first_sha, "checkpoint": original_binding["checkpoint"], "counter": counter}):
             raise _blocked("recovery_input_prelaunch_archive_drift")
         execution, terminal = archive / "execution.json", archive / "worker-terminal.json"
     else:
+        if history:
+            raise _blocked("recovery_input_prelaunch_archive_drift")
         execution, terminal = run / "execution.json", run / "worker-terminal.json"
     status = _json(execution)
     worker = _json(terminal)
     if (_sha(execution) != tail["source_execution_sha256"] or status.get("state") != "needs_native_recovery"
             or status.get("error_kind") != "BudgetError" or status.get("automatic_retry") is not False
-            or _sha(terminal) != binding["worker_terminal_sha256"] or type(worker.get("exit_code")) is not int or worker["exit_code"] == 0):
+            or _sha(terminal) != original_binding["worker_terminal_sha256"] or type(worker.get("exit_code")) is not int or worker["exit_code"] == 0):
         raise _blocked("recovery_input_prelaunch_execution_drift")
+    for index, entry in enumerate(history):
+        # Each archived execution is the state immediately before that grant.
+        # The following archive (or current run before dispatch) preserves the
+        # preceding zero-call failure without rewriting its consumed grant.
+        next_grant_id = history[index + 1]["grant_id"] if index + 1 < len(history) else grant["grant_id"]
+        next_archive = _safe(run / "recovery-history" / _id(next_grant_id))
+        failure_root = next_archive if next_archive.exists() else run
+        failure = _json(failure_root / "execution.json")
+        next_binding = (_binding(_json(next_archive / "grant.json")["binding"])
+                        if next_archive.exists() else binding)
+        worker = _json(failure_root / "worker-terminal.json")
+        if (failure.get("state") != "needs_native_recovery" or failure.get("error_kind") != "ResearchBlocked"
+                or failure.get("recovery_task_id") != entry["task_id"] or failure.get("automatic_retry") is not False
+                or _sha(failure_root / "worker-terminal.json") != next_binding["worker_terminal_sha256"]
+                or type(worker.get("exit_code")) is not int or worker["exit_code"] == 0):
+            raise _blocked("recovery_input_prelaunch_history_drift")
     from app.services.tradingagents_native.transport_process import project_usage_evidence
     receipts, finals, expected_ids = {}, [], set()
     for number in range(1, counter):
@@ -810,6 +862,9 @@ def _initial_snapshot(run, binding, symbol, packet, admission=None, *, source_gr
     if binding["checkpoint"].get("thread_id") != expected_thread:
         raise _blocked("recovery_checkpoint_thread_drift")
     if "input_prelaunch_tail" in binding:
+        if any(int(path.stem) > counter for folder in ("model-outputs", "usage-receipts")
+               for path in _safe(run / folder).iterdir()):
+            raise _blocked("recovery_input_prelaunch_history_drift")
         _input_prelaunch_checkpoint(run, symbol, binding, offline=offline)
     if "expected_pending_roles" in binding:
         # No placeholder files are created for an answer that never arrived.
@@ -928,11 +983,11 @@ def _pending_guard(binding):
             if first and role != binding["expected_pending_role"]:
                 raise _blocked("recovery_fresh_or_pending_role_mismatch")
             if first and "input_prelaunch_tail" in binding:
-                expected = binding["input_prelaunch_tail"]["pending_message_fingerprints"]
+                expected = binding.get("input_wrapup_message_fingerprints", [
+                    *binding["input_prelaunch_tail"]["pending_message_fingerprints"], INPUT_PRELAUNCH_WRAP_UP_SHA])
                 messages = request.get("messages")
-                if (not isinstance(messages, list) or len(messages) < len(expected) + 1
-                        or research._digest(messages[-1]) != INPUT_PRELAUNCH_WRAP_UP_SHA
-                        or [research._digest(row) for row in messages[-len(expected) - 1:-1]] != expected):
+                if (not isinstance(messages, list) or len(messages) < len(expected)
+                        or [research._digest(row) for row in messages[-len(expected):]] != expected):
                     raise _blocked("recovery_checkpoint_messages_drift")
         elif role in pending:
             expected, messages = binding["pending_message_fingerprints"][role], request.get("messages")
@@ -1239,6 +1294,10 @@ async def run_recovery(rec, params, app):
                 claim = _owned(context, supplied["dispatch_owner"])
                 if claim["state"] == "recovering" and claim.get("task_id") == rec.task_id:
                     await drain_thread(_advance, context, supplied["dispatch_owner"], "needs_recovery", task_id=rec.task_id)
-                    atomic_json(context["run"] / "execution.json", {"state": "needs_native_recovery", "error_kind": type(error).__name__,
-                        "finished_at": research._now().isoformat(), "recovery_task_id": rec.task_id, "automatic_retry": False})
+                    diagnostic = {"state": "needs_native_recovery", "error_kind": type(error).__name__,
+                        "finished_at": research._now().isoformat(), "recovery_task_id": rec.task_id, "automatic_retry": False}
+                    if (isinstance(error, research.ResearchBlocked) and isinstance(error.code, str)
+                            and re.fullmatch(r"[a-z][a-z0-9_]{0,99}", error.code)):
+                        diagnostic["error_code"] = error.code
+                    atomic_json(context["run"] / "execution.json", diagnostic)
                 raise
