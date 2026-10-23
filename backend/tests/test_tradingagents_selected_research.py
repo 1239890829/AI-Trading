@@ -39,7 +39,7 @@ class Driver:
         symbol = kwargs["params"]["symbol"]
         run_id = "a" * 32
         result = {"version": 1, "state": "completed", "symbol": symbol, "run_id": run_id,
-                  "generated_at": NOW.isoformat(), "as_of": (NOW - timedelta(seconds=1)).isoformat(),
+                  "generated_at": research._now().isoformat(), "as_of": (research._now() - timedelta(seconds=1)).isoformat(),
                   "upstream_sha": research.UPSTREAM_SHA, "input_sha256": "b" * 64,
                   "method_sha256": research._digest(self.method_identity()), "verification": research.VERIFICATION,
                   "selection": kwargs["selection_binding"], "authorization_mode": "RESEARCH_ONLY_AUTHORIZED", "net_gain_verified": False,
@@ -231,6 +231,259 @@ def test_selected_scheduler_does_not_queue_another_task_or_retry_unknown(env, mo
     with env.sf() as db:
         assert db.scalars(select(AgentResourceUsage)).all() == []
         assert db.scalars(select(AgentTask)).all() == []
+
+
+def test_active_task_does_not_lose_unstarted_selection_at_midnight(env, monkeypatch):
+    from app.services import agent_tasks
+    daily(env, ("600001", "600004"))
+    authorize(env, monkeypatch, valid_until=(NOW + timedelta(days=2)).isoformat())
+    original = deepcopy(research.selected_bindings(env.sf))
+    with env.sf() as db:
+        db.add(AgentTask(id="active", type="tradingagents_research", status="running", params='{"symbol":"600009"}'))
+        db.commit()
+    queued = []
+    async def create(kind, params, **kwargs):
+        queued.append(deepcopy(params))
+        with env.sf() as db:
+            db.add(AgentTask(id="e" * 32, type=kind, status="queued", params=json.dumps(params),
+                             created_by=kwargs["created_by"], created_at=research._now().replace(tzinfo=None)))
+            db.commit()
+        return {"id": "e" * 32}
+    monkeypatch.setattr(agent_tasks, "create_task_async", create)
+    asyncio.run(research.scheduler_tick(env.app))
+    claims = sorted(research.ROOT.glob("*/selection-*.json"))
+    assert len(claims) == 2 and not queued
+    assert all(json.loads(path.read_text())["state"] == "pending" for path in claims)
+    tomorrow = NOW + timedelta(days=1)
+    monkeypatch.setattr(research, "_now", lambda: tomorrow)
+    monkeypatch.setattr(budget, "beijing_now", lambda: tomorrow)
+    assert research.selected_bindings(env.sf) == {}
+    with env.sf() as db:
+        db.get(AgentTask, "active").status = "succeeded"
+        db.commit()
+    asyncio.run(research.scheduler_tick(env.app))
+    assert queued == [{"symbol": "600001"}]
+    # An ordinary symbol request still has no permission to start history.
+    with pytest.raises(research.ResearchBlocked) as blocked:
+        research.require_start({"symbol": "600001"}, env.app)
+    assert blocked.value.code == "not_selected"
+    rec = Recorder()
+    rec.task_id = "e" * 32
+    result = asyncio.run(research.run_research(rec, {"symbol": "600001"}, env.app))
+    assert result["state"] == "completed" and env.driver.calls == 1
+    saved = research.read_view("600001", env.app)["latest"]
+    assert saved["selection"] == original["600001"]
+    assert saved["selection"]["trade_date"] == NOW.date().isoformat()
+    assert saved["as_of"] == (tomorrow - timedelta(seconds=1)).isoformat()
+    assert saved["generated_at"] == tomorrow.isoformat()
+
+
+def test_dispatch_lease_does_not_prevent_read_only_selection_intent_capture(env, monkeypatch):
+    from app.services.company_evidence import worker_lease
+    daily(env)
+    authorize(env, monkeypatch)
+    with worker_lease(research.ROOT / "selected-dispatch"):
+        asyncio.run(research.scheduler_tick(env.app))
+    path = next((research.ROOT / "600001").glob("selection-*.json"))
+    assert json.loads(path.read_text())["state"] == "pending"
+    assert env.driver.calls == 0
+    with env.sf() as db:
+        assert not db.scalars(select(AgentResourceUsage)).all()
+        assert not db.scalars(select(AgentTask)).all()
+
+
+@pytest.mark.parametrize("change", ["disable", "authorization", "receipt", "method", "cancel", "wrong_creator", "wrong_task"])
+def test_pending_original_selection_does_not_bypass_current_hard_gates(env, monkeypatch, change):
+    from app.services import agent_tasks
+    from app.services.company_evidence import worker_lease
+    daily(env)
+    authorize(env, monkeypatch, valid_until=(NOW + timedelta(days=2)).isoformat())
+    with worker_lease(research.ROOT / "selected-dispatch"):
+        asyncio.run(research.scheduler_tick(env.app))
+    binding = research.selected_bindings(env.sf)["600001"]
+    method = research._digest(env.driver.method_identity())
+    path = research._selection_claim(binding, method)
+    research._write_selection_claim(path, binding, method, "dispatching", dispatch_owner="original-owner")
+    tomorrow = NOW + timedelta(days=1)
+    monkeypatch.setattr(research, "_now", lambda: tomorrow)
+    with env.sf() as db:
+        db.add(AgentTask(id=Recorder.task_id, type="tradingagents_research", status="running", params='{"symbol":"600001"}',
+                         created_by="scheduler", created_at=NOW.replace(tzinfo=None)))
+        db.commit()
+    if change == "disable":
+        monkeypatch.setattr(settings, "tradingagents_research_enabled", False)
+    elif change == "authorization":
+        monkeypatch.setattr(settings, "tradingagents_research_authorization_digest", "f" * 64)
+    elif change == "receipt":
+        with env.sf() as db:
+            row = db.scalar(select(DailyPickSet))
+            meta = json.loads(row.meta)
+            meta["selection_entries"]["600001"]["reference_price"] = 999
+            row.meta = json.dumps(meta)
+            db.commit()
+    elif change == "method":
+        old = env.driver.method_identity()
+        monkeypatch.setattr(env.driver, "method_identity", lambda: {**old, "revision": "not-migrated"})
+        authorize(env, monkeypatch, created_at=NOW.isoformat(), valid_until=(tomorrow + timedelta(days=1)).isoformat())
+    elif change in {"cancel", "wrong_creator"}:
+        with env.sf() as db:
+            task = db.get(AgentTask, Recorder.task_id)
+            if change == "cancel":
+                task.cancel_requested_at = tomorrow.replace(tzinfo=None)
+            else:
+                task.created_by = "user"
+            db.commit()
+    rec = Recorder()
+    if change == "wrong_task":
+        rec.task_id = "d" * 32
+    monkeypatch.setattr(agent_tasks, "create_task_async", lambda *a, **kw: pytest.fail("No fresh old-selection task"))
+    before = path.read_bytes()
+    with pytest.raises((research.ResearchBlocked, ValueError)):
+        asyncio.run(research.run_research(rec, {"symbol": "600001"}, env.app))
+    assert env.driver.calls == 0 and path.read_bytes() == before
+
+
+def test_pending_intent_does_not_create_model_usage_when_new_unknown_blocks_dispatch(env, monkeypatch):
+    from app.services import agent_tasks
+    daily(env)
+    authorize(env, monkeypatch)
+    row = budget.reserve(budget.SCOPE_SELECTED_RESEARCH_LLM, purpose="tradingagents.existing", kind="model", session_factory=env.sf)
+    budget.start(row["id"], env.sf)
+    monkeypatch.setattr(agent_tasks, "create_task_async", lambda *a, **kw: pytest.fail("Unknown blocks dispatch"))
+    asyncio.run(research.scheduler_tick(env.app))
+    claim = json.loads(next((research.ROOT / "600001").glob("selection-*.json")).read_text())
+    assert claim["state"] == "pending" and env.driver.calls == 0
+    with env.sf() as db:
+        rows = db.scalars(select(AgentResourceUsage)).all()
+        assert len(rows) == 1 and rows[0].id == row["id"] and not rows[0].usage_known
+
+
+@pytest.mark.parametrize("creator,late", [("scheduler", True), ("user", False), ("user", True)])
+def test_real_driver_keeps_original_selection_but_checks_pending_owner_before_each_call(env, monkeypatch, tmp_path, creator, late):
+    from app.services import tradingagents_driver as driver
+    daily(env)
+    authorize(env, monkeypatch, valid_until=(NOW + timedelta(days=2)).isoformat())
+    binding = research.selected_bindings(env.sf)["600001"]
+    assert research.require_start({"symbol": "600001"}, env.app)["selection"] == binding
+    identity = env.driver.method_identity()
+    method = research._digest(identity)
+    research._capture_pending(binding, method, env.sf)
+    path = research._selection_claim(binding, method)
+    research._write_selection_claim(path, binding, method, "dispatching", dispatch_owner="scheduler-owner")
+    research._write_selection_claim(path, binding, method, "running", task_id=Recorder.task_id)
+    tomorrow = NOW + timedelta(days=1) if late else NOW
+    monkeypatch.setattr(research, "_now", lambda: tomorrow)
+    monkeypatch.setattr(driver, "beijing_now", lambda: tomorrow)
+    if late:
+        with pytest.raises(research.ResearchBlocked) as ordinary:
+            research.require_start({"symbol": "600001"}, env.app)
+        assert ordinary.value.code == "not_selected"
+    with env.sf() as db:
+        db.add(AgentTask(id=Recorder.task_id, type="tradingagents_research", status="running", params='{"symbol":"600001"}',
+                         created_by=creator, created_at=NOW.replace(tzinfo=None)))
+        db.commit()
+    facts = {"symbol": "600001", "task": "isolated later research fixture"}
+    packet = {"case_id": "fixture", "ticker": "600001", "trade_date": tomorrow.date().isoformat(),
+              "as_of": (tomorrow - timedelta(seconds=1)).isoformat(), "facts": facts,
+              "evidence_sha256": driver.digest(facts), "identity": {"company_name": "公开夹具公司"},
+              "market_data": {}, "upstream_sha": research.UPSTREAM_SHA}
+    captured = []
+    def build(symbol, at, app):
+        captured.append(at)
+        return packet
+    native = driver.NativeTradingAgentsDriver(upstream_dir=tmp_path, python=tmp_path / "unused",
+        dependencies=tmp_path, transport=None, packet_builder=build)
+    monkeypatch.setattr(native, "method_identity", lambda: identity)
+    monkeypatch.setattr(env.app.state, "tradingagents_research_driver", native)
+    async def skip(*args, **kwargs):
+        return args[0] if args else None
+    monkeypatch.setattr(native, "_prepare_selected_company", skip)
+    monkeypatch.setattr(native, "_prepare_indicators", skip)
+    checked = []
+    async def graph(**kwargs):
+        checked.append(kwargs["usage_authorizer"]())
+        assert kwargs["packet"]["trade_date"] == tomorrow.date().isoformat()
+        with env.sf() as db:
+            if creator == "scheduler":
+                db.get(AgentTask, Recorder.task_id).cancel_requested_at = tomorrow.replace(tzinfo=None)
+            else:
+                row = db.scalar(select(DailyPickSet))
+                meta = json.loads(row.meta)
+                meta["selection_entries"]["600001"]["reference_price"] = 999
+                row.meta = json.dumps(meta)
+            db.commit()
+        kwargs["usage_authorizer"]()  # The real driver-supplied gate must stop, before any reserve/infer.
+        pytest.fail("Canceled or changed original intent cannot generate a response")
+    monkeypatch.setattr(native, "_execute", graph)
+    with pytest.raises(research.ResearchBlocked, match="已取消" if creator == "scheduler" else "来源无法核实"):
+        asyncio.run(native.run_accounted(rec=Recorder(), params={"symbol": "600001"}, app=env.app,
+            budget=budget, store_root=tmp_path / "native-reports", required_model_slots=None,
+            verification=research.VERIFICATION, selection_binding=binding))
+    assert captured == [tomorrow] and checked == [()]
+    assert binding["trade_date"] == NOW.date().isoformat()
+    with env.sf() as db:
+        assert not db.scalars(select(AgentResourceUsage)).all()
+
+
+@pytest.mark.parametrize("mutation", ["owner_changed", "intent_removed", "claim_deleted"])
+def test_consumed_intent_cannot_fall_back_before_native_driver_start(env, monkeypatch, tmp_path, mutation):
+    from app.services import agent_tasks, tradingagents_driver as driver
+    monkeypatch.setattr(agent_tasks, "_db_thread", lambda fn, *args, **kwargs: asyncio.to_thread(fn, *args, **kwargs))
+    daily(env)
+    authorize(env, monkeypatch)
+    binding = research.selected_bindings(env.sf)["600001"]
+    identity = env.driver.method_identity()
+    method = research._digest(identity)
+    research._capture_pending(binding, method, env.sf)
+    claim = research._selection_claim(binding, method)
+    original_intent = deepcopy(json.loads(claim.read_text())["research_intent"])
+    with env.sf() as db:
+        db.add(AgentTask(id=Recorder.task_id, type="tradingagents_research", status="running", params='{"symbol":"600001"}',
+                         created_by="user", created_at=NOW.replace(tzinfo=None)))
+        db.commit()
+    facts = {"symbol": "600001", "task": "isolated consumed-intent fixture"}
+    packet = {"case_id": "fixture", "ticker": "600001", "trade_date": NOW.date().isoformat(),
+              "as_of": NOW.isoformat(), "facts": facts, "evidence_sha256": driver.digest(facts),
+              "identity": {"company_name": "公开夹具公司"}, "market_data": {}, "upstream_sha": research.UPSTREAM_SHA}
+    source_calls, graph_calls, received_intents = [], [], []
+    def build(*args):
+        source_calls.append("packet")
+        return packet
+    native = driver.NativeTradingAgentsDriver(upstream_dir=tmp_path, python=tmp_path / "unused",
+        dependencies=tmp_path, transport=None, packet_builder=build)
+    monkeypatch.setattr(native, "method_identity", lambda: identity)
+    async def company(*args, **kwargs):
+        source_calls.append("company")
+    async def indicators(packet, **kwargs):
+        return packet
+    async def graph(**kwargs):
+        graph_calls.append(kwargs["usage_authorizer"]())
+        pytest.fail("A consumed intent cannot disappear into ordinary current-day admission")
+    monkeypatch.setattr(native, "_prepare_selected_company", company)
+    monkeypatch.setattr(native, "_prepare_indicators", indicators)
+    monkeypatch.setattr(native, "_execute", graph)
+    original_run = native.run_accounted
+    async def changed_before_native(**kwargs):
+        received_intents.append(deepcopy(kwargs.get("expected_selection_intent")))
+        consumed = json.loads(claim.read_text())
+        assert consumed["state"] == "running" and consumed["task_id"] == Recorder.task_id
+        if mutation == "claim_deleted":
+            claim.unlink()
+        else:
+            if mutation == "owner_changed":
+                consumed["task_id"] = "d" * 32
+            else:
+                consumed.pop("research_intent")
+            claim.write_text(json.dumps(consumed))
+        return await original_run(**kwargs)
+    monkeypatch.setattr(native, "run_accounted", changed_before_native)
+    monkeypatch.setattr(env.app.state, "tradingagents_research_driver", native)
+    with pytest.raises((research.ResearchBlocked, driver.DriverUnavailable), match="selected_intent_changed_before_start|来源无法核实"):
+        asyncio.run(research.run_research(Recorder(), {"symbol": "600001"}, env.app))
+    assert received_intents == [original_intent]
+    assert source_calls == graph_calls == []
+    with env.sf() as db:
+        assert not db.scalars(select(AgentResourceUsage)).all()
 
 
 @pytest.mark.parametrize("changes", [
@@ -439,7 +692,8 @@ def test_selected_scheduler_observes_durable_task_and_os_owner(env, monkeypatch)
         db.add(AgentTask(id="owner", type="tradingagents_research", status="running", params='{"symbol":"600004"}'))
         db.commit()
     asyncio.run(research.scheduler_tick(env.app))
-    assert not list(research.ROOT.glob("*/selection-*.json"))
+    claims = list(research.ROOT.glob("*/selection-*.json"))
+    assert len(claims) == 1 and json.loads(claims[0].read_text())["state"] == "pending"
 
 
 def test_completed_reader_keeps_original_selection_and_asof(env, monkeypatch):

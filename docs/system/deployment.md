@@ -482,7 +482,11 @@ PYTHONPATH=backend backend/.venv/bin/python backend/scripts/recovery_bundle.py r
 
 2026-10-21用户追加的当前启用方式：真正入选后解释/复盘采用独立`RESEARCH_ONLY_AUTHORIZED`授权，由`ASHARE_TRADINGAGENTS_RESEARCH_AUTHORIZATION_DIGEST`绑定同目录`authorization.json`；准确方法、用户`EXPLICIT`授权、有效期、`net_gain_verified=false`与`production_eligible=false`均核实。旧`ASHARE_TRADINGAGENTS_RESEARCH_ADMISSION_DIGEST`／`admission.json`仍代表效果准入，不能拿研究授权填成`VALIDATED`或净收益通过。原8次与22次冲突不再限制这个专属研究scope，逐调用真实用量仍记账，其他消费者配额不变；墙钟、输入输出、权限、未知及取消排空保留。
 
-后台只从当日持久daily/top真实入选身份领取，排除参考/题材参与/audit-only；同股同日和同入选身份复用持久claim，报价刷新不重跑。失败/取消/unknown保留原任务，不自动换输入重发。SchedulerRegistry原清单承接此消费者，启动只装配固定已有环境，不新增下载/安装；用户撤销时关闭原开关并保留结果/记账。新授权模式同时退出旧宽范围公司自动selector，免费原文采集由完整研究前置承接；其他显式维护能力不变。
+后台仅从当日持久daily/top发现真实新入选，排除参考/题材参与/audit-only；在原selection claim owner冻结pending，已有研究active也先保留，pending不是queued AgentTask。已接纳身份不因午夜或后来名单移出而自动取消，原trade_date/selected_at/rank及证据不改；关闭research、授权撤销、取消或坏证据仍阻断。派发继续只传symbol，handler/driver凭服务器task_id、created_by=scheduler及claim归属验证冻结原selection，普通HTTP symbol不获任意历史启动权限。同股同日和同入选身份复用claim，报价刷新不重跑；后采材料用真实as_of/版本，只作原入选后的研究补充，不回填原通知。失败/取消/unknown保留原任务，不自动换输入重发。SchedulerRegistry原清单承接此消费者，启动只装配固定已有环境，不新增下载/安装；用户撤销时关闭原开关并保留结果/记账。新授权模式同时退出旧宽范围公司自动selector，免费原文采集由完整研究前置承接；其他显式维护能力不变。
+
+此前合法开工的手动任务跨午夜只续原冻结intent，普通HTTP不能首次补开历史入选。handler/native与每次reserve/start继续核同一expected intent、真实task owner、原来源、授权和取消；claim删除、task_id漂移或intent被抹除必须拒绝，不回落普通接纳。原claim仍是单写者/CAS，未新增请求自授参数或平行账本。
+
+2026-10-23待发用量修补分别验证可信完整终态、严格tokens与答案JSON/最终文件/schema；失败答案仍拒绝，只有独立终态用量证明可failed+known。权限/安全、turn.failed、乱序、多终态、截断、无终态/非法tokens等仍unknown；原七条unknown不靠新规则自动核账，具名许可只解除对应ID的暂停，不修复其原因。DB只重试原幂等finish，不能重跑模型或把数字观察直接入账。固定有界`error_observations`仅类目/类型/长度/位置/哈希并标`channel_report_only`，不含原文、URL、路径、请求/context；未分类就明确不清楚，不作为重试或根因证明。当前4/8与第7许可归[语义记录](../ai/semantic-decisions.md#2026-10-23-终态用量与答复准入分离)；本批完整门、准确HEAD发布与加载事实由关联PR及回执接续核验，施工快照不证明已加载，不能用旧a78/e674运行或旧CI替代。
 
 正常构包要求验证公司profile；新选股后研究缺profile时先复用既有免费采集，仍未取得则在模型前真实阻断，不先运行公司selector模型。显式任务可复用现有免费实例，单次取得400日历日内最多300根qfq日线及8期财务摘要；有效报价只读现有Hub缓存，新闻只读已有库的原始公开观察，普通GET不触发这些操作。来源/证券/单位/质量/真实源钟与接收钟按[构包契约](../data/data-sources.md#tradingagents显式研究构包2026-10-21)分别绑定；实际采集后按真实截点冻结，不把新行情填入旧profile时刻。日线形成中尾条排除，原指标公式对冻结历史计算，完整财表、首次发布精确时刻、独立最终性、社交及账户仍明确缺失。新来源与方法身份改变后须重新验证准入，不能沿用旧149次模型结果或旧质量digest。
 
@@ -496,6 +500,12 @@ PYTHONPATH=backend backend/.venv/bin/python backend/scripts/recovery_bundle.py r
 正常新建与后台领取不自动重试失败/unknown。维护恢复复用`tradingagents_research`任务类型和原单写者、逐调用授权/记账、取消排空与墙钟边界；专用`POST /agent/tasks/{source_task_id}/recover`不属于普通设备读权限，body只声明`run_id`。当前服务器已pin的`authorization.json`必须包含该原任务/run的单次精确恢复grant，不以HTTP写入授权或任意换输入。
 
 恢复前核当前方法/授权、原失败任务、selection claim、冻结packet/config/staged代码/checkpoint及全部已保存输出/回执，登记旧/新方法兼容依据。队列与单次claim按owner/CAS处理部分失败，不把不明dispatch当成新任务重新领取；执行从原生未完成节点继续，新计数接续，已完成角色在模型预留前拒绝重生成。旧failed任务终态不改，原失败历史先保全，结果带有界恢复lineage；GET继续只读取，结果完成也不使来源或投资效果自动通过。授权撤销/漂移、新unknown、输入或checkpoint漂移、安全失败照常停止。实际执行须在准确HEAD工程发布后另核原答哈希、首次新角色、调用区间、七报告与普通页面读取。
+
+首调用失败且零原答的初始恢复仅允许counter1/call1、step0四分析pending、原错误与消息指纹、精确receipt/原DB failed-unknown及具名许可、完整源绑定一致；保留物理absence，不造model-output或空占位，下次物理调用从2。已有答、普通单角色、非初始、缺许可、未来答预置或漂移仍拒绝，详见[同批恢复合同](../ai/semantic-decisions.md#2026-10-21-cli启动警告与重复失败恢复纠错)。该施工快照不证明002803恢复成功，也不把历史unknown升known。
+
+冻结checkpoint读取不能仅以SQLite `mode=ro`声称无写入：WAL格式但无sidecar的原库仍可能被创建wal/shm。只有EXPLICIT首call1零答/step0、源failed、已绑定worker终态与checkpoint.files、主DB SHA一致，且绑定及现场wal/shm同时缺失，才走正式窄`immutable=1`入口；前后都核哈希与absence。默认、活动库或已有WAL不自动immutable，不删sidecar求通过、不在实服stub。2026-10-23因此主动中断的144.111秒pytest不是完整绿色；原142/244定向范围、新helper门与准确HEAD发布/加载各自留证，详见上述语义合同。
+
+2026-10-23当前方法迁移只增加已审`tradingagents_source_gate.py`与`transport_process.py`的两个准确有向hash对，完整值归[语义迁移记录](../ai/semantic-decisions.md#2026-10-21-cli启动警告与重复失败恢复纠错)。原9281→d88对保留，四个通用host组件allowlist不扩；旧许可不自动迁移，graph/model/deps/packet/tools及原答/账行不变。当前服务器grant须完整pin准确old/new，未来hash、逆向或缺old均拒绝。源码兼容不是803恢复已执行或新授权；完整门、准确HEAD发布与加载事实按本轮关联PR及回执核验。
 
 
 2026-10-21正式恢复实际失败后补充：再次续恢复仍使用同一维护POST与服务器digest-pin授权；每个已发生恢复段的任务、方法、原grant归档、调用区间和claim哈希显式进入当前恢复绑定。只接受连续、无重叠且失败/取消终态的历史段；旧claim及原用量不可删除或改写，未知队列不能当失败重领。普通读者和调度复用时核完整历史链及结果身份，公开lineage继续保留真正原source与所有继承unknown数量。新增unknown另获授权前不启动，历史grant过期不回写旧事实，当前grant仍须在其有效窗口内。

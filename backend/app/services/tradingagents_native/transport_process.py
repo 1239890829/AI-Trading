@@ -31,7 +31,7 @@ _USAGE_EVIDENCE = {'invalid_encoding', 'stream_exceeds_bound', 'event_count_exce
 class TransportError(RuntimeError):
     def __init__(self, diagnostic, *, verified_final_usage=None, observed_terminal_usage=_UNOBSERVED):
         self.diagnostic = diagnostic
-        # Only the bounded timeout parser supplies this separately verified
+        # Only terminal-proof callers supply this separately verified
         # projection. An arbitrary diagnostic['usage'] is not an accounting fact.
         self.usage = verified_final_usage
         self.final_usage_verified = verified_final_usage is not None
@@ -168,7 +168,7 @@ def timeout_evidence(stdout):
     items = [row['item'] for row in events if row.get('type') in
              ('item.started', 'item.updated', 'item.completed') and isinstance(row.get('item'), dict)]
     bad = [row for row in events if row.get('type') in ('error', 'turn.failed')]
-    errors = items + bad + [row['error'] for row in events if isinstance(row.get('error'), dict)]
+    errors = items + bad + [row['error'] for row in events + items if isinstance(row.get('error'), dict)]
     codes = {row.get('code', row.get('error_code')) for row in errors
              if isinstance(row.get('code', row.get('error_code')), str)}
     statuses = [row.get('http_status', row.get('status_code')) for row in errors]
@@ -195,7 +195,8 @@ def timeout_evidence(stdout):
                       unknown_event_types=['unrecognized_event_type'] if unknown else [],
                       usage_evidence='unrecognized_typed_event')
         return result, None, observed_usage
-    if reason or bad or any('error' in row for row in events) or any(item.get('type') == 'error' for item in items):
+    if (reason or bad or any('error' in row for row in events)
+            or any(item.get('type') == 'error' or 'error' in item for item in items)):
         result['usage_evidence'] = reason or 'typed_error_present'
         return result, None, observed_usage
     types = [row.get('type') for row in events]

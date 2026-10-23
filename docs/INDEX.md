@@ -124,7 +124,7 @@
 
 ---
 
-当前TradingAgents接续：见[六新场景完整图与四臂对照](ai/semantic-decisions.md#2026-10-20-六新场景完整图与四臂对照)、[完整研究读者](product/hunting-decision-design.md#2026-10-20-tradingagents完整研究读者)和[运行前置](system/deployment.md#tradingagents完整研究运行边界)，状态仍在W04/RSH-030。工程、真实模型、净收益准入与现役加载分开；旧批不替代新HEAD验收或启用。 最新[三主模型整图筛选](ai/semantic-decisions.md#用户改为三主模型整图筛选)已按来源质量与完整性选Sol作本例候选；Luna完整有复权口径错，DeepSeek受原输入上限阻断。两项完整速度试验均未提速，保留medium；原四臂失败/unknown保留，gold0；用户随后明确授权真正入选后的未验证完整研究，当前[研究授权](ai/semantic-decisions.md#2026-10-21-真正入选后完整研究与交互纠偏)与效果准入分开。
+当前TradingAgents接续：见[六新场景完整图与四臂对照](ai/semantic-decisions.md#2026-10-20-六新场景完整图与四臂对照)、[完整研究读者](product/hunting-decision-design.md#2026-10-20-tradingagents完整研究读者)和[运行前置](system/deployment.md#tradingagents完整研究运行边界)，状态仍在W04/RSH-030。工程、真实模型、净收益准入与现役加载分开；旧批不替代新HEAD验收或启用。 最新[三主模型整图筛选](ai/semantic-decisions.md#用户改为三主模型整图筛选)已按来源质量与完整性选Sol作本例候选；Luna完整有复权口径错，DeepSeek受原输入上限阻断。两项完整速度试验均未提速，保留medium；原四臂失败/unknown保留，gold0；用户随后明确授权真正入选后的未验证完整研究，当前[研究授权](ai/semantic-decisions.md#2026-10-21-真正入选后完整研究与交互纠偏)与效果准入分开。 原真实入选pending的跨日承接及局部否定守卫边界查[当前承接纠错](ai/semantic-decisions.md#2026-10-21-未派发研究承接与否定范围纠错)，原日期/排名及历史失败不改。当前4/8完整、第7unknown具名许可及待发用量/答复分离查[共因与未来合同](ai/semantic-decisions.md#2026-10-23-终态用量与答复准入分离)；旧七账不回写；本批完整门、准确HEAD发布与加载事实按关联PR回执核验，施工快照不证明已加载。
 
 ## 0. 主题路由（我要做什么 → 去读什么）
 

@@ -300,6 +300,17 @@ def _nonasserted(clause, start, end, kind, paragraph_prefix='', paragraph_suffix
             r'(?:该|本|当前)?(?:账户|投资者)?\s*$', before)
         if denial and not re.search(r'(?:不是|并非)\s*$', before[:denial.start()]):
             return 'LOCAL_DENIED_EXECUTION_INFERENCE'
+        # A denied decision or order-price inference is not a promised fill.
+        # Bind the denial directly to this claim; retain double negations,
+        # affirmative suffixes and presupposed post-sale risks as violations.
+        conclusion_denial = re.search(
+            r'(?:不能|无法|不足以)(?:据此)?(?:可靠)?\s*$'
+            r'|(?:不能|无法|不足以)(?:直接)?形成\s*$'
+            r'|(?:不能|无法|不足以)(?:直接)?(?:把|将)(?:研究|投研)?判断(?:直接)?推进为\s*$', before)
+        if (conclusion_denial
+                and not re.search(r'(?:不是|并非)[^。；;，,\n]{0,16}$', before[:conclusion_denial.start()])
+                and not re.search(r'是事实|已成立|属实|已证实|无疑|本来|确实|(?:已经|现已|已)(?:成立|具备|形成|证实)', after)):
+            return 'LOCAL_DENIED_EXECUTION_CONCLUSION'
         # A future prerequisite may span a comma and "同时". Recognize only
         # the explicit acquisition-of-evidence clause, never its contrast or
         # a new assertion that an account currently can trade.
@@ -332,12 +343,20 @@ def _nonasserted(clause, start, end, kind, paragraph_prefix='', paragraph_suffix
             and not re.search(r'(?:并非|不是)\s*(?:并非|不是)\s*$', before)):
         return 'EXPLICIT_NON_ENTAILMENT_OR_UNKNOWN'
     if kind == 'DAILY_PRICE_PATH' and not presupposed:
+        # A local table cell can deny what an indicator establishes. Do not
+        # extend that denial into another cell, an assertion or a risk premise.
+        if (re.search(r'(?:^|\|)\s*不独立证明(?:突破(?:或|、))?\s*$', before)
+                and re.match(r'\s*(?:\||$)', after)):
+            return 'LOCAL_INDICATOR_NON_ENTAILMENT'
         denial = re.search(r'(?:并未|没有)呈现[^。；;，,]{0,16}$', before)
         if denial and not re.search(r'(?:并非|不是)\s*$', before[:denial.start()]):
             return 'EXPLICIT_NOT_PRESENTED_PRICE_PATH'
-    if kind == 'ACCOUNT_EXECUTABILITY' and re.search(r'(?:并不|不|不能|无法|未能|不可)\s*$', before):
-        return 'EXPLICIT_NON_ENTAILMENT_OR_UNKNOWN'
-    if (kind == 'ACCOUNT_EXECUTABILITY' and re.search(r'(?:并非|不是).{0,12}$', before)
+    if kind == 'ACCOUNT_EXECUTABILITY':
+        denial = re.search(r'(?:并不|不|不能|无法|未能|不可)\s*$', before)
+        if denial and not re.search(r'(?:不是|并非)[^。；;，,\n]{0,16}$', before[:denial.start()]):
+            return 'EXPLICIT_NON_ENTAILMENT_OR_UNKNOWN'
+    if (kind == 'ACCOUNT_EXECUTABILITY'
+            and re.search(r'(?:并非|不是)\s*(?:(?:该|本|当前|特定)?账户|(?:该|本)?投资者|实际)?\s*$', before)
             and re.match(r'(?:证明|证据|结论)', after)):
         return 'EXPLICIT_NON_ENTAILMENT_OR_UNKNOWN'
     if (kind == 'ACCOUNT_EXECUTABILITY' and re.match(r'证据(?:[、，,；;。\s]|$)', after)
@@ -667,7 +686,7 @@ def evaluate_report(report, packet):
                 violations.append({**record, 'reason': reason, 'source_capability_sha256': _sha(_canonical(semantics))})
     return {'status': 'FAIL' if violations else 'PASS', 'violations': violations, 'observations': observations,
             'source_semantics_sha256': _sha(_canonical(semantics)), 'gate_version': VERSION,
-            'scope_rules_version': 'local-denial-prerequisite-v6',
+            'scope_rules_version': 'local-denial-prerequisite-v7',
             'checked_scope': {'families': [name for name, _ in families], 'scope': 'finite Chinese/English proposition families and local scopes only',
                               'not_checked': ['arbitrary natural-language entailment', 'source truth', 'causality', 'investment effect', 'unknown synonyms',
                                               'unparsed natural-language security names or dates; these still require source review',

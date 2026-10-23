@@ -561,6 +561,35 @@ def test_receipt_survives_output_capture_failure_and_preserves_known_finish(tmp_
     asyncio.run(run())
 
 
+def test_rejected_answer_keeps_verified_terminal_usage_without_replaying_or_succeeding(tmp_path):
+    path = tmp_path / "usage-receipts/1.json"
+    usage = {"input_tokens": 17, "output_tokens": 3, "cache_write_input_tokens": 0}
+    class Rejected(Typed):
+        def infer(self, messages, schema, *, mark_launch, **kwargs):
+            mark_launch()
+            self.calls += 1
+            rows = [{"type": "thread.started"}, {"type": "turn.started"},
+                    {"type": "item.completed", "item": {"type": "agent_message", "text": "PRIVATE_INVALID_JSON"}},
+                    {"type": "turn.completed", "usage": usage}]
+            return transport.decode("\n".join(map(json.dumps, rows)), "PRIVATE_STDERR", 0,
+                "PRIVATE_INVALID_JSON", verified_cli_version=transport.RECOVERABLE_ERROR_CLI_VERSION)
+    async def run():
+        typed, budget, originals = Rejected(), Budget(), []
+        rec = Recorder()
+        with pytest.raises(TransportError, match="final_schema_failure"):
+            await native(tmp_path, typed)._infer_accounted(rec, budget,
+                [{"role": "user", "content": "PRIVATE_REQUEST"}], build_cli_schema(), "Bull Researcher", 1,
+                usage_receipt_path=path, method_sha256="f" * 64, capture_output=originals.append)
+        saved = json.loads(path.read_text())
+        finishes = [row for kind, row in budget.events if kind == "finish"]
+        assert typed.calls == len(finishes) == 1 and finishes[0]["state"] == "failed"
+        assert finishes[0]["usage"] == usage and budget.unknown is False
+        assert saved["usage_known"] is True and saved["terminal_kind"] == "verified_transport_failure"
+        assert saved["usage"] == usage and saved["output_sha256"] is None
+        assert not originals and not rec.steps and "PRIVATE_" not in path.read_text()
+    asyncio.run(run())
+
+
 @pytest.mark.parametrize("usage,reason", [
     ({"input_tokens": 152010, "output_tokens": 288, "cached_input_tokens": 75776,
       "cache_write_input_tokens": 0, "reasoning_output_tokens": 77}, None),

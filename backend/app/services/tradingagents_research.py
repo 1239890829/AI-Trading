@@ -338,11 +338,121 @@ def preflight(symbol: str, app, *, session_factory=None) -> dict:
             "flow": {"roles": list(ROLES), "reports": list(REPORTS), "upstream_sha": UPSTREAM_SHA}}
 
 
-def require_start(params: dict, app, *, session_factory=None) -> dict:
+def require_start(params: dict, app, *, session_factory=None, task_id=None) -> dict:
     state = preflight(validate_params(params), app, session_factory=session_factory)
+    if task_id and state["admission"].get("state") == "research_only_authorized":
+        owned = _task_selection(params["symbol"], task_id, state["admission"]["method_sha256"],
+                                session_factory or get_session_factory())
+        if owned:
+            state["selection"], state["research_intent"] = owned
+            state["blockers"] = [row for row in state["blockers"] if row["code"] != "not_selected"]
     if state["blockers"]:
         raise ResearchBlocked(state["blockers"])
     return state
+
+
+def _entry_digest(binding, sf):
+    """Verify the original persisted first-entry receipt, not today's membership."""
+    if binding["source"] == "daily_generation":
+        from app.models.daily_pick import DailyPickSet
+        with sf() as db:
+            row = db.scalar(select(DailyPickSet).where(DailyPickSet.date == binding["trade_date"]))
+            meta = json.loads(row.meta or "{}") if row else {}
+            entries = meta.get("selection_entries", {}) if isinstance(meta, dict) else {}
+            entry = entries.get(binding["symbol"]) if isinstance(entries, dict) else None
+    else:
+        from app.picks.selection_entry import intraday_entries
+        entry = intraday_entries(binding["trade_date"], [binding["symbol"]], session_factory=sf).get(binding["symbol"])
+    if (not isinstance(entry, dict) or entry.get("state") not in {"recorded", "partial"}
+            or _clock(entry.get("selected_at")) != _clock(binding["selected_at"])
+            or any(entry.get(key) != binding[key] for key in ("source", "source_version"))):
+        raise ValueError("original selection receipt unavailable or changed")
+    return _digest(entry)
+
+
+def _check_intent(row, sf):
+    intent, binding = row.get("research_intent"), row["selection"]
+    if (not isinstance(intent, dict) or set(intent) != {"version", "captured_at", "entry_sha256"}
+            or type(intent.get("version")) is not int or intent["version"] != 1
+            or not isinstance(intent.get("entry_sha256"), str)
+            or not re.fullmatch(r"[0-9a-f]{64}", intent["entry_sha256"])
+            or not _clock(binding["selected_at"]) <= _clock(intent.get("captured_at")) <= _clock(row["updated_at"]) <= _now()
+            or _entry_digest(binding, sf) != intent["entry_sha256"]):
+        raise ValueError("original selection intent drift")
+    return intent
+
+
+def _capture_pending(binding, method, sf):
+    intent = {"version": 1, "captured_at": _now().isoformat(), "entry_sha256": _entry_digest(binding, sf)}
+    return _write_selection_claim(_selection_claim(binding, method), binding, method, "pending", research_intent=intent)
+
+
+def _pending_bindings(method, sf):
+    """Read bounded server-owned intents. No new selection or AgentTask is made."""
+    result = []
+    for folder in sorted(ROOT.glob("[0-9][0-9][0-9][0-9][0-9][0-9]")):
+        if not folder.is_dir():
+            continue
+        try:
+            records = _selection_records({"symbol": folder.name, "selection_key": None}, all_records=True)
+            for row in records:
+                if row["state"] != "pending" or row["method_sha256"] != method:
+                    continue
+                _check_intent(row, sf)
+                same = [value for value in records if value["selection"]["selection_key"] == row["selection"]["selection_key"]]
+                if len(same) == 1:
+                    result.append(row["selection"])
+        except (ResearchBlocked, OSError, ValueError, TypeError, KeyError):
+            continue  # A damaged symbol is not treated as an absent/new paid observation.
+    return sorted(result, key=lambda value: (value["selected_at"], value["symbol"]))
+
+
+def _task_selection(symbol, task_id, method, sf, *, running=False):
+    """Only a scheduler may first consume an already-dispatched old intent.
+
+    Public task params remain symbol-only. A caller cannot pass a date, path or
+    selection key to grant itself historical admission. Once a current-day user
+    task owns a running intent, it must keep the same receipt/cancel checks too.
+    """
+    with sf() as db:
+        task = db.get(AgentTask, task_id)
+        if task is None:
+            return None
+        if (task.type != "tradingagents_research" or task.status not in {"queued", "running"}
+                or task.cancel_requested_at is not None or json.loads(task.params) != {"symbol": symbol}):
+            raise ResearchBlocked([{"code": "selection_intent_owner_drift", "message": "原入选研究任务已取消或身份改变；未重新调用。"}])
+        created = task.created_at.replace(tzinfo=_now().tzinfo) if task.created_at.tzinfo is None else task.created_at
+        scheduler = task.created_by == "scheduler"
+    try:
+        records = _selection_records({"symbol": symbol, "selection_key": None}, all_records=True)
+        matches = [row for row in records if row["method_sha256"] == method and "research_intent" in row
+                   and (row["state"] in {"dispatching", "queued", "running"} and row.get("task_id") in {None, task_id}
+                        if scheduler else row["state"] == "running" and row.get("task_id") == task_id)]
+        if not matches:
+            return None  # Legacy scheduler tasks still use the original current-day gate.
+        if len(matches) != 1:
+            raise ValueError("ambiguous selection owner")
+        row = matches[0]
+        intent = _check_intent(row, sf)
+        if (scheduler and (not row.get("dispatch_owner") or not _clock(intent["captured_at"]) <= created <= _now())
+                or not scheduler and (task.status != "running"
+                    or created.astimezone(_now().tzinfo).date().isoformat() != row["selection"]["trade_date"]
+                    or not created <= _clock(row["updated_at"]) <= _now())
+                or running and (row["state"] != "running" or row.get("task_id") != task_id)
+                or any(other["selection"]["selection_key"] == row["selection"]["selection_key"]
+                       and other["method_sha256"] != method for other in records)):
+            raise ValueError("selection task owner drift")
+        return row["selection"], intent
+    except (OSError, ValueError, TypeError, KeyError):
+        raise ResearchBlocked([{"code": "selection_intent_owner_drift", "message": "原入选研究意图或来源无法核实；未重新调用。"}]) from None
+
+
+def authorized_selected_usage(app, *, method_sha256, authorization_sha256, task_id, selection, intent):
+    allowed = authorized_unknown_usage(app, method_sha256=method_sha256, authorization_sha256=authorization_sha256)
+    owned = _task_selection(selection["symbol"], task_id, method_sha256, get_session_factory(), running=True)
+    if owned != (selection, intent):
+        raise ResearchBlocked([{"code": "selection_intent_owner_drift", "message": "原入选研究归属已变或已撤回；保留原结果。"}])
+    return allowed
 
 
 def _latest(symbol: str) -> dict | None:
@@ -456,7 +566,7 @@ async def run_research(rec, params: dict, app) -> dict:
     # The handler repeats admission after queueing. A previous GET/POST snapshot
     # grants neither a model reservation nor immunity to later changes.
     await rec.checkpoint_async()
-    admitted = await agent_tasks._db_thread(require_start, params, app)
+    admitted = await agent_tasks._db_thread(require_start, params, app, task_id=rec.task_id)
     await rec.checkpoint_async()
     driver = _driver(app)
     try:
@@ -480,9 +590,14 @@ async def run_research(rec, params: dict, app) -> dict:
     # regenerate a paid answer or replace a failed/unknown native checkpoint.
     with worker_lease(ROOT / "selected-execution"):
         prior = await agent_tasks._db_thread(_execution_prior, binding, admitted["admission"]["method_sha256"])
+        expected_intent = dict(admitted["research_intent"]) if admitted.get("research_intent") else None
+        if expected_intent is not None and (not prior or prior.get("research_intent") != expected_intent):
+            raise ResearchBlocked([{"code": "selection_intent_owner_drift", "message": "原入选研究意图或来源无法核实；未重新调用。"}])
+        if prior and "research_intent" in prior:
+            expected_intent = dict(await agent_tasks._db_thread(_check_intent, prior, get_session_factory()))
         if prior and prior.get("state") == "completed":
             return await agent_tasks._db_thread(_completed_selection, prior, binding)
-        if prior and (prior.get("state") not in {"dispatching", "queued"}
+        if prior and (prior.get("state") not in {"pending", "dispatching", "queued"}
                       or prior.get("task_id") not in {None, rec.task_id}):
             raise ResearchBlocked([{"code": "selection_needs_recovery", "message": "这次真实入选已有执行或失败/未知记录；保留原任务，不能自动重新付费。"}])
         await agent_tasks._db_thread(_write_selection_claim, claim, binding, admitted["admission"]["method_sha256"],
@@ -490,7 +605,8 @@ async def run_research(rec, params: dict, app) -> dict:
         try:
             result = await driver.run_accounted(rec=rec, params=dict(params), app=app,
                 budget=agent_budget, store_root=ROOT, required_model_slots=None, verification=VERIFICATION,
-                selection_binding=binding)
+                selection_binding=binding,
+                **({"expected_selection_intent": expected_intent} if expected_intent is not None else {}))
             # Validate the real published artifact, not just a driver's return text.
             published = await agent_tasks._db_thread(_read_bound, _folder(binding["symbol"]) / result["run_id"] / "result.json")
             if (published[0].get("state") != "completed" or published[0].get("symbol") != binding["symbol"]
@@ -517,7 +633,7 @@ def _selection_claim(binding, method_sha):
     return _folder(binding["symbol"]) / ("selection-" + key + ".json")
 
 
-def _selection_records(binding):
+def _selection_records(binding, *, all_records=False):
     """Read every method's claim for one selection under the existing claim lease.
 
     An unreadable claim may contain a paid observation. Reject it rather than
@@ -543,7 +659,7 @@ def _selection_records(binding):
                     or path != _selection_claim(selection, method)
                     or value.get("task_id") is not None and (not isinstance(value["task_id"], str) or not 0 < len(value["task_id"]) <= 160)
                     or value.get("dispatch_owner") is not None and (not isinstance(value["dispatch_owner"], str) or not 0 < len(value["dispatch_owner"]) <= 160)
-                    or value.get("state") not in {"dispatching", "queued", "started", "running", "completed",
+                    or value.get("state") not in {"pending", "dispatching", "queued", "started", "running", "completed",
                                                    "needs_recovery", "dispatch_unknown", "unknown", "failed", "canceled",
                                                    "recovery_dispatching", "recovery_queued", "recovery_dispatch_unknown", "recovering"}):
                 raise ValueError("selection claim identity drift")
@@ -554,6 +670,8 @@ def _selection_records(binding):
             if selection["selection_key"] == binding["selection_key"]:
                 if selection != binding:
                     raise ValueError("selection claim binding drift")
+                records.append(value)
+            elif all_records:
                 records.append(value)
         return records
     except (OSError, ValueError, TypeError, KeyError):
@@ -575,8 +693,13 @@ def _write_selection_claim(path, binding, method_sha, state, *, task_id=None, di
     with worker_lease(ROOT / "selection-claims"):
         records = _selection_records(binding)
         prior = next((row for row in records if row["method_sha256"] == method_sha), None)
-        if state == "dispatching":
+        if state == "pending":
             if records:
+                return False
+            if task_id or dispatch_owner or "research_intent" not in extra:
+                raise ValueError("unstarted research intent required")
+        elif state == "dispatching":
+            if records and (len(records) != 1 or not prior or prior["state"] != "pending" or prior.get("task_id")):
                 return False  # Absent-CAS: a manual execution may have won after the scheduler's read.
             if not dispatch_owner:
                 raise ValueError("dispatch owner required")
@@ -586,13 +709,14 @@ def _write_selection_claim(path, binding, method_sha, state, *, task_id=None, di
                 return False  # Only this unstarted dispatch can advance; never downgrade real execution.
         elif state == "running":
             if (any(row["method_sha256"] != method_sha for row in records)
-                    or prior and (prior.get("state") not in {"dispatching", "queued"}
+                    or prior and (prior.get("state") not in {"pending", "dispatching", "queued"}
                                   or prior.get("task_id") not in {None, task_id})):
                 raise ResearchBlocked([{"code": "selection_needs_recovery", "message": "这次真实入选已有执行或失败/未知记录；保留原任务，不能自动重新付费。"}])
         path.parent.mkdir(parents=True, exist_ok=True)
         atomic_json(path, {"version": 1, "selection": binding, "method_sha256": method_sha,
                            "state": state, "task_id": task_id,
                            "dispatch_owner": dispatch_owner or (prior or {}).get("dispatch_owner"),
+                           **({"research_intent": prior["research_intent"]} if prior and "research_intent" in prior else {}),
                            "updated_at": _now().isoformat(), **extra})
         return True
 
@@ -633,6 +757,13 @@ async def scheduler_tick(app):
     if blockers or admission["state"] != "research_only_authorized":
         return
     sf = get_session_factory()
+    # Capture first, even while another task/dispatch lease is active. Pending
+    # is an original selection intent, not a queued model task or a new-day pick.
+    for binding in (await agent_tasks._db_thread(selected_bindings, sf)).values():
+        try:
+            await agent_tasks._db_thread(_capture_pending, binding, admission["method_sha256"], sf)
+        except (ResearchBlocked, OSError, ValueError, TypeError, KeyError):
+            continue
     try:
         await agent_tasks._db_thread(agent_budget.ensure_model_usage_known, sf,
             consumer_scope=agent_budget.SCOPE_SELECTED_RESEARCH_LLM,
@@ -647,10 +778,8 @@ async def scheduler_tick(app):
     try:
         if await agent_tasks._db_thread(_task_active, sf):
             return
-        for binding in (await agent_tasks._db_thread(selected_bindings, sf)).values():
+        for binding in await agent_tasks._db_thread(_pending_bindings, admission["method_sha256"], sf):
             claim = _selection_claim(binding, admission["method_sha256"])
-            if await agent_tasks._db_thread(claim.exists):
-                continue
             dispatch_owner = uuid.uuid4().hex
             try:
                 owned = await agent_tasks._db_thread(_write_selection_claim, claim, binding,

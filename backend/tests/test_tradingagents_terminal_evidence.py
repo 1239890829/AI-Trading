@@ -1,4 +1,5 @@
 """Offline terminal failures retain numeric evidence, never a paid retry."""
+import hashlib
 import json
 from pathlib import Path
 from types import SimpleNamespace
@@ -153,8 +154,12 @@ def test_verified_retry_contract_keeps_every_failure_and_unknown_boundary(case):
     with pytest.raises(TransportError) as raised:
         transport.decode(body,'',code,final,verified_cli_version='0.162.1')
     error=raised.value
-    assert error.usage is None and not error.final_usage_verified and error.metadata['no_fallback']
-    assert error.usage_observation['numeric_fields']==USAGE and 'recovered_error_count' not in error.metadata
+    assert error.metadata['no_fallback'] and error.usage_observation['numeric_fields']==USAGE
+    if case in {'final_binding', 'final_parse'}:
+        assert error.usage == USAGE and error.final_usage_verified
+        assert error.metadata['recovered_error_count'] == 1
+    else:
+        assert error.usage is None and not error.final_usage_verified and 'recovered_error_count' not in error.metadata
     assert 'PRIVATE_' not in json.dumps(error.metadata)
 
 
@@ -170,7 +175,7 @@ def test_retry_error_does_not_waive_original_schema_restoration(tmp_path,monkeyp
     schema={'type':'object','properties':{'content':{'type':'string'}},'required':['content']}
     invoke,_,marks=offline_infer(tmp_path,monkeypatch,body=stream(extra=[{'type':'error','message':'PRIVATE_TRANSIENT'}]),schema_override=schema)
     with pytest.raises(TransportError,match='original_schema_failure') as raised: invoke()
-    assert marks==[True] and raised.value.usage is None and not raised.value.final_usage_verified
+    assert marks==[True] and raised.value.usage == USAGE and raised.value.final_usage_verified
     assert raised.value.usage_observation['numeric_fields']==USAGE and raised.value.metadata['no_fallback']
 
 
@@ -249,7 +254,7 @@ def test_infer_retains_schema_and_file_failures_before_temporary_cleanup(tmp_pat
             model="fixture", mark_launch=lambda: None, executable=entry, auth_file=auth)
     error = raised.value
     assert len(calls) == 1 and not locations[0].exists()
-    assert error.usage_observation["numeric_fields"] == USAGE and error.usage is None
+    assert error.usage_observation["numeric_fields"] == USAGE and error.usage == USAGE and error.final_usage_verified
     assert error.metadata["no_fallback"]
     assert error.metadata["failure_stage"] == ("original_schema_restore" if failure == "restore" else "final_file_read")
     assert "PRIVATE_" not in json.dumps(error.metadata) + json.dumps(error.usage_observation)
@@ -346,3 +351,167 @@ def test_warning_before_initial_thread_is_not_a_general_prefix_exception():
     with pytest.raises(TransportError) as raised:
         transport.decode('\n'.join(map(json.dumps,rows)), '', 0, json.dumps(VALUE))
     assert raised.value.metadata['order_violation'] == 'invalid_startup_event'
+
+
+@pytest.mark.parametrize('text,final,stage', [
+    ('not JSON', 'not JSON', 'final_message_parse'),
+    (None, None, 'final_message_missing'),
+    (None, '{}', 'final_message_binding'),
+])
+def test_verified_terminal_accounts_failed_answer_without_accepting_it(text, final, stage):
+    with pytest.raises(TransportError) as raised:
+        transport.decode(stream(text=text), '', 0, final,
+                         verified_cli_version=transport.RECOVERABLE_ERROR_CLI_VERSION)
+    error = raised.value
+    assert error.metadata['failure_stage'] == stage and error.metadata['no_fallback']
+    assert error.usage == USAGE and error.final_usage_verified
+    assert error.usage_observation['projection_rejection'] is None
+    assert error.usage_observation['terminal_evidence'] == 'verified_single_final_turn'
+
+
+@pytest.mark.parametrize('failure', ['restore', 'read'])
+def test_verified_usage_survives_actual_infer_file_and_restore_failures(tmp_path, monkeypatch, failure):
+    invoke, _, marks = offline_infer(tmp_path, monkeypatch,
+        schema_override={'type': 'object', 'properties': {'content': {'type': 'string'}}, 'required': ['content']})
+    original_launch = transport.launch
+    if failure == 'read':
+        def launch(args, *a, **kw):
+            result = original_launch(args, *a, **kw)
+            Path(args[args.index('--output-last-message') + 1]).write_bytes(b'\xff')
+            return result
+        monkeypatch.setattr(transport, 'launch', launch)
+    with pytest.raises(TransportError) as raised:
+        invoke()
+    error = raised.value
+    assert marks == [True] and error.metadata['no_fallback']
+    assert error.metadata['failure_stage'] == ('final_file_read' if failure == 'read' else 'original_schema_restore')
+    assert error.usage == USAGE and error.final_usage_verified
+
+
+@pytest.mark.parametrize('event,category', [
+    ({'type': 'error', 'message': 'request timed out: PRIVATE_TOKEN https://private.invalid'}, 'timeout'),
+    ({'type': 'turn.failed', 'error': {'message': 'rate limit exceeded: PRIVATE_CONTEXT'}}, 'rate_limit'),
+    ({'type': 'error', 'message': 'unclassified PRIVATE_CONTEXT'}, 'unclassified'),
+])
+def test_message_only_failure_keeps_bounded_channel_observation(event, category):
+    rows = [{'type': 'thread.started'}, {'type': 'turn.started'}, event]
+    if event['type'] != 'turn.failed':
+        rows.append({'type': 'turn.failed', 'error': {'message': 'PRIVATE_FINAL'}})
+    with pytest.raises(TransportError) as raised:
+        transport.decode('\n'.join(map(json.dumps, rows)), 'PRIVATE_STDERR', 1, None,
+                         verified_cli_version=transport.RECOVERABLE_ERROR_CLI_VERSION)
+    error = raised.value
+    observed = error.metadata['error_observations'][0]
+    message = event.get('message', event.get('error', {}).get('message'))
+    assert observed['event_index'] == 2
+    assert observed['event_type'] == event['type'] and observed['stage'] == ('terminal' if event['type'] == 'turn.failed' else 'active_turn')
+    assert observed['reported_reason'] == category and observed['evidence_scope'] == 'channel_report_only'
+    assert observed['reason_basis'] == ('unclassified' if category == 'unclassified' else 'message_prefix')
+    assert observed['message_sha256'] == hashlib.sha256(message.encode()).hexdigest()
+    assert observed['message_bytes'] == len(message.encode()) and observed['message_type'] == 'string'
+    assert error.usage is None and not error.final_usage_verified
+    assert transport.safe_diagnostic(error.metadata) == error.metadata
+    assert 'PRIVATE_' not in json.dumps(error.metadata) and 'private.invalid' not in json.dumps(error.metadata)
+
+
+@pytest.mark.parametrize('message,category', [
+    ('rate limit exceeded: PRIVATE_TRANSIENT', 'rate_limit'),
+    ('permission denied: PRIVATE_TRANSIENT', 'authentication_or_permission'),
+    ('safety refusal: PRIVATE_TRANSIENT', 'safety'),
+])
+def test_channel_reason_does_not_authorize_or_change_recovered_error_accounting(message, category):
+    body = stream(extra=[{'type': 'error', 'message': message}])
+    result = transport.decode(body, '', 0, json.dumps(VALUE),
+                              verified_cli_version=transport.RECOVERABLE_ERROR_CLI_VERSION)
+    assert result['usage'] == USAGE and result['transport_diagnostic']['recovered_error_count'] == 1
+    assert result['transport_diagnostic']['error_observations'][0]['reported_reason'] == category
+    assert not result['transport_diagnostic']['no_fallback']
+
+
+def test_diagnostic_observations_are_bounded_and_reproject_idempotently():
+    rows = [{'type': 'error', 'message': 'PRIVATE_' + '\ud800' * 4000} for _ in range(20)]
+    with pytest.raises(TransportError) as raised:
+        transport.decode(stream(extra=rows), '', 1, None)
+    diagnostic = raised.value.metadata
+    assert len(diagnostic['error_observations']) == 16 and diagnostic['error_observations_omitted'] == 4
+    assert diagnostic['error_observations'][0]['message_bytes'] == len(rows[0]['message'].encode('utf-8', errors='surrogatepass'))
+    assert transport.safe_diagnostic(diagnostic) == diagnostic and 'PRIVATE_' not in json.dumps(diagnostic)
+    injected = {**diagnostic, 'error_observations': [{**diagnostic['error_observations'][0], 'message': 'PRIVATE_CONTEXT'}]}
+    projected = transport.safe_diagnostic(injected)
+    assert projected['error_observations'] == [] and projected['error_observations_omitted'] == 5
+    assert 'PRIVATE_' not in json.dumps(projected) and transport.safe_diagnostic(projected) == projected
+
+
+@pytest.mark.parametrize('event', [
+    {'type': 'item.started'}, {'type': 'item.updated', 'item': None},
+    {'type': 'item.completed', 'item': 'PRIVATE_NONOBJECT'},
+    {'type': 'item.completed', 'item': {'type': 'agent_message', 'text': '{}'}, 'error': {'message': 'PRIVATE_ERROR'}},
+    {'type': 'item.completed', 'item': {'type': 'reasoning', 'error': {'code': 'server_error'}}},
+    {'type': 'item.completed', 'item': {'type': 'agent_message', 'text': '{}', 'error': {'status_code': 500}}},
+])
+@pytest.mark.parametrize('final', [json.dumps(VALUE), 'not JSON'])
+def test_malformed_items_and_embedded_errors_never_prove_accounting(event, final):
+    with pytest.raises(TransportError) as raised:
+        transport.decode(stream(extra=[event]), '', 0, final, verified_cli_version='0.162.1')
+    error = raised.value
+    assert error.metadata['failure_stage'] == 'terminal' and error.metadata['no_fallback']
+    assert error.usage is None and not error.final_usage_verified
+
+
+@pytest.mark.parametrize('detail,kind', [
+    ({'code': 'permission_denied'}, 'codex_auth_or_permission_stop'),
+    ({'http_status': 403}, 'codex_auth_or_permission_stop'),
+    ({'code': 'content_filter'}, 'codex_safety_refusal'),
+])
+def test_nested_error_cannot_hide_permission_or_safety_stop(detail, kind):
+    event = {'type': 'item.completed', 'item': {'type': 'agent_message', 'text': '{}', 'error': detail}}
+    with pytest.raises(TransportError, match=kind) as raised:
+        transport.decode(stream(extra=[event]), '', 0, 'not JSON', verified_cli_version='0.162.1')
+    assert raised.value.usage is None and not raised.value.final_usage_verified and raised.value.metadata['no_fallback']
+
+
+@pytest.mark.parametrize('event_type', [None, [], {}, 7])
+def test_nonstring_event_type_keeps_safe_observation_without_masking_failure(event_type):
+    event = {'type': event_type, 'error': {'message': 'request timed out PRIVATE_CONTEXT'}}
+    with pytest.raises(TransportError) as raised:
+        transport.decode(stream(extra=[event]), '', 0, 'not JSON', verified_cli_version='0.162.1')
+    error = raised.value
+    assert error.metadata['failure_stage'] == 'terminal' and error.usage is None and not error.final_usage_verified
+    observation = error.metadata['error_observations'][0]
+    assert observation['event_type'] == 'unknown' and observation['reported_reason'] == 'timeout'
+    assert transport.safe_diagnostic(error.metadata) == error.metadata and 'PRIVATE_' not in json.dumps(error.metadata)
+
+
+@pytest.mark.parametrize('extra', [
+    [{'type': 'turn.failed', 'error': {'code': 'server_error'}}],
+    [{'type': 'error', 'code': 'permission_denied'}],
+    [{'type': 'error', 'code': 'content_filter'}],
+    [{'type': 'item.started', 'item': None}],
+])
+def test_unreadable_final_file_cannot_hide_an_untrusted_terminal(tmp_path, monkeypatch, extra):
+    invoke, _, marks = offline_infer(tmp_path, monkeypatch, body=stream(extra=extra))
+    original_launch = transport.launch
+    def launch(args, *a, **kw):
+        result = original_launch(args, *a, **kw)
+        Path(args[args.index('--output-last-message') + 1]).write_bytes(b'\xff')
+        return result
+    monkeypatch.setattr(transport, 'launch', launch)
+    with pytest.raises(TransportError) as raised:
+        invoke()
+    assert marks == [True] and raised.value.metadata['failure_stage'] == 'terminal'
+    assert raised.value.usage is None and not raised.value.final_usage_verified and raised.value.metadata['no_fallback']
+
+
+@pytest.mark.parametrize('usage,reason', [
+    (None, 'missing_usage'),
+    ({'input_tokens': 17, 'output_tokens': True}, 'noninteger_token_count'),
+    ({'input_tokens': 17, 'output_tokens': 3, 'cache_write_input_tokens': 18}, 'cache_tokens_exceed_input'),
+])
+def test_late_answer_failure_never_upgrades_invalid_usage(usage, reason):
+    rows = list(map(json.loads, stream().splitlines()))
+    rows[-1]['usage'] = usage
+    with pytest.raises(TransportError) as raised:
+        transport.decode('\n'.join(map(json.dumps, rows)), '', 0, 'not JSON', verified_cli_version='0.162.1')
+    error = raised.value
+    assert error.metadata['failure_stage'] == 'final_message_parse'
+    assert error.usage is None and not error.final_usage_verified and error.usage_observation['projection_rejection'] == reason

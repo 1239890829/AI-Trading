@@ -217,3 +217,16 @@ def test_normal_launch_is_unchanged(monkeypatch):
     monkeypatch.setattr(process.subprocess, "Popen", lambda *args, **kwargs: Child())
     monkeypatch.setattr(process.os, "killpg", lambda *args: pytest.fail("normal completion must not signal"))
     assert process.launch(["fixture"], "prompt", env={}, cwd=".") == (stream(), "ordinary stderr", 0)
+
+
+@pytest.mark.parametrize('detail,kind', [
+    ({'code': 'permission_denied'}, 'codex_auth_or_permission_stop'),
+    ({'http_status': 403}, 'codex_auth_or_permission_stop'),
+    ({'message': 'PRIVATE_UNKNOWN_ERROR'}, 'timeout'),
+])
+def test_nested_item_error_never_supplies_timeout_accounting(monkeypatch, detail, kind):
+    rows = list(map(json.loads, stream().splitlines()))
+    rows[2]['item']['error'] = detail
+    error, _, _ = timed_out(monkeypatch, '\n'.join(map(json.dumps, rows)))
+    assert error.diagnostic['kind'] == kind and error.usage is None and not error.final_usage_verified
+    assert 'PRIVATE_' not in json.dumps(error.metadata)
