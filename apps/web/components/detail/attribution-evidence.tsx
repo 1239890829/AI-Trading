@@ -457,7 +457,7 @@ function AttributionItems({items, laterItems = [], responseContext = false, symb
 }
 
 /** Toolbar reads only on open; visible reason fallbacks read once, with no polling. */
-export const StockAttributionPanel = memo(function StockAttributionPanel({symbol, eventId, active = true, title = "驱动线索", defaultExpanded = false, bounded = true, selectedAt, recordedRefs, selectionContext = false, defaultSourceExpanded = false, poolDate, responseAsOf, primarySummary = false, inlinePrimary = false, sourceReason, sourceCore, sourceAudit, concise = false, selectionSummary, presentation = "default"}: {
+export const StockAttributionPanel = memo(function StockAttributionPanel({symbol, eventId, active = true, title = "驱动线索", defaultExpanded = false, bounded = true, selectedAt, recordedRefs, selectionContext = false, defaultSourceExpanded = false, poolDate, responseAsOf, primarySummary = false, inlinePrimary = false, sourceReason, sourceCore, sourceAudit, concise = false, selectionSummary}: {
   symbol?: string | null; eventId?: number | null; active?: boolean; title?: string; defaultExpanded?: boolean; bounded?: boolean;
   selectedAt?: string | null; recordedRefs?: EventInterpretationRef[];
   selectionContext?: boolean; defaultSourceExpanded?: boolean;
@@ -467,7 +467,6 @@ export const StockAttributionPanel = memo(function StockAttributionPanel({symbol
   /** Selected-stock readers open with company evidence; reading never starts generation. */
   concise?: boolean;
   selectionSummary?: SelectionSummary;
-  presentation?: "default" | "workspace";
 }) {
   const [open, setOpen] = useState(defaultExpanded);
   const [readingCycle, setReadingCycle] = useState(0);
@@ -556,7 +555,7 @@ export const StockAttributionPanel = memo(function StockAttributionPanel({symbol
       </div>
       {resource.pending && !data && <p role="status">正在读取本股已保存的解释…</p>}
       {resource.error != null && <p role="alert" className="text-amber-800 dark:text-amber-300">{data ? "读取失败，下方保留上次结果，当前状态待核。" : "本股解释读取失败，暂不能确认是否有已保存结果。"}可用“刷新依据”重试。</p>}
-      {selectionSummary ? <SelectionDecisionExplorer key={`${identity}:${selectionSummary.version || ""}:${selectedAt || ""}`} summary={selectionSummary} events={decisionEvents} originalClock={timeLabel(selectedAt || responseAsOf)} presentation={presentation} fallback={<p>{historicalGap || (currentStatus && !historicalStatusExcluded ? `${companyStatusLabel(currentStatus)}；本条事件的经营关系仍需依据。` : "尚无可读取的本股经营依据，不代表公司没有相关业务。")}</p>}/>
+      {selectionSummary ? <SelectionDecisionExplorer key={`${identity}:${selectionSummary.version || ""}:${selectedAt || ""}`} summary={selectionSummary} events={decisionEvents} originalClock={timeLabel(selectedAt || responseAsOf)} fallback={<p>{historicalGap || (currentStatus && !historicalStatusExcluded ? `${companyStatusLabel(currentStatus)}；本条事件的经营关系仍需依据。` : "尚无可读取的本股经营依据，不代表公司没有相关业务。")}</p>}/>
         : currentCompany ? <>
         <CompanyImpactEvidence item={currentCompany} symbol={symbol} now={companyNow} compact/>
         <p className="text-zinc-600 dark:text-zinc-400">当前公司资料解释，不替换入选当时的理由。{companyResults.length > 1 ? `另有 ${companyResults.length - 1} 条本股经营解释，见完整依据。` : ""}</p>

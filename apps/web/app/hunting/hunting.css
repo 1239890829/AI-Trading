@@ -35,10 +35,11 @@
 .hunting-workspace>.hunting-content {display:flex;flex-direction:column;flex:1 1 0%;min-height:0;min-width:0;gap:12px;overflow:hidden;padding:0}
 .hunting-content>* {min-height:0;min-width:0}
 .hunting-discovery-grid {display:grid;grid-template-columns:minmax(0,1fr) minmax(280px,27%);flex:1;min-height:0;min-width:0;align-items:stretch;gap:22px;overflow:hidden}
-.hunting-candidate-flow {min-width:0;min-height:0;overflow:auto;padding-right:8px;overscroll-behavior:contain}
+.hunting-candidate-flow {min-width:0;min-height:0;overflow:auto;padding-right:8px;overscroll-behavior:contain;container-type:inline-size;container-name:hunting-candidates}
 .hunting-candidate-flow>*+* {margin-top:28px}
+.hunting-candidate-flow>[hidden] {display:none}
 .hunting-section-title {color:var(--hunt-ink);font-size:15px;line-height:1.5;font-weight:600}
-.hunting-daily {padding-top:22px;margin-top:22px;border-top:1px solid var(--hunt-line)}
+.hunting-daily {padding-top:0;margin-top:0}
 .hunting-context-column {min-width:0;min-height:0;display:flex;flex-direction:column;gap:18px;overflow:auto;padding-inline:18px 6px;border-inline-start:1px solid var(--hunt-line);overscroll-behavior:contain}
 .hunting-context-column>* {min-width:0;flex:none}
 .hunting-workspace .hunting-stat-strip {grid-template-columns:1fr 1fr;padding:0;border:0;gap:16px 10px}
@@ -52,6 +53,12 @@
 .hunting-workspace .collection-toolbar>span {color:var(--hunt-muted);font-size:11px}
 .hunting-workspace .collection-items {grid-template-columns:repeat(2,minmax(0,1fr));gap:14px}
 .hunting-workspace .collection-items[data-view=list] {grid-template-columns:minmax(0,1fr)}
+.hunting-candidate-flow .collection-toolbar {justify-content:flex-end;padding:0 0 6px}
+.hunting-candidate-flow .collection-toolbar>span {display:none}
+.hunting-candidate-flow .collection-items[data-view=cards] {grid-template-columns:repeat(auto-fit,minmax(min(100%,280px),1fr));gap:12px}
+@container hunting-candidates (min-width:864px) {
+  .hunting-candidate-flow .collection-items[data-view=cards] {grid-template-columns:repeat(3,minmax(0,1fr))}
+}
 .hunting-workspace .stock-card-slot {min-width:0;padding:0}
 .hunting-workspace .stock-card {padding:18px;border-radius:14px;background:var(--hunt-paper);color:var(--hunt-ink);box-shadow:none}
 .hunting-workspace .stock-card-name {font-size:16px}
@@ -139,6 +146,10 @@
 .hunting-section-heading {display:flex;align-items:flex-start;justify-content:space-between;gap:12px}
 .hunting-section-heading p,.hunting-source-note {margin-top:5px;font-size:11px;line-height:1.7;color:var(--hunt-muted)}
 .hunting-section-count {flex:none;align-self:center;font-size:13px;line-height:1.5;color:var(--hunt-muted)}
+.hunting-group-heading {align-items:baseline;justify-content:flex-start;flex-wrap:wrap;gap:3px 10px}
+.hunting-group-heading p {margin:0}
+.hunting-group-heading .hunting-group-scope {margin-left:auto}
+.hunting-group-summary {flex-basis:100%}
 .hunting-empty {padding:18px 0;color:var(--hunt-muted);font-size:12px;line-height:1.8;max-width:70ch}
 .hunting-reference-fold {margin-top:18px;padding-top:14px;border-top:1px dashed var(--hunt-line)}
 .hunting-reference-fold>summary {cursor:pointer;font-size:12px;line-height:1.6;color:var(--hunt-ink)}
@@ -231,12 +242,6 @@
 .hunting-candidate-flow>.hunting-candidate-notices+* {margin-top:18px}
 .hunting-candidate-notices:empty {display:none}
 .hunting-candidate-notices:empty+* {margin-top:0}
-.hunting-workspace .hunting-discovery-grid {display:flex;flex-direction:column;gap:24px;overflow:auto;overscroll-behavior:contain;padding-right:4px;}
-.hunting-workspace .hunting-candidate-flow {overflow:visible;padding-right:0;flex:none;}
-.hunting-workspace .hunting-context-column {display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:20px 28px;overflow:visible;padding:20px 0 0;border-inline-start:0;border-top:1px solid var(--hunt-line);flex:none;}
-.hunting-selection-workspace {min-width:0;}
-.hunting-workspace .hunting-context-column>.hunting-reading-note {margin:0;padding-top:0;border:0;}
-@media(max-width:767px) {.hunting-workspace .hunting-context-column {grid-template-columns:1fr;}.hunting-workspace .hunting-discovery-grid {gap:18px;}}
 @media(min-width:768px) and (max-height:800px) {
   :root .task-page.hunting-workspace {gap:6px;padding-top:8px}
   .hunting-workspace .hunting-masthead h1 {font-size:20px}
@@ -268,3 +273,8 @@
   .hunting-market-label svg {transition:none}
   .hunting-market-stat:hover:not(:disabled) .hunting-market-label svg {transform:rotate(-90deg)}
 }
+
+/* Keep the result list visible; risk statements remain above it. */
+.hunting-candidate-notices .gate-banner[data-compact] {padding:6px 0;border:0;border-bottom:1px solid var(--hunt-line);border-radius:0;font-size:11px;line-height:1.5;}
+.hunting-candidate-notices .gate-banner[data-compact] .gate-disclosure>summary {padding-block:2px;}
+.hunting-candidate-flow>.hunting-candidate-notices+* {margin-top:8px;}

@@ -126,7 +126,7 @@
 
 当前TradingAgents接续：见[六新场景完整图与四臂对照](ai/semantic-decisions.md#2026-10-20-六新场景完整图与四臂对照)、[完整研究读者](product/hunting-decision-design.md#2026-10-20-tradingagents完整研究读者)和[运行前置](system/deployment.md#tradingagents完整研究运行边界)，状态仍在W04/RSH-030。工程、真实模型、净收益准入与现役加载分开；旧批不替代新HEAD验收或启用。 最新[三主模型整图筛选](ai/semantic-decisions.md#用户改为三主模型整图筛选)已按来源质量与完整性选Sol作本例候选；Luna完整有复权口径错，DeepSeek受原输入上限阻断。两项完整速度试验均未提速，保留medium；原四臂失败/unknown保留，gold0；用户随后明确授权真正入选后的未验证完整研究，当前[研究授权](ai/semantic-decisions.md#2026-10-21-真正入选后完整研究与交互纠偏)与效果准入分开。 原真实入选pending的跨日承接及局部否定守卫边界查[当前承接纠错](ai/semantic-decisions.md#2026-10-21-未派发研究承接与否定范围纠错)，原日期/排名及历史失败不改。原批状态归RSH-030/handoff，第7unknown具名许可、已发布用量/答复分离及后续无损呈现合同查[共因与未来合同](ai/semantic-decisions.md#2026-10-23-终态用量与答复准入分离)；旧七账不回写；PR #325的发布/加载与后续新HEAD分别查关联PR回执，历史施工快照不代当前运行。 PR #326已加载及实际搜索/成员/午间读取范围见handoff；wrap_up原消息与实际wire指纹的纠错及零调用恢复history，仍归[原输入前续接合同](ai/semantic-decisions.md#2026-10-23-无损证据呈现与输入前失败续接)，不改原答/账或自动重试。
 
-当前交互与可靠性改进：原八只完整研究已工程完成；可探索依据/短视角见[产品读者](product/hunting-decision-design.md#2026-10-23-可探索依据与短研究视角)，普通源失败及成员承接见[性能§35](system/runtime-performance.md#35-2026-10-23-全市场漏页与成员冷启动承接)。用户随后否定首屏变化不足，继续按[UI审查§33](product/ui-audit-20261003.md#33-2026-10-23-首屏证据交互重做)重做多股矩阵、同层解释与分钟核对。准确版本、真实页面与剩余限制只查handoff及关联PR，不把新视觉当效果准入。
+当前交互与可靠性改进：原八只完整研究已工程完成；可探索依据/短视角见[产品读者](product/hunting-decision-design.md#2026-10-23-可探索依据与短研究视角)，普通源失败及成员承接见[性能§35](system/runtime-performance.md#35-2026-10-23-全市场漏页与成员冷启动承接)。用户随后否定繁复样式及多处内滚动，现按[UI审查§33](product/ui-audit-20261003.md#33-2026-10-23-首屏证据交互重做)恢复改版前个股卡片、候选/精选分组及通知基本布局，仅左区压缩卡片、复用现有导航就地切组并在本卡核依据；指数恢复紧凑卡，保留分钟核对。准确版本、真实页面与剩余限制只查handoff及关联PR，不把新视觉当效果准入。
 
 ## 0. 主题路由（我要做什么 → 去读什么）
 
@@ -360,3 +360,5 @@ IMP-054动效用途/静态弃权、反向退出、焦点/IO即时性、CSS+JS减
 2026-10-16 分类与候选真实性补充：实施范围见[W04/BUG-034](stages/w04-research.md#bug-034)，合同见[猎场决策](product/hunting-decision-design.md)、[数据来源](data/data-sources.md)和[细功能覆盖](product/feature-closure-audit.md)。原计划与版本证据归Git；行情真实运行验收仍归W06/IMP-019。
 
 公司经营解释工程入口：`backend/app/events/company_impact.py`（有界已发布读取）、`backend/app/events/company_sources.py`（CNINFO公共原件与有界经营片段）、`backend/app/services/company_evidence.py`（原任务中心与单调度，推荐及通过硬门的题材参与股研究阅读）、`backend/scripts/company_impact.py`（显式采集/对照/作者源审）。[常规管线](product/limit-up-attribution.md#2026-10-20-公司依据常规管线)取代旧仅CLI限制，新自动解释不冒充旧作者源审；前端复用原attribution-evidence只读者，无新页面。来源与有界PDF依赖见[数据源说明](data/data-sources.md#2026-10-20-公司依据常规管线)，模型对照/未知见[语义记录](ai/semantic-decisions.md#2026-10-20-公司依据常规管线)，状态只归W00/IMP-092。
+
+RSH-031有限前向运行与触发修复入口：[研究§39.5](research/limit-up-dragon-research.md#395-准点采集修复与有限新批2026-10-23)、[运维采集入口](system/deployment.md#rsh-031确定性前向采集)。准点取源与聊天任务分工、旧缺失、批次期限和实际安装/未来实样分别核验，任务状态仅归W04。

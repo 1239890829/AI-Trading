@@ -9,8 +9,9 @@ import {
   fromIntradayStock,
   selectionReading,
 } from "@/components/picks/pick-card";
-import type { DailyPickItem, IntradayTopStock, OpportunityStock, StandAsideGate } from "@/lib/api";
+import type { DailyPickItem, IntradayTopStock, OpportunityStock, SelectionMetrics, StandAsideGate } from "@/lib/api";
 import * as API from "@/lib/api";
+import * as AgentAPI from "@/lib/api/agent";
 
 // vitest 未开 globals 时 RTL 自动 cleanup 不注册，必须手动（见 event-panel.test.tsx 注释）
 afterEach(cleanup);
@@ -943,6 +944,26 @@ it("keeps exact archived event references in the combined reader and performs on
  } finally {spy.mockRestore();}
 });
 
+it.each([false, true])("keeps every card short without prefetching company or research and reads only the deliberately opened drawer (compact=%s)", async compact => {
+ const attribution=vi.spyOn(API,"getStockAttribution").mockResolvedValue({schema_version:1,symbol:"600222",count:0,items:[]} as API.StockAttributionPayload);
+ const research=vi.spyOn(AgentAPI,"getTradingAgentsResearch").mockRejectedValue(new Error("isolated research read"));
+ const start=vi.spyOn(AgentAPI,"createAgentTask").mockRejectedValue(new Error("must not start"));
+ try {
+  render(<>{["600111","600222","600333"].map(symbol=><PickCard key={symbol} compact={compact} item={fromDailyPick({...base,symbol})}/>)}</>);
+  const entries=screen.getAllByRole("button",{name:"入选解读"});
+  expect(entries).toHaveLength(3);
+  expect(screen.queryByRole("dialog")).toBeNull();
+  expect(attribution).not.toHaveBeenCalled();
+  expect(research).not.toHaveBeenCalled();
+  fireEvent.click(entries[1]);
+  await waitFor(()=>expect(attribution).toHaveBeenCalledExactlyOnceWith("600222"));
+  expect(screen.getAllByRole("dialog")).toHaveLength(1);
+  expect(research).not.toHaveBeenCalled();
+  expect(start).not.toHaveBeenCalled();
+  expect(screen.getAllByRole("button",{name:"入选解读",hidden:true})).toHaveLength(3);
+ } finally {attribution.mockRestore();research.mockRestore();start.mockRestore();}
+});
+
 it("opens a bottom-entry drawer without navigation or moving the card, and retires it on identity change", () => {
  const item=fromDailyPick(base);
  const view=render(<PickCard item={item}/>);
@@ -963,6 +984,113 @@ it("opens a bottom-entry drawer without navigation or moving the card, and retir
  view.rerender(<PickCard item={{...item,symbol:"600127",name:"另一记录"}}/>);
  expect(screen.queryByRole("dialog")).toBeNull();
  expect(screen.getByRole("button",{name:"入选解读"}).getAttribute("aria-expanded")).toBe("false");
+});
+
+describe("PickCard · compact local inspection", () => {
+ const metrics: SelectionMetrics = {schema_version:1,producer:"linkage_candidates",snapshot_version:"original-snapshot-v1",items:[
+  {key:"change_pct",label:"当日涨幅",value:3.12,unit:"%",state:"ready",source:"fixture_snapshot",as_of:"2026-10-23T09:59:58+08:00",received_at:"2026-10-23T10:00:01+08:00",thresholds:[{key:"minimum",label:"候选门槛",value:2,operator:">="}],basis:"当日涨幅跨过候选门槛。此项只是所记录时点的单项量价事实，不能代表同一股票的全部筛选条件，也不能替代账户权限、可执行价格或流动性复核。尚未满足真实可执行价格与流动性要求。"},
+  {key:"amount",label:"成交额",value:123000000,unit:"元",state:"ready",source:null,as_of:null,received_at:null,thresholds:[],basis:"原快照成交额，不能推断可成交量。"},
+  {key:"theme_limit_ups",label:"题材涨停",value:5,unit:"家",state:"ready",source:null,as_of:null,received_at:null,thresholds:[],basis:"原题材成员中5家涨停，不代表这只股票涨停。"},
+  {key:"theme_share",label:"题材占比",value:0,unit:"%",state:"missing",source:null,as_of:null,received_at:null,thresholds:[],basis:"分母来源缺失，零为不可用占位。"},
+  {key:"limit_up_gap_pct",label:"距涨停",value:50,unit:"%",state:"unknown",source:null,as_of:null,received_at:null,thresholds:[],basis:"原快照尚未核实涨停价。"},
+ ]};
+ const entry: NonNullable<IntradayTopStock["selection_entry"]> = {state:"recorded",selected_at:"2026-10-23T09:58:00+08:00",reference_price:5.2,reference_change_pct:1.8,quote_as_of:"2026-10-23T09:57:58+08:00",source:"intraday_rank_archive",source_version:"entry-v1",semantics:"observation_only_not_fill"};
+ const compactItem = () => fromIntradayStock({...topPath,selection_metrics:metrics,selection_entry:entry,tradability:{level:"可参与",basis:"原记录当前未封板"}});
+
+ it("shows actual units and keeps the selected field's exact qualifier, thresholds and clocks locally reachable", () => {
+  const attribution=vi.spyOn(API,"getStockAttribution").mockRejectedValue(new Error("local inspection must not read company evidence"));
+  const research=vi.spyOn(AgentAPI,"getTradingAgentsResearch").mockRejectedValue(new Error("local inspection must not read research"));
+  try {
+  render(<PickCard compact item={compactItem()}/>);
+  const group=screen.getByRole("group",{name:"本卡原测量"});
+  expect(within(group).getAllByRole("button")).toHaveLength(5);
+  expect(within(group).getByRole("button",{name:"核对成交额，1.23亿"})).toBeTruthy();
+  expect(within(group).getByRole("button",{name:"核对题材占比，缺项"})).toBeTruthy();
+  expect(within(group).getByRole("button",{name:"核对距涨停，待核"})).toBeTruthy();
+  expect(screen.queryByRole("meter")).toBeNull();
+  const field=within(group).getByRole("button",{name:"核对当日涨幅，3.12%"});
+  field.focus();fireEvent.click(field);
+  expect(document.activeElement).toBe(field);
+  expect(field.getAttribute("aria-pressed")).toBe("true");
+  const basis=screen.getByLabelText("本卡所选短依据");
+  expect(basis.querySelector("p")?.textContent).toBe(`${metrics.items[0].basis.slice(0,68)}…`);
+  const original=within(basis).getByText("核对本项完整依据").closest("details")!;
+  expect(original.open).toBe(false);
+  fireEvent.click(within(basis).getByText("核对本项完整依据"));
+  expect(original.open).toBe(true);
+  expect(within(original).getByText(metrics.items[0].basis)).toBeTruthy();
+  expect(original.textContent).toContain("候选门槛 ≥2%");
+  expect(original.textContent).toContain("09:59:58");
+  expect(original.textContent).toContain("10:00:01");
+  expect(original.textContent).toContain("original-snapshot-v1");
+  expect(screen.queryByRole("dialog")).toBeNull();
+  fireEvent.click(within(basis).getByRole("button",{name:"回看入选理由"}));
+  expect(within(basis).getByText("为什么入选")).toBeTruthy();
+  expect(attribution).not.toHaveBeenCalled();expect(research).not.toHaveBeenCalled();
+  } finally {attribution.mockRestore();research.mockRestore();}
+ });
+
+ it("separates real zero, partial evidence and missing score placeholders without manufacturing six measurements", () => {
+  render(<PickCard compact readError item={fromDailyPick({...base,sub_scores:{sentiment:0,news:50,tech:65},dimension_evidence:{
+   sentiment:{state:"success",reason:"原情绪项实测为0分"},news:{state:"missing",reason:"消息来源缺失"},tech:{state:"partial",reason:"仅部分走势依据"}},
+   vetoes:["权限不满足，不能参与"],observation_only:true,follow_state:"blocked",chip_signal:{available:true,label:"派发警示",signal:"distribution_warning",reasons:["原筹码分布提示派发"]},
+  })}/>);
+  const group=screen.getByRole("group",{name:"本卡原规则分项"});
+  expect(within(group).getAllByRole("button")).toHaveLength(6);
+  expect(within(group).getByRole("button",{name:"核对情绪，0分"})).toBeTruthy();
+  expect(within(group).getByRole("button",{name:"核对消息，缺项"})).toBeTruthy();
+  expect(within(group).getByRole("button",{name:"核对技术，65分"})).toBeTruthy();
+  expect(within(group).getByRole("button",{name:"核对基本面，待核"})).toBeTruthy();
+  fireEvent.click(within(group).getByRole("button",{name:"核对消息，缺项"}));
+  expect(screen.getByLabelText("本卡所选短依据").querySelector("p")?.textContent).toBe("消息来源缺失");
+  expect(screen.getByText(/刷新失败，当前行情与参与条件待重新核实/)).toBeTruthy();
+  expect(screen.getByText("参与条件待重新核实")).toBeTruthy();
+  expect(screen.getByText("禁买")).toBeTruthy();
+  expect(screen.getByText("存在 1 项不满足条件")).toBeTruthy();
+  expect(screen.getByText("部分依据缺失")).toBeTruthy();
+  expect(screen.getByText("派发警示")).toBeTruthy();
+  expect(screen.queryByRole("meter")).toBeNull();
+ });
+
+ it("does not give a reference-only stock candidate measurements, and resets local inspection only on original identity change", () => {
+  const item=compactItem();
+  const view=render(<PickCard compact item={item}/>);
+  const amount=screen.getByRole("button",{name:"核对成交额，1.23亿"});fireEvent.click(amount);
+  view.rerender(<PickCard compact item={{...item,price:5.5}}/>);
+  expect(screen.getByRole("button",{name:"核对成交额，1.23亿"}).getAttribute("aria-pressed")).toBe("true");
+  view.rerender(<PickCard compact item={{...item,selectionEntry:{...entry,source_version:"entry-v2"}}}/>);
+  expect(screen.getByRole("button",{name:"核对成交额，1.23亿"}).getAttribute("aria-pressed")).toBe("false");
+  expect(screen.getByText("为什么入选")).toBeTruthy();
+  view.rerender(<PickCard compact item={{...item,referenceOnly:true}}/>);
+  expect(screen.queryByRole("group",{name:"本卡原测量"})).toBeNull();
+  expect(screen.getByText("当前仅参考")).toBeTruthy();
+ });
+
+ it("retires an active group's real drawer immediately and does not resume reads or reopen it when the group returns", async () => {
+  const attribution=vi.spyOn(API,"getStockAttribution").mockResolvedValue({schema_version:1,symbol:topPath.symbol,count:0,items:[]} as API.StockAttributionPayload);
+  const research=vi.spyOn(AgentAPI,"getTradingAgentsResearch").mockRejectedValue(new Error("must remain unopened"));
+  const start=vi.spyOn(AgentAPI,"createAgentTask").mockRejectedValue(new Error("must never start"));
+  try {
+   const item=compactItem();const view=render(<PickCard compact item={item}/>);
+   expect(attribution).not.toHaveBeenCalled();
+   fireEvent.click(screen.getByRole("button",{name:"入选解读"}));
+   await waitFor(()=>expect(attribution).toHaveBeenCalledExactlyOnceWith(topPath.symbol));
+   expect(screen.getByRole("dialog")).toBeTruthy();
+   view.rerender(<PickCard compact active={false} item={item}/>);
+   expect(screen.queryByRole("dialog")).toBeNull();
+   expect(screen.queryAllByLabelText("相关消息与AI解读").every(node => !!node.closest("[data-exit-visual]"))).toBe(true);
+   fireEvent.click(screen.getByRole("button",{name:"入选解读"}));
+   expect(screen.queryByRole("dialog")).toBeNull();
+   view.rerender(<PickCard compact active item={item}/>);
+   expect(screen.queryByRole("dialog")).toBeNull();
+   expect(attribution).toHaveBeenCalledTimes(1);
+   expect(research).not.toHaveBeenCalled();expect(start).not.toHaveBeenCalled();
+   fireEvent.click(screen.getByRole("button",{name:"入选解读"}));
+   expect(screen.getByRole("dialog")).toBeTruthy();
+   fireEvent.click(screen.getByRole("button",{name:"原筛选完整依据"}));
+   expect(screen.getByLabelText("原画像与判定").textContent).toContain("题材启动；封单 1.2 亿");
+  } finally {attribution.mockRestore();research.mockRestore();start.mockRestore();}
+ });
 });
 
 it("keeps drawer pointer gestures outside the underlying spatial card", () => {
@@ -997,4 +1125,18 @@ it("复核失败不会把保存的强风险标题冒充当前判断", () => {
     advice: "市场情绪明显转弱", gate_source: "unavailable"}} />);
   expect(screen.queryByText("市场情绪明显转弱")).toBeNull();
   expect(screen.getByText("实时判断未更新，以下为生成时记录")).toBeTruthy();
+});
+
+it("紧凑风险栏保留当前风险与撤区间提示，市场数字在原依据中可核", () => {
+  render(<StandAsideBanner compact gate={{stand_aside:true, level:"strong", reasons:["昨日涨停中位 -1.81%"],
+    advice:"市场情绪明显转弱", gate_source:"live", strip_buy_range:true,
+    presentation:{scope:"涨停接力",headline:"涨停接力存在风险，需核对昨日强势股表现",
+      facts:[{label:"全市场涨/跌",value:"4962/560家"}],note:"局部风险不代表全市场普跌",source_state:"ready"}}}/>);
+  expect(screen.getByText("涨停接力存在风险，需核对昨日强势股表现").closest("details")).toBeNull();
+  expect(screen.getByText(/已撤除买入区间/).closest("details")).toBeNull();
+  const disclosure=screen.getByText("4962/560家").closest("details")!;
+  expect(disclosure.open).toBe(false);
+  fireEvent.click(within(disclosure).getByText("核对依据与时点对照"));
+  expect(disclosure.open).toBe(true);
+  expect(within(disclosure).getByText("昨日涨停中位 -1.81%",{exact:false})).toBeTruthy();
 });

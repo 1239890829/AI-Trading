@@ -6,7 +6,7 @@ import "./hunting.css";
 import { SelectionValidationPanel } from "@/components/hunting/validation-panel";
 
 import { patchWorkspaceUrl } from "@/lib/task-navigation";
-import { Suspense, useCallback, useEffect, useId, useMemo, useState } from "react";
+import { Suspense, useCallback, useEffect, useId, useLayoutEffect, useMemo, useRef, useState, type UIEvent } from "react";
 import Link from "next/link";
 import { inspectionClick, useInspection } from "@/components/inspection/inspection-context";
 
@@ -69,7 +69,6 @@ import { ModalShell } from "@/components/ui/modal-shell";
 import { WatchLedgerPanel } from "@/components/hunting/watch-ledger-panel";
 import { PickDetailModal } from "@/components/picks/pick-detail-modal";
 import { CandidateCollection } from "@/components/ui/candidate-collection";
-import {SelectionWorkspace} from "@/components/picks/selection-workspace";
 
 /**
  * Real selection consumers, organised by discover / observe / verify.
@@ -92,7 +91,7 @@ function HuntingInner() {
   const panel = sp.get("panel");
   const accessory = useExitPresence((panel === "evidence" || panel === "tracking") && panel !== view ? panel : null);
 
-  const [dailyDetail, setDailyDetail] = useState<{item: DailyPickItem; date: string | null; version: string | null} | null>(null);
+  const [dailyDetail, setDailyDetail] = useState<{item: DailyPickItem; date: string | null; version: string | null; group: "candidates" | "daily"} | null>(null);
   const [referenceOpen, setReferenceOpen] = useState(false);
   const referencePresence = useExitPresence(referenceOpen ? true : null);
   const referenceId = useId();
@@ -101,6 +100,23 @@ function HuntingInner() {
   // ?tag= 深链仍可解析（nav-targets 兼容）但不再分流视图——单一瀑布流（2026-09-09）
   const expandedTheme = sp.get("theme");
   const sec = sp.get("sec");
+  const selectedGroup = sec === "daily" ? "daily" : "candidates";
+  const flowRef = useRef<HTMLDivElement>(null);
+  const discoveryRef = useRef<HTMLDivElement>(null);
+  const groupScroll = useRef({candidates: 0, daily: 0});
+  const scrollOwner = useCallback(() => {
+    const flow = flowRef.current;
+    return flow && ["auto", "scroll", "overlay"].includes(window.getComputedStyle(flow).overflowY) ? flow : discoveryRef.current;
+  }, []);
+  const recordGroupScroll = (event: UIEvent<HTMLDivElement>) => {
+    const owner = scrollOwner();
+    if (owner && event.currentTarget === owner && event.target === owner) groupScroll.current[selectedGroup] = owner.scrollTop;
+  };
+  useLayoutEffect(() => {
+    if (!isDiscoverView) return;
+    const owner = scrollOwner();
+    if (owner) owner.scrollTop = groupScroll.current[selectedGroup];
+  }, [selectedGroup, isDiscoverView, scrollOwner]);
   const secValid = /^(overview|candidates|daily|opportunity|postmarket|brief|watcher|reminders|review)$/.test(sec ?? "");
   // 折叠区开合：?sec= 深链自动展开对应组；?review=1 / 生成复盘成功展开复盘组
   const [beatsOpen, setBeatsOpen] = useState(false);
@@ -175,11 +191,11 @@ function HuntingInner() {
   const intradayFailed = briefReadFailed || !!statsResource.error || (isDiscoverView && (topReadFailed || !!opportunitiesResource.error || !!watcherResource.error || !!healthResource.error));
   // A failed re-read retains observation content, never current gate eligibility.
   const gateView = daily.error ? undefined : data?.meta?.gate_live ?? data?.meta?.gate;
-  const detailItem = dailyDetail && isDiscoverView && data?.date === dailyDetail.date && (data?.meta?.selection_version ?? null) === dailyDetail.version
+  const detailItem = dailyDetail && isDiscoverView && dailyDetail.group === selectedGroup && data?.date === dailyDetail.date && (data?.meta?.selection_version ?? null) === dailyDetail.version
     ? data?.items.find(item => item.symbol === dailyDetail.item.symbol) ?? null : null;
   // Do not revive a captured ready snapshot after its date/version/member identity exits.
   if (dailyDetail && !detailItem) setDailyDetail(null);
-  const showDailyDetail = (item: DailyPickItem) => setDailyDetail({item, date: data?.date ?? null, version: data?.meta?.selection_version ?? null});
+  const showDailyDetail = (item: DailyPickItem) => setDailyDetail({item, date: data?.date ?? null, version: data?.meta?.selection_version ?? null, group: selectedGroup});
   const load = () => {
     for (const resource of [daily, historyResource, reviewsResource, metaResource, healthResource, briefResource, watcherResource, statsResource, opportunitiesResource, intraday]) {
       if (!resource.pending) resource.refresh();
@@ -195,7 +211,7 @@ function HuntingInner() {
 
   // ?sec= 滚动定位（展开已在上方渲染期完成，这里只负责滚动）
   useEffect(() => {
-    if (!secValid) return;
+    if (!secValid || sec === "candidates" || sec === "daily") return;
     const scroll = () => {
       document.getElementById(`sec-${sec}`)?.scrollIntoView({ behavior: window.matchMedia("(prefers-reduced-motion: reduce)").matches ? "instant" : "smooth", block: "start" });
     };
@@ -206,27 +222,14 @@ function HuntingInner() {
 
 
 
-  // 猎场两条瀑布流（2026-09-10 用户要求分区，取代 09-09 的单容器混排）：
-  // 盘中跟踪在前（实时优先）、盘前选择在后；同股两者都在时只出现在盘中组（防重 key）。
+  // Existing task links switch complete intraday/daily groups; neither producer loses same-symbol rows.
   // 闭环「标签」：已模拟持仓/已真实持仓（持仓状态派生，60s 轮询）
   // 2026-09-11（S2-5）：原为裸 setInterval，已收编到统一入口（与 workbench 同款重复实现）。
   const positions = useResource(getPositionLabels, {intervalMs: 60_000, enabled: view === "discover"});
   const posLabels = positions.data ?? {};
 
-  // 依赖取**状态对象** data/top（引用稳定），不取派生的 items/topItems：
-  // `?? []` 每次渲染都会新建数组引用，放进依赖会让 memo 每轮失效
-  // （react-hooks/exhaustive-deps，P1-27）。
-  //
-  // 2026-09-10 用户要求分区：两卡合并后字段已统一，但**来源语义仍然不同**
-  // （盘中=当日实时动态名单，每日=当日持久候选），混排会让两种节奏混在一起，
-  // 因此改为**两个容器 / 两条瀑布流，盘中在上**。同 symbol 只在盘中出现（盘前组去重）。
-  const pickItems = useMemo(() => {
-    const topSyms = new Set(data?.stale || data?.date !== top?.trade_date ? [] : (top?.items ?? []).map((t) => t.symbol));
-    return (data?.items ?? []).filter((p) => !topSyms.has(p.symbol));
-  }, [data, top]);
-  // 盘前名单的**真实只数**（去重前）：名额不兜底后「名单可能为空」是正常结论，
-  // 因此分区是否渲染、抬头写几只、空态文案，一律以它为准，不以去重后的 pickItems 为准
-  // ——否则「5 只全被盘中组去重」会误显示成空名单（2026-09-10 入选门槛落地时一并收口）。
+  const pickItems = data?.items ?? [];
+  // Keep the original daily count, including symbols also present in the intraday group.
   const pickTotal = data?.items?.length ?? 0;
   const dailyBySymbol = useMemo(() => new Map(
     !data?.stale && data?.date && data.date === top?.trade_date
@@ -450,7 +453,7 @@ function HuntingInner() {
       <div className="hunting-content min-h-0 flex-1" data-view={view} aria-label="选股内容">
         {view === "validation" ? <SelectionValidationPanel /> : view === "evidence" ? <OpportunityEvidencePanel date={sp.get("date") ?? undefined} onDateChange={date => { const p = new URLSearchParams(sp.toString()); p.set("date", date); router.replace(`/hunting?${p.toString()}`, {scroll:false}); }} /> : view === "tracking" ? <WatchLedgerPanel date={sp.get("date") ?? undefined} /> : view === "research" ? <LeaderResearchPanel date={sp.get("date") ?? undefined} onDateChange={date => router.replace(patchWorkspaceUrl("/hunting", sp.toString(), {date: date ?? null}), {scroll: false})} /> : <>
         {view === "discover" && <>
-<div className="hunting-discovery-grid"><div className="hunting-candidate-flow" tabIndex={0} role="region" aria-label="候选结果与题材">
+<div ref={discoveryRef} className="hunting-discovery-grid" onScroll={recordGroupScroll}><div ref={flowRef} className="hunting-candidate-flow" onScroll={recordGroupScroll} tabIndex={0} role="region" aria-label="候选结果与题材">
         <div className="hunting-candidate-notices">
         {/* ── 空仓闸门横幅（风险提示置顶）──
             2026-09-16 动态化：以**读取时刻复核**（meta.gate_live）为准展示，
@@ -460,6 +463,7 @@ function HuntingInner() {
             故这里仍以它为主、gate 作对照即可（不必再判分支）。 */}
         {gateView && (
           <StandAsideBanner
+            compact
             gate={gateView}
             stored={data?.meta?.gate}
             generatedAt={data?.meta?.generated_at}
@@ -467,22 +471,23 @@ function HuntingInner() {
         )}
         {sourceStatus}
         </div>
-        <div className="hunting-selection-workspace">
+        <section id="sec-candidates" className="hunting-candidates space-y-3" hidden={selectedGroup !== "candidates"} inert={selectedGroup !== "candidates"}>
+          <div className="hunting-section-heading hunting-group-heading">
+            <h2 className="hunting-section-title">盘中候选</h2>
+            {intradayLoaded && top && <span className="hunting-section-count">{topItems.length} 只</span>}
+            <p className="hunting-group-scope" title="名单与参考区均按账户交易权限过滤">权限 {top?.tradable_boards ?? "沪市主板 / 深市主板"}</p>
+            <p className="hunting-group-summary">当日动态名单 · 当前未封板，进入参与评估不保证成交</p>
+          </div>
           {topReadFailed && top && <p role="alert" className="hunting-empty">盘中候选读取失败。以下保留上次读取的盘中候选，当前参与条件待重新核实。</p>}
-          {picksFailed && data && <p role="alert" className="hunting-empty">每日精选读取失败。以下保留上次读取的组合与原生成依据，当前执行复核待重新读取。</p>}
-          {!intradayLoaded && <CardListSkeleton count={1}/>}
-          {intradayLoaded && !top && <p role="alert" className="hunting-empty">盘中候选读取失败。请刷新重试；当前无法判断是否有符合条件的标的。</p>}
-          {!picksLoaded && <CardListSkeleton count={1}/>}
-          {picksLoaded && !data && <p role="alert" className="hunting-empty">每日精选读取失败。请刷新重试；读取失败不表示没有组合。</p>}
-          <SelectionWorkspace groups={[
-            {key: "intraday", title: "盘中候选", readState: !intradayLoaded ? "pending" : !top ? "unavailable" : "ready", contextKey: JSON.stringify([top?.trade_date, top?.selection_identity_version]), description: `${top?.trade_date || "交易日待读取"} · 当日动态名单，进入参与评估不保证成交`, items: topItems.map(fromIntradayStock), readError: !!intraday.error},
-            {key: "picks", title: "每日精选", total: pickTotal, readState: !picksLoaded ? "pending" : !data ? "unavailable" : "ready", contextKey: JSON.stringify([data?.date, data?.meta?.selection_version]), description: `${data?.date || "组合日期待读取"} · 当日持久候选`, items: pickItems.map(fromDailyPick), readError: !!daily.error},
-          ]} dailyEvidence={new Map([...dailyBySymbol].map(([symbol, item]) => [symbol, {item, date: data!.date!, generatedAt: data?.meta?.generated_at ?? null, version: data?.meta?.selection_version ?? null}]))}
-            onShowDailyEvidence={showDailyDetail} positionLabels={posLabels}/>
-          {intradayLoaded && top && topItems.length === 0 && <p className="hunting-empty">{topReadFailed ? "上次读取的名单为空，当前状态待重试核实。" : top.empty_reasons?.join("；") || "当前没有同时满足条件的候选，系统不会凑满名额。"}</p>}
-          {top?.read_state === "partial" && <p role="status" className="hunting-empty">部分题材数据不完整，当前展示已核实的候选。</p>}
-          <p className="hunting-source-note">权限 {top?.tradable_boards ?? "沪市主板 / 深市主板"} · {top?.criteria}</p>
+          {!intradayLoaded ? <CardListSkeleton count={2} /> : !top ? <div role="alert" className="hunting-empty">盘中候选读取失败。请刷新重试；当前无法判断是否有符合条件的标的。</div>
+            : topItems.length > 0 ? <CandidateCollection>{topItems.map(it => <PickCard compact active={selectedGroup === "candidates"} key={JSON.stringify([top.trade_date, top.selection_identity_version, it.symbol])} item={fromIntradayStock(it)}
+                readError={!!intraday.error}
+                dailyEvidence={dailyBySymbol.has(it.symbol) && data?.date ? {item: dailyBySymbol.get(it.symbol)!, date: data.date, generatedAt: data.meta?.generated_at ?? null, version: data.meta?.selection_version ?? null} : undefined}
+                onShowDailyEvidence={showDailyDetail} positionLabel={(posLabels[it.symbol] as "sim" | "real" | undefined) ?? null} />)}</CandidateCollection>
+            : <div className="hunting-empty">{topReadFailed ? "上次读取的名单为空，当前状态待重试核实。" : (top.empty_reasons?.join("；") || "当前没有同时满足条件的候选，系统不会凑满名额。")}</div>}
           <button type="button" className="hunting-source-note" onClick={() => router.replace(patchWorkspaceUrl("/hunting", sp.toString(), {view: "validation"}), {scroll: false})}>查看已保存的入选记录 →</button>
+          {top?.read_state === "partial" && <p role="status" className="hunting-empty">部分题材数据不完整，当前展示已核实的候选。</p>}
+          {top?.criteria && <p className="hunting-source-note">{top.criteria}</p>}
           {topRefItems.length > 0 && <div className="hunting-reference-fold">
             <button type="button" className="hunting-reference-trigger" aria-expanded={referenceOpen} aria-controls={referenceId} onClick={() => setReferenceOpen(value => !value)}>
               <svg aria-hidden width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.6"><path d="m9 5 7 7-7 7" /></svg>
@@ -492,15 +497,20 @@ function HuntingInner() {
               <div className="motion-disclosure-body">
                 {referencePresence.value !== null && <>
                   <p className="hunting-source-note">{top?.reference_criteria ?? "保留今日曾封板身份；当前仍封、已开板或未判，以卡片对应时点为准。仅用于观察资金集中方向。"}</p>
-                  <CandidateCollection>{topRefItems.map(it => <PickCard key={it.symbol} item={fromIntradayStock(it)} readError={!!intraday.error} positionLabel={(posLabels[it.symbol] as "sim" | "real" | undefined) ?? null} />)}</CandidateCollection>
+                  <CandidateCollection>{topRefItems.map(it => <PickCard compact active={selectedGroup === "candidates" && referencePresence.active} key={JSON.stringify([top?.trade_date, top?.selection_identity_version, it.symbol])} item={fromIntradayStock(it)} readError={!!intraday.error} positionLabel={(posLabels[it.symbol] as "sim" | "real" | undefined) ?? null} />)}</CandidateCollection>
                 </>}
               </div>
             </div>
           </div>}
-          {picksLoaded && data && pickTotal === 0 && <p className="hunting-empty">{dailyEmptySummary(data)}</p>}
-          {pickTotal > 0 && !pickItems.length && <p className="hunting-source-note">{pickTotal} 只均已在盘中候选区展示。同一标的保留一行，每日评分与原生成依据可从所选股“每日原依据”查看。</p>}
+        </section>
+        <section id="sec-daily" className="hunting-daily space-y-3" hidden={selectedGroup !== "daily"} inert={selectedGroup !== "daily"}>
+          <div className="hunting-section-heading hunting-group-heading"><h2 className="hunting-section-title">每日精选</h2>{picksLoaded && !picksFailed && <span className="hunting-section-count">{pickTotal} 只</span>}<p>{data?.date ?? "组合日期待读取"} · 当日持久候选</p></div>
+          {picksFailed && data && <p role="alert" className="hunting-empty">每日精选读取失败。以下保留上次读取的组合与原生成依据，当前执行复核待重新读取。</p>}
+          {!picksLoaded ? <CardListSkeleton count={2} /> : !data ? <div role="alert" className="hunting-empty">每日精选读取失败。请刷新重试；读取失败不表示没有组合。</div>
+            : pickTotal === 0 ? <div className="hunting-empty">{dailyEmptySummary(data)}</div>
+            : <CandidateCollection>{pickItems.map(it => <PickCard compact active={selectedGroup === "daily"} key={JSON.stringify([data.date, data.meta?.selection_version, it.symbol])} item={fromDailyPick(it)} readError={!!daily.error} positionLabel={(posLabels[it.symbol] as "sim" | "real" | undefined) ?? null} />)}</CandidateCollection>}
           <p className="hunting-source-note">{minPickScore != null ? `综合分≥${minPickScore} · ` : ""}{replaceThreshold != null ? `换股门槛 ${replaceThreshold} 分` : "换股门槛未返回"} · {maxSwaps != null ? `每日换股上限 ${maxSwaps} 只` : "换股上限未返回"}；够格几只就保留几只。</p>
-        </div>
+        </section>
 
         {/* ── 异动手风琴（题材 → 个股瀑布流）── */}
         <div id="sec-opportunity" className="scroll-mt-2">
