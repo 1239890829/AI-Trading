@@ -87,17 +87,22 @@ def test_bare_stock_collision_never_uses_the_cached_index(context):
     assert hub.indices["000001"].model_dump() == before and hub.quotes == {}
 
 
-def test_direct_older_source_retains_trusted_fields_and_rejection_without_mutating_cache(context):
+@pytest.mark.parametrize("expired", [False, True])
+def test_direct_older_source_retains_original_age_and_fields_without_mutating_cache(context, expired):
     now = context["now"].replace(hour=10, minute=0)
     context["now"] = now
-    old = observation(stamp=(now - timedelta(seconds=1)).isoformat()).model_copy(update={"price": 11})
+    current_stamp = now - timedelta(seconds=20 if expired else 0)
+    old = observation(stamp=(current_stamp - timedelta(seconds=1)).isoformat()).model_copy(update={"price": 11})
     hub = make_hub(old)
-    current = observation(stamp=now.isoformat())
+    current = observation(stamp=current_stamp.isoformat())
     hub.quotes["600519"] = current
     before = current.model_dump()
     result = asyncio.run(quote_route("600519", "tencent", hub))["data"]
     assert result["price"] == current.price and result["data_timestamp"] == current.model_dump(mode="json")["data_timestamp"]
-    assert result["quality"] == "stale" and "source_time_regress_ignored" in result["quality_reasons"]
+    assert result["received_at"] == current.model_dump(mode="json")["received_at"]
+    assert result["quality"] == ("stale" if expired else "high")
+    assert result["quality_reasons"] == (["source_time_regress_ignored"] if expired else [])
+    assert hub.last_quote_rejections == {} and not hub.quote_history
     assert current.model_dump() == before
 
 

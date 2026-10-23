@@ -61,7 +61,8 @@ def test_accepted_closed_rows_have_reason_before_publication(context, domain):
 def test_partial_acceptance_and_publication_preserve_real_source_rejection(context, domain):
     async def scenario():
         hub = qh.QuoteHub(None, 1)
-        stamp = context["now"].replace(hour=16, minute=15).astimezone(timezone.utc)
+        # 原尾点早于应有收盘尾点；不能借“休市”掩盖真实源停更。
+        stamp = context["now"].replace(hour=14, minute=30).astimezone(timezone.utc)
         if domain == "indices":
             hub._accept_indices(rows(stamp))
             incoming = rows(stamp + timedelta(seconds=1))
@@ -283,3 +284,31 @@ def test_pause_source_tail_uses_original_age_tolerance(context, now, expected):
     context["days"] = [date(2026, 10, 13), date(2026, 10, 14), date(2026, 10, 15), date(2026, 10, 16)]
     hub = qh.QuoteHub(None, 1, stale_after=10)
     assert hub._display_session().model_dump(mode="json")["expected_source_after"] == expected
+
+
+@pytest.mark.parametrize("clock,phase", [
+    ("09:14:59", "closed"), ("09:15:00", "auction"),
+    ("09:24:59", "auction"), ("09:25:00", "pre_open_gap"),
+    ("09:29:59", "pre_open_gap"), ("09:30:00", "continuous"),
+    ("14:56:59", "continuous"), ("14:57:00", "auction"),
+    ("14:59:59", "auction"), ("15:00:00", "closed"),
+])
+def test_display_session_separates_opening_and_closing_auction(context, clock, phase):
+    context["now"] = datetime.fromisoformat(f"2026-10-13T{clock}+08:00")
+    hub = qh.QuoteHub(None, 1)
+    source = observation("600519", context["now"].astimezone(timezone.utc))
+    hub.quotes[source.symbol] = source
+    before = source.model_dump(mode="json")
+    session = hub._display_session()
+    assert session.phase == phase
+    assert session.trade_day_result is True
+    assert session.trade_date == context["now"].date()
+    assert session.as_of == context["now"]
+    assert hub.quotes[source.symbol].model_dump(mode="json") == before
+
+
+@pytest.mark.parametrize("days,phase", [([], "unknown"), ([date(2026, 10, 12), date(2026, 10, 14)], "closed")])
+def test_closing_auction_display_requires_confirmed_trade_day(context, days, phase):
+    context["now"] = datetime.fromisoformat("2026-10-13T14:58:00+08:00")
+    context["days"] = days
+    assert qh.QuoteHub(None, 1)._display_session().phase == phase

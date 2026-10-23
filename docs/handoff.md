@@ -1,12 +1,20 @@
 # 当前交接：工作台时段稳定、入选交互与完整研究承接
 
-> **摘要**：本轮修复行情时段抖动，加入真实评分与事件联动，并承接真正入选后的完整研究；发布与运行事实逐项核验。
+> **摘要**：本轮修复行情时段抖动，加入原量纲刻度与事件联动，并承接真正入选后的完整研究；发布与运行事实逐项核验。
 
 ## 1. 本轮范围与已核现场
 
 ### 已发布修补与当前恢复现场
 
-PR #324准确HEAD `4975535b6c9acc7ade4fae8a7a28fa029927ca6b`已合入master `a78d5486ec6936fee524d47147c7ca5099a46efa`；PR CI 39618397163与master CI 39619264630的backend/frontend/docs均成功，DegradedRelease 6318791234、release_check exit0，运行回执[6319278351](https://github.com/1239890829/AI-Trading/pull/324#issuecomment-6319278351)。launcher已加载方法`e67415053708694e670877b96995ec1f7e3f7281ed2c36b92b77a17f6b544b40`，前端仍为build `A8U18e9NOHuElaAH3AzWY`；HTTP/代理检查通过，不代替真实WS或行情时效。原用户文件、历史unknown和失败证据保留。本轮在该master上用`codex/selected-research-backlog`修未派发研究承接、局部否定守卫及未来终态用量/答复准入耦合，本批完整本地门、准确HEAD的CI/发布及加载事实由关联PR及回执接续核验，本段2026-10-23施工快照不证明已加载，不借PR #324旧绿放行。
+2026-10-23本批最终完整本地后端7264 passed／87 skipped／336 subtests（pytest486.88秒、外层488.899秒），pyflakes9.227秒、doc-health15.193秒、卫生0.160秒、公开扫描7.003秒均exit0；1836个跟踪输入全门内零漂移。使用与required CI相同的四worker/loadfile，全量用例与断言保留，和前端完整门串行。前端默认/UTC各2054通过及tsc/ESLint/build的370输入仍逐字不变。此前失败及受控反例不删除；本段只是最终事实回填，应用/测试字节不变，提交前另复核文档守卫。准确HEAD、三项CI、DegradedRelease、release_check、master CI与实际加载以本批PR回执为准，本地门不冒称已合并或生效。
+
+本分支前端11文件冻结后已完成tsc、ESLint（仅既有warning）、默认/UTC各2054 passed／150文件、生产build与生成引用逐字恢复后tsc；370个前端输入零漂移。受控请求计数和竞价夹具不冒充实服提升；新版尚待发布后实页核验。搜索全拼/缩写修复复用Tencent既有接口，成功选择历史仅存本浏览器；指数成员涨跌幅只消费已有内存行情，不增加逐股订阅。
+
+首次完整后端保留26 failed／7214 passed／87 skipped／336 subtests，pytest639.27秒、外层657.856秒。逐类复核为25项旧fresh-current强制stale期望与1项真正超deadline主源拒绝；只同步两份消费者测试并增加fresh/aged对照，原字段、拒绝摘要/coverage、失败计数、取消排空与原deadline均保留，超时方法仍须refresh_failed。两文件连retained_state共122 passed，pyflakes/diff通过；应用源码未因本次失败改变。该失败不当作最终完整绿色，不借PR #325门禁发布。
+
+同CI四worker完整复跑保留1 failed／7262 passed／87 skipped／336 subtests（pytest503.75秒）；余项是隔离锁测试的释放先于取得。处理器延迟80ms的确定性注入重现旧50ms定时提前rollback、随后BEGIN无人释放；只把测试50ms计时起点改为真实取得锁后的事件，重试次数/间隔与终态/一次handler断言不变，新增延迟反例随该文件14 passed。应用锁处理不因这项测试失败改动；最终完整门仍须重新通过。
+
+PR #325准确HEAD `5d812d61660f8a63df57f7b22bfab1c8c8dfa65e`已合入master `31b125265300296e7034488a4a901b28ce77620b`；PR CI 39878005317与master CI 39878362178的backend/frontend/docs均成功，DegradedRelease 6354378417、release_check exit0。launcher已加载该master及方法`0b66b483e4c81c523be78234e5954f7a51608bcdb9fa6b2a0bf67fd878b93e21`，后端PID59145；实际803恢复、两次普通GET及Chrome原通知最终正文读取见[运行接续回执6354805057](https://github.com/1239890829/AI-Trading/pull/325#issuecomment-6354805057)。HTTP/代理检查不代替真实WS、行情时效或全日性能。PR #324的a78/e674及其运行回执保留为前版历史，不再代表当前未加载。本轮`codex/quote-state-request-stability`继续修被拒观测导致的行情状态切换及详情请求，仍须自己的完整门、准确HEAD发布和实际运行验收；不借PR #325旧绿放行。用户原件、七条历史unknown及失败证据保留。
 
 PR #322已发布的边界包括：mark_launch前实核CLI 0.162.1；按精确官方合同接纳有序成功turn内的可恢复error形状；零终答/四分析师pending的逐角色消息指纹恢复；已获具名许可的历史unknown工具提案复用。其他版本、未知事件/形状、真实失败、权限/安全/工具、终态顺序、最终消息绑定和schema硬门保持；固定组件兼容有向hash对不扩大。旧unknown不升known、不回账，完整上游12角色/七报告/Memory不拆分。具体合同和历史拒绝见[语义纠错](ai/semantic-decisions.md#2026-10-21-cli启动警告与重复失败恢复纠错)。
 
@@ -32,21 +40,23 @@ PR #321发布后，用户单独允许保留第四unknown，正式维护task `b55
 
 实际恢复task `8f11efd953844c02b39885758c6d9620`于北京时间23:08:17完成12角色/七报告/Memory；新增call3–16共14次均known，原call1提案/工具与unknown保留，原call2仍无receipt，未造账或回退计数。v2持久只读核验及两次普通GET通过，七报告身份相同且目标文件不变；配对Chrome实际读取最终结论与Fundamentals正文，其余报告哈希/非空长度由GET核验，不冒称逐份实页全验。生成23:08与原材料14:29分开。原有限源审3个FAIL经逐源反证是“不足以/无法确定卖出”的局部否定误报，原审计保留；这不证明整体报告语义合格、独立准确率或效果准入。证据沿忽略的`artifacts/runs/prelaunch-tail-recovery-20261021/`。
 
-355完成时核验的8只真正入选中有3只完整、其余5只未启动；随后002777完成，当前完整结果为002178、002264、002355、002777共4/8。新增002777的task `824292a4dcae488e958b42204016c729`、run `ce20d717c4174da2853a85548738091e`有16次known调用和完整12角色/七报告/Memory；不把持久完成冒充该股实页逐项验收。002803的run `fd47…`／task `f8a…`首调用于2026-10-21北京时间23:34:50至23:34:57.735970、约7.709秒真实turn.failed，exit1、1 started/0 completed、usage=null；新增第7unknown `9e8d059b891647cdab1f81a1d3abfeae`已获用户单独许可，修补发布前仍不新增调用。其余600410、603171、603598未启动，不能称全部接入或运行收口。研究仍为`RESEARCH_ONLY_AUTHORIZED`、`net_gain_verified=false`、`production_eligible=false`、独立人工gold为0，不改评分、消息资格、策略或模拟执行。新unknown停止与固定次数额度无关；不再重复旧LAB对照，也未领取下一业务任务。
+355完成时核验的原8只真正入选中有3只完整、其余5只未启动；随后002777完成，当时为002178、002264、002355、002777共4/8。002777的task `824292a4dcae488e958b42204016c729`、run `ce20d717c4174da2853a85548738091e`有16次known调用和完整12角色/七报告/Memory；不把持久完成冒充该股实页逐项验收。002803原run `fd47…`／task `f8a…`首调用于2026-10-21北京时间23:34:50至23:34:57.735970、约7.709秒真实turn.failed，exit1、1 started/0 completed、usage=null；第7unknown `9e8d059b891647cdab1f81a1d3abfeae`随后单独获用户许可，原失败与旧账均保留。PR #325发布加载后，正式恢复task `43529301b1b34648b63412b07fadc840`于2026-10-23北京时间08:54:05成功：从call2续至17，新增16次均known、0新unknown，完整12角色/七报告/Memory保存；原call1及四份工具回执不变。两次普通GET同结果、79份run文件零变，Chrome原通知最终正文已读取，证据见[运行接续回执](https://github.com/1239890829/AI-Trading/pull/325#issuecomment-6354805057)。该时点原8只已证5/8完整；原余600410、603171、603598已迁移pending，08:54根执行者释放dispatch后由正式scheduler接续。600410正式task `8fbc335718234213b908c62289198860`于08:59:26以BudgetError进入failed／needs_recovery，六次新调用均known／succeeded、0新unknown，已有回答与检查点保全；已按固定原源码核定为发送前input_budget_exceeded：第7次输入250349字符超过原250000保护线，尚未reserve/start；前六次known，原末槽7不补造。603598正式task `2c5b0588d1984bd28a99e01db43ca169`于09:10:53完成12角色/七报告/Memory，新增16次均known，官方读取器/两次普通GET和Chrome原通知最终与基本面正文读取通过。该时点原批共6/8完整，603171仍pending/task_id=null；根执行者再次hold新增派发，0 active。新回执见[运行事实6355145108](https://github.com/1239890829/AI-Trading/pull/325#issuecomment-6355145108)，不称全部收口。研究仍为`RESEARCH_ONLY_AUTHORIZED`、`net_gain_verified=false`、`production_eligible=false`、独立人工gold为0，不改评分、消息资格、策略或模拟执行。新unknown停止与固定次数额度无关；不再重复旧LAB对照，也未领取下一业务任务。
 
-002777原有限源审的1个FAIL已逐源定位为cell“不独立证明突破或持续上涨”的局部否定误报；同批尚未发布的v7只补这个否定范围。只读派生85字段审核仅call8/content由FAIL变PASS，旧73份文件（其中21份核心）哈希不变、原finite1保留；派生产物SHA为`e667ebef957816d95e4d6bc09dbe8092d77b2e7fe7da9a6ae43cf3d4fca96334`。来源误报与用量unknown分开，不称整体语义已通过或新增gold。
+002777原有限源审的1个FAIL已逐源定位为cell“不独立证明突破或持续上涨”的局部否定误报；PR #325已发布的v7只补这个否定范围。只读派生85字段审核仅call8/content由FAIL变PASS，旧73份文件（其中21份核心）哈希不变、原finite1保留；派生产物SHA为`e667ebef957816d95e4d6bc09dbe8092d77b2e7fe7da9a6ae43cf3d4fca96334`。来源误报与用量unknown分开，不称整体语义已通过或新增gold。
 
-本分支承接未派发项的合同：当日发现真实daily/top入选时即在原selection claim owner冻结pending，已有研究active也先保留该身份；pending不是queued AgentTask。首次已接纳的选择不因午夜或后续名单刷新而自动取消，原日期、排名、资格与首次依据不改。后续仍提交symbol参数，handler/driver只凭服务器task_id、created_by=scheduler与原claim归属核原selection，普通HTTP不能借symbol启动任意历史研究。失败/取消/unknown不自动重发，关闭research、撤销授权、取消或坏证据仍阻断；新材料采用实际采集钟，作为后来补充不回填原理由。355两项验证通过且只读确认0 active后，已显式释放selected-dispatch，返回DISPATCH_RELEASED，正常调度恢复。backend仍为master a78/方法e674，本分支新合同尚未发布加载，不能把当前调度称为已具备新pending承接。
+PR #325已发布加载的未派发承接合同：当日发现真实daily/top入选时即在原selection claim owner冻结pending，已有研究active也先保留该身份；pending不是queued AgentTask。首次已接纳的选择不因午夜或后续名单刷新而自动取消，原日期、排名、资格与首次依据不改。后续仍提交symbol参数，handler/driver只凭服务器task_id、created_by=scheduler与原claim归属核原selection，普通HTTP不能借symbol启动任意历史研究。失败/取消/unknown不自动重发，关闭research、撤销授权、取消或坏证据仍阻断；新材料采用实际采集钟，作为后来补充不回填原理由。355后曾在旧a78/e674释放dispatch，当时尚无新pending合同；该记录只属历史。三份原pending已按新方法准确迁移，803成功后于08:54释放dispatch，由正式scheduler承接；600410于08:59:26失败后再次hold新增派发，六次新调用known、原答/检查点保留，该错误已定位为发送前输入超过250000字符，603598随后完整成功、603171仍pending；详见上段当前原批快照。
 
-此前合法开工的手动任务仅续原冻结intent，不获任意历史首次启动权限；handler→native与每次reserve/start都要保留并复核同一intent、真实owner/来源、授权和取消。删除claim、漂移task_id或抹掉intent须拒绝，不回落普通接纳；本批完整门、准确HEAD发布与运行事实由关联PR回执接续核验，施工快照不证明已加载。
+此前合法开工的手动任务仅续原冻结intent，不获任意历史首次启动权限；handler→native与每次reserve/start都要保留并复核同一intent、真实owner/来源、授权和取消。删除claim、漂移task_id或抹掉intent须拒绝，不回落普通接纳；PR #325完整门、准确HEAD发布和已加载事实见顶部回执，不以其通过预写后续研究成功。
 
-### 频繁unknown：共因已定位的范围与待发修补
+### 频繁unknown：已证范围与PR #325已发布修补
 
-只读共因审计及零模型反例保存在忽略的`artifacts/runs/unknown-common-audit-20261023/common-cause-audit.md`。用量unknown不等语义待核、公司缺证据或有限来源FAIL。741的cache_write白名单遗漏可复现，但该次原字段未保存，具体原因证据不够；debe约59.207秒TransportError仅留hash/missing_usage；668虽为terminal_order且exit0/1 completed/2 warnings，原顺序缺失；262原error语义缺失。既有修补不能据此把三条CLI拒绝一律称误报。002803则确无完成终态，上游细因不清楚，不能归因额度、上下文、网络或DB锁；七条旧账和失败保留，不估算或清账。
+七条共因诊断与已发布修补结论保存在忽略的`artifacts/runs/unknown-common-audit-20261023/diagnosis-and-published-fix.md`；原`common-cause-audit.md`只代表a78审计快照。70 started／63 known／7 unknown是该次冻结分母，不是恢复后的实时总数。原数据库事故三次中两次known、一次unknown，不能复述为三次全丢。用量unknown不等语义待核、公司缺证据或有限来源FAIL。741的cache_write白名单遗漏可复现，但该次原字段未保存，具体原因证据不够；debe约59.207秒TransportError仅留hash/missing_usage；668虽为terminal_order且exit0/1 completed/2 warnings，原顺序缺失；262原error语义缺失。既有修补不能据此把三条CLI拒绝一律称误报。002803则确无完成终态，上游细因不清楚，不能归因额度、上下文、网络或DB锁；七条旧账和失败保留，不估算或清账。
 
-另一条已离线复现的未来通路是用量证明与最后答案准入耦合，不是七条旧账的已证根因。待验修补将完整可信终态及严格tokens证明与答案JSON、最终文件、原schema分离：答案仍拒绝，独立证明的用量可记failed+known；auth/safety、turn.failed、乱序、截断、无终态等仍unknown。固定有界`error_observations`仅保留类别/类型/长度/位置/哈希并标`channel_report_only`，不保存原文、路径、URL或请求/context，也不把类目当根因或重试许可。本批完整门、准确HEAD CI、DegradedRelease、release_check与加载事实由关联PR及回执核验，施工快照不证明已加载；细则见[当前语义合同](ai/semantic-decisions.md#2026-10-23-终态用量与答复准入分离)。
+另一条已离线复现的未来通路是用量证明与最后答案准入耦合，不是七条旧账的已证根因。PR #325已将完整可信终态及严格tokens证明与答案JSON、最终文件、原schema分离：答案仍拒绝，独立证明的用量可记failed+known；auth/safety、turn.failed、乱序、截断、无终态等仍unknown。固定有界`error_observations`仅保留类别/类型/长度/位置/哈希并标`channel_report_only`，不保存原文、路径、URL或请求/context，也不把类目当根因或重试许可。准确HEAD完整门、CI、DegradedRelease、release_check与加载证据见顶部[运行回执](https://github.com/1239890829/AI-Trading/pull/325#issuecomment-6354805057)；该修补不能补回七条历史原始证据，也不保证未来没有unknown。细则见[当前语义合同](ai/semantic-decisions.md#2026-10-23-终态用量与答复准入分离)。
 
-同批803恢复入口只补原call1失败、零答、counter1/原生step0四分析pending且原错误/消息指纹、精确receipt/DB unknown、具名许可和完整源绑定一致的初始情形；物理absence不造占位，后续从call2续未完成节点。已有答、普通单角色、非初始、缺许可、预置未来答或漂移仍拒绝；两对源码兼容不自动迁移许可。详见[恢复合同](ai/semantic-decisions.md#2026-10-21-cli启动警告与重复失败恢复纠错)及[运行入口](system/deployment.md#完整研究的显式原生恢复)，不预写803真实成功。
+PR #325的803恢复入口只补原call1失败、零答、counter1/原生step0四分析pending且原错误/消息指纹、精确receipt/DB unknown、具名许可和完整源绑定一致的初始情形；物理absence不造占位，实际已从call2续未完成节点并成功，见上文正式task证据。已有答、普通单角色、非初始、缺许可、预置未来答或漂移仍拒绝；两对源码兼容不自动迁移许可。详见[恢复合同](ai/semantic-decisions.md#2026-10-21-cli启动警告与重复失败恢复纠错)及[运行入口](system/deployment.md#完整研究的显式原生恢复)，单项成功不外推全部余项。
+
+本轮行情纠偏已在隔离工作树区分被拒观测与当前事实：仍high且在原新鲜窗内的可信值保持自己的质量；严格匹配现役应有源日和尾点的正常pause保持原状态。拒绝记录、coverage、无来源和真实缺项仍可见，源钟、fresh window及采集频率均不延长。该补丁尚须本轮完整门、准确HEAD发布和实际页面验收；PR #325运行并不表示这份工作树补丁已加载，详见[性能报告§34](system/runtime-performance.md#34-2026-10-23-被拒观测与当前事实分离)。
 
 本轮已精确清理4项完成且无活引用的pytest临时payload，约2.951GiB已分配空间；日志/XML/哈希及所有模型原答、失败、unknown、checkpoint/Memory和用户原件保留。旧恢复构建副本仍保留，其他worktree及RSH资产不动。
 

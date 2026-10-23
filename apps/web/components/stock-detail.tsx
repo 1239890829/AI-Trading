@@ -24,7 +24,7 @@ import { notifyWatchlistChanged, subscribeWatchlist } from "@/lib/watchlist-sync
 import { LimitUpReasonPanel } from "@/components/detail/limit-up-reason";
 import {useSymbolDetail} from "@/components/detail/symbol-detail-context";
 import {useDetailModal} from "@/components/detail/detail-modal";
-import {quoteQualityView} from "@/lib/quote-quality-view";
+import {calendarPhase, quoteQualityView} from "@/lib/quote-quality-view";
 import { StockEventsRow } from "@/components/detail/stock-events";
 import { TradingAgentsResearchPanel } from "@/components/detail/tradingagents-research-panel";
 import {
@@ -105,6 +105,8 @@ const emptyDetailReads = (): Record<DetailReadKind, DetailReadState> => ({
   kline: emptyReadState(), minute: emptyReadState(), book: emptyReadState(),
   trades: emptyReadState(), financials: emptyReadState(), flow: emptyReadState(),
 });
+const valuationMetric = (value: number | null | undefined, positive = false) =>
+  typeof value === "number" && Number.isFinite(value) && (!positive || value > 0) ? value : undefined;
 
 /**
  * 个股详情面板（含 K 线/分时/盘口/逐笔/资金/财务多页签）。
@@ -253,10 +255,10 @@ export const StockDetailPanel = memo(function StockDetailPanel({
       return {
         ...(base ?? live),
         ...live,
-        pe_ttm: live.pe_ttm ?? base?.pe_ttm ?? null,
-        pb: live.pb ?? base?.pb ?? null,
-        total_mktcap_yi: live.total_mktcap_yi ?? base?.total_mktcap_yi ?? null,
-        float_mktcap_yi: live.float_mktcap_yi ?? base?.float_mktcap_yi ?? null,
+        pe_ttm: valuationMetric(live.pe_ttm) ?? valuationMetric(base?.pe_ttm) ?? null,
+        pb: valuationMetric(live.pb) ?? valuationMetric(base?.pb) ?? null,
+        total_mktcap_yi: valuationMetric(live.total_mktcap_yi, true) ?? valuationMetric(base?.total_mktcap_yi, true) ?? null,
+        float_mktcap_yi: valuationMetric(live.float_mktcap_yi, true) ?? valuationMetric(base?.float_mktcap_yi, true) ?? null,
         limit_up_price: live.limit_up_price ?? base?.limit_up_price ?? null,
         limit_down_price: live.limit_down_price ?? base?.limit_down_price ?? null,
       };
@@ -264,33 +266,61 @@ export const StockDetailPanel = memo(function StockDetailPanel({
   }
   // 报价补源与模拟账户都自行写 state，不能只依赖轮询 hook 丢弃旧 key 的返回值。
   // 每次切股产生独立身份，A→B→A 及卸载后也不接受旧实例的回包。
-  const detailReadScopeRef = useRef<{ symbol: string; alive: boolean } | null>(null);
+  const detailReadScopeRef = useRef<{ symbol: string; alive: boolean; live: Quote | null | undefined; status: StreamStatus } | null>(null);
   useEffect(() => {
     if (!active) return;
-    const scope = { symbol, alive: true };
+    const scope = { symbol, alive: true, live: undefined as Quote | null | undefined, status: "connecting" as StreamStatus };
     detailReadScopeRef.current = scope;
     return () => { scope.alive = false; };
   }, [symbol, active]);
+  useEffect(() => {
+    const scope = detailReadScopeRef.current;
+    if (active && scope?.alive && scope.symbol === symbol) {scope.live = live; scope.status = streamStatus;}
+  }, [live, symbol, active, streamStatus]);
+  const indexQuoteReadRef = useRef({symbol, provided: false});
+  useEffect(() => {
+    if (indexQuoteReadRef.current.symbol !== symbol) indexQuoteReadRef.current = {symbol, provided: false};
+    // 有同股feed后由原owner恢复。记录已有观察不提升坏帧/休市质量，也不把后续null洗成成功。
+    if (active && isIndex && live?.symbol === symbol) indexQuoteReadRef.current.provided = true;
+  }, [symbol, active, isIndex, live]);
 
-  // 估值补充：ths 快照无 PE/PB/市值，每 30s 从腾讯源低频补齐（价格仍以 WS 为准）
+  // 估值补充：仅原始live缺有效估值时，每30s从腾讯补齐；合并后的REST值不能停掉后续校准。
+  // 指数没有估值消费者，仅首帧前bootstrap；失败可重试，已有观察后不做周期估值补源。
   // 2026-09-11（S2-5）：裸 setInterval → 统一入口（获得可见性暂停 + 盘外降频）。
   usePollingFetch(
     async () => {
       const scope = detailReadScopeRef.current;
       if (!scope?.alive || scope.symbol !== symbol) return;
+      const sourceLive = scope.live;
+      if (isIndex && (sourceLive?.symbol === symbol || indexQuoteReadRef.current.provided)) return;
+      if (!isIndex && streamStatus === "live" && sourceLive?.symbol === symbol && hasTrustedQuoteObservation(sourceLive)
+        && [valuationMetric(sourceLive.pe_ttm), valuationMetric(sourceLive.pb),
+          valuationMetric(sourceLive.total_mktcap_yi, true), valuationMetric(sourceLive.float_mktcap_yi, true)]
+          .every(value => value !== undefined)) return;
       try {
         const q = await getQuote(symbol, "tencent");
         if (!scope.alive || scope !== detailReadScopeRef.current) return;
+        if (isIndex && q.symbol === symbol) {
+          const paused = quoteQualityView({quality: q.quality, reasons: q.quality_reasons, symbol, market: q.market,
+            dataTimestamp: q.data_timestamp, session: q.display_session});
+          const now = new Date();
+          const pausedObservation = q.quality === "stale" && q.display_session?.phase === "closed"
+            && paused.sessionLabel !== null && paused.label === paused.sessionLabel && paused.sessionIssue === null
+            && typeof q.price === "number" && Number.isFinite(q.price) && q.price > 0 && q.source.trim() !== ""
+            && bjDate(q.display_session.as_of) === bjDate(now.toISOString()) && Date.parse(q.display_session.as_of) <= now.getTime();
+          if (hasTrustedQuoteObservation(q) || pausedObservation) indexQuoteReadRef.current.provided = true;
+        }
+        const currentLive = scope.status === "live" && scope.live?.symbol === symbol && hasTrustedQuoteObservation(scope.live) ? scope.live : undefined;
         setQuote((prev) => {
           // 同股补估值；慢 REST 不覆盖已接纳报价的源钟、质量、量额与来源。
           if (!prev || prev.symbol !== q.symbol) return q;
           return {
             ...q,
             ...prev,
-            pe_ttm: q.pe_ttm ?? prev.pe_ttm,
-            pb: q.pb ?? prev.pb,
-            total_mktcap_yi: q.total_mktcap_yi ?? prev.total_mktcap_yi,
-            float_mktcap_yi: q.float_mktcap_yi ?? prev.float_mktcap_yi,
+            pe_ttm: valuationMetric(currentLive?.pe_ttm) ?? valuationMetric(q.pe_ttm) ?? prev.pe_ttm,
+            pb: valuationMetric(currentLive?.pb) ?? valuationMetric(q.pb) ?? prev.pb,
+            total_mktcap_yi: valuationMetric(currentLive?.total_mktcap_yi, true) ?? valuationMetric(q.total_mktcap_yi, true) ?? prev.total_mktcap_yi,
+            float_mktcap_yi: valuationMetric(currentLive?.float_mktcap_yi, true) ?? valuationMetric(q.float_mktcap_yi, true) ?? prev.float_mktcap_yi,
             limit_up_price: prev.limit_up_price ?? q.limit_up_price,
             limit_down_price: prev.limit_down_price ?? q.limit_down_price,
           };
@@ -593,11 +623,15 @@ export const StockDetailPanel = memo(function StockDetailPanel({
       });
     };
     try {
-      const [points] = await Promise.all([track(() => getMinuteLine("sh000001")), track(async () => {
+      const parent = parentIndexRef.current;
+      const quoteRead = parent === undefined ? track(async () => {
         const overview = await getMarketOverview();
         sourceQuote = overview.indices.find(value => value.symbol === "000001" || value.symbol === "sh000001");
-        return overview;
-      })]);
+      }) : Promise.resolve().then(() => {sourceQuote = parent ?? undefined;});
+      const [points] = await Promise.all([track(() => getMinuteLine("sh000001")), quoteRead]);
+      // A parent owner may arrive while standalone fallback drains. Its explicit
+      // missing/bad observation must not be replaced by the older REST success.
+      if (parentIndexRef.current !== undefined) sourceQuote = parentIndexRef.current ?? undefined;
       const value = buildIndexOverlay(points, sourceQuote, indexDate);
       if (current()) {owner!.failed = false; owner!.used = false; owner!.candidate = null; owner!.failureAsOf = NaN;}
       return value;
@@ -625,7 +659,8 @@ export const StockDetailPanel = memo(function StockDetailPanel({
         if (!Number.isFinite(owner.failureAsOf) || (Number.isFinite(asOf) && asOf > owner.failureAsOf)) owner.candidate = indexQuote;
       } catch {owner.candidate = null;}
     }
-    if (owner.failed && !owner.inFlight && owner.candidate) {
+    const phaseChanged = indexReadData?.mode === "waiting" && calendarPhase(indexQuote.display_session) !== indexReadData.waitingPhase;
+    if ((owner.failed || phaseChanged) && !owner.inFlight && owner.candidate) {
       owner.used = true; owner.candidate = null;
       refreshIndexOverlay();
     }
@@ -858,6 +893,7 @@ export const StockDetailPanel = memo(function StockDetailPanel({
             <Panel bodyClassName="overflow-hidden flex flex-col" className="detail-chart-panel min-h-0 flex-1">
               <DetailReadStatus label="分钟" state={readStates.minute} onRetry={() => retryRead("minute")} diagnostics={minuteDiagnostics} diagnosticIssue={!!indexResource.error} identity={`${symbol}:minute`} active={active}/>
               {indexOverlay?.mode === "historical" && <p className="px-3 pb-1 text-xs text-zinc-600 dark:text-zinc-400">上证叠加 · {indexOverlay.referenceDate} · 非实时</p>}
+              {!indexResource.error && indexOverlay?.mode === "waiting" && <p role="status" className="px-3 pb-1 text-xs text-zinc-600 dark:text-zinc-400">上证叠加 · {indexOverlay.waitingPhase === "closing_auction" ? "收盘竞价等待" : indexOverlay.waitingPhase === "pre_open_gap" ? "开盘等待" : "开盘竞价等待"} · {indexOverlay.points.length ? `观察截至 ${dateTimeTextBJ(indexOverlay.sourceClock, {seconds: true})}` : "尚无连续分时"}</p>}
               {!!indexResource.error && <div className="flex flex-wrap items-center gap-2 px-3 pb-1 text-xs"><p role="alert" className="text-amber-800 dark:text-amber-300">指数叠加读取失败{indexOverlay ? " · 保留结果" : ""}</p><button type="button" data-action="secondary" disabled={indexResource.pending} onClick={indexResource.refresh}>重新读取指数叠加</button></div>}
               {displayMinutes.length > 0 ? (
                 <div className="relative min-h-0 flex-1">

@@ -94,3 +94,92 @@ def test_concurrent_membership_reads_share_one_upstream():
             assert [response.status_code for response in await asyncio.gather(first, second)] == [200, 200]
             assert service.fetch_index_members.await_count == 1
     asyncio.run(run())
+
+
+def test_member_percent_reads_current_snapshot_each_time_without_refetching_membership():
+    from datetime import datetime, timezone
+    now = datetime.now(timezone.utc)
+    state = {"pct": -2.5}
+    class Snapshot:
+        def versioned_snapshot(self):
+            return ([{"symbol": "600519", "market": "SH", "price": 100, "prev_close": 101,
+                      "change_pct": state["pct"], "source": "sina_market", "received_at": now.isoformat()}], now)
+        def freshness(self):
+            return SimpleNamespace(as_of=now, state="ready")
+    app = FastAPI();app.include_router(router, prefix="/api")
+    app.state.snapshot_service = Snapshot()
+    app.state.theme_catalog = SimpleNamespace(fetch_index_members=AsyncMock(return_value={
+        "items": [{"symbol": "600519", "name": "贵州茅台", "market": "SH"},
+                  {"symbol": "000001", "name": "平安银行", "market": "SZ"}], "snapshot_at": "2026-10-15T07:29:07+00:00"}))
+    with TestClient(app) as client:
+        first = client.get("/api/indices/sh000300/members").json()["data"]
+        assert first["items"][0]["change_pct"] == -2.5
+        assert first["items"][1]["change_pct"] is None
+        assert first["items"][0]["source_clock"] is None
+        assert first["items"][0]["quote_observed_at"] == now.isoformat()
+        assert first["quote_snapshot"]["known_count"] == 1
+        assert first["quote_snapshot"]["total"] == 2
+        assert first["quote_snapshot"]["observed_at"] == now.isoformat()
+        state["pct"] = 0
+        second = client.get("/api/indices/sh000300/members").json()["data"]
+        assert second["items"][0]["change_pct"] == 0
+        assert second["cached"] is True
+        assert second["snapshot_at"] == first["snapshot_at"]
+        assert app.state.theme_catalog.fetch_index_members.await_count == 1
+
+
+@pytest.mark.parametrize("patch", [
+    {"change_pct": None}, {"change_pct": float("nan")}, {"change_pct": float("inf")},
+    {"change_pct": True}, {"price": 0}, {"prev_close": -1}, {"quality": "invalid"},
+    {"source": "mock"}, {"source": ""}, {"market": "SZ"},
+    {"symbol": []}, {"quality": []}, {"market": {}},
+    {"data_timestamp": "2026-10-20T10:00:00"},
+    {"data_timestamp": "2099-01-01T00:00:00+08:00"},
+    {"received_at": "2099-01-01T00:00:00+08:00"},
+])
+def test_member_quote_invalid_observations_stay_unknown(patch):
+    from datetime import datetime, timezone
+    now = datetime.now(timezone.utc)
+    row = {"symbol": "600519", "market": "SH", "price": 100, "prev_close": 101,
+           "change_pct": -1, "source": "sina_market", **patch}
+    snapshot = SimpleNamespace(versioned_snapshot=lambda: ([row], now),
+                               freshness=lambda: SimpleNamespace(as_of=now, state="ready"))
+    items = [{"symbol": "600519", "market": "SH", "name": "贵州茅台"}]
+    before = repr((items, row))
+    output, meta = market_quotes._index_member_quote_observations(items, snapshot, None)
+    assert output[0]["change_pct"] is None and meta["known_count"] == 0
+    assert repr((items, row)) == before
+
+
+def test_member_quote_duplicates_and_real_missing_are_not_zero():
+    from datetime import datetime, timezone
+    now = datetime.now(timezone.utc)
+    rows = [{"symbol": "600519", "market": "SH", "price": 100, "prev_close": 101,
+             "change_pct": -1, "source": "sina_market"}] * 2
+    snapshot = SimpleNamespace(versioned_snapshot=lambda: (rows, now),
+                               freshness=lambda: SimpleNamespace(as_of=now, state="ready"))
+    items = [{"symbol": "600519", "market": "SH", "name": "贵州茅台"}]
+    output, meta = market_quotes._index_member_quote_observations(items, snapshot, None)
+    assert output[0]["change_pct"] is None and meta["known_count"] == 0
+
+
+def test_member_quotes_use_only_passive_hub_on_absent_snapshot_with_explicit_clocks():
+    from datetime import datetime, timezone
+    from app.schemas.market import Quote
+    now = datetime.now(timezone.utc)
+    quote = Quote(symbol="600519", market="SH", name="贵州茅台", price=100, prev_close=100,
+                  change_pct=0, volume=1, amount=1, source="tencent", data_timestamp=now, received_at=now)
+    class Hub:
+        def get_quotes(self, symbols):
+            assert symbols == ["600519"]
+            return [quote]
+        async def get_quote(self, *args):
+            raise AssertionError("no upstream read")
+    items = [{"symbol": "600519", "market": "SH", "name": "贵州茅台"}]
+    output, meta = market_quotes._index_member_quote_observations(items, None, Hub())
+    assert output[0]["change_pct"] == 0
+    assert output[0]["source_clock"] == now.isoformat()
+    assert output[0]["quote_observed_at"] == now.isoformat()
+    assert output[0]["quote_quality"] == "high"
+    assert meta["known_count"] == meta["total"] == 1
+    assert meta["source_clock"] == now.isoformat()

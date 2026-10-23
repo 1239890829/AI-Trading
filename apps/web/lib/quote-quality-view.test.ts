@@ -22,6 +22,8 @@ describe("calendar session and source quality are independent", () => {
   it.each([
     [session("09:20:00", "auction"), "竞价等待"],
     [session("09:27:00", "pre_open_gap"), "开盘等待"],
+    [session("14:57:00", "auction"), "收盘竞价"],
+    [session("14:59:59", "auction"), "收盘竞价"],
     [session("08:00:00", "closed"), "未开盘"],
     [session("19:00:00", "closed"), "已收盘"],
     [session("10:00:00", "closed", false), "休市"],
@@ -36,12 +38,21 @@ describe("calendar session and source quality are independent", () => {
     session("09:20:00", "auction", false), session("09:20:00", "auction", null),
     {...session("09:20:00", "auction"), trade_date: "2026-10-12"},
     session("10:00:00", "continuous"), session("12:00:00", "unknown"),
+    session("14:56:59", "auction"), session("15:00:00", "auction"),
   ])("invalid, unknown or continuous phase does not invent a pause %j", context => {
     expect(quoteQualityView({quality: "high", session: context}).sessionLabel).toBeNull();
   });
 });
 
 describe("Quote quality display is explanatory, not trading eligibility", () => {
+  it("收盘竞价只解释本日到达14:57的源观察，拒绝原因和旧尾仍显式待核", () => {
+    const input = {...aged, dataTimestamp: "2026-10-13T14:57:00+08:00", session: session("14:58:00", "auction")};
+    const before = JSON.stringify(input);
+    expect(quoteQualityView(input)).toMatchObject({sessionLabel: "收盘竞价", label: "收盘竞价", tone: "warning"});
+    expect(quoteQualityView({...input, dataTimestamp: "2026-10-13T10:00:00+08:00"})).toMatchObject({sessionLabel: "收盘竞价", label: "报价未更新"});
+    expect(quoteQualityView({...input, reasons: ["refresh_failed"]})).toMatchObject({sessionLabel: "收盘竞价", label: "刷新异常"});
+    expect(JSON.stringify(input)).toBe(before);
+  });
   it.each([
     ["09:15:00", "auction", "竞价等待"],
     ["09:24:59", "auction", "竞价等待"],

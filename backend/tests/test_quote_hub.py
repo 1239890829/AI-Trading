@@ -291,6 +291,7 @@ def test_late_quote_cannot_overwrite_newer_cached_value(isolate_calendar, monkey
     b = make_q("600519", "乙", 100.0)
     hub, prov = _hub_with([newer, b])
     asyncio.run(hub.refresh())
+    trusted = hub.quotes["600105"].model_dump()
 
     late = make_q("600105", "甲", 9.0)
     late.data_timestamp = newer.data_timestamp - timedelta(seconds=5)
@@ -300,9 +301,9 @@ def test_late_quote_cannot_overwrite_newer_cached_value(isolate_calendar, monkey
     kept = hub.quotes["600105"]
     assert kept.price == 10.0
     assert kept.data_timestamp == newer.data_timestamp
-    assert kept.quality == Quality.stale
-    assert "source_time_regress_ignored" in kept.quality_reasons
-    assert kept.freshness(fresh_within=600).state == "stale"
+    assert kept.model_dump() == trusted and kept.quality == Quality.high
+    assert kept.freshness(fresh_within=hub.stale_after).state == "ready"
+    assert hub.last_quote_rejections["600105"] == "source_time_regress_ignored"
     assert hub.last_missing_symbols == ["600105"]
     assert hub.last_batch_coverage == pytest.approx(0.5)
 
@@ -313,6 +314,7 @@ def test_invalid_future_quote_cannot_replace_current_good_value(isolate_calendar
     b = make_q("600519", "乙", 100.0)
     hub, prov = _hub_with([current, b])
     asyncio.run(hub.refresh())
+    trusted = hub.quotes["600105"].model_dump()
 
     bad = make_q("600105", "甲", 999.0)
     bad.data_timestamp = datetime.now(timezone.utc) + timedelta(hours=1)
@@ -321,9 +323,9 @@ def test_invalid_future_quote_cannot_replace_current_good_value(isolate_calendar
 
     kept = hub.quotes["600105"]
     assert kept.price == 10.0
-    assert kept.quality == Quality.stale
-    assert "source_invalid_ignored" in kept.quality_reasons
-    assert kept.freshness(fresh_within=600).state == "stale"
+    assert kept.model_dump() == trusted and kept.quality == Quality.high
+    assert kept.freshness(fresh_within=hub.stale_after).state == "ready"
+    assert hub.last_quote_rejections["600105"] == "source_invalid_ignored"
     assert hub.last_missing_symbols == ["600105"]
 
 
@@ -334,6 +336,7 @@ def test_off_session_missing_price_cannot_erase_last_good_value(isolate_calendar
     b = make_q("600519", "乙", 100.0)
     hub, prov = _hub_with([current, b])
     asyncio.run(hub.refresh())
+    trusted = hub.quotes["600105"].model_dump()
 
     empty = make_q("600105", "甲", 10.0).model_copy(
         update={"price": missing_price, "change": -10.0, "change_pct": -100.0}
@@ -344,8 +347,8 @@ def test_off_session_missing_price_cannot_erase_last_good_value(isolate_calendar
     kept = hub.quotes["600105"]
     assert kept.price == 10.0
     assert kept.change == 0.0 and kept.change_pct == 0.0
-    assert kept.quality == Quality.stale
-    assert kept.quality_reasons == ["source_missing_price_ignored"]
+    assert kept.model_dump() == trusted and kept.quality == Quality.high
+    assert hub.last_quote_rejections["600105"] == "source_missing_price_ignored"
     assert hub.last_missing_symbols == ["600105"]
 
 
@@ -364,6 +367,7 @@ def test_off_session_zero_index_retains_last_good_value(isolate_calendar, monkey
     hub, prov = _hub_with([])
     index = make_q("000001", "上证指数", 3842.19)
     hub.indices[index.symbol] = index
+    trusted = index.model_dump()
 
     async def zero_indices():
         return [index.model_copy(update={"price": 0.0, "change_pct": -100.0})]
@@ -372,8 +376,9 @@ def test_off_session_zero_index_retains_last_good_value(isolate_calendar, monkey
     asyncio.run(hub.refresh())
     kept = hub.get_quotes(["sh000001"])[0]
     assert kept.price == 3842.19 and kept.change_pct == 0.0
-    assert kept.quality == Quality.stale
-    assert "source_missing_price_ignored" in kept.quality_reasons
+    assert kept.quality == Quality.high and kept.quality_reasons == trusted["quality_reasons"]
+    assert hub.indices[index.symbol].model_dump() == trusted
+    assert hub.last_index_rejections[index.symbol] == "source_missing_price_ignored"
 
 
 def test_missing_source_timestamp_cannot_overwrite_timestamped_current_value(isolate_calendar):
@@ -381,6 +386,7 @@ def test_missing_source_timestamp_cannot_overwrite_timestamped_current_value(iso
     b = make_q("600519", "乙", 100.0)
     hub, prov = _hub_with([current, b])
     asyncio.run(hub.refresh())
+    trusted = hub.quotes["600105"].model_dump()
 
     unknown_time = make_q("600105", "甲", 11.0).model_copy(update={"data_timestamp": None})
     prov.quotes = [unknown_time, b]
@@ -389,8 +395,7 @@ def test_missing_source_timestamp_cannot_overwrite_timestamped_current_value(iso
     kept = hub.quotes["600105"]
     assert kept.price == 10.0
     assert kept.data_timestamp == current.data_timestamp
-    assert kept.quality == Quality.stale
-    assert kept.quality_reasons == ["source_time_unknown_ignored"]
+    assert kept.model_dump() == trusted and kept.quality == Quality.high
     assert hub.source_rejections()["quotes"]["reasons"] == {"source_time_unknown_ignored": 1}
 
 
@@ -399,6 +404,7 @@ def test_duplicate_requested_symbol_is_rejected_instead_of_last_write_wins(isola
     b = make_q("600519", "乙", 100.0)
     hub, prov = _hub_with([current, b])
     asyncio.run(hub.refresh())
+    trusted = hub.quotes["600105"].model_dump()
 
     prov.quotes = [
         make_q("600105", "甲", 11.0),
@@ -409,8 +415,7 @@ def test_duplicate_requested_symbol_is_rejected_instead_of_last_write_wins(isola
 
     kept = hub.quotes["600105"]
     assert kept.price == 10.0
-    assert kept.quality == Quality.stale
-    assert kept.quality_reasons == ["source_identity_duplicate_ignored"]
+    assert kept.model_dump() == trusted and kept.quality == Quality.high
     assert hub.source_rejections()["quotes"]["reasons"] == {
         "source_identity_duplicate_ignored": 1,
     }

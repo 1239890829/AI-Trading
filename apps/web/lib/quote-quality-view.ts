@@ -27,11 +27,12 @@ function validSessionClock(session: QuoteDisplaySession | null | undefined): boo
   return Number.isFinite(local.getTime()) && local.toISOString().slice(0, 19) === session.as_of.slice(0, 19);
 }
 
-function calendarPhase(session: QuoteDisplaySession | null | undefined): "auction" | "pre_open_gap" | null {
+export function calendarPhase(session: QuoteDisplaySession | null | undefined): "auction" | "pre_open_gap" | "closing_auction" | null {
   if (session?.trade_day_result !== true || !validSessionClock(session)) return null;
   const minute = beijingMinute(session.as_of);
   if (minute === null) return null;
   if (session.phase === "auction" && minute >= 555 && minute < 565) return "auction";
+  if (session.phase === "auction" && minute >= 897 && minute < 900) return "closing_auction";
   if (session.phase === "pre_open_gap" && minute >= 565 && minute < 570) return "pre_open_gap";
   return null;
 }
@@ -74,7 +75,7 @@ export function quoteQualityView(input: QuoteQualityInput) {
   const phase = calendarPhase(session);
   // Exchange phase and source quality are independent facts. A rejected quote
   // cannot end lunch, and a lunch label cannot validate a rejected quote.
-  const sessionLabel = phase === "auction" ? "竞价等待" : phase === "pre_open_gap" ? "开盘等待" : calendarPause(session);
+  const sessionLabel = phase === "auction" ? "竞价等待" : phase === "closing_auction" ? "收盘竞价" : phase === "pre_open_gap" ? "开盘等待" : calendarPause(session);
   const has = (reason: string) => reasons.includes(reason);
   let label = quality === "high" ? "正常" : quality === "invalid" ? "非法" : "时点待核";
   let tone: "quiet" | "warning" | "danger" = quality === "invalid" ? "danger" : quality === "high" ? "quiet" : "warning";
@@ -100,15 +101,19 @@ export function quoteQualityView(input: QuoteQualityInput) {
       const observedAt = dataTimestamp ? Date.parse(dataTimestamp) : NaN;
       const phaseAt = session ? Date.parse(session.as_of) : NaN;
       const sourceMinute = dataTimestamp ? beijingMinute(dataTimestamp) : null;
-      const validTime = sourceDate && sourceDate <= (session?.trade_date ?? "") && observedAt <= phaseAt;
+      const validTime = dataTimestamp && /(?:Z|[+-]\d{2}:\d{2})$/.test(dataTimestamp)
+        && sourceDate && sourceDate <= (session?.trade_date ?? "") && Number.isFinite(observedAt) && observedAt <= phaseAt;
       const pause = calendarPause(session);
       if (pause && onlyAge && hasExpectedPausedSource(dataTimestamp, session)) {
         label = pause;
         context += `；日历确认${pause}，仍展示最近源观测，不声明源报价已更新`;
-      } else if (phase && onlyAge && validTime && isKnownIndex(input.symbol, input.market)) {
+      } else if (phase && onlyAge && validTime && (phase === "closing_auction"
+        ? sourceDate === session?.trade_date && sourceMinute !== null && sourceMinute >= 897
+        : isKnownIndex(input.symbol, input.market))) {
         expectedSession = true;
-        label = phase === "auction" ? "竞价等待" : "开盘等待";
-        context += "；交易日阶段：" + (phase === "auction" ? "集合竞价" : "开盘等待") + "；指数尚无较新的可信观测，不声明数据源必定更新";
+        label = phase === "auction" ? "竞价等待" : phase === "closing_auction" ? "收盘竞价" : "开盘等待";
+        context += phase === "closing_auction" ? "；当前处于收盘集合竞价，保留本日14:57之后的源观测，不据此认定最终收盘价"
+          : "；交易日阶段：" + (phase === "auction" ? "集合竞价" : "开盘等待") + "；指数尚无较新的可信观测，不声明数据源必定更新";
       } else if (phase === "pre_open_gap" && onlyAge && validTime
         && sourceDate === session?.trade_date && sourceMinute !== null && sourceMinute >= 565) {
         expectedSession = true;

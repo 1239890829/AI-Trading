@@ -108,8 +108,27 @@ def _rejected_source_observation(q: Quote, prev: Quote | None = None) -> str | N
     return None
 
 
-def _mark_retained_rejected(q: Quote, reason: str) -> None:
-    """保留最后可信值，但把“本轮没有可信刷新”作为 stale 暴露给消费者。"""
+def _mark_retained_rejected(
+    q: Quote, reason: str, *, fresh_within: float, session: QuoteDisplaySession,
+) -> None:
+    """被拒包不改变原观测的年龄或暂停归因；拒绝仍另记覆盖率与摘要。"""
+    stamp = q.data_timestamp
+    if stamp is not None and stamp.tzinfo is None:
+        stamp = stamp.replace(tzinfo=timezone.utc)
+    normal_reasons = set(q.quality_reasons) <= {"market_closed", "off_session"}
+    if (q.quality in {Quality.high, Quality.stale} and normal_reasons
+            and (q.quality is Quality.high or bool(q.quality_reasons))
+            and q.price is not None and q.price > 0 and stamp is not None
+            and session.phase == "closed" and session.trade_day_result is not None
+            and session.expected_source_date is not None and session.expected_source_after is not None
+            and stamp.astimezone(BJ_TZ).date() == session.expected_source_date
+            and session.expected_source_after <= stamp <= session.as_of):
+        _mark_confirmed_closed(q)
+        return
+    if (q.quality is Quality.high and set(q.quality_reasons) <= {"off_session"}
+            and q.price is not None and q.price > 0 and stamp is not None
+            and 0 <= (session.as_of - stamp).total_seconds() <= fresh_within):
+        return
     mark_stale(q, reason)
 
 
@@ -212,7 +231,8 @@ class QuoteHub:
                 rows = await self.provider.get_quotes(watchlist) if watchlist else []
                 self._accept_quotes(watchlist, rows)
             # A slow recovery must not hold already returned normal source rows.
-            # The rejected rows are already retained as stale by the original gate.
+            # Rejections retain the original value/clock; its own age and
+            # confirmed pause determine quality independently of this packet.
             self._pending_domains.add(domain)
             if self._running:
                 self._schedule_publish()
@@ -521,8 +541,9 @@ class QuoteHub:
     def _mark_index_gaps(
         self, returned: list[Quote], rejected: dict[str, str] | None = None,
     ) -> None:
-        """核对可接纳结果；拒绝观测也算本轮缺失，但保留旧值并标明拒绝原因。"""
+        """拒绝仍算本轮缺失；保留值按自己的源钟/阶段定质，原因另记摘要。"""
         rejected = rejected or {}
+        session = self._display_session()
         self.last_index_rejections = dict(sorted(rejected.items()))
         missing = sorted(INDEX_MARKETS.keys() - {q.symbol for q in returned})
         for symbol in missing:
@@ -530,12 +551,12 @@ class QuoteHub:
             if cached is not None:
                 reason = rejected.get(symbol)
                 if reason:
-                    _mark_retained_rejected(cached, reason)
+                    _mark_retained_rejected(cached, reason, fresh_within=self.stale_after, session=session)
                 else:
                     mark_stale(cached, "index_batch_missing")
         if missing != self.last_missing_indices:
             if missing:
-                log.warning("指数行情缺失（已有缓存标 stale，无缓存保持缺席）：%s", ", ".join(missing))
+                log.warning("指数本轮可接纳行情缺失（保留缓存，按原源钟/阶段定质）：%s", ", ".join(missing))
             else:
                 log.info("此前缺失的指数已全部返回")
         self.last_missing_indices = missing
@@ -583,8 +604,12 @@ class QuoteHub:
         —— 保留旧值不丢数据，但明确它已不是本轮的实时数据；无缓存的保持缺席
         （调用方按 missing 处理，不臆造）。休市时 ``_refresh_closed_state`` 会用
         ``market_closed`` 覆盖（更贴近成因），故本方法必须先于它执行。
+
+        已返回但被拒的包同样记缺项；其原current自身仍新鲜或满足暂停尾点时，
+        保留原状态。拒绝原因另记摘要，不借新包接收钟延续旧值。
         """
         rejected = rejected or {}
+        session = self._display_session()
         self.last_quote_rejections = dict(sorted(rejected.items()))
         missing = [s for s in watchlist if s not in by_symbol]
         coverage = (len(watchlist) - len(missing)) / len(watchlist) if watchlist else None
@@ -597,7 +622,7 @@ class QuoteHub:
             if cached is not None:
                 reason = rejected.get(symbol)
                 if reason:
-                    _mark_retained_rejected(cached, reason)
+                    _mark_retained_rejected(cached, reason, fresh_within=self.stale_after, session=session)
                 else:
                     mark_stale(cached, "batch_missing")
 
@@ -605,7 +630,7 @@ class QuoteHub:
         if missing != prev_missing:
             if missing:
                 log.warning(
-                    "批量行情部分缺失：%d/%d 只未返回（覆盖率 %.0f%%），已标 stale：%s%s",
+                    "批量行情部分缺失：%d/%d 只未接纳（覆盖率 %.0f%%），保留缓存与逐项源钟状态：%s%s",
                     len(missing), len(watchlist), (coverage or 0.0) * 100,
                     ", ".join(missing[:10]), " …" if len(missing) > 10 else "",
                 )
@@ -748,12 +773,13 @@ class QuoteHub:
             phase = "unknown"
         elif not trade_day:
             phase = "closed"
-        elif 9 * 60 + 15 <= minute < 9 * 60 + 25:
+        elif (9 * 60 + 15 <= minute < 9 * 60 + 25
+              or 14 * 60 + 57 <= minute < 15 * 60):
             phase = "auction"
         elif 9 * 60 + 25 <= minute < 9 * 60 + 30:
             phase = "pre_open_gap"
         elif (9 * 60 + 30 <= minute <= 11 * 60 + 30
-              or 13 * 60 <= minute <= 15 * 60):
+              or 13 * 60 <= minute < 14 * 60 + 57):
             phase = "continuous"
         else:
             phase = "closed"
@@ -827,12 +853,12 @@ class QuoteHub:
                 row.quality = original_quality
             row.quality_reasons = list(dict.fromkeys(original_reasons + row.quality_reasons))
         rejection = _rejected_source_observation(row, previous)
+        session = self._display_session()
         if previous is not None and rejection is not None:
             row = previous.model_copy(update={"quality_reasons": list(previous.quality_reasons)})
-            _mark_retained_rejected(row, rejection)
-            if original_quality != Quality.high:
+            _mark_retained_rejected(row, rejection, fresh_within=self.stale_after, session=session)
+            if original_quality != Quality.high and row.quality_reasons == [rejection]:
                 row.quality_reasons = list(dict.fromkeys(row.quality_reasons + original_reasons))
-        session = self._display_session()
         if session.phase == "closed" and session.trade_day_result is not None:
             _mark_confirmed_closed(row)
         if row.quality == Quality.high and row.data_timestamp is None:

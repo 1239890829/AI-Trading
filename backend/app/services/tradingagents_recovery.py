@@ -50,6 +50,27 @@ PRELAUNCH_SOURCE = {
     "codex_transport.py": "1876b45f0636e4305fb1df97ea2306134aacdc338a357b20e88e3cb0ad205101",
 }
 PRELAUNCH_UNKNOWN_MESSAGE_SHA = "34d06a06ea8588936d4206fb06ae1d378e72478ff047424e72b659b084ca05f2"
+# A distinct reviewed failure: PR325 checks the complete wire input before
+# reserve/start. This identity does not authorize a future implementation or
+# turn a missing call into a usage receipt. Each continuation needs its own grant.
+INPUT_PRELAUNCH_SOURCE = {
+    "driver.py": "af48f1ce70b37e474e2359daa25eb789ea092693e32147298d6f7d6f6e84c6ee",
+    "agent_budget.py": "5b292c8d675f71e97a86116b6e3250c7a15af8e2bde34ec6492875105c519923",
+    "codex_transport.py": "033af2af08a2c0aca013fb9be301e65bb74a7965a0a4ad6a59a23632bfd48970",
+    "transport_process.py": "ff2812c801be847b6c6e83b0edf109f82fb7fe65ea9077e4473597437af4e592",
+}
+INPUT_PRELAUNCH_TAIL_KEYS = PRELAUNCH_TAIL_KEYS | {"input_chars", "input_limit_chars", "pending_message_fingerprints"}
+INPUT_PRELAUNCH_NATIVE_ERROR_SHA = "b746f1c7ca6beccb3cee95a7d4770cf3b68a0ee60fc8f0413fe0cf4766f5e7a2"
+# The pinned upstream wrap_up appends this exact user message *after* the
+# checkpoint messages. Do not accept a fresh one-message report request.
+INPUT_PRELAUNCH_WRAP_UP_SHA = "a6a32b933c43bd17a43fa277e12d9ba9eb480d87008d2289b35c67efe14c0790"
+FROZEN_PACKET_OWNER_PAIRS = {"services/quote_hub.py": {
+    "old": "8ef2086885ae17cf52a5c720705251a2b956b91f401ca8604b655182053308bf",
+    "new": "5d970afc948ea70e8d5ef3cc6a1efe68d2a3df09d3044fc1c92c405c864db0b0",
+}, "data_providers/tencent.py": {
+    "old": "69d6380eab0e4ffc228d08391a8a815bfb37e304ee9cac70271d04ed58bc3a43",
+    "new": "32699b46cc03f0038e8e9d4969461bd336d9465c0363f984f8dca56b0b828aa9",
+}}
 # Reviewed 256cae58 usage contract migration: strict cache-write accounting and
 # bounded observations; no graph/process/timeout-proof change. Not a blanket
 # permission to migrate any future version of this transport component.
@@ -130,11 +151,31 @@ def _json(path):
 def _compatibility(grant, identity):
     old, new, compatibility = (grant[key] for key in ("source_method_identity", "continuation_method_identity", "compatibility"))
     if (not isinstance(old, dict) or new != identity or not isinstance(compatibility, dict)
-            or set(compatibility) != {"kind", "source_hash_pairs"}
-            or compatibility["kind"] != "reviewed_host_diagnostics_and_recovery_v1"):
+            or compatibility.get("kind") not in {"reviewed_host_diagnostics_and_recovery_v1", "reviewed_frozen_packet_owner_v1"}
+            or set(compatibility) != ({"kind", "source_hash_pairs", "packet_owner_hash_pairs"}
+                if compatibility["kind"] == "reviewed_frozen_packet_owner_v1" else {"kind", "source_hash_pairs"})):
         raise _blocked("recovery_method_incompatible")
     old_base, new_base = deepcopy(old), deepcopy(new)
     old_files, new_files = old_base.pop("source_files", None), new_base.pop("source_files", None)
+    if compatibility["kind"] == "reviewed_frozen_packet_owner_v1":
+        # Reviewed current presentation/search owners do not change this run's
+        # frozen packet. No owner pair permits recollection or future hashes.
+        binding = grant.get("binding")
+        old_packet, new_packet = old_base.get("packet_builder"), new_base.get("packet_builder")
+        old_owners = old_packet.get("owner_sources") if isinstance(old_packet, dict) else None
+        new_owners = new_packet.get("owner_sources") if isinstance(new_packet, dict) else None
+        if (not isinstance(binding, dict) or not isinstance(binding.get("input_prelaunch_tail"), dict)
+                or any(not _hash(binding.get(key)) for key in ("packet_sha256", "config_sha256", "staged_code_sha256", "manifest_sha256"))
+                or not isinstance(old_owners, dict) or not isinstance(new_owners, dict)):
+            raise _blocked("recovery_frozen_packet_owner_incompatible")
+        owner_changes = {key for key in old_owners.keys() | new_owners.keys() if old_owners.get(key) != new_owners.get(key)}
+        owner_pairs = {key: {"old": old_owners.get(key), "new": new_owners.get(key)} for key in owner_changes}
+        if (not owner_changes or not owner_changes <= FROZEN_PACKET_OWNER_PAIRS.keys()
+                or compatibility["packet_owner_hash_pairs"] != owner_pairs
+                or any(pair != FROZEN_PACKET_OWNER_PAIRS[key] for key, pair in owner_pairs.items())):
+            raise _blocked("recovery_frozen_packet_owner_incompatible")
+        for key, pair in owner_pairs.items():
+            old_owners[key] = pair["new"]
     if not isinstance(old_files, dict) or not isinstance(new_files, dict) or old_base != new_base:
         raise _blocked("recovery_graph_model_or_dependency_drift")
     allowed = {"driver.py", "codex_transport.py", "tradingagents_research.py", "tradingagents_recovery.py"}
@@ -160,7 +201,7 @@ def _checkpoint_files(dbpath):
 
 @contextmanager
 def _checkpoint_reader(run, symbol, *, offline=None):
-    """Immutable reads only the granted, terminated, no-sidecar first call."""
+    """Immutable reads require a proved, terminated native failure with no sidecars."""
     dbpath = _safe(run / "graph/cache/checkpoints" / (symbol + ".db"))
     def unchanged():
         if (not isinstance(offline, dict) or set(offline) != {"grant", "session_factory"}
@@ -169,10 +210,13 @@ def _checkpoint_reader(run, symbol, *, offline=None):
         grant = offline["grant"]
         binding = _binding(grant["binding"])
         files = binding["checkpoint"].get("files")
-        if (not _first_parallel_failure(binding, grant) or grant.get("symbol") != symbol
+        input_tail = "input_prelaunch_tail" in binding
+        if (not (_first_parallel_failure(binding, grant) or input_tail) or grant.get("symbol") != symbol
                 or not isinstance(files, dict) or set(files) != {"db", "-wal", "-shm"}
                 or not _hash(files["db"]) or files["-wal"] is not None or files["-shm"] is not None):
             raise _blocked("recovery_offline_checkpoint_unproven")
+        if input_tail:
+            _input_prelaunch_tail(grant, run, _history_segments(grant, run, offline["session_factory"]), offline["session_factory"])
         if _source_task(grant["source_task_id"], symbol, offline["session_factory"]) != "failed":
             raise _blocked("recovery_offline_checkpoint_unproven")
         terminal = _json(run / "worker-terminal.json")
@@ -266,9 +310,11 @@ def _grant(source_task_id, run_id, app, sf):
 
 
 def _binding(value):
-    if (not isinstance(value, dict) or set(value) - {"recovery_history", "prelaunch_tail"} not in (BINDING_KEYS, PARALLEL_BINDING_KEYS)
+    if (not isinstance(value, dict) or set(value) - {"recovery_history", "prelaunch_tail", "input_prelaunch_tail"} not in (BINDING_KEYS, PARALLEL_BINDING_KEYS)
             or any(not isinstance(value.get(key), dict) for key in ("selection", "outputs", "usage_receipts", "prefixes", "checkpoint"))):
         raise _blocked("recovery_binding_invalid")
+    if "input_prelaunch_tail" in value and ("prelaunch_tail" in value or "expected_pending_roles" in value or value.get("recovery_history")):
+        raise _blocked("recovery_input_prelaunch_tail_invalid")
     if "expected_pending_roles" in value:
         roles, fingerprints = value["expected_pending_roles"], value["pending_message_fingerprints"]
         if (not isinstance(roles, list) or len(roles) != 4 or any(not isinstance(r, str) for r in roles)
@@ -352,6 +398,7 @@ def _history_segments(grant, run, sf=None):
                 or type(prior["call_counter"]) is not int or prior["call_counter"] != entry["call_from"] - 1
                 or any(prior[key] != binding[key] for key in ("selection", "source_claim_sha256", "packet_sha256", "config_sha256", "staged_code_sha256"))
                 or prior.get("prelaunch_tail") != binding.get("prelaunch_tail")
+                or prior.get("input_prelaunch_tail") != binding.get("input_prelaunch_tail")
                 or prior["usage_receipts"] != {key: value for key, value in binding["usage_receipts"].items() if int(key) < entry["call_from"]}
                 or prior["outputs"] != {key: value for key, value in binding["outputs"].items() if int(key) < entry["call_from"]}
                 or _sha(archive / "worker-terminal.json") != prior["worker_terminal_sha256"]
@@ -495,12 +542,128 @@ def _prelaunch_tail(grant, run, segments, sf=None):
     return tail["call_id"]
 
 
+def _input_prelaunch_tail(grant, run, segments, sf=None):
+    """Prove one pre-reserve input rejection after three completed analysts.
+
+    No missing slot is priced, refunded, declared known or repaired. Whole-source
+    DB closure plus the pinned check-before-reserve implementation proves that
+    this *declared final slot* never reserved or launched. Paid answers stay put.
+    """
+    binding = grant["binding"]
+    tail = binding.get("input_prelaunch_tail")
+    if tail is None:
+        return None
+    counter = binding.get("call_counter")
+    fingerprints = tail.get("pending_message_fingerprints") if isinstance(tail, dict) else None
+    if (not isinstance(tail, dict) or set(tail) != INPUT_PRELAUNCH_TAIL_KEYS or type(tail.get("version")) is not int or tail["version"] != 1
+            or type(counter) is not int or not 3 < counter <= 4096 or type(tail.get("call_id")) is not int or tail["call_id"] != counter
+            or binding.get("expected_pending_role") != "Market Analyst" or "expected_pending_roles" in binding or "prelaunch_tail" in binding or binding.get("recovery_history")
+            or any(grant["source_method_identity"]["source_files"].get(key) != value for key, value in INPUT_PRELAUNCH_SOURCE.items())
+            or len(segments) != 1 or segments[0] != {"task_id": grant["source_task_id"], "method_sha256": research._digest(grant["source_method_identity"]), "call_from": 1, "call_to": counter}
+            or any(not _hash(tail.get(key)) for key in PRELAUNCH_TAIL_KEYS - {"version", "call_id", "model_receipts_prefix"})
+            or type(tail.get("input_chars")) is not int or type(tail.get("input_limit_chars")) is not int
+            or not 0 < tail["input_limit_chars"] < tail["input_chars"] <= MAX_BYTES
+            or not isinstance(fingerprints, list) or not 3 <= len(fingerprints) <= 128 or any(not _hash(value) for value in fingerprints)
+            or set(binding["outputs"]) != {str(number) for number in range(1, counter)} or set(binding["usage_receipts"]) != set(binding["outputs"])
+            or any(_safe(run / folder / (str(counter) + ".json")).exists() for folder in ("model-outputs", "usage-receipts"))):
+        raise _blocked("recovery_input_prelaunch_tail_invalid")
+    completed = binding.get("completed_roles")
+    if (not isinstance(completed, list) or len(completed) != 3 or any(not isinstance(row, dict) for row in completed)
+            or {row.get("role") for row in completed} != PARALLEL_ANALYSTS - {"Market Analyst"}):
+        raise _blocked("recovery_input_prelaunch_roles_invalid")
+    archive = _safe(run / "recovery-history" / _id(grant["grant_id"]))
+    if archive.exists():
+        start = _json(archive / "start.json")
+        if (research._digest(_json(archive / "grant.json")) != research._digest(grant)
+                or start != {"source_task_id": grant["source_task_id"], "recovery_task_id": _id(start.get("recovery_task_id")),
+                    "grant_sha256": research._digest(grant), "checkpoint": binding["checkpoint"], "counter": counter}):
+            raise _blocked("recovery_input_prelaunch_archive_drift")
+        execution, terminal = archive / "execution.json", archive / "worker-terminal.json"
+    else:
+        execution, terminal = run / "execution.json", run / "worker-terminal.json"
+    status = _json(execution)
+    worker = _json(terminal)
+    if (_sha(execution) != tail["source_execution_sha256"] or status.get("state") != "needs_native_recovery"
+            or status.get("error_kind") != "BudgetError" or status.get("automatic_retry") is not False
+            or _sha(terminal) != binding["worker_terminal_sha256"] or type(worker.get("exit_code")) is not int or worker["exit_code"] == 0):
+        raise _blocked("recovery_input_prelaunch_execution_drift")
+    from app.services.tradingagents_native.transport_process import project_usage_evidence
+    receipts, finals, expected_ids = {}, [], set()
+    for number in range(1, counter):
+        key = str(number)
+        usage, output = (_json(run / folder / (key + ".json")) for folder in ("usage-receipts", "model-outputs"))
+        value = output.get("structured_output")
+        projected = project_usage_evidence(usage.get("usage"))[0]
+        if (_sha(run / "usage-receipts" / (key + ".json")) != binding["usage_receipts"][key]
+                or _sha(run / "model-outputs" / (key + ".json")) != binding["outputs"][key]
+                or usage.get("usage_known") is not True or projected is None or usage.get("terminal_kind") != "typed_response"
+                or usage.get("task_id") != grant["source_task_id"] or usage.get("method_sha256") != segments[0]["method_sha256"]
+                or type(usage.get("call_id")) is not int or usage["call_id"] != number or type(output.get("call_id")) is not int or output["call_id"] != number
+                or output.get("role") not in PARALLEL_ANALYSTS or usage.get("role") != output["role"] or not isinstance(value, dict)
+                or output.get("output_sha256") != research._digest(value) or usage.get("output_sha256") != output["output_sha256"]
+                or "tool_calls" in value and not isinstance(value["tool_calls"], list)):
+            raise _blocked("recovery_input_prelaunch_source_usage_drift")
+        uid = _id(usage.get("usage_id"))
+        if uid in expected_ids:
+            raise _blocked("recovery_input_prelaunch_source_usage_drift")
+        expected_ids.add(uid)
+        receipts[uid] = (usage, projected)
+        if not value.get("tool_calls"):
+            finals.append({"role": output["role"], "call_id": number, "output_sha256": output["output_sha256"]})
+    if finals != completed:
+        raise _blocked("recovery_input_prelaunch_roles_invalid")
+    with (sf or research.get_session_factory())() as db:
+        task = db.get(AgentTask, grant["source_task_id"])
+        rows = db.execute(select(AgentResourceUsage).where(AgentResourceUsage.task_id == grant["source_task_id"], AgentResourceUsage.kind == "model")
+            .order_by(AgentResourceUsage.id).limit(4097)).scalars().all()
+        facts = [{column.name: (value.isoformat() if isinstance(value, datetime) else value) for column in AgentResourceUsage.__table__.columns for value in (getattr(row, column.name),)} for row in rows]
+        error = json.loads(task.error) if task and isinstance(task.error, str) and len(task.error) <= MAX_BYTES else None
+        expected_message = f"模型输入 {tail['input_chars']} 字符超过 Agent 上限 {tail['input_limit_chars']}"
+        if (task is None or task.type != "tradingagents_research" or task.status != "failed" or task.finished_at is None
+                or json.loads(task.params) != {"symbol": grant["symbol"]} or not isinstance(error, dict) or error.get("code") != "BudgetError"
+                or error.get("message") != expected_message or hashlib.sha256(task.error.encode()).hexdigest() != tail["source_task_error_sha256"]
+                or len(rows) != counter - 1 or {row.id for row in rows} != expected_ids or research._digest(facts) != tail["source_model_usage_facts_sha256"]):
+            raise _blocked("recovery_input_prelaunch_source_usage_drift")
+        for row in rows:
+            usage, projected = receipts[row.id]
+            if (row.state != "succeeded" or row.usage_known != 1 or row.started_at is None or row.finished_at is None or row.finished_at < row.started_at
+                    or row.scope != agent_budget.SCOPE_SELECTED_RESEARCH_LLM or row.budget_date != row.started_at.date().isoformat()
+                    or row.purpose != "tradingagents." + usage["role"].replace(" ", "_").lower() or row.provider != grant["source_method_identity"]["transport"]["provider"]
+                    or row.model != grant["source_method_identity"]["transport"]["model"] or row.attempts != 1 or row.max_retries != 0
+                    or row.input_tokens != projected["input_tokens"] or row.output_tokens != projected["output_tokens"]):
+                raise _blocked("recovery_input_prelaunch_source_usage_drift")
+    prefix = tail["model_receipts_prefix"]
+    if (not isinstance(prefix, dict) or set(prefix) != {"bytes", "sha256"} or type(prefix.get("bytes")) is not int
+            or not 0 < prefix["bytes"] <= MAX_BYTES or not _hash(prefix.get("sha256"))):
+        raise _blocked("recovery_input_prelaunch_stream_drift")
+    body = _body(run / "graph/model-receipts.jsonl")[:prefix["bytes"]]
+    if len(body) != prefix["bytes"] or hashlib.sha256(body).hexdigest() != prefix["sha256"]:
+        raise _blocked("recovery_input_prelaunch_stream_drift")
+    records = [json.loads(line) for line in body.splitlines() if line.strip()]
+    if len(records) != counter:
+        raise _blocked("recovery_input_prelaunch_stream_drift")
+    returned = {row.get("call_id"): row for row in records[:-1] if isinstance(row, dict)}
+    if len(returned) != counter - 1 or set(returned) != set(range(1, counter)):
+        raise _blocked("recovery_input_prelaunch_stream_drift")
+    for usage, _ in receipts.values():
+        row = returned[usage["call_id"]]
+        if (row.get("case_id") != grant["symbol"] or row.get("arm") != "ta-luna" or row.get("status") != "returned"
+                or row.get("role") != usage["role"] or row.get("response_sha256") != usage["output_sha256"]):
+            raise _blocked("recovery_input_prelaunch_stream_drift")
+    failed = records[-1]
+    if (not isinstance(failed, dict) or research._digest(failed) != tail["first_broker_error_record_sha256"]
+            or failed.get("case_id") != grant["symbol"] or failed.get("arm") != "ta-luna" or failed.get("status") != "broker_error"
+            or failed.get("call_id") is not None or failed.get("role") != "Market Analyst" or failed.get("error_type") != "{'kind': 'BudgetError'}"):
+        raise _blocked("recovery_input_prelaunch_stream_drift")
+    return counter
+
+
 def _first_parallel_failure(binding, grant):
     return (isinstance(grant, dict) and grant.get("user_authorization") == "EXPLICIT"
         and type(binding.get("call_counter")) is int and binding["call_counter"] == 1
         and binding.get("outputs") == {} and set(binding.get("usage_receipts", {})) == {"1"}
         and binding.get("completed_roles") == [] and binding.get("recovery_history", []) == []
-        and "prelaunch_tail" not in binding and "expected_pending_roles" in binding
+        and "prelaunch_tail" not in binding and "input_prelaunch_tail" not in binding and "expected_pending_roles" in binding
         and set(binding["expected_pending_roles"]) == PARALLEL_ANALYSTS
         and type(binding["checkpoint"].get("step")) is int and binding["checkpoint"]["step"] == 0
         and all(binding["prefixes"].get(name) == {"bytes": 0, "sha256": EMPTY_SHA}
@@ -544,8 +707,9 @@ def _first_failure_receipt(run, grant, sf=None):
 def _frozen_records(run, binding, segments, *, grant=None, sf=None):
     counter = binding["call_counter"]
     outputs, usages = binding["outputs"], binding["usage_receipts"]
-    gap = _prelaunch_tail(grant, run, segments, sf) if "prelaunch_tail" in binding and grant is not None else None
-    if "prelaunch_tail" in binding and gap is None:
+    gap = (_input_prelaunch_tail(grant, run, segments, sf) if "input_prelaunch_tail" in binding
+           else _prelaunch_tail(grant, run, segments, sf)) if grant is not None else None
+    if ("prelaunch_tail" in binding or "input_prelaunch_tail" in binding) and gap is None:
         raise _blocked("recovery_prelaunch_tail_invalid")
     first_failure = _first_parallel_failure(binding, grant)
     if (not isinstance(outputs, dict) or not isinstance(usages, dict) or not outputs and not first_failure
@@ -637,7 +801,7 @@ def _initial_snapshot(run, binding, symbol, packet, admission=None, *, source_gr
             or not _hash(files["db"]) or any(value is not None and not _hash(value) for value in files.values())):
         raise _blocked("recovery_checkpoint_or_terminal_drift")
     offline = ({"grant": source_grant, "session_factory": sf}
-               if _first_parallel_failure(binding, source_grant)
+               if (_first_parallel_failure(binding, source_grant) or "input_prelaunch_tail" in binding)
                and files.get("-wal") is None and files.get("-shm") is None else None)
     if checkpoint_snapshot(run, symbol, offline=offline) != binding["checkpoint"]:
         raise _blocked("recovery_checkpoint_or_terminal_drift")
@@ -645,6 +809,8 @@ def _initial_snapshot(run, binding, symbol, packet, admission=None, *, source_gr
     expected_thread = hashlib.sha256((symbol + ":" + packet["trade_date"] + ":" + manifest["config_signature"]).encode()).hexdigest()[:16]
     if binding["checkpoint"].get("thread_id") != expected_thread:
         raise _blocked("recovery_checkpoint_thread_drift")
+    if "input_prelaunch_tail" in binding:
+        _input_prelaunch_checkpoint(run, symbol, binding, offline=offline)
     if "expected_pending_roles" in binding:
         # No placeholder files are created for an answer that never arrived.
         # This applies only before dispatch; later physical calls may append
@@ -658,6 +824,42 @@ def _initial_snapshot(run, binding, symbol, packet, admission=None, *, source_gr
                 raise _blocked("recovery_parallel_original_role_stream_drift")
         historical = (admission or {}).get("unknown_usage_exception", {}).get("allowed_unknown_usage", ())
         _parallel_checkpoint(run, symbol, binding, historical, offline=offline)
+
+
+def _input_prelaunch_checkpoint(run, symbol, binding, *, offline=None):
+    """Three native analyst results survive; only Market wrap_up is pending."""
+    if binding["checkpoint"].get("step") != 0:
+        raise _blocked("recovery_input_prelaunch_checkpoint_invalid")
+    thread, root_id = (binding["checkpoint"][key] for key in ("thread_id", "checkpoint_id"))
+    reports = {"Sentiment Analyst": "sentiment_report", "News Analyst": "news_report", "Fundamentals Analyst": "fundamentals_report"}
+    counts = {role: sum(_json(run / "model-outputs" / (number + ".json"))["role"] == role for number in binding["outputs"]) for role in PARALLEL_ANALYSTS}
+    with _checkpoint_reader(run, symbol, offline=offline) as connection:
+        namespaces = connection.execute("SELECT checkpoint_ns,MAX(checkpoint_id) FROM checkpoints WHERE thread_id=? AND checkpoint_ns<>'' GROUP BY checkpoint_ns LIMIT 5", (thread,)).fetchall()
+        if len(namespaces) != 4:
+            raise _blocked("recovery_input_prelaunch_checkpoint_invalid")
+        errors = connection.execute("SELECT task_path,value FROM writes WHERE thread_id=? AND checkpoint_ns='' AND checkpoint_id=? AND channel='__error__' LIMIT 2", (thread, root_id)).fetchall()
+        if (len(errors) != 1 or errors[0][0] != "~__pregel_pull, Market Analyst"
+                or not isinstance(errors[0][1], bytes) or hashlib.sha256(errors[0][1]).hexdigest() != INPUT_PRELAUNCH_NATIVE_ERROR_SHA):
+            raise _blocked("recovery_input_prelaunch_checkpoint_invalid")
+        found = set()
+        for namespace, checkpoint_id in namespaces:
+            role, separator, suffix = namespace.partition(":")
+            row = connection.execute("SELECT metadata FROM checkpoints WHERE thread_id=? AND checkpoint_ns=? AND checkpoint_id=?", (thread, namespace, checkpoint_id)).fetchone()
+            meta = json.loads(row[0])
+            expected_step = 2 * counts.get(role, 0) - (0 if role == "Market Analyst" else 1)
+            if (not separator or not re.fullmatch(r"[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}", suffix)
+                    or role not in PARALLEL_ANALYSTS or role in found or not isinstance(meta, dict) or meta.get("parents") != {"": root_id}
+                    or type(meta.get("step")) is not int or not 0 < meta["step"] == expected_step):
+                raise _blocked("recovery_input_prelaunch_checkpoint_invalid")
+            errors = connection.execute("SELECT task_path,value FROM writes WHERE thread_id=? AND checkpoint_ns=? AND checkpoint_id=? AND channel='__error__' LIMIT 2", (thread, namespace, checkpoint_id)).fetchall()
+            if role == "Market Analyst":
+                if (len(errors) != 1 or errors[0][0] != "~__pregel_pull, wrap_up" or not isinstance(errors[0][1], bytes)
+                        or hashlib.sha256(errors[0][1]).hexdigest() != INPUT_PRELAUNCH_NATIVE_ERROR_SHA
+                        or connection.execute("SELECT 1 FROM writes WHERE thread_id=? AND checkpoint_ns='' AND checkpoint_id=? AND task_path=? AND channel='market_report' LIMIT 1", (thread, root_id, "~__pregel_pull, Market Analyst")).fetchone()):
+                    raise _blocked("recovery_input_prelaunch_checkpoint_invalid")
+            elif errors or not connection.execute("SELECT 1 FROM writes WHERE thread_id=? AND checkpoint_ns='' AND checkpoint_id=? AND task_path=? AND channel=? LIMIT 1", (thread, root_id, "~__pregel_pull, " + role, reports[role])).fetchone():
+                raise _blocked("recovery_input_prelaunch_checkpoint_invalid")
+            found.add(role)
 
 
 def _parallel_checkpoint(run, symbol, binding, allowed_unknown_usage=(), *, offline=None):
@@ -718,11 +920,20 @@ def _pending_guard(binding):
     def check(request, counter):
         nonlocal first
         role = request.get("role")
+        if "input_prelaunch_tail" in binding and role in {row["role"] for row in binding["completed_roles"]}:
+            raise _blocked("recovery_completed_role_replay_refused")
         if first and counter != binding["call_counter"]:
             raise _blocked("recovery_fresh_or_pending_role_mismatch")
         if "expected_pending_roles" not in binding:
             if first and role != binding["expected_pending_role"]:
                 raise _blocked("recovery_fresh_or_pending_role_mismatch")
+            if first and "input_prelaunch_tail" in binding:
+                expected = binding["input_prelaunch_tail"]["pending_message_fingerprints"]
+                messages = request.get("messages")
+                if (not isinstance(messages, list) or len(messages) < len(expected) + 1
+                        or research._digest(messages[-1]) != INPUT_PRELAUNCH_WRAP_UP_SHA
+                        or [research._digest(row) for row in messages[-len(expected) - 1:-1]] != expected):
+                    raise _blocked("recovery_checkpoint_messages_drift")
         elif role in pending:
             expected, messages = binding["pending_message_fingerprints"][role], request.get("messages")
             if (not isinstance(messages, list) or len(messages) < len(expected)

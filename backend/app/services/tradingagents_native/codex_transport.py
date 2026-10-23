@@ -7,6 +7,7 @@ install dependencies or use the upstream's separate ChatGPT sign-in.
 import hashlib
 import json
 import os
+from copy import deepcopy
 from pathlib import Path
 import re
 import tempfile
@@ -73,10 +74,118 @@ NOTE = ('Transport protocol only: the following lossless ordered JSON transcript
         'the original graph executes them after this process returns. Never invent tool_result or claim unexecuted tools ran. '
         'For an original structured result schema, produce that object. Null on a wire-only optional nonnullable property '
         'represents omission, not a measured value. Preserve every original fact, role, restriction and field description.\n')
+FROZEN_TABLE_NOTE = ('Frozen evidence representation only: frozen-facts-tables-v1 preserves the original facts. '
+    '__frozen_table_v1__ columns are original field names; each ordered row contains those exact values, including null. '
+    'Read each row as the object formed by pairing columns with values. No fact, source, row, or restriction is added or removed.\n')
+_FROZEN_START = '<UNTRUSTED_FROZEN_EVIDENCE>'
+_FROZEN_END = '</UNTRUSTED_FROZEN_EVIDENCE>'
+_TABLE_TAG = '__frozen_table_v1__'
+_TABLE_PATHS = (('price_history', 'observations'), ('fundamentals', 'periods'))
 
 
 def canonical(value):
     return json.dumps(value, ensure_ascii=False, sort_keys=True, separators=(',', ':'), allow_nan=False)
+
+
+def _check_frozen_keys(value, depth=0):
+    if depth > 64:
+        raise ValueError('frozen_wire_source_invalid')
+    if isinstance(value, dict):
+        if _TABLE_TAG in value:
+            raise ValueError('frozen_wire_source_invalid')
+        for item in value.values():
+            _check_frozen_keys(item, depth + 1)
+    elif isinstance(value, list):
+        for item in value:
+            _check_frozen_keys(item, depth + 1)
+
+
+def _frozen_tables(facts):
+    """Only two offered homogeneous row arrays; every other value is untouched."""
+    encoded = deepcopy(facts)
+    changed = False
+    for parent, field in _TABLE_PATHS:
+        owner = encoded.get(parent)
+        rows = owner.get(field) if isinstance(owner, dict) else None
+        if (not isinstance(rows, list) or len(rows) < 3 or not isinstance(rows[0], dict)
+                or not rows[0] or any(not isinstance(row, dict) for row in rows)):
+            continue
+        columns = list(rows[0])
+        if any(list(row) != columns for row in rows):
+            continue
+        table = {_TABLE_TAG: {'columns': columns, 'rows': [[row[key] for key in columns] for row in rows]}}
+        if len(canonical(table)) >= len(canonical(rows)):
+            continue
+        owner[field] = table
+        changed = True
+    # A local restoration check is proof of representation equality only. It
+    # never attests to the source's truth or approves a model response.
+    restored = deepcopy(encoded)
+    for parent, field in _TABLE_PATHS:
+        owner = restored.get(parent)
+        table = owner.get(field) if isinstance(owner, dict) else None
+        if isinstance(table, dict) and set(table) == {_TABLE_TAG}:
+            data = table[_TABLE_TAG]
+            owner[field] = [dict(zip(data['columns'], row)) for row in data['rows']]
+    if canonical(restored) != canonical(facts):
+        raise ValueError('frozen_wire_roundtrip_invalid')
+    return encoded, changed
+
+
+def _selected_wire_messages(messages, expected_sha256):
+    if not isinstance(expected_sha256, str) or not re.fullmatch('[0-9a-f]{64}', expected_sha256):
+        raise ValueError('frozen_wire_binding_invalid')
+    starts = [(index, row['content'].count(_FROZEN_START)) for index, row in enumerate(messages)]
+    ends = [(index, row['content'].count(_FROZEN_END)) for index, row in enumerate(messages)]
+    if sum(count for _, count in starts) != 1 or sum(count for _, count in ends) != 1:
+        raise ValueError('frozen_wire_source_invalid')
+    index = next(index for index, count in starts if count)
+    if not ends[index][1] or messages[index]['role'] not in {'system', 'user'}:
+        raise ValueError('frozen_wire_source_invalid')
+    content = messages[index]['content']
+    start = content.index(_FROZEN_START) + len(_FROZEN_START)
+    end = content.index(_FROZEN_END)
+    if end <= start:
+        raise ValueError('frozen_wire_source_invalid')
+    try:
+        facts = json.loads(content[start:end], object_pairs_hook=unique,
+            parse_constant=lambda _: (_ for _ in ()).throw(ValueError('frozen_wire_source_invalid')))
+        if not isinstance(facts, dict) or facts.get('format') == 'frozen-facts-tables-v1':
+            raise ValueError('frozen_wire_source_invalid')
+        _check_frozen_keys(facts)
+        original = canonical(facts)
+        if sha(original.encode()) != expected_sha256:
+            raise ValueError('frozen_wire_binding_invalid')
+        encoded, changed = _frozen_tables(facts)
+    except (ValueError, TypeError, UnicodeError, RecursionError):
+        raise ValueError('frozen_wire_source_invalid') from None
+    if not changed:
+        return messages, False
+    body = canonical({'format': 'frozen-facts-tables-v1', 'source_facts_sha256': expected_sha256, 'facts': encoded})
+    copied = [dict(row) for row in messages]
+    copied[index]['content'] = content[:start] + '\n' + body + '\n' + content[end:]
+    return copied, True
+
+
+def prepare_cli_request(messages, original_schema, *, selected_facts_sha256=None):
+    """One exact wire builder for accounting preflight and actual CLI input.
+
+    The optional hash is supplied only by the selected consumer after the
+    original request/recovery checks. Source text cannot authorize this mode.
+    No original message, packet, checkpoint, schema or tool is modified.
+    """
+    transcript = encode_cli_transcript(messages)  # Keep original role/tool/size guards.
+    changed = False
+    if selected_facts_sha256 is not None:
+        prepared, changed = _selected_wire_messages(messages, selected_facts_sha256)
+        if changed:
+            candidate = encode_cli_transcript(prepared)
+            if len(candidate) + len(FROZEN_TABLE_NOTE) < len(transcript):
+                transcript = candidate
+            else:
+                changed = False  # A small table must not grow the actual wire.
+    wire, projection = strict_wire_schema(original_schema)
+    return NOTE + (FROZEN_TABLE_NOTE if changed else '') + transcript, wire, projection
 
 
 def sha(body):
@@ -490,15 +599,14 @@ def interpreter_binding(executable, node_executable=None, node_executable_sha256
 
 def codex_infer(messages, original_schema, *, model, mark_launch, executable, auth_file,
                 timeout=180, effort="medium", proxy_env=None, node_executable=None,
-                node_executable_sha256=None):
+                node_executable_sha256=None, selected_facts_sha256=None):
     CODEX = Path(executable).resolve()
     interpreter = interpreter_binding(CODEX, node_executable, node_executable_sha256)
     command = [str(Path(node_executable).resolve()), str(CODEX)] if interpreter['kind'] == 'node' else [str(CODEX)]
     runtime_path = ([str(Path(node_executable).resolve().parent)] if interpreter['kind'] == 'node' else []) + [str(CODEX.parent), '/usr/bin', '/bin']
     # Original codec checks role ordering, actual tool-result IDs and bounds.
-    transcript = encode_cli_transcript(messages)
-    prompt = NOTE + transcript
-    wire, projection = strict_wire_schema(original_schema)
+    prompt, wire, projection = prepare_cli_request(messages, original_schema,
+        selected_facts_sha256=selected_facts_sha256)
     with tempfile.TemporaryDirectory(prefix='ta-codex-typed-') as td:
         path = Path(td)
         for name in ('home', 'codex', 'cwd'):
@@ -565,6 +673,9 @@ def codex_infer(messages, original_schema, *, model, mark_launch, executable, au
                   original_schema_sha256=sha(canonical(original_schema).encode()),
                   schema_projection=projection, wire_null_omitted_original_keys=omissions,
                   request_prompt_sha256=sha(prompt.encode()), messages_sha256=sha(canonical(messages).encode()),
-                  ordered_transcript_roundtrip=json.loads(transcript)['messages'] == messages,
+                  # This is the original ordered message codec check; the
+                  # optional evidence representation has its own strict
+                  # canonical restoration check before any launch.
+                  ordered_transcript_roundtrip=json.loads(encode_cli_transcript(messages))['messages'] == messages,
                   model_requested=model, protocol='codex_cli_output_schema_v1')
     return result

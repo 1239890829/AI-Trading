@@ -18,6 +18,7 @@ import type {
   Trade,
   TradingStatusInfo,
   Meta,
+  Quality,
 } from "@/types/market";
 
 import type { Freshness } from "./client";
@@ -674,7 +675,10 @@ export async function getBoardFlowMembers(boardCode: string): Promise<BoardFlowM
 
 export interface IndexMembers {
   symbol: string; name: string; source: string; snapshot_at: string; cached: boolean;
-  items: {symbol: string; name: string; market: "SH" | "SZ" | "BJ"}[];
+  items: {symbol: string; name: string; market: "SH" | "SZ" | "BJ"; change_pct?: number | null;
+    quote_source?: string | null; source_clock?: string | null; quote_quality?: Quality | null; quote_observed_at?: string | null}[];
+  quote_snapshot?: {source: string | null; source_clock: string | null; quality: Quality | "unknown";
+    observed_at?: string | null; known_count: number; total: number; snapshot_state?: Freshness["state"]};
 }
 export async function getIndexMembers(symbol: string): Promise<IndexMembers> {
   const result = (await getJson<IndexMembers>(`/api/indices/${encodeURIComponent(symbol)}/members`)).data;
