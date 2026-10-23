@@ -4,7 +4,6 @@ import type {EventInterpretationRef, NotificationItem} from "@/lib/api";
 import {dateTimeTextBJ, dateTimesInTextBJ, formatLegacyLimitDistance, sourceLabel} from "@/lib/format";
 import {workbenchUrl} from "@/lib/routing";
 import {ModalShell} from "@/components/ui/modal-shell";
-import styles from "./notification-workspace.module.css";
 import {ReaderBrief, ResearchDisclosure} from "@/components/ui/reader-brief";
 import {readerExcerpt, readerCautions} from "@/lib/reader-copy";
 import {ConditionList} from "@/components/ui/explanation-map";
@@ -123,43 +122,22 @@ function selectionContext(item: NotificationItem) {
     && Number.isFinite(Date.parse(asOf)) ? asOf : undefined};
 }
 
-/** A compact fingerprint of saved producer fields. Missing values are never measured zeros. */
-export function notificationEvidenceFingerprint(item: NotificationItem) {
-  const selection = selectionContext(item);
-  if (selection?.summary.measurements?.items.length) return selection.summary.measurements.items.map(value => ({
-    key: value.key, label: value.label, state: value.state, score: null as number | null,
-    value: value.state === "ready" && value.value !== null ? `${new Intl.NumberFormat("zh-CN", {maximumFractionDigits: 2}).format(value.value)}${value.unit}` : "待核",
-  }));
-  return (selection?.summary.scores ?? []).filter(value => value.value !== null || value.state !== "unknown").map(value => {
-    const measured = value.value !== null && ["success", "valid_empty", "partial"].includes(value.state);
-    return {key: value.key, label: value.label, state: value.state, score: measured ? value.value : null,
-      value: ["missing", "error"].includes(value.state) ? "缺项" : measured ? `${value.value}${value.state === "partial" ? " · 部分" : value.state === "valid_empty" ? " · 有效空集" : ""}` : "待核"};
-  });
-}
-
 /** One content owner for inline and standalone readers. Reading cannot start research. */
-export function NotificationDetailContent({item, active = true, inline = false, onClose, onOpenNews}: {
-  item: NotificationItem; active?: boolean; inline?: boolean; onClose: () => void; onOpenNews: (item: NewsModalItem) => void;
+export function NotificationDetailContent({item, active = true, onClose, onOpenNews}: {
+  item: NotificationItem; active?: boolean; onClose: () => void; onOpenNews: (item: NewsModalItem) => void;
 }) {
   const {open: inspect} = useInspection();
   const {open: openSymbol} = useSymbolDetail();
   const selection = selectionContext(item);
   const actionClass = `${readingRowClasses.action} quiet-action inline-flex min-h-9 items-center rounded px-2 py-1`;
   return (
-    <div className={inline ? styles.detailContent : "space-y-5 break-words text-sm leading-relaxed [overflow-wrap:anywhere]"}>
-      {inline ? <section className={styles.readingLead} aria-label="提醒要点">
-        <div><span>为何提醒</span><p>{notificationSummary(item)}</p></div>
-        <div><span>何时失效</span><p>{readerExcerpt(visibleProse(item.validity || "原记录未存失效条件，当前条件须重新核对"), 96)}</p></div>
-        <p className={styles.recordClock}>原观察 {clock(item.source_as_of ?? item.ts, "未记录")} · 当时记录，非当前买入结论</p>
-      </section> : <>
+    <div className="space-y-5 break-words text-sm leading-relaxed [overflow-wrap:anywhere]">
       <ReaderBrief label="提醒简述" headline={notificationSummary(item)} facts={[
         {label:"这条提醒",value:item.category === "risk" ? "提醒你核对风险" : item.category === "reminder" ? "你设置的条件曾触发" : selection ? "选股系统曾把它列入观察" : "保存的消息或条件观察记录"},
         {label:"发生时间",value:clock(item.source_as_of ?? item.ts, "原时点未记录")},
         {label:"关键条件",value:visibleProse(item.validity || "原记录未保存失效条件，须重新核对")},
       ]} cautions={[...readerCautions([item.body, item.validity || ""]), "这是当时的记录，不代表现在可以买入"]}/>
-      </>}
       {active && selection && <section aria-label="原选股对应的公司与研究" className="min-w-0 border-t border-zinc-200 pt-3 dark:border-zinc-800">
-        <p className="text-xs text-zinc-600 dark:text-zinc-400">公司联系核对原披露；补充资料不改写当时理由。</p>
         <StockAttributionPanel key={`${item.id}:${item.symbol}:${selection.identity}`} symbol={item.symbol} title="公司关联与依据" defaultExpanded bounded={false} concise
           responseAsOf={selection.asOf} recordedRefs={selection.events} selectionContext selectionSummary={selection.summary}/>
         <TradingAgentsResearchPanel key={`${item.id}:${item.symbol}:research`} symbol={item.symbol!} compact allowStart={false}/>
@@ -191,12 +169,13 @@ export function NotificationDetailContent({item, active = true, inline = false, 
   );
 }
 
-/** Standalone consumers retain the original modal contract; the notification workspace uses content directly. */
-export function NotificationDetail({item, open, onClose, onOpenNews}: {item: NotificationItem; open: boolean; onClose: () => void; onOpenNews: (item: NewsModalItem) => void}) {
+/** The notification list retains its original detail drawer. Reading cannot start research. */
+export function NotificationDetail({item, open, onClose, onOpenNews, readError = false}: {item: NotificationItem; open: boolean; onClose: () => void; onOpenNews: (item: NewsModalItem) => void; readError?: boolean}) {
   return <ModalShell open={open} onClose={onClose} presentation="drawer" zIndex={60} label={item.title} testid="notification-detail" size="md"
     header={<div className="min-w-0"><h3 className="break-words text-sm font-semibold">{item.title}</h3><p className="mt-1 text-xs text-zinc-600 dark:text-zinc-400">{item.label} · {dateTimeTextBJ(item.ts)}</p></div>}
-    bodyClassName="overflow-y-auto px-4 py-4"
+    bodyClassName="overflow-y-auto px-4 py-4" bodyTestId="notification-detail-body"
     footer={<p className="text-xs text-zinc-600 dark:text-zinc-400">不构成买卖建议。</p>}>
+    {readError && <p role="alert" className="mb-3 text-xs leading-relaxed text-amber-800 dark:text-amber-300">通知刷新失败，正在核对上次保存的记录；当前通知状态未确认。</p>}
     <NotificationDetailContent item={item} active={open} onClose={onClose} onOpenNews={onOpenNews}/>
   </ModalShell>;
 }

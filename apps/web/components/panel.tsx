@@ -3,9 +3,6 @@ import { QualityBadge } from "@/components/quality-badge";
 import { PanelBoundary } from "@/components/ui/panel-boundary";
 import { sourceLabel, timeText } from "@/lib/format";
 import type { Quality } from "@/types/market";
-import { HugeiconsIcon } from "@hugeicons/react";
-import Database01Icon from "@hugeicons/core-free-icons/Database01Icon";
-import Clock01Icon from "@hugeicons/core-free-icons/Clock01Icon";
 
 
 interface PanelProps {
@@ -72,15 +69,15 @@ export function Panel({ title, children, source, dataTimestamp, quality, quality
       {showHeader && (
         <div className="task-panel-header flex shrink-0 items-center justify-between gap-3 border-b border-zinc-200 bg-zinc-900/[0.03] px-4 py-2.5 dark:border-zinc-800 dark:bg-zinc-900/40">
           {/* 标题与元信息分别收缩；窄面板允许元信息换行，保持来源可读。 */}
-          <h2 className="panel-title min-w-0 text-sm font-medium text-zinc-900 dark:text-zinc-100">{title}</h2>
+          <h2 className="min-w-0 truncate text-sm font-medium text-zinc-900 dark:text-zinc-100">{title}</h2>
           <div className="panel-meta flex min-w-0 flex-wrap items-center gap-3 text-xs text-zinc-600 dark:text-zinc-400">
             {extra}
             {/* 直接渲染，不加门控——可见性策略单点在 QualityBadge 内部
                 （2026-09-14 口径统一；此前 `{quality && …}` 这类门控散在各调用点，
                 正是「盘面显示正常 / 工作台不显示」漂移的成因）。 */}
             <QualityBadge quality={quality} reasons={qualityReasons} dataTimestamp={dataTimestamp} />
-            {source && <span className="panel-meta-item panel-source" title="数据来源"><HugeiconsIcon icon={Database01Icon} size={13} strokeWidth={1.6} aria-hidden="true" /><span><span className="sr-only">来源：</span>{sourceLabel(source)}</span></span>}
-            {dataTimestamp && <span className="panel-meta-item panel-time" title="数据时间"><HugeiconsIcon icon={Clock01Icon} size={13} strokeWidth={1.6} aria-hidden="true" /><time dateTime={dataTimestamp}><span className="sr-only">数据时间：</span>{timeText(dataTimestamp)}</time></span>}
+            {source && <span className="shrink-0 whitespace-nowrap" title="数据来源">{sourceLabel(source)}</span>}
+            {dataTimestamp && <span className="shrink-0 whitespace-nowrap" title="数据时间">{timeText(dataTimestamp)}</span>}
           </div>
         </div>
       )}

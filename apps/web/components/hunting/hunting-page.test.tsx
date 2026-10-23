@@ -1,6 +1,6 @@
-import { useEffect, useRef } from "react";
+import { useEffect, useRef, useId, useState } from "react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { act, cleanup, fireEvent, render, screen, waitFor } from "@testing-library/react";
+import { act, cleanup, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import HuntingPage from "@/app/hunting/page";
 import * as api from "@/lib/api";
 import {CardEntryRow} from "@/components/picks/card-entries";
@@ -13,10 +13,15 @@ vi.mock("@/hooks/use-polling-fetch", () => ({ usePollingFetch: (fn: () => Promis
   useEffect(() => { if (options?.enabled !== false) void latest.current(); }, [options?.enabled]);
 } }));
 vi.mock("@/components/ui/modal-shell", () => ({ ModalShell: () => null }));
-vi.mock("@/components/ui/candidate-collection", () => ({ CandidateCollection: ({children}: {children: React.ReactNode}) => <div>{children}</div> }));
-vi.mock("@/components/picks/selection-workspace", () => ({SelectionWorkspace: ({groups, dailyEvidence, onShowDailyEvidence}: {groups: {key: string; title: string; description: string; readError?: boolean; items: {symbol: string}[]}[]; dailyEvidence?: Map<string, {item: api.DailyPickItem}>; onShowDailyEvidence?: (item: api.DailyPickItem) => void}) => <section data-testid="selection-comparison-workspace">{groups.map(group => <section key={group.key}><h3>{group.title}</h3><p>{group.description}</p>{group.items.map(item => <article key={item.symbol} data-read-error={String(!!group.readError)}>候选 {item.symbol}<CardEntryRow symbol={item.symbol}/>{dailyEvidence?.has(item.symbol) && <button onClick={() => onShowDailyEvidence?.(dailyEvidence.get(item.symbol)!.item)}>每日依据 {item.symbol}</button>}</article>)}</section>)}</section>}));
+vi.mock("@/components/ui/candidate-collection", () => ({ CandidateCollection: ({children}: {children: React.ReactNode}) => {
+  const [mode, setMode] = useState("cards");
+  return <div data-testid="candidate-collection" data-mode={mode}><button onClick={() => setMode(mode === "cards" ? "list" : "cards")}>本组呈现方式</button>{children}</div>;
+} }));
 vi.mock("@/components/ui/loading", () => ({ FadeIn: ({children}: {children: React.ReactNode}) => <div>{children}</div>, CardListSkeleton: () => <div>读取候选中</div>, PageSkeletonFallback: () => null, StatGridSkeleton: () => null, StatsSkeleton: () => null, TableSkeleton: () => null }));
-vi.mock("@/components/picks/pick-card", () => ({ PickCard: ({item, readError, dailyEvidence, onShowDailyEvidence}: {item: {symbol: string}; readError?: boolean; dailyEvidence?: {item: api.DailyPickItem}; onShowDailyEvidence?: (item: api.DailyPickItem) => void}) => <article data-read-error={String(!!readError)}>候选 {item.symbol}<CardEntryRow symbol={item.symbol} />{dailyEvidence && <button onClick={() => onShowDailyEvidence?.(dailyEvidence.item)}>每日依据 {item.symbol}</button>}</article>, fromDailyPick: (item: unknown) => item, fromIntradayStock: (item: unknown) => item, StandAsideBanner: () => <div data-testid="risk-gate">原风险闸门</div> }));
+vi.mock("@/components/picks/pick-card", () => ({ PickCard: ({item, readError, dailyEvidence, onShowDailyEvidence, active = true, compact = false}: {item: {symbol: string}; readError?: boolean; dailyEvidence?: {item: api.DailyPickItem}; onShowDailyEvidence?: (item: api.DailyPickItem) => void; active?: boolean; compact?: boolean}) => {
+  const instance = useId(); const [field, setField] = useState("原选择");
+  return <article data-card-instance={instance} data-read-error={String(!!readError)} data-active={String(active)} data-compact={String(compact)}>候选 {item.symbol}<button onClick={() => setField("已选分项")} aria-label={`本地分项 ${item.symbol}`}>{field}</button><CardEntryRow symbol={item.symbol} />{dailyEvidence && <button onClick={() => onShowDailyEvidence?.(dailyEvidence.item)}>每日依据 {item.symbol}</button>}</article>;
+}, fromDailyPick: (item: unknown) => item, fromIntradayStock: (item: unknown) => item, StandAsideBanner: () => <div data-testid="risk-gate">原风险闸门</div> }));
 vi.mock("@/components/picks/pick-detail-modal", () => ({PickDetailModal: ({target, readError}: {target: {item: api.DailyPickItem} | null; readError?: boolean}) => target ? <div data-testid="daily-detail" data-read-error={String(!!readError)}>原依据 {target.item.symbol} · 执行价 {target.item.execution?.executable_snapshot.price}</div> : null}));
 vi.mock("@/components/detail/detail-modal", () => ({useDetailModal: () => ({open: vi.fn()})}));
 vi.mock("@/lib/market-hours", () => ({isTradingSession: () => true}));
@@ -48,18 +53,106 @@ beforeEach(() => {
 });
 afterEach(() => { cleanup(); vi.useRealTimers(); vi.clearAllMocks(); vi.unstubAllGlobals(); });
 
+const group = (name: "candidates" | "daily") => document.getElementById(`sec-${name}`)!;
+const card = (symbol: string, name: "candidates" | "daily" = "candidates") => within(group(name)).getByText(`候选 ${symbol}`).closest("article")!;
+
+it("switches complete card groups through the existing URL section and preserves each group's local state", async () => {
+  const page = render(<HuntingPage/>);
+  await screen.findByText("候选 002636");
+  expect(group("candidates").hidden).toBe(false);
+  expect(group("daily").hidden).toBe(true);
+  expect(group("daily").hasAttribute("inert")).toBe(true);
+  expect(within(group("daily")).getAllByText(/候选 /)).toHaveLength(2);
+  expect(card("600127").dataset.active).toBe("true");
+  expect(card("600127", "daily").dataset.active).toBe("false");
+  expect(card("600127").dataset.compact).toBe("true");
+  fireEvent.click(within(group("candidates")).getByRole("button", {name: "本组呈现方式"}));
+  fireEvent.click(within(card("600127")).getByRole("button", {name: "本地分项 600127"}));
+  const intradayInstance = card("600127").dataset.cardInstance;
+  search = new URLSearchParams({sec: "daily"}); page.rerender(<HuntingPage/>);
+  expect(group("candidates").hidden).toBe(true);
+  expect(group("candidates").hasAttribute("inert")).toBe(true);
+  expect(group("daily").hidden).toBe(false);
+  expect(group("daily").hasAttribute("inert")).toBe(false);
+  expect(card("600127").dataset.active).toBe("false");
+  expect(card("600127", "daily").dataset.active).toBe("true");
+  fireEvent.click(within(card("600127", "daily")).getByRole("button", {name: "本地分项 600127"}));
+  const reads = vi.mocked(api.getTodayPicks).mock.calls.length;
+  const topReads = vi.mocked(api.getIntradayTop).mock.calls.length;
+  search = new URLSearchParams({sec: "candidates"}); page.rerender(<HuntingPage/>);
+  expect(card("600127").dataset.cardInstance).toBe(intradayInstance);
+  expect(within(group("candidates")).getByTestId("candidate-collection").dataset.mode).toBe("list");
+  expect(within(card("600127")).getByRole("button", {name: "本地分项 600127"}).textContent).toBe("已选分项");
+  search = new URLSearchParams({sec: "daily"}); page.rerender(<HuntingPage/>);
+  expect(within(card("600127", "daily")).getByRole("button", {name: "本地分项 600127"}).textContent).toBe("已选分项");
+  expect(api.getTodayPicks).toHaveBeenCalledTimes(reads);
+  expect(api.getIntradayTop).toHaveBeenCalledTimes(topReads);
+  expect(api.getEventsForSymbol).not.toHaveBeenCalled();
+});
+
+it.each(["desktop", "mobile"])("restores per-group positions in the actual %s scroll owner without moving the market context or navigation focus", async layout => {
+  const page = render(<HuntingPage/>);
+  await screen.findByText("候选 002636");
+  const flow = screen.getByRole("region", {name: "候选结果与题材"});
+  const grid = flow.parentElement!;
+  flow.style.overflowY = layout === "desktop" ? "auto" : "visible";
+  grid.style.overflowY = layout === "mobile" ? "auto" : "hidden";
+  const owner = layout === "desktop" ? flow : grid;
+  const context = screen.getByRole("complementary", {name: "市场环境、节拍与复盘"});
+  context.scrollTop = 64;
+  owner.scrollTop = 280; fireEvent.scroll(owner);
+  const nav = screen.getByRole("link", {name: "每日精选"}); nav.focus();
+  search = new URLSearchParams({sec: "daily"}); page.rerender(<HuntingPage/>);
+  expect(owner.scrollTop).toBe(0);
+  expect(document.activeElement).toBe(nav);
+  owner.scrollTop = 145; fireEvent.scroll(owner);
+  search = new URLSearchParams({sec: "candidates"}); page.rerender(<HuntingPage/>);
+  expect(owner.scrollTop).toBe(280);
+  expect(context.scrollTop).toBe(64);
+  expect(screen.getByRole("complementary", {name: "市场环境、节拍与复盘"})).toBe(context);
+  search = new URLSearchParams({sec: "daily"}); page.rerender(<HuntingPage/>);
+  expect(owner.scrollTop).toBe(145);
+  expect(HTMLElement.prototype.scrollIntoView).not.toHaveBeenCalled();
+});
+
+it("an initial daily section keeps the pending target visible and closes global daily details when the card group changes", async () => {
+  search = new URLSearchParams({sec: "daily"});
+  let finish!: (value: api.DailyPicksPayload) => void;
+  vi.mocked(api.getTodayPicks).mockReturnValueOnce(new Promise(resolve => {finish = resolve;}));
+  const page = render(<HuntingPage/>);
+  await waitFor(() => expect(api.getIntradayTop).toHaveBeenCalledTimes(1));
+  expect(group("daily").hidden).toBe(false);
+  expect(group("candidates").hidden).toBe(true);
+  expect(within(group("daily")).getByText("读取候选中")).toBeTruthy();
+  expect(within(group("daily")).queryByText(/没有组合|均已在盘中/)).toBeNull();
+  await act(async () => finish({date: "2026-10-08", items: [{symbol: "600127"}]} as api.DailyPicksPayload));
+  search = new URLSearchParams({sec: "candidates"}); page.rerender(<HuntingPage/>);
+  fireEvent.click(await screen.findByRole("button", {name: "每日依据 600127"}));
+  expect(screen.getByTestId("daily-detail")).toBeTruthy();
+  search = new URLSearchParams({sec: "daily"}); page.rerender(<HuntingPage/>);
+  expect(screen.queryByTestId("daily-detail")).toBeNull();
+});
+
 describe("真实选股消费者迁移", () => {
-  it("retains persisted and dynamic lists, deduplicates symbols and places risk before candidates", async () => {
+  it("retains each producer's complete list, hides the inactive group and places risk before candidates", async () => {
     render(<HuntingPage />);
-    expect(await screen.findByText("候选 600127")).toBeTruthy();
-    expect(screen.getAllByText("候选 600127")).toHaveLength(1);
+    expect(await within(group("candidates")).findByText("候选 600127")).toBeTruthy();
+    expect(screen.getAllByText("候选 600127")).toHaveLength(2);
     expect(screen.getByText("候选 002636")).toBeTruthy();
-    expect(screen.getAllByTestId("selection-comparison-workspace")).toHaveLength(1);
-    expect(screen.getByRole("heading", {name: "每日精选"})).toBeTruthy();
+    expect(screen.queryByRole("heading", {name: "每日精选"})).toBeNull();
+    expect(screen.getByRole("heading", {name: "每日精选", hidden: true})).toBeTruthy();
     expect(screen.getByText(/2026-10-08 · 当日持久候选/)).toBeTruthy();
     expect(screen.getByText("题材原消费者：台账嵌入 false")).toBeTruthy();
+    const intraday = screen.getByRole("heading", {name: "盘中候选"}).closest("section")!;
+    const daily = group("daily");
+    expect(intraday.id).toBe("sec-candidates");
+    expect(daily.id).toBe("sec-daily");
+    expect(intraday.contains(card("600127"))).toBe(true);
+    expect(daily.contains(screen.getByText("候选 002636"))).toBe(true);
+    expect(screen.getAllByTestId("candidate-collection")).toHaveLength(2);
+    expect(screen.queryByRole("region", {name: "入选依据对照工作区"})).toBeNull();
     const risk = screen.getByTestId("risk-gate");
-    expect(risk.compareDocumentPosition(screen.getByText("候选 600127")) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
+    expect(risk.compareDocumentPosition(card("600127")) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
   });
 
   it.each([["evidence", "真实依据组件"], ["tracking", "真实跟踪组件"], ["research", "真实研究组件"]])("does not mount discovery polling behind %s", async (view, name) => {
@@ -83,7 +176,7 @@ describe("真实选股消费者迁移", () => {
     search = new URLSearchParams({view: "discover", sec: "postmarket"});
     render(<HuntingPage />);
     expect(screen.getByText("原接力潜伏：true")).toBeTruthy();
-    await screen.findByText("候选 600127");
+    await within(group("candidates")).findByText("候选 600127");
   });
 });
 
@@ -110,7 +203,7 @@ it("renders candidates before slow auxiliary review and brief reads finish", asy
   vi.mocked(api.getMorningBriefToday).mockReturnValue(new Promise(() => {}));
   render(<HuntingPage />);
   expect(await screen.findByText("候选 002636")).toBeTruthy();
-  expect(screen.getByText("候选 600127")).toBeTruthy();
+  expect(card("600127")).toBeTruthy();
 });
 
 it("does not let a late daily read overwrite the results after leaving and returning", async () => {
@@ -208,7 +301,7 @@ it("closed reference details keeps the full count but makes no per-stock presenc
   expect(refCalls()).toHaveLength(0);
   expect(screen.getByText(/涨停梯队 2 只/)).toBeTruthy();
   expect(screen.getByText("候选 002636")).toBeTruthy();
-  expect(screen.getByText("候选 600127")).toBeTruthy();
+  expect(card("600127")).toBeTruthy();
 });
 
 it("reference disclosure keeps an inert exit for 160ms and a quick reversal preserves the same cards", async () => {
@@ -246,9 +339,9 @@ it("same-scope refresh failures preserve all candidates but remove current gate 
   vi.mocked(api.getIntradayTop).mockRejectedValue(new Error("top-offline"));
   fireEvent.click(screen.getByRole("button", {name: "刷新数据"}));
   await screen.findByText(/保留上次读取的盘中候选/);
-  expect(screen.getByText("候选 600127").closest("article")?.dataset.readError).toBe("true");
+  expect(card("600127").dataset.readError).toBe("true");
   expect(screen.getByText("候选 002636").closest("article")?.dataset.readError).toBe("true");
-  expect(screen.getAllByText(/候选 (600127|002636)/)).toHaveLength(2);
+  expect(screen.getAllByText(/候选 (600127|002636)/)).toHaveLength(3);
   expect(screen.queryByTestId("risk-gate")).toBeNull();
   expect(screen.queryByText(/当前没有可参与候选/)).toBeNull();
   vi.mocked(api.getTodayPicks).mockResolvedValue({date: "2026-10-08", items: [{symbol: "600128"}, {symbol: "002826"}], meta: {gate: {}}} as api.DailyPicksPayload);
@@ -259,7 +352,7 @@ it("same-scope refresh failures preserve all candidates but remove current gate 
   }], reference_items: [], total_candidates: 1, criteria: "fixture", hot_available: false, caveats: []});
   fireEvent.click(screen.getByRole("button", {name: "刷新数据"}));
   await screen.findByText("候选 002826");
-  expect(screen.getByText("候选 600128").closest("article")?.dataset.readError).toBe("false");
+  expect(card("600128").dataset.readError).toBe("false");
   expect(screen.getByText("候选 002826").closest("article")?.dataset.readError).toBe("false");
   expect(screen.queryByText("候选 600127")).toBeNull();
   expect(screen.queryByText("候选 002636")).toBeNull();
@@ -292,6 +385,24 @@ it("a successful same-version daily reply updates the open evidence, while remov
   vi.mocked(api.getTodayPicks).mockResolvedValue(dailyReply(15, "600127", "v2"));
   fireEvent.click(screen.getByRole("button", {name: "刷新数据"}));
   await waitFor(() => expect(screen.queryByTestId("daily-detail")).toBeNull());
+});
+
+it("retains the legacy card instance on same-version refresh but retires it when its list date or version changes", async () => {
+  const reply = (date = "2026-10-08", version = "v1") => ({date, items: [{symbol: "002636"}], meta: {selection_version: version}} as api.DailyPicksPayload);
+  vi.mocked(api.getTodayPicks).mockResolvedValue(reply());
+  render(<HuntingPage/>);
+  const card = () => screen.getByText("候选 002636").closest("article")!;
+  await screen.findByText("候选 002636");
+  const initial = card().dataset.cardInstance;
+  await act(async () => {fireEvent.click(screen.getByRole("button", {name: "刷新数据"}));});
+  expect(card().dataset.cardInstance).toBe(initial);
+  vi.mocked(api.getTodayPicks).mockResolvedValue(reply("2026-10-08", "v2"));
+  await act(async () => {fireEvent.click(screen.getByRole("button", {name: "刷新数据"}));});
+  await waitFor(() => expect(card().dataset.cardInstance).not.toBe(initial));
+  const updated = card().dataset.cardInstance;
+  vi.mocked(api.getTodayPicks).mockResolvedValue(reply("2026-10-09", "v2"));
+  await act(async () => {fireEvent.click(screen.getByRole("button", {name: "刷新数据"}));});
+  await waitFor(() => expect(card().dataset.cardInstance).not.toBe(updated));
 });
 
 it("labels the real role summary as bound price observations and retains its existing sample gate", async () => {
