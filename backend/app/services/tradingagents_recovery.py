@@ -7,6 +7,7 @@ No import, preflight or ordinary read starts a worker or collects new inputs.
 from __future__ import annotations
 
 from copy import deepcopy
+from contextlib import contextmanager
 from datetime import datetime
 import hashlib
 import json
@@ -56,6 +57,20 @@ USAGE_OBSERVATION_TRANSITION = (
     "9281aeaf1fc31d8b668392d99388f755043bbb191c5e27e39d4e3c1c053da3d2",
     "d88bdea9ecc8f9a854f02d92ed448d08fe3995074d4f130d805ab4d88aca7881",
 )
+# These reviewed host-only changes preserve the native graph, model, frozen
+# inputs and tools. They do not migrate a grant or authorize another call.
+# Future/reversed hashes remain incompatible, even under the same file name.
+REVIEWED_COMPONENT_TRANSITIONS = {
+    "transport_process.py": {
+        USAGE_OBSERVATION_TRANSITION,
+        ("d88bdea9ecc8f9a854f02d92ed448d08fe3995074d4f130d805ab4d88aca7881",
+         "ff2812c801be847b6c6e83b0edf109f82fb7fe65ea9077e4473597437af4e592"),
+    },
+    "tradingagents_source_gate.py": {
+        ("862dd58539f17698a8feabf04218acb41681f7381350007e6b630692d0fbbafc",
+         "0655bee3b5138cb354e69ee9c0c8cf9f7d627c58898952a2140a7237e14d7f83"),
+    },
+}
 
 
 def _blocked(code):
@@ -125,9 +140,9 @@ def _compatibility(grant, identity):
     allowed = {"driver.py", "codex_transport.py", "tradingagents_research.py", "tradingagents_recovery.py"}
     changed = {key for key in old_files.keys() | new_files.keys() if old_files.get(key) != new_files.get(key)}
     pairs = {key: {"old": old_files.get(key), "new": new_files.get(key)} for key in changed}
-    reviewed_usage_transition = (changed - allowed == {"transport_process.py"}
-        and (old_files.get("transport_process.py"), new_files.get("transport_process.py")) == USAGE_OBSERVATION_TRANSITION)
-    if (not changed or not (changed <= allowed or reviewed_usage_transition) or compatibility["source_hash_pairs"] != pairs
+    reviewed_transitions = all((old_files.get(key), new_files.get(key)) in
+        REVIEWED_COMPONENT_TRANSITIONS.get(key, ()) for key in changed - allowed)
+    if (not changed or not reviewed_transitions or compatibility["source_hash_pairs"] != pairs
             or any(not _hash(v) for v in new_files.values()) or any(not _hash(v) for v in old_files.values())):
         raise _blocked("recovery_component_mapping_drift")
     # Names never grant compatibility. Exact old/new pairs are server-pinned;
@@ -135,14 +150,57 @@ def _compatibility(grant, identity):
     return research._digest(old), research._digest(new)
 
 
-def checkpoint_snapshot(run, symbol):
+def _checkpoint_files(dbpath):
+    files = {}
+    for suffix in ("", "-wal", "-shm"):
+        path = _safe(Path(str(dbpath) + suffix))
+        files[suffix or "db"] = _sha(path) if path.exists() else None
+    return files
+
+
+@contextmanager
+def _checkpoint_reader(run, symbol, *, offline=None):
+    """Immutable reads only the granted, terminated, no-sidecar first call."""
+    dbpath = _safe(run / "graph/cache/checkpoints" / (symbol + ".db"))
+    def unchanged():
+        if (not isinstance(offline, dict) or set(offline) != {"grant", "session_factory"}
+                or not isinstance(offline["grant"], dict) or not callable(offline["session_factory"])):
+            raise _blocked("recovery_offline_checkpoint_unproven")
+        grant = offline["grant"]
+        binding = _binding(grant["binding"])
+        files = binding["checkpoint"].get("files")
+        if (not _first_parallel_failure(binding, grant) or grant.get("symbol") != symbol
+                or not isinstance(files, dict) or set(files) != {"db", "-wal", "-shm"}
+                or not _hash(files["db"]) or files["-wal"] is not None or files["-shm"] is not None):
+            raise _blocked("recovery_offline_checkpoint_unproven")
+        if _source_task(grant["source_task_id"], symbol, offline["session_factory"]) != "failed":
+            raise _blocked("recovery_offline_checkpoint_unproven")
+        terminal = _json(run / "worker-terminal.json")
+        if (_sha(run / "worker-terminal.json") != binding["worker_terminal_sha256"]
+                or type(terminal.get("exit_code")) is not int or terminal["exit_code"] == 0
+                or _json(run / "execution.json").get("state") not in {"needs_native_recovery", "canceled"}
+                or _checkpoint_files(dbpath) != files):
+            raise _blocked("recovery_offline_checkpoint_drift")
+    if offline is not None:
+        unchanged()
+    uri = dbpath.absolute().as_uri() + "?mode=ro" + ("&immutable=1" if offline is not None else "")
+    connection = sqlite3.connect(uri, uri=True, timeout=2)
+    try:
+        connection.execute("PRAGMA query_only=ON")
+        yield connection
+    finally:
+        connection.close()
+        if offline is not None:
+            unchanged()
+
+
+def checkpoint_snapshot(run, symbol, *, offline=None):
     """Logical SQLite state includes WAL; raw db/WAL/SHM hashes are retained too."""
     folder = _safe(run / "graph/cache/checkpoints")
     dbpath = _safe(folder / (symbol + ".db"))
     if not dbpath.is_file():
         raise _blocked("recovery_checkpoint_missing")
-    connection = sqlite3.connect(dbpath.absolute().as_uri() + "?mode=ro", uri=True, timeout=2)
-    try:
+    with _checkpoint_reader(run, symbol, offline=offline) as connection:
         root_rows = connection.execute("SELECT thread_id,checkpoint_id,checkpoint,metadata FROM checkpoints "
             "WHERE checkpoint_ns='' ORDER BY checkpoint_id DESC LIMIT 2").fetchall()
         if not root_rows:
@@ -158,14 +216,8 @@ def checkpoint_snapshot(run, symbol):
             return [hashlib.sha256(v).hexdigest() if isinstance(v, bytes) else v for v in row]
         logical = research._digest({"checkpoints": [scalars(row) for row in rows], "writes": [scalars(row) for row in writes]})
         step = json.loads(metadata).get("step")
-    finally:
-        connection.close()
-    files = {}
-    for suffix in ("", "-wal", "-shm"):
-        path = _safe(folder / (symbol + ".db" + suffix))
-        files[suffix or "db"] = _sha(path) if path.exists() else None
     return {"thread_id": thread, "checkpoint_id": checkpoint_id, "step": step,
-            "logical_sha256": logical, "files": files}
+            "logical_sha256": logical, "files": _checkpoint_files(dbpath)}
 
 
 def _source_task(source_task_id, symbol, sf):
@@ -174,6 +226,7 @@ def _source_task(source_task_id, symbol, sf):
         if (task is None or task.type != "tradingagents_research" or task.status not in {"failed", "canceled"}
                 or json.loads(task.params) != {"symbol": symbol} or task.finished_at is None):
             raise _blocked("recovery_source_task_invalid")
+        return task.status
 
 
 def _grant(source_task_id, run_id, app, sf):
@@ -442,18 +495,69 @@ def _prelaunch_tail(grant, run, segments, sf=None):
     return tail["call_id"]
 
 
+def _first_parallel_failure(binding, grant):
+    return (isinstance(grant, dict) and grant.get("user_authorization") == "EXPLICIT"
+        and type(binding.get("call_counter")) is int and binding["call_counter"] == 1
+        and binding.get("outputs") == {} and set(binding.get("usage_receipts", {})) == {"1"}
+        and binding.get("completed_roles") == [] and binding.get("recovery_history", []) == []
+        and "prelaunch_tail" not in binding and "expected_pending_roles" in binding
+        and set(binding["expected_pending_roles"]) == PARALLEL_ANALYSTS
+        and type(binding["checkpoint"].get("step")) is int and binding["checkpoint"]["step"] == 0
+        and all(binding["prefixes"].get(name) == {"bytes": 0, "sha256": EMPTY_SHA}
+                for name in ("role-outputs.jsonl", "source-audit.jsonl")))
+
+
+def _first_failure_receipt(run, grant, sf=None):
+    """One bound failed call is not a saved answer or a fresh-graph license."""
+    usage = _json(run / "usage-receipts/1.json")
+    diagnostic = usage.get("transport_diagnostic")
+    order = diagnostic.get("event_order") if isinstance(diagnostic, dict) else None
+    shapes = [(row.get("event_type"), row.get("item_type")) for row in order
+              if isinstance(row, dict)] if isinstance(order, list) else []
+    if (usage.get("usage_known") is not False or usage.get("usage") is not None
+            or usage.get("output_sha256") is not None or usage.get("role") not in PARALLEL_ANALYSTS
+            or not isinstance(usage.get("usage_id"), str) or not HEX32.fullmatch(usage["usage_id"])
+            or usage.get("terminal_kind") != "unknown_transport_failure" or not isinstance(diagnostic, dict)
+            or diagnostic.get("kind") != "codex_typed_terminal_failure" or diagnostic.get("failure_stage") != "terminal"
+            or type(diagnostic.get("exit_code")) is not int or diagnostic["exit_code"] != 1
+            or type(diagnostic.get("turn_count")) is not int or diagnostic["turn_count"] != 0
+            or type(diagnostic.get("turn_started_count")) is not int or diagnostic["turn_started_count"] != 1
+            or diagnostic.get("final_file_present") is not False or diagnostic.get("refusal_present") is not False
+            or diagnostic.get("event_order_complete") is not True or diagnostic.get("explicit_error_codes") != []
+            or diagnostic.get("unknown_error_codes") != [] or not isinstance(order, list) or len(shapes) != len(order)
+            or not 4 <= len(shapes) <= 16 or shapes[0] != ("thread.started", "none")
+            or shapes[-3:] != [("turn.started", "none"), ("error", "none"), ("turn.failed", "none")]
+            or any(shape != ("item.completed", "error") for shape in shapes[1:-3])):
+        raise _blocked("recovery_initial_failure_receipt_invalid")
+    if sf is not None:
+        with sf() as db:
+            row = db.get(AgentResourceUsage, usage["usage_id"])
+            original_ids = list(db.scalars(select(AgentResourceUsage.id).where(
+                AgentResourceUsage.task_id == grant["source_task_id"], AgentResourceUsage.kind == "model").limit(2)))
+            if (row is None or row.task_id != grant["source_task_id"] or row.kind != "model"
+                    or row.scope != agent_budget.SCOPE_SELECTED_RESEARCH_LLM or row.started_at is None
+                    or row.state != "failed" or row.usage_known or original_ids != [usage["usage_id"]]):
+                raise _blocked("recovery_initial_failure_usage_drift")
+    return usage
+
+
 def _frozen_records(run, binding, segments, *, grant=None, sf=None):
     counter = binding["call_counter"]
     outputs, usages = binding["outputs"], binding["usage_receipts"]
     gap = _prelaunch_tail(grant, run, segments, sf) if "prelaunch_tail" in binding and grant is not None else None
     if "prelaunch_tail" in binding and gap is None:
         raise _blocked("recovery_prelaunch_tail_invalid")
-    if (not isinstance(outputs, dict) or not isinstance(usages, dict) or not outputs
+    first_failure = _first_parallel_failure(binding, grant)
+    if (not isinstance(outputs, dict) or not isinstance(usages, dict) or not outputs and not first_failure
             or set(usages) != {str(n) for n in range(1, counter + 1) if n != gap} or not set(outputs) <= set(usages)):
         raise _blocked("recovery_original_index_invalid")
+    if first_failure:
+        _first_failure_receipt(run, grant, sf)
     for folder, expected in (("model-outputs", outputs), ("usage-receipts", usages)):
         actual = set()
-        for count, path in enumerate(_safe(run / folder).iterdir(), 1):
+        path = _safe(run / folder)
+        paths = () if first_failure and folder == "model-outputs" and not path.exists() else path.iterdir()
+        for count, path in enumerate(paths, 1):
             if count > 4096 or not re.fullmatch(r"[1-9][0-9]{0,3}\.json", path.name) or path.is_symlink():
                 raise _blocked("recovery_original_index_invalid")
             if int(path.stem) <= counter:
@@ -514,41 +618,54 @@ def _load_context(source_task_id, run_id, app, sf, *, initial=True):
             or any(row["role"] in pending for row in original_roles)):
         raise _blocked("recovery_pending_or_completed_roles_drift")
     if initial:
-        _initial_snapshot(run, binding, symbol, packet, admission)
+        _initial_snapshot(run, binding, symbol, packet, admission, source_grant=grant, sf=sf)
     return {"grant": grant, "grant_sha256": research._digest(grant), "admission": admission, "driver": driver,
             "old_method": old_method, "method": method, "run": run, "packet": packet, "binding": binding,
-            "source_claim": source_claim, "source": source, "segments": segments,
+            "source_claim": source_claim, "source": source, "segments": segments, "session_factory": sf,
             "claim": _safe(research._selection_claim(binding["selection"], method))}
 
 
-def _initial_snapshot(run, binding, symbol, packet, admission=None):
+def _initial_snapshot(run, binding, symbol, packet, admission=None, *, source_grant=None, sf=None):
     counter = binding["call_counter"]
     if (_json(run / "call-counter.json") != {"reserved": counter}
-            or checkpoint_snapshot(run, symbol) != binding["checkpoint"]
             or _sha(run / "worker-terminal.json") != binding["worker_terminal_sha256"]
             or type(_json(run / "worker-terminal.json").get("exit_code")) is not int
             or _json(run / "execution.json").get("state") not in {"needs_native_recovery", "canceled"}):
+        raise _blocked("recovery_checkpoint_or_terminal_drift")
+    files = binding["checkpoint"].get("files")
+    if (not isinstance(files, dict) or set(files) != {"db", "-wal", "-shm"}
+            or not _hash(files["db"]) or any(value is not None and not _hash(value) for value in files.values())):
+        raise _blocked("recovery_checkpoint_or_terminal_drift")
+    offline = ({"grant": source_grant, "session_factory": sf}
+               if _first_parallel_failure(binding, source_grant)
+               and files.get("-wal") is None and files.get("-shm") is None else None)
+    if checkpoint_snapshot(run, symbol, offline=offline) != binding["checkpoint"]:
         raise _blocked("recovery_checkpoint_or_terminal_drift")
     manifest = _json(run / "graph/run-manifest.json")
     expected_thread = hashlib.sha256((symbol + ":" + packet["trade_date"] + ":" + manifest["config_signature"]).encode()).hexdigest()[:16]
     if binding["checkpoint"].get("thread_id") != expected_thread:
         raise _blocked("recovery_checkpoint_thread_drift")
     if "expected_pending_roles" in binding:
+        # No placeholder files are created for an answer that never arrived.
+        # This applies only before dispatch; later physical calls may append
+        # outputs numbered after the frozen counter without changing the root.
+        if binding["outputs"] == {}:
+            outputs = _safe(run / "model-outputs")
+            if outputs.exists() and next(outputs.iterdir(), None) is not None:
+                raise _blocked("recovery_parallel_original_output_drift")
         for name in ("role-outputs.jsonl", "source-audit.jsonl"):
             if binding["prefixes"].get(name) == {"bytes": 0, "sha256": EMPTY_SHA} and _stream_body(run, name, binding):
                 raise _blocked("recovery_parallel_original_role_stream_drift")
         historical = (admission or {}).get("unknown_usage_exception", {}).get("allowed_unknown_usage", ())
-        _parallel_checkpoint(run, symbol, binding, historical)
+        _parallel_checkpoint(run, symbol, binding, historical, offline=offline)
 
 
-def _parallel_checkpoint(run, symbol, binding, allowed_unknown_usage=()):
+def _parallel_checkpoint(run, symbol, binding, allowed_unknown_usage=(), *, offline=None):
     """Validate the one supported zero-final native fan-out, without loading context."""
     if binding["checkpoint"].get("step") != 0:
         raise _blocked("recovery_parallel_checkpoint_invalid")
     thread, root_id = (binding["checkpoint"][key] for key in ("thread_id", "checkpoint_id"))
-    connection = sqlite3.connect(_safe(run / "graph/cache/checkpoints" / (symbol + ".db")).absolute().as_uri() + "?mode=ro", uri=True)
-    try:
-        connection.execute("PRAGMA query_only=ON")
+    with _checkpoint_reader(run, symbol, offline=offline) as connection:
         namespaces = connection.execute("SELECT checkpoint_ns,MAX(checkpoint_id) FROM checkpoints "
             "WHERE thread_id=? AND checkpoint_ns<>'' GROUP BY checkpoint_ns LIMIT 5", (thread,)).fetchall()
         if len(namespaces) != 4:
@@ -569,14 +686,17 @@ def _parallel_checkpoint(run, symbol, binding, allowed_unknown_usage=()):
                         "AND task_path=? AND channel='__error__' LIMIT 1", (thread, root_id, "~__pregel_pull, " + role)).fetchone()):
                 raise _blocked("recovery_parallel_checkpoint_invalid")
             found.add(role)
-    finally:
-        connection.close()
     # These facts came from _grant -> _quality's exact-method, ID/date/scope
     # validation and the shared ensure_model_usage_known gate. Use the full
-    # historical ID/date/scope facts only to reuse an old typed answer; physical
-    # reserve/start still receive the separate active-today projection.
+    # historical ID/date/scope facts to bind the original failed call or reuse
+    # an old typed answer; physical reserve/start still receive the separate
+    # active-today projection.
     permitted_unknown = {fact["usage_id"] for fact in allowed_unknown_usage
                          if fact["scope"] == agent_budget.SCOPE_SELECTED_RESEARCH_LLM}
+    if not binding["outputs"]:
+        usage = _json(run / "usage-receipts/1.json")
+        if usage.get("usage_id") not in permitted_unknown:
+            raise _blocked("recovery_initial_failure_not_authorized")
     for number in binding["outputs"]:
         output = _json(run / "model-outputs" / (number + ".json"))
         value = output.get("structured_output")
@@ -664,7 +784,8 @@ def _dispatch(context):
                     and info.get("source_claim_sha256") == context["binding"]["source_claim_sha256"]):
                 return _owned(context, info["dispatch_owner"]), False
             raise _blocked("recovery_selection_already_owned")
-        _initial_snapshot(context["run"], context["binding"], context["grant"]["symbol"], context["packet"], context["admission"])
+        _initial_snapshot(context["run"], context["binding"], context["grant"]["symbol"], context["packet"], context["admission"],
+                          source_grant=context["grant"], sf=context["session_factory"])
         owner = uuid.uuid4().hex
         claim = {"version": 1, "selection": context["binding"]["selection"], "method_sha256": context["method"],
             "state": "recovery_dispatching", "task_id": None, "updated_at": research._now().isoformat(),

@@ -384,6 +384,55 @@ class EvidenceGateTests(unittest.TestCase):
             with self.subTest(text=text):
                 self.assert_status('FAIL', text)
 
+    def test_real_denied_sell_conclusion_is_not_account_execution(self):
+        for text in (
+            '无法据此可靠确定卖出委托价及止损价，故留空。',
+            '不足以把研究判断推进为确定卖出、减持比例或委托价格。',
+            '不足以形成确定卖出结论。',
+        ):
+            with self.subTest(text=text):
+                self.assert_status('PASS', text)
+
+    def test_local_indicator_denial_does_not_assert_a_price_path(self):
+        for text in ('不独立证明突破或持续上涨。',
+                     '| MACDH | 指标已取得 | 不独立证明突破或持续上涨 |'):
+            with self.subTest(text=text):
+                self.assert_status('PASS', text)
+
+    def test_indicator_denial_does_not_waive_double_negation_or_assertions(self):
+        for text in (
+            '不是不独立证明突破或持续上涨。',
+            '并非不独立证明突破或持续上涨。',
+            '不独立证明持续上涨后的回撤风险。',
+            '不独立证明突破或持续上涨是事实。',
+            '不独立证明突破或持续上涨，但该股已持续上涨。',
+            '不独立证明突破或持续上涨，持续上涨已成立。',
+            'MACDH已证明持续上涨。',
+        ):
+            with self.subTest(text=text):
+                self.assert_status('FAIL', text)
+
+    def test_sell_conclusion_denial_does_not_pardon_an_assertion(self):
+        for text in (
+            '不是不足以形成确定卖出结论。',
+            '并非证据不足以形成确定卖出结论。',
+            '不是不能确定卖出结论。',
+            '并非无法确定卖出结论。',
+            '不是不可以卖出。',
+            '并非无法据此可靠确定卖出委托价。',
+            '并非不足以把研究判断推进为确定卖出。',
+            '不足以形成确定卖出结论，但当前账户可以卖出。',
+            '不足以把研究判断推进为确定卖出，但该账户可以卖出。',
+            '无法据此可靠确定卖出后的风险。',
+            '不足以形成确定卖出的风险结论。',
+            '不足以形成确定卖出结论已经成立。',
+            '已经形成确定卖出结论。',
+            '现在可确定卖出。',
+            '账户可以卖出。',
+        ):
+            with self.subTest(text=text):
+                self.assert_status('FAIL', text)
+
     def test_real_pending_table_execution_noun_is_not_a_current_account_claim(self):
         table = ('| 主题 | 支持度 | 待核数据/指标 |\n'
                  '| --- | --- | --- |\n'

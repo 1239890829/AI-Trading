@@ -676,10 +676,13 @@ class NativeTradingAgentsDriver:
                 "semantic_quality": "not_established_by_research_authorization"}
 
     async def run_accounted(self, *, rec, params, app, budget, store_root, required_model_slots, verification,
-                            selection_binding=None):
-        from app.services.tradingagents_research import authorized_unknown_usage, require_start, validate_params
+                            selection_binding=None, expected_selection_intent=None):
+        from app.services.tradingagents_research import authorized_selected_usage, authorized_unknown_usage, require_start, validate_params
         symbol = validate_params(params)
-        admitted = await drain_thread(require_start, params, app)
+        admitted = await drain_thread(require_start, params, app, **({"task_id": rec.task_id} if selection_binding else {}))
+        if expected_selection_intent is not None and admitted.get("research_intent") != expected_selection_intent:
+            raise DriverUnavailable("selected_intent_changed_before_start")
+        selected_intent = dict(expected_selection_intent) if expected_selection_intent is not None else admitted.get("research_intent")
         identity = await drain_thread(self.method_identity)
         selected_research = admitted["admission"].get("state") == "research_only_authorized"
         expected_slots = None if selected_research else 22
@@ -721,11 +724,16 @@ class NativeTradingAgentsDriver:
             atomic_json(claim, {"run_id": run_id, "input_sha256": digest(packet), "source_input_sha256": source_identity,
                                 "method_sha256": digest(identity)})
             try:
+                usage_authorizer = lambda: authorized_unknown_usage(app,
+                    method_sha256=digest(identity), authorization_sha256=admitted["admission"]["artifact_sha256"])
+                if selected_intent:
+                    usage_authorizer = lambda: authorized_selected_usage(app,
+                        method_sha256=digest(identity), authorization_sha256=admitted["admission"]["artifact_sha256"],
+                        task_id=rec.task_id, selection=selection_binding, intent=selected_intent)
                 final = await self._execute(rec=rec, packet=packet, run=run, budget=budget,
                     identity=identity, max_calls=required_model_slots,
                     **({"budget_scope": budget.SCOPE_SELECTED_RESEARCH_LLM,
-                        "usage_authorizer": lambda: authorized_unknown_usage(app,
-                            method_sha256=digest(identity), authorization_sha256=admitted["admission"]["artifact_sha256"])}
+                        "usage_authorizer": usage_authorizer}
                        if selected_research else {}))
                 audits = [json.loads(line) for line in (run / "source-audit.jsonl").read_text().splitlines()]
                 review_summary = self._review_summary(audits)

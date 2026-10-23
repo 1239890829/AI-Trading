@@ -876,7 +876,7 @@ PR #317真实加载后，新入选002178的一份原答成功保留，但新unkn
 
 ### 2026-10-21 普通传输失败的证据缺口
 
-PR #318已加载后，002264完整研究前9次用量正确保留，第10 Bear普通传输失败新增unknown，原两ID例外不扩到此条。该图只有5角色终答、4分析报告和原生恢复记录；无最终完整七报告、无完整费用，不能因前9次正常或有限检查无违规声称研究成功。
+PR #318已加载后，002264完整研究前9次用量正确保留，第10 Bear在约59.207秒后以TransportError失败并新增unknown，原两ID例外不扩到此条。仅存hash与missing_usage，真实上游失败、schema拒绝或适配误拒的证据不够，不能确定归因。该图当时只有5角色终答、4分析报告和原生恢复记录；无最终完整七报告、无完整费用，不能因前9次正常或有限检查无违规声称研究成功。
 
 已核源码缺口：decoder普通失败虽含退出/计数/类型等metadata，却没传有界终端数字观察，driver持久回执又仅取hash。原始流不再存在，真实错误细因和可能的数字无法恢复；missing_usage只代表未保全观察。本批覆盖普通终态、解析及schema失败的退场前安全证据，任意消息/context/键名不入回执；失败观察不自动known，不改变权限、安全、unknown停止或完整上游流程。旧答/失败/未知不重放或补算，先完成零调用工程核验及发布，运行与质量另核。
 
@@ -890,7 +890,7 @@ PR #319已发布并加载普通失败诊断修补，实际第三unknown仍正确
 
 ### 2026-10-21 CLI启动警告与重复失败恢复纠错
 
-PR #320正式恢复曾实际接续第11次Bear，但terminal_order拒绝且新增unknown，未产出新完整角色回答。已有数字观察未核实，不按已知补账；原九答和全部历史失败保留。该第四unknown当时需要单独授权，用户随后明确允许永久保留并在修复后只续未完成步骤，不覆盖未来新unknown。精确CLI版本的[官方事件映射](https://github.com/openai/codex/blob/rust-v0.162.1/codex-rs/exec/src/event_processor_with_jsonl_output.rs#L409-L445)与[非致命警告测试](https://github.com/openai/codex/blob/rust-v0.162.1/codex-rs/exec/src/event_processor_with_jsonl_output_tests.rs#L67-L90)证明启动警告可独立于模型turn发出。PR #321已发布的适配器只补合法启动warning兼容；完成后追加事件、模型内容乱序、真实错误/拒绝/工具和最终消息绑定硬门保留。仅存固定枚举顺序、有限计数与哈希，不留完整context或警告原文。本次具体原流已丢失，不能把合同缺口写成实际失败序列的完整还原。
+PR #320正式恢复曾实际接续第11次Bear，但terminal_order拒绝且新增unknown，未产出新完整角色回答。已存诊断为exit0、1 completed、2 warnings；原始顺序未保全，已有数字观察未核实，不按已知补账。原九答和全部历史失败保留。该第四unknown当时需要单独授权，用户随后明确允许永久保留并在修复后只续未完成步骤，不覆盖未来新unknown。精确CLI版本的[官方事件映射](https://github.com/openai/codex/blob/rust-v0.162.1/codex-rs/exec/src/event_processor_with_jsonl_output.rs#L409-L445)与[非致命警告测试](https://github.com/openai/codex/blob/rust-v0.162.1/codex-rs/exec/src/event_processor_with_jsonl_output_tests.rs#L67-L90)证明启动警告可独立于模型turn发出。PR #321已发布的适配器只补合法启动warning兼容；完成后追加事件、模型内容乱序、真实错误/拒绝/工具和最终消息绑定硬门保留。仅存固定枚举顺序、有限计数与哈希，不留完整context或警告原文。本次具体原流已丢失，不能把合同缺口写成该条已证误报或实际失败序列的完整还原。
 
 原单次恢复失败仍保留其任务、方法、claim及回执；再次维护恢复由现有服务器pin授权显式绑定有界历史链、各段调用区间与哈希，逐段核原身份及失败终态。原source身份不换、不删除中间claim，已经成功的角色继续复用。历史段数是元数据解析边界，不是研究次数预算；新unknown、输入/模型/图漂移和效果门不变。本轮正式维护task b5541f06已从第12次Bear续至第18次并成功完成12角色/七报告，新增7调用用量known、九原答与十一旧回执逐字保留；本run继承两条unknown不回填，不能据新增部分补算全任务费用。103项持久只读核验通过，两次普通GET同七报告哈希且目标文件零变；实际配对Chrome主卡与通知读取同一保存结果，通知七正文及复用/unknown说明逐项可达。生成19:18和材料截至15:30与原15:00:44理由明确分开，不冒充严格按通知时点过滤。当前保存结果可读不等后续生成预检已放行；该运行事实不形成语义质量、独立准确率或投资效果准入，也不代表全部入选股已完成，证据见handoff及本批PR运行回执。
 
@@ -900,14 +900,42 @@ PR #320正式恢复曾实际接续第11次Bear，但terminal_order拒绝且新�
 
 正式恢复预检同时发现零终答不受支持的工程边界：此run的`role-outputs`为空，但两份成功工具提案、工具结果及原生四分析师子图检查点已保存，四agent同时pending。它与此前九份终答后继续Bear的串行段不同，不能硬写首个新调用角色为News，也不能为满足旧非空前缀而重新生成已有提案。原正式恢复现补与旧单角色grant互斥的四pending角色集合及逐角色冻结消息指纹；只有新pending集合模式、显式数量0/emptySHA才允许终答目录不存在，每个pending角色首请求在新reserve/counter前核原消息尾序列。源task/input/方法/用量/提案/工具结果/检查点身份保持，旧单角色授权继续兼容且不扩大空流接纳。
 
+2026-10-23本批另补首调用即失败、没有原答的初始恢复合同。只限原counter1、唯一call1失败回执、原生step0且四分析师pending，原错误/逐角色消息指纹、完整源task/run/方法/packet/config/claim/检查点绑定一致；receipt及原DB行须准确对应failed/unknown，且该usage ID已有具名许可。物理缺失的model-output目录及空流保持原样，不造占位答、文件或账行；原call1保留，下个物理调用从2继续未完成节点。已有答、普通单角色、非初始/历史恢复段、缺许可、未来答预置或任一身份/错误/消息漂移均拒绝；原图、工具与Memory不重建，启动仍核当前grant与逐调用硬门。这是恢复入口工程合同，不证明002803已真实恢复；完整门、准确HEAD发布与加载按本批PR回执核验。
+
+同日真实803预检又确认：SQLite的`mode=ro`读取WAL格式主库时，仍可能为原本没有sidecar的库创建`-wal`/`-shm`，使冻结身份漂移；只读连接不等于物理零写入。正式入口的窄修补仅在EXPLICIT首call1零答/step0、源任务failed、worker终态和checkpoint.files已绑定、主DB SHA一致，且绑定和现场wal/shm均缺失时才允许`immutable=1`。读取前后都核主DB哈希及sidecar absence，漂移即拒绝；默认读取、活动库或已有WAL不能自动采用immutable，也不能在实服私加stub。此前完整pytest仅因该预检缺陷主动SIGINT，运行144.111秒，不计全量通过；中断原因保存在忽略的`artifacts/runs/unknown-common-audit-20261023/final-gates/interrupted-gate-reason.json`。旧142项恢复及244项transport仅代表各自冻结切片，不代替新增helper或本批完整门；新门、准确HEAD发布和实际加载按关联PR回执核验。
+
 同批实际002178也是零终答/四pending；旧741具名unknown保存的Fundamentals工具提案已类型化，输出/回执/原检查点AI及工具哈希相同。提案复用区分known原路径与获准unknown：后者须为typed_response、receipt/wrapper/payload三SHA一致，并匹配quality已验证的完整历史具名许可facts的准确ID/原北京日/scope。读取旧答不能误用当天active集合，否则次日自锁；新调用仍独立核当天active例外，不放行跨日新unknown。原账行与旧回执不改、不升known，未许可unknown、terminal failure、错hash继续拒绝；旧c98方法不因此整体获准，第5ID须使用其后单独取得的许可，其他消费者不扩用。兼容映射保留原四组件allowlist，仅额外接受transport_process.py的已审有向9281aeaf1fc31d8b668392d99388f755043bbb191c5e27e39d4e3c1c053da3d2→d88bdea9ecc8f9a854f02d92ed448d08fe3995074d4f130d805ab4d88aca7881；该差异包含有界诊断和严格cache_write字段契约，不只诊断。服务器pin仍需完整准确old/new hash pairs，未来hash、反向、缺old或其他未审组件变化拒绝；图/模型/依赖身份不放宽，旧unknown不重新入账。
+
+2026-10-23同批源码迁移仅追加两个已审准确有向对：`tradingagents_source_gate.py`的`862dd58539f17698a8feabf04218acb41681f7381350007e6b630692d0fbbafc`→`0655bee3b5138cb354e69ee9c0c8cf9f7d627c58898952a2140a7237e14d7f83`，及`transport_process.py`的`d88bdea9ecc8f9a854f02d92ed448d08fe3995074d4f130d805ab4d88aca7881`→`ff2812c801be847b6c6e83b0edf109f82fb7fe65ea9077e4473597437af4e592`；原9281→d88对保留，不扩大四个通用host组件allowlist。该兼容仅说明已审源码差异，不能迁移旧许可、授权新调用或改变graph/model/deps/packet/tools/原答/账行。当前grant仍须准确绑定完整old/new，未来/逆向/缺old拒绝；本批完整门、准确HEAD发布与加载按关联PR回执核验，施工快照不证明已执行803恢复。
 
 固定有向兼容补齐后恢复最终84项定向通过（6.71秒）；真实LangGraph与SqliteSaver在临时合成数据库完成四角色并行续接，两份原工具提案前后各一次，零模型调用。这证明合成行为边界，不是002355实际恢复或语义效果。完整后端首批因该跨日自锁反证主动SIGINT、保留102.869秒中断证据，不当完整绿色或产品断言失败；独立basetemp最终完整复验已通过，准确计数与同字节前端证据见handoff。真实旧检查点AI/工具匹配及哈希保留。PR #322与第5unknown许可随后分别完成，恢复实际执行并产生下述新超时；此前“未执行/未授权”只属当时事实，用户追问本身仍不构成授权。证据沿忽略artifacts及准确PR回执，不新设任务状态或平行账本。
 
 ### 2026-10-21 第5许可执行与启动前尾槽核对
 
-第5unknown `262c6b809cc4446e865550e9b5c3d6ee`已获用户单独明确许可。PR #322发布加载后，服务器精确单次grant于北京时间22:00:25.843024实际创建002355恢复task `27be01c0f47843d3b62b435853c386f1`。同原run的call4/Fundamentals于22:00:32.729620启动、22:03:33.049612因真实180秒超时失败：1 started、0 completed，无最终答或usage，本机终止与排空已完成。退出码0不代表模型完成，无法据此判断上游超时原因或补算用量。第6unknown `bca2e7d808734d1a99cc2d94f2d14b0f`尚未获许可，后续模型调用停止；第5许可不扩到它。counter保留4，原两份工具提案/工具结果不重跑，角色终答仍为0；002264既存七报告读取不因新失败撤销。
+第5unknown `262c6b809cc4446e865550e9b5c3d6ee`已获用户单独明确许可。PR #322发布加载后，服务器精确单次grant于北京时间22:00:25.843024实际创建002355恢复task `27be01c0f47843d3b62b435853c386f1`。同原run的call4/Fundamentals于22:00:32.729620启动、22:03:33.049612因真实180秒超时失败：1 started、0 completed，无最终答或usage，本机终止与排空已完成。退出码0不代表模型完成，无法据此判断上游超时原因或补算用量。第6unknown `bca2e7d808734d1a99cc2d94f2d14b0f`当时未获许可，后续模型调用停止；用户随后单独明确允许保留并继续，未扩用第5许可。counter保留4，原两份工具提案/工具结果不重跑，角色终答仍为0；002264既存七报告读取不因新失败撤销。
 
 另对002178原task `a3b95a144a43474b855da321cb596f20`只读核到counter2、仅call1提案及回执。固定旧driver在reserve前写counter，原任务固定BudgetError、首个Market broker错误、唯一原call1模型账行和“started行不由保留清理删除”的旧源码共同支持slot2没有物理发出。没有直接slot2阶段回执；reserve分支是代码/数据推论，不把检查点ProtocolError包装当成阶段证明。原741 unknown、原答/工具/账行保持，不能造receipt2、把缺文件写成known或回退counter。
 
-原正式恢复的receipt连续索引会阻挡该启动前末槽，本批已实现有界修补：仅服务器单次grant可显式绑定精确原source最后槽、已审旧源码身份、原失败/全模型账行和冻结原生流前缀；不接受任意缺口。counter2不变，新物理调用从3开始，新回执、unknown停止及12角色/七报告/Memory条件不变。历史链与完成读取须继承同一原始证明，未声明/内部/新调用缺口仍拒。定向104 passed（9.10秒）、pyflakes及diff检查通过，旧合同先红1项后转绿；OS禁止网络/模型CLI执行、仅允许证明文件写入的真实178旧run，只读`_binding`/`_frozen_records`通过，23份原regular文件和1条原模型账行不变，counter2与缺失2.json保留。该局部核验不等于完整grant、`_quality`/`_context`或模型恢复通过；本批完整本地门已通过，准确计数及同字节前端复用见handoff，当前新准确HEAD三项CI、发布/激活及实际续接仍待核，不复用PR #322旧CI。新工程证据在忽略的`artifacts/runs/prelaunch-tail-recovery-20261021/actual-178-tail-validation.json`，原证明沿`artifacts/runs/tradingagents-parallel-recovery-20261021/`保留，实际执行状态只归原stage/handoff。
+原正式恢复的receipt连续索引会阻挡该启动前末槽，本批已实现有界修补：仅服务器单次grant可显式绑定精确原source最后槽、已审旧源码身份、原失败/全模型账行和冻结原生流前缀；不接受任意缺口。counter2不变，新物理调用从3开始，新回执、unknown停止及12角色/七报告/Memory条件不变。历史链与完成读取须继承同一原始证明，未声明/内部/新调用缺口仍拒。定向104 passed（9.10秒）、pyflakes及diff检查通过，旧合同先红1项后转绿；OS禁止网络/模型CLI执行、仅允许证明文件写入的真实178旧run，只读`_binding`/`_frozen_records`通过，23份原regular文件和1条原模型账行不变，counter2与缺失2.json保留。该局部核验不等于完整grant、`_quality`/`_context`或模型恢复通过；本批完整本地门已通过，准确计数及同字节前端复用见handoff，PR #324的准确HEAD三项CI、发布/激活及实际续接随后均已完成，版本和当前现场见handoff，不以旧CI代新HEAD。新工程证据在忽略的`artifacts/runs/prelaunch-tail-recovery-20261021/actual-178-tail-validation.json`，原证明沿`artifacts/runs/tradingagents-parallel-recovery-20261021/`保留，实际执行状态只归原stage/handoff。
+
+### 2026-10-21 未派发研究承接与否定范围纠错
+
+真正入选的接纳与模型派发分开。调度先在原selection claim owner冻结当日真实daily/top的pending，即使已有研究active也不遗漏；这不是queued AgentTask或平行账本。已接纳的首次入选不因午夜或随后名单移出而自动取消，原日期、rank、来源/首次依据和选择资格不改。后续任务仍只传symbol，handler/driver以服务器task_id、created_by=scheduler及claim归属验证冻结原selection；普通HTTP不获任意历史启动权限。关闭research、撤销授权、取消、坏证据与新unknown仍阻断，失败/取消/unknown继续用原正式恢复链，不自动重发。新采材料按真实as_of/生成钟保存，只是原选择的后来研究，不回填原理由，也不改变评分、通知或资金资格。
+
+此前已合法接纳并开工的手动任务，只能按原冻结intent续行，不因跨午夜重建选择，也不能首次启动任意历史入选。handler到native传递同一内部expected intent，每次reserve/start重核真实task owner、原来源、取消与授权；claim被删、task归属漂移或intent被抹除均拒绝，不回落普通当前日接纳。这是原owner内的单写者/CAS约束，不给HTTP增加自授字段。
+
+PR #324实际恢复002178已完成12角色/七报告/Memory，新增14调用known，原unknown及缺失的启动前call2仍保留；持久核验、两次GET和有限实页读取分别通过，范围见handoff。原3个有限FAIL经有界逐源反证为“不足以/无法确定卖出”的局部否定误报；旧审计不覆写、不改原答。当前守卫修补按命题分句定位否定范围，双重否定、转折后的正向主张及其他无源扩写不能因出现否定词获得豁免；有限词法检查不等语义gold或整体报告正确。具体实现/新门禁与准确HEAD发布另核，不重跑模型证明守卫，也不把这3条反证当准确率。
+
+用户单独批准第6unknown后，精确双grant授权已用于原生恢复；002355的task `33fb73b17173439fa266b3ba64d9ec2f`已从call5续至17并succeeded：13新调用known、0新unknown，完整12角色/七报告/Memory，原两提案及四回执保留；持久只读核验与两次GET通过。该时点原8只中3只完整、另5只未启动；两项验证通过、只读确认0 active后已释放dispatch。随后002777也完整完成，当前4/8；002803首次调用失败产生第7unknown，详见下节。backend仍为已发布a78/e674，新承接尚未加载，不把调度恢复当新合同运行验收。该新合同与来源守卫施工、门禁、准确HEAD发布和激活另验，没有新模型比较、拆图或固定次数配额。
+
+### 2026-10-23 终态用量与答复准入分离
+
+原8只真正入选中，002178、002264、002355、002777已保存完整12角色/七报告/Memory。新增002777的task `824292a4dcae488e958b42204016c729`、run `ce20d717c4174da2853a85548738091e`完成16次known调用；这不等于新承接合同已发布、全部入选已齐或语义效果已验证。777原有限审计的1个FAIL经逐源反证为cell“不独立证明突破或持续上涨”的局部否定误报；旧审计和原文件保留，同批未发布v7只补该范围。新派生85字段审计仅call8/content由FAIL变PASS，旧73份文件（其中21份核心）哈希不变；这不是整体语义gold，也不是用量unknown。002803的run `fd47…`／task `f8a…`在首调用于2026-10-21北京时间23:34:50至23:34:57.735970、约7.709秒后真实turn.failed，exit1、1 started/0 completed、usage=null，没有可验证最终用量；并非此前002355的180秒超时。新unknown `9e8d059b891647cdab1f81a1d3abfeae`已获用户单独许可，修补发布前仍不新增模型调用；600410、603171、603598尚未启动。
+
+用量unknown、答复拒绝、来源有限FAIL和语义未验证是不同状态。原始错误或顺序未保全的旧条，具体原因仍须写“证据不够”：741确有可复现的cache_write白名单遗漏，但该条当时的字段已丢，不能确定就是它的实际原因；debe只存TransportError/hash/missing_usage；668的terminal_order计数不能还原原顺序；262的typed_error_count和有序retry形态不能恢复原error语义。不能把这三条CLI拒绝一律称误报。第7条没有完成终态，保留unknown正确，上游具体失败原因不清楚；七条历史账、失败和具名许可均不回写。
+
+零模型反例另证实一个面向未来的缺陷通路：唯一完整可信终态的合法用量，与最后答案JSON、最终文件绑定或原schema准入耦合，使答复拒绝连带失去known资格。这不是上述任一旧条的已证原因。本分支待验修补将两者分开：只有先通过现役精确CLI、完整流、唯一有序终态和严格tokens合同，失败答复才可按failed且usage_known=1保全用量；答案仍拒绝，不作为可用报告。不能把数字观察直接升格为已验证用量。auth/safety、turn.failed、乱序、多终态、截断、无终态、未知事件或非法tokens仍unknown；未终结账行的回执恢复不扩成自动核账或历史unknown清账。
+
+未来安全诊断只保留固定、有界的`error_observations`：类别、事件/消息类型、长度、位置和哈希，明确`channel_report_only`。无明确类别即未分类；观察不是根因证明，不授权重试或调用。禁止保存错误原文、URL、路径、请求/context；重复安全投影不得丢失同一有界观察。共因反例与原始核验定位在本机忽略的`artifacts/runs/unknown-common-audit-20261023/`，不为诊断重跑旧请求。
+
+这项修补不换模型、不拆完整图、不加研究次数配额或新权限，不改变评分、通知、策略、资金或独立效果准入。本节为2026-10-23施工快照；本批完整本地门、准确HEAD CI、DegradedRelease、release_check、发布和运行事实由关联PR及回执核验，施工快照不证明已加载，不以前次通过代替；下一条新unknown仍须单独许可，当前人工gold0、net_gain_verified=false、production_eligible=false。

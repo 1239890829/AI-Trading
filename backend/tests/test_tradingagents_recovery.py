@@ -159,6 +159,185 @@ def test_parallel_zero_final_answers_are_valid_without_creating_role_stream(env)
     e=parallel_env(env);assert context(e)['binding']['expected_pending_roles']==list(PARALLEL_ROLES)
     assert not (e.run/'role-outputs.jsonl').exists()
 
+
+def first_failed_parallel_env(e):
+    """Initial native fan-out failed on call one before saving any answer."""
+    e=parallel_env(e);b=e.grant['binding']
+    for folder in ('model-outputs','usage-receipts'):
+        for path in (e.run/folder).iterdir():path.unlink()
+    (e.run/'model-outputs').rmdir();(e.run/'source-audit.jsonl').unlink()
+    receipt=dict(task_id=OLD,method_sha256=research._digest(e.grant['source_method_identity']),call_id=1,
+        role='Fundamentals Analyst',usage_id=f'{1:032x}',usage_known=False,usage=None,output_sha256=None,
+        terminal_kind='unknown_transport_failure',transport_diagnostic=dict(kind='codex_typed_terminal_failure',
+            failure_stage='terminal',exit_code=1,turn_count=0,turn_started_count=1,final_file_present=False,
+            refusal_present=False,event_order_complete=True,explicit_error_codes=[],unknown_error_codes=[],
+            event_order=[dict(event_type='thread.started',item_type='none'),
+                dict(event_type='turn.started',item_type='none'),dict(event_type='error',item_type='none'),
+                dict(event_type='turn.failed',item_type='none')]))
+    put(e.run/'usage-receipts/1.json',receipt)
+    with e.sf() as db:
+        db.query(AgentResourceUsage).delete()
+        db.add(AgentResourceUsage(id=f'{1:032x}',budget_date=NOW.date().isoformat(),scope=agent_budget.SCOPE_SELECTED_RESEARCH_LLM,
+            kind='model',purpose='tradingagents.fundamentals_analyst',task_id=OLD,state='failed',usage_known=0,
+            started_at=(NOW-timedelta(minutes=15)).replace(tzinfo=None)));db.commit()
+    e.auth['unknown_usage_exception']['allowed_unknown_usage'][0]['usage_id']=f'{1:032x}'
+    e.messages={role:[dict(role='user',content='frozen initial message')] for role in PARALLEL_ROLES}
+    b.update(call_counter=1,outputs={},usage_receipts={'1':recovery._sha(e.run/'usage-receipts/1.json')},
+        pending_message_fingerprints={role:[research._digest(row) for row in rows] for role,rows in e.messages.items()})
+    b['prefixes']['source-audit.jsonl']=dict(bytes=0,sha256=hashlib.sha256(b'').hexdigest())
+    put(e.run/'call-counter.json',{'reserved':1})
+    cp=e.run/'graph/cache/checkpoints'/f'{SYMBOL}.db'
+    with sqlite3.connect(cp) as db:
+        for ns,metadata in db.execute('SELECT checkpoint_ns,metadata FROM checkpoints').fetchall():
+            meta=json.loads(metadata);meta['step']=0
+            db.execute('UPDATE checkpoints SET metadata=? WHERE checkpoint_ns=?',(json.dumps(meta),ns))
+    b['checkpoint']=recovery.checkpoint_snapshot(e.run,SYMBOL);e.pin();return e
+
+
+def test_first_parallel_unknown_checkpoint_has_no_original_answer_or_placeholder(env):
+    e=first_failed_parallel_env(env);receipt=(e.run/'usage-receipts/1.json').read_bytes();c=context(e)
+    assert c['binding']['outputs']=={} and c['binding']['call_counter']==1
+    assert not (e.run/'model-outputs').exists() and not (e.run/'role-outputs.jsonl').exists()
+    assert not (e.run/'source-audit.jsonl').exists() and (e.run/'usage-receipts/1.json').read_bytes()==receipt
+    guard=recovery._pending_guard(c['binding'])
+    guard(dict(role='Fundamentals Analyst',messages=e.messages['Fundamentals Analyst']),1)
+    assert e.native.calls==0 and json.loads((e.run/'call-counter.json').read_text())=={'reserved':1}
+
+
+@pytest.mark.parametrize('mutation',['single_role','step','counter','missing_receipt','not_named_previous_day',
+    'known_usage','wrong_task','extra_original_model','wrong_method','typed_success','not_failed_turn','unverified_order','explicit_stop',
+    'saved_answer_omitted','undeclared_future_answer','symlink_directory','pending_error_missing','message_drift'])
+def test_first_parallel_unknown_checkpoint_does_not_waive_original_guards(env,mutation):
+    e=first_failed_parallel_env(env);b=e.grant['binding'];path=e.run/'usage-receipts/1.json';receipt=json.loads(path.read_text())
+    if mutation=='single_role':
+        b.pop('expected_pending_roles');b.pop('pending_message_fingerprints');b['expected_pending_role']='Fundamentals Analyst'
+    elif mutation=='step':b['checkpoint']['step']=2
+    elif mutation=='counter':b['call_counter']=2;put(e.run/'call-counter.json',{'reserved':2})
+    elif mutation=='missing_receipt':path.unlink()
+    elif mutation=='not_named_previous_day':
+        e.auth.pop('unknown_usage_exception')
+        with e.sf() as db:
+            row=db.get(AgentResourceUsage,f'{1:032x}');row.budget_date=(NOW-timedelta(days=1)).date().isoformat()
+            row.started_at=(NOW-timedelta(days=1)).replace(tzinfo=None);db.commit()
+    elif mutation=='known_usage':
+        with e.sf() as db:db.get(AgentResourceUsage,f'{1:032x}').usage_known=1;db.commit()
+    elif mutation=='wrong_task':
+        with e.sf() as db:db.get(AgentResourceUsage,f'{1:032x}').task_id='f'*32;db.commit()
+    elif mutation=='extra_original_model':
+        with e.sf() as db:
+            db.add(AgentResourceUsage(id='f'*32,budget_date=NOW.date().isoformat(),scope=agent_budget.SCOPE_SELECTED_RESEARCH_LLM,
+                kind='model',purpose='omitted original',task_id=OLD,state='succeeded',usage_known=1,
+                input_tokens=1,output_tokens=1,started_at=(NOW-timedelta(minutes=15)).replace(tzinfo=None)));db.commit()
+    elif mutation=='wrong_method':receipt['method_sha256']='f'*64
+    elif mutation=='typed_success':receipt.update(terminal_kind='typed_response',output_sha256='a'*64)
+    elif mutation=='not_failed_turn':receipt['transport_diagnostic']['exit_code']=0
+    elif mutation=='unverified_order':receipt['transport_diagnostic']['event_order_complete']=False
+    elif mutation=='explicit_stop':receipt['transport_diagnostic']['explicit_error_codes']=['authentication_failed']
+    elif mutation in ('saved_answer_omitted','undeclared_future_answer'):
+        put(e.run/'model-outputs'/('1.json' if mutation=='saved_answer_omitted' else '2.json'),{'structured_output':{'content':'unbound'}})
+    elif mutation=='symlink_directory':(e.run/'model-outputs').symlink_to(e.run/'usage-receipts',target_is_directory=True)
+    elif mutation=='pending_error_missing':
+        cp=e.run/'graph/cache/checkpoints'/f'{SYMBOL}.db'
+        with sqlite3.connect(cp) as db:db.execute("DELETE FROM writes WHERE task_path='~__pregel_pull, News Analyst'")
+        b['checkpoint']=recovery.checkpoint_snapshot(e.run,SYMBOL)
+    if path.exists() and mutation in ('wrong_method','typed_success','not_failed_turn','unverified_order','explicit_stop'):
+        put(path,receipt);b['usage_receipts']['1']=recovery._sha(path)
+    e.pin()
+    if mutation=='message_drift':
+        c=context(e);guard=recovery._pending_guard(c['binding'])
+        with pytest.raises(research.ResearchBlocked):guard(dict(role='News Analyst',messages=[dict(role='user',content='changed')]),1)
+    else:
+        with pytest.raises(research.ResearchBlocked):context(e)
+    assert e.native.calls==0
+
+
+def test_first_parallel_unknown_allows_only_post_counter_outputs_after_dispatch(env):
+    e=first_failed_parallel_env(env);context(e)
+    put(e.run/'model-outputs/2.json',{'structured_output':{'content':'new continuation'}})
+    with pytest.raises(research.ResearchBlocked):context(e)
+    assert recovery._context(OLD,RUN,e.app,e.sf,initial=False)['binding']['outputs']=={}
+    put(e.run/'model-outputs/1.json',{'structured_output':{'content':'omitted original'}})
+    with pytest.raises(research.ResearchBlocked):recovery._context(OLD,RUN,e.app,e.sf,initial=False)
+
+
+def offline_wal_first_failure(e):
+    e=first_failed_parallel_env(e);cp=e.run/'graph/cache/checkpoints'/f'{SYMBOL}.db'
+    with sqlite3.connect(cp) as db:
+        assert db.execute('PRAGMA journal_mode=WAL').fetchone()[0]=='wal'
+    assert not any(cp.with_name(cp.name+suffix).exists() for suffix in ('-wal','-shm'))
+    # Changing the journal header does not change logical checkpoint rows.
+    e.grant['binding']['checkpoint']['files']={'db':recovery._sha(cp),'-wal':None,'-shm':None}
+    e.pin();return e
+
+
+def test_offline_first_failure_wal_reads_leave_all_original_files_absent_or_unchanged(env):
+    e=offline_wal_first_failure(env)
+    def files():return {p.relative_to(e.run).as_posix():p.read_bytes() for p in e.run.rglob('*') if p.is_file()}
+    before=files();c=context(e)
+    assert c['binding']['checkpoint']['step']==0 and files()==before
+    assert not (e.run/'model-outputs').exists() and e.native.calls==0
+
+
+@pytest.mark.parametrize('mutation',['active_source','canceled_source','worker_drift','worker_not_terminal','db_drift',
+    'unexpected_sidecar','missing_files','files_none','files_list'])
+def test_offline_first_failure_wal_snapshot_requires_exact_inactive_binding(env,monkeypatch,mutation):
+    e=offline_wal_first_failure(env);cp=e.run/'graph/cache/checkpoints'/f'{SYMBOL}.db'
+    if mutation=='active_source':
+        with e.sf() as db:db.get(AgentTask,OLD).status='running';db.commit()
+    elif mutation=='canceled_source':
+        with e.sf() as db:db.get(AgentTask,OLD).status='canceled';db.commit()
+        put(e.run/'execution.json',{'state':'canceled'})
+    elif mutation=='worker_drift':put(e.run/'worker-terminal.json',{'exit_code':2})
+    elif mutation=='worker_not_terminal':
+        put(e.run/'worker-terminal.json',{'exit_code':0});e.grant['binding']['worker_terminal_sha256']=recovery._sha(e.run/'worker-terminal.json');e.pin()
+    elif mutation=='db_drift':e.grant['binding']['checkpoint']['files']['db']='f'*64;e.pin()
+    elif mutation=='missing_files':e.grant['binding']['checkpoint'].pop('files');e.pin()
+    elif mutation in ('files_none','files_list'):
+        e.grant['binding']['checkpoint']['files']=None if mutation=='files_none' else [];e.pin()
+    else:cp.with_name(cp.name+'-wal').write_bytes(b'not a bound WAL')
+    connect=sqlite3.connect;checkpoint_uris=[]
+    def observe(database,*args,**kwargs):
+        if str(database).startswith('file:') and '/checkpoints/' in str(database):checkpoint_uris.append(str(database))
+        return connect(database,*args,**kwargs)
+    monkeypatch.setattr(sqlite3,'connect',observe)
+    before={p.relative_to(e.run).as_posix():p.read_bytes() for p in e.run.rglob('*') if p.is_file()}
+    with pytest.raises(research.ResearchBlocked):context(e)
+    assert before=={p.relative_to(e.run).as_posix():p.read_bytes() for p in e.run.rglob('*') if p.is_file()} and e.native.calls==0
+    assert checkpoint_uris==[]
+
+
+def test_offline_first_failure_rechecks_bound_worker_after_query(env,monkeypatch):
+    e=offline_wal_first_failure(env);connect=sqlite3.connect;changed=[]
+    class ChangeAfterQuery:
+        def __init__(self,connection):self.connection=connection
+        def execute(self,statement,*args,**kwargs):
+            result=self.connection.execute(statement,*args,**kwargs)
+            if statement.startswith('SELECT') and not changed:
+                put(e.run/'worker-terminal.json',{'exit_code':2});changed.append(True)
+            return result
+        def close(self):self.connection.close()
+    def observe(database,*args,**kwargs):
+        connection=connect(database,*args,**kwargs)
+        return ChangeAfterQuery(connection) if str(database).startswith('file:') and '/checkpoints/' in str(database) else connection
+    monkeypatch.setattr(sqlite3,'connect',observe)
+    with pytest.raises(research.ResearchBlocked) as error:context(e)
+    assert error.value.code=='recovery_offline_checkpoint_drift' and changed==[True] and e.native.calls==0
+
+
+def test_unbound_checkpoint_snapshot_reads_current_wal_without_immutable(env,monkeypatch):
+    cp=env.run/'graph/cache/checkpoints'/f'{SYMBOL}.db';connect=sqlite3.connect;uris=[]
+    with connect(cp) as writer:
+        writer.execute('PRAGMA journal_mode=WAL')
+        thread=writer.execute('SELECT thread_id FROM checkpoints').fetchone()[0]
+        writer.execute('INSERT INTO checkpoints VALUES(?,?,?,?,?,?,?)',(thread,'','checkpoint-2',None,'msgpack',b'current WAL',json.dumps({'step':3})));writer.commit()
+        def observe(database,*args,**kwargs):
+            uris.append(str(database));return connect(database,*args,**kwargs)
+        monkeypatch.setattr(sqlite3,'connect',observe)
+        snapshot=recovery.checkpoint_snapshot(env.run,SYMBOL)
+        assert snapshot['checkpoint_id']=='checkpoint-2' and snapshot['step']==3
+    assert uris and all('immutable=1' not in uri.partition('?')[2] for uri in uris)
+
+
 @pytest.mark.parametrize('roles',[['News Analyst'],list(PARALLEL_ROLES)+['News Analyst'],['Bull Researcher',*PARALLEL_ROLES[1:]]])
 def test_parallel_pending_set_must_match_native_four_subgraphs(env,roles):
     e=parallel_env(env);e.grant['binding']['expected_pending_roles']=roles;e.pin()
@@ -295,6 +474,13 @@ def test_full_continuation_preserves_old_and_reuses_normal_scheduler(env,monkeyp
     view=research._latest(SYMBOL); assert view['recovery_lineage']['reused_original_outputs']==1
     assert view['recovery_lineage']['inherited_unknown_usage_count']==1
     prior=research._execution_prior(env.selection,research._digest(env.current)); assert research._completed_selection(prior,env.selection)['reused_identical_selection']
+    from app.models.daily_pick import DailyPickSet
+    entry={key:env.selection[key] for key in ('selected_at','source','source_version')}
+    with env.sf() as db:
+        DailyPickSet.__table__.create(db.get_bind(),checkfirst=True)
+        db.add(DailyPickSet(date=env.selection['trade_date'],items=json.dumps([{'symbol':SYMBOL}]),
+            meta=json.dumps({'selection_entries':{SYMBOL:{'state':'recorded',**entry}}})))
+        db.commit()
     monkeypatch.setattr(research,'selected_bindings',lambda *args:{SYMBOL:env.selection})
     async def no_create(*args,**kwargs): raise AssertionError('completed selection must not regenerate')
     monkeypatch.setattr(agent_tasks,'create_task_async',no_create); asyncio.run(research.scheduler_tick(env.app)); assert env.native.calls==1
@@ -389,6 +575,38 @@ def test_reviewed_transport_usage_transition_is_exact_and_directed(env,mutation)
     if mutation is None:assert recovery._compatibility(grant,new)==(research._digest(old),research._digest(new))
     else:
         with pytest.raises(research.ResearchBlocked):recovery._compatibility(grant,new)
+
+
+@pytest.mark.parametrize('components',[
+    ('transport_process.py',), ('tradingagents_source_gate.py',),
+    ('transport_process.py','tradingagents_source_gate.py'),
+])
+@pytest.mark.parametrize('mutation',[None,'future_hash','reverse','missing_old','wrong_grant_pair','codec_drift'])
+def test_reviewed_current_source_and_timeout_transitions_are_exact(env,components,mutation):
+    grant=deepcopy(env.grant);old=grant['source_method_identity'];new=grant['continuation_method_identity']
+    pairs={
+        'transport_process.py':(
+            'd88bdea9ecc8f9a854f02d92ed448d08fe3995074d4f130d805ab4d88aca7881',
+            'ff2812c801be847b6c6e83b0edf109f82fb7fe65ea9077e4473597437af4e592'),
+        'tradingagents_source_gate.py':(
+            '862dd58539f17698a8feabf04218acb41681f7381350007e6b630692d0fbbafc',
+            '0655bee3b5138cb354e69ee9c0c8cf9f7d627c58898952a2140a7237e14d7f83'),
+    }
+    for name in components:
+        old['source_files'][name],new['source_files'][name]=pairs[name]
+    target=components[0]
+    if mutation=='future_hash':new['source_files'][target]='f'*64
+    elif mutation=='reverse':old['source_files'][target],new['source_files'][target]=new['source_files'][target],old['source_files'][target]
+    elif mutation=='missing_old':old['source_files'].pop(target)
+    elif mutation=='codec_drift':
+        old['source_files']['cli_codec.py']='a'*64;new['source_files']['cli_codec.py']='b'*64
+    grant['compatibility']['source_hash_pairs']={k:dict(old=old['source_files'].get(k),new=new['source_files'].get(k))
+        for k in old['source_files'].keys()|new['source_files'].keys() if old['source_files'].get(k)!=new['source_files'].get(k)}
+    if mutation=='wrong_grant_pair':grant['compatibility']['source_hash_pairs'][target]['new']='e'*64
+    if mutation is None:assert recovery._compatibility(grant,new)==(research._digest(old),research._digest(new))
+    else:
+        with pytest.raises(research.ResearchBlocked):recovery._compatibility(grant,new)
+    assert env.native.calls==0
 
 
 def test_grant_cannot_omit_existing_original_paid_output(env):
