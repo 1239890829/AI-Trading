@@ -17,6 +17,7 @@ vi.mock("@/lib/api", async () => {
   return {
     ...actual,
     getNotifications: vi.fn(async () => payload),
+    getImpactEvents: vi.fn(async () => ({items: [], count: 0, countsAll: {}, fourCounts: {}, tagCounts: {}})),
     getNotificationDiagnostics: vi.fn(async () => payload.diagnostics ?? ranRejectedDiag),
     // 已读状态的服务端同步（2026-09-12）：组件挂载即触发 hydration。
     // 本文件只验「渲染结果」，把服务端桩成不可达 ⇒ 快照退回纯 localStorage 语义，
@@ -102,6 +103,41 @@ beforeEach(() => {
 afterEach(() => {
   cleanup();
   vi.clearAllMocks();
+});
+
+it.each(["scroll", "manual", "mode-return"] as const)("48 already-read notifications remain reachable through %s without another notification request", async method => {
+  let top = 5000;
+  const heights = vi.spyOn(HTMLElement.prototype, "scrollHeight", "get").mockReturnValue(2000);
+  const clients = vi.spyOn(HTMLElement.prototype, "clientHeight", "get").mockReturnValue(300);
+  const rect = vi.spyOn(HTMLElement.prototype, "getBoundingClientRect").mockImplementation(() => ({top, bottom: top + 1, left: 0, right: 100, width: 100, height: 1, x: 0, y: top, toJSON: () => ({})}));
+  try {
+    payload = makePayload(Array.from({length: 48}, (_, index) => item({id: `local-${index}`, title: `原通知第${index + 1}条`})));
+    render(<NotificationBell/>);
+    await waitFor(() => expect(badge()?.textContent).toBe("48"));
+    await openDrawer();
+    await act(async () => {});
+    expect(screen.getAllByTestId("notification-row")).toHaveLength(30);
+    expect(screen.queryByText("原通知第48条")).toBeNull();
+    const requests = vi.mocked(getNotifications).mock.calls.length;
+    if (method === "mode-return") {
+      fireEvent.click(screen.getByTestId("notification-mode-events"));
+      await screen.findByTestId("event-feed");
+      fireEvent.click(screen.getByTestId("notification-mode-opportunity"));
+    }
+    if (method === "manual") {
+      const more = screen.getByRole("button", {name: "继续加载"});
+      more.focus(); expect(document.activeElement).toBe(more);
+      fireEvent.click(more);
+    } else {
+      top = 200;
+      fireEvent.scroll(screen.getByTestId("notification-list"));
+    }
+    expect(screen.getAllByTestId("notification-row")).toHaveLength(48);
+    expect(screen.getByText("原通知第48条")).toBeTruthy();
+    expect(screen.getByText("已全部加载（48 条通知）")).toBeTruthy();
+    expect(screen.queryByRole("button", {name: "继续加载"})).toBeNull();
+    expect(vi.mocked(getNotifications).mock.calls.length).toBe(requests);
+  } finally {rect.mockRestore(); clients.mockRestore(); heights.mockRestore();}
 });
 
 describe("通知中心：未读计数与红点", () => {

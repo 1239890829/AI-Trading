@@ -447,8 +447,9 @@ export function NotificationBell() {
   // 增量渲染（#55）：/api/notifications 默认 60 条（实测 16KB），每条是富文本卡片，
   // 一次性全铺会拖慢抽屉打开的首帧。切换时段 tab / 清空历史时重置到首页。
   const activeList = bySession[tab];
-  const { shown: shownNotices, visible, sentinelRef } = useIncremental(activeList, {
+  const { shown: shownNotices, visible, sentinelRef, loadMore } = useIncremental(activeList, {
     resetKey: `${tab}/${clearBefore}`,
+    active: open && mode === "opportunity",
   });
 
   return (
@@ -639,6 +640,7 @@ export function NotificationBell() {
                   total={activeList.length}
                   unit="条通知"
                   testId="notification-sentinel"
+                  onLoadMore={loadMore}
                 />
                 {payload?.errors && (
                   <p className="pt-1 text-[10px] text-amber-500/90" title={Object.entries(payload.errors).map(([k, v]) => `${k}: ${v}`).join("；")}>
