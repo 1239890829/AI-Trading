@@ -360,6 +360,53 @@ it("same-scope refresh failures preserve all candidates but remove current gate 
   expect(screen.queryByText(/保留上次读取的盘中候选/)).toBeNull();
 });
 
+it("acknowledges manual reads, prevents duplicate primary reads and reports partial failure without clearing cards", async () => {
+  render(<HuntingPage/>);
+  await screen.findByText("候选 002636");
+  let finish!: (value: api.DailyPicksPayload) => void;
+  let reject!: (error: Error) => void;
+  vi.mocked(api.getTodayPicks).mockReturnValueOnce(new Promise(resolve => {finish = resolve;}));
+  vi.mocked(api.getIntradayTop).mockReturnValueOnce(new Promise((_resolve, fail) => {reject = fail;}));
+  const instance = card("600127");
+  fireEvent.click(screen.getByRole("button", {name: "刷新数据"}));
+  const busy = screen.getByRole("button", {name: "读取中…"});
+  expect(busy.hasAttribute("disabled")).toBe(true);
+  expect(busy.getAttribute("aria-busy")).toBe("true");
+  expect(screen.getByRole("status").textContent).toContain("正在读取名单");
+  fireEvent.click(busy);
+  await waitFor(() => expect(api.getTodayPicks).toHaveBeenCalledTimes(2));
+  expect(api.getIntradayTop).toHaveBeenCalledTimes(2);
+  expect(card("600127")).toBe(instance);
+  await act(async () => {
+    finish({date: "2026-10-08", items: [{symbol: "600127"}, {symbol: "002636"}], meta: {gate: {}}} as api.DailyPicksPayload);
+    reject(new Error("source-offline"));
+  });
+  await screen.findByRole("button", {name: "刷新数据"});
+  expect(screen.getByRole("status").textContent).toContain("部分读取失败");
+  expect(screen.getByRole("status").textContent).not.toContain("本轮读取完成");
+  expect(card("600127")).toBe(instance);
+  expect(instance.dataset.readError).toBe("true");
+  expect(api.getEventsForSymbol).not.toHaveBeenCalled();
+});
+
+it("an auxiliary slow read does not disable refreshing the ready candidate list or fetch closed archives", async () => {
+  let finishHealth!: (value: api.SignalHealthPayload) => void;
+  vi.mocked(api.getSignalHealth).mockReturnValueOnce(new Promise(resolve => {finishHealth = resolve;}));
+  render(<HuntingPage/>);
+  await screen.findByText("候选 002636");
+  const refresh = screen.getByRole("button", {name: "刷新数据"});
+  expect(refresh.hasAttribute("disabled")).toBe(false);
+  expect(screen.getByRole("status").textContent).toContain("附加资料");
+  fireEvent.click(refresh);
+  await waitFor(() => expect(api.getTodayPicks).toHaveBeenCalledTimes(2));
+  expect(api.getSignalHealth).toHaveBeenCalledTimes(1);
+  expect(api.getPicksHistory).not.toHaveBeenCalled();
+  expect(api.getPickReviews).not.toHaveBeenCalled();
+  expect(api.getPicksMeta).not.toHaveBeenCalled();
+  await act(async () => finishHealth(null as unknown as api.SignalHealthPayload));
+  await waitFor(() => expect(screen.getByRole("status").textContent).toContain("本轮读取完成"));
+});
+
 it("a successful same-version daily reply updates the open evidence, while removal or version changes close it permanently", async () => {
   const dailyReply = (price: number, symbol = "600127", version = "v1") => ({date: "2026-10-08", items: [{symbol, execution: {executable_snapshot: {price}}}], meta: {gate: {}, selection_version: version}} as api.DailyPicksPayload);
   vi.mocked(api.getTodayPicks).mockResolvedValue(dailyReply(11));

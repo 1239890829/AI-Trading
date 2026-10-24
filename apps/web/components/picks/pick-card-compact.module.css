@@ -124,6 +124,7 @@
 }
 
 .field {
+  position: relative;
   display: flex;
   flex-direction: column;
   align-items: flex-start;
@@ -165,6 +166,22 @@
   font-weight: 500;
   line-height: 1.4;
   font-variant-numeric: tabular-nums;
+}
+
+.ruleScale {
+  position: absolute;
+  right: 5px;
+  bottom: 2px;
+  left: 5px;
+  height: 2px;
+  background: var(--ui-line);
+  pointer-events: none;
+}
+
+.ruleScale > span {
+  display: block;
+  height: 100%;
+  background: var(--ui-accent);
 }
 
 .basis {

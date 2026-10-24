@@ -196,8 +196,17 @@ function HuntingInner() {
   // Do not revive a captured ready snapshot after its date/version/member identity exits.
   if (dailyDetail && !detailItem) setDailyDetail(null);
   const showDailyDetail = (item: DailyPickItem) => setDailyDetail({item, date: data?.date ?? null, version: data?.meta?.selection_version ?? null, group: selectedGroup});
+  const refreshTargets = [daily, briefResource, statsResource,
+    ...(isDiscoverView ? [healthResource, watcherResource, opportunitiesResource, intraday] : []),
+    ...(reviewOptions.enabled ? [historyResource, reviewsResource, metaResource] : []),
+  ];
+  const primaryReading = daily.pending || (isDiscoverView && intraday.pending);
+  const extraReading = refreshTargets.some(resource => resource.pending);
+  const [requestedRefresh, setRequestedRefresh] = useState(false);
   const load = () => {
-    for (const resource of [daily, historyResource, reviewsResource, metaResource, healthResource, briefResource, watcherResource, statsResource, opportunitiesResource, intraday]) {
+    if (primaryReading) return;
+    setRequestedRefresh(true);
+    for (const resource of refreshTargets) {
       if (!resource.pending) resource.refresh();
     }
   };
@@ -413,32 +422,32 @@ function HuntingInner() {
       <header className="workspace-masthead hunting-masthead">
         <div><h1>选股</h1><p className="hunting-page-intro">先发现，再核对条件，持续跟踪变化。</p></div>
         <div className="workspace-context">
-        {isDiscovery && (picksFailed || intradayFailed) ? (
+        <span role="status" aria-live="polite" aria-atomic="true" className="hunting-read-status">
+        {isDiscovery && extraReading ? <span>{primaryReading ? "正在读取名单…" : "正在读取附加资料…"}</span> : isDiscovery && (picksFailed || intradayFailed || (reviewOptions.enabled && reviewReadFailures.length > 0)) ? (
           <span
             className="rounded border border-amber-500/40 bg-amber-500/10 px-1.5 py-0.5 text-[10px] text-amber-800 dark:text-amber-300"
             title="部分数据端点失败（后端不可达或网络中断）。每 60s 自动重试，也可点「刷新数据」。"
           >
-            数据加载失败 · 自动重试中
+            部分读取失败 · 自动重试
           </span>
         ) : (
-          <span className="text-[10px]" title={view === "tracking" ? "跟踪记录每 30s 读取；切回会立即刷新。" : "当前视图每 60s 读取；切回会立即刷新。"}>
-            {view === "tracking" ? "记录每 30s 刷新" : "每 60s 自动刷新"}
+          <span className="text-[10px]" title="后台自动同步；非交易时段降频。读取完成不代表行情实时或当前可参与。">
+            {isDiscovery && requestedRefresh ? "本轮读取完成" : "自动同步"}
           </span>
         )}
+        </span>
         <div className="ml-auto flex flex-wrap items-center justify-end gap-1.5">
           {isDiscovery && <button data-action="secondary"
             onClick={() => void load()}
+            disabled={primaryReading} aria-busy={primaryReading}
             className="quiet-action"
             title="立即重新拉取全部数据（通常无需手动点——页面已自动刷新）"
           >
-            刷新数据
+            {primaryReading ? "读取中…" : "刷新数据"}
           </button>}
           <Link href="/agent?area=maintenance&tab=operations" onClick={inspectionClick(inspect, {kind: "system-status"})} className="quiet-action">生产状态与维护</Link>
-        </div></div>
-      </header>
-
-      <HuntingTaskRail view={view} section={sec} search={sp.toString()} />
-      <div className="hunting-current-context">
+        </div>
+      <div className="hunting-current-context hunting-context-tools">
         <details className="hunting-context-help"><summary>使用说明<svg aria-hidden="true" width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.5"><path d="m7 10 5 5 5-5" /></svg></summary><p>{view === "evidence" ? "核对同版依据、等待条件与反证；研究观察不取得交易资格。"
           : view === "tracking" ? "参考跟踪记录与收盘对照；关注、参考价均不是持仓或成交。"
           : view === "research" ? "研究强势形成过程；保留来源、缺项与后续观察，尚未验证的规律不进入交易排序。"
@@ -446,6 +455,10 @@ function HuntingInner() {
           : "盘中候选实时变化；每日精选保留组合日期，两种名单分开核对。"}</p></details>
         <Link className="quiet-action" onClick={inspectionClick(inspect, {kind: "account", scope: "manual"})} href={patchWorkspaceUrl("/workbench", sp.toString(), {mode: "positions", account: "manual", view: null, panel: null, from: `/hunting?${sp.toString()}`})}>实际持仓</Link>
       </div>
+        </div>
+      </header>
+
+      <HuntingTaskRail view={view} section={sec} search={sp.toString()} counts={{candidates: intradayLoaded && !topReadFailed && top ? topItems.length : undefined, daily: picksLoaded && !picksFailed ? pickTotal : undefined}} />
       {accessory.value && <ModalShell open={accessory.active} label={accessory.value === "evidence" ? "机会证据台" : "参考跟踪"} size="lg" presentation="drawer" expandable onClose={() => router.replace(patchWorkspaceUrl("/hunting", sp.toString(), {panel: null}), {scroll: false})} header={<div><h2 className="text-lg font-semibold">{accessory.value === "evidence" ? "机会证据台" : "参考跟踪"}</h2></div>} footer="保留当前机会位置；参考价与观察记录不是成交，不构成买卖建议。">
         {accessory.active && (accessory.value === "evidence" ? <OpportunityEvidencePanel date={sp.get("date") ?? undefined} onDateChange={date => router.replace(patchWorkspaceUrl("/hunting", sp.toString(), {date}), {scroll: false})} /> : <WatchLedgerPanel date={sp.get("date") ?? undefined} />)}
       </ModalShell>}
