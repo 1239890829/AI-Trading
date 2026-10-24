@@ -36,7 +36,7 @@
 | **MD-12** | `product/ui-original-skills-plan-20261008.md` | L2 | 原版技能重设计方案 | 逐技能原文流程与独立产物、清晰来源与具体组合、107候选及跨切面/细功能附录、原生与宿主适配边界；当前为方案审计交付 |
 | **MD-09** | `research/limit-up-dragon-research.md` | L2 | 选股研究 | 历史涨停/强连板/龙头研究协议与证据；§30 纠正未来筛选，§32 为已纠错的旧裁决，§33 为价格基线，§34–35 为近期多路径案例与样本纠错，§36–38 为首板后候选状态、共同机制及 2016–2025 跨年份反证；§39 为持续观察、猎场消费和复盘契约，§39.4为隔离前向运行入口与覆盖限制；状态归 W04/RSH-031 |
 | **KW-00..11** | `kb/00-INDEX.md` … `kb/11-doc-catalog.md` | L2/L3 | 知识 | 见下方「KB 知识库」分表 |
-| **SM-01..08** | `summary/stock-strategy` · `factor-system` · `data-market` · `architecture-design` · `ai-evolution` · `review-governance` · `system-final-blueprint` · `pick-signal-chain` | L2 | 主题汇总 | **查主题先看这里**；`system-final-blueprint` 是任务四后目标架构与验收总纲，§5.1给KB正文回执与有限对照协议；**`pick-signal-chain` = 选股提醒链路（`dispatch_alert` 扇出 / 双家族断点 / §11 通知读侧 / §12 来源事件与投递合同）**。维护：主题结论更新 |
+| **SM-01..08** | `summary/stock-strategy` · `factor-system` · `data-market` · `architecture-design` · `ai-evolution` · `review-governance` · `system-final-blueprint` · `pick-signal-chain` | L2 | 主题汇总 | **查主题先看这里**；`system-final-blueprint` 是任务四后目标架构与验收总纲，§5.1给KB正文回执与有限对照协议；**`pick-signal-chain` = 选股提醒链路（`dispatch_alert` 扇出 / 双家族断点 / §11 通知读侧 / §12 来源事件与投递合同 / §14 零成交分母 / §15 低分归因与盘中完整执行评估）**。维护：主题结论更新 |
 | **DT-01** | `data/data-source-comparison.md` | L2 | 数据源 | 四源实测对比与选型；§17工作台个股/指数故障分母与身份/失败契约。**改数据源前必读，改完回填** |
 | **DT-02** | `data/data-sources.md` | L2 | 数据源 | 接入策略：主源 → 备源 → 降级链；[TradingAgents显式构包](data/data-sources.md#tradingagents显式研究构包2026-10-21)的现有免费owner、单位/双钟/缺失与指标边界 |
 | **DT-03** | `archive/external-data-source-survey-2026-09-11.md` | L1 | 调研 | 外部付费源调研。§0–§7 = 官方公开信息（零实测，📎）；**§8 = 2026-09-16 复评（本机实测）**：FTShare 免费档实测 + 1000 次/天预算精算 + 四家价格/覆盖横向对比 + **升级决策 = 不升级**。**已拍板不接入付费档** ⇒ 只读留痕 |
@@ -125,6 +125,8 @@
 ---
 
 当前入选研究/模拟接续见[角色与受控承接](product/hunting-decision-design.md#2026-10-24-角色阅读站内提醒与受控模拟承接)、[并行租约/只读角色](ai/semantic-decisions.md#2026-10-24-入选完整研究并行与只读角色投影)、[信号链§13](summary/pick-signal-chain.md#13-入选研究与模拟进展的站内承接2026-10-24)及[性能§37](system/runtime-performance.md#37-2026-10-24-完整研究并行与保存结果快读)。准确工程/页面/发布事实归handoff与原W02/W03/W04；研究数量不作质量或胜率。
+
+当前低分归因与盘中执行接续见[信号链§15](summary/pick-signal-chain.md#15-低分归因与盘中完整执行评估2026-10-24)：深评输入/成功/丢档分开、108/108仅证算术，三项合同纠错及共享六维后续assessment不改首次入选。原权重/50/60/75、60秒执行、unknown拒绝和同股消费去重不变；名单480秒不当报价窗。职责仍归原W02/W03/W04/W07，工程/发布/真实未来窗口与收益分别验。
 
 当前TradingAgents接续：见[六新场景完整图与四臂对照](ai/semantic-decisions.md#2026-10-20-六新场景完整图与四臂对照)、[完整研究读者](product/hunting-decision-design.md#2026-10-20-tradingagents完整研究读者)和[运行前置](system/deployment.md#tradingagents完整研究运行边界)，状态仍在W04/RSH-030。工程、真实模型、净收益准入与现役加载分开；旧批不替代新HEAD验收或启用。 最新[三主模型整图筛选](ai/semantic-decisions.md#用户改为三主模型整图筛选)已按来源质量与完整性选Sol作本例候选；Luna完整有复权口径错，DeepSeek受原输入上限阻断。两项完整速度试验均未提速，保留medium；原四臂失败/unknown保留，gold0；用户随后明确授权真正入选后的未验证完整研究，当前[研究授权](ai/semantic-decisions.md#2026-10-21-真正入选后完整研究与交互纠偏)与效果准入分开。 原真实入选pending的跨日承接及局部否定守卫边界查[当前承接纠错](ai/semantic-decisions.md#2026-10-21-未派发研究承接与否定范围纠错)，原日期/排名及历史失败不改。原批状态归RSH-030/handoff，第7unknown具名许可、已发布用量/答复分离及后续无损呈现合同查[共因与未来合同](ai/semantic-decisions.md#2026-10-23-终态用量与答复准入分离)；旧七账不回写；PR #325的发布/加载与后续新HEAD分别查关联PR回执，历史施工快照不代当前运行。 PR #326已加载及实际搜索/成员/午间读取范围见handoff；wrap_up原消息与实际wire指纹的纠错及零调用恢复history，仍归[原输入前续接合同](ai/semantic-decisions.md#2026-10-23-无损证据呈现与输入前失败续接)，不改原答/账或自动重试。
 
