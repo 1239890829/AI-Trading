@@ -3,6 +3,21 @@ import { afterEach, expect, it, vi } from "vitest";
 import { act, cleanup, fireEvent, render, screen } from "@testing-library/react";
 import { CandidateCollection } from "./candidate-collection";
 afterEach(cleanup);
+it("a controlled presentation and read description keep candidate identity without a duplicate toolbar", () => {
+ const change = vi.fn();
+ const {container,rerender} = render(<CandidateCollection view="cards" onViewChange={change} toolbar={false} description={<p>2026-10-23 · 原名单</p>}><button key="stock">原卡依据</button></CandidateCollection>);
+ const card = screen.getByRole("button",{name:"原卡依据"});
+ expect(screen.queryByRole("button",{name:"列表"})).toBeNull();
+ rerender(<CandidateCollection view="cards" onViewChange={change}><button key="stock">原卡依据</button></CandidateCollection>);
+ fireEvent.click(screen.getByRole("button",{name:"列表"}));
+ expect(change).toHaveBeenCalledWith("list");
+ expect(container.querySelector('[data-view="cards"]')).toBeTruthy();
+ rerender(<CandidateCollection view="list" onViewChange={change} toolbar={false} description={<p role="alert">读取失败，保留原名单</p>}><button key="stock">原卡依据</button></CandidateCollection>);
+ expect(container.querySelector('[data-view="list"]')).toBeTruthy();
+ expect(screen.getByRole("button",{name:"原卡依据"})).toBe(card);
+ expect(screen.getByRole("alert").textContent).toContain("保留原名单");
+ expect(change).toHaveBeenCalledTimes(1);
+});
 it("同一候选切换列表保留对象状态和挂载身份", () => {
  const mount = vi.fn();
  function Candidate() {

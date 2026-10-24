@@ -1,12 +1,31 @@
 import { afterEach, describe, expect, it } from "vitest";
 import { cleanup, fireEvent, render, screen } from "@testing-library/react";
-import { HuntingTaskRail } from "./hunting-task-rail";
+import { HuntingCandidateSwitch, HuntingTaskRail } from "./hunting-task-rail";
 
 afterEach(cleanup);
 const query = "symbol=600127&date=2026-09-30&theme=%E5%86%9C%E4%B8%9A&ct=kline&from=%2Fmarket%3Ftab%3Dthemes&panel=tracking";
 const params = (link: HTMLElement) => new URL(link.getAttribute("href")!, "http://localhost").searchParams;
 
 describe("选股任务入口保真", () => {
+  it("uses one local pair without repeating primary links in the discovery task menu", () => {
+    render(<><HuntingTaskRail view="discover" section="daily" search={query} localCandidates/><HuntingCandidateSwitch group="daily" search={query} counts={{candidates:0,daily:3}}/></>);
+    expect(screen.getAllByRole("link",{name:"每日精选"})).toHaveLength(1);
+    expect(screen.getAllByRole("link",{name:"盘中候选"})).toHaveLength(1);
+    const local=screen.getByRole("navigation",{name:"候选名单切换"});
+    expect(local.contains(screen.getByRole("link",{name:"每日精选"}))).toBe(true);
+    const daily=screen.getByRole("link",{name:"每日精选"});
+    expect(daily.getAttribute("aria-current")).toBe("page");
+    expect(daily.textContent).toContain("3只");
+    const intraday=screen.getByRole("link",{name:"盘中候选"});
+    expect(intraday.textContent).toContain("0只");
+    expect(params(intraday).get("date")).toBe("2026-09-30");
+    expect(params(intraday).get("symbol")).toBe("600127");
+    expect(params(intraday).has("panel")).toBe(false);
+    intraday.focus();fireEvent.keyDown(intraday,{key:"ArrowRight"});
+    expect(document.activeElement).toBe(daily);
+    fireEvent.keyDown(daily,{key:"Home",isComposing:true,keyCode:229});
+    expect(document.activeElement).toBe(daily);
+  });
   it("keeps object, date, source and chart context when switching consumer", () => {
     render(<HuntingTaskRail view="discover" section={null} search={query} />);
     const evidence = params(screen.getByRole("link", { name: "机会依据" }));

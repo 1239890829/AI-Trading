@@ -62,12 +62,13 @@ import {
 } from "@/components/ui/loading";
 import { timeText } from "@/lib/format";
 import { OpportunityEvidencePanel } from "@/components/hunting/opportunity-evidence-panel";
-import { HuntingTaskRail } from "@/components/hunting/hunting-task-rail";
+import { HuntingCandidateSwitch, HuntingTaskRail } from "@/components/hunting/hunting-task-rail";
 import { LeaderResearchPanel } from "@/components/hunting/leader-research-panel";
 import { useExitPresence } from "@/hooks/use-exit-presence";
 import { ModalShell } from "@/components/ui/modal-shell";
 import { WatchLedgerPanel } from "@/components/hunting/watch-ledger-panel";
 import { PickDetailModal } from "@/components/picks/pick-detail-modal";
+import { SelectionRail } from "@/components/ui/selection-rail";
 import { CandidateCollection } from "@/components/ui/candidate-collection";
 
 /**
@@ -101,6 +102,7 @@ function HuntingInner() {
   const expandedTheme = sp.get("theme");
   const sec = sp.get("sec");
   const selectedGroup = sec === "daily" ? "daily" : "candidates";
+  const [collectionViews, setCollectionViews] = useState<Record<"candidates" | "daily", "cards" | "list">>({candidates:"cards",daily:"cards"});
   const flowRef = useRef<HTMLDivElement>(null);
   const discoveryRef = useRef<HTMLDivElement>(null);
   const groupScroll = useRef({candidates: 0, daily: 0});
@@ -416,6 +418,9 @@ function HuntingInner() {
           </div>
         </details>);
 
+  const candidateCounts = {candidates: intradayLoaded && !topReadFailed && top ? topItems.length : undefined, daily: picksLoaded && !picksFailed ? pickTotal : undefined};
+  const candidateSwitch = <HuntingCandidateSwitch group={selectedGroup} search={sp.toString()} counts={candidateCounts}/>;
+
   return (
     <main data-workspace="hunting" className="task-page hunting-workspace mx-auto flex h-full w-full max-w-[1440px] flex-col overflow-hidden">
       {/* 头部：标题 + 口径说明 + 刷新状态 + 操作 */}
@@ -458,7 +463,7 @@ function HuntingInner() {
         </div>
       </header>
 
-      <HuntingTaskRail view={view} section={sec} search={sp.toString()} counts={{candidates: intradayLoaded && !topReadFailed && top ? topItems.length : undefined, daily: picksLoaded && !picksFailed ? pickTotal : undefined}} />
+      <HuntingTaskRail view={view} section={sec} search={sp.toString()} counts={candidateCounts} localCandidates={isDiscoverView} />
       {accessory.value && <ModalShell open={accessory.active} label={accessory.value === "evidence" ? "机会证据台" : "参考跟踪"} size="lg" presentation="drawer" expandable onClose={() => router.replace(patchWorkspaceUrl("/hunting", sp.toString(), {panel: null}), {scroll: false})} header={<div><h2 className="text-lg font-semibold">{accessory.value === "evidence" ? "机会证据台" : "参考跟踪"}</h2></div>} footer="保留当前机会位置；参考价与观察记录不是成交，不构成买卖建议。">
         {accessory.active && (accessory.value === "evidence" ? <OpportunityEvidencePanel date={sp.get("date") ?? undefined} onDateChange={date => router.replace(patchWorkspaceUrl("/hunting", sp.toString(), {date}), {scroll: false})} /> : <WatchLedgerPanel date={sp.get("date") ?? undefined} />)}
       </ModalShell>}
@@ -467,6 +472,13 @@ function HuntingInner() {
         {view === "validation" ? <SelectionValidationPanel /> : view === "evidence" ? <OpportunityEvidencePanel date={sp.get("date") ?? undefined} onDateChange={date => { const p = new URLSearchParams(sp.toString()); p.set("date", date); router.replace(`/hunting?${p.toString()}`, {scroll:false}); }} /> : view === "tracking" ? <WatchLedgerPanel date={sp.get("date") ?? undefined} /> : view === "research" ? <LeaderResearchPanel date={sp.get("date") ?? undefined} onDateChange={date => router.replace(patchWorkspaceUrl("/hunting", sp.toString(), {date: date ?? null}), {scroll: false})} /> : <>
         {view === "discover" && <>
 <div ref={discoveryRef} className="hunting-discovery-grid" onScroll={recordGroupScroll}><div ref={flowRef} className="hunting-candidate-flow" onScroll={recordGroupScroll} tabIndex={0} role="region" aria-label="候选结果与题材">
+        <div className="hunting-list-toolbar">
+          {candidateSwitch}
+          <SelectionRail activeKey={collectionViews[selectedGroup]} label="候选呈现方式">
+            {(["cards", "list"] as const).map(mode => <button key={mode} type="button" aria-pressed={collectionViews[selectedGroup] === mode}
+              onClick={() => setCollectionViews(previous => previous[selectedGroup] === mode ? previous : {...previous, [selectedGroup]:mode})}>{mode === "cards" ? "卡片" : "列表"}</button>)}
+          </SelectionRail>
+        </div>
         <div className="hunting-candidate-notices">
         {/* ── 空仓闸门横幅（风险提示置顶）──
             2026-09-16 动态化：以**读取时刻复核**（meta.gate_live）为准展示，
@@ -485,19 +497,22 @@ function HuntingInner() {
         {sourceStatus}
         </div>
         <section id="sec-candidates" className="hunting-candidates space-y-3" hidden={selectedGroup !== "candidates"} inert={selectedGroup !== "candidates"}>
-          <div className="hunting-section-heading hunting-group-heading">
-            <h2 className="hunting-section-title">盘中候选</h2>
-            {intradayLoaded && top && <span className="hunting-section-count">{topItems.length} 只</span>}
-            <p className="hunting-group-scope" title="名单与参考区均按账户交易权限过滤">权限 {top?.tradable_boards ?? "沪市主板 / 深市主板"}</p>
-            <p className="hunting-group-summary">当日动态名单 · 当前未封板，进入参与评估不保证成交</p>
-          </div>
-          {topReadFailed && top && <p role="alert" className="hunting-empty">盘中候选读取失败。以下保留上次读取的盘中候选，当前参与条件待重新核实。</p>}
-          {!intradayLoaded ? <CardListSkeleton count={2} /> : !top ? <div role="alert" className="hunting-empty">盘中候选读取失败。请刷新重试；当前无法判断是否有符合条件的标的。</div>
-            : topItems.length > 0 ? <CandidateCollection>{topItems.map(it => <PickCard compact active={selectedGroup === "candidates"} key={JSON.stringify([top.trade_date, top.selection_identity_version, it.symbol])} item={fromIntradayStock(it)}
-                readError={!!intraday.error}
-                dailyEvidence={dailyBySymbol.has(it.symbol) && data?.date ? {item: dailyBySymbol.get(it.symbol)!, date: data.date, generatedAt: data.meta?.generated_at ?? null, version: data.meta?.selection_version ?? null} : undefined}
-                onShowDailyEvidence={showDailyDetail} positionLabel={(posLabels[it.symbol] as "sim" | "real" | undefined) ?? null} />)}</CandidateCollection>
-            : <div className="hunting-empty">{topReadFailed ? "上次读取的名单为空，当前状态待重试核实。" : (top.empty_reasons?.join("；") || "当前没有同时满足条件的候选，系统不会凑满名额。")}</div>}
+          <CandidateCollection view={collectionViews.candidates} onViewChange={mode => setCollectionViews(previous => ({...previous,candidates:mode}))} toolbar={false} description={<>
+            <div className="hunting-section-heading hunting-group-heading">
+              <h2 className="sr-only">盘中候选</h2>
+              <p className="hunting-group-scope" title="名单与参考区均按账户交易权限过滤">权限 {top?.tradable_boards ?? "沪市主板 / 深市主板"}</p>
+              <p className="hunting-group-summary">当日动态名单 · 当前未封板，进入参与评估不保证成交</p>
+            </div>
+            {topReadFailed && top && <p role="alert" className="hunting-empty">盘中候选读取失败。以下保留上次读取的盘中候选，当前参与条件待重新核实。</p>}
+          </>}>
+            {!intradayLoaded ? <div className="hunting-collection-placeholder"><CardListSkeleton count={2}/></div>
+              : !top ? <div role="alert" className="hunting-empty hunting-collection-placeholder">盘中候选读取失败。请刷新重试；当前无法判断是否有符合条件的标的。</div>
+              : topItems.length > 0 ? topItems.map(it => <PickCard compact active={selectedGroup === "candidates"} key={JSON.stringify([top.trade_date, top.selection_identity_version, it.symbol])} item={fromIntradayStock(it)}
+                  readError={!!intraday.error}
+                  dailyEvidence={dailyBySymbol.has(it.symbol) && data?.date ? {item: dailyBySymbol.get(it.symbol)!, date: data.date, generatedAt: data.meta?.generated_at ?? null, version: data.meta?.selection_version ?? null} : undefined}
+                  onShowDailyEvidence={showDailyDetail} positionLabel={(posLabels[it.symbol] as "sim" | "real" | undefined) ?? null} />)
+              : <div className="hunting-empty hunting-collection-placeholder">{topReadFailed ? "上次读取的名单为空，当前状态待重试核实。" : (top.empty_reasons?.join("；") || "当前没有同时满足条件的候选，系统不会凑满名额。")}</div>}
+          </CandidateCollection>
           <button type="button" className="hunting-source-note" onClick={() => router.replace(patchWorkspaceUrl("/hunting", sp.toString(), {view: "validation"}), {scroll: false})}>查看已保存的入选记录 →</button>
           {top?.read_state === "partial" && <p role="status" className="hunting-empty">部分题材数据不完整，当前展示已核实的候选。</p>}
           {top?.criteria && <p className="hunting-source-note">{top.criteria}</p>}
@@ -517,11 +532,15 @@ function HuntingInner() {
           </div>}
         </section>
         <section id="sec-daily" className="hunting-daily space-y-3" hidden={selectedGroup !== "daily"} inert={selectedGroup !== "daily"}>
-          <div className="hunting-section-heading hunting-group-heading"><h2 className="hunting-section-title">每日精选</h2>{picksLoaded && !picksFailed && <span className="hunting-section-count">{pickTotal} 只</span>}<p>{data?.date ?? "组合日期待读取"} · 当日持久候选</p></div>
-          {picksFailed && data && <p role="alert" className="hunting-empty">每日精选读取失败。以下保留上次读取的组合与原生成依据，当前执行复核待重新读取。</p>}
-          {!picksLoaded ? <CardListSkeleton count={2} /> : !data ? <div role="alert" className="hunting-empty">每日精选读取失败。请刷新重试；读取失败不表示没有组合。</div>
-            : pickTotal === 0 ? <div className="hunting-empty">{dailyEmptySummary(data)}</div>
-            : <CandidateCollection>{pickItems.map(it => <PickCard compact active={selectedGroup === "daily"} key={JSON.stringify([data.date, data.meta?.selection_version, it.symbol])} item={fromDailyPick(it)} readError={!!daily.error} positionLabel={(posLabels[it.symbol] as "sim" | "real" | undefined) ?? null} />)}</CandidateCollection>}
+          <CandidateCollection view={collectionViews.daily} onViewChange={mode => setCollectionViews(previous => ({...previous,daily:mode}))} toolbar={false} description={<>
+            <div className="hunting-section-heading hunting-group-heading"><h2 className="sr-only">每日精选</h2><p>{data?.date ?? "组合日期待读取"} · 当日持久候选</p></div>
+            {picksFailed && data && <p role="alert" className="hunting-empty">每日精选读取失败。以下保留上次读取的组合与原生成依据，当前执行复核待重新读取。</p>}
+          </>}>
+            {!picksLoaded ? <div className="hunting-collection-placeholder"><CardListSkeleton count={2}/></div>
+              : !data ? <div role="alert" className="hunting-empty hunting-collection-placeholder">每日精选读取失败。请刷新重试；读取失败不表示没有组合。</div>
+              : pickTotal === 0 ? <div className="hunting-empty hunting-collection-placeholder">{dailyEmptySummary(data)}</div>
+              : pickItems.map(it => <PickCard compact active={selectedGroup === "daily"} key={JSON.stringify([data.date, data.meta?.selection_version, it.symbol])} item={fromDailyPick(it)} readError={!!daily.error} positionLabel={(posLabels[it.symbol] as "sim" | "real" | undefined) ?? null} />)}
+          </CandidateCollection>
           <p className="hunting-source-note">{minPickScore != null ? `综合分≥${minPickScore} · ` : ""}{replaceThreshold != null ? `换股门槛 ${replaceThreshold} 分` : "换股门槛未返回"} · {maxSwaps != null ? `每日换股上限 ${maxSwaps} 只` : "换股上限未返回"}；够格几只就保留几只。</p>
         </section>
 
