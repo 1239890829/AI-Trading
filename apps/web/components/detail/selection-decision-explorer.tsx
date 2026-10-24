@@ -85,12 +85,14 @@ export function SelectionMeasurements({value, compact = false}: {value: Selectio
   </section>;
 }
 
-export function SelectionScores({scores, compact = false, onSelect}: {scores: SelectionScore[]; compact?: boolean; onSelect?: (key: string) => void}) {
+export function SelectionScores({scores, compact = false, onSelect, label, title = "关键分项", note = "原规则分值，不是上涨概率"}: {
+  scores: SelectionScore[]; compact?: boolean; onSelect?: (key: string) => void; label?: string; title?: string; note?: string;
+}) {
   const [selected, setSelected] = useState(scores[0]?.key ?? "");
   const score = scores.find(value => value.key === selected) ?? scores[0];
   const choose = (key: string) => {setSelected(key); onSelect?.(key);};
-  return <section aria-label={compact ? "入选关键评分概览" : "关键分项评分"} className={`${styles.scoreSection} ${compact ? styles.compact : ""}`}>
-    <div className={styles.heading}><h3>关键分项</h3><span>原规则分值，不是上涨概率</span></div>
+  return <section aria-label={label ?? (compact ? "入选关键评分概览" : "关键分项评分")} className={`${styles.scoreSection} ${compact ? styles.compact : ""}`}>
+    <div className={styles.heading}><h3>{title}</h3><span>{note}</span></div>
     {scores.length ? <>
       <div className={styles.scores}>{scores.map(item => {
         const valid = typeof item.value === "number" && Number.isFinite(item.value) && item.value >= 0 && item.value <= item.maximum;

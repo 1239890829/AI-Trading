@@ -26,7 +26,7 @@ from copy import deepcopy
 import json
 import logging
 from dataclasses import dataclass
-from datetime import date
+from datetime import date, datetime
 from typing import Any
 
 from sqlalchemy import select
@@ -62,7 +62,7 @@ from app.picks.halt_risk import (
     risk_labels,
     veto_reasons,
 )
-from app.picks.meta_confidence import classify_confidence
+from app.picks.meta_confidence import EXECUTABLE_SCORE, STRONG_SCORE, classify_confidence
 from app.picks.regime import detect_regime, earnings_event_ratio, weights_for
 from app.picks.risk import build_invalidations, exit_discipline, risk_tier_of, stop_loss_reference
 from app.picks.rps import get_rps_service
@@ -84,7 +84,7 @@ from app.picks.tradability import (
 )
 from app.services.quote_enrich import fill_valuation
 from app.services.quote_hub import QuoteHub
-from app.core.bjtime import beijing_now
+from app.core.bjtime import beijing_now, to_beijing
 
 log = logging.getLogger(__name__)
 
@@ -705,6 +705,8 @@ async def deep_score_candidates(
     promo_percentile: float | None = None,
     index_bars: dict[str, list[dict]] | None = None,
     style: dict | None = None,
+    assessed_at: datetime | None = None,
+    scoring_context: dict | None = None,
 ) -> list[dict]:
     """④ 逐只深度评分（并发；每只独立异常兜底）。
 
@@ -716,6 +718,8 @@ async def deep_score_candidates(
     """
     sem = asyncio.Semaphore(concurrency)
     index_bars = index_bars or {}
+    assessed_at = assessed_at or beijing_now()
+    scoring_context = scoring_context or {}
     # RPS 全市场截面（一次查询、服务内当日缓存；marketdb 未建/陈旧 → {} →
     # score_stock 的 rps 维自动取中性 0.5，不臆造分位）。同步 DuckDB 查询
     # 放线程池，不占事件循环。
@@ -755,6 +759,7 @@ async def deep_score_candidates(
             sub: dict[str, float] = {}
             bases: dict[str, str] = {}
             dimension_evidence: dict[str, dict] = {}
+            inputs: dict[str, dict] = {}
             # 技术（防飞刀口径 score_stock，v3 含 RPS 横截面）
             # 两段各自兜底（2026-09-14）：**取数失败**与**评分自身异常**是两回事。
             # 原实现共用一个 `except`，把评分代码的 bug 也写成「K线数据缺失，中性」——
@@ -782,6 +787,12 @@ async def deep_score_candidates(
             ma10 = _ma_value(dicts, 10)
             sub["tech"], bases["tech"] = s_tech, b_tech
             dimension_evidence["tech"] = {"state": tech_state, "reason": b_tech}
+            inputs["tech"] = {"bars_count": len(dicts),
+                "source": sorted({str(bar["source"]) for bar in dicts if bar.get("source")}),
+                "last_bar_as_of": str(dicts[-1].get("ts")) if dicts and dicts[-1].get("ts") is not None else None,
+                "rps": deepcopy(rps_map.get(sym)), "rps_note": rps_note,
+                "volume_baseline_available": len(dicts) >= 6 and sum((bar.get("volume") or 0) for bar in dicts[-6:-1]) > 0,
+                "amount_rank_pct": None, "turnover_rank_pct": None}
             # 消息（B1：查预构建索引，O(1)——不再逐候选扫事件表）
             event_hit = event_hits_index.get(sym, (0, 0, None, None, 0))
             bull, bear, top_title, top_dir, linked = event_hit[:5]
@@ -803,6 +814,9 @@ async def deep_score_candidates(
                     "partial" if linked and bull == bear == 0 else "success" if linked else "valid_empty"
                 ), "reason": bases["news"],
             }
+            inputs["news"] = {"weighted_bull": bull, "weighted_bear": bear, "linked_count": linked,
+                              "event_refs": deepcopy(event_refs), "events_available": events_available,
+                              "event_index_available": event_index_available}
             # 基本面：成长性/盈利质量来自财务报告（营收增速、净利同比、ROE、毛利率——
             # normalizer 早已提取这四个字段，2026-09-01 起评分全部消费），估值来自行情快照
             rev = None
@@ -810,11 +824,13 @@ async def deep_score_candidates(
             roe_v = None
             gm = None
             financial_error = None
+            financial_row = {}
             try:
                 fin = await hub.provider.get_financials(sym, 4)
                 if fin:
                     latest = fin[0] if isinstance(fin, list) else fin
                     d_ = latest if isinstance(latest, dict) else getattr(latest, "__dict__", {})
+                    financial_row = d_
                     rev = d_.get("revenue_yoy")
                     profit = d_.get("profit_yoy")
                     roe_v = d_.get("roe")
@@ -845,14 +861,17 @@ async def deep_score_candidates(
             if financial_error:
                 financial_reason += f"；财报读取失败（{financial_error}）"
             dimension_evidence["fundamental"] = {"state": financial_state, "reason": financial_reason}
+            inputs["fundamental"] = {**financial_inputs, "source": financial_row.get("source"),
+                "report_date": financial_row.get("report_date"), "notice_date": financial_row.get("notice_date"),
+                "valuation_quote": quote_audit(q_snap)}
             # 资金
             net_inflow = None
             capital_error = None
+            capital_input = {"date": None, "source": None, "future_rows_excluded": 0, "undated_rows": 0}
             try:
                 flow = await hub.provider.get_capital_flow(sym, 5)
                 if flow:
-                    last = flow[-1] if isinstance(flow, list) else flow
-                    d_ = last if isinstance(last, dict) else getattr(last, "__dict__", {})
+                    d_, capital_input = _latest_capital_flow(flow, assessed_at)
                     # ⚠️ 新浪资金流字段名是 net_main（主力净额，元），不是 net_amount。
                     # 此前写错字段名 → 恒为 None → 资金面永远显示"数据缺失"，
                     # 被静默降级掩盖成了"数据源问题"（2026-08-31 修复）。
@@ -862,9 +881,12 @@ async def deep_score_candidates(
                 log.warning("picks capital flow %s failed: %s", sym, exc)
             sub["capital"], bases["capital"] = score_capital(net_inflow, None, on_lhb=False)
             dimension_evidence["capital"] = {
-                "state": "success" if net_inflow is not None else "error" if capital_error else "missing",
-                "reason": bases["capital"] + (f"；资金源读取失败（{capital_error}）" if capital_error else ""),
+                "state": ("success" if capital_input.get("date") else "partial") if net_inflow is not None else "error" if capital_error else "missing",
+                "reason": bases["capital"] + (f"；资金源读取失败（{capital_error}）" if capital_error else
+                    "；资金日期缺失，无法核实该值的日期" if net_inflow is not None and not capital_input.get("date") else ""),
             }
+            inputs["capital"] = {**capital_input, "net_main": net_inflow, "net_main_unit": "CNY",
+                                 "volume_ratio": None, "on_lhb": False}
             # 情绪（全局相位；题材涨家占比第一版缺省；promo 历史分位为接力环境修正，
             # 选股 2.0 §3——分位来自 P0-3b 校准库，缺失时不修正、basis 如实呈现）
             sub["sentiment"], bases["sentiment"] = score_sentiment(
@@ -874,6 +896,8 @@ async def deep_score_candidates(
                 "state": "success" if market_phase else "partial" if promo_percentile is not None else "missing",
                 "reason": bases["sentiment"],
             }
+            inputs["sentiment"] = {**deepcopy(scoring_context.get("sentiment_inputs") or {}),
+                "phase": market_phase, "promo_percentile": promo_percentile, "theme_up_ratio": None}
 
             # 梯队（第六维）：个股在题材天梯中的地位 × 题材阶段，联合读取。
             # 没有这一维，退潮期的最后一棒会和发酵期的真龙头拿同样分。
@@ -927,6 +951,11 @@ async def deep_score_candidates(
                     if theme_ctx["stage"] is None or theme_ctx["completeness"] is None else ""
                 ),
             }
+            inputs["echelon"] = {"role": role, "stage": theme_ctx["stage"],
+                "completeness": theme_ctx["completeness"], "theme": theme_name,
+                "stock_change_pct": c["change_pct"], "benchmark_pct": benchmark, "excess_pct": excess,
+                "market_benchmark": deepcopy(scoring_context.get("market_benchmark")),
+                "quote": quote_audit(quotes.get(sym))}
 
             # 停牌核查 / 异动风险（docs/summary/stock-strategy.md 第一批）：
             # 只依据已取到的个股日 K + 预取的指数日 K，零新增数据源。
@@ -946,9 +975,14 @@ async def deep_score_candidates(
             chip = await asyncio.to_thread(get_chip_service().distribution, sym)
             chip_sig = evaluate_chip_signal(chip, dicts)
             bases["chip"] = chip_basis_text(chip_sig, chip)
-            score, vetoes = synthesize(sub, weights=weights, vetoes=veto_reasons(halt))
+            trace: dict = {}
+            score, vetoes = synthesize(sub, weights=weights, vetoes=veto_reasons(halt), trace=trace)
             if halt["penalty"]:
                 score = round(max(0.0, score - halt["penalty"]), 1)
+            trace.update(requested_at=assessed_at.isoformat(), assessed_at=beijing_now().isoformat(), inputs=inputs,
+                dimension_evidence=deepcopy(dimension_evidence), risk_penalty=halt["penalty"], final_score=score,
+                thresholds={"selected": effective_limits()["min_pick_score"],
+                            "executable": EXECUTABLE_SCORE, "strong": STRONG_SCORE})
             # meta 置信层（P1 规则版）：综合分+相位+筹码+红线 → 三档置信
             # （替代 gate 二值跳变的统一置信语言；gate 保留为兜底）。
             # 相位维度扩展（审查 §4.1）：当日风格路由结果挂进置信理由留痕。
@@ -964,6 +998,7 @@ async def deep_score_candidates(
             )
             return {
                 "symbol": sym, "name": c["name"], "price": c["price"], "change_pct": c["change_pct"],
+                **{field: deepcopy(c[field]) for field in ("observation_only", "follow_state") if field in c},
                 "halt_risk": halt,
                 "halt_risk_labels": risk_labels(halt),
                 # 可参与性（2026-09-15 用户指令）：候选池已剔除"开盘即涨停"，故这里
@@ -983,6 +1018,7 @@ async def deep_score_candidates(
                 "quote_audit": quote_audit(q_snap),
                 "score": score, "sub_scores": sub, "bases": bases, "vetoes": vetoes,
                 "dimension_evidence": dimension_evidence,
+                "scoring_trace": trace,
                 "related_events": [top_title] if top_title else [],
                 "related_event_refs": event_refs,
                 "echelon_role": role,
@@ -1024,6 +1060,7 @@ def assemble_card(k: dict) -> dict:
         "sub_scores": k["sub_scores"],
         "bases": k["bases"],
         "dimension_evidence": k.get("dimension_evidence") or {},
+        "scoring_trace": deepcopy(k.get("scoring_trace") or {}),
         "vetoes": k["vetoes"],
         "buy_range": build_buy_range(k["price"], support, resistance),
         "echelon_role": role,
@@ -1143,57 +1180,8 @@ def _persist_picks(
         log.warning("watch ledger merge marking failed: %s", exc)
 
 
-async def generate_picks_pipeline(
-    deps: PipelineDeps,
-    hub: QuoteHub,
-    *,
-    today: str | None = None,
-) -> dict:
-    """生成今日组合（T 日收盘后跑，产出 T+1 组合；重复生成覆盖当日行）。
-
-    :param today: 归属日（`YYYY-MM-DD`）。缺省取北京今日；常驻调度传入它自己
-        判定窗口用的那个日期，避免"调度按北京日判窗口、管线按本机日写入"
-        这类跨日口径分裂（KB-TRADE-02）。
-    """
-    store = deps.event_store
-    svc = deps.theme_catalog
-    today = today or beijing_now().date().isoformat()
-
-    # ① 当日涨停池（**单次取数**，下游三处复用；P2-4）
-    td, limit_up_pool = await _fetch_limit_up_pool(hub)
-
-    # ①a 涨停板生态上下文（梯队地位判定的题材级证据）—— 纯函数，池已取。
-    # ⚠️ 位置在候选池**之前**（2026-09-15 起）：题材联动挖掘要用它的题材集中度
-    # 定位容器。此前它在候选池之后（①c），只是因为它当时的唯一消费方是深评。
-    lu_ctx = limit_up_context(limit_up_pool)
-
-    # ①b 题材联动挖掘（2026-09-15 用户指令）：把"开盘即涨停"的参考价值兑现成
-    # 可参与评估候选——涨停集中的题材内，当前未封板、有联动机会的官方成分股。
-    # 全市场快照只用于**筛选**（谁可参与），最终价格仍由 ② 的批量行情同源提供。
-    # 快照不可用 → 该来源诚实缺席（note 写进 meta），不臆造。
-    snapshot_rows = list(getattr(deps.snapshot_service, "snapshot", None) or [])
-    snapshot_state = "unknown"
-    snapshot_as_of = None
-    try:
-        fresh_fn = getattr(deps.snapshot_service, "freshness", None)
-        fresh = fresh_fn() if callable(fresh_fn) else None
-        snapshot_state = getattr(fresh, "state", None) or "unknown"
-        as_of = getattr(fresh, "as_of", None) or getattr(deps.snapshot_service, "last_success", None)
-        snapshot_as_of = as_of.isoformat() if hasattr(as_of, "isoformat") else (str(as_of) if as_of else None)
-    except Exception:  # noqa: BLE001 — 快照事实拿不到就保持 unknown，不伪造 current
-        snapshot_state, snapshot_as_of = "unknown", None
-    linkage = await mine_theme_linkage(
-        svc, lu_ctx, snapshot_rows,
-        snapshot_state=snapshot_state, snapshot_as_of=snapshot_as_of,
-    )
-    audit: dict = {"theme_linkage": {"themes": linkage.get("themes") or [],
-                                     "note": linkage.get("note")}}
-
-    # ①c 候选池
-    # G-2 / 取数单点（P2-4 同型）：活跃事件**取一次**（同步 SQLite + selectinload →
-    # 线程池），下游三处复用（候选池题材反查 / regime 的 ev_texts / 消息命中索引）。
-    # 此前同一条查询在本管线里跑了**三遍**。失败时保留不可用状态，
-    # 避免空表占位被持久化为「无活跃事件」。
+async def _load_scoring_events(store):
+    """Read and index one atomic event batch for every scoring consumer."""
     try:
         active_events = await asyncio.to_thread(store.list_events, active_only=True, limit=30)
         events_available = True
@@ -1212,66 +1200,62 @@ async def generate_picks_pipeline(
         event_index_available = False
     usable_events = active_events if events_available and event_index_available else []
 
-    candidates = await candidate_pool(
-        hub, store, svc,
-        limit_up_pool=limit_up_pool,
-        active_events=usable_events,
-        linkages=linkage.get("items") or [],
-        audit=audit,
-    )
+    return active_events, events_available, event_index_available, event_hits_index, usable_events
 
-    # ①d 昨日组合成员兜底纳入（carryover）：
-    # 组合稳定性要求 incumbent 有"被重新评估的权利"——否则一只票今天没涨停、
-    # 没上热榜、事件又过期，就会被静默踢出，组合天天大换血（跨日回放实测：
-    # 纯涨停股候选池下日均换手 60%）。纳入后它仍要重新评分，分数不够照样被换，
-    # 只是不再因为"没进榜"而消失。
-    # G-2：同步 SQLite（DailyPickSet 最近一行）→ 线程池（判据同 candidate_pool 顶部注释）
-    prev_symbols = await asyncio.to_thread(_prev_combo_symbols)
-    have = {c["symbol"] for c in candidates}
-    for s in prev_symbols:
-        if s not in have:
-            candidates.append({"symbol": s, "from": "carryover", "prio": 1})
-    carryover_set = set(prev_symbols)
 
-    # ①e 市场基准（上证当日涨跌幅）：题材基准匹配不到时的诚实回退
-    market_pct = None
+async def _read_market_benchmark(hub) -> tuple[float | None, dict]:
+    """Use the real index API; the stock 000001 must never stand in for SH index."""
+    from app.core.freshness import DEFAULT_FRESH_WITHIN_SECONDS
+
+    evidence = {"symbol": "000001", "market": "SH", "state": "unknown", "reason": "上证指数未提供"}
     try:
-        ov = await hub.provider.get_market_overview()
-        for i in getattr(ov, "indices", None) or []:
-            if getattr(i, "symbol", "") in ("000001", "sh000001"):
-                market_pct = getattr(i, "change_pct", None)
+        cached = getattr(hub, "get_indices", None)
+        rows = cached() if callable(cached) else []
+        if not rows:
+            rows = await hub.provider.get_indices()
+        matches = [q for q in rows if q.symbol == "000001" and q.market == "SH"]
+        if len(matches) != 1:
+            evidence["reason"] = "上证指数身份缺失或重复"
+            return None, evidence
+        quote = matches[0]
+        evidence.update(quote_audit(quote))
+        fresh = quote.freshness(fresh_within=DEFAULT_FRESH_WITHIN_SECONDS)
+        evidence.update(state=fresh.state, reason=fresh.reason, change_pct=quote.change_pct)
+        if fresh.state != "ready" or quote.change_pct is None or quote.price is None or quote.price <= 0:
+            if quote.change_pct is None or quote.price is None or quote.price <= 0:
+                evidence.update(state="unknown", reason="上证指数现价或涨跌幅缺失")
+            return None, evidence
+        return quote.change_pct, evidence
     except Exception as exc:
-        log.warning("picks: market overview failed: %s", exc)
+        evidence["reason"] = f"上证指数读取失败（{type(exc).__name__}）"
+        return None, evidence
 
-    # ② 批量快照 + 预筛（剔 ST/退/无行情/**无交易权限板块**）
-    quotes = await _batch_quotes(hub, [c["symbol"] for c in candidates])
-    deep: list[dict] = []
-    board_excluded: list[dict] = []
-    for c in candidates:
-        q = quotes.get(c["symbol"])
-        if q is None or q.price is None or q.price <= 0:
-            continue
-        name = q.name or ""
-        if "ST" in name.upper() or "退" in name:
-            continue
-        # 板块权限（用户 2026-09-15「只有主板的权限现在」）：创业板/科创板/北交所/B 股
-        # 进不了组合 —— 与"买不进"同义。判据单点 = `picks/tradability.is_tradable`。
-        # 放在**这里**而不是各来源入口：候选池有 4 路来源，逐一过滤 = 四份判据；
-        # 这里是与 ST/退 同一处的**既有可交易性收口**，一处即全覆盖。
-        if not is_tradable(c["symbol"], name):
-            board_excluded.append(
-                {"symbol": c["symbol"], "name": name,
-                 "board": board_label(c["symbol"], name), "from": c.get("from")}
-            )
-            continue
-        c.update({"name": name, "price": q.price, "change_pct": q.change_pct, "amount": q.amount})
-        c["_prio"] = c.get("prio", 0) * 1000 + (q.change_pct or 0)
-        deep.append(c)
-    # 昨日成员优先进入深度评估：它们已经有仓位逻辑在身，不该因涨幅不高被截断
-    deep.sort(key=lambda c: (-(1 if c["symbol"] in carryover_set else 0),
-                             _SOURCE_ORDER.get(c.get("from"), 9), -c["_prio"]))
-    deep = deep[:DEEP_DIVE_CAP]
 
+def _latest_capital_flow(flow, assessed_at: datetime) -> tuple[dict, dict]:
+    """Sina returns newest first. Select by known date and exclude future rows."""
+    rows = flow if isinstance(flow, list) else [flow] if flow else []
+    dated, undated = [], []
+    future = 0
+    for row in rows:
+        data = row if isinstance(row, dict) else getattr(row, "__dict__", {})
+        try:
+            day = date.fromisoformat(str(data.get("date") or "")[:10])
+        except ValueError:
+            undated.append(data)
+            continue
+        if day > to_beijing(assessed_at).date():
+            future += 1
+        else:
+            dated.append((day, data))
+    selected_pair = max(dated, key=lambda pair: pair[0]) if dated else None
+    selected = selected_pair[1] if selected_pair else undated[0] if undated else {}
+    return selected, {"date": selected_pair[0].isoformat() if selected_pair else None, "source": selected.get("source"),
+                      "future_rows_excluded": future, "undated_rows": len(undated)}
+
+
+async def _prepare_scoring_context(deps, hub, *, today, td, limit_up_pool, lu_ctx,
+                                   usable_events, market_pct, market_benchmark) -> dict:
+    """One context preparation for daily and already-selected intraday stocks."""
     # ③ 全局情绪（一次）—— 涨停池复用 ① 的结果（P2-4）
     market_phase = None
     sent: dict = {}
@@ -1379,6 +1363,203 @@ async def generate_picks_pipeline(
     # 库样本不足时为空 → 情绪面修正项自动缺席，basis 如实呈现。
     promo_pct = promo_pctl
 
+    from app.picks.execution_qualification import context_issue
+
+    fresh = sent.get("snapshot_freshness") or {}
+    execution_context = {"state": "ready", "phase": market_phase, "trade_date": sent.get("trade_date"),
+        "judged_at": sent.get("judged_at"), "source_as_of": fresh.get("as_of"),
+        "source_state": fresh.get("state"), "gate": deepcopy(gate)}
+    issue = context_issue(execution_context, beijing_now())
+    if sent.get("phase_unreliable"):
+        issue = "宏观相位的原始判定不可靠"
+    if issue:
+        execution_context.update(state="unavailable", reason=issue)
+
+    return {"market_phase": market_phase, "weights": weights, "regime": regime,
+            "style_routing": style, "gate": gate, "market_pct": market_pct,
+            "market_benchmark": market_benchmark, "index_bars": index_bars,
+            "execution_context": execution_context,
+            "sentiment_inputs": {"phase": market_phase, "promo_percentile": promo_pct,
+                                 "judged_at": sent.get("judged_at"), "trade_date": sent.get("trade_date"),
+                                 "snapshot_freshness": sent.get("snapshot_freshness"),
+                                 "promotion_1to2": promo_1to2, "break_rate": break_rate}}
+
+
+async def score_selected_candidates(deps, hub, candidates, quotes, *, assessed_at: datetime) -> dict:
+    """Score only supplied durable selections. No reselection, writes or dispatch."""
+    assessed_at = to_beijing(assessed_at)
+    if not candidates:
+        return {"items": [], "meta": {"requested_at": assessed_at.isoformat(),
+                "assessed_at": beijing_now().isoformat()}, "unscored": []}
+    deep, unscored, seen = [], [], set()
+    for row in candidates:
+        symbol = str(row.get("symbol") or "")
+        if symbol in seen:
+            continue
+        seen.add(symbol)
+        quote = quotes.get(symbol)
+        reason = None
+        if len(symbol) != 6 or not symbol.isdigit():
+            reason = "证券身份无效"
+        elif quote is None or quote.symbol != symbol or quote.price is None or quote.price <= 0:
+            reason = "同股报价缺失或现价无效"
+        elif "ST" in (quote.name or "").upper() or "退" in (quote.name or "") or not is_tradable(symbol, quote.name or ""):
+            reason = "现役账户或风险预筛不通过"
+        elif len(deep) >= DEEP_DIVE_CAP:
+            reason = "本批深评容量已满，未评分"
+        if reason:
+            unscored.append({"symbol": symbol, "reason": reason})
+            continue
+        deep.append({**deepcopy(row), "from": row.get("from") or row.get("source"),
+                     "name": quote.name or "", "price": quote.price, "change_pct": quote.change_pct,
+                     "amount": quote.amount})
+    if not deep:
+        return {"items": [], "meta": {"requested_at": assessed_at.isoformat(),
+                "assessed_at": beijing_now().isoformat(),
+                "execution_context": {"state": "unavailable", "reason": "没有可评分的同股输入"}},
+                "unscored": unscored}
+    td, pool = await _fetch_limit_up_pool(hub)
+    lu_ctx = limit_up_context(pool)
+    _events, available, indexed, event_index, usable = await _load_scoring_events(deps.event_store)
+    market_pct, benchmark = await _read_market_benchmark(hub)
+    context = await _prepare_scoring_context(deps, hub, today=assessed_at.date().isoformat(), td=td,
+        limit_up_pool=pool, lu_ctx=lu_ctx, usable_events=usable, market_pct=market_pct,
+        market_benchmark=benchmark)
+    scored = await deep_score_candidates(deep, hub=hub, svc=deps.theme_catalog, lu_ctx=lu_ctx,
+        market_pct=market_pct, market_phase=context["market_phase"], quotes=quotes,
+        weights=context["weights"], event_hits_index=event_index, events_available=available,
+        event_index_available=indexed, concurrency=CONCURRENCY,
+        promo_percentile=context["sentiment_inputs"]["promo_percentile"],
+        index_bars=context["index_bars"], style=context["style_routing"],
+        assessed_at=assessed_at, scoring_context=context)
+    cards = apply_gate_to_picks([assemble_card(row) for row in scored], context["gate"])
+    meta = {key: deepcopy(value) for key, value in context.items() if key != "index_bars"}
+    from app.picks.execution_qualification import context_issue
+
+    completed_at = beijing_now()
+    issue = context_issue(meta["execution_context"], completed_at)
+    if completed_at.date() != assessed_at.date():
+        issue = "评分跨交易日完成，当前资格未知"
+    if issue:
+        meta["execution_context"].update(state="unavailable", reason=issue)
+    meta.update(requested_at=assessed_at.isoformat(), assessed_at=completed_at.isoformat(),
+                event_evidence={"state": "available" if available and indexed else "unavailable"})
+    return {"items": cards, "meta": meta, "unscored": unscored}
+
+
+async def generate_picks_pipeline(
+    deps: PipelineDeps,
+    hub: QuoteHub,
+    *,
+    today: str | None = None,
+) -> dict:
+    """生成今日组合（T 日收盘后跑，产出 T+1 组合；重复生成覆盖当日行）。
+
+    :param today: 归属日（`YYYY-MM-DD`）。缺省取北京今日；常驻调度传入它自己
+        判定窗口用的那个日期，避免"调度按北京日判窗口、管线按本机日写入"
+        这类跨日口径分裂（KB-TRADE-02）。
+    """
+    store = deps.event_store
+    svc = deps.theme_catalog
+    today = today or beijing_now().date().isoformat()
+
+    # ① 当日涨停池（**单次取数**，下游三处复用；P2-4）
+    td, limit_up_pool = await _fetch_limit_up_pool(hub)
+
+    # ①a 涨停板生态上下文（梯队地位判定的题材级证据）—— 纯函数，池已取。
+    # ⚠️ 位置在候选池**之前**（2026-09-15 起）：题材联动挖掘要用它的题材集中度
+    # 定位容器。此前它在候选池之后（①c），只是因为它当时的唯一消费方是深评。
+    lu_ctx = limit_up_context(limit_up_pool)
+
+    # ①b 题材联动挖掘（2026-09-15 用户指令）：把"开盘即涨停"的参考价值兑现成
+    # 可参与评估候选——涨停集中的题材内，当前未封板、有联动机会的官方成分股。
+    # 全市场快照只用于**筛选**（谁可参与），最终价格仍由 ② 的批量行情同源提供。
+    # 快照不可用 → 该来源诚实缺席（note 写进 meta），不臆造。
+    snapshot_rows = list(getattr(deps.snapshot_service, "snapshot", None) or [])
+    snapshot_state = "unknown"
+    snapshot_as_of = None
+    try:
+        fresh_fn = getattr(deps.snapshot_service, "freshness", None)
+        fresh = fresh_fn() if callable(fresh_fn) else None
+        snapshot_state = getattr(fresh, "state", None) or "unknown"
+        as_of = getattr(fresh, "as_of", None) or getattr(deps.snapshot_service, "last_success", None)
+        snapshot_as_of = as_of.isoformat() if hasattr(as_of, "isoformat") else (str(as_of) if as_of else None)
+    except Exception:  # noqa: BLE001 — 快照事实拿不到就保持 unknown，不伪造 current
+        snapshot_state, snapshot_as_of = "unknown", None
+    linkage = await mine_theme_linkage(
+        svc, lu_ctx, snapshot_rows,
+        snapshot_state=snapshot_state, snapshot_as_of=snapshot_as_of,
+    )
+    audit: dict = {"theme_linkage": {"themes": linkage.get("themes") or [],
+                                     "note": linkage.get("note")}}
+
+    # ①c 候选池
+    # G-2 / 取数单点（P2-4 同型）：活跃事件**取一次**（同步 SQLite + selectinload →
+    # 线程池），下游三处复用（候选池题材反查 / regime 的 ev_texts / 消息命中索引）。
+    # 此前同一条查询在本管线里跑了**三遍**。失败时保留不可用状态，
+    # 避免空表占位被持久化为「无活跃事件」。
+    active_events, events_available, event_index_available, event_hits_index, usable_events = await _load_scoring_events(store)
+
+    candidates = await candidate_pool(
+        hub, store, svc,
+        limit_up_pool=limit_up_pool,
+        active_events=usable_events,
+        linkages=linkage.get("items") or [],
+        audit=audit,
+    )
+
+    # ①d 昨日组合成员兜底纳入（carryover）：
+    # 组合稳定性要求 incumbent 有"被重新评估的权利"——否则一只票今天没涨停、
+    # 没上热榜、事件又过期，就会被静默踢出，组合天天大换血（跨日回放实测：
+    # 纯涨停股候选池下日均换手 60%）。纳入后它仍要重新评分，分数不够照样被换，
+    # 只是不再因为"没进榜"而消失。
+    # G-2：同步 SQLite（DailyPickSet 最近一行）→ 线程池（判据同 candidate_pool 顶部注释）
+    prev_symbols = await asyncio.to_thread(_prev_combo_symbols)
+    have = {c["symbol"] for c in candidates}
+    for s in prev_symbols:
+        if s not in have:
+            candidates.append({"symbol": s, "from": "carryover", "prio": 1})
+    carryover_set = set(prev_symbols)
+
+    # ①e 市场基准（上证当日涨跌幅）：题材基准匹配不到时的诚实回退
+    market_pct, market_benchmark = await _read_market_benchmark(hub)
+
+    # ② 批量快照 + 预筛（剔 ST/退/无行情/**无交易权限板块**）
+    quotes = await _batch_quotes(hub, [c["symbol"] for c in candidates])
+    deep: list[dict] = []
+    board_excluded: list[dict] = []
+    for c in candidates:
+        q = quotes.get(c["symbol"])
+        if q is None or q.price is None or q.price <= 0:
+            continue
+        name = q.name or ""
+        if "ST" in name.upper() or "退" in name:
+            continue
+        # 板块权限（用户 2026-09-15「只有主板的权限现在」）：创业板/科创板/北交所/B 股
+        # 进不了组合 —— 与"买不进"同义。判据单点 = `picks/tradability.is_tradable`。
+        # 放在**这里**而不是各来源入口：候选池有 4 路来源，逐一过滤 = 四份判据；
+        # 这里是与 ST/退 同一处的**既有可交易性收口**，一处即全覆盖。
+        if not is_tradable(c["symbol"], name):
+            board_excluded.append(
+                {"symbol": c["symbol"], "name": name,
+                 "board": board_label(c["symbol"], name), "from": c.get("from")}
+            )
+            continue
+        c.update({"name": name, "price": q.price, "change_pct": q.change_pct, "amount": q.amount})
+        c["_prio"] = c.get("prio", 0) * 1000 + (q.change_pct or 0)
+        deep.append(c)
+    # 昨日成员优先进入深度评估：它们已经有仓位逻辑在身，不该因涨幅不高被截断
+    deep.sort(key=lambda c: (-(1 if c["symbol"] in carryover_set else 0),
+                             _SOURCE_ORDER.get(c.get("from"), 9), -c["_prio"]))
+    deep = deep[:DEEP_DIVE_CAP]
+
+    context = await _prepare_scoring_context(deps, hub, today=today, td=td,
+        limit_up_pool=limit_up_pool, lu_ctx=lu_ctx, usable_events=usable_events,
+        market_pct=market_pct, market_benchmark=market_benchmark)
+    market_phase, weights = context["market_phase"], context["weights"]
+    regime, style, gate = context["regime"], context["style_routing"], context["gate"]
+    index_bars, promo_pct = context["index_bars"], context["sentiment_inputs"]["promo_percentile"]
+
     # ④ 逐只深度评分（并发；T6 拆分至 deep_score_candidates）
     ranked = await deep_score_candidates(
         deep,
@@ -1395,7 +1576,7 @@ async def generate_picks_pipeline(
         concurrency=CONCURRENCY,
         promo_percentile=promo_pct,
         index_bars=index_bars,
-        style=style,
+        style=style, assessed_at=beijing_now(), scoring_context=context,
     )
     ranked.sort(key=lambda r: -r["score"])
 
@@ -1416,6 +1597,8 @@ async def generate_picks_pipeline(
             "score": r["score"],
             "tech": (r.get("sub_scores") or {}).get("tech"),
             "sub_scores": r.get("sub_scores") or {},
+            "dimension_evidence": deepcopy(r.get("dimension_evidence") or {}),
+            "scoring_trace": deepcopy(r.get("scoring_trace") or {}),
             "bases": r.get("bases") or [],
             "vetoes": r.get("vetoes") or [],
             "source": r.get("source"),
@@ -1481,6 +1664,7 @@ async def generate_picks_pipeline(
         "kept_count": len(items),
         "removed": removed,
         "market_pct": market_pct,
+        "market_benchmark": market_benchmark,
         "limit_up_count": len(lu_ctx["records"]),
         "market_max_boards": lu_ctx["market_max_boards"],
         # 可参与性口径留痕（2026-09-15 用户指令）：被剔除的开盘即涨停明细 +
@@ -1498,7 +1682,7 @@ async def generate_picks_pipeline(
         },
         "generated_at": generated_at,
         "selection_contract": {"version": "daily_selection_v2", "trade_date": today, "generated_at": generated_at,
-                               "strategy_version": "daily-six-dimension-v1.official-catalyst",
+                               "strategy_version": "daily-six-dimension-v2.source-date-zero",
                                "feature_version": "daily-entry-evidence-v2"},
         "selection_version": daily_selection_version(today, generated_at, items),
     }

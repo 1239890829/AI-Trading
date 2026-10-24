@@ -12,6 +12,7 @@ import {
 import type { DailyPickItem, IntradayTopStock, OpportunityStock, SelectionMetrics, StandAsideGate } from "@/lib/api";
 import * as API from "@/lib/api";
 import * as AgentAPI from "@/lib/api/agent";
+import * as PaperSelectionAPI from "@/lib/paper-selection-api";
 
 const savedResearch=(symbol:string):AgentAPI.TradingAgentsResearchView=>({symbol,startup_conditions_not_checked:true,enabled:false,executable:false,blockers:[],required_model_slots:null,budget:null,admission:{state:"not_admitted",method_sha256:null},verification:"unverified_full_graph_research",production_eligible:false,latest:null,task:null});
 // Isolate read consumers and make any unintended model start fail without business HTTP.
@@ -83,6 +84,79 @@ const topPath: IntradayTopStock = {
   stop_ref: { pct: 8, price: 4.99, basis: "档位基准 8% → 取 8.0%（clamp 3%~12%）" },
   exit_plan: { trailing_pct: 8, roi_ladder: [{ gain_pct: 10, action: "减半仓" }], note: "错了要快" },
 };
+
+function assessedStock(overrides: Record<string, unknown> = {}) {
+  const entry = {state: "recorded", selected_at: "2026-10-23T09:40:00+08:00", reference_price: 5.2,
+    reference_change_pct: 1.2, quote_as_of: "2026-10-23T09:39:59+08:00", source: "intraday_rank_archive",
+    source_version: "original-entry", semantics: "observation_only_not_fill"};
+  return {...topPath, pick_basis: "原首次入选：题材集中且当时未封板", selection_entry: entry,
+    execution_qualification: {state: "ready", reason: null, selection_ref: `intraday:2026-10-23:${topPath.symbol}`,
+      source_version: "original-entry", reference_entry: {source: "intraday_rank_archive", selected_at: entry.selected_at,
+        price: entry.reference_price, as_of: entry.quote_as_of, snapshot_id: "original-snapshot", semantics: "reference_only_not_fill"},
+      assessment: {snapshot_id: "assessment-1", version: "later-score-v1", assessed_at: "2026-10-23T10:02:00+08:00"},
+      membership: {run_id: "current-member", as_of: "2026-10-23T10:01:58+08:00", state: "ready"},
+      item: {symbol: topPath.symbol, score: 72, sub_scores: {news: 0, tech: 80, fundamental: 50},
+        dimension_evidence: {news: {state: "success", reason: "后续消息原评分确为0"},
+          tech: {state: "success", reason: "后续技术条件已读取"},
+          fundamental: {state: "missing", reason: "后续财报未取得，50只是占位"}},
+        scoring_trace: {weighted_total: 72, risk_penalty: 0, final_score: 72}}, ...overrides}} as unknown as IntradayTopStock;
+}
+
+it("keeps later six-factor assessment separate from original selection and never auto-preflights", () => {
+  const preflight = vi.spyOn(PaperSelectionAPI, "getPaperSelectionAction");
+  const item = fromIntradayStock(assessedStock());
+  expect(item.score).toBeNull();
+  expect(item.sub_scores).toBeNull();
+  expect(selectionReading(item).why).toContain("原首次入选");
+  render(<PickCard compact evidenceExpanded item={item}/>);
+  const summary = screen.getByLabelText("后续执行复核概览");
+  expect(summary.textContent).toContain("评分已齐");
+  expect(summary.textContent).toContain("未取得当前执行判定");
+  expect(summary.textContent).toContain("10:02");
+  const reader = screen.getByRole("region", {name: "后续执行复核"});
+  expect(reader.textContent).toContain("不改写首次入选依据");
+  expect(within(reader).getByRole("meter", {name: "消息原规则分值"}).getAttribute("aria-valuenow")).toBe("0");
+  expect(within(reader).queryByRole("meter", {name: "基本面原规则分值"})).toBeNull();
+  fireEvent.focus(within(reader).getByRole("button", {name: "核对基本面评分依据"}));
+  expect(reader.textContent).toContain("后续财报未取得");
+  expect(preflight).not.toHaveBeenCalled();
+  expect(AgentAPI.createAgentTask).not.toHaveBeenCalled();
+});
+
+it("does not turn absent assessment scores into zero or ready into an executable action", () => {
+  render(<PickCard compact evidenceExpanded item={fromIntradayStock(assessedStock({item: {symbol: topPath.symbol, score: null}}))}/>);
+  expect(screen.getByLabelText("后续执行复核概览").textContent).toContain("评分未提供");
+  expect(screen.getByLabelText("后续执行复核概览").textContent).not.toContain("评分已齐");
+  expect(screen.getByRole("region", {name: "后续执行复核"}).querySelector('[role="meter"]')).toBeNull();
+  expect(screen.queryByText("执行复核通过")).toBeNull();
+});
+
+it.each([{source_version: "another-source"}, {selection_ref: "intraday:2026-10-23:600001"},
+  {reference_entry: {source_version: "another-first"}}])("does not attribute a mismatched later assessment or enable paper context: %j", overrides => {
+  const item = fromIntradayStock(assessedStock(overrides));
+  expect(item.paperContext).toBeNull();
+  render(<PickCard compact evidenceExpanded item={item}/>);
+  expect(screen.getByLabelText("后续执行复核概览").textContent).toContain("复核来源待核");
+  expect(screen.queryByRole("region", {name: `${topPath.symbol}模拟买入`})).toBeNull();
+  expect(screen.queryByRole("region", {name: "后续六维分解"})).toBeNull();
+});
+
+it("retained qualification after read error is not displayed as the current decision", () => {
+  render(<PickCard compact evidenceExpanded readError item={fromIntradayStock(assessedStock())}/>);
+  expect(screen.getByLabelText("后续执行复核概览").textContent).toContain("上次复核，当前待核");
+});
+
+it("shows the recorded decision and actual unknown blocker without turning a passing gate into a warning", () => {
+  render(<PickCard compact evidenceExpanded item={fromIntradayStock(assessedStock({decision: {
+    gate_decision: "rejected", archived_decision: "rejected", gate_reason: "当前资金流依据未取得",
+    gate_checks: [{name: "quote", state: "pass", reason: "报价通过"},
+      {name: "capital", state: "unknown", reason: "资金流来源未核实"}],
+  }}))}/>);
+  expect(screen.getByLabelText("后续执行复核概览").textContent).toContain("执行判定未通过");
+  const blockers = screen.getByRole("region", {name: "已记录执行阻断"});
+  expect(blockers.textContent).toContain("资金流来源未核实");
+  expect(blockers.textContent).not.toContain("报价通过");
+});
 
 /** 盘中名单 · 题材手风琴（OpportunityStock）：无 tier / 无 pick_basis，只有官方涨停原因。 */
 const accordionPath: OpportunityStock = {

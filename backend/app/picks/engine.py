@@ -45,6 +45,7 @@ WEIGHTS = {
     "fundamental": 0.15, # 基本面：估值与盈利趋势
     "capital": 0.15,     # 资金面：净流入/量能/龙虎榜
 }
+SCORING_REVISION = "six-dimension-v2.source-date-zero"
 REPLACE_THRESHOLD = 15.0
 #: 组合**容量上限**（不是"每天必须凑满"的目标数）。够格的标的不足时名单就该更短——
 #: 名额由质量决定，不由常量决定（2026-09-10 用户要求：不硬凑、也不过多）。
@@ -189,7 +190,8 @@ def score_tech(tech_card: dict | None) -> tuple[float, str]:
     """技术面：score_stock 八维卡总分（0-100 已归一），basis 用其信号摘要。"""
     if tech_card is None:
         return 50.0, "技术样本不足（<60 根日K），中性处理"
-    return round(float(tech_card.get("score") or 50), 1), tech_card.get("summary") or "技术评分卡"
+    score = tech_card.get("score")
+    return round(float(50 if score is None else score), 1), tech_card.get("summary") or "技术评分卡"
 
 
 def score_fundamental(
@@ -313,19 +315,28 @@ def score_capital(net_inflow: float | None, volume_ratio: float | None, on_lhb: 
     return round(max(0, min(100, score)), 1), "；".join(parts) if parts else "资金数据缺失，中性"
 
 
-def synthesize(sub: dict[str, float], weights: dict[str, float] | None = None, vetoes: list[str] | None = None) -> tuple[float, list[str]]:
+def synthesize(sub: dict[str, float], weights: dict[str, float] | None = None, vetoes: list[str] | None = None,
+               *, trace: dict | None = None) -> tuple[float, list[str]]:
     """加权合成 + 一票否决。返回 (综合分, 否决说明列表)。
 
     否决不直接归零（保留可解释性），而是 ×0.4 重罚并显式记录——
     风控引擎「强空」状态、ST/退市风险警示等触发。
     """
     w = weights or WEIGHTS
-    total = sum(w.get(k, 0) * v for k, v in sub.items())
+    dimensions = {key: {"score": value, "weight": w.get(key, 0), "contribution": w.get(key, 0) * value}
+                  for key, value in sub.items()}
+    total = sum(row["contribution"] for row in dimensions.values())
+    weighted_total = total
     reasons = []
     for v in vetoes or []:
         total *= 0.4
         reasons.append(f"一票否决：{v}（综合分 ×0.4）")
-    return round(max(0, min(100, total)), 1), reasons
+    score = round(max(0, min(100, total)), 1)
+    if trace is not None:
+        trace.update({"algorithm_version": SCORING_REVISION, "effective_weights": dict(w),
+                      "dimensions": dimensions, "weighted_total": weighted_total,
+                      "veto_count": len(reasons), "vetoes": list(vetoes or []), "post_veto_score": score})
+    return score, reasons
 
 
 def apply_replacement_threshold(

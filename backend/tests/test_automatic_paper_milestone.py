@@ -6,8 +6,9 @@ from datetime import datetime, timedelta, timezone
 import json
 import os
 import signal
+import sys
 import time
-from types import SimpleNamespace
+from types import ModuleType, SimpleNamespace
 
 import pytest
 from sqlalchemy import create_engine, event, select
@@ -236,6 +237,179 @@ def qualified_original(env):
         origin.snapshot = json.dumps(snapshot)
         db.commit()
     return original
+
+
+def intraday_original(env, monkeypatch, *, daily_first=False):
+    """The assessment reader is isolated; rank, contracts, funds and owner are real SQL."""
+    from copy import deepcopy
+    from app.picks.execution_qualification import requalify_item
+    raw = qualified_original(env)
+    version, ref = "intraday-original", f"intraday:{DAY}:600001"
+    first_at = NOW - timedelta(minutes=1)
+    reference = {"price": 9.9, "as_of": first_at.isoformat(), "source": "intraday_rank_archive",
+        "selected_at": (first_at + timedelta(seconds=1)).isoformat(), "snapshot_id": "rank-original"}
+    assessment = {"snapshot_id": "assessment-A", "version": "inputs-A", "assessed_at": NOW.isoformat()}
+    context = {"state": "ready", "phase": "发酵", "trade_date": DAY,
+        "judged_at": NOW.isoformat(), "source_as_of": NOW.isoformat(), "source_state": "ready",
+        "gate": {"phase": "发酵", "stand_aside": False, "strip_buy_range": False}}
+    effective = requalify_item(raw, version, context, NOW)
+    effective.update(_selection_context={"ref": ref, "source_version": version, "assessment": assessment},
+        _reference_entry=reference)
+    contract = build_execution_contract(trade_date=DAY, symbol="600001", item=effective,
+        executable_snapshot={"price": 10., "state": "ready", "source": "fixture", "as_of": NOW.isoformat()},
+        gate_decision="passed", gate_reason=None, pick_generated_at=reference["as_of"])
+    execution = _execution_ref(contract)
+    mapping = {"600001": {"state": "ready", "selection_ref": ref, "source_version": version,
+        "item": raw, "reference_entry": reference, "assessment": assessment,
+        "membership": {"run_id": "current-run", "as_of": NOW.isoformat(), "state": "ready"}}}
+    module = ModuleType("app.picks.intraday_execution")
+    module.load_intraday_execution_candidates = lambda sf, now: deepcopy(mapping)
+    async def refresh(*args, **kwargs):
+        return {"state": "ready"}
+    module.refresh_intraday_execution = refresh
+    monkeypatch.setitem(sys.modules, module.__name__, module)
+    with env.sf() as db:
+        db.query(DailyPickSet).delete()
+        db.add(Decision(snapshot_id="rank-original", run_id=version, trade_date=DAY,
+            as_of=first_at.replace(tzinfo=None), created_at=(first_at + timedelta(seconds=1)).astimezone(timezone.utc).replace(tzinfo=None),
+            scenario="intraday_opportunity", stage="rank", symbol="600001", rank=1,
+            decision="ranked", data_state="ready", entry_price=9.9, strategy_version="fixture", feature_version="fixture",
+            evidence=json.dumps({"selection_entry_contract": "selection-entry-v1", "within_display_capacity": True, "effective_limit": 3})))
+        db.query(Decision).filter(Decision.stage == "notification").one().evidence = json.dumps({"execution_contract": contract})
+        progress = db.get(Progress, (env.key, "position"))
+        saved = json.loads(progress.payload)
+        saved["alert"]["meta"].update(selection_ref=ref, selection_source_version=version, execution_ref=execution)
+        progress.payload = json.dumps(saved)
+        event = db.get(AlertEvent, env.buy.id)
+        snap = json.loads(event.snapshot)
+        snap["execution_ref"] = execution
+        event.snapshot = json.dumps(snap)
+        if not daily_first:
+            origin = db.get(AlertEvent, env.origin.id)
+            snap = json.loads(origin.snapshot)
+            snap.update(selection_source="intraday", source_version=version, source_as_of=reference["as_of"])
+            origin.snapshot = json.dumps(snap)
+        db.commit()
+    env.contract, env.source_version = contract, version
+    return mapping
+
+
+@pytest.mark.parametrize("status", ["pending", "filled"])
+@pytest.mark.parametrize("daily_first", [False, True])
+def test_intraday_full_qualification_owns_real_main_order_without_daily_membership(env, monkeypatch, status, daily_first):
+    mapping = intraday_original(env, monkeypatch, daily_first=daily_first)
+    if status == "pending":
+        env.quote["price"] = 10.1
+    asyncio.run(consumers.consume_pending(env.app, env.sf))
+    with env.sf() as db:
+        order = db.query(PaperOrder).one()
+        saved = json.loads(db.get(Progress, (env.key, "position")).payload)
+        assert order.status == status and saved["execution_result"]["order_id"] == order.id
+        assert db.query(DailyPickSet).count() == 0
+    assert len(milestones(env)) == 1
+    assert milestones(env)[0]["paper_execution"]["selection_ref"] == mapping["600001"]["selection_ref"]
+    with env.sf() as db:
+        origin = json.loads(db.get(AlertEvent, env.origin.id).snapshot)
+        assert origin["selection_source"] == ("daily" if daily_first else "intraday")
+    asyncio.run(consumers.consume_pending(env.app, env.sf))
+    with env.sf() as db:
+        assert db.query(PaperOrder).count() == 1
+
+
+@pytest.mark.parametrize("change", ["dropped", "unknown", "source", "assessment"])
+def test_intraday_binding_is_rechecked_after_real_quote_wait(env, monkeypatch, change):
+    mapping = intraday_original(env, monkeypatch)
+    def change_source():
+        if change == "dropped":
+            mapping.clear()
+        elif change == "unknown":
+            mapping["600001"]["state"] = "unknown"
+        elif change == "source":
+            mapping["600001"]["source_version"] = "another-entry"
+        else:
+            mapping["600001"]["assessment"]["version"] = "inputs-B"
+    env.quote["on_quote"] = change_source
+    asyncio.run(consumers.consume_pending(env.app, env.sf))
+    with env.sf() as db:
+        assert db.query(PaperOrder).count() == db.query(PaperPosition).count() == 0
+        assert db.query(PaperAccount).one().cash == 1_000_000
+
+
+def test_daily_unknown_owner_occupies_intraday_action_without_lending_qualification(env):
+    from app.paper.selection_action import execution_status
+    with env.sf() as db:
+        owner = db.get(Progress, (env.key, "position"))
+        owner.state = "unknown"
+        db.commit()
+    result = execution_status(env.sf, f"intraday:{DAY}:600001", "intraday-other")
+    assert result["state"] == "unknown" and result["order"] is None
+
+
+def test_fresh_intraday_assessment_clock_does_not_supersede_same_pending_decision(env, monkeypatch):
+    mapping = intraday_original(env, monkeypatch)
+    env.quote["price"] = 10.1
+    asyncio.run(consumers.consume_pending(env.app, env.sf))
+    mapping["600001"]["assessment"].update(snapshot_id="assessment-B", assessed_at=(NOW + timedelta(seconds=10)).isoformat())
+    env.quote["price"] = 10
+    assert asyncio.run(env.paper.match_pending()) == 0
+    with env.sf() as db:
+        order = db.query(PaperOrder).one()
+        assert order.status == "filled" and order.filled_price == 10
+
+
+@pytest.mark.parametrize("change", ["dropped", "range"])
+def test_intraday_existing_pending_keeps_funds_and_identity_until_current_binding_and_quote_pass(env, monkeypatch, change):
+    from copy import deepcopy
+    mapping = intraday_original(env, monkeypatch)
+    original = deepcopy(mapping)
+    env.quote["price"] = 10.1
+    asyncio.run(consumers.consume_pending(env.app, env.sf))
+    with env.sf() as db:
+        order_id = db.query(PaperOrder).one().id
+        frozen = db.query(PaperAccount).one().cash
+        expiry = db.get(Progress, (env.key, "position")).expires_at_ms
+    if change == "dropped":
+        mapping.clear()
+    env.quote["price"] = 9.7 if change == "range" else 10
+    assert asyncio.run(env.paper.match_pending()) == 1
+    with env.sf() as db:
+        assert db.query(PaperOrder).one().id == order_id and db.query(PaperOrder).one().status == "pending"
+        assert db.query(PaperAccount).one().cash == frozen and db.query(PaperPosition).count() == 0
+        assert db.get(Progress, (env.key, "position")).expires_at_ms == expiry
+    mapping.update(original)
+    env.quote["price"] = 10
+    assert asyncio.run(env.paper.match_pending()) == 0
+    with env.sf() as db:
+        assert db.query(PaperOrder).one().id == order_id and db.query(PaperOrder).one().status == "filled"
+
+
+def test_intraday_manual_preview_and_real_action_use_the_same_qualification_and_pending_recheck(env, monkeypatch):
+    from uuid import uuid4
+    from app.api.routes.paper import OrderIn
+    from app.paper.actions import submit_action
+    from app.paper.selection_action import read_selection_action
+    mapping = intraday_original(env, monkeypatch)
+    with env.sf() as db:
+        db.delete(db.get(Progress, (env.key, "position")))
+        db.commit()
+    env.quote["price"] = 10.1
+    envelope = mapping["600001"]
+    preview = asyncio.run(read_selection_action(env.paper, envelope["selection_ref"], envelope["source_version"], price=10))
+    assert preview["eligibility"]["state"] == "ready"
+    body = OrderIn(request_id=uuid4(), expires_at=datetime.now(timezone.utc) + timedelta(seconds=30),
+        symbol="600001", side="buy", price=10, quantity=100, selection_ref=envelope["selection_ref"],
+        source_version=envelope["source_version"], decision_id=preview["preflight"]["decision_id"],
+        decision_version=preview["preflight"]["decision_version"])
+    result = asyncio.run(submit_action(env.paper, body))
+    assert result["status"] == "pending"
+    env.quote["price"] = 9.7
+    assert asyncio.run(env.paper.match_pending()) == 1
+    env.quote["price"] = 10
+    assert asyncio.run(env.paper.match_pending()) == 0
+    with env.sf() as db:
+        order = db.query(PaperOrder).one()
+        assert order.id == result["id"] and order.status == "filled"
+        assert db.query(PaperActionReceipt).count() == 1
 
 
 def test_validated_live_context_sizes_the_real_action_without_reusing_morning_mask(env):

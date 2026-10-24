@@ -945,7 +945,8 @@ async def dispatch_alert(app, alert: dict, *, rule_provider=None) -> bool:
 
     is_buy_point = alert.get("kind") == "buy_point" and rule_provider is not None
     state = app.state if hasattr(app, "state") else app
-    session_factory = get_session_factory()
+    session_factory = (getattr(getattr(state, "alert_repo", None), "_session_factory", None)
+                       or get_session_factory())
     meta = alert.get("meta") or {}
 
     if is_buy_point and alert.get("symbol") and not alert.get("name"):

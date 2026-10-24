@@ -29,6 +29,34 @@ def _clock(value):
         return None
 
 
+def _intraday_selection_recorded(db, day, symbol, version, *, reference=None, before=None):
+    """Historical projection verifies the original rank, never today's membership."""
+    from datetime import timezone
+    from app.core.bjtime import BJ_TZ
+    from app.models.opportunity_learning import OpportunityDecisionSnapshot as Decision
+    from app.picks.review_contract import object_json
+    rows = db.scalars(select(Decision).where(Decision.trade_date == day, Decision.symbol == symbol,
+        Decision.run_id == version, Decision.scenario == "intraday_opportunity", Decision.stage == "rank",
+        Decision.decision == "ranked", Decision.data_state == "ready"))
+    for row in rows:
+        evidence = object_json(row.evidence)
+        limit = evidence.get("effective_limit")
+        created = row.created_at.replace(tzinfo=timezone.utc) if row.created_at.tzinfo is None else row.created_at
+        source_at = row.as_of.replace(tzinfo=BJ_TZ) if row.as_of.tzinfo is None else row.as_of
+        if (evidence.get("selection_entry_contract") != "selection-entry-v1"
+                or evidence.get("within_display_capacity") != 1 or type(limit) is not int
+                or row.rank is None or not 1 <= row.rank <= limit or row.entry_price is None or row.entry_price <= 0
+                or created.astimezone(BJ_TZ).date().isoformat() != day
+                or (before is not None and created > (before.replace(tzinfo=timezone.utc) if before.tzinfo is None else before))):
+            continue
+        if reference is not None and (reference.get("source") != "intraday_rank_archive"
+                or reference.get("price") != row.entry_price or _clock(reference.get("as_of")) != source_at
+                or reference.get("snapshot_id") != row.snapshot_id):
+            continue
+        return True
+    return False
+
+
 def record_research_ready(*, selection: dict, report: dict, session_factory=None) -> dict:
     """Called only after a native result and its completed claim were persisted.
 
@@ -125,8 +153,11 @@ def record_paper_status(selection_ref, source_version, order_id, session_factory
         origin = db.scalar(select(AlertEvent).join(AlertRule, AlertRule.id == AlertEvent.rule_id).where(
             AlertEvent.dedup_key == selection_dedup_key(day, symbol), AlertRule.name == SELECTION_RULE))
         snap = object_json(origin.snapshot) if origin else {}
-        if (origin is None or snap.get("kind") != "selection" or snap.get("trade_date") != day
-                or snap.get("selection_source") != scope or snap.get("source_version") != version):
+        origin_valid = origin is not None and snap.get("kind") == "selection" and snap.get("trade_date") == day
+        bound_source = (snap.get("selection_source") == scope and snap.get("source_version") == version) if scope == "daily" else (
+            snap.get("selection_source") in {"daily", "intraday"}
+            and _intraday_selection_recorded(db, day, symbol, version, before=row.created_at if row else receipt.created_at))
+        if not origin_valid or not bound_source:
             return {"state": "unavailable", "reason": "original_selection_message_missing"}
         from datetime import timezone
         recorded = row.updated_at if row else receipt.created_at
@@ -186,10 +217,10 @@ def record_automatic_paper_status(*, event_key=None, order_id=None, session_fact
         alert, result = object_json(payload.get("alert")), object_json(payload.get("execution_result"))
         meta = object_json(alert.get("meta"))
         ref, version = meta.get("selection_ref"), meta.get("selection_source_version")
-        match = re.fullmatch(r"daily:(\d{4}-\d{2}-\d{2}):(\d{6})", ref or "")
+        match = re.fullmatch(r"(daily|intraday):(\d{4}-\d{2}-\d{2}):(\d{6})", ref or "")
         if not match or not isinstance(version, str) or not version:
             return {"state": "unavailable", "reason": "automatic_selection_binding_missing"}
-        day, symbol = match.groups()
+        scope, day, symbol = match.groups()
         execution = object_json(meta.get("execution_ref"))
         identifier, decision_version = execution.get("decision_id"), execution.get("decision_version")
         saved_order_id = result.get("order_id")
@@ -217,25 +248,33 @@ def record_automatic_paper_status(*, event_key=None, order_id=None, session_fact
         if not contracts or any(contract.get("gate_decision") != "passed"
                 or object_json(contract.get("executable_snapshot")).get("state") != "ready" for contract in contracts):
             return {"state": "rejected", "reason": "automatic_decision_missing_or_ineligible"}
-        origin = db.scalar(select(AlertEvent).join(AlertRule, AlertRule.id == AlertEvent.rule_id).where(
-            AlertEvent.dedup_key == selection_dedup_key(day, symbol), AlertRule.name == SELECTION_RULE))
-        snap = object_json(origin.snapshot) if origin else {}
-        if (origin is None or origin.symbol != symbol or snap.get("kind") != "selection" or snap.get("trade_date") != day
-                or snap.get("selection_source") != "daily" or snap.get("source_version") != version
-                or any(object_json(contract.get("reference_entry")).get("source") != "daily_pick_set"
-                       or object_json(contract.get("reference_entry")).get("as_of") != snap.get("source_as_of") for contract in contracts)):
-            return {"state": "unavailable", "reason": "original_selection_message_missing"}
         row = db.get(PaperOrder, saved_order_id)
         if (row is None or row.scope != "main" or row.symbol != symbol or row.side != "buy"
                 or row.status not in {"pending", "filled", "rejected", "cancelled"}
                 or to_beijing(row.created_at.replace(tzinfo=timezone.utc) if row.created_at.tzinfo is None else row.created_at).date().isoformat() != day):
             return {"state": "rejected", "reason": "automatic_main_order_mismatch"}
+        origin = db.scalar(select(AlertEvent).join(AlertRule, AlertRule.id == AlertEvent.rule_id).where(
+            AlertEvent.dedup_key == selection_dedup_key(day, symbol), AlertRule.name == SELECTION_RULE))
+        snap = object_json(origin.snapshot) if origin else {}
+        origin_valid = origin is not None and origin.symbol == symbol and snap.get("kind") == "selection" and snap.get("trade_date") == day
+        if scope == "daily":
+            source_valid = snap.get("selection_source") == "daily" and snap.get("source_version") == version and all(
+                object_json(contract.get("reference_entry")).get("source") == "daily_pick_set"
+                and object_json(contract.get("reference_entry")).get("as_of") == snap.get("source_as_of") for contract in contracts)
+        else:
+            source_valid = snap.get("selection_source") in {"daily", "intraday"} and all(
+                object_json(contract.get("selection")).get("ref") == ref
+                and object_json(contract.get("selection")).get("source_version") == version
+                and _intraday_selection_recorded(db, day, symbol, version,
+                    reference=object_json(contract.get("reference_entry")), before=row.created_at) for contract in contracts)
+        if not origin_valid or not source_valid:
+            return {"state": "unavailable", "reason": "original_selection_message_missing"}
         changed = row.updated_at.replace(tzinfo=timezone.utc) if row.updated_at.tzinfo is None else row.updated_at
         clock = to_beijing(changed).isoformat()
         identity = _digest(["paper-status:v1", ref, version, row.id, row.status])
         labels = {"pending": "模拟委托待成交", "filled": "模拟买入已成交", "rejected": "模拟委托被拒绝", "cancelled": "模拟委托已取消"}
         snapshot = {"kind": "paper_status", "name": str(snap.get("name") or symbol), "trade_date": day,
-            "selection_source": "daily", "source_id": f"selection:{origin.id}", "source_version": identity,
+            "selection_source": scope, "source_id": f"selection:{origin.id}", "source_version": identity,
             "source_as_of": clock, "origin_event_id": origin.id, "push_policy": "in_app",
             "text": labels[row.status] + (f"：{row.reason}" if row.reason else "。请核对原委托记录。"),
             "paper_execution": {"scope": "main", "order_id": row.id, "status": row.status,

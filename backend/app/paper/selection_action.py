@@ -49,10 +49,24 @@ def _source(sf, ref, version, now):
                     or not isinstance(limit, (int, float)) or isinstance(limit, bool)
                     or row.rank is None or not 1 <= row.rank <= limit):
                 return symbol, None, None, ("selection_missing", "原盘中入选及展示资格没有有效归档")
+            from app.picks.intraday_execution import load_intraday_execution_candidates
+            envelope = load_intraday_execution_candidates(sf, now).get(symbol) or {}
+            if (envelope.get("state") != "ready" or envelope.get("selection_ref") != ref
+                    or envelope.get("source_version") != version):
+                return symbol, None, None, ("selection_superseded", envelope.get("reason") or "原盘中入选的当前成员或完整评分资格已变化")
+            item = envelope.get("item")
+            if not isinstance(item, dict) or not isinstance(item.get("execution_seed"), dict):
+                return symbol, None, None, ("no_actionable_decision", "盘中原入选尚无后续完整评分执行要素")
+            reference = object_json(envelope.get("reference_entry"))
+            meta = {"generated_at": reference.get("as_of"), "gate": {}, "selection": {
+                "ref": ref, "source_version": version, "assessment": envelope.get("assessment") or {}}}
+            if (reference.get("source") != "intraday_rank_archive" or reference.get("price") != row.entry_price
+                    or generated_time(meta) is None or generated_time(meta).replace(tzinfo=None) != row.as_of):
+                return symbol, None, None, ("selection_missing", "盘中后续评分与原入选参考身份不一致")
         if day != now.date().isoformat():
             return symbol, item, meta, ("historical_selection", "这是历史入选记录，不能作为今天的新模拟买点")
-        if not item:
-            return symbol, None, meta, ("no_actionable_decision", "盘中候选尚无当前每日买点执行资格")
+        if not item or item.get("symbol") != symbol:
+            return symbol, None, meta, ("no_actionable_decision", "原入选尚无当前完整买点执行资格")
     return symbol, item, meta, None
 
 
@@ -60,7 +74,14 @@ def selection_binding(sf, ref, version, now, *, decision_id=None, decision_versi
     symbol, item, meta, issue = _source(sf, ref, version, now)
     if issue:
         return symbol, item, meta, None, issue
-    decision = latest_notification_execution(now.date().isoformat(), sf).get(symbol) or {}
+    decision = latest_notification_execution(now.date().isoformat(), sf,
+        selection_ref=ref, source_version=version).get(symbol) or {}
+    if meta.get("selection"):
+        bound = object_json(decision.get("selection"))
+        current = meta["selection"]
+        if (bound.get("ref") != ref or bound.get("source_version") != version
+                or object_json(bound.get("assessment")).get("version") != object_json(current.get("assessment")).get("version")):
+            return symbol, item, meta, decision, ("no_actionable_decision", "盘中后续评分版本与执行判定不一致")
     from app.picks.execution_qualification import resolve_execution_item
     source_item = item
     item, context, qualification_issue = resolve_execution_item(item, decision, version, now)
@@ -108,9 +129,9 @@ def execution_status(sf, ref, version, *, request_id=None, decision=None, exclud
         candidates = [projection()]
         draft = case((func.json_valid(PaperActionReceipt.draft), PaperActionReceipt.draft), else_="{}")
         manual_result = case((func.json_valid(PaperActionReceipt.result), PaperActionReceipt.result), else_="{}")
+        source_refs = (f"daily:{day}:{symbol}", f"intraday:{day}:{symbol}") if match else (ref,)
         query = select(PaperActionReceipt).where(PaperActionReceipt.scope == "main",
-            func.json_extract(draft, "$.selection_ref") == ref,
-            func.json_extract(draft, "$.source_version") == version)
+            func.json_extract(draft, "$.selection_ref").in_(source_refs))
         if request_id:
             query = query.where(PaperActionReceipt.request_id == str(request_id))
         query = query.outerjoin(PaperOrder, (PaperOrder.id == func.json_extract(manual_result, "$.id"))
@@ -126,7 +147,7 @@ def execution_status(sf, ref, version, *, request_id=None, decision=None, exclud
             payload = case((func.json_valid(BuyPointConsumption.payload), BuyPointConsumption.payload), else_="{}")
             selected_ref = func.json_extract(payload, "$.alert.meta.selection_ref")
             selected_version = func.json_extract(payload, "$.alert.meta.selection_source_version")
-            exact_binding = and_(selected_ref == ref, selected_version == version)
+            same_stock_binding = and_(selected_ref.in_(source_refs), selected_version.is_not(None))
             legacy_identity = or_(
                 and_(func.json_extract(payload, "$.alert.symbol") == symbol,
                      func.json_extract(payload, "$.alert.meta.trade_date") == day),
@@ -136,15 +157,15 @@ def execution_status(sf, ref, version, *, request_id=None, decision=None, exclud
             # Current decision/version controls only new qualification. It cannot
             # erase another already running or unresolved action for this selection.
             query = select(BuyPointConsumption).where(BuyPointConsumption.consumer == "position",
-                or_(exact_binding, and_(or_(selected_ref.is_(None), selected_version.is_(None)), legacy_identity)))
+                or_(same_stock_binding, and_(or_(selected_ref.is_(None), selected_version.is_(None)), legacy_identity)))
             if exclude_event_key is not None:
                 query = query.where(BuyPointConsumption.event_key != exclude_event_key)
             for progress in db.scalars(query.order_by(BuyPointConsumption.updated_at_ms.desc())):
                 saved = object_json(progress.payload)
                 meta = object_json(object_json(saved.get("alert")).get("meta"))
                 result = object_json(saved.get("execution_result"))
-                exact = meta.get("selection_ref") == ref and meta.get("selection_source_version") == version
-                if not exact:
+                known_binding = meta.get("selection_ref") in source_refs and bool(meta.get("selection_source_version"))
+                if not known_binding:
                     # Legacy same-stock/day work is an unresolved occupant. Do
                     # not fabricate a fill or a source-version association for it.
                     if (progress.state in {"pending", "running", "unknown"}
@@ -169,7 +190,8 @@ def automatic_selection_binding(engine, symbol, context, *, matching_order_id=No
     fields = ("selection_ref", "source_version", "decision_id", "decision_version", "consumer_event_key")
     if (engine.scope != "main" or not isinstance(context, dict)
             or any(not isinstance(context.get(key), str) or not context[key] for key in fields)
-            or context["selection_ref"] != f"daily:{beijing_now().date().isoformat()}:{symbol}"):
+            or context["selection_ref"] not in {f"{kind}:{beijing_now().date().isoformat()}:{symbol}"
+                                                for kind in ("daily", "intraday")}):
         return None, ("selection_binding_missing", "自动买点缺少同一原入选、执行判定与消费身份，未执行")
     expiry = context.get("expires_at_ms")
     if type(expiry) is not int or (matching_order_id is None and expiry <= int(time.time() * 1000)):

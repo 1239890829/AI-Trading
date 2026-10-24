@@ -80,7 +80,7 @@ def queue(rig, *, lifetime=300_000):
     return e, repo.outbox.pending_ids()[0], now
 
 
-def queue_buy_point(rig, *, price=10.5, as_of=None, symbol="600000", dedup_key=None):
+def queue_buy_point(rig, *, price=10.5, as_of=None, symbol="600000", dedup_key=None, selection=None):
     from app.picks.opportunity_learning import archive_notification_pipeline, latest_notification_execution
 
     repo, factory, _, service, notifier, *_ = rig
@@ -91,6 +91,8 @@ def queue_buy_point(rig, *, price=10.5, as_of=None, symbol="600000", dedup_key=N
         "confidence": {"tier": "executable"}, "vetoes": [],
         "buy_range": {"low": 10.2, "high": 10.8},
     }
+    if selection:
+        item["_selection_context"] = selection
     hit = {"item": item, "price": price, "chg": 5.0}
     archive_notification_pipeline(
         [item], trade_date=trade_date, as_of=as_of, hits=[hit], skips=[],
@@ -101,7 +103,8 @@ def queue_buy_point(rig, *, price=10.5, as_of=None, symbol="600000", dedup_key=N
         }},
         session_factory=factory,
     )
-    latest = latest_notification_execution(trade_date, factory)[symbol]
+    latest = latest_notification_execution(trade_date, factory,
+        **({"selection_ref": selection["ref"], "source_version": selection["source_version"]} if selection else {}))[symbol]
     rule = repo.create_rule(
         name="buy-point", condition_type="picks_buy_point", threshold=0,
         scope="all", channels=["in_app", "feishu"], cooldown_seconds=0, enabled=True,
@@ -112,6 +115,8 @@ def queue_buy_point(rig, *, price=10.5, as_of=None, symbol="600000", dedup_key=N
         "execution_snapshot_state": "ready",
         "execution_snapshot_price": price,
     }
+    if selection:
+        ref.update(selection_ref=selection["ref"], selection_source_version=selection["source_version"])
     now = service._now_ms()
     event, created = repo.record_trigger_once(
         rule.id, symbol, 0, 0,
@@ -128,6 +133,20 @@ def queue_buy_point(rig, *, price=10.5, as_of=None, symbol="600000", dedup_key=N
     )
     assert created
     return event, rule, item, hit, latest
+
+
+@pytest.mark.parametrize("queued_scope", ["daily", "intraday"])
+def test_queued_buy_point_rechecks_its_original_source_instead_of_another_source_same_symbol(rig, queued_scope):
+    from app.picks.opportunity_learning import archive_notification_pipeline
+    binding = {"ref": f"{queued_scope}:2026-09-21:600000", "source_version": f"{queued_scope}-original"}
+    event, _, item, _, contract = queue_buy_point(rig, selection=binding)
+    other = "intraday" if queued_scope == "daily" else "daily"
+    changed = {**item, "_selection_context": {"ref": f"{other}:2026-09-21:600000", "source_version": f"{other}-original"}}
+    archive_notification_pipeline([changed], trade_date="2026-09-21", as_of=datetime(2026, 9, 21, 10, 31),
+        hits=[], skips=[{"symbol": "600000", "reason": "other source rejected"}], dispatch_by_symbol={},
+        execution_by_symbol={"600000": {"state": "ready", "price": 10.5, "source": "fixture"}}, session_factory=rig[1])
+    intent = {"trade_date": "2026-09-21", "decision_id": contract["decision_id"], "decision_version": contract["decision_version"]}
+    assert rig[3]._buy_point_delivery_block(event, intent) is None
 
 
 def test_source_event_is_durable_deduplicated_and_silent(rig, monkeypatch):

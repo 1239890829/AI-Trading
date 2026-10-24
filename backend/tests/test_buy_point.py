@@ -269,6 +269,56 @@ def async_ok(v):
     async def _f(*a, **k):
         return v
     return _f
+
+
+@pytest.mark.parametrize("mode", ["intraday_only", "same_symbol", "refresh_failure", "missing_seed"])
+def test_persisted_intraday_source_joins_buy_point_loop_after_daily_without_borrowing_or_duplicate_intent(monkeypatch, tmp_path, mode):
+    from copy import deepcopy
+    from types import ModuleType
+    import sys
+    from app.core.bjtime import BJ_TZ
+    from app.models.daily_pick import DailyPickSet
+    from app.models.opportunity_learning import OpportunityDecisionSnapshot
+    from app.picks.meta_confidence import DIMENSIONS
+    import app.picks.buy_point as bp
+    app, counters, _ = _patch_happy_path(monkeypatch, tmp_path, items=[_item()])
+    now = datetime(2026, 9, 8, 10, 30, tzinfo=BJ_TZ)
+    context = {"state": "ready", "trade_date": "2026-09-08", "phase": "发酵", "judged_at": now.isoformat(),
+        "source_as_of": now.isoformat(), "source_state": "ready", "gate": {"phase": "发酵", "stand_aside": False}}
+    monkeypatch.setattr("app.picks.execution_qualification.live_execution_context", async_ok(context))
+    raw = _item(price=10.5)
+    raw["execution_seed"] = {"version": 1, "score": 82., "sub_scores": dict.fromkeys(DIMENSIONS, 82.),
+        "dimension_evidence": {d: {"state": "success"} for d in DIMENSIONS}, "vetoes": [],
+        "halt_penalty": 0, "chip_signal": None, "buy_range": raw["buy_range"], "observation_only": False, "follow_state": None}
+    if mode == "missing_seed":
+        raw.pop("execution_seed")
+    mapping = {"600000": {"state": "ready", "selection_ref": "intraday:2026-09-08:600000", "source_version": "first-rank",
+        "item": raw, "reference_entry": {"price": 10., "as_of": "2026-09-08T10:00:00+08:00", "source": "intraday_rank_archive"},
+        "assessment": {"version": "full-inputs-A", "snapshot_id": "assessment-A"}}}
+    module = ModuleType("app.picks.intraday_execution")
+    async def refresh(*args, **kwargs):
+        if mode in {"same_symbol", "refresh_failure"}:
+            assert counters["paper"] == 1  # Independent daily dispatch completed before scoring IO.
+        if mode == "refresh_failure":
+            raise OSError("isolated assessment source failure")
+        return {"state": "ready"}
+    module.refresh_intraday_execution = refresh
+    module.load_intraday_execution_candidates = lambda sf, checked: deepcopy(mapping)
+    monkeypatch.setitem(sys.modules, module.__name__, module)
+    if mode in {"intraday_only", "missing_seed"}:
+        monkeypatch.setattr(bp, "_today_picks_payload", lambda: None)
+        with app._test_factory() as db:
+            db.query(DailyPickSet).delete()
+            db.commit()
+    dispatched = asyncio.run(bp.check_and_dispatch(app))
+    assert len(dispatched) == (0 if mode == "missing_seed" else 1)
+    assert counters["paper"] == (0 if mode == "missing_seed" else 1)
+    with app._test_factory() as db:
+        rows = db.query(OpportunityDecisionSnapshot).filter(OpportunityDecisionSnapshot.stage == "notification").all()
+        bindings = [json.loads(row.evidence)["execution_contract"]["selection"] for row in rows]
+        assert any(b["ref"].startswith("intraday:") for b in bindings)
+        if mode in {"same_symbol", "refresh_failure"}:
+            assert len({json.loads(row.evidence)["execution_contract"]["decision_id"] for row in rows}) == 2
 def test_check_and_dispatch_persists_one_card_and_intent_per_symbol(monkeypatch, tmp_path):
     """每票一张卡进入 AlertEvent/Outbox；本拍不得直接做 Feishu 网络 IO。"""
     import app.picks.buy_point as bp
