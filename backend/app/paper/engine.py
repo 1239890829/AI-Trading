@@ -498,7 +498,21 @@ class PaperTradingEngine:
 
     # ---------- 下单 ----------
 
-    async def place_order(self, symbol: str, side: str, price: float, qty: int) -> PaperOrder:
+    def _selection_context_issue(self, symbol, side, context, quote):
+        if context is None:
+            return None
+        if side != "buy":
+            return "自动来源绑定只允许原买点买入"
+        from app.paper.selection_action import automatic_selection_binding
+        try:
+            _meta, issue = automatic_selection_binding(self, symbol, context, quote=quote)
+            return issue[1] if issue else None
+        except Exception:
+            log.exception("automatic selection recheck failed for %s", symbol)
+            return "原自动入选资格暂不可核实，未执行"
+
+    async def place_order(self, symbol: str, side: str, price: float, qty: int,
+                          *, selection_context: dict | None = None) -> PaperOrder:
         quote = await self._quote_fn(symbol)
         order = PaperOrder(scope=self.scope, symbol=symbol, side=side, price=price, quantity=qty, status="pending")
 
@@ -530,6 +544,9 @@ class PaperTradingEngine:
             issue = self._execution_issue(symbol, quote, execution_days)
             if issue:
                 return reject(issue[1])
+        selection_issue = self._selection_context_issue(symbol, side, selection_context, quote)
+        if selection_issue:
+            return reject(selection_issue)
 
         # 涨跌停硬拦截（红线 5）：**缺限价一律拒单，不做静默放行**。
         # 限价缺失是**会发生的状态**（补价依赖链上腾讯单源，曾真实被封），
@@ -559,6 +576,9 @@ class PaperTradingEngine:
                 issue = self._execution_issue(symbol, quote, execution_days)
                 if issue:
                     return reject(issue[1])
+            selection_issue = self._selection_context_issue(symbol, side, selection_context, quote)
+            if selection_issue:
+                return reject(selection_issue)
             # Keep initialization flush after the calendar/risk waits. A missing
             # account INSERT otherwise holds SQLite's write lock across await.
             # Balance still belongs to this Session's read/modify/commit boundary.
@@ -735,6 +755,16 @@ class PaperTradingEngine:
                             o.reason = issue[1]
                             db.commit()
                             continue
+                    from app.paper.selection_action import automatic_pending_issue
+                    try:
+                        selection_issue = automatic_pending_issue(self, o.id, sym, quote)
+                    except Exception:
+                        log.exception("automatic pending source recheck failed for order %s", o.id)
+                        selection_issue = "原自动挂单资格暂不可核实，未成交"
+                    if selection_issue:
+                        o.reason = selection_issue
+                        db.commit()
+                        continue
                     if o.reason:
                         o.reason = None
                         db.commit()

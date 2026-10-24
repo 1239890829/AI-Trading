@@ -57,7 +57,7 @@ def rig(tmp_path, monkeypatch):
     paper = PaperTradingEngine(sf, quote_fn, days_fn, risk_engine=risk)
     paper.ensure_account()  # Only the temporary test account, never done by GET.
     generated = clock[0].replace(hour=9, minute=26).isoformat()
-    item = {"symbol": quote.symbol, "name": quote.name, "price": 9.9,
+    item = {"symbol": quote.symbol, "name": quote.name, "price": 9.9, "score": 80,
             "confidence": {"tier": "strong"}, "buy_range": {"low": 9., "high": 10.5},
             "vetoes": [], "observation_only": False, "follow_state": "followable"}
     items = [item]

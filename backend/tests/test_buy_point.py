@@ -182,13 +182,19 @@ def _patch_happy_path(monkeypatch, tmp_path, *, items=None, quotes=None, channel
     monkeypatch.setattr(tc, "in_trading_window", lambda now=None: True)
     monkeypatch.setattr(bp, "beijing_now", lambda: d)
     monkeypatch.setattr("app.picks.buy_point_consumers.beijing_now", lambda: d)
-    monkeypatch.setattr(bp, "_today_picks_payload", lambda: {
-        "date": "2026-09-08",
-        "items": items,
-        "meta": {"gate": {"stand_aside": False, "level": "none"}},
-    })
+    from app.models.daily_pick import DailyPickSet
+    from app.services.selection_notifications import daily_selection_version
+    generated = "2026-09-08T09:26:00+08:00"
+    payload = {"date": "2026-09-08", "items": items,
+               "meta": {"generated_at": generated,
+                        "selection_version": daily_selection_version("2026-09-08", generated, items),
+                        "gate": {"stand_aside": False, "level": "none"}}}
+    monkeypatch.setattr(bp, "_today_picks_payload", lambda: payload)
 
     factory = _rule_factory(tmp_path)
+    with factory() as db:
+        db.add(DailyPickSet(date="2026-09-08", items=json.dumps(items), meta=json.dumps(payload["meta"])))
+        db.commit()
     counters = {"direct_io": 0, "brief": 0, "paper": 0, "ledger": 0}
     seen: set[str] = set()
     state = NS(

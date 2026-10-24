@@ -364,3 +364,5 @@ IMP-054动效用途/静态弃权、反向退出、焦点/IO即时性、CSS+JS减
 公司经营解释工程入口：`backend/app/events/company_impact.py`（有界已发布读取）、`backend/app/events/company_sources.py`（CNINFO公共原件与有界经营片段）、`backend/app/services/company_evidence.py`（原任务中心与单调度，推荐及通过硬门的题材参与股研究阅读）、`backend/scripts/company_impact.py`（显式采集/对照/作者源审）。[常规管线](product/limit-up-attribution.md#2026-10-20-公司依据常规管线)取代旧仅CLI限制，新自动解释不冒充旧作者源审；前端复用原attribution-evidence只读者，无新页面。来源与有界PDF依赖见[数据源说明](data/data-sources.md#2026-10-20-公司依据常规管线)，模型对照/未知见[语义记录](ai/semantic-decisions.md#2026-10-20-公司依据常规管线)，状态只归W00/IMP-092。
 
 RSH-031有限前向运行与触发修复入口：[研究§39.5](research/limit-up-dragon-research.md#395-准点采集修复与有限新批2026-10-23)、[运维采集入口](system/deployment.md#rsh-031确定性前向采集)。准点取源与聊天任务分工、旧缺失、批次期限和实际安装/未来实样分别核验，任务状态仅归W04。
+
+主模拟零成交的原记录分母、独立门与同版执行修补：[信号链§14](summary/pick-signal-chain.md#14-主模拟零成交分母门序与已证缺陷2026-10-24)；本机只读诊断脚本 `scripts/audit/paper_funnel_audit.py`，输出归忽略artifacts，不作为新业务或任务账本。

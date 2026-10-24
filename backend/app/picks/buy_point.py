@@ -31,7 +31,6 @@ import contextlib
 import hashlib
 import json
 import logging
-import time
 
 from app.core.config import settings
 from app.core.db import get_session_factory
@@ -58,69 +57,64 @@ LIMIT_ZONE_PCT = 9.5
 # ---------------------------------------------------------------- 纯函数：判定
 
 
-def evaluate_buy_points(
-    items: list[dict], *, gate_stand: bool, quotes: dict[str, dict],
-) -> tuple[list[dict], list[dict]]:
-    """多因素综合判定「可以上车」。纯函数零 IO。
+def _rule_checks(it, gate_stand, q):
+    from app.picks.meta_confidence import EXECUTABLE_SCORE
+    from app.picks.execution_qualification import _number
 
-    :param items: 当日每日精选 items（DailyPickSet.items 反序列化）
-    :param gate_stand: 当日空仓闸门是否触发（meta.gate.stand_aside）
-    :param quotes: symbol(裸6位) → 快照行（price/change_pct/prev_close）
-    :returns: (hits, skips)。hits 元素可直接喂 build_buy_point_card；
-              skips 元素 {"symbol", "reason"} 留痕可观测（为什么没推）。
-    """
-    hits: list[dict] = []
-    skips: list[dict] = []
+    checks = []
+    def add(name, state, reason):
+        checks.append({"name": name, "state": state, "reason": reason})
+    price = q.get("price")
+    price_ok = _number(price) and price > 0
+    add("quote_price", "pass" if price_ok else "unknown", "现价有效" if price_ok else "快照无现价（不臆造）")
+    qual = it.get("_execution_qualification")
+    if isinstance(qual, dict):
+        add("qualification", "pass" if qual.get("state") == "ready" else "unknown",
+            qual.get("reason") or "同版动态执行复核")
+    conf = it.get("confidence") or {}
+    tier = conf.get("tier")
+    add("confidence", "pass" if tier in EXEC_TIERS else "fail",
+        "置信档通过" if tier in EXEC_TIERS else f"置信档 {tier or '未判定'} 不足（需 executable/strong）")
+    score = it.get("score")
+    add("score", "unknown" if not _number(score) else "pass" if score >= EXECUTABLE_SCORE else "fail",
+        f"原综合分 {score}；可执行线 {EXECUTABLE_SCORE}" if _number(score) else "原综合分缺失")
+    vetoes = it.get("vetoes") or []
+    add("vetoes", "fail" if vetoes else "pass", f"红线一票否决 {len(vetoes)} 条" if vetoes else "无原红线否决")
+    gate_ok = it.get("follow_state") == "followable" if gate_stand else not it.get("observation_only")
+    add("macro_gate", "pass" if gate_ok else "fail", "闸门检查通过" if gate_ok else
+        "闸门期且不满足可跟判据" if gate_stand else "仅观察（observation_only）")
+    br = it.get("buy_range") or {}
+    low, high = (br.get("low"), br.get("high")) if isinstance(br, dict) else (None, None)
+    range_ok = _number(low) and _number(high) and 0 < low <= high
+    add("buy_range", "pass" if range_ok else "unknown", "原买入区间有效" if range_ok else "无买入区间（不臆造）")
+    in_range = price_ok and range_ok and low <= price <= high
+    add("in_range", "unknown" if not price_ok or not range_ok else "pass" if in_range else "fail",
+        "现价在原买入区间" if in_range else f"现价 {price} 不在买入区间 {low}-{high}")
+    chg = q.get("change_pct")
+    if not _number(chg) and price_ok and _number(q.get("prev_close")) and q["prev_close"] > 0:
+        chg = (price / q["prev_close"] - 1) * 100
+    zone = _rules_limit_pct(it.get("symbol"), it.get("name")) * 0.95
+    add("limit_zone", "unknown" if not _number(chg) else "fail" if chg >= zone else "pass",
+        "涨幅口径不可核实" if not _number(chg) else
+        f"涨幅 {chg:+.1f}% ≥ 涨停区下沿 {zone:.1f}%（买不进/追高风险）" if chg >= zone else "未触涨停区")
+    return checks, chg, low, high
+
+
+def evaluate_buy_points(items: list[dict], *, gate_stand: bool, quotes: dict[str, dict]):
+    """All original hard gates; retain first refusal and independent checks separately."""
+    hits, skips = [], []
     for it in items or []:
         sym = it.get("symbol") or ""
         q = quotes.get(sym) or {}
-        price = q.get("price")
-        if price is None:
-            skips.append({"symbol": sym, "reason": "快照无现价（不臆造）"})
-            continue
-        conf = it.get("confidence") or {}
-        tier = conf.get("tier")
-        if tier not in EXEC_TIERS:
-            skips.append({"symbol": sym, "reason": f"置信档 {tier or '未判定'} 不足（需 executable/strong）"})
-            continue
-        vetoes = it.get("vetoes") or []
-        if vetoes:
-            skips.append({"symbol": sym, "reason": f"红线一票否决 {len(vetoes)} 条"})
-            continue
-        if gate_stand:
-            # 闸门日：只有满足可跟判据（P1-2 三态）的标的才进入买点判定；
-            # 可跟 ≠ 可买——不推买入建议语义的文案，卡片注明须经影子持仓验证
-            if it.get("follow_state") != "followable":
-                skips.append({"symbol": sym, "reason": "闸门期且不满足可跟判据"})
-                continue
-        elif it.get("observation_only"):
-            skips.append({"symbol": sym, "reason": "仅观察（observation_only）"})
-            continue
-        br = it.get("buy_range") or {}
-        low, high = br.get("low"), br.get("high")
-        if low is None or high is None:
-            skips.append({"symbol": sym, "reason": "无买入区间（不臆造）"})
-            continue
-        if not (low <= price <= high):
-            skips.append({"symbol": sym, "reason": f"现价 {price} 不在买入区间 {low}-{high}"})
-            continue
-        chg = q.get("change_pct")
-        if chg is None and q.get("prev_close"):
-            chg = (price / q["prev_close"] - 1) * 100  # 数据源纪律：close 能推就算
-        # 条件化审计 A2（§6.25）：涨停区按板块制度映射——固定 9.5% 会把 20cm 股
-        # 的半程高开（实测零期望，非「买不进」）误判为触顶
-        limit_zone = _rules_limit_pct(sym, it.get("name")) * 0.95
-        if chg is not None and chg >= limit_zone:
-            skips.append({"symbol": sym, "reason": f"涨幅 {chg:+.1f}% ≥ 涨停区下沿 {limit_zone:.1f}%（买不进/追高风险）"})
-            continue
-        hits.append({
-            "item": it,
-            "price": price,
-            "chg": chg,
-            "tier_label": conf.get("label") or str(tier),
-            "low": low,
-            "high": high,
-        })
+        checks, chg, low, high = _rule_checks(it, gate_stand, q)
+        blocked = next((c for c in checks if c["state"] != "pass"), None)
+        if blocked:
+            skips.append({"symbol": sym, "reason": blocked["reason"], "checks": checks})
+        else:
+            conf = it.get("confidence") or {}
+            hits.append({"item": it, "price": q["price"], "chg": chg,
+                         "tier_label": conf.get("label") or str(conf.get("tier")),
+                         "low": low, "high": high, "checks": checks})
     return hits, skips
 
 
@@ -175,26 +169,15 @@ def _today_picks_payload() -> dict | None:
         }
 
 
-async def _sent_with_cache(state, refresh_after: float) -> dict | None:
-    """情绪指标（卡片栅格用）进程内缓存——compute_market_sentiment 较重
-    （全市场宽度 + 两天涨停池），与 watcher env 同节奏 600s 刷新。
-    失败沿用上次值（不猜新值）；首次失败返回 None（栅格显式 '--'）。"""
-    cache = getattr(state, "buy_point_sent_cache", None)
-    if cache is None:
-        cache = {"at": 0.0, "sent": None}
-        state.buy_point_sent_cache = cache
-    if cache["sent"] is not None and time.monotonic() - float(cache["at"] or 0.0) < refresh_after:
-        return cache["sent"]
-    try:
-        from app.services.market_context import compute_market_sentiment
+async def _sent_with_cache(state) -> dict | None:
+    """Cards and qualification share the existing market.sentiment owner/60s cache."""
+    from app.services.market_context import get_cached_sentiment
 
-        sent = await compute_market_sentiment(state.hub, state.snapshot_service) or None
-        if sent is not None:
-            cache["sent"] = sent
-            cache["at"] = time.monotonic()
+    try:
+        return await get_cached_sentiment(state, state.hub)
     except Exception as exc:
-        log.warning("buy point sentiment refresh failed: %s（沿用上次值）", exc)
-    return cache["sent"]
+        log.warning("buy point card sentiment unavailable: %s", type(exc).__name__)
+        return None
 
 
 def _quotes_from_snapshot(state) -> dict[str, dict]:
@@ -243,24 +226,40 @@ def _execution_snapshots(
     return out
 
 
-def _reject_unfresh_execution(
-    hits: list[dict], skips: list[dict], execution_by_symbol: dict[str, dict],
-) -> tuple[list[dict], list[dict]]:
-    """动作时快照只有 ready 才能进入执行；其它状态保留为明确拒绝证据。"""
-    ready_hits: list[dict] = []
-    out_skips = list(skips)
+def execution_quote_check(snap):
+    from app.picks.execution_qualification import _clock, _number
+    from app.core.freshness import DEFAULT_FRESH_WITHIN_SECONDS, MAX_FUTURE_SKEW_SECONDS
+    from app.paper.execution_guard import window_issue
+
+    reason = None
+    if snap.get("state") != "ready":
+        reason = f"执行快照 {snap.get('state') or 'unknown'}（{snap.get('freshness_reason') or '新鲜度不可确认'}），只保留参考、不执行"
+    stamp, checked = _clock(snap.get("as_of")), _clock(snap.get("checked_at"))
+    if reason is None and (stamp is None or checked is None or not snap.get("source")):
+        reason = "执行快照源时点或来源缺失，不以接收时刻代替"
+    if reason is None:
+        age = (checked - stamp).total_seconds()
+        if stamp.date() != checked.date() or not -MAX_FUTURE_SKEW_SECONDS <= age <= DEFAULT_FRESH_WITHIN_SECONDS:
+            reason = "执行快照超出同日60秒可信窗口，只保留参考、不执行"
+        elif window_issue(checked, [checked.date()]):
+            reason = "竞价、午休或收盘阶段不模拟成交"
+        elif not _number(snap.get("price")) or snap["price"] <= 0:
+            reason = "执行快照价格无效"
+    return {"name": "execution_quote", "state": "unknown" if reason else "pass",
+            "reason": reason or "同日源时点、价格、来源与执行窗口通过"}
+
+
+def _reject_unfresh_execution(hits, skips, execution_by_symbol):
+    """A ready label alone cannot replace the engine's source clock/window discipline."""
+    ready_hits, out_skips = [], list(skips)
     for hit in hits:
         symbol = str((hit.get("item") or {}).get("symbol") or "")
-        snap = execution_by_symbol.get(symbol) or {}
-        state = str(snap.get("state") or "unknown")
-        if state == "ready":
+        check = execution_quote_check(execution_by_symbol.get(symbol) or {})
+        if check["state"] == "pass":
             ready_hits.append(hit)
-            continue
-        reason = snap.get("freshness_reason") or "动作时行情新鲜度不可确认"
-        out_skips.append({
-            "symbol": symbol,
-            "reason": f"执行快照 {state}（{reason}），只保留参考、不执行",
-        })
+        else:
+            out_skips.append({"symbol": symbol, "reason": check["reason"],
+                              "checks": [*hit.get("checks", []), check]})
     return ready_hits, out_skips
 
 
@@ -365,25 +364,53 @@ async def check_and_dispatch(app) -> list[dict]:
     if td != now.date() or not tc.in_trading_window(now):
         return []
 
-    payload = _today_picks_payload()
+    payload = await asyncio.to_thread(_today_picks_payload)
     if not payload or not payload.get("items"):
         return []
-    gate = ((payload.get("meta") or {}).get("gate")) or {}
-    gate_stand = bool(gate.get("stand_aside"))
-
+    from app.picks.execution_qualification import _clock, context_issue, live_execution_context, requalify_item
+    source_items = payload["items"]
+    meta = payload.get("meta") or {}
+    gate = meta.get("gate") or {}
+    pick_generated_at = meta.get("generated_at")
+    from app.services.selection_notifications import daily_selection_version
+    source_version = meta.get("selection_version")
+    source_valid = (isinstance(pick_generated_at, str) and source_version
+                    and source_version == daily_selection_version(payload["date"], pick_generated_at, source_items))
+    context = await live_execution_context(state, now=now) if any("execution_seed" in item for item in source_items) else None
+    now = beijing_now()
+    if payload.get("date") != now.date().isoformat() or td != now.date():
+        log.warning("buy point input collection crossed its original trade date; no action")
+        return []
+    generated_clock = _clock(pick_generated_at)
+    source_valid = bool(source_valid and generated_clock is not None
+                        and generated_clock.date() == now.date() and generated_clock <= now)
+    items = [requalify_item(item, source_version if source_valid else None, context, now)
+             if "execution_seed" in item else dict(item) for item in source_items]
+    if not source_valid:
+        for item in items:
+            if "_execution_qualification" in item:
+                item["_execution_qualification"].update(state="unavailable", reason="原入选版本无法核实")
+                item["confidence"] = {"tier": "observe", "reasons": ["原入选版本无法核实"]}
+                item.pop("buy_range", None)
     quotes = _quotes_from_snapshot(state)
-    pick_generated_at = ((payload.get("meta") or {}).get("generated_at"))
-    execution_by_symbol = _execution_snapshots(
-        state, payload["items"], quotes, checked_at=now,
-    )
-    hits, skips = evaluate_buy_points(payload["items"], gate_stand=gate_stand, quotes=quotes)
+    execution_by_symbol = _execution_snapshots(state, items, quotes, checked_at=now)
+    hits, skips = [], []
+    for item in items:
+        qual = item.get("_execution_qualification") or {}
+        current_gate = (qual.get("context") or {}).get("gate") if qual.get("state") == "ready" else gate
+        current_gate = current_gate or {}
+        kept, refused = evaluate_buy_points([item], gate_stand=bool(current_gate.get("stand_aside")), quotes=quotes)
+        checks = (kept[0] if kept else refused[0])["checks"]
+        item["_execution_checks"] = [*checks, execution_quote_check(execution_by_symbol.get(item.get("symbol")) or {})]
+        hits.extend(kept)
+        skips.extend(refused)
     hits, skips = _reject_unfresh_execution(hits, skips, execution_by_symbol)
     # 派发前先按同一批输入计算 decision_id/version；dispatch 不是交易判断事实，
     # 不进入该版本身份。完整 decision 必须先落库，AlertEvent/模拟仓随后只引用它。
     from app.picks.opportunity_learning import build_notification_records
 
     _preview_run, preview = build_notification_records(
-        payload["items"], trade_date=now.date().isoformat(), as_of=now,
+        items, trade_date=now.date().isoformat(), as_of=now,
         hits=hits, skips=skips, dispatch_by_symbol={},
         pick_generated_at=pick_generated_at, execution_by_symbol=execution_by_symbol,
     )
@@ -400,7 +427,7 @@ async def check_and_dispatch(app) -> list[dict]:
     # 权威执行事实先于任何提醒/模拟动作落库。dispatch 结果属于通知可靠性事实，
     # 不反写交易 decision；后者由 AlertEvent/通道回执独立记录（IMP-044 继续收口）。
     archived = await _archive_notification_decisions(
-        items=payload["items"], trade_date=now.date().isoformat(), hits=hits, skips=skips,
+        items=items, trade_date=now.date().isoformat(), hits=hits, skips=skips,
         dispatch_by_symbol={}, as_of=now, pick_generated_at=pick_generated_at,
         execution_by_symbol=execution_by_symbol,
     )
@@ -414,23 +441,53 @@ async def check_and_dispatch(app) -> list[dict]:
     # AlertEvent + dedup + Outbox。同拍不再直接做任何 Feishu 网络 IO。
     from app.picks.watcher import dispatch_alert
 
-    sent = await _sent_with_cache(state, settings.picks_watcher_env_refresh_seconds)
+    sent = await _sent_with_cache(state)
     snap = getattr(state, "snapshot_service", None)
     breadth = getattr(snap, "breadth", None) or {}
     trade_date = now.date().isoformat()
     dispatched: list[dict] = []
     for h in hits:
         sym = str((h.get("item") or {}).get("symbol") or "")
+        # Awaited card/DB work may have consumed the quote or qualification lease.
+        # Preserve the old eligible fact; a later rejection is a new observation.
+        current = await asyncio.to_thread(_today_picks_payload)
+        checked = beijing_now()
+        current_meta = (current or {}).get("meta") or {}
+        current_generated = _clock(current_meta.get("generated_at"))
+        current_items = (current or {}).get("items") or []
+        reason = None
+        if (not source_valid or current is None or current.get("date") != trade_date
+                or current_generated is None or current_generated.date() != checked.date() or current_generated > checked
+                or current_meta.get("selection_version") != source_version
+                or daily_selection_version(trade_date, current_meta.get("generated_at"), current_items) != source_version
+                or not any(item.get("symbol") == sym for item in current_items)):
+            reason = "派发前原入选来源或成员已变化，未发送旧买点"
+        checked_snapshot = {**(execution_by_symbol.get(sym) or {}), "checked_at": checked.isoformat()}
+        quote_check = execution_quote_check(checked_snapshot)
+        if reason is None and quote_check["state"] != "pass":
+            reason = quote_check["reason"]
+        qualification = (h.get("item") or {}).get("_execution_qualification")
+        if reason is None and isinstance(qualification, dict):
+            reason = context_issue(qualification.get("context"), checked)
+        if reason:
+            from copy import deepcopy
+            refused_item = deepcopy(h["item"])
+            refused_item["_execution_checks"] = [*refused_item.get("_execution_checks", []),
+                {"name": "dispatch_recheck", "state": "unknown", "reason": reason}]
+            await _archive_notification_decisions(items=[refused_item], trade_date=trade_date, hits=[],
+                skips=[{"symbol": sym, "reason": reason}], dispatch_by_symbol={}, as_of=checked,
+                pick_generated_at=pick_generated_at, execution_by_symbol={sym: checked_snapshot})
+            log.warning("buy point stopped before dispatch %s: %s", sym, reason)
+            continue
         alert = build_buy_point_alert(h)
-        alert["card"] = build_buy_point_card([h], sent, breadth, gate or None, show=now)
+        card_gate = qualification["context"]["gate"] if isinstance(qualification, dict) else gate
+        alert["card"] = build_buy_point_card([h], sent, breadth, card_gate or None, show=checked)
         alert["dedup_key"] = _buy_point_dedup_key(trade_date, sym)
         alert["meta"]["trade_date"] = trade_date
         # Freeze the same persisted daily generation before durable dispatch.
         # This is linkage metadata, never a new decision or execution permission.
-        from app.services.selection_notifications import daily_selection_version
-        selection_version = (payload.get("meta") or {}).get("selection_version")
-        if (isinstance(pick_generated_at, str) and selection_version
-                and selection_version == daily_selection_version(trade_date, pick_generated_at, payload["items"])):
+        selection_version = source_version
+        if source_valid:
             alert["meta"]["selection_ref"] = f"daily:{trade_date}:{sym}"
             alert["meta"]["selection_source_version"] = selection_version
         try:

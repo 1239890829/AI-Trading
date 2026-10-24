@@ -1074,20 +1074,6 @@ async def dispatch_alert(app, alert: dict, *, rule_provider=None) -> bool:
                     entry_time=beijing_now().strftime("%H:%M:%S"),
                 )
 
-    # Derived consumer 2: paper position. Durable buy-point event/outbox already exists here.
-    if not is_buy_point and alert.get("kind") in ("buy_point", "confirm"):
-        with contextlib.suppress(Exception):
-            from app.picks.position_engine import maybe_open
-
-            await maybe_open(
-                app,
-                symbol=str(alert["symbol"]), name=str(alert.get("name") or ""),
-                trigger=str(alert["kind"]),
-                price=_alert_price(alert, _snapshot_price(app, alert.get("symbol"))),
-                certainty_level=meta.get("certainty_level") if meta.get("certainty_level") in {"高", "中", "低"} else None,
-                decision_context=(meta.get("execution_ref") or None),
-            )
-
     if not is_buy_point:
         rule = rule_provider(session_factory) if rule_provider is not None else ensure_system_rule(session_factory)
         repo = getattr(state, "alert_repo", None) or AlertRepository(session_factory)
@@ -1098,6 +1084,28 @@ async def dispatch_alert(app, alert: dict, *, rule_provider=None) -> bool:
             float(meta.get("threshold") or 0.0),
             snapshot=snapshot,
         )
+
+    # The original event must commit before a confirm can reach the executor.
+    if not is_buy_point and alert.get("kind") in ("buy_point", "confirm"):
+        from app.picks.position_engine import maybe_open, record_confirm_result
+        reference_price = _alert_price(alert, _snapshot_price(app, alert.get("symbol")))
+        try:
+            result = await maybe_open(
+                app,
+                symbol=str(alert["symbol"]), name=str(alert.get("name") or ""),
+                trigger=str(alert["kind"]),
+                price=reference_price,
+                certainty_level=meta.get("certainty_level") if meta.get("certainty_level") in {"高", "中", "低"} else None,
+                decision_context=(meta.get("execution_ref") or None),
+            )
+        except Exception as exc:
+            log.exception("paper attempt unknown for source event %s", event.id)
+            result = {"opened": False, "execution_unknown": True, "reason": f"模拟动作异常：{type(exc).__name__}"}
+        if not isinstance(result, dict):
+            result = {"opened": False, "execution_unknown": True, "reason": "模拟动作结果不可核实"}
+        if alert.get("kind") == "confirm":
+            meta["paper_execution"] = await asyncio.to_thread(record_confirm_result, alert, event.id, result,
+                session_factory, reference_price=reference_price)
 
     # Buy-point Feishu is exclusively delivered by Outbox; no direct-card side path.
     if is_buy_point:

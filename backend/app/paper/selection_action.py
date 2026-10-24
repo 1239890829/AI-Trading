@@ -2,6 +2,7 @@
 from datetime import datetime, timedelta, timezone
 import json
 import re
+import time
 
 from sqlalchemy import and_, case, func, or_, select
 
@@ -52,8 +53,6 @@ def _source(sf, ref, version, now):
             return symbol, item, meta, ("historical_selection", "这是历史入选记录，不能作为今天的新模拟买点")
         if not item:
             return symbol, None, meta, ("no_actionable_decision", "盘中候选尚无当前每日买点执行资格")
-        if item.get("observation_only"):
-            return symbol, item, meta, ("observation_only", "原入选仅观察，不等于已确认可执行买点")
     return symbol, item, meta, None
 
 
@@ -62,6 +61,14 @@ def selection_binding(sf, ref, version, now, *, decision_id=None, decision_versi
     if issue:
         return symbol, item, meta, None, issue
     decision = latest_notification_execution(now.date().isoformat(), sf).get(symbol) or {}
+    from app.picks.execution_qualification import resolve_execution_item
+    source_item = item
+    item, context, qualification_issue = resolve_execution_item(item, decision, version, now)
+    if qualification_issue:
+        code = "observation_only" if source_item.get("observation_only") and "execution_seed" not in source_item else "no_actionable_decision"
+        return symbol, item, meta, decision, (code, qualification_issue)
+    if context is not None:
+        meta = {**meta, "gate": context["gate"], "market_phase": context["phase"]}
     if (decision.get("archived_decision") != "eligible" or decision.get("gate_decision") != "passed"
             or (decision.get("executable_snapshot") or {}).get("state") != "ready"
             or (decision.get("reference_entry") or {}).get("as_of") != meta.get("generated_at")):
@@ -72,7 +79,7 @@ def selection_binding(sf, ref, version, now, *, decision_id=None, decision_versi
     return symbol, item, meta, decision, None
 
 
-def execution_status(sf, ref, version, *, request_id=None, decision=None):
+def execution_status(sf, ref, version, *, request_id=None, decision=None, exclude_event_key=None):
     """Only existing main action receipts/consumers and actual order state."""
     match = re.fullmatch(r"(daily|intraday):(\d{4}-\d{2}-\d{2}):(\d{6})", ref or "")
     day, symbol = (match.group(2), match.group(3)) if match else (None, None)
@@ -130,6 +137,8 @@ def execution_status(sf, ref, version, *, request_id=None, decision=None):
             # erase another already running or unresolved action for this selection.
             query = select(BuyPointConsumption).where(BuyPointConsumption.consumer == "position",
                 or_(exact_binding, and_(or_(selected_ref.is_(None), selected_version.is_(None)), legacy_identity)))
+            if exclude_event_key is not None:
+                query = query.where(BuyPointConsumption.event_key != exclude_event_key)
             for progress in db.scalars(query.order_by(BuyPointConsumption.updated_at_ms.desc())):
                 saved = object_json(progress.payload)
                 meta = object_json(object_json(saved.get("alert")).get("meta"))
@@ -153,6 +162,73 @@ def execution_status(sf, ref, version, *, request_id=None, decision=None):
         precedence = {"filled": 0, "pending": 1, "unknown": 2, "cancelled": 3,
                       "rejected": 4, "expired": 5, "not_started": 6}
         return min(candidates, key=lambda value: precedence[value["state"]])
+
+
+def automatic_selection_binding(engine, symbol, context, *, matching_order_id=None, quote=None):
+    """Resolve a claimed automatic intent without letting its own running slot self-lock."""
+    fields = ("selection_ref", "source_version", "decision_id", "decision_version", "consumer_event_key")
+    if (engine.scope != "main" or not isinstance(context, dict)
+            or any(not isinstance(context.get(key), str) or not context[key] for key in fields)
+            or context["selection_ref"] != f"daily:{beijing_now().date().isoformat()}:{symbol}"):
+        return None, ("selection_binding_missing", "自动买点缺少同一原入选、执行判定与消费身份，未执行")
+    expiry = context.get("expires_at_ms")
+    if type(expiry) is not int or (matching_order_id is None and expiry <= int(time.time() * 1000)):
+        return None, ("original_action_expired", "原自动动作已过期，未重复执行")
+    with engine._sf() as db:
+        owner = db.get(BuyPointConsumption, (context["consumer_event_key"], "position"))
+        saved = object_json(object_json(object_json(owner.payload).get("alert")).get("meta")) if owner else {}
+        reference = object_json(saved.get("execution_ref"))
+        result = object_json(object_json(owner.payload).get("execution_result")) if owner else {}
+        owner_valid = owner is not None and (owner.state == "running" if matching_order_id is None else
+            owner.state == "done" and result.get("order_id") == matching_order_id and not result.get("execution_unknown"))
+        if (not owner_valid or owner.expires_at_ms != expiry
+                or saved.get("selection_ref") != context["selection_ref"]
+                or saved.get("selection_source_version") != context["source_version"]
+                or reference.get("decision_id") != context["decision_id"]
+                or reference.get("decision_version") != context["decision_version"]):
+            return None, ("automatic_owner_unknown", "原自动消费归属已变化，需核对原动作")
+    selected, item, meta, decision, issue = selection_binding(engine._sf, context["selection_ref"],
+        context["source_version"], beijing_now(), decision_id=context["decision_id"],
+        decision_version=context["decision_version"])
+    if issue:
+        return None, issue
+    if selected != symbol:
+        return None, ("selection_binding_missing", "自动动作证券与原入选不一致")
+    if quote is not None:
+        hits, skips = evaluate_buy_points([item], gate_stand=bool((meta.get("gate") or {}).get("stand_aside")),
+            quotes={symbol: {"price": quote.price, "change_pct": getattr(quote, "change_pct", None),
+                             "prev_close": getattr(quote, "prev_close", None)}})
+        if not hits:
+            return None, ("no_actionable_decision", (skips[0].get("reason") if skips else None) or "当前买点条件未通过")
+    existing = execution_status(engine._sf, context["selection_ref"], context["source_version"],
+        decision=decision, exclude_event_key=context["consumer_event_key"])
+    if existing["state"] in {"pending", "filled", "unknown"}:
+        return None, ("execution_exists", "原入选已有其他模拟动作或待核结果，未重复执行")
+    return meta, None
+
+
+def automatic_pending_issue(engine, order_id, symbol, quote):
+    """Recheck only an existing bound automatic order; never create another intent."""
+    if engine.scope != "main":
+        return None
+    with engine._sf() as db:
+        payload = case((func.json_valid(BuyPointConsumption.payload), BuyPointConsumption.payload), else_="{}")
+        owners = list(db.scalars(select(BuyPointConsumption).where(
+            BuyPointConsumption.consumer == "position",
+            func.json_extract(payload, "$.execution_result.order_id") == order_id).limit(2)))
+        if not owners:
+            return None  # Preserve ordinary unbound maintenance-order behavior.
+        if len(owners) != 1:
+            return "原自动订单的消费归属不唯一，暂不撮合"
+        owner = owners[0]
+        meta = object_json(object_json(object_json(owner.payload).get("alert")).get("meta"))
+        reference = object_json(meta.get("execution_ref"))
+        context = {"selection_ref": meta.get("selection_ref"),
+            "source_version": meta.get("selection_source_version"),
+            "decision_id": reference.get("decision_id"), "decision_version": reference.get("decision_version"),
+            "consumer_event_key": owner.event_key, "expires_at_ms": owner.expires_at_ms}
+    _meta, issue = automatic_selection_binding(engine, symbol, context, matching_order_id=order_id, quote=quote)
+    return issue[1] if issue else None
 
 
 async def action_issue(engine, item, meta, symbol, price, quantity, quote, *, days=None):

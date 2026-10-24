@@ -1138,3 +1138,6 @@ W00/IMP-092用户直派扩展在既有读者增加主营/产品/客户/订单原
 现役消费者：实际daily/top → 原claim/完整图并行 → 保存12角色/7报告 → 入选详情/原通知按需读；selection/confirmed/research_ready/paper_status按阶段版本到达，关闭/已读/溢出分开。当前列表批量summary、静态不轮询、运行续读、旧七报告回退、IME/键盘与窄屏分别验。参考池不触发新增研究。
 
 模拟子功能：原选择/判定绑定 → 只读预检 → 维护授权/显式提交 → 同UUID回执 → pending/filled/rejected/cancelled/unknown → 原position消费结果；预检过期/换股/换版/换量失效，未知不换UUID。pending动态窗口/源/风险再验，暂时阻断保留冻结；main/shadow/hunting-shadow不混。新工程测试与真实页面范围归handoff；周末未产生主账户真实fill、语义gold及选股收益改进不冒称通过。
+
+
+2026-10-24主模拟链路反证：候选同股强来源/晚到直接事件/已有来源carryover、宏观遮罩前seed、同日当前资格、ready源钟60秒、派发等待后失效、自动初单/挂单来源与买区、受理后投影失败、confirm实际拒因分别验；首拒/并存未知不混、旧无seed不重造、原分<60不升格。真实0订单不等于下游健康，隔离真引擎通过不冒充未来主成交；证据入口见信号链§14/handoff。
