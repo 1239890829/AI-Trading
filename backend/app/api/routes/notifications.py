@@ -62,7 +62,7 @@ router = APIRouter(tags=["notifications"])
 BUY_POINT_RULE = "__picks_buy_point__"
 # Ordinary watcher shapes remain in diagnostics, never in opportunity items.
 WATCHER_RULE = "__picks_watcher__"
-_NOTIF_KINDS = ("buy_point", "selection", "real_exit_alert")
+_NOTIF_KINDS = ("buy_point", "selection", "real_exit_alert", "research_ready", "paper_status")
 _NOTIF_RULE_NAMES = (BUY_POINT_RULE, WATCHER_RULE, "__source_board_reopen__",
                      "__source_real_exit_alert__", "__selection_notifications__")
 # The source window is per rule; ordinary monitors cannot evict selected results.
@@ -105,6 +105,13 @@ def _message_time(value) -> datetime:
         return to_beijing(datetime.min)
 
 
+def _activity_time(item: dict) -> datetime:
+    """Rank recent milestones without replacing the immutable first-selection clock."""
+    clocks = [item.get('ts')]
+    clocks.extend(row.get('source_as_of') for row in item.get('arrivals', []) if isinstance(row, dict))
+    return max(_message_time(clock) for clock in clocks if clock) if any(clocks) else _message_time(None)
+
+
 def _explicit_symbol_rule(rule) -> bool:
     if getattr(rule, 'scope', None) != 'symbols' or getattr(rule, 'condition_type', None) not in {
         'price_above', 'price_below', 'change_pct_above', 'change_pct_below'}:
@@ -125,6 +132,7 @@ def _original_reference(event, snapshot: dict) -> dict:
             'execution_ref', 'confidence', 'vetoes', 'invalidations', 'buy_range',
             'source', 'quality', 'quality_reasons', 'data_timestamp', 'received_at',
             'source_evidence',
+            'research', 'paper_execution',
         ) if key in snapshot}
     return {'event_id': event.id, 'kind': snapshot.get('kind') or 'explicit_condition',
         'trade_date': snapshot.get('trade_date'), 'selection_source': snapshot.get('selection_source'),
@@ -164,7 +172,8 @@ def _alert_items(
         if not e.symbol or e.symbol == '000000':
             continue
         kind, rule_name = snap.get('kind'), rules[e.rule_id].name
-        if (kind, rule_name) not in {('buy_point', BUY_POINT_RULE), ('selection', SELECTION_RULE)}:
+        if (kind, rule_name) not in {('buy_point', BUY_POINT_RULE), ('selection', SELECTION_RULE),
+                                    ('research_ready', SELECTION_RULE), ('paper_status', SELECTION_RULE)}:
             continue
         day = snap.get('trade_date') or (e.triggered_at.date().isoformat() if e.triggered_at else '')
         if isinstance(day, str) and day:
@@ -228,10 +237,32 @@ def _alert_items(
             category, label, source = 'opportunity', '个股机会', '盘中买点判定'
             text = (snap.get('text') or '原买点条件时点记录') + '。' + OBSERVATION_VALIDITY
             validity = '仅触发时点满足原条件；当前资格须重新核验。' + OBSERVATION_VALIDITY
+        elif kind == 'research_ready' and rule.name == SELECTION_RULE and name:
+            from app.services.selection_notifications import _time
+            research = snap.get('research')
+            if (not isinstance(research, dict) or research.get('run_id') != snap.get('run_id')
+                    or research.get('report_count') != 7 or not snap.get('origin_event_id')
+                    or not snap.get('source_version') or not _time(snap.get('source_as_of'))):
+                continue
+            category, label, source = 'opportunity', '研究完成', '原入选完整研究'
+            text = snap.get('text') or '完整研究已保存，原答仍待核。'
+            validity = '研究完成与可执行买点不同；请核对原入选时点与研究材料截点。'
+        elif kind == 'paper_status' and rule.name == SELECTION_RULE and name:
+            from app.services.selection_notifications import _time
+            paper = snap.get('paper_execution')
+            if (not isinstance(paper, dict) or paper.get('scope') != 'main'
+                    or not ((isinstance(paper.get('order_id'), int) and not isinstance(paper.get('order_id'), bool) and paper['order_id'] > 0)
+                            or (paper.get('order_id') is None and paper.get('status') == 'rejected' and paper.get('request_id')))
+                    or paper.get('status') not in {'pending', 'filled', 'rejected', 'cancelled'}
+                    or not snap.get('origin_event_id') or not snap.get('source_version') or not _time(snap.get('source_as_of'))):
+                continue
+            category, label, source = 'opportunity', '模拟进展', '原入选模拟委托'
+            text = snap.get('text') or '模拟委托状态已保存，请核对原记录。'
+            validity = '仅模拟账户事实，不代表真实成交或当前可以买入。'
         else:
             continue
         bj = e.triggered_at
-        display_ts = snap.get('source_as_of') if kind == 'selection' else bj.isoformat(sep=' ') if bj else None
+        display_ts = snap.get('source_as_of') if kind in {'selection', 'research_ready', 'paper_status'} else bj.isoformat(sep=' ') if bj else None
         observed_at = _message_time(display_ts) if display_ts else bj
         item = {'id': f'alert-{e.id}', 'category': category, 'label': label,
             'session': _session_of(observed_at, trading_dates) if observed_at else 'intraday', 'ts': display_ts,
@@ -240,6 +271,12 @@ def _alert_items(
             'references': [_original_reference(e, snap)],
             'title': f'【{label}】{e.symbol} {name}'.strip(), 'body': text, 'symbol': e.symbol,
             'url': None, 'score': None, 'source': source, 'validity': validity}
+        if kind in {'selection', 'buy_point', 'research_ready', 'paper_status'}:
+            phase = {'selection': 'selected', 'buy_point': 'confirmed'}.get(kind, kind)
+            milestone = {'phase': phase, 'version': str(snap.get('source_version') or getattr(e, 'dedup_key', None) or f'event:{e.id}'),
+                         'source_as_of': snap.get('source_as_of') or snap.get('data_timestamp') or display_ts,
+                         'origin_id': f'alert-{snap.get("origin_event_id") or e.id}'}
+            item['arrival'], item['arrivals'] = milestone, [milestone]
         if category == 'opportunity':
             day = snap.get('trade_date') or (bj.date().isoformat() if bj else '')
             groups.setdefault((day, e.symbol), []).append((e, item, kind))
@@ -251,6 +288,9 @@ def _alert_items(
         anchor = rows[0][1]
         anchor['_event_ids'] = [r[0].id for r in rows]
         anchor['references'] = [ref for _, item, _ in rows for ref in item['references']]
+        anchor['arrivals'] = [milestone for _, item, _ in rows for milestone in item.get('arrivals', [])]
+        if anchor['arrivals']:
+            anchor['arrival'] = anchor['arrivals'][-1]
         if len(rows) > 1:
             anchor['body'] += '\n' + '\n'.join(f'补充原时点 {r[1]["ts"]}（{r[1]["source"]}）：{r[1]["body"]}' for r in rows[1:])
         items.append(anchor)
@@ -293,7 +333,7 @@ async def notifications(
         errors["alerts"] = type(exc).__name__
 
     items = alert_items
-    items.sort(key=lambda x: _message_time(x["ts"]), reverse=True)
+    items.sort(key=_activity_time, reverse=True)
     # A saturated source window does not prove that older rows are eligible.
     # True is witnessed overflow; false is complete within the fetched window;
     # null exposes the remaining unknown rather than inventing an exact count.

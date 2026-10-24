@@ -2,7 +2,7 @@
 
 口径（见 PaperTradingEngine 构造函数注释）：
 - 仅 main 账户 + 仅买入方向；shadow 豁免（研究仪器）、卖出永不拦截（减风险）；
-- 挂单撮合期不复查——风控时点是下单，撮合期否决会留下冻结挂单；
+- 挂单撮合前重核当前风控——临时阻断保留冻结额与pending，恢复后重核；
 - 预检异常**保守拒单**（不知道是否安全时宁可拒并说明原因）；
 - 预检数据组装与 /api/risk/check-order 同口径（risk_check_context 单点）。
 """
@@ -11,12 +11,24 @@ import sys
 sys.path.insert(0, ".")
 
 import asyncio
+from datetime import datetime
+import pytest
 
 from app.core.db import get_session_factory
 from app.paper.engine import PaperTradingEngine
 from app.risk.config import get_params
 from app.risk.engine import RiskEngine
 from app.schemas.market import Quote
+from app.core.bjtime import BJ_TZ
+
+NOW = datetime(2026, 9, 29, 10, 0, tzinfo=BJ_TZ)
+
+
+@pytest.fixture(autouse=True)
+def execution_clock(monkeypatch):
+    monkeypatch.setattr("app.paper.engine.beijing_now", lambda: NOW)
+    monkeypatch.setattr("app.paper.engine._today", lambda: NOW.strftime("%Y%m%d"))
+    monkeypatch.setattr("app.paper.execution_guard.known_trade_days", lambda: [NOW.date()])
 
 
 class FakeHub:
@@ -59,7 +71,8 @@ def reset():
 
 
 def q600519(price=100.0):
-    return Quote(symbol="600519", price=price, limit_up_price=110.0, limit_down_price=90.0, source="t")
+    return Quote(symbol="600519", price=price, limit_up_price=110.0, limit_down_price=90.0,
+                 source="t", data_timestamp=NOW)
 
 
 def test_risk_gate_blocks_buy_in_bear_on_main():
@@ -119,28 +132,31 @@ def test_risk_precheck_exception_fails_closed():
     assert "保守拒单" in order.reason
 
 
-def test_match_pending_does_not_recheck_risk():
-    """风控时点是下单：挂单期间市场状态转差，撮合期**不**重复风控。
-
-    撮合期再否决会留下既不可成交也难自解释的冻结挂单（资金已扣）；
-    用户保留撤单（cancel）作为退出路径。
-    """
+def test_match_pending_rechecks_risk_and_preserves_reservation_until_recovery():
+    """曾通过预检不能永久放行；当前否决可解释，冻结额不重复扣减。"""
     reset()
     quote_map = {"600519": q600519(100.0)}
     engine = make_engine(quote_map, risk_engine=make_risk("震荡偏多"))
     # 95 < 100 → 挂单（通过下单时风控）
     order = asyncio.run(engine.place_order("600519", "buy", 95.0, 100))
     assert order.status == "pending", order.reason
+    frozen_cash = engine.account_summary(0)["cash"]
     # 市场转入下跌趋势 + 价格回落到挂单价
     engine._risk_engine = make_risk("下跌趋势")
     quote_map["600519"] = q600519(95.0)
     pending_left = asyncio.run(engine.match_pending())
-    assert pending_left == 0
+    assert pending_left == 1
     from app.models.paper import PaperOrder
 
     with engine._sf() as db:
         o = db.query(PaperOrder).filter(PaperOrder.id == order.id).one()
-        assert o.status == "filled", o.reason
+        assert o.status == "pending" and "下跌趋势" in o.reason
+    assert engine.account_summary(0)["cash"] == frozen_cash
+    engine._risk_engine = make_risk("震荡偏多")
+    assert asyncio.run(engine.match_pending()) == 0
+    with engine._sf() as db:
+        o = db.query(PaperOrder).filter(PaperOrder.id == order.id).one()
+        assert o.status == "filled" and o.reason is None
 
 
 def test_risk_gate_respects_total_position_cap():

@@ -107,11 +107,11 @@ async def recover_task(
 
 
 @router.get("/agent/research/tradingagents/{symbol}")
-async def tradingagents_research_view(symbol: str, request: Request):
+async def tradingagents_research_view(symbol: str, request: Request, saved_only: bool = False):
     from app.services.tradingagents_research import read_view
 
     try:
-        return {"data": await at._db_thread(read_view, symbol, request.app)}
+        return {"data": await at._db_thread(read_view, symbol, request.app, saved_only=saved_only)}
     except ValueError as exc:
         raise HTTPException(status_code=422, detail=str(exc))
 

@@ -1389,7 +1389,7 @@ async def generate_picks_pipeline(
         }
         for i, r in enumerate(ranked)
         if r["symbol"] not in kept_symbols
-    ][:20]
+    ]
 
     # ⑤b 出列留痕（2026-09-10）：昨日成员没进今日名单的，分两种归因——
     # ① 跌破入选门槛（质量下滑，有分数可证）② 未入选（掉出候选池/被更强候选换掉/名额截断）。
@@ -1467,4 +1467,6 @@ async def generate_picks_pipeline(
     }
     # G-2：落库是同步 SQLite 写（+ 大对象 json.dumps）→ 线程池（判据见 candidate_pool 顶部）
     await asyncio.to_thread(_persist_picks, today, items, meta, replaced, rejected)
+    from app.services.tradingagents_research import wake_selected_research
+    wake_selected_research()
     return {"data": {"date": today, "items": items, "replaced": replaced, "meta": meta}, "meta": {}}

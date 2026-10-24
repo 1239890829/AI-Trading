@@ -644,7 +644,6 @@ class NativeTradingAgentsDriver:
         self.dependency_manifest = Path(dependency_manifest) if dependency_manifest is not None else None
         self._dependency_verified = None
         self._dependency_error = None
-        self._model_lease = asyncio.Lock()
 
     def method_identity(self):
         if not self.sandbox.is_file() or not self.python.is_file() or not self.dependencies.is_dir():
@@ -664,7 +663,7 @@ class NativeTradingAgentsDriver:
         files = {p.name: file_sha(p) for p in NATIVE.glob("*.py")}
         files["upstream-manifest.json"] = file_sha(NATIVE / "upstream-manifest.json")
         files["driver.py"] = file_sha(__file__)
-        for name in ("tradingagents_research.py", "agent_budget.py", "tradingagents_recovery.py"):
+        for name in ("tradingagents_research.py", "agent_budget.py", "tradingagents_recovery.py", "selected_model_lease.py"):
             files[name] = file_sha(Path(__file__).with_name(name))
         for module in (adapter, evidence, sentiment, source_gate, bjtime):
             files[Path(module.__file__).name] = file_sha(module.__file__)
@@ -1006,6 +1005,7 @@ class NativeTradingAgentsDriver:
         counter_path = run / "call-counter.json"
         physical_calls = json.loads(counter_path.read_text())["reserved"] if counter_path.exists() else 0
         active = set()
+        model_lease = asyncio.Lock()  # Preserve per-graph ordering; independent stock graphs may overlap.
         failure = None
         # Short random socket path avoids AF_UNIX path length limits; only its
         # exact path is granted to this worker. It is never an HTTP listener.
@@ -1024,7 +1024,7 @@ class NativeTradingAgentsDriver:
                 try:
                     data = await asyncio.wait_for(reader.readline(), timeout=5)
                     request = decode_wire_json(data)
-                    async with self._model_lease:
+                    async with model_lease:
                         if stopped:
                             raise DriverUnavailable("graph_already_stopped")
                         await rec.checkpoint_async()
@@ -1271,64 +1271,77 @@ class NativeTradingAgentsDriver:
         infer_options = {'mark_launch': mark_launch, 'timeout': timeout, 'role': role}
         if selected_facts_sha256 is not None:
             infer_options['selected_facts_sha256'] = selected_facts_sha256
-        inference = asyncio.create_task(asyncio.to_thread(self.transport.infer, messages, schema, **infer_options))
-        try:
-            response = await asyncio.shield(inference)
-        except asyncio.CancelledError as error:
-            interrupted = error
+        lease = None
+        acquire = getattr(budget, "acquire_selected_call_lease", None)
+        if budget_scope == "selected_research_llm" and callable(acquire):
             try:
-                # Cancellation still waits for the actual process. Preserve its
-                # returned accounting instead of discarding it after draining.
-                response = await wait_drained(inference)
+                lease = await drain_thread(acquire, receipt["id"], method_sha256=method_sha256,
+                                           cancel_check=rec.checkpoint)
+            except BaseException:
+                await drain_thread(budget.release, receipt["id"])
+                raise
+        try:
+            inference = asyncio.create_task(asyncio.to_thread(self.transport.infer, messages, schema, **infer_options))
+            try:
+                response = await asyncio.shield(inference)
+            except asyncio.CancelledError as error:
+                interrupted = error
+                try:
+                    # Cancellation still waits for the actual process. Preserve its
+                    # returned accounting instead of discarding it after draining.
+                    response = await wait_drained(inference)
+                except BaseException as error:
+                    failure = error
             except BaseException as error:
                 failure = error
-        except BaseException as error:
-            failure = error
-        outcome_error = interrupted or failure
-        if not launched:
-            await drain_thread(budget.release, receipt["id"])
-            raise outcome_error or DriverUnavailable("transport_did_not_start_accounted_call")
-        actual_usage, usage_observation = project_usage_evidence(response.get("usage") if isinstance(response, dict) else None)
-        usage_observation["terminal_evidence"] = "typed_terminal_response" if isinstance(response, dict) else "unobserved_transport_failure"
-        if isinstance(failure, codex_transport.TransportError):
-            usage_observation = failure.usage_observation
-        if actual_usage is None and isinstance(failure, codex_transport.TransportError) and failure.final_usage_verified:
-            actual_usage = project_usage_evidence(failure.usage)[0]
-        try:
-            if isinstance(response, dict) and isinstance(response.get("structured_output"), dict):
-                output_chars = len(canonical(response["structured_output"]))
-                output_sha = digest(response["structured_output"])
-            elif outcome_error is None:
-                raise DriverUnavailable("typed_response_unavailable")
-        except BaseException as error:
-            outcome_error = outcome_error or error
-        if usage_receipt_path is not None:
+            outcome_error = interrupted or failure
+            if not launched:
+                await drain_thread(budget.release, receipt["id"])
+                raise outcome_error or DriverUnavailable("transport_did_not_start_accounted_call")
+            actual_usage, usage_observation = project_usage_evidence(response.get("usage") if isinstance(response, dict) else None)
+            usage_observation["terminal_evidence"] = "typed_terminal_response" if isinstance(response, dict) else "unobserved_transport_failure"
+            if isinstance(failure, codex_transport.TransportError):
+                usage_observation = failure.usage_observation
+            if actual_usage is None and isinstance(failure, codex_transport.TransportError) and failure.final_usage_verified:
+                actual_usage = project_usage_evidence(failure.usage)[0]
             try:
-                await drain_thread(self._save_usage_receipt, usage_receipt_path, receipt=receipt, rec=rec,
-                    role=role, call_id=call_id, method_sha256=method_sha256, transport=method,
-                    response=response, failure=failure, usage=actual_usage,
-                    usage_observation=usage_observation, output_sha256=output_sha)
+                if isinstance(response, dict) and isinstance(response.get("structured_output"), dict):
+                    output_chars = len(canonical(response["structured_output"]))
+                    output_sha = digest(response["structured_output"])
+                elif outcome_error is None:
+                    raise DriverUnavailable("typed_response_unavailable")
             except BaseException as error:
                 outcome_error = outcome_error or error
-        # Original answers remain independently recoverable even if receipt
-        # storage fails. Neither failure may discard reported provider usage.
-        if capture_output is not None and isinstance(response, dict) and isinstance(response.get("structured_output"), dict):
-            try:
-                await drain_thread(capture_output, response["structured_output"])
-            except BaseException as error:
-                outcome_error = outcome_error or error
-        # Only this idempotent DB operation retries on SQLite BUSY/LOCKED. The
-        # process and the metadata capture above are never replayed by retries.
-        await _lifecycle_db(budget.finish, receipt["id"], state="failed" if outcome_error else "succeeded",
-            usage=actual_usage, output_chars=output_chars, attempts=1,
-            **({"error_kind": type(outcome_error).__name__} if outcome_error else {}))
-        if outcome_error is not None:
-            raise outcome_error
-        await rec.add_async(name="TradingAgents " + role, input_summary="冻结公开资料与原图角色",
-                            output_summary="typed模型返回；语义未独立验证",
-                            duration_ms=round((monotonic() - started_at) * 1000), ok=True,
-                            llm={"usage_id": receipt["id"], "provider": method["provider"], "model": method["model"]})
-        return {**response, "call_id": call_id}
+            if usage_receipt_path is not None:
+                try:
+                    await drain_thread(self._save_usage_receipt, usage_receipt_path, receipt=receipt, rec=rec,
+                        role=role, call_id=call_id, method_sha256=method_sha256, transport=method,
+                        response=response, failure=failure, usage=actual_usage,
+                        usage_observation=usage_observation, output_sha256=output_sha)
+                except BaseException as error:
+                    outcome_error = outcome_error or error
+            # Original answers remain independently recoverable even if receipt
+            # storage fails. Neither failure may discard reported provider usage.
+            if capture_output is not None and isinstance(response, dict) and isinstance(response.get("structured_output"), dict):
+                try:
+                    await drain_thread(capture_output, response["structured_output"])
+                except BaseException as error:
+                    outcome_error = outcome_error or error
+            # Only this idempotent DB operation retries on SQLite BUSY/LOCKED. The
+            # process and the metadata capture above are never replayed by retries.
+            await _lifecycle_db(budget.finish, receipt["id"], state="failed" if outcome_error else "succeeded",
+                usage=actual_usage, output_chars=output_chars, attempts=1,
+                **({"error_kind": type(outcome_error).__name__} if outcome_error else {}))
+            if outcome_error is not None:
+                raise outcome_error
+            await rec.add_async(name="TradingAgents " + role, input_summary="冻结公开资料与原图角色",
+                                output_summary="typed模型返回；语义未独立验证",
+                                duration_ms=round((monotonic() - started_at) * 1000), ok=True,
+                                llm={"usage_id": receipt["id"], "provider": method["provider"], "model": method["model"]})
+            return {**response, "call_id": call_id}
+        finally:
+            if lease is not None:
+                lease.close()
 
 
 def _dependency_files(root):

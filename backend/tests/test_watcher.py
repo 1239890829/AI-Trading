@@ -10,6 +10,7 @@
 from __future__ import annotations
 
 import asyncio
+import pytest
 from types import SimpleNamespace as NS
 
 from app.picks import morning_brief, watcher
@@ -956,7 +957,8 @@ def test_snapshot_price_only_accepts_positive_number():
     assert watcher._snapshot_price(NS(snapshot_service=NS(snapshot=None)), "603330") is None
 
 
-def test_dispatch_alert_price_comes_from_price_semantics(monkeypatch):
+@pytest.mark.parametrize("certainty,expected", [(None, None), ("高", "高"), ("中", "中"), ("strong", None)])
+def test_dispatch_alert_price_comes_from_price_semantics(monkeypatch, certainty, expected):
     """端到端复刻 09-09 事故：可开 paper 的 `confirm` 告警不带 `meta["price"]` 时，
     台账 entry_price 与开仓价都必须回退**快照现价**，绝不可取 trigger_value。
 
@@ -987,7 +989,8 @@ def test_dispatch_alert_price_comes_from_price_semantics(monkeypatch):
         "symbol": "603330",
         "name": "奥士康",
         "text": "主力净流入 0.32 亿",
-        "meta": {"trigger_value": 0.32, "threshold": 0.3},  # 无 price 字段
+        "meta": {"trigger_value": 0.32, "threshold": 0.3,
+                 "certainty_level": certainty, "strength": 1.0},  # 不由满强度推导确定性
     }
     ok = asyncio.run(
         watcher.dispatch_alert(app, dict(alert), rule_provider=lambda sf: NS(id=1, channels="[]"))
@@ -996,6 +999,7 @@ def test_dispatch_alert_price_comes_from_price_semantics(monkeypatch):
     assert seen, "台账登记分支未走到（异常被 contextlib.suppress 吞掉时会假绿）"
     assert seen["entry_price"] == 71.2
     assert opened["price"] == 71.2
+    assert opened["certainty_level"] == expected
     assert seen["entry_price"] != 0.32 and opened["price"] != 0.32  # 事故值：净额不是价格
 
 

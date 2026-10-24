@@ -667,3 +667,48 @@ def test_imp025_ready_agenda_is_not_successful_execution(monkeypatch, tmp_path):
     out = at.get_task("agenda:2026-09-10")
     assert out["status"] == "needs_confirm"
     assert out["outcome"]["label"] == "待处理"
+
+
+def test_selected_research_runs_three_symbols_and_keeps_same_symbol_mutex(monkeypatch, tmp_path):
+    from app.core.config import settings
+    from app.services import tradingagents_research as research
+    _patch(monkeypatch, tmp_path)
+    wake_states = []
+    def wake(app):
+        wake_states.append([at.get_task(row["id"])["status"] for row in created_tasks])
+        return True
+    created_tasks = []
+    monkeypatch.setattr(research, "wake_selected_research", wake)
+    monkeypatch.setattr(settings, "tradingagents_research_authorization_digest", "a" * 64)
+    monkeypatch.setattr(settings, "tradingagents_research_concurrency", 3)
+    async def exercise():
+        release = asyncio.Event()
+        active, peak = set(), [0]
+        all_started = asyncio.Event()
+        async def handler(rec, params, app):
+            active.add(params["symbol"])
+            peak[0] = max(peak[0], len(active))
+            if len(active) == 3:
+                all_started.set()
+            await release.wait()
+            active.remove(params["symbol"])
+            return {"kind": "tradingagents_research", "symbol": params["symbol"]}
+        monkeypatch.setitem(at._HANDLERS, "tradingagents_research", handler)
+        created = []
+        for symbol in ("600001", "600002", "600003"):
+            created.append(await at.create_task_async("tradingagents_research", {"symbol": symbol}))
+            created_tasks.append(created[-1])
+        with pytest.raises(RuntimeError):
+            await at.create_task_async("tradingagents_research", {"symbol": "600001"})
+        with pytest.raises(RuntimeError):
+            await at.create_task_async("tradingagents_research", {"symbol": "600004"})
+        owners = [at._HANDLES[row["id"]] for row in created]
+        await asyncio.wait_for(all_started.wait(), 2)
+        assert peak[0] == 3
+        release.set()
+        await asyncio.gather(*owners)
+        assert all(at.get_task(row["id"])["status"] == "succeeded" for row in created)
+        assert not any(key.startswith("tradingagents_research") for key in at._RUNNING)
+        assert len(wake_states) == 3 and all("succeeded" in states for states in wake_states)
+        assert wake_states[-1] == ["succeeded"] * 3
+    asyncio.run(exercise())

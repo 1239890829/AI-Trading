@@ -13,6 +13,7 @@ import {symbolDetailClick, useSymbolDetail} from "@/components/detail/symbol-det
 import {ChannelStatus} from "./channel-status";
 import type {NewsModalItem} from "@/components/news-modal";
 import {StockAttributionPanel} from "@/components/detail/attribution-evidence";
+import {PaperSelectionAction} from "@/components/picks/paper-selection-action";
 import {TradingAgentsResearchPanel} from "@/components/detail/tradingagents-research-panel";
 import {SELECTION_SCORE_LABELS, readSelectionMetrics, type SelectionSummary} from "@/components/detail/selection-decision-explorer";
 
@@ -118,7 +119,7 @@ function selectionContext(item: NotificationItem) {
     scores: SELECTION_SCORE_LABELS.some(([key]) => key in archivedScores) ? SELECTION_SCORE_LABELS.map(([key, label]) => ({key, label: label === "基本" ? "基本面" : label,
       value: typeof archivedScores[key] === "number" && Number.isFinite(archivedScores[key]) && archivedScores[key] >= 0 && archivedScores[key] <= 100 ? archivedScores[key] as number : null, maximum: 100,
       state: text(object(archivedStates[key]).state) || "unknown", basis: text(object(archivedStates[key]).reason) || text(bases[key])})) : undefined};
-  return {identity: `${refs[0].source_id ?? ""}:${refs[0].source_version ?? ""}`, summary, events: [...events.values()], asOf: asOf && /(?:Z|[+-]\d{2}:\d{2})$/.test(asOf)
+  return {paperContext: refs[0].trade_date && refs[0].source_version ? {ref: `${refs[0].selection_source}:${refs[0].trade_date}:${item.symbol}`, version: refs[0].source_version} : null, identity: `${refs[0].source_id ?? ""}:${refs[0].source_version ?? ""}`, summary, events: [...events.values()], asOf: asOf && /(?:Z|[+-]\d{2}:\d{2})$/.test(asOf)
     && Number.isFinite(Date.parse(asOf)) ? asOf : undefined};
 }
 
@@ -140,7 +141,8 @@ export function NotificationDetailContent({item, active = true, onClose, onOpenN
       {active && selection && <section aria-label="原选股对应的公司与研究" className="min-w-0 border-t border-zinc-200 pt-3 dark:border-zinc-800">
         <StockAttributionPanel key={`${item.id}:${item.symbol}:${selection.identity}`} symbol={item.symbol} title="公司关联与依据" defaultExpanded bounded={false} concise
           responseAsOf={selection.asOf} recordedRefs={selection.events} selectionContext selectionSummary={selection.summary}/>
-        <TradingAgentsResearchPanel key={`${item.id}:${item.symbol}:research`} symbol={item.symbol!} compact allowStart={false}/>
+        <TradingAgentsResearchPanel key={`${item.id}:${item.symbol}:${item.arrivals?.findLast(arrival=>arrival.phase==="research_ready")?.version ?? "research"}`} symbol={item.symbol!} compact allowStart={false}/>
+        {selection.paperContext && <PaperSelectionAction key={selection.identity} symbol={item.symbol!} selectionRef={selection.paperContext.ref} sourceVersion={selection.paperContext.version}/>}
       </section>}
       <ResearchDisclosure identity={`${item.id}:${JSON.stringify(item)}`} label="完整依据与研究记录">
       <section aria-label="原提醒内容"><h4 className="mb-1 font-medium">提醒依据</h4><p className="whitespace-pre-wrap">{visibleProse(item.body) || "原提醒内容未提供。"}</p></section>

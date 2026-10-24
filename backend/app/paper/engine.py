@@ -22,11 +22,12 @@ from datetime import date, datetime
 from sqlalchemy import text
 from sqlalchemy.orm import Session
 
-from app.core.bjtime import beijing_today
+from app.core.bjtime import beijing_now, beijing_today
 from app.core.db import utcnow
 from app.models.paper import PaperAccount, PaperOrder, PaperPosition, SCOPE_HUNTING_SHADOW
 
 log = logging.getLogger(__name__)
+DEFAULT_INITIAL_CASH = 1_000_000.0
 
 
 def _as_ymd(value) -> str:
@@ -164,8 +165,8 @@ class PaperTradingEngine:
         #:   拦自损卖出（exit_engine 硬止损走本引擎卖出路径）只会放大风险；
         #: - position_engine 的买点自动执行同走 main 买入，一并通过本闸
         #:   （其拒绝路径已优雅呈现「撮合拒绝：<原因>」）。
-        #: 挂单轮询（match_pending）**不**重复风控：资金已在下单时冻结，
-        #: 撮合期再否决会留下既不可成交也难自解释的冻结挂单——风控时点是下单。
+        #: 挂单成交前重新核当前风控。临时阻断保留原冻结额与pending，
+        #: 原因留在订单；取消仍沿原路径退款，预检不构成永久执行资格。
         self._risk_engine = risk_engine
 
     # ---------- 账户 ----------
@@ -183,7 +184,7 @@ class PaperTradingEngine:
         """
         acc = db.query(PaperAccount).filter(PaperAccount.scope == self.scope).first()
         if acc is None:
-            acc = PaperAccount(scope=self.scope, cash=1_000_000.0, initial_cash=1_000_000.0)
+            acc = PaperAccount(scope=self.scope, cash=DEFAULT_INITIAL_CASH, initial_cash=DEFAULT_INITIAL_CASH)
             db.add(acc)
             db.flush()
         return acc
@@ -226,7 +227,7 @@ class PaperTradingEngine:
             db.query(PaperOrder).filter(PaperOrder.scope == self.scope).delete()
             acc = db.query(PaperAccount).filter(PaperAccount.scope == self.scope).first()
             if acc is None:
-                acc = PaperAccount(scope=self.scope, cash=1_000_000.0, initial_cash=1_000_000.0)
+                acc = PaperAccount(scope=self.scope, cash=DEFAULT_INITIAL_CASH, initial_cash=DEFAULT_INITIAL_CASH)
             if initial_cash is not None and initial_cash > 0:
                 acc.initial_cash = float(initial_cash)
             acc.cash = acc.initial_cash
@@ -383,7 +384,7 @@ class PaperTradingEngine:
 
     # ---------- 风控硬拦截（§6.5b #2） ----------
 
-    def risk_check_context(self, hub) -> tuple[dict, list[dict]]:
+    def risk_check_context(self, hub, *, initialize: bool = True) -> tuple[dict, list[dict]]:
         """风控预检的（账户, 持仓）上下文——**与 /api/risk/check-order 同口径的单点**。
 
         取价 = hub 全量报价，缺实时价回退成本价（绝不回退「本次订单价」——
@@ -407,14 +408,15 @@ class PaperTradingEngine:
             (p.get("last_price") or p.get("cost_price") or 0) * p.get("quantity", 0)
             for p in positions
         )
-        account = self.account_summary(market_value)
+        account = self.account_summary(market_value, initialize=initialize)
         account["total_equity"] = account["total"]
         return account, positions
 
-    async def _risk_block_reason(self, symbol: str, side: str, price: float, qty: int, quote) -> str | None:
+    async def _risk_block_reason(self, symbol: str, side: str, price: float, qty: int, quote,
+                                 *, matching_order_id: int | None = None, reserved_cash: float = 0.0) -> str | None:
         """风控硬拦截判据。返回 None = 放行，否则返回中文拒单原因。
 
-        边界（见构造函数注释）：main/hunting_shadow 账户 + 仅买入；挂单撮合期不复查。
+        边界（见构造函数注释）：main/hunting_shadow 账户 + 仅买入；挂单成交前重核。
         市场状态用的是 risk_engine 的**缓存态**（调度器每 60s 刷新，
         与 UI 预检看到的同一个值）；预检自身异常按**保守拒单**处理——
         不知道订单是否安全时，模拟盘宁可拒并说明原因（红线 2 的精神：
@@ -429,9 +431,29 @@ class PaperTradingEngine:
         if self.scope == SCOPE_HUNTING_SHADOW and re_ is None:
             return "猎场影子风控未装配，保守拒单"
         if re_ is None:
-            return None
+            return "模拟风控未装配，保守拒单"
         try:
-            account, positions = self.risk_check_context(re_.hub)
+            account, positions = self.risk_check_context(re_.hub, initialize=False)
+            if not account.get("account_created", True):
+                if positions or self.frozen_cash():
+                    return "模拟账户缺失但有活动账本，需先维护恢复"
+                # The original default is an evaluation input, not a persisted
+                # balance. Only the qualified financial transaction creates it.
+                account = {**account, "cash": DEFAULT_INITIAL_CASH, "initial_cash": DEFAULT_INITIAL_CASH,
+                           "total": DEFAULT_INITIAL_CASH, "total_equity": DEFAULT_INITIAL_CASH,
+                           "frozen_cash": 0.0}
+            if matching_order_id is not None:
+                # This order's own reservation is available to its fill, never a
+                # second deduction. Other live buy intents still occupy exposure.
+                account = {**account, "cash": account.get("cash", 0) + reserved_cash}
+                positions = list(positions)
+                with self._sf() as pending_db:
+                    for pending in pending_db.query(PaperOrder).filter(PaperOrder.scope == self.scope,
+                            PaperOrder.status == "pending", PaperOrder.side == "buy",
+                            PaperOrder.id != matching_order_id):
+                        positions.append({"symbol": pending.symbol, "quantity": pending.quantity,
+                                          "available": 0, "last_price": pending.price,
+                                          "cost_price": pending.price})
             result = re_.check_order(
                 symbol=symbol,
                 side=side,
@@ -450,6 +472,29 @@ class PaperTradingEngine:
         reason = "；".join(result.get("reasons") or []) or "未通过风控预检"
         warnings = "；".join(result.get("warnings") or [])
         return f"风控拦截：{reason}" + (f"（警告：{warnings}）" if warnings else "")
+
+    async def execution_context_issue(self, symbol: str, quote, *, days=None):
+        """Current action/matching context. Does not initialize or settle funds."""
+        return self._execution_issue(symbol, quote, await self._execution_days(days))
+
+    async def _execution_days(self, days=None):
+        """Resolve one calendar snapshot; write-time checks do not fetch it again."""
+        from app.paper.execution_guard import known_trade_days
+        if days is None and self._tdays_fn is not None:
+            try:
+                days = await self._tdays_fn()
+            except Exception:
+                days = []
+        if days is not None:
+            days = sorted({datetime.strptime(day, "%Y%m%d").date()
+                           for day in (_as_ymd(value) for value in days) if day})
+        return known_trade_days() if days is None else days
+
+    @staticmethod
+    def _execution_issue(symbol, quote, days):
+        from app.paper.execution_guard import quote_issue, window_issue
+        now = beijing_now()
+        return window_issue(now, days) or quote_issue(quote, symbol, now)
 
     # ---------- 下单 ----------
 
@@ -476,6 +521,15 @@ class PaperTradingEngine:
             return reject("停牌或无行情，无法交易")
         if side == "buy" and qty % 100 != 0:
             return reject("买入数量须为100股整数倍")
+        execution_days = None
+        if self.scope in {"main", SCOPE_HUNTING_SHADOW}:
+            # Every live-simulation entry path, including automatic and unbound
+            # maintenance actions, shares this gate before any financial Session.
+            # The research shadow retains its separately declared 09:26 protocol.
+            execution_days = await self._execution_days()
+            issue = self._execution_issue(symbol, quote, execution_days)
+            if issue:
+                return reject(issue[1])
 
         # 涨跌停硬拦截（红线 5）：**缺限价一律拒单，不做静默放行**。
         # 限价缺失是**会发生的状态**（补价依赖链上腾讯单源，曾真实被封），
@@ -492,11 +546,19 @@ class PaperTradingEngine:
             # 而它是 `quantity - frozen_today` 的派生值——不先解冻就会把昨日买入
             # 误判成"当日买入不可卖"。
             await self._unfreeze(db)
+            if self.scope in {"main", SCOPE_HUNTING_SHADOW}:
+                issue = self._execution_issue(symbol, quote, execution_days)
+                if issue:
+                    return reject(issue[1])
             # 风控硬拦截（§6.5b #2）：main/hunting_shadow 买入。放在账户级资金校验之前——
             # 与涨跌停拦截同理：「该不该买」不应因「买不买得起」不满足而不被求值。
             risk_blocked = await self._risk_block_reason(symbol, side, price, qty, quote)
             if risk_blocked:
                 return reject(risk_blocked)
+            if self.scope in {"main", SCOPE_HUNTING_SHADOW}:
+                issue = self._execution_issue(symbol, quote, execution_days)
+                if issue:
+                    return reject(issue[1])
             # Keep initialization flush after the calendar/risk waits. A missing
             # account INSERT otherwise holds SQLite's write lock across await.
             # Balance still belongs to this Session's read/modify/commit boundary.
@@ -624,36 +686,86 @@ class PaperTradingEngine:
             try:
                 quote = await self._quote_fn(sym)
             except Exception:
+                # Source failure does not enter a financial write transaction;
+                # preserve the pending order for the next genuine quote.
                 continue
-            if not is_valid_price(getattr(quote, "price", None)):
+            execution_days = (await self._execution_days()
+                              if self.scope in {"main", SCOPE_HUNTING_SHADOW} else None)
+            issue = (self._execution_issue(sym, quote, execution_days)
+                     if self.scope in {"main", SCOPE_HUNTING_SHADOW} else None)
+            if not is_valid_price(getattr(quote, "price", None)) or issue:
                 # R05：原判据只有 `quote.price is None`，价格为 **0** 时会进来
                 # 并按 0 元撮合成交（现金只入卖出费用差额 / 买入白得持仓）。
                 # 无效价一律跳过本轮，挂单保留待下一轮（行情恢复后可正常成交）。
-                log.warning("挂单撮合跳过 %s：行情价无效（%r）", sym, getattr(quote, "price", None))
+                reason = issue[1] if issue else "行情价无效，暂不撮合"
+                await asyncio.to_thread(self._record_pending_reason, sym, reason)
                 continue
             with self._sf() as db:
+                changed_orders = []
                 for o in db.query(PaperOrder).filter(
                     PaperOrder.status == "pending", PaperOrder.scope == self.scope,
                     PaperOrder.symbol == sym,
                 ).all():
-                    acc = self._account(db)
                     # 成交前二次校验涨跌停（红线 5）：挂单可能是在股价冲上涨停**之前**
                     # 挂下的，`place_order` 的那次校验代表不了此刻。缺限价时同样不成交
                     # ——静默按现价成交等于在涨停板买入/在跌停板卖出。
                     blocked = limit_block_reason(quote, o.side, quote.price)
                     if blocked:
-                        log.info("挂单暂不撮合 %s %s：%s", o.side, sym, blocked)
+                        if o.reason != blocked:
+                            o.reason = blocked
+                        if db.dirty:
+                            db.commit()
                         continue
+                    await self._unfreeze(db)
+                    risk_blocked = ("模拟风控未装配，暂不撮合" if o.side == "buy"
+                                    and self.scope in {"main", SCOPE_HUNTING_SHADOW}
+                                    and self._risk_engine is None else
+                                    await self._risk_block_reason(sym, o.side, quote.price, o.quantity, quote,
+                                        matching_order_id=o.id,
+                                        reserved_cash=buy_freeze_amount(o.price, o.quantity) if o.side == "buy" else 0.0))
+                    if risk_blocked:
+                        if o.reason != risk_blocked:
+                            o.reason = risk_blocked
+                        if db.dirty:
+                            db.commit()
+                        continue
+                    if self.scope in {"main", SCOPE_HUNTING_SHADOW}:
+                        issue = self._execution_issue(sym, quote, execution_days)
+                        if issue:
+                            o.reason = issue[1]
+                            db.commit()
+                            continue
+                    if o.reason:
+                        o.reason = None
+                        db.commit()
                     if o.side == "buy" and o.price >= quote.price:
                         # 先归还下单时的冻结额，再由 `_fill` 扣本次实付。二者配对，
                         # 缺一即**重复扣款**（冻结额永不归还）——见 buy_freeze_amount。
                         # 释放对「被拒单」同样必要：`_fill` 若因资金不足拒单，
                         # 用户应拿回冻结额，而不是钱被扣掉且单子作废。
+                        acc = self._account(db)
                         acc.cash += buy_freeze_amount(o.price, o.quantity)
                         await self._fill(db, acc, o, quote.price, o.quantity)
+                        if o.status != "pending":
+                            changed_orders.append(o.id)
                     elif o.side == "sell" and o.price <= quote.price:
+                        acc = self._account(db)
                         await self._fill_sell(db, acc, o, quote.price, o.quantity)
+                        if o.status != "pending":
+                            changed_orders.append(o.id)
+            from app.paper.actions import record_action_status
+            for order_id in changed_orders:
+                await record_action_status(self, None, None, order_id)
         return await asyncio.to_thread(self._pending_order_count)
+
+    def _record_pending_reason(self, symbol: str, reason: str) -> None:
+        with self._sf() as db:
+            for order in db.query(PaperOrder).filter(PaperOrder.scope == self.scope,
+                    PaperOrder.status == "pending", PaperOrder.symbol == symbol):
+                if order.reason != reason:
+                    order.reason = reason
+            if db.dirty:
+                db.commit()
 
     def _pending_order_count(self) -> int:
         with self._sf() as db:

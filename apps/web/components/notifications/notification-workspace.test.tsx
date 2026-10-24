@@ -4,8 +4,10 @@ import {getNotifications, getStockAttribution, type NotificationItem, type Notif
 import {NotificationBell} from "./notification-drawer";
 import {__resetPrefsCache} from "@/lib/notification-read";
 import {SymbolDetailCtx} from "@/components/detail/symbol-detail-context";
+import type {TradingAgentsResearchView} from "@/lib/api/agent";
 import {InspectionContext} from "@/components/inspection/inspection-context";
 
+const savedResearch=(symbol:string):TradingAgentsResearchView=>({symbol,startup_conditions_not_checked:true,enabled:false,executable:false,blockers:[],required_model_slots:null,budget:null,admission:{state:"not_admitted",method_sha256:null},verification:"unverified_full_graph_research",production_eligible:false,latest:null,task:null});
 let compact = false;
 let payload: NotificationsPayload;
 const research = vi.hoisted(() => ({read:vi.fn(), start:vi.fn()}));
@@ -32,6 +34,7 @@ async function open() {
 }
 beforeEach(() => {
   compact=false;localStorage.clear();__resetPrefsCache();
+  research.read.mockImplementation(async (symbol:string)=>savedResearch(symbol));
   payload={items:[item("A","600127"),item("B","600519")],count:2,generated_at:"2026-10-23T02:01:00Z",news_min_score:60,policy:"stock_opportunities_only",errors:null};
   vi.stubGlobal("matchMedia",(query:string)=>({matches:query.includes("max-width") && compact,addEventListener:vi.fn(),removeEventListener:vi.fn()}));
 });
@@ -45,7 +48,7 @@ it("restores the original narrow list cards and opens the original detail drawer
   const rows=screen.getAllByTestId("notification-row");
   expect(rows[0].className).toContain("rounded-lg");
   fireEvent.mouseEnter(rows[0]);fireEvent.focus(rows[0]);
-  expect(getStockAttribution).not.toHaveBeenCalled();
+  expect(getStockAttribution).not.toHaveBeenCalled();expect(research.read).not.toHaveBeenCalled();
   fireEvent.click(within(rows[0]).getByTestId("notification-judgment"));
   const detail=await screen.findByRole("dialog",{name:"原入选A"});
   expect(drawer.contains(detail)).toBe(false);
@@ -53,7 +56,7 @@ it("restores the original narrow list cards and opens the original detail drawer
   expect(getStockAttribution).toHaveBeenLastCalledWith("600127",{poolDate:undefined,responseAsOf:"2026-10-23T01:59:00Z"});
   fireEvent.click(within(rows[0]).getByTestId("notification-judgment"));
   expect(getStockAttribution).toHaveBeenCalledTimes(1);
-  expect(research.read).not.toHaveBeenCalled();expect(research.start).not.toHaveBeenCalled();
+  expect(research.read).toHaveBeenCalledExactlyOnceWith("600127",{savedOnly:true});expect(research.start).not.toHaveBeenCalled();
 });
 
 it.each([false,true])("preserves keyboard selection, IME and row focus after detail close at compact=%s",async(narrow)=>{
@@ -61,13 +64,14 @@ it.each([false,true])("preserves keyboard selection, IME and row focus after det
   const rows=screen.getAllByTestId("notification-row");
   const first=within(rows[0]).getByRole("button",{name:/原入选A/});
   first.focus();fireEvent.keyDown(first,{key:"ArrowDown",isComposing:true});
-  expect(getStockAttribution).not.toHaveBeenCalled();
+  expect(getStockAttribution).not.toHaveBeenCalled();expect(research.read).not.toHaveBeenCalled();
   fireEvent.keyDown(first,{key:"ArrowDown"});
   const detail=await screen.findByRole("dialog",{name:"原入选B"});
   await waitFor(()=>expect(detail.contains(document.activeElement)).toBe(true));
   fireEvent.click(within(detail).getByRole("button",{name:"关闭"}));
   await waitFor(()=>expect(document.activeElement).toBe(within(rows[1]).getByRole("button",{name:/原入选B/})));
   expect(getStockAttribution).toHaveBeenCalledTimes(1);
+  expect(research.read).toHaveBeenCalledExactlyOnceWith("600519",{savedOnly:true});expect(research.start).not.toHaveBeenCalled();
 });
 
 it("retains saved evidence and all original conditions in the original report disclosure",async()=>{
@@ -80,7 +84,7 @@ it("retains saved evidence and all original conditions in the original report di
   expect(detail.textContent).toContain("价格资料缺失");
   expect(detail.textContent).toContain("原消息撤回即失效");
   expect(detail.textContent).toContain("version:A");
-  expect(research.read).not.toHaveBeenCalled();expect(research.start).not.toHaveBeenCalled();
+  expect(research.read).toHaveBeenCalledExactlyOnceWith("600127",{savedOnly:true});expect(research.start).not.toHaveBeenCalled();
 });
 
 it("keeps a failed refresh visible in the original detail without rereading the company",async()=>{
@@ -110,7 +114,7 @@ it.each(["查看行情", "查看原文", "查看此版本复盘"])("detail actio
   if(action==="查看此版本复盘") expect(destinations.inspection).toHaveBeenCalledWith({kind:"selection-review",date:"2026-10-23",version:"version:A",motionOrigin:null});
   if(action==="查看原文") expect(screen.getByRole("region",{name:"原文阅读"}).textContent).toBe("原入选A");
   expect(getStockAttribution).toHaveBeenCalledTimes(1);
-  expect(research.read).not.toHaveBeenCalled();expect(research.start).not.toHaveBeenCalled();
+  expect(research.read).toHaveBeenCalledExactlyOnceWith("600127",{savedOnly:true});expect(research.start).not.toHaveBeenCalled();
 });
 
 it("pauses the covered list during reading and rebinds its original scroll owner without another request",async()=>{

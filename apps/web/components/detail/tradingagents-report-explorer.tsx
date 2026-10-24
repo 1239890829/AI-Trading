@@ -4,6 +4,7 @@ import {useId, useState, type KeyboardEvent} from "react";
 import type {TradingAgentsResearchReport, TradingAgentsReportKey} from "@/lib/api/agent";
 import {originalRating, researchExcerpt, researchField} from "@/lib/research-presentation";
 import styles from "./tradingagents-report-explorer.module.css";
+import {TradingAgentsRoleReader} from "./tradingagents-role-reader";
 
 const REPORTS: {key: TradingAgentsReportKey; label: string; group: string}[] = [
   {key: "market_report", label: "行情", group: "分析"}, {key: "sentiment_report", label: "情绪", group: "分析"},
@@ -14,6 +15,11 @@ const REPORTS: {key: TradingAgentsReportKey; label: string; group: string}[] = [
 
 /** Seven saved reports become a comparison workspace; no model or new verdict. */
 export function TradingAgentsReportExplorer({report}: {report: TradingAgentsResearchReport}) {
+  if (report.roles?.length) return <TradingAgentsRoleReader report={report} originals={<SavedReportExplorer report={report}/>}/>;
+  return <SavedReportExplorer report={report}/>;
+}
+
+function SavedReportExplorer({report}: {report: TradingAgentsResearchReport}) {
   const id = useId();
   const [selected, setSelected] = useState<TradingAgentsReportKey>("final_trade_decision");
   const [compare, setCompare] = useState(false);

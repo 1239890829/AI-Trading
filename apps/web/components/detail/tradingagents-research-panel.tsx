@@ -12,8 +12,8 @@ const STATUS: Record<string, string> = {queued: "排队中", running: "执行中
 export function TradingAgentsResearchPanel({symbol, active = true, defaultOpen = false, allowStart = true, compact = false}: {
   symbol: string; active?: boolean; defaultOpen?: boolean; allowStart?: boolean; compact?: boolean;
 }) {
-  const [open, setOpen] = useState(defaultOpen);
-  const [readSymbol, setReadSymbol] = useState(defaultOpen ? symbol : null);
+  const [open, setOpen] = useState(defaultOpen || compact);
+  const [readSymbol, setReadSymbol] = useState(defaultOpen || compact ? symbol : null);
   if (!active || !/^\d{6}$/.test(symbol)) return null;
   return <section aria-label="TradingAgents完整研究" className="mt-3 min-w-0 border-t border-zinc-200 pt-2 text-xs dark:border-zinc-800">
     <button type="button" data-action="quiet" aria-expanded={open} onClick={() => {
@@ -26,7 +26,8 @@ export function TradingAgentsResearchPanel({symbol, active = true, defaultOpen =
 }
 
 function ResearchReader({symbol, allowStart, compact}: {symbol: string; allowStart: boolean; compact: boolean}) {
-  const resource = useResource(() => getTradingAgentsResearch(symbol), {key: symbol, marketHours: false, intervalMs: compact ? null : undefined});
+  const [startupChecked, setStartupChecked] = useState(false);
+  const resource = useResource(() => getTradingAgentsResearch(symbol, {savedOnly: !startupChecked}), {key: `${symbol}:${startupChecked ? "conditions" : "saved"}`, marketHours: false, intervalMs: null});
   const view = resource.data;
   const [submitting, setSubmitting] = useState(false);
   const [submitted, setSubmitted] = useState<AgentTask | null>(null);
@@ -47,7 +48,7 @@ function ResearchReader({symbol, allowStart, compact}: {symbol: string; allowSta
   }, [pending, readError, refresh, activeTask, receiptPending, task?.status]);
 
   async function start() {
-    if (busy.current || !view?.executable || resource.pending || resource.error || activeTask || receiptPending || uncertain || view.task_read_unavailable) return;
+    if (!startupChecked || busy.current || !view?.executable || resource.pending || resource.error || activeTask || receiptPending || uncertain || view.task_read_unavailable) return;
     busy.current = true;
     setSubmitting(true);
     setError(null);
@@ -69,7 +70,7 @@ function ResearchReader({symbol, allowStart, compact}: {symbol: string; allowSta
   const selectedResearch = view?.admission.state === "research_only_authorized";
   const methodChanged = report && view?.admission.method_sha256 && report.method_sha256 !== view.admission.method_sha256;
   const runtimeConditions = view && <>
-    <p>{resource.error ? "启动条件读取失败，当前资格未确认" : resource.pending ? "正在校准启动条件，暂不能启动" : selectedResearch ? "已授权入选后完整研究；后台按真实入选记录承接，不代表选股或投资效果已通过验证" : `${view.enabled ? "研究功能已配置" : "当前未启用完整研究"} · ${view.executable ? "启动条件当前满足，仍需显式提交" : "当前不能启动"}`}。</p>
+    <p>{resource.error ? "启动条件读取失败，当前资格未确认" : resource.pending ? "正在读取保存结果" : view.startup_conditions_not_checked ? "只读已保存结果；启动条件尚未检查" : selectedResearch ? "已授权入选后完整研究；后台按真实入选记录承接，不代表选股或投资效果已通过验证" : `${view.enabled ? "研究功能已配置" : "当前未启用完整研究"} · ${view.executable ? "启动条件当前满足，仍需显式提交" : "当前不能启动"}`}。</p>
     {view.blockers.length > 0 && <details><summary className="cursor-pointer">查看启动阻断原因（{view.blockers.length}项）</summary><ul className="list-disc space-y-1 pl-4">{view.blockers.map((item, index) => <li key={`${item.code}:${index}`}>{item.message}</li>)}</ul></details>}
     {selectedResearch && <p>只研究真正入选股；复用同次入选的已有任务和报告，行情刷新不会重复生成。</p>}
   </>;
@@ -82,7 +83,7 @@ function ResearchReader({symbol, allowStart, compact}: {symbol: string; allowSta
     {resource.error != null && <p role="alert" className="text-amber-800 dark:text-amber-300">完整研究读取失败。{report ? "保留本股上次读取报告，当前状态未确认。" : "尚不能确认是否有已保存报告。"}</p>}
     {!view && resource.pending && <p role="status">正在读取 {symbol} 的完整研究…</p>}
     {view && <>
-      {!compact && runtimeConditions}
+      {!compact && <details><summary className="cursor-pointer">运行条件</summary>{runtimeConditions}</details>}
       {view.task_read_unavailable && <p role="alert">任务状态读取失败，不能确认是否仍有研究在运行。</p>}
       {task && (!compact || task.error || canceling || task.status === "succeeded" && !report) && <p role="status">本股最近任务{resource.error ? "（上次读取）" : ""}：{canceling ? "取消请求已记录，等待当前步骤结束" : STATUS[task.status] ?? "状态未知"}{task.error ? ` · ${task.error.message}（${task.error.code}）` : ""}。{task.status === "succeeded" && !report ? "尚无可读取的完整七报告，不能据任务状态当作研究通过。" : ""}</p>}
       {receiptPending && <p role="status">任务已提交，持久状态待校准；不会重复提交。</p>}
@@ -96,6 +97,7 @@ function ResearchReader({symbol, allowStart, compact}: {symbol: string; allowSta
         {lineage && lineage.inherited_unknown_usage_count > 0 && <p role="note" aria-label="研究用量缺口" className="text-amber-800 dark:text-amber-300">仍有{lineage.inherited_unknown_usage_count}次历史用量未知，总用量与费用不完整。</p>}
         {!report.generated_today && <p className="text-amber-800 dark:text-amber-300">历史生成报告，不代表今天已重新判读。</p>}
         {methodChanged && <p className="text-amber-800 dark:text-amber-300">报告方法与当前执行器不同，仅供历史阅读。</p>}
+        {report.role_projection_state === "unavailable" && <p role="status">角色原答暂不可读，七份保存报告仍可核对。</p>}
         <TradingAgentsReportExplorer key={report.run_id} report={report}/>
         <details><summary className="cursor-pointer">报告版本与核验身份</summary><p className="break-all">报告方法：{report.method_sha256}<br/>上游：{report.upstream_sha}<br/>输入：{report.input_sha256}<br/>核验身份：完整原图未验证研究；原答与结论仍待复核。</p>{lineage && <p aria-label="恢复任务与方法来源" className="break-all">原任务：{lineage.source_task_id}<br/>原运行：{lineage.source_run_id}<br/>接续任务：{lineage.recovery_task_id}<br/>原方法：{lineage.source_method_sha256}<br/>接续方法：{lineage.recovery_method_sha256}<br/>新增调用编号：{lineage.new_call_from}–{lineage.new_call_to}</p>}{compact && <p>同伴释义待审：{report.review_summary.peer_review_required}项。尚无独立人工验收，不代表投资正确率。</p>}</details>
 
@@ -105,7 +107,8 @@ function ResearchReader({symbol, allowStart, compact}: {symbol: string; allowSta
     {error && <p role="alert" className="text-amber-800 dark:text-amber-300">{error.message}。请先核对任务状态；提交失败不表示已执行研究。</p>}
     <div className="flex flex-wrap gap-2">
       <button type="button" data-action="secondary" disabled={resource.pending || submitting} onClick={resource.refresh}>重新读取研究</button>
-      {allowStart && <button type="button" data-action="command" disabled={!view?.executable || resource.pending || resource.error != null || submitting || activeTask || receiptPending || uncertain || view?.task_read_unavailable} onClick={() => void start()}>{submitting ? "正在提交…" : "显式启动完整研究"}</button>}
+      {allowStart && !startupChecked && <button type="button" data-action="quiet" disabled={resource.pending} onClick={()=>setStartupChecked(true)}>检查启动条件</button>}
+      {allowStart && <button type="button" data-action="command" disabled={!startupChecked || !view?.executable || resource.pending || resource.error != null || submitting || activeTask || receiptPending || uncertain || view?.task_read_unavailable} onClick={() => void start()}>{submitting ? "正在提交…" : "显式启动完整研究"}</button>}
       {allowStart && <a href="/agent?area=maintenance&tab=tasks" data-action="quiet">任务中心查看或取消</a>}
     </div>
   </div>;

@@ -570,7 +570,7 @@ def _new_horizon_outcome(
 
 def ensure_outcome_horizons(
     trade_date: str, trading_days: list[date], session_factory=None, *,
-    include_deferred: bool = True,
+    include_deferred: bool = True, symbols: set[str] | None = None,
 ) -> dict:
     """Ensure D1/D3/D5 identities without rewriting decision snapshots.
 
@@ -585,6 +585,8 @@ def ensure_outcome_horizons(
     total_snapshots = 0
     with sf() as db:
         base_where = OpportunityDecisionSnapshot.trade_date == trade_date
+        if symbols is not None:
+            base_where = and_(base_where, OpportunityDecisionSnapshot.symbol.in_(symbols))
         if include_deferred:
             snapshots = db.execute(
                 select(OpportunityDecisionSnapshot).where(base_where)
@@ -1291,6 +1293,7 @@ def label_d0_paths(
     trade_date: str, minute_by_symbol: dict[str, list[Any]], *,
     first_seal_by_symbol: dict[str, str | None] | None = None,
     limit_pool_known: bool = False, session_factory=None, include_deferred: bool = False,
+    symbols: set[str] | None = None,
 ) -> dict[str, Any]:
     """Attach D0 post-decision path facts without changing close labels or snapshots."""
     sf = session_factory or get_session_factory()
@@ -1305,6 +1308,7 @@ def label_d0_paths(
                 OpportunityDecisionSnapshot.trade_date == trade_date,
                 OpportunityOutcomeLabel.horizon == OUTCOME_HORIZON,
                 OpportunityOutcomeLabel.path_state.in_(("unknown", "pending", "deferred")),
+                *([OpportunityDecisionSnapshot.symbol.in_(symbols)] if symbols is not None else []),
             )
         ).all()
         for outcome, snapshot in rows:
@@ -1526,7 +1530,7 @@ def label_cross_day_paths(
     trading_days: list[date],
     price_basis_by_key: dict[tuple[str, str], tuple[float, str]],
     session_factory=None, *,
-    horizons: Iterable[str] = FUTURE_OUTCOME_HORIZONS,
+    horizons: Iterable[str] = FUTURE_OUTCOME_HORIZONS, symbols: set[str] | None = None,
 ) -> dict[str, Any]:
     """Attach selected-only D1/D3/D5 cumulative path facts for one exact target date."""
     sf = session_factory or get_session_factory()
@@ -1544,6 +1548,7 @@ def label_cross_day_paths(
                 OpportunityOutcomeLabel.horizon.in_(wanted),
                 _selected_outcome_sql(),
                 OpportunityOutcomeLabel.path_state.in_(("not_started", "unknown", "pending")),
+                *([OpportunityDecisionSnapshot.symbol.in_(symbols)] if symbols is not None else []),
             )
         ).all()
         snapshot_ids = [snapshot.snapshot_id for _outcome, snapshot in rows]
@@ -1890,6 +1895,7 @@ def label_due_outcomes(
     target_date: str, close_by_symbol: dict[str, float], session_factory=None, *,
     price_basis_by_key: dict[tuple[str, str], tuple[float, str]],
     include_deferred: bool = False, horizons: Iterable[str] = FUTURE_OUTCOME_HORIZONS,
+    symbols: set[str] | None = None,
 ) -> dict:
     """Label D1/D3/D5 rows due on an exact target trading date."""
     sf = session_factory or get_session_factory()
@@ -1904,6 +1910,7 @@ def label_due_outcomes(
                 OpportunityOutcomeLabel.target_date == target_date,
                 OpportunityOutcomeLabel.horizon.in_(wanted),
                 OpportunityOutcomeLabel.state.in_(states),
+                *([OpportunityDecisionSnapshot.symbol.in_(symbols)] if symbols is not None else []),
             )
         ).all()
         counts = _label_outcome_rows(rows, close_by_symbol, price_basis_by_key)
@@ -1932,7 +1939,7 @@ def pending_symbols(
 def label_trade_date(
     trade_date: str, close_by_symbol: dict[str, float], session_factory=None, *,
     price_basis_by_key: dict[tuple[str, str], tuple[float, str]],
-    include_deferred: bool = False, batch_size: int | None = None,
+    include_deferred: bool = False, batch_size: int | None = None, symbols: set[str] | None = None,
 ) -> dict:
     """Attach D0 qfq-basis labels; missing close/basis stays pending and retryable."""
     if batch_size is not None and batch_size < 1:
@@ -1953,6 +1960,7 @@ def label_trade_date(
                     OpportunityDecisionSnapshot.trade_date == trade_date,
                     OpportunityOutcomeLabel.horizon == OUTCOME_HORIZON,
                     OpportunityOutcomeLabel.state.in_(states),
+                    *([OpportunityDecisionSnapshot.symbol.in_(symbols)] if symbols is not None else []),
                 )
             )
             if batch_size is not None:

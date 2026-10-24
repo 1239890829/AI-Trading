@@ -10,10 +10,22 @@
 from __future__ import annotations
 
 import asyncio
+from datetime import datetime
+from types import SimpleNamespace
 
 import pytest
 
 from app.schemas.market import Quote
+from app.core.bjtime import BJ_TZ
+
+NOW = datetime(2026, 9, 29, 10, 0, tzinfo=BJ_TZ)
+
+
+@pytest.fixture(autouse=True)
+def execution_clock(monkeypatch):
+    monkeypatch.setattr("app.paper.engine.beijing_now", lambda: NOW)
+    monkeypatch.setattr("app.paper.engine._today", lambda: NOW.strftime("%Y%m%d"))
+    monkeypatch.setattr("app.paper.execution_guard.known_trade_days", lambda: [NOW.date()])
 
 
 class _FakeLog:
@@ -50,7 +62,11 @@ def _make_engine(quote_map: dict):
     async def quote_fn(symbol: str):
         return quote_map.get(symbol)
 
-    return PaperTradingEngine(get_session_factory(), quote_fn)
+    for quote in quote_map.values():
+        quote.data_timestamp = NOW
+    risk = SimpleNamespace(hub=SimpleNamespace(get_quotes=lambda: list(quote_map.values())),
+                           check_order=lambda **_: {"allowed": True})
+    return PaperTradingEngine(get_session_factory(), quote_fn, risk_engine=risk)
 
 
 @pytest.fixture()

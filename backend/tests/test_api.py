@@ -136,15 +136,43 @@ def test_websocket_snapshot_and_ping(client):
         assert pong["type"] == "pong"
 
 
-def test_paper_fills_and_reset(client):
+def test_paper_fills_and_reset(client, monkeypatch):
     """成交记录带费用字段；重置后持仓/委托清空、资金回到初始额度。"""
+    from datetime import datetime, timedelta, timezone
+    from uuid import uuid4
+
+    from app.core.bjtime import BJ_TZ
+    from app.risk.config import get_params
+    from app.schemas.market import Quality, Quote
+
+    # This accounting/API test uses a declared continuous session and trusted
+    # same-symbol source, not the host's weekend or the mock hub's stale tape.
+    now = datetime(2026, 9, 29, 10, 0, tzinfo=BJ_TZ)
+    monkeypatch.setattr("app.paper.engine.beijing_now", lambda: now)
+    monkeypatch.setattr("app.paper.engine._today", lambda: now.strftime("%Y%m%d"))
+    quote = Quote(symbol="600519", price=20.0, prev_close=20.0,
+                  limit_up_price=22.0, limit_down_price=18.0,
+                  amount=100_000_000, source="fixture", quality=Quality.high,
+                  data_timestamp=now)
+
+    async def current_quote(symbol):
+        assert symbol == quote.symbol
+        return quote
+
+    async def trading_days():
+        return ["20260929", "20260930"]
+
+    paper = client.app.state.paper
+    monkeypatch.setattr(paper, "_quote_fn", current_quote)
+    monkeypatch.setattr(paper, "_tdays_fn", trading_days)
+    # Keep the installed real RiskEngine and its rules; only the cached market
+    # state is fixed for this successful order, fee, and reset contract.
+    monkeypatch.setattr(paper._risk_engine, "_state", "震荡偏多")
+    monkeypatch.setattr(paper._risk_engine, "_params", get_params("震荡偏多"))
     before = client.get("/api/paper/account").json()["data"]
     assert before["cash"] > 0
 
-    quote = client.get("/api/quotes/600519").json()["data"]
-    price = quote["price"]
-    from uuid import uuid4
-    from datetime import datetime, timedelta, timezone
+    price = quote.price
 
     placed = client.post("/api/paper/orders", json={
         "request_id": str(uuid4()),

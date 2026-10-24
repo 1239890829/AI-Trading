@@ -319,7 +319,7 @@ def test_upstream_source_changes_or_additions_block(tmp_path, monkeypatch):
         d.method_identity()
 
 
-@pytest.mark.parametrize("changed_policy", ["tradingagents_research.py", "agent_budget.py"])
+@pytest.mark.parametrize("changed_policy", ["tradingagents_research.py", "agent_budget.py", "selected_model_lease.py"])
 def test_actual_method_identity_pins_selected_authorization_and_atomic_budget_policy(tmp_path, monkeypatch, changed_policy):
     upstream, native_root = tmp_path / "upstream", tmp_path / "native"
     upstream.mkdir(); native_root.mkdir(); (upstream / "a.py").write_text("fixture = 1\n")

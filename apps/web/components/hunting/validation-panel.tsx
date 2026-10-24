@@ -60,6 +60,7 @@ function EntryDetail({entry}: {entry: ValidationSelectionEntry}) {
     <dl><div><dt>首次加入</dt><dd>{dateTimeTextBJ(entry.selected_at, {seconds:true})}</dd></div><div><dt>加入参考价</dt><dd>{price(entry.reference_price)}</dd></div><div><dt>当时涨幅</dt><dd>{percent(entry.reference_change_pct)}</dd></div><div><dt>观察天数</dt><dd>{entry.observation_calendar_days} 自然日</dd></div></dl>
     <ReaderBrief label="入选记录简述" headline={readerExcerpt(entry.reason)} cautions={[...readerCautions([entry.reason,...entry.conditions]), ...(entry.conditions.length ? ["当时附有条件，见完整依据"] : [])]}/><ResearchDisclosure identity={JSON.stringify(entry)} label="原入选完整依据"><p>{entry.reason}</p><ul>{entry.conditions.map((c,i) => <li key={i}>{c}</li>)}</ul></ResearchDisclosure>
     <p className="validation-muted">{stateName[entry.outcome_state] ?? "结果待核"} · {entry.scope === "daily" ? "每日精选" : "盘中入选"} · 入选不代表可成交。</p>
+    {entry.outcome_reason && <p className="validation-muted" title={entry.outcome_reason}>结果缺口：{readerExcerpt(entry.outcome_reason, 120)}{entry.outcome_date ? ` · 目标收盘 ${entry.outcome_date}` : ""}</p>}
   </div>;
 }
 function EpisodeDetail({episode}: {episode: TradeEpisode}) {

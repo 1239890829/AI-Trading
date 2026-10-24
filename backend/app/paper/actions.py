@@ -7,6 +7,8 @@ captured inputs without suspension. A crash rolls back both money and receipt.
 from __future__ import annotations
 
 import json
+import asyncio
+import logging
 from datetime import datetime, timezone
 
 from fastapi import HTTPException
@@ -14,6 +16,19 @@ from sqlalchemy.orm import sessionmaker
 
 from app.models.paper import PaperActionReceipt
 from app.paper.engine import PaperTradingEngine
+
+log = logging.getLogger(__name__)
+
+
+async def record_action_status(engine, selection_ref, source_version, order_id):
+    """Best-effort projection only after the authoritative action committed."""
+    if engine.scope != "main":
+        return
+    try:
+        from app.services.selection_workflow import record_paper_status
+        await asyncio.to_thread(record_paper_status, selection_ref, source_version, order_id, engine._sf)
+    except Exception:
+        log.warning("paper milestone projection deferred for order %s", order_id, exc_info=True)
 
 
 def _replay(sf, scope, request_id, draft):
@@ -33,7 +48,7 @@ def _valid_deadline(expires_at):
 
 
 async def submit_action(engine: PaperTradingEngine, body) -> dict:
-    draft = body.model_dump_json(exclude={"request_id"})
+    draft = body.model_dump_json(exclude={"request_id"}, exclude_none=True)
     request_id = str(body.request_id)
     prior = _replay(engine._sf, engine.scope, request_id, draft)
     if prior is not None:
@@ -54,6 +69,9 @@ async def submit_action(engine: PaperTradingEngine, body) -> dict:
     async def captured_days():
         return days
 
+    from app.paper.selection_action import validate_bound_action
+    await validate_bound_action(engine, body, quote, days=days)
+
     with engine._sf() as probe:
         bind = probe.get_bind()
     with bind.connect() as connection:
@@ -69,6 +87,7 @@ async def submit_action(engine: PaperTradingEngine, body) -> dict:
             _valid_deadline(body.expires_at)
             executor = PaperTradingEngine(sf, captured_quote, captured_days,
                                           scope=engine.scope, risk_engine=engine._risk_engine)
+            await validate_bound_action(executor, body, quote, days=days)
             order = await executor.place_order(body.symbol, body.side, body.price, body.quantity)
             result = {"replayed": False, "id": order.id, "symbol": order.symbol, "side": order.side,
                       "status": order.status, "filled_price": order.filled_price,
@@ -78,6 +97,8 @@ async def submit_action(engine: PaperTradingEngine, body) -> dict:
                                          draft=draft, result=json.dumps(result)))
                 db.commit()
             connection.commit()
+            if body.selection_ref:
+                await record_action_status(engine, body.selection_ref, body.source_version, order.id)
             return result
         except BaseException:
             connection.rollback()

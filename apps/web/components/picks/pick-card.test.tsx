@@ -1,5 +1,5 @@
 import { cleanup, fireEvent, render, screen, within, waitFor } from "@testing-library/react";
-import { afterEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 import {
   JudgeChip,
@@ -13,8 +13,15 @@ import type { DailyPickItem, IntradayTopStock, OpportunityStock, SelectionMetric
 import * as API from "@/lib/api";
 import * as AgentAPI from "@/lib/api/agent";
 
+const savedResearch=(symbol:string):AgentAPI.TradingAgentsResearchView=>({symbol,startup_conditions_not_checked:true,enabled:false,executable:false,blockers:[],required_model_slots:null,budget:null,admission:{state:"not_admitted",method_sha256:null},verification:"unverified_full_graph_research",production_eligible:false,latest:null,task:null});
+// Isolate read consumers and make any unintended model start fail without business HTTP.
+beforeEach(()=>{
+  vi.spyOn(AgentAPI,"getTradingAgentsResearch").mockImplementation(async symbol=>savedResearch(symbol));
+  vi.spyOn(API,"getStockAttribution").mockImplementation(async symbol=>({schema_version:1,symbol,count:0,items:[]}));
+  vi.spyOn(AgentAPI,"createAgentTask").mockRejectedValue(new Error("UI reads cannot start model tasks"));
+});
 // vitest 未开 globals 时 RTL 自动 cleanup 不注册，必须手动（见 event-panel.test.tsx 注释）
-afterEach(cleanup);
+afterEach(()=>{cleanup();vi.restoreAllMocks();});
 
 function readBasis(label: string) {
   expect(within(screen.getByLabelText("入选依据核对")).getByText(label)).toBeTruthy();
@@ -913,15 +920,17 @@ it("uses the recorded selection rationale before a high-scoring dimension as the
  expect(reading.supports[0].value).toContain("估值中性");
 });
 
-it("has one selection reader and loads related messages only after opening it", () => {
+it("has one selection reader and loads related messages and saved research only after opening it", async () => {
  render(<PickCard item={fromDailyPick(base)}/>);
  expect(screen.queryByRole("button",{name:"关联消息"})).toBeNull();
  expect(screen.queryByLabelText("相关消息与AI解读")).toBeNull();
+ expect(AgentAPI.getTradingAgentsResearch).not.toHaveBeenCalled();
  fireEvent.click(screen.getByRole("button",{name:"入选解读"}));
  expect(screen.getByLabelText("本次筛选考虑")).toBeTruthy();
  expect(screen.getByLabelText("相关消息与AI解读")).toBeTruthy();
  expect(screen.queryByLabelText("入选依据核对")).toBeNull();
- expect(screen.getByLabelText("TradingAgents完整研究").textContent).toContain("未读取");
+ await waitFor(()=>expect(AgentAPI.getTradingAgentsResearch).toHaveBeenCalledExactlyOnceWith(base.symbol,{savedOnly:true}));
+ expect(screen.getByLabelText("TradingAgents完整研究").textContent).toContain("未查到研究记录");
  fireEvent.click(screen.getByRole("button",{name:"原筛选完整依据"}));
  expect(screen.getByLabelText("入选依据核对")).toBeTruthy();
 });
@@ -946,7 +955,7 @@ it("keeps exact archived event references in the combined reader and performs on
 
 it.each([false, true])("keeps every card short without prefetching company or research and reads only the deliberately opened drawer (compact=%s)", async compact => {
  const attribution=vi.spyOn(API,"getStockAttribution").mockResolvedValue({schema_version:1,symbol:"600222",count:0,items:[]} as API.StockAttributionPayload);
- const research=vi.spyOn(AgentAPI,"getTradingAgentsResearch").mockRejectedValue(new Error("isolated research read"));
+ const research=vi.spyOn(AgentAPI,"getTradingAgentsResearch").mockImplementation(async symbol=>savedResearch(symbol));
  const start=vi.spyOn(AgentAPI,"createAgentTask").mockRejectedValue(new Error("must not start"));
  try {
   render(<>{["600111","600222","600333"].map(symbol=><PickCard key={symbol} compact={compact} item={fromDailyPick({...base,symbol})}/>)}</>);
@@ -958,7 +967,7 @@ it.each([false, true])("keeps every card short without prefetching company or re
   fireEvent.click(entries[1]);
   await waitFor(()=>expect(attribution).toHaveBeenCalledExactlyOnceWith("600222"));
   expect(screen.getAllByRole("dialog")).toHaveLength(1);
-  expect(research).not.toHaveBeenCalled();
+  expect(research).toHaveBeenCalledExactlyOnceWith("600222",{savedOnly:true});
   expect(start).not.toHaveBeenCalled();
   expect(screen.getAllByRole("button",{name:"入选解读",hidden:true})).toHaveLength(3);
  } finally {attribution.mockRestore();research.mockRestore();start.mockRestore();}
@@ -1157,11 +1166,11 @@ describe("PickCard · compact local inspection", () => {
 
  it("retires an active group's real drawer immediately and does not resume reads or reopen it when the group returns", async () => {
   const attribution=vi.spyOn(API,"getStockAttribution").mockResolvedValue({schema_version:1,symbol:topPath.symbol,count:0,items:[]} as API.StockAttributionPayload);
-  const research=vi.spyOn(AgentAPI,"getTradingAgentsResearch").mockRejectedValue(new Error("must remain unopened"));
+  const research=vi.spyOn(AgentAPI,"getTradingAgentsResearch").mockImplementation(async symbol=>savedResearch(symbol));
   const start=vi.spyOn(AgentAPI,"createAgentTask").mockRejectedValue(new Error("must never start"));
   try {
    const item=compactItem();const view=render(<PickCard compact item={item}/>);
-   expect(attribution).not.toHaveBeenCalled();
+   expect(attribution).not.toHaveBeenCalled();expect(research).not.toHaveBeenCalled();
    fireEvent.click(screen.getByRole("button",{name:"入选解读"}));
    await waitFor(()=>expect(attribution).toHaveBeenCalledExactlyOnceWith(topPath.symbol));
    expect(screen.getByRole("dialog")).toBeTruthy();
@@ -1173,11 +1182,14 @@ describe("PickCard · compact local inspection", () => {
    view.rerender(<PickCard compact active item={item}/>);
    expect(screen.queryByRole("dialog")).toBeNull();
    expect(attribution).toHaveBeenCalledTimes(1);
-   expect(research).not.toHaveBeenCalled();expect(start).not.toHaveBeenCalled();
+   expect(research).toHaveBeenCalledExactlyOnceWith(topPath.symbol,{savedOnly:true});expect(start).not.toHaveBeenCalled();
    fireEvent.click(screen.getByRole("button",{name:"入选解读"}));
    expect(screen.getByRole("dialog")).toBeTruthy();
    fireEvent.click(screen.getByRole("button",{name:"原筛选完整依据"}));
    expect(screen.getByLabelText("原画像与判定").textContent).toContain("题材启动；封单 1.2 亿");
+   await waitFor(()=>expect(research).toHaveBeenCalledTimes(2));
+   expect(research.mock.calls.every(([symbol,options])=>symbol===topPath.symbol && options?.savedOnly===true)).toBe(true);
+   expect(start).not.toHaveBeenCalled();
   } finally {attribution.mockRestore();research.mockRestore();start.mockRestore();}
  });
 });

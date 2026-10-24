@@ -3,7 +3,7 @@ import { getJson, getJsonArray, type ReadOptions } from "./internal";
 export interface ValidationSelectionEntry {
   id: string; date: string; symbol: string; name: string; scope: "daily" | "intraday";
   state: string; selected_at: string | null; reference_price: number | null; reference_change_pct: number | null;
-  return_pct: number | null; outcome_state: string; quote_as_of?: string | null; version: string | null;
+  return_pct: number | null; outcome_state: string; outcome_date?: string | null; outcome_reason?: string | null; quote_as_of?: string | null; version: string | null;
   coverage_state?: string; method_version?: string | null; feature_version?: string | null;
   reason: string; conditions: string[]; selection_refs: string[]; observation_calendar_days: number;
 }

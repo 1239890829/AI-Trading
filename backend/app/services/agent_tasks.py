@@ -6,7 +6,8 @@
   不假装还在跑——三态纪律的"缺失不冒充"）。
 - **步骤轨迹**：每个 handler 用 `step()` 上下文记录一步（输入/输出/耗时/LLM 信息），
   失败也记录——可追溯三件套第一件。
-- **同类型互斥**：同一 type 同时只允许一个运行，防止重复消耗数据源配额
+- **同类型互斥**：普通 type 同时只允许一个；已授权入选研究按证券互斥、最多三股并行
+  防止重复消耗数据源配额
   （复盘会拉两天涨停池 + 全市场宽度，配额敏感）。
 - **取消**：只取消尚未开始/可中断的步骤；已完成的步骤与轨迹保留。
 - **审计**：任务创建/完成/取消都写 AgentAudit（actor/action/target/before/after）。
@@ -772,16 +773,17 @@ async def _execute(task_id: str, type_: str, params: dict) -> None:
         log.warning("[AGENT-TASK] %s %s persisted=%s", type_, task_id, status)
     finally:
         current = asyncio.current_task()
-        if _RUNNING.get(type_) is current:
-            _RUNNING.pop(type_, None)
+        _drop_running(current)
         if _HANDLES.get(task_id) is current:
             _HANDLES.pop(task_id, None)
+        if type_ == "tradingagents_research":
+            from app.services.tradingagents_research import wake_selected_research
+            wake_selected_research(_APP)
 
 
 def _retrieve_execution(task_id: str, type_: str, handle: asyncio.Task) -> None:
     """Final bounded fallback, including cancellation before _execute entered."""
-    if _RUNNING.get(type_) is handle:
-        _RUNNING.pop(type_, None)
+    _drop_running(handle)
     if _HANDLES.get(task_id) is handle:
         _HANDLES.pop(task_id, None)
     if not handle.cancelled():
@@ -790,32 +792,46 @@ def _retrieve_execution(task_id: str, type_: str, handle: asyncio.Task) -> None:
             log.error("[AGENT-TASK] %s %s runtime_error=%s persistence=unknown; "
                       "recovery=reconcile_on_startup/operator", type_, task_id, type(error).__name__)
 
-def _check_creation(type_: str) -> None:
+def _running_key(type_: str, params: dict | None = None) -> str:
+    if type_ == "tradingagents_research" and settings.tradingagents_research_authorization_digest:
+        from app.services.tradingagents_research import validate_params
+        return type_ + ":" + validate_params({"symbol": (params or {}).get("symbol")})
+    return type_
+
+
+def _drop_running(handle):
+    for key, owner in list(_RUNNING.items()):
+        if owner is handle:
+            _RUNNING.pop(key, None)
+
+
+def _check_creation(type_: str, params: dict | None = None) -> None:
     if type_ not in CREATABLE_TASK_TYPES:
-        raise ValueError(
-            f"未知任务类型：{type_}"
-            f"（可用：{'、'.join(t['type'] for t in creatable_task_types())}）"
-        )
-    existing = _RUNNING.get(type_)
+        raise ValueError(f"未知任务类型：{type_}（可用：{'、'.join(t['type'] for t in creatable_task_types())}）")
+    key = _running_key(type_, params)
+    for name, handle in list(_RUNNING.items()):
+        if handle.done():
+            _RUNNING.pop(name, None)
+    existing = _RUNNING.get(key)
     if existing is not None:
-        if existing.done():
-            _RUNNING.pop(type_, None)
-        else:
-            raise RuntimeError(f"「{TASK_TYPES[type_]['label']}」正在运行中，请等待完成")
+        raise RuntimeError(f"「{TASK_TYPES[type_]['label']}」正在运行中，请等待完成")
+    if key != type_:
+        running = sum(name == type_ or name.startswith(type_ + ":") for name in _RUNNING)
+        if running >= max(1, min(3, int(settings.tradingagents_research_concurrency))):
+            raise RuntimeError("完整研究当前执行槽已占用；原入选保留排队，不重复生成")
 
 
 def _launch_handler(task_id: str, type_: str, params: dict) -> None:
-    # Called only on the owner event loop, never from a DB worker thread.
     loop = asyncio.get_event_loop()
-    handle = loop.create_task(_execute(task_id, type_, params), name=f"agent-task-{type_}")
+    handle = loop.create_task(_execute(task_id, type_, params), name=f"agent-task-{type_}-{task_id}")
     handle.add_done_callback(lambda done: _retrieve_execution(task_id, type_, done))
-    _RUNNING[type_] = handle
+    _RUNNING[_running_key(type_, params)] = handle
     _HANDLES[task_id] = handle
 
 
 def create_task(type_: str, params: dict | None = None, *, created_by: str = "user") -> dict:
     """Legacy synchronous creation. Async request/scheduler consumers use the async entry."""
-    _check_creation(type_)
+    _check_creation(type_, params)
     params = params or {}
     task_id = uuid.uuid4().hex
     with get_session_factory()() as db:
@@ -871,11 +887,12 @@ async def create_task_async(type_: str, params: dict | None = None, *, created_b
     creator stops before that handoff, drain the write and cancel only an actual
     unlaunched queued row. Unavailable persistence remains explicitly unknown.
     """
-    _check_creation(type_)
+    _check_creation(type_, params)
     packed = json.dumps(params or {}, ensure_ascii=False, default=str)
     frozen_params, task_id = json.loads(packed), uuid.uuid4().hex
     owner = asyncio.current_task()
-    _RUNNING[type_] = owner
+    key = _running_key(type_, frozen_params)
+    _RUNNING[key] = owner
     try:
         try:
             row = await _lifecycle_db(_persist_queued_task, task_id, type_, packed, created_by)
@@ -899,8 +916,8 @@ async def create_task_async(type_: str, params: dict | None = None, *, created_b
                         type_, task_id, type(error).__name__)
         return row
     finally:
-        if _RUNNING.get(type_) is owner:
-            _RUNNING.pop(type_, None)
+        if _RUNNING.get(key) is owner:
+            _RUNNING.pop(key, None)
 
 
 def get_task(task_id: str) -> dict | None:

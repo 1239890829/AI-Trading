@@ -4,6 +4,7 @@ from datetime import datetime, timedelta, timezone
 from types import SimpleNamespace
 from uuid import uuid4
 
+import pytest
 from sqlalchemy import create_engine
 from sqlalchemy.orm import sessionmaker
 
@@ -11,6 +12,22 @@ from app.api.routes.paper import OrderIn, place_order
 from app.models.paper import PaperOrder, PaperPosition
 from app.models.watchlist import Base
 from app.paper.engine import PaperTradingEngine
+from app.core.bjtime import BJ_TZ
+from app.schemas.market import Quote
+
+NOW = datetime(2026, 9, 29, 10, 0, tzinfo=BJ_TZ)
+
+
+@pytest.fixture(autouse=True)
+def execution_clock(monkeypatch):
+    monkeypatch.setattr("app.paper.engine.beijing_now", lambda: NOW)
+    monkeypatch.setattr("app.paper.engine._today", lambda: NOW.strftime("%Y%m%d"))
+    monkeypatch.setattr("app.paper.execution_guard.known_trade_days", lambda: [NOW.date()])
+
+
+def allowed_risk():
+    """An installed, controlled policy isolates atomic accounting/replay tests."""
+    return SimpleNamespace(hub=SimpleNamespace(get_quotes=lambda: []), check_order=lambda **_: {"allowed": True})
 
 
 def test_retry_same_action_does_not_fill_twice(tmp_path):
@@ -19,9 +36,10 @@ def test_retry_same_action_does_not_fill_twice(tmp_path):
     sf = sessionmaker(bind=db_engine, expire_on_commit=False)
 
     async def quote(_):
-        return SimpleNamespace(price=10, limit_up_price=11, limit_down_price=9)
+        return Quote(symbol="600127", price=10, limit_up_price=11, limit_down_price=9,
+                     source="fixture", data_timestamp=NOW)
 
-    engine = PaperTradingEngine(sf, quote)
+    engine = PaperTradingEngine(sf, quote, risk_engine=allowed_risk())
     request = SimpleNamespace(app=SimpleNamespace(state=SimpleNamespace(paper=engine)))
     body = OrderIn(symbol="600127", side="buy", price=10, quantity=100,
                    request_id=str(uuid4()),
@@ -35,7 +53,6 @@ def test_retry_same_action_does_not_fill_twice(tmp_path):
     db_engine.dispose()
 
 
-import pytest
 from fastapi import HTTPException
 from sqlalchemy import event
 from app.models.paper import PaperActionReceipt
@@ -51,9 +68,10 @@ def action_env(tmp_path):
     async def quote(_):
         quotes["calls"] += 1
         await asyncio.sleep(0)
-        return SimpleNamespace(price=quotes["price"], limit_up_price=11, limit_down_price=9)
+        return Quote(symbol="600127", price=quotes["price"], limit_up_price=11, limit_down_price=9,
+                     source="fixture", data_timestamp=NOW)
 
-    engine = PaperTradingEngine(sf, quote)
+    engine = PaperTradingEngine(sf, quote, risk_engine=allowed_risk())
     engine.ensure_account()
     request = SimpleNamespace(app=SimpleNamespace(state=SimpleNamespace(paper=engine)))
     body = OrderIn(symbol="600127", side="buy", price=10, quantity=100,

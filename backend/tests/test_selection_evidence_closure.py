@@ -79,10 +79,18 @@ def test_default_api_and_normal_top_consume_same_runtime_capacity(monkeypatch):
     try:
         # Missing HTTP query must use the same runtime setting as notification projection.
         normal = asyncio.run(get())
-        assert normal["items"] == top_watch_stocks(_payload())["items"]
+        def business_items(data):
+            # Saved research is a read-only projection. Every original selection
+            # field must still exactly match the shared capacity/filter owner.
+            assert all(isinstance(row.get("research_summary"), dict)
+                       and row["research_summary"]["symbol"] == row["symbol"] for row in data["items"])
+            return [{key: value for key, value in row.items() if key != "research_summary"}
+                    for row in data["items"]]
+        assert business_items(normal) == top_watch_stocks(_payload())["items"]
         assert normal["effective_limit"] == 2 and len(normal["items"]) == 2
         explicit = asyncio.run(get("?limit=1"))
         assert explicit["effective_limit"] == 1 and len(explicit["items"]) == 1
+        assert business_items(explicit) == top_watch_stocks(_payload(), limit=1)["items"]
     finally:
         runtime_params.set_overrides(old)
 

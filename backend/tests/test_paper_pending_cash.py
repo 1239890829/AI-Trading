@@ -18,11 +18,23 @@
 from __future__ import annotations
 
 import asyncio
+from datetime import datetime
+from types import SimpleNamespace
 
 import pytest
 
 from app.core.db import get_engine, get_session_factory
 from app.paper.engine import PaperTradingEngine, buy_freeze_amount
+from app.core.bjtime import BJ_TZ
+
+NOW = datetime(2026, 9, 29, 10, 0, tzinfo=BJ_TZ)
+
+
+@pytest.fixture(autouse=True)
+def execution_clock(monkeypatch):
+    monkeypatch.setattr("app.paper.engine.beijing_now", lambda: NOW)
+    monkeypatch.setattr("app.paper.engine._today", lambda: NOW.strftime("%Y%m%d"))
+    monkeypatch.setattr("app.paper.execution_guard.known_trade_days", lambda: [NOW.date()])
 
 
 class _Quotes:
@@ -33,12 +45,18 @@ class _Quotes:
         self.limit_up_price = limit_up
         self.limit_down_price = limit_down
 
+    def model_dump(self):
+        return vars(self).copy()
+
 
 def _make(quotes: dict[str, _Quotes]) -> PaperTradingEngine:
+    for symbol, quote in quotes.items():
+        quote.symbol, quote.source, quote.quality, quote.data_timestamp = symbol, "fixture", "high", NOW
     async def quote_fn(symbol):
         return quotes.get(symbol)
-
-    return PaperTradingEngine(get_session_factory(), quote_fn)
+    risk = SimpleNamespace(hub=SimpleNamespace(get_quotes=lambda: []),
+                           check_order=lambda **_: {"allowed": True})
+    return PaperTradingEngine(get_session_factory(), quote_fn, risk_engine=risk)
 
 
 def _reset() -> None:

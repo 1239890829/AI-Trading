@@ -59,3 +59,13 @@ describe("selection validation reading", () => {
     expect(screen.getByRole("heading",{name:"金健米业 · 成交回合"})).toBeTruthy();
   });
 });
+
+
+it("shows the saved closing-basis gap without inventing a return or an execution result",()=>{
+  const entry={...report.entries[0],return_pct:null,outcome_state:"pending",outcome_date:"2026-10-13",outcome_reason:"等待决策日 qfq日收/raw日收价格基准"};
+  render(<ValidationContent report={{...report,entries:[entry]}}/>);
+  fireEvent.click(screen.getByRole("button",{name:/金健米业，/}));
+  expect(screen.getByText(/结果缺口：等待决策日 qfq日收\/raw日收价格基准/)).toBeTruthy();
+  expect(screen.getByText(/目标收盘 2026-10-13/)).toBeTruthy();
+  expect(screen.queryByText("0.00%")).toBeNull();
+});

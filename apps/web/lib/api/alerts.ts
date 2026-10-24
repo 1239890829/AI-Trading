@@ -105,7 +105,17 @@ export interface NotificationReference {
   run_id?: string | null; evidence: Record<string, unknown>;
 }
 
+export interface NotificationArrival {
+  phase: "selected" | "confirmed" | "research_ready" | "paper_status";
+  version: string;
+  source_as_of: string | null;
+  origin_id: string;
+}
+
 export interface NotificationItem {
+  /** Display milestones, separate from durable read/dismissal state. */
+  arrival?: NotificationArrival;
+  arrivals?: NotificationArrival[];
   recorded_at?: string | null;
   source_as_of?: string | null;
   references?: NotificationReference[];

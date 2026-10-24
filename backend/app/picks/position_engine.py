@@ -226,6 +226,8 @@ async def maybe_open(
     engine = getattr(state, "paper", None)
     if engine is None:
         return {"opened": False, "reason": "paper engine 缺失"}
+    if engine.scope != "main":
+        return {"opened": False, "reason": "自动模拟动作只属于main账户，不混用研究影子账户"}
     if trigger not in OPEN_TRIGGERS:
         return {"opened": False, "reason": f"触发 {trigger} 不在开仓白名单（嗅到≠买入）"}
     if price is None or price <= 0:
@@ -292,8 +294,10 @@ async def maybe_open(
     # 冻结额必须计入——挂单的钱已经从可用资金里划走、又不在持仓市值内（R01 同源口径），
     # 漏掉它会让「已占用多少仓位」系统性偏低，从而在资金已投出的情况下继续加仓。
     try:
-        acc = engine.ensure_account()
-        initial = float(acc.initial_cash or 1_000_000.0)
+        # Planning is read-only. Only the qualified executor may initialize funds.
+        account = engine.account_summary(0, initialize=False)
+        from app.paper.engine import DEFAULT_INITIAL_CASH
+        initial = float(account.get("initial_cash") or DEFAULT_INITIAL_CASH)
         exposure = sum((p.get("last_price") or p.get("cost_price") or 0) * p.get("quantity", 0) for p in held)
         exposure += float(engine.frozen_cash())
         if exposure / initial >= total_cap:

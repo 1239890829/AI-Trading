@@ -160,6 +160,8 @@
 
 ## RSH-030
 
+> 2026-10-24用户直接派工工程补充：完整图跨股最多3并行，同股跨进程单写，活跃租约精确核在途账，真正unknown仍阻断。旧30份12角色/7报告按原hash投影与轻量批量状态复用，无新模型测试调用；完成站内里程碑不晋级选股/资金。工程/读侧性能与页面验收归本批handoff/PR，人工gold与效果准入仍待条件，不改本任务状态或原八类调度。
+
 > 历史接续：PR #319加载后第三unknown正确阻断，用户随后仅为该条授权继续原未完成步骤；PR #320补正式维护原生恢复入口及服务器单次grant，保留九答、旧task/失败/用量。实际call11/Bear仍因terminal_order失败，新增第四unknown；数字观察未核实、当时全七报告未完成。失败与unknown保留，不能被后续成功覆盖。
 >
 > PR #321准确HEAD发布、PR/master三CI及release_check均通过，方法6ea已加载；用户单独允许保留第四unknown后，正式维护task b5541f06从call12/Bear续至call18成功，12角色/七报告完成，103项只读核验通过。九原答/十一旧回执逐字保留；新增7调用用量known、此前四条获准保留的unknown及本run继承两条保留，不能推出全任务费用。两次普通GET同七报告且目标文件零变，配对Chrome的002264主卡/原通知读取同结果，通知七正文及复用/unknown已逐项核。生成19:18/材料截至15:30是当前补充，不回写15:00:44首次理由，不声称严格按通知时点过滤、全部入选股已齐或后续生成可用。RESEARCH_ONLY_AUTHORIZED、net_gain_verified=false、production_eligible=false、人工gold0及本任务原状态/独立效果条件不变，见[语义纠错](../ai/semantic-decisions.md#2026-10-21-cli启动警告与重复失败恢复纠错)及handoff。

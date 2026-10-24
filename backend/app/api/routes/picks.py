@@ -54,11 +54,13 @@ def _attach_latest_execution(items: list[dict], trade_date: str, meta: dict | No
         latest = {}
     from app.picks.selection_entry import attach_daily_entries
 
-    return attach_daily_entries([
+    from app.services.tradingagents_research import attach_saved_summaries
+
+    return attach_saved_summaries(attach_daily_entries([
         {**it, "execution": latest.get(str(it.get("symbol") or ""))}
         for it in (items or [])
         if isinstance(it, dict)
-    ], meta or {})
+    ], meta or {}), session_factory=get_session_factory())
 
 
 @router.post("/generate")

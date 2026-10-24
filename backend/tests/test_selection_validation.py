@@ -97,7 +97,7 @@ def test_buy_requires_existing_same_symbol_selection_before_exact_fill(sf):
         assert evidence['reference_price'] == 10
 
 
-def test_daily_archive_is_observation_only_idempotent_and_uses_current_outcome_basis(sf):
+def test_daily_archive_is_observation_only_idempotent_and_uses_current_outcome_basis(sf, monkeypatch):
     from app.picks.selection_entry import archive_daily_observations
     from app.picks.opportunity_learning import PRICE_BASIS_VERSION, ensure_outcome_horizons
     from app.models.opportunity_learning import OpportunityDecisionSnapshot, OpportunityOutcomeLabel
@@ -116,9 +116,22 @@ def test_daily_archive_is_observation_only_idempotent_and_uses_current_outcome_b
         assert snap.stage == 'validation' and snap.strategy_version != 'stock-opportunity-funnel-v2'
         out = db.scalar(select(OpportunityOutcomeLabel).where(OpportunityOutcomeLabel.horizon == 'd1_close'))
         out.state, out.return_pct, out.price_basis_version = 'labeled', 5.0, PRICE_BASIS_VERSION
+        out.reason = '原归档价格基准说明'
         db.commit()
     report = validation_report('2026-10-12', '2026-10-14', session_factory=sf, calendar=[])
     assert report['selection']['mean_pct'] == 5.0
+    assert report['entries'][0]['outcome_reason'] is None
+    assert report['entries'][0]['outcome_date'] == '2026-10-13'
+    from fastapi import FastAPI
+    from fastapi.testclient import TestClient
+    from app.api.routes import selection_validation as api
+    monkeypatch.setattr(api, 'read_validation', lambda *_a, **_k: (report, 'isolated-report'))
+    app = FastAPI()
+    app.include_router(api.router, prefix='/api')
+    with TestClient(app) as client:
+        response = client.get('/api/picks/validation?start=2026-10-12&end=2026-10-14')
+        assert response.status_code == 200
+        assert response.json()['data']['entries'][0]['outcome_reason'] is None
     # The range selects entry dates; a later matured D1 remains visible.
     one_day = validation_report('2026-10-12', '2026-10-12', session_factory=sf, calendar=[])
     assert one_day['selection']['mean_pct'] == 5.0

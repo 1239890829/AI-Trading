@@ -50,3 +50,11 @@ it("storage failure prevents an untraceable submission", async () => {
   await expect(placePaperOrder("600127", "buy", 10, 100)).rejects.toThrow("quota");
   expect(sendJson).not.toHaveBeenCalled();
 });
+
+it("selection-bound callers reuse their persisted UUID and append the complete optional binding without changing legacy calls",async()=>{
+  vi.mocked(sendJson).mockResolvedValue({data:{id:21,status:"filled",filled_price:10,fee:5},meta:{provider:"fixture",is_realtime:false,is_stale:false,last_success_refresh:null,generated_at:"2026-10-24T09:30:00+08:00"}});
+  const binding={selection_ref:"daily:2026-10-24:600127",source_version:"source-v1",decision_id:"decision-A",decision_version:"decision-v1",request_id:"f97dde63-3f36-4f35-a81c-63af0086a167",expires_at:"2026-10-24T09:30:30+08:00"};
+  await placePaperOrder("600127","buy",10,100,binding);
+  expect(sendJson).toHaveBeenCalledWith("/api/paper/orders","POST",{symbol:"600127",side:"buy",price:10,quantity:100,...binding},15000);
+  expect(sessionStorage.length).toBe(0);
+});

@@ -12,6 +12,10 @@ import json
 from pathlib import Path
 import re
 import uuid
+import asyncio
+import logging
+
+log = logging.getLogger(__name__)
 
 from sqlalchemy import case, func, select
 from sqlalchemy.exc import SQLAlchemyError
@@ -526,37 +530,162 @@ def _latest(symbol: str) -> dict | None:
         return None
 
 
-def read_view(symbol: str, app, *, session_factory=None) -> dict:
-    """Ordinary paired reading; no provider, writes, task creation or model calls."""
-    state = preflight(symbol, app, session_factory=session_factory)
-    state["latest"] = _latest(symbol)
-    state["task"] = None
+ROLE_FIELDS = {
+    "Sentiment Analyst": ("narrative", "overall_band", "overall_score", "confidence"),
+    "Research Manager": ("recommendation", "rationale", "strategic_actions"),
+    "Trader": ("action", "entry_price", "position_sizing", "reasoning", "stop_loss"),
+    "Portfolio Manager": ("executive_summary", "investment_thesis", "price_target", "rating", "time_horizon"),
+}
+
+
+def _role_projection(folder: Path, result: dict) -> tuple[list[dict], str]:
+    """Project stored typed originals without changing a completed result/hash.
+
+    Missing legacy or damaged role evidence does not destroy the independent
+    seven-report reader. It is explicitly unavailable, never reconstructed.
+    """
+    try:
+        packet = _read(folder / "packet.json")
+        if _digest(packet) != result["input_sha256"]:
+            raise ValueError("role packet binding drift")
+        path = folder / "role-outputs.jsonl"
+        if path.is_symlink() or path.stat().st_size > MAX_FILE_BYTES:
+            raise ValueError("invalid original role file")
+        rows = [json.loads(line) for line in path.read_text().splitlines() if line.strip()]
+        if len(rows) != len(ROLES):
+            raise ValueError("complete original roles unavailable")
+        roles, calls = {}, set()
+        for row in rows:
+            peer = row["peer"]
+            role, call, output = peer["role"], peer["call_id"], peer["output"]
+            if (role not in ROLES or role in roles or type(call) is not int or call <= 0 or call in calls
+                    or peer.get("accepted") is not True or peer.get("state") != "accepted"
+                    or peer.get("case_id") != packet["case_id"] or peer.get("arm") != "ta-luna"
+                    or not isinstance(output, dict) or output.get("tool_calls")
+                    or _digest(output) != peer.get("output_sha256")):
+                raise ValueError("original role identity drift")
+            captured = _read(folder / "model-outputs" / (str(call) + ".json"))
+            if (captured.get("call_id") != call or captured.get("role") != role
+                    or captured.get("output_sha256") != peer["output_sha256"]
+                    or captured.get("structured_output") != output):
+                raise ValueError("original role capture drift")
+            keys = ROLE_FIELDS.get(role, ("content",))
+            fields = {key: output[key] for key in keys if key in output}
+            if not fields:
+                raise ValueError("role has no declared original body")
+            roles[role] = {"role": role, "call_id": call, "output_sha256": peer["output_sha256"], "fields": fields}
+            calls.add(call)
+        return [roles[role] for role in ROLES], "available"
+    except (OSError, ValueError, TypeError, KeyError):
+        return [], "unavailable"
+
+
+def _public_task(task):
+    error = None
+    if task.error:
+        try:
+            code = json.loads(task.error).get("code", "TaskError")
+        except (ValueError, TypeError, AttributeError):
+            code = "TaskError"
+        if not isinstance(code, str) or not re.fullmatch(r"[A-Za-z0-9_]{1,64}", code):
+            code = "TaskError"
+        error = {"code": code, "message": "本轮任务未完成；已保存报告保留，具体恢复条件见启动门禁和任务中心。"}
+    return {"id": task.id, "status": task.status, "cancel_requested": task.cancel_requested_at is not None,
+            "created_at": task.created_at.isoformat(), "finished_at": task.finished_at.isoformat() if task.finished_at else None,
+            "failed": bool(task.error), "error": error}
+
+
+def _read_task_states(symbols, session_factory=None):
+    """One latest-per-symbol query for an existing selected-list response."""
+    states = {symbol: {"task": None} for symbol in symbols}
+    if not symbols:
+        return states
     try:
         sf = session_factory or get_session_factory()
         safe = case((func.json_valid(AgentTask.params), AgentTask.params), else_="{}")
+        symbol = func.json_extract(safe, "$.symbol")
+        latest = select(AgentTask.id, symbol.label("symbol"), func.row_number().over(
+            partition_by=symbol, order_by=(AgentTask.created_at.desc(), AgentTask.id.desc())).label("position")).where(
+                AgentTask.type == "tradingagents_research", symbol.in_(symbols)).subquery()
         with sf() as db:
-            task = db.execute(select(AgentTask).where(
-                AgentTask.type == "tradingagents_research",
-                func.json_extract(safe, "$.symbol") == symbol,
-            ).order_by(AgentTask.created_at.desc(), AgentTask.id.desc()).limit(1)).scalar_one_or_none()
-            if task is not None:
-                error = None
-                if task.error:
-                    try:
-                        code = json.loads(task.error).get("code", "TaskError")
-                    except (ValueError, TypeError, AttributeError):
-                        code = "TaskError"
-                    if not isinstance(code, str) or not re.fullmatch(r"[A-Za-z0-9_]{1,64}", code):
-                        code = "TaskError"
-                    error = {"code": code, "message": "本轮任务未完成；已保存报告保留，具体恢复条件见启动门禁和任务中心。"}
-                state["task"] = {"id": task.id, "status": task.status,
-                                 "cancel_requested": task.cancel_requested_at is not None,
-                                 "created_at": task.created_at.isoformat(),
-                                 "finished_at": task.finished_at.isoformat() if task.finished_at else None,
-                                 "failed": bool(task.error), "error": error}
+            rows = db.execute(select(AgentTask, latest.c.symbol).join(latest, latest.c.id == AgentTask.id).where(latest.c.position == 1))
+            for task, identity in rows:
+                states[identity] = {"task": _public_task(task)}
     except Exception:
-        state["task_read_unavailable"] = True
+        states = {symbol: {"task": None, "task_read_unavailable": True} for symbol in symbols}
+    return states
+
+
+def _read_task_state(symbol, session_factory=None):
+    return _read_task_states([symbol], session_factory)[symbol]
+
+
+def read_view(symbol: str, app, *, session_factory=None, saved_only=False) -> dict:
+    """Ordinary paired reading. Saved-only reads do not inspect launch machinery."""
+    validate_params({"symbol": symbol})
+    if saved_only:
+        from app.services.selected_model_lease import authorization
+        auth = authorization()
+        state = {"symbol": symbol, "enabled": bool(settings.tradingagents_research_enabled),
+                 "executable": False, "blockers": [], "startup_conditions_not_checked": True,
+                 "admission": {"state": "research_only_authorized" if auth else "not_checked",
+                               "method_sha256": auth["method_sha256"] if auth else None},
+                 "verification": VERIFICATION, "production_eligible": False,
+                 "flow": {"roles": list(ROLES), "reports": list(REPORTS), "upstream_sha": UPSTREAM_SHA}}
+    else:
+        state = preflight(symbol, app, session_factory=session_factory)
+    state["latest"] = _latest(symbol)
+    if state["latest"] is not None:
+        result = state["latest"]
+        roles, projection = _role_projection(_folder(symbol) / result["run_id"], result)
+        result["roles"], result["role_projection_state"] = roles, projection
+    state.update(_read_task_state(symbol, session_factory))
     return state
+
+
+def read_saved_summary(symbol: str, *, session_factory=None) -> dict:
+    """Small saved-result metadata for the existing selected-list response owner."""
+    validate_params({"symbol": symbol})
+    return _saved_summary(symbol, _read_task_state(symbol, session_factory))
+
+
+def read_saved_summaries(symbols, *, session_factory=None) -> dict:
+    """Batch task state once; no launch preflight or model/quote/source call."""
+    symbols = list(dict.fromkeys(validate_params({"symbol": symbol}) for symbol in symbols))
+    states = _read_task_states(symbols, session_factory)
+    return {symbol: _saved_summary(symbol, states[symbol]) for symbol in symbols}
+
+
+def attach_saved_summaries(items: list[dict], *, session_factory=None) -> list[dict]:
+    symbols = [row["symbol"] for row in items if isinstance(row, dict)
+               and isinstance(row.get("symbol"), str) and re.fullmatch(r"[0-9]{6}", row["symbol"])]
+    summaries = read_saved_summaries(symbols, session_factory=session_factory)
+    return [{**row, **({"research_summary": summaries[row["symbol"]]} if row.get("symbol") in summaries else {})}
+            for row in items if isinstance(row, dict)]
+
+
+def _saved_summary(symbol, task_state):
+    report = _latest(symbol)
+    task = task_state["task"]
+    state = task["status"] if task and task["status"] in {"queued", "running", "failed", "canceled"} else "completed" if report else "unknown" if task else "none"
+    result = {"symbol": symbol, "state": "unknown" if task_state.get("task_read_unavailable") else state,
+              "task_state": task["status"] if task else None, "has_saved": report is not None,
+              "run_id": report["run_id"] if report else None,
+              "generated_at": report["generated_at"] if report else None,
+              "as_of": report["as_of"] if report else None,
+              "report_count": len(report["reports"]) if report else 0,
+              "roles_count": None, "final_rating": None,
+              "review_state": report["review_state"] if report else None,
+              "role_projection_state": "unavailable", "method_compatible": None}
+    if report:
+        roles, projection = _role_projection(_folder(symbol) / report["run_id"], report)
+        result["role_projection_state"] = projection
+        result["roles_count"] = len(roles) if projection == "available" else None
+        final = next((role for role in roles if role["role"] == "Portfolio Manager"), None)
+        rating = final["fields"].get("rating") if final else None
+        if isinstance(rating, str) and 0 < len(rating) <= 80:
+            result["final_rating"] = rating
+    return result
 
 
 async def run_research(rec, params: dict, app) -> dict:
@@ -588,7 +717,7 @@ async def run_research(rec, params: dict, app) -> dict:
     claim = _selection_claim(binding, admitted["admission"]["method_sha256"])
     # One cross-process execution owner. A queued task is not authority to
     # regenerate a paid answer or replace a failed/unknown native checkpoint.
-    with worker_lease(ROOT / "selected-execution"):
+    with worker_lease(ROOT / "selected-execution" / binding["symbol"]):
         prior = await agent_tasks._db_thread(_execution_prior, binding, admitted["admission"]["method_sha256"])
         expected_intent = dict(admitted["research_intent"]) if admitted.get("research_intent") else None
         if expected_intent is not None and (not prior or prior.get("research_intent") != expected_intent):
@@ -618,7 +747,6 @@ async def run_research(rec, params: dict, app) -> dict:
                 raise ValueError("selected result identity mismatch")
             await agent_tasks._db_thread(_write_selection_claim, claim, binding, admitted["admission"]["method_sha256"],
                 "completed", task_id=rec.task_id, run_id=result["run_id"], result_sha256=published[1])
-            return result
         except BaseException:
             # Use the task runner's drain discipline even when cancellation has
             # arrived; the claim prevents a later quote/date refresh from retrying.
@@ -626,6 +754,19 @@ async def run_research(rec, params: dict, app) -> dict:
             await drain_thread(_write_selection_claim, claim, binding, admitted["admission"]["method_sha256"],
                                "needs_recovery", task_id=rec.task_id)
             raise
+        await notify_research_ready(binding, published[0])
+        return result
+
+
+async def notify_research_ready(binding, published):
+    """Notification failure cannot roll a persisted research result backward."""
+    from app.services import agent_tasks
+    from app.services.selection_workflow import record_research_ready
+    try:
+        await agent_tasks._db_thread(record_research_ready, selection=binding, report=published,
+                                     session_factory=get_session_factory())
+    except Exception:
+        log.exception("completed selected research notification unavailable; result retained")
 
 
 def _selection_claim(binding, method_sha):
@@ -746,7 +887,7 @@ def _completed_selection(prior, binding):
 
 
 async def scheduler_tick(app):
-    """Drain actual selected stocks through the existing single task runtime.
+    """Drain actual selected stocks through the existing bounded task runtime.
 
     No daily count quota and no model on reads. Durable claims retain dispatch
     uncertainty and failures; new snapshots are not new paid observations.
@@ -776,9 +917,13 @@ async def scheduler_tick(app):
     except RuntimeError:
         return  # Another process already owns this short dispatch stage.
     try:
-        if await agent_tasks._db_thread(_task_active, sf):
+        capacity = max(1, min(3, int(settings.tradingagents_research_concurrency)))
+        active_symbols = await agent_tasks._db_thread(_active_symbols, sf)
+        if len(active_symbols) >= capacity:
             return
         for binding in await agent_tasks._db_thread(_pending_bindings, admission["method_sha256"], sf):
+            if binding["symbol"] in active_symbols:
+                continue
             claim = _selection_claim(binding, admission["method_sha256"])
             dispatch_owner = uuid.uuid4().hex
             try:
@@ -797,12 +942,76 @@ async def scheduler_tick(app):
                 await drain_thread(_write_selection_claim, claim, binding, admission["method_sha256"],
                                    "dispatch_unknown", dispatch_owner=dispatch_owner)
                 raise
-            return
+            active_symbols.add(binding["symbol"])
+            if len(active_symbols) >= capacity:
+                return
     finally:
         lease.__exit__(None, None, None)
 
 
-def _task_active(sf):
+def _active_symbols(sf):
     with sf() as db:
-        return bool(db.scalar(select(AgentTask.id).where(AgentTask.type == "tradingagents_research",
-                            AgentTask.status.in_(("queued", "running"))).limit(1)))
+        rows = db.scalars(select(AgentTask.params).where(AgentTask.type == "tradingagents_research",
+                          AgentTask.status.in_(("queued", "running")))).all()
+    symbols = set()
+    for index, raw in enumerate(rows):
+        try:
+            symbol = json.loads(raw)["symbol"]
+            if isinstance(symbol, str) and re.fullmatch(r"[0-9]{6}", symbol):
+                if symbol in symbols:
+                    symbols.add("duplicate-owner-" + str(index))
+                symbols.add(symbol)
+            else:
+                return {"unknown-owner-" + str(i) for i in range(3)}
+        except (ValueError, TypeError, KeyError):
+            return {"unknown-owner-" + str(i) for i in range(3)}
+    return symbols
+
+
+def wake_selected_research(app=None) -> bool:
+    """Coalesce committed selection events in the existing tracked scheduler."""
+    if not settings.tradingagents_research_enabled:
+        return False
+    if app is None:
+        from app.services.agent_tasks import _APP
+        app = _APP
+    state = getattr(app, "state", None)
+    event, loop = getattr(state, "selected_research_wake", None), getattr(state, "selected_research_loop", None)
+    if event is None or loop is None or loop.is_closed():
+        return False
+    loop.call_soon_threadsafe(event.set)
+    return True
+
+
+async def selected_research_loop(app, stop, *, interval=60.0, first_delay=90.0, registry=None):
+    """One registry-owned loop; no untracked dispatch tasks or shutdown list."""
+    event = app.state.selected_research_wake
+    app.state.selected_research_loop = asyncio.get_running_loop()
+    delay = first_delay
+    try:
+        while not stop.is_set():
+            waking = asyncio.create_task(event.wait())
+            stopping = asyncio.create_task(stop.wait())
+            try:
+                done, _ = await asyncio.wait({waking, stopping}, timeout=delay, return_when=asyncio.FIRST_COMPLETED)
+                if stopping in done or stop.is_set():
+                    return
+            finally:
+                for task in (waking, stopping):
+                    if not task.done():
+                        task.cancel()
+                await asyncio.gather(waking, stopping, return_exceptions=True)
+            event.clear()
+            try:
+                await scheduler_tick(app)
+                if registry is not None:
+                    registry.tick_ok("tradingagents-selected-research")
+            except asyncio.CancelledError:
+                raise
+            except Exception as error:
+                if registry is not None:
+                    registry.tick_failed("tradingagents-selected-research", error)
+                log.exception("selected research dispatch unavailable; original claims retained")
+            delay = interval
+    finally:
+        app.state.selected_research_loop = None
