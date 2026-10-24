@@ -4,7 +4,15 @@
 
 ## 1. 本轮范围与已核现场
 
-### 当前接续：左区空间与切换连续性
+### 当前收尾：合并后门禁隔离纠错
+
+UI的PR #331准确HEAD `a67a00df399410db48d1ff837ab3c84b36cecd24` 已经通过本地全门、PR CI及DegradedRelease/release_check并合入`b0c6e84330373d0002c0629314c835ea985f0f89`。但post-merge CI `40068586950` 的后端1 failed／7356 passed／87 skipped，故本轮尚未发布收口；原失败完整保留，不能用PR绿色代替master。
+
+失败在`test_event_api_exposes_channel_state_without_claiming_delivered`创建规则时，SQLite报`cannot commit - no transaction is active`。共享client启完整lifespan，内存StaticPool使多Session共用物理连接；受控INSERT后交错另一Session的SELECT/close，原夹具确实回滚插入并在refresh失败，文件库独立连接则保行且原HTTP断言通过。这不是同一条异常栈复现；CI实际抢占线程仍证据不够。
+
+从上述master接续`codex/isolate-outbox-api-check`，只将此序列化用例改用已有rig临时文件库与真实alert router，triage旁读同一factory，保留原全部状态/未送达/删除断言并增加HTTP200。局部路由测试不冒充鉴权或常驻生命周期验收；生产应用、共享conftest和CI不改。定向整文件50 passed，受控反例旧红/新绿；修补/测试提交`2044d3c800f69bf7cf0a02ed63a3f45a3cd84bb0`最终完整后端7357 passed／87 skipped／372 subtests（pytest361.96秒、外层364.665秒），pyflakes8.610秒、doc-health13.112秒、卫生0.139秒、公开扫描4.640秒通过，1848输入零漂移；本段仅事实回填，文档/账本/发布守卫另复验，准确HEAD发布与合并后CI另核。前端全部跟踪输入与上一份两时区2119/生产包4Fw证据逐字一致，可复用本地证据，新HEAD三required CI仍须取得。UI候选8d仍在本机，最终包未因失败提前正式加载；用户原件与031拒绝证据保留。
+
+### 已实现：左区空间与切换连续性
 
 用户直接要求接续PR #330优化卡片和每日／盘中切换。本轮基于master `dbb6dddd5d662c0501b1bd39796a3b80e61c0e0c`，分支`codex/hunting-card-flow`，原临时DEGRADED_FULL_CONTROL仍有效。原左右布局、双组挂载、资料身份与实际滚动owner保留；左区单一工具条合并名单与呈现切换，各组模式和阅读位置独立。每日规则键横向压紧，原时间、参考价、风险及完整依据不隐藏；[范围与取舍见UI审查§35](product/ui-audit-20261003.md#35-2026-10-24-名单切换与紧凑分项)。无新增滚动区、研究调用、业务评分／来源／权限变更。
 

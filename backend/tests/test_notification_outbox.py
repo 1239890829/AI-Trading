@@ -683,14 +683,27 @@ def test_deletion_during_send_preserves_attempt_and_cannot_mark_new_event(rig):
     assert rows(factory, NotificationAttempt)[0].state == "accepted"
 
 
-def test_event_api_exposes_channel_state_without_claiming_delivered(client):
-    from app.main import app
-    repo = app.state.alert_repo
+def test_event_api_exposes_channel_state_without_claiming_delivered(rig, monkeypatch):
+    from fastapi import FastAPI
+    from fastapi.testclient import TestClient
+    from app.api.routes.alert import router
+
+    repo, factory, *_ = rig
+    # This is the real route's serialization contract, not a scheduler test.
+    # A full lifespan shares one in-memory StaticPool connection with background
+    # sessions; their close/rollback can discard this test's INSERT transaction.
+    app = FastAPI()
+    app.include_router(router, prefix="/api")
+    app.state.alert_repo = repo
+    monkeypatch.setattr("app.core.db.get_session_factory", lambda: factory)
     rule = repo.create_rule(name="outbox-api", channels=["feishu"])
     event = repo.record_trigger(rule.id, "600000", 11, 10, outbox_target="opaque-target",
                                 now_ms=1, expires_at_ms=2)
     repo.outbox.reconcile(3)
-    data = client.get("/api/alerts/events", params={"rule_id": rule.id}).json()["data"]
+    with TestClient(app) as client:
+        response = client.get("/api/alerts/events", params={"rule_id": rule.id})
+    assert response.status_code == 200
+    data = response.json()["data"]
     found, = [e for e in data if e["id"] == event.id]
     state, = found["channel_states"]
     assert state["state"] == "expired" and state["accepted_at_ms"] is None
