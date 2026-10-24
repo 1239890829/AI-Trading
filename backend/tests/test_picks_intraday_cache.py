@@ -42,6 +42,10 @@ def test_opportunity_endpoints_share_one_build_and_isolate_overlays(monkeypatch)
     monkeypatch.setattr(runtime, "_build_opportunities_uncached", fake_uncached)
     monkeypatch.setattr(runtime, "attach_risk_to_themes", fake_overlay)
     monkeypatch.setattr(runtime, "snapshot_by", lambda _app: {})
+    # This cache/overlay fixture has no archived first-entry database. Its reader
+    # boundary returns an empty set; selection-entry persistence has separate tests.
+    from app.picks import selection_entry
+    monkeypatch.setattr(selection_entry, "intraday_entries", lambda *args, **kwargs: {})
 
     async def run():
         one = asyncio.create_task(runtime.build_opportunities(app, "2026-09-15", 5, 8))

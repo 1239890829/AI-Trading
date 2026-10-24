@@ -271,6 +271,256 @@ def _brief(date_str: str) -> dict:
     }
 
 
+@pytest.fixture
+def close_collection_rig(brief_dir, monkeypatch):
+    import app.picks.opportunity_learning as ol
+    clock = [datetime(2026, 9, 2, 15, 36)]
+    monkeypatch.setattr(ri, "beijing_now", lambda: clock[0])
+    async def days(_): return [date(2026, 9, 1), date(2026, 9, 2), date(2026, 9, 3)]
+    async def closing(_): return {"themes": {}, "env": {}, "missing": [], "pool_count": 0, "board_count": 0}
+    async def alerts(_): return {"ok": True, "alerts_updated": 0}
+    async def path(*_): return {"labeled": 0, "pending": 0, "unknown": 0}
+    class Provider:
+        name = "unit"
+        async def get_kline(self, symbol, timeframe):
+            return [Kline(symbol=symbol,timeframe=timeframe,ts=datetime(2026,9,d),close=10.,high=10.5,low=9.5,source=self.name) for d in (1,2)]
+        async def get_raw_daily_kline(self, symbol):
+            return await self.get_kline(symbol,"1d")
+    state = NS(hub=NS(provider=Provider()), snapshot_service=None, picks_watcher=None)
+    monkeypatch.setattr(ri.tc, "trading_days", days)
+    monkeypatch.setattr(ri, "collect_closing_facts", closing)
+    monkeypatch.setattr(ri, "backfill_alert_returns", alerts)
+    monkeypatch.setattr(ri, "collect_d0_path_outcomes", path)
+    monkeypatch.setattr("app.picks.watch_ledger.get_day", lambda *_a,**_k: [])
+    monkeypatch.setattr("app.picks.watch_ledger.settle_day", lambda *_a,**_k: {})
+    monkeypatch.setattr("app.picks.watch_ledger.validate_previous_day", lambda *_a,**_k: 0)
+    monkeypatch.setattr(ol, "ensure_outcome_horizons", lambda *_a,**_k: {"inserted": 0})
+    monkeypatch.setattr(ol, "pending_outcome_targets", lambda *_a,**_k: {})
+    monkeypatch.setattr(ol, "pending_cross_day_path_targets", lambda *_a,**_k: {})
+    monkeypatch.setattr(ol, "pending_symbols", lambda *_a,**_k: set())
+    monkeypatch.setattr(ol, "label_trade_date", lambda *_a,**_k: {"labeled": 0, "pending": 0, "unknown": 0})
+    monkeypatch.setattr(ol, "label_due_outcomes", lambda *_a,**_k: {"labeled": 0, "pending": 0, "unknown": 0})
+    _write_brief(brief_dir, {**_brief("20260902"), "directions": []})
+    return state,clock,ol,Provider
+
+
+def test_successful_brief_does_not_hide_outcome_failure_or_block_later_retry(close_collection_rig, brief_dir, monkeypatch):
+    import asyncio
+    state,clock,ol,_ = close_collection_rig
+    calls=[]
+    def label(*_a,**_k):
+        calls.append(True)
+        if len(calls)==1: raise RuntimeError("synthetic close storage failure")
+        return {"labeled": 1, "pending": 0, "unknown": 0}
+    monkeypatch.setattr(ol, "label_trade_date", label)
+    result=asyncio.run(ri.run_review(NS(state=state),trigger="schedule"))
+    assert result["ok"] is True
+    assert result["outcome_collection"]["state"] == "failed"
+    assert json.loads((brief_dir/"20260902.json").read_text())["review"]["trigger"] == "schedule"
+    clock[0]=clock[0].replace(minute=51)
+    recovered=asyncio.run(ri.collect_after_close_outcomes(state))
+    assert recovered["outcome_collection"]["state"] == "complete" and len(calls)==2
+    assert [p["brief_date"] for p in ri.list_brief_payloads()] == ["20260902"]
+
+
+def test_pending_prior_d0_is_recovered_as_existing_close_observation(close_collection_rig, monkeypatch):
+    import asyncio
+    state,_,ol,_=close_collection_rig
+    def pending(*_a,**kw):
+        return {"2026-09-01":{"600001"}} if "d0_close" in kw.get("horizons",()) else {}
+    monkeypatch.setattr(ol,"pending_outcome_targets",pending)
+    labels=[]
+    def label(day,closes,*_a,**_k):
+        labels.append((day,closes))
+        return {"labeled":len(closes),"pending":0,"unknown":0}
+    monkeypatch.setattr(ol,"label_trade_date",label)
+    asyncio.run(ri.run_review(NS(state=state),trigger="manual"))
+    assert ("2026-09-01",{"600001":10.}) in labels
+
+
+def test_outcome_pair_does_not_split_composite_qfq_and_raw_sources(close_collection_rig, monkeypatch):
+    import asyncio
+    state,_,ol,Provider=close_collection_rig
+    good=Provider();bad_calls=[]
+    class Composite:
+        providers=[good]
+        async def get_kline(self,symbol,timeframe):
+            bad_calls.append("qfq")
+            return [Kline(symbol=symbol,timeframe=timeframe,ts=datetime(2026,9,2),close=10.,source="other")]
+        async def get_raw_daily_kline(self,symbol):
+            bad_calls.append("raw")
+            return await good.get_raw_daily_kline(symbol)
+    state.hub.provider=Composite()
+    monkeypatch.setattr(ol,"pending_symbols",lambda *_a,**_k:{"600001"})
+    bases=[]
+    def label(*_a,**kw):
+        bases.append(kw["price_basis_by_key"])
+        return {"labeled":1,"pending":0,"unknown":0}
+    monkeypatch.setattr(ol,"label_trade_date",label)
+    asyncio.run(ri.run_review(NS(state=state),trigger="manual"))
+    assert bases and bases[0][("2026-09-02","600001")][0] == 1.
+    assert bad_calls == []
+
+
+def test_outcome_slots_survive_restart_without_creating_a_brief(close_collection_rig, brief_dir, monkeypatch):
+    import asyncio
+    state,clock,_,_=close_collection_rig
+    (brief_dir/"20260902.json").unlink()
+    calls=[]
+    async def fail(*_a,**_k):
+        calls.append(True)
+        return {"outcome_collection":{"state":"failed","reason_codes":["synthetic_source_failure"]}}
+    monkeypatch.setattr(ri,"collect_closed_outcomes",fail)
+    asyncio.run(ri.collect_after_close_outcomes(state))
+    restarted=NS(hub=state.hub)
+    assert asyncio.run(ri.collect_after_close_outcomes(restarted))["outcome_collection"]["reason_codes"] == ["slot_already_attempted"]
+    for hour,minute in ((15,50),(16,5),(16,20),(16,35)):
+        clock[0]=datetime(2026,9,2,hour,minute)
+        asyncio.run(ri.collect_after_close_outcomes(restarted))
+    assert len(calls)==5
+    clock[0]=datetime(2026,9,2,16,36)
+    assert asyncio.run(ri.collect_after_close_outcomes(restarted))["outcome_collection"]["state"] == "skipped"
+    assert len(calls)==5 and ri.list_brief_payloads()==[]
+    receipt=json.loads((brief_dir/"20260902.outcomes.json").read_text())
+    assert len(receipt["attempts"])==5
+    assert all(set(a)<= {"slot","state","started_at","finished_at","reason_codes"} for a in receipt["attempts"])
+    assert not (brief_dir/"20260902.json").exists()
+
+
+def test_close_calendar_unknown_never_fetches_price_or_guesses_sessions(close_collection_rig, monkeypatch):
+    import asyncio
+    state,_,ol,_=close_collection_rig
+    async def no_days(_): return []
+    async def forbidden(*_a,**_k): raise AssertionError("must not fetch price without calendar")
+    monkeypatch.setattr(ri.tc,"trading_days",no_days)
+    monkeypatch.setattr(ri,"_paired_daily_facts",forbidden)
+    monkeypatch.setattr(ol,"ensure_outcome_horizons",lambda *_a,**_k: (_ for _ in ()).throw(AssertionError("no guessed horizons")))
+    got=asyncio.run(ri.collect_closed_outcomes(state))
+    assert got["outcome_collection"] == {"state":"calendar_unknown","reason_codes":["calendar_uncovered"]}
+
+
+@pytest.mark.parametrize("mode",["missing_raw","mismatched_source","stale"])
+def test_paired_daily_rejects_missing_or_untrusted_legs(close_collection_rig, mode):
+    import asyncio
+    _,_,_,Provider=close_collection_rig
+    class Broken(Provider):
+        async def get_raw_daily_kline(self,symbol):
+            if mode=="missing_raw": return []
+            rows=await super().get_raw_daily_kline(symbol)
+            return [r.model_copy(update={"source":"other"} if mode=="mismatched_source" else {"quality":"stale"}) for r in rows]
+    assert asyncio.run(ri._paired_daily_facts(Broken(),"600001")) == ({},{})
+
+
+def test_paired_daily_attempts_only_two_capable_sources(close_collection_rig):
+    import asyncio
+    _,_,_,Provider=close_collection_rig
+    calls=[]
+    class Missing(Provider):
+        async def get_kline(self,symbol,timeframe): calls.append(self.name);return []
+        async def get_raw_daily_kline(self,symbol): return []
+    sources=[]
+    for i in range(3):
+        source=Missing();source.name=str(i);sources.append(source)
+    assert asyncio.run(ri._paired_daily_facts(NS(providers=sources),"600001")) == ({},{})
+    assert calls==["0","1"]
+
+
+def test_pinned_pair_keeps_real_composite_observation_and_breaker(close_collection_rig):
+    import asyncio
+    from app.data_providers.composite import CompositeProvider
+    _,_,_,Provider=close_collection_rig
+    provider=CompositeProvider([Provider()])
+    qfq,raw=asyncio.run(ri._paired_daily_facts(provider,"600001"))
+    assert qfq and raw
+    health=provider.provider_health()
+    assert health["method_attempts"]["get_kline@unit"]["method_started"]==1
+    assert health["method_attempts"]["get_raw_daily_kline@unit"]["method_started"]==1
+    for _ in range(3): provider._record_failure("get_raw_daily_kline","unit")
+    assert asyncio.run(ri._paired_daily_facts(provider,"600001"))==({},{})
+    assert provider.provider_health()["method_attempts"]==health["method_attempts"]
+
+
+def test_unhandled_collection_error_is_saved_as_failure(close_collection_rig, brief_dir, monkeypatch):
+    import asyncio
+    state,_,_,_=close_collection_rig
+    async def fail(*_a,**_k): raise OSError("synthetic unavailable")
+    monkeypatch.setattr(ri,"collect_closed_outcomes",fail)
+    got=asyncio.run(ri.collect_after_close_outcomes(state))
+    assert got["outcome_collection"]["state"]=="failed"
+    receipt=json.loads((brief_dir/"20260902.outcomes.json").read_text())
+    assert receipt["attempts"][0]["reason_codes"]==["collector:OSError"]
+
+
+@pytest.mark.parametrize("payload",[None,{"review":{"trigger":"schedule"}}])
+def test_existing_scheduler_collects_without_or_after_successful_brief(close_collection_rig, monkeypatch, payload):
+    import asyncio
+    state,_,_,_=close_collection_rig
+    calls=[]
+    async def scenario():
+        stop=asyncio.Event()
+        async def collect(*_a,**_k): calls.append(True);stop.set()
+        async def noop(*_a,**_k): return None
+        async def forbidden(*_a,**_k): raise AssertionError("brief must not run again")
+        monkeypatch.setattr(ri,"load_brief",lambda _:payload)
+        monkeypatch.setattr(ri,"run_review",forbidden)
+        monkeypatch.setattr(ri,"collect_after_close_outcomes",collect)
+        monkeypatch.setattr("app.picks.heat_history.record_daily_heat",noop)
+        monkeypatch.setattr("app.picks.heat_history.record_daily_skyrocket",noop)
+        monkeypatch.setattr("app.market.board_flow.snapshot_daily_if_closed",noop)
+        await ri.intraday_review_scheduler(NS(state=state),stop=stop)
+    asyncio.run(scenario())
+    assert calls==[True]
+
+
+def test_closed_symbol_batch_preserves_other_pending_and_all_original_snapshots(tmp_path, monkeypatch):
+    import asyncio
+    engine=create_engine(f"sqlite:///{tmp_path/'closed-batch.sqlite'}")
+    Base.metadata.create_all(engine)
+    sf=sessionmaker(bind=engine)
+    items=[{"symbol":s,"name":"合成观察","price":10.,"confidence":{"tier":"executable"}} for s in ("600001","600002")]
+    run,records=build_notification_records(items,trade_date="2026-09-01",as_of=datetime(2026,9,1,10),
+        hits=[{"item":i,"price":10.,"chg":2.} for i in items],skips=[],dispatch_by_symbol={})
+    archive_records(run,records,sf)
+    monkeypatch.setattr(ri,"beijing_now",lambda:datetime(2026,9,2,16))
+    async def days(_):return [date(2026,9,1),date(2026,9,2),date(2026,9,3)]
+    monkeypatch.setattr(ri.tc,"trading_days",days)
+    monkeypatch.setattr("app.picks.watch_ledger.get_day",lambda *_a,**_k:[])
+    monkeypatch.setattr("app.picks.watch_ledger.settle_day",lambda *_a,**_k:{})
+    def forbidden(*_a,**_k):raise AssertionError("historical close cannot become today's D+1 fact")
+    monkeypatch.setattr("app.picks.watch_ledger.validate_previous_day",forbidden)
+    calls=[]
+    class Provider:
+        name="unit"
+        def rows(self,symbol):
+            return [Kline(symbol=symbol,timeframe="1d",ts=datetime(2026,9,1),close=10.,source=self.name)]
+        async def get_kline(self,symbol,timeframe):calls.append(symbol);return self.rows(symbol)
+        async def get_raw_daily_kline(self,symbol):calls.append(symbol);return self.rows(symbol)
+    state=NS(hub=NS(provider=Provider()))
+    def snapshot():
+        with sf() as db:
+            originals=[tuple(getattr(s,c.name) for c in s.__table__.columns) for s in db.scalars(select(OpportunityDecisionSnapshot).order_by(OpportunityDecisionSnapshot.id))]
+            outside=[tuple(getattr(o,c.name) for c in o.__table__.columns) for o in db.scalars(select(OpportunityOutcomeLabel)
+                .join(OpportunityDecisionSnapshot,OpportunityDecisionSnapshot.snapshot_id==OpportunityOutcomeLabel.snapshot_id)
+                .where(OpportunityDecisionSnapshot.symbol=="600002").order_by(OpportunityOutcomeLabel.id))]
+            return originals,outside
+    before=snapshot()
+    rejected=asyncio.run(ri.collect_closed_outcomes(state,trade_date="2026-09-01",session_factory=sf,symbols={"999999"}))
+    assert rejected["outcome_collection"]["reason_codes"]==["symbols_outside_archived_scope"]
+    assert snapshot()==before and calls==[]
+    result=asyncio.run(ri.collect_closed_outcomes(state,trade_date="2026-09-01",session_factory=sf,symbols={"600001"}))
+    status=result["outcome_collection"]
+    assert status["state"]=="partial" and status["partial_batch"] is True
+    assert (status["processed_count"],status["remaining_count"],status["scope_count"])==(1,1,2)
+    assert calls==["600001","600001"]
+    assert snapshot()==before
+    with sf() as db:
+        chosen=list(db.scalars(select(OpportunityOutcomeLabel).join(OpportunityDecisionSnapshot,
+            OpportunityDecisionSnapshot.snapshot_id==OpportunityOutcomeLabel.snapshot_id)
+            .where(OpportunityDecisionSnapshot.symbol=="600001",OpportunityOutcomeLabel.horizon=="d0_close")))
+        assert chosen and all(o.state=="labeled" for o in chosen)
+    engine.dispose()
+
+
 def test_collect_d0_path_outcomes_uses_tencent_only_and_selected_symbols(tmp_path):
     import asyncio
 
@@ -588,7 +838,7 @@ def test_backfill_alert_returns(brief_dir, monkeypatch):
                 date(2026, 9, 1): 10.0, date(2026, 9, 2): 11.0,
                 date(2026, 9, 3): 10.5, date(2026, 9, 4): 9.0,
             }
-            return [NS(ts=datetime(d.year, d.month, d.day), close=c)
+            return [NS(ts=datetime(d.year, d.month, d.day), close=c, source="tencent", quality="high")
                     for d, c in bars.items()]
 
     async def _days(provider):

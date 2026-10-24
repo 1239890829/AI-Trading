@@ -5,7 +5,7 @@ import os
 from pathlib import Path
 from typing import Any
 
-from pydantic import model_validator
+from pydantic import Field, model_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 REPO_ROOT = Path(__file__).resolve().parents[3]
@@ -361,6 +361,7 @@ class Settings(BaseSettings):
     tradingagents_research_enabled: bool = False  # Requires exact-method research authorization or quality admission.
     tradingagents_research_admission_digest: str = ""  # Server-pinned data/tradingagents_research/admission.json.
     tradingagents_research_authorization_digest: str = ""  # Independent selected-stock research authorization; never quality approval.
+    tradingagents_research_concurrency: int = Field(default=3, ge=1, le=3)  # Running selected stocks, not a daily quota.
     tradingagents_research_interval_seconds: float = 60.0
     tradingagents_research_startup_delay_seconds: float = 90.0
     tradingagents_research_timeout_seconds: float = 1800.0  # Complete selected-stock graph, including free evidence capture; not a call quota.

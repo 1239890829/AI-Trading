@@ -49,7 +49,7 @@ describe("完整TradingAgents研究读者", () => {
     expect(getTradingAgentsResearch).not.toHaveBeenCalled();
     fireEvent.click(screen.getByRole("button", {name: /TradingAgents 完整研究/}));
     await screen.findByText(/当前未启用完整研究/);
-    expect(getTradingAgentsResearch).toHaveBeenCalledWith("002121");
+    expect(getTradingAgentsResearch).toHaveBeenCalledWith("002121", {savedOnly:true});
     fireEvent.click(screen.getByText(/查看启动阻断原因/));
     expect(screen.getByText("净增益尚未准入")).toBeTruthy();
     expect((screen.getByRole("button", {name: "显式启动完整研究"}) as HTMLButtonElement).disabled).toBe(true);
@@ -106,7 +106,7 @@ describe("完整TradingAgents研究读者", () => {
     let finish!: (value: TradingAgentsResearchView) => void;
     vi.mocked(getTradingAgentsResearch).mockImplementationOnce(() => new Promise(resolve => {finish = resolve;})).mockResolvedValueOnce(saved("600276"));
     const panel = render(<TradingAgentsResearchPanel symbol="002121" defaultOpen/>);
-    await waitFor(() => expect(getTradingAgentsResearch).toHaveBeenCalledWith("002121"));
+    await waitFor(() => expect(getTradingAgentsResearch).toHaveBeenCalledWith("002121", {savedOnly:true}));
     panel.rerender(<TradingAgentsResearchPanel symbol="600276" defaultOpen/>);
     await screen.findByText(/600276 · 已保存/);
     await act(async () => {finish(recovered());});
@@ -159,6 +159,8 @@ describe("完整TradingAgents研究读者", () => {
     let finish!: (task: AgentTask) => void;
     vi.mocked(createAgentTask).mockImplementation(() => new Promise(resolve => {finish = resolve;}));
     render(<TradingAgentsResearchPanel symbol="002121" defaultOpen/>);
+    await screen.findByRole("button", {name: "检查启动条件"});
+    fireEvent.click(screen.getByRole("button", {name: "检查启动条件"}));
     const button = await screen.findByRole("button", {name: "显式启动完整研究"});
     await waitFor(() => expect((button as HTMLButtonElement).disabled).toBe(false));
     fireEvent.click(button); fireEvent.click(button);
@@ -177,12 +179,10 @@ describe("完整TradingAgents研究读者", () => {
     expect(getTradingAgentsResearch).not.toHaveBeenCalled();
   });
 
-  it("keeps the compact entry unread until opened and never offers a model start even when executable", async () => {
+  it("reads saved roles immediately inside an opened compact reader without offering a model start", async () => {
     vi.mocked(getTradingAgentsResearch).mockResolvedValue({...view(), enabled: true, executable: true, blockers: []});
     render(<TradingAgentsResearchPanel symbol="002121" compact/>);
-    expect(screen.getByText(/未读取 · 展开只查已有结果/)).toBeTruthy();
-    expect(getTradingAgentsResearch).not.toHaveBeenCalled();
-    fireEvent.click(screen.getByRole("button", {name: "TradingAgents 研究记录 · 查看"}));
+    expect(screen.getByRole("button", {name: "TradingAgents 研究记录 · 收起"})).toBeTruthy();
     await screen.findByText("002121 · 未查到研究记录");
     expect(screen.queryByRole("button", {name: "显式启动完整研究"})).toBeNull();
     expect(screen.queryByRole("link", {name: "任务中心查看或取消"})).toBeNull();

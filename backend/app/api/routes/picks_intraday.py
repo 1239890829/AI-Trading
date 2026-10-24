@@ -18,6 +18,7 @@
 """
 from __future__ import annotations
 
+import asyncio
 import contextlib
 import logging
 from datetime import datetime
@@ -27,6 +28,7 @@ from fastapi import APIRouter, Depends, HTTPException, Query, Request
 from app.api.deps import require_write_token
 from app.core.bjtime import beijing_now
 from app.core.config import settings
+from app.core.db import get_session_factory
 from app.core.ttl_cache import cache_on
 from app.services.market_snapshot import default_trade_date
 
@@ -155,13 +157,29 @@ async def intraday_review(limit: int = Query(default=30, ge=1, le=90)) -> dict:
 
 @router.post("/intraday-review/run")
 async def run_intraday_review(
-    request: Request, _: None = Depends(require_write_token)
+    request: Request, _: None = Depends(require_write_token),
+    outcome_date: str | None = Query(default=None, pattern=r"^\d{4}-\d{2}-\d{2}$"),
+    symbols: str | None = Query(default=None, pattern=r"^\d{6}(,\d{6}){0,19}$"),
 ) -> dict:
     """手动执行当日方向对照 + 全量提醒收益回填（15:35 调度的同代码路径）。
 
     09:25 前拒绝（当日盘面未形成，对照只会产出垃圾）；当日无简报 404。
+    显式 outcome_date 只恢复已完成交易日的原归档价格观察，不执行简报或交易。
     """
-    from app.picks.review_intraday import run_review
+    from app.picks.review_intraday import collect_closed_outcomes, run_review
+
+    if symbols is not None and outcome_date is None:
+        raise HTTPException(422, detail={"code": "outcome_date_required"})
+    if outcome_date is not None:
+        try:
+            result = await collect_closed_outcomes(request.app, trade_date=outcome_date,
+                **({"symbols": set(symbols.split(","))} if symbols is not None else {}))
+        except ValueError as exc:
+            raise HTTPException(422, detail={"code": "invalid_outcome_date", "reason": str(exc)}) from exc
+        status = result["outcome_collection"]
+        if status["state"] in {"blocked", "calendar_unknown"}:
+            raise HTTPException(409, detail=status)
+        return {"data": result, "meta": {"mode": "outcome_only", "outcome_date": outcome_date}}
 
     result = await run_review(request.app, trigger="manual")
     if not result.get("ok"):
@@ -418,6 +436,9 @@ async def intraday_top(
     trade_date = await default_trade_date(hub)
     payload = await _build_opportunities(request, trade_date, 5, 8)
     data = top_watch_stocks(payload["data"], limit=limit)
+    from app.services.tradingagents_research import attach_saved_summaries
+    data["items"] = await asyncio.to_thread(attach_saved_summaries, data.get("items") or [],
+                                           session_factory=get_session_factory())
 
     # The shared assembly already froze price/risk fields with its evidence snapshot.
     # A later quote must not overwrite one half of this decision.

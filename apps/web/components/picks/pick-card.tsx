@@ -7,6 +7,7 @@ import { CardHead, CardShell } from "@/components/picks/card-shell";
 import { CardEntryRow } from "@/components/picks/card-entries";
 import { LimitReason } from "@/components/detail/limit-reason";
 import {StockAttributionPanel} from "@/components/detail/attribution-evidence";
+import {PaperSelectionAction} from "@/components/picks/paper-selection-action";
 import {TradingAgentsResearchPanel} from "@/components/detail/tradingagents-research-panel";
 import {SELECTION_SCORE_LABELS, SelectionMeasurements, SelectionScores, readSelectionMetrics, type SelectionScore} from "@/components/detail/selection-decision-explorer";
 import { StockLink, useStockRowNav } from "@/components/stock-link";
@@ -96,6 +97,8 @@ export interface TradingCard {
   /** 盘前生成/首见参考价；仅用于复盘基准，绝不冒充成交。 */
   referencePrice: number | null;
   selectionEntry?: DailyPickItem["selection_entry"];
+  researchSummary?: DailyPickItem["research_summary"];
+  paperContext?: {ref: string; version: string} | null;
   /** 当前展示身份，保留既有首次入选记录；仅参考不等于从未入选。 */
   referenceOnly?: boolean;
   /** 最新动作时执行复核；null = 尚未产生盘中买点判定。 */
@@ -174,8 +177,26 @@ function toJudgement(raw: { level: string; basis?: string } | null | undefined):
   return { level: raw.level, basis: raw.basis ?? "" };
 }
 
+/** A current daily identity may supersede its immutable first-entry reference. */
+function selectedPaperContext(it: {symbol: string; selection_entry?: DailyPickItem["selection_entry"]}, scope: "daily" | "intraday", current?: {date: string; version: string | null}) {
+  if (!/^\d{6}$/.test(it.symbol)) return null;
+  if (scope === "daily" && current && /^\d{4}-\d{2}-\d{2}$/.test(current.date) && current.version) return {ref: `daily:${current.date}:${it.symbol}`, version: current.version};
+  const entry = it.selection_entry;
+  if (!entry || entry.source !== (scope === "daily" ? "daily_generation" : "intraday_rank_archive") || !entry.source_version || !entry.selected_at || !/(?:Z|[+-]\d{2}:\d{2})$/.test(entry.selected_at)) return null;
+  const day = bjDate(entry.selected_at);
+  return /^\d{4}-\d{2}-\d{2}$/.test(day) ? {ref: `${scope}:${day}:${it.symbol}`, version: entry.source_version} : null;
+}
+
+function ResearchState({item}: {item: TradingCard}) {
+  const state = item.researchSummary;
+  if (!state || state.symbol !== item.symbol || item.referenceOnly) return null;
+  const labels = {completed: "研究已保存", running: "完整研究进行中", queued: "研究排队中", failed: "本轮研究失败", canceled: "本轮研究已取消", none: "尚无完整研究", unknown: "研究状态待核"};
+  const label = labels[state.state] || "研究状态待核";
+  return <span title={`${state.generated_at ? `生成于 ${dateTimeTextBJ(state.generated_at)}；` : ""}角色与报告数量仅代表覆盖，不证明结论正确。`}>{label}{state.has_saved && state.roles_count === 12 && state.report_count === 7 ? " · 12角色" : ""}</span>;
+}
+
 /** 盘前名单（DailyPickItem）→ 统一模型。 */
-export function fromDailyPick(it: DailyPickItem): TradingCard {
+export function fromDailyPick(it: DailyPickItem, current?: {date: string; version: string | null}): TradingCard {
   const basisRows: { label: string; value: string }[] = [];
   const execution = it.execution ?? null;
   const executable = execution?.executable_snapshot;
@@ -199,6 +220,8 @@ export function fromDailyPick(it: DailyPickItem): TradingCard {
     change_pct: executionReady ? (executable?.change_pct ?? it.change_pct ?? null) : (it.change_pct ?? null),
     referencePrice: execution?.reference_entry.price ?? it.price ?? null,
     selectionEntry: it.selection_entry,
+    researchSummary: it.research_summary,
+    paperContext: selectedPaperContext(it, "daily", current),
     referenceOnly: false,
     execution,
     pe_ttm: it.pe_ttm ?? null,
@@ -264,6 +287,8 @@ export function fromIntradayStock(it: IntradayTopStock | OpportunityStock): Trad
     change_pct: it.change_pct ?? null,
     referencePrice: null,
     selectionEntry: it.selection_entry,
+    researchSummary: it.research_summary,
+    paperContext: it.reference_only ? null : selectedPaperContext(it, "intraday"),
     referenceOnly: it.reference_only === true,
     execution: null,
     pe_ttm: null,
@@ -419,6 +444,7 @@ function CompactPickSummary({item, scores, reading, positionLabel, dailyEvidence
       <span>{item.origin === "picks" ? "每日精选" : "盘中跟踪"}{item.tier != null ? ` · T${item.tier}` : ""}</span>
       {item.referenceOnly && <strong>当前仅参考</strong>}
       <span title={item.tradability?.basis}>{qualification}</span>
+      <ResearchState item={item}/>
       {positionLabel && <span>{positionLabel === "real" ? "有手工持仓记录" : "有模拟持仓记录"}</span>}
       {item.observationOnly && <strong title={followTitle}>{followText}</strong>}
     </div>
@@ -539,6 +565,7 @@ export function PickCard({
           scores: selectionScores,
         }}/>
       <TradingAgentsResearchPanel symbol={item.symbol} compact allowStart={false}/>
+      {!item.referenceOnly && item.paperContext && <PaperSelectionAction key={`${item.paperContext.ref}:${item.paperContext.version}`} symbol={item.symbol} selectionRef={item.paperContext.ref} sourceVersion={item.paperContext.version}/>}
       <ResearchDisclosure label="原筛选完整依据" identity={readingKey} defaultOpen={evidenceExpanded}>
       <ReaderBrief label="筛选支持项" facts={reading.supports}/>
       {compact && item.execution && <FactCards label="原报价与执行复核" items={[

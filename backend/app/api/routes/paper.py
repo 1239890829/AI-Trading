@@ -6,11 +6,11 @@ import asyncio
 from datetime import timezone
 from uuid import UUID
 
-from fastapi import Depends, APIRouter, HTTPException, Request
+from fastapi import Depends, APIRouter, HTTPException, Query, Request
 
 from app.api.deps import require_write_token
 from app.core.bjtime import BJ_TZ
-from pydantic import AwareDatetime, BaseModel, Field
+from pydantic import AwareDatetime, BaseModel, Field, model_validator
 
 from app.paper.engine import PaperTradingEngine
 
@@ -33,6 +33,36 @@ class OrderIn(BaseModel):
     # 把账户余额污染成 inf。NaN 比较恒 False 侥幸被 gt 挡住，但两者都该显式拒。
     price: float = Field(gt=0, allow_inf_nan=False)
     quantity: int = Field(gt=0)
+    selection_ref: str | None = Field(default=None, max_length=100,
+                                      pattern=r"^(daily|intraday):\d{4}-\d{2}-\d{2}:\d{6}$")
+    source_version: str | None = Field(default=None, min_length=1, max_length=128)
+    decision_id: str | None = Field(default=None, min_length=1, max_length=128)
+    decision_version: str | None = Field(default=None, min_length=1, max_length=128)
+
+    @model_validator(mode="after")
+    def complete_selection_binding(self):
+        values = (self.selection_ref, self.source_version, self.decision_id, self.decision_version)
+        if any(values) and not all(values):
+            raise ValueError("入选模拟动作须完整绑定来源与执行判定版本")
+        return self
+
+
+@router.get("/paper/selection-action")
+async def selection_action(request: Request,
+        selection_ref: str = Query(pattern=r"^(daily|intraday):\d{4}-\d{2}-\d{2}:\d{6}$"),
+        source_version: str = Query(min_length=1, max_length=128),
+        price: float | None = Query(default=None, gt=0, allow_inf_nan=False),
+        quantity: int = Query(default=100, gt=0), request_id: UUID | None = None):
+    from app.paper.selection_action import read_selection_action
+    try:
+        data = await read_selection_action(_engine(request), selection_ref, source_version,
+                                          price=price, quantity=quantity, request_id=request_id)
+    except ValueError as exc:
+        raise HTTPException(422, str(exc)) from exc
+    access = getattr(request.state, "device_access", {})
+    data["permission"] = {"maintenance_required": True,
+                          "maintenance_granted": bool(access.get("maintenance"))}
+    return {"data": data}
 
 
 class ResetIn(BaseModel):
@@ -155,6 +185,8 @@ async def cancel_order(order_id: int, request: Request):
     o = engine.cancel(order_id)
     if o is None:
         raise HTTPException(status_code=404, detail="挂单不存在或已成交")
+    from app.paper.actions import record_action_status
+    await record_action_status(engine, None, None, o.id)
     return {"data": {"id": o.id, "status": o.status}}
 
 

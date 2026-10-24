@@ -441,6 +441,8 @@ async def archive_intraday_evidence_tick(app) -> dict:
         run_id=evidence["run_id"],
         fresh_within=float(getattr(svc, "poll_interval", settings.snapshot_poll_interval_seconds)) * 3,
     )
+    from app.services.tradingagents_research import wake_selected_research
+    wake_selected_research(app)
     state.opportunity_evidence_saved_files = saved_files
     log.info(
         "intraday opportunity evidence archived: snapshot=%s run=%s records=%s",

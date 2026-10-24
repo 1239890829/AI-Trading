@@ -24,6 +24,7 @@ def setup(tmp_path, monkeypatch):
     sf = sessionmaker(bind=engine, expire_on_commit=False)
     clock = [datetime(2026, 9, 29, 10, 0, tzinfo=BJ_TZ)]
     monkeypatch.setattr(hs, "beijing_now", lambda: clock[0])
+    monkeypatch.setattr("app.paper.engine.beijing_now", lambda: clock[0])
     monkeypatch.setattr("app.paper.engine._today", lambda: clock[0].strftime("%Y%m%d"))
     class Clock(datetime):
         @classmethod

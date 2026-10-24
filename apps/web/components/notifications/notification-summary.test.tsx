@@ -1,11 +1,15 @@
 import {afterEach, beforeEach, expect, it, vi} from "vitest";
 import {cleanup, fireEvent, render, screen, waitFor, within} from "@testing-library/react";
+import type {TradingAgentsResearchView} from "@/lib/api/agent";
 import type {NotificationItem, NotificationsPayload} from "@/lib/api";
 import {NotificationBell} from "./notification-drawer";
 import {SymbolDetailCtx} from "@/components/detail/symbol-detail-context";
 import {__resetPrefsCache} from "@/lib/notification-read";
 
 let payload: NotificationsPayload;
+const research=vi.hoisted(()=>({read:vi.fn(),start:vi.fn()}));
+const savedResearch=(symbol:string):TradingAgentsResearchView=>({symbol,startup_conditions_not_checked:true,enabled:false,executable:false,blockers:[],required_model_slots:null,budget:null,admission:{state:"not_admitted",method_sha256:null},verification:"unverified_full_graph_research",production_eligible:false,latest:null,task:null});
+vi.mock("@/lib/api/agent",async()=>({...await vi.importActual<typeof import("@/lib/api/agent")>("@/lib/api/agent"),getTradingAgentsResearch:research.read,createAgentTask:research.start}));
 const openSymbol = vi.fn();
 vi.mock("@/lib/api", async () => ({
   ...await vi.importActual<typeof import("@/lib/api")>("@/lib/api"),
@@ -29,6 +33,7 @@ async function open(over: Partial<NotificationItem> = {}) {
 }
 beforeEach(() => {
   localStorage.clear(); __resetPrefsCache();
+  research.read.mockImplementation(async (symbol:string)=>savedResearch(symbol));
   vi.stubGlobal("fetch", vi.fn(async () => {throw new Error("No network allowed");}));
   vi.stubGlobal("matchMedia", () => ({matches:true, addEventListener:vi.fn(), removeEventListener:vi.fn()}));
 });
@@ -66,6 +71,7 @@ it("shows the object, original reason including its limitation and key state wit
 
 it("one click opens every original condition and both clocks; it does not open stock quotes", async () => {
   const item = await open();
+  expect(research.read).not.toHaveBeenCalled();
   fireEvent.click(screen.getByText(item.title));
   const detail = await screen.findByRole("dialog", {name:item.title});
   fireEvent.click(within(detail).getByRole("button",{name:"完整依据与研究记录"}));
@@ -78,6 +84,7 @@ it("one click opens every original condition and both clocks; it does not open s
   expect(detail.textContent).not.toContain("T01:");
   expect(within(detail).getByRole("link", {name:"查看此版本复盘"}).getAttribute("href")).toBe("/hunting?view=review&date=2026-10-13&version=version-A");
   expect(openSymbol).not.toHaveBeenCalled();
+  expect(research.read).toHaveBeenCalledExactlyOnceWith("600127",{savedOnly:true});
   expect(screen.queryByTestId("notification-unread-dot")).toBeNull();
   expect(fetch).not.toHaveBeenCalled();
 });

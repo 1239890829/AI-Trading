@@ -272,7 +272,7 @@ describe("通知中心：未读计数与红点", () => {
 
     await waitFor(() => expect(badge()?.textContent).toBe("1"));
     await waitFor(() => expect(dots().length).toBe(1));
-    expect(screen.getByText("新来的")).toBeTruthy();
+    expect(within(screen.getByTestId("notification-list")).getByText("新来的")).toBeTruthy();
   });
 
   it("点开某条 → 该条红点消失、徽标减一，其余未读不受影响", async () => {
@@ -686,4 +686,39 @@ it("one detail opening shows the entire message and all original references with
   expect(within(detail).queryByRole("tab")).toBeNull();
   expect(dots()).toHaveLength(0);
   expect(vi.mocked(getNotifications).mock.calls.length).toBe(calls);
+});
+
+it("one 15-second read drives the arrival card; closing keeps unread, reading opens the exact item without a second fetch", async () => {
+  vi.useFakeTimers();
+  const now = Date.parse("2026-10-24T09:30:00+08:00");
+  vi.setSystemTime(now);
+  try {
+    payload = makePayload([]);
+    await act(async () => {render(<NotificationBell />);});
+    expect(vi.mocked(getNotifications)).toHaveBeenCalledTimes(1);
+    expect(screen.queryByTestId("notification-arrival")).toBeNull();
+    const original = {...item({id:"alert-live",symbol:"600127",title:"新入选原记录",body:"原始入选依据仍需核对。",ts:new Date(now+1000).toISOString(),recorded_at:new Date(now+1000).toISOString()}),
+      arrival:{phase:"selected" as const,version:"selection-v1",source_as_of:new Date(now+1000).toISOString(),origin_id:"selection:live"}};
+    payload = makePayload([original]);
+    await act(async () => {await vi.advanceTimersByTimeAsync(14_999);});
+    expect(screen.queryByTestId("notification-arrival")).toBeNull();
+    await act(async () => {await vi.advanceTimersByTimeAsync(1);});
+    const card = screen.getByTestId("notification-arrival");
+    expect(screen.queryByTestId("notification-drawer")).toBeNull();
+    expect(badge()?.textContent).toBe("1");
+    expect(vi.mocked(getNotifications)).toHaveBeenCalledTimes(2);
+    await act(async () => {fireEvent.click(within(card).getByRole("button",{name:/收起新入选提醒/}));});
+    expect(badge()?.textContent).toBe("1");
+    const confirmed = {...original,title:"同股条件确认原记录",body:"确认条件并不代表真实成交。",arrival:{phase:"confirmed" as const,version:"confirmation-v1",source_as_of:new Date(now+16000).toISOString(),origin_id:"confirmation:live"}};
+    payload = makePayload([confirmed]);
+    await act(async () => {await vi.advanceTimersByTimeAsync(15_000);});
+    const second = screen.getByTestId("notification-arrival");
+    expect(second.textContent).toContain("条件确认");
+    const calls = vi.mocked(getNotifications).mock.calls.length;
+    await act(async () => {fireEvent.click(within(second).getByRole("button",{name:/查看原记录/}));});
+    expect(screen.getByRole("dialog",{name:"同股条件确认原记录"})).toBeTruthy();
+    expect(screen.getByTestId("notification-detail-body").textContent).toContain("确认条件并不代表真实成交。");
+    expect(badge()).toBeNull();
+    expect(vi.mocked(getNotifications).mock.calls.length).toBe(calls);
+  } finally {cleanup();vi.useRealTimers();}
 });

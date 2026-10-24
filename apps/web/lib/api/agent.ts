@@ -96,6 +96,17 @@ export async function cancelAgentTask(id: string): Promise<AgentTask> {
 export type TradingAgentsReportKey = "market_report" | "sentiment_report" | "news_report" | "fundamentals_report"
   | "investment_plan" | "trader_investment_plan" | "final_trade_decision";
 
+export const TRADING_AGENTS_ROLES = ["Market Analyst", "Sentiment Analyst", "News Analyst", "Fundamentals Analyst",
+  "Bull Researcher", "Bear Researcher", "Research Manager", "Trader", "Aggressive Analyst", "Conservative Analyst",
+  "Neutral Analyst", "Portfolio Manager"] as const;
+export type TradingAgentsRoleName = typeof TRADING_AGENTS_ROLES[number];
+export interface TradingAgentsRoleOutput {
+  role: TradingAgentsRoleName;
+  call_id: number;
+  output_sha256: string;
+  fields: Record<string, unknown>;
+}
+
 export interface TradingAgentsRecoveryLineage {
   version: 1;
   source_task_id: string; source_run_id: string; recovery_task_id: string;
@@ -112,10 +123,13 @@ export interface TradingAgentsResearchReport {
   review_state: "unreviewed" | "finite_failed_requires_review";
   review_summary: {finite_failures: number; peer_review_required: number; source_verified: false; independent_human_gold: false};
   reports: Record<TradingAgentsReportKey, string>;
+  roles?: TradingAgentsRoleOutput[];
+  role_projection_state?: "available" | "unavailable";
   recovery_lineage?: TradingAgentsRecoveryLineage;
 }
 
 export interface TradingAgentsResearchView {
+  startup_conditions_not_checked?: boolean;
   symbol: string; enabled: boolean; executable: boolean;
   blockers: {code: string; message: string}[];
   required_model_slots: number | null;
@@ -129,9 +143,9 @@ export interface TradingAgentsResearchView {
 }
 
 /** Ordinary paired read. Opening this reader never creates a research task. */
-export async function getTradingAgentsResearch(symbol: string): Promise<TradingAgentsResearchView> {
+export async function getTradingAgentsResearch(symbol: string, options: {savedOnly?: boolean} = {}): Promise<TradingAgentsResearchView> {
   if (!/^\d{6}$/.test(symbol)) throw new Error("完整研究需要六位证券代码");
-  const data = (await getJson<TradingAgentsResearchView>(`/api/agent/research/tradingagents/${symbol}`)).data;
+  const data = (await getJson<TradingAgentsResearchView>(`/api/agent/research/tradingagents/${symbol}${options.savedOnly ? "?saved_only=true" : ""}`)).data;
   const keys: TradingAgentsReportKey[] = ["market_report", "sentiment_report", "news_report", "fundamentals_report", "investment_plan", "trader_investment_plan", "final_trade_decision"];
   const lineage = data?.latest?.recovery_lineage;
   const lineageKeys = ["version", "source_task_id", "source_run_id", "recovery_task_id", "source_method_sha256", "recovery_method_sha256",
@@ -161,6 +175,15 @@ export async function getTradingAgentsResearch(symbol: string): Promise<TradingA
       || (data.latest.review_state === "unreviewed") !== (data.latest.review_summary.finite_failures === 0)
       || keys.some(key => typeof data.latest!.reports[key] !== "string" || !data.latest!.reports[key].trim()))) {
     throw new Error("完整研究响应身份或报告不完整，未展示");
+  }
+  const roles = data.latest?.roles;
+  if (roles !== undefined && (!Array.isArray(roles) || roles.length !== TRADING_AGENTS_ROLES.length
+      || new Set(roles.map(row => row?.role)).size !== TRADING_AGENTS_ROLES.length
+      || roles.some(row => !row || !TRADING_AGENTS_ROLES.includes(row.role)
+        || !Number.isSafeInteger(row.call_id) || row.call_id < 1
+        || !/^[0-9a-f]{64}$/.test(row.output_sha256)
+        || !row.fields || typeof row.fields !== "object" || Array.isArray(row.fields)))) {
+    return {...data, latest: {...data.latest!, roles: undefined, role_projection_state: "unavailable"}};
   }
   return data;
 }

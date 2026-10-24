@@ -1084,6 +1084,7 @@ async def dispatch_alert(app, alert: dict, *, rule_provider=None) -> bool:
                 symbol=str(alert["symbol"]), name=str(alert.get("name") or ""),
                 trigger=str(alert["kind"]),
                 price=_alert_price(alert, _snapshot_price(app, alert.get("symbol"))),
+                certainty_level=meta.get("certainty_level") if meta.get("certainty_level") in {"高", "中", "低"} else None,
                 decision_context=(meta.get("execution_ref") or None),
             )
 

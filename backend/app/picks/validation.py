@@ -320,7 +320,7 @@ def validation_report(start, end, *, session_factory=None, calendar=None, horizo
     for e in entries:
         o = outcomes.get(e['snapshot_id'])
         if o:
-            e.update(outcome_state=o.state, outcome_date=o.target_date, tradability=o.fill_state)
+            e.update(outcome_state=o.state, outcome_date=o.target_date, outcome_reason=o.reason, tradability=o.fill_state)
             join_clock = _clock(e['selected_at'])
             close_clock = datetime.fromisoformat(o.target_date).replace(hour=15, tzinfo=BJ_TZ)
             if (join_clock and join_clock < close_clock and e['state'] == 'recorded' and o.state == 'labeled' and o.price_basis_version == PRICE_BASIS_VERSION
@@ -328,6 +328,7 @@ def validation_report(start, end, *, session_factory=None, calendar=None, horizo
                 e['return_pct'] = o.return_pct
             elif o.state == 'labeled':
                 e['outcome_state'] = 'basis_or_window_unavailable'
+            e['outcome_reason'] = o.reason if e['return_pct'] is None else None
         e['observation_calendar_days'] = max(0, (last-date.fromisoformat(e['date'])).days)
     if scope != 'all':
         entries = [e for e in entries if e['scope'] == scope]

@@ -1235,7 +1235,7 @@ async def run_recovery(rec, params, app):
     _id(supplied["dispatch_owner"])
     sf = research.get_session_factory()
     await rec.checkpoint_async()
-    with worker_lease(research.ROOT / "selected-execution"):
+    with worker_lease(research.ROOT / "selected-execution" / research.validate_params({"symbol": params["symbol"]})):
         context = await drain_thread(_context, supplied["source_task_id"], supplied["run_id"], app, sf)
         if context["grant_sha256"] != supplied["grant_sha256"] or context["grant"]["symbol"] != params["symbol"]:
             raise _blocked("recovery_task_grant_drift")
@@ -1285,6 +1285,7 @@ async def run_recovery(rec, params, app):
                 atomic_json(run / "execution.json", {"state": "completed", "completed_at": research._now().isoformat(),
                     "recovery_task_id": rec.task_id, "source_task_id": grant["source_task_id"], "quality": "unverified"})
                 await drain_thread(_advance, context, supplied["dispatch_owner"], "completed", task_id=rec.task_id, result_sha256=result_sha)
+                await research.notify_research_ready(binding["selection"], result)
                 return {"kind": "tradingagents_research", "state": "completed", "symbol": params["symbol"],
                     "run_id": grant["run_id"], "source_task_id": grant["source_task_id"], "recovery_lineage": lineage,
                     "production_eligible": False}

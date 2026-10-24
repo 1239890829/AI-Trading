@@ -11,6 +11,7 @@ from app.models.alert import AlertEvent
 from app.models.agent import AgentTriage
 from app.models.opportunity_learning import OpportunityDecisionRun
 from app.models.watchlist import Base
+from app.models.paper import PaperOrder, PaperActionReceipt
 from app.repositories.alert_repo import AlertRepository
 
 NOW = datetime(2026, 10, 9, 10, 0, tzinfo=BJ_TZ)
@@ -599,3 +600,100 @@ def test_daily_rechecks_source_age_after_entering_atomic_write(sf, monkeypatch):
     receipt = selection.retry_daily_selection(trade_date='2026-10-09', session_factory=delayed_write_session)
     assert receipt['created'] == 0 and receipt['suppressed'] == 1
     assert AlertRepository(sf).list_events() == []
+
+
+def test_saved_research_milestone_merges_into_original_selection_and_is_deduplicated(sf):
+    from app.services.selection_notifications import publish_daily_selection
+    from app.services.selection_workflow import REPORTS, record_research_ready
+    from app.api.routes.notifications import _alert_items
+    from app.models.notification_outbox import NotificationOutbox
+    publish_daily_selection([item()], trade_date='2026-10-09', generated_at=NOW.isoformat(), session_factory=sf)
+    publish_daily_selection([item('600002')], trade_date='2026-10-09', generated_at=(NOW + timedelta(minutes=2)).isoformat(), session_factory=sf)
+    repo = AlertRepository(sf)
+    original = next(row for row in repo.list_events() if row.symbol == '600001')
+    selection = {'symbol': '600001', 'trade_date': '2026-10-09', 'source': 'daily_generation',
+                 'source_version': json.loads(original.snapshot)['source_version'], 'selected_at': NOW.isoformat(), 'selection_key': 'a' * 64}
+    report = {'symbol': '600001', 'state': 'completed', 'production_eligible': False,
+              'verification': 'unverified_full_graph_research', 'selection': selection,
+              'run_id': 'b' * 32, 'method_sha256': 'c' * 64,
+              'generated_at': (NOW + timedelta(minutes=4)).isoformat(), 'as_of': NOW.isoformat(),
+              'reports': {key: '原报告' for key in REPORTS}}
+    wrong = {**selection, 'source_version': 'other-version'}
+    assert record_research_ready(selection=wrong, report={**report, 'selection': wrong}, session_factory=sf)['state'] == 'rejected'
+    assert record_research_ready(selection=selection, report=report, session_factory=sf)['created'] is True
+    assert record_research_ready(selection=selection, report=report, session_factory=sf)['created'] is False
+    rows, _ = _alert_items(repo, 50)
+    from app.api.routes.notifications import _activity_time
+    rows.sort(key=_activity_time, reverse=True)
+    assert len(rows) == 2 and rows[:1][0]['id'] == f'alert-{original.id}'
+    assert {value['phase'] for value in rows[0]['arrivals']} == {'selected', 'research_ready'}
+    research = next(value for value in rows[0]['references'] if value['kind'] == 'research_ready')
+    assert research['evidence']['research']['run_id'] == 'b' * 32
+    assert research['source_as_of'] == report['generated_at']
+    assert json.loads(repo.get_event(original.id).snapshot)['kind'] == 'selection'
+    with sf() as db:
+        assert list(db.scalars(select(NotificationOutbox))) == []
+
+
+def test_incomplete_or_mismatched_research_cannot_create_a_completion_message(sf):
+    from app.services.selection_workflow import record_research_ready
+    assert record_research_ready(selection={}, report={}, session_factory=sf)['state'] == 'rejected'
+    with sf() as db:
+        assert list(db.scalars(select(AlertEvent))) == []
+
+
+def test_paper_milestone_requires_committed_main_bound_receipt_and_tracks_actual_state(sf):
+    from app.services.selection_notifications import publish_daily_selection
+    from app.services.selection_workflow import record_paper_status
+    from app.api.routes.notifications import _alert_items
+    publish_daily_selection([item()], trade_date='2026-10-09', generated_at=NOW.isoformat(), session_factory=sf)
+    ref = 'daily:2026-10-09:600001'
+    version = json.loads(AlertRepository(sf).list_events()[0].snapshot)['source_version']
+    assert record_paper_status(ref, version, None, sf)['state'] == 'unavailable'
+    with sf() as db:
+        order = PaperOrder(scope='main', symbol='600001', side='buy', price=10, quantity=100, status='pending', updated_at=NOW.replace(tzinfo=None))
+        db.add(order)
+        db.flush()
+        oid = order.id
+        db.add(PaperActionReceipt(scope='main', request_id='original-request',
+            draft=json.dumps({'selection_ref': ref, 'source_version': version}), result=json.dumps({'id': oid})))
+        db.commit()
+    assert record_paper_status(ref, version, oid, sf)['created'] is True
+    assert record_paper_status(ref, version, oid, sf)['created'] is False
+    assert record_paper_status(ref, 'different-version', oid, sf)['state'] == 'rejected'
+    with sf() as db:
+        order = db.get(PaperOrder, oid)
+        order.status, order.filled_price, order.fee = 'filled', 10, 5
+        order.updated_at = (NOW + timedelta(minutes=1)).replace(tzinfo=None)
+        db.commit()
+    assert record_paper_status(None, None, oid, sf)['created'] is True
+    rows, _ = _alert_items(AlertRepository(sf), 50)
+    assert len(rows) == 1
+    phases = [value for value in rows[0]['arrivals'] if value['phase'] == 'paper_status']
+    assert len(phases) == 2 and phases[0]['version'] != phases[1]['version']
+    refs = [r for r in rows[0]['references'] if r['kind'] == 'paper_status']
+    assert {r['evidence']['paper_execution']['status'] for r in refs} == {'pending', 'filled'}
+    with sf() as db:
+        assert db.get(PaperOrder, oid).fee == 5
+        assert db.get(PaperOrder, oid).status == 'filled'
+
+
+def test_rejected_action_receipt_is_visible_without_inventing_an_order(sf):
+    from app.services.selection_notifications import publish_daily_selection
+    from app.services.selection_workflow import record_paper_status
+    from app.api.routes.notifications import _alert_items
+    publish_daily_selection([item()], trade_date='2026-10-09', generated_at=NOW.isoformat(), session_factory=sf)
+    ref = 'daily:2026-10-09:600001'
+    version = json.loads(AlertRepository(sf).list_events()[0].snapshot)['source_version']
+    with sf() as db:
+        db.add(PaperActionReceipt(scope='main', request_id='1af27228-8293-40be-9dfe-12400d85ba45',
+            draft=json.dumps({'selection_ref': ref, 'source_version': version, 'quantity': 100}),
+            result=json.dumps({'id': None, 'status': 'rejected', 'reason': '真实风险拒绝'})))
+        db.commit()
+    assert record_paper_status(ref, version, None, sf)['created'] is True
+    rows, _ = _alert_items(AlertRepository(sf), 50)
+    evidence = next(row['evidence']['paper_execution'] for row in rows[0]['references'] if row['kind'] == 'paper_status')
+    assert evidence['status'] == 'rejected' and evidence['order_id'] is None
+    assert evidence['filled_price'] is None and evidence['fee'] is None
+    with sf() as db:
+        assert list(db.scalars(select(PaperOrder))) == []

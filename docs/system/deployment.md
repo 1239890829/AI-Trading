@@ -533,3 +533,15 @@ CLI启动warning的兼容依据与固定版本见[语义纠错记录](../ai/sema
 本机user LaunchAgent参数固定为现有解释器、已发布小型Python源码副本、批次、日历和宇宙。源码副本只含两脚本与backend/app，清单绑定发布commit和文件hash；不复制.env、依赖树或业务库。活动输出为安装回执指向的该副本artifacts/rsh031-forward，外层不复制health/PID作为另一事实源。RunAtLoad与工作日09:45/15:10预先启动，09:55/15:25才取源；失败由launchd有界节奏重启，STOP/期限/容量正常停止。不要手写第二个collector或让聊天再次调叶脚本。用脚本`--help`核当前参数及`print-plist`生成结果，核JSON/锁/PID/health和launchctl实际状态，不能只看旧manifest。
 
 停止先在确认批次输出写STOP，待进程排空，再卸载确认属于该批的用户LaunchAgent；不删除样本或旧missing。睡眠醒后已过窗口记missing，不回填。启动/落盘权限被拒时保留原错误、停止对应动作并恢复现有入口，不修改macOS安全设置或换路径规避。实际安装参数、版本与进程核验归handoff/本批PR；未来第一笔真实样本另验。
+
+### 2026-10-24 入选完整研究并发运行
+
+`ASHARE_TRADINGAGENTS_RESEARCH_CONCURRENCY`默认3，范围1–3，仅用于已授权selected-stock完整研究；回退为1可恢复串行，不改变原报告/账。普通AgentTask互斥、同股单写及原授权/unknown/超时/取消门继续生效。运行租约只保存task/usage/owner/method身份，权限0700/0600、持有真实flock；失锁/孤儿不能当活跃账免验。无迁移或新收费服务。完整研究使用原模型与原入选claim，不在普通读请求启动。
+
+只读原报告不做启动前检；显式启动仍走完整校验。重新启用/换模型不由此配置授权。新入选上下文可读主paper预检，提交仍需维护身份与明确动作，且真实交易窗/源钟/风险逐次核。休市真实主账户空仓是合法结果，不能用隔离夹具的fill冒充主账户已成交。
+
+原维护POST `/api/picks/intraday-review/run` 可用 `outcome_date` 只运行已完成交易日的结果owner，原无参复盘保留。必须是官方日历确认且已发生的收盘，未来/未知拒绝；最多已有provider两对日K、同股合并各周期与原12秒时限，不新增模型/服务/外发。原调度有限slot和失败回执可重启恢复；简报成功不当作结果采集成功。
+
+维护恢复可选`symbols`（逗号分隔1–20个六位码，必须与outcome_date合用且属于原归档/台账范围）；先只读核scope再写，所有准备/标签同批过滤，不改批外pending。返回`partial_batch/processed_count/remaining_count/scope_count`，剩余不为0时`state=partial`，不能把批内成功当全历史已齐。原无参/自动行为保持，不新增结果账或队列。
+
+最终执行边界：main/hunting-shadow的立即成交与挂单撮合共用窗口、证券身份、源钟/质量及已装配风险门；不带selection绑定的维护请求和自动maybe_open也不能旁路。研究shadow保留既有独立晨窗协议与限价/T+1/整手/费用，不混main结果。原选择一旦已有未决、unknown或真实成交，后续执行判定换版不能把旧占位清成not_started；最新判定只控制新资格。历史无明确绑定的未决事实保守阻断，不猜成交或重跑动作。

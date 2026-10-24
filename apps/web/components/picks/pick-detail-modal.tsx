@@ -17,7 +17,7 @@ import { useExitPresence } from "@/hooks/use-exit-presence";
  */
 
 export type PickDetailTarget =
-  | { kind: "pick"; item: DailyPickItem }
+  | { kind: "pick"; item: DailyPickItem; current?: {date: string; version: string | null} }
   | { kind: "top"; item: IntradayTopStock }
   | null;
 
@@ -44,7 +44,7 @@ export function PickDetailModal({ target, onClose, readError = false }: { target
       }
     >
       {presence.active && (shown.kind === "pick" ? (
-        <PickCard key={shown.item.symbol} item={fromDailyPick(shown.item)} readError={readError} evidenceExpanded />
+        <PickCard key={shown.item.symbol} item={fromDailyPick(shown.item, shown.current)} readError={readError} evidenceExpanded />
       ) : (
         <PickCard key={shown.item.symbol} item={fromIntradayStock(shown.item)} readError={readError} evidenceExpanded />
       ))}

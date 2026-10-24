@@ -62,6 +62,10 @@ def _fake_engine(positions, cash=1_000_000.0, orders=None, *,
 
             return _A()
 
+        def account_summary(self, market_value, *, initialize=True):
+            assert initialize is False, "planning must not initialize funds"
+            return {"initial_cash": cash}
+
         async def place_order(self, symbol, side, price, quantity):
             placed.append({"symbol": symbol, "side": side, "price": price, "quantity": quantity})
             from types import SimpleNamespace
@@ -88,6 +92,18 @@ def test_maybe_open_opens_with_role_weight(tmp_path, monkeypatch):
     assert out["opened"] is True
     # 1M × 65% × 55% = 357500 → 357 手 = 35700 股 @ 10 元
     assert placed and placed[0]["quantity"] == 35700 and placed[0]["side"] == "buy"
+
+
+@pytest.mark.parametrize("certainty,opened", [(None, False), ("中", False), ("高", True)])
+def test_confirm_keeps_unknown_or_lower_certainty_blocked(tmp_path, monkeypatch, certainty, opened):
+    monkeypatch.setattr(pe, "_PLAN_DIR", tmp_path)
+    monkeypatch.setattr(pe, "_today_gate_and_phase", lambda: ({}, "发酵"))
+    _patch_alerts(monkeypatch, tmp_path)
+    engine, placed = _fake_engine([])
+    result = asyncio.run(pe.maybe_open(_app(engine), symbol="600001", name="合成确认",
+        trigger="confirm", price=10., certainty_level=certainty))
+    assert result["opened"] is opened
+    assert bool(placed) is opened
 
 
 def test_maybe_open_guards(tmp_path, monkeypatch):

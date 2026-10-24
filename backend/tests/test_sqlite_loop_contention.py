@@ -20,6 +20,7 @@ from app.models.notification_outbox import NotificationOutbox
 from app.models.paper import PaperPosition
 from app.models.watchlist import Base
 from app.paper.engine import PaperTradingEngine
+from app.core.bjtime import BJ_TZ
 from app.repositories.alert_repo import AlertRepository
 from app.repositories.watchlist_repo import WatchlistRepository
 
@@ -65,6 +66,8 @@ def test_calendar_wait_does_not_hold_a_real_sqlite_write_lock(sqlite_rig, monkey
     from app.schemas.market import Quote
     engine, sf, traces, settings = sqlite_rig
     monkeypatch.setattr(paper, "_today", lambda: "20261014")
+    now = datetime(2026, 10, 14, 10, tzinfo=BJ_TZ)
+    monkeypatch.setattr(paper, "beijing_now", lambda: now)
     with sf() as db:
         db.add(PaperPosition(scope="main", symbol="600000", quantity=100,
                              frozen_today=100, cost_price=10, buy_date="20261013"))
@@ -91,7 +94,7 @@ def test_calendar_wait_does_not_hold_a_real_sqlite_write_lock(sqlite_rig, monkey
             seen["writer_blocked_during_calendar"] = True
         return ["20261013", "20261014"]
     async def quote(_symbol):
-        return Quote(symbol="600000", price=10, limit_up_price=11, limit_down_price=9, source="offline")
+        return Quote(symbol="600000", price=10, limit_up_price=11, limit_down_price=9, source="offline", data_timestamp=now)
     paper_engine = PaperTradingEngine(sf, quote, calendar)
     async def run():
         if path == "settle_t1":

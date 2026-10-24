@@ -40,6 +40,7 @@ import { useResource } from "@/hooks/use-resource";
 import { NewsModal, type NewsModalItem } from "@/components/news-modal";
 import { EventFeed } from "@/components/notifications/event-feed";
 import { dateTimeTextBJ, dateTimesInTextBJ } from "@/lib/format";
+import { NotificationArrivalStack } from "./notification-arrival-stack";
 import { NotificationDetail, notificationKeyState, notificationSummary, notificationDeliveryHint } from "./notification-detail";
 import { ExplanationMap, NarrativeText } from "@/components/ui/explanation-map";
 import { ReadingRow, readingRowClasses } from "@/components/ui/reading-row";
@@ -361,7 +362,7 @@ export function NotificationBell() {
   const rowButtons = useRef(new Map<string, HTMLButtonElement>());
   const returnToRow = useRef<string | null>(null);
   useOverlayFocus(drawerRef, () => setOpen(false), open);
-  const notifications = useResource(getNotifications, {intervalMs: 60_000, marketHours: false});
+  const notifications = useResource(getNotifications, {intervalMs: 15_000, marketHours: false});
   const payload = notifications.data ?? null;
   const loading = notifications.pending;
   const error = notifications.error ? "通知读取失败" : null;
@@ -380,6 +381,7 @@ export function NotificationBell() {
   const [eventsRefresh, setEventsRefresh] = useState(0);
   const [newsItem, setNewsItem] = useState<NewsModalItem | null>(null);
   const [detailId, setDetailId] = useState<string | null>(null);
+  const [arrivalDetail, setArrivalDetail] = useState<NotificationItem | null>(null);
   // 已读偏好（水位 + 逐条 id + 清除水位）：**外部存储订阅**，见 lib/notification-read.ts。
   // 首帧（含 hydration）给服务端空快照，hydration 后自动切到 localStorage 真实值。
   const prefs = useSyncExternalStore(subscribePrefs, getPrefsSnapshot, getServerPrefsSnapshot);
@@ -452,7 +454,7 @@ export function NotificationBell() {
   // 增量渲染（#55）：/api/notifications 默认 60 条（实测 16KB），每条是富文本卡片，
   // 一次性全铺会拖慢抽屉打开的首帧。切换时段 tab / 清空历史时重置到首页。
   const activeList = bySession[tab];
-  const selectedNotice = open && mode === "opportunity" ? activeList.find(item => item.id === detailId) ?? null : null;
+  const selectedNotice = open && mode === "opportunity" ? activeList.find(item => item.id === detailId) ?? (arrivalDetail?.id === detailId ? arrivalDetail : null) : null;
   const selectedNoticeId = selectedNotice?.id;
   const detailPresence = useExitPresence(selectedNotice);
   const { shown: shownNotices, visible, sentinelRef, loadMore } = useIncremental(activeList, {
@@ -472,7 +474,7 @@ export function NotificationBell() {
     const item = shownNotices[next];
     if (item) {rowButtons.current.get(item.id)?.focus(); selectNotice(item);}
   };
-  const backToList = () => {returnToRow.current = detailId; setDetailId(null);};
+  const backToList = () => {returnToRow.current = detailId; setDetailId(null); setArrivalDetail(null);};
   useLayoutEffect(() => {
     if (!open || mode !== "opportunity" || selectedNoticeId || !returnToRow.current) return;
     if (listRef.current) listRef.current.scrollTop = listScroll.current;
@@ -486,6 +488,10 @@ export function NotificationBell() {
 
   return (
     <>
+      <NotificationArrivalStack items={payload?.items ?? []} ready={payload !== null && !pollError && !payload.errors?.alerts}
+        clearBefore={clearBefore} suspended={open} onOpen={item => {
+          setMode("opportunity"); setTab(item.session); setOpen(true); setArrivalDetail(item); selectNotice(item);
+        }} onOpenCenter={() => {setMode("opportunity"); setDetailId(null); setArrivalDetail(null); setOpen(true);}} />
       <IconButton
         onClick={() => {setOpen(true); load();}}
         aria-label={pollError ? `打开通知中心（上次读取的未读数 ${unread}）` : unread > 0 ? `打开通知中心（${unread} 条未读）` : "打开通知中心"}
@@ -526,7 +532,7 @@ export function NotificationBell() {
                     onClick={() => (mode === "opportunity" ? void load() : setEventsRefresh((n) => n + 1))}
                     className="rounded p-1 text-zinc-600 dark:text-zinc-400 transition-colors hover:bg-zinc-100 hover:text-zinc-700 dark:hover:bg-zinc-800 dark:hover:text-zinc-200"
                     aria-label="刷新通知"
-                    title="重新拉取（页面打开期间每 60s 自动检查新内容）"
+                    title="重新拉取（页面打开期间每 15s 自动检查新内容）"
                   >
                     <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" aria-hidden>
                       <path d="M21 12a9 9 0 1 1-2.64-6.36M21 3v6h-6" />

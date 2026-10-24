@@ -123,6 +123,8 @@ def test_industry_map_keeps_serving_stale_cache_on_refresh_failure(monkeypatch):
 class _BrokenEngine:
     """持仓读取抛异常（模拟 DB 锁 / 表损坏）。"""
 
+    scope = "main"  # Same account identity as the real paper engine.
+
     def positions_with_pnl(self, _quotes):  # noqa: ANN001
         raise RuntimeError("database is locked")
 

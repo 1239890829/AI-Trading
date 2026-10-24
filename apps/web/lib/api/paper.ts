@@ -75,31 +75,39 @@ export const getPaperOrders = (status?: string) =>
 export const getPaperFills = (symbol: string) =>
   getJsonArray<PaperFill>(`/api/paper/fills?symbol=${symbol}`);
 
-type PaperResult = { replayed?: boolean; id: number; status: string; filled_price?: number | null; fee?: number | null };
+export interface PaperSelectionOrderBinding {
+  selection_ref: string; source_version: string; decision_id: string; decision_version: string;
+  request_id: string; expires_at: string;
+}
+
+type PaperResult = { replayed?: boolean; id: number; status: string; symbol?: string; side?: string; filled_price?: number | null; fee?: number | null };
 const submitting = new Map<string, Promise<PaperResult>>();
 
 /** Same unresolved draft retains its identity across network errors and tab reloads. */
-export function placePaperOrder(symbol: string, side: string, price: number, quantity: number): Promise<PaperResult> {
-  const draft = { symbol, side, price, quantity };
-  const key = `paper-action:main:${JSON.stringify(draft)}`;
+export function placePaperOrder(symbol: string, side: string, price: number, quantity: number, selection?: PaperSelectionOrderBinding): Promise<PaperResult> {
+  const draft = { symbol, side, price, quantity, ...(selection ? {selection_ref: selection.selection_ref,
+    source_version: selection.source_version, decision_id: selection.decision_id, decision_version: selection.decision_version} : {}) };
+  const key = `paper-action:main:${JSON.stringify(selection ? {...draft, request_id:selection.request_id} : draft)}`;
   const pending = submitting.get(key);
   if (pending) return pending;
   const run = async () => {
     // Storage failure must stop the action: otherwise a reload could lose its identity.
-    const stored = sessionStorage.getItem(key);
-    const identity: { request_id: string; expires_at: string } = stored
-      ? JSON.parse(stored)
+    // Bound selection callers persist their explicit identity before entering this helper.
+    const stored = selection ? null : sessionStorage.getItem(key);
+    const identity: { request_id: string; expires_at: string } = selection
+      ? {request_id:selection.request_id, expires_at:selection.expires_at}
+      : stored ? JSON.parse(stored)
       : { request_id: crypto.randomUUID(), expires_at: new Date(Date.now() + 30_000).toISOString() };
-    sessionStorage.setItem(key, JSON.stringify(identity));
+    if (!selection) sessionStorage.setItem(key, JSON.stringify(identity));
     try {
       const result = (await sendJson<PaperResult>(
         "/api/paper/orders", "POST", { ...draft, ...identity }, 15_000,
       )).data;
-      sessionStorage.removeItem(key);
+      if (!selection) sessionStorage.removeItem(key);
       return result;
     } catch (e) {
       // A definitive rejection is safe to retry as a new, explicitly confirmed action.
-      if (e instanceof ApiError && [401, 403, 422].includes(e.status)) sessionStorage.removeItem(key);
+      if (!selection && e instanceof ApiError && [401, 403, 422].includes(e.status)) sessionStorage.removeItem(key);
       throw e;
     }
   };

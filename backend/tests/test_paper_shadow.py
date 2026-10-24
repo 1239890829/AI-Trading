@@ -5,14 +5,28 @@ sys.path.insert(0, ".")
 
 import asyncio
 import json
+from datetime import datetime
+from types import SimpleNamespace
+import pytest
 
 from app.paper.engine import PaperTradingEngine
 from app.core.db import get_session_factory
 from app.picks.shadow import ShadowRunner, plan_buys
 
 from app.schemas.market import Quote
+from app.core.bjtime import BJ_TZ
 
-FIXED_QUOTE = Quote(symbol="600001", price=10.0, open=10.0, limit_up_price=11.0, limit_down_price=9.0, source="t")
+NOW = datetime(2026, 9, 29, 10, 0, tzinfo=BJ_TZ)
+
+
+@pytest.fixture(autouse=True)
+def execution_clock(monkeypatch):
+    monkeypatch.setattr("app.paper.engine.beijing_now", lambda: NOW)
+    monkeypatch.setattr("app.paper.engine._today", lambda: NOW.strftime("%Y%m%d"))
+    monkeypatch.setattr("app.paper.execution_guard.known_trade_days", lambda: [NOW.date()])
+
+FIXED_QUOTE = Quote(symbol="600001", price=10.0, open=10.0, limit_up_price=11.0, limit_down_price=9.0,
+                    source="t", data_timestamp=NOW)
 
 
 def _gate_items():
@@ -88,7 +102,9 @@ def _engine(quote_map, scope):
             return q.model_copy(update={"symbol": symbol})
         return None
 
-    return PaperTradingEngine(get_session_factory(), quote_fn, scope=scope)
+    risk = SimpleNamespace(hub=SimpleNamespace(get_quotes=lambda: list(quote_map.values())),
+                           check_order=lambda **_: {"allowed": True})
+    return PaperTradingEngine(get_session_factory(), quote_fn, scope=scope, risk_engine=risk)
 
 
 def test_engine_scope_isolation():
@@ -240,9 +256,6 @@ def _hub(quote_map):
         return q.model_copy(update={"symbol": symbol}) if q else None
 
     return SimpleNamespace(provider=SimpleNamespace(get_quote=get_quote))
-
-
-from types import SimpleNamespace  # noqa: E402
 
 
 def _gate(gate_items):

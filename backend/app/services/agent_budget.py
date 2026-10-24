@@ -151,21 +151,42 @@ def _unexcepted_unknown(model, date, consumer_scope, allowed_unknown_usage):
     return ~or_(*permitted) if permitted else True
 
 
+def _unexcepted_inflight(model, date, consumer_scope, session_factory):
+    # Only a live, bounded selected-call owner is in flight. Terminal/expired/
+    # orphan rows stay unknown, even when an earlier check observed them live.
+    if consumer_scope != SCOPE_SELECTED_RESEARCH_LLM:
+        return True
+    from app.services.selected_model_lease import active_usage_ids
+    active = active_usage_ids(session_factory, date)
+    return ~and_(model.scope == SCOPE_SELECTED_RESEARCH_LLM, model.state == "started", model.id.in_(active)) if active else True
+
+
+def acquire_selected_call_lease(usage_id, *, method_sha256, cancel_check=None, session_factory=None):
+    from app.services.selected_model_lease import acquire
+    return acquire(usage_id, session_factory or get_session_factory(), method_sha256=method_sha256,
+                   cancel_check=cancel_check)
+
+
 def _unknown_usage_exists(sf, date: str, *, consumer_scope=None, allowed_unknown_usage=()) -> bool:
     retained = _unexcepted_unknown(AgentResourceUsage, date, consumer_scope, allowed_unknown_usage)
+    conditions = (AgentResourceUsage.budget_date == date,
+                  AgentResourceUsage.scope.in_(_MODEL_BUDGET_SCOPES),
+                  AgentResourceUsage.state.in_(_STARTED_OR_TERMINAL),
+                  AgentResourceUsage.started_at.is_not(None), AgentResourceUsage.kind == "model",
+                  AgentResourceUsage.usage_known == 0, retained)
+    # Observe rows before their ownership proof. Reversing that order labels a
+    # concurrent start between the two reads as lost usage. New starts remain
+    # covered by the atomic start CAS, never by this admission snapshot.
     with sf() as db:
-        rows = db.execute(
-            select(AgentResourceUsage.id).where(
-                AgentResourceUsage.budget_date == date,
-                AgentResourceUsage.scope.in_(_MODEL_BUDGET_SCOPES),
-                AgentResourceUsage.state.in_(_STARTED_OR_TERMINAL),
-                AgentResourceUsage.started_at.is_not(None),
-                AgentResourceUsage.kind == "model",
-                AgentResourceUsage.usage_known == 0,
-                retained,
-            ).limit(1)
-        ).first()
-        return rows is not None
+        observed = tuple(db.scalars(select(AgentResourceUsage.id).where(*conditions).limit(33)))
+    if not observed:
+        return False
+    if consumer_scope != SCOPE_SELECTED_RESEARCH_LLM or len(observed) >= 33:
+        return True
+    in_flight = _unexcepted_inflight(AgentResourceUsage, date, consumer_scope, sf)
+    with sf() as db:
+        return db.scalar(select(AgentResourceUsage.id).where(*conditions,
+            AgentResourceUsage.id.in_(observed), in_flight).limit(1)) is not None
 
 
 def ensure_model_usage_known(session_factory=None, *, date: str | None = None,
@@ -303,6 +324,27 @@ def reserve(
 
 
 def start(usage_id: str, session_factory=None, *, allowed_unknown_usage=()) -> dict:
+    # A simultaneous selected start may precede the snapshot used by SQL. Only
+    # repeat a pre-I/O CAS when every intervening started row has a live lease;
+    # no provider call, reservation ID or unknown permission is retried.
+    sf = session_factory or get_session_factory()
+    for attempt in range(3):
+        try:
+            return _start_once(usage_id, sf, allowed_unknown_usage=allowed_unknown_usage)
+        except BudgetError as error:
+            if error.code != "usage_unknown" or attempt == 2:
+                raise
+            with sf() as db:
+                row = db.get(AgentResourceUsage, usage_id)
+                selected = row is not None and row.scope == SCOPE_SELECTED_RESEARCH_LLM and row.state == "reserved"
+                day = row.budget_date if row else None
+            if not selected or _unknown_usage_exists(sf, day, consumer_scope=SCOPE_SELECTED_RESEARCH_LLM,
+                                                     allowed_unknown_usage=allowed_unknown_usage):
+                raise
+    raise RuntimeError("unreachable selected start state")
+
+
+def _start_once(usage_id: str, session_factory=None, *, allowed_unknown_usage=()) -> dict:
     sf = session_factory or get_session_factory()
     allowed_unknown_usage = validate_unknown_usage_exceptions(allowed_unknown_usage)
     now = beijing_now_naive()
@@ -330,6 +372,7 @@ def start(usage_id: str, session_factory=None, *, allowed_unknown_usage=()) -> d
                 other.usage_known == 0,
                 other.id != usage_id,
                 _unexcepted_unknown(other, row.budget_date, row.scope, allowed_unknown_usage),
+                _unexcepted_inflight(other, row.budget_date, row.scope, sf),
             ).exists())
         result = db.execute(
             update(AgentResourceUsage).where(*conditions)

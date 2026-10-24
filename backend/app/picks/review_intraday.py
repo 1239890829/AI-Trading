@@ -35,6 +35,8 @@ import contextlib
 import json
 import logging
 import math
+import re
+import time
 from datetime import date, datetime
 from pathlib import Path
 from typing import Any
@@ -42,7 +44,7 @@ from typing import Any
 from app.market import trade_calendar as tc
 from app.picks.intraday_rules import CONFIRM_THEME_PCT_LATE, confirm_signal
 from app.picks.morning_brief import BRIEF_DIR, load_brief, save_brief
-from app.core.bjtime import beijing_now, to_beijing_naive
+from app.core.bjtime import beijing_now, to_beijing, to_beijing_naive
 
 log = logging.getLogger(__name__)
 
@@ -411,118 +413,7 @@ async def run_review(app, *, trigger: str = "manual") -> dict:
 
     backfill = await backfill_alert_returns(state)
 
-    # 猎场批次 A（需求 9/10）：跟踪台账收盘清算——入选价 vs 当日收盘，逐股判定
-    # + 统计。失败只记日志（清算幂等，下一轮补）。
-    ledger_settled = None
-    opportunity_labels = None
-    opportunity_horizons = None
-    opportunity_path = None
-    opportunity_crossday_path = None
-    horizon_prepared: list[dict] = []
-    with contextlib.suppress(Exception):
-        from app.picks.watch_ledger import get_day, settle_day, validate_previous_day
-        from app.picks.opportunity_learning import (
-            ensure_outcome_horizons, label_cross_day_paths, label_due_outcomes, label_trade_date,
-            pending_cross_day_path_targets, pending_outcome_targets, pending_symbols,
-        )
-        from app.core.bjtime import beijing_now as _bnow
-        from app.core.db import get_session_factory as _gsf
-
-        tdate = _bnow().date().isoformat()
-        provider = _tencent_provider(state.hub) or state.hub.provider
-        closes: dict[str, float] = {}
-        ledger_symbols = {
-            r["symbol"] for r in get_day(tdate, _gsf()) if r["status"] == "tracking"
-        }
-        days: list[date] = []
-        with contextlib.suppress(Exception):
-            days = await tc.trading_days(state.hub.provider)
-            # D5 is five sessions out. Revisit a bounded window larger than D5 so a
-            # short scheduler/deployment outage can still create missing identities.
-            recent = [d for d in days if d <= _bnow().date()][-10:]
-            horizon_prepared = [
-                ensure_outcome_horizons(
-                    d.isoformat(), days, _gsf(), include_deferred=False
-                )
-                for d in recent
-            ]
-        due_targets = pending_outcome_targets(tdate, _gsf(), lookback_days=30)
-        due_symbols = {symbol for symbols in due_targets.values() for symbol in symbols}
-        crossday_targets = (
-            pending_cross_day_path_targets(tdate, _gsf(), lookback_days=30)
-            if days else {}
-        )
-        crossday_symbols = {symbol for symbols in crossday_targets.values() for symbol in symbols}
-        d0_pending = pending_symbols(tdate, _gsf())
-        outcome_symbols = d0_pending | due_symbols | crossday_symbols
-        symbols = ledger_symbols | outcome_symbols
-        daily_by_symbol: dict[str, dict[date, float]] = {}
-        daily_path_by_symbol: dict[str, dict[date, tuple[float, float, str]]] = {}
-        price_basis_by_key: dict[tuple[str, str], tuple[float, str]] = {}
-        for symbol in sorted(symbols):
-            with contextlib.suppress(Exception):
-                # Outcome labels need qfq and raw from the same provider family.
-                # Use the composite lane for both legs; `_price_basis_from_daily`
-                # rejects a failover split across vendors.  Non-outcome ledger rows
-                # retain the existing low-cost/Tencent preference.
-                qfq_provider = state.hub.provider if symbol in outcome_symbols else provider
-                if symbol in outcome_symbols:
-                    qfq_bars = await _daily_bar_facts(qfq_provider, symbol, raw=False)
-                    qfq_facts = {
-                        d: (float(fact["close"]), str(fact["source"]))
-                        for d, fact in qfq_bars.items()
-                        if fact.get("close") is not None
-                    }
-                    daily_path_by_symbol[symbol] = {
-                        d: (float(fact["high"]), float(fact["low"]), str(fact["source"]))
-                        for d, fact in qfq_bars.items()
-                        if fact.get("high") is not None and fact.get("low") is not None
-                    }
-                else:
-                    qfq_facts = await _daily_close_facts(qfq_provider, symbol, raw=False)
-                dc = {d: value for d, (value, _source) in qfq_facts.items()}
-                daily_by_symbol[symbol] = dc
-                c = dc.get(_bnow().date())
-                if c is not None:
-                    closes[symbol] = c
-                if symbol in outcome_symbols:
-                    raw_facts = await _daily_close_facts(state.hub.provider, symbol, raw=True)
-                    price_basis_by_key.update(
-                        _price_basis_from_daily(symbol, qfq_facts, raw_facts)
-                    )
-        ledger_settled = settle_day(tdate, closes, _gsf())
-        opportunity_labels = label_trade_date(tdate, closes, _gsf(), price_basis_by_key=price_basis_by_key)
-        opportunity_horizons = []
-        for target_date, target_symbols in due_targets.items():
-            target_day = date.fromisoformat(target_date)
-            target_closes = {
-                symbol: daily_by_symbol[symbol][target_day]
-                for symbol in target_symbols
-                if symbol in daily_by_symbol and target_day in daily_by_symbol[symbol]
-            }
-            opportunity_horizons.append(
-                label_due_outcomes(target_date, target_closes, _gsf(), price_basis_by_key=price_basis_by_key)
-            )
-        # Preserve the already-closed D0 path lane even if the new cross-day
-        # accumulator fails. Cross-day evidence is additive and must never block D0.
-        opportunity_path = await collect_d0_path_outcomes(state, tdate, _gsf())
-        opportunity_crossday_path = []
-        if days:
-            try:
-                for target_date in crossday_targets:
-                    opportunity_crossday_path.append(
-                        label_cross_day_paths(
-                            target_date, daily_path_by_symbol, days, price_basis_by_key, _gsf()
-                        )
-                    )
-            except Exception:
-                log.warning("cross-day opportunity path labeling failed", exc_info=True)
-        # 次日持续性验证（闭环「验证」段）：T-1 行写回 T 收盘表现
-        d1_n = validate_previous_day(closes, _gsf())
-        log.info(
-            "watch ledger settle: %s | opportunity labels: %s | future horizons: %s | cross-day path: %s | D0 path: %s | D+1 验证 %s 行",
-            ledger_settled, opportunity_labels, opportunity_horizons, opportunity_crossday_path, opportunity_path, d1_n,
-        )
+    outcome_result = await collect_after_close_outcomes(state)
 
     log.info(
         "intraday review saved: %s（%d 方向 %s；提醒回填 %s）",
@@ -530,12 +421,244 @@ async def run_review(app, *, trigger: str = "manual") -> dict:
         {r["direction"]: r["outcome"] for r in reviews},
         backfill.get("alerts_updated"),
     )
-    return {"ok": True, "brief_date": target, "directions": reviews, "alert_backfill": backfill,
-            "ledger_settled": ledger_settled, "opportunity_labels": opportunity_labels,
-            "opportunity_horizons": opportunity_horizons,
-            "opportunity_crossday_path": opportunity_crossday_path,
-            "opportunity_path": opportunity_path,
-            "outcome_horizons_prepared": horizon_prepared}
+    return {"ok": True, "brief_date": target, "directions": reviews,
+            "alert_backfill": backfill, **outcome_result}
+
+
+def _empty_collection():
+    return {"ledger_settled": None, "opportunity_labels": None,
+            "opportunity_horizons": [], "opportunity_crossday_path": [],
+            "opportunity_path": None, "outcome_horizons_prepared": []}
+
+
+async def collect_closed_outcomes(app, *, trade_date=None, session_factory=None, symbols=None):
+    """Observe existing, already-closed decisions; never create selections/fills.
+
+    This explicit owner also supports authorized recovery of a previous closed
+    trade date. It cannot reconstruct first-seen facts or RSH-031 blind samples.
+    Each selected symbol is fetched once for all due targets in the 30-day lane.
+    """
+    from app.core.db import get_session_factory
+    from app.picks.watch_ledger import get_day, settle_day, validate_previous_day
+    from app.picks.opportunity_learning import (
+        ensure_outcome_horizons, label_cross_day_paths, label_due_outcomes,
+        label_trade_date, pending_cross_day_path_targets, pending_outcome_targets,
+        pending_d0_path_symbols, pending_symbols,
+    )
+    state = _normalize_state(app)
+    now = to_beijing(beijing_now())
+    anchor = date.fromisoformat(trade_date) if trade_date else now.date()
+    if trade_date and trade_date != anchor.isoformat():
+        raise ValueError("收盘观察日期须为 YYYY-MM-DD")
+    batch = None if symbols is None else set(symbols)
+    if batch is not None and (not 1 <= len(batch) <= 20 or any(
+            not isinstance(s, str) or not re.fullmatch(r"\d{6}", s) for s in batch)):
+        raise ValueError("symbols须为1–20个六位股票代码")
+    result = _empty_collection()
+    errors = []
+    if anchor > now.date() or (anchor == now.date() and (now.hour, now.minute) < (15, 0)):
+        return {**result, "outcome_collection": {"state": "blocked", "reason_codes": ["target_not_closed"]}}
+    sf = session_factory or get_session_factory()
+    try:
+        days = await tc.trading_days(state.hub.provider)
+    except Exception as exc:
+        log.warning("outcome calendar unavailable: %s", type(exc).__name__)
+        days = []
+    if not days or anchor not in days:
+        return {**result, "outcome_collection": {"state": "calendar_unknown", "reason_codes": ["calendar_uncovered"]}}
+    target = anchor.isoformat()
+    scope_count = processed_count = remaining_count = None
+    try:
+        recent = [d for d in days if d <= anchor][-10:]
+        async def prepare():
+            filters = {"symbols": batch} if batch is not None else {}
+            return [await asyncio.to_thread(ensure_outcome_horizons, d.isoformat(), days, sf,
+                    include_deferred=False, **filters) for d in recent]
+        if batch is None:
+            result["outcome_horizons_prepared"] = await prepare()
+        due = await asyncio.to_thread(pending_outcome_targets, target, sf, lookback_days=30)
+        # D0 previously had no cross-day recovery consumer at all. Read its
+        # immutable original identity; daily history supplies only later outcomes.
+        due_d0 = await asyncio.to_thread(pending_outcome_targets, target, sf, lookback_days=30, horizons=("d0_close",))
+        due_d0.setdefault(target, set()).update(await asyncio.to_thread(pending_symbols, target, sf))
+        crossday = await asyncio.to_thread(pending_cross_day_path_targets, target, sf, lookback_days=30)
+        ledger_symbols = {r["symbol"] for r in await asyncio.to_thread(get_day, target, sf) if r["status"] == "tracking"}
+        minute_symbols = (await asyncio.to_thread(pending_d0_path_symbols, target, sf)
+                          if batch is not None and anchor == now.date() else set())
+        all_symbols = ledger_symbols | minute_symbols | {s for m in (due, due_d0, crossday) for group in m.values() for s in group}
+        if batch is not None and not batch <= all_symbols:
+            return {**result, "outcome_collection": {"state": "blocked", "reason_codes": ["symbols_outside_archived_scope"],
+                    "partial_batch": True, "processed_count": 0, "remaining_count": len(all_symbols), "scope_count": len(all_symbols)}}
+        if batch is not None:
+            # Scope rejection precedes every business writer, including horizon preparation.
+            result["outcome_horizons_prepared"] = await prepare()
+            due = await asyncio.to_thread(pending_outcome_targets, target, sf, lookback_days=30)
+            due_d0 = await asyncio.to_thread(pending_outcome_targets, target, sf, lookback_days=30, horizons=("d0_close",))
+            due_d0.setdefault(target, set()).update(await asyncio.to_thread(pending_symbols, target, sf))
+            crossday = await asyncio.to_thread(pending_cross_day_path_targets, target, sf, lookback_days=30)
+        active = all_symbols if batch is None else batch
+        scope_count, processed_count, remaining_count = len(all_symbols), len(active), len(all_symbols - active)
+        def in_batch(mapping):
+            return {d: members & active for d, members in mapping.items() if members & active}
+        due, due_d0, crossday = in_batch(due), in_batch(due_d0), in_batch(crossday)
+        # Keep the legacy empty current-D0 result in a full automatic run.
+        if batch is None:
+            due_d0.setdefault(target, set())
+        filters = {"symbols": batch} if batch is not None else {}
+        closes_by_symbol, paths_by_symbol, price_basis = {}, {}, {}
+        outcome_symbols = {s for m in (due, due_d0, crossday) for group in m.values() for s in group}
+        for symbol in sorted(active):
+            if symbol in outcome_symbols:
+                qfq, raw = await _paired_daily_facts(state.hub.provider, symbol)
+                if not qfq or not raw:
+                    errors.append("paired_daily_unavailable")
+                factors = _price_basis_from_daily(symbol,
+                    {d: (v["close"], v["source"]) for d, v in qfq.items() if v.get("close") is not None},
+                    {d: (v["close"], v["source"]) for d, v in raw.items() if v.get("close") is not None})
+                if qfq and raw and not factors:
+                    errors.append("price_basis_unavailable")
+                price_basis.update(factors)
+                closes_by_symbol[symbol] = {d: v["close"] for d, v in qfq.items() if v.get("close") is not None}
+                paths_by_symbol[symbol] = {d: (v["high"], v["low"], v["source"]) for d, v in qfq.items()
+                                           if v.get("high") is not None and v.get("low") is not None}
+            elif symbol in ledger_symbols:
+                closes_by_symbol[symbol] = await _daily_closes(_tencent_provider(state.hub), symbol)
+        def closes_for(day, members):
+            return {s: closes_by_symbol[s][day] for s in members
+                    if s in closes_by_symbol and day in closes_by_symbol[s]}
+        current_closes = closes_for(anchor, active)
+        result["ledger_settled"] = await asyncio.to_thread(settle_day, target, current_closes, sf)
+        d0_results = []
+        for day, members in sorted(due_d0.items()):
+            labeled = await asyncio.to_thread(label_trade_date, day, closes_for(date.fromisoformat(day), members), sf,
+                                               price_basis_by_key=price_basis, **filters)
+            d0_results.append(labeled)
+            if day == target:
+                result["opportunity_labels"] = labeled
+        result["opportunity_d0_recovery"] = d0_results
+        for day, members in due.items():
+            result["opportunity_horizons"].append(await asyncio.to_thread(label_due_outcomes, day,
+                closes_for(date.fromisoformat(day), members), sf, price_basis_by_key=price_basis, **filters))
+        # Only the actual current trade day's expiring minute series is collected.
+        # Old D0 recovery above uses dated daily closes, never a later minute tape.
+        if anchor == now.date():
+            result["opportunity_path"] = await collect_d0_path_outcomes(state, target, sf,
+                **({"only_symbols": batch} if batch is not None else {}))
+        try:
+            for day in crossday:
+                result["opportunity_crossday_path"].append(
+                    await asyncio.to_thread(label_cross_day_paths, day, paths_by_symbol, days, price_basis, sf, **filters))
+        except Exception as exc:
+            errors.append(f"crossday_path:{type(exc).__name__}")
+            log.warning("cross-day opportunity path labeling failed", exc_info=True)
+        if anchor == now.date():
+            await asyncio.to_thread(validate_previous_day, current_closes, sf)
+    except Exception as exc:
+        errors.append(f"collection:{type(exc).__name__}")
+        log.warning("closed opportunity collection failed", exc_info=True)
+    lanes = [result.get("opportunity_labels"), result.get("opportunity_path"),
+             *result.get("opportunity_d0_recovery", []), *result["opportunity_horizons"],
+             *result["opportunity_crossday_path"]]
+    pending = any((lane or {}).get("pending", 0) for lane in lanes)
+    result["outcome_collection"] = {"state": "failed" if errors else "pending" if pending else "partial" if remaining_count else "complete",
+        "reason_codes": sorted(set(errors)) or (["source_facts_pending"] if pending else ["partial_batch"] if remaining_count else []),
+        "partial_batch": batch is not None, "processed_count": processed_count,
+        "remaining_count": remaining_count, "scope_count": scope_count}
+    return result
+
+
+async def collect_after_close_outcomes(app, *, run_hour=15, run_minute=35):
+    """Five durable automatic slots, independent of whether the brief succeeded."""
+    state = _normalize_state(app)
+    now = to_beijing(beijing_now())
+    elapsed = now.hour * 60 + now.minute - (run_hour * 60 + run_minute)
+    empty = _empty_collection()
+    if not 0 <= elapsed <= 60:
+        return {**empty, "outcome_collection": {"state": "skipped", "reason_codes": ["outside_retry_window"]}}
+    slot, day = elapsed // 15, now.strftime("%Y%m%d")
+    lock = getattr(state, "picks_outcome_collection_lock", None)
+    if lock is None:
+        lock = asyncio.Lock()
+        state.picks_outcome_collection_lock = lock
+    async with lock:
+        path = Path(BRIEF_DIR) / f"{day}.outcomes.json"
+        def read_receipt():
+            if not path.exists():
+                return {"brief_date": f"{day}.outcomes", "kind": "outcome_collection_attempts", "attempts": []}
+            receipt = json.loads(path.read_text(encoding="utf-8"))
+            attempts = receipt.get("attempts")
+            if (receipt.get("kind") != "outcome_collection_attempts"
+                    or receipt.get("brief_date") != f"{day}.outcomes" or not isinstance(attempts, list)
+                    or len(attempts) > 5 or any(a.get("slot") not in range(5) for a in attempts)):
+                raise ValueError("invalid outcome collection attempt receipt; not reset")
+            return receipt
+        receipt = await asyncio.to_thread(read_receipt)
+        if any(a.get("slot") == slot for a in receipt["attempts"]):
+            return {**empty, "outcome_collection": {"state": "skipped", "reason_codes": ["slot_already_attempted"]}}
+        if receipt.get("state") == "complete":
+            return {**empty, "outcome_collection": {"state": "complete", "reason_codes": []}}
+        attempt = {"slot": slot, "state": "started", "started_at": now.isoformat()}
+        receipt["attempts"].append(attempt)
+        receipt["state"] = "started"
+        await asyncio.to_thread(save_brief, receipt)
+        try:
+            result = await collect_closed_outcomes(state)
+        except Exception as exc:
+            log.warning("outcome collection attempt failed", exc_info=True)
+            result = {**empty, "outcome_collection": {"state": "failed",
+                      "reason_codes": [f"collector:{type(exc).__name__}"]}}
+        outcome = result["outcome_collection"]
+        attempt.update(state=outcome["state"], reason_codes=outcome["reason_codes"],
+                       finished_at=to_beijing(beijing_now()).isoformat())
+        receipt["state"] = outcome["state"]
+        await asyncio.to_thread(save_brief, receipt)
+        return result
+
+
+async def _paired_daily_facts(provider, symbol):
+    """At most two existing dual-capability providers within one 12s budget.
+
+    A composite's separate failovers cannot establish a corporate-action ratio.
+    Reuse one selected pair across every overdue horizon for this symbol.
+    """
+    from app.data_providers.composite import CompositeProvider, REQUEST_BUDGET_SECONDS
+    candidates = [p for p in (getattr(provider, "providers", None) or [provider])
+                  if callable(getattr(p, "get_raw_daily_kline", None)) and callable(getattr(p, "get_kline", None))]
+    deadline = time.monotonic() + REQUEST_BUDGET_SECONDS
+    if isinstance(provider, CompositeProvider):
+        candidates = [p for p in candidates if not any(provider._in_cooldown(m, p.name)
+                      for m in ("get_kline", "get_raw_daily_kline"))]
+    try:
+        async with asyncio.timeout(REQUEST_BUDGET_SECONDS):
+            for candidate in candidates[:2]:
+                pinned = candidate
+                if isinstance(provider, CompositeProvider):
+                    # Pin identity while retaining the existing breaker, deadline
+                    # and method observations. Never create an unobserved lane.
+                    from types import SimpleNamespace
+                    async def call(method, args):
+                        _, bars, error = await provider._attempt(method, candidate, args, deadline)
+                        if error is not None or not bars:
+                            provider._record_failure(method, candidate.name)
+                            raise RuntimeError("paired source method unavailable") from error
+                        provider._settle_last_good(method, candidate.name)
+                        return bars
+                    async def qfq_call(member, timeframe):
+                        return await call("get_kline", (member, timeframe))
+                    async def raw_call(member):
+                        return await call("get_raw_daily_kline", (member,))
+                    pinned = SimpleNamespace(name=candidate.name, get_kline=qfq_call, get_raw_daily_kline=raw_call)
+                qfq = await _daily_bar_facts(pinned, symbol)
+                raw = await _daily_bar_facts(pinned, symbol, raw=True) if qfq else {}
+                if time.monotonic() >= deadline:
+                    return {}, {}
+                if qfq and raw and _price_basis_from_daily(symbol,
+                        {d: (v["close"], v["source"]) for d, v in qfq.items() if v.get("close") is not None},
+                        {d: (v["close"], v["source"]) for d, v in raw.items() if v.get("close") is not None}):
+                    return qfq, raw
+    except TimeoutError:
+        log.warning("paired daily facts exceeded the existing request budget")
+    return {}, {}
 
 
 # ---------------------------------------------------------------- IO：提醒收益回算
@@ -557,7 +680,7 @@ def _strict_tencent_minute_provider(hub):
     return next((p for p in candidates if getattr(p, "name", "") == "tencent"), None)
 
 
-async def collect_d0_path_outcomes(state, trade_date: str, session_factory=None) -> dict:
+async def collect_d0_path_outcomes(state, trade_date: str, session_factory=None, *, only_symbols=None) -> dict:
     """Collect selected-only D0 path facts after close.
 
     Minute bars are Tencent-only. Ever-hit-limit uses the union of final limit-up
@@ -570,6 +693,8 @@ async def collect_d0_path_outcomes(state, trade_date: str, session_factory=None)
 
     sf = session_factory or get_session_factory()
     symbols = pending_d0_path_symbols(trade_date, sf)
+    if only_symbols is not None:
+        symbols &= only_symbols
     if not symbols:
         return {"trade_date": trade_date, "symbols": 0, "labeled": 0, "pending": 0, "unknown": 0}
 
@@ -626,6 +751,7 @@ async def collect_d0_path_outcomes(state, trade_date: str, session_factory=None)
     result = label_d0_paths(
         trade_date, minute_by_symbol, first_seal_by_symbol=first_seal_by_symbol,
         limit_pool_known=limit_pool_known, session_factory=sf,
+        **({"symbols": only_symbols} if only_symbols is not None else {}),
     )
     return {
         **result, "symbols": len(symbols),
@@ -660,10 +786,14 @@ async def _daily_bar_facts(provider, symbol: str, *, raw: bool = False) -> dict[
     facts: dict[date, dict[str, Any]] = {}
     for b in bars or []:
         try:
+            if getattr(b, "quality", None) not in {"high", "medium"}:
+                continue
             d = to_beijing_naive(b.ts).date()
             if d.year < 2020:
                 continue
             source = str(getattr(b, "source", "") or getattr(provider, "name", ""))
+            if not source:
+                continue
             def clean(value):
                 try:
                     v = float(value)
@@ -890,7 +1020,6 @@ async def intraday_review_scheduler(
     非交易日自然跳过（无简报文件）。无简报不报警（盘前调度失败时这里安静，
     手动端点 /intraday-review/run 可补跑）。
     """
-    last_path_retry_key: tuple[str, int] | None = None
     while not stop.is_set():
         try:
             now = beijing_now()
@@ -905,33 +1034,11 @@ async def intraday_review_scheduler(
             ):
                 await run_review(app, trigger="schedule")
 
-            # The review file is intentionally idempotent, but D0 minute evidence is
-            # a separate market-data fact. If the first 15:35 fetch was transiently
-            # unavailable/truncated, retry only still-pending selected symbols in a
-            # bounded one-hour window. This does not reopen the full review or expand
-            # requests to rejected/deferred funnel rows.
-            retry_slot = d0_path_retry_slot(
-                now, run_hour=run_hour, run_minute=run_minute
+            # Close/path observations have their own bounded, durable attempts.
+            # A successful or absent brief cannot suppress their consumer.
+            await collect_after_close_outcomes(
+                _normalize_state(app), run_hour=run_hour, run_minute=run_minute
             )
-            retry_key = (target, retry_slot) if retry_slot is not None else None
-            if (
-                payload is not None
-                and retry_key is not None
-                and retry_key != last_path_retry_key
-            ):
-                try:
-                    from app.picks.opportunity_learning import pending_d0_path_symbols
-
-                    trade_date = now.date().isoformat()
-                    if pending_d0_path_symbols(trade_date):
-                        path_retry = await collect_d0_path_outcomes(
-                            _normalize_state(app), trade_date
-                        )
-                        log.info("D0 path bounded retry slot=%s: %s", retry_slot, path_retry)
-                except Exception:
-                    log.warning("D0 path bounded retry failed", exc_info=True)
-                finally:
-                    last_path_retry_key = retry_key
 
             # 批次 D：题材热度时序前向落库（独立于复盘成败；自带磁盘幂等，
             # 已落库的 tick 不会再碰行情配额）。窗口与复盘一致：run_hour–23 点。

@@ -13,10 +13,13 @@ from __future__ import annotations
 
 import asyncio
 import logging
+from datetime import datetime
+from types import SimpleNamespace
 
 import pytest
 
 import app.paper.engine as pe
+from app.core.bjtime import BJ_TZ
 
 #: 含**未来交易日**的日历 —— 这正是 R04 的复现条件：
 #: 旧实现取「今天之后的第一个交易日」当解冻日，再判 `today >= 它`，永不成立。
@@ -43,7 +46,8 @@ def _mk_engine(tmp_path, *, days=CAL, name="t1.db", scope="main"):
             raise days
         return list(days)
 
-    engine = PaperTradingEngine(sf, quote_fn, None if days is None else days_fn, scope=scope)
+    risk = SimpleNamespace(hub=SimpleNamespace(get_quotes=lambda: []), check_order=lambda **_: {"allowed": True})
+    engine = PaperTradingEngine(sf, quote_fn, None if days is None else days_fn, scope=scope, risk_engine=risk)
     return engine, sf
 
 
@@ -70,7 +74,8 @@ def _snap(sf, symbol: str = "600519", scope: str = "main") -> dict:
 
 
 @pytest.fixture(autouse=True)
-def _reset_fallback_log():
+def _reset_fallback_log(monkeypatch):
+    monkeypatch.setattr(pe, "beijing_now", lambda: datetime.strptime(pe._today(), "%Y%m%d").replace(hour=10, tzinfo=BJ_TZ))
     pe._T1_FALLBACK_LOGGED.clear()
     yield
     pe._T1_FALLBACK_LOGGED.clear()
@@ -206,9 +211,10 @@ def test_add_position_keeps_yesterday_qty_sellable(tmp_path, monkeypatch):
         from app.schemas.market import Quote
 
         return Quote(symbol=symbol, price=10.0, limit_up_price=11.0,
-                     limit_down_price=9.0, source="t")
+                     limit_down_price=9.0, source="t", data_timestamp=pe.beijing_now())
 
     engine._quote_fn = quote_fn
+    engine.ensure_account()  # This test's pre-existing position has an initialized owner.
     order = asyncio.run(engine.place_order("600519", "buy", 10.0, 100))
     assert order.status == "filled", getattr(order, "reason", None)
 
@@ -235,7 +241,7 @@ def test_exit_monitor_sells_yesterday_position_without_manual_settlement(tmp_pat
         from app.schemas.market import Quote
 
         return Quote(symbol=symbol, price=9.0, limit_up_price=11.0,
-                     limit_down_price=8.0, source="t")
+                     limit_down_price=8.0, source="t", data_timestamp=pe.beijing_now())
 
     engine._quote_fn = quote_fn
 

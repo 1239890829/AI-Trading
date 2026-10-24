@@ -234,6 +234,7 @@ def test_selected_scheduler_does_not_queue_another_task_or_retry_unknown(env, mo
 
 
 def test_active_task_does_not_lose_unstarted_selection_at_midnight(env, monkeypatch):
+    monkeypatch.setattr(settings, "tradingagents_research_concurrency", 1)
     from app.services import agent_tasks
     daily(env, ("600001", "600004"))
     authorize(env, monkeypatch, valid_until=(NOW + timedelta(days=2)).isoformat())
@@ -681,6 +682,7 @@ def test_old_completed_report_remains_readable_but_is_not_reissued_as_the_new_me
 
 
 def test_selected_scheduler_observes_durable_task_and_os_owner(env, monkeypatch):
+    monkeypatch.setattr(settings, "tradingagents_research_concurrency", 1)
     from app.services import agent_tasks
     from app.services.company_evidence import worker_lease
     daily(env)
@@ -1108,3 +1110,144 @@ def test_real_driver_continuation_rechecks_server_pin_before_reserve_and_atomic_
         assert all(row["state"] == "started" for row in usage_facts(env).values())
     assert len(authorization_checks) == (1 if mutation == "before_reserve" else 2)
     assert usage_facts(env)[fact["usage_id"]] == before
+
+
+def test_scheduler_fills_three_stock_capacity_without_duplicate_dispatch(env, monkeypatch):
+    from app.services import agent_tasks
+    import uuid
+    monkeypatch.setattr(settings, "tradingagents_research_concurrency", 3)
+    daily(env, ("600001", "600002", "600003", "600004", "600005"))
+    authorize(env, monkeypatch)
+    queued = []
+    async def create(kind, params, **kwargs):
+        task_id = uuid.uuid4().hex
+        queued.append(params["symbol"])
+        with env.sf() as db:
+            db.add(AgentTask(id=task_id, type=kind, status="queued", params=json.dumps(params)))
+            db.commit()
+        return {"id": task_id}
+    monkeypatch.setattr(agent_tasks, "create_task_async", create)
+    asyncio.run(research.scheduler_tick(env.app))
+    assert queued == ["600001", "600002", "600003"]
+    asyncio.run(research.scheduler_tick(env.app))
+    assert queued == ["600001", "600002", "600003"]
+    assert env.driver.calls == 0  # Dispatch does not synthesize a model answer.
+    with env.sf() as db:
+        row = db.scalar(select(AgentTask).where(AgentTask.params == json.dumps({"symbol": "600001"})))
+        row.status = "succeeded"
+        db.commit()
+    asyncio.run(research.scheduler_tick(env.app))
+    assert queued == ["600001", "600002", "600003", "600004"]
+
+
+def test_malformed_durable_owner_reserves_capacity_fail_closed(env, monkeypatch):
+    from app.services import agent_tasks
+    daily(env)
+    authorize(env, monkeypatch)
+    with env.sf() as db:
+        db.add(AgentTask(id="bad", type="tradingagents_research", status="running", params='{"symbol":null}'))
+        db.commit()
+    monkeypatch.setattr(agent_tasks, "create_task_async", lambda *a, **kw: pytest.fail("Uncertain owner cannot open capacity"))
+    asyncio.run(research.scheduler_tick(env.app))
+    assert len(research._active_symbols(env.sf)) == 3
+
+
+def _add_original_roles(env):
+    asyncio.run(research.run_research(Recorder(), {"symbol": "600001"}, env.app))
+    path = next(research.ROOT.glob("600001/*/result.json"))
+    value = json.loads(path.read_bytes())
+    packet = {"case_id": "saved-original"}
+    (path.parent / "packet.json").write_text(json.dumps(packet))
+    value["input_sha256"] = research._digest(packet)
+    path.write_text(json.dumps(value))
+    (path.parent.parent / "latest.json").write_text(json.dumps({"run_id": value["run_id"], "result_sha256": hashlib.sha256(path.read_bytes()).hexdigest()}))
+    (path.parent / "model-outputs").mkdir()
+    rows = []
+    for call_id, role in enumerate(research.ROLES, 1):
+        key = research.ROLE_FIELDS.get(role, ("content",))[0]
+        output = {key: "original exact content", "tool_calls": []}
+        if role == "Portfolio Manager":
+            output["rating"] = "hold"
+        peer = {"role": role, "call_id": call_id, "output": output, "output_sha256": research._digest(output),
+                "accepted": True, "state": "accepted", "case_id": packet["case_id"], "arm": "ta-luna"}
+        rows.append(json.dumps({"peer": peer}))
+        (path.parent / "model-outputs" / f"{call_id}.json").write_text(json.dumps({"role": role, "call_id": call_id,
+            "output_sha256": peer["output_sha256"], "structured_output": output}))
+    (path.parent / "role-outputs.jsonl").write_text("\n".join(rows) + "\n")
+    return path
+
+
+def test_saved_only_reader_projects_twelve_original_roles_without_preflight_or_mutation(env, monkeypatch):
+    daily(env)
+    authorize(env, monkeypatch)
+    path = _add_original_roles(env)
+    before = hashlib.sha256(path.read_bytes()).hexdigest()
+    monkeypatch.setattr(research, "preflight", lambda *a, **kw: pytest.fail("Saved reading must not inspect startup"))
+    monkeypatch.setattr(env.driver, "method_identity", lambda: pytest.fail("No upstream hashing for saved reading"))
+    view = research.read_view("600001", env.app, saved_only=True)
+    assert view["executable"] is False and view["startup_conditions_not_checked"] is True
+    assert [row["role"] for row in view["latest"]["roles"]] == list(research.ROLES)
+    assert view["latest"]["roles"][0]["fields"] == {"content": "original exact content"}
+    assert len(view["latest"]["reports"]) == 7
+    summary = research.read_saved_summary("600001", session_factory=env.sf)
+    assert (summary["report_count"], summary["roles_count"], summary["final_rating"]) == (7, 12, "hold")
+    assert summary["method_compatible"] is None and "reports" not in summary and "roles" not in summary
+    assert hashlib.sha256(path.read_bytes()).hexdigest() == before
+    assert env.driver.calls == 1
+
+
+def test_corrupt_role_evidence_does_not_hide_independent_seven_saved_reports(env, monkeypatch):
+    daily(env)
+    authorize(env, monkeypatch)
+    path = _add_original_roles(env)
+    original = (path.parent / "model-outputs/1.json")
+    value = json.loads(original.read_text())
+    value["structured_output"]["content"] = "changed"
+    original.write_text(json.dumps(value))
+    view = research.read_view("600001", env.app, saved_only=True)
+    assert len(view["latest"]["reports"]) == 7
+    assert view["latest"]["role_projection_state"] == "unavailable" and view["latest"]["roles"] == []
+    summary = research.read_saved_summary("600001", session_factory=env.sf)
+    assert summary["report_count"] == 7 and summary["roles_count"] is None
+    assert summary["final_rating"] is None and env.driver.calls == 1
+
+
+def test_notification_failure_keeps_completed_claim_and_saved_research(env, monkeypatch):
+    from app.services import selection_workflow
+    daily(env)
+    authorize(env, monkeypatch)
+    def unavailable(**kwargs):
+        raise RuntimeError("isolated notification write failure")
+    monkeypatch.setattr(selection_workflow, "record_research_ready", unavailable)
+    result = asyncio.run(research.run_research(Recorder(), {"symbol": "600001"}, env.app))
+    assert result["state"] == "completed"
+    claim = next(research.ROOT.glob("600001/selection-*.json"))
+    assert json.loads(claim.read_text())["state"] == "completed"
+    assert research.read_view("600001", env.app, saved_only=True)["latest"] is not None
+    assert env.driver.calls == 1
+
+
+def test_committed_wake_coalesces_and_shutdown_drains_tick(env, monkeypatch):
+    async def exercise():
+        stop, entered, release = asyncio.Event(), asyncio.Event(), asyncio.Event()
+        env.app.state.selected_research_wake = asyncio.Event()
+        calls = []
+        async def tick(app):
+            calls.append("dispatch")
+            entered.set()
+            await release.wait()
+        monkeypatch.setattr(research, "scheduler_tick", tick)
+        owner = asyncio.create_task(research.selected_research_loop(env.app, stop, first_delay=100, interval=100))
+        await asyncio.sleep(0)
+        for _ in range(20):
+            assert research.wake_selected_research(env.app) is True
+        await asyncio.wait_for(entered.wait(), 1)
+        stop.set()
+        await asyncio.sleep(0.01)
+        assert not owner.done()  # Stop does not claim the current DB/dispatch stage is drained.
+        release.set()
+        await asyncio.wait_for(owner, 1)
+        assert calls == ["dispatch"]
+        assert env.app.state.selected_research_loop is None
+        assert research.wake_selected_research(env.app) is False
+    asyncio.run(exercise())

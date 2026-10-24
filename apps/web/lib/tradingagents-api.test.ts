@@ -65,3 +65,14 @@ it.each([0, 10000])("accepts declared count boundary %s without inferring a full
   vi.mocked(getJson).mockResolvedValue({data: {...completed(), latest: {...completed().latest, recovery_lineage}}, meta: {}} as never);
   expect((await getTradingAgentsResearch("002121")).latest!.recovery_lineage).toEqual(recovery_lineage);
 });
+
+it("uses the saved-only read and retains valid originals when a role projection is incomplete",async()=>{
+  const value={...completed(),latest:{...completed().latest,roles:[{role:"Market Analyst",call_id:1,output_sha256:"d".repeat(64),fields:{content:"唯一原答"}}],role_projection_state:"available"}};
+  vi.mocked(getJson).mockResolvedValueOnce({data:value,meta:{}} as never);
+  const result=await getTradingAgentsResearch("002121",{savedOnly:true});
+  expect(getJson).toHaveBeenCalledWith("/api/agent/research/tradingagents/002121?saved_only=true");
+  expect(result.latest!.reports).toEqual(value.latest.reports);
+  expect(result.latest!.roles).toBeUndefined();
+  expect(result.latest!.role_projection_state).toBe("unavailable");
+  expect(value.latest.roles).toHaveLength(1);
+});

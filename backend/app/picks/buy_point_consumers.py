@@ -3,12 +3,13 @@
 Watch insertion is idempotent. A started paper action with an unknown outcome
 is retained for reconciliation and is never retried blindly.
 """
+import asyncio
 import json
 import logging
 import time
 from datetime import datetime
 
-from sqlalchemy import select, update
+from sqlalchemy import case, func, select, update
 
 from app.core.bjtime import beijing_now
 from app.models.notification_outbox import BuyPointConsumption as Progress
@@ -17,6 +18,7 @@ log = logging.getLogger(__name__)
 
 
 async def consume_pending(app, sf, *, event_id=None):
+    await _project_positions(sf)
     now_ms = int(time.time() * 1000)
     with sf() as db:
         if db.scalar(select(Progress.event_id).where(Progress.state.in_(("pending", "running"))).limit(1)) is None:
@@ -43,7 +45,7 @@ async def consume_pending(app, sf, *, event_id=None):
                 continue
             row = db.get(Progress, key)
             raw, expiry, attempts = row.payload, row.expires_at_ms, row.attempts
-        state, reason = "done", "consumed"
+        state, reason, execution_result = "done", "consumed", None
         try:
             payload = json.loads(raw)
             alert, snapshot = payload["alert"], payload["snapshot"]
@@ -93,6 +95,9 @@ async def consume_pending(app, sf, *, event_id=None):
                     result = await maybe_open(app, symbol=alert["symbol"], name=alert["name"],
                                               trigger="buy_point", price=executable.get("price"),
                                               decision_context=ref)
+                    execution_result = {field: result[field] for field in (
+                        "opened", "accepted", "pending", "execution_unknown", "order_id",
+                        "decision_id", "decision_version", "reason") if field in result}
                     state = "unknown" if result.get("execution_unknown") else "done"
                     reason = str(result.get("reason") or "consumed")[:256]
         except Exception as exc:
@@ -100,8 +105,49 @@ async def consume_pending(app, sf, *, event_id=None):
             reason = f"consumer_error:{type(exc).__name__}"
             log.warning("buy-point consumer %s/%s: %s", *key, reason, exc_info=True)
         with sf() as db:
-            db.execute(update(Progress).where(
+            values = {"state": state, "reason": reason, "updated_at_ms": int(time.time() * 1000)}
+            if execution_result is not None:
+                saved_payload = {**payload, "execution_result": execution_result}
+                order_id = execution_result.get("order_id")
+                if (state == "done" and type(order_id) is int and order_id > 0
+                        and meta.get("selection_ref") and meta.get("selection_source_version")):
+                    saved_payload["paper_projection"] = {"state": "pending"}
+                values["payload"] = json.dumps(saved_payload, ensure_ascii=False)
+            saved = db.execute(update(Progress).where(
                 Progress.event_key == key[0], Progress.consumer == key[1], Progress.state == "running",
                 Progress.updated_at_ms == now_ms,
-            ).values(state=state, reason=reason, updated_at_ms=int(time.time() * 1000)))
+            ).values(**values))
             db.commit()
+        if saved.rowcount and key[1] == "position" and state == "done":
+            await _project_positions(sf, event_key=key[0])
+
+
+def _pending_position_projections(sf, event_key):
+    safe = case((func.json_valid(Progress.payload), Progress.payload), else_="{}")
+    with sf() as db:
+        query = select(Progress.event_key, Progress.payload).where(Progress.consumer == "position",
+            Progress.state == "done", func.json_extract(safe, "$.paper_projection.state") == "pending")
+        if event_key is not None:
+            query = query.where(Progress.event_key == event_key)
+        return list(db.execute(query.limit(20)))
+
+
+def _finish_projection(sf, event_key, original, receipt):
+    payload = json.loads(original)
+    payload["paper_projection"] = {key: receipt[key] for key in ("state", "event_id", "reason") if key in receipt}
+    with sf() as db:
+        db.execute(update(Progress).where(Progress.event_key == event_key, Progress.consumer == "position",
+            Progress.state == "done", Progress.payload == original).values(payload=json.dumps(payload, ensure_ascii=False)))
+        db.commit()
+
+
+async def _project_positions(sf, event_key=None):
+    """Retry only a committed notification projection, never its paper action."""
+    from app.services.selection_workflow import record_automatic_paper_status
+    for key, original in await asyncio.to_thread(_pending_position_projections, sf, event_key):
+        try:
+            receipt = await asyncio.to_thread(record_automatic_paper_status, event_key=key, session_factory=sf)
+            if receipt.get("state") in {"recorded", "rejected"}:
+                await asyncio.to_thread(_finish_projection, sf, key, original, receipt)
+        except Exception:
+            log.warning("saved paper projection unavailable; original action retained", exc_info=True)

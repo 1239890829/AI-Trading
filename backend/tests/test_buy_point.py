@@ -462,3 +462,32 @@ def test_consumer_identity_survives_event_numeric_id_reuse(monkeypatch, tmp_path
     with sf() as db:
         assert db.query(BuyPointConsumption).count() == 4
         assert len({r.event_key for r in db.query(BuyPointConsumption)}) == 2
+
+
+def test_new_buy_point_freezes_exact_daily_selection_version_in_durable_payload(monkeypatch, tmp_path):
+    import app.picks.buy_point as bp
+    from app.models.notification_outbox import BuyPointConsumption
+    from app.services.selection_notifications import daily_selection_version
+    items = [_item()]
+    app, counters, _ = _patch_happy_path(monkeypatch, tmp_path, items=items)
+    generated = "2026-09-08T09:26:00+08:00"
+    version = daily_selection_version("2026-09-08", generated, items)
+    payload = {"date": "2026-09-08", "items": items,
+               "meta": {"generated_at": generated, "selection_version": version, "gate": {"stand_aside": False}}}
+    monkeypatch.setattr(bp, "_today_picks_payload", lambda: payload)
+    assert len(asyncio.run(bp.check_and_dispatch(app))) == 1
+    with app._test_factory() as db:
+        rows = list(db.query(BuyPointConsumption))
+        frozen = {row.consumer: json.loads(row.payload) for row in rows}
+    assert set(frozen) == {"position", "watch"}
+    for value in frozen.values():
+        meta = value["alert"]["meta"]
+        assert meta["selection_ref"] == "daily:2026-09-08:600000"
+        assert meta["selection_source_version"] == version
+        assert meta["execution_ref"]["decision_id"] and meta["execution_ref"]["decision_version"]
+    # A later daily generation must not replace the already consumed immutable intent.
+    payload["meta"]["selection_version"] = "changed-version"
+    asyncio.run(bp.check_and_dispatch(app))
+    assert counters["paper"] == 1
+    with app._test_factory() as db:
+        assert {row.consumer: json.loads(row.payload) for row in db.query(BuyPointConsumption)} == frozen

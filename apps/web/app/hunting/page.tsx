@@ -467,7 +467,7 @@ function HuntingInner() {
       {accessory.value && <ModalShell open={accessory.active} label={accessory.value === "evidence" ? "机会证据台" : "参考跟踪"} size="lg" presentation="drawer" expandable onClose={() => router.replace(patchWorkspaceUrl("/hunting", sp.toString(), {panel: null}), {scroll: false})} header={<div><h2 className="text-lg font-semibold">{accessory.value === "evidence" ? "机会证据台" : "参考跟踪"}</h2></div>} footer="保留当前机会位置；参考价与观察记录不是成交，不构成买卖建议。">
         {accessory.active && (accessory.value === "evidence" ? <OpportunityEvidencePanel date={sp.get("date") ?? undefined} onDateChange={date => router.replace(patchWorkspaceUrl("/hunting", sp.toString(), {date}), {scroll: false})} /> : <WatchLedgerPanel date={sp.get("date") ?? undefined} />)}
       </ModalShell>}
-      <PickDetailModal target={detailItem ? {kind: "pick", item: detailItem} : null} readError={!!daily.error} onClose={() => setDailyDetail(null)} />
+      <PickDetailModal target={detailItem ? {kind: "pick", item: detailItem, current: data?.date ? {date: data.date, version: data.meta?.selection_version ?? null} : undefined} : null} readError={!!daily.error} onClose={() => setDailyDetail(null)} />
       <div className="hunting-content min-h-0 flex-1" data-view={view} aria-label="选股内容">
         {view === "validation" ? <SelectionValidationPanel /> : view === "evidence" ? <OpportunityEvidencePanel date={sp.get("date") ?? undefined} onDateChange={date => { const p = new URLSearchParams(sp.toString()); p.set("date", date); router.replace(`/hunting?${p.toString()}`, {scroll:false}); }} /> : view === "tracking" ? <WatchLedgerPanel date={sp.get("date") ?? undefined} /> : view === "research" ? <LeaderResearchPanel date={sp.get("date") ?? undefined} onDateChange={date => router.replace(patchWorkspaceUrl("/hunting", sp.toString(), {date: date ?? null}), {scroll: false})} /> : <>
         {view === "discover" && <>
@@ -539,7 +539,7 @@ function HuntingInner() {
             {!picksLoaded ? <div className="hunting-collection-placeholder"><CardListSkeleton count={2}/></div>
               : !data ? <div role="alert" className="hunting-empty hunting-collection-placeholder">每日精选读取失败。请刷新重试；读取失败不表示没有组合。</div>
               : pickTotal === 0 ? <div className="hunting-empty hunting-collection-placeholder">{dailyEmptySummary(data)}</div>
-              : pickItems.map(it => <PickCard compact active={selectedGroup === "daily"} key={JSON.stringify([data.date, data.meta?.selection_version, it.symbol])} item={fromDailyPick(it)} readError={!!daily.error} positionLabel={(posLabels[it.symbol] as "sim" | "real" | undefined) ?? null} />)}
+              : pickItems.map(it => <PickCard compact active={selectedGroup === "daily"} key={JSON.stringify([data.date, data.meta?.selection_version, it.symbol])} item={fromDailyPick(it, {date: data.date!, version: data.meta?.selection_version ?? null})} readError={!!daily.error} positionLabel={(posLabels[it.symbol] as "sim" | "real" | undefined) ?? null} />)}
           </CandidateCollection>
           <p className="hunting-source-note">{minPickScore != null ? `综合分≥${minPickScore} · ` : ""}{replaceThreshold != null ? `换股门槛 ${replaceThreshold} 分` : "换股门槛未返回"} · {maxSwaps != null ? `每日换股上限 ${maxSwaps} 只` : "换股上限未返回"}；够格几只就保留几只。</p>
         </section>

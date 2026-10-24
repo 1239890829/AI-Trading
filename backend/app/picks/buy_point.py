@@ -425,6 +425,14 @@ async def check_and_dispatch(app) -> list[dict]:
         alert["card"] = build_buy_point_card([h], sent, breadth, gate or None, show=now)
         alert["dedup_key"] = _buy_point_dedup_key(trade_date, sym)
         alert["meta"]["trade_date"] = trade_date
+        # Freeze the same persisted daily generation before durable dispatch.
+        # This is linkage metadata, never a new decision or execution permission.
+        from app.services.selection_notifications import daily_selection_version
+        selection_version = (payload.get("meta") or {}).get("selection_version")
+        if (isinstance(pick_generated_at, str) and selection_version
+                and selection_version == daily_selection_version(trade_date, pick_generated_at, payload["items"])):
+            alert["meta"]["selection_ref"] = f"daily:{trade_date}:{sym}"
+            alert["meta"]["selection_source_version"] = selection_version
         try:
             ok = await dispatch_alert(app, alert, rule_provider=ensure_buy_point_rule)
         except Exception:

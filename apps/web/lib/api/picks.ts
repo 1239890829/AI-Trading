@@ -65,6 +65,22 @@ export interface DimensionEvidence {
   source_as_of?: string | null;
 }
 
+/** Saved metadata only. Counts are coverage, not quality or trading eligibility. */
+export interface SelectedResearchSummary {
+  symbol: string;
+  state: "completed" | "running" | "queued" | "failed" | "canceled" | "none" | "unknown";
+  task_state: string | null;
+  has_saved: boolean;
+  run_id: string | null;
+  generated_at: string | null;
+  as_of: string | null;
+  report_count: number;
+  roles_count: number | null;
+  final_rating: string | null;
+  review_state: string | null;
+  method_compatible: boolean | null;
+}
+
 export interface SelectionEntry {
   state: "recorded" | "partial" | "missing";
   selected_at: string | null;
@@ -80,6 +96,7 @@ export interface SelectionEntry {
 export interface DailyPickItem {
   related_event_refs?: EventInterpretationRef[];
   selection_entry?: SelectionEntry | null;
+  research_summary?: SelectedResearchSummary | null;
   symbol: string;
   name: string | null;
   price: number | null;
@@ -690,6 +707,7 @@ export interface OpportunityStock {
   selection_metrics?: SelectionMetrics | null;
   related_event_refs?: EventInterpretationRef[];
   selection_entry?: SelectionEntry | null;
+  research_summary?: SelectedResearchSummary | null;
   symbol: string;
   name: string | null;
   role: string | null;
@@ -861,6 +879,7 @@ export interface IntradayTopStock {
   selection_metrics?: SelectionMetrics | null;
   related_event_refs?: EventInterpretationRef[];
   selection_entry?: SelectionEntry | null;
+  research_summary?: SelectedResearchSummary | null;
   theme_sources?: IntradayThemeSource[];
   symbol: string;
   name: string | null;
