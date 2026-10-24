@@ -911,7 +911,6 @@ export const StockDetailPanel = memo(function StockDetailPanel({
                   key={symbol}
                   symbol={symbol}
                   name={quote?.name ?? symbol}
-                  quoteState={quote}
                   points={displayMinutes}
                   prevClose={quote?.prev_close ?? null}
                   referenceDate={minuteReferenceDate}
