@@ -1,5 +1,7 @@
 """The same real executor rejects unsafe manual and automatic main actions."""
 import asyncio
+import json
+import time
 from datetime import datetime, timedelta, timezone
 from types import SimpleNamespace
 from uuid import uuid4
@@ -15,9 +17,15 @@ from app.api.routes.paper import router
 from app.core.bjtime import BJ_TZ
 from app.core.config import settings
 from app.models.paper import PaperAccount, PaperOrder, PaperPosition
+from app.models.daily_pick import DailyPickSet
+from app.models.notification_outbox import BuyPointConsumption
+from app.models.opportunity_learning import OpportunityDecisionSnapshot
 from app.models.watchlist import Base
 from app.paper.engine import PaperTradingEngine
 from app.picks import position_engine
+from app.picks.buy_point import _buy_point_dedup_key, _execution_ref
+from app.picks.opportunity_learning import build_execution_contract
+from app.services.selection_notifications import daily_selection_version
 from app.risk.config import get_params
 from app.risk.engine import RiskEngine
 from app.schemas.market import Quality, Quote
@@ -31,6 +39,7 @@ def execution(tmp_path, monkeypatch):
     clock = [datetime(2026, 9, 29, 10, 0, tzinfo=BJ_TZ)]
     monkeypatch.setattr("app.paper.engine.beijing_now", lambda: clock[0])
     monkeypatch.setattr("app.paper.engine._today", lambda: clock[0].strftime("%Y%m%d"))
+    monkeypatch.setattr("app.paper.selection_action.beijing_now", lambda: clock[0])
     monkeypatch.setattr(position_engine, "beijing_now", lambda: clock[0])
     monkeypatch.setattr(position_engine, "_PLAN_DIR", tmp_path/'plans')
     monkeypatch.setattr(position_engine, "_today_gate_and_phase", lambda: ({}, "冰点"))
@@ -45,13 +54,36 @@ def execution(tmp_path, monkeypatch):
     risk._state, risk._params = "震荡偏多", get_params("震荡偏多")
     paper = PaperTradingEngine(sf, current, days, risk_engine=risk)
     paper.ensure_account()
+    day, generated = clock[0].date().isoformat(), clock[0].replace(hour=9, minute=26).isoformat()
+    item = {"symbol": "600001", "price": 10., "score": 80, "confidence": {"tier": "strong"},
+            "buy_range": {"low": 9., "high": 10.5}}
+    version = daily_selection_version(day, generated, [item])
+    contract = build_execution_contract(trade_date=day, symbol="600001", item=item,
+        executable_snapshot={"state": "ready", "price": 10., "source": "fixture", "as_of": clock[0].isoformat()},
+        gate_decision="passed", gate_reason=None, pick_generated_at=generated)
+    key, expires = _buy_point_dedup_key(day, "600001"), int(time.time() * 1000) + 60_000
+    binding = {"selection_ref": f"daily:{day}:600001", "source_version": version,
+        "decision_id": contract["decision_id"], "decision_version": contract["decision_version"],
+        "consumer_event_key": key, "expires_at_ms": expires}
+    with sf() as db:
+        db.add(DailyPickSet(date=day, items=json.dumps([item]), meta=json.dumps({
+            "generated_at": generated, "selection_version": version, "gate": {}, "market_phase": "冰点"})))
+        db.add(OpportunityDecisionSnapshot(snapshot_id="b" * 40, run_id="fixture", trade_date=day,
+            as_of=clock[0].replace(tzinfo=None), symbol="600001", scenario="buy_point", stage="notification",
+            decision="eligible", data_state="ready", strategy_version="fixture", feature_version="fixture",
+            evidence=json.dumps({"execution_contract": contract})))
+        db.add(BuyPointConsumption(event_key=key, event_id=1, consumer="position", state="running", expires_at_ms=expires,
+            updated_at_ms=int(time.time() * 1000), payload=json.dumps({"alert": {"meta": {
+                "selection_ref": binding["selection_ref"], "selection_source_version": version,
+                "execution_ref": _execution_ref(contract)}}})))
+        db.commit()
     app = FastAPI()
     app.state.paper, app.state.hub = paper, hub
     app.include_router(router, prefix="/api", dependencies=[Depends(require_api_token)])
     monkeypatch.setattr(settings, "api_token", "isolated-paper-execution")
     with TestClient(app) as client:
         yield SimpleNamespace(sf=sf, clock=clock, quote=quote, paper=paper, app=app, client=client,
-                              headers={"X-API-Token": settings.api_token})
+                              headers={"X-API-Token": settings.api_token}, binding=binding)
     sql.dispose()
 
 
@@ -78,7 +110,7 @@ def test_all_main_entry_paths_recheck_execution_context(execution, path, failure
         assert result.status_code == 422, result.text
     else:
         result = asyncio.run(position_engine.maybe_open(execution.app, symbol="600001", name="合成观察",
-                                                       trigger="buy_point", price=10.))
+                                                       trigger="buy_point", price=10., selection_context=execution.binding))
         assert result["opened"] is False and "撮合拒绝" in result["reason"]
         assert not result.get("execution_unknown")
     unchanged(execution)
@@ -93,7 +125,7 @@ def test_qualified_real_main_executor_still_fills(execution, path):
         assert result.status_code == 200 and result.json()["data"]["status"] == "filled"
     else:
         result = asyncio.run(position_engine.maybe_open(execution.app, symbol="600001", name="合成观察",
-                                                       trigger="buy_point", price=10.))
+                                                       trigger="buy_point", price=10., selection_context=execution.binding))
         assert result["opened"] is True
     with execution.sf() as db:
         order = db.scalar(select(PaperOrder))
@@ -161,7 +193,7 @@ def test_rejected_automatic_plan_does_not_initialize_an_empty_account(execution,
     if failure=="risk_rejected":
         execution.paper._risk_engine._state="下跌趋势"
         execution.paper._risk_engine._params=get_params("下跌趋势")
-    result=asyncio.run(position_engine.maybe_open(execution.app,symbol="600001",name="合成观察",trigger="buy_point",price=10.))
+    result=asyncio.run(position_engine.maybe_open(execution.app,symbol="600001",name="合成观察",trigger="buy_point",price=10.,selection_context=execution.binding))
     assert result["opened"] is False and not result.get("execution_unknown")
     with execution.sf() as db:
         assert db.query(PaperAccount).count()==db.query(PaperOrder).count()==db.query(PaperPosition).count()==0
@@ -171,7 +203,7 @@ def test_qualified_automatic_plan_initializes_only_inside_real_executor(executio
     with execution.sf() as db:
         db.query(PaperAccount).delete()
         db.commit()
-    result=asyncio.run(position_engine.maybe_open(execution.app,symbol="600001",name="合成观察",trigger="buy_point",price=10.))
+    result=asyncio.run(position_engine.maybe_open(execution.app,symbol="600001",name="合成观察",trigger="buy_point",price=10.,selection_context=execution.binding))
     assert result["opened"] is True
     with execution.sf() as db:
         assert db.query(PaperAccount).count()==db.query(PaperOrder).count()==db.query(PaperPosition).count()==1

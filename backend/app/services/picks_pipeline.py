@@ -22,6 +22,7 @@ from __future__ import annotations
 from app.services.source_reads import read_pool_input
 
 import asyncio
+from copy import deepcopy
 import json
 import logging
 from dataclasses import dataclass
@@ -92,15 +93,15 @@ DEEP_DIVE_CAP = 24      # 深度评分上限（每只要拉 K 线/财务/资金�
 CONCURRENCY = 6
 
 #: 候选池装配顺序（来源优先级）。**不是**插入顺序的同义反复：本轮新增的
-#: 「题材联动」来源必须在最前占位（见 `candidate_pool` ②b 的配额说明），
+#: 「题材联动」来源必须在最前占位（见 `candidate_pool` 的来源组装），
 #: 而它的取数天然发生在其他来源之后 ⇒ 用一张显式顺序表解耦「取数顺序」与
-#: 「装配顺序」。同档内保持插入序（`sorted` 稳定），故既有来源的相对次序零变化。
+#: 「装配顺序」。直接点名事件在宽题材展开前，同股保留最强已验证来源。
 _SOURCE_ORDER = {
     "theme_linkage": 0,  # ① 可参与的题材联动股（2026-09-15 用户指令，最优先）
     "event": 1,          # ② 活跃事件直接命中的个股
-    "event_theme": 1,    # ② 事件题材成分（同档，保持插入序）
-    "limit_up": 2,       # ③ 当日涨停池
-    "hot": 3,            # ④ 热股榜
+    "event_theme": 2,    # ③ 宽题材成分不能按插入序挤掉直接点名个股
+    "limit_up": 3,       # ④ 当日涨停池
+    "hot": 4,            # ⑤ 热股榜
     "carryover": 9,      # 昨日组合成员由调用方另行追加，不参与这里的排序
 }
 
@@ -197,6 +198,17 @@ async def candidate_pool(
         `theme_linkage`（题材集中度与补入结果）。
     """
     symbols: dict[str, dict] = {}
+
+    def add_source(target, symbol, meta, evidence=None):
+        previous = target.get(symbol)
+        sources = list((previous or {}).get("candidate_sources") or [])
+        proof = {"from": meta["from"], **(evidence or {})}
+        if proof not in sources:
+            sources.append(proof)
+        if previous is None or _SOURCE_ORDER[meta["from"]] < _SOURCE_ORDER[previous["from"]]:
+            target[symbol] = {**meta, "candidate_sources": sources}
+        else:
+            previous["candidate_sources"] = sources
     # G-2（2026-09-12 评审批次 5）：本函数由 async 管线直接 await（调度 15:00+ 与
     # `POST /api/picks/generate` 手动触发两条路径都**在事件循环上**），函数体内每一处
     # 同步 SQLite/磁盘读都排在循环里（连同 QuoteHub 的秒级行情推送一起停摆）。
@@ -218,8 +230,8 @@ async def candidate_pool(
         # （每个题材一个独立 session）。复用的是既有挂载点 `member_symbols_bulk`——它的
         # docstring 已写明"排序后与 `get_members` 同序，批量替换单查才是**行为等价**的"
         # （2026-09-11 P0-2 已为另一处消费方补齐该性质），所以这里不是新写一个批量查询。
-        # 行为等价要点：`symbols` 是 setdefault 建的**有序列**，最终 `out` 按插入序取到
-        # `CANDIDATE_CAP` 为止 ⇒ **遍历顺序必须逐字保留**。故下面仍是「按 row → 按 direction」
+        # 同来源内保持已有遍历序；来源优先级与同股升级则显式判断，不能让宽题材
+        # 展开顺序覆盖直接事件/已验证联动。下面仍是「按 row → 按 direction」
         # 的原顺序，只是把取数提前；`[:30]` 截断落在与 `get_members` 同序的列表上。
         wanted: list[str] = []
         if svc is not None:
@@ -249,14 +261,16 @@ async def candidate_pool(
             for d in row.directions:
                 if getattr(d, "matched_by", None) == "llm_aux":
                     continue  # Unreviewed model hypothesis is not a candidate source.
+                evidence = {"event_id": getattr(row, "id", None),
+                            "target_type": d.target_type, "target": d.target}
                 if d.target_type == "symbol" and d.target.isdigit() and len(d.target) == 6:
-                    event_symbols.setdefault(d.target, {"from": "event", "prio": 1})
+                    add_source(event_symbols, d.target, {"from": "event", "prio": 1}, evidence)
                 elif d.target_type == "theme" and svc is not None:
                     code = name_to_code.get(d.target)
                     if not code:
                         continue
                     for sym in (members_by_code.get(code) or [])[:30]:
-                        event_symbols.setdefault(sym, {"from": "event_theme", "prio": 1})
+                        add_source(event_symbols, sym, {"from": "event_theme", "prio": 1}, evidence)
         # 全批读取/展开成功后才提交，避免后一条坏行留下前面的部分事件候选。
         symbols.update(event_symbols)
     except Exception as exc:
@@ -275,9 +289,12 @@ async def candidate_pool(
     else:
         for c in linkages:
             sym = str(c.get("symbol") or "")
-            if sym and sym not in symbols:
-                symbols[sym] = {"from": "theme_linkage", "prio": 2, "linkage": c}
-                n_linkage += 1
+            if sym:
+                previous_source = (symbols.get(sym) or {}).get("from")
+                add_source(symbols, sym, {"from": "theme_linkage", "prio": 2, "linkage": c},
+                           {"basis": c.get("basis"), "theme": c.get("theme")})
+                if previous_source != "theme_linkage":
+                    n_linkage += 1
 
     # ② 当日涨停池（突发大幅拉升的极端表现）—— 由调用方预取（P2-4）
     # ⚠️ **开盘即封成员不通过“原始涨停池来源”直接晋级**：首封 ≤09:30 是强历史特征，
@@ -295,18 +312,17 @@ async def candidate_pool(
                 }
             )
             continue
-        symbols.setdefault(r.symbol, {"from": "limit_up", "prio": 1})
+        add_source(symbols, r.symbol, {"from": "limit_up", "prio": 1})
 
     # ③ 热股榜 top 20（关注度信号，B1 同源）
     try:
         for s in (await hub.provider.get_hot_stock_list("day"))[:20]:
-            symbols.setdefault(s["symbol"], {"from": "hot", "prio": 0})
+            add_source(symbols, s["symbol"], {"from": "hot", "prio": 0})
     except Exception as exc:
         log.warning("picks candidate: hot list failed: %s", exc)
 
     # 装配：按来源优先级排序后截断。`sorted` 稳定 ⇒ 同档内保持插入序，
-    # 既有来源（事件 → 事件题材 → 涨停池 → 热榜）的相对次序与改动前**逐字一致**，
-    # 唯一变化是联动股整体前移（这正是本轮规则的目的）。
+    # 直接点名与题材展开分档，避免早出现的大题材吞掉后出现的直接点名事件。
     ordered = sorted(symbols.items(), key=lambda kv: _SOURCE_ORDER.get(kv[1]["from"], 3))
     out = []
     for sym, meta in ordered:
@@ -959,6 +975,7 @@ async def deep_score_candidates(
                 # 入选来源与来源依据：题材联动股要能让用户看见"它是从哪个题材挖出来的"
                 "source": c.get("from"),
                 "source_basis": (c.get("linkage") or {}).get("basis"),
+                "candidate_sources": deepcopy(c.get("candidate_sources") or []),
                 # 估值此前**只用于基本面打分，没有透出到卡片**——选股页因此永远看不到 PE，
                 # 而个股详情页有（走 /api/quotes 的 fill_valuation）。同一标的两个口径不一致。
                 "pe_ttm": pe,
@@ -994,7 +1011,7 @@ def assemble_card(k: dict) -> dict:
     # 买入范围的技术位收敛：均线在现价下方作支撑、上方作压力
     support = min([v for v in (ma5, ma10) if v and v < k["price"]], default=None)
     resistance = max([v for v in (ma5, ma10) if v and v > k["price"]], default=None)
-    return {
+    card = {
         "symbol": k["symbol"],
         "name": k["name"],
         "price": k["price"],
@@ -1039,7 +1056,24 @@ def assemble_card(k: dict) -> dict:
         "tradability": k.get("tradability"),
         "source": k.get("source"),
         "source_basis": k.get("source_basis"),
+        "candidate_sources": deepcopy(k.get("candidate_sources") or []),
     }
+    for field in ("observation_only", "follow_state"):
+        if field in k:
+            card[field] = deepcopy(k[field])
+    # Preserve original execution inputs before the macro overlay hides the
+    # displayed range. This seed is evidence, never execution permission.
+    card["execution_seed"] = {
+        "version": 1, "buy_range": deepcopy(card["buy_range"]),
+        "score": card["score"], "sub_scores": deepcopy(card["sub_scores"]),
+        "dimension_evidence": deepcopy(card["dimension_evidence"]),
+        "vetoes": deepcopy(card["vetoes"]),
+        "halt_penalty": (card.get("halt_risk") or {}).get("penalty"),
+        "chip_signal": (card.get("chip_signal") or {}).get("signal"),
+        "observation_only": card.get("observation_only", False),
+        "follow_state": card.get("follow_state"),
+    }
+    return card
 
 
 # ---------------------------------------------------------------- 管线主体
@@ -1197,7 +1231,7 @@ async def generate_picks_pipeline(
     for s in prev_symbols:
         if s not in have:
             candidates.append({"symbol": s, "from": "carryover", "prio": 1})
-    carryover_set = set(prev_symbols) - have
+    carryover_set = set(prev_symbols)
 
     # ①e 市场基准（上证当日涨跌幅）：题材基准匹配不到时的诚实回退
     market_pct = None
@@ -1234,7 +1268,8 @@ async def generate_picks_pipeline(
         c["_prio"] = c.get("prio", 0) * 1000 + (q.change_pct or 0)
         deep.append(c)
     # 昨日成员优先进入深度评估：它们已经有仓位逻辑在身，不该因涨幅不高被截断
-    deep.sort(key=lambda c: (-(1 if c["symbol"] in carryover_set else 0), -c["_prio"]))
+    deep.sort(key=lambda c: (-(1 if c["symbol"] in carryover_set else 0),
+                             _SOURCE_ORDER.get(c.get("from"), 9), -c["_prio"]))
     deep = deep[:DEEP_DIVE_CAP]
 
     # ③ 全局情绪（一次）—— 涨停池复用 ① 的结果（P2-4）
@@ -1383,6 +1418,8 @@ async def generate_picks_pipeline(
             "sub_scores": r.get("sub_scores") or {},
             "bases": r.get("bases") or [],
             "vetoes": r.get("vetoes") or [],
+            "source": r.get("source"),
+            "candidate_sources": deepcopy(r.get("candidate_sources") or []),
             "selection_reason": "below_min_score" if r["score"] < limits["min_pick_score"] else "capacity_or_replacement",
             "score_shortfall": round(max(0, limits["min_pick_score"] - r["score"]), 2),
             "rank": i + 1,

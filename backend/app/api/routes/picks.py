@@ -147,9 +147,9 @@ async def _live_gate(request: Request, hub: QuoteHub, stored: dict | None) -> di
 
     **不做什么**：落库的 `meta.gate` **原样保留**（它记录了生成时刻的真实判断，
     是复盘归因的证据，也是 `items[].buy_range` 已被撤除的原因）；本函数只**新增**
-    一个对照面 `meta.gate_live`。也不动推送口径——这是展示层复核，不是新的告警源。
+    一个对照面 `meta.gate_live`。GET仍不生成交易或告警；后台买点沿同一纯闸门规则独立重检并归档，不消费本读接口作为许可。
     """
-    from app.picks.gate import describe_gate_context, evaluate_stand_aside
+    from app.picks.execution_qualification import gate_from_sentiment
     from app.services.market_context import CalendarUnavailable, get_cached_sentiment
 
     try:
@@ -160,49 +160,7 @@ async def _live_gate(request: Request, hub: QuoteHub, stored: dict | None) -> di
         log.warning("live gate sentiment failed: %s", exc)
         return _gate_unavailable(stored, f"实时情绪计算失败（{exc}），显示生成时刻结论")
 
-    gi = sent.get("gate_inputs") or {}
-    promo_1to2 = gi.get("promotion_1to2")
-    break_rate = gi.get("break_rate")
-    promo_pctl = None
-    break_pctl = None
-    try:
-        from app.sentiment import metric_history
-
-        # 与生成时同一处函数、同样合并为一次线程跳（两个分位一起算）：
-        # 从事件循环里做同步磁盘读会卡住整个进程（G-2 的同一教训）。
-        def _both_pctl() -> tuple[float | None, float | None]:
-            p = (metric_history.percentile_of_value("promo_1to2", promo_1to2) or {}).get("percentile")
-            b = (metric_history.percentile_of_value("break_rate", break_rate) or {}).get("percentile")
-            return p, b
-
-        promo_pctl, break_pctl = await asyncio.to_thread(_both_pctl)
-    except Exception as exc:  # noqa: BLE001  分位不可用时闸门自动回落绝对经验值并在理由里写明（不静默）
-        log.warning("live gate percentile failed: %s", exc)
-
-    gate = evaluate_stand_aside(
-        phase=sent.get("phase"),
-        promotion_1to2=promo_1to2,
-        promotion_1to2_pctl=promo_pctl,
-        break_rate=break_rate,
-        break_rate_pctl=break_pctl,
-        limit_down=gi.get("limit_down"),
-        prev_zt_median_pct=gi.get("prev_zt_median_pct"),
-        phase_unreliable=bool(sent.get("phase_unreliable")),
-    )
-    gate["presentation"] = describe_gate_context(sent, gate)
-    gate["gate_source"] = "live"
-    # 对照面：实时相位 vs 生成时刻相位、本次复核用的交易日。前端凭此说明
-    # 「结论为何变化」，不必自己推断（也不该在前端重算规则）。
-    gate["recheck"] = {
-        "phase": sent.get("phase"),
-        "trade_date": sent.get("trade_date"),
-        "judged_at": sent.get("judged_at"),
-        "stored_phase": (stored or {}).get("phase"),
-        "phase_changed": (stored or {}).get("phase") != sent.get("phase"),
-        "inputs_source": "sentiment.gate_inputs",
-        "break_caliber": gi.get("break_caliber"),
-    }
-    return gate
+    return await gate_from_sentiment(sent, stored)
 
 
 async def _attach_gates(request: Request, hub: QuoteHub, meta: dict) -> dict:

@@ -20,6 +20,7 @@ from __future__ import annotations
 import json
 import logging
 import os
+from datetime import datetime
 from pathlib import Path
 from app.core.bjtime import beijing_now
 
@@ -81,6 +82,64 @@ def save_plan(plan: dict) -> None:
     tmp = target.with_name(f"{target.name}.tmp")
     tmp.write_text(json.dumps(plan, ensure_ascii=False, indent=1), encoding="utf-8")
     os.replace(tmp, target)
+
+
+def record_confirm_result(alert, event_id, result, session_factory, *, reference_price=None):
+    """Project this new source event's outcome; never execute or replay a confirm."""
+    from app.models.alert import AlertEvent
+    from app.picks.review_contract import object_json
+    meta = alert.get("meta") or {}
+    reference = meta.get("execution_ref") or {}
+    certainty = meta.get("certainty_level") if meta.get("certainty_level") in {"高", "中", "低"} else None
+    original_time = alert.get("at") if isinstance(alert.get("at"), str) else None
+    try:
+        trigger_clock = datetime.fromisoformat(original_time.replace("Z", "+00:00"))
+        if trigger_clock.tzinfo is None:
+            trigger_clock = None
+    except (AttributeError, TypeError, ValueError):
+        trigger_clock = None
+    unknown = [key for key, value in {"certainty_level": certainty, "triggered_at": trigger_clock,
+        "reference_price": reference_price,
+        "decision_id": reference.get("decision_id"), "decision_version": reference.get("decision_version")}.items()
+        if value is None]
+    state = ("unknown" if result.get("execution_unknown") else "filled" if result.get("opened")
+             else "pending" if result.get("accepted") else "rejected")
+    receipt = {"state": state, "trace_state": "recorded", "trigger_event_id": event_id,
+        "triggered_at": original_time, "recorded_at": beijing_now().isoformat(),
+        "certainty_level": certainty, "unknown_fields": unknown, "order_id": result.get("order_id"),
+        "reference_price": reference_price,
+        "reason": str(result.get("reason") or "动作结果未提供原因")[:256]}
+    try:
+        with session_factory() as db:
+            source = db.get(AlertEvent, event_id)
+            if source is None or source.symbol != alert.get("symbol") or object_json(source.snapshot).get("kind") != "confirm":
+                raise ValueError("confirm source event mismatch")
+        try:
+            plan = load_plan()
+            decision = next((d for d in plan.get("decisions", [])
+                if d.get("trigger_event_id") == event_id or (receipt["order_id"] is not None
+                    and d.get("order_id") == receipt["order_id"] and d.get("trigger") == "confirm")), None)
+            if decision is None:
+                decision = {"ts": beijing_now().strftime("%H:%M:%S"), "symbol": alert.get("symbol"),
+                    "name": alert.get("name"), "trigger": "confirm",
+                    "action": {"rejected": "open_rejected", "unknown": "open_unknown",
+                               "pending": "open_pending", "filled": "open"}[state]}
+                plan.setdefault("decisions", []).append(decision)
+            decision.update(receipt)
+            save_plan(plan)
+        except Exception:
+            receipt["trace_state"] = "unknown"
+            log.exception("confirm plan receipt unknown for source event %s", event_id)
+        with session_factory() as db:
+            source = db.get(AlertEvent, event_id)
+            snapshot = object_json(source.snapshot)
+            snapshot["paper_execution"] = receipt
+            source.snapshot = json.dumps(snapshot, ensure_ascii=False)
+            db.commit()
+    except Exception:
+        receipt["trace_state"] = "unknown"
+        log.exception("confirm original-event receipt unknown for source event %s", event_id)
+    return receipt
 
 
 def _publish_open_decision(plan: dict, decision: dict) -> tuple[int, bool] | None:
@@ -220,6 +279,7 @@ async def maybe_open(
     role: str | None = None,
     certainty_level: str | None = None,
     decision_context: dict | None = None,
+    selection_context: dict | None = None,
 ) -> dict:
     """触发后裁定是否自动开模拟仓。返回 {opened, reason, qty?, weight?}。全程只动模拟盘。"""
     state = app.state if hasattr(app, "state") else app
@@ -273,7 +333,18 @@ async def maybe_open(
             "reason": f"已挂单未成交（{dup.get('quantity')} 股 @ {dup.get('price')}，等待撮合）",
         }
 
-    gate, phase = _today_gate_and_phase()
+    if trigger == "buy_point":
+        from app.paper.selection_action import automatic_selection_binding
+        try:
+            selected_meta, issue = automatic_selection_binding(engine, symbol, selection_context)
+        except Exception:
+            log.exception("automatic selection binding unavailable for %s", symbol)
+            return {"opened": False, "reason": "原自动入选资格暂不可核实，未执行"}
+        if issue:
+            return {"opened": False, "reason": issue[1]}
+        gate, phase = selected_meta.get("gate") or {}, selected_meta.get("market_phase")
+    else:
+        gate, phase = _today_gate_and_phase()
     total_cap, max_pos, cap_note = phase_caps(phase, gate)
     if total_cap <= 0 or max_pos <= 0:
         return {"opened": False, "reason": f"仓位封零：{cap_note}"}
@@ -311,7 +382,8 @@ async def maybe_open(
         return {"opened": False, "reason": f"目标金额不足一手（{target_amount:.0f} 元 @ {price}）"}
 
     try:
-        order = await engine.place_order(symbol, "buy", price, qty)
+        order = await engine.place_order(symbol, "buy", price, qty,
+            **({"selection_context": selection_context} if trigger == "buy_point" else {}))
     except Exception as exc:  # noqa: BLE001
         return {"opened": False, "execution_unknown": True, "reason": f"下单异常: {exc}"}
     if getattr(order, "status", "") == "rejected":
@@ -323,9 +395,10 @@ async def maybe_open(
         # 后果是「挂单」被记成「已开仓」并发 position_open 通知（用户以为已建仓）。
         # 台账仍要留痕（本模块契约：决策全程可复盘），但用**可区分的 action**，
         # 使按 `action == "open"` 统计已开仓的消费方不被误导。
-        plan = load_plan()
-        plan["decisions"].append(
-            {
+        projection_unknown = False
+        try:
+            plan = load_plan()
+            plan["decisions"].append({
                 "ts": beijing_now().strftime("%H:%M:%S"),
                 "symbol": symbol, "name": name, "trigger": trigger,
                 "action": "open_pending", "qty": qty, "price": price,
@@ -333,9 +406,11 @@ async def maybe_open(
                 "order_id": getattr(order, "id", None),
                 **decision_trace,
                 "reason": f"{cap_note}；限价 {price} 未达现价，挂单已受理、等待撮合",
-            }
-        )
-        save_plan(plan)
+            })
+            save_plan(plan)
+        except Exception:
+            projection_unknown = True
+            log.exception("position plan projection failed after accepted order %s", getattr(order, "id", None))
         log.info(
             "[仓位引擎] 开仓挂单受理未成交 %s %s %d 股 @ 限价 %s（%s）",
             symbol, name, qty, price, cap_note,
@@ -345,11 +420,11 @@ async def maybe_open(
             "qty": qty, "price": price, "order_id": getattr(order, "id", None),
             "decision_id": decision_trace.get("decision_id"),
             "decision_version": decision_trace.get("decision_version"),
+            "projection_unknown": projection_unknown,
             "reason": f"挂单受理未成交（限价 {price} 未达现价），等待撮合",
         }
 
     filled = getattr(order, "filled_price", None) or price
-    plan = load_plan()
     decision = {
         "ts": beijing_now().strftime("%H:%M:%S"),
         "symbol": symbol, "name": name, "trigger": trigger,
@@ -359,10 +434,16 @@ async def maybe_open(
         **decision_trace,
         "reason": f"{cap_note}；角色 {role or '默认'} 权重 {weight:.0%}；触发 {trigger}",
     }
-    plan["decisions"].append(decision)
+    plan = {"date": beijing_now().date().isoformat(), "decisions": [decision]}
+    plan_loaded = False
+    projection_unknown = False
     try:
+        plan = load_plan()
+        plan["decisions"].append(decision)
+        plan_loaded = True
         save_plan(plan)
     except Exception:
+        projection_unknown = True
         # A filled order must still reach the durable event even when the
         # secondary JSON plan is temporarily unwritable.
         log.exception("position_open plan save failed after filled order %s", decision["order_id"])
@@ -376,16 +457,20 @@ async def maybe_open(
         if result is not None:
             event_id, event_projected = result
     except Exception:
+        projection_unknown = True
         log.exception("position_open 事件投影失败；成交单保留，后续按 plan 补建")
-    try:
-        save_plan(plan)
-    except Exception:
-        log.exception("position_open plan save failed after event attempt %s", decision["order_id"])
+    if plan_loaded:
+        try:
+            save_plan(plan)
+        except Exception:
+            projection_unknown = True
+            log.exception("position_open plan save failed after event attempt %s", decision["order_id"])
     return {
         "opened": True, "qty": qty, "weight": weight, "price": filled,
         "order_id": getattr(order, "id", None),
         "event_id": event_id, "event_projected": event_projected,
         "decision_id": decision_trace.get("decision_id"),
         "decision_version": decision_trace.get("decision_version"),
+        "projection_unknown": projection_unknown,
         "reason": cap_note,
     }

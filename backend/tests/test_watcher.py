@@ -24,6 +24,11 @@ from app.picks.watcher import (
 ENV_OK = {"phase": "发酵", "promo_percentile": 60.0}
 
 
+@pytest.fixture(autouse=True)
+def isolate_confirm_plan_files(tmp_path, monkeypatch):
+    monkeypatch.setattr("app.picks.position_engine._PLAN_DIR", tmp_path / "position_plans")
+
+
 def _theme(**kw) -> dict:
     base = {
         "pct": None, "limit_up": None, "max_boards": None,

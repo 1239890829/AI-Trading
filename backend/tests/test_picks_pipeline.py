@@ -621,7 +621,9 @@ def test_candidate_pool_reads_directions_from_loaded_relation(deps, monkeypatch)
     assert [p["symbol"] for p in pool] == ["600519"], (
         "事件方向没进候选池——多半是回退成 store.directions_of 后异常被吞"
     )
-    assert pool[0] == {"symbol": "600519", "from": "event", "prio": 1}
+    assert pool[0] == {"symbol": "600519", "from": "event", "prio": 1,
+                       "candidate_sources": [{"from": "event", "event_id": 1,
+                                              "target_type": "symbol", "target": "600519"}]}
     assert not [w for w in warnings if w.startswith("picks candidate: events failed")], (
         f"事件路被异常吞掉了（异常吞没会同时让守卫失效）：{warnings}"
     )
@@ -1140,3 +1142,121 @@ def test_open_sealed_raw_source_can_reenter_only_via_linkage_recheck():
     row=next(x for x in got if x["symbol"]=="600111")
     assert row["from"] == "theme_linkage"
     assert audit["excluded_open_sealed"]["count"] == 1  # 原始涨停池来源仍未直接授权
+
+
+def test_candidate_overlap_retains_qualified_linkage_and_original_event():
+    linkage = {"symbol": "600519", "basis": "已核同题材、未封板与流动性",
+               "tradability": {"level": "可参与"}}
+    got = asyncio.run(pl.candidate_pool(
+        _BareHub(), _Store(), None, limit_up_pool=[], linkages=[linkage],
+    ))
+    row = next(item for item in got if item["symbol"] == "600519")
+    assert row["from"] == "theme_linkage"
+    assert row["linkage"] == linkage
+    assert {source["from"] for source in row["candidate_sources"]} == {"event", "theme_linkage"}
+    assert next(s for s in row["candidate_sources"] if s["from"] == "event")["event_id"] == 1
+
+
+def test_named_event_survives_earlier_wide_theme_expansion_without_raising_cap():
+    class Catalog:
+        def get_catalog(self, **_):
+            return [_CatalogTheme("A", "早题材"), _CatalogTheme("B", "晚题材")]
+
+        def member_symbols_bulk(self, _):
+            return {"A": [f"600{i:03d}" for i in range(30)],
+                    "B": [f"601{i:03d}" for i in range(30)]}
+
+    events = [_Event(1, "早题材", "早题材", "theme"),
+              _Event(2, "晚题材", "晚题材", "theme"),
+              _Event(3, "明确点名", "603638")]
+    got = asyncio.run(pl.candidate_pool(
+        _BareHub(), _Store(), Catalog(), active_events=events,
+        limit_up_pool=[], linkages=[],
+    ))
+    assert len(got) == 40
+    assert got[0]["symbol"] == "603638" and got[0]["from"] == "event"
+
+
+def test_named_event_upgrades_its_earlier_theme_membership():
+    class Catalog:
+        def get_catalog(self, **_):
+            return [_CatalogTheme("A", "题材")]
+
+        def member_symbols_bulk(self, _):
+            return {"A": ["603638"]}
+
+    got = asyncio.run(pl.candidate_pool(
+        _BareHub(), _Store(), Catalog(), active_events=[
+            _Event(1, "题材", "题材", "theme"), _Event(2, "直接公告", "603638")],
+        limit_up_pool=[], linkages=[],
+    ))
+    assert len(got) == 1 and got[0]["from"] == "event"
+    assert {s["from"] for s in got[0]["candidate_sources"]} == {"event_theme", "event"}
+
+
+@pytest.mark.parametrize("incumbent", [False, True])
+def test_deep_cap_preserves_named_source_or_existing_incumbent(deps, monkeypatch, incumbent):
+    symbols = [f"600{i:03d}" for i in range(29)] + ["603638"]
+
+    async def candidates(*_args, **_kwargs):
+        return [{"symbol": s, "from": "event_theme" if incumbent or s != "603638" else "event", "prio": 1}
+                for s in symbols]
+
+    async def score(deep, **_kwargs):
+        captured.extend(deep)
+        return []
+
+    captured = []
+    monkeypatch.setattr(pl, "candidate_pool", candidates)
+    monkeypatch.setattr(pl, "_prev_combo_symbols", lambda: ["603638"] if incumbent else [])
+    monkeypatch.setattr(pl, "deep_score_candidates", score)
+    monkeypatch.setattr(pl, "evaluate_stand_aside", _benign_gate)
+    _run(deps, _Hub())
+    assert len(captured) == 24
+    assert captured[0]["symbol"] == "603638"
+
+
+def test_macro_mask_preserves_original_execution_seed_without_exposing_buy_range(deps, monkeypatch):
+    def macro_block(**_):
+        return {"stand_aside": True, "phase": "退潮", "level": "mild",
+                "reasons": ["原宏观条件不满足"], "strip_buy_range": True}
+
+    monkeypatch.setattr(pl, "evaluate_stand_aside", macro_block)
+    data = _run(deps, _Hub())["data"]
+    assert data["items"]
+    from app.services.selection_notifications import daily_selection_version
+
+    for card in data["items"]:
+        assert card["observation_only"] is True and "buy_range" not in card
+        seed = card["execution_seed"]
+        assert seed["version"] == 1 and seed["buy_range"]["low"] <= card["price"] <= seed["buy_range"]["high"]
+        assert seed["score"] == card["score"] and seed["sub_scores"] == card["sub_scores"]
+        assert seed["dimension_evidence"] == card["dimension_evidence"]
+        assert seed["vetoes"] == card["vetoes"]
+        assert seed["halt_penalty"] == card["halt_risk"]["penalty"]
+        assert seed["chip_signal"] == card["chip_signal"]["signal"]
+        assert seed["observation_only"] is False and seed["follow_state"] is None
+        assert "source_version" not in seed
+    assert data["meta"]["selection_version"] == daily_selection_version(
+        data["date"], data["meta"]["generated_at"], data["items"])
+    from copy import deepcopy
+
+    changed = deepcopy(data["items"])
+    changed[0]["execution_seed"]["buy_range"]["low"] += 0.01
+    assert data["meta"]["selection_version"] != daily_selection_version(
+        data["date"], data["meta"]["generated_at"], changed)
+
+
+def test_execution_seed_preserves_independent_observation_constraint_and_unknowns():
+    card = pl.assemble_card({
+        "symbol": "600001", "name": "甲", "price": 10.0, "change_pct": 3.0,
+        "score": 70.0, "sub_scores": {}, "bases": {}, "vetoes": [],
+        "related_events": [], "observation_only": True, "follow_state": "blocked",
+    })
+    seed = card["execution_seed"]
+    assert card["observation_only"] is True and seed["observation_only"] is True
+    assert seed["follow_state"] == "blocked"
+    assert seed["halt_penalty"] is None and seed["chip_signal"] is None
+    card["buy_range"]["low"] = 0
+    card["vetoes"].append("later-display-change")
+    assert seed["buy_range"]["low"] > 0 and seed["vetoes"] == []

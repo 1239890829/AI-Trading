@@ -185,10 +185,21 @@ def build_execution_contract(
             "buy_range": item.get("buy_range"),
         },
     }
+    qualification = item.get("_execution_qualification")
+    if isinstance(qualification, dict):
+        context = qualification.get("context") or {}
+        gate = context.get("gate") or {}
+        material["qualification"] = {
+            **{k: qualification.get(k) for k in ("version", "selection_source_version", "seed_digest", "state", "reason")},
+            "context": {**{k: context.get(k) for k in ("state", "phase", "trade_date")},
+                        "gate": {k: gate.get(k) for k in ("phase", "stand_aside", "strip_buy_range", "level", "reasons")}},
+        }
     return {
         **material,
         # 版本哈希只吃会改变判断的物质事实；对外证据保留完整 freshness/checked_at/语义。
         "executable_snapshot": snap,
+        **({"qualification": deepcopy(qualification)} if isinstance(qualification, dict) else {}),
+        **({"gate_checks": deepcopy(item["_execution_checks"])} if isinstance(item.get("_execution_checks"), list) else {}),
         "decision_version": "ODV-" + _hash(material, 32),
     }
 

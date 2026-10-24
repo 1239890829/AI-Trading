@@ -14,6 +14,16 @@ from app.picks import exit_engine as ee
 from app.picks import position_engine as pe
 
 
+@pytest.fixture(autouse=True)
+def isolate_selection_validation_in_position_unit_tests(monkeypatch):
+    # These tests isolate sizing/position rules. Source identity is covered by
+    # the real-engine durable-consumer tests in test_automatic_paper_milestone.
+    def qualified(_engine, _symbol, _context):
+        gate, phase = pe._today_gate_and_phase()
+        return {"gate": gate, "market_phase": phase}, None
+    monkeypatch.setattr("app.paper.selection_action.automatic_selection_binding", qualified)
+
+
 # ---------------------------------------------------------------- 仓位引擎
 
 def test_phase_caps_matrix():
@@ -66,7 +76,7 @@ def _fake_engine(positions, cash=1_000_000.0, orders=None, *,
             assert initialize is False, "planning must not initialize funds"
             return {"initial_cash": cash}
 
-        async def place_order(self, symbol, side, price, quantity):
+        async def place_order(self, symbol, side, price, quantity, *, selection_context=None):
             placed.append({"symbol": symbol, "side": side, "price": price, "quantity": quantity})
             from types import SimpleNamespace
 

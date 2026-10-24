@@ -94,10 +94,17 @@ async def consume_pending(app, sf, *, event_id=None):
                 else:
                     result = await maybe_open(app, symbol=alert["symbol"], name=alert["name"],
                                               trigger="buy_point", price=executable.get("price"),
-                                              decision_context=ref)
+                                              decision_context=ref,
+                                              selection_context={
+                                                  "selection_ref": meta.get("selection_ref"),
+                                                  "source_version": meta.get("selection_source_version"),
+                                                  "decision_id": ref.get("decision_id"),
+                                                  "decision_version": ref.get("decision_version"),
+                                                  "consumer_event_key": key[0], "expires_at_ms": expiry,
+                                              })
                     execution_result = {field: result[field] for field in (
                         "opened", "accepted", "pending", "execution_unknown", "order_id",
-                        "decision_id", "decision_version", "reason") if field in result}
+                        "decision_id", "decision_version", "reason", "projection_unknown") if field in result}
                     state = "unknown" if result.get("execution_unknown") else "done"
                     reason = str(result.get("reason") or "consumed")[:256]
         except Exception as exc:
