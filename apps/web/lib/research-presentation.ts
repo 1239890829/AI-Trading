@@ -11,12 +11,11 @@ export function researchField(raw: string, field: string): string | null {
   return match ? researchPlainText(match[1]) : null;
 }
 
-/** A complete first sentence, never a generated paraphrase or a clipped qualifier. */
+/** Leading source text through a complete sentence; no title inference or clipped qualifier. */
 export function researchExcerpt(raw: string, limit = 170): string {
   const clean = researchPlainText(raw).replace(/^\s*(?:[-*]|\d+[.)、])\s+/, "");
-  const paragraph = clean.split(/\n\s*\n/).find(value => value.trim())?.trim() ?? "";
-  const sentence = paragraph.match(/^[\s\S]*?[。！？](?:[”’」』])?/)?.[0]
-    ?? paragraph.match(/^[\s\S]*?[.!?](?:\s|$)/)?.[0]?.trim() ?? paragraph;
+  const sentence = clean.match(/^[\s\S]*?[。！？](?:[”’」』])?/)?.[0]
+    ?? clean.match(/^[\s\S]*?[.!?](?:\s|$)/)?.[0]?.trim() ?? clean;
   if (!sentence) return "原报告没有可摘录正文。";
   return sentence.length <= limit ? sentence : "这段原答较长，请在原文中核对完整表述。";
 }
