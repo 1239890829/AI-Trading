@@ -11,7 +11,8 @@ import sys
 sys.path.insert(0, ".")
 
 import asyncio
-from datetime import datetime
+from datetime import datetime, timedelta, timezone
+from uuid import uuid4
 import pytest
 
 from app.core.db import get_session_factory
@@ -138,8 +139,12 @@ def test_match_pending_rechecks_risk_and_preserves_reservation_until_recovery():
     quote_map = {"600519": q600519(100.0)}
     engine = make_engine(quote_map, risk_engine=make_risk("震荡偏多"))
     # 95 < 100 → 挂单（通过下单时风控）
-    order = asyncio.run(engine.place_order("600519", "buy", 95.0, 100))
-    assert order.status == "pending", order.reason
+    from app.api.routes.paper import OrderIn
+    from app.paper.actions import submit_action
+    body = OrderIn(request_id=uuid4(), expires_at=datetime.now(timezone.utc) + timedelta(seconds=30),
+        symbol="600519", side="buy", price=95., quantity=100)
+    order = asyncio.run(submit_action(engine, body))
+    assert order["status"] == "pending", order["reason"]
     frozen_cash = engine.account_summary(0)["cash"]
     # 市场转入下跌趋势 + 价格回落到挂单价
     engine._risk_engine = make_risk("下跌趋势")
@@ -149,13 +154,13 @@ def test_match_pending_rechecks_risk_and_preserves_reservation_until_recovery():
     from app.models.paper import PaperOrder
 
     with engine._sf() as db:
-        o = db.query(PaperOrder).filter(PaperOrder.id == order.id).one()
+        o = db.query(PaperOrder).filter(PaperOrder.id == order["id"]).one()
         assert o.status == "pending" and "下跌趋势" in o.reason
     assert engine.account_summary(0)["cash"] == frozen_cash
     engine._risk_engine = make_risk("震荡偏多")
     assert asyncio.run(engine.match_pending()) == 0
     with engine._sf() as db:
-        o = db.query(PaperOrder).filter(PaperOrder.id == order.id).one()
+        o = db.query(PaperOrder).filter(PaperOrder.id == order["id"]).one()
         assert o.status == "filled" and o.reason is None
 
 

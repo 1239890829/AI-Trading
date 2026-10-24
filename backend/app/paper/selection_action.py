@@ -207,19 +207,86 @@ def automatic_selection_binding(engine, symbol, context, *, matching_order_id=No
     return meta, None
 
 
+def bind_automatic_order(db, order, context):
+    """Commit the original consumer's accepted order in the financial transaction."""
+    db.flush()
+    owner = db.get(BuyPointConsumption, (context["consumer_event_key"], "position"))
+    payload = object_json(owner.payload) if owner else {}
+    alert = object_json(payload.get("alert"))
+    meta = object_json(alert.get("meta"))
+    reference = object_json(meta.get("execution_ref"))
+    previous = object_json(payload.get("execution_result"))
+    if (order.scope != "main" or order.side != "buy" or order.status not in {"pending", "filled"}
+            or owner is None or owner.state != "running"
+            or owner.expires_at_ms != context["expires_at_ms"]
+            or owner.expires_at_ms <= int(time.time() * 1000)
+            or meta.get("selection_ref") != context["selection_ref"]
+            or meta.get("selection_source_version") != context["source_version"]
+            or reference.get("decision_id") != context["decision_id"]
+            or reference.get("decision_version") != context["decision_version"]
+            or previous.get("order_id") is not None):
+        raise ValueError("automatic order owner changed before financial commit")
+    payload["execution_result"] = {"order_id": order.id, "status": order.status,
+        "opened": order.status == "filled", "accepted": True, "pending": order.status == "pending",
+        "execution_unknown": False, "decision_id": context["decision_id"],
+        "decision_version": context["decision_version"]}
+    owner.payload = json.dumps(payload, ensure_ascii=False)
+    # Preserve running and its claim timestamp. Only the consumer settles work.
+    db.add(owner)
+
+
+def _manual_pending_issue(db, engine, order, quote):
+    safe = case((func.json_valid(PaperActionReceipt.result), PaperActionReceipt.result), else_="{}")
+    receipts = list(db.scalars(select(PaperActionReceipt).where(PaperActionReceipt.scope == "main",
+        func.json_extract(safe, "$.id") == order.id,
+        PaperActionReceipt.created_at >= order.created_at).limit(2)))
+    if len(receipts) != 1:
+        return "原买入挂单归属无法核实，暂不撮合"
+    receipt = receipts[0]
+    draft, result = object_json(receipt.draft), object_json(receipt.result)
+    if (type(result.get("id")) is not int or result["id"] != order.id
+            or result.get("symbol") != order.symbol or result.get("side") != order.side
+            or result.get("status") != "pending" or draft.get("symbol") != order.symbol
+            or draft.get("side") != order.side or draft.get("price") != order.price
+            or draft.get("quantity") != order.quantity
+            or receipt.created_at < order.created_at):
+        return "原买入挂单回执与订单不一致，暂不撮合"
+    fields = ("selection_ref", "source_version", "decision_id", "decision_version")
+    if not any(draft.get(field) for field in fields):
+        return None
+    if not all(isinstance(draft.get(field), str) and draft[field] for field in fields):
+        return "原买入挂单入选身份不完整，暂不撮合"
+    symbol, item, meta, _decision, issue = selection_binding(engine._sf, draft["selection_ref"],
+        draft["source_version"], beijing_now(), decision_id=draft["decision_id"],
+        decision_version=draft["decision_version"])
+    if issue:
+        return issue[1]
+    if symbol != order.symbol:
+        return "原买入挂单与入选证券不一致，暂不撮合"
+    hits, skips = evaluate_buy_points([item], gate_stand=bool((meta.get("gate") or {}).get("stand_aside")),
+        quotes={symbol: {"price": quote.price, "change_pct": getattr(quote, "change_pct", None),
+                         "prev_close": getattr(quote, "prev_close", None)}})
+    return None if hits else (skips[0].get("reason") if skips else None) or "当前买点条件未通过"
+
+
 def automatic_pending_issue(engine, order_id, symbol, quote):
-    """Recheck only an existing bound automatic order; never create another intent."""
+    """Recheck main order ownership without creating another intent."""
     if engine.scope != "main":
         return None
     with engine._sf() as db:
+        order = db.get(PaperOrder, order_id)
+        if order is None or order.scope != "main" or order.symbol != symbol:
+            return "原挂单身份无法核实，暂不撮合"
         payload = case((func.json_valid(BuyPointConsumption.payload), BuyPointConsumption.payload), else_="{}")
         owners = list(db.scalars(select(BuyPointConsumption).where(
             BuyPointConsumption.consumer == "position",
             func.json_extract(payload, "$.execution_result.order_id") == order_id).limit(2)))
         if not owners:
-            return None  # Preserve ordinary unbound maintenance-order behavior.
+            return _manual_pending_issue(db, engine, order, quote) if order.side == "buy" else None
         if len(owners) != 1:
             return "原自动订单的消费归属不唯一，暂不撮合"
+        if order.side != "buy":
+            return "原自动订单方向与买点不一致，暂不撮合"
         owner = owners[0]
         meta = object_json(object_json(object_json(owner.payload).get("alert")).get("meta"))
         reference = object_json(meta.get("execution_ref"))

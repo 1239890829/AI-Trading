@@ -114,7 +114,14 @@ async def consume_pending(app, sf, *, event_id=None):
         with sf() as db:
             values = {"state": state, "reason": reason, "updated_at_ms": int(time.time() * 1000)}
             if execution_result is not None:
-                saved_payload = {**payload, "execution_result": execution_result}
+                current = db.get(Progress, key)
+                saved_payload = json.loads(current.payload) if current else payload
+                atomic_result = saved_payload.get("execution_result") or {}
+                if type(atomic_result.get("order_id")) is int and atomic_result["order_id"] > 0:
+                    # The financial transaction knows this order even if the
+                    # wrapper/refresh failed before returning its identity.
+                    execution_result = {**execution_result, **atomic_result}
+                saved_payload = {**saved_payload, "execution_result": execution_result}
                 order_id = execution_result.get("order_id")
                 if (state == "done" and type(order_id) is int and order_id > 0
                         and meta.get("selection_ref") and meta.get("selection_source_version")):

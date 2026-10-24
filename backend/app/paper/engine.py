@@ -589,10 +589,13 @@ class PaperTradingEngine:
                     return reject(f"可用资金不足（需 {need:.0f}，余 {acc.cash:.0f}）")
                 # 限价撮合：买价 >= 现价 → 按现价成交；否则挂单
                 if price >= quote.price:
-                    return await self._fill(db, acc, order, quote.price, qty)
+                    return await self._fill(db, acc, order, quote.price, qty, selection_context=selection_context)
                 acc.cash -= need  # 挂单冻结
                 db.add(order)
                 db.add(acc)
+                if selection_context is not None:
+                    from app.paper.selection_action import bind_automatic_order
+                    bind_automatic_order(db, order, selection_context)
                 db.commit()
                 db.refresh(order)
                 return order
@@ -610,7 +613,8 @@ class PaperTradingEngine:
 
     # ---------- 成交（买） ----------
 
-    async def _fill(self, db: Session, acc: PaperAccount, order: PaperOrder, fill_price: float, qty: int) -> PaperOrder:
+    async def _fill(self, db: Session, acc: PaperAccount, order: PaperOrder, fill_price: float, qty: int,
+                    *, selection_context: dict | None = None) -> PaperOrder:
         # 成交价二次校验（R05）：本方法被 `match_pending` 直接调用，不经
         # `place_order` 的价格校验。挂单期间的行情可能变成 0/NaN/inf
         # （上游缺值被填 0 是常见形态），此时按 0 元成交等于白送持仓。
@@ -648,6 +652,9 @@ class PaperTradingEngine:
         db.add(acc)
         db.add(pos)
         db.add(order)
+        if selection_context is not None:
+            from app.paper.selection_action import bind_automatic_order
+            bind_automatic_order(db, order, selection_context)
         db.commit()
         db.refresh(order)
         return order

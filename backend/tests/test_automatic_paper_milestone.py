@@ -4,12 +4,14 @@ from __future__ import annotations
 import asyncio
 from datetime import datetime, timedelta, timezone
 import json
+import os
+import signal
 import time
 from types import SimpleNamespace
 
 import pytest
 from sqlalchemy import create_engine, event, select
-from sqlalchemy.orm import sessionmaker
+from sqlalchemy.orm import Session, sessionmaker
 
 from app.core.bjtime import BJ_TZ
 from app.models.agent import AgentTriage
@@ -398,6 +400,179 @@ async def _no_projection(*args, **kwargs):
     pass
 
 
+def interrupt_after_order_commit(env, expected_status):
+    """A real child exits after the real executor committed, before maybe_open returns."""
+    pid = os.fork()
+    if pid == 0:
+        env.engine.dispose(close=False)
+        original = env.paper.place_order
+        async def committed_then_exit(*args, **kwargs):
+            order = await original(*args, **kwargs)
+            if order.status != expected_status:
+                os._exit(74)
+            os._exit(73)
+        env.paper.place_order = committed_then_exit
+        try:
+            asyncio.run(consumers.consume_pending(env.app, env.sf))
+        except BaseException:
+            os._exit(75)
+        os._exit(76)
+    deadline = time.monotonic() + 10
+    while True:
+        finished, status = os.waitpid(pid, os.WNOHANG)
+        if finished:
+            break
+        if time.monotonic() >= deadline:
+            os.kill(pid, signal.SIGKILL)
+            os.waitpid(pid, 0)
+            pytest.fail("isolated child did not reach the controlled post-commit exit")
+        time.sleep(.01)
+    assert os.WIFEXITED(status) and os.WEXITSTATUS(status) == 73
+    env.engine.dispose()
+
+
+@pytest.mark.skipif(not hasattr(os, "fork"), reason="requires an actual process-exit boundary")
+@pytest.mark.parametrize("status", ["pending", "filled"])
+def test_crash_after_financial_commit_keeps_atomic_owner_identity_and_never_unbinds_pending(env, status):
+    if status == "pending":
+        env.quote["price"] = 10.1
+    interrupt_after_order_commit(env, status)
+    with env.sf() as db:
+        order = db.query(PaperOrder).one()
+        order_id = order.id
+        progress = db.get(Progress, (env.key, "position"))
+        saved = json.loads(progress.payload).get("execution_result")
+        assert progress.state == "running" and order.status == status
+    if status == "pending":
+        env.quote["price"] = 9.7
+        assert asyncio.run(env.paper.match_pending()) == 1
+        with env.sf() as db:
+            order = db.query(PaperOrder).one()
+            assert order.id == order_id and order.status == "pending" and db.query(PaperPosition).count() == 0
+    assert saved is not None and saved["order_id"] == order_id and saved["status"] == status
+    assert saved["opened"] is (status == "filled") and saved["accepted"] is True
+
+
+@pytest.mark.parametrize("status", ["pending", "filled"])
+def test_atomic_owner_write_failure_rolls_back_order_and_funds(env, status):
+    if status == "pending":
+        env.quote["price"] = 10.1
+    def fail_binding(conn, cursor, statement, parameters, context, many):
+        if statement.startswith("UPDATE buy_point_consumption SET payload=") and ", state=" not in statement:
+            raise RuntimeError("isolated atomic binding failure")
+    event.listen(env.engine, "before_cursor_execute", fail_binding)
+    try:
+        asyncio.run(consumers.consume_pending(env.app, env.sf))
+    finally:
+        event.remove(env.engine, "before_cursor_execute", fail_binding)
+    with env.sf() as db:
+        assert db.query(PaperOrder).count() == db.query(PaperPosition).count() == 0
+        assert db.query(PaperAccount).one().cash == 1_000_000
+        progress = db.get(Progress, (env.key, "position"))
+        assert progress.state == "unknown"
+        assert not (json.loads(progress.payload).get("execution_result") or {}).get("order_id")
+
+
+@pytest.mark.parametrize("status", ["pending", "filled"])
+def test_post_commit_refresh_failure_preserves_known_order_in_unknown_consumer(env, monkeypatch, status):
+    if status == "pending":
+        env.quote["price"] = 10.1
+    original = Session.refresh
+    def fail_refresh(db, instance, *args, **kwargs):
+        if isinstance(instance, PaperOrder):
+            raise RuntimeError("isolated post-commit refresh failure")
+        return original(db, instance, *args, **kwargs)
+    monkeypatch.setattr(Session, "refresh", fail_refresh)
+    asyncio.run(consumers.consume_pending(env.app, env.sf))
+    with env.sf() as db:
+        order = db.query(PaperOrder).one()
+        progress = db.get(Progress, (env.key, "position"))
+        result = json.loads(progress.payload)["execution_result"]
+        assert progress.state == "unknown" and "下单异常" in progress.reason
+        assert result["order_id"] == order.id and result["status"] == order.status == status
+        assert result["accepted"] is True and result["execution_unknown"] is False
+        assert result["opened"] is (status == "filled")
+    if status == "pending":
+        env.quote["price"] = 10
+        assert asyncio.run(env.paper.match_pending()) == 1
+    asyncio.run(consumers.consume_pending(env.app, env.sf))
+    with env.sf() as db:
+        assert db.query(PaperOrder).count() == 1
+    assert milestones(env) == []
+
+
+def submit_manual_pending(env, *, bound=False):
+    from uuid import uuid4
+    from app.api.routes.paper import OrderIn
+    from app.paper.actions import submit_action
+    env.quote["price"] = 10.1
+    binding = {}
+    if bound:
+        with env.sf() as db:
+            db.delete(db.get(Progress, (env.key, "position")))
+            db.commit()
+        binding = {"selection_ref": f"daily:{DAY}:600001", "source_version": env.source_version,
+            "decision_id": env.contract["decision_id"], "decision_version": env.contract["decision_version"]}
+    body = OrderIn(request_id=uuid4(), expires_at=datetime.now(timezone.utc) + timedelta(seconds=30),
+        symbol="600001", side="buy", price=10, quantity=100, **binding)
+    result = asyncio.run(submit_action(env.paper, body))
+    assert result["status"] == "pending"
+    return result["id"]
+
+
+def test_real_manual_pending_receipt_keeps_original_unbound_matching(env):
+    order_id = submit_manual_pending(env)
+    env.quote["price"] = 9.7
+    assert asyncio.run(env.paper.match_pending()) == 0
+    with env.sf() as db:
+        order = db.query(PaperOrder).one()
+        assert order.id == order_id and order.status == "filled" and order.filled_price == 9.7
+        assert db.query(PaperActionReceipt).one().scope == "main"
+
+
+@pytest.mark.parametrize("change", ["range", "source", "legal"])
+def test_real_bound_manual_receipt_rechecks_current_selection_and_quote(env, change):
+    order_id = submit_manual_pending(env, bound=True)
+    env.quote["price"] = 9.7 if change == "range" else 10
+    if change == "source":
+        with env.sf() as db:
+            daily = db.query(DailyPickSet).one()
+            items = json.loads(daily.items)
+            items[0]["score"] = 81
+            daily.items = json.dumps(items)
+            db.commit()
+    assert asyncio.run(env.paper.match_pending()) == (0 if change == "legal" else 1)
+    with env.sf() as db:
+        order = db.query(PaperOrder).one()
+        assert order.id == order_id and order.status == ("filled" if change == "legal" else "pending")
+
+
+def test_unowned_main_buy_pending_is_unknown_instead_of_maintenance(env):
+    env.quote["price"] = 10.1
+    order = asyncio.run(env.paper.place_order("600001", "buy", 10, 100))
+    assert order.status == "pending"
+    env.quote["price"] = 10
+    assert asyncio.run(env.paper.match_pending()) == 1
+    with env.sf() as db:
+        saved = db.get(PaperOrder, order.id)
+        assert saved.status == "pending" and "归属无法核实" in saved.reason
+        assert db.query(PaperActionReceipt).count() == db.query(PaperPosition).count() == 0
+
+
+def test_unowned_main_sell_pending_preserves_risk_exit_path(env):
+    assert asyncio.run(env.paper.place_order("600001", "buy", 10, 100)).status == "filled"
+    with env.sf() as db:
+        db.query(PaperPosition).one().frozen_today = 0
+        db.commit()
+    order = asyncio.run(env.paper.place_order("600001", "sell", 10.2, 100))
+    assert order.status == "pending"
+    env.quote["price"] = 10.3
+    assert asyncio.run(env.paper.match_pending()) == 0
+    with env.sf() as db:
+        assert db.get(PaperOrder, order.id).status == "filled"
+        assert db.query(PaperPosition).count() == db.query(PaperActionReceipt).count() == 0
+
+
 def test_uncommitted_consumer_outcome_cannot_publish_completion_or_repeat_order(env):
     def fail_done(conn, cursor, statement, parameters, context, many):
         if statement.startswith("UPDATE buy_point_consumption") and "done" in parameters:
@@ -412,7 +587,9 @@ def test_uncommitted_consumer_outcome_cannot_publish_completion_or_repeat_order(
     with env.sf() as db:
         assert db.query(PaperOrder).count() == 1
         progress = db.get(Progress, (env.key, "position"))
-        assert progress.state == "running" and "execution_result" not in json.loads(progress.payload)
+        result = json.loads(progress.payload)["execution_result"]
+        assert progress.state == "running" and result["order_id"] == db.query(PaperOrder).one().id
+        assert result["status"] == "filled" and result["opened"] is True
     asyncio.run(consumers.consume_pending(env.app, env.sf))
     with env.sf() as db:
         assert db.query(PaperOrder).count() == 1
