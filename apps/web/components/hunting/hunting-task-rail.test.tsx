@@ -44,4 +44,37 @@ describe("选股任务入口保真", () => {
     expect(screen.getByRole("link", { name: "龙头研究" }).getAttribute("aria-current")).toBe("page");
     expect(screen.queryByRole("link", { name: "跟踪记录" })).toBeNull();
   });
+
+  it("keeps known counts distinct from unread counts and preserves link names and scope", () => {
+    const page = render(<HuntingTaskRail view="discover" section="daily" search={query} counts={{candidates: 0, daily: 3}} />);
+    const daily = screen.getByRole("link", {name: "每日精选"});
+    expect(daily.textContent).toBe("每日精选3只");
+    expect(document.getElementById(daily.getAttribute("aria-describedby")!)?.textContent).toBe("3只");
+    expect(screen.getByRole("link", {name: "盘中候选"}).textContent).toBe("盘中候选0只");
+    expect(params(daily).get("date")).toBe("2026-09-30");
+    page.rerender(<HuntingTaskRail view="discover" section="daily" search={query} counts={{candidates: Number.NaN}} />);
+    expect(screen.getByRole("link", {name: "盘中候选"}).textContent).toBe("盘中候选");
+    expect(screen.getByRole("link", {name: "每日精选"}).hasAttribute("aria-describedby")).toBe(false);
+  });
+
+  it("supports explicit keyboard group and destination inspection without navigating on focus", () => {
+    render(<HuntingTaskRail view="discover" section="daily" search={query} />);
+    const discover = screen.getByRole("button", {name: "发现候选"});
+    discover.focus(); fireEvent.keyDown(discover, {key: "ArrowRight"});
+    const tracking = screen.getByRole("button", {name: "持续观察"});
+    expect(document.activeElement).toBe(tracking);
+    expect(tracking.getAttribute("aria-expanded")).toBe("true");
+    fireEvent.keyDown(tracking, {key: "Home"});
+    const first = screen.getByRole("link", {name: "盘中候选"});
+    first.focus(); fireEvent.keyDown(first, {key: "ArrowRight"});
+    const daily = screen.getByRole("link", {name: "每日精选"});
+    expect(document.activeElement).toBe(daily);
+    expect(daily.getAttribute("aria-current")).toBe("page");
+    fireEvent.keyDown(daily, {key: "End"});
+    expect(document.activeElement).toBe(screen.getByRole("link", {name: "机会依据"}));
+    fireEvent.keyDown(document.activeElement!, {key: "ArrowLeft", isComposing: true, keyCode: 229});
+    expect(document.activeElement).toBe(screen.getByRole("link", {name: "机会依据"}));
+    fireEvent.keyDown(document.activeElement!, {key: "Home", ctrlKey: true});
+    expect(document.activeElement).toBe(screen.getByRole("link", {name: "机会依据"}));
+  });
 });

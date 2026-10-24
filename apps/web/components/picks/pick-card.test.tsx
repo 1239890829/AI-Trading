@@ -997,6 +997,68 @@ describe("PickCard · compact local inspection", () => {
  const entry: NonNullable<IntradayTopStock["selection_entry"]> = {state:"recorded",selected_at:"2026-10-23T09:58:00+08:00",reference_price:5.2,reference_change_pct:1.8,quote_as_of:"2026-10-23T09:57:58+08:00",source:"intraday_rank_archive",source_version:"entry-v1",semantics:"observation_only_not_fill"};
  const compactItem = () => fromIntradayStock({...topPath,selection_metrics:metrics,selection_entry:entry,tradability:{level:"可参与",basis:"原记录当前未封板"}});
 
+ it("inspects fields in an explicit linear keyboard order without hover, focus or modified-key side effects or remote reads", () => {
+  const attribution=vi.spyOn(API,"getStockAttribution").mockRejectedValue(new Error("local inspection must not read company evidence"));
+  const research=vi.spyOn(AgentAPI,"getTradingAgentsResearch").mockRejectedValue(new Error("local inspection must not read research"));
+  const start=vi.spyOn(AgentAPI,"createAgentTask").mockRejectedValue(new Error("local inspection must not start research"));
+  try {
+   render(<><input aria-label="本卡备注"/><PickCard compact item={compactItem()}/></>);
+   const group=screen.getByRole("group",{name:"本卡原测量"});
+   const buttons=within(group).getAllByRole("button");
+   expect(buttons.map(button=>button.tabIndex)).toEqual([0,-1,-1,-1,-1]);
+   expect(document.getElementById(group.getAttribute("aria-describedby")!)?.textContent).toContain("按显示顺序");
+   buttons[0].focus();
+   expect(buttons[0].getAttribute("aria-pressed")).toBe("false");
+   fireEvent.click(buttons[0]);
+   fireEvent.mouseEnter(buttons[1]);buttons[1].focus();
+   expect(buttons[0].getAttribute("aria-pressed")).toBe("true");
+   buttons[0].focus();
+   for(const [key,index] of [["ArrowRight",1],["ArrowDown",2],["ArrowLeft",1],["ArrowUp",0],["End",4],["ArrowRight",0],["ArrowLeft",4],["Home",0]] as const){
+    expect(fireEvent.keyDown(document.activeElement!,{key})).toBe(false);
+    expect(document.activeElement).toBe(buttons[index]);
+    expect(buttons[index].getAttribute("aria-pressed")).toBe("true");
+    expect(buttons.map(button=>button.tabIndex)).toEqual(buttons.map((_,i)=>i===index?0:-1));
+   }
+   fireEvent.click(buttons[0]);
+   expect(buttons[0].getAttribute("aria-pressed")).toBe("true");
+   for(const modifiers of [{isComposing:true},{keyCode:229},{shiftKey:true},{ctrlKey:true},{altKey:true},{metaKey:true}]){
+    expect(fireEvent.keyDown(buttons[0],{key:"End",...modifiers})).toBe(true);
+    expect(buttons[0].getAttribute("aria-pressed")).toBe("true");
+   }
+   const note=screen.getByRole("textbox",{name:"本卡备注"});note.focus();
+   expect(fireEvent.keyDown(note,{key:"ArrowDown"})).toBe(true);
+   expect(document.activeElement).toBe(note);
+   expect(buttons[0].getAttribute("aria-pressed")).toBe("true");
+   const basis=screen.getByLabelText("本卡所选短依据");
+   expect(buttons[0].getAttribute("aria-controls")).toBe(basis.id);
+   fireEvent.click(within(basis).getByRole("button",{name:"回看入选理由"}));
+   expect(buttons.every(button=>button.getAttribute("aria-pressed")==="false")).toBe(true);
+   expect(buttons[0].tabIndex).toBe(0);
+   expect(attribution).not.toHaveBeenCalled();expect(research).not.toHaveBeenCalled();expect(start).not.toHaveBeenCalled();
+  } finally {attribution.mockRestore();research.mockRestore();start.mockRestore();}
+ });
+
+ it("draws a small scale only for finite known daily rule scores, including genuine zero, never intraday measurements or unknowns", () => {
+  const card=fromDailyPick({...base,sub_scores:{sentiment:0,news:80,tech:100,fundamental:Number.NaN,capital:101,echelon:55},dimension_evidence:{
+   sentiment:{state:"success",reason:"已核0分"},news:{state:"partial",reason:"部分取得"},tech:{state:"valid_empty",reason:"有效空集"},
+   fundamental:{state:"success",reason:"坏数字"},capital:{state:"success",reason:"越界数字"},
+  }});
+  const view=render(<PickCard compact item={card}/>);
+  const group=screen.getByRole("group",{name:"本卡原规则分项"});
+  expect(within(group).getAllByRole("meter")).toHaveLength(3);
+  for(const [label,value] of [["情绪",0],["消息",80],["技术",100]] as const){
+   const meter=within(group).getByRole("meter",{name:`${label}原规则分值`});
+   expect(meter.getAttribute("aria-valuenow")).toBe(String(value));
+   expect((meter.firstElementChild as HTMLElement).style.width).toBe(`${value}%`);
+  }
+  expect(within(group).queryByRole("meter",{name:"基本面原规则分值"})).toBeNull();
+  expect(within(group).queryByRole("meter",{name:"资金原规则分值"})).toBeNull();
+  expect(within(group).queryByRole("meter",{name:"梯队原规则分值"})).toBeNull();
+  expect(document.getElementById(group.getAttribute("aria-describedby")!)?.textContent).toContain("不是上涨概率");
+  view.rerender(<PickCard compact item={{...card,origin:"intraday"}}/>);
+  expect(screen.queryByRole("meter")).toBeNull();
+ });
+
  it("shows actual units and keeps the selected field's exact qualifier, thresholds and clocks locally reachable", () => {
   const attribution=vi.spyOn(API,"getStockAttribution").mockRejectedValue(new Error("local inspection must not read company evidence"));
   const research=vi.spyOn(AgentAPI,"getTradingAgentsResearch").mockRejectedValue(new Error("local inspection must not read research"));
@@ -1049,7 +1111,9 @@ describe("PickCard · compact local inspection", () => {
   expect(screen.getByText("存在 1 项不满足条件")).toBeTruthy();
   expect(screen.getByText("部分依据缺失")).toBeTruthy();
   expect(screen.getByText("派发警示")).toBeTruthy();
-  expect(screen.queryByRole("meter")).toBeNull();
+  expect(within(group).getAllByRole("meter")).toHaveLength(2);
+  expect(within(group).getByRole("meter",{name:"情绪原规则分值"}).getAttribute("aria-valuenow")).toBe("0");
+  expect(within(group).queryByRole("meter",{name:"消息原规则分值"})).toBeNull();
  });
 
  it("does not give a reference-only stock candidate measurements, and resets local inspection only on original identity change", () => {

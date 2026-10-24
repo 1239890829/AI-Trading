@@ -1,7 +1,7 @@
 "use client";
 
 import {ConditionList, NarrativeText, FactCards, FactTimeline} from "@/components/ui/explanation-map";
-import { useState, type ReactNode } from "react";
+import { useId, useState, type KeyboardEvent, type ReactNode } from "react";
 
 import { CardHead, CardShell } from "@/components/picks/card-shell";
 import { CardEntryRow } from "@/components/picks/card-entries";
@@ -380,6 +380,7 @@ function CompactPickSummary({item, scores, reading, positionLabel, dailyEvidence
   followText: string; followTitle: string; executionState: string | null; executionText: string | null;
 }) {
   const [selected, setSelected] = useState("reason");
+  const inspectionId = useId();
   const fields = item.referenceOnly ? [] : item.selectionMetrics?.items.length ? item.selectionMetrics.items.map(metric => ({
     key: metric.key, label: metric.label, unit: metric.unit, value: metric.value, state: metric.state,
     measured: metric.state === "ready" && metric.value !== null, basis: metric.basis,
@@ -387,6 +388,18 @@ function CompactPickSummary({item, scores, reading, positionLabel, dailyEvidence
   })) : (scores ?? []).map(score => ({key: score.key, label: score.label, unit: "分", value: score.value, state: score.state,
     measured: score.value !== null && ["success", "valid_empty", "partial"].includes(score.state), basis: score.basis, metric: null}));
   const field = fields.find(value => value.key === selected);
+  const keyboardEntry = field?.key ?? fields[0]?.key;
+  function inspectField(event: KeyboardEvent<HTMLButtonElement>, index: number) {
+    if (event.defaultPrevented || event.nativeEvent.isComposing || event.keyCode === 229
+      || event.shiftKey || event.altKey || event.ctrlKey || event.metaKey
+      || !["ArrowLeft", "ArrowRight", "ArrowUp", "ArrowDown", "Home", "End"].includes(event.key)) return;
+    event.preventDefault(); event.stopPropagation();
+    // Deliberately linear even when the responsive grid changes its column count.
+    const next = event.key === "Home" ? 0 : event.key === "End" ? fields.length - 1
+      : (index + (["ArrowLeft", "ArrowUp"].includes(event.key) ? -1 : 1) + fields.length) % fields.length;
+    setSelected(fields[next].key);
+    event.currentTarget.parentElement?.querySelectorAll<HTMLButtonElement>("[data-compact-field]")[next]?.focus({preventScroll:true});
+  }
   const originalReason = item.basisRows.find(row => ["入选", "来源", "联动"].includes(row.label))?.value || reading.why;
   const basis = field?.basis || (field ? "原记录未保存本项依据。" : originalReason);
   const fieldValue = (value: typeof fields[number]) => !value.measured ? ["missing", "error"].includes(value.state) ? "缺项" : "待核"
@@ -416,12 +429,17 @@ function CompactPickSummary({item, scores, reading, positionLabel, dailyEvidence
       {item.board && <span>{item.board}</span>}{item.riskTier && <span title={item.exit?.note}>{item.riskTier}</span>}
       {item.linkage && <span title={item.linkage.basis}>题材关联 {triText(item.linkage.level)}</span>}
     </p>}
-    {!!fields.length && <div className={compactStyles.fields} data-count={fields.length} role="group" aria-label={item.origin === "picks" ? "本卡原规则分项" : "本卡原测量"}>{fields.map(value => <button type="button" key={value.key} className={compactStyles.field}
+    {!!fields.length && <div className={compactStyles.fields} data-count={fields.length} role="group" aria-label={item.origin === "picks" ? "本卡原规则分项" : "本卡原测量"} aria-describedby={`${inspectionId}-keys`}>
+      <span id={`${inspectionId}-keys`} className="sr-only">方向键按显示顺序切换：左、上为前一项，右、下为后一项；Home、End 到首尾。细线仅表示每日原规则分值，不是上涨概率。</span>
+      {fields.map((value, index) => <button type="button" key={value.key} className={compactStyles.field} data-compact-field
+      tabIndex={keyboardEntry === value.key ? 0 : -1} aria-controls={`${inspectionId}-basis`} onKeyDown={event => inspectField(event, index)}
       aria-pressed={field?.key === value.key} data-state={value.state} aria-label={`核对${value.label}，${fieldValue(value)}`} onClick={() => setSelected(value.key)}>
       <span className={compactStyles.fieldLabel}>{value.label}</span><strong className={compactStyles.fieldValue}>{fieldValue(value)}</strong>
       {value.state === "partial" && <small>部分</small>}{value.state === "valid_empty" && <small>有效空集</small>}
+      {item.origin === "picks" && !value.metric && value.measured && typeof value.value === "number" && Number.isFinite(value.value) && value.value >= 0 && value.value <= 100
+        && <span className={compactStyles.ruleScale} role="meter" aria-label={`${value.label}原规则分值`} aria-valuemin={0} aria-valuemax={100} aria-valuenow={value.value}><span style={{width:`${value.value}%`}}/></span>}
     </button>)}</div>}
-    <section className={compactStyles.basis} aria-label="本卡所选短依据">
+    <section id={`${inspectionId}-basis`} className={compactStyles.basis} aria-label="本卡所选短依据">
       <div className={compactStyles.basisHeading}><span>{field ? `${field.label} · 依据节选` : `为什么入选${basis.length > 68 ? " · 节选" : ""}`}</span>{field && <button type="button" onClick={() => setSelected("reason")}>回看入选理由</button>}</div>
       <p>{readerExcerpt(basis, 68)}</p>
       {field && <details key={field.key} className={compactStyles.fullBasis} onClick={event => event.stopPropagation()}><summary>核对本项完整依据</summary><p>{basis}</p>
