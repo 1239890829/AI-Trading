@@ -14,6 +14,12 @@
 
 实现提交`92f4b70496ae03d74d61885ea1eb3778ebcccd6b`已完成完整本地后端7565 passed／87 skipped／372 subtests（四worker/loadfile，213.81秒）及pyflakes；807后端输入全门零漂移。前端393输入与#335最终版本逐字相同，复用默认/UTC各2217项、tsc/ESLint/build `eP160voXI2A-cHgjA0-GM`与恢复后tsc；新HEAD required CI仍另取。文档体检、工作区卫生、公开扫描和diff均通过。末次卡片闸门不一致反例先红、修后通过；之前主动中断的候选全门和目标名错误均保留，不冒充最终绿色。准确HEAD的DegradedRelease/CI/release_check、master CI与运行只读验收归本批PR发布回执。尚未加载本轮后端，未写真实业务数据/授权或新开模型调用。既有RSH-031系统拒绝不重试、不换路径规避。
 
+### 本任务收尾补修：订单与消费身份同事务
+
+PR #336的准确HEAD `3c226907f37ca26e7d1023b6c6a2335c2bbd7d35` 经DegradedRelease 6384925860、PR CI40099198831与release_check通过，合入`d77bb93912f102eae7310c9baef9f07372b76ec6`；master CI40099618599三项成功。终审又确认订单commit与消费回填order_id分属事务，进程在两步间退出会留下无来源身份挂单；原“保全”只覆盖次级投影异常，未覆盖这个崩溃窗口。旧回执及缺陷历史保留，尚未加载该中间版本。
+
+沿同一用户任务从最新master接续`codex/paper-atomic-order-binding`：复用原消费owner，在订单同一数据库事务保存实际order_id/状态，不加schema、不猜归属；消费端异常返回不能清掉原子已知事实。running/unknown原归属未完成仍保守阻断买入撮合，不重下单。真实维护回执正常承接，带selection的回执仍复核原资格/本次quote，无归属confirm买挂单不伪装维护；卖出/研究域保持原硬门。真实子进程在订单commit后退出的2例旧红已复现；补修7文件的10个关联测试文件185 passed，资金/风险原断言不降，3个旧测试文件只将4次初始维护挂单改走真实Actions。实现提交`844e421098ef94ffc9ab8a177ba3cda201b5d830`已完成最终完整后端7577 passed／87 skipped／372 subtests（四worker/loadfile，249.29秒）及pyflakes；807后端输入零漂移。前端393输入仍复用#335默认/UTC各2217项与类型/静态/生产build证据。最终文档/账本/发布守卫和准确HEAD发布与加载另以收尾PR回执核实；无真实业务、配置或模型调用改动。
+
 ### 前版已发布：研究角色与受控模拟入口
 
 PR #334/#335已合入基线master，#335 master CI40094466530三项成功；本机BE65542、FE80415/build `eP160voXI2A-cHgjA0-GM`。实页与收尾见[#335回执6384356355](https://github.com/1239890829/AI-Trading/pull/335#issuecomment-6384356355)。下节是该版过程，当前零成交范围更正以上述审计为准。

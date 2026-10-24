@@ -18,8 +18,9 @@
 from __future__ import annotations
 
 import asyncio
-from datetime import datetime
+from datetime import datetime, timedelta, timezone
 from types import SimpleNamespace
+from uuid import uuid4
 
 import pytest
 
@@ -81,6 +82,15 @@ def _set_cash(engine: PaperTradingEngine, amount: float) -> None:
         db.commit()
 
 
+def _manual_pending(engine, quantity):
+    """Real API action owns the pending order; cash assertions still use the engine."""
+    from app.api.routes.paper import OrderIn
+    from app.paper.actions import submit_action
+    body = OrderIn(request_id=uuid4(), expires_at=datetime.now(timezone.utc) + timedelta(seconds=30),
+        symbol="600519", side="buy", price=95., quantity=quantity)
+    return SimpleNamespace(**asyncio.run(submit_action(engine, body)))
+
+
 # ---------- 修复的主症状：挂单成交只扣一次 ----------
 
 
@@ -90,7 +100,7 @@ def test_pending_buy_fill_charges_exactly_once():
     engine = _make(quotes)
 
     # 限价 95 < 现价 100 ⇒ 挂单，下单时冻结 95,000 + 佣金
-    order = asyncio.run(engine.place_order("600519", "buy", 95.0, 1000))
+    order = _manual_pending(engine, 1000)
     assert order.status == "pending", order.reason
 
     frozen = buy_freeze_amount(95.0, 1000)
@@ -122,7 +132,7 @@ def test_large_pending_buy_is_not_rejected_at_fill_time():
     _set_cash(engine, 200_000.0)
 
     # 冻结 190,045 左右 ≈ 账户的 95%，下单时校验能过
-    order = asyncio.run(engine.place_order("600519", "buy", 95.0, 1900))
+    order = _manual_pending(engine, 1900)
     assert order.status == "pending", order.reason
 
     quotes["600519"].price = 95.0  # 限价到位

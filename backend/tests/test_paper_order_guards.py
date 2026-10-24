@@ -9,7 +9,8 @@ from __future__ import annotations
 
 import asyncio
 import types
-from datetime import datetime
+from datetime import datetime, timedelta, timezone
+from uuid import uuid4
 
 import pytest
 
@@ -322,7 +323,11 @@ def test_equity_conservation_across_pending_then_fill():
     _reset()
     quotes = {"600519": _Quotes(price=100.0)}
     engine = _make(quotes)
-    asyncio.run(engine.place_order("600519", "buy", 95.0, 1000))  # pending，冻结
+    from app.api.routes.paper import OrderIn
+    from app.paper.actions import submit_action
+    body = OrderIn(request_id=uuid4(), expires_at=datetime.now(timezone.utc) + timedelta(seconds=30),
+        symbol="600519", side="buy", price=95., quantity=1000)
+    assert asyncio.run(submit_action(engine, body))["status"] == "pending"
 
     quotes["600519"].price = 94.0
     asyncio.run(engine.match_pending())  # 按 94 成交
