@@ -19,9 +19,7 @@ import {
   isPositivePrice,
   minuteLimitPriceState,
 } from "@/lib/minute-axis";
-import { bjDate, dateTimeTextBJ, pctColor, sourceLabel } from "@/lib/format";
-import { QualityBadge } from "@/components/quality-badge";
-import type { Quote } from "@/types/market";
+import { bjDate } from "@/lib/format";
 import styles from "./minute-chart.module.css";
 import { tradingSeqFromHHMM } from "@/lib/market-hours";
 import { getMinuteAmount } from "@/lib/kline-live";
@@ -186,12 +184,6 @@ function sameMinute(point: P, ts: string | null) {
   return ts !== null && Math.floor(Date.parse(point.ts) / 60000) === Math.floor(Date.parse(ts) / 60000);
 }
 
-function relativePct(point: P | undefined, reference: number | null) {
-  if (!point || !isPositivePrice(reference)) return null;
-  const value = (point.price / reference - 1) * 100;
-  return Number.isFinite(value) ? value : null;
-}
-
 type SeriesBundle = {
   chart: IChartApi | null;
   /** 有昨收 → BaselineSeries（红涨绿跌分段）；降级（无昨收）→ AreaSeries 单色。 */
@@ -228,7 +220,6 @@ const emptyBundle = (): SeriesBundle => ({
 export function MinuteChart({
   symbol,
   name,
-  quoteState,
   points,
   prevClose,
   referenceDate,
@@ -244,8 +235,6 @@ export function MinuteChart({
 }: {
   symbol?: string;
   name?: string;
-  /** Existing quote state only; reading a minute never requests another quote. */
-  quoteState?: Quote | null;
   points: P[];
   prevClose?: number | null;
   /**
@@ -363,12 +352,6 @@ export function MinuteChart({
   }, [points, sessionDate]);
   const latestPoint = inspectionPoints.at(-1);
   const inspectedPoint = inspection.ts ? inspectionPoints.find(point => sameMinute(point, inspection.ts)) : latestPoint;
-  const inspectedIndex = inspectedPoint && usableIndex
-    ? usableIndex.points.findLast(point => bjHHMM(point) === bjHHMM(inspectedPoint) && isPositivePrice(point.price)) : undefined;
-  const inspectedPct = relativePct(inspectedPoint, effectivePrevClose);
-  const inspectedIndexPct = relativePct(inspectedIndex, usableIndex?.prevClose ?? null);
-  const difference = inspectedPct !== null && inspectedIndexPct !== null ? inspectedPct - inspectedIndexPct : null;
-  const quoteReading = quoteState && (!symbol || quoteState.symbol === symbol) ? quoteState : null;
   const inspectPoint = useCallback((point: P, moveChart = true, fixed = inspectionRef.current.fixed) => {
     const next = {ts: point.ts, fixed};
     inspectionRef.current = next;
@@ -1136,29 +1119,15 @@ export function MinuteChart({
     const next = event.key === "Home" ? 0 : event.key === "End" ? inspectionPoints.length - 1 : Math.max(0, Math.min(inspectionPoints.length - 1, current + (event.key === "ArrowRight" ? 1 : -1)));
     inspectPoint(inspectionPoints[next]);
   }
-  const inspectionIndex = inspectedPoint ? inspectionPoints.indexOf(inspectedPoint) : 0;
   const fixedMissing = inspection.fixed && !inspectedPoint;
 
   return (
     <div className="flex h-full w-full flex-col">
-      <section className={styles.comparison} aria-label="同分钟分时对照">
-        <div className={styles.heading}><div><span>{inspection.fixed ? "固定分钟" : inspection.ts ? "查看分钟" : "跟随最新"}</span><strong>{inspectedPoint ? bjHHMM(inspectedPoint) : fixedMissing && inspection.ts ? `${bjHHMM({ts: inspection.ts})} · 当前资料缺失` : "暂无可读分钟"}</strong></div>
-          <button type="button" aria-pressed={inspection.fixed} disabled={!inspectedPoint && !inspection.fixed} onClick={toggleFixedMinute}>{inspection.fixed ? "恢复跟随" : "固定当前分钟"}</button>
-        </div>
-        <div className={styles.values}>
-          <div><span>{name ?? symbol ?? "当前证券"}</span><strong className={pctColor(inspectedPct)}>{fmtPct(inspectedPct)}</strong><small>{inspectedPoint ? `${inspectedPoint.price.toFixed(2)} · ${sourceLabel(inspectedPoint.source)}` : "原分钟未提供"}</small></div>
-          <div><span>上证 · 同分钟</span><strong className={pctColor(inspectedIndexPct)}>{fmtPct(inspectedIndexPct)}</strong><small>{inspectedIndex ? sourceLabel(inspectedIndex.source) : "同日同分钟缺项"}</small></div>
-          <div><span>相对上证</span><strong className={pctColor(difference)}>{difference === null ? "--" : fmtPct(difference).replace("%", "")}</strong><small>百分点，非收益</small></div>
-        </div>
-        <div className={styles.scrub}><span>{inspectionPoints[0] ? bjHHMM(inspectionPoints[0]) : "--"}</span><input type="range" aria-label="选择已有交易分钟" min={0} max={Math.max(0, inspectionPoints.length - 1)} step={1} value={inspectionIndex} disabled={!inspectedPoint} aria-valuetext={inspectedPoint ? `${bjDate(inspectedPoint.ts)} ${bjHHMM(inspectedPoint)}` : "暂无可读分钟"} onChange={event => {const point = inspectionPoints[Number(event.target.value)]; if (point) inspectPoint(point);}}/><span>{latestPoint ? bjHHMM(latestPoint) : "--"}</span></div>
-        <div className={styles.context}><span>最新已有 {latestPoint ? bjHHMM(latestPoint) : "--"}</span>{quoteReading ? <QualityBadge compact quality={quoteReading.quality} reasons={quoteReading.quality_reasons} symbol={symbol ?? quoteReading.symbol} market={quoteReading.market} dataTimestamp={quoteReading.data_timestamp} session={quoteReading.display_session}/> : <span>行情状态未提供</span>}<span>{sessionDate ?? "交易日待核"}</span></div>
-        {fixedMissing && <p role="status" className={styles.warning}>固定分钟已不在当前资料中；没有用近邻分钟替代。</p>}
-        <p className={styles.hint}>画布聚焦：← → 逐点 · 空格固定分钟 · Esc 跟随{inspectedPoint?.observation_ts ? ` · 该点源观察 ${dateTimeTextBJ(inspectedPoint.observation_ts, {seconds: true})}` : ""}</p>
-      </section>
       {/* 角标行：量比 + 竞价 + 上证叠加图例——独立文档流行（原 absolute right-2 top-1.5
           浮层压在图表右上角价格标签/最新价区域），不占图表绘制空间、互不遮挡 */}
       <div className="flex shrink-0 flex-wrap items-center justify-end gap-2 px-2 pb-0.5 pt-1 text-[11px]">
-        <span ref={focusRef} hidden className="chart-focus" aria-label="图表当前焦点"><span data-focus-time /> <span data-focus-price className="chart-focus-price" /></span>
+        <span ref={focusRef} hidden={fixedMissing || inspection.ts === null} className="chart-focus" aria-label="图表当前焦点"><span data-focus-time /> <span data-focus-price className="chart-focus-price" /></span>
+        {fixedMissing && <span role="status" className="text-amber-800 dark:text-amber-300">固定分钟已不在当前资料中；没有用近邻分钟替代。</span>}
         {invalidPrices > 0 && <span className="text-amber-800 dark:text-amber-300">{invalidPrices} 个无效价格已留空</span>}
         {referenceIssue === "invalid-price" && <span className="text-amber-800 dark:text-amber-300">涨跌幅基准无效，仅展示价格</span>}
         {referenceIssue === "unknown-date" && <span className="text-amber-800 dark:text-amber-300">参考日未知，仅展示价格</span>}
@@ -1218,7 +1187,7 @@ export function MinuteChart({
         )}
       </div>
       <div className="relative min-h-0 w-full flex-1">
-        <div ref={ref} data-chart-surface="true" data-escape-owner="minute-chart" data-escape-active={inspection.fixed || inspection.ts !== null ? "true" : undefined} role="group" aria-label={`${name ?? symbol ?? "当前证券"}分时读点`} tabIndex={inspectionPoints.length ? 0 : -1} onKeyDown={readWithKeyboard} className={`h-full w-full ${styles.surface} ${className ?? ""}`} />
+        <div ref={ref} data-chart-surface="true" data-escape-owner="minute-chart" data-escape-active={inspection.fixed || inspection.ts !== null ? "true" : undefined} role="group" aria-label={`${name ?? symbol ?? "当前证券"}分时读点`} title="方向键逐点；空格固定分钟；Esc恢复跟随" tabIndex={inspectionPoints.length ? 0 : -1} onKeyDown={readWithKeyboard} className={`h-full w-full ${styles.surface} ${className ?? ""}`} />
         <div
           ref={tipRef}
           hidden={fixedMissing}
