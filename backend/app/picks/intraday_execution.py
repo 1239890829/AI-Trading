@@ -328,8 +328,20 @@ def attach_intraday_execution(data, *, session_factory=None, now=None):
             symbol = str(stock.get("symbol") or "")
             fallback = read_error or ("历史原入选未做后续完整评估；不补算过去资格"
                 if day != now.date().isoformat() else "尚无同版完整执行评估")
-            envelope = deepcopy(candidates.get(symbol) or {
-                "state": "unknown" if read_error else "missing", "reason": fallback})
+            missing = {"state": "unknown" if read_error else "missing", "reason": fallback}
+            entry = _object(stock.get("selection_entry"))
+            selected_at = _clock(entry.get("selected_at"))
+            # The original entry can be known even when its later assessment is
+            # absent. Preserve that identity without inventing a score or grant.
+            if (entry.get("state") == "recorded" and entry.get("source") == "intraday_rank_archive"
+                    and isinstance(entry.get("source_version"), str) and entry["source_version"]
+                    and selected_at is not None and selected_at.date().isoformat() == day
+                    and len(symbol) == 6 and symbol.isascii() and symbol.isdigit()):
+                missing.update(selection_ref=f"intraday:{day}:{symbol}", source_version=entry["source_version"],
+                    reference_entry={"source": "intraday_rank_archive", "selected_at": entry["selected_at"],
+                        "price": entry.get("reference_price"), "as_of": entry.get("quote_as_of"),
+                        "semantics": "reference_only_not_fill"})
+            envelope = deepcopy(candidates.get(symbol) or missing)
             if envelope.get("state") == "ready":
                 try:
                     envelope["decision"] = latest_notification_execution(day, sf,

@@ -246,6 +246,24 @@ def test_get_projection_reports_read_failure_and_never_backfills_history(rig, mo
     assert calls == []
 
 
+def test_missing_historical_assessment_keeps_known_first_entry_identity_without_scoring(rig):
+    sf, app, clock, calls, _ = rig
+    day = "2026-09-09"
+    entry = {"state": "recorded", "source": "intraday_rank_archive", "source_version": "original-only",
+        "selected_at": day + "T10:00:00+08:00", "reference_price": 9.9,
+        "quote_as_of": day + "T09:59:59+08:00"}
+    data = {"trade_date": day, "themes": [{"participants": [{"symbol": SYMBOL, "selection_entry": entry}]}]}
+    ie.attach_intraday_execution(data, session_factory=sf, now=NOW)
+    stock = data["themes"][0]["participants"][0]
+    env = stock["execution_qualification"]
+    assert env["state"] == "missing" and "不补算" in env["reason"]
+    assert env["selection_ref"] == f"intraday:{day}:{SYMBOL}" and env["source_version"] == "original-only"
+    assert env["reference_entry"]["selected_at"] == entry["selected_at"]
+    assert env["reference_entry"]["price"] == 9.9
+    assert stock["selection_entry"] == entry and "item" not in env and "assessment" not in env
+    assert calls == []
+
+
 def _real_scoring(rig, monkeypatch):
     from tests.test_picks_pipeline import _Store, _Catalog, _Snapshot, _Hub, _Rps, _Chip
     from app.services import market_context
