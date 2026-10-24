@@ -13,9 +13,9 @@ vi.mock("@/hooks/use-polling-fetch", () => ({ usePollingFetch: (fn: () => Promis
   useEffect(() => { if (options?.enabled !== false) void latest.current(); }, [options?.enabled]);
 } }));
 vi.mock("@/components/ui/modal-shell", () => ({ ModalShell: () => null }));
-vi.mock("@/components/ui/candidate-collection", () => ({ CandidateCollection: ({children}: {children: React.ReactNode}) => {
+vi.mock("@/components/ui/candidate-collection", () => ({ CandidateCollection: ({children,view,description,toolbar = true}: {children: React.ReactNode;view?:"cards"|"list";description?:React.ReactNode;toolbar?:boolean}) => {
   const [mode, setMode] = useState("cards");
-  return <div data-testid="candidate-collection" data-mode={mode}><button onClick={() => setMode(mode === "cards" ? "list" : "cards")}>本组呈现方式</button>{children}</div>;
+  return <div data-testid="candidate-collection" data-mode={view ?? mode}>{description}{toolbar && <button onClick={() => setMode(mode === "cards" ? "list" : "cards")}>本组呈现方式</button>}{children}</div>;
 } }));
 vi.mock("@/components/ui/loading", () => ({ FadeIn: ({children}: {children: React.ReactNode}) => <div>{children}</div>, CardListSkeleton: () => <div>读取候选中</div>, PageSkeletonFallback: () => null, StatGridSkeleton: () => null, StatsSkeleton: () => null, TableSkeleton: () => null }));
 vi.mock("@/components/picks/pick-card", () => ({ PickCard: ({item, readError, dailyEvidence, onShowDailyEvidence, active = true, compact = false}: {item: {symbol: string}; readError?: boolean; dailyEvidence?: {item: api.DailyPickItem}; onShowDailyEvidence?: (item: api.DailyPickItem) => void; active?: boolean; compact?: boolean}) => {
@@ -56,6 +56,33 @@ afterEach(() => { cleanup(); vi.useRealTimers(); vi.clearAllMocks(); vi.unstubAl
 const group = (name: "candidates" | "daily") => document.getElementById(`sec-${name}`)!;
 const card = (symbol: string, name: "candidates" | "daily" = "candidates") => within(group(name)).getByText(`候选 ${symbol}`).closest("article")!;
 
+it("keeps one shared switch and presentation preference available through pending, valid empty and failed reads", async () => {
+  search = new URLSearchParams({sec:"daily"});
+  let finish!: (value:api.DailyPicksPayload) => void;
+  vi.mocked(api.getTodayPicks).mockReturnValueOnce(new Promise(resolve => {finish=resolve;}));
+  const page=render(<HuntingPage/>);
+  const switcher=screen.getByRole("navigation",{name:"候选名单切换"});
+  const daily=screen.getByRole("link",{name:"每日精选"});
+  expect(screen.getAllByRole("link",{name:"每日精选"})).toHaveLength(1);
+  expect(daily.textContent).not.toContain("0只");
+  fireEvent.click(screen.getByRole("button",{name:"列表"}));
+  await act(async () => finish({date:"2026-10-08",items:[]} as api.DailyPicksPayload));
+  await waitFor(() => expect(daily.textContent).toContain("0只"));
+  expect(within(group("daily")).getByTestId("candidate-collection").dataset.mode).toBe("list");
+  daily.focus();search=new URLSearchParams({sec:"candidates"});page.rerender(<HuntingPage/>);
+  expect(screen.getByRole("navigation",{name:"候选名单切换"})).toBe(switcher);
+  expect(document.activeElement).toBe(daily);
+  expect(screen.getByRole("button",{name:"卡片"}).getAttribute("aria-pressed")).toBe("true");
+  search=new URLSearchParams({sec:"daily"});page.rerender(<HuntingPage/>);
+  expect(screen.getByRole("button",{name:"列表"}).getAttribute("aria-pressed")).toBe("true");
+  vi.mocked(api.getTodayPicks).mockRejectedValueOnce(new Error("source-offline"));
+  fireEvent.click(screen.getByRole("button",{name:"刷新数据"}));
+  await screen.findByText(/每日精选读取失败。以下保留/);
+  expect(screen.getByRole("navigation",{name:"候选名单切换"})).toBe(switcher);
+  expect(daily.textContent).not.toContain("0只");
+  expect(api.getEventsForSymbol).not.toHaveBeenCalled();
+});
+
 it("switches complete card groups through the existing URL section and preserves each group's local state", async () => {
   const page = render(<HuntingPage/>);
   await screen.findByText("候选 002636");
@@ -66,7 +93,7 @@ it("switches complete card groups through the existing URL section and preserves
   expect(card("600127").dataset.active).toBe("true");
   expect(card("600127", "daily").dataset.active).toBe("false");
   expect(card("600127").dataset.compact).toBe("true");
-  fireEvent.click(within(group("candidates")).getByRole("button", {name: "本组呈现方式"}));
+  fireEvent.click(screen.getByRole("button", {name:"列表"}));
   fireEvent.click(within(card("600127")).getByRole("button", {name: "本地分项 600127"}));
   const intradayInstance = card("600127").dataset.cardInstance;
   search = new URLSearchParams({sec: "daily"}); page.rerender(<HuntingPage/>);

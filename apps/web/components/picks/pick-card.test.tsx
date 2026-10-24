@@ -1059,6 +1059,31 @@ describe("PickCard · compact local inspection", () => {
   expect(screen.queryByRole("meter")).toBeNull();
  });
 
+ it("keeps daily field keyboard inspection, empty/partial states and the original entry facts together in the compact card", () => {
+  const card=fromDailyPick({...base,selection_entry:{...entry,source:"daily_generation"},sub_scores:{sentiment:0,news:80,tech:100},dimension_evidence:{
+   sentiment:{state:"success",reason:"原情绪零分，不能当作缺项"},news:{state:"partial",reason:"仅取得一部分新闻证据，不能补写客户或订单"},tech:{state:"valid_empty",reason:"技术来源是本次有效空集"},
+  }});
+  render(<PickCard compact item={card}/>);
+  const fields=screen.getByRole("group",{name:"本卡原规则分项"});
+  const first=within(fields).getByRole("button",{name:"核对情绪，0分"});
+  first.focus();fireEvent.keyDown(first,{key:"ArrowRight"});
+  const partial=within(fields).getByRole("button",{name:"核对消息，80分"});
+  expect(document.activeElement).toBe(partial);
+  expect(partial.getAttribute("aria-pressed")).toBe("true");
+  expect(within(partial).getByText("部分")).toBeTruthy();
+  expect(screen.getByLabelText("本卡所选短依据").querySelector("p")?.textContent).toBe("仅取得一部分新闻证据，不能补写客户或订单");
+  fireEvent.keyDown(partial,{key:"ArrowRight"});
+  const empty=within(fields).getByRole("button",{name:"核对技术，100分"});
+  expect(document.activeElement).toBe(empty);
+  expect(within(empty).getByText("有效空集")).toBeTruthy();
+  expect(within(empty).getByRole("meter",{name:"技术原规则分值"}).getAttribute("aria-valuenow")).toBe("100");
+  const original=screen.getByLabelText("每日首次加入记录");
+  expect(original.textContent).toContain("2026-10-23 09:58:00");
+  expect(original.textContent).toContain("加入参考价 ¥5.20");
+  expect(original.textContent).toContain("当时 +1.80%");
+  expect(original.textContent).toContain("非成交价");
+ });
+
  it("shows actual units and keeps the selected field's exact qualifier, thresholds and clocks locally reachable", () => {
   const attribution=vi.spyOn(API,"getStockAttribution").mockRejectedValue(new Error("local inspection must not read company evidence"));
   const research=vi.spyOn(AgentAPI,"getTradingAgentsResearch").mockRejectedValue(new Error("local inspection must not read research"));

@@ -10,8 +10,9 @@ import { useReducedMotion } from "@/hooks/use-exit-presence";
 gsap.registerPlugin(Flip, useGSAP);
 
 /** Animate the outer layout only; each candidate keeps its state and inner 3D face. */
-export function CandidateCollection({children}: {children: ReactNode}) {
-  const [view, setView] = useState<"cards" | "list">("cards");
+export function CandidateCollection({children, description, view: controlledView, onViewChange, toolbar = true}: {children: ReactNode; description?: ReactNode; view?: "cards" | "list"; onViewChange?: (view: "cards" | "list") => void; toolbar?: boolean}) {
+  const [ownView, setOwnView] = useState<"cards" | "list">("cards");
+  const view = controlledView ?? ownView;
   const root = useRef<HTMLDivElement>(null);
   const before = useRef<Flip.FlipState | null>(null);
   const reduced = useReducedMotion();
@@ -38,11 +39,13 @@ export function CandidateCollection({children}: {children: ReactNode}) {
       });
       before.current = !reduced && event.detail > 0 && visible.length ? Flip.getState(visible) : null;
     }
-    setView(next);
+    if (controlledView === undefined) setOwnView(next);
+    onViewChange?.(next);
   }
 
   return <div className="candidate-collection">
-    <div className="collection-toolbar"><span>按形成依据逐项核对</span><SelectionRail activeKey={view} label="候选呈现方式"><button type="button" aria-pressed={view === "cards"} onClick={event => choose("cards", event)}>卡片</button><button type="button" aria-pressed={view === "list"} onClick={event => choose("list", event)}>列表</button></SelectionRail></div>
+    {toolbar && <div className="collection-toolbar"><span>按形成依据逐项核对</span><SelectionRail activeKey={view} label="候选呈现方式"><button type="button" aria-pressed={view === "cards"} onClick={event => choose("cards", event)}>卡片</button><button type="button" aria-pressed={view === "list"} onClick={event => choose("list", event)}>列表</button></SelectionRail></div>}
+    {description && <div className="collection-description">{description}</div>}
     <div ref={root} className="collection-items" data-view={view}>{Children.toArray(children).map(child => <div key={typeof child === "object" && child && "key" in child ? child.key : String(child)} data-collection-item={String(typeof child === "object" && child && "key" in child ? child.key : child)} style={{transformOrigin: "top left"}}>{child}</div>)}</div>
   </div>;
 }

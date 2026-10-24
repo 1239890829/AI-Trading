@@ -387,6 +387,7 @@ function CompactPickSummary({item, scores, reading, positionLabel, dailyEvidence
     metric,
   })) : (scores ?? []).map(score => ({key: score.key, label: score.label, unit: "分", value: score.value, state: score.state,
     measured: score.value !== null && ["success", "valid_empty", "partial"].includes(score.state), basis: score.basis, metric: null}));
+  const scoreLayout = item.origin === "picks" && !fields.some(value => value.metric);
   const field = fields.find(value => value.key === selected);
   const keyboardEntry = field?.key ?? fields[0]?.key;
   function inspectField(event: KeyboardEvent<HTMLButtonElement>, index: number) {
@@ -429,7 +430,7 @@ function CompactPickSummary({item, scores, reading, positionLabel, dailyEvidence
       {item.board && <span>{item.board}</span>}{item.riskTier && <span title={item.exit?.note}>{item.riskTier}</span>}
       {item.linkage && <span title={item.linkage.basis}>题材关联 {triText(item.linkage.level)}</span>}
     </p>}
-    {!!fields.length && <div className={compactStyles.fields} data-count={fields.length} role="group" aria-label={item.origin === "picks" ? "本卡原规则分项" : "本卡原测量"} aria-describedby={`${inspectionId}-keys`}>
+    {!!fields.length && <div className={compactStyles.fields} data-count={fields.length} data-layout={scoreLayout ? "scores" : "metrics"} role="group" aria-label={item.origin === "picks" ? "本卡原规则分项" : "本卡原测量"} aria-describedby={`${inspectionId}-keys`}>
       <span id={`${inspectionId}-keys`} className="sr-only">方向键按显示顺序切换：左、上为前一项，右、下为后一项；Home、End 到首尾。细线仅表示每日原规则分值，不是上涨概率。</span>
       {fields.map((value, index) => <button type="button" key={value.key} className={compactStyles.field} data-compact-field
       tabIndex={keyboardEntry === value.key ? 0 : -1} aria-controls={`${inspectionId}-basis`} onKeyDown={event => inspectField(event, index)}

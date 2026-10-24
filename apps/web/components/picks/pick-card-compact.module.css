@@ -143,6 +143,28 @@
   overflow-wrap: anywhere;
 }
 
+/* Daily rule values fit a short label/value key; raw intraday units keep their own flow. */
+.fields[data-layout="scores"] .field {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  align-items: center;
+  gap: 2px 4px;
+  min-height: 34px;
+  padding: 5px 6px 6px;
+}
+
+.fields[data-layout="scores"] .fieldValue {
+  justify-self: end;
+  white-space: nowrap;
+}
+
+.fields[data-layout="scores"] .field small {
+  grid-column: 1 / -1;
+  color: var(--ui-muted);
+  font-size: 10px;
+  line-height: 1.3;
+}
+
 .field[aria-pressed="true"] {
   border-color: var(--ui-accent);
   background: var(--ui-selected);
@@ -300,12 +322,24 @@
   outline-offset: 2px;
 }
 
+@container (max-width: 259px) {
+  .fields[data-layout="scores"] {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+}
+
 @container (min-width: 380px) {
-  .fields[data-count="5"] {
+  .fields[data-layout="metrics"][data-count="5"] {
     grid-template-columns: repeat(5, minmax(0, 1fr));
   }
 
-  .fields[data-count="6"] {
+  .fields[data-layout="metrics"][data-count="6"] {
+    grid-template-columns: repeat(6, minmax(0, 1fr));
+  }
+}
+
+@container (min-width: 560px) {
+  .fields[data-layout="scores"][data-count="6"] {
     grid-template-columns: repeat(6, minmax(0, 1fr));
   }
 }
@@ -318,6 +352,7 @@
 
 @media (pointer: coarse) {
   .field,
+  .fields[data-layout="scores"] .field,
   .basisHeading button,
   .fullBasis summary,
   .compactCard.compactCard :global(.card-entry-action) {

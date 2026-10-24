@@ -40,8 +40,8 @@
 .hunting-current-context p {margin:0;max-width:75ch;color:var(--hunt-muted);font-size:12px;line-height:1.6}
 .hunting-workspace>.hunting-content {display:flex;flex-direction:column;flex:1 1 0%;min-height:0;min-width:0;gap:12px;overflow:hidden;padding:0}
 .hunting-content>* {min-height:0;min-width:0}
-.hunting-discovery-grid {display:grid;grid-template-columns:minmax(0,1fr) minmax(280px,27%);flex:1;min-height:0;min-width:0;align-items:stretch;gap:22px;overflow:hidden}
-.hunting-candidate-flow {min-width:0;min-height:0;overflow:auto;padding-right:8px;overscroll-behavior:contain;container-type:inline-size;container-name:hunting-candidates}
+.hunting-discovery-grid {display:grid;grid-template-columns:minmax(0,1fr) minmax(280px,27%);flex:1;min-height:0;min-width:0;align-items:stretch;gap:22px;overflow:hidden;scroll-padding-block-start:64px}
+.hunting-candidate-flow {min-width:0;min-height:0;overflow:auto;padding-right:8px;overscroll-behavior:contain;container-type:inline-size;container-name:hunting-candidates;scroll-padding-block-start:64px}
 .hunting-candidate-flow>*+* {margin-top:28px}
 .hunting-candidate-flow>[hidden] {display:none}
 .hunting-section-title {color:var(--hunt-ink);font-size:15px;line-height:1.5;font-weight:600}
@@ -61,6 +61,19 @@
 .hunting-workspace .collection-items[data-view=list] {grid-template-columns:minmax(0,1fr)}
 .hunting-candidate-flow .collection-toolbar {justify-content:flex-end;padding:0 0 6px}
 .hunting-candidate-flow .collection-toolbar>span {display:none}
+.hunting-list-toolbar {position:sticky;top:0;z-index:2;display:flex;align-items:center;justify-content:space-between;gap:6px;padding:4px 0 6px;background:var(--hunt-paper);border-bottom:1px solid var(--hunt-line);}
+.hunting-list-toolbar+.hunting-candidate-notices {margin-top:8px;}
+.hunting-list-toolbar .selection-rail {flex:none;}
+.hunting-candidate-switch {display:flex;align-items:stretch;gap:2px;min-width:0;}
+.hunting-candidate-switch a {display:inline-flex;align-items:center;justify-content:center;gap:5px;min-height:34px;padding:6px 10px;border-bottom:2px solid transparent;color:var(--hunt-muted);font-size:12px;white-space:nowrap;text-decoration:none;}
+.hunting-candidate-switch a[aria-current=page] {border-bottom-color:var(--hunt-accent);color:var(--hunt-ink);font-weight:600;}
+.hunting-candidate-switch a:hover {background:var(--hunt-raised);}
+.hunting-candidate-switch small {font-size:10px;font-weight:400;font-variant-numeric:tabular-nums;}
+.hunting-candidate-flow .collection-description {margin:6px 0 10px;color:var(--hunt-muted);font-size:11px;line-height:1.5;}
+.hunting-candidate-flow .collection-description .hunting-group-heading {gap:2px 10px;}
+.hunting-candidate-flow .collection-description .hunting-group-scope {margin-left:0;}
+.hunting-candidate-flow .collection-description .hunting-group-summary {flex-basis:auto;}
+.hunting-candidate-flow .collection-items>[data-collection-item]:has(>.hunting-collection-placeholder) {grid-column:1/-1;}
 .hunting-candidate-flow .collection-items[data-view=cards] {grid-template-columns:repeat(auto-fit,minmax(min(100%,280px),1fr));gap:12px}
 @container hunting-candidates (min-width:864px) {
   .hunting-candidate-flow .collection-items[data-view=cards] {grid-template-columns:repeat(3,minmax(0,1fr))}
@@ -288,4 +301,10 @@
 @media(max-width:479px) {
   .hunting-workspace .hunting-task-links {display:grid;grid-template-columns:repeat(4,minmax(0,1fr));gap:2px;padding:3px 4px 4px;}
   .hunting-workspace .hunting-task-links a {min-width:0;min-height:44px;flex-direction:column;justify-content:center;gap:0;padding:4px 2px;font-size:11px;white-space:normal;text-align:center;}
+  .hunting-workspace .hunting-task-links[data-count="2"] {grid-template-columns:repeat(2,minmax(0,1fr));}
+  .hunting-candidate-switch {flex:1 1 auto;}
+  .hunting-candidate-switch a {min-height:44px;flex:1 1 0%;gap:3px;padding:5px 6px;font-size:11px;}
+  .hunting-list-toolbar {flex-wrap:nowrap;}
+  .hunting-list-toolbar .selection-rail button {min-width:32px;min-height:44px;padding-inline:5px;font-size:11px;}
 }
+@media(pointer:coarse) { .hunting-candidate-switch a,.hunting-list-toolbar .selection-rail button {min-height:44px;} }
