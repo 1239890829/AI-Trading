@@ -278,9 +278,9 @@ class _Provider:
             for s in symbols
         ]
 
-    async def get_market_overview(self):
-        idx = type("I", (), {"symbol": "sh000001", "change_pct": 0.8})()
-        return type("O", (), {"indices": [idx]})()
+    async def get_indices(self):
+        return [Quote(symbol="000001", market="SH", source="sina", price=3500.0,
+                      change_pct=0.8, data_timestamp=pl.beijing_now())]
 
     async def get_kline(self, symbol, period, start, end):
         # 60 根单调上行的日 K：足够算 MA5/MA10 与 ATR14
@@ -293,7 +293,7 @@ class _Provider:
         return [{"revenue_yoy": 15.0, "profit_yoy": 18.0, "roe": 22.0, "gross_margin": 0.91}]
 
     async def get_capital_flow(self, symbol, days):
-        return [{"net_main": 2.5e8}]
+        return [{"date": pl.beijing_now().date().isoformat(), "source": "sina", "net_main": 2.5e8}]
 
 
 class _EmptyProvider:
@@ -373,6 +373,184 @@ async def _no_index_bars(hub):
 
 def _run(deps, hub, **kw):
     return asyncio.run(pl.generate_picks_pipeline(deps, hub, today=TRADE_DAY.isoformat(), **kw))
+
+
+@pytest.mark.parametrize("reverse", [False, True])
+def test_capital_consumes_latest_nonfuture_date_not_list_tail(deps, monkeypatch, reverse):
+    monkeypatch.setattr(pl, "evaluate_stand_aside", _benign_gate)
+    hub = _Hub()
+    today = pl.beijing_now().date()
+    from datetime import timedelta
+    rows = [{"date": (today + timedelta(days=1)).isoformat(), "net_main": -4e8, "source": "sina"},
+            {"date": today.isoformat(), "net_main": 2.5e8, "source": "sina"},
+            {"date": (today - timedelta(days=4)).isoformat(), "net_main": -2e8, "source": "sina"}]
+    async def capital(*_args):
+        return list(reversed(rows)) if reverse else rows
+    monkeypatch.setattr(hub.provider, "get_capital_flow", capital)
+    card = _run(deps, hub)["data"]["items"][0]
+    assert card["sub_scores"]["capital"] == 80.0
+    inputs = card["scoring_trace"]["inputs"]["capital"]
+    assert inputs["date"] == today.isoformat()
+    assert inputs["source"] == "sina"
+    assert inputs["net_main"] == 2.5e8
+    assert inputs["future_rows_excluded"] == 1
+
+
+def test_generated_and_rejected_candidates_keep_same_scoring_trace(deps, monkeypatch):
+    monkeypatch.setattr(pl, "evaluate_stand_aside", _benign_gate)
+    hub = _Hub()
+    data = _run(deps, hub)["data"]
+    assert data["items"]
+    card = data["items"][0]
+    trace = card["scoring_trace"]
+    assert trace["final_score"] == card["score"]
+    assert trace["effective_weights"] == data["meta"]["weights"]
+    assert trace["dimension_evidence"] == card["dimension_evidence"]
+    assert set(trace["inputs"]) == {"tech", "news", "fundamental", "capital", "sentiment", "echelon"}
+    assert trace["thresholds"] == {"selected": data["meta"]["min_pick_score"], "executable": 60.0, "strong": 75.0}
+    original = pl.effective_limits
+    monkeypatch.setattr(pl, "effective_limits", lambda: {**original(), "min_pick_score": 101.0})
+    from app.picks import engine
+    monkeypatch.setattr(engine, "_live", lambda key, default: 101.0 if key == "picks_min_pick_score" else default)
+    rejected_data = _run(deps, hub)["data"]
+    assert not rejected_data["items"]
+    with pl._db() as db:
+        row = db.query(DailyPickSet).filter(DailyPickSet.date == TRADE_DAY.isoformat()).one()
+        rejected = json.loads(row.rejected)
+    assert rejected
+    for row in rejected:
+        assert row["scoring_trace"]["final_score"] == row["score"]
+        assert row["dimension_evidence"] == row["scoring_trace"]["dimension_evidence"]
+
+
+def test_market_benchmark_uses_real_provider_public_contract(deps, monkeypatch):
+    from app.data_providers.composite import CompositeProvider
+    assert hasattr(CompositeProvider, "get_indices")
+    assert not hasattr(CompositeProvider, "get_market_overview")
+    hub = _Hub()
+    async def indices():
+        return [Quote(symbol="000001", market="SH", source="sina", price=3500.0,
+                      change_pct=0.8, data_timestamp=pl.beijing_now())]
+    monkeypatch.setattr(hub.provider, "get_indices", indices, raising=False)
+    data = _run(deps, hub)["data"]
+    assert data["meta"]["market_pct"] == 0.8
+    assert data["meta"]["market_benchmark"]["state"] == "ready"
+
+
+@pytest.mark.parametrize("market,age", [("SZ", 0), ("SH", 3600)])
+def test_market_benchmark_rejects_stock_identity_and_stale_clock(deps, monkeypatch, market, age):
+    from datetime import timedelta
+    hub = _Hub()
+    async def indices():
+        return [Quote(symbol="000001", market=market, source="sina", price=3500.0,
+                      change_pct=0.8, data_timestamp=pl.beijing_now() - timedelta(seconds=age))]
+    monkeypatch.setattr(hub.provider, "get_indices", indices, raising=False)
+    data = _run(deps, hub)["data"]
+    assert data["meta"]["market_pct"] is None
+    assert data["meta"]["market_benchmark"]["state"] != "ready"
+
+
+def test_selected_scoring_reuses_full_pipeline_without_persist_or_reselection(deps, monkeypatch):
+    hub = _Hub()
+    def forbidden(*_args, **_kwargs):
+        raise AssertionError("selected scoring must not persist or reselect")
+    monkeypatch.setattr(pl, "_persist_picks", forbidden)
+    monkeypatch.setattr(pl, "candidate_pool", forbidden)
+    monkeypatch.setattr(pl, "_prev_combo_symbols", forbidden)
+    monkeypatch.setattr(pl, "evaluate_stand_aside", _benign_gate)
+    quotes = asyncio.run(hub.provider.get_quotes(["600519"]))
+    result = asyncio.run(pl.score_selected_candidates(deps, hub,
+        [{"symbol": "600519", "source": "theme_linkage"}], {q.symbol: q for q in quotes},
+        assessed_at=pl.beijing_now()))
+    assert [card["symbol"] for card in result["items"]] == ["600519"]
+    card = result["items"][0]
+    assert len(card["sub_scores"]) == 6 and card["execution_seed"]
+    assert card["scoring_trace"]["final_score"] == card["score"]
+    assert result["meta"]["market_phase"] and result["meta"]["weights"]
+    assert hub.provider.pool_dates.count(TRADE_DAY) == 1
+    assert hub.provider.pool_dates.count(PREV_DAY) == 1
+    assert not result["unscored"]
+
+
+def test_selected_scoring_context_keeps_source_clock_without_second_gate_read(deps, monkeypatch):
+    from app.services import market_context
+    from app.picks.execution_qualification import context_issue
+    now = pl.beijing_now()
+    calls = []
+    async def sentiment(*_args, **_kwargs):
+        calls.append("sentiment")
+        return {"phase": "发酵", "trade_date": now.date().isoformat(), "judged_at": now.isoformat(),
+                "snapshot_freshness": {"state": "ready", "as_of": now.isoformat()},
+                "promotion": {"promo_1to2": 0.8}}
+    monkeypatch.setattr(market_context, "compute_market_sentiment", sentiment)
+    monkeypatch.setattr(pl, "evaluate_stand_aside", lambda **kwargs: {**_benign_gate(), "phase": kwargs["phase"]})
+    hub = _Hub()
+    quotes = asyncio.run(hub.provider.get_quotes(["600519"]))
+    result = asyncio.run(pl.score_selected_candidates(deps, hub, [{"symbol": "600519"}],
+                         {q.symbol: q for q in quotes}, assessed_at=now))
+    context = result["meta"]["execution_context"]
+    assert context["source_as_of"] == now.isoformat()
+    assert context["gate"] == result["meta"]["gate"]
+    assert context_issue(context, pl.beijing_now()) is None
+    assert calls == ["sentiment"]
+
+
+def test_selected_scoring_caps_unique_stocks_and_preserves_independent_observation(deps, monkeypatch):
+    monkeypatch.setattr(pl, "evaluate_stand_aside", _benign_gate)
+    hub = _Hub()
+    symbols = [f"600{i:03d}" for i in range(100, 125)]
+    quotes = asyncio.run(hub.provider.get_quotes(symbols))
+    rows = [{"symbol": s} for s in symbols]
+    rows[0].update(observation_only=True, follow_state="observe")
+    result = asyncio.run(pl.score_selected_candidates(deps, hub, [rows[0], *rows],
+                         {q.symbol: q for q in quotes}, assessed_at=pl.beijing_now()))
+    assert len(result["items"]) == pl.DEEP_DIVE_CAP
+    assert result["unscored"] == [{"symbol": symbols[-1], "reason": "本批深评容量已满，未评分"}]
+    assert result["items"][0]["execution_seed"]["observation_only"] is True
+    assert result["items"][0]["execution_seed"]["follow_state"] == "observe"
+
+
+def test_empty_selected_batch_does_not_read_sources(deps, monkeypatch):
+    async def forbidden(*_args):
+        raise AssertionError("empty batch must not read market")
+    monkeypatch.setattr(pl, "_fetch_limit_up_pool", forbidden)
+    result = asyncio.run(pl.score_selected_candidates(deps, _Hub(), [], {}, assessed_at=pl.beijing_now()))
+    assert result["items"] == result["unscored"] == []
+
+
+def test_unquoted_selected_batch_does_not_read_sources(deps, monkeypatch):
+    async def forbidden(*_args):
+        raise AssertionError("unquoted batch must not read market")
+    monkeypatch.setattr(pl, "_fetch_limit_up_pool", forbidden)
+    result = asyncio.run(pl.score_selected_candidates(deps, _Hub(), [{"symbol": "600519"}], {},
+                         assessed_at=pl.beijing_now()))
+    assert not result["items"]
+    assert result["unscored"] == [{"symbol": "600519", "reason": "同股报价缺失或现价无效"}]
+    assert result["meta"]["execution_context"]["state"] == "unavailable"
+
+
+@pytest.mark.parametrize("raw_date", [None, "not-a-date"])
+def test_undated_capital_is_not_claimed_current(deps, monkeypatch, raw_date):
+    hub = _Hub()
+    async def capital(*_args):
+        return [{"date": raw_date, "net_main": 0.0, "source": "sina"}]
+    monkeypatch.setattr(hub.provider, "get_capital_flow", capital)
+    card = _run(deps, hub)["data"]["items"][0]
+    assert card["sub_scores"]["capital"] == 50.0
+    assert card["dimension_evidence"]["capital"]["state"] == "partial"
+    assert card["scoring_trace"]["inputs"]["capital"]["date"] is None
+
+
+def test_future_only_capital_keeps_missing_instead_of_scoring_future(deps, monkeypatch):
+    from datetime import timedelta
+    hub = _Hub()
+    async def capital(*_args):
+        return [{"date": (pl.beijing_now().date() + timedelta(days=1)).isoformat(), "net_main": 4e8}]
+    monkeypatch.setattr(hub.provider, "get_capital_flow", capital)
+    card = _run(deps, hub)["data"]["items"][0]
+    assert card["sub_scores"]["capital"] == 50.0
+    assert card["dimension_evidence"]["capital"]["state"] == "missing"
+    assert card["scoring_trace"]["inputs"]["capital"]["future_rows_excluded"] == 1
 
 
 # ---------------------------------------------------------------- 用例
@@ -457,7 +635,7 @@ def test_real_zero_flow_negative_pe_and_zero_growth_remain_available(deps, monke
     async def financials(*_args):
         return [{"revenue_yoy": 0.0, "profit_yoy": 0.0, "roe": 0.0, "gross_margin": 0.0}]
     async def capital(*_args):
-        return [{"net_main": 0.0}]
+        return [{"date": pl.beijing_now().date().isoformat(), "source": "sina", "net_main": 0.0}]
     monkeypatch.setattr(hub.provider, "get_quotes", quotes)
     monkeypatch.setattr(hub.provider, "get_financials", financials)
     monkeypatch.setattr(hub.provider, "get_capital_flow", capital)
@@ -491,7 +669,7 @@ def test_generated_selection_contract_uses_original_final_items_digest(deps, mon
     assert datetime.fromisoformat(generated_at).utcoffset().total_seconds() == 8 * 3600
     assert data["meta"]["selection_contract"] == {
         "version": "daily_selection_v2", "trade_date": data["date"], "generated_at": generated_at,
-        "strategy_version": "daily-six-dimension-v1.official-catalyst",
+        "strategy_version": "daily-six-dimension-v2.source-date-zero",
         "feature_version": "daily-entry-evidence-v2",
     }
     assert data["meta"]["selection_version"] == daily_selection_version(data["date"], generated_at, data["items"])

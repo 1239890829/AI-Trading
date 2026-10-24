@@ -532,6 +532,8 @@ def top_watch_stocks(payload: dict, *, limit: int | None = None) -> dict:
                     "tier": tier,
                     "price": s.get("price"),
                     "selection_entry": s.get("selection_entry"),
+                    **({"execution_qualification": deepcopy(s["execution_qualification"])}
+                       if "execution_qualification" in s else {}),
                     "limit_up_price": s.get("limit_up_price"),
                     "limit_up_gap_pct": s.get("limit_up_gap_pct"),
                     "limit_up_gap_state": s.get("limit_up_gap_state") or "unknown",

@@ -412,6 +412,25 @@ def test_score_sentiment_promo_clamped():
     assert 0 <= s <= 100
 
 
+def test_tech_zero_is_evidence_not_missing():
+    from app.picks.engine import score_tech
+    assert score_tech({"score": 0.0, "summary": "已知全空"}) == (0.0, "已知全空")
+    assert score_tech({"score": None})[0] == 50.0
+
+
+def test_synthesis_trace_records_the_actual_veto_calculation():
+    trace = {}
+    score, reasons = synthesize({"tech": 0.0, "news": 100.0},
+                               weights={"tech": 0.25, "news": 0.75},
+                               vetoes=["红线一", "红线二"], trace=trace)
+    assert score == 12.0 and len(reasons) == 2
+    assert trace["weighted_total"] == 75.0
+    assert trace["dimensions"]["tech"] == {"score": 0.0, "weight": 0.25, "contribution": 0.0}
+    assert trace["dimensions"]["news"]["contribution"] == 75.0
+    assert trace["post_veto_score"] == score
+    assert trace["veto_count"] == 2
+
+
 def test_event_weight_tier_and_certainty():
     """Use the persisted producer contract: 5 official, 1 self-media."""
     from app.picks.engine import event_weight

@@ -158,7 +158,10 @@ async def build_opportunities(
 
     # Project joins after copying the immutable market tree; no cached mutation.
     if not include_audit:
-        await asyncio.to_thread(attach_intraday_entries, payload["data"])
+        session_factory = getattr(getattr(state, "alert_repo", None), "_session_factory", None)
+        await asyncio.to_thread(attach_intraday_entries, payload["data"], session_factory=session_factory)
+        from app.picks.intraday_execution import attach_intraday_execution
+        await asyncio.to_thread(attach_intraday_execution, payload["data"], session_factory=session_factory)
     if not include_audit:
         for theme in payload["data"].get("themes") or []:
             theme.pop("_candidate_audit", None)

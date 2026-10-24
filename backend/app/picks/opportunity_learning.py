@@ -65,6 +65,7 @@ OUTCOME_REVISION_VERSION = f"close-v1.{PRICE_BASIS_VERSION}.{COST_MODEL_VERSION}
 #: IMP-006：页面/提醒/模拟执行共享的决策事实契约版本。只改结构语义时递增；
 #: 策略阈值变化仍由 STRATEGY_VERSION / FEATURE_VERSION 单独版本化。
 EXECUTION_CONTRACT_VERSION = "execution-facts-v1"
+BOUND_EXECUTION_CONTRACT_VERSION = "execution-facts-v2.selection-bound"
 
 #: 净收益按**每笔 10 万元名义本金**折算整手股数（口径假设）。
 #: 取 10 万是为了让佣金脱离 `commission_min`(5 元) 的主导区、反映真实费率结构；
@@ -147,7 +148,7 @@ def build_execution_contract(
     ref_price = item.get("price")
     if not _positive_finite(ref_price):
         ref_price = None
-    reference_entry = {
+    reference_entry = deepcopy(item.get("_reference_entry")) if isinstance(item.get("_reference_entry"), dict) else {
         "price": float(ref_price) if ref_price is not None else None,
         "as_of": pick_generated_at,
         "source": "daily_pick_set",
@@ -160,16 +161,20 @@ def build_execution_contract(
     snap.setdefault("source", None)
     snap["semantics"] = "action_time_quote_not_fill"
 
-    decision_id = "OD-" + _hash({
+    selection = item.get("_selection_context")
+    identity = {
         "scenario": "buy_point", "trade_date": trade_date, "symbol": symbol,
-    }, 24)
+    }
+    if isinstance(selection, dict):
+        identity["selection"] = {k: selection.get(k) for k in ("ref", "source_version")}
+    decision_id = "OD-" + _hash(identity, 24)
     # decision_version 只吃会改变动作结论的物质事实。单纯刷新 received_at/ticktime/as_of
     # 仍完整归档在 executable_snapshot，但不能让“价格没动、判据没动”的轮询每分钟造新版本。
     material_snapshot = {
         k: snap.get(k) for k in ("state", "price", "change_pct", "prev_close", "source")
     }
     material = {
-        "contract_version": EXECUTION_CONTRACT_VERSION,
+        "contract_version": BOUND_EXECUTION_CONTRACT_VERSION if isinstance(selection, dict) else EXECUTION_CONTRACT_VERSION,
         "decision_id": decision_id,
         "strategy_version": STRATEGY_VERSION,
         "feature_version": FEATURE_VERSION,
@@ -185,6 +190,9 @@ def build_execution_contract(
             "buy_range": item.get("buy_range"),
         },
     }
+    if isinstance(selection, dict):
+        material["selection"] = {**deepcopy(selection), **({"assessment": {
+            "version": selection["assessment"].get("version")}} if isinstance(selection.get("assessment"), dict) else {})}
     qualification = item.get("_execution_qualification")
     if isinstance(qualification, dict):
         context = qualification.get("context") or {}
@@ -198,6 +206,7 @@ def build_execution_contract(
         **material,
         # 版本哈希只吃会改变判断的物质事实；对外证据保留完整 freshness/checked_at/语义。
         "executable_snapshot": snap,
+        **({"selection": deepcopy(selection)} if isinstance(selection, dict) else {}),
         **({"qualification": deepcopy(qualification)} if isinstance(qualification, dict) else {}),
         **({"gate_checks": deepcopy(item["_execution_checks"])} if isinstance(item.get("_execution_checks"), list) else {}),
         "decision_version": "ODV-" + _hash(material, 32),
@@ -472,8 +481,12 @@ def build_notification_records(
     本阶段属 `intraday_pick` 场景（别名 `buy_point`）。
     """
     as_of = as_of.replace(tzinfo=None)
-    run_id = _hash({"scenario": "notification", "trade_date": trade_date, "as_of": as_of.isoformat(),
-                    "strategy_version": STRATEGY_VERSION, "feature_version": FEATURE_VERSION})
+    run_identity = {"scenario": "notification", "trade_date": trade_date, "as_of": as_of.isoformat(),
+                    "strategy_version": STRATEGY_VERSION, "feature_version": FEATURE_VERSION}
+    bindings = [item["_selection_context"] for item in items if isinstance(item.get("_selection_context"), dict)]
+    if bindings:
+        run_identity["selections"] = sorted(bindings, key=_json)
+    run_id = _hash(run_identity)
     kb_ids_json, kb_refs_json = snapshot_citations("buy_point", kb_ids, fragments=kb_fragments)
     hit_by = {str(h.get("item", {}).get("symbol") or ""): h for h in hits}
     skip_by = {str(s.get("symbol") or ""): str(s.get("reason") or "") for s in skips}
@@ -979,8 +992,9 @@ def archive_notification_pipeline(
     return archive_records(run_id, records, session_factory, run_meta=run_meta)
 
 
-def latest_notification_execution(trade_date: str, session_factory=None) -> dict[str, dict]:
-    """读取每只股票最新一版买点执行事实；只读，不生成样本（IMP-006）。"""
+def latest_notification_execution(trade_date: str, session_factory=None, *,
+                                  selection_ref=None, source_version=None) -> dict[str, dict]:
+    """Read one source's latest fact; legacy/default callers retain the daily view."""
     sf = session_factory or get_session_factory()
     with sf() as db:
         rows = db.execute(
@@ -996,6 +1010,17 @@ def latest_notification_execution(trade_date: str, session_factory=None) -> dict
         evidence = _load_json(row.evidence, {})
         contract = evidence.get("execution_contract") if isinstance(evidence, dict) else None
         if isinstance(contract, dict) and contract.get("decision_version"):
+            binding = contract.get("selection") or {}
+            if selection_ref is None:
+                if str(binding.get("ref") or "").startswith("intraday:"):
+                    continue
+            elif binding:
+                if binding.get("ref") != selection_ref or binding.get("source_version") != source_version:
+                    continue
+            elif (selection_ref != f"daily:{trade_date}:{row.symbol}"
+                    or (contract.get("reference_entry") or {}).get("source") != "daily_pick_set"
+                    or (contract.get("qualification") or {}).get("selection_source_version") not in (None, source_version)):
+                continue
             out[row.symbol] = {
                 **contract,
                 "dispatch": evidence.get("dispatch"),

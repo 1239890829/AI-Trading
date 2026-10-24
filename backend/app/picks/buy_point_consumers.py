@@ -83,7 +83,8 @@ async def consume_pending(app, sf, *, event_id=None):
                 from app.picks.opportunity_learning import latest_notification_execution
                 from app.picks.position_engine import maybe_open
 
-                latest = latest_notification_execution(trade_date, sf).get(alert["symbol"]) or {}
+                latest = latest_notification_execution(trade_date, sf,
+                    selection_ref=meta.get("selection_ref"), source_version=meta.get("selection_source_version")).get(alert["symbol"]) or {}
                 executable = latest.get("executable_snapshot") or {}
                 if (latest.get("decision_id") != ref.get("decision_id")
                         or latest.get("decision_version") != ref.get("decision_version")

@@ -68,6 +68,60 @@ def _basis(trade_date: str, *symbols: str, factor: float = 1.0):
     }
 
 
+def test_bound_daily_and_intraday_qualification_keep_separate_contract_and_run_identities(tmp_path):
+    from app.picks.opportunity_learning import latest_notification_execution
+    sf = _factory(tmp_path)
+    day, symbol = "2026-09-21", "600001"
+    clock = datetime(2026, 9, 21, 10, 30)
+    runs, contracts = [], []
+    for scope in ("daily", "intraday"):
+        item = {"symbol": symbol, "name": "甲", "price": 10., "score": 80,
+            "confidence": {"tier": "strong"}, "vetoes": [], "buy_range": {"low": 9.8, "high": 10.2},
+            "_selection_context": {"ref": f"{scope}:{day}:{symbol}", "source_version": f"{scope}-original"},
+            "_reference_entry": {"price": 9.9, "as_of": f"{day}T10:00:00+08:00",
+                "source": "daily_pick_set" if scope == "daily" else "intraday_rank_archive",
+                "selected_at": f"{day}T10:00:01+08:00", "snapshot_id": f"{scope}-snapshot"}}
+        run, records = build_notification_records([item], trade_date=day, as_of=clock,
+            hits=[{"item": item, "price": 10.}], skips=[], dispatch_by_symbol={},
+            execution_by_symbol={symbol: {"state": "ready", "price": 10., "source": "fixture"}})
+        archive_notification_pipeline([item], trade_date=day, as_of=clock,
+            hits=[{"item": item, "price": 10.}], skips=[], dispatch_by_symbol={},
+            execution_by_symbol={symbol: {"state": "ready", "price": 10., "source": "fixture"}}, session_factory=sf)
+        runs.append(run)
+        contracts.append(records[0]["evidence"]["execution_contract"])
+    assert runs[0] != runs[1]
+    assert contracts[0]["decision_id"] != contracts[1]["decision_id"]
+    assert contracts[1]["reference_entry"]["source"] == "intraday_rank_archive"
+    assert contracts[1]["reference_entry"]["price"] == 9.9
+    daily = latest_notification_execution(day, sf)[symbol]
+    intraday = latest_notification_execution(day, sf,
+        selection_ref=f"intraday:{day}:{symbol}", source_version="intraday-original")[symbol]
+    assert daily["decision_id"] == contracts[0]["decision_id"]
+    assert intraday["decision_id"] == contracts[1]["decision_id"]
+    assert latest_notification_execution(day, sf,
+        selection_ref=f"intraday:{day}:{symbol}", source_version="daily-original") == {}
+
+
+def test_execution_assessment_clocks_remain_evidence_without_changing_material_decision():
+    from copy import deepcopy
+    from app.picks.opportunity_learning import build_execution_contract
+    item = {"symbol": "600001", "price": 10., "score": 80,
+        "_selection_context": {"ref": "intraday:2026-09-21:600001", "source_version": "original",
+            "assessment": {"version": "same-inputs", "snapshot_id": "A", "assessed_at": "2026-09-21T10:30:00+08:00"}}}
+    def make(value):
+        return build_execution_contract(trade_date="2026-09-21", symbol="600001", item=value,
+            executable_snapshot={"price": 10., "state": "ready", "source": "fixture"},
+            gate_decision="passed", gate_reason=None, pick_generated_at="2026-09-21T10:00:00+08:00")
+    first = make(item)
+    fresh = deepcopy(item)
+    fresh["_selection_context"]["assessment"].update(snapshot_id="B", assessed_at="2026-09-21T10:31:00+08:00")
+    second = make(fresh)
+    assert first["decision_id"] == second["decision_id"] and first["decision_version"] == second["decision_version"]
+    assert second["selection"]["assessment"]["snapshot_id"] == "B"
+    fresh["_selection_context"]["assessment"]["version"] = "changed-inputs"
+    assert make(fresh)["decision_version"] != first["decision_version"]
+
+
 def _payload():
     return {
         "trade_date": "2026-09-16",

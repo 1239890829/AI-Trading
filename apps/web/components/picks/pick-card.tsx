@@ -24,6 +24,7 @@ import type {
   ExecutionDecisionContract,
   ExitDiscipline,
   IntradayTopStock,
+  IntradayExecutionQualification,
   SelectionMetrics,
   OpportunityStock,
   StandAsideGate,
@@ -48,9 +49,8 @@ import type {
  *   role↔echelon_role · stage↔theme_stage · stop_ref↔stop_loss · exit_plan↔exit_discipline
  * 下游若再写 `item.role ?? item.echelon_role`，就是把归一逻辑又散回渲染层。
  *
- * ⚠️ 盘中算不出/不该给的维度**不补、也不留白**：整节不渲染，并在卡底用一句口径注记
- * 说明「为什么没有」（`caliberNote`）。渲染占位「—」是把「该数据源本就没有这个维度」
- * 伪装成「有数据但没取到」，既误导也违反三态纪律（不适用 ≠ 缺失）。
+ * ⚠️ 首次盘中排名不补每日六维字段；后续完整评估保留独立版本和时点，另列复核。
+ * 不适用维度不伪造占位；已适用但缺项的后续评估明确缺项（不适用 ≠ 缺失）。
  *
  * 红线 3：全部为可解释依据与条件陈述，不构成买卖建议。
  */
@@ -99,6 +99,9 @@ export interface TradingCard {
   selectionEntry?: DailyPickItem["selection_entry"];
   researchSummary?: DailyPickItem["research_summary"];
   paperContext?: {ref: string; version: string} | null;
+  /** Later persisted assessment; never the original selection score or rationale. */
+  executionQualification?: IntradayExecutionQualification | null;
+  qualificationIdentityValid?: boolean;
   /** 当前展示身份，保留既有首次入选记录；仅参考不等于从未入选。 */
   referenceOnly?: boolean;
   /** 最新动作时执行复核；null = 尚未产生盘中买点判定。 */
@@ -185,6 +188,99 @@ function selectedPaperContext(it: {symbol: string; selection_entry?: DailyPickIt
   if (!entry || entry.source !== (scope === "daily" ? "daily_generation" : "intraday_rank_archive") || !entry.source_version || !entry.selected_at || !/(?:Z|[+-]\d{2}:\d{2})$/.test(entry.selected_at)) return null;
   const day = bjDate(entry.selected_at);
   return /^\d{4}-\d{2}-\d{2}$/.test(day) ? {ref: `${scope}:${day}:${it.symbol}`, version: entry.source_version} : null;
+}
+
+function qualificationIdentity(it: IntradayTopStock | OpportunityStock) {
+  const original = selectedPaperContext(it, "intraday");
+  const q = it.execution_qualification;
+  if (!q || typeof q !== "object" || Array.isArray(q) || !original) return false;
+  const reference = q.reference_entry;
+  return q.selection_ref === original.ref && q.source_version === original.version
+    && (!reference || (!reference.source_version || reference.source_version === original.version)
+      && reference.source === "intraday_rank_archive" && reference.selected_at === it.selection_entry?.selected_at)
+    && (!q.item?.symbol || q.item.symbol === it.symbol);
+}
+
+function assessmentScore(value: unknown): number | null {
+  return typeof value === "number" && Number.isFinite(value) && value >= 0 && value <= 100 ? value : null;
+}
+
+function assessmentClock(value: unknown): string | null {
+  return typeof value === "string" && /(?:Z|[+-]\d{2}:\d{2})$/.test(value) && Number.isFinite(Date.parse(value)) ? value : null;
+}
+
+function qualificationLabel(item: TradingCard, readError: boolean) {
+  if (!item.qualificationIdentityValid) return "复核来源待核";
+  if (readError) return "上次复核，当前待核";
+  const state = item.executionQualification?.state;
+  if (state === "ready") return assessmentScore(item.executionQualification?.item?.score) === null ? "后续评分待核" : "评分已齐";
+  if (["pending", "queued", "running", "evaluating"].includes(state || "")) return "后续复核处理中";
+  if (["blocked", "rejected"].includes(state || "")) return "后续复核受限";
+  return "后续复核待核";
+}
+
+function QualificationSummary({item, readError}: {item: TradingCard; readError: boolean}) {
+  const q = item.executionQualification;
+  if (!q || item.referenceOnly) return null;
+  const valid = item.qualificationIdentityValid;
+  const score = valid ? assessmentScore(q.item?.score) : null;
+  const at = valid ? assessmentClock(q.assessment?.assessed_at) : null;
+  const decision = valid && !readError ? q.decision : null;
+  const decisionLabel = decision?.gate_decision === "rejected" ? "执行判定未通过"
+    : decision?.gate_decision === "passed" && decision.archived_decision === "eligible"
+      ? "执行判定已记录，仍需当前预检" : "未取得当前执行判定";
+  return <div className={compactStyles.reference} role="status" aria-label="后续执行复核概览">
+    <strong>{qualificationLabel(item, readError)}</strong>
+    {valid && <><span>{score === null ? "评分未提供" : `后续评分 ${fmt(score, 1)}`}</span>
+      <span>{at ? `评估 ${timeTextBJ(at)}` : "评估时点未提供"}</span><span>{decisionLabel}</span></>}
+  </div>;
+}
+
+function QualificationDetails({item, readError}: {item: TradingCard; readError: boolean}) {
+  const q = item.executionQualification;
+  if (!q || item.referenceOnly) return null;
+  const valid = item.qualificationIdentityValid;
+  const assessed = valid ? q.item : null;
+  const evidence = assessed?.dimension_evidence;
+  const scores = assessed?.sub_scores ? SUB_LABELS.map(([key, label]) => ({key,
+    label: label === "基本" ? "基本面" : label, maximum: 100 as const,
+    value: assessmentScore(assessed.sub_scores?.[key]), state: evidence?.[key]?.state || "unknown",
+    basis: evidence?.[key]?.reason || assessed.bases?.[key] || "本次复核未保存此项依据。"})) : [];
+  const trace = assessed?.scoring_trace;
+  const traceFields = [
+    {label: "加权合成", value: trace?.weighted_total}, {label: "否决后", value: trace?.post_veto_score},
+    {label: "风险扣分", value: trace?.risk_penalty}, {label: "后续总分", value: trace?.final_score},
+  ].filter((row): row is {label: string; value: number} => typeof row.value === "number" && Number.isFinite(row.value));
+  const at = valid ? assessmentClock(q.assessment?.assessed_at) : null;
+  const gaps = scores.filter(score => !["success", "valid_empty"].includes(score.state));
+  const decision = valid && !readError ? q.decision : null;
+  const blockers = decision?.gate_checks?.filter(check => !["pass", "passed", "success"].includes(check.state)) ?? [];
+  return <section aria-label="后续执行复核" className="my-2 space-y-2">
+    <ReaderBrief label="后续复核状态" headline={qualificationLabel(item, readError)} facts={[
+      {label: "评估时点", value: at ? dateTimeTextBJ(at, {seconds:true}) : "未提供可信评估时点"},
+      {label: "与首次的关系", value: "后续评估不改写首次入选依据、当时测量或原排名。"},
+    ]}/>
+    {!valid ? <p role="status" className="text-xs text-amber-700 dark:text-amber-300">原证券、日期或来源版本不一致，未展示其他记录的复核评分。</p> : <>
+      {q.reason && <p className="text-xs text-zinc-600 dark:text-zinc-400">{readerExcerpt(q.reason, 140)}</p>}
+      <p className="text-xs text-zinc-600 dark:text-zinc-400">评分齐全不等于可执行；最新执行判定和当前模拟预检分别核对。</p>
+      {decision?.gate_reason && <p className="text-xs text-zinc-600 dark:text-zinc-400">执行判定：{readerExcerpt(decision.gate_reason, 140)}</p>}
+      {!!blockers.length && <ConditionList label="已记录执行阻断" tone="warning" items={blockers.map(check => `${check.name}：${check.reason}`)}/>}
+      {scores.length ? <SelectionScores key={`${q.selection_ref}:${q.source_version}:${q.assessment?.snapshot_id}:${q.assessment?.version}`}
+        scores={scores} compact label="后续六维分解" title="后续六维分解" note="本次评估值，不回填首次分值，不是上涨概率"/>
+        : <p className="text-xs text-zinc-600 dark:text-zinc-400">后续六维评分未提供；没有按0分补齐。</p>}
+      {!!gaps.length && <ConditionList label="后续依据缺项" tone="warning" items={gaps.map(score => `${score.label}：${score.basis}`)}/>}
+      {traceFields.length > 0 && <ResearchDisclosure label="复核计算核对" identity={`${q.assessment?.snapshot_id}:${q.assessment?.version}`}>
+        <FactCards label="本次评分合成" items={traceFields.map(row => ({label: row.label, value: `${fmt(row.value, 2)}分`}))}/>
+        <FactCards label="本次六维权重与贡献" items={SUB_LABELS.flatMap(([key, label]) => {
+          const dimension = trace?.dimensions?.[key];
+          return dimension && typeof dimension.weight === "number" && Number.isFinite(dimension.weight)
+            && typeof dimension.contribution === "number" && Number.isFinite(dimension.contribution)
+            ? [{label, value: `权重 ${fmt(dimension.weight * 100, 2)}% · 合成贡献 ${fmt(dimension.contribution, 2)}分`}] : [];
+        })}/>
+      </ResearchDisclosure>}
+      <p className="break-all text-[10px] text-zinc-600 dark:text-zinc-400">评估版本 {q.assessment?.version || "未提供"} · 原选择版本 {q.source_version || "未提供"}</p>
+    </>}
+  </section>;
 }
 
 function ResearchState({item}: {item: TradingCard}) {
@@ -288,7 +384,11 @@ export function fromIntradayStock(it: IntradayTopStock | OpportunityStock): Trad
     referencePrice: null,
     selectionEntry: it.selection_entry,
     researchSummary: it.research_summary,
-    paperContext: it.reference_only ? null : selectedPaperContext(it, "intraday"),
+    paperContext: it.reference_only ? null : it.execution_qualification
+      ? qualificationIdentity(it) ? {ref: it.execution_qualification.selection_ref!, version: it.execution_qualification.source_version!} : null
+      : selectedPaperContext(it, "intraday"),
+    executionQualification: it.reference_only ? null : it.execution_qualification,
+    qualificationIdentityValid: !it.reference_only && qualificationIdentity(it),
     referenceOnly: it.reference_only === true,
     execution: null,
     pe_ttm: null,
@@ -326,9 +426,10 @@ export function fromIntradayStock(it: IntradayTopStock | OpportunityStock): Trad
     relatedEvents: [],
     relatedEventRefs: it.related_event_refs,
     // 盘中来源不补每日组合字段；原生成时点信息由每日来源提供。
-    caliberNote:
-      "盘中实时口径 · 随盘面重算：含联动确定性判定与出场纪律；" +
-      "评分、估值与参考区间由每日组合原生成时点提供，不以盘中数据补填。参考信息不代表成交；判定为条件陈述，不构成买卖建议。",
+    caliberNote: it.execution_qualification
+      ? "盘中首次依据不改写；后续评分与执行判定分开核对。参考信息不代表成交，不构成买卖建议。"
+      : "盘中实时口径 · 随盘面重算：含联动确定性判定与出场纪律；" +
+        "评分、估值与参考区间由每日组合原生成时点提供，不以盘中数据补填。参考信息不代表成交；判定为条件陈述，不构成买卖建议。",
   };
 }
 
@@ -449,6 +550,7 @@ function CompactPickSummary({item, scores, reading, positionLabel, dailyEvidence
       {item.observationOnly && <strong title={followTitle}>{followText}</strong>}
     </div>
     <SelectionEntryRow compact entry={item.selectionEntry} scope={item.origin === "picks" ? "daily" : "intraday"} referenceOnly={item.referenceOnly}/>
+    <QualificationSummary item={item} readError={readError}/>
     {item.origin === "intraday" && dailyEvidence?.item.symbol === item.symbol && <SelectionEntryRow compact entry={dailyEvidence.item.selection_entry} scope="daily"/>}
     {(item.theme || item.role || item.board || item.riskTier || item.linkage) && <p className={compactStyles.theme}>
       {item.theme && <span>{item.theme}{item.stage ? ` · ${item.stage}` : ""}</span>}
@@ -554,6 +656,7 @@ export function PickCard({
       {compact && <><SelectionEntryRow entry={item.selectionEntry} scope={item.origin === "picks" ? "daily" : "intraday"} referenceOnly={item.referenceOnly}/>
       {item.origin === "intraday" && dailyEvidence?.item.symbol === item.symbol && <SelectionEntryRow entry={dailyEvidence.item.selection_entry} scope="daily"/>}</>}
       <ReaderBrief label="本次筛选考虑" facts={[{label: reading.why.endsWith("…") ? "理由节选" : "选择理由", value: reading.why}, {label: reading.limit.endsWith("…") ? "条件节选" : "失效条件", value: reading.limit}]}/>
+      <QualificationDetails item={item} readError={readError}/>
       <p className="text-xs text-zinc-600 dark:text-zinc-400">入选依据保留原记录；下方公司资料与研究是补充，不回填当时理由。</p>
       <StockAttributionPanel symbol={item.symbol} title="相关消息与AI解读" defaultExpanded bounded={false} concise
         selectedAt={item.selectionEntry?.selected_at} recordedRefs={item.relatedEventRefs} selectionContext selectionSummary={{
@@ -817,6 +920,7 @@ export function PickCard({
       />
 
       <SelectionEntryRow entry={item.selectionEntry} scope={item.origin === "picks" ? "daily" : "intraday"} referenceOnly={item.referenceOnly} />
+      <QualificationSummary item={item} readError={readError}/>
       {item.origin === "intraday" && dailyEvidence?.item.symbol === item.symbol && <SelectionEntryRow entry={dailyEvidence.item.selection_entry} scope="daily" />}
 
       {/* IMP-006：参考价与动作时执行快照分开呈现；两者都不是成交。 */}

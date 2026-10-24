@@ -5,7 +5,7 @@
 飞书消息。其余任何中间状态、预警或异动信息一律不要推送。」
 
 系统语义映射：
-- 猎群捕捉 → 当日每日精选名单（DailyPickSet，盘前选出=盘中跟踪输入）
+- 猎群捕捉 → 当日每日精选或已持久盘中容量内入选；盘中须另有后续完整深评
 - 多因素综合判定（全部满足才命中，缺一即 skip 且 skip 理由可观测）：
   1. 置信档 ∈ {executable, strong}（meta_confidence 六维合成：综合分+相位+筹码+红线）
   2. 无红线一票否决（vetoes 空）
@@ -269,6 +269,7 @@ def _execution_ref(contract: dict | None) -> dict | None:
         return None
     reference = contract.get("reference_entry") or {}
     snapshot = contract.get("executable_snapshot") or {}
+    selection = contract.get("selection") or {}
     return {
         "contract_version": contract.get("contract_version"),
         "decision_id": contract.get("decision_id"),
@@ -278,6 +279,8 @@ def _execution_ref(contract: dict | None) -> dict | None:
         "execution_snapshot_state": snapshot.get("state"),
         "execution_snapshot_as_of": snapshot.get("as_of"),
         "execution_snapshot_source": snapshot.get("source"),
+        **({"selection_ref": selection["ref"], "selection_source_version": selection["source_version"]}
+           if selection.get("ref") and selection.get("source_version") else {}),
     }
 
 
@@ -320,6 +323,7 @@ async def _archive_notification_decisions(
     *, items: list[dict], trade_date: str, hits: list[dict], skips: list[dict],
     dispatch_by_symbol: dict[str, str], as_of, pick_generated_at: str | None,
     execution_by_symbol: dict[str, dict],
+    session_factory=None,
 ) -> bool:
     """Persist the authoritative decision fact before any notification/paper action.
 
@@ -335,6 +339,7 @@ async def _archive_notification_decisions(
                 items, trade_date=trade_date, hits=hits, skips=skips,
                 dispatch_by_symbol=dispatch_by_symbol, as_of=as_of,
                 pick_generated_at=pick_generated_at, execution_by_symbol=execution_by_symbol,
+                session_factory=session_factory,
             )
         )
         return True
@@ -364,9 +369,47 @@ async def check_and_dispatch(app) -> list[dict]:
     if td != now.date() or not tc.in_trading_window(now):
         return []
 
-    payload = await asyncio.to_thread(_today_picks_payload)
-    if not payload or not payload.get("items"):
-        return []
+    dispatched = []
+    try:
+        payload = await asyncio.to_thread(_today_picks_payload)
+        if payload and payload.get("items"):
+            dispatched.extend(await _check_and_dispatch_source(app, payload, td))
+    except Exception:
+        log.exception("daily execution source unavailable; intraday path continues")
+    checked = beijing_now()
+    if checked.date() != td or not tc.in_trading_window(checked):
+        return dispatched
+    try:
+        from app.picks.intraday_execution import refresh_intraday_execution
+        await refresh_intraday_execution(app, now=checked)
+    except Exception:
+        log.exception("intraday execution assessment unavailable; daily path retained")
+    sf = repo._session_factory if repo is not None else get_session_factory()
+    try:
+        from app.picks.intraday_execution import load_intraday_execution_candidates
+        candidates = await asyncio.to_thread(load_intraday_execution_candidates, sf, beijing_now())
+    except Exception:
+        log.exception("intraday execution source unavailable; daily path retained")
+        return dispatched
+    for symbol, envelope in candidates.items():
+        try:
+            item = dict(envelope.get("item") or {})
+            item.setdefault("symbol", symbol)
+            payload = {"date": checked.date().isoformat(), "items": [item], "meta": {
+                "generated_at": (envelope.get("reference_entry") or {}).get("as_of"),
+                "selection_version": envelope.get("source_version"), "gate": {}}}
+            dispatched.extend(await _check_and_dispatch_source(app, payload, td, binding=envelope))
+        except Exception:
+            log.exception("one intraday execution source failed; other selections continue")
+    return dispatched
+
+
+async def _check_and_dispatch_source(app, payload, td, *, binding=None):
+    """One persisted source batch; equal symbols in other sources never share a contract."""
+    state = app.state if hasattr(app, "state") else app
+    now = beijing_now()
+    repo = getattr(state, "alert_repo", None)
+    source_sf = repo._session_factory if repo is not None else get_session_factory()
     from app.picks.execution_qualification import _clock, context_issue, live_execution_context, requalify_item
     source_items = payload["items"]
     meta = payload.get("meta") or {}
@@ -374,7 +417,10 @@ async def check_and_dispatch(app) -> list[dict]:
     pick_generated_at = meta.get("generated_at")
     from app.services.selection_notifications import daily_selection_version
     source_version = meta.get("selection_version")
-    source_valid = (isinstance(pick_generated_at, str) and source_version
+    source_valid = (binding.get("state") == "ready" and isinstance(source_version, str) and bool(source_version)
+                    and isinstance(source_items[0].get("execution_seed"), dict)
+                    and binding.get("selection_ref") == f"intraday:{payload['date']}:{source_items[0].get('symbol')}") if binding is not None else (
+                    isinstance(pick_generated_at, str) and source_version
                     and source_version == daily_selection_version(payload["date"], pick_generated_at, source_items))
     context = await live_execution_context(state, now=now) if any("execution_seed" in item for item in source_items) else None
     now = beijing_now()
@@ -391,6 +437,17 @@ async def check_and_dispatch(app) -> list[dict]:
             if "_execution_qualification" in item:
                 item["_execution_qualification"].update(state="unavailable", reason="原入选版本无法核实")
                 item["confidence"] = {"tier": "observe", "reasons": ["原入选版本无法核实"]}
+                item.pop("buy_range", None)
+    for item in items:
+        item["_selection_context"] = {"ref": binding["selection_ref"] if binding is not None else
+            f"daily:{payload['date']}:{item.get('symbol')}", "source_version": source_version}
+        if binding is not None:
+            from copy import deepcopy
+            item["_selection_context"]["assessment"] = deepcopy(binding.get("assessment") or {})
+            item["_reference_entry"] = deepcopy(binding.get("reference_entry") or {})
+            if not source_valid:
+                item["confidence"] = {"tier": "observe"}
+                item["observation_only"] = True
                 item.pop("buy_range", None)
     quotes = _quotes_from_snapshot(state)
     execution_by_symbol = _execution_snapshots(state, items, quotes, checked_at=now)
@@ -430,6 +487,7 @@ async def check_and_dispatch(app) -> list[dict]:
         items=items, trade_date=now.date().isoformat(), hits=hits, skips=skips,
         dispatch_by_symbol={}, as_of=now, pick_generated_at=pick_generated_at,
         execution_by_symbol=execution_by_symbol,
+        session_factory=source_sf,
     )
     if not hits:
         return []
@@ -450,17 +508,29 @@ async def check_and_dispatch(app) -> list[dict]:
         sym = str((h.get("item") or {}).get("symbol") or "")
         # Awaited card/DB work may have consumed the quote or qualification lease.
         # Preserve the old eligible fact; a later rejection is a new observation.
-        current = await asyncio.to_thread(_today_picks_payload)
-        checked = beijing_now()
-        current_meta = (current or {}).get("meta") or {}
-        current_generated = _clock(current_meta.get("generated_at"))
-        current_items = (current or {}).get("items") or []
         reason = None
-        if (not source_valid or current is None or current.get("date") != trade_date
-                or current_generated is None or current_generated.date() != checked.date() or current_generated > checked
-                or current_meta.get("selection_version") != source_version
-                or daily_selection_version(trade_date, current_meta.get("generated_at"), current_items) != source_version
-                or not any(item.get("symbol") == sym for item in current_items)):
+        if binding is None:
+            current = await asyncio.to_thread(_today_picks_payload)
+            checked = beijing_now()
+            current_meta = (current or {}).get("meta") or {}
+            current_generated = _clock(current_meta.get("generated_at"))
+            current_items = (current or {}).get("items") or []
+            valid = (current is not None and current.get("date") == trade_date
+                and current_generated is not None and current_generated.date() == checked.date() and current_generated <= checked
+                and current_meta.get("selection_version") == source_version
+                and daily_selection_version(trade_date, current_meta.get("generated_at"), current_items) == source_version
+                and any(item.get("symbol") == sym for item in current_items))
+        else:
+            from app.picks.intraday_execution import load_intraday_execution_candidates
+            repo = getattr(state, "alert_repo", None)
+            sf = repo._session_factory if repo is not None else get_session_factory()
+            current = (await asyncio.to_thread(load_intraday_execution_candidates, sf, beijing_now())).get(sym) or {}
+            checked = beijing_now()
+            valid = (current.get("state") == "ready" and current.get("selection_ref") == binding["selection_ref"]
+                and current.get("source_version") == source_version
+                and (current.get("assessment") or {}).get("version") == (binding.get("assessment") or {}).get("version")
+                and (current.get("item") or {}).get("execution_seed") == (binding.get("item") or {}).get("execution_seed"))
+        if not source_valid or not valid or checked.date().isoformat() != trade_date:
             reason = "派发前原入选来源或成员已变化，未发送旧买点"
         checked_snapshot = {**(execution_by_symbol.get(sym) or {}), "checked_at": checked.isoformat()}
         quote_check = execution_quote_check(checked_snapshot)
@@ -476,7 +546,8 @@ async def check_and_dispatch(app) -> list[dict]:
                 {"name": "dispatch_recheck", "state": "unknown", "reason": reason}]
             await _archive_notification_decisions(items=[refused_item], trade_date=trade_date, hits=[],
                 skips=[{"symbol": sym, "reason": reason}], dispatch_by_symbol={}, as_of=checked,
-                pick_generated_at=pick_generated_at, execution_by_symbol={sym: checked_snapshot})
+                pick_generated_at=pick_generated_at, execution_by_symbol={sym: checked_snapshot},
+                session_factory=source_sf)
             log.warning("buy point stopped before dispatch %s: %s", sym, reason)
             continue
         alert = build_buy_point_alert(h)
@@ -488,7 +559,7 @@ async def check_and_dispatch(app) -> list[dict]:
         # This is linkage metadata, never a new decision or execution permission.
         selection_version = source_version
         if source_valid:
-            alert["meta"]["selection_ref"] = f"daily:{trade_date}:{sym}"
+            alert["meta"]["selection_ref"] = binding["selection_ref"] if binding is not None else f"daily:{trade_date}:{sym}"
             alert["meta"]["selection_source_version"] = selection_version
         try:
             ok = await dispatch_alert(app, alert, rule_provider=ensure_buy_point_rule)

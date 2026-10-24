@@ -320,7 +320,8 @@ class AlertEngine:
 
         from app.picks.opportunity_learning import latest_notification_execution
 
-        latest = latest_notification_execution(trade_date, self._repo._session_factory).get(event.symbol)
+        latest = latest_notification_execution(trade_date, self._repo._session_factory,
+            selection_ref=ref.get("selection_ref"), source_version=ref.get("selection_source_version")).get(event.symbol)
         if not latest:
             return "buy_point_decision_missing"
         if latest.get("decision_id") != decision_id or latest.get("decision_version") != decision_version:

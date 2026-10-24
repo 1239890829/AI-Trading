@@ -65,6 +65,33 @@ export interface DimensionEvidence {
   source_as_of?: string | null;
 }
 
+/** A later arithmetic trace, never a rewrite of the original selection score. */
+export interface SelectionScoringTrace {
+  algorithm_version?: string;
+  effective_weights?: Record<string, number>;
+  dimensions?: Record<string, {score?: number; weight?: number; contribution?: number}>;
+  weighted_total?: number | null;
+  post_veto_score?: number | null;
+  risk_penalty?: number | null;
+  final_score?: number | null;
+}
+
+/** Read-only persisted assessment. `ready` is not permission or an executable order. */
+export interface IntradayExecutionQualification {
+  state: string;
+  reason?: string | null;
+  selection_ref: string | null;
+  source_version: string | null;
+  reference_entry?: {price?: number | null; as_of?: string | null; selected_at?: string | null;
+    source?: string | null; source_version?: string | null; snapshot_id?: string | null; semantics?: string} | null;
+  item?: {symbol?: string; score?: number | null; sub_scores?: Record<string, number> | null;
+    dimension_evidence?: Record<string, DimensionEvidence> | null; bases?: Record<string, string>;
+    scoring_trace?: SelectionScoringTrace | null; execution_seed?: Record<string, unknown>} | null;
+  assessment?: {snapshot_id?: string | null; version?: string | null; assessed_at?: string | null} | null;
+  membership?: {run_id?: string | null; as_of?: string | null; state?: string | null} | null;
+  decision?: (ExecutionDecisionContract & {gate_checks?: {name: string; state: string; reason: string}[]}) | null;
+}
+
 /** Saved metadata only. Counts are coverage, not quality or trading eligibility. */
 export interface SelectedResearchSummary {
   symbol: string;
@@ -704,6 +731,7 @@ export interface SelectionMetrics {
 }
 
 export interface OpportunityStock {
+  execution_qualification?: IntradayExecutionQualification | null;
   selection_metrics?: SelectionMetrics | null;
   related_event_refs?: EventInterpretationRef[];
   selection_entry?: SelectionEntry | null;
@@ -876,6 +904,7 @@ export interface IntradayThemeSource {
 }
 
 export interface IntradayTopStock {
+  execution_qualification?: IntradayExecutionQualification | null;
   selection_metrics?: SelectionMetrics | null;
   related_event_refs?: EventInterpretationRef[];
   selection_entry?: SelectionEntry | null;
