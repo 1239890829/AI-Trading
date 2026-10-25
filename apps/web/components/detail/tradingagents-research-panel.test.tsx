@@ -1,8 +1,10 @@
 import {act, cleanup, fireEvent, render, screen, waitFor} from "@testing-library/react";
 import {afterEach, beforeEach, describe, expect, it, vi} from "vitest";
+import {useDeviceAccess} from "@/components/access/device-access";
 import {TradingAgentsResearchPanel} from "./tradingagents-research-panel";
 import {createAgentTask, getTradingAgentsResearch, type AgentTask, type TradingAgentsResearchView} from "@/lib/api/agent";
 
+vi.mock("@/components/access/device-access", () => ({useDeviceAccess:vi.fn()}));
 vi.mock("@/lib/api/agent", () => ({createAgentTask: vi.fn(), getTradingAgentsResearch: vi.fn()}));
 const view = (symbol = "002121"): TradingAgentsResearchView => ({
   symbol, enabled: false, executable: false, required_model_slots: 22,
@@ -28,16 +30,46 @@ const recovered = (symbol = "002121"): TradingAgentsResearchView => {
     new_call_from: 11, new_call_to: 24, inherited_unknown_usage_count: 1};
   return value;
 };
-beforeEach(() => {vi.clearAllMocks(); vi.mocked(getTradingAgentsResearch).mockResolvedValue(view());});
+beforeEach(() => {vi.clearAllMocks(); vi.mocked(useDeviceAccess).mockReturnValue({device:{state:"active",maintenance:true},open:vi.fn(),refresh:vi.fn(async()=>{})}); vi.mocked(getTradingAgentsResearch).mockResolvedValue(view());});
 afterEach(() => {cleanup(); vi.useRealTimers();});
 
 describe("完整TradingAgents研究读者", () => {
+  it("ordinary paired readers can reuse full saved reports but cannot inspect launch gates or submit tasks", async () => {
+    const open=vi.fn();
+    vi.mocked(useDeviceAccess).mockReturnValue({device:{state:"active",maintenance:false},open,refresh:vi.fn(async()=>{})});
+    vi.mocked(getTradingAgentsResearch).mockResolvedValue({...saved(),enabled:true,executable:true,blockers:[]});
+    render(<TradingAgentsResearchPanel symbol="002121" defaultOpen allowStart/>);
+    await screen.findByRole("tab",{name:/最终判断/});
+    expect(screen.queryByRole("button",{name:"检查启动条件"})).toBeNull();
+    expect(screen.queryByRole("button",{name:"开始完整研究"})).toBeNull();
+    expect(screen.getByText(/生成新研究需要维护授权/)).toBeTruthy();
+    fireEvent.click(screen.getByRole("button",{name:"设备与权限"}));
+    expect(open).toHaveBeenCalledTimes(1);
+    expect(getTradingAgentsResearch).toHaveBeenCalledTimes(1);
+    expect(getTradingAgentsResearch).toHaveBeenCalledWith("002121",{savedOnly:true});
+    expect(createAgentTask).not.toHaveBeenCalled();
+  });
+
+  it("an explicitly enabled compact entry starts only after maintenance preflight and a user command", async () => {
+    vi.mocked(getTradingAgentsResearch).mockResolvedValue({...view(),enabled:true,executable:true,blockers:[]});
+    vi.mocked(createAgentTask).mockResolvedValue({id:"started",type:"tradingagents_research",params:{symbol:"002121"},status:"queued",steps:[],result_ref:null,error:null,risk_level:"L0",created_by:"user",created_at:null,started_at:null,finished_at:null});
+    render(<TradingAgentsResearchPanel symbol="002121" compact allowStart/>);
+    await screen.findByRole("button",{name:"检查启动条件"});
+    expect(createAgentTask).not.toHaveBeenCalled();
+    fireEvent.click(screen.getByRole("button",{name:"检查启动条件"}));
+    const start=screen.getByRole("button",{name:"开始完整研究"});
+    await waitFor(()=>expect((start as HTMLButtonElement).disabled).toBe(false));
+    expect(createAgentTask).not.toHaveBeenCalled();
+    fireEvent.click(start);
+    await waitFor(()=>expect(createAgentTask).toHaveBeenCalledTimes(1));
+    expect(createAgentTask).toHaveBeenCalledWith("tradingagents_research",{symbol:"002121"});
+  });
   it("shows explicit selected-stock research authorization without a call quota or an effect-admission claim", async () => {
     vi.mocked(getTradingAgentsResearch).mockResolvedValue({...view(), enabled:true, executable:true, blockers:[],
       admission:{state:"research_only_authorized",method_sha256:"current-method"},
       budget:{date:"2026-10-21",limit:null,used:31,remaining:null,scope:"selected_stock_research"}});
     const panel=render(<TradingAgentsResearchPanel symbol="002121" compact defaultOpen/>);
-    await screen.findByText("002121 · 未查到研究记录");
+    await screen.findByText("002121 · 暂无可读完整报告");
     fireEvent.click(screen.getByText("运行条件与承接状态"));
     expect(panel.container.textContent).toContain("已授权入选后完整研究");
     expect(panel.container.textContent).toContain("不代表选股或投资效果已通过验证");
@@ -52,7 +84,7 @@ describe("完整TradingAgents研究读者", () => {
     expect(getTradingAgentsResearch).toHaveBeenCalledWith("002121", {savedOnly:true});
     fireEvent.click(screen.getByText(/查看启动阻断原因/));
     expect(screen.getByText("净增益尚未准入")).toBeTruthy();
-    expect((screen.getByRole("button", {name: "显式启动完整研究"}) as HTMLButtonElement).disabled).toBe(true);
+    expect((screen.getByRole("button", {name: "开始完整研究"}) as HTMLButtonElement).disabled).toBe(true);
     expect(createAgentTask).not.toHaveBeenCalled();
   });
 
@@ -138,7 +170,7 @@ describe("完整TradingAgents研究读者", () => {
     expect(panel.container.textContent).toContain("启动条件读取失败，当前资格未确认");
     fireEvent.click(screen.getByRole("tab", {name: /^行情/}));
     expect(panel.container.textContent).toContain("002121 行情原报告");
-    expect((screen.getByRole("button", {name: "显式启动完整研究"}) as HTMLButtonElement).disabled).toBe(true);
+    expect((screen.getByRole("button", {name: "开始完整研究"}) as HTMLButtonElement).disabled).toBe(true);
     expect(createAgentTask).not.toHaveBeenCalled();
   });
 
@@ -161,14 +193,14 @@ describe("完整TradingAgents研究读者", () => {
     render(<TradingAgentsResearchPanel symbol="002121" defaultOpen/>);
     await screen.findByRole("button", {name: "检查启动条件"});
     fireEvent.click(screen.getByRole("button", {name: "检查启动条件"}));
-    const button = await screen.findByRole("button", {name: "显式启动完整研究"});
+    const button = await screen.findByRole("button", {name: "开始完整研究"});
     await waitFor(() => expect((button as HTMLButtonElement).disabled).toBe(false));
     fireEvent.click(button); fireEvent.click(button);
     expect(createAgentTask).toHaveBeenCalledTimes(1);
     expect(createAgentTask).toHaveBeenCalledWith("tradingagents_research", {symbol: "002121"});
     await act(async () => {finish({id: "new-task", type: "tradingagents_research", params: {symbol: "002121"}, status: "queued", steps: [], result_ref: null, error: null, risk_level: "L0", created_by: "operator", created_at: "2026-10-20T21:00:00+08:00", started_at: null, finished_at: null});});
     await screen.findByText(/持久状态待校准/);
-    expect((screen.getByRole("button", {name: "显式启动完整研究"}) as HTMLButtonElement).disabled).toBe(true);
+    expect((screen.getByRole("button", {name: "开始完整研究"}) as HTMLButtonElement).disabled).toBe(true);
   });
 
   it("does not request equity research for an index or hidden stock panel", () => {
@@ -183,8 +215,8 @@ describe("完整TradingAgents研究读者", () => {
     vi.mocked(getTradingAgentsResearch).mockResolvedValue({...view(), enabled: true, executable: true, blockers: []});
     render(<TradingAgentsResearchPanel symbol="002121" compact/>);
     expect(screen.getByRole("button", {name: "TradingAgents 研究记录 · 收起"})).toBeTruthy();
-    await screen.findByText("002121 · 未查到研究记录");
-    expect(screen.queryByRole("button", {name: "显式启动完整研究"})).toBeNull();
+    await screen.findByText("002121 · 暂无可读完整报告");
+    expect(screen.queryByRole("button", {name: "开始完整研究"})).toBeNull();
     expect(screen.queryByRole("link", {name: "任务中心查看或取消"})).toBeNull();
     expect(screen.getByText("运行条件与承接状态").closest("details")?.open).toBe(false);
     fireEvent.click(screen.getByRole("button", {name: "重新读取研究"}));
@@ -221,16 +253,16 @@ describe("完整TradingAgents研究读者", () => {
     vi.mocked(getTradingAgentsResearch).mockImplementationOnce(() => new Promise(resolve => {finish = resolve;}));
     render(<TradingAgentsResearchPanel symbol="002121" defaultOpen compact/>);
     expect(screen.getByText("002121 · 读取中")).toBeTruthy();
-    expect(screen.queryByText("002121 · 未查到研究记录")).toBeNull();
+    expect(screen.queryByText("002121 · 暂无可读完整报告")).toBeNull();
     await act(async () => {finish({...view(), blockers: [{code: "driver_unavailable", message: "完整执行器尚未装配"}]});});
-    await screen.findByText("002121 · 未查到研究记录");
+    await screen.findByText("002121 · 暂无可读完整报告");
     fireEvent.click(screen.getByText("运行条件与承接状态"));
     fireEvent.click(screen.getByText(/查看启动阻断原因/));
     expect(screen.getByText("完整执行器尚未装配")).toBeTruthy();
     vi.mocked(getTradingAgentsResearch).mockRejectedValue(new Error("read failed"));
     fireEvent.click(screen.getByRole("button", {name: "重新读取研究"}));
     await screen.findByText("002121 · 读取失败");
-    expect(screen.queryByText("002121 · 未查到研究记录")).toBeNull();
+    expect(screen.queryByText("002121 · 暂无可读完整报告")).toBeNull();
     expect(screen.queryByText(/预算不足|所需模型余量/)).toBeNull();
     expect(screen.getByText(/尚不能确认是否有已保存报告/)).toBeTruthy();
     expect(createAgentTask).not.toHaveBeenCalled();

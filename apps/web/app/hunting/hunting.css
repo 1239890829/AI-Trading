@@ -353,7 +353,7 @@
 .discovery-unmapped summary {cursor:pointer;min-height:32px}
 .discovery-unmapped ul {display:flex;flex-wrap:wrap;gap:8px 16px;padding:8px 0;list-style:none}
 @media(max-width:1023px) {
-  .hunting-discovery-grid[data-detail-open=true] .discovery-browser {display:none}
+  .hunting-discovery-grid[data-detail-open=true] .discovery-browser,.hunting-discovery-grid[data-detail-open=true] .discovery-methods {display:none}
   .hunting-discovery-grid[data-detail-open=true] .hunting-context-column {margin-top:10px;padding-top:12px}
 }
 @media(max-width:767px) {

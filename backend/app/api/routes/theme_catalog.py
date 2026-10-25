@@ -11,7 +11,7 @@ from __future__ import annotations
 import asyncio
 import logging
 from datetime import date, datetime
-from typing import Any
+from typing import Annotated, Any
 
 from fastapi import APIRouter, Depends, HTTPException, Query, Request
 from pydantic import BaseModel
@@ -26,6 +26,8 @@ from app.services.theme_catalog_service import (
     aggregate_theme_strength,
     official_multi_day_changes,
     reconcile,
+    source_saved_clock,
+    source_saved_state,
 )
 from app.services.theme_service import parse_theme_tags
 
@@ -90,6 +92,7 @@ async def stock_themes(
     request: Request,
     date_str: str | None = Query(default=None, alias="date", description="YYYYMMDD，默认最近交易日"),
     svc: ThemeCatalogService = Depends(get_service),
+    enrichment: Annotated[str, Query(pattern="^(snapshot|full)$")] = "full",
 ) -> dict:
     """个股题材反查（architecture-design §1）：官方成分（L3）+ 涨停归因（L2）。
 
@@ -109,7 +112,12 @@ async def stock_themes(
         except Exception as exc:  # noqa: BLE001
             raise HTTPException(status_code=502, detail=f"题材目录同步失败：{exc}") from exc
 
-    official = svc.get_official_for_symbol(sym)
+    official = await asyncio.to_thread(svc.get_official_for_symbol, sym)
+    if enrichment == "snapshot":
+        return {"data": {"symbol": sym,
+                         "official": [{**row, "theme_chg_1d": None, "theme_align_1d": None} for row in official],
+                         "attribution": [], "market_enrichment": "not_requested",
+                         "attribution_state": "not_requested"}, "meta": {}}
     attribution = await _attribution_for_symbol(request, sym, trade_date)
 
     # 有界懒同步：官方归属为空但当日有归因时，只补齐归因题材的成分再反查一次
@@ -191,22 +199,39 @@ async def theme_catalog(
     search: str | None = Query(default=None, max_length=32),
     limit: int = Query(default=500, ge=1, le=1000),
     svc: ThemeCatalogService = Depends(get_service),
+    kind: Annotated[str, Query(pattern="^(concept|industry)$")] = "concept",
 ) -> dict:
     """题材全集（官方目录）。空库时自动同步一次（首次访问建库）。"""
-    if svc.catalog_size() == 0:
-        try:
-            await svc.sync_catalog()
-        except Exception as exc:  # noqa: BLE001
-            raise HTTPException(status_code=502, detail=f"题材目录同步失败：{exc}") from exc
-    rows = svc.get_catalog(search=search or None, limit=limit)
-    return {
-        "data": {
-            "count": len(rows),
-            "total": svc.catalog_size(),
-            "items": [{"code": r.code, "name": r.name, "source": r.source, "synced_at": r.synced_at.isoformat()} for r in rows],
-        },
-        "meta": {},
-    }
+    try:
+        payload = await svc.read_board_catalog(kind)
+    except Exception as exc:
+        raise HTTPException(status_code=502, detail="同花顺正式目录暂不可用") from exc
+    items = [row for row in payload["items"] if not search or search in row["name"] or search in row["code"]][:limit]
+    return {"data": {**payload, "count": len(items), "items": items}, "meta": {}}
+
+
+@router.get("/themes/catalog/quotes")
+async def theme_catalog_quotes(
+    codes: str = Query(..., min_length=1, max_length=550),
+    kind: Annotated[str, Query(pattern="^(concept|industry)$")] = "concept",
+    svc: ThemeCatalogService = Depends(get_service),
+) -> dict:
+    wanted = list(dict.fromkeys(codes.split(",")))
+    if len(wanted) > 50:
+        raise HTTPException(status_code=422, detail="每批最多50个正式板块代码")
+    try:
+        directory = await svc.read_board_catalog(kind)
+        allowed = {row["code"] for row in directory["items"]}
+        if not set(wanted) <= allowed:
+            raise HTTPException(status_code=404, detail="代码不在所选来源正式目录中")
+        payload = await svc.read_board_snapshots(wanted)
+    except ValueError as exc:
+        raise HTTPException(status_code=422, detail="板块代码格式无效") from exc
+    except HTTPException:
+        raise
+    except Exception as exc:
+        raise HTTPException(status_code=502, detail="正式板块目录读取失败，未请求其它板块替代") from exc
+    return {"data": {**payload, "kind": kind}, "meta": {}}
 
 
 @router.get("/themes/catalog/strength")
@@ -358,6 +383,63 @@ async def theme_members(
     }
 
 
+async def _snapshot_catalog_detail(code: str, kind: str, request: Request, svc: ThemeCatalogService) -> dict:
+    """Return names and saved facts independently of optional remote enrichment."""
+    try:
+        directory = await svc.read_board_catalog(kind)
+    except Exception as exc:
+        raise HTTPException(status_code=502, detail="来源正式目录暂不可用") from exc
+    identity = next((row for row in directory["items"] if row["code"] == code), None)
+    if identity is None:
+        raise HTTPException(status_code=404, detail="代码不在所选来源正式目录中")
+    if kind == "industry":
+        try:
+            rows = await svc.read_industry_members(code)
+        except Exception as exc:
+            raise HTTPException(status_code=502, detail="来源行业成分暂不可用") from exc
+        members = [{"symbol": row["symbol"], "name": row.get("name") or row["symbol"]} for row in rows]
+        membership_as_of = None  # provider readiness must not become an effective membership date
+        membership_state = "source_read"
+    else:
+        rows = await asyncio.to_thread(svc.get_members, code)
+        if not rows:
+            try:
+                await svc.sync_members(code)
+                rows = await asyncio.to_thread(svc.get_members, code)
+            except Exception as exc:
+                raise HTTPException(status_code=502, detail="来源概念成分暂不可用") from exc
+        members = [{"symbol": row.symbol, "name": row.name} for row in rows]
+        membership_as_of = min((source_saved_clock(row.synced_at) for row in rows if row.synced_at), default=None)
+        from app.core.config import settings
+
+        membership_state = source_saved_state([row.synced_at for row in rows], settings.theme_members_ttl_hours)
+    snap = getattr(request.app.state, "snapshot_service", None)
+    snapshot, snapshot_version = snap.versioned_snapshot() if callable(getattr(snap, "versioned_snapshot", None)) else ([], None)
+    try:
+        freshness = snap.freshness().model_dump(mode="json") if snap is not None else None
+    except Exception:
+        freshness = None
+    quotes = {row["symbol"]: row for row in snapshot if isinstance(row, dict) and row.get("symbol")}
+    for member in members:
+        quote = quotes.get(member["symbol"], {})
+        change = quote.get("change_pct")
+        member.update({"price": quote.get("price"), "change_pct": change,
+                       "turnover_rate": quote.get("turnover_rate"), "float_market_cap_yi": (
+                           round(quote["nmc"] / 1e4, 2) if quote.get("nmc") else None),
+                       "limit_up": None,  # missing source day/quality cannot establish a current sealed state
+                       "break_count": None, "seal_amount": None, "boards": None,
+                       "reason": None, "reason_source": None, "reason_date": None, "tags": []})
+    members.sort(key=lambda row: (row["change_pct"] is None, -(row["change_pct"] or 0), row["symbol"]))
+    return {"data": {"code": code, "name": identity["name"], "kind": kind, "source": "ths_official",
+                     "total": len(members), "members": members,
+                     "limit_up_count": None, "tag_groups": [],
+                     "membership_saved_at": membership_as_of, "membership_as_of": None,
+                     "membership_state": membership_state, "catalog_state": directory.get("catalog_state", "unknown"),
+                     "market_enrichment": "snapshot", "source_as_of": None,
+                     "quote_freshness": freshness, "quote_snapshot_saved_at": source_saved_clock(snapshot_version),
+                     "meta_note": "名称与成分来自同花顺正式目录；报价仅使用已存快照，时点待核。涨停归因按需另读，不影响目录加载。"}, "meta": {}}
+
+
 @router.get("/themes/catalog/{code}/detail")
 async def theme_catalog_detail(
     code: str,
@@ -365,6 +447,8 @@ async def theme_catalog_detail(
     refresh: bool = Query(default=False),
     svc: ThemeCatalogService = Depends(get_service),
     hub: QuoteHub = Depends(get_hub),
+    kind: Annotated[str, Query(pattern="^(concept|industry)$")] = "concept",
+    enrichment: Annotated[str, Query(pattern="^(snapshot|full)$")] = "full",
 ) -> dict:
     """概念详情（2026-09-08 用户需求，参考同花顺概念页设计）：
 
@@ -378,6 +462,11 @@ async def theme_catalog_detail(
     code = code.strip()
     if "/" in code or "\\" in code or ".." in code:
         raise HTTPException(status_code=400, detail=f"非法题材代码：{code!r}")
+    if enrichment == "snapshot" or kind == "industry":
+        if refresh:
+            # A pure browse does not force a database rewrite or discard saved evidence.
+            raise HTTPException(status_code=422, detail="目录快读不支持强制重同步")
+        return await _snapshot_catalog_detail(code, kind, request, svc)
     if refresh or not svc.get_members(code):
         try:
             await svc.sync_members(code)
@@ -535,40 +624,76 @@ async def themes_hot(
     limit: int = Query(default=30, ge=5, le=50, description="热股榜截取条数（官方榜共 30 只）"),
     svc: ThemeCatalogService = Depends(get_service),
 ) -> dict:
-    """题材人气（B1 热股榜消费端）：ths 热股榜 × 官方成分反查 → 题材级人气聚合。
-
-    - stocks：热股原榜（24 小时榜，含 rank/heat/rank_change），附官方归属题材名；
-    - themes：按官方成分聚合（heat 合计 / 热股家数 / 榜内最高排名成员），按人气倒序；
-    - 归属只用官方成分反查，不用关键词猜；无归属热股仅出现在 stocks（诚实口径）。
-    人气为 ths 口径的估算数据，60s 缓存；ths 源不可用时 502，前端静默降级（看板不依赖它）。
-    """
+    """热股样本的正式成分集中度；只读已存目录，不补同步或扩大选股范围。"""
+    from copy import deepcopy
+    from datetime import timedelta, timezone
+    from app.core.db import utcnow
+    from app.core.inflight_reads import read_inflight
+    from app.core.config import settings
     from app.services.theme_catalog_service import aggregate_hot_themes
     from app.services.theme_service import _pick_provider
 
-    cache = cache_on(request.app.state, "themes.hot", 60, maxsize=1)
-    hit, payload = cache.get(limit)
+    revision = getattr(svc, "revision", 0)
+    key = (limit, revision)
+    cache = cache_on(request.app.state, "themes.hot", 60, maxsize=4)
+    hit, payload = cache.get(key)
     if hit:
-        return payload
+        return deepcopy(payload)
 
     hub = request.app.state.hub
     ths = _pick_provider(hub.provider, "ThsFuyaoProvider")
     if ths is None:
         raise HTTPException(status_code=503, detail="同花顺源不可用，无热股榜数据")
-    try:
-        stocks = await ths.get_hot_stock_list("day")
-    except Exception as exc:  # noqa: BLE001
-        raise HTTPException(status_code=502, detail=f"热股榜数据源失败：{exc}") from exc
-
-    stocks = stocks[:limit]
-    official_by_symbol: dict[str, list[dict]] = {}
-    for s in stocks:
+    def project(stocks):
+        now = utcnow().replace(tzinfo=None)
+        membership_state = "ready"
         try:
-            official_by_symbol[s["symbol"]] = svc.get_official_for_symbol(s["symbol"])
-        except Exception:  # noqa: BLE001 — 归属查询失败按无归属处理，不让目录问题拖垮热股榜
-            official_by_symbol[s["symbol"]] = []
-    payload = {"data": aggregate_hot_themes(stocks, official_by_symbol), "meta": {}}
-    cache.set(limit, payload)
-    return payload
+            catalog = svc.get_catalog(limit=1000)
+        except Exception:  # noqa: BLE001 - 原热股榜不因本地分类读取失败而消失
+            log.warning("hot themes local catalog unavailable", exc_info=True)
+            catalog, membership_state = [], "unavailable"
+        formal = [item for item in catalog if item.source == "ths_official"]
+        def valid_time(value, hours):
+            return value is not None and now - timedelta(hours=hours) <= value.replace(tzinfo=None) <= now
+        catalog_state = ("unknown" if not formal or any(item.catalog_synced_at is None for item in formal)
+                         else "ready" if all(valid_time(item.catalog_synced_at, 24) for item in formal) else "stale")
+        registered = {item.code: {
+            "name": item.name, "source": item.source,
+            "members_current": valid_time(item.synced_at, settings.theme_members_ttl_hours),
+            "member_as_of": item.synced_at.replace(tzinfo=timezone.utc).isoformat()
+                            if item.synced_at is not None and item.synced_at.replace(tzinfo=None) <= now else None,
+        } for item in formal if item.catalog_synced_at is None or item.catalog_synced_at.replace(tzinfo=None) <= now}
+        symbols = list(dict.fromkeys(item["symbol"] for item in stocks))
+        try:
+            official = svc.official_for_symbols_bulk(symbols, apply_manual=False)
+        except Exception:  # noqa: BLE001 - unknown 归属不能伪装成没有归属
+            log.warning("hot themes local membership unavailable", exc_info=True)
+            official, membership_state = {}, "unavailable"
+        codes = {item.get("theme_code") for items in official.values() for item in items
+                 if item.get("source") == "ths_official" and item.get("theme_code") in registered}
+        try:
+            members = svc.member_symbols_bulk(sorted(codes))
+        except Exception:  # noqa: BLE001 - 分母未核，不填0或重新同步
+            log.warning("hot themes member denominator unavailable", exc_info=True)
+            members = {}
+        if getattr(svc, "revision", 0) != revision:
+            raise HTTPException(status_code=503, detail="题材目录版本已变化，请重新读取")
+        return aggregate_hot_themes(stocks, official, catalog_by_code=registered, members_by_code=members,
+                                    catalog_revision=revision, catalog_state=catalog_state,
+                                    membership_state=membership_state)
+
+    async def load():
+        try:
+            stocks = (await ths.get_hot_stock_list("day"))[:limit]
+        except Exception as exc:  # noqa: BLE001
+            raise HTTPException(status_code=502, detail=f"热股榜数据源失败：{exc}") from exc
+        return {"data": await asyncio.to_thread(project, stocks), "meta": {}}
+
+    async def cached():
+        _, payload = await cache.get_or_set(key, load)
+        return payload
+
+    return await read_inflight(ths, ("themes-hot", cache, id(svc), key), cached)
 
 
 @router.get("/themes/reconciliation")

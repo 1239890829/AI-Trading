@@ -3,6 +3,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { act, cleanup, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import HuntingPage from "@/app/hunting/page";
 import * as api from "@/lib/api";
+import { getStrategyRegistry } from "@/lib/api/picks";
 import {CardEntryRow} from "@/components/picks/card-entries";
 
 let search = new URLSearchParams();
@@ -33,6 +34,7 @@ vi.mock("@/components/hunting/opportunity-evidence-panel", () => ({ OpportunityE
 vi.mock("@/components/hunting/watch-ledger-panel", () => ({ WatchLedgerPanel: () => <div>真实跟踪组件</div> }));
 vi.mock("@/components/hunting/leader-research-panel", () => ({ LeaderResearchPanel: () => <div>真实研究组件</div> }));
 vi.mock("@/lib/api", () => ({ ApiError: class extends Error { status = 500; }, getTodayPicks: vi.fn(), getPicksHistory: vi.fn(), getPickReviews: vi.fn(), getPicksMeta: vi.fn(), getSignalHealth: vi.fn(), getMorningBriefToday: vi.fn(), getWatcherState: vi.fn(), getIntradayReview: vi.fn(), getIntradayOpportunities: vi.fn(), getIntradayTop: vi.fn(), getPositionLabels: vi.fn(), getEventsForSymbol: vi.fn(), getThemesHot: vi.fn(), getBoardFundFlow: vi.fn(), getDiscoveryMemberships: vi.fn(), getConceptDetail: vi.fn(), getBoardFlowMembers: vi.fn() }));
+vi.mock("@/lib/api/picks", async () => ({...await vi.importActual<typeof import("@/lib/api/picks")>("@/lib/api/picks"), getStrategyRegistry:vi.fn()}));
 
 beforeEach(() => {
   search = new URLSearchParams();
@@ -48,9 +50,9 @@ beforeEach(() => {
   vi.mocked(api.getIntradayTop).mockResolvedValue({trade_date: "2026-10-08", items: [{symbol: "600127"}], reference_items: []} as unknown as api.IntradayTopPayload);
   vi.mocked(api.getPositionLabels).mockResolvedValue({});
   vi.mocked(api.getEventsForSymbol).mockImplementation(async symbol => ({symbol, themes: [], count: 0, items: []}));
-  vi.mocked(api.getThemesHot).mockResolvedValue({ts:"2026-10-25T02:00:00Z", stocks:[{rank:1,symbol:"600127",name:"原标的",heat:10,rank_change:0,themes:["未涨停热点"]}],themes:[{theme:"未涨停热点",theme_code:"885111.TI",heat:10,hot_count:1,best:null,basis:"官方归属"}]});
+  vi.mocked(api.getThemesHot).mockResolvedValue({ranking_basis:"hot_stock_concentration",catalog_revision:1,catalog_state:"ready",membership_state:"ready",scope:"隔离夹具：热股×正式目录",ts:"2026-10-25T02:00:00Z", stocks:[{rank:1,symbol:"600127",name:"原标的",heat:10,rank_change:0,themes:["机器人概念"]}],themes:[{theme:"机器人概念",theme_code:"885517.TI",heat:10,heat_complete:true,hot_count:1,hot_symbols:["600127"],source:"ths_official",member_count:100,member_as_of:"2026-10-25T02:00:00Z",concentration_pct:1,best:null,basis:"隔离夹具：正式目录归属"}]});
   vi.mocked(api.getDiscoveryMemberships).mockResolvedValue({scope:"current_not_historical", requested_trade_date:"2026-10-08",content_version:"a".repeat(64),state:"unknown",source:"local_theme_catalog",source_as_of:null,observed_at:"2026-10-25T10:00:00+08:00",count:1,matched_count:0,unknown_count:1,items:[{symbol:"600127",state:"unknown",themes:[],reason:"未核"}]});
-  vi.mocked(api.getConceptDetail).mockResolvedValue({code:"885111.TI",name:"未涨停热点",total:1,limit_up_count:0,members:[{symbol:"600127",name:"原标的",price:10,change_pct:0,tags:[]}],tag_groups:[],meta_note:"当前目录"} as unknown as api.ConceptDetail);
+  vi.mocked(api.getConceptDetail).mockResolvedValue({code:"885517.TI",name:"机器人概念",total:1,limit_up_count:0,members:[{symbol:"600127",name:"原标的",price:10,change_pct:0,tags:[]}],tag_groups:[],meta_note:"当前目录"} as unknown as api.ConceptDetail);
   HTMLElement.prototype.scrollIntoView = vi.fn();
   vi.stubGlobal("matchMedia", () => ({matches: true, addEventListener: vi.fn(), removeEventListener: vi.fn()}));
 });
@@ -503,7 +505,7 @@ it("labels the real role summary as bound price observations and retains its exi
 
 it("loads only the chosen discovery source and original selected group, without hidden market or research polling", async () => {
   search=new URLSearchParams({browse:"hot"});render(<HuntingPage/>);
-  await screen.findByRole("button",{name:"查看未涨停热点成分"});
+  await screen.findByRole("button",{name:"查看机器人概念成分"});
   expect(api.getThemesHot).toHaveBeenCalledTimes(1);
   expect(screen.getByText("按需读取")).toBeTruthy();
   expect(screen.queryByRole("button",{name:"刷新数据"})).toBeNull();
@@ -525,11 +527,11 @@ it.each(["candidates","daily"] as const)("retries the failed %s original list in
   vi.mocked(api.getDiscoveryMemberships).mockImplementation(async(symbols,date)=>({
     scope:"current_not_historical",requested_trade_date:date??null,content_version:"b".repeat(64),state:"ready",source:"local_theme_catalog",
     source_as_of:null,observed_at:"2026-10-25T10:00:00+08:00",count:symbols.length,matched_count:symbols.length,unknown_count:0,
-    items:symbols.map(symbol=>({symbol,state:"matched" as const,themes:[{theme_code:"885111.TI",theme_name:"未涨停热点",source:"ths_official"}],reason:null})),
+    items:symbols.map(symbol=>({symbol,state:"matched" as const,themes:[{theme_code:"885517.TI",theme_name:"机器人概念",source:"ths_official"}],reason:null})),
   }));
   search=new URLSearchParams({browse:"hot",sec:currentGroup});
   const page=render(<HuntingPage/>);
-  await screen.findByRole("button",{name:"查看未涨停热点成分"});
+  await screen.findByRole("button",{name:"查看机器人概念成分"});
   await screen.findByText("原名单读取失败，归属对照未完成。");
   expect(screen.getByRole("list",{name:"分类结果"}).textContent).toContain("原名单读取失败");
   expect(screen.queryByText("本组原名单已确认空")).toBeNull();
@@ -551,7 +553,7 @@ it.each(["candidates","daily"] as const)("retries the failed %s original list in
   expect(api.getDiscoveryMemberships).toHaveBeenCalledTimes(1);
   expect(api.getDiscoveryMemberships).toHaveBeenCalledWith(["600127"],day,{signal:expect.any(AbortSignal)});
 
-  search=new URLSearchParams({browse:"hot",sec:currentGroup,disc_code:"885111.TI"});page.rerender(<HuntingPage/>);
+  search=new URLSearchParams({browse:"hot",sec:currentGroup,disc_code:"885517.TI"});page.rerender(<HuntingPage/>);
   expect(await screen.findByRole("button",{name:"返回原名单核对原标的"})).toBeTruthy();
   const detail=screen.getByTestId("discovery-detail");
   expect(detail.textContent).toContain(`原名单日期：${day}`);
@@ -570,7 +572,7 @@ it("retires a previously open original-evidence drawer on classification switch 
   fireEvent.click(screen.getByRole("button",{name:"每日依据 600127"}));
   expect(screen.getByTestId("daily-detail")).toBeTruthy();
   search=new URLSearchParams({browse:"hot"});page.rerender(<HuntingPage/>);
-  await screen.findByRole("button",{name:"查看未涨停热点成分"});
+  await screen.findByRole("button",{name:"查看机器人概念成分"});
   expect(screen.queryByTestId("daily-detail")).toBeNull();
   search=new URLSearchParams();page.rerender(<HuntingPage/>);
   expect(card("600127").dataset.cardInstance).toBe(instance);
@@ -580,18 +582,18 @@ it("retires a previously open original-evidence drawer on classification switch 
 
 it("restores mobile discovery list position after detail/back and does not overwrite it with detail scrolling",async()=>{
   search=new URLSearchParams({browse:"hot"});const page=render(<HuntingPage/>);
-  await screen.findByRole("button",{name:"查看未涨停热点成分"});
+  await screen.findByRole("button",{name:"查看机器人概念成分"});
   const flow=screen.getByRole("region",{name:"候选结果与题材"});const grid=flow.parentElement!;
   flow.style.overflowY="visible";grid.style.overflowY="auto";
   grid.scrollTop=345;fireEvent.scroll(grid);
-  search=new URLSearchParams({browse:"hot",disc_code:"885111.TI"});page.rerender(<HuntingPage/>);
+  search=new URLSearchParams({browse:"hot",disc_code:"885517.TI"});page.rerender(<HuntingPage/>);
   await screen.findByTestId("discovery-detail");
   await waitFor(()=>expect(grid.scrollTop).toBe(0));
   grid.scrollTop=90;fireEvent.scroll(grid);
   search=new URLSearchParams({browse:"hot"});page.rerender(<HuntingPage/>);
   await waitFor(()=>expect(screen.queryByTestId("discovery-detail")).toBeNull());
   expect(grid.scrollTop).toBe(345);
-  expect(document.activeElement).toBe(screen.getByRole("button",{name:"查看未涨停热点成分"}));
+  expect(document.activeElement).toBe(screen.getByRole("button",{name:"查看机器人概念成分"}));
 });
 
 it("consumes a return-to-selection focus intent once, rather than refocusing on each saved-list refresh",async()=>{
@@ -611,7 +613,7 @@ it("preserves the original market-context position across a classification place
   const side=screen.getByRole("complementary",{name:"市场环境、节拍与复盘"});
   side.scrollTop=164;fireEvent.scroll(side);
   search=new URLSearchParams({browse:"hot"});page.rerender(<HuntingPage/>);
-  await screen.findByRole("button",{name:"查看未涨停热点成分"});
+  await screen.findByRole("button",{name:"查看机器人概念成分"});
   side.scrollTop=0;fireEvent.scroll(side);
   search=new URLSearchParams();page.rerender(<HuntingPage/>);
   expect(side.scrollTop).toBe(164);
@@ -623,8 +625,73 @@ it("stops previously opened review archives when their context is hidden by clas
   journal.open=true;fireEvent(journal,new Event("toggle",{bubbles:true}));
   await waitFor(()=>expect(api.getPickReviews).toHaveBeenCalled());
   search=new URLSearchParams({browse:"hot"});page.rerender(<HuntingPage/>);
-  await screen.findByRole("button",{name:"查看未涨停热点成分"});
+  await screen.findByRole("button",{name:"查看机器人概念成分"});
   const reads=vi.mocked(api.getPickReviews).mock.calls.length;
   vi.useFakeTimers();await act(async()=>{await vi.advanceTimersByTimeAsync(120_001);});
   expect(api.getPickReviews).toHaveBeenCalledTimes(reads);
+});
+
+const savedMethodFixture = ():api.StrategyRegistryItem => ({
+  key:"daily_picks",name:"每日精选六维组合",catalog_kind:"registered",status:"active",basis:"market_neutral",source:"daily_pick_review",evaluable:true,
+  discovery:{category:"multi_factor",category_label:"多因子组合",session:"daily",session_label:"每日生成",summary:"原六维组合记录",supports_saved_runs:true},
+});
+
+it("opens the chosen method in the existing right column with one opt-in directory read", async () => {
+  vi.mocked(getStrategyRegistry).mockResolvedValue([savedMethodFixture()]);
+  search=new URLSearchParams({browse:"methods",disc_method:"daily_picks",date:"2026-10-22"});
+  const view=render(<HuntingPage/>);
+  const side=await screen.findByLabelText("方法详情 每日精选六维组合");
+  expect(within(side).getByRole("heading",{name:"每日精选六维组合"})).toBeTruthy();
+  expect(getStrategyRegistry).toHaveBeenCalledTimes(1);
+  expect(vi.mocked(getStrategyRegistry).mock.calls[0][0]?.includeCandidates).toBe(true);
+  expect(api.getTodayPicks).not.toHaveBeenCalled();
+  expect(api.getIntradayTop).not.toHaveBeenCalled();
+  const link=within(side).getByRole("link",{name:"查看原运行与版本"});
+  expect(new URL(link.getAttribute("href")!,"http://localhost").searchParams.get("date")).toBe("2026-10-22");
+  search=new URLSearchParams({browse:"methods",disc_method:"missing-key",date:"2026-10-22"});
+  view.rerender(<HuntingPage/>);
+  expect(screen.queryByLabelText("方法详情 每日精选六维组合")).toBeNull();
+  expect(screen.getByRole("heading",{name:"核对真实方法"})).toBeTruthy();
+});
+
+it("refreshing the same method updates its data without stealing mobile reading focus", async () => {
+  vi.mocked(getStrategyRegistry).mockResolvedValue([savedMethodFixture()]);
+  search=new URLSearchParams({browse:"methods",disc_method:"daily_picks"});
+  render(<HuntingPage/>);
+  const side=await screen.findByLabelText("方法详情 每日精选六维组合");
+  const close=within(side).getByRole("button",{name:"返回方法目录"});
+  close.focus();side.scrollTop=93;
+  vi.mocked(getStrategyRegistry).mockResolvedValue([{...savedMethodFixture(),note:"新读取的原方法说明"}]);
+  fireEvent.click(screen.getByRole("button",{name:"刷新方法"}));
+  await waitFor(()=>expect(getStrategyRegistry).toHaveBeenCalledTimes(2));
+  await act(async()=>{});
+  expect(document.activeElement).toBe(close);
+  expect(side.scrollTop).toBe(93);
+});
+
+it.each(["desktop", "mobile"])("returns %s method focus to search when unfollowing removes the original row", async layout => {
+  vi.stubGlobal("matchMedia", () => ({matches: layout === "mobile", addEventListener: vi.fn(), removeEventListener: vi.fn()}));
+  localStorage.setItem("ashare.discovery.methods.favorites.v1", "[]");
+  fireEvent(window, new StorageEvent("storage", {key: "ashare.discovery.methods.favorites.v1", newValue: "[]"}));
+  vi.mocked(getStrategyRegistry).mockResolvedValue([savedMethodFixture()]);
+  search = new URLSearchParams({browse: "methods"});
+  const view = render(<HuntingPage />);
+  fireEvent.click(await screen.findByRole("button", {name: "关注每日精选六维组合"}));
+  fireEvent.click(screen.getByRole("button", {name: "我关注 1"}));
+  expect(screen.getByRole("link", {name: "查看方法规则：每日精选六维组合"})).toBeTruthy();
+
+  search = new URLSearchParams({browse: "methods", disc_method: "daily_picks"});
+  view.rerender(<HuntingPage />);
+  const side = await screen.findByLabelText("方法详情 每日精选六维组合");
+  fireEvent.click(within(side).getByRole("button", {name: "取消关注每日精选六维组合"}));
+  expect(screen.queryByRole("link", {name: "查看方法规则：每日精选六维组合"})).toBeNull();
+  expect(screen.getByText("当前关注没有匹配方法。")).toBeTruthy();
+  const close = within(side).getByRole("button", {name: "返回方法目录"});
+  close.focus(); fireEvent.click(close);
+  search = new URLSearchParams({browse: "methods"});
+  view.rerender(<HuntingPage />);
+
+  await waitFor(() => expect(document.activeElement).toBe(screen.getByRole("textbox", {name: "搜索战法"})));
+  expect(screen.queryByLabelText("方法详情 每日精选六维组合")).toBeNull();
+  expect(getStrategyRegistry).toHaveBeenCalledTimes(1);
 });

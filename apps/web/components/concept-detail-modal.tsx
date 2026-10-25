@@ -30,8 +30,23 @@ export function ConceptDetailModal({
   active?: boolean;
 }) {
   const stockNav = useStockRowNav();
-  const resource = useResource(() => getConceptDetail(code), { key: code, enabled: active });
-  const detail = resource.data;
+  const resource = useResource(async () => {
+    const value = await getConceptDetail(code);
+    if (value.code !== code) throw new Error("返回成分代码不符");
+    return value;
+  }, { key: code, enabled: active });
+  const [enrichmentCode, setEnrichmentCode] = useState("");
+  const [previousCode, setPreviousCode] = useState(code);
+  if (previousCode !== code) {setPreviousCode(code); setEnrichmentCode("");}
+  const enrichment = useResource(async () => {
+    const base = resource.data;
+    const value = await getConceptDetail(code, {enrichment: "full"});
+    if (value.code !== code) throw new Error("返回归因代码不符");
+    if (base && (value.name !== base.name || JSON.stringify(value.members.map(row => [row.symbol, row.name]).sort()) !== JSON.stringify(base.members.map(row => [row.symbol, row.name]).sort()))) throw new Error("成分版本已变，请先刷新成分后读取归因");
+    return {base, detail: value};
+  }, {key: code, enabled: active && enrichmentCode === code, refreshOnVisible: false});
+  const currentEnrichment = enrichment.data?.base === resource.data ? enrichment.data?.detail : undefined;
+  const detail = currentEnrichment ?? resource.data;
   const error = resource.error instanceof Error ? resource.error.message : String(resource.error);
   const [filters, setFilters] = useState({ code, tab: "__all__", q: "", detail: undefined as typeof detail });
   // A scope change resets its filters before commit. Within the same concept,
@@ -71,18 +86,26 @@ export function ConceptDetailModal({
           </h2>
           <p className="mt-0.5 text-[11px] text-zinc-600 dark:text-zinc-400">
             {detail
-              ? `官方成分 ${detail.total} 只（与同花顺逐符号一致） · 今日涨停 ${detail.limit_up_count}`
+              ? `同花顺成分记录 ${detail.total} 只 · ${detail.limit_up_count == null ? "涨停归因未读取" : `源池涨停记录 ${detail.limit_up_count}只`}`
               : resource.error ? "读取失败" : "加载中…"}
           </p>
         </>
       }
       footer={
         <>
-          {detail?.meta_note ?? "成分=同花顺官方目录"} · 细分 tab 为当日涨停成员的官方归因标签（官方 API 未提供二级概念成分，待数据源支持）
+          {detail?.meta_note ?? "成分来自同花顺正式目录"} · 原因标签不等于二级概念。
         </>
       }
     >
       {active && <>
+        <div className="flex flex-wrap items-center justify-between gap-2 px-4 py-2 text-[11px] text-zinc-600 dark:text-zinc-400">
+          <span>名称与成分先读；完整涨停归因按需补充。</span>
+          <button type="button" className="quiet-action" disabled={!resource.data || enrichment.pending && enrichmentCode === code} onClick={() => {if (enrichmentCode === code) enrichment.refresh(); else setEnrichmentCode(code);}}>
+            {enrichment.pending && enrichmentCode === code ? "读取归因中…" : currentEnrichment ? "刷新涨停归因" : "读取涨停归因"}
+          </button>
+          {enrichment.error != null && <><span role="alert">归因读取失败或成分版本已变；已存成分仍可查看。</span><button type="button" className="quiet-action" disabled={resource.pending} onClick={resource.refresh}>重读正式成分</button></>}
+          {detail?.membership_state === "stale" && <span role="status">成员记录已过保鲜期，当前变动待核。</span>}
+        </div>
         {/* 细分 tab + 搜索：单行布局——tab 容器横向滚动（概念多时不换行不挤压），
             搜索框 shrink-0 固定右侧，整行高度恒定 */}
         <div className="flex shrink-0 items-center gap-2 border-b border-zinc-100 px-4 py-2 dark:border-zinc-800">

@@ -569,3 +569,17 @@ describe("pure-read cancellation", () => {
     expect(result.current.error).toBeNull();
   });
 });
+
+it("explicit optional reads keep saved data on visibility resume and only reread on request", async () => {
+  const fn = vi.fn(async () => "saved");
+  const {result, unmount} = renderHook(() => useResource(fn, {refreshOnVisible:false, intervalMs:null}));
+  await flush();
+  act(() => {setVisibility("hidden");setVisibility("visible");});
+  await flush();
+  expect(fn).toHaveBeenCalledTimes(1);
+  expect(result.current.data).toBe("saved");
+  act(() => result.current.refresh());
+  await flush();
+  expect(fn).toHaveBeenCalledTimes(2);
+  unmount();
+});

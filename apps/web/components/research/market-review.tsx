@@ -8,6 +8,7 @@ import { useResource } from "@/hooks/use-polling-fetch";
 import { bjDate, dateTimeTextBJ, fmt, fmtAmount, pctColor, pctText, signedYi } from "@/lib/format";
 import { readerExcerpt } from "@/lib/reader-copy";
 import { getReviewReport, type ReviewData, type ReviewProvenance, type ReviewReportDetail, type ReviewSectorBoard } from "@/lib/api";
+import { ReviewMetricTrends } from "./review-metric-trends";
 
 const STATE_LABEL: Record<ReviewProvenance["state"], string> = {
   verified: "已核同日", partial: "同日 · 部分覆盖", unverified: "未核同日", unavailable: "未取得", mismatch: "日期不符",
@@ -144,6 +145,7 @@ export function MarketReview({report, previousDate, active = true}: {report: Rev
       <SourceRecord record={provenance?.indices} bound={bound("indices")}/>
       {bound("sentiment") ? <p className="market-review-phase">原情绪状态：<strong>{text(market?.sentiment.phase) || "未记录"}</strong>{text(market?.sentiment.confidence) ? ` · ${text(market?.sentiment.confidence)}` : ""}。状态不是上涨概率。</p> : <MissingSegment label="情绪状态" record={provenance?.sentiment}/>}
       <SourceRecord record={provenance?.sentiment} bound={bound("sentiment")}/>
+      <ReviewMetricTrends key={`${report.trade_date}:${report.review_id}:${report.generated_at}`} reference={report.metric_history_reference} tradeDate={report.trade_date}/>
       <ResearchDisclosure label="原报告的市场判断" identity={`${report.review_id}:market:${report.generated_at}`}><ul>{marketDimension?.judgements.map((v,i)=><li key={i}>{v}</li>)}</ul>{!marketDimension?.judgements.length && <p>原报告没有市场判断。</p>}<p>原判断按原报告保存，不因后来行情改写；来源未核时不升级结论。</p></ResearchDisclosure>
     </section>
     <section id={`${prefix}-sectors`} className="market-review-section" aria-label="行业与概念主线">

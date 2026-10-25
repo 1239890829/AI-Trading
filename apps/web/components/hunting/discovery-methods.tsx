@@ -1,6 +1,6 @@
 "use client";
 
-import { useState } from "react";
+import { useEffect, useMemo, useState, useSyncExternalStore } from "react";
 import Link from "next/link";
 import { useResource } from "@/hooks/use-resource";
 import { getStrategyRegistry, type StrategyRegistryItem } from "@/lib/api/picks";
@@ -16,10 +16,10 @@ interface MethodDiscovery {
 }
 
 const LIFECYCLES = [
-  ["active", "现役"], ["observing", "观察"], ["rejected", "已否决"], ["all", "全部"],
+  ["all", "全部"], ["active", "现役"], ["candidate", "来源候选"], ["out_of_scope", "范围未开放"], ["observing", "观察"], ["rejected", "已否决"],
 ] as const;
 
-function discoveryMetadata(row: StrategyRegistryItem): MethodDiscovery {
+export function discoveryMetadata(row: StrategyRegistryItem): MethodDiscovery {
   const raw = row.discovery;
   const data = raw && typeof raw === "object" && !Array.isArray(raw) ? raw as Record<string, unknown> : {};
   const text = (key: string, fallback: string) => {
@@ -41,7 +41,7 @@ export function discoveryMethodHref(method: string, search: string, date?: strin
   params.set("from", `/hunting${returnSearch ? `?${returnSearch}` : ""}`);
   params.set("area", "research");
   params.set("tab", "strategies");
-  for (const key of ["view", "sec", "panel", "discover", "browse", "disc_kind", "disc_range", "disc_code", "disc_q", "disc_sort", "selection"]) params.delete(key);
+  for (const key of ["view", "sec", "panel", "discover", "browse", "disc_kind", "disc_range", "disc_code", "disc_q", "disc_sort", "disc_method", "selection"]) params.delete(key);
   const location = readMethodRunLocation(search, method);
   const clearIdentity = () => {
     location.runId = "";
@@ -62,7 +62,7 @@ export function discoveryMethodHref(method: string, search: string, date?: strin
   return methodRunUrl("/agent", params.toString(), method, location);
 }
 
-function SavedRunSummary({ row, date }: {row: StrategyRegistryItem; date?: string}) {
+export function SavedRunSummary({ row, date }: {row: StrategyRegistryItem; date?: string}) {
   const run = row.runtime;
   if (!run || run.state === "missing") return <span>尚无保存运行</span>;
   if (run.state === "error") return <span>原运行读取异常</span>;
@@ -79,45 +79,141 @@ function SavedRunSummary({ row, date }: {row: StrategyRegistryItem; date?: strin
   </>;
 }
 
-/** One read of the registered methods; this surface never runs a strategy or model. */
-export function DiscoveryMethods({active = true, date, search = ""}: {active?: boolean; date?: string; search?: string}) {
-  const resource = useResource(signal => getStrategyRegistry({signal}), {enabled: active, marketHours: false, abortable: true});
-  const [lifecycle, setLifecycle] = useState("active");
+export function discoveryMethodScope(date: string | undefined, key: string) {return JSON.stringify(["methods", date ?? null, key]);}
+
+export function validMethodRow(row: StrategyRegistryItem): boolean {
+  if (!row || typeof row.key !== "string" || !/^[a-zA-Z0-9_:-]{1,128}$/.test(row.key)) return false;
+  if (row.name !== undefined && (typeof row.name !== "string" || !row.name.trim())) return false;
+  if (row.status !== undefined && typeof row.status !== "string") return false;
+  if (row.catalog_kind !== "reference") return !row.key.startsWith("reference:") && (row.catalog_kind === undefined || row.catalog_kind === "registered");
+  const value = row.candidate;
+  return !!value && value.runnable === false && ["stock", "etf"].includes(value.asset) && row.key === `reference:${value.source_code}`
+    && row.status === (value.asset === "etf" ? "out_of_scope" : "candidate")
+    && [value.source_label, value.source_code, value.source_version].every(item => typeof item === "string" && !!item.trim())
+    && [value.criteria, value.existing_coverage, value.limitations].every(items => Array.isArray(items) && items.every(item => typeof item === "string" && !!item.trim()));
+}
+
+export function methodSupportsRuns(row: StrategyRegistryItem) {
+  return row.catalog_kind !== "reference" && discoveryMetadata(row).supports_saved_runs && ["daily_picks", "intraday_watch"].includes(row.key);
+}
+export function methodStatusLabel(row: StrategyRegistryItem) {return LIFECYCLES.find(([key]) => key !== "all" && key === row.status)?.[1] || "状态未登记";}
+
+const FAVORITES_KEY = "ashare.discovery.methods.favorites.v1";
+const FAVORITES_EVENT = "ashare:discovery-method-favorites";
+type FavoriteSnapshot = {keys: readonly string[]; saved: boolean};
+const EMPTY_FAVORITES: FavoriteSnapshot = {keys: [], saved: true};
+let favoriteSnapshot = EMPTY_FAVORITES;
+let favoriteRaw: string | null | undefined;
+let memoryOnly = false;
+function boundedFavorites(value: unknown): string[] {
+  return Array.isArray(value) ? [...new Set(value.filter((key): key is string => typeof key === "string" && /^[a-zA-Z0-9_:-]{1,128}$/.test(key)))].slice(0, 40) : [];
+}
+function readFavorites() {
+  if (memoryOnly) return favoriteSnapshot;
+  try {
+    const raw = window.localStorage.getItem(FAVORITES_KEY);
+    if (raw !== favoriteRaw) {
+      favoriteRaw = raw;
+      let parsed: unknown = [];
+      try {parsed = raw ? JSON.parse(raw) : [];} catch { /* Ignore malformed local preferences. */ }
+      favoriteSnapshot = {keys: boundedFavorites(parsed), saved: true};
+    }
+  } catch {memoryOnly = true; favoriteSnapshot = {...favoriteSnapshot, saved: false};}
+  return favoriteSnapshot;
+}
+function subscribeFavorites(listener: () => void) {
+  const storage = (event: StorageEvent) => {if (event.key === null || event.key === FAVORITES_KEY) {memoryOnly = false; favoriteRaw = undefined; listener();}};
+  window.addEventListener("storage", storage);
+  window.addEventListener(FAVORITES_EVENT, listener);
+  return () => {window.removeEventListener("storage", storage); window.removeEventListener(FAVORITES_EVENT, listener);};
+}
+function saveFavorites(keys: readonly string[]) {
+  const bounded = boundedFavorites(keys);
+  const raw = JSON.stringify(bounded);
+  try {window.localStorage.setItem(FAVORITES_KEY, raw); favoriteRaw = raw; memoryOnly = false; favoriteSnapshot = {keys: bounded, saved: true};}
+  catch {memoryOnly = true; favoriteSnapshot = {keys: bounded, saved: false};}
+  window.dispatchEvent(new Event(FAVORITES_EVENT));
+}
+/** A bounded local preference, shared by the list and its open detail; never a strategy status. */
+export function useMethodFavorites() {
+  const snapshot = useSyncExternalStore(subscribeFavorites, readFavorites, () => EMPTY_FAVORITES);
+  const toggle = (key: string) => {
+    const current = readFavorites().keys;
+    if (!current.includes(key) && current.length >= 40) return false;
+    saveFavorites(current.includes(key) ? current.filter(item => item !== key) : [...current, key]);
+    return true;
+  };
+  return {...snapshot, toggle, clear: () => saveFavorites([])};
+}
+
+export function MethodFavoriteButton({name, followed, onToggle}: {name: string; followed: boolean; onToggle: () => void}) {
+  return <button type="button" className="quiet-action inline-flex min-h-8 shrink-0 items-center gap-1" aria-pressed={followed}
+    aria-label={`${followed ? "取消关注" : "关注"}${name}`} onClick={onToggle} title="仅保存本机关注，不启用方法">
+    <svg aria-hidden="true" width="14" height="14" viewBox="0 0 24 24" fill={followed ? "currentColor" : "none"} stroke="currentColor" strokeWidth="1.5"><path d="m12 3 2.8 5.7 6.3.9-4.6 4.4 1.1 6.2-5.6-3-5.6 3 1.1-6.2L2.9 9.6l6.3-.9Z"/></svg>
+    {followed ? "已关注" : "关注"}
+  </button>;
+}
+
+/** One catalog read. Selection and local favorites never run a method or model. */
+export function DiscoveryMethods({active = true, date, search = "", onNavigate, onMethodTarget}: {
+  active?: boolean; date?: string; search?: string;
+  onNavigate?: (href: string, push?: boolean) => void;
+  onMethodTarget?: (scope: string, row: StrategyRegistryItem | null) => void;
+}) {
+  const resource = useResource(signal => getStrategyRegistry({signal, includeCandidates: true}), {enabled: active, marketHours: false, abortable: true});
+  const [lifecycle, setLifecycle] = useState("all");
   const [category, setCategory] = useState("all");
   const [session, setSession] = useState("all");
+  const [asset, setAsset] = useState("all");
+  const [followedOnly, setFollowedOnly] = useState(false);
+  const [notice, setNotice] = useState("");
+  const favorites = useMethodFavorites();
   const [draft, setDraft] = useState("");
   const [query, setQuery] = useState("");
   const [composing, setComposing] = useState(false);
-  if (!active) return null;
-
   const malformed = resource.data !== undefined && !Array.isArray(resource.data);
-  const originals = Array.isArray(resource.data) ? resource.data : [];
-  const rows = originals.filter(row => row && typeof row.key === "string" && row.key.trim())
-    .map(row => ({row, metadata: discoveryMetadata(row)}));
-  const invalidRows = rows.length !== originals.length;
+  const originals = resource.data;
+  const rows = useMemo(() => {
+    const values = Array.isArray(originals) ? originals : [];
+    const counts = new Map<string, number>();
+    for (const row of values) if (row && typeof row.key === "string") counts.set(row.key, (counts.get(row.key) ?? 0) + 1);
+    return values.filter(row => validMethodRow(row) && counts.get(row.key) === 1).map(row => ({row, metadata: discoveryMetadata(row)}));
+  }, [originals]);
+  const selectedKey = new URLSearchParams(search).get("disc_method") ?? "";
+  const chosen = rows.find(({row}) => row.key === selectedKey)?.row ?? null;
+  const target = active && !resource.error && !malformed ? chosen : null;
+  const scope = discoveryMethodScope(date, selectedKey);
+  useEffect(() => {onMethodTarget?.(scope, target);}, [onMethodTarget, scope, target]);
+  if (!active) return null;
+  const invalidRows = Array.isArray(originals) && rows.length !== originals.length;
   const categories = new Map(rows.map(({metadata}) => [metadata.category, metadata.category_label]));
   const sessions = new Map(rows.map(({metadata}) => [metadata.session, metadata.session_label]));
   const searchText = query.trim().toLocaleLowerCase();
   const visible = rows.filter(({row, metadata}) => (lifecycle === "all" || row.status === lifecycle)
     && (category === "all" || metadata.category === category)
     && (session === "all" || metadata.session === session)
+    && (asset === "all" || (row.catalog_kind === "reference" ? row.candidate?.asset : "stock") === asset)
+    && (!followedOnly || favorites.keys.includes(row.key))
     && `${row.name || row.key} ${row.key} ${metadata.category_label} ${metadata.session_label} ${metadata.summary}`.toLocaleLowerCase().includes(searchText));
-  const clear = () => {setLifecycle("all"); setCategory("all"); setSession("all"); setDraft(""); setQuery("");};
+  const clear = () => {setLifecycle("all"); setCategory("all"); setSession("all"); setAsset("all"); setFollowedOnly(false); setDraft(""); setQuery("");};
+  const chooseHref = (key: string) => {const params = new URLSearchParams(search); params.set("view", "discover"); params.set("browse", "methods"); params.set("disc_method", key); params.delete("disc_code"); return `/hunting?${params}`;};
+  const toggleFavorite = (key: string) => setNotice(favorites.toggle(key) ? "" : "本机最多关注40个方法，请先取消一项。");
 
   return <section className="discovery-methods min-w-0 space-y-3" aria-label="战法分类">
     <header className="flex flex-wrap items-center justify-between gap-2">
-      <div><h3 className="text-sm font-medium">方法分类</h3><p className="mt-1 text-xs text-zinc-600 dark:text-zinc-400">用途、时段与原始依据；仅查看已登记方法。</p></div>
+      <div><h3 className="text-sm font-medium">方法目录</h3><p className="mt-1 text-xs text-zinc-600 dark:text-zinc-400">选一项看规则与覆盖；来源候选不运行。</p></div>
       <button type="button" className="quiet-action" disabled={resource.pending} onClick={resource.refresh}>
         {resource.pending ? "读取中…" : "刷新方法"}
       </button>
     </header>
 
     <div className="discovery-method-filters flex flex-wrap items-center gap-2">
-      <div className="flex flex-wrap gap-1" aria-label="方法生命周期">
-        {LIFECYCLES.map(([key, label]) => <button key={key} type="button" aria-pressed={lifecycle === key}
-          className={`ui-filter rounded-md px-2 py-1 text-xs ${lifecycle === key ? "ui-filter-selected" : "border border-zinc-200 dark:border-zinc-700"}`}
-          onClick={() => setLifecycle(key)}>{label}{resource.data !== undefined && !malformed ? ` ${key === "all" ? rows.length : rows.filter(({row}) => row.status === key).length}` : ""}</button>)}
-      </div>
+      <label className="flex items-center gap-1 text-xs">状态<select aria-label="方法状态" value={lifecycle} onChange={event => setLifecycle(event.target.value)} className="min-w-0 rounded border border-zinc-300 bg-transparent px-1.5 py-1 dark:border-zinc-600">
+        {LIFECYCLES.map(([key, label]) => <option key={key} value={key}>{label}{resource.data !== undefined && !malformed ? ` ${key === "all" ? rows.length : rows.filter(({row}) => row.status === key).length}` : ""}</option>)}
+      </select></label>
+      <label className="flex items-center gap-1 text-xs">资产<select aria-label="方法资产" value={asset} onChange={event => setAsset(event.target.value)} className="min-w-0 rounded border border-zinc-300 bg-transparent px-1.5 py-1 dark:border-zinc-600">
+        <option value="all">全部</option><option value="stock">A股</option><option value="etf">ETF参考</option></select></label>
+      <button type="button" className="quiet-action" aria-pressed={followedOnly} onClick={() => setFollowedOnly(value => !value)}>我关注 {favorites.keys.length}</button>
       <label className="flex items-center gap-1 text-xs text-zinc-600 dark:text-zinc-400">类别
         <select aria-label="方法类别" value={category} onChange={event => setCategory(event.target.value)}
           className="min-w-0 rounded border border-zinc-300 bg-transparent px-1.5 py-1 text-zinc-900 dark:border-zinc-600 dark:text-zinc-100">
@@ -137,6 +233,10 @@ export function DiscoveryMethods({active = true, date, search = ""}: {active?: b
       </label>
     </div>
 
+    {!favorites.saved && <p role="status" className="text-xs text-amber-800 dark:text-amber-300">本机存储不可用，关注仅保留在当前页面，尚未保存。</p>}
+    {notice && favorites.keys.length >= 40 && <p role="status" className="text-xs text-amber-800 dark:text-amber-300">{notice}</p>}
+    {selectedKey && !resource.pending && !resource.error && !chosen && <p role="status" className="text-xs text-zinc-600 dark:text-zinc-400">链接指定的方法不在本次目录，未换成其他方法。</p>}
+
     {(resource.error != null || malformed || invalidRows) && <p role="alert" className="text-xs text-amber-800 dark:text-amber-300">
       {malformed || invalidRows ? "方法返回结构不完整，当前分类未核实。" : "方法读取失败。"}
       {rows.length > 0 && (malformed || invalidRows ? " 以下仅列可读取登记。" : " 保留上次成功读取的登记，当前状态待重试。")}
@@ -146,33 +246,36 @@ export function DiscoveryMethods({active = true, date, search = ""}: {active?: b
     </div>}
     {resource.data !== undefined && rows.length === 0 && !malformed && !resource.error && <p className="text-xs text-zinc-600 dark:text-zinc-400">暂无已登记方法。</p>}
     {rows.length > 0 && visible.length === 0 && <div className="flex flex-wrap items-center gap-2 py-4 text-xs text-zinc-600 dark:text-zinc-400">
-      <span>没有匹配方法。</span><button type="button" className="quiet-action" onClick={clear}>清除筛选</button>
+      <span>{followedOnly ? "当前关注没有匹配方法。" : "没有匹配方法。"}</span><button type="button" className="quiet-action" onClick={clear}>清除筛选</button>
+      {followedOnly && favorites.keys.length > 0 && <button type="button" className="quiet-action" onClick={() => {favorites.clear(); setNotice("");}}>清空本机关注</button>}
     </div>}
 
     <ul className="discovery-method-list divide-y divide-zinc-200 dark:divide-zinc-800" aria-label="已登记方法">
       {visible.map(({row, metadata}) => {
-        const supportsRuns = metadata.supports_saved_runs && (row.key === "daily_picks" || row.key === "intraday_watch");
-        const statusLabel = LIFECYCLES.find(([key]) => key !== "all" && key === row.status)?.[1] || "状态未登记";
+        const supportsRuns = methodSupportsRuns(row);
+        const statusLabel = methodStatusLabel(row);
         const verificationLabel = row.verification?.available === true ? "有核验产物"
           : row.verification?.available === false ? "尚无核验产物" : "核验状态未记录";
-        return <li key={row.key} className="discovery-method-row py-3 first:pt-0 last:pb-0">
+        return <li key={row.key} data-method-key={row.key} data-selected={selectedKey === row.key} className="discovery-method-row py-3 first:pt-0 last:pb-0">
           <div className="flex flex-wrap items-center justify-between gap-x-3 gap-y-1">
             <div className="flex min-w-0 flex-wrap items-baseline gap-2">
-              <span className="text-sm font-medium">{row.name || row.key}</span>
+              <Link href={chooseHref(row.key)} data-discovery-method={row.key} scroll={false} aria-current={selectedKey === row.key ? "true" : undefined} aria-label={`查看方法规则：${row.name || row.key}`} className="quiet-action text-sm font-medium"
+                onClick={event => {if(onNavigate && event.button === 0 && !event.metaKey && !event.ctrlKey && !event.shiftKey && !event.altKey) {event.preventDefault(); onNavigate(chooseHref(row.key), true);}}}>{row.name || row.key}</Link>
               <span className="text-xs text-zinc-600 dark:text-zinc-400">{metadata.category_label} · {metadata.session_label}</span>
             </div>
-            <span className="text-xs text-zinc-600 dark:text-zinc-400">{statusLabel}</span>
+            <MethodFavoriteButton name={row.name || row.key} followed={favorites.keys.includes(row.key)} onToggle={() => toggleFavorite(row.key)}/>
           </div>
           <p className="mt-1 text-xs leading-relaxed text-zinc-600 dark:text-zinc-400">{metadata.summary}</p>
           <div className="mt-2 flex flex-wrap items-center gap-x-3 gap-y-1 text-[11px] text-zinc-600 dark:text-zinc-400">
-            {supportsRuns ? <SavedRunSummary row={row} date={date}/> : <span>{verificationLabel}{row.verification?.stale ? " · 需复核" : ""}</span>}
-            <Link className="quiet-action ml-auto" href={discoveryMethodHref(row.key, search, date)}>
+            <span>{statusLabel}{row.catalog_kind === "reference" ? ` · ${row.candidate?.asset === "etf" ? "ETF参考" : "待评价，不可运行"}` : ""}</span>
+            {supportsRuns ? <SavedRunSummary row={row} date={date}/> : row.catalog_kind !== "reference" && <span>{verificationLabel}{row.verification?.stale ? " · 需复核" : ""}</span>}
+            {row.catalog_kind !== "reference" && <Link className="quiet-action ml-auto" href={discoveryMethodHref(row.key, search, date)}>
               {supportsRuns ? "查看原运行与版本" : "查看核验与反例"}<span className="sr-only">：{row.name || row.key}</span>
-            </Link>
+            </Link>}
           </div>
         </li>;
       })}
     </ul>
-    <p className="text-[11px] text-zinc-600 dark:text-zinc-400">分类不生成新名单；观察与已否决方法不参与当前选股，原入选不等于模拟成交。</p>
+    <p className="text-[11px] text-zinc-600 dark:text-zinc-400">关注仅本机偏好，不启用方法；来源候选、观察及否决方法不参与当前选股。</p>
   </section>;
 }

@@ -361,6 +361,7 @@ class Settings(BaseSettings):
     company_evidence_startup_delay_seconds: float = 90.0
     company_evidence_batch_size: int = 4  # Worker hard-caps both selected stocks and model batches at eight.
     tradingagents_research_enabled: bool = False  # Requires exact-method research authorization or quality admission.
+    tradingagents_auto_research_enabled: bool = False  # New automatic dispatch only; manual tasks and saved readers stay independent.
     tradingagents_research_admission_digest: str = ""  # Server-pinned data/tradingagents_research/admission.json.
     tradingagents_research_authorization_digest: str = ""  # Independent selected-stock research authorization; never quality approval.
     tradingagents_research_concurrency: int = Field(default=3, ge=1, le=3)  # Running selected stocks, not a daily quota.

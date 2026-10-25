@@ -15,7 +15,9 @@
 from __future__ import annotations
 
 import asyncio
+from copy import deepcopy
 import logging
+import math
 import re
 import time
 from datetime import datetime, timedelta, timezone
@@ -24,8 +26,10 @@ import httpx
 from sqlalchemy import func, select
 
 from app.core.config import settings
+from app.core.bjtime import BJ_TZ, beijing_now
 from app.core.db import utcnow
 from app.core.ttl_cache import TTLCache
+from app.core.inflight_reads import close_inflight_reads, read_inflight
 from app.models.theme_catalog import Theme, ThemeMember, ThemeOverride
 from app.picks.pre_limit_radar import board_limit_pct, is_sealed
 
@@ -34,25 +38,50 @@ log = logging.getLogger(__name__)
 CATALOG_TAG = "cn_concept"
 
 
+def source_saved_clock(value: datetime | None) -> str | None:
+    """SQLite stores these existing source-save clocks as naive UTC."""
+    if value is None:
+        return None
+    return (value.replace(tzinfo=timezone.utc) if value.tzinfo is None else value.astimezone(timezone.utc)).isoformat()
+
+
+def source_saved_state(clocks: list[datetime | None], hours: int) -> str:
+    if not clocks or any(value is None for value in clocks):
+        return "unknown"
+    values = [datetime.fromisoformat(source_saved_clock(value)) for value in clocks]
+    now = datetime.now(timezone.utc)
+    if any(value > now for value in values):
+        return "unknown"
+    return "stale" if any(now - value > timedelta(hours=hours) for value in values) else "ready"
+
+
 # ---------------------------------------------------------------- 纯函数：解析
 
 
 def parse_board_bars(payload: dict) -> list[dict]:
     """板块历史 K 线响应 → 按日期升序的 [{date, close, open, turnover, volume}]。
 
-    官方字段：date_ms（毫秒）/ close_price / open_price / turnover（成交额）/ volume（股）。
+    官方字段：date_ms（毫秒，北京交易日）/ close_price / open_price / turnover（成交额）/ volume（股）。
     open/turnover/volume 为批次 D 回测补充解析（T+1 开盘买入收益、板块量比），
     缺失时为 None（老消费方只用 close，不受影响）。
     """
     items = ((payload or {}).get("data") or {}).get("item") or []
     bars: list[dict] = []
+    now = beijing_now()
+    today = now.date()
     for it in items:
         ts = it.get("date_ms")
         close = it.get("close_price")
-        if not ts or close is None:
+        if type(ts) is not int or ts <= 0 or ts > int(now.timestamp() * 1000) or close is None:
+            continue
+        try:
+            day = datetime.fromtimestamp(ts / 1000, tz=BJ_TZ).date()
+        except (OverflowError, OSError, ValueError):
+            continue
+        if day > today:
             continue
         bars.append({
-            "date": datetime.fromtimestamp(ts / 1000, tz=timezone.utc).date().isoformat(),
+            "date": day.isoformat(),
             "close": float(close),
             "open": float(it["open_price"]) if it.get("open_price") is not None else None,
             "turnover": float(it["turnover"]) if it.get("turnover") is not None else None,
@@ -148,58 +177,93 @@ def reconcile(
 def aggregate_hot_themes(
     stocks: list[dict],
     official_by_symbol: dict[str, list[dict]],
+    *,
+    catalog_by_code: dict[str, dict],
+    members_by_code: dict[str, list[str]],
+    catalog_revision: int = 0,
+    catalog_state: str = "unknown",
+    membership_state: str = "ready",
 ) -> dict:
-    """热股榜 × 官方成分 → 题材级人气聚合（纯函数，B1 热股榜消费端）。
+    """热股样本在正式成分中的集中度；不生成官方题材榜或选股资格。"""
+    from math import isfinite
 
-    归属口径 = 官方成分反查（architecture-design §1 L3），不用关键词猜题材。
-    - 题材热度 = 题材内热股 heat 合计；热股家数与榜内最高排名成员一并给出；
-    - rank_change 沿用榜内最高排名成员的值——不单造「题材排名变化」指标，保持可解释；
-    - 无官方归属的热股只留在 stocks 列表（附空 themes），不参与题材聚合（诚实口径）。
-
-    :param stocks: provider.get_hot_stock_list 归一化行（rank/symbol/name/heat/rank_change/ts）
-    :param official_by_symbol: symbol → [{theme_code, theme_name, source}]（get_official_for_symbol）
-    """
     stock_rows: list[dict] = []
-    theme_acc: dict[str, dict] = {}
+    theme_acc: dict[tuple[str, str], dict] = {}
+    seen_symbols = set()
     for s in stocks:
-        officials = official_by_symbol.get(s["symbol"]) or []
-        theme_names = [o["theme_name"] for o in officials]
+        symbol = s["symbol"]
+        if symbol in seen_symbols:
+            continue
+        seen_symbols.add(symbol)
+        officials = {}
+        for item in official_by_symbol.get(symbol) or []:
+            code, name = item.get("theme_code"), item.get("theme_name")
+            registered = catalog_by_code.get(code) or {}
+            if (item.get("source") == "ths_official" and registered.get("source") == "ths_official"
+                    and name and registered.get("name") == name):
+                officials[(code, name)] = item
         row = {
             "rank": s["rank"],
-            "symbol": s["symbol"],
+            "symbol": symbol,
             "name": s.get("name"),
             "heat": s.get("heat"),
             "rank_change": s.get("rank_change"),
-            "themes": theme_names,
+            "themes": list(dict.fromkeys(name for _code, name in officials)),
         }
         stock_rows.append(row)
-        for o in officials:
+        for code, name in officials:
             acc = theme_acc.setdefault(
-                o["theme_name"],
-                {"theme": o["theme_name"], "theme_code": o.get("theme_code"),
-                 "heat": 0.0, "hot_count": 0, "best": None},
+                (code, name),
+                {"theme": name, "theme_code": code, "source": "ths_official",
+                 "heat": 0.0, "heat_complete": True, "hot_count": 0, "hot_symbols": [], "best": None},
             )
-            acc["heat"] += s.get("heat") or 0.0
+            heat = s.get("heat")
+            if isinstance(heat, (int, float)) and not isinstance(heat, bool) and isfinite(heat):
+                acc["heat"] += heat
+            else:
+                acc["heat_complete"] = False
             acc["hot_count"] += 1
+            acc["hot_symbols"].append(symbol)
             if acc["best"] is None or s["rank"] < acc["best"]["rank"]:
                 acc["best"] = {
-                    "symbol": s["symbol"], "name": s.get("name"),
+                    "symbol": symbol, "name": s.get("name"),
                     "rank": s["rank"], "rank_change": s.get("rank_change"),
                 }
     themes = []
     for acc in theme_acc.values():
-        best = acc.pop("best") or {}
-        acc["best"] = best
+        code = acc["theme_code"]
+        registered = catalog_by_code[code]
+        members = set(members_by_code.get(code) or [])
+        count_known = (catalog_state == "ready" and registered.get("members_current") is True
+                       and bool(members) and set(acc["hot_symbols"]) <= members)
+        acc["member_count"] = len(members) if count_known else None
+        acc["member_as_of"] = registered.get("member_as_of")
+        acc["concentration_pct"] = round(acc["hot_count"] / len(members) * 100, 2) if count_known else None
+        if not acc["heat_complete"]:
+            acc["heat"] = None
+        best = acc["best"] or {}
+        coverage = (f"{acc['hot_count']} / {acc['member_count']} 只已核成分，集中度 {acc['concentration_pct']:g}%"
+                    if count_known else f"{acc['hot_count']} 只热股；当前完整成分数未核")
         acc["basis"] = (
-            f"{acc['hot_count']} 只官方成分热股人气合计；榜内最高"
+            f"{coverage}；榜内最高"
             f" {best.get('name') or best.get('symbol')} 第 {best.get('rank')} 名"
         ) if best else ""
         themes.append(acc)
-    themes.sort(key=lambda t: -t["heat"])
+    themes.sort(key=lambda item: (item["concentration_pct"] is None,
+                                  -(item["concentration_pct"] or 0), -item["hot_count"],
+                                  item["theme_code"], item["theme"]))
     return {
         "ts": next((s.get("ts") for s in stocks if s.get("ts")), None),
         "stocks": stock_rows,
         "themes": themes,
+        "ranking_basis": "hot_stock_concentration",
+        "catalog_revision": catalog_revision,
+        "catalog_state": catalog_state,
+        "membership_state": membership_state,
+        "scope": (f"本次读取 {len(stock_rows)} 只同花顺热股与已存正式目录的成分交集；"
+                  "按热股占已核完整成分的比例排序，并非官方题材榜、全市场主线或入选资格。"
+                  + ("目录未在有效期内，保留已存身份，当前成分分母未核。" if catalog_state != "ready" else "")
+                  + ("归属读取失败，热股原榜仍保留，不能据空分类认定没有归属。" if membership_state != "ready" else "")),
     }
 
 
@@ -276,6 +340,126 @@ class ThemeCatalogService:
         self._member_closing = False
         self._catalog_read: asyncio.Task | None = None
         self.revision = 0
+        self._directory_reads = TTLCache("official_board_directory", ttl=86400, maxsize=2)
+        self._snapshot_reads = TTLCache("official_board_snapshot", ttl=30, maxsize=32)
+        self._industry_members = TTLCache("official_industry_members", ttl=60, maxsize=8)
+
+    async def read_board_catalog(self, kind: str) -> dict:
+        """One source identity owner; directory reads never wait for prices or funds."""
+        if kind not in ("concept", "industry"):
+            raise ValueError("unsupported official board kind")
+        if kind == "concept":
+            if not await asyncio.to_thread(self.catalog_size):
+                await self.sync_catalog()
+
+            def stored():
+                rows = [row for row in self.get_catalog(limit=1000) if row.source == "ths_official"]
+                items = [{"code": row.code, "name": row.name, "source": row.source,
+                          "kind": kind, "synced_at": source_saved_clock(row.catalog_synced_at)}
+                         for row in rows if row.source == "ths_official"]
+                times = [row["synced_at"] for row in items]
+                return {"items": items, "total": len(items), "kind": kind,
+                        "catalog_state": source_saved_state([row.catalog_synced_at for row in rows], 24),
+                        "source": "ths_official", "synced_at": min(times) if times and all(times) else None}
+
+            return await asyncio.to_thread(stored)
+
+        hit, value = self._directory_reads.get(kind)
+        if hit:
+            return deepcopy(value)
+
+        async def fetch():
+            hit, value = self._directory_reads.get(kind)
+            if hit:
+                return value
+            response = await self._client.get(
+                f"{self._base}/api/a-share-index/catalog/ths-index-list", params={"tag": "industry"})
+            response.raise_for_status()
+            payload = response.json()
+            raw = (payload.get("data") or {}).get("item") if isinstance(payload, dict) else None
+            items = parse_catalog_items(payload) if isinstance(raw, list) else []
+            if (not isinstance(payload, dict) or type(payload.get("code")) is not int or payload["code"] != 0
+                    or not raw or any(not isinstance(row, dict) or not isinstance(row.get("name"), str)
+                                      or not row["name"].strip() or not isinstance(row.get("thscode"), str) for row in raw)
+                    or len(items) != len(raw)
+                    or len({row["code"] for row in items}) != len(items)
+                    or any(not re.fullmatch(r"[0-9]{6}\.TI", row["code"]) for row in items)):
+                raise RuntimeError("official industry catalog incomplete or failed")
+            received = datetime.now(timezone.utc).isoformat()
+            value = {"kind": kind, "source": "ths_official", "synced_at": received, "catalog_state": "ready",
+                     "total": len(items), "items": [
+                         {**row, "kind": kind, "source": "ths_official", "synced_at": received} for row in items]}
+            self._directory_reads.set(kind, value)
+            return value
+
+        return await read_inflight(self, ("official-directory", kind), fetch)
+
+    async def read_board_snapshots(self, codes: list[str]) -> dict:
+        """Explicit, bounded same-source batch. Readiness is not the market clock."""
+        wanted = tuple(sorted(set(codes)))
+        if not wanted or len(wanted) > 50 or any(not re.fullmatch(r"[0-9]{6}\.TI", code) for code in wanted):
+            raise ValueError("1 to 50 exact official board codes required")
+        hit, value = self._snapshot_reads.get(wanted)
+        if hit:
+            return deepcopy(value)
+
+        async def fetch():
+            hit, value = self._snapshot_reads.get(wanted)
+            if hit:
+                return value
+            received = None
+            try:
+                response = await self._client.get(
+                    f"{self._base}/api/a-share-index/prices/snapshot", params={"thscodes": ",".join(wanted)})
+                response.raise_for_status()
+                payload = response.json()
+                data = payload.get("data") if isinstance(payload, dict) else None
+                raw = data.get("item") if isinstance(data, dict) else None
+                if not isinstance(payload, dict) or type(payload.get("code")) is not int or payload["code"] != 0 or not isinstance(raw, list):
+                    raise RuntimeError("official board snapshot failed")
+                rows, seen = [], set()
+                for row in raw:
+                    code = row.get("thscode") if isinstance(row, dict) else None
+                    if code not in wanted or code in seen:
+                        raise RuntimeError("official board snapshot identity mismatch")
+                    seen.add(code)
+                    values = [row.get("last_price"), row.get("price_change_ratio_pct")]
+                    if any(value is not None and (isinstance(value, bool) or not isinstance(value, (int, float))
+                                                 or not math.isfinite(value)) for value in values):
+                        raise RuntimeError("official board snapshot invalid number")
+                    if values[0] is not None and values[0] <= 0:
+                        values = [None, None]
+                    rows.append({"code": code, "price": values[0], "change_pct": values[1]})
+                stamp = data.get("timestamp")
+                ready = (datetime.fromtimestamp(stamp / 1000, timezone.utc).isoformat()
+                         if type(stamp) in (int, float) and 0 < stamp <= datetime.now(timezone.utc).timestamp() * 1000
+                         and math.isfinite(stamp) else None)
+                value = {"available": True, "source": "ths_official", "source_basis": "index_snapshot",
+                         "source_as_of": None, "source_ready_at": ready,
+                         "received_at": datetime.now(timezone.utc).isoformat(), "rows": rows,
+                         "missing_codes": [code for code in wanted if code not in seen]}
+            except Exception as exc:  # optional price failure cannot hide source identities
+                log.warning("official board snapshot unavailable: %s", type(exc).__name__)
+                value = {"available": False, "source": "ths_official", "source_basis": "index_snapshot",
+                         "source_as_of": None, "source_ready_at": None,
+                         "received_at": received or datetime.now(timezone.utc).isoformat(), "rows": [],
+                         "missing_codes": list(wanted), "reason": "同花顺板块报价暂不可用"}
+            self._snapshot_reads.set(wanted, value, ttl=30 if value["available"] else 5)
+            return value
+
+        return await read_inflight(self, ("official-board-snapshot", wanted), fetch)
+
+    async def read_industry_members(self, code: str) -> list[dict]:
+        hit, value = self._industry_members.get(code)
+        if hit:
+            return deepcopy(value)
+
+        async def fetch():
+            value = await self.fetch_members(code)
+            self._industry_members.set(code, value)
+            return value
+
+        return await read_inflight(self, ("official-industry-members", code), fetch)
 
     async def day_changes(self, codes: list[str]) -> dict[str, float | None]:
         """官方板块指数当日涨跌幅（最新日 K close / 前一日 - 1，%）。
@@ -309,13 +493,30 @@ class ThemeCatalogService:
 
     async def aclose(self) -> None:
         self._member_closing = True
+        cancelled = False
+        try:
+            await close_inflight_reads(self)
+        except asyncio.CancelledError:
+            cancelled = True  # shared source owners have actually drained
         # A canceled view may leave a shared source/write draining. Complete this
         # owner's bounded reads before closing the client they still consume.
-        if self._catalog_read and not self._catalog_read.done():
-            await asyncio.gather(self._catalog_read, return_exceptions=True)
-        if self._member_reads:
-            await asyncio.gather(*tuple(self._member_reads.values()), return_exceptions=True)
-        await self._client.aclose()
+        owned = ([self._catalog_read] if self._catalog_read and not self._catalog_read.done() else []) + list(self._member_reads.values())
+        if owned:
+            drained = asyncio.gather(*owned, return_exceptions=True)
+            while not drained.done():
+                try:
+                    await asyncio.shield(drained)
+                except asyncio.CancelledError:
+                    cancelled = True
+        closing = asyncio.create_task(self._client.aclose())
+        while not closing.done():
+            try:
+                await asyncio.shield(closing)
+            except asyncio.CancelledError:
+                cancelled = True
+        closing.result()
+        if cancelled:
+            raise asyncio.CancelledError
 
     # -- fetch -----------------------------------------------------------
 
@@ -387,7 +588,16 @@ class ThemeCatalogService:
             params={"thscode": code, "interval": "1d", "start": start, "end": end},
         )
         r.raise_for_status()
-        return parse_board_bars(r.json())
+        try:
+            payload = r.json()
+        except ValueError as exc:
+            raise RuntimeError("theme board bars: incomplete or failed snapshot") from exc
+        data = payload.get("data") if isinstance(payload, dict) else None
+        raw = data.get("item") if isinstance(data, dict) else None
+        if (not isinstance(payload, dict) or type(payload.get("code")) is not int or payload["code"] != 0
+                or not isinstance(raw, list) or any(not isinstance(row, dict) for row in raw)):
+            raise RuntimeError("theme board bars: incomplete or failed snapshot")
+        return parse_board_bars(payload)
 
     # -- sync ------------------------------------------------------------
 

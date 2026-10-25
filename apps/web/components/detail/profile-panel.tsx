@@ -48,6 +48,9 @@ export function ProfilePanel({
   themes = null,
   themesState,
   onThemesRetry,
+  onThemesEnhance,
+  themesEnhancing = false,
+  themesEnhanceError = false,
 }: {
   boardRows: BoardRows;
   company: CompanyProfile | null;
@@ -59,6 +62,9 @@ export function ProfilePanel({
   themes?: StockThemes | null;
   themesState?: DetailReadState;
   onThemesRetry?: () => void;
+  onThemesEnhance?: () => void;
+  themesEnhancing?: boolean;
+  themesEnhanceError?: boolean;
 }) {
   return (
     <div className="px-3 py-2 text-xs">
@@ -79,6 +85,10 @@ export function ProfilePanel({
       <div className="mb-3">
         {themesState && <DetailReadStatus label="题材" state={themesState} onRetry={onThemesRetry} identity={`${readIdentity}:themes`} active={active}/>}
         <ThemeChipsRow themes={themes} companyNames={boardRows.find(([label]) => label === "概念题材")?.[1] || []}/>
+        {onThemesEnhance && <div className="mt-1 flex flex-wrap items-center gap-2 text-[11px] text-zinc-600 dark:text-zinc-400">
+          <button type="button" className="quiet-action" disabled={themesEnhancing} onClick={onThemesEnhance}>{themesEnhancing ? "读取归因与板块表现…" : "补充归因与板块表现"}</button>
+          {themesEnhanceError && <><span role="alert">增强读取失败或正式目录已变，已存名称仍可查看。</span>{onThemesRetry && <button type="button" className="quiet-action" disabled={themesState?.pending} onClick={onThemesRetry}>重读正式目录</button>}</>}
+        </div>}
       </div>
       {company?.main_business && (
         <div className="mb-2">

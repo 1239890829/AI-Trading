@@ -514,5 +514,5 @@ def register_schedulers(reg: SchedulerRegistry, app: FastAPI, services: AppServi
         "tradingagents-selected-research", lambda: selected_research_loop(app, research_stop, registry=reg,
             interval=max(30.0, settings.tradingagents_research_interval_seconds),
             first_delay=max(1.0, settings.tradingagents_research_startup_delay_seconds)),
-        stop=research_stop, switch="tradingagents_research_enabled",
+        stop=research_stop, switch="tradingagents_auto_research_enabled",
     )

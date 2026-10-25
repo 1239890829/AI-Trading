@@ -138,7 +138,9 @@ tracked/独有内容的物理清理走 `scripts/safe-trash.sh` 可恢复；许�
 
 数据源接入先读 `docs/data/data-sources.md` 与对应官方接口文档，实抓核字段/单位/身份/源时间/失败语义，再录脱敏 fixture 与消费者验收；不能把包装库数当独立数据源数。历史环境/WAF/配额结论先刷新。Provider 能力以当前实现和实测为准。
 
-行情质量 high/medium/low/stale/invalid，低质量不得被 AI/回测当有效事实。结论写来源、依据、时间与失效条件；非交易日有效空集不等于失败。Parquet 快照在根 data/parquet/snapshots，写入走原子接口；backend/data 与根 data 不因目录统一而盲迁。
+行情质量 high/medium/low/stale/invalid，低质量不得被 AI/回测当有效事实。结论写来源、依据、时间与失效条件；非交易日有效空集不等于失败。
+
+板块、行业与概念以来源正式名称及代码为身份，不自创别名、按词干合并或用成员重合替换身份。源方原因、公司资料标签及人工/AI研究线索分别标明，不能冒充正式概念或官方热点榜。可按已披露的实际样本重合收拢展示，但原名称、代码、成员和指标独立保留，不合并分数、热度或资格。Parquet 快照在根 data/parquet/snapshots，写入走原子接口；backend/data 与根 data 不因目录统一而盲迁。
 
 ## 6. 开发与交付
 

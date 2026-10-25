@@ -1,6 +1,7 @@
 
 from __future__ import annotations
 
+import asyncio
 from datetime import date, datetime
 
 from fastapi import Depends, APIRouter, HTTPException, Query, Request
@@ -12,6 +13,7 @@ from app.review.methodology import (
     evaluate_historical_effectiveness,
     suggest_methodology_changes,
 )
+from app.review.metric_reference import read_metric_history_reference
 from app.review.storage import (
     ALLOWED_STATUSES,
     ActionItemStaleError,
@@ -75,11 +77,14 @@ async def review_list(request: Request, limit: int = Query(30, ge=1, le=200)):
 async def review_detail(trade_date: str, request: Request):
     """某交易日完整复盘报告。"""
     svc = _service(request)
-    _parse_trade_date(trade_date)  # 仅做格式校验
+    day = _parse_trade_date(trade_date)
     report = get_report(svc.session_factory, trade_date)
     if report is None:
         raise HTTPException(status_code=404, detail=f"{trade_date} 无复盘报告")
-    return {"data": report.model_dump()}
+    payload = report.model_dump()
+    # Distinct read-time reference: never rewrite the saved report's input/body.
+    payload["metric_history_reference"] = await asyncio.to_thread(read_metric_history_reference, day)
+    return {"data": payload}
 
 
 class ActionItemPatch(BaseModel):

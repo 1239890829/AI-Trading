@@ -91,6 +91,27 @@ export interface ReviewData {
   } | null;
 }
 
+export interface ReviewMetricHistoryPoint {
+  date: string;
+  limit_up: number | null; n_break: number | null; max_board: number | null;
+  break_rate: number | null; seal_rate: number | null; seal_base: number | null;
+  promo_1to2: number | null; promo_2to3: number | null;
+  promo_1to2_base: null; promo_2to3_base: null;
+  missing: string[];
+}
+
+export interface ReviewMetricHistoryReference {
+  contract_version: "metric_history_reference_v1";
+  role: "read_time_aggregate_reference"; source: "sentiment.metric_history";
+  requested_trade_date: string; window_start: string; window_end: string; read_at: string;
+  dataset_updated_at: string | null; source_as_of: null; raw_source_sha256: null;
+  available_at_original_report: "unknown";
+  state: "partial" | "unavailable" | "error";
+  points: ReviewMetricHistoryPoint[]; unrecorded_dates: string[]; invalid_rows: number;
+  coverage: {calendar_days: number; recorded_days: number; effective_days: Record<"seal_rate" | "promo_1to2" | "promo_2to3" | "max_board", number>};
+  reason: string; limitations: string[];
+}
+
 export interface ReviewReportDetail {
   review_id: string;
   trade_date: string;
@@ -99,6 +120,8 @@ export interface ReviewReportDetail {
   model: { requested?: string; actual?: string; degraded?: boolean; reason?: string };
   /** Older reports remain readable; absence is not a zero-valued market snapshot. */
   data?: ReviewData;
+  /** Added when read; not part of the frozen original report or its known inputs. */
+  metric_history_reference?: ReviewMetricHistoryReference;
   dimensions: { key: string; title: string; status: string; findings: string[]; judgements: string[]; gaps: string[] }[];
   action_items: {
     id: string;

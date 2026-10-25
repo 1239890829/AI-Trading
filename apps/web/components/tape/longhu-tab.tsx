@@ -1,10 +1,10 @@
 "use client";
 
-import { useEffect, useId, useMemo, useState } from "react";
+import { useId, useMemo, useState } from "react";
 import { Panel } from "@/components/panel";
 import { StockLink, useStockRowNav } from "@/components/stock-link";
-import { getLonghu, getLonghuThemeTrail, type LonghuTrailPayload } from "@/lib/api";
-import { fmt, fmtAmount, pctColor, pctText } from "@/lib/format";
+import { getLonghu, getLonghuThemeTrail } from "@/lib/api";
+import { fmt, fmtAmount, pctColor, pctText, sourceLabel } from "@/lib/format";
 import { useResource } from "@/hooks/use-polling-fetch";
 import { useSurfaceScope } from "@/components/inspection/surface-scope";
 import { bjMinuteOfDay, bjToday } from "@/lib/market-hours";
@@ -36,27 +36,17 @@ export function LonghuTab() {
   const error = resource.error instanceof Error ? resource.error.message : resource.error ? "读取失败" : null;
   const now = useMemo(() => resource.data?.readAt ?? (resource.error ? new Date() : null), [resource.data, resource.error]);
   const loading = resource.pending;
-  const [trail, setTrail] = useState<LonghuTrailPayload | null>(null);
+  const trailDate = queryDate?.replace(/^(\d{4})(\d{2})(\d{2})$/, "$1-$2-$3");
+  const trailResource = useResource(signal => getLonghuThemeTrail(5, trailDate, {signal}), {
+    key: `longhu-trail:${trailDate ?? "latest"}`, intervalMs: null, abortable: true,
+  });
+  const trail = trailResource.error ? null : trailResource.data ?? null;
   const [trailOpen, setTrailOpen] = useState(false);
   function onDate(date: string) {
     const params = new URLSearchParams(searchParams.toString());
     if (date) params.set("date", date); else params.delete("date");
     replaceSearch(params);
   }
-
-  useEffect(() => {
-    let alive = true;
-    getLonghuThemeTrail(5)
-      .then((t) => {
-        if (alive) setTrail(t);
-      })
-      .catch(() => {
-        if (alive) setTrail(null);
-      });
-    return () => {
-      alive = false;
-    };
-  }, []);
 
   // 数据源返回的是原序（实测既非升序也非降序），这里显式排序，别让表格标题说谎。
   // 排序口径：日榜(1) 优先于三日榜(3)——两者是不同统计区间的累计值，金额不可直接比大小；
@@ -210,6 +200,8 @@ export function LonghuTab() {
       </Panel>
 
       {/* ── 题材迁徙（B3）：概念等分守恒口径，回答「资金近 N 日在题材间怎么轮动」── */}
+      {trailResource.error != null && <p role="status" className="mt-4 shrink-0 text-xs text-amber-800 dark:text-amber-300">题材迁徙未核：所选截止日窗口读取失败，未显示其他日期。<button type="button" className="quiet-action ml-2" onClick={trailResource.refresh}>重试迁徙读取</button></p>}
+      {trail && (!trail.trail.length || trail.coverage_state === "unknown") && <p role="status" className="mt-2 shrink-0 text-xs text-zinc-600 dark:text-zinc-400">题材迁徙 · 截至 {trail.anchor_date}：{trail.coverage_state === "unknown" ? "部分来源返回空集，覆盖未核，不据此认定没有上榜记录。" : "该窗口未取得可聚合记录。"}</p>}
       {trail && trail.trail.length > 0 && (
         <details
           className="ui-card mt-4 shrink-0 rounded-xl border border-zinc-200 dark:border-zinc-800"
@@ -217,7 +209,7 @@ export function LonghuTab() {
           onToggle={(e) => setTrailOpen((e.target as HTMLDetailsElement).open)}
         >
           <summary className="cursor-pointer select-none px-4 py-2.5 text-xs text-zinc-600 dark:text-zinc-400 hover:text-zinc-600 dark:hover:text-zinc-300">
-            题材迁徙 · 近 {trail.days.length} 日龙虎榜净额按概念聚合（等分守恒口径，非真实拆分；仅日榜）
+            题材迁徙 · 截至 {trail.anchor_date} · 近 {trail.days.length} 日龙虎榜净额按概念聚合（等分守恒口径，非真实拆分；仅日榜）
           </summary>
           <div className="space-y-1.5 border-t border-zinc-200 px-4 py-3 dark:border-zinc-800">
             {trail.trail.slice(0, 12).map((row) => {
@@ -251,6 +243,7 @@ export function LonghuTab() {
                 部分交易日拉取失败已跳过：{trail.degraded.join("；")}
               </p>
             )}
+            <p className="pt-1 text-[11px] text-zinc-600 dark:text-zinc-400">来源：{trail.sources?.length ? trail.sources.map(sourceLabel).join(" / ") : "未提供来源标记"} · {trail.note}</p>
           </div>
         </details>
       )}

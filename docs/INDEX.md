@@ -383,3 +383,7 @@ RSH-031有限前向运行与触发修复入口：[研究§39.5](research/limit-u
 ## 2026-10-25 选股分类发现与原名单对照
 
 [猎场四类发现合同](product/hunting-decision-design.md#2026-10-25-选股分类发现与原名单对照) → [细功能验收](product/feature-closure-audit.md#2026-10-25-选股分类发现与原名单对照)。沿原W07维护工程事实；来源钟/覆盖及原五战法分类分别归data/data-sources和strategy/strategy-registry，副作用/请求边界归system/runtime-performance。本轮不是仅更新审计，真实页面与最终发布仍分别核验。
+
+## 2026-10-25 正式板块身份与按需研究
+
+[正式身份与按需研究](product/hunting-decision-design.md#2026-10-25-正式板块身份与按需研究) → [58项全功能复核](product/feature-closure-audit.md#2026-10-25-正式板块身份与按需研究) → [模型边界](ai/semantic-decisions.md#2026-10-25-正式板块身份与按需研究) / [性能与读取](system/runtime-performance.md#2026-10-25-正式板块身份与按需研究) / [来源](data/data-sources.md#2026-10-25-正式板块身份与按需研究)。原5键与35参考项归strategy/strategy-registry；默认自动派发取代关系及旧摘要命令归system/deployment。状态仍在原W07/IMP-050、W04/RSH-030，当前发布与主目录生效只读handoff及准确PR回执。

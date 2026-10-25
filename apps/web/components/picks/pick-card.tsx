@@ -669,7 +669,7 @@ export function PickCard({
           measurements: item.selectionMetrics,
           scores: selectionScores,
         }}/>
-      <TradingAgentsResearchPanel symbol={item.symbol} compact allowStart={false}/>
+      <TradingAgentsResearchPanel symbol={item.symbol} compact allowStart={!item.referenceOnly}/>
       {!item.referenceOnly && item.paperContext && <PaperSelectionAction key={`${item.paperContext.ref}:${item.paperContext.version}`} symbol={item.symbol} selectionRef={item.paperContext.ref} sourceVersion={item.paperContext.version}/>}
       <ResearchDisclosure label="原筛选完整依据" identity={readingKey} defaultOpen={evidenceExpanded}>
       <ReaderBrief label="筛选支持项" facts={reading.supports}/>

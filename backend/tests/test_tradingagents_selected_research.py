@@ -6,6 +6,7 @@ from copy import deepcopy
 from datetime import datetime, timedelta, timezone
 import hashlib
 import json
+from threading import Event
 from types import SimpleNamespace
 
 import pytest
@@ -82,6 +83,8 @@ def env(tmp_path, monkeypatch):
     monkeypatch.setattr(budget, "beijing_now_naive", lambda: NOW.replace(tzinfo=None))
     monkeypatch.setattr(budget, "get_session_factory", lambda: sf)
     monkeypatch.setattr(settings, "tradingagents_research_enabled", True)
+    # These legacy scheduler tests explicitly exercise the opt-in automatic mode.
+    monkeypatch.setattr(settings, "tradingagents_auto_research_enabled", True)
     monkeypatch.setattr(settings, "tradingagents_research_authorization_digest", "", raising=False)
     monkeypatch.setattr(settings, "tradingagents_research_admission_digest", "")
     monkeypatch.setattr(settings, "agent_daily_llm_budget", 0)
@@ -1055,6 +1058,69 @@ def test_selected_driver_graph_entry_carries_the_same_exact_server_authorizer(en
     assert list(usage_facts(env)) == [fact["usage_id"]]
 
 
+def test_cancel_during_derived_summary_cannot_downgrade_completed_selected_graph(env, monkeypatch, tmp_path):
+    """The optional short view is outside durable full-graph completion."""
+    from app.services import _tradingagents_summary as summary, tradingagents_driver as driver
+    daily(env)
+    fact = original_unknown(env)
+    authorize(env, monkeypatch, unknown_usage_exception=continuation(env, fact))
+    identity = env.driver.method_identity()
+    before_usage = usage_facts(env)
+    at = (NOW - timedelta(seconds=1)).isoformat()
+    facts = {"symbol": "600001", "task": "offline cancellation fixture"}
+    packet = {"case_id": "fixture", "ticker": "600001", "trade_date": NOW.date().isoformat(),
+              "as_of": at, "facts": facts, "evidence_sha256": driver.digest(facts),
+              "identity": {"company_name": "公开夹具公司"}, "market_data": {}, "upstream_sha": research.UPSTREAM_SHA}
+    native = driver.NativeTradingAgentsDriver(upstream_dir=tmp_path, python=tmp_path / "unused",
+        dependencies=tmp_path, transport=None, packet_builder=lambda *args: packet)
+    monkeypatch.setattr(native, "method_identity", lambda: identity)
+    monkeypatch.setattr(env.app.state, "tradingagents_research_driver", native)
+    async def skip(*args, **kwargs):
+        return args[0] if args else None
+    monkeypatch.setattr(native, "_prepare_selected_company", skip)
+    monkeypatch.setattr(native, "_prepare_indicators", skip)
+    executions = []
+    async def graph(**kwargs):
+        executions.append(kwargs["run"])
+        (kwargs["run"] / "source-audit.jsonl").write_text("")
+        return {key: "complete original report fixture" for key in research.REPORTS}
+    monkeypatch.setattr(native, "_execute", graph)
+    release, snapshots = Event(), {}
+    async def run():
+        entered = asyncio.Event()
+        loop = asyncio.get_running_loop()
+        def delayed_summary(symbol, **kwargs):
+            run = executions[0]
+            for path in (run / "result.json", run / "execution.json", run.parent / "latest.json"):
+                snapshots[path] = path.read_bytes()
+            loop.call_soon_threadsafe(entered.set)
+            if not release.wait(5):
+                raise AssertionError("summary cancellation fixture did not drain")
+        monkeypatch.setattr(summary, "materialize", delayed_summary)
+        task = asyncio.create_task(research.run_research(Recorder(), {"symbol": "600001"}, env.app))
+        try:
+            await asyncio.wait_for(entered.wait(), 3)
+            task.cancel()
+            await asyncio.sleep(0)
+            assert not task.done()  # Real summary work drains before cancellation propagates.
+            release.set()
+            with pytest.raises(asyncio.CancelledError):
+                await task
+        finally:
+            release.set()
+            if not task.done():
+                task.cancel()
+                await asyncio.gather(task, return_exceptions=True)
+    asyncio.run(run())
+    assert len(executions) == 1 and all(path.read_bytes() == raw for path, raw in snapshots.items())
+    assert json.loads((executions[0] / "execution.json").read_text())["state"] == "completed"
+    binding = research.selected_bindings(env.sf)["600001"]
+    prior = research._execution_prior(binding, research._digest(identity))
+    assert prior["state"] == "completed"
+    assert research._completed_selection(prior, binding)["reused_identical_selection"]
+    assert usage_facts(env) == before_usage
+
+
 @pytest.mark.parametrize("mutation", [None, "before_reserve", "revoke", "method", "new_pin", "new_unknown"])
 def test_real_driver_continuation_rechecks_server_pin_before_reserve_and_atomic_start(env, monkeypatch, tmp_path, mutation):
     from app.services import tradingagents_driver as driver
@@ -1174,6 +1240,8 @@ def _add_original_roles(env):
         (path.parent / "model-outputs" / f"{call_id}.json").write_text(json.dumps({"role": role, "call_id": call_id,
             "output_sha256": peer["output_sha256"], "structured_output": output}))
     (path.parent / "role-outputs.jsonl").write_text("\n".join(rows) + "\n")
+    from app.services._tradingagents_summary import materialize
+    materialize("600001", write=True)
     return path
 
 
@@ -1207,6 +1275,10 @@ def test_corrupt_role_evidence_does_not_hide_independent_seven_saved_reports(env
     view = research.read_view("600001", env.app, saved_only=True)
     assert len(view["latest"]["reports"]) == 7
     assert view["latest"]["role_projection_state"] == "unavailable" and view["latest"]["roles"] == []
+    summary = research.read_saved_summary("600001", session_factory=env.sf)
+    assert summary["summary_state"] == "unavailable" and summary["report_count"] is None
+    from app.services._tradingagents_summary import materialize
+    materialize("600001", write=True)
     summary = research.read_saved_summary("600001", session_factory=env.sf)
     assert summary["report_count"] == 7 and summary["roles_count"] is None
     assert summary["final_rating"] is None and env.driver.calls == 1
@@ -1251,3 +1323,40 @@ def test_committed_wake_coalesces_and_shutdown_drains_tick(env, monkeypatch):
         assert env.app.state.selected_research_loop is None
         assert research.wake_selected_research(env.app) is False
     asyncio.run(exercise())
+
+
+def test_auto_dispatch_defaults_off_and_preserves_existing_tasks_unknowns_and_claims(env, monkeypatch):
+    from app.core.config import Settings
+    from app.models.agent import AgentTask
+
+    assert Settings.model_fields["tradingagents_auto_research_enabled"].default is False
+    monkeypatch.setattr(settings, "tradingagents_auto_research_enabled", False)
+    daily(env)
+    authorize(env, monkeypatch)
+    claim = research.ROOT / "preserved-unknown.json"
+    claim.write_text('{"state":"unknown","usage_id":"original"}')
+    with env.sf() as db:
+        for identity, state in (("1" * 32, "queued"), ("2" * 32, "running"), ("3" * 32, "failed")):
+            db.add(AgentTask(id=identity, type="tradingagents_research", status=state,
+                params=json.dumps({"symbol": "600001"}), created_at=NOW.replace(tzinfo=None)))
+        db.commit()
+    before = claim.read_bytes()
+    monkeypatch.setattr(research, "_quality", lambda *a, **kw: pytest.fail("Disabled automatic mode must not open launch gates"))
+    asyncio.run(research.scheduler_tick(env.app))
+    assert research.wake_selected_research(env.app) is False
+    assert claim.read_bytes() == before and env.driver.calls == 0
+    with env.sf() as db:
+        rows = db.scalars(select(AgentTask).order_by(AgentTask.id)).all()
+        assert [row.status for row in rows] == ["queued", "running", "failed"]
+
+
+def test_auto_mode_off_does_not_disable_explicit_research_or_repeat_completed_selection(env, monkeypatch):
+    monkeypatch.setattr(settings, "tradingagents_auto_research_enabled", False)
+    daily(env)
+    authorize(env, monkeypatch)
+    before = research.require_start({"symbol": "600001"}, env.app)
+    assert before["admission"]["state"] == "research_only_authorized"
+    first = asyncio.run(research.run_research(Recorder(), {"symbol": "600001"}, env.app))
+    second = asyncio.run(research.run_research(Recorder(), {"symbol": "600001"}, env.app))
+    assert first["state"] == "completed" and second["reused_identical_selection"] is True
+    assert env.driver.calls == 1
