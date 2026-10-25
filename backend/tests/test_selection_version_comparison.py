@@ -1,5 +1,5 @@
 """A/B cohorts use original joint identities, before cross-source deduplication."""
-from datetime import date, datetime, timedelta
+from datetime import date, datetime, timedelta, timezone
 import json
 
 import pytest
@@ -51,7 +51,8 @@ def intraday(sf, day, *, method='same', feature='f1', result=5.0, suffix='', hou
         db.add(OpportunityDecisionRun(run_id=f'intra-{day}{suffix}',trade_date=day,as_of=at,scenario='intraday_opportunity',
             strategy_version=method,feature_version=feature,data_state='ready',rank_rows=1,evidence_digest='fixture'))
         db.add(OpportunityDecisionSnapshot(snapshot_id=f'snap-{day}{suffix}',run_id=f'intra-{day}{suffix}',trade_date=day,as_of=at,
-            created_at=at-timedelta(hours=8),scenario='intraday_opportunity',stage='rank',decision='ranked',rank=1,
+            created_at=at.replace(tzinfo=BJ_TZ).astimezone(timezone.utc).replace(tzinfo=None),
+            scenario='intraday_opportunity',stage='rank',decision='ranked',rank=1,
             symbol='600000',entry_price=10.0,strategy_version=method,feature_version=feature,data_state='ready',
             evidence=json.dumps({'selection_entry_contract':CONTRACT,'within_display_capacity':True,'effective_limit':8})))
         if result is not None:

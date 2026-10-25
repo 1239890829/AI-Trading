@@ -80,6 +80,7 @@ PATH_VALUES = {
     # （由 test_path_values_cover_every_path_parameter 抓出）
     "event_id": "1",
     "run_id": "missing-run",
+    "method": "daily_picks",
 }
 
 #: 必需查询参数的填充值（同样与 api-sweep.js 的 QUERY_VALUES 同口径）
@@ -108,6 +109,9 @@ QUERY_VALUES = {
     "excludeBJ": "true",
     "excludeNew": "false",
     "top": "20",
+    "method": "daily_picks",
+    # Deliberately absent run: exercise the exact-reader 404, not validation 422.
+    "content_version": "0" * 64,
 }
 
 

@@ -54,6 +54,7 @@ const PATH_VALUES = {
   // 两个下钻端点一直被跳过，属巡检盲区。BK1024=绿色电力，实测存在）
   board_code: "BK1024",
   run_id: "missing-run",
+  method: "daily_picks",
 };
 
 // 查询参数默认值：只给**必需**参数填，选填的一律不带（走后端默认）
@@ -82,6 +83,9 @@ const QUERY_VALUES = {
   excludeBJ: "true",
   excludeNew: "false",
   top: "20",
+  method: "daily_picks",
+  // Deliberately absent run: exercise the exact-reader 404, not validation 422.
+  content_version: "0".repeat(64),
 };
 
 /**
