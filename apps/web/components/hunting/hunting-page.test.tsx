@@ -505,6 +505,8 @@ it("loads only the chosen discovery source and original selected group, without 
   search=new URLSearchParams({browse:"hot"});render(<HuntingPage/>);
   await screen.findByRole("button",{name:"查看未涨停热点成分"});
   expect(api.getThemesHot).toHaveBeenCalledTimes(1);
+  expect(screen.getByText("按需读取")).toBeTruthy();
+  expect(screen.queryByRole("button",{name:"刷新数据"})).toBeNull();
   expect(api.getIntradayTop).toHaveBeenCalledTimes(1);
   for(const read of [api.getTodayPicks,api.getSignalHealth,api.getMorningBriefToday,api.getWatcherState,api.getIntradayReview,api.getIntradayOpportunities,api.getPositionLabels,api.getEventsForSymbol,api.getBoardFundFlow]) expect(read).not.toHaveBeenCalled();
   expect(group("candidates").hidden).toBe(true);

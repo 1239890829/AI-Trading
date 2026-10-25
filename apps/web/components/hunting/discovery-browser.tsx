@@ -9,7 +9,7 @@ import { StockLink } from "@/components/stock-link";
 import { DiscoveryMethods } from "./discovery-methods";
 import type { DiscoveryDetailTarget } from "./discovery-detail";
 import { getBoardFundFlow, getDiscoveryMemberships, getThemesHot, type BoardFlowKind, type BoardFlowRange, type BoardFlowRow, type HotTheme, type ThemesHotPayload, type BoardFundFlowPayload } from "@/lib/api";
-import { pctColor, pctText } from "@/lib/format";
+import { dateTimeTextBJ, pctColor, pctText } from "@/lib/format";
 
 const MODES = [["selected", "入选名单"], ["hot", "热门题材"], ["catalog", "行业概念"], ["funds", "资金方向"], ["methods", "战法分类"]] as const;
 export type DiscoveryMode = typeof MODES[number][0];
@@ -128,7 +128,7 @@ export function DiscoveryBrowser({search, selection, onNavigate, onTarget}: {
   const rows: {key: string; hot: HotTheme | null; board: BoardFlowRow | null}[] = isHot ? filteredHot.map(row => ({key: `theme:${row.theme_code ?? row.theme}`, hot: row, board: null}))
     : filteredBoards.map(row => ({key: `board:${row.board_code}`, hot: null, board: row}));
   const list = useIncremental(rows, {pageSize: 24, step: 24, resetKey: JSON.stringify([mode, kind, range, query, sort]), active: mode !== "methods"});
-  if (mode === "methods") return <DiscoveryMethods active date={selection.date ?? undefined} search={search}/>;
+  if (mode === "methods") return <DiscoveryMethods active date={new URLSearchParams(search).get("date") ?? selection.date ?? undefined} search={search}/>;
   const malformed = isHot ? malformedHot : boardMismatch;
   const pending = source.pending && source.data === undefined;
   const sourceAvailable = isHot ? !malformed : !malformed && boards.data?.available === true;
@@ -137,7 +137,7 @@ export function DiscoveryBrowser({search, selection, onNavigate, onTarget}: {
   const select = (next: DiscoveryDetailTarget) => onNavigate(discoveryUrl(search, {disc_code: next.code, selection: null}), true);
   return <section className="discovery-browser" aria-label={isHot ? "热门题材发现" : mode === "catalog" ? "行业概念发现" : "资金方向发现"}>
     <header className="discovery-heading"><div><h2>{isHot ? "热门题材" : mode === "catalog" ? "行业与概念" : "资金方向"}</h2>
-      <p>{isHot ? "从人气发现方向，不限涨停家数" : mode === "catalog" ? "先看板块强弱，再核对成分与原名单" : "按真实主力净额看流入与流出"}</p></div>
+      <p>{isHot ? "热股共同归属，包含题材与通用标签" : mode === "catalog" ? "先看板块强弱，再核对成分与原名单" : "按真实主力净额看流入与流出"}</p></div>
       <button className="quiet-action" type="button" disabled={source.pending} onClick={refresh}>{source.pending ? "读取中…" : "刷新分类"}</button></header>
     <div className="discovery-controls">
       {!isHot && <div className="discovery-kinds" aria-label="板块类别">{(["industry", "concept"] as const).map(value => <button key={value} type="button" aria-pressed={kind === value} onClick={() => change({disc_kind: value})}>{value === "industry" ? "行业" : "概念"}</button>)}</div>}
@@ -152,9 +152,9 @@ export function DiscoveryBrowser({search, selection, onNavigate, onTarget}: {
       {query && <button className="quiet-action" type="button" onClick={() => change({disc_q: null})}>清除搜索</button>}
     </div>
     <div className="discovery-basis" role="note">
-      {isHot ? <><span>同花顺24小时热股 × 当前目录</span><span>榜单时刻 {hot.data?.ts || "未提供"}</span><span>返回 {hot.data?.stocks?.length ?? "—"} 只热股，非全市场热点全集</span></>
+      {isHot ? <><span>同花顺24小时热股 × 当前目录</span><span title={hot.data?.ts ?? undefined}>榜单时刻 {hot.data?.ts ? dateTimeTextBJ(hot.data.ts) : "未提供"}（北京）</span><span>返回 {hot.data?.stocks?.length ?? "—"} 只热股，非全市场热点全集</span></>
         : <><span>东财板块口径 · {kind === "industry" ? "行业" : "概念"}</span><span>{range === "20d" ? `本地存档截至 ${boards.data?.as_of || "未提供"}` : "源时点未提供"}</span>
-          {boards.data?.received_at && <span>源读取完成 {boards.data.received_at}</span>}
+          {boards.data?.received_at && <span title={boards.data.received_at}>源读取完成 {dateTimeTextBJ(boards.data.received_at)}（北京）</span>}
           <span>已返回 {boardRows.length} 个板块{range === "20d" ? " · 有限本地样本" : " · 全市场覆盖未核"}</span></>}
       <span>分类浏览不改变原入选，不构成买卖建议。</span>
     </div>
@@ -176,7 +176,7 @@ export function DiscoveryBrowser({search, selection, onNavigate, onTarget}: {
           <button className="discovery-result-open" type="button" disabled={!rowCode} data-discovery-code={rowCode ?? undefined} aria-label={`查看${name}成分`} aria-pressed={!!rowCode && code === rowCode}
             onClick={() => rowCode && select({kind: row ? "theme" : "board", code: rowCode, name})}>
             <span className="discovery-order">{index + 1}</span><span className="discovery-name"><strong>{name}</strong><small>{rowCode || "代码未确认"}</small></span>
-            <span className={`discovery-measure ${board ? pctColor(board.change_pct) : ""}`}>{row ? (heat?.value != null ? heat.value.toLocaleString("zh-CN", {maximumFractionDigits: 0}) : "未齐") : pctText(board!.change_pct)}<small>{row ? heat?.value != null ? "榜内人气合计" : `${heat?.known ?? 0}/${heat?.total ?? 0}股提供人气` : "板块涨跌幅"}</small></span>
+            <span title={heat?.value != null ? heat.value.toLocaleString("zh-CN") : undefined} className={`discovery-measure ${board ? pctColor(board.change_pct) : ""}`}>{row ? (heat?.value != null ? heat.value.toLocaleString("zh-CN", {notation: "compact", maximumFractionDigits: 1}) : "未齐") : pctText(board!.change_pct)}<small>{row ? heat?.value != null ? "榜内人气合计" : `${heat?.known ?? 0}/${heat?.total ?? 0}股提供人气` : "板块涨跌幅"}</small></span>
             <span className={`discovery-measure ${board && net != null ? net >= 0 ? "text-up-ink dark:text-up" : "text-down-ink dark:text-down" : ""}`}>{row ? `${row.hot_count}只` : signed(net)}<small>{row ? "榜内热股" : range === "intraday" ? "主力净额" : `${range.replace("d", "日")}主力净额`}</small></span>
             <svg aria-hidden="true" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.5"><path d="m9 5 7 7-7 7"/></svg>
           </button>
@@ -190,7 +190,7 @@ export function DiscoveryBrowser({search, selection, onNavigate, onTarget}: {
       })}
     </ul>
     <IncrementalSentinel sentinelRef={list.sentinelRef} visible={Math.min(list.visible, rows.length)} total={rows.length} unit="个分类" onLoadMore={list.loadMore}/>
-    {isHot && selection.entries.length > 0 && <p className="discovery-footnote">对照名单 {selection.date || "日期未核"} · {membershipKnown ? `${memberships.data!.unknown_count}只归属未核 · 对照读取于 ${memberships.data!.observed_at}` : "本次归属对照未核，可刷新重试"}。当前目录对照不是当时归属或入选依据。</p>}
+    {isHot && selection.entries.length > 0 && <p className="discovery-footnote">对照名单 {selection.date || "日期未核"} · {membershipKnown ? `${memberships.data!.unknown_count}只归属未核 · 对照读取于 ${dateTimeTextBJ(memberships.data!.observed_at)}（北京）` : "本次归属对照未核，可刷新重试"}。当前目录对照不是当时归属或入选依据。</p>}
     {isHot && hot.data?.stocks?.some(stock => stock.themes.length === 0) && <details className="discovery-unmapped"><summary>热榜中归属未核的股票</summary>
       <ul>{hot.data.stocks.filter(stock => stock.themes.length === 0).map(stock => <li key={stock.symbol}>第{stock.rank}名 · {/^\d{6}$/.test(stock.symbol) ? <StockLink symbol={stock.symbol}>{stock.name || stock.symbol}</StockLink> : "证券身份未核"}</li>)}</ul></details>}
   </section>;

@@ -346,8 +346,8 @@
 .discovery-name {display:flex;flex-direction:column;gap:3px;min-width:0;overflow-wrap:anywhere}
 .discovery-name strong {font-size:14px;line-height:1.4;font-weight:500}
 .discovery-name small,.discovery-measure small {font-size:10px;line-height:1.5;font-weight:400;color:var(--hunt-muted)}
-.discovery-measure {min-width:0;font-size:14px;line-height:1.4;text-align:right;font-variant-numeric:tabular-nums;overflow-wrap:anywhere}
-.discovery-measure small {display:block;margin-top:3px}
+.discovery-measure {min-width:0;font-size:14px;line-height:1.4;text-align:right;font-variant-numeric:tabular-nums;white-space:nowrap}
+.discovery-measure small {display:block;margin-top:3px;white-space:normal;overflow-wrap:anywhere}
 .discovery-result-context {display:flex;flex-wrap:wrap;justify-content:space-between;gap:4px 10px;padding:4px 22px 0 36px;font-size:11px;line-height:1.6;color:var(--hunt-muted)}
 .discovery-unmapped {margin-top:14px;padding-top:12px;border-top:1px solid var(--hunt-line);font-size:12px;color:var(--hunt-muted)}
 .discovery-unmapped summary {cursor:pointer;min-height:32px}

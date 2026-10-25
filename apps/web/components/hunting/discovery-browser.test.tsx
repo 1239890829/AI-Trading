@@ -77,11 +77,26 @@ beforeEach(() => {
 afterEach(() => {cleanup();vi.restoreAllMocks();});
 
 describe("真实分类发现的来源与范围", () => {
+  it("an explicit historical date wins over the cached latest selection when opening a method", async () => {
+    jsonMock.mockResolvedValue({data:{strategies:[{key:"daily_picks",name:"每日精选",status:"active"}]}});
+    render(<Browser search="browse=methods&date=2026-10-22" selection={selected}/>);
+    const link=await screen.findByRole("link",{name:/查看核验与反例/});
+    expect(new URL(link.getAttribute("href")!,"http://localhost").searchParams.get("date")).toBe("2026-10-22");
+    expect(jsonMock.mock.calls.map(call=>call[0])).toEqual(["/api/picks/strategy-registry"]);
+  });
+  it("large heat remains readable in narrow rows while preserving the exact source value", async () => {
+    const data=hotPayload();data.themes[0].heat=51040600;data.stocks[0].heat=51040600;
+    jsonMock.mockResolvedValue({data});
+    render(<Browser/>);
+    const exact=await screen.findByTitle("51,040,600");
+    expect(exact.textContent).toContain("5104.1万");
+    expect(screen.getByText(/榜单时刻/).textContent).toContain("09:50（北京）");
+  });
   it("没有涨停梯队也可发现热门题材，归属未核热股仍能读取", async () => {
     render(<Browser/>);
     expect(await screen.findByRole("button",{name:"查看未涨停新题材成分"})).toBeTruthy();
-    expect(screen.getByText("从人气发现方向，不限涨停家数")).toBeTruthy();
-    expect(screen.getByText(/榜单时刻 2026-10-25T09:50/)).toBeTruthy();
+    expect(screen.getByText("热股共同归属，包含题材与通用标签")).toBeTruthy();
+    expect(screen.getByText(/榜单时刻/).textContent).toContain("09:50（北京）");
     const unmapped = screen.getByText("热榜中归属未核的股票").closest("details")!;
     fireEvent.click(within(unmapped).getByText("热榜中归属未核的股票"));
     expect(within(unmapped).getByRole("link",{name:"未归属热股"}).getAttribute("href")).toContain("symbol=000001");

@@ -335,7 +335,8 @@ async def _load_board_members(board_code: str) -> dict:
     """板块成员个股资金排行 Top20（fs=b:BKxxxx，fid=f62 服务端降序）。"""
     diff, host = await _clist_pages(f"b:{board_code}", _MEMBER_FIELDS, pz=20, first_page_only=True)
     if diff is None:
-        raise _DrillUnavailable({"available": False, "reason": "板块成员资金排行不可用（双域已重试）", "rows": [], "degraded": []})
+        raise _DrillUnavailable({"available": False, "board_code": board_code,
+                                 "reason": "板块成员资金排行不可用（双域已重试）", "rows": [], "degraded": []})
     rows: list[dict] = []
     for it in diff[:20]:
         code, name = it.get("f12"), it.get("f14")
@@ -362,6 +363,7 @@ async def _load_board_members(board_code: str) -> dict:
         "degraded": (["主域不可达，使用延迟口径（push2delay）"] if host == _HOSTS[1] else []),
     }
     if not out["available"]:
+        out["reason"] = "板块成员资金排行未返回可用记录"
         raise _DrillUnavailable(out)
     return out
 
@@ -557,7 +559,8 @@ async def get_board_fund_flow(kind: str, range_key: str) -> dict:
                 "time_basis": "as_of 为本地已存完成日记录的截止日；未补齐缺日"}
     rows, degraded = await get_board_list(kind)
     if rows is None:
-        return {"available": False, "reason": degraded[0] if degraded else "数据源不可用", "rows": [], "degraded": degraded}
+        return {"available": False, "kind": kind, "range": range_key,
+                "reason": degraded[0] if degraded else "数据源不可用", "rows": [], "degraded": degraded}
 
     sort_key = _RANGE_SORT_KEY[range_key]
     rows.sort(key=lambda r: (r.get(sort_key) is None, -(r.get(sort_key) or 0)))

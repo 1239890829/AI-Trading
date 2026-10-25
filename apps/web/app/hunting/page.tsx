@@ -485,7 +485,7 @@ function HuntingInner() {
         <div><h1>选股</h1><p className="hunting-page-intro">先发现，再核对条件，持续跟踪变化。</p></div>
         <div className="workspace-context">
         <span role="status" aria-live="polite" aria-atomic="true" className="hunting-read-status">
-        {isDiscovery && extraReading ? <span>{primaryReading ? "正在读取名单…" : "正在读取附加资料…"}</span> : isDiscovery && (picksFailed || intradayFailed || (reviewOptions.enabled && reviewReadFailures.length > 0)) ? (
+        {isDiscovery && !selectedOnly ? <span>按需读取</span> : isDiscovery && extraReading ? <span>{primaryReading ? "正在读取名单…" : "正在读取附加资料…"}</span> : isDiscovery && (picksFailed || intradayFailed || (reviewOptions.enabled && reviewReadFailures.length > 0)) ? (
           <span
             className="rounded border border-amber-500/40 bg-amber-500/10 px-1.5 py-0.5 text-[10px] text-amber-800 dark:text-amber-300"
             title="部分数据端点失败（后端不可达或网络中断）。每 60s 自动重试，也可点「刷新数据」。"
@@ -499,7 +499,7 @@ function HuntingInner() {
         )}
         </span>
         <div className="ml-auto flex flex-wrap items-center justify-end gap-1.5">
-          {isDiscovery && <button data-action="secondary"
+          {isDiscovery && selectedOnly && <button data-action="secondary"
             onClick={() => void load()}
             disabled={primaryReading} aria-busy={primaryReading}
             className="quiet-action"
