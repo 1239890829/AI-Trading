@@ -1285,6 +1285,7 @@ async def run_recovery(rec, params, app):
                 atomic_json(run / "execution.json", {"state": "completed", "completed_at": research._now().isoformat(),
                     "recovery_task_id": rec.task_id, "source_task_id": grant["source_task_id"], "quality": "unverified"})
                 await drain_thread(_advance, context, supplied["dispatch_owner"], "completed", task_id=rec.task_id, result_sha256=result_sha)
+                await research._materialize_completed_summary(params["symbol"], grant["run_id"])
                 await research.notify_research_ready(binding["selection"], result)
                 return {"kind": "tradingagents_research", "state": "completed", "symbol": params["symbol"],
                     "run_id": grant["run_id"], "source_task_id": grant["source_task_id"], "recovery_lineage": lineage,

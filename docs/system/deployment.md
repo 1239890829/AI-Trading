@@ -545,3 +545,9 @@ CLI启动warning的兼容依据与固定版本见[语义纠错记录](../ai/sema
 维护恢复可选`symbols`（逗号分隔1–20个六位码，必须与outcome_date合用且属于原归档/台账范围）；先只读核scope再写，所有准备/标签同批过滤，不改批外pending。返回`partial_batch/processed_count/remaining_count/scope_count`，剩余不为0时`state=partial`，不能把批内成功当全历史已齐。原无参/自动行为保持，不新增结果账或队列。
 
 最终执行边界：main/hunting-shadow的立即成交与挂单撮合共用窗口、证券身份、源钟/质量及已装配风险门；不带selection绑定的维护请求和自动maybe_open也不能旁路。研究shadow保留既有独立晨窗协议与限价/T+1/整手/费用，不混main结果。原选择一旦已有未决、unknown或真实成交，后续执行判定换版不能把旧占位清成not_started；最新判定只控制新资格。历史无明确绑定的未决事实保守阻断，不猜成交或重跑动作。
+
+## 2026-10-25 正式板块身份与按需研究
+
+总开关`ASHARE_TRADINGAGENTS_RESEARCH_ENABLED`继续管原手工完整研究和准确授权；新增`ASHARE_TRADINGAGENTS_AUTO_RESEARCH_ENABLED=0`只管新自动派发，不能通过关闭总开关冒充只停自动。原queued/running任务及unknown不取消、不清账，恢复仍按原准确任务/方法/具名许可。
+
+旧报告的小摘要维护命令归本安装backend：`PYTHONPATH=. .venv/bin/python scripts/tradingagents_saved_summary.py --all-saved`默认dry-run；核验后显式加`--write`仅写derived旁车。支持重复`--symbol`限定，不接受任意root路径，不重跑模型或改原件/业务数据库；坏原件保留并明确unavailable，不能为显示完整状态补造。主目录启服前核开关/在途状态、原授权和来源副作用，沿原启动器激活并单独验HTTP/代理与实际页面。

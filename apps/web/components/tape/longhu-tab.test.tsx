@@ -2,7 +2,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { act, cleanup, fireEvent, render, screen } from "@testing-library/react";
 import { InspectionScope } from "@/components/inspection/surface-scope";
 import { LonghuTab } from "@/components/tape/longhu-tab";
-import { getLonghu } from "@/lib/api";
+import { getLonghu, getLonghuThemeTrail, type LonghuTrailPayload } from "@/lib/api";
 import type { LongHuRecord } from "@/types/market";
 
 // 龙虎榜披露语义（2026-09-02 盘中实测驱动）：
@@ -60,6 +60,7 @@ function at(hour: number, minute: number) {
 
 beforeEach(() => {
   vi.mocked(getLonghu).mockReset();
+  vi.mocked(getLonghuThemeTrail).mockReset().mockRejectedValue(new Error("skipped"));
 });
 
 async function mount() {
@@ -68,12 +69,47 @@ async function mount() {
 }
 
 describe("LonghuTab 披露语义（P1-C）", () => {
+  it("binds trail cutoff to selected date, cancels the old request and discards its late result", async()=>{
+    at(17,5);
+    vi.mocked(getLonghu).mockResolvedValue([]);
+    const pending=new Map<string,{signal:AbortSignal;resolve:(data:LonghuTrailPayload)=>void}>();
+    vi.mocked(getLonghuThemeTrail).mockImplementation((_days,day,options)=>new Promise(resolve=>{
+      pending.set(day!,{signal:options!.signal!,resolve});
+    }));
+    render(<InspectionScope initialSearch="date=2026-08-31"><LonghuTab/></InspectionScope>);
+    await act(async()=>{});
+    const old=pending.get("2026-08-31")!;
+    fireEvent.change(screen.getByLabelText(/按日期查询/),{target:{value:"2026-09-01"}});
+    await act(async()=>{});
+    expect(old.signal.aborted).toBe(true);
+    const payload=(day:string,label:string):LonghuTrailPayload=>({requested_date:day,anchor_date:day,expected_days:[day],days:[day],coverage_state:"complete",empty_days:[],trail:[{concept:label,total:1,first:1,last:1,daily:[{date:day,net:1}]}],degraded:[],note:"等分估算，非真实拆分"});
+    await act(async()=>{pending.get("2026-09-01")!.resolve(payload("2026-09-01","历史迁徙"));});
+    expect(screen.getByText("历史迁徙")).toBeTruthy();
+    expect(screen.getByText(/题材迁徙 · 截至 2026-09-01/)).toBeTruthy();
+    await act(async()=>{old.resolve(payload("2026-08-31","旧窗晚回"));});
+    expect(screen.queryByText("旧窗晚回")).toBeNull();
+  });
+
+  it("clears a previous trail on historical failure and exposes unknown instead of the latest window",async()=>{
+    at(17,5);vi.mocked(getLonghu).mockResolvedValue([]);
+    vi.mocked(getLonghuThemeTrail).mockResolvedValueOnce({requested_date:null,anchor_date:"2026-09-02",expected_days:["2026-09-02"],days:["2026-09-02"],coverage_state:"complete",empty_days:[],trail:[{concept:"最新窗",total:1,first:1,last:1,daily:[{date:"2026-09-02",net:1}]}],degraded:[],note:"等分估算"}).mockRejectedValue(new Error("history unavailable"));
+    render(<InspectionScope initialSearch=""><LonghuTab/></InspectionScope>);
+    await act(async()=>{});
+    expect(screen.getByText("最新窗")).toBeTruthy();
+    fireEvent.change(screen.getByLabelText(/按日期查询/),{target:{value:"2026-09-01"}});
+    await act(async()=>{});
+    expect(screen.queryByText("最新窗")).toBeNull();
+    expect(screen.getByText(/所选截止日窗口读取失败，未显示其他日期/)).toBeTruthy();
+    expect(getLonghuThemeTrail).toHaveBeenLastCalledWith(5,"2026-09-01",expect.objectContaining({signal:expect.any(AbortSignal)}));
+  });
+
   it("compact-date deep links retain their original request while sharing today's disclosure window", async () => {
     at(14, 20);
     vi.mocked(getLonghu).mockRejectedValue(new Error("all providers failed"));
     render(<InspectionScope initialSearch="date=20260902"><LonghuTab /></InspectionScope>);
     await act(async () => {});
     expect(getLonghu).toHaveBeenCalledWith("20260902");
+    expect(getLonghuThemeTrail).toHaveBeenCalledWith(5,"2026-09-02",expect.objectContaining({signal:expect.any(AbortSignal)}));
     expect((screen.getByLabelText(/按日期查询/) as HTMLInputElement).value).toBe("2026-09-02");
     expect(screen.getByText(/今日榜单尚未披露/)).toBeTruthy();
     expect(screen.queryByText(/加载失败/)).toBeNull();

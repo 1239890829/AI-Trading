@@ -342,16 +342,36 @@ export interface LonghuTrailRow {
 
 export interface LonghuTrailPayload {
   days: string[];
+  requested_date: string | null;
+  anchor_date: string;
+  expected_days: string[];
+  coverage_state: "complete" | "partial" | "unknown";
+  empty_days: string[];
+  sources?: string[];
   trail: LonghuTrailRow[];
   degraded: string[];
   note: string;
 }
 
-export async function getLonghuThemeTrail(days = 5): Promise<LonghuTrailPayload> {
-  return (await getJson<LonghuTrailPayload>(
-    `/api/market/longhu/theme-trail?days=${days}`,
-    20_000,
-  )).data;
+export async function getLonghuThemeTrail(days = 5, date?: string, options: ReadOptions = {}): Promise<LonghuTrailPayload> {
+  const validDate = (value: unknown): value is string => typeof value === "string" && /^\d{4}-\d{2}-\d{2}$/.test(value)
+    && Number.isFinite(Date.parse(`${value}T00:00:00Z`)) && new Date(`${value}T00:00:00Z`).toISOString().slice(0, 10) === value;
+  if (date !== undefined && !validDate(date)) throw new Error("龙虎榜迁徙截止日格式无效");
+  const query = new URLSearchParams({days: String(days)});
+  if (date) query.set("date", date);
+  const data = (await getJson<LonghuTrailPayload>(`/api/market/longhu/theme-trail?${query}`, 20_000, options)).data;
+  if (!data || data.requested_date !== (date ?? null) || !validDate(data.anchor_date) || date && data.anchor_date !== date
+    || !Array.isArray(data.days) || !Array.isArray(data.expected_days) || !Array.isArray(data.empty_days)
+    || !Array.isArray(data.trail) || !Array.isArray(data.degraded)
+    || data.sources !== undefined && (!Array.isArray(data.sources) || data.sources.some(source => typeof source !== "string"))
+    || !["complete", "partial", "unknown"].includes(data.coverage_state)
+    || data.days.some(day => !validDate(day) || day > data.anchor_date || !data.expected_days.includes(day))
+    || data.expected_days.some(day => !validDate(day) || day > data.anchor_date)
+    || data.empty_days.some(day => !data.days.includes(day))
+    || data.trail.some(row => !Array.isArray(row.daily) || row.daily.some(point => !data.days.includes(point.date)))) {
+    throw new Error("龙虎榜迁徙返回日期或窗口身份不一致");
+  }
+  return data;
 }
 
 export async function searchSymbols(q: string): Promise<SymbolSearchItem[]> {

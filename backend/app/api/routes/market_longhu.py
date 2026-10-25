@@ -147,6 +147,8 @@ async def longhu(
 async def longhu_theme_trail(
     request: Request,
     days: int = Query(default=5, ge=1, le=10, description="回看交易日数（≤10 控限流）"),
+    date_str: str | None = Query(default=None, alias="date", min_length=10, max_length=10,
+                                 description="YYYY-MM-DD，明确的窗口截止日；默认最近交易日"),
     hub: QuoteHub = Depends(get_hub),
 ) -> dict:
     """龙虎榜跨日题材轨迹（B3，官方场景 16 方法学）——资金近 N 日在题材间的轮动。
@@ -162,14 +164,25 @@ async def longhu_theme_trail(
     from app.market.trade_calendar import trading_days
     from app.services.longhu_trail import aggregate_concept_trail
 
-    cache = cache_on(request.app.state, "market.longhu.theme-trail", 300, maxsize=4)
-    key = (days,)
+    if date_str is not None:
+        try:
+            anchor = date.fromisoformat(date_str)
+            if anchor.isoformat() != date_str or anchor > beijing_today():
+                raise ValueError("invalid cutoff")
+        except ValueError as exc:
+            raise HTTPException(status_code=422, detail="date 须为不晚于今天的有效 YYYY-MM-DD") from exc
+    else:
+        anchor = await default_trade_date(hub)
+    cache = cache_on(request.app.state, "market.longhu.theme-trail", 300, maxsize=16)
+    key = (days, anchor.isoformat(), date_str is not None)
     hit, payload = cache.get(key)
     if hit:
         return {"data": payload, "meta": meta_payload(hub)}
 
-    anchor = await default_trade_date(hub)
-    cal = await trading_days(hub.provider)
+    try:
+        cal = await trading_days(hub.provider)
+    except Exception as exc:
+        raise HTTPException(status_code=503, detail="交易日历不可用，无法核实所选截止日窗口") from exc
     i = _bisect.bisect_right(cal, anchor)
     window = cal[max(0, i - days) : i]  # 升序近 N 个交易日（含最近已披露日）
     if not window:
@@ -180,16 +193,27 @@ async def longhu_theme_trail(
     )
     daily: list[tuple[date, list]] = []
     degraded: list[str] = []
+    empty_days: list[str] = []
     for d, res in zip(window, results):
         if isinstance(res, BaseException):
-            degraded.append(f"{d.isoformat()}: {res}")
+            degraded.append(f"{d.isoformat()}: 来源读取失败，未核")
+        elif not isinstance(res, (list, tuple)) or any(getattr(row, "trade_date", None) != d for row in res):
+            degraded.append(f"{d.isoformat()}: 来源返回日期不匹配，未混入其他日期")
         else:
             daily.append((d, res))
+            if not res:
+                empty_days.append(d.isoformat())
     if not daily:
         raise HTTPException(status_code=502, detail=f"龙虎榜近 {days} 日全部拉取失败：{degraded}")
 
     payload = {
         "days": [d.isoformat() for d, _ in daily],
+        "requested_date": date_str,
+        "anchor_date": anchor.isoformat(),
+        "expected_days": [d.isoformat() for d in window],
+        "coverage_state": "unknown" if empty_days else "partial" if degraded or len(window) < days else "complete",
+        "empty_days": empty_days,
+        "sources": sorted({row.source for _day, records in daily for row in records if getattr(row, "source", None)}),
         "trail": aggregate_concept_trail(daily),
         "degraded": degraded,
         "note": "概念等分守恒口径（单股净额按概念数均摊，非真实拆分）；仅统计日榜（range_days=1）",

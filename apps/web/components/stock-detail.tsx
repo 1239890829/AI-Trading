@@ -415,7 +415,15 @@ export const StockDetailPanel = memo(function StockDetailPanel({
     if (result && result.symbol !== symbol) throw new Error("题材资料标的不匹配");
     return result;
   }, {key: symbol, enabled: profileVisible && !!symbol, intervalMs: null, marketHours: false});
-  const stockThemes = themesResource.data ?? null;
+  const [themesEnhanceSymbol, setThemesEnhanceSymbol] = useState("");
+  const enhancedThemes = useResource(async () => {
+    const base = themesResource.data;
+    const result = await getStockThemes(symbol, {enrichment: "full"});
+    if (result && result.symbol !== symbol) throw new Error("题材增强标的不匹配");
+    if (base && result && JSON.stringify(base.official.map(row => [row.theme_code, row.theme_name, row.source]).sort()) !== JSON.stringify(result.official.map(row => [row.theme_code, row.theme_name, row.source]).sort())) throw new Error("正式目录身份已变，请重新读取目录");
+    return {base, result};
+  }, {key: symbol, enabled: profileVisible && themesEnhanceSymbol === symbol, intervalMs: null, marketHours: false, refreshOnVisible: false});
+  const stockThemes = (enhancedThemes.data?.base === themesResource.data ? enhancedThemes.data?.result : null) ?? themesResource.data ?? null;
   const companyResource = useResource(() => getCompanyProfile<CompanyProfile>(symbol), {
     key: symbol, enabled: profileVisible, intervalMs: null, marketHours: false,
   });
@@ -431,6 +439,7 @@ export const StockDetailPanel = memo(function StockDetailPanel({
   const [prevDataSymbol, setPrevDataSymbol] = useState<string | null>(null);
   if (symbol !== prevDataSymbol) {
     setPrevDataSymbol(symbol);
+    setThemesEnhanceSymbol("");
     setBars([]);
     setTradingStatus(null);
     setMinutes([]);
@@ -1085,7 +1094,7 @@ export const StockDetailPanel = memo(function StockDetailPanel({
           {viewRightTab === "real" && (
             <RealPositionPanel symbol={symbol} currentPrice={quote?.price ?? null} currentName={quote?.name ?? null} realPositions={realPositions} active={rightActive} className="h-full" />
           )}
-          {(viewRightTab === "profile" || viewRightTab === "themes") && <ProfilePanel themes={stockThemes} themesState={{pending: themesResource.pending, loaded: themesResource.data !== undefined, error: themesResource.error ? "题材读取失败" : null, readAt: null}} onThemesRetry={themesResource.refresh} boardRows={boardRows} company={company} fins={fins} readState={readStates.financials} onRetry={() => retryRead("financials")} readIdentity={`${symbol}:financials`} active={rightActive}/>}
+          {(viewRightTab === "profile" || viewRightTab === "themes") && <ProfilePanel themes={stockThemes} themesState={{pending: themesResource.pending, loaded: themesResource.data !== undefined, error: themesResource.error ? "题材读取失败" : null, readAt: null}} onThemesRetry={themesResource.refresh} onThemesEnhance={() => {if (themesEnhanceSymbol === symbol) enhancedThemes.refresh(); else setThemesEnhanceSymbol(symbol);}} themesEnhancing={themesEnhanceSymbol === symbol && enhancedThemes.pending} themesEnhanceError={!!enhancedThemes.error} boardRows={boardRows} company={company} fins={fins} readState={readStates.financials} onRetry={() => retryRead("financials")} readIdentity={`${symbol}:financials`} active={rightActive}/>}
 
           {viewRightTab === "info" && <div id={`${perspectiveId}-information`}><InfoPanel key={symbol} anns={anns} news={news} annError={annError} newsError={newsError} loading={digestLoading} onRetry={() => { void loadDigest(); }} /></div>}
 

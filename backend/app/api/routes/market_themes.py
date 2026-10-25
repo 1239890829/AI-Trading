@@ -8,6 +8,7 @@ from __future__ import annotations
 
 import asyncio
 import logging
+import math
 from copy import deepcopy
 from datetime import date
 from fastapi import APIRouter, Depends, HTTPException, Query, Request
@@ -29,6 +30,10 @@ from app.services.theme_catalog_service import official_multi_day_changes
 
 router = APIRouter(tags=["market"])
 log = logging.getLogger("app.api.routes.market")
+
+# Optional K-line enrichment must not hold the basic theme list behind slow batches.
+THEME_KLINE_VIEW_BUDGET_SECONDS = 0.25
+THEME_KLINE_SOURCE_BUDGET_SECONDS = 15.0
 
 from app.api.routes.market_envelope import (
     meta_payload,
@@ -68,64 +73,235 @@ async def market_overview(request: Request, hub: QuoteHub = Depends(get_hub)) ->
     }
 
 
-async def _verify_board_multi_day(request: Request, board_payload: dict) -> None:
+async def _official_identities_cached(request: Request) -> dict:
+    """Share a local primitive projection; canceled views do not abandon its thread."""
+    from app.services.official_match import catalog_identity_index
+
+    svc = request.app.state.theme_catalog
+    revision = getattr(svc, "revision", 0)
+    cache = cache_on(svc, "themes.official.identities", 60, maxsize=4)
+    key = ("exact-catalog-v2", revision)
+    hit, result = cache.get(key)
+    if hit:
+        return deepcopy(result)
+
+    async def load():
+        hit, result = cache.get(key)
+        if hit:
+            return result
+        try:
+            rows = await asyncio.to_thread(svc.get_catalog, limit=1000)
+            identities = catalog_identity_index(rows)
+            if getattr(svc, "revision", 0) != revision:
+                raise RuntimeError("catalog_revision_changed")
+            result = {"state": "available", "identities": identities, "reason": None}
+        except Exception as exc:
+            result = {"state": "unavailable", "identities": {}, "reason": type(exc).__name__}
+        cache.set(key, result, ttl=60 if result["state"] == "available" else 5)
+        return result
+
+    return await read_inflight(svc, ("theme-official-identities", cache, key), load)
+
+
+async def _official_bars_cached(request: Request, code: str, trade_date: date) -> dict:
+    """One bounded provider-owned read, shared after UI waiters disconnect."""
+    state = request.app.state
+    svc = state.theme_catalog
+    owner = getattr(getattr(state, "hub", None), "provider", svc)
+    cache = cache_on(svc, "themes.official.bars", 60, maxsize=256)
+    key = ("exact-catalog-v2", code, trade_date.isoformat(), getattr(svc, "revision", 0))
+    hit, result = cache.get(key)
+    if hit:
+        return deepcopy(result)
+
+    async def load():
+        hit, result = cache.get(key)
+        if hit:
+            return result
+        sem = getattr(svc, "_board_fetch_sem", None)
+        if sem is None:
+            sem = getattr(owner, "_theme_kline_sem", None)
+            if sem is None:
+                sem = owner._theme_kline_sem = asyncio.Semaphore(4)
+
+        async def fetch():
+            async with sem:
+                return await svc.fetch_board_bars(code)
+
+        try:
+            # The deadline includes waiting for the shared source concurrency gate.
+            raw = await asyncio.wait_for(fetch(), timeout=THEME_KLINE_SOURCE_BUDGET_SECONDS)
+            if not isinstance(raw, list):
+                raise ValueError("invalid bar list")
+            bars = []
+            seen = set()
+            for row in raw:
+                if not isinstance(row, dict) or not isinstance(row.get("date"), str):
+                    raise ValueError("invalid bar identity")
+                day = date.fromisoformat(row["date"])
+                if day.isoformat() != row["date"] or row["date"] in seen:
+                    raise ValueError("invalid or duplicate bar date")
+                seen.add(row["date"])
+                close = row.get("close")
+                if isinstance(close, bool) or not isinstance(close, (int, float)) or not math.isfinite(close) or close <= 0:
+                    raise ValueError("invalid bar close")
+                if day <= trade_date:
+                    bars.append(dict(row))
+            bars.sort(key=lambda row: row["date"])
+            result = {"state": "available" if bars else "unavailable", "bars": bars,
+                      "as_of": bars[-1]["date"] if bars else None,
+                      "reason": None if bars else "no_bars_at_or_before_requested_date"}
+        except Exception as exc:  # source failure remains unknown, briefly shared
+            result = {"state": "unavailable", "bars": [], "as_of": None,
+                      "reason": type(exc).__name__}
+        cache.set(key, result, ttl=60 if result["state"] == "available" else 5)
+        return result
+
+    return await read_inflight(owner, ("theme-official-bars", id(svc), key), load)
+
+
+def _restore_unverified_board(board: dict) -> None:
+    for n in (3, 5, 10):
+        key = f"chg_{n}d"
+        if f"{key}_inferred" in board:
+            board[key] = board[f"{key}_inferred"]
+    for key in ("multi_day_source", "multi_day_source_code", "multi_day_source_name",
+                "multi_day_as_of", "multi_day_cutoff_date"):
+        board.pop(key, None)
+    board["multi_day_verified"] = False
+
+
+async def _verify_board_multi_day(request: Request, board_payload: dict, trade_date: date) -> None:
     """T3/B3（architecture-design §1）：用同花顺官方板块 K 线交叉验证/替换
     板块 3/5/10 日涨跌幅（东财字段序推断值）。
 
-    - 题材名（ths 体系）直接映射官方概念目录 → 板块 K 线 → 重算涨跌幅
+    - 源原因名与目录正式名称精确相同 → 该目录代码 K 线 → 重算涨跌幅
     - 官方可得 → 覆盖 chg_3d/5d/10d + multi_day_verified=true（推断值保留在 *_inferred 供审计）
     - 不可用（无目录服务/题材不在目录/拉取失败）→ 保留推断值 + false，caveats 如实说明
-    - 缓存命中的 payload 已验证过则直接跳过，避免每请求重复拉 K 线
+    - 按代码、目标日期与目录版本缓存 K 线；非必需增强超过列表等待窗则明确 pending
     """
+    deadline = asyncio.get_running_loop().time() + THEME_KLINE_VIEW_BUDGET_SECONDS
     svc = getattr(request.app.state, "theme_catalog", None)
-    if svc is None:
-        return
     cards = board_payload.get("themes") or []
-    if any(((c.get("board") or {}).get("multi_day_verified")) for c in cards):
+    if svc is None:
+        for card in cards:
+            board = card.get("board")
+            if board:
+                _restore_unverified_board(board)
+                board.update(multi_day_catalog=None, multi_day_verification_state="catalog_unavailable",
+                             multi_day_requested_trade_date=trade_date.isoformat())
         return
-
-    name_to_code = {t.name: t.code for t in svc.get_catalog(limit=1000)}
+    catalog_waiter = asyncio.create_task(_official_identities_cached(request))
+    catalog_done = set()
+    try:
+        catalog_done, _pending = await asyncio.wait(
+            {catalog_waiter}, timeout=max(0, deadline - asyncio.get_running_loop().time()))
+    finally:
+        if not catalog_waiter.done():
+            # Cancel only this request's waiter. The service read owner drains
+            # the real worker and retains its result for the next base payload.
+            catalog_waiter.cancel()
+            await asyncio.gather(catalog_waiter, return_exceptions=True)
+    result = None
+    if catalog_done:
+        try:
+            result = catalog_waiter.result()
+        except (Exception, asyncio.CancelledError) as exc:
+            result = {"state": "unavailable", "reason": type(exc).__name__}
+    if result is None or result["state"] != "available":
+        for card in cards:
+            board = card.get("board")
+            if board:
+                _restore_unverified_board(board)
+                board.update(multi_day_catalog=None,
+                             multi_day_verification_state="pending" if result is None else "catalog_unavailable",
+                             multi_day_reason="catalog_read_pending" if result is None else result.get("reason"),
+                             multi_day_requested_trade_date=trade_date.isoformat())
+        return
+    identities = result["identities"]
     targets: dict[str, list[tuple[dict, dict]]] = {}  # 目录代码 → (卡片, board dict) 列表
     for card in cards:
         board = card.get("board")
         if not board:
             continue
-        code = name_to_code.get(card.get("theme") or "") or name_to_code.get(board.get("name") or "")
-        if code:
-            targets.setdefault(code, []).append((card, board))
+        board["multi_day_requested_trade_date"] = trade_date.isoformat()
+        identity = identities.get(card.get("theme") or "") if not card.get("is_unclassified") else None
+        board_source_mismatch = identity is not None and board.get("name") != identity["name"]
+        if board_source_mismatch:
+            identity = None  # a different provider board cannot inherit this code's interval facts
+        # A previous fuzzy-name upgrade or a renamed catalog cannot stay verified.
+        # Restore available inferred facts, without inventing missing prior values.
+        if (identity is None or board.get("multi_day_catalog") != identity
+                or board.get("multi_day_cutoff_date") != trade_date.isoformat()):
+            _restore_unverified_board(board)
+        if identity is None:
+            board["multi_day_verified"] = False
+            board["multi_day_catalog"] = None
+            board["multi_day_verification_state"] = "board_source_mismatch" if board_source_mismatch else "unmapped"
+            continue
+        if (board.get("multi_day_verified") is True and board.get("multi_day_catalog") == identity
+                and board.get("multi_day_source") == "ths_official_kline"
+                and board.get("multi_day_cutoff_date") == trade_date.isoformat()):
+            continue
+        board["multi_day_catalog"] = dict(identity)
+        board["multi_day_verification_state"] = "pending"
+        board.pop("multi_day_reason", None)
+        targets.setdefault(identity["code"], []).append((card, board))
     if not targets:
         return
 
-    sem = asyncio.Semaphore(4)
-    bars_by_code: dict[str, list[dict]] = {}
-
-    async def _fetch(code: str) -> None:
-        async with sem:
-            try:
-                bars_by_code[code] = await svc.fetch_board_bars(code)
-            except Exception as exc:  # noqa: BLE001 - 单板块失败保留推断值
-                log.warning("board bars %s unavailable: %s", code, exc)
-
-    await asyncio.gather(*(_fetch(c) for c in targets))
+    waiters = {asyncio.create_task(_official_bars_cached(request, code, trade_date)): code for code in targets}
+    done = set()
+    try:
+        done, _pending = await asyncio.wait(
+            waiters, timeout=max(0, deadline - asyncio.get_running_loop().time()))
+    finally:
+        # These are only request waiters. read_inflight shields the real provider
+        # owners; their bounded source reads drain and populate the reusable cache.
+        pending = [task for task in waiters if not task.done()]
+        for task in pending:
+            task.cancel()
+        if pending:
+            await asyncio.gather(*pending, return_exceptions=True)
+    results = {}
+    for task in done:
+        try:
+            results[waiters[task]] = task.result()
+        except (Exception, asyncio.CancelledError) as exc:
+            results[waiters[task]] = {"state": "unavailable", "bars": [], "reason": type(exc).__name__}
 
     verified = 0
     position_upgraded = 0
     for code, pairs in targets.items():
-        bars = bars_by_code.get(code)
+        result = results.get(code)
+        if result is None:
+            continue  # pending: the base list can return before optional IO completes
+        bars = result.get("bars")
         if not bars:
+            for _card, board in pairs:
+                board["multi_day_verification_state"] = "source_unavailable"
+                board["multi_day_reason"] = result.get("reason")
             continue
         official = official_multi_day_changes(bars)
         for card, board in pairs:
             for n in (3, 5, 10):
                 key = f"chg_{n}d"
                 if official.get(key) is not None:
-                    board[f"{key}_inferred"] = board.get(key)
+                    board.setdefault(f"{key}_inferred", board.get(key))
                     board[key] = official[key]
             board["multi_day_verified"] = all(
                 official.get(f"chg_{n}d") is not None for n in (3, 5, 10)
             )
-            if board["multi_day_verified"]:
+            has_official = any(official.get(f"chg_{n}d") is not None for n in (3, 5, 10))
+            board["multi_day_verification_state"] = "verified" if board["multi_day_verified"] else "partial"
+            if has_official:
                 board["multi_day_source"] = "ths_official_kline"
+                board["multi_day_source_code"] = code
+                board["multi_day_source_name"] = board["multi_day_catalog"]["name"]
+                board["multi_day_as_of"] = bars[-1].get("date")
+                board["multi_day_cutoff_date"] = trade_date.isoformat()
+                board.pop("multi_day_reason", None)
+            if board["multi_day_verified"]:
                 verified += 1
             # P1-6：官方 5 日涨幅到位后，把持续性评估的位置判定从 active_days
             # 代理升级为真实区间涨幅（chg_5d 不可得时保持代理口径，不硬凑）。
@@ -140,7 +316,7 @@ async def _verify_board_multi_day(request: Request, board_payload: dict) -> None
         for i, text in enumerate(caveats):
             if "board_multi_day_verified" in text:
                 caveats[i] = (
-                    f"板块 3/5/10 日涨跌幅已用同花顺官方板块 K 线交叉验证"
+                    f"精确同名目录的板块 3/5/10 日涨跌幅已用同花顺官方板块 K 线交叉验证"
                     f"（{verified}/{card_total} 张卡片），持续性评估位置判定同步升级"
                     f"（{position_upgraded} 张）；未命中的题材保留东财字段序推断"
                 )
@@ -150,7 +326,7 @@ async def _verify_board_multi_day(request: Request, board_payload: dict) -> None
 def _attach_official_flags(request: Request, themes_list: list[dict]) -> None:
     """L5（architecture-design §1）+ 09-08 簇级官方概念挂靠：见 app/services/official_match.py。
 
-    盘面题材看板与猎场机会视图共用同一挂靠实现（成分重叠反查，非簇名精确匹配）。
+    盘面题材看板与猎场机会视图共用精确目录身份；成分重叠另作相关导航。
     """
     from app.services.official_match import attach_official
 
@@ -182,7 +358,7 @@ async def themes(
     payload = await _theme_board_cached(request, hub, trade_date)
 
     # T3/B3：官方板块 K 线交叉验证（缓存的 payload 已验证过时内部直接跳过）
-    await _verify_board_multi_day(request, payload["data"])
+    await _verify_board_multi_day(request, payload["data"], trade_date)
 
     # 挂靠会写卡片与嵌套成员标记；worker 只修改本请求副本。
     themes_list = deepcopy(payload["data"]["themes"])
@@ -211,7 +387,11 @@ async def _theme_board_cached(request: Request, hub: QuoteHub, trade_date: date)
     from app.services.theme_service import build_theme_board
 
     cache = cache_on(request.app.state, "market.themes", 60, maxsize=16)
-    hit, payload = cache.get(trade_date)
+    # Catalog renames/retirements must invalidate derived identity and K-line claims.
+    # The version also excludes payloads created by the former fuzzy-name policy.
+    key = ("exact-catalog-v2", trade_date,
+           getattr(getattr(request.app.state, "theme_catalog", None), "revision", 0))
+    hit, payload = cache.get(key)
     if hit:
         return deepcopy(payload)
 
@@ -228,10 +408,10 @@ async def _theme_board_cached(request: Request, hub: QuoteHub, trade_date: date)
         return {"data": board, "meta": await dated_meta(hub, trade_date)}
 
     async def cached():
-        _, payload = await cache.get_or_set(trade_date, load)
+        _, payload = await cache.get_or_set(key, load)
         return payload
 
-    return await read_inflight(hub.provider, ("theme-board", cache, trade_date), cached)
+    return await read_inflight(hub.provider, ("theme-board", cache, key), cached)
 
 
 async def _market_phase_cached(request: Request, hub: QuoteHub) -> str | None:

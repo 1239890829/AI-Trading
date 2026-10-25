@@ -1,7 +1,7 @@
 import { useState, type ReactNode } from "react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { act, cleanup, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
-import type { BoardFundFlowPayload, BoardFlowRow, DiscoveryMemberships, ThemesHotPayload } from "@/lib/api";
+import type { BoardFundFlowPayload, BoardFlowRow, DiscoveryMemberships, OfficialCatalogKind, ThemesHotPayload } from "@/lib/api";
 
 const {jsonMock} = vi.hoisted(() => ({jsonMock: vi.fn()}));
 vi.mock("@/lib/api/internal", async () => ({
@@ -21,13 +21,20 @@ const selected: DiscoverySelection = {date:"2026-10-23",loaded:true,entries:[{sy
 const farRect = {top:5000,bottom:5001,left:0,right:0,width:0,height:1,x:0,y:5000,toJSON:() => ({})} as DOMRect;
 
 function hotPayload(): ThemesHotPayload {
+  // Formal names/codes are source-verified anchors; all memberships/values below are isolated fixtures.
   return {ts:"2026-10-25T09:50:00+08:00",themes:[
-    {theme:"未涨停新题材",theme_code:"885001.TI",heat:700,hot_count:1,best:{symbol:"600519",name:"原入选公司",rank:7,rank_change:1},basis:"官方成分反查"},
-    {theme:"另一已映射题材",theme_code:"885002.TI",heat:100,hot_count:1,best:null,basis:"官方成分反查"},
+    {theme:"机器人概念",theme_code:"885517.TI",heat:700,heat_complete:true,member_count:20,member_as_of:"2026-10-25T08:00:00+08:00",hot_symbols:["600519"],concentration_pct:5,source:"ths_official",hot_count:1,best:{symbol:"600519",name:"原入选公司",rank:7,rank_change:1},basis:"官方成分反查"},
+    {theme:"人形机器人",theme_code:"886069.TI",heat:100,heat_complete:true,member_count:50,member_as_of:"2026-10-25T08:00:00+08:00",hot_symbols:["000001"],concentration_pct:2,source:"ths_official",hot_count:1,best:null,basis:"官方成分反查"},
   ],stocks:[
-    {symbol:"600519",name:"原入选公司",rank:7,heat:700,rank_change:1,themes:["未涨停新题材"]},
-    {symbol:"000001",name:"未归属热股",rank:12,heat:450,rank_change:null,themes:[]},
-  ]};
+    {symbol:"600519",name:"原入选公司",rank:7,heat:700,rank_change:1,themes:["机器人概念"]},
+    {symbol:"000001",name:"另一热股",rank:10,heat:100,rank_change:null,themes:["人形机器人"]},
+    {symbol:"600000",name:"未归属热股",rank:12,heat:450,rank_change:null,themes:[]},
+  ],ranking_basis:"hot_stock_concentration",catalog_revision:1,catalog_state:"ready",membership_state:"ready",scope:"hot_stock_sample"};
+}
+
+function officialCatalog(kind:OfficialCatalogKind) {
+  const anchors=kind==="industry"?[["881101.TI","种植业与林业"],["884001.TI","种子生产"],["884002.TI","粮食种植"]]:[["885517.TI","机器人概念"],["886069.TI","人形机器人"]];
+  return {kind,source:"ths_official",synced_at:null,total:anchors.length,items:anchors.map(([code,name])=>({code,name,kind,source:"ths_official",synced_at:null}))};
 }
 
 function board(overrides: Partial<BoardFlowRow> = {}): BoardFlowRow {
@@ -45,11 +52,16 @@ function memberships(symbols: string[], date: string | null, state: "matched" | 
   return {scope:"current_not_historical",requested_trade_date:date,content_version:"a".repeat(64),state:state==="matched"?"ready":"partial",
     source:"ths_official",source_as_of:null,observed_at:"2026-10-25T09:50:01+08:00",count:symbols.length,
     matched_count:state==="matched"?symbols.length:0,unknown_count:state==="unknown"?symbols.length:0,
-    items:symbols.map(symbol => ({symbol,state,themes:state==="matched"?[{theme_code:"885001.TI",theme_name:"未涨停新题材",source:"ths_official"}]:[],reason:state==="unknown"?"成分尚未同步":null}))};
+    items:symbols.map(symbol => ({symbol,state,themes:state==="matched"?[{theme_code:"885517.TI",theme_name:"机器人概念",source:"ths_official"}]:[],reason:state==="unknown"?"成分尚未同步":null}))};
 }
 function route(url: string) {
   const query = new URL(url,"http://localhost");
   if (query.pathname === "/api/themes/hot") return {data:hotPayload()};
+  if (query.pathname === "/api/themes/catalog") return {data:officialCatalog(query.searchParams.get("kind")==="industry"?"industry":"concept")};
+  if (query.pathname === "/api/themes/catalog/quotes") {
+    const codes=(query.searchParams.get("codes")??"").split(",");
+    return {data:{kind:query.searchParams.get("kind"),source:"ths_official",source_basis:"index_snapshot",source_as_of:null,source_ready_at:null,received_at:"2026-10-25T09:50:01+08:00",available:true,rows:codes.map(code=>({code,change_pct:null,price:null})),missing_codes:[]}};
+  }
   if (query.pathname === "/api/market/board-fund-flow") {
     const kind = query.searchParams.get("kind") as BoardFundFlowPayload["kind"];
     const range = query.searchParams.get("range") as BoardFundFlowPayload["range"];
@@ -84,44 +96,65 @@ describe("真实分类发现的来源与范围", () => {
     render(<Browser search="browse=methods&date=2026-10-22" selection={selected}/>);
     const link=await screen.findByRole("link",{name:/查看核验与反例/});
     expect(new URL(link.getAttribute("href")!,"http://localhost").searchParams.get("date")).toBe("2026-10-22");
-    expect(jsonMock.mock.calls.map(call=>call[0])).toEqual(["/api/picks/strategy-registry"]);
+    expect(jsonMock.mock.calls.map(call=>call[0])).toEqual(["/api/picks/strategy-registry?include_candidates=true"]);
   });
-  it("large heat remains readable in narrow rows while preserving the exact source value", async () => {
-    const data=hotPayload();data.themes[0].heat=51040600;data.stocks[0].heat=51040600;
+  it("方法目录没有显式日期时不被原入选缓存日期固定",async()=>{
+    jsonMock.mockResolvedValue({data:{strategies:[{key:"daily_picks",name:"每日精选",status:"active"}]}});
+    render(<Browser search="browse=methods" selection={selected}/>);
+    const link=await screen.findByRole("link",{name:/查看核验与反例/});
+    expect(new URL(link.getAttribute("href")!,"http://localhost").searchParams.has("date")).toBe(false);
+    expect(jsonMock).toHaveBeenCalledTimes(1);
+  });
+  it("方法选择回报精确日期与disc_method，仍只读取一次可选目录",async()=>{
+    const row={key:"daily_picks",name:"每日精选",status:"active"},methodTarget=vi.fn();
+    jsonMock.mockResolvedValue({data:{strategies:[row]}});
+    render(<DiscoveryBrowser search="browse=methods&disc_method=daily_picks&method=intraday_watch&run_id=old" selection={selected}
+      methodDate="2026-10-22" onNavigate={navigateMock} onTarget={targetMock} onMethodTarget={methodTarget}/>);
+    await screen.findByRole("link",{name:"查看方法规则：每日精选"});
+    expect(methodTarget.mock.lastCall).toEqual([JSON.stringify(["methods","2026-10-22","daily_picks"]),row]);
+    expect(jsonMock.mock.calls.map(([url])=>url)).toEqual(["/api/picks/strategy-registry?include_candidates=true"]);
+  });
+  it("巨大人气不能替代集中度或成为全市场主线结论", async () => {
+    const data=hotPayload();data.themes[0].heat=51040600;data.stocks[0].heat=51040600;data.themes[0].concentration_pct=1;data.themes[0].member_count=100;
     jsonMock.mockResolvedValue({data});
     render(<Browser/>);
-    const exact=await screen.findByTitle("51,040,600");
-    expect(exact.textContent).toContain("5104.1万");
+    await screen.findByRole("button",{name:"查看机器人概念成分"});
+    expect(resultNames()).toEqual(["人形机器人","机器人概念"]);
+    expect(within(resultRows()[1]).getByText("1%")).toBeTruthy();
+    expect(screen.getByText(/本系统排序，不是来源官方热榜或全市场最强主线/)).toBeTruthy();
     expect(screen.getByText(/榜单时刻/).textContent).toContain("09:50（北京）");
   });
   it("没有涨停梯队也可发现热门题材，归属未核热股仍能读取", async () => {
     render(<Browser/>);
-    expect(await screen.findByRole("button",{name:"查看未涨停新题材成分"})).toBeTruthy();
-    expect(screen.getByText("热股共同归属，包含题材与通用标签")).toBeTruthy();
+    expect(await screen.findByRole("button",{name:"查看机器人概念成分"})).toBeTruthy();
+    expect(screen.getByText("同花顺正式概念 · 按热股集中度观察")).toBeTruthy();
     expect(screen.getByText(/榜单时刻/).textContent).toContain("09:50（北京）");
     const unmapped = screen.getByText("热榜中归属未核的股票").closest("details")!;
     fireEvent.click(within(unmapped).getByText("热榜中归属未核的股票"));
-    expect(within(unmapped).getByRole("link",{name:"未归属热股"}).getAttribute("href")).toContain("symbol=000001");
+    expect(within(unmapped).getByRole("link",{name:"未归属热股"}).getAttribute("href")).toContain("symbol=600000");
     expect(jsonMock.mock.calls.map(call => call[0])).toEqual(["/api/themes/hot?limit=30"]);
     expect(selected.entries[0].open).not.toHaveBeenCalled();
   });
 
-  it("源股未提供人气时聚合占位0不是有效零，显示缺失覆盖", async () => {
+  it("人气缺失和成分总数未知不补集中度0，未知条目沉底但保持可读", async () => {
     const data=hotPayload();
-    data.themes[0].heat=0;data.stocks[0].heat=null;
+    data.themes[0].heat=null;data.themes[0].heat_complete=false;data.stocks[0].heat=null;
+    data.themes[0].member_count=null;data.themes[0].concentration_pct=null;
     jsonMock.mockResolvedValue({data});
     render(<Browser/>);
-    const target=await screen.findByRole("button",{name:"查看未涨停新题材成分"});
-    expect(within(target).getByText("未齐")).toBeTruthy();
-    expect(within(target).getByText("0/1股提供人气")).toBeTruthy();
+    const target=await screen.findByRole("button",{name:"查看机器人概念成分"});
+    expect(within(target).getByText("未核")).toBeTruthy();
+    expect(resultNames()).toEqual(["人形机器人","机器人概念"]);
+    expect(within(target.closest("li")!).getByText(/成分总数未核/)).toBeTruthy();
+    expect(within(target).queryByText("0%")).toBeNull();
     expect(within(target).queryByText("榜内人气合计")).toBeNull();
   });
 
   it("每种激活视角只读对应来源，切走取消上游请求，不启动策略", async () => {
-    let finishHot!: (value: unknown) => void, finishBoards!: (value: unknown) => void;
+    let finishHot!: (value: unknown) => void, finishCatalog!: (value: unknown) => void;
     jsonMock.mockImplementation((url:string) => {
       if(url.includes("themes/hot"))return new Promise(resolve => {finishHot=resolve;});
-      if(url.includes("board-fund-flow"))return new Promise(resolve => {finishBoards=resolve;});
+      if(url.startsWith("/api/themes/catalog?"))return new Promise(resolve => {finishCatalog=resolve;});
       return Promise.resolve(route(url));
     });
     const page = render(<Browser search="browse=hot"/>);
@@ -130,19 +163,72 @@ describe("真实分类发现的来源与范围", () => {
     page.rerender(<Browser search="browse=catalog&disc_kind=industry&disc_range=20d"/>);
     await waitFor(() => expect(jsonMock).toHaveBeenCalledTimes(2));
     expect(hotSignal.aborted).toBe(true);
-    expect(jsonMock.mock.calls[1][0]).toBe("/api/market/board-fund-flow?kind=industry&range=intraday");
-    const boardSignal = jsonMock.mock.calls[1][2].signal as AbortSignal;
+    expect(jsonMock.mock.calls[1][0]).toBe("/api/themes/catalog?kind=industry");
+    const catalogSignal = jsonMock.mock.calls[1][2].signal as AbortSignal;
     page.rerender(<Browser search="browse=methods"/>);
     await screen.findByText("暂无已登记方法。");
-    expect(boardSignal.aborted).toBe(true);
+    expect(catalogSignal.aborted).toBe(true);
     expect(jsonMock.mock.calls.map(call => call[0])).toEqual([
-      "/api/themes/hot?limit=30","/api/market/board-fund-flow?kind=industry&range=intraday","/api/picks/strategy-registry",
+      "/api/themes/hot?limit=30","/api/themes/catalog?kind=industry","/api/picks/strategy-registry?include_candidates=true",
     ]);
     await act(async () => {
       finishHot({data:hotPayload()});
-      finishBoards({data:flow([board({kind:"industry"})],"industry")});
+      finishCatalog({data:officialCatalog("industry")});
     });
-    expect(screen.queryByRole("button",{name:"查看未涨停新题材成分"})).toBeNull();
+    expect(screen.queryByRole("button",{name:"查看机器人概念成分"})).toBeNull();
+  });
+
+  it("行业概念基础目录不等可选快照，也不依赖失败的东财资金榜",async()=>{
+    let finish!:(value:unknown)=>void;
+    jsonMock.mockImplementation((url:string)=>{
+      if(url.includes("board-fund-flow"))return Promise.reject(new Error("eastmoney unavailable"));
+      if(url.includes("/catalog/quotes?"))return new Promise(resolve=>{finish=resolve;});
+      return Promise.resolve(route(url));
+    });
+    render(<Harness initial="browse=catalog&disc_kind=concept&date=2026-10-22&sec=daily&selection=600519"/>);
+    const button=await screen.findByRole("button",{name:"查看机器人概念成分"});
+    expect(screen.getByRole("button",{name:"查看人形机器人成分"})).toBeTruthy();
+    await waitFor(()=>expect(jsonMock).toHaveBeenCalledTimes(2));
+    expect(button).toHaveProperty("disabled",false);fireEvent.click(button);
+    expect(targetMock.mock.lastCall).toEqual([JSON.stringify(["catalog","concept","intraday","885517.TI"]),{kind:"theme",code:"885517.TI",name:"机器人概念",catalogKind:"concept"}]);
+    expect(jsonMock.mock.calls.some(([url])=>String(url).includes("board-fund-flow"))).toBe(false);
+    expect(screen.getByText("报价正在补充，可先浏览目录。")).toBeTruthy();
+    const call=jsonMock.mock.calls.find(([url])=>String(url).includes("/catalog/quotes?"))!;
+    await act(async()=>finish(route(String(call[0]))));
+    expect(screen.getByRole("list",{name:"官方目录结果"}).textContent).not.toContain("0.00%");
+  });
+
+  it("只收拢热股样本重合，保留三个正式名称代码及独立下钻，可恢复完整列表",async()=>{
+    const data=hotPayload(),symbols=["600519","000001","600000","300024"];
+    data.stocks=symbols.map((symbol,index)=>({symbol,name:`隔离热股${index}`,rank:index+1,heat:100,rank_change:null,themes:index<3?["机器人概念","人形机器人","机器视觉"]:["机器视觉"]}));
+    data.themes=[
+      {...data.themes[0],hot_count:3,hot_symbols:symbols.slice(0,3),member_count:60,concentration_pct:5,heat:300,best:null},
+      {...data.themes[1],hot_count:3,hot_symbols:symbols.slice(0,3),member_count:100,concentration_pct:3,heat:300},
+      {...data.themes[1],theme:"机器视觉",theme_code:"886002.TI",hot_count:4,hot_symbols:symbols,member_count:200,concentration_pct:2,heat:400},
+    ];
+    jsonMock.mockResolvedValue({data});render(<Harness initial="browse=hot"/>);
+    await screen.findByRole("button",{name:"查看机器人概念成分"});
+    expect(resultRows()).toHaveLength(1);
+    expect(screen.getByRole("button",{name:"查看人形机器人成分"}).textContent).toContain("886069.TI");
+    expect(screen.getByRole("button",{name:"查看机器视觉成分"}).textContent).toContain("886002.TI");
+    expect(screen.getByText(/各名称、代码和成分独立保留，不合并为新题材/)).toBeTruthy();
+    fireEvent.click(screen.getByRole("button",{name:"查看机器视觉成分"}));
+    expect(targetMock.mock.lastCall?.[1]).toEqual({kind:"theme",code:"886002.TI",name:"机器视觉"});
+    fireEvent.click(screen.getByRole("button",{name:"重合热股已收拢"}));
+    expect(resultNames()).toEqual(["机器人概念","人形机器人","机器视觉"]);
+    expect(new URL(navigateMock.mock.lastCall![0],"http://localhost").searchParams.get("disc_group")).toBe("all");
+    expect(jsonMock).toHaveBeenCalledTimes(1);
+  });
+
+  it.each(["source","code","hot_symbols"])("正式热榜%s身份不完整时不展示或替换成别的题材",async issue=>{
+    const data=hotPayload();
+    if(issue==="source")(data.themes[0] as unknown as {source:string}).source="manual";
+    if(issue==="code")data.themes[0].theme_code="机器人概念";
+    if(issue==="hot_symbols")data.themes[0].hot_symbols=["600519","000001"];
+    jsonMock.mockResolvedValue({data});render(<Browser search="browse=hot&disc_code=885517.TI"/>);
+    expect((await screen.findByRole("alert")).textContent).toContain("分类返回身份或结构不一致");
+    expect(screen.queryByRole("button",{name:"查看机器人概念成分"})).toBeNull();
+    expect(targetMock.mock.calls.every(([,value])=>value===null)).toBe(true);
   });
 
   it.each([
@@ -197,16 +283,16 @@ describe("真实分类发现的来源与范围", () => {
   });
 
   it("中文组合输入未完成不提交URL或提前过滤；完成后仅在本地筛选", async () => {
-    render(<Harness initial="browse=hot&disc_code=885002.TI&selection=daily&date=2026-10-23&account=paper"/>);
-    await screen.findByRole("button",{name:"查看未涨停新题材成分"});
+    render(<Harness initial="browse=hot&disc_code=886069.TI&selection=daily&date=2026-10-23&account=paper"/>);
+    await screen.findByRole("button",{name:"查看机器人概念成分"});
     const input = screen.getByRole("textbox",{name:"搜索分类"});
-    fireEvent.compositionStart(input);fireEvent.change(input,{target:{value:"未涨停"}});
+    fireEvent.compositionStart(input);fireEvent.change(input,{target:{value:"机器人概念"}});
     expect(navigateMock).not.toHaveBeenCalled();
     expect(resultRows()).toHaveLength(2);
-    fireEvent.compositionEnd(input,{data:"未涨停"});
+    fireEvent.compositionEnd(input,{data:"机器人概念"});
     expect(resultRows()).toHaveLength(1);
     const query = new URL(navigateMock.mock.lastCall![0],"http://localhost").searchParams;
-    expect(query.get("disc_q")).toBe("未涨停");
+    expect(query.get("disc_q")).toBe("机器人概念");
     expect(query.get("date")).toBe("2026-10-23");expect(query.get("account")).toBe("paper");
     expect(query.has("disc_code")).toBe(false);expect(query.has("selection")).toBe(false);
     expect(jsonMock).toHaveBeenCalledTimes(1);
@@ -215,14 +301,14 @@ describe("真实分类发现的来源与范围", () => {
   it("选择行进入相应来源scope，清原名单选中但保留日期/账户/返回位置", async () => {
     const original="browse=hot&selection=daily&date=2026-10-23&account=paper&symbol=600519&from=%2Fmarket";
     render(<Harness initial={original}/>);
-    await screen.findByRole("button",{name:"查看未涨停新题材成分"});
-    fireEvent.click(screen.getByRole("button",{name:"查看未涨停新题材成分"}));
+    await screen.findByRole("button",{name:"查看机器人概念成分"});
+    fireEvent.click(screen.getByRole("button",{name:"查看机器人概念成分"}));
     const query = new URL(navigateMock.mock.lastCall![0],"http://localhost").searchParams;
     expect(navigateMock.mock.lastCall![1]).toBe(true);
-    expect(query.get("disc_code")).toBe("885001.TI");expect(query.get("selection")).toBeNull();
+    expect(query.get("disc_code")).toBe("885517.TI");expect(query.get("selection")).toBeNull();
     expect(query.get("account")).toBe("paper");expect(query.get("symbol")).toBe("600519");
     expect(query.get("from")).toBe("/market");expect(query.get("date")).toBe("2026-10-23");
-    expect(targetMock.mock.lastCall).toEqual([JSON.stringify(["hot","concept","intraday","885001.TI"]),{kind:"theme",code:"885001.TI",name:"未涨停新题材"}]);
+    expect(targetMock.mock.lastCall).toEqual([JSON.stringify(["hot","concept","intraday","885517.TI"]),{kind:"theme",code:"885517.TI",name:"机器人概念"}]);
     expect(selected.entries[0].open).not.toHaveBeenCalled();
   });
 
@@ -246,23 +332,24 @@ describe("真实分类发现的来源与范围", () => {
 });
 
 describe("行业概念的显式最近存档", () => {
-  it("本次失败不自动回退，显式读存档并保留原日期/分组/选中，可返回本次榜单", async () => {
+  it("基础目录失败不偷偷改资金源，旧存档URL仍独立可读，返回后恢复正式目录", async () => {
     let currentAvailable=false;
     jsonMock.mockImplementation(async(url:string)=>{
       const parsed=new URL(url,"http://localhost");
-      const range=parsed.searchParams.get("range") as BoardFundFlowPayload["range"];
-      if(range==="intraday" && !currentAvailable)throw new Error("source offline");
-      return {data:flow([board({name:range==="latest_saved"?"原行业样本":"恢复行业",kind:"industry"})],"industry",range)};
+      if(parsed.pathname==="/api/themes/catalog" && !currentAvailable)throw new Error("catalog offline");
+      if(parsed.pathname==="/api/market/board-fund-flow")return {data:flow([board({name:"原行业样本",kind:"industry"})],"industry","latest_saved")};
+      return route(url);
     });
-    render(<Harness initial="browse=catalog&date=2026-10-22&sec=daily&selection=600519&disc_code=BK0001"/>);
-    expect((await screen.findByRole("alert")).textContent).toContain("分类读取失败");
-    expect(jsonMock.mock.calls.map(([url])=>url)).toEqual(["/api/market/board-fund-flow?kind=industry&range=intraday"]);
+    const base="browse=catalog&date=2026-10-22&sec=daily&selection=600519";
+    const page=render(<Browser search={base}/>);
+    expect((await screen.findByRole("alert")).textContent).toContain("官方目录读取失败");
+    expect(jsonMock.mock.calls.map(([url])=>url)).toEqual(["/api/themes/catalog?kind=industry"]);
     expect(screen.queryByText("原行业样本")).toBeNull();
-    fireEvent.click(screen.getByRole("button",{name:"查看最近存档"}));
+    expect(screen.queryByRole("button",{name:"查看最近存档"})).toBeNull();
+    // The old explicit archive link remains historical; a failed directory never selects it automatically.
+    page.rerender(<Browser search={`${base}&disc_range=latest_saved`}/>);
     await screen.findByRole("button",{name:"查看原行业样本成分"});
-    const query=new URL(navigateMock.mock.lastCall![0],"http://localhost").searchParams;
-    expect(query.get("disc_range")).toBe("latest_saved");expect(query.has("disc_code")).toBe(false);
-    expect(query.get("date")).toBe("2026-10-22");expect(query.get("sec")).toBe("daily");expect(query.get("selection")).toBe("600519");
+    expect(navigateMock).not.toHaveBeenCalled();
     expect(screen.getByText("原榜单日期 2026-10-23")).toBeTruthy();
     expect(screen.getByText("Top50净流入存档样本，非全目录")).toBeTruthy();
     expect(screen.getByText(/历史参考，不表示即时源已恢复/)).toBeTruthy();
@@ -272,13 +359,14 @@ describe("行业概念的显式最近存档", () => {
     expect(screen.getByText("原日涨跌幅")).toBeTruthy();expect(screen.getByText("原当日净额")).toBeTruthy();
     currentAvailable=true;
     fireEvent.change(screen.getByRole("combobox",{name:"目录范围"}),{target:{value:"intraday"}});
-    await screen.findByRole("button",{name:"查看恢复行业成分"});
+    const next=new URL(navigateMock.mock.lastCall![0],"http://localhost");
+    expect(next.searchParams.get("date")).toBe("2026-10-22");expect(next.searchParams.get("sec")).toBe("daily");expect(next.searchParams.get("selection")).toBe("600519");
+    expect(next.searchParams.has("disc_range")).toBe(false);
+    page.rerender(<Browser search={next.search}/>);
+    await screen.findByRole("button",{name:"查看种植业与林业成分"});
     expect(screen.queryByText("Top50净流入存档样本，非全目录")).toBeNull();
-    expect(jsonMock.mock.calls.map(([url])=>url)).toEqual([
-      "/api/market/board-fund-flow?kind=industry&range=intraday",
-      "/api/market/board-fund-flow?kind=industry&range=latest_saved",
-      "/api/market/board-fund-flow?kind=industry&range=intraday",
-    ]);
+    expect(jsonMock.mock.calls.filter(([url])=>String(url).includes("board-fund-flow")).map(([url])=>url)).toEqual(["/api/market/board-fund-flow?kind=industry&range=latest_saved"]);
+    expect(jsonMock.mock.calls.filter(([url])=>String(url).startsWith("/api/themes/catalog?")).map(([url])=>url)).toEqual(Array(2).fill("/api/themes/catalog?kind=industry"));
     expect(selected.entries[0].open).not.toHaveBeenCalled();
   });
 
@@ -341,7 +429,7 @@ describe("原入选名单的目录对照边界", () => {
     const retry=vi.fn();
     const failed={...selected,loaded:false,readError:true,pending:false,retry};
     const page=render(<Browser selection={failed}/>);
-    await screen.findByRole("button",{name:"查看未涨停新题材成分"});
+    await screen.findByRole("button",{name:"查看机器人概念成分"});
     expect(screen.getByText("原名单读取失败，归属对照未完成。")).toBeTruthy();
     expect(resultRows()[0].textContent).toContain("原名单读取失败");
     expect(screen.queryByText("本组原名单已确认空")).toBeNull();
@@ -408,7 +496,7 @@ describe("原入选名单的目录对照边界", () => {
 
 describe("分类导航的键盘与深链", () => {
   it("方向键只移动焦点；切视角链接清旧分类选择但保留对象和日期", () => {
-    const search="browse=hot&disc_kind=concept&disc_range=5d&disc_code=old&disc_q=old&disc_sort=asc&selection=daily&date=2026-10-23&account=paper&symbol=600519&panel=evidence&review=1";
+    const search="browse=hot&disc_kind=concept&disc_range=5d&disc_code=old&disc_method=daily_picks&disc_group=all&disc_q=old&disc_sort=asc&selection=daily&date=2026-10-23&account=paper&symbol=600519&panel=evidence&review=1";
     render(<DiscoveryNavigation search={search}/>);
     const nav=screen.getByRole("navigation",{name:"选股分类发现"});
     const hot=within(nav).getByRole("link",{name:"热门题材"});
@@ -419,7 +507,7 @@ describe("分类导航的键盘与深链", () => {
     fireEvent.keyDown(document.activeElement!,{key:"Home",isComposing:true,keyCode:229});expect(document.activeElement).toBe(within(nav).getByRole("link",{name:"战法分类"}));
     const query=new URL(catalog.getAttribute("href")!,"http://localhost").searchParams;
     expect(query.get("browse")).toBe("catalog");expect(query.get("view")).toBe("discover");
-    for(const key of ["disc_kind","disc_range","disc_code","disc_q","disc_sort","selection","panel","review"])expect(query.has(key)).toBe(false);
+    for(const key of ["disc_kind","disc_range","disc_code","disc_method","disc_group","disc_q","disc_sort","selection","panel","review"])expect(query.has(key)).toBe(false);
     expect(query.get("date")).toBe("2026-10-23");expect(query.get("account")).toBe("paper");expect(query.get("symbol")).toBe("600519");
     expect(jsonMock).not.toHaveBeenCalled();
   });

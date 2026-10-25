@@ -8,12 +8,6 @@ import type { StockThemes } from "@/lib/api";
 import { pctColor, pctText } from "@/lib/format";
 import { themesUrl } from "@/lib/routing";
 
-/** 来源徽标语义（architecture-design §1）：官方成分=结构性归属，涨停归因=行为性归属，人工=override。 */
-const SOURCE_LABEL: Record<string, string> = {
-  ths_official: "官方成分",
-  manual: "人工",
-};
-
 /** 官方成分默认展示条数（2026-09-01 用户反馈：全量展示会把分时/K线挤下去）。 */
 const OFFICIAL_TOP_N = 6;
 
@@ -52,29 +46,34 @@ export function ThemeChipsRow({themes, companyNames = []}: {themes: StockThemes 
   const [expanded, setExpanded] = useState(false);
   const presence = useExitPresence(expanded ? true : null);
   const entries = useMemo(() => {
-    const result = new Map<string, {name: string; sources: string[]; change: number | null; attributed: boolean}>();
-    const add = (name: string, source: string, change: number | null = null, attributed = false) => {
-      const key = name.trim(); if (!key) return;
-      const item = result.get(key) || {name: key, sources: [], change: null, attributed: false};
+    const result = new Map<string, {name: string; code?: string; sources: string[]; change: number | null; attributed: boolean}>();
+    const add = (name: string, source: string, change: number | null = null, attributed = false, code?: string) => {
+      const clean = name.trim(); if (!clean) return;
+      const existing = [...result.entries()].filter(([, item]) => item.name === clean && item.code);
+      const key = code || (existing.length === 1 ? existing[0][0] : `source:${clean}`);
+      const item = result.get(key) || {name: clean, code, sources: [], change: null, attributed: false};
       if (!item.sources.includes(source)) item.sources.push(source);
       if (item.change === null && typeof change === "number" && Number.isFinite(change)) item.change = change;
       item.attributed ||= attributed; result.set(key, item);
     };
     const official = [...(themes?.official || [])].sort((a, b) => (b.theme_align_1d ?? -1) - (a.theme_align_1d ?? -1) || (b.theme_chg_1d ?? -Infinity) - (a.theme_chg_1d ?? -Infinity));
-    for (const item of official) add(item.theme_name, SOURCE_LABEL[item.source] || item.source, item.theme_chg_1d ?? null);
+    for (const item of official) {
+      const code = item.source === "ths_official" && /^\d{6}\.TI$/.test(item.theme_code) ? item.theme_code : undefined;
+      add(item.theme_name, code ? "官方成分" : item.source === "manual" ? "人工标注" : "来源标签（正式代码未核）", item.theme_chg_1d ?? null, false, code);
+    }
     for (const item of themes?.attribution || []) add(item.theme_name, `${item.date} 来源归因`, null, true);
     for (const name of companyNames) add(name, "公司资料");
     return [...result.values()];
   }, [themes, companyNames]);
   if (!entries.length) return null;
   const visible = entries.slice(0, OFFICIAL_TOP_N), hidden = entries.slice(OFFICIAL_TOP_N);
-  const render = (item: typeof entries[number]) => <ThemeLinkChip key={item.name} name={item.name} attributed={item.attributed}
-    title={`${item.sources.join(" · ")}；概念归属不证明当日催化或个股受益`}>
+  const render = (item: typeof entries[number]) => <ThemeLinkChip key={item.code || `source:${item.name}`} name={item.name} attributed={item.attributed}
+    title={`${item.sources.join(" · ")}${item.code ? ` · 同花顺 ${item.code}` : " · 正式概念身份未核"}；概念归属不证明当日催化或个股受益`}>
     {item.change !== null && <span className={`ml-1 font-mono tabular-nums ${pctColor(item.change)}`}>{pctText(item.change)}</span>}
     <span className="ml-1 text-[10px] text-zinc-600 dark:text-zinc-400">{item.sources.map(value => value.endsWith("来源归因") ? "归因" : value === "官方成分" ? "官方" : value === "公司资料" ? "资料" : value).join(" / ")}</span>
   </ThemeLinkChip>;
   return <div className="space-y-1.5 text-xs" aria-label="概念题材">
-    <div className="flex items-center justify-between gap-2"><h3 className="text-zinc-600 dark:text-zinc-400">概念题材</h3>{hidden.length > 0 && <button type="button" data-action="quiet" aria-expanded={expanded} onClick={() => setExpanded(value => !value)}>{expanded ? "收起" : `＋${hidden.length} 个`}</button>}</div>
+    <div className="flex items-center justify-between gap-2"><h3 className="text-zinc-600 dark:text-zinc-400">{entries.some(item => item.code) ? "正式概念与来源标签" : "来源标签（正式概念未核）"}</h3>{hidden.length > 0 && <button type="button" data-action="quiet" aria-expanded={expanded} onClick={() => setExpanded(value => !value)}>{expanded ? "收起" : `＋${hidden.length} 个`}</button>}</div>
     <div className="flex flex-wrap gap-1.5">{visible.map(render)}</div>
     {presence.value && <div className="theme-chips-extras motion-disclosure" data-open={expanded} aria-hidden={!expanded || undefined} inert={!expanded}><div className="motion-disclosure-body"><div className="flex flex-wrap gap-1.5 pt-1.5">{hidden.map(render)}</div></div></div>}
   </div>;

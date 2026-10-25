@@ -40,6 +40,8 @@ os.environ["ASHARE_DATABASE_URL"] = "sqlite:///:memory:"
 # 此开关不停止建议议程；共享 client 在下方单独隔离该后台任务。
 # 自治和议程调度的专门测试仍直接调用真实循环。
 os.environ["ASHARE_AGENT_AUTONOMY_ENABLED"] = "false"
+# Complete-research admission is now a manual feature gate, not a scheduler switch.
+os.environ["ASHARE_TRADINGAGENTS_RESEARCH_ENABLED"] = "false"
 
 # 带配置开关的调度器在测试里关闭；无开关任务不在这份清单内。
 #

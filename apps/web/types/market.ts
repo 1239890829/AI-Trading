@@ -234,14 +234,11 @@ export interface ThemeCard {
       reason: string;
     }[];
   };
-  /**
-   * 簇 → 官方概念挂靠（09-08「代糖/玉米搜不到」修复）：簇按 ths 涨停原因动态
-   * 标签聚合（如「功能糖」），用户在同花顺 App 看到的是概念板块目录（如
-   * 「代糖概念 885904」「玉米 885811」）——两套口径不同。按成分重叠反查
-   * （命中 ≥2 只，过滤成分 >300 的大概念），命中数降序 ≤3 个；无挂靠缺省。
-   */
+  /** Exact source identity is independent of source reasons and shared members. */
+  exact_catalog?: {code: string; name: string; source: string; basis: "exact_name"} | null;
+  catalog_mapping_state?: "exact" | "unmapped" | "unclassified" | "unavailable";
   official_matches?: { code: string; name: string; hits: number }[];
-  /** 弹窗入口的目录代码：最高命中官方概念 > 簇名精确同名；null = 无目录映射 */
+  /** Exact official identity only. Membership overlap cannot supply this code. */
   catalog_code?: string | null;
 }
 

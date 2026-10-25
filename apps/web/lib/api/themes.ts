@@ -33,6 +33,44 @@ export interface ThemeCatalogItem {
   name: string;
 }
 
+export type OfficialCatalogKind = "concept" | "industry";
+export interface OfficialCatalogItem {
+  code: string;
+  name: string;
+  source: "ths_official";
+  kind: OfficialCatalogKind;
+  synced_at: string | null;
+}
+export interface OfficialCatalogPayload {
+  items: OfficialCatalogItem[];
+  total: number;
+  kind: OfficialCatalogKind;
+  source: "ths_official";
+  synced_at: string | null;
+  catalog_state?: "ready" | "stale" | "unknown";
+}
+export interface OfficialBoardQuotes {
+  available: boolean;
+  kind: OfficialCatalogKind;
+  source: "ths_official";
+  source_basis: "index_snapshot";
+  source_as_of: string | null;
+  source_ready_at: string | null;
+  received_at: string;
+  rows: {code: string; change_pct: number | null; price: number | null}[];
+  missing_codes: string[];
+  reason?: string;
+}
+export async function getOfficialCatalog(kind: OfficialCatalogKind, options: ReadOptions = {}): Promise<OfficialCatalogPayload> {
+  return (await getJson<OfficialCatalogPayload>(`/api/themes/catalog?kind=${kind}`, 15_000, options)).data;
+}
+export async function getOfficialBoardQuotes(kind: OfficialCatalogKind, codes: readonly string[], options: ReadOptions = {}): Promise<OfficialBoardQuotes> {
+  const unique = [...new Set(codes)];
+  if (!unique.length || unique.length > 50) throw new Error("官方板块快照每批须为1至50个代码");
+  const query = new URLSearchParams({kind, codes: unique.join(",")});
+  return (await getJson<OfficialBoardQuotes>(`/api/themes/catalog/quotes?${query}`, 15_000, options)).data;
+}
+
 export async function getThemesCatalog(search?: string): Promise<ThemeCatalogItem[]> {
   const qs = search ? `?search=${encodeURIComponent(search)}` : "";
   return (await getJson<{ items: ThemeCatalogItem[] }>(`/api/themes/catalog${qs}`, 30_000)).data.items;
@@ -88,7 +126,13 @@ export interface HotStock {
 export interface HotTheme {
   theme: string;
   theme_code: string | null;
-  heat: number;
+  heat: number | null;
+  heat_complete: boolean;
+  member_count: number | null;
+  member_as_of: string | null;
+  hot_symbols: string[];
+  concentration_pct: number | null;
+  source: "ths_official";
   hot_count: number;
   best: { symbol: string; name: string | null; rank: number; rank_change: number | null } | null;
   basis: string;
@@ -98,6 +142,11 @@ export interface ThemesHotPayload {
   ts: string | null;
   stocks: HotStock[];
   themes: HotTheme[];
+  ranking_basis: "hot_stock_concentration";
+  catalog_revision: number;
+  catalog_state: "ready" | "stale" | "unknown";
+  membership_state: "ready" | "unavailable";
+  scope: string;
 }
 
 export async function getThemesHot(limit = 30, options: ReadOptions = {}): Promise<ThemesHotPayload> {
@@ -123,10 +172,13 @@ export interface StockThemes {
   symbol: string;
   official: StockThemeLink[];
   attribution: StockThemeAttribution[];
+  market_enrichment?: "not_requested" | "full";
+  attribution_state?: string;
 }
 
-export async function getStockThemes(symbol: string): Promise<StockThemes> {
-  return (await getJson<StockThemes>(`/api/themes/stock/${symbol}`, 30_000)).data;
+export async function getStockThemes(symbol: string, options: ReadOptions & {enrichment?: "snapshot" | "full"} = {}): Promise<StockThemes> {
+  const {enrichment = "snapshot", ...readOptions} = options;
+  return (await getJson<StockThemes>(`/api/themes/stock/${encodeURIComponent(symbol)}?enrichment=${enrichment}`, 30_000, readOptions)).data;
 }
 
 export interface ConceptMember {
@@ -138,7 +190,7 @@ export interface ConceptMember {
   turnover_rate: number | null;
   /** 流通市值（亿元，快照口径） */
   float_market_cap_yi: number | null;
-  limit_up: boolean;
+  limit_up: boolean | null;
   /** 开板次数（东财涨停池增强；仅涨停成员，非涨停 null） */
   break_count: number | null;
   /** 封单额（元，ths 官方；仅涨停成员） */
@@ -155,12 +207,23 @@ export interface ConceptDetail {
   code: string;
   name: string;
   total: number;
-  limit_up_count: number;
+  limit_up_count: number | null;
   members: ConceptMember[];
   tag_groups: { tag: string; symbols: string[] }[];
   meta_note: string;
+  membership_state?: "ready" | "stale" | "unknown" | "source_read";
+  catalog_state?: "ready" | "stale" | "unknown";
+  quote_freshness?: {state: string; reason?: string | null; as_of?: string | null} | null;
+  source?: "ths_official";
+  kind?: OfficialCatalogKind;
+  market_enrichment?: "snapshot" | "full";
+  membership_saved_at?: string | null;
+  membership_as_of?: string | null;
+  source_as_of?: string | null;
 }
 
-export async function getConceptDetail(code: string, options: ReadOptions = {}): Promise<ConceptDetail> {
-  return (await getJson<ConceptDetail>(`/api/themes/catalog/${encodeURIComponent(code)}/detail`, undefined, options)).data;
+export async function getConceptDetail(code: string, options: ReadOptions & {catalogKind?: OfficialCatalogKind; enrichment?: "snapshot" | "full"} = {}): Promise<ConceptDetail> {
+  const {catalogKind = "concept", enrichment = "snapshot", ...readOptions} = options;
+  const query = new URLSearchParams({kind: catalogKind, enrichment});
+  return (await getJson<ConceptDetail>(`/api/themes/catalog/${encodeURIComponent(code)}/detail?${query}`, undefined, readOptions)).data;
 }

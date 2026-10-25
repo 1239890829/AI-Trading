@@ -665,27 +665,38 @@ def attach_saved_summaries(items: list[dict], *, session_factory=None) -> list[d
 
 
 def _saved_summary(symbol, task_state):
-    report = _latest(symbol)
+    from app.services._tradingagents_summary import read
+
+    saved = read(symbol)
+    report = saved["summary"]
     task = task_state["task"]
-    state = task["status"] if task and task["status"] in {"queued", "running", "failed", "canceled"} else "completed" if report else "unknown" if task else "none"
+    state = (task["status"] if task and task["status"] in {"queued", "running", "failed", "canceled"}
+             else "completed" if report else "unknown" if task or saved["state"] == "unavailable" else "none")
     result = {"symbol": symbol, "state": "unknown" if task_state.get("task_read_unavailable") else state,
-              "task_state": task["status"] if task else None, "has_saved": report is not None,
-              "run_id": report["run_id"] if report else None,
+              "task_state": task["status"] if task else None, "has_saved": saved["has_record"],
+              "summary_state": saved["state"], "summary_reason": saved["reason"],
+              "run_id": saved["run_id"],
               "generated_at": report["generated_at"] if report else None,
               "as_of": report["as_of"] if report else None,
-              "report_count": len(report["reports"]) if report else 0,
+              "report_count": report["report_count"] if report else None if saved["has_record"] else 0,
               "roles_count": None, "final_rating": None,
               "review_state": report["review_state"] if report else None,
               "role_projection_state": "unavailable", "method_compatible": None}
     if report:
-        roles, projection = _role_projection(_folder(symbol) / report["run_id"], report)
-        result["role_projection_state"] = projection
-        result["roles_count"] = len(roles) if projection == "available" else None
-        final = next((role for role in roles if role["role"] == "Portfolio Manager"), None)
-        rating = final["fields"].get("rating") if final else None
-        if isinstance(rating, str) and 0 < len(rating) <= 80:
-            result["final_rating"] = rating
+        for key in ("role_projection_state", "roles_count", "final_rating"):
+            result[key] = report[key]
     return result
+
+
+async def _materialize_completed_summary(symbol: str, run_id: str) -> None:
+    """Optional derivation after durable result/selection completion; cancellation still drains."""
+    from app.services._tradingagents_summary import materialize
+    from app.services.tradingagents_driver import drain_thread
+
+    try:
+        await drain_thread(materialize, symbol, write=True, expected_run_id=run_id, expected_root=ROOT)
+    except Exception:
+        log.exception("saved research summary unavailable; completed originals retained")
 
 
 async def run_research(rec, params: dict, app) -> dict:
@@ -708,10 +719,12 @@ async def run_research(rec, params: dict, app) -> dict:
     # This contract must be provided by the real full-graph adapter. No fake
     # fallback, direct CLI launch or model-budget bypass exists in this module.
     if admitted["admission"]["state"] != "research_only_authorized":
-        return await driver.run_accounted(rec=rec, params=dict(params), app=app,
-                                          budget=agent_budget, store_root=ROOT,
-                                          required_model_slots=REQUIRED_MODEL_SLOTS,
-                                          verification=VERIFICATION)
+        result = await driver.run_accounted(rec=rec, params=dict(params), app=app,
+                                            budget=agent_budget, store_root=ROOT,
+                                            required_model_slots=REQUIRED_MODEL_SLOTS,
+                                            verification=VERIFICATION)
+        await _materialize_completed_summary(params["symbol"], result["run_id"])
+        return result
     from app.services.company_evidence import worker_lease
     binding = admitted["selection"]
     claim = _selection_claim(binding, admitted["admission"]["method_sha256"])
@@ -754,6 +767,9 @@ async def run_research(rec, params: dict, app) -> dict:
             await drain_thread(_write_selection_claim, claim, binding, admitted["admission"]["method_sha256"],
                                "needs_recovery", task_id=rec.task_id)
             raise
+        # A derived-view failure/cancellation must not roll the completed
+        # graph or its selected-execution owner back into native recovery.
+        await _materialize_completed_summary(binding["symbol"], result["run_id"])
         await notify_research_ready(binding, published[0])
         return result
 
@@ -892,6 +908,8 @@ async def scheduler_tick(app):
     No daily count quota and no model on reads. Durable claims retain dispatch
     uncertainty and failures; new snapshots are not new paid observations.
     """
+    if not settings.tradingagents_auto_research_enabled or not settings.tradingagents_research_enabled:
+        return
     from app.services import agent_tasks
     from app.services.company_evidence import worker_lease
     admission, blockers = await agent_tasks._db_thread(_quality, app)
@@ -970,7 +988,7 @@ def _active_symbols(sf):
 
 def wake_selected_research(app=None) -> bool:
     """Coalesce committed selection events in the existing tracked scheduler."""
-    if not settings.tradingagents_research_enabled:
+    if not settings.tradingagents_research_enabled or not settings.tradingagents_auto_research_enabled:
         return False
     if app is None:
         from app.services.agent_tasks import _APP

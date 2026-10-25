@@ -5,6 +5,7 @@ from datetime import datetime,timedelta
 import hashlib
 import json
 import sqlite3
+from threading import Event
 from types import SimpleNamespace
 
 import pytest
@@ -491,6 +492,41 @@ def test_failure_and_cancel_consumes_grant_preserves_old(env,failure):
     with pytest.raises(type(failure)): asyncio.run(recovery.run_recovery(env.rec,params(c,owner),env.app))
     assert env.source_claim.read_bytes()==before and recovery._json(c['claim'])['state']=='needs_recovery'
     again,fresh=recovery._dispatch(c); assert not fresh and again['task_id']==NEW
+
+
+def test_summary_cancellation_after_recovery_keeps_completed_owner_and_original_unknown(env,monkeypatch):
+    from app.services import _tradingagents_summary as summary
+    c,owner=consumed(env)
+    originals={path:path.read_bytes() for path in (env.source_claim,env.run/'model-outputs/1.json',env.run/'usage-receipts/2.json')}
+    release,snapshots=Event(),{}
+    async def run():
+        entered=asyncio.Event();loop=asyncio.get_running_loop()
+        def delayed_summary(symbol,**kwargs):
+            assert symbol==SYMBOL and kwargs['expected_run_id']==RUN
+            for path in (env.run/'result.json',env.run/'execution.json',env.run.parent/'latest.json',c['claim']):
+                snapshots[path]=path.read_bytes()
+            loop.call_soon_threadsafe(entered.set)
+            if not release.wait(5): raise AssertionError('summary recovery fixture did not drain')
+        monkeypatch.setattr(summary,'materialize',delayed_summary)
+        task=asyncio.create_task(recovery.run_recovery(env.rec,params(c,owner),env.app))
+        try:
+            await asyncio.wait_for(entered.wait(),3)
+            task.cancel();await asyncio.sleep(0)
+            assert not task.done()
+            release.set()
+            with pytest.raises(asyncio.CancelledError): await task
+        finally:
+            release.set()
+            if not task.done():
+                task.cancel();await asyncio.gather(task,return_exceptions=True)
+    asyncio.run(run())
+    assert env.native.calls==1
+    assert all(path.read_bytes()==raw for path,raw in (originals|snapshots).items())
+    assert recovery._json(c['claim'])['state']=='completed'
+    assert recovery._json(env.run/'execution.json')['state']=='completed'
+    prior=research._execution_prior(env.selection,research._digest(env.current))
+    assert research._completed_selection(prior,env.selection)['reused_identical_selection']
+    with env.sf() as db: assert db.get(AgentResourceUsage,f'{2:032x}').usage_known==0
 
 @pytest.mark.parametrize('revoke',[False,True])
 def test_pending_guard_and_revocation_prevent_new_call(env,revoke):

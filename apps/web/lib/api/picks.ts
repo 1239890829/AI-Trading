@@ -101,11 +101,13 @@ export interface SelectedResearchSummary {
   run_id: string | null;
   generated_at: string | null;
   as_of: string | null;
-  report_count: number;
+  report_count: number | null;
   roles_count: number | null;
   final_rating: string | null;
   review_state: string | null;
   method_compatible: boolean | null;
+  summary_state?: "available" | "unavailable" | "missing";
+  summary_reason?: string | null;
 }
 
 export interface SelectionEntry {
@@ -801,9 +803,11 @@ export interface OpportunityTheme {
   /** 机会三层（需求 4）：today_strongest / quiet_starting / brewing */
   opportunity_layer?: string | null;
   layer_basis?: string | null;
-  /** 簇→官方概念挂靠（09-08「代糖/玉米搜不到」修复）：成分重叠 ≥2、过滤大概念，命中降序 ≤3 */
+  exact_catalog?: {code: string; name: string; source: string; basis: "exact_name"} | null;
+  catalog_mapping_state?: "exact" | "unmapped" | "unclassified" | "unavailable";
+  /** Shared members are navigation evidence, not official identity. */
   official_matches?: { code: string; name: string; hits: number }[];
-  /** 概念详情弹窗入口的目录代码（最高命中官方概念 > 簇名精确同名） */
+  /** Exact official identity only. */
   catalog_code?: string | null;
 }
 
@@ -1168,6 +1172,17 @@ export interface SavedStrategyRun {
 
 export interface StrategyRegistryItem {
   key: string;
+  catalog_kind?: "registered" | "reference";
+  candidate?: {
+    source_label: string;
+    source_code: string;
+    source_version: string;
+    asset: "stock" | "etf";
+    criteria: string[];
+    existing_coverage: string[];
+    limitations: string[];
+    runnable: false;
+  };
   runtime?: SavedStrategyRun | null;
   name?: string;
   status?: string;
@@ -1190,8 +1205,9 @@ export async function getStrategyHealth(): Promise<StrategyHealthPayload> {
   return (await getJson<StrategyHealthPayload>("/api/picks/strategy-health")).data;
 }
 
-export async function getStrategyRegistry(options: ReadOptions = {}): Promise<StrategyRegistryItem[]> {
-  return (await getJson<{ strategies: StrategyRegistryItem[] }>("/api/picks/strategy-registry", undefined, options))
+export async function getStrategyRegistry(options: ReadOptions & {includeCandidates?: boolean} = {}): Promise<StrategyRegistryItem[]> {
+  const {includeCandidates, ...readOptions} = options;
+  return (await getJson<{ strategies: StrategyRegistryItem[] }>(`/api/picks/strategy-registry${includeCandidates ? "?include_candidates=true" : ""}`, undefined, readOptions))
     .data.strategies ?? [];
 }
 

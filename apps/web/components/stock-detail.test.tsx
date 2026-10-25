@@ -2,7 +2,7 @@ import { act, cleanup, fireEvent, render, screen, within } from "@testing-librar
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 import { StockDetailPanel, type ChartTab, type RightTab } from "@/components/stock-detail";
-import type { KlinePayload, MinutePoint, PaperAccountInfo, PaperFill, PaperPositionInfo } from "@/lib/api";
+import type { KlinePayload, MinutePoint, PaperAccountInfo, PaperFill, PaperPositionInfo, StockThemes } from "@/lib/api";
 import { mergeQuoteIntoMinutes } from "@/lib/kline-live";
 import { getWatchlist as readActualWatchlist } from "@/lib/api/watchlist";
 import { notifyWatchlistChanged } from "@/lib/watchlist-sync";
@@ -107,6 +107,12 @@ function account(total = 100): PaperAccountInfo {
 }
 function position(symbol = "600519", quantity = 100, cost_price = 20): PaperPositionInfo {
   return { symbol, quantity, available: quantity, cost_price };
+}
+function themeSnapshot(symbol = "600519", name = "机器人概念", code = "885517.TI"): StockThemes {
+  return {symbol, official: [{theme_code: code, theme_name: name, source: "ths_official"}], attribution: [], market_enrichment: "not_requested"};
+}
+function themeEnrichment(base: StockThemes, name = "完整来源归因"): StockThemes {
+  return {...base, market_enrichment: "full", attribution: [{theme_name: name, date: "2026-10-09"}]};
 }
 function fill(symbol = "600519", price = 20): PaperFill {
   return { symbol, date: "2026-10-09", side: "buy", price, quantity: 100, fee: 5 };
@@ -493,6 +499,113 @@ afterEach(() => {
   vi.useRealTimers();
 });
 
+describe("StockDetailPanel · 基础题材与按需完整增强", () => {
+  it("初读仅基础；完整增强较慢时正式名称仍可读，回可见不会重拉完整增强", async () => {
+    const base = themeSnapshot();
+    const full = deferred<StockThemes>();
+    api.getStockThemes.mockImplementation((_symbol: string, options?: {enrichment?: string}) =>
+      options?.enrichment === "full" ? full.promise : Promise.resolve(base));
+    const view = render(<StockDetailPanel symbol={base.symbol} chartTab="flow" rightTab="profile" />);
+    await settle();
+    const panel = within(view.getByRole("tabpanel"));
+    expect(panel.getByRole("link", {name: "机器人概念"})).toBeTruthy();
+    expect(api.getStockThemes).toHaveBeenCalledExactlyOnceWith(base.symbol);
+    fireEvent.click(panel.getByRole("button", {name: "补充归因与板块表现"}));
+    await settle();
+    expect(api.getStockThemes).toHaveBeenLastCalledWith(base.symbol, {enrichment: "full"});
+    expect(panel.getByRole("button", {name: "读取归因与板块表现…"})).toHaveProperty("disabled", true);
+    expect(panel.getByRole("link", {name: "机器人概念"})).toBeTruthy();
+    await act(async () => full.resolve(themeEnrichment(base)));
+    expect(panel.getByRole("link", {name: "完整来源归因"})).toBeTruthy();
+    fireEvent(document, new Event("visibilitychange")); await settle();
+    expect(api.getStockThemes).toHaveBeenCalledTimes(3);
+    expect(api.getStockThemes.mock.calls.filter(([, options]) => options?.enrichment === "full")).toHaveLength(1);
+    expect(api.getNewsDigest).not.toHaveBeenCalled();
+  });
+
+  it.each([false, true])("新基础目录刷新后已完成的旧增强立即失效，目录身份变化=%s", async identityChanged => {
+    const base = themeSnapshot();
+    const next = themeSnapshot(base.symbol, identityChanged ? "人形机器人" : "机器人概念", identityChanged ? "886069.TI" : "885517.TI");
+    next.official[0].theme_chg_1d = 3.25;
+    api.getStockThemes.mockResolvedValueOnce(base).mockResolvedValueOnce(themeEnrichment(base)).mockResolvedValueOnce(next);
+    const view = render(<StockDetailPanel symbol={base.symbol} chartTab="flow" rightTab="profile" />);
+    await settle();
+    const panel = within(view.getByRole("tabpanel"));
+    fireEvent.click(panel.getByRole("button", {name: "补充归因与板块表现"})); await settle();
+    expect(panel.getByRole("link", {name: "完整来源归因"})).toBeTruthy();
+    fireEvent(document, new Event("visibilitychange")); await settle();
+    expect(panel.getByRole("link", {name: identityChanged ? "人形机器人" : "机器人概念"})).toBeTruthy();
+    expect(panel.getByText("+3.25%")).toBeTruthy();
+    if (identityChanged) expect(panel.queryByRole("link", {name: "机器人概念"})).toBeNull();
+    expect(panel.queryByRole("link", {name: "完整来源归因"})).toBeNull();
+    expect(api.getStockThemes).toHaveBeenCalledTimes(3);
+  });
+
+  it.each(["success", "failure"])("新目录先到，旧完整增强晚回 %s 不覆盖当前目录", async outcome => {
+    const base = themeSnapshot();
+    const next = themeSnapshot(base.symbol, "人形机器人", "886069.TI");
+    const full = deferred<StockThemes>();
+    api.getStockThemes.mockResolvedValueOnce(base).mockReturnValueOnce(full.promise).mockResolvedValueOnce(next);
+    const view = render(<StockDetailPanel symbol={base.symbol} chartTab="flow" rightTab="profile" />);
+    await settle();
+    const panel = within(view.getByRole("tabpanel"));
+    fireEvent.click(panel.getByRole("button", {name: "补充归因与板块表现"})); await settle();
+    fireEvent(document, new Event("visibilitychange")); await settle();
+    expect(panel.getByRole("link", {name: "人形机器人"})).toBeTruthy();
+    await act(async () => {
+      if (outcome === "success") full.resolve(themeEnrichment(base, "旧完整来源归因"));
+      else full.reject(new Error("old full unavailable"));
+    });
+    expect(panel.getByRole("link", {name: "人形机器人"})).toBeTruthy();
+    expect(panel.queryByRole("link", {name: "机器人概念"})).toBeNull();
+    expect(panel.queryByRole("link", {name: "旧完整来源归因"})).toBeNull();
+    expect(api.getStockThemes).toHaveBeenCalledTimes(3);
+  });
+
+  it("完整目录身份冲突可就近重读基础，重读和回可见不会自动再取完整增强", async () => {
+    const base = themeSnapshot();
+    const next = themeSnapshot(base.symbol, "人形机器人", "886069.TI");
+    api.getStockThemes.mockResolvedValueOnce(base).mockResolvedValueOnce(themeEnrichment(next)).mockResolvedValueOnce(next).mockResolvedValueOnce(next);
+    const view = render(<StockDetailPanel symbol={base.symbol} chartTab="flow" rightTab="profile" />);
+    await settle();
+    const panel = within(view.getByRole("tabpanel"));
+    fireEvent.click(panel.getByRole("button", {name: "补充归因与板块表现"})); await settle();
+    expect(panel.getByRole("alert").textContent).toContain("正式目录已变");
+    expect(panel.getByRole("link", {name: "机器人概念"})).toBeTruthy();
+    expect(panel.queryByRole("link", {name: "完整来源归因"})).toBeNull();
+    fireEvent.click(panel.getByRole("button", {name: "重读正式目录"})); await settle();
+    expect(panel.getByRole("link", {name: "人形机器人"})).toBeTruthy();
+    fireEvent(document, new Event("visibilitychange")); await settle();
+    expect(api.getStockThemes).toHaveBeenCalledTimes(4);
+    expect(api.getStockThemes.mock.calls.filter(([, options]) => options?.enrichment === "full")).toHaveLength(1);
+    api.getStockThemes.mockResolvedValueOnce(themeEnrichment(next, "新完整来源归因"));
+    fireEvent.click(panel.getByRole("button", {name: "补充归因与板块表现"})); await settle();
+    expect(panel.getByRole("link", {name: "新完整来源归因"})).toBeTruthy();
+  });
+
+  it("换股与返回原股均需新的明确完整读取，旧股晚回不可泄漏", async () => {
+    const base = themeSnapshot();
+    const next = themeSnapshot("000001", "人形机器人", "886069.TI");
+    const full = deferred<StockThemes>();
+    api.getStockThemes.mockResolvedValueOnce(base).mockReturnValueOnce(full.promise).mockResolvedValueOnce(next).mockResolvedValueOnce(base);
+    const view = render(<StockDetailPanel symbol={base.symbol} chartTab="flow" rightTab="profile" />);
+    await settle();
+    fireEvent.click(view.getByRole("button", {name: "补充归因与板块表现"})); await settle();
+    view.rerender(<StockDetailPanel symbol={next.symbol} chartTab="flow" rightTab="profile" />); await settle();
+    let panel = within(view.getByRole("tabpanel"));
+    expect(panel.getByRole("link", {name: "人形机器人"})).toBeTruthy();
+    await act(async () => full.resolve(themeEnrichment(base, "旧股来源归因")));
+    expect(panel.queryByRole("link", {name: "旧股来源归因"})).toBeNull();
+    view.rerender(<StockDetailPanel symbol={base.symbol} chartTab="flow" rightTab="profile" />); await settle();
+    panel = within(view.getByRole("tabpanel"));
+    expect(panel.getByRole("link", {name: "机器人概念"})).toBeTruthy();
+    expect(panel.queryByRole("link", {name: "旧股来源归因"})).toBeNull();
+    expect(panel.getByRole("button", {name: "补充归因与板块表现"})).toHaveProperty("disabled", false);
+    expect(api.getStockThemes).toHaveBeenCalledTimes(4);
+    expect(api.getStockThemes.mock.calls.filter(([, options]) => options?.enrichment === "full")).toHaveLength(1);
+  });
+});
+
 describe("StockDetailPanel · 自选读取真实请求边界", () => {
   it("财务首次进入读取一次，同一页签重复点选不重复GET", async () => {
     const view = render(<StockDetailPanel symbol="600519" chartTab="flow" rightTab="book"/>); await settle();
@@ -787,11 +900,11 @@ describe("StockDetailPanel · 核对视角入口", () => {
   });
 
   it("旧themes深链复用资料概念区域，只出现一个同名入口且不请求新闻", async () => {
-    api.getStockThemes.mockResolvedValue({symbol: "600519", official: [{theme_code: "fixture", theme_name: "同名概念", source: "ths_official", theme_chg_1d: 2}], attribution: [{theme_name: "同名概念", date: "2026-10-09"}]});
-    api.getCompanyProfile.mockResolvedValue({source: "synthetic_fixture", board_groups: {industry: [], region: [], concept: ["同名概念"], style_index: []}});
+    api.getStockThemes.mockResolvedValue({symbol: "600519", official: [{theme_code: "885517.TI", theme_name: "机器人概念", source: "ths_official", theme_chg_1d: 2}], attribution: [{theme_name: "机器人概念", date: "2026-10-09"}]});
+    api.getCompanyProfile.mockResolvedValue({source: "synthetic_fixture", board_groups: {industry: [], region: [], concept: ["机器人概念"], style_index: []}});
     const view = render(<StockDetailPanel symbol="600519" chartTab="flow" rightTab="themes"/>); await advance(900);
     const panel = within(view.getByRole("tabpanel"));
-    expect(panel.getAllByRole("link", {name: "同名概念"})).toHaveLength(1);
+    expect(panel.getAllByRole("link", {name: "机器人概念"})).toHaveLength(1);
     expect(panel.getByText("官方 / 归因 / 资料")).toBeTruthy();
     expect(panel.getByText("+2.00%")).toBeTruthy();
     expect(view.getByRole("tab", {name: "资料", selected: true})).toBeTruthy();

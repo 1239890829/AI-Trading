@@ -203,7 +203,7 @@ COLLECTORS = {
 # ---------------------------------------------------------------- 评估入口
 
 
-def list_strategy_keys() -> list[dict]:
+def list_strategy_keys(*, include_candidates: bool = False) -> list[dict]:
     """登记册全量策略键（含不可评估者，便于前端/复盘展示"有哪些策略"）。
 
     S2-11：带 `verify_key` 的条目会附 `verification` 三态——`status` 从此有产物背书。
@@ -228,6 +228,11 @@ def list_strategy_keys() -> list[dict]:
         if s.verify_key:
             item["verification"] = _verification_of(s.verify_key)
         out.append(item)
+    if include_candidates:
+        from app.picks._strategy_reference_catalog import reference_catalog_entries
+
+        out = [{**item, "catalog_kind": "registered"} for item in out]
+        out.extend(reference_catalog_entries())
     return out
 
 

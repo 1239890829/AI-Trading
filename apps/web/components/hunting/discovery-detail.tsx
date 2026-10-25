@@ -12,6 +12,7 @@ export interface DiscoveryDetailTarget {
   kind: "theme" | "board";
   code: string;
   name: string;
+  catalogKind?: "concept" | "industry";
 }
 
 export interface DiscoveryDetailSelection {
@@ -44,12 +45,13 @@ function readMoment(value?: string) {
 
 /** Current membership is a reading reference, never a historic selection or a research command. */
 export function DiscoveryDetail({ target, active = true, selection, onClose }: DiscoveryDetailProps) {
-  const scope = `${target.kind}:${target.code}`;
+  const scope = `${target.kind}:${target.catalogKind ?? "concept"}:${target.code}`;
   const searchId = useId();
   const resource = useResource<DetailRead>(async signal => {
     if (target.kind === "theme") {
-      const detail = await getConceptDetail(target.code, { signal });
+      const detail = await getConceptDetail(target.code, { signal, catalogKind: target.catalogKind });
       if (detail.code !== target.code) throw new DetailIdentityError("成分身份不符");
+      if (detail.kind && detail.kind !== (target.catalogKind ?? "concept")) throw new DetailIdentityError("成分类别不符");
       if (!Array.isArray(detail.members) || detail.members.some(member => !member || typeof member.symbol !== "string")) throw new Error("成分内容格式不符");
       return { kind: "theme", detail };
     }
@@ -104,7 +106,12 @@ export function DiscoveryDetail({ target, active = true, selection, onClose }: D
       <button type="button" className="quiet-action shrink-0" onClick={onClose}>返回环境</button>
     </header>
     <div className="space-y-1 text-[11px] leading-relaxed text-zinc-600 dark:text-zinc-400">
-      <p>{target.kind === "theme" ? "当前目录成分" : "资金成员样本，非完整成分全集"} · 目录归属与报价时点未核</p>
+      <p>{target.kind === "theme" ? "来源目录成分记录" : "资金成员样本，非完整成分全集"} · 目录归属与报价时点未核</p>
+      {read?.kind === "theme" && <>
+        {read.detail.membership_state === "stale" && <p role="status">成员记录已过保鲜期，当前变动待核；不当作最新归属。</p>}
+        {read.detail.catalog_state === "stale" && <p role="status">目录同步已过保鲜期，保留来源原名与原代码。</p>}
+        {read.detail.quote_freshness && read.detail.quote_freshness.state !== "ready" && <p>报价状态：{read.detail.quote_freshness.state === "stale" ? "已存旧快照" : "当前时效未核"}。{read.detail.quote_freshness.reason}</p>}
+      </>}
       {read?.kind === "board" && <p>读取记录时间：{readMoment(read.detail.updated_at)}；不等于来源时刻。{read.detail.delayed && "资金为延迟口径。"}</p>}
       <p>原名单日期：{selection.readError ? "读取失败，未作对照" : selection.loaded ? selection.date || "未记录" : "待读取"}
         {selection.loaded && !selection.readError && read && !unavailable ? ` · 代码相同 ${matches} 只` : ""}</p>

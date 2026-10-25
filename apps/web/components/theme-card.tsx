@@ -1,5 +1,7 @@
 "use client";
 
+import { SourceThemeIdentity } from "@/components/source-theme-identity";
+
 import { Fragment, useState } from "react";
 import { useExitPresence } from "@/hooks/use-exit-presence";
 import { fmt, fmtAmount, fmtHeat, pctColor, pctText, signedYi } from "@/lib/format";
@@ -240,34 +242,16 @@ export function ThemeCardView({
               setDetailCode(card.catalog_code!);
             }}
             className={JUMP_PILL_CLASS}
-            title="查看官方成分全量（与同花顺逐符号一致）与涨停细分"
+            title="读取同花顺正式成分记录；涨停归因按需补充"
           >
             成分 ↗
           </button>
         )}
 
-        {/* 官方概念挂靠（09-08「代糖/玉米搜不到」修复）：簇按涨停原因标签聚合，
-            名称可能与同花顺概念板块不同（功能糖 vs 代糖概念/玉米）；成分重叠 ≥2
-            才挂靠，无挂靠缺省不显示 */}
-        {/* 官方概念徽标：只显示**归属的大概念**（命中数最高的一个）——细分在
-            概念详情弹窗里看（09-08 用户反馈：簇上铺一堆细分徽标太乱）；
-            其余挂靠名收进 tooltip */}
-        {(card.official_matches ?? []).length > 0 && (
-          <span
-            className="flex items-center"
-            title={`官方概念挂靠：${(card.official_matches ?? []).map((m) => m.name).join("、")}`}
-          >
-            <Badge
-              className="border-sky-500/40 bg-sky-500/10 text-sky-700 dark:text-sky-300"
-            >
-              官方·{(card.official_matches ?? [])[0]?.name}
-            </Badge>
-          </span>
-        )}
-
+        <SourceThemeIdentity reason={card.theme} exact={card.exact_catalog} related={card.official_matches} />
         {/* 题材当日涨跌幅：板块口径（东财板块），匹配不到时明确留空不臆测 */}
-        <span className="flex items-baseline gap-1" title="题材对应板块当日涨跌幅（东财板块口径）">
-          <span className="text-[11px] text-zinc-600 dark:text-zinc-400">当日</span>
+        <span className="flex items-baseline gap-1" title={`东财参考板块 ${board?.name || "未映射"} ${board?.board_code || ""}；名称/成分不等于同花顺概念，不能当同一题材核验`}>
+          <span className="text-[11px] text-zinc-600 dark:text-zinc-400">东财{board?.name ? `·${board.name}` : "参考"}</span>
           {boardPct !== null && boardPct !== undefined ? (
             <span className={`font-mono text-lg font-semibold tabular-nums ${pctColor(boardPct)}`}>
               {pctText(boardPct)}

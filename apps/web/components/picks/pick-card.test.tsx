@@ -1015,7 +1015,7 @@ it("has one selection reader and loads related messages and saved research only 
  expect(screen.getByLabelText("相关消息与AI解读")).toBeTruthy();
  expect(screen.queryByLabelText("入选依据核对")).toBeNull();
  await waitFor(()=>expect(AgentAPI.getTradingAgentsResearch).toHaveBeenCalledExactlyOnceWith(base.symbol,{savedOnly:true}));
- expect(screen.getByLabelText("TradingAgents完整研究").textContent).toContain("未查到研究记录");
+ expect(screen.getByLabelText("TradingAgents完整研究").textContent).toContain("暂无可核验的完整七报告；不代表从未研究");
  fireEvent.click(screen.getByRole("button",{name:"原筛选完整依据"}));
  expect(screen.getByLabelText("入选依据核对")).toBeTruthy();
 });

@@ -1,5 +1,7 @@
 "use client";
 
+import { SourceThemeIdentity } from "@/components/source-theme-identity";
+
 import { useId, useState } from "react";
 import { HugeiconsIcon } from "@hugeicons/react";
 import ArrowDown01Icon from "@hugeicons/core-free-icons/ArrowDown01Icon";
@@ -116,21 +118,13 @@ export function IntradayThemeRow({
               title={`机会分层（规则可解释）：${t.layer_basis ?? ""}`}
             >
               {t.opportunity_layer === "today_strongest"
-                ? "今日最强"
+                ? "样本强势"
                 : t.opportunity_layer === "quiet_starting"
                   ? "悄悄启动"
                   : "孕育待发酵"}
             </span>
           )}
-          {/* 官方概念徽标：只显示归属的大概念（命中数最高），细分在弹窗里 */}
-          {(t.official_matches ?? []).length > 0 && (
-            <span
-              className="rounded bg-sky-500/10 px-1.5 py-0.5 text-[10px] text-sky-700 dark:text-sky-300"
-              title={`官方概念挂靠：${(t.official_matches ?? []).map((m) => m.name).join("、")}`}
-            >
-              官方·{(t.official_matches ?? [])[0]?.name}
-            </span>
-          )}
+          <SourceThemeIdentity reason={t.theme} exact={t.exact_catalog} related={t.official_matches} />
           <span className={`rounded px-1.5 py-0.5 text-[10px] ${STAGE_TONE[stage] ?? "bg-zinc-500/10 text-zinc-600 dark:text-zinc-400"}`} title={(t.stage_basis || []).join("；")}>
             {stage}
           </span>

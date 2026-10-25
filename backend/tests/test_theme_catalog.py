@@ -356,7 +356,25 @@ def test_parse_board_bars_sorts_and_skips_incomplete():
     ]}}
     bars = parse_board_bars(payload)
     assert [b["close"] for b in bars] == [2554.496, 2632.18], "按日期升序"
+    assert bars[-1]["date"] == "2026-08-28", "北京零点不能按 UTC 误记成前一交易日"
     assert bars[0]["date"] < bars[1]["date"]
+
+
+def test_parse_board_bars_uses_official_millisecond_example_and_rejects_bad_dates(monkeypatch):
+    from datetime import datetime
+
+    from app.core.bjtime import BJ_TZ
+    from app.services import theme_catalog_service as catalog
+
+    monkeypatch.setattr(catalog, "beijing_now", lambda: datetime(2026, 10, 25, 18, tzinfo=BJ_TZ))
+    # Official API documentation example: 1716134400000 = 2024-05-20 00:00 +08:00.
+    future = int(datetime(2026, 10, 26, tzinfo=BJ_TZ).timestamp() * 1000)
+    future_same_day = int(datetime(2026, 10, 25, 20, tzinfo=BJ_TZ).timestamp() * 1000)
+    payload = {"data": {"item": [{"date_ms": value, "close_price": 100} for value in
+                                [1716134400000, 0, -1, True, "1716134400000", float("inf"),
+                                 float("nan"), 10**99, future, future_same_day]]}}
+    assert catalog.parse_board_bars(payload) == [{"date": "2024-05-20", "close": 100,
+                                                  "open": None, "turnover": None, "volume": None}]
 
 
 def test_official_multi_day_changes():
@@ -386,6 +404,7 @@ def test_verify_board_multi_day_replaces_and_flags(monkeypatch: pytest.MonkeyPat
         return [{"date": f"2026-08-{d:02d}", "close": 100 + i} for i, d in enumerate(range(10, 22))]
 
     monkeypatch.setattr(svc, "fetch_catalog", fake_catalog)
+    asyncio.run(svc.sync_catalog())
     monkeypatch.setattr(svc, "fetch_board_bars", fake_bars)
 
     from app.api.routes.market_themes import _verify_board_multi_day
@@ -398,7 +417,7 @@ def test_verify_board_multi_day_replaces_and_flags(monkeypatch: pytest.MonkeyPat
         "caveats": ["板块 3/5/10 日涨跌幅为东财字段序推断，未经 K 线交叉验证（board_multi_day_verified=false）"],
     }
     request = SimpleNamespace(app=SimpleNamespace(state=SimpleNamespace(theme_catalog=svc)))
-    asyncio.run(_verify_board_multi_day(request, payload))
+    asyncio.run(_verify_board_multi_day(request, payload, date(2026, 8, 21)))
 
     board = payload["themes"][0]["board"]
     assert board["multi_day_verified"] is True
@@ -407,7 +426,8 @@ def test_verify_board_multi_day_replaces_and_flags(monkeypatch: pytest.MonkeyPat
     assert board["multi_day_source"] == "ths_official_kline"
 
     other = payload["themes"][1]["board"]
-    assert "multi_day_verified" not in other, "目录外题材保留推断值、不打验证标"
+    assert other["multi_day_verified"] is False, "目录外题材保留推断值、不打验证标"
+    assert other["multi_day_verification_state"] == "unmapped"
     assert any("已用同花顺官方板块 K 线交叉验证" in c for c in payload["caveats"])
     assert any("board_multi_day_verified=false" in c for c in payload["caveats"]) is False
 
@@ -420,7 +440,7 @@ def test_verify_board_multi_day_replaces_and_flags(monkeypatch: pytest.MonkeyPat
         return await orig(code)
 
     monkeypatch.setattr(svc, "fetch_board_bars", counting)
-    asyncio.run(_verify_board_multi_day(request, payload))
+    asyncio.run(_verify_board_multi_day(request, payload, date(2026, 8, 21)))
     assert calls["n"] == 0, "已验证的 payload 直接跳过"
 
 
@@ -457,7 +477,7 @@ def test_verify_board_multi_day_upgrades_persistence_position(monkeypatch: pytes
         "caveats": ["板块 3/5/10 日涨跌幅为东财字段序推断，未经 K 线交叉验证（board_multi_day_verified=false）"],
     }
     request = SimpleNamespace(app=SimpleNamespace(state=SimpleNamespace(theme_catalog=svc)))
-    asyncio.run(_verify_board_multi_day(request, payload))
+    asyncio.run(_verify_board_multi_day(request, payload, date(2026, 8, 21)))
 
     board = payload["themes"][0]["board"]
     assert board["chg_5d"] == round((121 / 106 - 1) * 100, 2), "官方值覆盖"
@@ -619,13 +639,16 @@ def test_aggregate_hot_themes_sums_and_picks_best():
         "000019": [{"theme_code": "B", "theme_name": "粮食概念", "source": "ths_official"}],
         # 300001 无官方归属
     }
-    r = aggregate_hot_themes(stocks, official)
+    r = aggregate_hot_themes(stocks, official, catalog_by_code={
+        "A": {"name": "物业管理", "source": "ths_official", "members_current": True},
+        "B": {"name": "粮食概念", "source": "ths_official", "members_current": True},
+    }, members_by_code={"A": ["000560"], "B": ["000019"]}, catalog_state="ready")
 
     assert r["ts"] == "t1"
     assert r["stocks"][2]["themes"] == [], "无归属热股保留在 stocks，themes 为空"
 
     assert len(r["themes"]) == 2
-    assert r["themes"][0]["theme"] == "物业管理" and r["themes"][0]["heat"] == 100.0, "按人气倒序"
+    assert r["themes"][0]["theme"] == "物业管理" and r["themes"][0]["heat"] == 100.0, "集中度相同时按代码稳定排序，保留人气和"
     assert r["themes"][0]["hot_count"] == 1
     assert r["themes"][0]["best"]["symbol"] == "000560"
     assert "第 1 名" in r["themes"][0]["basis"]
@@ -639,13 +662,15 @@ def test_aggregate_hot_themes_best_is_highest_rank_member():
         {"rank": 9, "symbol": "000505", "name": "京粮控股", "heat": 60.0, "rank_change": 4, "ts": None},
     ]
     same = [{"theme_code": "B", "theme_name": "粮食概念", "source": "ths_official"}]
-    r = aggregate_hot_themes(stocks, {"000560": same, "000505": same})
+    r = aggregate_hot_themes(stocks, {"000560": same, "000505": same}, catalog_by_code={
+        "B": {"name": "粮食概念", "source": "ths_official", "members_current": True},
+    }, members_by_code={"B": ["000560", "000505"]}, catalog_state="ready")
 
     t = r["themes"][0]
     assert t["heat"] == 140.0 and t["hot_count"] == 2, "同题材 heat 合计"
     assert t["best"]["rank"] == 2 and t["best"]["symbol"] == "000560", "best 取榜内排名最高成员"
     assert t["best"]["rank_change"] == -1, "rank_change 沿用 best 成员，不造题材级指标"
-    assert "2 只官方成分热股人气合计" in t["basis"]
+    assert "2 / 2 只已核成分，集中度 100%" in t["basis"]
 
 
 def test_themes_hot_route(monkeypatch: pytest.MonkeyPatch):

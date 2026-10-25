@@ -27,6 +27,7 @@ import {
   type DailyPickItem,
   type MorningBrief,
   type StyleRouting,
+  type StrategyRegistryItem,
   getPositionLabels,
 } from "@/lib/api";
 import { PickCard, StandAsideBanner, fromDailyPick, fromIntradayStock } from "@/components/picks/pick-card";
@@ -72,6 +73,8 @@ import { SelectionRail } from "@/components/ui/selection-rail";
 import { CandidateCollection } from "@/components/ui/candidate-collection";
 import { DiscoveryBrowser, DiscoveryNavigation, discoveryLocation, discoveryUrl } from "@/components/hunting/discovery-browser";
 import { DiscoveryDetail, type DiscoveryDetailTarget } from "@/components/hunting/discovery-detail";
+import { DiscoveryMethodDetail } from "@/components/hunting/discovery-method-detail";
+import { discoveryMethodScope } from "@/components/hunting/discovery-methods";
 
 /**
  * Real selection consumers, organised by discover / observe / verify.
@@ -113,14 +116,21 @@ function HuntingInner() {
   const browseScroll = useRef<Record<string, number>>({});
   const browseScrollKey = JSON.stringify([discovery.mode, discovery.kind, discovery.range, discovery.query, discovery.sort]);
   const [resolvedDiscovery, setResolvedDiscovery] = useState<{scope: string; target: DiscoveryDetailTarget | null} | null>(null);
+  const methodDate = sp.get("date") ?? undefined;
+  const methodScope = discoveryMethodScope(methodDate, sp.get("disc_method") ?? "");
+  const [resolvedMethod, setResolvedMethod] = useState<{scope: string; row: StrategyRegistryItem | null} | null>(null);
+  const resolveMethod = useCallback((scope: string, row: StrategyRegistryItem | null) => setResolvedMethod(previous =>
+    previous?.scope === scope && previous.row === row ? previous : {scope, row}), []);
+  const methodTarget = isDiscoverView && discovery.mode === "methods" && resolvedMethod?.scope === methodScope ? resolvedMethod.row : null;
   const resolveDiscovery = useCallback((scope: string, target: DiscoveryDetailTarget | null) => setResolvedDiscovery(previous =>
-    previous?.scope === scope && previous.target?.kind === target?.kind && previous.target?.code === target?.code && previous.target?.name === target?.name ? previous : {scope, target}), []);
+    previous?.scope === scope && previous.target?.kind === target?.kind && previous.target?.code === target?.code && previous.target?.name === target?.name && previous.target?.catalogKind === target?.catalogKind ? previous : {scope, target}), []);
   const discoveryTarget = isDiscoverView && !selectedOnly && resolvedDiscovery?.scope === discovery.scope ? resolvedDiscovery.target : null;
   const previousTarget = useRef<DiscoveryDetailTarget | null>(null);
   const contextRef = useRef<HTMLElement>(null);
   const contextScroll = useRef(0);
   const previousContextKey = useRef("");
-  const contextKey = discoveryTarget ? `${discoveryTarget.kind}:${discoveryTarget.code}` : selectedOnly ? "context" : "browse";
+  const hasDiscoveryDetail = !!discoveryTarget || !!methodTarget;
+  const contextKey = methodTarget ? `method:${methodTarget.key}` : discoveryTarget ? `${discoveryTarget.kind}:${discoveryTarget.catalogKind ?? "concept"}:${discoveryTarget.code}` : selectedOnly ? "context" : "browse";
   useLayoutEffect(() => {
     const side = contextRef.current;
     if (side && contextKey !== previousContextKey.current) side.scrollTop = contextKey === "context" ? contextScroll.current : 0;
@@ -128,13 +138,14 @@ function HuntingInner() {
   }, [contextKey]);
   const navigateDiscovery = useCallback((href: string, push = false) => {if (push) router.push(href, {scroll: false}); else router.replace(href, {scroll: false});}, [router]);
   const closeDiscovery = useCallback(() => router.replace(discoveryUrl(sp.toString(), {disc_code: null}), {scroll: false}), [router, sp]);
+  const closeMethod = useCallback(() => router.replace(discoveryUrl(sp.toString(), {disc_method: null}), {scroll: false}), [router, sp]);
   const scrollOwner = useCallback(() => {
     const flow = flowRef.current;
     return flow && ["auto", "scroll", "overlay"].includes(window.getComputedStyle(flow).overflowY) ? flow : discoveryRef.current;
   }, []);
   const recordGroupScroll = (event: UIEvent<HTMLDivElement>) => {
     const owner = scrollOwner();
-    if (owner && event.currentTarget === owner && event.target === owner) {if (!selectedOnly && discoveryTarget && window.matchMedia("(max-width: 1023px)").matches) return; if (selectedOnly) groupScroll.current[selectedGroup] = owner.scrollTop; else browseScroll.current[browseScrollKey] = owner.scrollTop;}
+    if (owner && event.currentTarget === owner && event.target === owner) {if (!selectedOnly && hasDiscoveryDetail && window.matchMedia("(max-width: 1023px)").matches) return; if (selectedOnly) groupScroll.current[selectedGroup] = owner.scrollTop; else browseScroll.current[browseScrollKey] = owner.scrollTop;}
   };
   useLayoutEffect(() => {
     if (!isDiscoverView) return;
@@ -153,6 +164,20 @@ function HuntingInner() {
       button?.focus({preventScroll: true});
     }
   }, [discoveryTarget, selectedOnly, scrollOwner, browseScrollKey]);
+  const previousMethod = useRef<string | null>(null);
+  useEffect(() => {
+    const previous = previousMethod.current;
+    previousMethod.current = methodTarget?.key ?? null;
+    if (methodTarget && previous !== methodTarget.key && window.matchMedia("(max-width: 1023px)").matches) {
+      discoveryRef.current?.querySelector<HTMLElement>("[data-testid=discovery-method-detail] h2")?.focus({preventScroll: true});
+      const owner = scrollOwner(); if (owner) owner.scrollTop = 0;
+    } else if (previous && !methodTarget && discovery.mode === "methods") {
+      const owner = scrollOwner(); if (owner) owner.scrollTop = browseScroll.current[browseScrollKey] ?? 0;
+      const original = Array.from(flowRef.current?.querySelectorAll<HTMLAnchorElement>("[data-discovery-method]") ?? [])
+        .find(link => link.dataset.discoveryMethod === previous);
+      (original ?? flowRef.current?.querySelector<HTMLInputElement>('input[aria-label="搜索战法"]'))?.focus({preventScroll: true});
+    }
+  }, [methodTarget, discovery.mode, browseScrollKey, scrollOwner]);
   const secValid = /^(overview|candidates|daily|opportunity|postmarket|brief|watcher|reminders|review)$/.test(sec ?? "");
   // 折叠区开合：?sec= 深链自动展开对应组；?review=1 / 生成复盘成功展开复盘组
   const [beatsOpen, setBeatsOpen] = useState(false);
@@ -528,7 +553,7 @@ function HuntingInner() {
       <div className="hunting-content min-h-0 flex-1" data-view={view} aria-label="选股内容">
         {view === "validation" ? <SelectionValidationPanel /> : view === "evidence" ? <OpportunityEvidencePanel date={sp.get("date") ?? undefined} onDateChange={date => { const p = new URLSearchParams(sp.toString()); p.set("date", date); router.replace(`/hunting?${p.toString()}`, {scroll:false}); }} /> : view === "tracking" ? <WatchLedgerPanel date={sp.get("date") ?? undefined} /> : view === "research" ? <LeaderResearchPanel date={sp.get("date") ?? undefined} onDateChange={date => router.replace(patchWorkspaceUrl("/hunting", sp.toString(), {date: date ?? null}), {scroll: false})} /> : <>
         {view === "discover" && <>
-<div ref={discoveryRef} className="hunting-discovery-grid" data-detail-open={!!discoveryTarget} onScroll={recordGroupScroll}><div ref={flowRef} className="hunting-candidate-flow" onScroll={recordGroupScroll} tabIndex={0} role="region" aria-label="候选结果与题材">
+<div ref={discoveryRef} className="hunting-discovery-grid" data-detail-open={hasDiscoveryDetail} onScroll={recordGroupScroll}><div ref={flowRef} className="hunting-candidate-flow" onScroll={recordGroupScroll} tabIndex={0} role="region" aria-label="候选结果与题材">
         <DiscoveryNavigation search={sp.toString()} />
         <div className="hunting-list-toolbar" hidden={!selectedOnly} inert={!selectedOnly}>
           {candidateSwitch}
@@ -537,7 +562,7 @@ function HuntingInner() {
               onClick={() => setCollectionViews(previous => previous[selectedGroup] === mode ? previous : {...previous, [selectedGroup]:mode})}>{mode === "cards" ? "卡片" : "列表"}</button>)}
           </SelectionRail>
         </div>
-        {!selectedOnly && <DiscoveryBrowser search={sp.toString()} selection={discoverySelection} onNavigate={navigateDiscovery} onTarget={resolveDiscovery} />}
+        {!selectedOnly && <DiscoveryBrowser search={sp.toString()} selection={discoverySelection} onNavigate={navigateDiscovery} onTarget={resolveDiscovery} onMethodTarget={resolveMethod} methodDate={methodDate} />}
         <div className="hunting-candidate-notices" hidden={!selectedOnly} inert={!selectedOnly}>
         {/* ── 空仓闸门横幅（风险提示置顶）──
             2026-09-16 动态化：以**读取时刻复核**（meta.gate_live）为准展示，
@@ -617,9 +642,10 @@ function HuntingInner() {
 
         {/* ── 盘后增强（P1-5/6）：接力质量排序 + 潜伏观察池，默认收起 ── */}
         <div id="sec-postmarket" hidden={!selectedOnly} inert={!selectedOnly}>{selectedOnly && <PostMarketEnhance initiallyOpen={sec === "postmarket"} />}</div>
-        </div><aside ref={contextRef} onScroll={event => {if (selectedOnly && !discoveryTarget && event.target === event.currentTarget) contextScroll.current = event.currentTarget.scrollTop;}} className="hunting-context-column" tabIndex={0} aria-label={discoveryTarget ? `分类详情 ${discoveryTarget.name}` : "市场环境、节拍与复盘"}>
+        </div><aside ref={contextRef} onScroll={event => {if (selectedOnly && !discoveryTarget && event.target === event.currentTarget) contextScroll.current = event.currentTarget.scrollTop;}} className="hunting-context-column" tabIndex={0} aria-label={methodTarget ? `方法详情 ${methodTarget.name}` : discoveryTarget ? `分类详情 ${discoveryTarget.name}` : "市场环境、节拍与复盘"}>
         {discoveryTarget && <DiscoveryDetail key={`${discoveryTarget.kind}:${discoveryTarget.code}`} target={discoveryTarget} selection={discoverySelection} onClose={closeDiscovery} />}
-        {!selectedOnly && !discoveryTarget && <div className="hunting-reading-note"><h2>{discovery.mode === "methods" ? "核对真实方法" : "点选分类，核对成分"}</h2><p>{discovery.mode === "methods" ? "从方法进入原日期与版本。观察、已否决和现役分别保留。" : "右侧就近核对成分、涨跌与原名单；分类浏览不新增入选或研究。"}</p></div>}
+        {methodTarget && <DiscoveryMethodDetail key={methodTarget.key} row={methodTarget} date={methodDate} search={sp.toString()} onClose={closeMethod} />}
+        {!selectedOnly && !hasDiscoveryDetail && <div className="hunting-reading-note"><h2>{discovery.mode === "methods" ? "核对真实方法" : "点选分类，核对成分"}</h2><p>{discovery.mode === "methods" ? "选择方法看原规则、现有覆盖与缺口。关注仅为本机偏好，不启用策略。" : "右侧就近核对成分、涨跌与原名单；分类浏览不新增入选或研究。"}</p></div>}
         <div className="hunting-original-context" hidden={!!discoveryTarget || !selectedOnly} inert={!!discoveryTarget || !selectedOnly}>
         {/* ── 相位→风格路由（审查 §4.1）：当日风格 + 权重偏移，路由未生效时显式说明 ── */}
         {data?.meta?.style_routing && (

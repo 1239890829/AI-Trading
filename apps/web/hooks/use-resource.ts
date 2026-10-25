@@ -79,6 +79,8 @@ export interface ResourceOptions {
   marketHours?: boolean;
   /** Only opt in after confirming the endpoint is a pure read. */
   abortable?: boolean;
+  /** Expensive optional reads can remain explicit after the first request. */
+  refreshOnVisible?: boolean;
 }
 
 /** 盘外降频倍数。 */
@@ -101,7 +103,7 @@ function nextDelay(base: number | null, marketHours: boolean): number | null {
 export function useResource<T = unknown>(fn: (signal: AbortSignal) => Promise<T>, options: ResourceOptions & {abortable: true}): Resource<T>;
 export function useResource<T = unknown>(fn: () => Promise<T>, options?: ResourceOptions & {abortable?: false}): Resource<T>;
 export function useResource<T = unknown>(fn: (() => Promise<T>) | ((signal: AbortSignal) => Promise<T>), options: ResourceOptions = {}): Resource<T> {
-  const { intervalMs = null, key, enabled = true, marketHours = true, abortable = false } = options;
+  const { intervalMs = null, key, enabled = true, marketHours = true, abortable = false, refreshOnVisible = true } = options;
 
   const fnRef = useRef(fn);
   useEffect(() => {
@@ -226,7 +228,8 @@ export function useResource<T = unknown>(fn: (() => Promise<T>) | ((signal: Abor
         return;
       }
       clear();
-      void tick(); // 回可见：立即补拉一次（在途则合并），再重排
+      if (refreshOnVisible) void tick(); // ordinary reads retain the original resume behavior
+      else schedule();
     };
 
     void tick();
@@ -238,7 +241,7 @@ export function useResource<T = unknown>(fn: (() => Promise<T>) | ((signal: Abor
       clear();
       if (typeof document !== "undefined") document.removeEventListener("visibilitychange", onVisibility);
     };
-  }, [enabled, intervalMs, key, marketHours, nonce, abortable]);
+  }, [enabled, intervalMs, key, marketHours, nonce, abortable, refreshOnVisible]);
 
   // 快照只在"属于当前 key"时才算数；否则一律回到未判定（三态优先于"有值就显示"）。
   const matched = Object.is(snap.key, key);

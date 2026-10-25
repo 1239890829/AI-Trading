@@ -1,4 +1,4 @@
-import { act, cleanup, fireEvent, render, screen } from "@testing-library/react";
+import { act, cleanup, fireEvent, render, screen, waitFor } from "@testing-library/react";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { ConceptDetailModal } from "./concept-detail-modal";
 import { getConceptDetail, type ConceptDetail } from "@/lib/api";
@@ -15,6 +15,16 @@ const detail = (code: string, name: string): ConceptDetail => ({
     limit_up: false, turnover_rate: null, float_market_cap_yi: null,
     boards: null, break_count: null, seal_amount: null, reason: null, tags: [] }],
 });
+function deferred<T>() {
+  let resolve!: (value: T) => void;
+  let reject!: (error: Error) => void;
+  const promise = new Promise<T>((done, fail) => { resolve = done; reject = fail; });
+  return { promise, resolve, reject };
+}
+function withAttribution(base: ConceptDetail, tag = "完整归因"): ConceptDetail {
+  return { ...base, tag_groups: [{ tag, symbols: base.members.map(row => row.symbol) }],
+    members: base.members.map(row => ({ ...row, tags: [tag] })) };
+}
 
 describe("概念详情读取身份与无感刷新", () => {
   it("切换概念会复位细分与搜索条件", async () => {
@@ -99,5 +109,107 @@ describe("概念详情读取身份与无感刷新", () => {
     view.rerender(<ConceptDetailModal code="A" name="概念" onClose={() => {}} />);
     await screen.findByText("重新打开的成分", {selector:"span"});
     expect(getConceptDetail).toHaveBeenCalledTimes(2);
+  });
+});
+
+describe("概念基础成分与按需完整归因", () => {
+  it("首次只读基础；慢完整归因不挡成分，回可见只更新基础", async () => {
+    const base = detail("885517.TI", "基础成分");
+    const full = deferred<ConceptDetail>();
+    vi.mocked(getConceptDetail).mockImplementation((_code, options) =>
+      options?.enrichment === "full" ? full.promise : Promise.resolve(base));
+    render(<ConceptDetailModal code={base.code} name="机器人概念" onClose={() => {}} />);
+    await screen.findByText("基础成分", { selector: "span" });
+    expect(getConceptDetail).toHaveBeenCalledExactlyOnceWith(base.code);
+    fireEvent.click(screen.getByRole("button", { name: "读取涨停归因" }));
+    await waitFor(() => expect(getConceptDetail).toHaveBeenCalledTimes(2));
+    expect(screen.getByText("基础成分", { selector: "span" })).toBeTruthy();
+    expect(screen.getByRole("button", { name: "读取归因中…" })).toHaveProperty("disabled", true);
+    await act(async () => full.resolve(withAttribution(base)));
+    expect(screen.getByRole("button", { name: "完整归因 1" })).toBeTruthy();
+    fireEvent(document, new Event("visibilitychange"));
+    await waitFor(() => expect(getConceptDetail).toHaveBeenCalledTimes(3));
+    expect(vi.mocked(getConceptDetail).mock.calls.filter(([, options]) => options?.enrichment === "full")).toHaveLength(1);
+  });
+
+  it.each([false, true])("已完成的完整归因不能压过刷新后的基础成分，成员身份变化=%s", async identityChanged => {
+    const base = detail("885517.TI", "原成分");
+    const next = { ...base, members: [{ ...base.members[0], name: identityChanged ? "更新成分" : "原成分", change_pct: 3.25 }] };
+    vi.mocked(getConceptDetail).mockResolvedValueOnce(base).mockResolvedValueOnce(withAttribution(base)).mockResolvedValueOnce(next);
+    render(<ConceptDetailModal code={base.code} name="机器人概念" onClose={() => {}} />);
+    await screen.findByText("原成分", { selector: "span" });
+    fireEvent.click(screen.getByRole("button", { name: "读取涨停归因" }));
+    await screen.findByRole("button", { name: "完整归因 1" });
+    fireEvent(document, new Event("visibilitychange"));
+    await screen.findByText("+3.25%");
+    expect(screen.getByText(identityChanged ? "更新成分" : "原成分", { selector: "span" })).toBeTruthy();
+    expect(screen.queryByRole("button", { name: "完整归因 1" })).toBeNull();
+    if (identityChanged) expect(screen.queryByText("原成分", { selector: "span" })).toBeNull();
+    expect(getConceptDetail).toHaveBeenCalledTimes(3);
+  });
+
+  it.each(["success", "failure"])("新基础先到时，旧完整归因晚回 %s 也不覆盖它", async outcome => {
+    const base = detail("885517.TI", "原成分");
+    const next = { ...base, members: [{ ...base.members[0], name: "更新成分" }] };
+    const full = deferred<ConceptDetail>();
+    vi.mocked(getConceptDetail).mockResolvedValueOnce(base).mockReturnValueOnce(full.promise).mockResolvedValueOnce(next);
+    render(<ConceptDetailModal code={base.code} name="机器人概念" onClose={() => {}} />);
+    await screen.findByText("原成分", { selector: "span" });
+    fireEvent.click(screen.getByRole("button", { name: "读取涨停归因" }));
+    await waitFor(() => expect(getConceptDetail).toHaveBeenCalledTimes(2));
+    fireEvent(document, new Event("visibilitychange"));
+    await screen.findByText("更新成分", { selector: "span" });
+    await act(async () => {
+      if (outcome === "success") full.resolve(withAttribution(base, "旧完整归因"));
+      else full.reject(new Error("old full unavailable"));
+    });
+    expect(screen.getByText("更新成分", { selector: "span" })).toBeTruthy();
+    expect(screen.queryByRole("button", { name: "旧完整归因 1" })).toBeNull();
+    expect(screen.queryByText("原成分", { selector: "span" })).toBeNull();
+    expect(getConceptDetail).toHaveBeenCalledTimes(3);
+  });
+
+  it("完整成员身份冲突可重读正式成分，且不会自动重复完整读取", async () => {
+    const base = detail("885517.TI", "原成分");
+    const next = { ...base, members: [{ ...base.members[0], name: "已变更成分" }] };
+    vi.mocked(getConceptDetail).mockResolvedValueOnce(base).mockResolvedValueOnce(withAttribution(next)).mockResolvedValueOnce(next);
+    render(<ConceptDetailModal code={base.code} name="机器人概念" onClose={() => {}} />);
+    await screen.findByText("原成分", { selector: "span" });
+    fireEvent.click(screen.getByRole("button", { name: "读取涨停归因" }));
+    await screen.findByRole("alert");
+    expect(screen.getByText("原成分", { selector: "span" })).toBeTruthy();
+    expect(screen.queryByRole("button", { name: "完整归因 1" })).toBeNull();
+    fireEvent.click(screen.getByRole("button", { name: "重读正式成分" }));
+    await screen.findByText("已变更成分", { selector: "span" });
+    expect(getConceptDetail).toHaveBeenCalledTimes(3);
+    expect(vi.mocked(getConceptDetail).mock.calls.filter(([, options]) => options?.enrichment === "full")).toHaveLength(1);
+    vi.mocked(getConceptDetail).mockResolvedValueOnce(withAttribution(next, "新完整归因"));
+    fireEvent.click(screen.getByRole("button", { name: "读取涨停归因" }));
+    await screen.findByRole("button", { name: "新完整归因 1" });
+    expect(getConceptDetail).toHaveBeenLastCalledWith(base.code, { enrichment: "full" });
+  });
+
+  it("概念A→B→A清除完整读取scope，旧完整晚回与返回A都不自动重读完整归因", async () => {
+    const base = detail("885517.TI", "原概念成分");
+    const next = detail("886069.TI", "新概念成分");
+    const full = deferred<ConceptDetail>();
+    vi.mocked(getConceptDetail).mockResolvedValueOnce(base).mockReturnValueOnce(full.promise).mockResolvedValueOnce(next).mockResolvedValueOnce(base);
+    const view = render(<ConceptDetailModal code={base.code} name="机器人概念" onClose={() => {}} />);
+    await screen.findByText("原概念成分", { selector: "span" });
+    fireEvent.click(screen.getByRole("button", { name: "读取涨停归因" }));
+    await waitFor(() => expect(getConceptDetail).toHaveBeenCalledTimes(2));
+    view.rerender(<ConceptDetailModal code={next.code} name="人形机器人" onClose={() => {}} />);
+    await screen.findByText("新概念成分", { selector: "span" });
+    await act(async () => full.resolve(withAttribution(base, "旧概念归因")));
+    expect(screen.queryByRole("button", { name: "旧概念归因 1" })).toBeNull();
+    expect(screen.queryByText("原概念成分", { selector: "span" })).toBeNull();
+    expect(screen.getByRole("button", { name: "读取涨停归因" })).toHaveProperty("disabled", false);
+    expect(getConceptDetail).toHaveBeenCalledTimes(3);
+    view.rerender(<ConceptDetailModal code={base.code} name="机器人概念" onClose={() => {}} />);
+    await screen.findByText("原概念成分", { selector: "span" });
+    expect(screen.queryByRole("button", { name: "旧概念归因 1" })).toBeNull();
+    expect(screen.getByRole("button", { name: "读取涨停归因" })).toHaveProperty("disabled", false);
+    expect(getConceptDetail).toHaveBeenCalledTimes(4);
+    expect(vi.mocked(getConceptDetail).mock.calls.filter(([, options]) => options?.enrichment === "full")).toHaveLength(1);
   });
 });

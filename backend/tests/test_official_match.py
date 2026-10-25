@@ -25,13 +25,13 @@ def catalog(tmp_path):
     sf = sessionmaker(bind=engine)
     with sf() as db:
         db.add_all([Theme(code=code, name=name) for code, name in [
-            ("A", "A概念"), ("B", "B概念"), ("C", "C大概念"), ("D", "空概念"),
+            ("885001.TI", "A概念"), ("885002.TI", "B概念"), ("885003.TI", "C大概念"), ("885004.TI", "空概念"),
         ]])
         db.add_all([
             ThemeMember(theme_code=code, symbol=symbol)
-            for code in ("A", "B") for symbol in ("600001", "600002")
+            for code in ("885001.TI", "885002.TI") for symbol in ("600001", "600002")
         ])
-        db.add_all([ThemeMember(theme_code="C", symbol=f"{600001 + i:06d}")
+        db.add_all([ThemeMember(theme_code="885003.TI", symbol=f"{600001 + i:06d}")
                     for i in range(301)])
         db.add(ThemeMember(theme_code="orphan", symbol="600001"))
         db.commit()
@@ -56,8 +56,8 @@ def _cards():
 def test_cold_index_batches_real_sqlite_and_keeps_order_sizes_and_empty(catalog):
     svc, _engine, queries = catalog
     index, sizes = official._official_symbol_index(svc)
-    assert index["600001"] == [("A", "A概念"), ("B", "B概念"), ("C", "C大概念")]
-    assert sizes == {"A": 2, "B": 2, "C": 301, "D": 0}
+    assert index["600001"] == [("885001.TI", "A概念"), ("885002.TI", "B概念"), ("885003.TI", "C大概念")]
+    assert sizes == {"885001.TI": 2, "885002.TI": 2, "885003.TI": 301, "885004.TI": 0}
     assert len(queries) == 2, "one catalog + one existing bulk member read"
 
 
@@ -72,16 +72,16 @@ def test_bulk_failure_retains_individual_coverage_and_item_failure(catalog, monk
 
     def single(code):
         attempts.append(code)
-        if code == "B":
+        if code == "885002.TI":
             raise RuntimeError("one concept unavailable")
         return read(code)
 
     monkeypatch.setattr(svc, "member_symbols_bulk", bulk)
     monkeypatch.setattr(svc, "get_members", single)
     index, sizes = official._official_symbol_index(svc)
-    assert attempts == ["bulk", "A", "B", "C", "D"]
-    assert index["600001"] == [("A", "A概念"), ("C", "C大概念")]
-    assert sizes == {"A": 2, "C": 301, "D": 0}
+    assert attempts == ["bulk", "885001.TI", "885002.TI", "885003.TI", "885004.TI"]
+    assert index["600001"] == [("885001.TI", "A概念"), ("885003.TI", "C大概念")]
+    assert sizes == {"885001.TI": 2, "885003.TI": 301, "885004.TI": 0}
 
 
 def test_attachment_keeps_hot_exact_match_read_and_filters_large_concept(catalog):
@@ -91,15 +91,21 @@ def test_attachment_keeps_hot_exact_match_read_and_filters_large_concept(catalog
     official.attach_official(state, first)
     assert [row["official"] for row in first[0]["stocks"]] == [True, True, False]
     assert "official" not in first[1]["ladder"][0]
-    matches = [{"code": "A", "name": "A概念", "hits": 2},
-               {"code": "B", "name": "B概念", "hits": 2}]
+    matches = [{"code": code, "name": name, "hits": 2, "relationship": "membership_overlap",
+                "basis": "member_overlap", "source": "ths_official"}
+               for code, name in [("885001.TI", "A概念"), ("885002.TI", "B概念")]]
     assert first[0]["official_matches"] == first[1]["official_matches"] == matches
+    assert first[0]["exact_catalog"] == {"code": "885001.TI", "name": "A概念", "source": "ths_official",
+                                         "basis": "exact_name"}
+    assert first[0]["catalog_code"] == "885001.TI" and first[0]["candidate_catalog_code"] is None
+    assert first[1]["exact_catalog"] is None and first[1]["catalog_mapping_state"] == "unmapped"
+    assert first[1]["catalog_code"] is None, "a related overlap must never become the source label identity"
     assert first[2]["stocks"][0]["official"] is False
-    assert first[2]["official_matches"] == [] and first[2]["catalog_code"] == "D"
+    assert first[2]["official_matches"] == [] and first[2]["catalog_code"] == "885004.TI"
     assert len(queries) == 5
     # A hot reverse index must not replace the existing fresh exact-name member read.
     with svc._sf() as db:
-        db.query(ThemeMember).filter_by(theme_code="A", symbol="600001").delete()
+        db.query(ThemeMember).filter_by(theme_code="885001.TI", symbol="600001").delete()
         db.commit()
     queries.clear()
     second = _cards()
@@ -107,6 +113,80 @@ def test_attachment_keeps_hot_exact_match_read_and_filters_large_concept(catalog
     assert second[0]["stocks"][0]["official"] is False
     assert second[0]["official_matches"] == matches
     assert len(queries) == 3
+
+
+def test_large_exact_catalog_identity_is_not_filtered_as_a_navigation_overlap(catalog):
+    svc, _engine, _queries = catalog
+    card = {"theme": "C大概念", "stocks": [{"symbol": s} for s in ("600001", "600002")]}
+    official.attach_official(SimpleNamespace(theme_catalog=svc), [card])
+    assert card["theme"] == "C大概念"
+    assert card["exact_catalog"]["code"] == card["catalog_code"] == card["candidate_catalog_code"] == "885003.TI"
+    assert card["catalog_mapping_state"] == "exact"
+    assert all(row["official"] is True for row in card["stocks"])
+    assert all(row["code"] != "885003.TI" for row in card["official_matches"])
+
+
+def test_missing_catalog_clears_previous_projection_without_claiming_non_membership():
+    card = {"theme": "动态标签", "exact_catalog": {"code": "old"}, "catalog_code": "old",
+            "candidate_catalog_code": "old", "official_matches": [{"code": "old"}],
+            "stocks": [{"symbol": "600001", "official": True}]}
+    official.attach_official(SimpleNamespace(), [card])
+    assert card["theme"] == "动态标签"
+    assert card["catalog_mapping_state"] == "unavailable"
+    assert card["exact_catalog"] is card["catalog_code"] is card["candidate_catalog_code"] is None
+    assert card["official_matches"] == [] and "official" not in card["stocks"][0]
+
+
+def test_only_unique_complete_source_name_produces_identity():
+    rows = [SimpleNamespace(code="885001.TI", name="机器人概念", source="ths_official", catalog_active=True),
+            SimpleNamespace(code="885002.TI", name="重复名称", source="ths_official", catalog_active=True),
+            SimpleNamespace(code="885003.TI", name="重复名称", source="ths_official", catalog_active=True)]
+    index = official.catalog_identity_index(rows)
+    assert list(index) == ["机器人概念"]
+    assert "机器人" not in index and " 机器人概念" not in index
+    assert "重复名称" not in index, "same display name cannot choose one code arbitrarily"
+
+
+@pytest.mark.parametrize("change", [{"source": "manual"}, {"source": "unknown"}, {"source": None},
+                                     {"catalog_active": False}, {"catalog_active": None},
+                                     {"code": "BK0001"}, {"code": "885001.ti"}])
+def test_source_code_and_active_state_are_required_for_official_identity(change):
+    row = {"code": "885001.TI", "name": "源正式名称", "source": "ths_official", "catalog_active": True}
+    row.update(change)
+    assert official.catalog_identity_index([SimpleNamespace(**row)]) == {}
+
+
+def test_related_navigation_also_excludes_manual_and_retired_catalog_rows():
+    rows = [SimpleNamespace(code="885001.TI", name="源正式名称", source="ths_official", catalog_active=True),
+            SimpleNamespace(code="885002.TI", name="人工名称", source="manual", catalog_active=True),
+            SimpleNamespace(code="885003.TI", name="退出名称", source="ths_official", catalog_active=False)]
+    calls = []
+
+    def members(codes):
+        calls.append(set(codes))
+        return {code: ["600001", "600002"] for code in codes}
+
+    svc = SimpleNamespace(get_catalog=lambda **_: rows, member_symbols_bulk=members)
+    index, sizes = official._official_symbol_index(svc)
+    assert calls == [{"885001.TI"}]
+    assert sizes == {"885001.TI": 2}
+    assert index["600001"] == [("885001.TI", "源正式名称")]
+
+
+def test_catalog_revision_invalidates_related_names_and_exact_identity(catalog):
+    svc, _engine, _queries = catalog
+    state = SimpleNamespace(theme_catalog=svc)
+    first = _cards()
+    official.attach_official(state, first)
+    assert first[0]["catalog_code"] == "885001.TI"
+    svc._write_catalog([{"code": code, "name": name} for code, name in [
+        ("885001.TI", "A正式新名"), ("885002.TI", "B概念"), ("885003.TI", "C大概念"), ("885004.TI", "空概念")]])
+    second = _cards()
+    official.attach_official(state, second)
+    assert second[0]["exact_catalog"] is None and second[0]["catalog_code"] is None
+    assert second[0]["candidate_catalog_code"] is None
+    assert second[0]["official_matches"][0]["name"] == "A正式新名"
+    assert second[0]["official_matches"][0]["relationship"] == "membership_overlap"
 
 
 def test_two_threads_share_one_cold_index_and_expiry_rebuild(catalog, monkeypatch):
@@ -225,7 +305,7 @@ def test_real_attachment_sessions_yield_loop_and_isolate_cached_cards(catalog, m
         assert len(opened) == len(closed) and opened == closed
         assert all(thread != main_thread for _session, thread in opened)
         assert len({id(session) for session, _thread in opened}) == len(opened)
-        assert payload["data"]["themes"][0]["official_matches"][0]["code"] == "A"
+        assert payload["data"]["themes"][0]["official_matches"][0]["code"] == "885001.TI"
         assert cached_cards == original_cards
 
     asyncio.run(run())

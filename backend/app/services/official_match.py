@@ -1,26 +1,21 @@
-"""簇 → 官方概念挂靠（09-08 用户反馈「代糖/玉米搜不到」的修复）。
+"""源原因标签、精确目录身份与相关成分导航分开。
 
-**根因**：同花顺有**两套口径**——
-①涨停原因动态标签（「功能糖」「减糖甜味剂」「玉米加工」，每日变）；
-②概念板块目录（「代糖概念 885904」「玉米 885811」，静态成分，App 内展示口径）。
-我们的题材聚类用①（保留原始标签），用户在同花顺看到的是②——簇名精确匹配
-目录的旧挂靠逻辑对「功能糖」这类簇完全失效。
-
-**修复**：按**成分重叠**反向挂靠——簇成员命中某官方概念 ≥2 只即挂靠
-（official_matches，命中数降序 ≤3 个），并过滤全市场性大概念（成分 >300 只的
-融资融券/深股通类命中几只毫无辨识度）。盘面题材看板与猎场机会视图共用导航。未分类不挂靠；候选资格另需精确同名
-且全部支持股均为官方成分，部分重叠不等于共同驱动。
+``theme`` 保留源原因标签。只有完整同名的目录条目可给出 ``exact_catalog`` /
+``catalog_code``；不拼别名、不用成员重叠改名。``official_matches`` 仅为兼容
+旧消费者保留的成员重叠导航，不证明官方身份、共同驱动或候选资格。
+候选资格仍要求精确同名且全部支持股均为该目录的官方成分。
 """
 from __future__ import annotations
 
 import logging
+import re
 import threading
 
 from app.core.ttl_cache import cache_on
 
 log = logging.getLogger(__name__)
 
-#: 概念成分规模上限：超过此值的全市场性概念（融资融券/深股通/国企改革…）无辨识度
+#: 旧成员重叠导航的规模上限；不用于判断题材性质或排除精确目录身份。
 MAX_CONCEPT_SIZE = 300
 #: 簇挂靠最小命中数：≥2 只才算（单票噪声不挂）
 MIN_HITS = 2
@@ -30,22 +25,42 @@ MAX_MATCHES = 3
 _INDEX_LOCK_INIT = threading.Lock()
 
 
+def catalog_identity_index(catalog) -> dict[str, dict]:
+    """Index exact source names; ambiguous same-name identities are not chosen."""
+    identities: dict[str, dict] = {}
+    ambiguous: set[str] = set()
+    for row in catalog:
+        code, name = getattr(row, "code", None), getattr(row, "name", None)
+        if (not isinstance(code, str) or not re.fullmatch(r"[0-9]{6}\.TI", code)
+                or not isinstance(name, str) or not name
+                or getattr(row, "source", None) != "ths_official"
+                or getattr(row, "catalog_active", None) is not True):
+            continue
+        identity = {"code": code, "name": name, "source": "ths_official",
+                    "basis": "exact_name"}
+        if name in identities and identities[name] != identity:
+            ambiguous.add(name)
+        identities[name] = identity
+    return {name: identity for name, identity in identities.items() if name not in ambiguous}
+
+
 def _official_symbol_index(svc) -> tuple[dict[str, list[tuple[str, str]]], dict[str, int]]:
     """symbol → [(概念 code, name)] 反查索引 + 概念成分规模表。"""
     index: dict[str, list[tuple[str, str]]] = {}
     sizes: dict[str, int] = {}
-    catalog = svc.get_catalog(limit=1000)
+    catalog = list(catalog_identity_index(svc.get_catalog(limit=1000)).values())
     try:
-        symbols_by_code = svc.member_symbols_bulk([t.code for t in catalog])
+        symbols_by_code = svc.member_symbols_bulk([t["code"] for t in catalog])
     except Exception:  # noqa: BLE001 - 批读失败仍保留原逐概念覆盖与容错
         symbols_by_code = None
     for t in catalog:
+        code, name = t["code"], t["name"]
         try:
-            symbols = (symbols_by_code.get(t.code, []) if symbols_by_code is not None
-                       else [m.symbol for m in svc.get_members(t.code)])
-            sizes[t.code] = len(symbols)
+            symbols = (symbols_by_code.get(code, []) if symbols_by_code is not None
+                       else [m.symbol for m in svc.get_members(code)])
+            sizes[code] = len(symbols)
             for symbol in symbols:
-                index.setdefault(symbol, []).append((t.code, t.name))
+                index.setdefault(symbol, []).append((code, name))
         except Exception:  # noqa: BLE001 - 单概念成员失败不影响整体索引
             continue
     return index, sizes
@@ -77,19 +92,26 @@ def _get_index(holder) -> tuple[dict[str, list[tuple[str, str]]], dict[str, int]
 
 
 def attach_official(holder, themes_list: list[dict]) -> None:
-    """给簇（themes_list 的每项）挂 official_matches + 成员级 official 布尔。
+    """Attach exact identity and separately labelled membership navigation.
 
-    目录服务不可用/为空时静默跳过（无徽标 ≠ 非成分，前端不得当负面信号）。
+    先清除本函数旧投影，目录不可用时明确 unknown，不沿用旧官方身份。
     """
+    for card in themes_list:
+        card.update(exact_catalog=None, catalog_mapping_state="unavailable", catalog_code=None,
+                    candidate_catalog_code=None, official_matches=[],
+                    official_matches_basis="membership_overlap")
+        for member in card.get("ladder") or card.get("stocks") or []:
+            member.pop("official", None)
     state = _state(holder)
     svc = getattr(state, "theme_catalog", None)
     if svc is None or svc.catalog_size() == 0:
         return
     try:
         symbol_index, concept_sizes = _get_index(holder)
-        name_to_code = {t.name: t.code for t in svc.get_catalog(limit=1000)}
-        exact_codes = list({name_to_code[c["theme"]] for c in themes_list
-                            if c.get("theme") in name_to_code and not c.get("is_unclassified")})
+        identities = catalog_identity_index(svc.get_catalog(limit=1000))
+        by_code = {identity["code"]: identity for identity in identities.values()}
+        exact_codes = list({identities[c["theme"]]["code"] for c in themes_list
+                            if c.get("theme") in identities and not c.get("is_unclassified")})
         # Fresh membership read stays independent of the reverse-index cache.
         # One batch replaces N exact-name reads without extending freshness.
         try:
@@ -98,15 +120,17 @@ def attach_official(holder, themes_list: list[dict]) -> None:
         except Exception:
             members_by_code = {code: {m.symbol for m in svc.get_members(code)} for code in exact_codes}
         for card in themes_list:
-            card["candidate_catalog_code"] = None
             if card.get("is_unclassified") or card.get("theme") == "未分类":
-                card["official_matches"] = []
-                card["catalog_code"] = None
+                card["catalog_mapping_state"] = "unclassified"
                 continue
             # 成员行：看板用 ladder，机会视图用 stocks（两结构 symbol 字段同名）
             member_rows = card.get("ladder") or card.get("stocks") or []
             # 成员级：簇名与目录精确同名时，成员在官方成分内打 official 布尔
-            code = name_to_code.get(card.get("theme") or "")
+            identity = identities.get(card.get("theme") or "")
+            code = identity["code"] if identity else None
+            card["exact_catalog"] = dict(identity) if identity else None
+            card["catalog_mapping_state"] = "exact" if identity else "unmapped"
+            card["catalog_code"] = code
             official = set()
             if code:
                 official = members_by_code.get(code, set())
@@ -127,13 +151,12 @@ def attach_official(holder, themes_list: list[dict]) -> None:
                     if concept_sizes.get(code2, 10**9) <= MAX_CONCEPT_SIZE:
                         match_counts[(code2, name2)] = match_counts.get((code2, name2), 0) + 1
             matches = [
-                {"code": c, "name": n, "hits": h}
+                {"code": c, "name": n, "hits": h, "relationship": "membership_overlap",
+                 "basis": "member_overlap", "source": (by_code.get(c) or {}).get("source", "unknown")}
                 for (c, n), h in match_counts.items()
                 if h >= MIN_HITS
             ]
             matches.sort(key=lambda x: -x["hits"])
             card["official_matches"] = matches[:MAX_MATCHES]
-            # 弹窗入口用的目录代码：优先簇名精确同名，其次仅供浏览的成分重叠
-            card["catalog_code"] = code or (matches[0]["code"] if matches else None)
     except Exception:  # noqa: BLE001 - 挂靠失败不影响看板
         log.exception("attach official matches failed")

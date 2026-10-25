@@ -7,6 +7,9 @@ import { useIncremental } from "@/hooks/use-incremental";
 import { IncrementalSentinel } from "@/components/ui/incremental-sentinel";
 import { StockLink } from "@/components/stock-link";
 import { DiscoveryMethods } from "./discovery-methods";
+import { DiscoveryOfficialDirectory } from "./discovery-official-directory";
+import { groupHotThemes } from "./discovery-hot-groups";
+import type { StrategyRegistryItem } from "@/lib/api/picks";
 import type { DiscoveryDetailTarget } from "./discovery-detail";
 import { getBoardFundFlow, getDiscoveryMemberships, getThemesHot, type BoardFlowKind, type BoardFlowRange, type BoardFlowRow, type HotTheme, type ThemesHotPayload, type BoardFundFlowPayload } from "@/lib/api";
 import { dateTimeTextBJ, pctColor, pctText } from "@/lib/format";
@@ -50,7 +53,7 @@ export function DiscoveryNavigation({search}: {search: string}) {
   const {mode} = discoveryLocation(search);
   return <nav className="discovery-nav" aria-label="选股分类发现" onKeyDown={moveFocus}>
     {MODES.map(([key, name]) => <Link key={key} scroll={false} aria-current={mode === key ? "page" : undefined}
-      href={discoveryUrl(search, {browse: key === "selected" ? null : key, disc_code: null, disc_q: null, disc_sort: null, disc_kind: null, disc_range: null, selection: null})}>{name}</Link>)}
+      href={discoveryUrl(search, {browse: key === "selected" ? null : key, disc_code: null, disc_method: null, disc_group: null, disc_q: null, disc_sort: null, disc_kind: null, disc_range: null, selection: null})}>{name}</Link>)}
   </nav>;
 }
 
@@ -72,8 +75,12 @@ const text = (value: unknown): value is string => typeof value === "string" && v
 const nullableNumber = (value: unknown) => value == null || validNumber(value);
 function checkHot(data: ThemesHotPayload) {
   if (!object(data) || !Array.isArray(data.themes) || !Array.isArray(data.stocks)
+    || data.ranking_basis !== "hot_stock_concentration"
     || data.themes.some(row => !object(row) || !text(row.theme) || !(row.theme_code == null || text(row.theme_code))
-      || !nullableNumber(row.heat) || !Number.isSafeInteger(row.hot_count) || (row.hot_count as number) < 0
+      || row.source !== "ths_official" || !text(row.theme_code) || !/^\d{6}\.TI$/.test(row.theme_code)
+      || !nullableNumber(row.heat) || !nullableNumber(row.concentration_pct) || !nullableNumber(row.member_count)
+      || !Array.isArray(row.hot_symbols) || row.hot_symbols.some(symbol => typeof symbol !== "string" || !/^\d{6}$/.test(symbol))
+      || new Set(row.hot_symbols).size !== row.hot_count || !Number.isSafeInteger(row.hot_count) || (row.hot_count as number) < 0
       || !(row.best == null || object(row.best) && text(row.best.symbol) && validNumber(row.best.rank)))
     || data.stocks.some(row => !object(row) || !text(row.symbol) || !validNumber(row.rank) || !nullableNumber(row.heat)
       || !Array.isArray(row.themes) || row.themes.some(name => !text(name)))) throw new DiscoveryReadError("热榜返回结构不完整");
@@ -90,24 +97,19 @@ function checkBoards(data: BoardFundFlowPayload, kind: string, range: string) {
       || new Date(`${data.as_of}T00:00:00Z`).toISOString().slice(0, 10) !== data.as_of)) throw new DiscoveryReadError("板块返回身份或结构不一致");
   return data;
 }
-function heatReading(row: HotTheme, stocks: ThemesHotPayload["stocks"]) {
-  const members = stocks.filter(stock => stock.themes.includes(row.theme));
-  const known = members.filter(stock => validNumber(stock.heat)).length;
-  return {value: members.length === row.hot_count && known === row.hot_count && known > 0 && validNumber(row.heat) ? row.heat : null,
-    known, total: row.hot_count};
-}
-
 /** One active source read, local filters, and a separately scoped catalog projection. */
-export function DiscoveryBrowser({search, selection, onNavigate, onTarget}: {
+export function DiscoveryBrowser({search, selection, onNavigate, onTarget, onMethodTarget, methodDate}: {
   search: string; selection: DiscoverySelection;
   onNavigate: (href: string, push?: boolean) => void;
   onTarget: (scope: string, target: DiscoveryDetailTarget | null) => void;
+  onMethodTarget?: (scope: string, row: StrategyRegistryItem | null) => void;
+  methodDate?: string;
 }) {
   const location = discoveryLocation(search);
   const {mode, kind, range, code, query, sort, scope} = location;
   const savedDirectory = mode === "catalog" && range === "latest_saved";
   const hot = useResource(async signal => checkHot(await getThemesHot(30, {signal})), {enabled: mode === "hot", key: "hot/30", abortable: true});
-  const boards = useResource(async signal => checkBoards(await getBoardFundFlow(kind, range, {signal}), kind, range), {enabled: mode === "catalog" || mode === "funds", key: `${kind}/${range}`, abortable: true});
+  const boards = useResource(async signal => checkBoards(await getBoardFundFlow(kind, range, {signal}), kind, range), {enabled: savedDirectory || mode === "funds", key: `${kind}/${range}`, abortable: true});
   const symbols = [...new Set(selection.entries.map(entry => entry.symbol).filter(symbol => /^\d{6}$/.test(symbol)))].sort();
   const membershipKey = JSON.stringify([selection.date, symbols]);
   const memberships = useResource(signal => getDiscoveryMemberships(symbols, selection.date, {signal}), {
@@ -124,19 +126,21 @@ export function DiscoveryBrowser({search, selection, onNavigate, onTarget}: {
   const boardRows = useMemo(() => boardMismatch ? [] : boards.data?.available ? boards.data.rows : [], [boardMismatch, boards.data]);
   const targetName = !code ? undefined : mode === "hot" ? hotRows.find(row => row.theme_code === code)?.theme : mode === "catalog" || mode === "funds" ? boardRows.find(row => row.board_code === code)?.name : undefined;
   const targetKind = mode === "hot" ? "theme" : "board";
-  useEffect(() => {onTarget(scope, targetName ? {kind: targetKind, code, name: targetName} : null);}, [onTarget, scope, targetKind, code, targetName]);
+  useEffect(() => {if (mode !== "methods" && !(mode === "catalog" && !savedDirectory)) onTarget(scope, targetName ? {kind: targetKind, code, name: targetName} : null);}, [onTarget, scope, targetKind, code, targetName, mode, savedDirectory]);
   const q = query.trim().toLocaleLowerCase();
   const isHot = mode === "hot";
   const source = isHot ? hot : boards;
   const ascending = sort === "asc";
   const filteredHot = [...hotRows].filter(row => `${row.theme} ${row.theme_code ?? ""} ${row.best?.name ?? ""} ${row.best?.symbol ?? ""}`.toLocaleLowerCase().includes(q))
-    .sort((a, b) => discoveryCompare(heatReading(a, hot.data?.stocks ?? []).value, heatReading(b, hot.data?.stocks ?? []).value, ascending));
+    .sort((a, b) => discoveryCompare(a.concentration_pct, b.concentration_pct, ascending) || (ascending ? a.hot_count - b.hot_count : b.hot_count - a.hot_count) || (a.theme_code ?? "").localeCompare(b.theme_code ?? ""));
   const filteredBoards = [...boardRows].filter(row => `${row.name} ${row.board_code} ${row.leader_name ?? ""}`.toLocaleLowerCase().includes(q))
     .sort((a, b) => discoveryCompare(mode === "catalog" ? a.change_pct : discoveryFlowValue(a, range), mode === "catalog" ? b.change_pct : discoveryFlowValue(b, range), ascending));
-  const rows: {key: string; hot: HotTheme | null; board: BoardFlowRow | null}[] = isHot ? filteredHot.map(row => ({key: `theme:${row.theme_code ?? row.theme}`, hot: row, board: null}))
+  const compact = new URLSearchParams(search).get("disc_group") !== "all";
+  const rows: {key: string; hot: HotTheme | null; board: BoardFlowRow | null; related?: HotTheme[]}[] = isHot ? groupHotThemes(filteredHot, compact).map(group => ({key: `theme:${group.primary.theme_code}`, hot: group.primary, board: null, related: group.related}))
     : filteredBoards.map(row => ({key: `board:${row.board_code}`, hot: null, board: row}));
   const list = useIncremental(rows, {pageSize: 24, step: 24, resetKey: JSON.stringify([mode, kind, range, query, sort]), active: mode !== "methods"});
-  if (mode === "methods") return <DiscoveryMethods active date={new URLSearchParams(search).get("date") ?? selection.date ?? undefined} search={search}/>;
+  if (mode === "methods") return <DiscoveryMethods active date={methodDate ?? new URLSearchParams(search).get("date") ?? undefined} search={search} onNavigate={onNavigate} onMethodTarget={onMethodTarget}/>;
+  if (mode === "catalog" && !savedDirectory) return <DiscoveryOfficialDirectory kind={kind} search={search} scope={scope} selection={selection} onNavigate={onNavigate} onTarget={onTarget}/>;
   const malformed = isHot ? malformedHot : boardMismatch;
   const pending = source.pending && source.data === undefined;
   const sourceAvailable = isHot ? !malformed : !malformed && boards.data?.available === true;
@@ -145,7 +149,7 @@ export function DiscoveryBrowser({search, selection, onNavigate, onTarget}: {
   const select = (next: DiscoveryDetailTarget) => onNavigate(discoveryUrl(search, {disc_code: next.code, selection: null}), true);
   return <section className="discovery-browser" aria-label={isHot ? "热门题材发现" : mode === "catalog" ? "行业概念发现" : "资金方向发现"}>
     <header className="discovery-heading"><div><h2>{isHot ? "热门题材" : mode === "catalog" ? "行业与概念" : "资金方向"}</h2>
-      <p>{isHot ? "热股共同归属，包含题材与通用标签" : mode === "catalog" ? "先看板块强弱，再核对成分与原名单" : "按真实主力净额看流入与流出"}</p></div>
+      <p>{isHot ? "同花顺正式概念 · 按热股集中度观察" : mode === "catalog" ? "先看板块强弱，再核对成分与原名单" : "按真实主力净额看流入与流出"}</p></div>
       <button className="quiet-action" type="button" disabled={source.pending} onClick={refresh}>{source.pending ? "读取中…" : "刷新分类"}</button></header>
     <div className="discovery-controls">
       {!isHot && <div className="discovery-kinds" aria-label="板块类别">{(["industry", "concept"] as const).map(value => <button key={value} type="button" aria-pressed={kind === value} onClick={() => change({disc_kind: value})}>{value === "industry" ? "行业" : "概念"}</button>)}</div>}
@@ -154,15 +158,20 @@ export function DiscoveryBrowser({search, selection, onNavigate, onTarget}: {
       {mode === "funds" && <label>区间<select aria-label="资金区间" value={range} onChange={event => change({disc_range: event.target.value})}>
         <option value="intraday">本次榜单</option><option value="5d">5日</option><option value="10d">10日</option><option value="20d">20日存档</option></select></label>}
       <label>排序<select aria-label="分类排序" value={ascending ? "asc" : "desc"} onChange={event => change({disc_sort: event.target.value})}>
-        <option value="desc">{isHot ? "人气优先" : mode === "catalog" ? "涨幅优先" : "净流入优先"}</option>
-        <option value="asc">{isHot ? "人气反向" : mode === "catalog" ? "跌幅优先" : "净流出优先"}</option></select></label>
+        <option value="desc">{isHot ? "集中度优先" : mode === "catalog" ? "涨幅优先" : "净流入优先"}</option>
+        <option value="asc">{isHot ? "集中度反向" : mode === "catalog" ? "跌幅优先" : "净流出优先"}</option></select></label>
+      {isHot && <button className="quiet-action" type="button" aria-pressed={compact} onClick={() => onNavigate(discoveryUrl(search, {disc_group: compact ? "all" : null}))}>{compact ? "重合热股已收拢" : "显示全部概念"}</button>}
       <label className="discovery-search"><span className="sr-only">搜索分类</span><input aria-label="搜索分类" placeholder="名称、代码或领涨股" value={draft.value}
         onCompositionStart={() => setComposing(true)} onCompositionEnd={event => {setComposing(false); change({disc_q: event.currentTarget.value});}}
         onChange={event => {setDraft({query, value: event.target.value}); if (!composing) change({disc_q: event.target.value});}}/></label>
       {query && <button className="quiet-action" type="button" onClick={() => change({disc_q: null})}>清除搜索</button>}
     </div>
     <div className="discovery-basis" role="note">
-      {isHot ? <><span>同花顺24小时热股 × 当前目录</span><span title={hot.data?.ts ?? undefined}>榜单时刻 {hot.data?.ts ? dateTimeTextBJ(hot.data.ts) : "未提供"}（北京）</span><span>返回 {hot.data?.stocks?.length ?? "—"} 只热股，非全市场热点全集</span></>
+      {isHot ? <><span>同花顺24小时热股 × 正式目录</span><span title={hot.data?.ts ?? undefined}>榜单时刻 {hot.data?.ts ? dateTimeTextBJ(hot.data.ts) : "未提供"}（北京）</span><span>返回 {hot.data?.stocks?.length ?? "—"} 只热股，非全市场热点全集</span>
+        <span>集中度＝榜内热股／已核成分。本系统排序，不是来源官方热榜或全市场最强主线。</span>
+        {compact && <span>仅将热股样本重合≥75%的条目收拢；各名称、代码和成分独立保留，不合并为新题材。</span>}
+        {hot.data?.catalog_state !== "ready" && <span>目录或成员保鲜未核；缺失集中度不参与领先判断。</span>}
+        {hot.data?.membership_state === "unavailable" && <span>本次归属读取失败，不能判断没有热门题材。</span>}</>
         : <><span>东财板块口径 · {kind === "industry" ? "行业" : "概念"}</span><span>{savedDirectory ? `原榜单日期 ${boards.data?.as_of || "未提供"}` : range === "20d" ? `本地存档截至 ${boards.data?.as_of || "未提供"}` : "源时点未提供"}</span>
           {savedDirectory ? <><span>Top50净流入存档样本，非全目录</span>
             <span title={boards.data?.stored_at ?? undefined}>存档保存于 {boards.data?.stored_at && /(?:Z|[+-]\d{2}:?\d{2})$/i.test(boards.data.stored_at) && Number.isFinite(Date.parse(boards.data.stored_at)) ? `${dateTimeTextBJ(boards.data.stored_at)}（北京）` : "未提供"} · 来源时刻未核</span>
@@ -184,26 +193,28 @@ export function DiscoveryBrowser({search, selection, onNavigate, onTarget}: {
     {!pending && sourceAvailable && source.data && rows.length === 0 && <p className="discovery-empty">{query ? "没有匹配分类。可清除搜索查看已返回范围。" : isHot ? "热榜暂未映射到可确认题材；不是没有市场热点。" : "本次范围没有可展示板块；缺数不按零处理。"}</p>}
     {code && !pending && source.data && !targetName && <p role="status" className="discovery-warning">该条目不在当前返回范围，未用其他分类替代。请重新选择。</p>}
     <ul className="discovery-results" aria-label="分类结果">
-      {list.shown.map(({key, hot: row, board}, index) => {
+      {list.shown.map(({key, hot: row, board, related}, index) => {
         const name = row?.theme ?? board!.name;
         const rowCode = row?.theme_code ?? board?.board_code ?? null;
         const matched = rowCode && membershipKnown ? memberships.data!.items.filter(item => item.state === "matched" && item.themes.some(theme => theme.theme_code === rowCode)).length : null;
         const net = board ? discoveryFlowValue(board, range) : null;
-        const heat = row ? heatReading(row, hot.data?.stocks ?? []) : null;
-        return <li key={key} className="discovery-result" data-selected={!!rowCode && code === rowCode}>
+        return <li key={key} className="discovery-result" data-selected={!!rowCode && code === rowCode || !!related?.some(item => item.theme_code === code)}>
           <button className="discovery-result-open" type="button" disabled={!rowCode} data-discovery-code={rowCode ?? undefined} aria-label={`查看${name}成分`} aria-pressed={!!rowCode && code === rowCode}
             onClick={() => rowCode && select({kind: row ? "theme" : "board", code: rowCode, name})}>
             <span className="discovery-order">{index + 1}</span><span className="discovery-name"><strong>{name}</strong><small>{rowCode || "代码未确认"}</small></span>
-            <span title={heat?.value != null ? heat.value.toLocaleString("zh-CN") : undefined} className={`discovery-measure ${board ? pctColor(board.change_pct) : ""}`}>{row ? (heat?.value != null ? heat.value.toLocaleString("zh-CN", {notation: "compact", maximumFractionDigits: 1}) : "未齐") : pctText(board!.change_pct)}<small>{row ? heat?.value != null ? "榜内人气合计" : `${heat?.known ?? 0}/${heat?.total ?? 0}股提供人气` : savedDirectory ? "原日涨跌幅" : "板块涨跌幅"}</small></span>
+            <span className={`discovery-measure ${board ? pctColor(board.change_pct) : ""}`}>{row ? validNumber(row.concentration_pct) ? `${row.concentration_pct.toLocaleString("zh-CN", {maximumFractionDigits: 2})}%` : "未核" : pctText(board!.change_pct)}<small>{row ? "热股集中度" : savedDirectory ? "原日涨跌幅" : "板块涨跌幅"}</small></span>
             <span className={`discovery-measure ${board && net != null ? net >= 0 ? "text-up-ink dark:text-up" : "text-down-ink dark:text-down" : ""}`}>{row ? `${row.hot_count}只` : signed(net)}<small>{row ? "榜内热股" : savedDirectory ? "原当日净额" : range === "intraday" ? "主力净额" : `${range.replace("d", "日")}主力净额`}</small></span>
             <svg aria-hidden="true" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.5"><path d="m9 5 7 7-7 7"/></svg>
           </button>
           <div className="discovery-result-context">
+            {row && <span title={row.member_as_of ?? undefined}>同花顺正式概念 · {row.member_count == null ? "成分总数未核" : `已核成分${row.member_count}只`}</span>}
             {row?.best && /^\d{6}$/.test(row.best.symbol) ? <span>榜内靠前 <StockLink symbol={row.best.symbol}>{row.best.name || row.best.symbol}</StockLink> · 第{row.best.rank}名</span>
               : board?.leader_symbol && /^\d{6}$/.test(board.leader_symbol) ? <span>源列领涨 <StockLink symbol={board.leader_symbol}>{board.leader_name || board.leader_symbol}</StockLink></span>
                 : <span>{row ? "榜内靠前成员未确认" : board?.leader_name ? `源列领涨 ${board.leader_name} · 证券代码未确认` : "领涨成员未提供"}</span>}
             {row && <span>{selection.readError ? "原名单读取失败" : !selection.loaded ? "原名单待核" : matched !== null ? `已核匹配 ${matched} 只${memberships.data!.unknown_count > 0 ? ` · ${memberships.data!.unknown_count}只归属未核` : ""}` : selection.entries.length === 0 ? "本组原名单已确认空" : symbols.length > 200 ? "对照超过200只，归属未核" : "原名单归属未核"}</span>}
           </div>
+          {!!related?.length && <div className="discovery-result-context" aria-label={`${name}重合热股归属`}><span>热股样本重合</span>{related.map(item => <button type="button" className="quiet-action" key={item.theme_code} data-discovery-code={item.theme_code ?? undefined}
+            aria-label={`查看${item.theme}成分`} aria-pressed={code === item.theme_code} onClick={() => item.theme_code && select({kind:"theme",code:item.theme_code,name:item.theme})} title={`${item.theme_code} · ${item.hot_count}只热股 · 名称与成分独立保留`}>{item.theme} <span className="font-mono text-[10px]">{item.theme_code}</span></button>)}</div>}
         </li>;
       })}
     </ul>

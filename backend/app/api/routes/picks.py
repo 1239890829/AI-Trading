@@ -434,10 +434,13 @@ async def picks_strategy_health() -> dict:
 
 
 @router.get("/strategy-registry")
-async def picks_strategy_registry() -> dict:
+async def picks_strategy_registry(
+    include_candidates: bool = Query(False, description="显式附带只读参考战法；不启用运行或效果评估"),
+) -> dict:
     """策略登记册全量条目（含已否决者，便于追溯"有哪些策略、各自什么状态"）。
 
-    与 `docs/strategy/strategy-registry.md` §1 总表一致（由测试守卫）。
+    默认与 `docs/strategy/strategy-registry.md` §1 现役登记一致。
+    参考目录仅供阅读与关注，不进入原策略执行、评分或健康评估。
     """
     from app.picks.strategy_registry import list_strategy_keys, saved_method_runs
 
@@ -447,8 +450,9 @@ async def picks_strategy_registry() -> dict:
         log.warning("saved method runs unavailable", exc_info=True)
         runs = {key: {"state": "error", "reason": "已存运行读取失败，未当作零命中"}
                 for key in ("daily_picks", "intraday_watch")}
-    items = [{**item, **({"runtime": runs[item["key"]]} if item["key"] in runs else {})}
-             for item in list_strategy_keys()]
+    items = [{**item, **({"runtime": runs[item["key"]]}
+                       if item["key"] in ("daily_picks", "intraday_watch") and item["key"] in runs else {})}
+             for item in list_strategy_keys(include_candidates=include_candidates)]
     return {"data": {"strategies": items}, "meta": {}}
 
 
