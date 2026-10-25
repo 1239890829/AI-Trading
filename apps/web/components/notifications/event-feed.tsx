@@ -1,5 +1,6 @@
 "use client";
 
+import { NewsReader } from "@/components/events/news-reader";
 import { useEffect, useRef, useState } from "react";
 import {eventTimeText} from "@/lib/format";
 import { inspectionClick, useInspection } from "@/components/inspection/inspection-context";
@@ -160,7 +161,7 @@ function EventRow({
   );
 }
 
-export function EventFeed({ active, refreshToken = 0 }: { active: boolean; refreshToken?: number }) {
+export function ImpactEventFeed({ active, refreshToken = 0 }: { active: boolean; refreshToken?: number }) {
   const [sort, setSort] = useState<EventSort>("relevance");
   const [l1Only, setL1Only] = useState(false);
   const [directionOnly, setDirectionOnly] = useState(false);
@@ -250,4 +251,15 @@ export function EventFeed({ active, refreshToken = 0 }: { active: boolean; refre
       )}
     </div>
   );
+}
+
+export function EventFeed({active,refreshToken=0}: {active:boolean;refreshToken?:number}) {
+  const [view,setView]=useState<"news"|"analysis">("news");
+  return <div className="flex min-h-0 flex-1 flex-col" data-testid={view==="news"?"event-feed":undefined}>
+    <nav className="flex shrink-0 gap-2 px-3 py-2" aria-label="通知资讯视角">
+      <button type="button" className={`ui-filter px-2 py-1 text-xs ${view==="news"?"ui-filter-selected":""}`} aria-pressed={view==="news"} onClick={()=>setView("news")}>快讯阅读</button>
+      <button type="button" className={`ui-filter px-2 py-1 text-xs ${view==="analysis"?"ui-filter-selected":""}`} aria-pressed={view==="analysis"} onClick={()=>setView("analysis")}>事件分析</button>
+    </nav>
+    {view==="news"?<NewsReader active={active} compact refreshToken={refreshToken}/>:<ImpactEventFeed active={active} refreshToken={refreshToken}/>}
+  </div>;
 }

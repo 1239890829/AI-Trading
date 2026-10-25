@@ -28,8 +28,8 @@
                 └────────────────────────────────────────┘
                                      │
                 ┌──────────────── API 层 ────────────────┐
-                │  /api/review/run | /reports | /compare  │
-                │  /methodology/versions | /effectiveness │
+                │  /api/review/run | /reports           │
+                │  /action-items | /effectiveness        │
                 └────────────────────────────────────────┘
 ```
 
@@ -49,10 +49,10 @@
 | ③ 分析 | `ModelRouter.analyze(data, method)` → 三维度结论 | LLM 抛错 → 降级规则引擎，重试一次 |
 | ④ 改进项合成 | `build_action_items()`：阻断级缺失→P0；纪律/滑点/断层→P1/P2 | — |
 | ⑤ 元结论 | `build_meta_insights()`：记录"哪种复盘方式有效/无效" | — |
-| ⑥ 落库+落盘 | `save_report()`：SQLite 三表 + `data/review/reports/YYYYMMDD.json` | 落盘失败不写库 |
+| ⑥ 落库+落盘 | `save_report()`：SQLite 三表 + `data/review/reports/YYYYMMDD/<sha256>.json` 不可变版本，数据库指针决定当前版本 | 文件失败不提交；库提交失败保留原当前版本，孤立文件不当作报告 |
 
 三维度（`DimensionResult`）：
-- **trades 当日操作评估**：规则遵守（被拒单）、过度交易、执行滑点、盈亏归因、亏损单占比。
+- **trades 当日操作评估**：规则遵守（被拒单）、过度交易、执行滑点、有成本依据的盈亏归因与亏损单统计；缺成本批次则未知。
 - **market 市场环境研判**：指数、情绪阶段（分歧/退潮/高潮…）、宽度、题材梯队断层。
 - **system 系统表现诊断**：数据完整度、数据源健康、信号样本量、参数失效征兆。
 
@@ -66,8 +66,8 @@
 - **触发条件**（全部满足才跑，且当天只跑一次）：
   1. 今天在 `trade_calendar` 里是**交易日**（走权威日历，不靠 weekday 猜）；
   2. 当前北京时间已过 `review_run_hour:review_run_minute`（默认 15:30）；
-  3. 今天还没跑过（`last_run` 去重）。
-- **不补跑历史**：非交易日/时间未到就跳过。补跑某一天请用 `POST /api/review/run?trade_date=YYYYMMDD`，否则分不清"这份报告是哪天生成的"。
+  3. 数据库不存在当日报告（`storage.report_exists()` 持久去重，不靠内存`last_run`）。
+- **不补跑历史**：非交易日/时间未到就跳过。补跑某一天请用 `POST /api/review/run`，JSON body指定`{"trade_date":"YYYYMMDD"}`，否则分不清"这份报告是哪天生成的"。
 - **关闭**：`lifespan` 退出时由 `reg.shutdown()` 按**同一份声明**统一收割（能自己退的走 stop 事件，其余 cancel），不再有第二份手写停机清单。
 - **开关**：`ASHARE_REVIEW_SCHEDULER_ENABLED=false` 可完全关闭自动调度，只保留手动触发。
 
@@ -86,12 +86,12 @@
 
 **降级路径**（`ModelRouter`）：
 1. `resolve()` 先选配置指定的分析器；
-2. 若选 `llm` 但 `LLMAnalyzer.is_available()` 为 False（未配 base_url/api_key）→ **显式降级**到 `RulesAnalyzer`，记录 `degraded=True` + `reason`；
+2. 若选 `llm` 但 `LLMAnalyzer.is_available()` 为 False（HTTP配置不全，或所选CLI不可执行）→ **显式降级**到 `RulesAnalyzer`，记录 `degraded=True` + `reason`；
 3. 若首选分析器运行抛错 → 降级到规则引擎重试一次；规则引擎再挂才真抛错（不吞）。
 4. `ModelUsage` 把 `requested`（想用）与 `actual`（实际）**分开存**，并记 `fallback_chain` / `cost` / `latency_ms` —— 读者永远不会误以为结论来自 LLM 而实际来自规则引擎。
-5. **LLM 分析器目前是占位壳**：`analyze()` 未实现（抛 `NotImplementedError`），等确定接口形态（OpenAI 兼容 / 各家国产）再补，不猜测字段产出不可用代码。
+5. **LLM分析器已有实现**：先由规则生成事实底稿，再通过既有OpenAI兼容通道或获准本机CLI增强各维度`judgements`；原`findings/evidence`不由模型重写。输出逐条接地校验，失败或全部拒绝时保留规则原判；校验通过不等于事实独立核验或效果准入。用量另由既有`agent_budget`持久记录，缺失不估算。本轮未变更模型配置、权限或发起新模型调用。
 
-> 当前默认 `rules` 的原因：规则分析器**零成本、零外部依赖、结果可复现**——可复现是"方法论自我迭代"的硬前提（带随机性的结论无法判断哪个版本更有效）。
+> 默认配置仍是`rules`：不新增模型调用、事实底稿可复现。LLM增强需分开记录模型与输入版本、真实用量和研判；可复现的规则或模型研判均不自动证明策略有效。
 
 ---
 
@@ -141,15 +141,15 @@
 | POST | `/api/review/run` | 手动触发；body `{trade_date?, methodology_version?}` |
 | GET | `/api/review/reports` | 报告列表（结构化摘要） |
 | GET | `/api/review/reports/{trade_date}` | 某交易日完整报告 |
-| GET | `/api/review/compare?from=&to=` | 两日对比（缺口修复/情绪迁移/改进项处置） |
-| GET | `/api/review/methodology/versions` | 可用方法论版本 |
 | GET | `/api/review/effectiveness?version=` | 采纳率/回退率 + 演进建议 |
-| PATCH | `/api/review/action-items/{id}` | 处置单条改进项；body `{status, note, trade_date, category, title}`；`rejected`/`reverted` 必填 note；守卫三元组不符返回 409 |
-| GET | `/api/review/action-items?status=&limit=` | 改进项清单（默认 pending，按 priority/id 升序） |
+| PATCH | `/api/review/action-items/{id}` | 处置单条改进项；body `{status, note, implementation_evidence, trade_date, category, title}`；`applied`需实施及验证证据，`rejected`/`reverted`需理由；守卫三元组不符返回409 |
+| GET | `/api/review/action-items?status=&limit=` | 改进项清单（未传status返回全部，按priority/id升序） |
+
+`/review/compare`与`/review/methodology/versions`已于2026-09-08删除，存储/配置函数保留。当前页面按需读取两份已保存报告作有限对照，不恢复无人消费的API。
 
 **改进项处置（PDCA 闭环的落点）**
 
-- 状态取值 `pending | confirmed | applied | rejected | reverted`；回到 `pending` = 撤销处置，清 `resolved_at`。
+- 状态取值 `pending | recorded | confirmed | applied | rejected | reverted`；回到 `pending` = 撤销处置，清 `resolved_at`。
 - `{id}` 是 `review_action_items.id`（数据库主键），**不是** payload 里的 `AI-xxxxxxxx` 临时编号。
   `GET /api/review/reports/{trade_date}` 会把主键回填到 `action_items[].id`，前端直接拿它寻址。
 - **id 漂移守卫（2026-09-01）**：id 是 SQLite rowid 别名且无 AUTOINCREMENT，报告重跑删除重建后
@@ -158,18 +158,33 @@
   绝不静默写到恰好复用该 id 的别的改进项上。
 - **`get_report` 会用表行状态覆盖 payload 快照**：payload 是生成时快照，处置只改表行；
   不同步的话界面会表现为"点了确认、回读还是待处置"（2026-09-01 实测）。
-- 写接口走 `require_write_token`（**R22 后与 `require_api_token` 同判定**：未配
-  `ASHARE_API_TOKEN` 时全放行、本地 dev 零影响；配了之后**所有**接口包括读都要
-  `X-API-Token`，见 `docs/system/api.md` §鉴权）。
+- 写接口受现役设备配对、能力与维护权限约束；普通读取不继承维护授权。历史R22的“未配token即全放行”不代表当前共享运行规则，现役鉴权以项目AGENTS及`docs/system/api.md`为准。
 
 ---
 
-## 8. 需要你确认的假设（未验证项）
+## 8. 当前能力与验收边界
 
-1. **默认用规则引擎、LLM 留占位**：本机/项目内无可用 LLM API Key 与可调接口（Hy4 preview 是会话模型，非可调用 API）。是否要我现在接入某个具体 LLM 端点（需你提供 base_url / key / 模型名）？
-2. **调度用进程内 asyncio 协程而非外部 cron**：当前部署（docker-compose）没有持久调度器。若以后要"进程重启也不漏跑"，需改外部 cron / k8s CronJob，或加"启动时补跑昨天"。
-3. **复盘只覆盖模拟账户（paper）操作**：符合项目红线（禁止真实券商 / 真实下单）。真实账户对接不在范围内。
-4. **题材梯队 / 龙虎榜依赖 ths 官方端点**：若 ths key 失效，这些维度会标 `gap` 降级而非臆测；是否需要加腾讯/东财备源补齐？
-5. **同交易日重复生成 = 覆盖**（不追加）：认为"对某一天的判断应唯一"。若你要保留历次版本（如 v1/v2 都跑同一天），需改为按 `(trade_date, methodology_version)` 唯一。
-6. **情绪/宽度口径完全复用现有 `market_context` / `snapshot_service`**：不另起炉灶，保证与前端展示口径一致。
-7. **单账户**：复盘结论基于单个 paper 账户的全部操作；多账户隔离未考虑。
+- 复盘默认配置仍为规则分析器；LLM增强实现及降级边界见§4。代码实现、现场配置、实际调用与效果验收分别取证，不因历史文档索要新凭据。
+- 自动调度由现有进程内注册表承接；进程未运行或错过窗口不构成已采集。手动历史生成只读可证明属于该日的材料，当前行情不得填回历史日。
+- 操作仅覆盖模拟交易。账户scope、来源日期与原消息身份必须保留；没有历史估值或成本批次时分别标未知，不能借当前账户补齐。
+- 题材、板块与竞价能力按现役owner和逐段源时实测；返回请求日期不证明底层材料属于该日。2026-10-25修订的日期绑定规则取代旧“按参数指定日即同日”的假设。
+- 同日报告保存与改进项更新沿原持久化流程；本轮不重写旧报告，不新增模型、策略晋级或自动应用改进项。工程完整、运行采集与策略效果分别验收。
+
+
+## 2026-10-25 市场复盘、新闻与方法读者
+
+用户批准将本地TSP比较中有价值的复盘、新闻和方法发现路径接入原系统；采用产品组织，不复制其模板CSS、seed、伪绩效、假发送/成交或无权限后端。保留当前主题、左右布局、原地详情与一个实际列表滚动owner。工程与未来策略效果分别验收。
+
+复盘市场及交易快照新增`date_bound_v1`：各段独立保留来源、源时刻、接收时刻、来源日、请求日、状态与原因。只有日期匹配且来源/质量可核的`verified/partial`段进入同日事实与分析；接收时刻不能补造源日期。指定历史日不读当前宽度、情绪、竞价或重生成旧归因，未来日期拒绝。旧报告不重写、旧值作为`reported_values`或原报告保留，缺元数据不升级。
+
+原板块owner只有按日Top50资金排序存档、没有逐行源钟，因此可独立阅读和排序“原按日采集参考”，不得叫全市场涨跌榜或已核同日事实。历史账户余额与持仓估值不拿当前快照填入；该日创建委托的当前/保存状态不当作当日新增成交。未绑定旧逐股归因不计可信summary；卖出成交价减委托价不是已实现利润，缺成本批次则利润未知。
+
+原复盘入口新增市场/检查改进双视角：市场事实及来源、有限板块强弱、同版原入选与观察、明确绑定的站内留痕/渠道接受/模拟状态、原简报触发与证伪条件、历史报告对照。`selection_journey`只按原消息origin、selection_ref、source_version绑定，禁止按同股猜订单；accepted不证明送达或已读。`outlook`只读该日已保存简报，不新增模型预测、收费调用或回填原判断。
+
+新闻快讯与事件分析共用原EventStore：快讯模式只读最新有限原记录，含失效历史；不触发盘面排名/题材记忆取数，不增加通知未读。支持重要、关联已存名单、并购及来源文字筛选，逐条按需读取原始观察与解释版本。名单日期/版本独立，原引用与同股关联分开，修订不倒填首次依据。方法目录继续读原登记册；最近运行只读原DailyPickSet/OpportunityDecisionRun/Snapshot，扫描行、入选股、观察表现及实际成交不混分母。耗时未记录保持未知，不导入候选35条定义或伪胜率。
+
+免费源仅准入已核的美联储货币政策官方RSS，用原快讯loop每15分钟有限读取近30日/最多30项，原ID/hash/三时钟进入原观察库。它只服务宏观事实阅读，零股票方向，排除自动LLM，不改变评分/机会资格或外部投递。关闭开关、源失败/时效与feed窗口可见；未声明完整历史。金十需要Token，免费额度/留存展示许可未证，不接；其他候选按实际失败或无消费者价值排除，不重复试探求成功。来源核验归[数据源说明](../data/data-sources.md#2026-10-25-官方宏观rss与只读新闻补源)。
+
+旧报告的空精选条目只说明该报告没有可展示条目，不证明当日零入选。新闻事实/阶段展示为原分类标记，不能当作独立核验；非活跃可能来自修订、处置、证据或时效，不一律写成过期。方法拒绝理由只消费原`selection_reason/score_shortfall`，技术分不是理由；盘中有限投影优先原rank行，再读硬门行，只有rank计数与原运行一致且依据可核时展示原入选确数，其他阶段截断仍保留。
+
+本批完整本地门禁、准确HEAD发布、实际页面读取/交互及运行限制归handoff和PR回执；设计覆盖、测试通过与收益增益不得互代。

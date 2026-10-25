@@ -43,7 +43,7 @@ describe("选股任务入口保真", () => {
 
   it("keeps every original capability reachable without showing all tools at once", () => {
     render(<HuntingTaskRail view="discover" section={null} search="" />);
-    expect(screen.getAllByRole("link").map(link => link.textContent)).toEqual(["盘中候选", "每日精选", "题材参与", "机会依据"]);
+    expect(screen.getAllByRole("link").map(link => link.textContent)).toEqual(["盘中候选", "每日精选", "题材参与", "机会依据", "选股方法"]);
     fireEvent.click(screen.getByRole("button", { name: "持续观察" }));
     expect(screen.getAllByRole("link").map(link => link.textContent)).toEqual(["跟踪记录", "接力与潜伏", "盘中节拍"]);
     fireEvent.click(screen.getByRole("button", { name: "验证复盘" }));
@@ -90,10 +90,10 @@ describe("选股任务入口保真", () => {
     expect(document.activeElement).toBe(daily);
     expect(daily.getAttribute("aria-current")).toBe("page");
     fireEvent.keyDown(daily, {key: "End"});
-    expect(document.activeElement).toBe(screen.getByRole("link", {name: "机会依据"}));
+    expect(document.activeElement).toBe(screen.getByRole("link", {name: "选股方法"}));
     fireEvent.keyDown(document.activeElement!, {key: "ArrowLeft", isComposing: true, keyCode: 229});
-    expect(document.activeElement).toBe(screen.getByRole("link", {name: "机会依据"}));
+    expect(document.activeElement).toBe(screen.getByRole("link", {name: "选股方法"}));
     fireEvent.keyDown(document.activeElement!, {key: "Home", ctrlKey: true});
-    expect(document.activeElement).toBe(screen.getByRole("link", {name: "机会依据"}));
+    expect(document.activeElement).toBe(screen.getByRole("link", {name: "选股方法"}));
   });
 });

@@ -83,160 +83,178 @@ def _date_key(d: date) -> str:
 async def collect_market(
     hub, snapshot_service, trade_date: date, *, sentinel=None
 ) -> MarketSnapshot:
-    """采集市场环境数据。每项失败都记 gap，不影响其他项。
+    """Collect only source-date-bound facts; retain rejected values as audit records."""
+    from types import SimpleNamespace
 
-    :param sentinel: ths 涨停原因哨兵实例（可选，app.state.ths_sentinel）。
-      provider 健康与哨兵快照是**复盘生成时刻**的状态——熔断 open / 哨兵 alert
-      意味着当日部分数据建立在降级口径上，system 维度据此提示核对面。
-    """
+    from app.core.bjtime import beijing_now
+    from app.market.breadth import compute_breadth
+    from app.review.provenance import collect_sector_boards, date_key, evidence, finite, quote_evidence, source_time
+
+    now = beijing_now()
     gaps: list[DataGap] = []
+    provenance: dict = {}
+    reported: dict = {}
     td = _date_key(trade_date)
 
-    # --- 指数 ---
-    indices: list[IndexQuote] = []
-    try:
-        quotes = hub.get_indices()
-        for q in quotes or []:
-            indices.append(
-                IndexQuote(
-                    symbol=q.symbol,
-                    name=q.name or q.symbol,
-                    close=q.price or 0.0,
-                    change_pct=q.change_pct or 0.0,
-                    amount=q.amount,
-                )
-            )
-        if not indices:
-            gaps.append(DataGap(
-                field="indices", source="hub.get_indices", reason="返回空列表",
-                impact="market.指数走势", severity="warn",
-            ))
-    except Exception as exc:
-        gaps.append(DataGap(
-            field="indices", source="hub.get_indices", reason=str(exc)[:200],
-            impact="market.指数走势", severity="warn",
-        ))
+    def gap(field: str, reason: str, *, source: str, severity: str = "warn") -> None:
+        gaps.append(DataGap(field=field, source=source, reason=reason[:400],
+                            impact=f"market.{field}", severity=severity))
 
-    # --- 市场宽度 ---
+    indices: list[IndexQuote] = []
+    rejected_indices: list[dict] = []
+    try:
+        for q in hub.get_indices() or []:
+            proof = quote_evidence(q, trade_date, now)
+            close, pct = finite(getattr(q, "price", None)), finite(getattr(q, "change_pct", None))
+            if proof.state not in {"verified", "partial"} or close is None or close <= 0 or pct is None:
+                rejected_indices.append({"symbol": getattr(q, "symbol", None),
+                    "price": close, "change_pct": pct, "provenance": proof.model_dump()})
+                continue
+            indices.append(IndexQuote(symbol=q.symbol, name=q.name or q.symbol,
+                close=close, change_pct=pct, amount=finite(getattr(q, "amount", None)),
+                source=proof.source, data_timestamp=proof.source_as_of,
+                received_at=proof.received_at, quality=getattr(q.quality, "value", q.quality),
+                binding_state=proof.state))
+        stamps = [q.data_timestamp for q in indices if q.data_timestamp]
+        provenance["indices"] = evidence(trade_date,
+            state=("partial" if rejected_indices or any(q.binding_state == "partial" for q in indices) else "verified") if indices else "unavailable",
+            source=",".join(sorted({q.source for q in indices if q.source})) or "hub.get_indices",
+            as_of=max(stamps) if stamps else None, received=now,
+            source_day=trade_date.isoformat() if indices else None,
+            reason=f"{len(indices)}条同日可信报价；{len(rejected_indices)}条缺项/异日未计入；各行保留原源钟")
+        if rejected_indices:
+            reported["indices"] = rejected_indices
+        if not indices or rejected_indices:
+            gap("indices", provenance["indices"].reason, source="hub.get_indices")
+    except Exception as exc:
+        provenance["indices"] = evidence(trade_date, source="hub.get_indices", reason=str(exc)[:200])
+        gap("indices", str(exc), source="hub.get_indices")
+
     breadth: dict = {}
+    frozen_rows: list[dict] = []
+    receipt = None
     try:
         payload = snapshot_service.breadth_payload()
-        b = payload.get("breadth")
-        if not b:
-            # 复盘调度固定 15:30 触发，快照服务是独立异步任务。后端若刚重启过，
-            # 首轮全市场刷新（新浪 56 页）可能尚未完成，此时 breadth 为空 →
-            # 宽度与情绪双双记 block，market 维度整天空转。
-            # 2026-09-07 实测：进程约 15:29 启动，采集 15:30:06 读到空 breadth，
-            # 快照 15:30:07 才落盘——只差 1 秒。#69/#111 曾标 applied 却复发，
-            # 根因就在这里（当时只做了排查建议，没有等待/重试）。
-            b = await _await_snapshot_breadth(snapshot_service)
-        if b:
-            breadth = dict(b)
+        if isinstance(payload.get("breadth"), dict):
+            reported["breadth"] = dict(payload["breadth"])
+        read = getattr(snapshot_service, "versioned_snapshot", None)
+        rows, receipt = read() if callable(read) else ([], None)
+        receipts = source_time(receipt)
+        proofs = [quote_evidence(r, trade_date, now) for r in rows]
+        # Never derive a source date from the local receipt, parquet directory or HH:MM tick.
+        frozen_rows = [dict(r) for r, proof in zip(rows, proofs)
+                       if proof.state in {"verified", "partial"} and finite(r.get("price")) is not None
+                       and finite(r.get("change_pct")) is not None]
+        if frozen_rows:
+            breadth = compute_breadth(frozen_rows)
+            provenance["breadth"] = evidence(trade_date,
+                state="verified" if len(frozen_rows) == len(rows) and all(p.state == "verified" for p in proofs) else "partial",
+                source=",".join(sorted({str(r.get("source")) for r in frozen_rows})),
+                as_of=max(p.source_as_of for p in proofs if p.source_as_of and p.state in {"verified", "partial"}),
+                received=receipts, source_day=trade_date.isoformat(),
+                reason=f"同一冻结版本内{len(frozen_rows)}/{len(rows)}条源日期可核；仅该覆盖范围的涨跌与成交额，不冒充全集")
         else:
-            gaps.append(DataGap(
-                field="breadth", source="snapshot_service.breadth_payload",
-                reason="全市场快照尚未就绪（已等待 %.0fs）" % _SNAPSHOT_WAIT_TIMEOUT,
-                impact="market.宽度与情绪", severity="block",
-            ))
+            provenance["breadth"] = evidence(trade_date, state="unverified" if reported.get("breadth") else "unavailable",
+                source=payload.get("snapshot_source") or "snapshot_service", received=receipts,
+                reason="缺完整来源日期，或源日期不属于报告日；原采集数值仅保留为未核记录")
+            gap("breadth", provenance["breadth"].reason, source="snapshot_service")
     except Exception as exc:
-        gaps.append(DataGap(
-            field="breadth", source="snapshot_service.breadth_payload",
-            reason=str(exc)[:200], impact="market.宽度与情绪", severity="block",
-        ))
+        provenance["breadth"] = evidence(trade_date, source="snapshot_service", reason=str(exc)[:200])
+        gap("breadth", str(exc), source="snapshot_service")
 
-    # --- 情绪 ---
     sentiment: dict = {}
     try:
-        from app.services.market_context import CalendarUnavailable, compute_market_sentiment
-
-        sentiment = await compute_market_sentiment(hub, snapshot_service)
-    except CalendarUnavailable as exc:
-        gaps.append(DataGap(
-            field="sentiment", source="market_context.compute_market_sentiment",
-            reason=str(exc)[:200], impact="market.情绪阶段", severity="block",
-        ))
+        if trade_date != now.date() or provenance["breadth"].state != "verified":
+            raise ValueError("未具备当日完整可信宽度，不调用当前情绪计算冒充报告日结论")
+        from app.services.market_context import compute_market_sentiment
+        frozen = SimpleNamespace(breadth=breadth, snapshot=frozen_rows, last_success=receipt,
+                                 poll_interval=getattr(snapshot_service, "poll_interval", 60.0))
+        value = await compute_market_sentiment(hub, frozen)
+        if date_key(value.get("trade_date")) != trade_date.isoformat():
+            reported["sentiment"] = {k: value.get(k) for k in ("trade_date", "phase", "temperature", "caveats")}
+            raise ValueError("情绪引擎实际日期与报告日不符，未进入当日结论")
+        sentiment = value
+        provenance["sentiment"] = evidence(trade_date, state="partial" if value.get("caveats") else "verified",
+            source="market_context.compute_market_sentiment", as_of=provenance["breadth"].source_as_of,
+            received=now, source_day=trade_date.isoformat(), reason="复用同一冻结宽度与引擎显式交易日；保留全部caveats")
     except Exception as exc:
-        gaps.append(DataGap(
-            field="sentiment", source="market_context.compute_market_sentiment",
-            reason=str(exc)[:200], impact="market.情绪阶段", severity="block",
-        ))
+        provenance["sentiment"] = evidence(trade_date, source="market_context.compute_market_sentiment", reason=str(exc)[:200])
+        gap("sentiment", str(exc), source="market_context.compute_market_sentiment")
 
-    # --- 题材梯队 ---
     themes: list[dict] = []
     theme_summary: dict = {}
     try:
+        if trade_date != now.date():
+            raise ValueError("题材构建含当前板块指标；历史复盘不调用当前混合数据构建")
         from app.services.theme_service import build_theme_board
-
         board = await build_theme_board(hub.provider, trade_date)
-        themes = (board.get("themes") or [])[:10]
-        theme_summary = {
+        reported["themes"] = [t for t in board.get("themes", []) if isinstance(t, dict)][:10]
+        reported["theme_summary"] = {
             "theme_count": len(board.get("themes") or []),
             "broken_ladder": len(board.get("broken_ladder") or []),
             "summary": board.get("summary") or {},
         }
-        if not themes:
-            gaps.append(DataGap(
-                field="themes", source="build_theme_board", reason="返回空题材列表",
-                impact="market.题材梯队", severity="warn",
-            ))
+        # build_theme_board echoes the requested date but also reads _board_index()
+        # without a date argument. Its mixed output cannot certify a source day.
+        provenance["themes"] = evidence(trade_date, state="unverified",
+            source="theme_service.build_theme_board", received=now,
+            reason="原题材构建含当前板块/成员混合指标；顶层日期是请求回显，仅保留采集参考，未计入同日事实")
+        gap("themes", provenance["themes"].reason, source="theme_service.build_theme_board")
     except Exception as exc:
-        gaps.append(DataGap(
-            field="themes", source="build_theme_board", reason=str(exc)[:200],
-            impact="market.题材梯队", severity="warn",
-        ))
+        provenance["themes"] = evidence(trade_date, source="theme_service.build_theme_board", reason=str(exc)[:200])
+        gap("themes", str(exc), source="theme_service.build_theme_board")
 
-    # --- 数据链健康（provider 熔断/切换 + ths 涨停原因哨兵）---
-    # 失败记 None（未采集），绝不给 {} 冒充"健康无异常"。
+    try:
+        boards, board_proof = collect_sector_boards(trade_date)
+        provenance["sector_boards"] = board_proof
+        # Preserve old owner values, but do not promote their absent source clocks.
+        reported["sector_boards"] = boards
+    except Exception as exc:
+        provenance["sector_boards"] = evidence(trade_date, source="board_flow.daily", reason=str(exc)[:200])
+    if provenance["sector_boards"].state not in {"verified", "partial"}:
+        gap("sector_boards", provenance["sector_boards"].reason, source="board_flow.daily")
+
     provider_health: dict | None = None
     try:
         if hasattr(hub.provider, "provider_health"):
             provider_health = hub.provider.provider_health()
-        else:
-            provider_health = None  # 单源部署无链状态
     except Exception as exc:
-        log.warning("review collect: provider health failed: %s", exc)
-        provider_health = None
-        gaps.append(DataGap(
-            field="provider_health", source="composite.provider_health",
-            reason=str(exc)[:200], impact="system.数据链健康核对", severity="warn",
-        ))
+        gap("provider_health", str(exc), source="composite.provider_health")
     if sentinel is not None:
         try:
             provider_health = dict(provider_health or {})
             provider_health["ths_reason_sentinel"] = sentinel.snapshot()
         except Exception as exc:
-            log.warning("review collect: sentinel snapshot failed: %s", exc)
-            gaps.append(DataGap(
-                field="ths_reason_sentinel", source="ths_sentinel.snapshot",
-                reason=str(exc)[:200], impact="system.题材标签可靠性核对", severity="warn",
-            ))
+            gap("ths_reason_sentinel", str(exc), source="ths_sentinel.snapshot")
+    provenance["provider_health"] = evidence(trade_date, state="partial" if provider_health is not None else "unavailable",
+        source="composite.provider_health", received=now,
+        reason="报告生成时刻的运行健康，不是报告交易日的历史行情事实")
 
-    # --- 竞价溢价比（昨日涨停股今日竞价承接，P0 因子）---
-    # 失败记 None（未采集），gap 显式降级——绝不冒充"无溢价"。
-    auction_premium: dict | None = None
+    auction_premium = None
     try:
+        if trade_date != now.date():
+            raise ValueError("竞价端点仅供当日，历史复盘不读取当前竞价")
         from app.market.auction_premium import collect_premium
-
-        auction_premium = await collect_premium(hub, trade_date)
-        if auction_premium.get("caveats"):
-            gaps.append(DataGap(
-                field="auction_premium", source="auction_premium.collect_premium",
-                reason="；".join(auction_premium["caveats"])[:200],
-                impact="market.竞价承接力", severity="warn",
-            ))
+        value = await collect_premium(hub, trade_date)
+        if date_key(value.get("trade_date")) != trade_date.isoformat():
+            raise ValueError("竞价数据日期与报告日不同")
+        # This owner currently drops the individual auction rows' source clocks.
+        # Its trade_date echoes the request, so it is not independent date evidence.
+        reported["auction_premium"] = value
+        provenance["auction_premium"] = evidence(trade_date, state="unverified",
+            source="auction_premium.collect_premium", received=now,
+            reason="原竞价汇总未保逐行源日期/源钟；请求日回显不是源日证明，仅留采集参考")
+        gap("auction_premium", provenance["auction_premium"].reason, source="auction_premium.collect_premium")
+        if value.get("caveats"):
+            gap("auction_premium", "；".join(value["caveats"]), source="auction_premium.collect_premium")
     except Exception as exc:
-        log.warning("review collect: auction premium failed: %s", exc)
-        gaps.append(DataGap(
-            field="auction_premium", source="auction_premium.collect_premium",
-            reason=str(exc)[:200], impact="market.竞价承接力", severity="warn",
-        ))
+        provenance["auction_premium"] = evidence(trade_date, source="auction_premium.collect_premium", reason=str(exc)[:200])
+        gap("auction_premium", str(exc), source="auction_premium.collect_premium")
 
-    return MarketSnapshot(
-        trade_date=td, indices=indices, breadth=breadth, sentiment=sentiment,
-        themes=themes, theme_summary=theme_summary, gaps=gaps,
-        provider_health=provider_health,
-        auction_premium=auction_premium,
-    )
+    return MarketSnapshot(trade_date=td, contract_version="date_bound_v1", provenance=provenance,
+        reported_values=reported, indices=indices, breadth=breadth, sentiment=sentiment,
+        themes=themes, theme_summary=theme_summary, sector_boards={"industry": [], "concept": []}, gaps=gaps,
+        provider_health=provider_health, auction_premium=auction_premium)
 
 
 # ---------------------------------------------------------------- 交易与账户
@@ -249,9 +267,14 @@ def collect_trading(
 
     :param price_map: symbol -> 最新价，用于持仓浮盈；缺失则 pnl 记 None 并标 gap
     """
+    from app.core.bjtime import beijing_now
+    from app.review.provenance import evidence
+
+    collected = beijing_now()
+    current_account = trade_date == collected.date()
     gaps: list[DataGap] = []
     td = _date_key(trade_date)
-    price_map = price_map or {}
+    price_map = (price_map or {}) if current_account else {}
 
     orders: list[OrderRecord] = []
     positions: list[PositionRecord] = []
@@ -264,10 +287,10 @@ def collect_trading(
         # 影子账户（shadow）在下方 ShadowSnapshot 独立采集。此前三处查询均无 scope，
         # 影子持仓/委托会混进「账户与盈亏 / 操作评估」⇒ 复盘口径被污染且不可见。
         try:
-            acc = db.execute(
+            acc = (db.execute(
                 select(PaperAccount).where(PaperAccount.scope == SCOPE_MAIN)
                 .order_by(PaperAccount.id)
-            ).scalars().first()
+            ).scalars().first()) if current_account else None
             if acc:
                 account = {
                     "cash": acc.cash,
@@ -276,8 +299,9 @@ def collect_trading(
                 }
             else:
                 gaps.append(DataGap(
-                    field="account", source="paper_account", reason="无账户记录",
-                    impact="trades.账户与盈亏", severity="block",
+                    field="account", source="paper_account",
+                    reason="无账户记录" if current_account else "历史复盘不以当前账户余额冒充报告日余额",
+                    impact="trades.账户与盈亏", severity="warn" if not current_account else "block",
                 ))
         except Exception as exc:
             gaps.append(DataGap(
@@ -310,9 +334,13 @@ def collect_trading(
 
         # --- 持仓 ---
         try:
-            prows = db.execute(
+            prows = (db.execute(
                 select(PaperPosition).where(PaperPosition.scope == SCOPE_MAIN)
-            ).scalars().all()
+            ).scalars().all()) if current_account else []
+            if not current_account:
+                gaps.append(DataGap(field="positions", source="paper_position",
+                    reason="没有报告日持仓快照；未用当前持仓和现价回填历史浮盈",
+                    impact="trades.持仓浮盈", severity="warn"))
             missing_price: list[str] = []
             for p in prows:
                 if p.quantity <= 0:
@@ -347,14 +375,27 @@ def collect_trading(
     finally:
         db.close()
 
-    # 已实现盈亏只统计当日成交的卖出单
-    realized = sum(
-        ((o.filled_price or o.price) - o.price) * o.quantity - o.fee
-        for o in orders if o.side == "sell" and o.status == "filled"
-    ) if orders else None
+    # A filled sell price minus its order limit is slippage, not realized profit.
+    # The order row has no acquisition-cost/lot or immutable fill-time ledger.
+    realized = None
+    if any(o.side == "sell" and o.status == "filled" for o in orders):
+        gaps.append(DataGap(field="realized_pnl", source="paper_order",
+            reason="原委托未保存本次卖出的成本批次；成交价减委托价不是已实现盈亏，未估算",
+            impact="trades.已实现盈亏", severity="warn"))
 
     return TradingSnapshot(
-        trade_date=td, account=account, orders=orders, positions=positions,
+        trade_date=td, contract_version="date_bound_v1",
+        provenance={
+            "orders": evidence(trade_date, state="verified" if not any(g.field == "orders" for g in gaps) else "unavailable",
+                source="paper_order:main", source_day=trade_date.isoformat(), received=collected,
+                reason="按原委托created_at的北京日期筛选；委托/已成交状态不等于该日新增成交"),
+            "account": evidence(trade_date, state="partial" if account else "unavailable",
+                source="paper_account:main", received=collected,
+                reason="生成时刻主模拟账户余额，非历史收盘快照" if current_account else "历史账户快照未保存，未读取当前余额"),
+            "positions": evidence(trade_date, state="partial" if current_account else "unavailable",
+                source="paper_position:main", received=collected,
+                reason="生成时刻主模拟持仓；缺可信同日价格不计算浮盈" if current_account else "无报告日持仓快照，当前持仓未冒充历史"),
+        }, account=account, orders=orders, positions=positions,
         realized_pnl=round(realized, 2) if realized is not None else None,
         trade_count=len(orders), gaps=gaps,
     )
@@ -486,6 +527,10 @@ def collect_picks(session_factory, trade_date: date) -> "PicksSnapshot":
                 score=i.get("score"),
                 themes=i.get("themes") or [],
                 observation_only=bool(i.get("observation_only")),
+                basis=str(i.get("pick_basis") or i.get("source_basis") or "") or None,
+                selection_ref=i.get("selection_ref") if isinstance(i.get("selection_ref"), dict) else None,
+                source_version=str(i.get("source_version")) if i.get("source_version") else None,
+                event_refs=[r for r in (i.get("related_event_refs") or i.get("event_refs") or []) if isinstance(r, dict)],
             )
             for i in items_raw
         ],

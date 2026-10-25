@@ -1,5 +1,7 @@
 "use client";
 
+import { NewsReader } from "@/components/events/news-reader";
+
 import { eventTimeText } from "@/lib/format";
 
 import { FilterMenu } from "@/components/ui/filter-menu";
@@ -64,7 +66,7 @@ const TAGS = ["业绩", "公告", "异动", "资金", "行业"] as const;
 
 
 
-export function EventsTab() {
+export function ImpactEventsView() {
   const { searchParams } = useSurfaceScope();
   const { open: openInspection } = useInspection();
   const [four, setFour] = useState(() => searchParams.get("four") ?? "all");
@@ -297,4 +299,17 @@ export function EventsTab() {
       <NewsModal item={modalItem} onClose={() => setModalItem(null)} />
     </Panel>
   );
+}
+
+/** The market lens keeps its layout; the reader and analysis share the same facts. */
+export function EventsTab() {
+  const {searchParams}=useSurfaceScope();
+  const [view,setView]=useState<"news"|"analysis">(()=>["four","tag","sort","target","l1"].some(k=>searchParams.has(k))?"analysis":"news");
+  return <div className="flex h-full min-h-0 flex-col">
+    <nav className="flex shrink-0 gap-2 border-b border-zinc-200 px-3 py-2 dark:border-zinc-800" aria-label="新闻阅读视角">
+      <button type="button" className={`ui-filter px-3 py-1 text-xs ${view==="news"?"ui-filter-selected":""}`} aria-pressed={view==="news"} onClick={()=>setView("news")}>快讯阅读</button>
+      <button type="button" className={`ui-filter px-3 py-1 text-xs ${view==="analysis"?"ui-filter-selected":""}`} aria-pressed={view==="analysis"} onClick={()=>setView("analysis")}>事件分析</button>
+    </nav>
+    <div className="min-h-0 flex-1">{view==="news"?<NewsReader/>:<ImpactEventsView/>}</div>
+  </div>;
 }

@@ -362,6 +362,12 @@ def test_sync_io_calls_are_offloaded(rel: str, needle: str, fn: str, why: str) -
 GUARDED_ROUTES: list[tuple[str, str, str, str]] = [
     (
         "app/api/routes/events.py",
+        "asyncio.to_thread(store.list_events, active_only=False, limit=limit, visible_at=beijing_now_naive())",
+        "store.list_events",
+        "快讯只读（limit≤200），含失效历史但排除未来可见时点，SQLite同样不得阻塞事件循环",
+    ),
+    (
+        "app/api/routes/events.py",
         "asyncio.to_thread(store.list_events, active_only=active, limit=limit)",
         "store.list_events",
         "活跃事件列表（默认 30 条）——前端 30s 轮询的热端点，实测 7.2ms",

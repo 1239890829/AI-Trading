@@ -7,13 +7,14 @@ import { inspectionClick, useInspection } from "@/components/inspection/inspecti
 import { patchWorkspaceUrl } from "@/lib/task-navigation";
 
 type HuntingView = "validation" | "discover" | "evidence" | "tracking" | "research" | "review";
-type Task = { id: string; label: string; view: HuntingView; section?: string; external?: boolean };
+type Task = { id: string; label: string; view: HuntingView; section?: string; external?: boolean; method?: boolean };
 const GROUPS: { id: string; label: string; tasks: Task[] }[] = [
   { id: "discover", label: "发现候选", tasks: [
     { id: "candidates", label: "盘中候选", view: "discover", section: "candidates" },
     { id: "daily", label: "每日精选", view: "discover", section: "daily" },
     { id: "opportunity", label: "题材参与", view: "discover", section: "opportunity" },
     { id: "evidence", label: "机会依据", view: "evidence" },
+    { id: "methods", label: "选股方法", view: "validation", method: true },
   ] },
   { id: "tracking", label: "持续观察", tasks: [
     { id: "tracking", label: "跟踪记录", view: "tracking" },
@@ -64,7 +65,7 @@ export function HuntingTaskRail({ view, section, search, counts = {}, localCandi
         const knownCount = typeof count === "number" && Number.isSafeInteger(count) && count >= 0;
         return <Link key={task.id} scroll={false} aria-label={task.label} aria-describedby={knownCount ? `${panelId}-${task.id}-count` : undefined} aria-current={!task.external && selected === task.id ? "page" : undefined}
         onClick={task.external ? inspectionClick(inspect, {kind: "review-report", date: new URLSearchParams(search).get("date") ?? undefined}) : undefined}
-        href={task.external ? patchWorkspaceUrl("/agent", search, {area: "research", tab: "review", view: null, panel: null, sec: null, from: `/hunting${search ? `?${search}` : ""}`})
+        href={task.method ? patchWorkspaceUrl("/agent", search, {area:"research", tab:"strategies", view:null, sec:null, panel:null, from:`/hunting${search ? `?${search}` : ""}`}) : task.external ? patchWorkspaceUrl("/agent", search, {area: "research", tab: "review", view: null, panel: null, sec: null, from: `/hunting${search ? `?${search}` : ""}`})
           : patchWorkspaceUrl("/hunting", search, {view: task.view, sec: task.section ?? null, panel: null, review: null})}>
         {task.label}{knownCount && <span id={`${panelId}-${task.id}-count`} className="hunting-task-count">{count}只</span>}{task.external && <svg aria-hidden="true" width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.6"><path d="M7 17 17 7M7 7h10v10" /></svg>}
       </Link>;})}

@@ -10,7 +10,7 @@
 from __future__ import annotations
 
 from datetime import datetime, timezone
-from typing import Any
+from typing import Any, Literal
 
 from pydantic import BaseModel, Field
 
@@ -35,18 +35,39 @@ class DataGap(BaseModel):
 # ---------------------------------------------------------------- 数据快照
 
 
+class SectionProvenance(BaseModel):
+    """Source date and local observation time remain distinct, including legacy gaps."""
+
+    state: Literal["verified", "partial", "unverified", "unavailable", "mismatch"] = "unverified"
+    source: str | None = None
+    source_as_of: str | None = None
+    received_at: str | None = None
+    source_trade_date: str | None = None
+    requested_trade_date: str
+    reason: str = ""
+
+
 class IndexQuote(BaseModel):
     symbol: str
     name: str
     close: float
     change_pct: float
     amount: float | None = None
+    source: str | None = None
+    data_timestamp: str | None = None
+    received_at: str | None = None
+    quality: str | None = None
+    binding_state: str = "unverified"
 
 
 class MarketSnapshot(BaseModel):
     """市场环境数据快照（自采）。"""
 
     trade_date: str
+    contract_version: str | None = None
+    provenance: dict[str, SectionProvenance] = Field(default_factory=dict)
+    reported_values: dict[str, Any] = Field(default_factory=dict)
+    sector_boards: dict[str, list[dict[str, Any]]] = Field(default_factory=dict)
     indices: list[IndexQuote] = Field(default_factory=list)
     breadth: dict[str, Any] = Field(default_factory=dict)
     sentiment: dict[str, Any] = Field(default_factory=dict)
@@ -87,6 +108,8 @@ class TradingSnapshot(BaseModel):
     """当日操作与账户数据快照（自采）。"""
 
     trade_date: str
+    contract_version: str | None = None
+    provenance: dict[str, SectionProvenance] = Field(default_factory=dict)
     account: dict[str, Any] = Field(default_factory=dict)
     orders: list[OrderRecord] = Field(default_factory=list)
     positions: list[PositionRecord] = Field(default_factory=list)
@@ -103,6 +126,10 @@ class PickEntry(BaseModel):
     score: float | None = None
     themes: list[str] = Field(default_factory=list)
     observation_only: bool = False
+    basis: str | None = None
+    selection_ref: dict[str, Any] | None = None
+    source_version: str | None = None
+    event_refs: list[dict[str, Any]] = Field(default_factory=list)
 
 
 class PickReviewEntry(BaseModel):
@@ -160,6 +187,8 @@ class ReviewData(BaseModel):
     trading: TradingSnapshot
     #: 每日精选快照。None = 未采集（旧版本服务/采集失败）——三态：缺失不冒充"无组合"。
     picks: PicksSnapshot | None = None
+    outlook: dict[str, Any] | None = None
+    selection_journey: dict[str, Any] | None = None
     collected_at: str = Field(default_factory=lambda: utcnow().isoformat())
 
     @property

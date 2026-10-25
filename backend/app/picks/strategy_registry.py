@@ -271,3 +271,141 @@ def strategy_verdicts(session_factory) -> list[dict]:
     """仅返回需要关注的策略键（warning/drift），供告警与复盘消费。"""
     out = collect_all_strategy_health(session_factory)
     return [s for s in out["strategies"] if s.get("status") in ("warning", "drift")]
+
+
+def saved_method_runs(session_factory) -> dict:
+    """Project existing run owners; no execution, market read or outcome fabrication."""
+    import json
+    import math
+    from sqlalchemy import case, select
+    from app.models.daily_pick import DailyPickSet
+    from app.models.opportunity_learning import OpportunityDecisionRun, OpportunityDecisionSnapshot
+    from app.core.bjtime import beijing_now, BJ_TZ
+
+    def checked_obj(value, kind):
+        try:
+            data = json.loads(value) if isinstance(value, str) else value
+            return data if isinstance(data, kind) else None
+        except (ValueError, TypeError):
+            return None
+
+    def obj(value, kind):
+        data = checked_obj(value, kind)
+        return data if data is not None else kind()
+
+    def number(value):
+        return value if not isinstance(value, bool) and isinstance(value, (int, float)) and math.isfinite(value) else None
+
+    def daily_reason(row):
+        reason = row.get('reason')
+        if isinstance(reason, str) and reason.strip():
+            return reason
+        selection_reason = row.get('selection_reason')
+        if selection_reason == 'below_min_score':
+            shortfall = number(row.get('score_shortfall'))
+            return ('低于原入选分线；原记录差额 ' + format(shortfall, 'g') + ' 分'
+                    if shortfall is not None and shortfall >= 0 else '低于原入选分线；原差额未记录')
+        if selection_reason == 'capacity_or_replacement':
+            return '原记录为容量或换股约束；具体原因未区分'
+        if isinstance(selection_reason, str) and selection_reason:
+            return f'原入选原因未识别（{selection_reason}）'
+        return ''
+
+    now = beijing_now()
+    today = now.date().isoformat()
+    result = {key: {'state': 'missing', 'reason': '没有已保存运行；未按读取时间构造'}
+              for key in ('daily_picks', 'intraday_watch')}
+    with session_factory() as db:
+        daily = db.scalar(select(DailyPickSet).where(DailyPickSet.date <= today)
+                          .order_by(DailyPickSet.date.desc()).limit(1))
+        if daily:
+            stored_meta = checked_obj(daily.meta, dict)
+            meta = stored_meta if stored_meta is not None else {}
+            stored_lists = [checked_obj(daily.items, list), checked_obj(daily.rejected, list)]
+            valid_lists = [rows is not None and all(isinstance(row, dict) for row in rows)
+                           for rows in stored_lists]
+            selected, rejected = [[row for row in (rows or []) if isinstance(row, dict)]
+                                  for rows in stored_lists]
+            problems = ([] if stored_meta is not None else ['运行元数据 JSON 损坏或结构不符'])
+            problems.extend(f'{label} JSON 损坏或结构不符' for label, valid
+                            in zip(['入选名单', '拒绝名单'], valid_lists) if not valid)
+            funnel = obj(meta.get('selection_funnel'), dict)
+            state = 'saved' if not problems else 'partial' if any(valid_lists) or selected or rejected else 'error'
+            result['daily_picks'] = {'state': state, 'trade_date': daily.date,
+                'reason': '；'.join(problems),
+                'source_version': meta.get('selection_version'), 'run_at': meta.get('generated_at'),
+                'strategy_version': obj(meta.get('selection_contract'), dict).get('strategy_version'),
+                'elapsed_ms': None, 'possibly_truncated': len(selected) > 200 or len(rejected) > 200,
+                'counts': {'candidates': number(meta.get('candidate_count')), 'scored': number(funnel.get('scored')),
+                           'selected': len(selected) if valid_lists[0] else None,
+                           'rejected_saved': len(rejected) if valid_lists[1] else None},
+                'criteria': {'min_pick_score': number(meta.get('min_pick_score')),
+                             'max_picks': number(meta.get('max_picks'))},
+                'items': [{'symbol': str(row.get('symbol') or ''), 'name': str(row.get('name') or row.get('symbol') or ''),
+                           'state': state, 'score': number(row.get('score')),
+                           'reason': daily_reason(row),
+                           'basis': row.get('bases') if isinstance(row.get('bases'), dict) else {}}
+                          for state, rows in [('selected', selected), ('rejected', rejected)]
+                          for row in rows[:200] if isinstance(row, dict)],
+                'semantics': 'saved_selection_not_execution_or_fill'}
+        run = db.scalar(select(OpportunityDecisionRun).where(
+            OpportunityDecisionRun.trade_date <= today, OpportunityDecisionRun.as_of <= now.replace(tzinfo=None),
+            OpportunityDecisionRun.scenario == 'intraday_opportunity')
+            .order_by(OpportunityDecisionRun.trade_date.desc(), OpportunityDecisionRun.as_of.desc(),
+                      OpportunityDecisionRun.run_id.desc()).limit(1))
+        if run:
+            rows = db.scalars(select(OpportunityDecisionSnapshot).where(
+                OpportunityDecisionSnapshot.run_id == run.run_id,
+                OpportunityDecisionSnapshot.stage.in_(['rank', 'hard_gate']))
+                .order_by(case((OpportunityDecisionSnapshot.stage == 'rank', 0), else_=1),
+                          OpportunityDecisionSnapshot.id).limit(200)).all()
+            items, selected_symbols, invalid_evidence = [], set(), False
+            rank_rows_read, rank_evidence_known = 0, True
+            for row in rows:
+                stored_evidence = checked_obj(row.evidence, dict)
+                invalid_evidence = invalid_evidence or stored_evidence is None
+                evidence = stored_evidence if stored_evidence is not None else {}
+                capacity = evidence.get('effective_limit')
+                if row.stage == 'rank':
+                    rank_rows_read += 1
+                    rank_evidence_known = rank_evidence_known and stored_evidence is not None
+                    if row.decision == 'ranked':
+                        rank_evidence_known = rank_evidence_known and (
+                            not isinstance(capacity, bool) and isinstance(capacity, int) and capacity >= 1
+                            and row.rank is not None and row.rank >= 1
+                            and isinstance(evidence.get('within_display_capacity'), bool)
+                            and evidence['within_display_capacity'] == (row.rank <= capacity))
+                    elif row.decision not in {'unknown', 'rejected', 'blocked'}:
+                        rank_evidence_known = False
+                selected = (row.stage == 'rank' and row.decision == 'ranked'
+                            and evidence.get('within_display_capacity') is True
+                            and not isinstance(capacity, bool) and isinstance(capacity, int)
+                            and row.rank is not None and 1 <= row.rank <= capacity)
+                if selected:
+                    selected_symbols.add(row.symbol)
+                if selected:
+                    state = 'selected'
+                elif row.decision in {'rejected', 'blocked'}:
+                    state = 'rejected'
+                elif (row.stage == 'hard_gate' and row.decision == 'passed'
+                      or row.stage == 'rank' and row.decision == 'ranked' and stored_evidence is not None):
+                    state = 'candidate'
+                else:
+                    state = 'unknown'
+                items.append({'symbol': row.symbol, 'name': row.name or row.symbol,
+                    'state': state, 'stage': row.stage, 'decision': row.decision,
+                    'score': number(evidence.get('score')),
+                    'reason': str(evidence.get('reason') or evidence.get('filter_reason')
+                                  or evidence.get('linkage_basis') or row.decision),
+                    'rank': row.rank, 'source_theme': row.source_theme, 'snapshot_id': row.snapshot_id})
+            at = run.as_of.replace(tzinfo=BJ_TZ) if run.as_of.tzinfo is None else run.as_of.astimezone(BJ_TZ)
+            result['intraday_watch'] = {'state': 'partial' if invalid_evidence else 'saved', 'trade_date': run.trade_date,
+                'reason': '部分快照依据 JSON 损坏或结构不符' if invalid_evidence else '',
+                'source_version': run.run_id, 'run_at': at.isoformat(), 'strategy_version': run.strategy_version,
+                'elapsed_ms': None, 'data_state': run.data_state,
+                'counts': {'candidate_rows': run.candidate_rows, 'rank_rows': run.rank_rows,
+                           'hard_gate_rows': run.hard_gate_rows,
+                           'selected': len(selected_symbols) if rank_rows_read == run.rank_rows and rank_evidence_known else None},
+                'items': items, 'possibly_truncated': len(rows) >= 200,
+                'semantics': 'saved_run_rows_not_unique_stock_outcomes_or_fills'}
+    return result

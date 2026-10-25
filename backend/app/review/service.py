@@ -86,6 +86,8 @@ class ReviewService:
         靠 `date.today()` 推算会产生自指计算（2026-08-29 事故）。
         """
         if trade_date is not None:
+            if trade_date > beijing_now().date():
+                raise ValueError("未来日期没有可复盘的事实")
             return trade_date
         days = await tc.trading_days(self.hub.provider)
         anchor = tc.last_trade_date(days)
@@ -93,14 +95,20 @@ class ReviewService:
             raise RuntimeError("交易日历不可用，无法确定复盘交易日")
         return anchor
 
-    def _price_map(self) -> dict[str, float]:
-        """从全市场快照构造 symbol → 最新价。"""
+    def _price_map(self, trade_date: date) -> dict[str, float]:
+        """Only same-day, source-clock-bound prices may value a current position."""
+        from app.review.provenance import finite, quote_evidence
+
+        now = beijing_now()
+        if trade_date != now.date():
+            return {}
         out: dict[str, float] = {}
-        for row in self.snapshot_service.snapshot or []:
-            sym = row.get("symbol")
-            price = row.get("price")
-            if sym and price:
-                out[str(sym)] = float(price)
+        read = getattr(self.snapshot_service, "versioned_snapshot", None)
+        rows, _receipt = read() if callable(read) else ([], None)
+        for row in rows:
+            sym, price = row.get("symbol"), finite(row.get("price"))
+            if sym and price is not None and price > 0 and quote_evidence(row, trade_date, now).state in {"verified", "partial"}:
+                out[str(sym)] = price
         return out
 
     async def run(
@@ -124,7 +132,10 @@ class ReviewService:
         try:
             from app.picks.daily_review import generate_daily_review
 
-            await generate_daily_review(self.hub, self.snapshot_service, self.session_factory, trade_date=anchor)
+            if anchor == beijing_now().date():
+                await generate_daily_review(self.hub, self.snapshot_service, self.session_factory, trade_date=anchor)
+            else:
+                log.info("historical review reads saved pick observations; no present-day regeneration")
         except ValueError as exc:
             log.info("picks review skipped: %s", exc)
         except Exception:
@@ -137,7 +148,7 @@ class ReviewService:
             self.hub, self.snapshot_service, anchor, sentinel=sentinel
         )
         trading_task = asyncio.to_thread(
-            collect_trading, self.session_factory, anchor, self._price_map()
+            collect_trading, self.session_factory, anchor, self._price_map(anchor)
         )
         picks_task = asyncio.to_thread(collect_picks, self.session_factory, anchor)
         try:
@@ -147,8 +158,11 @@ class ReviewService:
             raise
         checkpoint()
 
+        from app.review.reader_context import collect_reader_context
+        reader_context = await asyncio.to_thread(collect_reader_context, self.session_factory, anchor)
         data = ReviewData(
-            trade_date=anchor.strftime("%Y%m%d"), market=market, trading=trading, picks=picks
+            trade_date=anchor.strftime("%Y%m%d"), market=market, trading=trading, picks=picks,
+            outlook=reader_context["outlook"], selection_journey=reader_context["selection_journey"],
         )
 
         # --- 分析 ---
@@ -202,9 +216,10 @@ class ReviewService:
         try:
             from app.predict.service import maybe_auto_verify
 
-            predict_note = await maybe_auto_verify(
-                self.hub, self.snapshot_service, self.session_factory, anchor
-            )
+            if anchor == beijing_now().date():
+                predict_note = await maybe_auto_verify(
+                    self.hub, self.snapshot_service, self.session_factory, anchor
+                )
         except Exception:
             log.exception("prediction auto-verify failed")
         checkpoint()
@@ -287,8 +302,9 @@ class ReviewService:
             parts.append(f"已实现 {data.trading.realized_pnl:+.2f}")
         # 每日精选准确率一眼可见（2026-09-04）；口径与 picks 维度一致
         if data.picks and data.picks.reviews:
-            good = sum(1 for r in data.picks.reviews if r.verdict == "good")
-            bad = sum(1 for r in data.picks.reviews if r.verdict == "bad")
+            observing = {i.symbol for i in data.picks.items if i.observation_only}
+            good = sum(1 for r in data.picks.reviews if r.statistics_eligible and r.verdict == "good")
+            bad = sum(1 for r in data.picks.reviews if r.statistics_eligible and r.verdict == "bad" and r.symbol not in observing)
             if good + bad:
                 parts.append(f"精选准确率 {round(good / (good + bad) * 100)}%")
         gaps = len(data.all_gaps)

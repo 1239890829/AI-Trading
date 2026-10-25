@@ -101,6 +101,8 @@ def _pending_candidates(sf, *, theme_names: list[str], max_batch: int,
     """
     if max_batch <= 0:
         return []
+    from app.news.official import READ_ONLY_SOURCES
+
     now = beijing_now_naive()
     rows = []
     with sf() as db:
@@ -114,6 +116,7 @@ def _pending_candidates(sf, *, theme_names: list[str], max_batch: int,
             .where(EventCard.status == "active")
             .where(EventCard.revision_pending_at.is_(None))
             .where(EventCard.llm_judged_at.is_(None))
+            .where(or_(EventCard.source.is_(None), ~EventCard.source.in_(READ_ONLY_SOURCES)))
             .where(EventCard.published_at <= now,
                    EventCard.published_at >= now - timedelta(hours=age_max_h))
             .where(~select(EventDirection.id).where(

@@ -1057,8 +1057,40 @@ export interface StrategyHealthPayload {
   caveat?: string;
 }
 
+export interface SavedStrategyRunItem {
+  symbol: string;
+  name?: string | null;
+  state: "selected" | "rejected" | "candidate" | "unknown";
+  stage?: string;
+  decision?: string;
+  score: number | null;
+  reason?: string;
+  basis?: Record<string, string>;
+  rank?: number | null;
+  source_theme?: string | null;
+  snapshot_id?: string | null;
+}
+
+/** Saved run projection; counts and selection are never execution/fill evidence. */
+export interface SavedStrategyRun {
+  state: "saved" | "partial" | "missing" | "error";
+  reason?: string;
+  trade_date?: string | null;
+  source_version?: string | null;
+  strategy_version?: string | null;
+  run_at?: string | null;
+  elapsed_ms?: number | null;
+  data_state?: string | null;
+  counts?: Record<string, number | null>;
+  criteria?: { min_pick_score?: number | null; max_picks?: number | null };
+  items?: SavedStrategyRunItem[];
+  possibly_truncated?: boolean;
+  semantics?: string;
+}
+
 export interface StrategyRegistryItem {
   key: string;
+  runtime?: SavedStrategyRun | null;
   name?: string;
   status?: string;
   basis?: string;

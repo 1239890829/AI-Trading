@@ -192,6 +192,8 @@ class Settings(BaseSettings):
     # EventStore（事件 tab 即消费层，不开新存储）；双域 failover；失败不缓存
     # （游标不推进，下轮重拉）。性能红线：单源单端点，抽取纯函数。
     flash_news_enabled: bool = True
+    # 官方宏观RSS仅事实阅读；复用快讯loop，每15分钟一次，不自动判读或评分。
+    official_news_enabled: bool = True
     flash_news_interval_seconds: float = 15.0
     flash_news_eod_interval_seconds: float = 60.0
     # 频道（东财 fastColumn，2026-09-10 实测）：100=**全部**（含公司/资金/政策/

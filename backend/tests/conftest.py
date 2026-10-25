@@ -31,6 +31,8 @@ sys.addaudithook(_guard_sqlite_target)
 
 # 必须在导入 app 之前设置：保证测试环境确定性（mock provider + 不主动轮询）
 os.environ["ASHARE_DATA_PROVIDER"] = "mock"
+# Official RSS is separately enabled only by its isolated behavior tests.
+os.environ["ASHARE_OFFICIAL_NEWS_ENABLED"] = "false"
 os.environ["ASHARE_POLL_INTERVAL_SECONDS"] = "3600"
 os.environ["ASHARE_WATCHLIST"] = "600519,000001,300750,601318"
 os.environ["ASHARE_DATABASE_URL"] = "sqlite:///:memory:"

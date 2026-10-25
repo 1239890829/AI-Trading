@@ -13,7 +13,7 @@ import type { ImpactEvent, NotificationItem, NotificationsPayload } from "@/lib/
  * 本文件钉四件事（都是"改坏了会静默变质"的那种）：
  *  ① **懒加载** —— 停在「个股机会」时**不发** `/api/events/impact` 请求。
  *     缺了它，抽屉一打开就白拉 100 条事件（且每 60s 一次）；
- *  ② **真的渲染出来** —— 切过去后 L1 徽标 / 标题 / 四类标签都在（不是只切了个高亮）；
+ *  ② **真的渲染出来** —— 默认快讯可读；显式进入事件分析后 L1 徽标 / 标题 / 四类标签都在；
  *  ③ **未读口径隔离** —— 资讯条目不进铃铛徽标：徽标仍**只**由个股机会驱动。
  *     这是本项最容易做错的地方：一旦资讯计入未读，`IMP-028` 的收口就被绕过了；
  *  ④ **点击不静默失败** —— 无原文链接的事件仍开通用详情弹窗（带 `eventId`）。
@@ -153,6 +153,8 @@ async function openDrawer() {
 
 async function switchToEvents() {
   fireEvent.click(screen.getByTestId("notification-mode-events"));
+  await waitFor(() => expect(screen.getByTestId("event-feed")).toBeTruthy());
+  fireEvent.click(screen.getByRole("button", { name: "事件分析" }));
   await waitFor(() => expect(screen.getByTestId("event-feed-list")).toBeTruthy());
 }
 
@@ -179,6 +181,40 @@ afterEach(() => {
 });
 
 describe("通知中心：资讯 / 事件 tab", () => {
+  it("资讯默认快讯阅读，切换事件分析再切回，容器唯一且不增加机会未读", async () => {
+    payload = makePayload([item({ id: "only-opportunity", title: "唯一的机会提醒" })]);
+    renderBell();
+    await waitFor(() => expect(screen.getByTestId("notification-badge").textContent).toBe("1"));
+    await openDrawer();
+    fireEvent.click(screen.getByTestId("notification-mode-events"));
+    expect(await screen.findByRole("region", { name: "新闻阅读" })).toBeTruthy();
+    expect(screen.getByRole("button", { name: "快讯阅读" }).getAttribute("aria-pressed")).toBe("true");
+    expect(await screen.findByText("政策级事件")).toBeTruthy();
+    expect(screen.getAllByTestId("event-feed")).toHaveLength(1);
+    expect(screen.queryByTestId("event-feed-list")).toBeNull();
+    expect(screen.queryByTestId("event-feed-level")).toBeNull();
+    expect(spies.getImpactEvents).toHaveBeenLastCalledWith(true, 200, "time", true);
+    expect(screen.queryAllByTestId("notification-unread-dot")).toHaveLength(0);
+    expect(screen.getByTestId("notification-badge").textContent).toBe("1");
+
+    fireEvent.click(screen.getByRole("button", { name: "事件分析" }));
+    await screen.findByTestId("event-feed-list");
+    expect(screen.getAllByTestId("event-feed")).toHaveLength(1);
+    await waitFor(() => expect(spies.getImpactEvents).toHaveBeenLastCalledWith(false, 100, "relevance"));
+    expect(screen.getByTestId("notification-badge").textContent).toBe("1");
+    expect(screen.queryAllByTestId("notification-unread-dot")).toHaveLength(0);
+
+    fireEvent.click(screen.getByRole("button", { name: "快讯阅读" }));
+    expect(await screen.findByRole("region", { name: "新闻阅读" })).toBeTruthy();
+    expect(screen.getAllByTestId("event-feed")).toHaveLength(1);
+    expect(screen.queryByTestId("event-feed-list")).toBeNull();
+    await waitFor(() => expect(spies.getImpactEvents).toHaveBeenLastCalledWith(true, 200, "time", true));
+    expect(screen.getByTestId("notification-badge").textContent).toBe("1");
+    fireEvent.click(screen.getByTestId("notification-mode-opportunity"));
+    expect(await screen.findByText("唯一的机会提醒")).toBeTruthy();
+    expect(screen.getAllByTestId("notification-unread-dot")).toHaveLength(1);
+    expect(screen.getByTestId("notification-badge").textContent).toBe("1");
+  });
   it("退出画面仍在时立即停止事件轮询，再打开补读一次", async () => {
     vi.useFakeTimers();
     try {
@@ -208,6 +244,7 @@ describe("通知中心：资讯 / 事件 tab", () => {
         { target_type: "theme", target: "存储芯片", direction: 1, strength: 1, chain: "", basis: "模型解释", matched_by: "llm_aux" },
       ] })];
     render(<EventFeed active />);
+    fireEvent.click(screen.getByRole("button", { name: "事件分析" }));
     await screen.findByText("模型辅助解释");
     expect(screen.getByText("未明超时").getAttribute("title")).toContain("证据不足且已超时");
     expect(screen.getByText("模型正向假设")).toBeTruthy();
@@ -245,7 +282,7 @@ describe("通知中心：资讯 / 事件 tab", () => {
     await waitFor(() => expect(spies.getImpactEvents).toHaveBeenCalled());
   });
 
-  it("切到资讯 tab ⇒ 渲染事件条目（影响力徽标 / 分类 / 标题）", async () => {
+  it("切到资讯的事件分析 ⇒ 渲染事件条目（影响力徽标 / 分类 / 标题）", async () => {
     renderBell();
     await openDrawer();
     await switchToEvents();

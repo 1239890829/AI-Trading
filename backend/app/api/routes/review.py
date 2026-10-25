@@ -57,7 +57,10 @@ async def run_review(body: RunIn, request: Request):
     """
     svc = _service(request)
     td = _parse_trade_date(body.trade_date)
-    report = await svc.run(td, methodology_version=body.methodology_version)
+    try:
+        report = await svc.run(td, methodology_version=body.methodology_version)
+    except ValueError as exc:
+        raise HTTPException(status_code=422, detail=str(exc)) from None
     return {"data": report.model_dump()}
 
 
