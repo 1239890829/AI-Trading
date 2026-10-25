@@ -69,7 +69,7 @@ function RunDiagnostics({row, identity}: {row: SavedStrategyRunItem; identity: s
     ]}/>
     {scores.length ? <SelectionScores key={identity} compact scores={scores} label="原运行六维评分" title="原运行六维" note="原规则分值，不是上涨概率；缺项不补0"/> : <p className="text-xs text-zinc-600 dark:text-zinc-400">原存档未保存六维分项，不套用当前分值。</p>}
     {metrics && <SelectionMeasurements value={metrics} compact/>}
-    <FactCards label="原盘中阶段与容量" items={originalGateFacts}/>
+    <FactCards label="原排名与阶段" items={originalGateFacts}/>
     {vetoes.length > 0 && <ConditionList label="原否决项" tone="warning" items={vetoes}/>}
     {Array.isArray(diagnostics?.vetoes) && diagnostics.vetoes.length > vetoes.length && <p className="text-xs text-zinc-600 dark:text-zinc-400">部分原否决记录结构未识别，没有改写成通过。</p>}
     {stringList(diagnostics?.missing).length > 0 && <ConditionList label="原评分缺项" tone="warning" items={stringList(diagnostics?.missing).map(key=>`${GAP_LABELS[key] || key}未记录`)}/>}
@@ -101,6 +101,11 @@ function RunRows({run, identity, location, onLocation}: {run: SavedMethodRunDeta
   const incremental=useIncremental(matching,{pageSize:20,step:20,resetKey:location.filter});
   const latest=allPages[allPages.length-1], nextOffset=latest.coverage.next_offset;
   const hasRemote=typeof nextOffset==="number" && Number.isInteger(nextOffset) && nextOffset>=(latest.coverage.offset ?? 0)+(latest.items?.length ?? 0) && nextOffset>(latest.coverage.offset ?? 0);
+  const coverage=allPages.reduce((state,page)=>({read:state.read+(page.items?.length ?? 0),complete:state.complete && page.state==="saved"
+    && page.coverage.offset===state.read && page.coverage.total===run.coverage.total && page.coverage.returned===(page.items?.length ?? 0)}),{read:0,complete:true});
+  const savedZero=location.filter==="selected" && allPages.every(page=>page.counts?.selected===0) && coverage.complete
+    && finite(run.coverage.total) && run.coverage.total>=0 && coverage.read===run.coverage.total
+    && nextOffset===null && latest.coverage.possibly_truncated===false && latest.possibly_truncated!==true;
   const exactLocation=identityLocation(identity,location);
   async function readNext() {
     if (!hasRemote || inFlight.current) return;
@@ -142,7 +147,7 @@ function RunRows({run, identity, location, onLocation}: {run: SavedMethodRunDeta
     {run.possibly_truncated && <p role="status" className="text-xs text-amber-700 dark:text-amber-300">{run.counts?.selected==null?"原入选总数未知；不能以当前行数冒充全集。":"原存档投影可能截断，不按当前行数替换原计数。"}</p>}
     {(finite(run.criteria?.min_pick_score)||finite(run.criteria?.max_picks)) && <p className="text-[11px] text-zinc-600 dark:text-zinc-400">原入选条件：{finite(run.criteria?.min_pick_score)?`分线 ${run.criteria.min_pick_score}`:"分线未记录"} · {finite(run.criteria?.max_picks)?`容量 ${run.criteria.max_picks}`:"容量未记录"}；执行资格另行复核。</p>}
     <div className="flex flex-wrap gap-2 text-xs" aria-label="运行结果筛选">{(Object.keys(ROW_LABELS) as MethodRowFilter[]).map(filter=><button key={filter} type="button" data-action="secondary" aria-pressed={location.filter===filter} onClick={()=>onLocation({...exactLocation,filter,row:""})}>{ROW_LABELS[filter]}</button>)}</div>
-    {matching.length===0 ? <p className="py-2 text-xs text-zinc-600 dark:text-zinc-400">已读部分没有此类保存行{hasRemote?"，可继续下拉读取原批次":""}；不据此推断当时零入选或未运行。</p> : <ul className="divide-y divide-zinc-200 dark:divide-zinc-700">{incremental.shown.map(({row,id})=><li key={id} className="py-2 text-xs">
+    {matching.length===0 ? <p className="py-2 text-xs text-zinc-600 dark:text-zinc-400">{savedZero?"原批次已保存：0只入选。":"已读部分没有此类保存行"+(hasRemote?"，可继续下拉读取原批次":"")+"；不据此推断当时零入选或未运行。"}</p> : <ul className="divide-y divide-zinc-200 dark:divide-zinc-700">{incremental.shown.map(({row,id})=><li key={id} className="py-2 text-xs">
       <div className="flex flex-wrap items-baseline gap-x-2 gap-y-1">{/^\d{6}$/.test(row.symbol)?<StockLink symbol={row.symbol} className="font-medium">{row.name || row.symbol}</StockLink>:<span className="font-medium">{row.name || row.symbol || "证券未记录"}</span>}<span className="font-mono text-[10px] text-zinc-600 dark:text-zinc-400">{row.symbol}</span><span className="text-[11px] text-zinc-600 dark:text-zinc-400">{ROW_LABELS[row.state] || row.state}</span>{row.stage && <span className="text-[11px] text-zinc-600 dark:text-zinc-400">{row.stage==="hard_gate"?"硬门":row.stage==="rank"?"排序":row.stage}：{row.decision?DECISION_LABELS[row.decision] || `未识别（${row.decision}）`:"未记录"}</span>}<span className="ml-auto tabular-nums">{finite(row.score)?`原分 ${row.score}`:"未保存分数"}</span></div>
       <p className="mt-1 break-words text-zinc-600 dark:text-zinc-400">{row.reason || (Object.keys(row.basis ?? {}).length?"原评分依据已保存，可展开核对；简短理由未记录。":"原存档没有简短理由，不能据此推定通过。")}</p>
       <button ref={element=>{if(element)rowButtons.current.set(id,element);else rowButtons.current.delete(id);}} type="button" data-action="quiet" className="mt-1 min-h-8 text-[11px]" aria-expanded={location.row===id} aria-controls={`${prefix}-${encodeURIComponent(id)}`} onClick={()=>toggleRow(id)}>{location.row===id?"收起":"核对"}{row.name || row.symbol}原评分与缺项</button>
@@ -207,7 +212,6 @@ export function MethodRunReader({method}: {method: string}) {
   },[moreIndexAvailable,moreIndex.loading,moreIndex.error]);
   const identity=explicit ? methodRunIdentity(method as SavedMethodKey,location) : runs[0] ?? null;
   if(supported && identity && !explicit)setLocation(identityLocation(identity,location));
-  const exact=identity ? identityLocation(identity,location) : location;
   const key=identity?methodRunKey(identity):"none";
   const detail=useResource(async signal=>{
     const result=await getStrategyMethodRun(identity!,{signal});
@@ -215,13 +219,14 @@ export function MethodRunReader({method}: {method: string}) {
     return result;
   },{key,enabled:supported && !!identity && !invalidDate,marketHours:false,abortable:true});
   useEffect(()=>{
-    if(identity) {
-      const url=methodRunUrl(window.location.pathname,window.location.search,method,exact);
-      if(url!==window.location.pathname+window.location.search)window.history.replaceState(window.history.state,"",url);
+    const original=methodRunIdentity(method as SavedMethodKey,location);
+    if(original) {
+      const url=methodRunUrl(window.location.pathname,window.location.search,method,identityLocation(original,location));
+      if(url!==window.location.pathname+window.location.search)window.history.replaceState({},"",url);
     }
-  },[identity,explicit,exact,method]);
+  },[location,method]);
   function navigate(next: MethodRunLocation, changeScope=false) {
-    window.history.pushState(window.history.state,"",methodRunUrl(window.location.pathname,window.location.search,method,next));
+    window.history.pushState({},"",methodRunUrl(window.location.pathname,window.location.search,method,next));
     setLocation(next);
     if(changeScope)setScope(next);
   }

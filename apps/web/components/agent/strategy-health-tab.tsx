@@ -76,7 +76,7 @@ export function StrategyHealthTab() {
     return () => window.removeEventListener("popstate", sync);
   }, []);
   function chooseMethod(key: string) {
-    window.history.pushState(window.history.state, "", methodRunUrl(window.location.pathname, window.location.search, key));
+    window.history.pushState({}, "", methodRunUrl(window.location.pathname, window.location.search, key));
     setChosen(key);
   }
   const items = health.data?.strategies ?? [];

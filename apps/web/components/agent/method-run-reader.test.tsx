@@ -148,4 +148,77 @@ describe("saved method run reader",()=>{
     expect(mocks.index.mock.calls[1][0]).toMatchObject({offset:30,method:"daily_picks"});
     expect(mocks.detail.mock.calls[0][0]).toMatchObject(original);
   });
+  it("labels a daily rejected row's saved rank without calling it an intraday stage",async()=>{
+    locate(original,"rejected","rejected:0");mocks.detail.mockResolvedValue(detail(original,[{...row,rank:1}]));
+    render(<MethodRunReader method="daily_picks"/>);
+    expect(await screen.findByRole("region",{name:"原排名与阶段"})).toBeTruthy();
+    expect(screen.queryByText("原盘中阶段与容量")).toBeNull();
+  });
+  it("states confirmed zero selections only after reading the entire complete original batch",async()=>{
+    locate(original,"selected");mocks.detail.mockResolvedValue(detail(original,Array.from({length:20},(_,index)=>({...row,item_id:`rejected:${index}`}))));
+    render(<MethodRunReader method="daily_picks"/>);
+    expect(await screen.findByText("原批次已保存：0只入选。")).toBeTruthy();
+    expect(screen.queryByText(/不据此推断当时零入选/)).toBeNull();
+    expect(screen.getByText(/本批已读 20 \/ 20 条原行/)).toBeTruthy();
+  });
+  it.each([
+    {label:"unknown original selected count",patch:{counts:{selected:null}}},
+    {label:"partially readable archive",patch:{state:"partial" as const,reason:"原名单缺失"}},
+    {label:"unread later rows",patch:{coverage:{offset:0,limit:200,total:2,returned:1,next_offset:1,possibly_truncated:true,history_semantics:"原范围"}}},
+    {label:"missing original total",patch:{coverage:{offset:0,limit:200,total:null,returned:1,next_offset:null,possibly_truncated:false,history_semantics:"原范围"}}},
+  ])("does not claim zero selections for $label",async({patch})=>{
+    locate(original,"selected");mocks.detail.mockResolvedValue({...detail(),...patch});render(<MethodRunReader method="daily_picks"/>);
+    expect(await screen.findByText(/不据此推断当时零入选/)).toBeTruthy();
+    expect(screen.queryByText("原批次已保存：0只入选。")).toBeNull();
+  });
+  it("confirms saved zero only when the last original page completes the bound batch",async()=>{
+    locate(original,"selected");mocks.detail.mockResolvedValueOnce(detail(original,[row],0,2))
+      .mockResolvedValueOnce(detail(original,[{...row,item_id:"rejected:1"}],1,2));
+    render(<MethodRunReader method="daily_picks"/>);
+    expect(await screen.findByText(/不据此推断当时零入选/)).toBeTruthy();
+    fireEvent.click(screen.getByRole("button",{name:"继续读取原批次"}));
+    expect(await screen.findByText("原批次已保存：0只入选。")).toBeTruthy();
+    expect(screen.queryByText(/不据此推断当时零入选/)).toBeNull();
+  });
+  it("uses the external Next history path instead of replaying its private bypass markers",async()=>{
+    window.history.replaceState({__NA:true,__PRIVATE_NEXTJS_INTERNALS_TREE:{tree:"retained-by-next"}},"",window.location.href);
+    const replace=vi.spyOn(window.history,"replaceState"),push=vi.spyOn(window.history,"pushState");
+    try {
+      render(<MethodRunReader method="daily_picks"/>);
+      await screen.findByRole("button",{name:"拒绝存档"});
+      expect(replace).toHaveBeenCalled();
+      fireEvent.click(screen.getByRole("button",{name:"拒绝存档"}));
+      expect(push).toHaveBeenCalled();
+      for(const [state] of [...replace.mock.calls,...push.mock.calls]) {
+        expect(state).not.toHaveProperty("__NA");expect(state).not.toHaveProperty("_N");
+      }
+      expect(new URLSearchParams(window.location.search).get("run_state")).toBe("rejected");
+    } finally {replace.mockRestore();push.mockRestore();}
+  });
+  it("does not overwrite a traversal target during an unrelated parent render before popstate sync",async()=>{
+    locate(original,"rejected","rejected:0");const previousUrl=window.location.pathname+window.location.search;
+    const view=render(<MethodRunReader method="daily_picks"/>);
+    await screen.findByRole("region",{name:"原落选股的原评分诊断"});
+    fireEvent.click(screen.getByRole("button",{name:"原入选"}));
+    await screen.findByText("原批次已保存：0只入选。");
+    window.history.replaceState({},"",previousUrl);
+    view.rerender(<MethodRunReader method="daily_picks"/>);
+    expect(window.location.pathname+window.location.search).toBe(previousUrl);
+    fireEvent.popState(window);
+    expect(await screen.findByRole("region",{name:"原落选股的原评分诊断"})).toBeTruthy();
+  });
+  it("restores the exact rejected row with native browser Back and returns to selected with Forward",async()=>{
+    locate(original,"rejected","rejected:0");render(<MethodRunReader method="daily_picks"/>);
+    await screen.findByRole("region",{name:"原落选股的原评分诊断"});
+    fireEvent.click(screen.getByRole("button",{name:"原入选"}));
+    await screen.findByText("原批次已保存：0只入选。");
+    await act(async()=>{await new Promise<void>(resolve=>{window.addEventListener("popstate",()=>resolve(),{once:true});window.history.back();});});
+    expect(await screen.findByRole("region",{name:"原落选股的原评分诊断"})).toBeTruthy();
+    expect(new URLSearchParams(window.location.search).get("run_state")).toBe("rejected");
+    expect(new URLSearchParams(window.location.search).get("run_row")).toBe("rejected:0");
+    await act(async()=>{await new Promise<void>(resolve=>{window.addEventListener("popstate",()=>resolve(),{once:true});window.history.forward();});});
+    expect(await screen.findByText("原批次已保存：0只入选。")).toBeTruthy();
+    expect(new URLSearchParams(window.location.search).has("run_state")).toBe(false);
+    expect(screen.queryByRole("region",{name:"原落选股的原评分诊断"})).toBeNull();
+  });
 });
