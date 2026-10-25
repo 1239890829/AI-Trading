@@ -60,6 +60,13 @@ class StrategySpec:
     #: 有值时 `list_strategy_keys()` 会附带 `verification` 三态——让 `status`
     #: 背后有一份带时间戳的可回查证据，而不是人工誊写的一句话。
     verify_key: str | None = None
+    # Display taxonomy belongs to this registry, not to note keyword guessing.
+    discovery_category: str = "unknown"
+    discovery_category_label: str = "未分类"
+    discovery_session: str = "unknown"
+    discovery_session_label: str = "时段未登记"
+    discovery_summary: str = ""
+    supports_saved_runs: bool = False
 
 
 SPECS: tuple[StrategySpec, ...] = (
@@ -71,6 +78,10 @@ SPECS: tuple[StrategySpec, ...] = (
         source="daily_pick_review",
         evaluable=True,
         note="当日持久候选；六维评分 + 换股上限 2 只；CUSUM仅消费同版本同窗口可信观察",
+        discovery_category="multi_factor", discovery_category_label="多因子组合",
+        discovery_session="daily", discovery_session_label="每日生成",
+        discovery_summary="六维评分形成已存名单；入选与模拟执行分别核验",
+        supports_saved_runs=True,
     ),
     StrategySpec(
         key="intraday_watch",
@@ -81,6 +92,10 @@ SPECS: tuple[StrategySpec, ...] = (
         evaluable=True,
         note="盘中首见即登记 → 收盘清算 verdict；P1-38 首次接入监控。"
         "口径为绝对收益（入选价→收盘），非超额",
+        discovery_category="intraday", discovery_category_label="盘中跟踪",
+        discovery_session="intraday", discovery_session_label="盘中观察",
+        discovery_summary="盘中首次入选记录与收盘观察，不代表自动成交",
+        supports_saved_runs=True,
     ),
     StrategySpec(
         key="pullback_reversal",
@@ -95,6 +110,9 @@ SPECS: tuple[StrategySpec, ...] = (
         note="测试段（样本外）T+5 中性 +1.33% 但中性中位 −0.08%、中性跑赢 49.3%（右偏）"
              "⇒ 观察不接入；结论以 verify_registry 产物为准",
         verify_key="pullback_reversal",
+        discovery_category="reversal", discovery_category_label="超跌反转",
+        discovery_session="research", discovery_session_label="离线研究",
+        discovery_summary="样本外观察，尚未接入",
     ),
     StrategySpec(
         key="triple_volume",
@@ -104,6 +122,9 @@ SPECS: tuple[StrategySpec, ...] = (
         source="scripts/verify_triple_volume*.py",
         evaluable=False,
         note="近 250 日/1.79 万条实测负期望、胜率 33.5%/35.9% vs 基准 46.8% ⇒ 已否决",
+        discovery_category="volume", discovery_category_label="量价形态",
+        discovery_session="research", discovery_session_label="离线研究",
+        discovery_summary="历史验证已否决，保留反例",
     ),
     StrategySpec(
         key="two_thirty_five",
@@ -117,6 +138,9 @@ SPECS: tuple[StrategySpec, ...] = (
         note="五步全通过 T+5 −0.51%（中性 −0.85%）、胜率 39.3%、年度为正 1/11 ⇒ 已否决；"
              "结论以 verify_registry 产物为准",
         verify_key="two_thirty_five",
+        discovery_category="timing", discovery_category_label="盘尾时段",
+        discovery_session="research", discovery_session_label="离线研究",
+        discovery_summary="盘尾五步方法已否决，保留反例",
     ),
 )
 
@@ -192,6 +216,14 @@ def list_strategy_keys() -> list[dict]:
             "key": s.key, "name": s.name, "status": s.status,
             "basis": s.basis, "source": s.source,
             "evaluable": s.evaluable, "note": s.note,
+            "discovery": {
+                "category": s.discovery_category,
+                "category_label": s.discovery_category_label,
+                "session": s.discovery_session,
+                "session_label": s.discovery_session_label,
+                "summary": s.discovery_summary,
+                "supports_saved_runs": s.supports_saved_runs,
+            },
         }
         if s.verify_key:
             item["verification"] = _verification_of(s.verify_key)

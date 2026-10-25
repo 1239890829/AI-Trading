@@ -66,7 +66,7 @@ export function HuntingTaskRail({ view, section, search, counts = {}, localCandi
         return <Link key={task.id} scroll={false} aria-label={task.label} aria-describedby={knownCount ? `${panelId}-${task.id}-count` : undefined} aria-current={!task.external && selected === task.id ? "page" : undefined}
         onClick={task.external ? inspectionClick(inspect, {kind: "review-report", date: new URLSearchParams(search).get("date") ?? undefined}) : undefined}
         href={task.method ? patchWorkspaceUrl("/agent", search, {area:"research", tab:"strategies", view:null, sec:null, panel:null, from:`/hunting${search ? `?${search}` : ""}`}) : task.external ? patchWorkspaceUrl("/agent", search, {area: "research", tab: "review", view: null, panel: null, sec: null, from: `/hunting${search ? `?${search}` : ""}`})
-          : patchWorkspaceUrl("/hunting", search, {view: task.view, sec: task.section ?? null, panel: null, review: null})}>
+          : patchWorkspaceUrl("/hunting", search, {view: task.view, sec: task.section ?? null, panel: null, review: null, browse: null, disc_code: null, selection: null})}>
         {task.label}{knownCount && <span id={`${panelId}-${task.id}-count`} className="hunting-task-count">{count}只</span>}{task.external && <svg aria-hidden="true" width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.6"><path d="M7 17 17 7M7 7h10v10" /></svg>}
       </Link>;})}
     </nav>
@@ -81,7 +81,7 @@ export function HuntingCandidateSwitch({group, search, counts}: {group: "candida
       const count = counts[key];
       const known = typeof count === "number" && Number.isSafeInteger(count) && count >= 0;
       const label = key === "daily" ? "每日精选" : "盘中候选";
-      return <Link key={key} scroll={false} href={patchWorkspaceUrl("/hunting", search, {view:"discover", sec:key, panel:null, review:null})}
+      return <Link key={key} scroll={false} href={patchWorkspaceUrl("/hunting", search, {view:"discover", sec:key, panel:null, review:null, browse:null, disc_code:null, selection:null})}
         aria-label={label} aria-current={group === key ? "page" : undefined} aria-describedby={known ? `${id}-${key}` : undefined}>
         <span>{label}</span>{known && <small id={`${id}-${key}`}>{count}只</small>}
       </Link>;

@@ -378,3 +378,8 @@ RSH-031有限前向运行与触发修复入口：[研究§39.5](research/limit-u
 ## 2026-10-25 TSP全量复审
 
 [细功能全量对照](product/feature-closure-audit.md#2026-10-25-tsp全量复审与未采用价值)覆盖全部自编源码、93种子文件、页面分支/接口、58项读者行为及35战法候选；区分已有、发现缺口、真增量与不采用实现。热门题材不应只靠涨停梯队显现；候选筛选不改stage顺位、算法、模型、来源或模拟资格，也不宣称候选已接入。
+
+
+## 2026-10-25 选股分类发现与原名单对照
+
+[猎场四类发现合同](product/hunting-decision-design.md#2026-10-25-选股分类发现与原名单对照) → [细功能验收](product/feature-closure-audit.md#2026-10-25-选股分类发现与原名单对照)。沿原W07维护工程事实；来源钟/覆盖及原五战法分类分别归data/data-sources和strategy/strategy-registry，副作用/请求边界归system/runtime-performance。本轮不是仅更新审计，真实页面与最终发布仍分别核验。

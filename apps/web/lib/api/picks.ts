@@ -6,7 +6,7 @@
  * 因此引用方（`@/lib/api`）**零改动**。
  */
 
-import { getJson, getJsonArray, sendJson } from "./internal";
+import { getJson, getJsonArray, sendJson, type ReadOptions } from "./internal";
 import {ApiError} from "./client";
 import type {EventInterpretationRef} from "./events";
 
@@ -1190,9 +1190,47 @@ export async function getStrategyHealth(): Promise<StrategyHealthPayload> {
   return (await getJson<StrategyHealthPayload>("/api/picks/strategy-health")).data;
 }
 
-export async function getStrategyRegistry(): Promise<StrategyRegistryItem[]> {
-  return (await getJson<{ strategies: StrategyRegistryItem[] }>("/api/picks/strategy-registry"))
+export async function getStrategyRegistry(options: ReadOptions = {}): Promise<StrategyRegistryItem[]> {
+  return (await getJson<{ strategies: StrategyRegistryItem[] }>("/api/picks/strategy-registry", undefined, options))
     .data.strategies ?? [];
+}
+
+export interface DiscoveryMemberships {
+  scope: "current_not_historical";
+  requested_trade_date: string | null;
+  content_version: string;
+  state: "ready" | "partial" | "unknown" | "unavailable";
+  source: string;
+  source_as_of: string | null;
+  observed_at: string;
+  count: number;
+  matched_count: number;
+  unknown_count: number;
+  items: {symbol: string; state: "matched" | "unknown"; themes: {theme_code: string; theme_name: string; source: string}[]; reason: string | null}[];
+}
+
+/** Local catalog projection only; the selected date is not a historical membership claim. */
+export async function getDiscoveryMemberships(symbols: readonly string[], date?: string | null, options: ReadOptions = {}): Promise<DiscoveryMemberships> {
+  const unique = [...new Set(symbols)];
+  if (unique.length > 200 || unique.some(symbol => !/^\d{6}$/.test(symbol))) throw new Error("分类对照证券范围无效");
+  const params = new URLSearchParams({symbols: unique.join(",")});
+  if (date) params.set("trade_date", date);
+  const result = (await getJson<DiscoveryMemberships>(`/api/picks/discovery-memberships?${params}`, 8_000, options)).data;
+  const object = (value: unknown): value is Record<string, unknown> => value !== null && typeof value === "object" && !Array.isArray(value);
+  const valid = object(result) && result.scope === "current_not_historical" && result.requested_trade_date === (date ?? null)
+    && typeof result.content_version === "string" && /^[a-f0-9]{64}$/i.test(result.content_version)
+    && ["ready", "partial", "unknown", "unavailable"].includes(result.state) && result.count === unique.length
+    && Array.isArray(result.items) && result.items.length === unique.length
+    && result.items.every(item => object(item) && unique.includes(item.symbol) && ["matched", "unknown"].includes(item.state)
+      && Array.isArray(item.themes) && item.themes.every(theme => object(theme) && typeof theme.theme_code === "string"
+        && /^[A-Za-z0-9._-]{1,48}$/.test(theme.theme_code) && typeof theme.theme_name === "string" && !!theme.theme_name.trim() && typeof theme.source === "string")
+      && (item.state === "matched") === (item.themes.length > 0))
+    && new Set(result.items.map(item => item.symbol)).size === unique.length
+    && result.matched_count === result.items.filter(item => item.state === "matched").length
+    && result.unknown_count === result.items.filter(item => item.state === "unknown").length
+    && result.matched_count + result.unknown_count === unique.length;
+  if (!valid) throw new Error("分类对照身份或结构不一致");
+  return result;
 }
 
 export interface LeaderResearchCard {

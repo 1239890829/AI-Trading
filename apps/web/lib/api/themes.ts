@@ -10,7 +10,7 @@ import type {
   ThemeBoardPayload,
 } from "@/types/market";
 
-import { getJson } from "./internal";
+import { getJson, type ReadOptions } from "./internal";
 import type { BoardFundRow } from "./market";
 
 export interface BoardRow {
@@ -100,8 +100,8 @@ export interface ThemesHotPayload {
   themes: HotTheme[];
 }
 
-export async function getThemesHot(limit = 30): Promise<ThemesHotPayload> {
-  return (await getJson<ThemesHotPayload>(`/api/themes/hot?limit=${limit}`, 15_000)).data;
+export async function getThemesHot(limit = 30, options: ReadOptions = {}): Promise<ThemesHotPayload> {
+  return (await getJson<ThemesHotPayload>(`/api/themes/hot?limit=${limit}`, 15_000, options)).data;
 }
 
 export interface StockThemeLink {
@@ -161,6 +161,6 @@ export interface ConceptDetail {
   meta_note: string;
 }
 
-export async function getConceptDetail(code: string): Promise<ConceptDetail> {
-  return (await getJson<ConceptDetail>(`/api/themes/catalog/${encodeURIComponent(code)}/detail`)).data;
+export async function getConceptDetail(code: string, options: ReadOptions = {}): Promise<ConceptDetail> {
+  return (await getJson<ConceptDetail>(`/api/themes/catalog/${encodeURIComponent(code)}/detail`, undefined, options)).data;
 }

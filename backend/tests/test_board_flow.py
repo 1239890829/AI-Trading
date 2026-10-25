@@ -133,6 +133,30 @@ def test_board_warm_cache_keeps_delay_and_unmodified_rows(monkeypatch, isolated_
     _run(go())
 
 
+def test_discovery_board_receipt_is_shared_and_not_source_time(monkeypatch, isolated_list_reads):
+    """Switching a display window reuses the source load, not a new clock."""
+    from datetime import timedelta
+
+    fake = FakeHTTP()
+    fake.add("push2.eastmoney", [RuntimeError("fixture primary unavailable")])
+    fake.add("push2delay.eastmoney", [_clist_payload([_em_board()])])
+    monkeypatch.setattr(bf, "_HTTP", fake)
+
+    async def go():
+        first = await bf.get_board_fund_flow("concept", "intraday")
+        received = first["received_at"]
+        assert received == isolated_list_reads["now"].isoformat()
+        isolated_list_reads["now"] += timedelta(seconds=10)
+        second = await bf.get_board_fund_flow("concept", "5d")
+        assert second["received_at"] == received
+        assert second["source_as_of"] is None and second["coverage_state"] == "unknown"
+        assert second["source_mode"] == "delayed"
+        assert first["updated_at"] != second["updated_at"]
+        assert len(fake.calls) == 2
+
+    _run(go())
+
+
 def test_board_list_cache_separates_kind_and_date(monkeypatch, isolated_list_reads):
     calls = []
 

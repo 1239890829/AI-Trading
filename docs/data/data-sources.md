@@ -684,3 +684,10 @@ Tencent搜索原始五列为市场、六位代码、Unicode证券名称、拼音
 TSP仅指用户给定的本机版本：`server/src/index.js`的两处金十`connected:true`是硬编码；数据源成功钟及延迟同样即时构造。新闻路由读取`seed/news_flash.json`静态副本，20条均标财联社；源矩阵原种子为403，不能证明原站接线。原远端站是否另有金十实现仍不清楚。没有可迁移的金十采集链，不能把演示状态、HTTP可读或第三方开源包装许可当成新闻授权。
 
 重开条件：金十提供明确覆盖目标消费者、自动采集、留存期限、数据库/恢复副本、重排展示及拟用AI用途的另行授权，并证明无需启用付费，才沿现有flash→EventStore→新闻读者做有界实抓和行为验证。未获该授权前不抓网页/未文档化快讯接口，不用第三方转接规避。既有东财快讯和美联储RSS继续独立运行；旧宏观研究的来源与许可属于原研究范围，本轮不重采、不删除，也不把MCP专用规则直接推定为所有历史接口协议。
+
+
+## 2026-10-25 选股分类发现与原名单对照
+
+沿用THS24小时热股、当前官方目录、东财板块L2资金及其成员，不新增数据源。热榜ts来自提供方timestamp，不等于A股固定交易日；主题只覆盖榜内热股×已知目录。新归属投影最多200只/两次本地SELECT，source_as_of未知，content_version只证内容，requested_trade_date只指名单上下文，不能当历史成分版本。
+
+资金榜新增received_at记实际共享源读取完成钟，缓存命中不改写；source_as_of仍未知，coverage_state=unknown不称全市场完整覆盖。source_mode标primary/delayed/unknown，不变available/排序或资格；20日沿原as_of与quality并标local_sample。只在打开类别/成分时按需读取；代码空间BK与THS分开，不按同名拼成因果或历史依据。消费者与失败验收见[猎场分类](../product/hunting-decision-design.md#2026-10-25-选股分类发现与原名单对照)。
