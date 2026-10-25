@@ -1,7 +1,7 @@
 "use client";
 
 import Link from "next/link";
-import {useEffect, useId, useRef, useState, type FormEvent} from "react";
+import {useEffect, useId, useLayoutEffect, useRef, useState, type FormEvent} from "react";
 import {StockLink} from "@/components/stock-link";
 import {SELECTION_SCORE_LABELS, SelectionMeasurements, SelectionScores, readSelectionMetrics} from "@/components/detail/selection-decision-explorer";
 import {ConditionList, FactCards, NarrativeText} from "@/components/ui/explanation-map";
@@ -120,8 +120,9 @@ function RunRows({run, identity, location, onLocation}: {run: SavedMethodRunDeta
     finally {inFlight.current=false;if(alive.current)setLoading(false);}
   }
   const readNextRef=useRef(readNext);
-  useEffect(()=>{readNextRef.current=readNext;});
-  useEffect(()=>{
+  // A visible continuation must already listen; its first scroll can precede passive effects.
+  useLayoutEffect(()=>{readNextRef.current=readNext;});
+  useLayoutEffect(()=>{
     if (!hasRemote || incremental.hasMore || loading || error) return;
     const sentinel=incremental.sentinelRef.current;
     if(!sentinel) return;
@@ -131,7 +132,7 @@ function RunRows({run, identity, location, onLocation}: {run: SavedMethodRunDeta
     const check=()=>{const rect=sentinel.getBoundingClientRect();if(rect.top<=(window.innerHeight || 800)+300 && rect.bottom>=-300)void readNextRef.current();};
     target.addEventListener("scroll",check,{passive:true});
     return()=>target.removeEventListener("scroll",check);
-  },[hasRemote,incremental.hasMore,incremental.sentinelRef,loading,error]);
+  },[hasRemote,incremental.hasMore,incremental.sentinelRef,matching.length,location.filter,location.row,loading,error]);
   const counts=identity.method==="daily_picks" ? [["候选母集",run.counts?.candidates],["评分成功",run.counts?.scored],["原入选",run.counts?.selected],["拒绝存档",run.counts?.rejected_saved]]
     : [["候选行",run.counts?.candidate_rows],["排序行",run.counts?.rank_rows],["硬门行",run.counts?.hard_gate_rows],["原入选",run.counts?.selected]];
   function toggleRow(id: string) {
@@ -201,8 +202,8 @@ export function MethodRunReader({method}: {method: string}) {
     finally{indexControllers.current.delete(controller);if(indexBusy.current===base)indexBusy.current=null;}
   }
   const indexMarker=useRef<HTMLDivElement|null>(null), readMoreIndexRef=useRef(readMoreIndex);
-  useEffect(()=>{readMoreIndexRef.current=readMoreIndex;});
-  useEffect(()=>{
+  useLayoutEffect(()=>{readMoreIndexRef.current=readMoreIndex;});
+  useLayoutEffect(()=>{
     if(!moreIndexAvailable || moreIndex.loading || moreIndex.error)return;
     const marker=indexMarker.current;if(!marker)return;
     let root:HTMLElement|null=marker.parentElement;

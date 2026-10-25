@@ -13,7 +13,7 @@ import { dateTimeTextBJ, pctColor, pctText } from "@/lib/format";
 
 const MODES = [["selected", "入选名单"], ["hot", "热门题材"], ["catalog", "行业概念"], ["funds", "资金方向"], ["methods", "战法分类"]] as const;
 export type DiscoveryMode = typeof MODES[number][0];
-export type DiscoverySelection = {date: string | null; loaded: boolean; entries: readonly {symbol: string; name?: string | null; open: () => void}[]};
+export type DiscoverySelection = {date: string | null; loaded: boolean; readError?: boolean; pending?: boolean; retry?: () => void; entries: readonly {symbol: string; name?: string | null; open: () => void}[]};
 
 export function discoveryLocation(search: string) {
   const params = new URLSearchParams(search);
@@ -104,7 +104,7 @@ export function DiscoveryBrowser({search, selection, onNavigate, onTarget}: {
   const symbols = [...new Set(selection.entries.map(entry => entry.symbol).filter(symbol => /^\d{6}$/.test(symbol)))].sort();
   const membershipKey = JSON.stringify([selection.date, symbols]);
   const memberships = useResource(signal => getDiscoveryMemberships(symbols, selection.date, {signal}), {
-    enabled: mode === "hot" && selection.loaded && symbols.length > 0 && symbols.length <= 200, key: membershipKey, abortable: true,
+    enabled: mode === "hot" && selection.loaded && !selection.readError && symbols.length > 0 && symbols.length <= 200, key: membershipKey, abortable: true,
   });
   const [draft, setDraft] = useState({query, value: query});
   const [composing, setComposing] = useState(false);
@@ -132,8 +132,8 @@ export function DiscoveryBrowser({search, selection, onNavigate, onTarget}: {
   const malformed = isHot ? malformedHot : boardMismatch;
   const pending = source.pending && source.data === undefined;
   const sourceAvailable = isHot ? !malformed : !malformed && boards.data?.available === true;
-  const membershipKnown = selection.loaded && memberships.data && !memberships.pending && !memberships.error && ["ready", "partial"].includes(memberships.data.state);
-  const refresh = () => {source.refresh(); if (isHot && selection.loaded && symbols.length > 0 && symbols.length <= 200) memberships.refresh();};
+  const membershipKnown = selection.loaded && !selection.readError && memberships.data && !memberships.pending && !memberships.error && ["ready", "partial"].includes(memberships.data.state);
+  const refresh = () => {source.refresh(); if (isHot && selection.loaded && !selection.readError && symbols.length > 0 && symbols.length <= 200) memberships.refresh();};
   const select = (next: DiscoveryDetailTarget) => onNavigate(discoveryUrl(search, {disc_code: next.code, selection: null}), true);
   return <section className="discovery-browser" aria-label={isHot ? "热门题材发现" : mode === "catalog" ? "行业概念发现" : "资金方向发现"}>
     <header className="discovery-heading"><div><h2>{isHot ? "热门题材" : mode === "catalog" ? "行业与概念" : "资金方向"}</h2>
@@ -158,8 +158,12 @@ export function DiscoveryBrowser({search, selection, onNavigate, onTarget}: {
           <span>已返回 {boardRows.length} 个板块{range === "20d" ? " · 有限本地样本" : " · 全市场覆盖未核"}</span></>}
       <span>分类浏览不改变原入选，不构成买卖建议。</span>
     </div>
+    {selection.readError && <div role="alert" className="discovery-error">
+      <span>原名单读取失败，归属对照未完成。</span>
+      {selection.retry && <button type="button" className="quiet-action" disabled={selection.pending} onClick={selection.retry}>{selection.pending ? "正在重试原名单…" : "重试原名单"}</button>}
+    </div>}
     {(source.error != null || malformed || (!isHot && boards.data?.available === false)) && <div className="discovery-error" role="alert">
-      {malformed ? "分类返回身份或结构不一致，已停止展示。" : source.error ? `分类读取失败。${source.data ? "以下为上次成功结果，当前时效待核。" : "请重试，不能据此判断没有分类。"}` : `资金资料暂不可用：${boards.data?.reason || "原因未提供"}`}
+      {malformed ? "分类返回身份或结构不一致，已停止展示。" : source.error ? `分类读取失败。${source.data ? "以下为上次成功结果，当前时效待核。" : "请重试，不能据此判断没有分类。"}` : `板块资料暂不可用：${boards.data?.reason || "原因未提供"}`}
       <button type="button" className="quiet-action" disabled={source.pending} onClick={refresh}>重试分类</button></div>}
     {!!boards.data?.degraded?.length && !isHot && <p className="discovery-warning">{boards.data.degraded.join("；")}</p>}
     {pending && <div role="status" className="discovery-skeleton" aria-busy="true">正在读取分类…</div>}
@@ -184,7 +188,7 @@ export function DiscoveryBrowser({search, selection, onNavigate, onTarget}: {
             {row?.best && /^\d{6}$/.test(row.best.symbol) ? <span>榜内靠前 <StockLink symbol={row.best.symbol}>{row.best.name || row.best.symbol}</StockLink> · 第{row.best.rank}名</span>
               : board?.leader_symbol && /^\d{6}$/.test(board.leader_symbol) ? <span>源列领涨 <StockLink symbol={board.leader_symbol}>{board.leader_name || board.leader_symbol}</StockLink></span>
                 : <span>{row ? "榜内靠前成员未确认" : board?.leader_name ? `源列领涨 ${board.leader_name} · 证券代码未确认` : "领涨成员未提供"}</span>}
-            {row && <span>{!selection.loaded ? "原名单待核" : matched !== null ? `已核匹配 ${matched} 只${memberships.data!.unknown_count > 0 ? ` · ${memberships.data!.unknown_count}只归属未核` : ""}` : selection.entries.length === 0 ? "本组原名单已确认空" : symbols.length > 200 ? "对照超过200只，归属未核" : "原名单归属未核"}</span>}
+            {row && <span>{selection.readError ? "原名单读取失败" : !selection.loaded ? "原名单待核" : matched !== null ? `已核匹配 ${matched} 只${memberships.data!.unknown_count > 0 ? ` · ${memberships.data!.unknown_count}只归属未核` : ""}` : selection.entries.length === 0 ? "本组原名单已确认空" : symbols.length > 200 ? "对照超过200只，归属未核" : "原名单归属未核"}</span>}
           </div>
         </li>;
       })}

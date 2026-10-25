@@ -97,6 +97,60 @@ describe("saved method run reader",()=>{
     fireEvent.click(screen.getByRole("button",{name:"原入选"}));
     expect(screen.getByText("已读入选0")).toBeTruthy();expect(mocks.detail).toHaveBeenCalledTimes(2);
   });
+  it.each([201,401])("does not lose the first scroll after each continuation control mounts for %i original rows",async total=>{
+    locate();
+    const first=Array.from({length:200},(_,i)=>({...row,item_id:`selected:${i}`,name:`已读入选${i}`,state:"selected" as const}));
+    mocks.detail.mockImplementation(async(identity:SavedMethodRunIdentity,{offset=0}:{offset?:number})=>
+      offset===total-1?detail(identity,[{...row,item_id:`rejected:${offset}`,name:"挂载后原落选"}],offset,total)
+        :detail(identity,first.map((item,index)=>({...item,item_id:`selected:${offset+index}`})),offset,total));
+    const scrolledOffsets=new Set<number>();
+    const observer=new MutationObserver(()=>{
+      if(!Array.from(document.querySelectorAll("button")).some(button=>button.textContent==="继续读取原批次" && !button.disabled))return;
+      const read=Array.from(document.querySelectorAll("p")).map(paragraph=>paragraph.textContent?.match(/^本批已读 (\d+) \/ /)).find(Boolean);
+      const offset=read?Number(read[1]):null;
+      if(offset===null || scrolledOffsets.has(offset))return;
+      scrolledOffsets.add(offset);
+      fireEvent.scroll(window);
+    });
+    observer.observe(document.body,{childList:true,characterData:true,subtree:true});
+    try {
+      render(<MethodRunReader method="daily_picks"/>);
+      expect(await screen.findByText("挂载后原落选")).toBeTruthy();
+      const offsets=total===201?[200]:[200,400];
+      expect([...scrolledOffsets]).toEqual(offsets);
+      expect(mocks.detail).toHaveBeenCalledTimes(offsets.length+1);
+      for(const [index,offset] of offsets.entries()) {
+        expect(mocks.detail.mock.calls[index+1][0]).toMatchObject(original);
+        expect(mocks.detail.mock.calls[index+1][1]).toMatchObject({offset,limit:200});
+      }
+    } finally {observer.disconnect();}
+  });
+  it("rebinds remote continuation to a newly scrollable parent after filtering without relying on event bubbling",async()=>{
+    locate();
+    const first=[row,...Array.from({length:4},(_,index)=>({...row,item_id:`candidate:${index}`,state:"candidate" as const,name:`原候选${index}`}))];
+    mocks.detail.mockImplementation(async(identity:SavedMethodRunIdentity,{offset=0}:{offset?:number})=>offset===0?detail(identity,first,0,6)
+      :detail(identity,[{...row,item_id:"candidate:5",state:"candidate",name:"父层滚动续读原行"}],5,6));
+    vi.spyOn(HTMLElement.prototype,"scrollHeight","get").mockImplementation(function(this:HTMLElement) {
+      return this.dataset.testid==="remote-scroll-owner"?this.querySelectorAll("li").length*40+20:0;
+    });
+    vi.spyOn(HTMLElement.prototype,"clientHeight","get").mockImplementation(function(this:HTMLElement) {
+      return this.dataset.testid==="remote-scroll-owner"?100:0;
+    });
+    try {
+      render(<div data-testid="remote-scroll-owner"><MethodRunReader method="daily_picks"/></div>);
+      await screen.findByText("原落选股");
+      const owner=screen.getByTestId("remote-scroll-owner");
+      expect(owner.scrollHeight).toBeLessThan(owner.clientHeight);
+      fireEvent.click(screen.getByRole("button",{name:"候选"}));
+      expect(screen.getByText("原候选3")).toBeTruthy();
+      expect(owner.scrollHeight).toBeGreaterThan(owner.clientHeight);
+      fireEvent.scroll(owner,{bubbles:false});
+      expect(await screen.findByText("父层滚动续读原行")).toBeTruthy();
+      expect(mocks.detail).toHaveBeenCalledTimes(2);
+      expect(mocks.detail.mock.calls[1][0]).toMatchObject(original);
+      expect(mocks.detail.mock.calls[1][1]).toMatchObject({offset:5,limit:200});
+    } finally {vi.restoreAllMocks();}
+  });
   it("retains read rows when another page fails and refuses a changed-content retry",async()=>{
     locate();mocks.detail.mockResolvedValueOnce(detail(original,[row],0,2)).mockRejectedValueOnce(new Error("page offline"))
       .mockResolvedValueOnce({...detail(original,[{...row,item_id:"rejected:1",name:"漂移原行"}],1,2),content_version:"d".repeat(64)});
@@ -147,6 +201,33 @@ describe("saved method run reader",()=>{
     expect(await screen.findByText("较早已存原行")).toBeTruthy();
     expect(mocks.index.mock.calls[1][0]).toMatchObject({offset:30,method:"daily_picks"});
     expect(mocks.detail.mock.calls[0][0]).toMatchObject(original);
+  });
+  it("does not lose the first scroll after each earlier-index control mounts or reuse the previous cursor",async()=>{
+    mocks.index.mockResolvedValueOnce({method:"daily_picks",items:[],coverage:{offset:0,limit:30,scanned:30,next_offset:30,possibly_truncated:true,history_semantics:"原范围"}})
+      .mockResolvedValueOnce({method:"daily_picks",items:[original],coverage:{offset:30,limit:30,scanned:30,next_offset:60,possibly_truncated:true,history_semantics:"原范围"}})
+      .mockResolvedValueOnce({method:"daily_picks",items:[newer],coverage:{offset:60,limit:30,scanned:1,next_offset:null,possibly_truncated:false,history_semantics:"原范围"}});
+    mocks.detail.mockResolvedValue(detail(original,[{...row,state:"selected",name:"首批锁定原行"}]));
+    const scrolledCounts=new Set<number>();
+    const observer=new MutationObserver(()=>{
+      if(!Array.from(document.querySelectorAll("button")).some(button=>button.textContent==="继续读取更早批次" && !button.disabled))return;
+      const read=Array.from(document.querySelectorAll("p")).map(paragraph=>paragraph.textContent?.match(/^已读索引 (\d+) 批/)).find(Boolean);
+      const count=read?Number(read[1]):null;
+      if(count===null || scrolledCounts.has(count))return;
+      scrolledCounts.add(count);
+      fireEvent.scroll(window);
+    });
+    observer.observe(document.body,{childList:true,characterData:true,subtree:true});
+    try {
+      render(<MethodRunReader method="daily_picks"/>);
+      expect(await screen.findByText(/已读索引 2 批。原范围/)).toBeTruthy();
+      expect([...scrolledCounts]).toEqual([0,1]);
+      expect(mocks.index.mock.calls.map(([query])=>query.offset)).toEqual([undefined,30,60]);
+      expect(mocks.index.mock.calls.every(([query])=>query.method==="daily_picks")).toBe(true);
+      expect(await screen.findByText("首批锁定原行")).toBeTruthy();
+      expect(mocks.detail).toHaveBeenCalledTimes(1);
+      expect(mocks.detail.mock.calls[0][0]).toMatchObject(original);
+      expect(new URLSearchParams(window.location.search).get("run_id")).toBe(original.run_id);
+    } finally {observer.disconnect();}
   });
   it("labels a daily rejected row's saved rank without calling it an intraday stage",async()=>{
     locate(original,"rejected","rejected:0");mocks.detail.mockResolvedValue(detail(original,[{...row,rank:1}]));

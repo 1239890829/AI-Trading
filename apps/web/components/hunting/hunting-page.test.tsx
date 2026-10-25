@@ -513,6 +513,57 @@ it("loads only the chosen discovery source and original selected group, without 
   expect(card("600127").dataset.active).toBe("false");
 });
 
+it.each(["candidates","daily"] as const)("retries the failed %s original list independently and restores real membership/code comparison",async currentGroup=>{
+  const day="2026-10-08";
+  let finishRetry!:()=>void;
+  const dailyReply={date:day,items:[{symbol:"600127",name:"原标的"}],meta:{selection_version:"retry-daily-v1"}} as unknown as api.DailyPicksPayload;
+  const intradayReply={trade_date:day,selection_identity_version:"retry-intraday-v1",items:[{symbol:"600127",name:"原标的"}],reference_items:[]} as unknown as api.IntradayTopPayload;
+  if(currentGroup==="daily")vi.mocked(api.getTodayPicks).mockRejectedValueOnce(new Error("original daily unavailable"))
+    .mockImplementationOnce(()=>new Promise(resolve=>{finishRetry=()=>resolve(dailyReply);}));
+  else vi.mocked(api.getIntradayTop).mockRejectedValueOnce(new Error("original intraday unavailable"))
+    .mockImplementationOnce(()=>new Promise(resolve=>{finishRetry=()=>resolve(intradayReply);}));
+  vi.mocked(api.getDiscoveryMemberships).mockImplementation(async(symbols,date)=>({
+    scope:"current_not_historical",requested_trade_date:date??null,content_version:"b".repeat(64),state:"ready",source:"local_theme_catalog",
+    source_as_of:null,observed_at:"2026-10-25T10:00:00+08:00",count:symbols.length,matched_count:symbols.length,unknown_count:0,
+    items:symbols.map(symbol=>({symbol,state:"matched" as const,themes:[{theme_code:"885111.TI",theme_name:"未涨停热点",source:"ths_official"}],reason:null})),
+  }));
+  search=new URLSearchParams({browse:"hot",sec:currentGroup});
+  const page=render(<HuntingPage/>);
+  await screen.findByRole("button",{name:"查看未涨停热点成分"});
+  await screen.findByText("原名单读取失败，归属对照未完成。");
+  expect(screen.getByRole("list",{name:"分类结果"}).textContent).toContain("原名单读取失败");
+  expect(screen.queryByText("本组原名单已确认空")).toBeNull();
+  expect(api.getDiscoveryMemberships).not.toHaveBeenCalled();
+  expect(api.getThemesHot).toHaveBeenCalledTimes(1);
+  expect(screen.queryByRole("button",{name:"刷新数据"})).toBeNull();
+
+  fireEvent.click(screen.getByRole("button",{name:"重试原名单"}));
+  const busy=await screen.findByRole("button",{name:"正在重试原名单…"});
+  expect(busy).toHaveProperty("disabled",true);
+  fireEvent.click(busy);
+  const producer=currentGroup==="daily"?api.getTodayPicks:api.getIntradayTop;
+  const other=currentGroup==="daily"?api.getIntradayTop:api.getTodayPicks;
+  expect(producer).toHaveBeenCalledTimes(2);expect(other).not.toHaveBeenCalled();
+  expect(api.getThemesHot).toHaveBeenCalledTimes(1);
+  await act(async()=>{finishRetry();});
+  await screen.findByText("已核匹配 1 只");
+  expect(screen.queryByText("原名单读取失败，归属对照未完成。")).toBeNull();
+  expect(api.getDiscoveryMemberships).toHaveBeenCalledTimes(1);
+  expect(api.getDiscoveryMemberships).toHaveBeenCalledWith(["600127"],day,{signal:expect.any(AbortSignal)});
+
+  search=new URLSearchParams({browse:"hot",sec:currentGroup,disc_code:"885111.TI"});page.rerender(<HuntingPage/>);
+  expect(await screen.findByRole("button",{name:"返回原名单核对原标的"})).toBeTruthy();
+  const detail=screen.getByTestId("discovery-detail");
+  expect(detail.textContent).toContain(`原名单日期：${day}`);
+  expect(detail.textContent).toContain("代码相同 1 只");
+  expect(api.getConceptDetail).toHaveBeenCalledTimes(1);
+  vi.useFakeTimers();await act(async()=>{await vi.advanceTimersByTimeAsync(120_001);});
+  expect(producer).toHaveBeenCalledTimes(2);expect(other).not.toHaveBeenCalled();
+  expect(api.getThemesHot).toHaveBeenCalledTimes(1);expect(api.getDiscoveryMemberships).toHaveBeenCalledTimes(1);
+  for(const read of [api.getPicksHistory,api.getPickReviews,api.getPicksMeta,api.getSignalHealth,api.getMorningBriefToday,api.getWatcherState,
+    api.getIntradayReview,api.getIntradayOpportunities,api.getPositionLabels,api.getEventsForSymbol,api.getBoardFundFlow])expect(read).not.toHaveBeenCalled();
+});
+
 it("retires a previously open original-evidence drawer on classification switch and preserves the original card instance",async()=>{
   const page=render(<HuntingPage/>);await screen.findByText("候选 002636");
   const instance=card("600127").dataset.cardInstance;
