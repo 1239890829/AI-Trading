@@ -40,12 +40,13 @@ from __future__ import annotations
 
 import asyncio
 from copy import deepcopy
-from datetime import date, timedelta
+from datetime import date, datetime, timedelta
 import json
 import logging
 from math import isfinite
 import os
 from pathlib import Path
+import re
 
 from app.core.ttl_cache import TTLCache
 from app.market import trade_calendar
@@ -477,6 +478,90 @@ _RANGE_SORT_KEY = {
 }
 
 
+def _local_board_latest_saved(kind: str) -> dict:
+    """Read one completed-day Top50 archive; never repair it or call a source."""
+    now = beijing_now()
+    cutoff = now.date() if (now.hour, now.minute) >= (_SNAPSHOT_HOUR, _SNAPSHOT_MINUTE) else now.date() - timedelta(days=1)
+    data = _read_store_memo(_DAILY_STORE, "daily")
+    base = {
+        "available": False, "kind": kind, "range": "latest_saved", "rows": [],
+        "historical": True, "as_of": None, "stored_at": None,
+        "source": "eastmoney_local_daily_snapshot", "source_as_of": None,
+        "received_at": None, "coverage_state": "local_sample", "quality": "stale",
+        "total_boards": None, "coverage": 0, "returned_count": 0,
+        "sample_limit": _TOP_BOARD_ROWS, "rank_basis_date": None,
+        "time_basis": "as_of 是归档日；stored_at 仅为原归档文件保存钟，均不是可核行情源时点",
+        "degraded": ["原样本按主力净流入降序保留 Top50；非全市场目录或涨跌幅前50",
+                     "只能对这批已存样本局部排序，不证明全市场或净流出覆盖"],
+    }
+    if not isinstance(data, dict) or not isinstance(data.get("days"), dict):
+        return {**base, "reason": "板块单日存档缺失或结构不完整"}
+    calendar = trade_calendar._load_persisted()
+    if not calendar:
+        return {**base, "reason": "本地交易日历不可用，无法核实归档日；未外取或猜测"}
+    eligible = []
+    ignored = 0
+    for stamp in data["days"]:
+        try:
+            day = date.fromisoformat(stamp)
+        except (TypeError, ValueError):
+            ignored += 1
+            continue
+        if day.isoformat() != stamp or day > cutoff or trade_calendar.is_trade_day_on(day, days=calendar) is not True:
+            ignored += 1
+            continue
+        eligible.append((day, stamp))
+    if ignored:
+        base["degraded"].append("已排除未来、未完成、日期无效或本地日历未确认的归档键")
+    for _, stamp in sorted(eligible, reverse=True):
+        snapshot = data["days"][stamp]
+        if not isinstance(snapshot, dict) or not isinstance(snapshot.get("boards"), dict):
+            return {**base, "reason": "最近已完成日的板块归档结构不完整"}
+        raw = snapshot["boards"].get(kind)
+        if raw is None or raw == []:
+            continue  # This kind was not captured; never borrow the other kind.
+        if not isinstance(raw, list) or len(raw) > _TOP_BOARD_ROWS:
+            return {**base, "reason": "最近同类板块归档不是有效 Top50 样本"}
+        rows, seen = [], set()
+        missing = 0
+        for item in raw:
+            if (not isinstance(item, list) or len(item) != 5
+                    or not isinstance(item[0], str) or not re.fullmatch(r"BK[0-9]{3,4}", item[0])
+                    or item[0] in seen or not isinstance(item[1], str) or not item[1].strip()):
+                return {**base, "reason": "最近同类板块归档含无效身份、重复代码或不完整记录"}
+            try:
+                valid = all(value is None or (isinstance(value, (int, float))
+                            and not isinstance(value, bool) and isfinite(value)) for value in item[2:])
+            except OverflowError:
+                valid = False
+            if not valid:
+                return {**base, "reason": "最近同类板块归档含无效数值，未转成零或混入其他日期"}
+            seen.add(item[0])
+            missing += sum(value is None for value in item[2:])
+            rows.append({
+                "board_code": item[0], "name": item[1], "kind": kind,
+                "main_net_yi": item[2], "main_net_ratio": item[3], "change_pct": item[4],
+                "super_net_yi": None, "main_net_5d_yi": None, "main_net_10d_yi": None,
+                "main_net_20d_yi": None, "leader_name": None, "leader_symbol": None,
+                "streak": None, "rank_delta": None, "rank": len(rows) + 1,
+            })
+        # The file-wide clock is disclosed only as a save clock, never row source time.
+        stored = data.get("updated_at")
+        try:
+            at = datetime.fromisoformat(stored)
+            stored_valid = at.utcoffset() is not None and at <= now
+        except (TypeError, ValueError):
+            stored_valid = False
+        if not stored_valid:
+            stored = None
+            base["degraded"].append("原归档文件保存钟缺失或异常，未使用本次读取时间补填")
+        if missing:
+            base["degraded"].append(f"该样本有 {missing} 个未保存数值字段，保留缺失，不按零处理")
+        return {**base, "available": True, "as_of": stamp, "stored_at": stored,
+                "rows": rows, "coverage": len(rows), "returned_count": len(rows)}
+    return {**base, "reason": "没有已完成且本地日历确认的同类板块单日存档，未补取或改标其他范围"}
+
+
 def _local_board_history(kind: str) -> dict:
     """独立读取同一截止日的已存资金日线；不要求实时榜可用，也不补猜缺失日。"""
     now = beijing_now()
@@ -547,12 +632,15 @@ async def get_board_fund_flow(kind: str, range_key: str) -> dict:
 
     - intraday/5d/10d：一次翻页全量（clist f62/f164/f174），零额外上游调用；
     - 20d：只读落盘 daykline 自算（读路径零外呼），未沉淀板块不参与排名，显式 coverage；
+    - latest_saved：独立的已完成单日 Top50 样本，身份/归档日独立，不代替即时榜；
     - 连续流入天数：只对落盘板块可判，其余 None。
     """
-    if range_key not in ("intraday", "5d", "10d", "20d"):
+    if range_key not in ("intraday", "5d", "10d", "20d", "latest_saved"):
         return {"available": False, "reason": f"range 非法：{range_key!r}", "rows": [], "degraded": []}
     if kind not in _KIND_FS:
         return {"available": False, "reason": f"kind 非法：{kind!r}", "rows": [], "degraded": []}
+    if range_key == "latest_saved":
+        return await asyncio.to_thread(_local_board_latest_saved, kind)
     if range_key == "20d":
         return {**_local_board_history(kind), "source_as_of": None,
                 "received_at": None, "coverage_state": "local_sample",

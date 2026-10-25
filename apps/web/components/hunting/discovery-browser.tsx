@@ -20,7 +20,9 @@ export function discoveryLocation(search: string) {
   const raw = params.get("browse");
   const mode = MODES.find(([key]) => key === raw)?.[0] ?? "selected";
   const kind: BoardFlowKind = params.get("disc_kind") === "industry" ? "industry" : params.get("disc_kind") === "concept" ? "concept" : mode === "catalog" ? "industry" : "concept";
-  const range: BoardFlowRange = mode === "catalog" ? "intraday" : (["5d", "10d", "20d"].includes(params.get("disc_range") ?? "") ? params.get("disc_range") as BoardFlowRange : "intraday");
+  const rawRange = params.get("disc_range");
+  const range: BoardFlowRange = mode === "catalog" ? rawRange === "latest_saved" ? "latest_saved" : "intraday"
+    : mode === "funds" && ["5d", "10d", "20d"].includes(rawRange ?? "") ? rawRange as BoardFlowRange : "intraday";
   const code = params.get("disc_code") ?? "";
   return {mode, kind, range, code, query: params.get("disc_q") ?? "", sort: params.get("disc_sort") ?? "desc",
     scope: JSON.stringify([mode, kind, range, code])};
@@ -81,7 +83,11 @@ function checkBoards(data: BoardFundFlowPayload, kind: string, range: string) {
   if (!object(data) || data.kind !== kind || data.range !== range || typeof data.available !== "boolean" || !Array.isArray(data.rows)
     || !Array.isArray(data.degraded) || data.degraded.some(item => typeof item !== "string")
     || data.rows.some(row => !object(row) || !text(row.name) || !text(row.board_code) || row.kind !== kind
-      || ![row.change_pct, row.main_net_yi, row.main_net_5d_yi, row.main_net_10d_yi, row.main_net_20d_yi].every(nullableNumber))) throw new DiscoveryReadError("板块返回身份或结构不一致");
+      || ![row.change_pct, row.main_net_yi, row.main_net_5d_yi, row.main_net_10d_yi, row.main_net_20d_yi].every(nullableNumber))
+    || range === "intraday" && data.historical === true
+    || range === "latest_saved" && data.available && (data.historical !== true || data.coverage_state !== "local_sample" || data.quality !== "stale"
+      || !text(data.as_of) || !/^\d{4}-\d{2}-\d{2}$/.test(data.as_of) || !Number.isFinite(Date.parse(`${data.as_of}T00:00:00Z`))
+      || new Date(`${data.as_of}T00:00:00Z`).toISOString().slice(0, 10) !== data.as_of)) throw new DiscoveryReadError("板块返回身份或结构不一致");
   return data;
 }
 function heatReading(row: HotTheme, stocks: ThemesHotPayload["stocks"]) {
@@ -99,6 +105,7 @@ export function DiscoveryBrowser({search, selection, onNavigate, onTarget}: {
 }) {
   const location = discoveryLocation(search);
   const {mode, kind, range, code, query, sort, scope} = location;
+  const savedDirectory = mode === "catalog" && range === "latest_saved";
   const hot = useResource(async signal => checkHot(await getThemesHot(30, {signal})), {enabled: mode === "hot", key: "hot/30", abortable: true});
   const boards = useResource(async signal => checkBoards(await getBoardFundFlow(kind, range, {signal}), kind, range), {enabled: mode === "catalog" || mode === "funds", key: `${kind}/${range}`, abortable: true});
   const symbols = [...new Set(selection.entries.map(entry => entry.symbol).filter(symbol => /^\d{6}$/.test(symbol)))].sort();
@@ -110,6 +117,7 @@ export function DiscoveryBrowser({search, selection, onNavigate, onTarget}: {
   const [composing, setComposing] = useState(false);
   if (draft.query !== query) setDraft({query, value: query});
   const change = (changes: Record<string, string | null>) => onNavigate(discoveryUrl(search, {disc_code: null, selection: null, ...changes}));
+  const changeDirectoryRange = (next: "intraday" | "latest_saved") => onNavigate(discoveryUrl(search, {disc_range: next === "intraday" ? null : next, disc_code: null}));
   const malformedHot = hot.error instanceof DiscoveryReadError;
   const boardMismatch = boards.error instanceof DiscoveryReadError;
   const hotRows = useMemo(() => malformedHot ? [] : hot.data?.themes ?? [], [malformedHot, hot.data]);
@@ -141,6 +149,8 @@ export function DiscoveryBrowser({search, selection, onNavigate, onTarget}: {
       <button className="quiet-action" type="button" disabled={source.pending} onClick={refresh}>{source.pending ? "读取中…" : "刷新分类"}</button></header>
     <div className="discovery-controls">
       {!isHot && <div className="discovery-kinds" aria-label="板块类别">{(["industry", "concept"] as const).map(value => <button key={value} type="button" aria-pressed={kind === value} onClick={() => change({disc_kind: value})}>{value === "industry" ? "行业" : "概念"}</button>)}</div>}
+      {mode === "catalog" && <label>目录范围<select aria-label="目录范围" value={range} onChange={event => changeDirectoryRange(event.target.value === "latest_saved" ? "latest_saved" : "intraday")}>
+        <option value="intraday">本次榜单</option><option value="latest_saved">最近存档</option></select></label>}
       {mode === "funds" && <label>区间<select aria-label="资金区间" value={range} onChange={event => change({disc_range: event.target.value})}>
         <option value="intraday">本次榜单</option><option value="5d">5日</option><option value="10d">10日</option><option value="20d">20日存档</option></select></label>}
       <label>排序<select aria-label="分类排序" value={ascending ? "asc" : "desc"} onChange={event => change({disc_sort: event.target.value})}>
@@ -153,9 +163,12 @@ export function DiscoveryBrowser({search, selection, onNavigate, onTarget}: {
     </div>
     <div className="discovery-basis" role="note">
       {isHot ? <><span>同花顺24小时热股 × 当前目录</span><span title={hot.data?.ts ?? undefined}>榜单时刻 {hot.data?.ts ? dateTimeTextBJ(hot.data.ts) : "未提供"}（北京）</span><span>返回 {hot.data?.stocks?.length ?? "—"} 只热股，非全市场热点全集</span></>
-        : <><span>东财板块口径 · {kind === "industry" ? "行业" : "概念"}</span><span>{range === "20d" ? `本地存档截至 ${boards.data?.as_of || "未提供"}` : "源时点未提供"}</span>
-          {boards.data?.received_at && <span title={boards.data.received_at}>源读取完成 {dateTimeTextBJ(boards.data.received_at)}（北京）</span>}
-          <span>已返回 {boardRows.length} 个板块{range === "20d" ? " · 有限本地样本" : " · 全市场覆盖未核"}</span></>}
+        : <><span>东财板块口径 · {kind === "industry" ? "行业" : "概念"}</span><span>{savedDirectory ? `原榜单日期 ${boards.data?.as_of || "未提供"}` : range === "20d" ? `本地存档截至 ${boards.data?.as_of || "未提供"}` : "源时点未提供"}</span>
+          {savedDirectory ? <><span>Top50净流入存档样本，非全目录</span>
+            <span title={boards.data?.stored_at ?? undefined}>存档保存于 {boards.data?.stored_at && /(?:Z|[+-]\d{2}:?\d{2})$/i.test(boards.data.stored_at) && Number.isFinite(Date.parse(boards.data.stored_at)) ? `${dateTimeTextBJ(boards.data.stored_at)}（北京）` : "未提供"} · 来源时刻未核</span>
+            <span>历史参考，不表示即时源已恢复。成分下钻另读当前样本，不是原日归属。</span></>
+            : boards.data?.received_at && <span title={boards.data.received_at}>源读取完成 {dateTimeTextBJ(boards.data.received_at)}（北京）</span>}
+          <span>已返回 {boardRows.length} 个板块{range === "20d" || savedDirectory ? " · 有限本地样本" : " · 全市场覆盖未核"}</span></>}
       <span>分类浏览不改变原入选，不构成买卖建议。</span>
     </div>
     {selection.readError && <div role="alert" className="discovery-error">
@@ -164,7 +177,8 @@ export function DiscoveryBrowser({search, selection, onNavigate, onTarget}: {
     </div>}
     {(source.error != null || malformed || (!isHot && boards.data?.available === false)) && <div className="discovery-error" role="alert">
       {malformed ? "分类返回身份或结构不一致，已停止展示。" : source.error ? `分类读取失败。${source.data ? "以下为上次成功结果，当前时效待核。" : "请重试，不能据此判断没有分类。"}` : `板块资料暂不可用：${boards.data?.reason || "原因未提供"}`}
-      <button type="button" className="quiet-action" disabled={source.pending} onClick={refresh}>重试分类</button></div>}
+      <button type="button" className="quiet-action" disabled={source.pending} onClick={refresh}>重试分类</button>
+      {mode === "catalog" && range === "intraday" && <button type="button" className="quiet-action" onClick={() => changeDirectoryRange("latest_saved")}>查看最近存档</button>}</div>}
     {!!boards.data?.degraded?.length && !isHot && <p className="discovery-warning">{boards.data.degraded.join("；")}</p>}
     {pending && <div role="status" className="discovery-skeleton" aria-busy="true">正在读取分类…</div>}
     {!pending && sourceAvailable && source.data && rows.length === 0 && <p className="discovery-empty">{query ? "没有匹配分类。可清除搜索查看已返回范围。" : isHot ? "热榜暂未映射到可确认题材；不是没有市场热点。" : "本次范围没有可展示板块；缺数不按零处理。"}</p>}
@@ -180,8 +194,8 @@ export function DiscoveryBrowser({search, selection, onNavigate, onTarget}: {
           <button className="discovery-result-open" type="button" disabled={!rowCode} data-discovery-code={rowCode ?? undefined} aria-label={`查看${name}成分`} aria-pressed={!!rowCode && code === rowCode}
             onClick={() => rowCode && select({kind: row ? "theme" : "board", code: rowCode, name})}>
             <span className="discovery-order">{index + 1}</span><span className="discovery-name"><strong>{name}</strong><small>{rowCode || "代码未确认"}</small></span>
-            <span title={heat?.value != null ? heat.value.toLocaleString("zh-CN") : undefined} className={`discovery-measure ${board ? pctColor(board.change_pct) : ""}`}>{row ? (heat?.value != null ? heat.value.toLocaleString("zh-CN", {notation: "compact", maximumFractionDigits: 1}) : "未齐") : pctText(board!.change_pct)}<small>{row ? heat?.value != null ? "榜内人气合计" : `${heat?.known ?? 0}/${heat?.total ?? 0}股提供人气` : "板块涨跌幅"}</small></span>
-            <span className={`discovery-measure ${board && net != null ? net >= 0 ? "text-up-ink dark:text-up" : "text-down-ink dark:text-down" : ""}`}>{row ? `${row.hot_count}只` : signed(net)}<small>{row ? "榜内热股" : range === "intraday" ? "主力净额" : `${range.replace("d", "日")}主力净额`}</small></span>
+            <span title={heat?.value != null ? heat.value.toLocaleString("zh-CN") : undefined} className={`discovery-measure ${board ? pctColor(board.change_pct) : ""}`}>{row ? (heat?.value != null ? heat.value.toLocaleString("zh-CN", {notation: "compact", maximumFractionDigits: 1}) : "未齐") : pctText(board!.change_pct)}<small>{row ? heat?.value != null ? "榜内人气合计" : `${heat?.known ?? 0}/${heat?.total ?? 0}股提供人气` : savedDirectory ? "原日涨跌幅" : "板块涨跌幅"}</small></span>
+            <span className={`discovery-measure ${board && net != null ? net >= 0 ? "text-up-ink dark:text-up" : "text-down-ink dark:text-down" : ""}`}>{row ? `${row.hot_count}只` : signed(net)}<small>{row ? "榜内热股" : savedDirectory ? "原当日净额" : range === "intraday" ? "主力净额" : `${range.replace("d", "日")}主力净额`}</small></span>
             <svg aria-hidden="true" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.5"><path d="m9 5 7 7-7 7"/></svg>
           </button>
           <div className="discovery-result-context">

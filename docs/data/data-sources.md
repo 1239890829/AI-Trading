@@ -691,3 +691,6 @@ TSP仅指用户给定的本机版本：`server/src/index.js`的两处金十`conn
 沿用THS24小时热股、当前官方目录、东财板块L2资金及其成员，不新增数据源。热榜ts来自提供方timestamp，不等于A股固定交易日；主题只覆盖榜内热股×已知目录。新归属投影最多200只/两次本地SELECT，source_as_of未知，content_version只证内容，requested_trade_date只指名单上下文，不能当历史成分版本。
 
 资金榜新增received_at记实际共享源读取完成钟，缓存命中不改写；source_as_of仍未知，coverage_state=unknown不称全市场完整覆盖。source_mode标primary/delayed/unknown，不变available/排序或资格；20日沿原as_of与quality并标local_sample。只在打开类别/成分时按需读取；代码空间BK与THS分开，不按同名拼成因果或历史依据。消费者与失败验收见[猎场分类](../product/hunting-decision-design.md#2026-10-25-选股分类发现与原名单对照)。
+
+
+2026-10-25同轮实页补修：`latest_saved`显式读取原L2的daily收盘Top50存档，行业/概念各取最近已完成且非未来的同日快照，读路径不外呼、不同步、不写档。归档日`as_of`、原保存钟`stored_at`、未知`source_as_of=null`分别保留；`historical=true`、`quality=stale`、`coverage_state=local_sample`，全集数量未知。Top50原按当日主力净流入截取，只可对这个样本按原涨跌幅/净额浏览，不推断完整市场或无净流出。当前榜失败仍保留，用户主动切换最近存档，不把历史伪装为即时恢复；BK下钻另读当前成员，不能将其当原归档日成员。缺档、坏结构、错身份、未来/未完成日期和缺值分别保守反馈。
