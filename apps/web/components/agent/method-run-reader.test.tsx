@@ -154,7 +154,7 @@ describe("saved method run reader",()=>{
     expect(await screen.findByRole("region",{name:"原排名与阶段"})).toBeTruthy();
     expect(screen.queryByText("原盘中阶段与容量")).toBeNull();
   });
-  it("states confirmed zero selections only after reading the entire complete original batch",async()=>{
+  it("states confirmed zero selections from a complete original source summary",async()=>{
     locate(original,"selected");mocks.detail.mockResolvedValue(detail(original,Array.from({length:20},(_,index)=>({...row,item_id:`rejected:${index}`}))));
     render(<MethodRunReader method="daily_picks"/>);
     expect(await screen.findByText("原批次已保存：0只入选。")).toBeTruthy();
@@ -164,21 +164,61 @@ describe("saved method run reader",()=>{
   it.each([
     {label:"unknown original selected count",patch:{counts:{selected:null}}},
     {label:"partially readable archive",patch:{state:"partial" as const,reason:"原名单缺失"}},
-    {label:"unread later rows",patch:{coverage:{offset:0,limit:200,total:2,returned:1,next_offset:1,possibly_truncated:true,history_semantics:"原范围"}}},
-    {label:"missing original total",patch:{coverage:{offset:0,limit:200,total:null,returned:1,next_offset:null,possibly_truncated:false,history_semantics:"原范围"}}},
   ])("does not claim zero selections for $label",async({patch})=>{
     locate(original,"selected");mocks.detail.mockResolvedValue({...detail(),...patch});render(<MethodRunReader method="daily_picks"/>);
     expect(await screen.findByText(/不据此推断当时零入选/)).toBeTruthy();
     expect(screen.queryByText("原批次已保存：0只入选。")).toBeNull();
   });
-  it("confirms saved zero only when the last original page completes the bound batch",async()=>{
+  it("retains the source-confirmed zero while reading later original pages",async()=>{
     locate(original,"selected");mocks.detail.mockResolvedValueOnce(detail(original,[row],0,2))
       .mockResolvedValueOnce(detail(original,[{...row,item_id:"rejected:1"}],1,2));
     render(<MethodRunReader method="daily_picks"/>);
-    expect(await screen.findByText(/不据此推断当时零入选/)).toBeTruthy();
+    expect(await screen.findByText("原批次已保存：0只入选。")).toBeTruthy();
     fireEvent.click(screen.getByRole("button",{name:"继续读取原批次"}));
     expect(await screen.findByText("原批次已保存：0只入选。")).toBeTruthy();
     expect(screen.queryByText(/不据此推断当时零入选/)).toBeNull();
+  });
+  it.each([
+    {method:"daily_picks" as const,state:"saved" as const},{method:"intraday_watch" as const,state:"saved" as const},
+    {method:"daily_picks" as const,state:"partial" as const},{method:"intraday_watch" as const,state:"partial" as const},
+  ])("uses the $method full source summary independently of 200/960 client rows when $state",async({method,state})=>{
+    const identity={...original,method};locate(identity,"selected");
+    const first=Array.from({length:200},(_,index)=>({...row,item_id:`rejected:${index}`}));
+    mocks.detail.mockResolvedValue({...detail(identity,first,0,960),state,possibly_truncated:true,reason:state==="partial"?"原排序源记录缺失":""});
+    render(<MethodRunReader method={method}/>);
+    expect(await screen.findByText(/本批已读 200 \/ 960 条原行/)).toBeTruthy();
+    expect(screen.getByText("原存档投影可能截断，不按当前行数替换原计数。")).toBeTruthy();
+    if(state==="saved") {
+      expect(screen.getByText("原批次已保存：0只入选。")).toBeTruthy();
+      expect(screen.queryByText(/不据此推断当时零入选/)).toBeNull();
+    } else {
+      expect(screen.queryByText("原批次已保存：0只入选。")).toBeNull();
+      expect(screen.getByText(/不据此推断当时零入选/)).toBeTruthy();
+    }
+  });
+  it("withdraws zero confirmation if a later page contradicts the original source summary",async()=>{
+    locate(original,"selected");mocks.detail.mockResolvedValueOnce(detail(original,[row],0,2))
+      .mockResolvedValueOnce({...detail(original,[{...row,item_id:"rejected:1"}],1,2),counts:{selected:1}});
+    render(<MethodRunReader method="daily_picks"/>);
+    expect(await screen.findByText("原批次已保存：0只入选。")).toBeTruthy();
+    fireEvent.click(screen.getByRole("button",{name:"继续读取原批次"}));
+    expect(await screen.findByText(/不据此推断当时零入选/)).toBeTruthy();
+    expect(screen.queryByText("原批次已保存：0只入选。")).toBeNull();
+  });
+  it.each(["saved","partial"] as const)("retires the first-page truncation warning after over 200 %s rows without hiding source gaps",async state=>{
+    locate(original,"selected");
+    const first=Array.from({length:200},(_,index)=>({...row,item_id:`rejected:${index}`,name:index===0?"首屏已读原行":`原落选${index}`}));
+    const reason=state==="partial"?"原来源记录缺失":"";
+    mocks.detail.mockResolvedValueOnce({...detail(original,first,0,201),state,reason,possibly_truncated:true})
+      .mockResolvedValueOnce({...detail(original,[{...row,item_id:"rejected:200"}],200,201),state,reason,possibly_truncated:false});
+    render(<MethodRunReader method="daily_picks"/>);
+    expect(await screen.findByText("原存档投影可能截断，不按当前行数替换原计数。")).toBeTruthy();
+    fireEvent.click(screen.getByRole("button",{name:"继续读取原批次"}));
+    expect(await screen.findByText(/本批已读 201 \/ 201 条原行/)).toBeTruthy();
+    expect(screen.queryByText("原存档投影可能截断，不按当前行数替换原计数。")).toBeNull();
+    if(state==="partial")expect(screen.getByText(/部分存档不可读取：原来源记录缺失/)).toBeTruthy();
+    fireEvent.click(screen.getByRole("button",{name:"拒绝存档"}));
+    expect(screen.getByText("首屏已读原行")).toBeTruthy();expect(mocks.detail).toHaveBeenCalledTimes(2);
   });
   it("uses the external Next history path instead of replaying its private bypass markers",async()=>{
     window.history.replaceState({__NA:true,__PRIVATE_NEXTJS_INTERNALS_TREE:{tree:"retained-by-next"}},"",window.location.href);

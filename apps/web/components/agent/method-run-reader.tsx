@@ -101,11 +101,12 @@ function RunRows({run, identity, location, onLocation}: {run: SavedMethodRunDeta
   const incremental=useIncremental(matching,{pageSize:20,step:20,resetKey:location.filter});
   const latest=allPages[allPages.length-1], nextOffset=latest.coverage.next_offset;
   const hasRemote=typeof nextOffset==="number" && Number.isInteger(nextOffset) && nextOffset>=(latest.coverage.offset ?? 0)+(latest.items?.length ?? 0) && nextOffset>(latest.coverage.offset ?? 0);
-  const coverage=allPages.reduce((state,page)=>({read:state.read+(page.items?.length ?? 0),complete:state.complete && page.state==="saved"
-    && page.coverage.offset===state.read && page.coverage.total===run.coverage.total && page.coverage.returned===(page.items?.length ?? 0)}),{read:0,complete:true});
-  const savedZero=location.filter==="selected" && allPages.every(page=>page.counts?.selected===0) && coverage.complete
-    && finite(run.coverage.total) && run.coverage.total>=0 && coverage.read===run.coverage.total
+  const coverage=allPages.reduce((state,page)=>({read:state.read+(page.items?.length ?? 0),complete:state.complete && page.state==="saved",
+    contiguous:state.contiguous && page.coverage.offset===state.read && page.coverage.total===run.coverage.total
+      && page.coverage.returned===(page.items?.length ?? 0)}),{read:0,complete:true,contiguous:true});
+  const allRowsRead=coverage.contiguous && finite(run.coverage.total) && run.coverage.total>=0 && coverage.read===run.coverage.total
     && nextOffset===null && latest.coverage.possibly_truncated===false && latest.possibly_truncated!==true;
+  const savedZero=location.filter==="selected" && allPages.every(page=>page.counts?.selected===0) && coverage.complete;
   const exactLocation=identityLocation(identity,location);
   async function readNext() {
     if (!hasRemote || inFlight.current) return;
@@ -144,7 +145,7 @@ function RunRows({run, identity, location, onLocation}: {run: SavedMethodRunDeta
     <dl className="grid grid-cols-2 gap-x-4 gap-y-2 border-b border-zinc-200 pb-3 text-xs sm:grid-cols-4 dark:border-zinc-700">{counts.map(([label,value])=><div key={String(label)}><dt className="text-zinc-600 dark:text-zinc-400">{label}</dt><dd className="mt-0.5 font-medium tabular-nums">{countText(value)}</dd></div>)}</dl>
     <p className="text-[11px] text-zinc-600 dark:text-zinc-400">{identity.method==="daily_picks"?"入选与拒绝均为原保存结果，不代表执行通过。":"各阶段按行计数，可能包含同股/同题材多行，不是递减漏斗。"} 运行、健康窗口与离线核验分别读取。</p>
     {run.data_state && <p className="text-[11px] text-zinc-600 dark:text-zinc-400">运行输入：{run.data_state}（原保存状态）；存档存在不等于输入完整。</p>}
-    {run.possibly_truncated && <p role="status" className="text-xs text-amber-700 dark:text-amber-300">{run.counts?.selected==null?"原入选总数未知；不能以当前行数冒充全集。":"原存档投影可能截断，不按当前行数替换原计数。"}</p>}
+    {!allRowsRead && <p role="status" className="text-xs text-amber-700 dark:text-amber-300">{run.counts?.selected==null?"原入选总数未知；不能以当前行数冒充全集。":"原存档投影可能截断，不按当前行数替换原计数。"}</p>}
     {(finite(run.criteria?.min_pick_score)||finite(run.criteria?.max_picks)) && <p className="text-[11px] text-zinc-600 dark:text-zinc-400">原入选条件：{finite(run.criteria?.min_pick_score)?`分线 ${run.criteria.min_pick_score}`:"分线未记录"} · {finite(run.criteria?.max_picks)?`容量 ${run.criteria.max_picks}`:"容量未记录"}；执行资格另行复核。</p>}
     <div className="flex flex-wrap gap-2 text-xs" aria-label="运行结果筛选">{(Object.keys(ROW_LABELS) as MethodRowFilter[]).map(filter=><button key={filter} type="button" data-action="secondary" aria-pressed={location.filter===filter} onClick={()=>onLocation({...exactLocation,filter,row:""})}>{ROW_LABELS[filter]}</button>)}</div>
     {matching.length===0 ? <p className="py-2 text-xs text-zinc-600 dark:text-zinc-400">{savedZero?"原批次已保存：0只入选。":"已读部分没有此类保存行"+(hasRemote?"，可继续下拉读取原批次":"")+"；不据此推断当时零入选或未运行。"}</p> : <ul className="divide-y divide-zinc-200 dark:divide-zinc-700">{incremental.shown.map(({row,id})=><li key={id} className="py-2 text-xs">
