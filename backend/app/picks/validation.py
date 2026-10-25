@@ -41,7 +41,7 @@ def _daily_rows(db, start, end):
     return days
 
 
-def selection_rows(db, start, end, *, symbol=None, daily_rows=None):
+def selection_rows(db, start, end, *, symbol=None, daily_rows=None, preserve_versions=False):
     entries = []
     days = _daily_rows(db, start, end) if daily_rows is None else daily_rows
     for day, row in days.items():
@@ -74,7 +74,7 @@ def selection_rows(db, start, end, *, symbol=None, daily_rows=None):
     for row in rows:
         e = _object(row.evidence)
         at = to_beijing(row.created_at.replace(tzinfo=timezone.utc) if row.created_at.tzinfo is None else row.created_at)
-        key = row.trade_date, row.symbol
+        key = (row.trade_date, row.symbol, row.strategy_version, row.feature_version) if preserve_versions else (row.trade_date, row.symbol)
         limit = e.get('effective_limit')
         if (key in seen or e.get('selection_entry_contract') != CONTRACT or e.get('within_display_capacity') != 1
                 or not isinstance(limit, (int, float)) or row.rank is None or not 1 <= row.rank <= limit
@@ -286,6 +286,49 @@ def _payoff(values):
                 drawdown_pct=None, drawdown_basis='缺少逐日完整账户净值，不能用重叠成交回合拼出账户回撤')
 
 
+def _version_identity(scope, method, feature):
+    method = method if isinstance(method, str) and method else None
+    feature = feature if isinstance(feature, str) and feature else None
+    return scope, method, feature
+
+
+def _selection_projection(entries, known_days, *, calendar, horizon):
+    values = [e['return_pct'] for e in entries if e['return_pct'] is not None]
+    by_day = defaultdict(list)
+    for entry in entries:
+        by_day[entry['date']].append(entry)
+    daily = []
+    for day in sorted(set(by_day) | set(known_days)):
+        members = by_day[day]
+        observed = [e['return_pct'] for e in members if e['return_pct'] is not None]
+        daily.append(dict(date=day, count=len(members), observed=len(observed),
+            mean_pct=mean(observed) if observed else None, median_pct=median(observed) if observed else None))
+    return dict(selection=dict(count=len(entries), observed=len(values), missing=len(entries)-len(values),
+                    mean_pct=mean(values) if values else None, median_pct=median(values) if values else None),
+                daily=daily, coverage=_coverage(entries, calendar=calendar, horizon=horizon))
+
+
+def _version_groups(entries, version_days, *, calendar, horizon):
+    groups = defaultdict(list)
+    for entry in entries:
+        groups[_version_identity(entry['scope'], entry.get('method_version'), entry.get('feature_version'))].append(entry)
+    result = []
+    for identity in sorted(set(groups) | set(version_days), key=str):
+        rows = groups[identity]
+        scope, method, feature = identity
+        observed_days = sorted({row['date'] for row in rows if row['return_pct'] is not None})
+        dates = sorted(set(version_days.get(identity, ())) | {row['date'] for row in rows})
+        result.append(dict(key=json.dumps(identity, ensure_ascii=False, separators=(',', ':')),
+            scope=scope, method_version=method, feature_version=feature,
+            version_state='recorded' if method and feature else 'missing', entry_ids=[row['id'] for row in rows],
+            window=dict(first_entry_date=dates[0] if dates else None, last_entry_date=dates[-1] if dates else None,
+                        observed_start=observed_days[0] if observed_days else None,
+                        observed_end=observed_days[-1] if observed_days else None,
+                        observed_days=len(observed_days), observed_dates=observed_days),
+            **_selection_projection(rows, dates, calendar=calendar, horizon=horizon)))
+    return result
+
+
 def validation_report(start, end, *, session_factory=None, calendar=None, horizon='d1_close', scope='all'):
     first, last = date.fromisoformat(start), date.fromisoformat(end)
     if start != first.isoformat() or end != last.isoformat():
@@ -300,15 +343,34 @@ def validation_report(start, end, *, session_factory=None, calendar=None, horizo
         calendar = known_trade_days()
     with sf() as db:
         daily_rows = _daily_rows(db, start, end)
-        entries = selection_rows(db, start, end, daily_rows=daily_rows)
+        entries = selection_rows(db, start, end, daily_rows=daily_rows, preserve_versions=True)
+        version_days = defaultdict(set)
+        if scope != 'intraday':
+            daily_entry_days = {entry['date'] for entry in entries if entry['scope'] == 'daily'}
+            for day, row in daily_rows.items():
+                # Only a genuinely saved empty list proves a zero-selection day.
+                # Nonempty entries carry their own original version below.
+                try:
+                    empty = json.loads(row.items) == []
+                except (ValueError, TypeError):
+                    empty = False
+                if empty and day not in daily_entry_days:
+                    contract = _object(_object(row.meta).get('selection_contract'))
+                    version_days[_version_identity('daily', contract.get('strategy_version'), contract.get('feature_version'))].add(day)
         known_days = set(daily_rows) if scope != 'intraday' else set()
         if scope != 'daily':
             from app.models.opportunity_learning import OpportunityDecisionRun
             from app.picks.opportunity_learning import FEATURE_VERSION
-            known_days.update(db.scalars(select(OpportunityDecisionRun.trade_date).where(
+            runs = db.execute(select(OpportunityDecisionRun.trade_date, OpportunityDecisionRun.strategy_version,
+                OpportunityDecisionRun.feature_version, OpportunityDecisionRun.rank_rows).where(
                 OpportunityDecisionRun.trade_date >= start, OpportunityDecisionRun.trade_date <= end,
-                OpportunityDecisionRun.scenario == 'intraday_opportunity', OpportunityDecisionRun.data_state == 'ready',
-                OpportunityDecisionRun.feature_version == FEATURE_VERSION)))
+                OpportunityDecisionRun.scenario == 'intraday_opportunity', OpportunityDecisionRun.data_state == 'ready').limit(50001)).all()
+            if len(runs) > 50000:
+                raise ValueError('运行归档过多，请缩短范围；未截断版本分母')
+            known_days.update(run.trade_date for run in runs if run.feature_version == FEATURE_VERSION)
+            for run in runs:
+                if run.rank_rows == 0:
+                    version_days[_version_identity('intraday', run.strategy_version, run.feature_version)].add(run.trade_date)
         from app.picks.opportunity_learning import read_effective_outcomes, PRICE_BASIS_VERSION
         outcomes = read_effective_outcomes(db, [e['snapshot_id'] for e in entries if e['snapshot_id']], horizon)
         trades = db.scalars(select(RealTrade).where(RealTrade.traded_at <= end).order_by(RealTrade.traded_at, RealTrade.id).limit(50001)).all()
@@ -332,12 +394,17 @@ def validation_report(start, end, *, session_factory=None, calendar=None, horizo
         e['observation_calendar_days'] = max(0, (last-date.fromisoformat(e['date'])).days)
     if scope != 'all':
         entries = [e for e in entries if e['scope'] == scope]
+    # Group before the default cross-source day/symbol deduplication. A daily
+    # method and an intraday method with the same names remain separate facts.
+    version_entries = [dict(entry, id=f"{entry['id']}@{entry['snapshot_id']}" if entry['scope']=='intraday' else entry['id'],
+                            selection_refs=[entry['id']]) for entry in entries]
+    version_groups = _version_groups(version_entries, version_days, calendar=calendar, horizon=horizon)
     unique = {}
     for e in entries:
         key = e['date'], e['symbol']
         if key not in unique:
             unique[key] = dict(e, selection_refs=[e['id']])
-        else:
+        elif e['id'] not in unique[key]['selection_refs']:
             unique[key]['selection_refs'].append(e['id'])
     entries = list(unique.values())
     def avg(v): return mean(v) if v else None
@@ -367,6 +434,7 @@ def validation_report(start, end, *, session_factory=None, calendar=None, horizo
             mean_pct=avg(returns), median_pct=med(returns)))
     coverage = _coverage(entries, calendar=calendar, horizon=horizon)
     return dict(start=start, end=end, scope=scope, horizon=horizon, coverage=coverage,
+        version_entries=version_entries, version_groups=version_groups,
         selection=dict(count=len(entries), observed=len(observed), missing=len(entries)-len(observed), mean_pct=avg(observed), median_pct=med(observed)),
         actual=dict(**_payoff(values), denominator=len(values), win_rate=sum(v > 0 for v in values)/len(values)*100 if values else None,
             mean_pct=avg(values), median_pct=med(values), wins=sum(v > 0 for v in values), losses=sum(v < 0 for v in values), flat=sum(v == 0 for v in values),

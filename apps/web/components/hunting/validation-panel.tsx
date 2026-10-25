@@ -2,8 +2,9 @@
 
 import { useExitPresence } from "@/hooks/use-exit-presence";
 import {plotSample} from "@/lib/plot-sampling";
-import { useMemo, useState } from "react";
-import { createSelectionValidationReader, type ValidationSelectionEntry, type TradeEpisode, type ValidationReport } from "@/lib/api/validation";
+import { useMemo, useState, type ReactNode } from "react";
+import { createSelectionValidationReader, type ValidationSelectionEntry, type TradeEpisode, type ValidationReport, type ValidationVersionGroup } from "@/lib/api/validation";
+import {versionObservation} from "@/lib/validation-read";
 import { useResource } from "@/hooks/use-resource";
 import { FilterMenu } from "@/components/ui/filter-menu";
 import { useSymbolDetail } from "@/components/detail/symbol-detail-context";
@@ -73,8 +74,10 @@ function EpisodeDetail({episode}: {episode: TradeEpisode}) {
   </div>;
 }
 
-export function ValidationContent({report, maintenance = false}: {report: ValidationReport; maintenance?: boolean}) {
-  const [mode, setMode] = useState<"selection" | "actual" | "execution">("selection");
+type ValidationMode = "selection" | "actual" | "execution";
+
+function ValidationBody({report, maintenance, mode, setMode, comparison}: {report: ValidationReport; maintenance: boolean;
+  mode: ValidationMode; setMode: (mode: ValidationMode) => void; comparison: ReactNode}) {
   const [picked, setPicked] = useState<string | null>(null);
   const [day, setDay] = useState<string | null>(null);
   const [coverageFilter, setCoverageFilter] = useState<string | null>(null);
@@ -89,6 +92,7 @@ export function ValidationContent({report, maintenance = false}: {report: Valida
   if (mode === "execution") return <>{modes}<ExecutionValidation start={report.start} end={report.end}/></>;
   return <>
     {modes}
+    {mode === "selection" && comparison}
     <div className="validation-overview" aria-live="polite"><div className="validation-overview-lead"><span>{mode === "selection" ? "原始入选记录" : "实际买入 · 清仓胜率"}</span><strong>{mode === "selection" ? report.selection.count : actual.win_rate == null ? "—" : `${actual.win_rate.toFixed(1)}%`}</strong><small>{mode === "selection" ? "同股跨日分别记录" : "仅统计资料齐全的清仓回合"}</small></div><div className="validation-summary">{(mode === "selection" ? [
       {label:"有效观察",value:report.selection.observed,unit:"条"},{label:"尚无有效结果",value:report.selection.missing,unit:"条"},
       {label:"平均涨跌",value:percent(report.selection.mean_pct),tone:sign(report.selection.mean_pct)},
@@ -123,6 +127,48 @@ export function ValidationContent({report, maintenance = false}: {report: Valida
     <section className="validation-method"><button type="button" aria-expanded={methodOpen} onClick={() => setMethodOpen(open => !open)}>如何读结果、怎样改进</button>{method.value && <div className="validation-expanded" data-open={method.active} inert={!method.active} aria-hidden={!method.active}><div><p>{report.basis.coverage}</p><p>入选数量来自现存档案。旧每日覆盖式存储无法还原全部轮次；没有记录的历史不补造。</p><p>先看同一入选时点的原依据，再比较盈利与亏损的样本。小样本、未成交、缺费用或缺源价不能证明战法有效。把握主升浪与缩窄范围须经过分时期的前向对照，不能从赢家倒推。</p><p>{report.basis.improvement}</p></div></div>}</section>
     <p className="validation-disclaimer">仅供投研与复盘，不构成买卖建议。</p>
   </>;
+}
+
+type VersionChoice = {context: string; a: string; b: string; view: "all" | "a" | "b"};
+function versionLabel(group: ValidationVersionGroup) {
+  return `${group.scope === "daily" ? "每日" : "盘中"} · ${group.method_version || "方法未记录"} / ${group.feature_version || "特征未记录"}`;
+}
+
+export function ValidationContent({report, maintenance = false}: {report: ValidationReport; maintenance?: boolean}) {
+  const context = `${report.start}/${report.end}/${report.scope}/${report.horizon}`;
+  const [mode, setMode] = useState<ValidationMode>("selection");
+  const [choice, setChoice] = useState<VersionChoice | null>(null);
+  const groups = report.version_groups ?? [];
+  const current = choice?.context === context ? choice : null;
+  const a = current ? groups.find(group => group.key === current.a) : groups[0];
+  const b = current ? groups.find(group => group.key === current.b) : groups[1];
+  const requested = current?.view === "a" ? a : current?.view === "b" ? b : undefined;
+  const projected = requested ? versionObservation(report, requested.key) : null;
+  const active = mode === "selection" && projected ? current?.view || "all" : "all";
+  const shown = active !== "all" && projected ? projected : report;
+  function choose(update: Partial<Omit<VersionChoice, "context">>) {
+    setChoice({context, a: a?.key || "", b: b?.key || "", view: current?.view || "all", ...update});
+  }
+  const differentWindows = a && b && JSON.stringify(a.window) !== JSON.stringify(b.window);
+  const comparison = groups.length > 0 ? <section className="validation-versions" aria-label="版本效果对照">
+    <header><h3>原版本对照</h3><button type="button" className="quiet-action" aria-pressed={active === "all"} onClick={() => choose({view:"all"})}>全部原入选</button></header>
+    <div className="validation-version-rows">{([{slot:"a", group:a}, {slot:"b", group:b}] as const).map(({slot,group}) => <div key={slot} className="validation-version-row" data-active={active === slot}>
+      <div className="validation-version-choice"><button type="button" className="quiet-action" aria-pressed={active === slot} disabled={!group} onClick={() => choose({view:slot})}>查看 {slot.toUpperCase()}</button>
+        <label><span className="sr-only">版本 {slot.toUpperCase()}</span><select aria-label={`版本 ${slot.toUpperCase()}`} value={group?.key || ""} onChange={event => choose({[slot]:event.target.value})}>
+          <option value="">请选择原版本</option>{groups.map(option => <option key={option.key} value={option.key}>{versionLabel(option)}</option>)}
+        </select></label></div>
+      {group ? <><dl aria-label={`${slot.toUpperCase()} 原观察摘要`}>
+        <div><dt>原记录</dt><dd>{group.selection.count}</dd></div><div><dt>有效</dt><dd>{group.selection.observed}</dd></div>
+        <div><dt>均值</dt><dd data-sign={sign(group.selection.mean_pct)}>{percent(group.selection.mean_pct)}</dd></div>
+        <div><dt>中位</dt><dd data-sign={sign(group.selection.median_pct)}>{percent(group.selection.median_pct)}</dd></div>
+      </dl><p className="validation-muted">{group.window.observed_start ? `有效入选日 ${group.window.observed_start} → ${group.window.observed_end} · ${group.window.observed_days} 日` : "尚无有效结果；不按零收益补齐"}{group.version_state === "missing" ? " · 原版本未完整记录，不能视为可比新版本" : ""}</p></>
+        : <p className="validation-muted">当前范围暂无另一组原版本，可调整日期或来源。</p>}
+    </div>)}</div>
+    <p className="validation-muted" aria-live="polite">当前查看：{active === "all" ? "全部原入选，同股按日去重" : `${active.toUpperCase()} · ${requested ? versionLabel(requested) : ""}`}。{differentWindows ? "两组实际覆盖日不同；" : ""}仅为已存观察，不证明版本因果或成交效果。</p>
+    {current && ((current.view === "a" && !a) || (current.view === "b" && !b)) && <p role="status" className="validation-muted">所选版本已不在当前范围，已恢复全部原入选。</p>}
+    {requested && !projected && <p role="alert" className="validation-muted">该版本原记录不完整，当前保留全部视图；请刷新后核对。</p>}
+  </section> : null;
+  return <ValidationBody key={`${context}/${mode}/${active === "all" ? "all" : requested?.key}`} report={shown} maintenance={maintenance} mode={mode} setMode={setMode} comparison={comparison}/>;
 }
 
 export function SelectionValidationPanel({maintenance = false}: {maintenance?: boolean} = {}) {

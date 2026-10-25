@@ -13,13 +13,10 @@
  *    **不可互相解释**。
  * 3. 核验结论（`verification`）缺失时如实说"尚无核验产物"，不得留白让人以为已验证。
  */
-import Link from "next/link";
-import { useState } from "react";
-import { StockLink } from "@/components/stock-link";
-import { IncrementalSentinel } from "@/components/ui/incremental-sentinel";
-import { useIncremental } from "@/hooks/use-incremental";
-import { dateTimeTextBJ } from "@/lib/format";
-import type { SavedStrategyRun, StrategyRegistryItem } from "@/lib/api/picks";
+import { useEffect, useState } from "react";
+import type { StrategyRegistryItem } from "@/lib/api/picks";
+import {MethodRunReader} from "./method-run-reader";
+import {methodRunUrl} from "./method-run-location";
 import { useResource } from "@/hooks/use-resource";
 import {ConditionList, ExplanationMap, NarrativeText} from "@/components/ui/explanation-map";
 
@@ -65,68 +62,6 @@ function StatusBadge({ status }: { status?: string }) {
   );
 }
 
-function countText(value: unknown) {
-  return typeof value === "number" && Number.isFinite(value) && value >= 0 ? value.toLocaleString("zh-CN") : "未记录";
-}
-
-const ROW_LABELS: Record<string, string> = { selected: "原入选", rejected: "拒绝存档", candidate: "候选", unknown: "待核" };
-const DECISION_LABELS: Record<string, string> = { passed: "通过", ranked: "已排序", rejected: "未过", blocked: "阻断", unknown: "待核" };
-
-function SavedRun({ run, method }: {run: SavedStrategyRun | null | undefined; method: string}) {
-  const [filter, setFilter] = useState("selected");
-  const items = run?.items ?? [];
-  const rows = items.filter(row => filter === "all" || row.state === filter);
-  const incremental = useIncremental(rows, {pageSize: 20, step: 20, resetKey: `${method}:${run?.source_version}:${filter}`});
-  if (!run || (run.state !== "saved" && run.state !== "partial")) return <div className="rounded-lg border border-zinc-200 p-3 text-xs dark:border-zinc-700">
-    <h3 className="font-medium">最近运行</h3>
-    <p className="mt-1 text-zinc-600 dark:text-zinc-400">{run?.reason || (run?.state === "error" ? "读取失败，当前运行未知。" : "尚无本版可读取的保存运行；不按页面读取时间制造运行记录。")}</p>
-    <p className="mt-1 text-zinc-600 dark:text-zinc-400">观察或已否决的方法不会因打开目录而启动。</p>
-  </div>;
-  const counts = method === "daily_picks"
-    ? [["候选母集", run.counts?.candidates], ["评分成功", run.counts?.scored], ["原入选", run.counts?.selected], ["拒绝存档", run.counts?.rejected_saved]]
-    : [["候选行", run.counts?.candidate_rows], ["排序行", run.counts?.rank_rows], ["硬门行", run.counts?.hard_gate_rows], ["原入选", run.counts?.selected]];
-  const hunting = method === "daily_picks" ? "/hunting?view=discover&sec=daily" : "/hunting?view=discover&sec=candidates";
-  return <section aria-label="最近保存运行" className="space-y-3">
-    <div className="flex flex-wrap items-baseline justify-between gap-2 border-b border-zinc-200 pb-2 dark:border-zinc-700">
-      <h3 className="text-sm font-medium">最近保存运行 <span className="ml-1 text-xs font-normal text-zinc-600 dark:text-zinc-400">{run.trade_date || "日期未记录"}</span></h3>
-      <span className="text-[11px] text-zinc-600 dark:text-zinc-400">{run.run_at ? dateTimeTextBJ(run.run_at) : "运行时刻未记录"} · {typeof run.elapsed_ms === "number" && Number.isFinite(run.elapsed_ms) ? `${run.elapsed_ms}ms` : "耗时未记录"}</span>
-    </div>
-    {run.state === "partial" && <p role="status" className="text-xs text-amber-700 dark:text-amber-300">部分存档不可读取：{run.reason || "原始内容不完整"}；未知计数不按 0 处理。</p>}
-    <dl className="grid grid-cols-2 gap-x-4 gap-y-2 border-b border-zinc-200 pb-3 text-xs sm:grid-cols-4 dark:border-zinc-700">
-      {counts.map(([label,value]) => <div key={String(label)}><dt className="text-zinc-600 dark:text-zinc-400">{label}</dt><dd className="mt-0.5 font-medium tabular-nums">{countText(value)}</dd></div>)}
-    </dl>
-    <p className="text-[11px] text-zinc-600 dark:text-zinc-400">{method === "daily_picks" ? "入选与拒绝均为原保存结果，不代表执行通过。" : "各阶段按行计数，可能包含同股/同题材多行，不是递减漏斗。"} 运行、健康窗口与离线核验分别读取，不能当作共同版本。</p>
-    {run.data_state && <p className="text-[11px] text-zinc-600 dark:text-zinc-400">运行输入：{run.data_state}（原保存状态）；存档存在不等于输入完整或执行通过。</p>}
-    {run.possibly_truncated && <p role="status" className="text-xs text-amber-700 dark:text-amber-300">此投影可能截断，{run.counts?.selected == null ? "原入选总数未知；不能以当前行数冒充全集。" : "以下存档行不是全集；原保存计数仍按各自范围展示。"}</p>}
-    {(run.criteria?.min_pick_score != null || run.criteria?.max_picks != null) && <p className="text-[11px] text-zinc-600 dark:text-zinc-400">原入选条件：{run.criteria?.min_pick_score != null ? `分线 ${run.criteria.min_pick_score}` : "分线未记录"} · {run.criteria?.max_picks != null ? `容量 ${run.criteria.max_picks}` : "容量未记录"}；执行资格另行复核。</p>}
-    <div className="flex flex-wrap gap-2 text-xs" aria-label="运行结果筛选">
-      {["selected","rejected","candidate","unknown","all"].map(value => <button key={value} type="button" data-action="secondary" aria-pressed={filter===value} onClick={() => setFilter(value)}>{value === "all" ? "全部存档行" : ROW_LABELS[value]}</button>)}
-    </div>
-    {rows.length === 0 ? <p className="py-2 text-xs text-zinc-600 dark:text-zinc-400">当前筛选没有保存行，可切换核对其他阶段；不是新运行或成交结论。</p> : <ul className="divide-y divide-zinc-200 dark:divide-zinc-700">
-      {incremental.shown.map((row,index) => <li key={`${row.snapshot_id || row.symbol}:${row.state}:${index}`} className="py-2 text-xs">
-        <div className="flex flex-wrap items-baseline gap-x-2 gap-y-1">
-          {/^\d{6}$/.test(row.symbol) ? <StockLink symbol={row.symbol} className="font-medium">{row.name || row.symbol}</StockLink> : <span className="font-medium">{row.name || row.symbol || "证券未记录"}</span>}
-          <span className="font-mono text-[10px] text-zinc-600 dark:text-zinc-400">{row.symbol}</span>
-          <span className="text-[11px] text-zinc-600 dark:text-zinc-400">{ROW_LABELS[row.state] || row.state}</span>
-          {row.stage && <span className="text-[11px] text-zinc-600 dark:text-zinc-400">{row.stage === "hard_gate" ? "硬门" : row.stage === "rank" ? "排序" : row.stage}：{row.decision ? DECISION_LABELS[row.decision] || `未识别（${row.decision}）` : "未记录"}</span>}
-          <span className="ml-auto tabular-nums">{typeof row.score === "number" && Number.isFinite(row.score) ? `原分 ${row.score}` : "未保存分数"}</span>
-        </div>
-        <p className="mt-1 break-words text-zinc-600 dark:text-zinc-400">{row.reason || (Object.keys(row.basis || {}).length > 0 ? "原评分依据已保存，可展开核对；简短理由未记录。" : "原存档没有简短理由，不能据此推定通过。")}</p>
-        {(Object.keys(row.basis || {}).length > 0 || row.snapshot_id) && <details className="mt-1 text-[11px] text-zinc-600 dark:text-zinc-400"><summary className="cursor-pointer">核对原依据与身份</summary>
-          {Object.entries(row.basis || {}).map(([key,value]) => <p key={key} className="mt-1 break-words">{key}：{value}</p>)}
-          {row.snapshot_id && <p className="mt-1 break-all font-mono">快照 {row.snapshot_id}</p>}
-        </details>}
-      </li>)}
-    </ul>}
-    <IncrementalSentinel sentinelRef={incremental.sentinelRef} visible={Math.min(incremental.visible,rows.length)} total={rows.length} onLoadMore={incremental.loadMore}/>
-    <div className="flex flex-wrap gap-3 border-t border-zinc-200 pt-2 text-xs dark:border-zinc-700">
-      <Link href={hunting}>当前名单与完整研究</Link><Link href="/hunting?view=validation">执行与成交核对</Link>
-      <Link href={`/agent?area=research&tab=review${run.trade_date ? `&date=${encodeURIComponent(run.trade_date)}` : ""}`}>同日复盘</Link>
-    </div>
-    <details className="text-[10px] text-zinc-600 dark:text-zinc-400"><summary className="cursor-pointer">运行版本与范围</summary><p className="mt-1 break-all">来源版本：{run.source_version || "未记录"}</p><p>方法版本：{run.strategy_version || "未记录"}</p><p>仅保存选股事实，不是实际委托、成交或方法有效性证明。</p></details>
-  </section>;
-}
-
 export function StrategyHealthTab() {
   const health = useResource(getStrategyHealth, { marketHours: false });
   const registryResource = useResource(getStrategyRegistry, { marketHours: false });
@@ -135,6 +70,15 @@ export function StrategyHealthTab() {
   const [composing,setComposing] = useState(false);
   const [lifecycle,setLifecycle] = useState("all");
   const [chosen,setChosen] = useState(() => typeof window === "undefined" ? "" : new URLSearchParams(window.location.search).get("method") || "");
+  useEffect(() => {
+    const sync = () => setChosen(new URLSearchParams(window.location.search).get("method") || "");
+    window.addEventListener("popstate", sync);
+    return () => window.removeEventListener("popstate", sync);
+  }, []);
+  function chooseMethod(key: string) {
+    window.history.pushState({}, "", methodRunUrl(window.location.pathname, window.location.search, key));
+    setChosen(key);
+  }
   const items = health.data?.strategies ?? [];
   const registry = registryResource.data ?? [];
   const healthByKey = new Map(items.map(row => [row.strategy_key,row]));
@@ -173,14 +117,14 @@ export function StrategyHealthTab() {
     {directory.length===0 && <p className="text-xs text-zinc-600 dark:text-zinc-400">{health.data===undefined && registryResource.data===undefined ? "正在读取方法与健康结果…" : "暂无策略键"}</p>}
     {directory.length>0 && visible.length===0 && <p className="text-xs text-zinc-600 dark:text-zinc-400">没有匹配方法，清空搜索或切换生命周期即可查看原登记。</p>}
     {selected && <div className="grid min-w-0 gap-4 lg:grid-cols-[minmax(12rem,.7fr)_minmax(0,1.6fr)]">
-      <nav aria-label="方法目录"><ul className="space-y-1">{visible.map(row => <li key={row.key}><button type="button" aria-pressed={row.key===selected.key} onClick={() => setChosen(row.key)}
+      <nav aria-label="方法目录"><ul className="space-y-1">{visible.map(row => <li key={row.key}><button type="button" aria-pressed={row.key===selected.key} onClick={() => chooseMethod(row.key)}
         className={`w-full rounded-lg border px-3 py-2 text-left text-xs ${row.key===selected.key ? "border-current bg-zinc-100 dark:bg-zinc-800" : "border-transparent hover:bg-zinc-100 dark:hover:bg-zinc-800"}`}>
         <span className="block font-medium">{row.name}</span><span className="mt-0.5 block text-[10px] text-zinc-600 dark:text-zinc-400">{LIFECYCLE_LABEL[row.lifecycle] || "状态未记录"} · {STATUS_META[row.health?.status || "unknown"]?.label || "未知"}</span>
       </button></li>)}</ul></nav>
       <div className="min-w-0 space-y-3" aria-label="当前方法详情">
         <div className="flex flex-wrap items-center gap-2"><span className="font-mono text-[11px]">{selected.key}</span><StatusBadge status={h?.status}/><span className="text-[11px] text-zinc-600 dark:text-zinc-400">生命周期：{LIFECYCLE_LABEL[selected.lifecycle] || "未记录"}</span></div>
         {selected.note && <p className="text-xs leading-relaxed text-zinc-600 dark:text-zinc-400">{selected.note}</p>}
-        <SavedRun key={selected.key} method={selected.key} run={record?.runtime}/>
+        <MethodRunReader key={selected.key} method={selected.key}/>
         <section className="space-y-2 border-t border-zinc-200 pt-3 dark:border-zinc-700" aria-label="健康与核验">
           <h3 className="text-xs font-medium">滚动健康与独立核验</h3>
           {(record?.basis || h?.basis) && <p className="text-[11px] text-zinc-600 dark:text-zinc-400" title="market_neutral 测 alpha 衰减；absolute 测策略自身变差，两者不可互相解释">口径：<span className="font-mono">{record?.basis || h?.basis}</span></p>}

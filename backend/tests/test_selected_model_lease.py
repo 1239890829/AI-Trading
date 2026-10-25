@@ -225,7 +225,7 @@ class _Recorder:
 
 @pytest.mark.parametrize("concurrency", [1, 3])
 def test_controlled_twelve_stage_accounted_runner_preserves_all_calls(env, monkeypatch, concurrency):
-    """Scheduling measurement only; the delayed runner is not a real model graph."""
+    """Owned-call rendezvous only; this fixture is not a real model graph."""
     import asyncio
     from pathlib import Path
     from app.services import tradingagents_driver as driver
@@ -236,6 +236,7 @@ def test_controlled_twelve_stage_accounted_runner_preserves_all_calls(env, monke
         def __init__(self):
             self.active, self.peak, self.calls = 0, 0, 0
             self.lock = threading.Lock()
+            self.entered = threading.Barrier(concurrency, timeout=5)
         def method_identity(self):
             return {"provider": "codex_cli", "model": TRADINGAGENTS_SELECTED_MODEL, "effort": "medium"}
         def infer(self, messages, schema, *, mark_launch, timeout, role=None):
@@ -245,7 +246,10 @@ def test_controlled_twelve_stage_accounted_runner_preserves_all_calls(env, monke
                 self.calls += 1
                 self.peak = max(self.peak, self.active)
             try:
-                time.sleep(0.04)
+                # All admitted calls must actually enter before any can finish.
+                # A sleep cannot prove overlap under a loaded host; a missing
+                # driver/lease slot instead breaks this bounded rendezvous.
+                self.entered.wait()
                 return {"structured_output": {"content": "controlled runner original", "tool_calls": []},
                         "usage": {"input_tokens": 2, "output_tokens": 1}}
             finally:

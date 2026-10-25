@@ -25,10 +25,21 @@ export interface ValidationReport {
     strata?: {dimension:string;label:string;scope:string;method_version:string|null;feature_version:string|null;count:number;observed:number;observed_days:number;mean_pct:number|null;median_pct:number|null}[];
     versions: {scope: string; method_version: string | null; feature_version: string | null; version_state: string; count: number; observed: number; observed_days: number; mean_pct: number | null; median_pct: number | null}[]; basis: string};
   entries: ValidationSelectionEntry[]; episodes: TradeEpisode[];
+  /** Original source lanes before the all-sources day/symbol deduplication. */
+  version_entries?: ValidationSelectionEntry[];
+  version_groups?: ValidationVersionGroup[];
   daily: {date: string; count: number; observed: number; mean_pct: number | null; median_pct: number | null}[];
   win_curve: {date: string; episode_id: number; denominator: number; win_rate: number; mean_pct: number; median_pct: number}[];
   cohorts: {reason: string; total: number; denominator: number; wins: number; losses: number; mean_pct: number | null; median_pct: number | null}[];
   basis: {actual: string; selection: string; coverage: string; improvement: string};
+}
+export interface ValidationVersionGroup {
+  key: string; scope: "daily" | "intraday"; method_version: string | null; feature_version: string | null;
+  version_state: "recorded" | "missing"; entry_ids: string[];
+  selection: ValidationReport["selection"]; daily: ValidationReport["daily"];
+  coverage: NonNullable<ValidationReport["coverage"]>;
+  window: {first_entry_date: string | null; last_entry_date: string | null;
+    observed_start: string | null; observed_end: string | null; observed_days: number; observed_dates?: string[]};
 }
 export async function getSelectionValidation(start: string, end: string, horizon = "d1_close", scope = "all", options: ReadOptions = {}) {
   return (await getJson<ValidationReport>(`/api/picks/validation?${new URLSearchParams({start, end, horizon, scope})}`, 15_000, options)).data;
