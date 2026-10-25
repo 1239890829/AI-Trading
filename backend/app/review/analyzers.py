@@ -233,11 +233,11 @@ class RulesAnalyzer:
         judgements: list[str] = []
         evidence: dict = {}
 
-        findings.append(f"当日委托 {t.trade_count} 笔")
+        findings.append(f"报告日新建委托 {t.trade_count} 笔（状态为报告采集时所见，不等于当日新增成交）")
         if t.trade_count == 0:
-            judgements.append("当日无操作，无需评估执行偏差")
+            judgements.append("报告日无新建委托；不能据此断言当日没有成交、撤单或其他后续变化")
             return DimensionResult(
-                key="trades", title=self._TITLES["trades"], status="ok",
+                key="trades", title=self._TITLES["trades"], status="degraded" if t.gaps else "ok",
                 findings=findings, judgements=judgements, evidence=evidence,
                 gaps=t.gaps,
             )
@@ -304,17 +304,10 @@ class RulesAnalyzer:
         elif t.positions:
             findings.append(f"{len(t.positions)} 只持仓但无最新价，浮盈不可用")
 
-        # 亏损单占比
+        # Order-limit deviations measure execution, not acquisition-cost profit.
         if filled:
-            loss = sum(1 for o in filled if o.side == "sell" and o.filled_price
-                       and o.filled_price < o.price)
-            loss_ratio = loss / len(filled)
-            evidence["loss_ratio"] = round(loss_ratio, 3)
-            if loss_ratio > th.loss_trade_ratio_alert:
-                judgements.append(
-                    f"卖出亏损占比 {loss_ratio:.0%} 超过 {th.loss_trade_ratio_alert:.0%}，"
-                    "择时或选股环节可能存在系统性偏差"
-                )
+            evidence["loss_ratio"] = None
+            findings.append("原委托未提供卖出成本批次，亏损单占比不可评；未以成交价与委托价差代替")
 
         status = "degraded" if t.gaps else "ok"
         return DimensionResult(
@@ -330,6 +323,12 @@ class RulesAnalyzer:
         judgements: list[str] = []
         evidence: dict = {}
 
+        if m.contract_version == "date_bound_v1":
+            evidence["provenance"] = {key: value.model_dump() for key, value in m.provenance.items()
+                                      if key != "provider_health"}
+            partial = [f"{key}：{value.reason}" for key, value in m.provenance.items()
+                       if value.state == "partial" and key != "provider_health"]
+            findings.extend(partial)
         # 指数
         if m.indices:
             for q in m.indices[:4]:
@@ -465,6 +464,11 @@ class RulesAnalyzer:
         # 不冒充"健康"（三态纪律）。今天的四类静默失败共同证明：不主动核对
         # 数据链，data_issue 归因永远是盲区。
         ph = data.market.provider_health
+        if ph is not None and data.market.contract_version == "date_bound_v1":
+            proof = data.market.provenance.get("provider_health")
+            if proof is not None:
+                evidence["provider_health_observation"] = proof.model_dump()
+                findings.append("以下数据链健康是报告生成时刻的运行快照，不代表报告交易日历史健康")
         if ph is not None:
             breakers = ph.get("breakers") or {}
             open_breakers = sorted(

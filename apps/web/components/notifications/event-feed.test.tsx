@@ -1,7 +1,7 @@
 import { act, cleanup, fireEvent, render, screen } from "@testing-library/react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { getImpactEvents, type ImpactEvent } from "@/lib/api";
-import { EventFeed } from "./event-feed";
+import { ImpactEventFeed as EventFeed } from "./event-feed";
 
 vi.mock("@/lib/api", () => ({ getImpactEvents: vi.fn() }));
 vi.mock("@/components/news-modal", () => ({ NewsModal: () => null }));

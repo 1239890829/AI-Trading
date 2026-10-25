@@ -158,6 +158,17 @@ it("shows the recorded decision and actual unknown blocker without turning a pas
   expect(blockers.textContent).not.toContain("报价通过");
 });
 
+it.each(["rejected", "unknown"])("compact original decision %s retains its reason without converting unknown to rejection", decision => {
+  render(<PickCard compact item={fromDailyPick({...base, execution: {
+    contract_version: "execution-facts-v1", decision_id: "OD-source", decision_version: "ODV-source",
+    strategy_version: "s1", feature_version: "f1",
+    reference_entry: {price:40.36,as_of:null,source:"daily_pick_set",semantics:"reference_only_not_fill"},
+    executable_snapshot: {state:"ready",price:40.5,change_pct:2,semantics:"action_time_quote_not_fill"},
+    gate_decision: decision, gate_reason:"来源等待核实",
+  }})}/>);
+  expect(screen.getByText(`${decision === "rejected" ? "本次阻断" : "本次待核"}：来源等待核实`)).toBeTruthy();
+});
+
 /** 盘中名单 · 题材手风琴（OpportunityStock）：无 tier / 无 pick_basis，只有官方涨停原因。 */
 const accordionPath: OpportunityStock = {
   symbol: "600111",

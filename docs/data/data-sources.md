@@ -658,3 +658,10 @@ Tencent搜索原始五列为市场、六位代码、Unicode证券名称、拼音
 ### 2026-10-23 全市场普通源失败与备源边界
 
 新浪精确计数/去重完整性门继续执行；现役批量行情备源除了限流，亦可在ProviderError/httpx失败且当前快照unavailable/stale时尝试一次。已有新鲜degraded不重复全量补取。备源只复用既有股票名单，动态事实来自本轮合格报价，90%覆盖、盘中新鲜度和真实源钟均不放松；缺项不填旧值，失败不冒充有效空或完整快照。普通故障不写成WAF限流。采集期限与请求/共享owner边界见[性能§35](../system/runtime-performance.md#35-2026-10-23-全市场漏页与成员冷启动承接)，没有新增数据商、单股订阅或收费来源。
+
+
+## 2026-10-25 官方宏观RSS与只读新闻补源
+
+已核美联储[官方RSS](https://www.federalreserve.gov/feeds/feeds.htm)及[使用说明](https://www.federalreserve.gov/disclaimer.htm)：一般正文属public domain，须注明来源，第三方内容/徽标不在本次复制范围。仅固定货币政策RSS，沿原flash loop每900秒读取；不跟跳转或正文外链，512KiB/30项/近30日，HTTP总截止8秒；重复原ID/hash幂等，修订追加，源发布/接收/可用时刻分开，不补历史首见。`official_news_enabled`可停用；`source_snapshot`只读运行健康和feed窗口，不冒全历史。
+
+此源零股票/题材方向，仅宏观事实读者；自动LLM候选明确排除，原选股评分与通知资格不变。HTTP200实抓不证明长期可用。金十[官方MCP](https://mcp.jin10.com/app/doc.html)存在，但要求Token、免费额度与留存/展示条件未知，未安装/创建凭据/接入；BLS RSS本次403，ECB MID内容偏支付系统且不匹配消费者，均排除。原行情源顺序、费用/风控不变。

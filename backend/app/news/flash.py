@@ -556,5 +556,11 @@ async def flash_news_loop(app, *, stop: asyncio.Event) -> None:
                 log.info("flash news: +%d new events", n)
         except Exception:  # noqa: BLE001 —— 常驻 loop 永不自灭
             log.exception("flash news: poll failed")
+        from app.news.official import poll_if_due
+
+        await poll_if_due(app)
+    from app.news.official import aclose as close_official
+
+    await close_official()
     await aclose()
     log.info("flash news loop stopped")

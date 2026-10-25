@@ -579,7 +579,9 @@ function CompactPickSummary({item, scores, reading, positionLabel, dailyEvidence
         {field && !field.metric && <p>原规则分，非上涨概率；{field.measured ? field.state === "partial" ? "依据仅部分取得" : field.state === "valid_empty" ? "原来源为有效空集" : "原依据读取成功" : "原数值是待核或计算占位，不作为实测分"}。</p>}
       </details>}
     </section>
-    <p className={compactStyles.limits} title={reading.limit}>留意：{readerExcerpt(reading.limit, 40)}</p>
+    {!readError && item.execution?.gate_decision !== "passed" && item.execution?.gate_reason
+      ? <p className={compactStyles.limits} title={item.execution.gate_reason}>{item.execution.gate_decision === "rejected" ? "本次阻断" : "本次待核"}：{readerExcerpt(item.execution.gate_reason, 72)}</p>
+      : <p className={compactStyles.limits} title={reading.limit}>留意：{readerExcerpt(reading.limit, 40)}</p>}
     {(item.execution || item.stopLoss || item.buyRange || item.score != null) && <div className={compactStyles.reference}>
       {item.execution && <span title={`${item.execution.gate_reason || "原复核"}；${item.execution.decision_id} · ${item.execution.decision_version}；不是成交`}>{readError ? "执行复核待读取" : executionState !== "ready" ? `执行快照${executionText || "未判定"}` : item.execution.gate_decision === "passed" ? "执行复核通过" : "执行复核未通过"}</span>}
       {item.score != null && <span title="原综合筛选分，不是上涨概率">综合 {fmt(item.score, 1)}</span>}

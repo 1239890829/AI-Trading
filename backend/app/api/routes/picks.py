@@ -438,6 +438,14 @@ async def picks_strategy_registry() -> dict:
 
     与 `docs/strategy/strategy-registry.md` §1 总表一致（由测试守卫）。
     """
-    from app.picks.strategy_registry import list_strategy_keys
+    from app.picks.strategy_registry import list_strategy_keys, saved_method_runs
 
-    return {"data": {"strategies": list_strategy_keys()}, "meta": {}}
+    try:
+        runs = await asyncio.to_thread(saved_method_runs, get_session_factory())
+    except Exception:
+        log.warning("saved method runs unavailable", exc_info=True)
+        runs = {key: {"state": "error", "reason": "已存运行读取失败，未当作零命中"}
+                for key in ("daily_picks", "intraday_watch")}
+    items = [{**item, **({"runtime": runs[item["key"]]} if item["key"] in runs else {})}
+             for item in list_strategy_keys()]
+    return {"data": {"strategies": items}, "meta": {}}

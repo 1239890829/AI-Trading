@@ -1,7 +1,7 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { cleanup, fireEvent, render, screen } from "@testing-library/react";
 import type { ImpactEvent } from "@/lib/api";
-import { EventsTab } from "./events-tab";
+import { ImpactEventsView as EventsTab } from "./events-tab";
 
 afterEach(() => {cleanup(); detail.open.mockClear();});
 const detail = vi.hoisted(() => ({open: vi.fn()}));

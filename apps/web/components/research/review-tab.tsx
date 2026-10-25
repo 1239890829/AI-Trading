@@ -1,12 +1,13 @@
 "use client";
 
-import { useCallback, useEffect, useRef, useState } from "react";
+import { useCallback, useEffect, useId, useRef, useState } from "react";
 import { Panel } from "@/components/panel";
 import { useResource } from "@/hooks/use-polling-fetch";
 import {ConditionList} from "@/components/ui/explanation-map";
 import {ReaderBrief, ResearchDisclosure} from "@/components/ui/reader-brief";
 import {dateTimeTextBJ} from "@/lib/format";
 import {readerExcerpt, readerCautions} from "@/lib/reader-copy";
+import {MarketReview} from "./market-review";
 import "./review-layout.css";
 import {
   ApiError,
@@ -257,7 +258,7 @@ function ActionItemDispose({
   );
 }
 
-function ReportDetail({
+function ImprovementReport({
   report,
   onDisposed,
   allowDispose,
@@ -325,6 +326,28 @@ function ReportDetail({
   );
 }
 
+function ReportDetail({report, previousDate, ...props}: {
+  report: ReviewReportDetail;
+  previousDate?: string;
+  allowDispose: boolean;
+  readError?: boolean;
+  onDisposed: () => void;
+}) {
+  const [chosenView, setChosenView] = useState<"market" | "improvement" | null>(null);
+  // Maintenance opens its existing controls; reports without structured data retain
+  // the complete original reader rather than becoming an empty new surface.
+  const view = chosenView ?? (props.allowDispose || !report.data ? "improvement" : "market");
+  return <div className="review-perspectives">
+    <div className="review-view-switch" role="group" aria-label="复盘阅读视角">
+      <button type="button" aria-pressed={view === "market"} onClick={() => setChosenView("market")}>市场复盘</button>
+      <button type="button" aria-pressed={view === "improvement"} onClick={() => setChosenView("improvement")}>检查与改进</button>
+      <span>{report.data ? "同一份保存报告，两种阅读方式" : "旧报告仅保留原检查记录"}</span>
+    </div>
+    <div hidden={view !== "market"}><MarketReview key={`${report.review_id}:${report.generated_at}`} report={report} previousDate={previousDate} active={view === "market"}/></div>
+    <div hidden={view !== "improvement"}><ImprovementReport report={report} {...props}/></div>
+  </div>;
+}
+
 /**
  * @param focusDate 深链日期（/research?tab=review&date=YYYY-MM-DD，助手一键跳转用）。
  *   命中报告列表则展开它；列表里没有也照样尝试拉一次（可能未生成 → detail 为 null，
@@ -339,6 +362,8 @@ export function ReviewTab({ focusDate, allowDispose = false }: { focusDate?: str
   const error = list.error instanceof Error ? list.error.message : list.error ? "读取失败" : null;
   // undefined follows the requested date/latest report; null explicitly closes the detail.
   const [selectedDate, setSelectedDate] = useState<string | null | undefined>();
+  const [dateQuery, setDateQuery] = useState("");
+  const dateQueryId = useId();
   const openDate = selectedDate === undefined ? requestedDate ?? reports?.[0]?.trade_date ?? null : selectedDate;
   const detailResource = useDispositionResource(async () => {
     try { return await getReviewReport(openDate!); } catch (error) {
@@ -346,7 +371,11 @@ export function ReviewTab({ focusDate, allowDispose = false }: { focusDate?: str
       throw error;
     }
   }, openDate, !!openDate);
-  const detail = detailResource.data ?? null;
+  const receivedDetail = detailResource.data ?? null;
+  const identityMismatch = !!receivedDetail && receivedDetail.trade_date.replaceAll("-", "") !== openDate?.replaceAll("-", "");
+  const detail = identityMismatch ? null : receivedDetail;
+  const previousDate = openDate ? reports?.map(r => r.trade_date).filter(date => date.replaceAll("-", "") < openDate.replaceAll("-", "")).sort((a,b) => b.replaceAll("-", "").localeCompare(a.replaceAll("-", "")))[0] : undefined;
+  const filteredReports = reports?.filter(r => !dateQuery.trim() || `${r.trade_date} ${r.summary}`.toLowerCase().includes(dateQuery.trim().toLowerCase()) || r.trade_date.replaceAll("-", "").includes(dateQuery.replaceAll("-", "").trim()));
   const toggle = useCallback((date: string) => setSelectedDate(openDate === date ? null : date), [openDate]);
   const reloadAfterDispose = useCallback(() => {
     list.refresh(); effectiveness.refresh(); detailResource.refresh();
@@ -373,6 +402,7 @@ export function ReviewTab({ focusDate, allowDispose = false }: { focusDate?: str
       {error && <p role="alert" className="px-4 py-2 text-xs text-amber-800 dark:text-amber-300">报告列表刷新失败，保留上次读取：{error} <button onClick={list.refresh}>重试列表</button></p>}
     <div className={`review-layout${allowDispose ? " review-layout-with-disposition" : ""}`} role="region" aria-label="报告索引、正文与处置阅读区" tabIndex={0}>
       <Panel title="复盘报告（冻结版本）" className="review-index" bodyClassName="review-index-scroll overflow-auto">
+        {!!reports.length && <div className="review-date-search"><label htmlFor={dateQueryId}>查找日期或原摘要</label><input id={dateQueryId} type="search" value={dateQuery} onChange={event => setDateQuery(event.target.value)} placeholder="日期 / 关键词"/>{dateQuery && <button type="button" onClick={() => setDateQuery("")}>清除筛选</button>}</div>}
         {requestedDate && !reports.some(r => r.trade_date === requestedDate) && <div className="px-4 py-3 text-sm"><button aria-pressed={openDate === requestedDate} onClick={() => setSelectedDate(requestedDate)}>{requestedDate} 指定报告</button></div>}
         {reports.length === 0 ? (
           <p className="px-4 py-8 text-sm text-zinc-600 dark:text-zinc-400">
@@ -380,7 +410,7 @@ export function ReviewTab({ focusDate, allowDispose = false }: { focusDate?: str
           </p>
         ) : (
           <div className="divide-y divide-zinc-100 dark:divide-zinc-800/60">
-            {reports.map((r) => (
+            {filteredReports?.map((r) => (
               <button key={r.review_id}
                 onClick={() => toggle(r.trade_date)}
                 aria-pressed={openDate === r.trade_date}
@@ -391,11 +421,12 @@ export function ReviewTab({ focusDate, allowDispose = false }: { focusDate?: str
                   <span className="text-zinc-900 dark:text-zinc-100" title={r.summary}>{readerExcerpt(r.summary,64)}</span>
                 </div>
                 <div className="mt-1 text-xs text-zinc-600 dark:text-zinc-400">
-                  缺口 {r.gap_count} · 行动项 {r.action_item_count}
+                  原记录缺口 {r.gap_count} · 改进 {r.action_item_count}
                   {r.model_degraded && <span className="ml-2 text-amber-800 dark:text-amber-400">模型降级</span>}
                 </div>
               </button>
             ))}
+            {!filteredReports?.length && <p className="px-4 py-5 text-xs text-zinc-600 dark:text-zinc-400">没有匹配的已存报告，当前正文保持原日期。</p>}
           </div>
         )}
       </Panel>
@@ -403,9 +434,9 @@ export function ReviewTab({ focusDate, allowDispose = false }: { focusDate?: str
       <Panel title={openDate ? `${openDate} 复盘正文` : "复盘正文"} className="review-detail" bodyClassName="review-detail-scroll overflow-auto">
         {allowDispose && detail && (list.inFlight || detailResource.inFlight) && <p role="status" className="px-4 py-2 text-xs text-zinc-600 dark:text-zinc-400">正在核对当前处置状态，暂不可操作。</p>}
         {!!detailResource.error && detail && <p role="alert" className="px-4 py-2 text-xs text-amber-800 dark:text-amber-300">正文刷新失败，保留上次报告；当前处置状态待确认。<button onClick={detailResource.refresh}>重试正文</button></p>}
-        {openDate ? detail ? <ReportDetail report={detail} allowDispose={allowDispose} readError={list.reading || detailResource.reading || !!list.error || !!detailResource.error} onDisposed={reloadAfterDispose} /> : (
+        {openDate ? detail ? <ReportDetail report={detail} previousDate={previousDate} allowDispose={allowDispose} readError={list.reading || detailResource.reading || !!list.error || !!detailResource.error} onDisposed={reloadAfterDispose} /> : (
           <div className="px-4 py-4 text-sm text-zinc-600 dark:text-zinc-400">
-            {detailResource.error ? <><p role="alert">{openDate} 报告读取失败。</p><button onClick={detailResource.refresh}>重试读取</button></> : detailResource.pending ? <p role="status">详情加载中…</p> : <p role="status">{requestedDate === openDate && !reports.some(r => r.trade_date === openDate) ? "指定日期尚无报告" : `${openDate} 尚无报告，不回退成其它日期。`}</p>}
+            {identityMismatch ? <><p role="alert">返回报告日期与所选日期不符，未展示该返回。</p><button onClick={detailResource.refresh}>重试读取</button></> : detailResource.error ? <><p role="alert">{openDate} 报告读取失败。</p><button onClick={detailResource.refresh}>重试读取</button></> : detailResource.pending ? <p role="status">详情加载中…</p> : <p role="status">{requestedDate === openDate && !reports.some(r => r.trade_date === openDate) ? "指定日期尚无报告" : `${openDate} 尚无报告，不回退成其它日期。`}</p>}
           </div>
         ) : <p className="px-4 py-4 text-sm text-zinc-600 dark:text-zinc-400">从报告列表选择日期，查看冻结记录与改进项。</p>}
       </Panel>

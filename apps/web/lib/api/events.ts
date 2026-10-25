@@ -85,7 +85,27 @@ export interface RankFactors {
   subtotal?: number;
 }
 
+export interface SavedSelectionLink {
+  symbol: string; name: string; trade_date: string; scope: "daily" | "intraday";
+  source_version: string | null; relation: "original_evidence" | "same_symbol";
+  reference_state?: "current_version" | "different_version" | "unknown";
+  original_event_refs: {event_id: number; version_id?: number | null; observation_id?: number | null}[];
+}
+export interface EventObservationRow {
+  id: number; source: string; title: string; summary: string | null; url: string | null;
+  source_published_at: string | null; received_at: string; available_at: string;
+  change_kind: string; content_hash: string;
+}
+export interface OfficialNewsSource {
+  source: string; enabled: boolean; state: string; scope: string;
+  last_success_at: string | null; latest_published_at: string | null; last_error: string | null;
+}
+export interface EventReadingContext {
+  state: "saved" | "partial" | "error"; items: {symbol: string; name: string; trade_date: string; scope: string}[];
+  missing: string[];
+}
 export interface ImpactEvent extends EventSummary {
+  selection_links?: SavedSelectionLink[];
   four_category: string; // international / policy / hot / material
   four_label: string;
   impact_level: "L1" | "L2" | "L3";
@@ -101,7 +121,11 @@ export async function getImpactEvents(
   includeL3 = false,
   limit = 100,
   sort: EventSort = "relevance",
+  reading = false,
 ): Promise<{
+  officialSources?: OfficialNewsSource[];
+  selectionContext?: EventReadingContext;
+  coverage?: {limit: number; read_rows: number; possibly_truncated: boolean; scope: string};
   count: number;
   countsAll: Record<string, number>;
   fourCounts: Record<string, number>;
@@ -109,13 +133,19 @@ export async function getImpactEvents(
   items: ImpactEvent[];
 }> {
   const r = await getJson<{
+    official_sources?: OfficialNewsSource[];
+    selection_context?: EventReadingContext;
+    coverage?: {limit: number; read_rows: number; possibly_truncated: boolean; scope: string};
     count: number;
     counts_all: Record<string, number>;
     four_counts: Record<string, number>;
     tag_counts: Record<string, number>;
     items: ImpactEvent[];
-  }>(`/api/events/impact?include_l3=${includeL3}&limit=${limit}&sort=${sort}`, 30_000);
+  }>(`/api/events/impact?include_l3=${includeL3}&limit=${limit}&sort=${sort}${reading ? "&reading=true" : ""}`, 30_000);
   return {
+    officialSources: r.data.official_sources,
+    selectionContext: r.data.selection_context,
+    coverage: r.data.coverage,
     count: r.data.count,
     countsAll: r.data.counts_all,
     fourCounts: r.data.four_counts,
@@ -136,4 +166,9 @@ export async function getEventsForSymbol(
 
 export async function getEventStocks(id: number): Promise<EventStockPool[]> {
   return (await getJson<{ pools: EventStockPool[] }>(`/api/events/${id}/stocks`, 60_000)).data.pools;
+}
+
+/** Read original observations and interpretation versions; never starts analysis. */
+export async function getEventHistory(id: number) {
+  return (await getJson<EventSummary & {observations: EventObservationRow[]; interpretations: {id: number; state: string; effective_at: string | null}[]}>(`/api/events/${id}`, 15_000)).data;
 }

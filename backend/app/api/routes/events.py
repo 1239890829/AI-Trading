@@ -306,6 +306,7 @@ async def impact_events(
     sort: str = Query(default="relevance", description="relevance(盘面相关性) | time(最新) | impact(影响力)"),
     request: Request = None,
     store: EventStore = Depends(get_store),
+    reading: bool = False,
 ) -> dict:
     """事件影响力视图（§六.4 拍板）：四级分类（国际时事/国家政策/市场热点/原材料涨价）
     + 三级影响力（L1 必上 / L2 选上 / L3 不上）。派生自既有 EventCard，不重建抽取管道。
@@ -320,7 +321,10 @@ async def impact_events(
         raise HTTPException(status_code=400, detail=f"sort 只支持 relevance/time/impact，收到 {sort!r}")
 
     # 同步 SQLite 读搬线程池（2026-09-12）：limit=100 实测约 11ms，前端 30s 轮询本端点。
-    rows = await asyncio.to_thread(store.list_events, active_only=True, limit=limit)
+    if reading:
+        rows = await asyncio.to_thread(store.list_events, active_only=False, limit=limit, visible_at=beijing_now_naive())
+    else:
+        rows = await asyncio.to_thread(store.list_events, active_only=True, limit=limit)
     # naive 北京墙钟：与 _parse_dt 产出的 naive published_at 同语义相减（age_h 衰减），
     # 且与服务器本地时区解耦（P2-2 时区统一）
     now = beijing_now().replace(tzinfo=None)
@@ -345,7 +349,7 @@ async def impact_events(
         enriched.append({**_serialize(r), "four_category": four, "four_label": FOUR_LABEL[four],
                          "impact_level": level, "tags": tags})
 
-    if sort == "relevance" and enriched:
+    if sort == "relevance" and enriched and not reading:
         from app.events.ranking import collect_rank_context, score_event
 
         svc = getattr(request.app.state, "theme_catalog", None) if request else None
@@ -397,7 +401,7 @@ async def impact_events(
         from app.services.leader_archive import get_archive, leaders_for_theme
 
         hub = getattr(request.app.state, "hub", None)
-        if hub is not None:
+        if hub is not None and not reading:
             archive = await get_archive(hub.provider)
             for e in enriched:
                 for d in e["directions"]:
@@ -413,8 +417,26 @@ async def impact_events(
     except Exception:  # noqa: BLE001  记忆附加强层，失败仅降级（无记忆名单）
         log.warning("impact theme-memory enrich skipped", exc_info=True)
 
+    context = None
+    if reading:
+        from app.events.reading import saved_selection_context, selection_links
+        from app.news.official import source_snapshot
+        try:
+            context = await asyncio.to_thread(saved_selection_context, store._sf, now=beijing_now())
+            for event in enriched:
+                event["selection_links"] = selection_links(event, context)
+        except Exception:  # A broken selection projection must not invent an empty relation set.
+            log.warning("news saved-selection projection unavailable", exc_info=True)
+            context = {"state": "error", "items": [], "missing": ["原入选关联读取失败"]}
+        if sort == "relevance":
+            enriched.sort(key=lambda event: event["published_at"] or "", reverse=True)
     return {"data": {"count": len(enriched), "counts_all": counts, "four_counts": four_counts,
-                     "tag_counts": tag_counts, "sort": sort, "items": enriched}, "meta": {}}
+                     "tag_counts": tag_counts, "sort": "time" if reading else sort, "items": enriched,
+                     **({"selection_context": context, "coverage": {"limit": limit,
+                         "read_rows": len(rows), "possibly_truncated": len(rows) >= limit,
+                         "scope": "latest_saved_visible_events"},
+                         "official_sources": [source_snapshot(request.app.state)]
+                         if request else []} if reading else {})}, "meta": {}}
 
 
 @router.get("/events/{event_id}")

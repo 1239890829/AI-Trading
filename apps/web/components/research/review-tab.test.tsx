@@ -265,6 +265,23 @@ describe("ReviewTab 改进项处置闭环", () => {
 });
 
 describe("ReviewTab 只读与请求身份", () => {
+  it("date filtering preserves the selected report and does not generate or fetch other reports", async () => {
+    setup();
+    vi.mocked(mocked.getReviewReports).mockResolvedValue([SUMMARY,{...SUMMARY,review_id:"other",trade_date:"20260831",summary:"另一份报告"}]);
+    render(<ReviewTab/>);
+    await screen.findByText("补齐阻断级数据缺失：breadth, sentiment");
+    fireEvent.change(screen.getByRole("searchbox",{name:"查找日期或原摘要"}),{target:{value:"20260831"}});
+    expect(screen.queryByRole("button",{name:/20260901.*委托/})).toBeNull();
+    expect(screen.getByText("补齐阻断级数据缺失：breadth, sentiment")).toBeTruthy();
+    expect(mocked.getReviewReport).toHaveBeenCalledTimes(1);
+    fireEvent.click(screen.getByRole("button",{name:"清除筛选"}));
+    expect(screen.getByRole("button",{name:/20260901.*委托/})).toBeTruthy();
+  });
+  it("a successful response with a different report date is not presented under the requested date",async()=>{
+    setup();render(<ReviewTab focusDate="2026-09-02"/>);
+    expect(await screen.findByText("返回报告日期与所选日期不符，未展示该返回。")).toBeTruthy();
+    expect(screen.queryByText("补齐阻断级数据缺失：breadth, sentiment")).toBeNull();
+  });
   it("ordinary research is read-only, adoption is not presented as trading performance", async () => {
     setup(); vi.mocked(mocked.updateActionItemStatus).mockClear();
     render(<ReviewTab />);
