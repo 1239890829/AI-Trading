@@ -1166,3 +1166,145 @@ W00/IMP-092用户直派扩展在既有读者增加主营/产品/客户/订单原
 | 原默认和成交轨 | 原all同股日去重及真实成交统计回归；模型、行情、评分/风控/委托、归档无读取副作用 |
 
 完整语义见[原运行读者](hunting-decision-design.md#2026-10-25-原运行落选诊断与版本效果读者)。本表为验收映射，实际测试/实页和准确HEAD发布归原stage/handoff与PR回执；不得据表的存在宣称已通过。
+
+## 2026-10-25 TSP全量复审与未采用价值
+
+**结论更正**：前两批完成复盘、新闻、方法及历史读者，不等于TSP全部有用功能已落地。热门题材、行业/概念分类与资金方向仍有真实发现缺口；不能因底层接口存在就判定用户已经能够使用，也不能因参考后端含演示数据便否定其全部产品价值。本节是候选筛选和现状核对，不是新策略准入或实施完成记录。
+
+### 审阅范围与证据边界
+
+基线为本仓`d05ad12f72ab5d232016d642157628e9d7f7320a`。参考对象为用户提供的本机TSP复刻目录，不把README对远端原站的自述当已核事实。全部30份自编源码/配置/资源已逐段全文读完，93份种子JSON全部解析并核字段、数组、文本域、日期、来源和缺失；核心123文件共2,759,539字节、24,297行。逐文件SHA-256在读取结束复核无漂移。JSON解析和文本检查不等于逐条市场事实获独立验证。
+
+另核1份锁文件的300个包条目；5份生成副本不重复当原创功能；第三方`node_modules`不纳入自编源码逐行审阅。不能声称连同第三方依赖的每个字都人工审计过。参考目录未见项目级LICENSE或可核Git来源；295条依赖license字段不证明原创代码、报告、教材或原站内容可再分发。可借鉴产品组织并沿本仓owner实现，直接复制源码/正文另需权属证据。
+
+| 覆盖面 | 完整读取或清点的对象 | 核验层次 |
+|---|---|---|
+| 根及前端基础17份 | README、包/构建/启动配置、App/main、CSS、Shell、ui/charts、api/format、ui store、HTML/favicon | 全文；导航、图形语义、请求、格式化、主题、空错与交互边界 |
+| 8份页面源码 | Strategy、Boards、StockAnalysis、Review、Info、Misc、Watchlist、Dashboard | 全文；全部导出页面、分支、tab、筛选、按钮、读写入口逐项映射 |
+| 后端5份 | package、index、engine、universe、rand | 全文；105个唯一HTTP方法/路径注册、80个处理器登记点，含别名，不是105项独立能力 |
+| 93份种子 | 策略/入选、行情、板块、复盘、新闻、异动、学堂、账户及设置 | 全schema与文本域；93文件仅91种内容hash，不是93个独立数据源 |
+| 实际浏览 | 23个渲染路由模式均以Chrome只读访问；另核dashboard重定向 | 实际切股票/ETF和密度；概念与热点结果目视，未点击运行/生成/发送/交易/保存 |
+
+23个渲染模式覆盖：首页、自选、策略目录/详情、个股搜索/详情、商品、连板、龙虎榜、概念、行业、异动/规则、复盘、基础知识/书单、快讯/热搜/资金、外围指数、并购、个人中心、反馈；另两条Route仅重定向。个股详情以`600519.SH`读取成功，裸代码`600519`停留加载的现象保留。全路由访问不代表全状态、移动屏、真实行情、Canvas、延迟或策略效果验收通过。
+
+本机忽略证据统一位于`artifacts/runs/tsp-full-audit-20261025/`：scope-manifest、shared-coverage、selection-themes、other-pages、backend-sources、coverage-closure及只读页面记录。原始身份字段、日志、种子和截图不提交公共仓库；表中参考源码路径均相对TSP根，本仓路径相对仓库根。
+
+### 首要缺口与采用顺序
+
+| 顺位 | 真实价值与当前差异 | 最小承接与验收 | 成本及退出 |
+|---|---|---|---|
+| 1 | 热门题材独立发现；当前`tape/themes-tab.tsx`默认`min_count=2`，`hot.themes`仅装饰已匹配梯队卡，尚无涨停簇的新热点会漏掉 | 复用`/themes/catalog`、`/themes/hot`、`/themes/catalog/strength`及已有资金/成分owner，在原选股左右布局联动题材、行业/概念和原名单；参考集合与真正入选分开 | 低至中：读者/身份/批量缓存；不新增策略或逐股模型调用。验无涨停热点仍可见、原名单不变、旧日期不混当前榜、未知/空/截断可见；发现层可独立退出 |
+| 2 | 资金方向、行业/概念、真实方法分类并列可找；当前入口分散，5个真实方法登记不是35条演示算法 | 复用`market/board-flow.tsx`、`detail/board-rank-panel.tsx`和strategy_registry；按真实净流、窗口、原分类筛选，不发明综合投资分 | 低至中：信息组织与联动；核多主题重复、无成员映射、不合口径不合榜，点击不扩大TA/通知/模拟资格；保留原榜可回退 |
+| 3 | 复盘情绪维度、封板率趋势/梯队断层及强弱资金对照 | 原复盘消费同日可核快照与真实多日存档；已有强弱排序、触发/失效和后验对照不重建 | 中：缺分母/旧存档时明确缺失；无历史不画假趋势，不把情绪测量当上涨概率或擅自加分 |
+| 4 | 并购事项完整档案：主体、标的、拟议/签约/审核/交割/终止及连续来源 | 原EventStore与公司证据按事项身份联读；当前仅关键词筛选，不是完整专题 | 中至高：实体归并和阶段核实比页面成本高；验“重组疫苗”反例、同公司多事项、终止/修订/晚到，不覆盖首次依据；可退回原新闻读者 |
+| 5 | 分来源热度、商品/海外上下文、指标情境解释卡 | 先用现有获准来源与KB，就近解释当前事实和失效条件；新增源分别核许可、单位、双钟和完整性 | 中至高：主要成本在数据契约/维护；不为多几个卡片新增常驻请求或付费源，无真实消费者不新建学堂/外围一级页 |
+
+这里的顺位是本轮产品筛选建议，未改stage状态、G门或调度优先级。先补入口和读者，不能把35种战法全部启用当作丰富分类的前提；也不能把改善发现层说成选股胜率提高。
+
+### 跨层能力与明确不替换项
+
+| 对象 | 取舍及依据 | 本仓消费者与验收要求 |
+|---|---|---|
+| 真实行情/财报/资金/板块源 | 保留现役Provider；参考GET多数读捕获快照或确定性补值，source标签不证明在线外采 | data-sources与原provider；核代码、单位、来源日/接收钟、缺数、覆盖/分页、失败退避，不能把包装API数量当独立源数 |
+| 策略执行与评分 | 可借因子/权重/理由合同，不能复制静态入选为策略引擎；通用加权复算吻合仅证明算术，部分theme_heat权重还缺dimension | 原strategy_registry、scoring_trace、Opportunity/DailyPickSet；方法、输入、阈值、成本及点时冻结后才比较增量 |
+| AI判读 | 不替换现有公司证据和完整TradingAgents；参考个股runAi调用热点运行后自行拼话术/默认8%目标，未使用返回摘要 | 原公司证据/TA完整图；可借短结论结构，事实、推断、反证、缺项分列，不能冒充模型或恢复反复试跑 |
+| 调度/复盘生成/邮件 | 不替换；参考策略运行只刷新run_at，生成可重贴报告日期，sent/connected成功字段无实际链证明 | 原任务/通知回执及复盘date_bound_v1；启动、取消、失败、恢复、持久结果和实际发送分别验 |
+| 模拟账户/撮合 | 不替换；参考下单立即filled且未更新真实持仓链 | 原paper硬门、账户scope和durable消费；T+1/涨跌停/整手/费用/停牌与同版来源保持，不为演示凑成交 |
+| 登录/会员/资料/租户 | 不采用会员商业体系或无鉴权后端，数据文件含身份不外传 | 原配对设备、普通只读与维护能力分离；不新增账户、充值或权限 |
+| API与加载 | 保留现役请求去重、取消、身份和质量；参考axios封装不提供这些保证，多页异常永久skeleton | 原useResource/API owner；乱序、旧响应、局部空错/陈旧、卸载与恢复，不因HTTP200抹失败 |
+| 数字/时间 | 不搬`Number(null)=0`、宿主时区和未来时间显示刚刚等行为 | 原bjtime/quality；缺失、合法0、源时间、时区和非交易日分别测试 |
+| 图形组件 | 可借紧凑正负条、结构/占比、支撑距离的表达任务，不替换现有交互行情图 | 参考Treemap实际单行比例条，MA可能跨缺口连线；需真实series/缺数/正负轴、键盘、文本替代。Gauge刻度不能当置信或收益概率 |
+| 通用UI/样式 | 借信息层次与密度，不复制模板、分页、大抽屉和多滚动；原Shell在线数随机、通知1/健康正常固定 | 保持本仓主题、左右布局、下拉加载、焦点/中文输入/窄屏/CSS+JS减弱动效；业务状态来自真实owner |
+| 依赖和构建技术 | 不替换Next/现有图表为Vite/Express/自写SVG；本地版本声明不证明更快、更安全或有净收益 | 没有必要API替换、安装/升级或包体性能结论；如后续提出替换，先实测消费者和同任务成本 |
+| 新闻许可/内容 | 金十connected为硬编码，本地接口用硬编码成功响应覆盖权限拒绝；不证明免费/留存许可；已有许可排除结论保持 | [来源说明](../data/data-sources.md#2026-10-25-金十新闻接入许可复核)；不复制报告、教材、书封或原站内容，证据不够就保留未知 |
+
+### 反例与不能据此得出的结论
+
+参考策略卡的胜率/均收益/净值由`Strategy.tsx:120–165`伪随机生成，不能当绩效证据；策略池/创建叠加/创建AI是无处理函数按钮。35项策略对应的35份结果快照共保存764行、401只不同证券，声明入选合计1,294；9份只存部分页，后续页未知，不能据此指控原站造假。热点200条仅保存50条、概念540条只存100条，不能称本地样本代表全市场最强。
+
+`Boards.tsx:228–231`按净额绝对值找“净流入最高”，可能选中净流出；100条概念成交额全缺、72条涨跌家数缺。复盘同一breadth对象上涨数6038超过总数5578，预测“近3日”文字与5条样本口径不一致；涨跌/资金/宽度必须先校口径。日线周末trade_date是日期契约疑点，不足以断言每条价格都是假数据。当前克隆缺实现也不证明远端原站没有实现。
+
+参考并购池包含“重组四价肠道病毒疫苗”技术转让，不能按“重组”二字当资产重组；本仓`events/news-reader.tsx`的同类正则也有误收风险，应回原事件owner核事项语义，而不是照搬混合池或宣称已被准确分类。教材、跨平台热榜和海外背景亦需内容/来源核验，不能因文字完整就当事实或策略依据。
+
+### 逐功能对照与35种战法去向
+
+本节逐项承接选股/题材/个股研究26项与其余页面32项，共58项。审阅不等于已实施、已部署或有效果增量；候选仍按原owner、权限、来源许可与真实验收推进。参考静态数据、依赖名称、原站宣称和可点占位均不作能力证明。
+
+路径缩写：现系统 `web/` = `apps/web/`，`be/` = `backend/app/`；参考 `TSP页/` = `web/src/pages/`，`TSP服/` = `server/src/`，`TSP种子/` = `server/src/seed/`。Owner是现有承接文件，不另建事实源或账本。
+
+| 编号 | 功能与TSP源码行号 | 当前覆盖及缺口 | 取舍与验收 |
+| --- | --- | --- | --- |
+| S01 | 策略发现目录与战法命名<br>TSP页/Strategy.tsx:19–40,207–260,441–590；TSP种子/strategies.json | 5键目录已有，选股入口较隐蔽。<br>Owner `be/picks/strategy_registry.py` | 借方法分类与搜索；每项有真实输入、消费者、生命周期，不把35名称当35引擎。 |
+| S02 | 热门题材选股候选视角<br>TSP页/Boards.tsx:206–318；TSP种子/strategies.json（hot_theme） | 题材/热股已有；未涨停热主题可能不出梯队卡。<br>Owner `web/components/tape/themes-tab.tsx` | 优先候选：独立热门发现并筛原名单；源钟/覆盖可见，参考集合不取得入选或研究资格。 |
+| S03 | 策略类别、资产、运行时段标签<br>TSP页/Strategy.tsx:207–260,362–400 | 真实方法目录已有，资产/时段分类尚分散。<br>Owner `web/components/agent/strategy-health-tab.tsx` | 仅投影真实元数据；筛选可回退，观察/否决不写可执行。 |
+| S04 | 卡片密度与高密度信息组织<br>TSP页/Strategy.tsx:262–276,337–435,549–553 | 选股已有紧凑卡/列表和切组位置。<br>Owner `web/app/hunting/page.tsx` | 借密度组织，不换左右布局；同屏可读，不增加嵌套滚动。 |
+| S05 | 策略池持久顺序<br>TSP页/Strategy.tsx:93–117,447–457,485–492,512–514 | 已有URL选中；TSP池按钮未实现。<br>Owner `web/components/agent/method-run-location.ts` | 不搬假策略池；有编辑消费者再存偏好，存储失败不崩溃。 |
+| S06 | 创建叠加/创建AI策略<br>TSP页/Strategy.tsx:515–527 | 本仓有代码提案/晋级硬门；TSP两按钮无处理。<br>Owner `be/services/code_executor.py` | 排除直接迁移；不得用空按钮冒充叠加或AI创建。 |
+| S07 | 运行状态、命中与耗时卡<br>TSP页/Strategy.tsx:42–52,347–349,406–425,466–475 | 已有保存运行状态/身份，部分耗时未知。<br>Owner `web/components/agent/method-run-reader.tsx` | 复用；未运行、零命中、失败分别显示，缺耗时不造。 |
+| S08 | 胜率、均收益与权益迷你图<br>TSP页/Strategy.tsx:120–165,317–326,435,584,727 | 已有真实窗口与样本口径；TSP绩效伪随机。<br>Owner `web/components/agent/strategy-health-tab.tsx` | 排除其数值；曲线只能来自可追原版样本，不混观察/成交胜率。 |
+| S09 | 策略详情漏斗<br>TSP页/Strategy.tsx:593–675; index.js686–725 | 日期/版本/原名单/拒绝/效果对照已由PR #341承接。<br>Owner `web/components/agent/method-run-reader.tsx` | 不重做；准确版本可回看，部分截断/未知明示，读取不改运行时间。 |
+| S10 | 入选表量化字段与信号标签<br>TSP页/Strategy.tsx:678–722；TSP种子/picks/*.json | 评分/信号/依据已有，字段检索可改善。<br>Owner `web/components/picks/pick-card.tsx` | 借紧凑列/标签；仅展示真实字段，风险不被折没，50/200截断可见。 |
+| B01 | 概念与行业分开浏览<br>TSP页/Boards.tsx:206–318; concepts100/540,industries74/74 | 行业/概念榜已有，藏在指数详情与资金页。<br>Owner `web/components/detail/board-rank-panel.tsx` | 候选：原选股左栏联动入口；行业、概念、风格分清，不复制新页。 |
+| B02 | 题材强弱热力分布<br>TSP页/Boards.tsx:220–232,269–272 | 市值行业云图已有；不同于板块资金热力。<br>Owner `web/components/market/heatmap-tab.tsx` | 按需借热力扫描；面积/颜色仅一种明确口径，缺值不造热度，键盘可用。 |
+| B03 | 涨跌Top10与领涨股<br>TSP页/Boards.tsx:221–226,244–260,274–307 | 板块涨幅/领涨股已有，选择入口分散。<br>Owner `web/components/detail/board-rank-panel.tsx` | 借强弱并看；声明全集/本页分母，未知沉底，无证券ID不猜跳转。 |
+| B04 | 资金热度与资金流排名<br>TSP页/Boards.tsx:228–232,263–267,309–311 | 已有多周期净额、占比、连续流入和排名。<br>Owner `web/components/market/board-flow.tsx` | 复用并改善入口；人气/成交/净流入分列，负净流入不可被绝对值标最强。 |
+| B05 | 板块宽度：涨跌家数、涨停家数<br>TSP页/Boards.tsx:246–260,284–301; concepts/industries seeds | 已有官方成分的涨跌/涨停/成交聚合。<br>Owner `be/api/routes/theme_catalog.py` | 复用宽度；同宇宙分母可核，缺项不是0，不能沿用TSP缺失计数。 |
+| B06 | 板块成员和选股联动<br>TSP页/Boards.tsx:274–307无成员/题材点击 | 已有官方概念成员/归因细分/证券下钻，比参考完整。<br>Owner `web/components/concept-detail-modal.tsx` | 加强发现；同日期版本筛本名单，结构归属不冒充事件因果。 |
+| B07 | 连板层级梯队<br>TSP页/Boards.tsx:15–103；TSP种子/limit_ladder.json | 题材梯队、涨停原池及断层已有。<br>Owner `web/components/theme-card.tsx` | 借紧凑层级摘要；真实源钟、总量/已显示量可核，缺层不当空层。 |
+| B08 | 龙虎榜公开席位与净额<br>TSP页/Boards.tsx:113–196; dragon_tiger.json81行 | 已有龙虎榜与题材迁徙。<br>Owner `web/components/tape/longhu-tab.tsx` | 复用公开席位；日/三日榜不重复，席位别名不当账户，涨跌颜色正确。 |
+| B09 | 龙虎榜短AI结论<br>TSP页/Boards.tsx:184–188; dragon_tiger.json ai_comment | 已有公司依据/完整研究；参考短评有无源概率。<br>Owner `web/components/tape/longhu-tab.tsx` | 只借短结论版式；事实可引用、推断标明，不照搬高开概率或另跑模型。 |
+| Q01 | 搜索与搜索历史<br>TSP页/StockAnalysis.tsx:35–131 | 已有拼音搜索、历史和左右详情。<br>Owner `web/app/workbench/page.tsx` | 保留；核中文输入、乱序、去重、存储失败与清空，不搬参考竞态。 |
+| Q02 | 真实日线与技术指标<br>TSP页/StockAnalysis.tsx:155–216,281–340,379–407 | 已有日线/指标/历史行情；TSP报价来自日K。<br>Owner `web/lib/technical-analysis.ts` | 不替换；复权、周期、证券一致，缺换手不写0，切股无旧值。 |
+| Q03 | 压力支撑相对距离<br>TSP页/StockAnalysis.tsx:195–216,291–340 | 已有技术分析，参考位距离可简化阅读。<br>Owner `web/components/stock-detail.tsx` | 按真实消费者候选；纯函数可重算、样本不足未知，图层与标签一致。 |
+| Q04 | 个股AI分析与目标价预测<br>TSP页/StockAnalysis.tsx:221–235,345–369 | 已有完整TradingAgents与公司依据链。<br>Owner `web/components/picks/pick-card.tsx` | 排除参考伪AI：本地拼话术/默认目标价；不改完整研究为热点策略返回。 |
+| Q05 | 分析页生命周期与错误恢复<br>TSP页/StockAnalysis.tsx:155–190,221–245 | 已有证券scope与统一请求治理。<br>Owner `web/hooks/use-resource.ts` | 保留；切股/乱序/部分失败/重试均不串公司、AI和目标字段。 |
+| Q06 | 价格提醒按钮<br>TSP页/StockAnalysis.tsx:103–104 | 告警归受控后台；TSP提醒按钮未实现。<br>Owner `web/components/research/alerts-tab.tsx` | 不搬假动作；真提醒需权限、持久结果、撤销恢复，验收不实发。 |
+| X01 | 日期版本、全量与来源身份<br>TSP页/Strategy.tsx:641–675；TSP页/Boards.tsx:28,246–267；TSP页/StockAnalysis.tsx:267 | 已有日期/版本/源时/覆盖契约。<br>Owner `web/components/agent/method-run-reader.tsx` | 所有借鉴继续绑定；读取不改run_at，截断明确，同报价不算独立样本。 |
+| R01 | 按日期回看原复盘与历史索引<br>TSP页/Review.tsx:634-696,984-1075,1105-1227 | 已有冻结报告索引与更严格版本身份。<br>Owner `web/components/research/review-tab.tsx` | 复用；错日期/乱序/404不退最新，不拿旧报告冒充当前。 |
+| R02 | 行情事实首屏与六维情绪拆解<br>TSP页/Review.tsx:427-464,539-552;TSP种子/review_detail.json:data.payload.sentiment | 已有情绪与盘面；维度可用性、分母仍可改善。<br>Owner `web/components/research/market-review.tsx` | 候选：拆真实维度/公式；缺两维仍读其余，宽度计数守恒，不硬加总分。 |
+| R03 | 指数结构及多周期表现<br>TSP页/Review.tsx:554-584;TSP种子/review_detail.json:data.payload.indices | 已有指数/行情，历史多周期结构部分覆盖。<br>Owner `web/components/research/market-review.tsx` | 候选：读同日存档5/20/60日；单位可核，不给选股分时再挤高度。 |
+| R04 | 行业/概念领涨与领跌双向榜<br>TSP页/Review.tsx:287-338,586-589 | 已有行业/概念双向排序，历史领涨关联部分缺。<br>Owner `web/components/research/market-review.tsx` | 先联动原详情；同日期同范围，资金Top50不冒全市场涨跌榜。 |
+| R05 | 封板率走势与连板断层<br>TSP页/Review.tsx:594–623；TSP种子/review_detail.json（lianban/sealRateTrend） | 梯队/健康已有；多日完整归档需核。<br>Owner `web/components/tape/themes-tab.tsx` | 按需归档复盘；真空层与未取到分开，封板率同宇宙可重算。 |
+| R06 | 资金流入流出对照<br>TSP页/Review.tsx:594–623；TSP页/Info.tsx:118–185 | 已有分钟/历史/成员/连续流入，比参考完整。<br>Owner `web/components/market/board-flow.tsx` | 只借正负同列；保留5/10/20日，子集求和不称全市场。 |
+| R07 | 多空中性场景卡与后续条件<br>TSP页/Review.tsx:358-424,620;TSP种子/review_detail.json:data.payload.forecast | 原简报已有触发、失效与后验归因。<br>Owner `web/components/research/market-review.tsx` | 复用原场景联动；无条件存档不编兑现，不另生一套预测。 |
+| R08 | 持仓专项与自身选股/执行复盘<br>TSP页/Review.tsx:597-599;TSP种子/review_detail.json:data.payload.holdingActionPlans | 已有入选→通知留痕→委托/拒绝/成交核对。<br>Owner `web/components/research/market-review.tsx` | 保留账户scope；缺关联即未核，不能按同代码猜，自选不称持仓。 |
+| R09 | 复制、完整报告与精读<br>TSP页/Review.tsx:256-284,466-475,488-522,1228-1266 | 已有原报告/Markdown阅读。<br>Owner `web/components/research/review-tab.tsx` | 可借复制原文；同版一致、无敏感内容，焦点恢复，不搬双滚动大抽屉。 |
+| R10 | 生成/轮询/删除与调度邮件<br>TSP页/Review.tsx:698-978,1034-1103 | 已有维护操作与通道状态。<br>Owner `web/app/agent/page.tsx` | 只借任务反馈；生成/删除/邮件仍维护权限，force不覆冻结证据，不实发验收。 |
+| N01 | 快讯时间流、重要筛选和原文<br>TSP页/Info.tsx:9-62 | 已有同层阅读、来源、首次可用与修订链。<br>Owner `web/components/events/news-reader.tsx` | 复用；标题到原文/引用股票可核，修订不回填原判断。 |
+| N02 | 全网热搜分平台与财经热点<br>TSP页/Info.tsx:64-110;TSP种子/hot_search.json | 热股/飙升已有，跨平台热点部分缺。<br>Owner `web/components/tape/themes-tab.tsx` | 有许可才加来源切片；同源排名变化可核，证券/话题不混，零重复常驻请求。 |
+| N03 | 海外指数面板<br>TSP页/Info.tsx:192-237;TSP种子/global_indexes.json | 已有隔夜上下文，海外行情覆盖有限。<br>Owner `web/components/hunting/intraday-sections.tsx` | 候选详情复用；各市场休市/夏令时、标的、单位正确，不宣称版权已获准。 |
+| N04 | 并购重组专题档案<br>TSP页/Info.tsx:239-370;TSP种子/merger.json | 事件新闻已有，连续并购事项身份/阶段缺。<br>Owner `web/components/events/news-reader.tsx` | 候选专题复用EventStore；拟议至终止可追；重组疫苗不是并购。 |
+| N05 | 专题趋势、公司排行与新闻联读<br>TSP页/Info.tsx:279-367;TSP种子/merger.json:data.top_companies | 已有板块详情/成分联读，事项趋势/阶段部分缺。<br>Owner `web/components/market/board-flow.tsx` | 候选专题联动；排行明指标、旧公告不混新行情推价值，全部增量可达。 |
+| N06 | 新闻雷达开关与金十标签<br>TSP页/Info.tsx:9–62；TSP服/index.js:453–459；TSP种子/news_radar.json | 已有事件阅读/通道；标签不能证明雷达或金十许可。<br>Owner `web/components/market/events-tab.tsx` | 以实际API与许可结论为准；源字段/时刻一致，未准来源不接入。 |
+| W01 | 自选紧凑清单与一键添加<br>TSP页/Watchlist.tsx:7-92,111-196 | 已有分组自选、搜索历史、共享读取及左右详情。<br>Owner `be/api/routes/watchlist.py` | 只借紧凑密度；增删同owner同步，切组切股不串，不另建事实源。 |
+| W02 | 持仓警报靠近清单<br>TSP页/Watchlist.tsx:94-105 | 已有真实持仓风险与告警读面。<br>Owner `web/components/detail/real-position-panel.tsx` | 借就近风险入口；账户成本不串，无成本不计算，不硬写统一5%。 |
+| W03 | 行内迷你趋势与报价状态<br>TSP页/Watchlist.tsx:128-165 | 已有迷你图与报价状态。<br>Owner `web/components/sparkline.tsx` | 仅真分钟序列可用；图与时间顺序一致，竞价/午休稳定，不搬四价拼图。 |
+| A01 | 异动类型+规则阈值+诊断跳转<br>TSP页/Misc.tsx:13-91 | 已有异动/提醒，类型筛选与诊断关联部分缺。<br>Owner `be/api/routes/market_pools.py` | 候选原类型/值/阈值联动；股涨与资金流出可并存，方向不以涨跌代替。 |
+| A02 | 规则盘点、启停与阈值说明<br>TSP页/Misc.tsx:95-166 | 已有维护规则CRUD与权限。<br>Owner `web/app/agent/page.tsx` | 复用盘点；普通前台只读结果/风险，维护可核原阈值，不复制空创建按钮。 |
+| K01 | 知识分类、层级、阅读时间与标签<br>TSP页/Misc.tsx:168-269;TSP种子/academy.json | KB浏览已有，情境分类与短解释部分缺。<br>Owner `web/components/agent/kb-browser-tab.tsx` | 候选就近术语卡；全量可搜、历史可达、短卡与权威正文一致。 |
+| K02 | 交易基础和集合竞价规则<br>TSP页/Misc.tsx:168–269；TSP种子/academy.json items[0,11–20] | 交易时段/报价事实已有。<br>Owner `be/market/trade_calendar.py` | 只借教学结构；时段按现役日历与官方版本核对，各板差异可核，规则不用模型生成。 |
+| K03 | 形态/指标/量价的确认与失效教学<br>TSP页/Misc.tsx:168–269；TSP种子/academy.json items[1–7,21–50] | 指标/KB已有，确认/失效联读可改善。<br>Owner `web/components/stock-detail.tsx` | 候选条件卡；公式和现役代码一致、失败可见，教材不直接变因子。 |
+| K04 | 风险、交易日志、策略效果教学<br>TSP页/Misc.tsx:168–269；TSP种子/academy.json items[8–10,51–61] | 已有执行核验、策略健康和效果复盘。<br>Owner `web/components/research/market-review.tsx` | 借真实拒绝/成本学习；分母/盈亏比可核，不用固定30笔当准入，不接实盘。 |
+| K05 | 书单分组与单句价值<br>TSP页/Misc.tsx:271-332 | KB可容书目引用，缺独立书单消费者。<br>Owner `web/components/agent/kb-browser-tab.tsx` | 暂不新增；有学习消费者再做索引，书目信息/封面许可分别核。 |
+| C01 | 商品报价与公司传导背景<br>TSP页/Misc.tsx:334-396;TSP种子/commodity.json | 已有商品链与隔夜背景，紧凑公司暴露部分缺。<br>Owner `be/market/commodity_chain.py` | 复用商品事实与已验证行业线索；公司成本/营收暴露另核公司证据，合约/币种/源钟可核，同期相关不当隔夜预测。 |
+| P01 | 个人资料、租户与会员套餐<br>TSP页/Misc.tsx:399-459 | 当前采用设备配对/能力权限，不需会员租户。<br>Owner `web/app/agent/page.tsx` | 不采用商业套餐/支付；普通读取/维护边界不得退化。 |
+| F01 | 反馈输入与可追溯问题单<br>TSP页/Misc.tsx:462-495 | 已有任务中心，用户问题到owner闭环可改善。<br>Owner `web/components/agent/task-center.tsx` | 候选本机反馈；最小脱敏scope、去重/重试/处理人可核，不建平行账本或外发。 |
+| D01 | 仪表盘欢迎与使用指引<br>TSP页/Dashboard.tsx:7-73 | 已有真实市场/选股入口。<br>Owner `web/app/market/page.tsx` | 不另做欢迎仪表盘；只在空态给可完成动作，不加装饰占屏。 |
+| D02 | 仪表盘未消费的量化分布与监测schema<br>TSP页/Dashboard.tsx:21–25；TSP种子/dashboard_overview.json | 已有市场/云图/监测；部分分布仅数据契约候选。<br>Owner `web/app/market/page.tsx` | 按真实输入补原区域；数量守恒、阈值可解释，available=false不变0或95分。 |
+| UX01 | 统一错误、陈旧、缺失与增量可达性<br>TSP页/Info.tsx:14-18,71-79,122-126,195-198,255-257;TSP页/Misc.tsx:19-22,100-104,188-190,232,351-357 | 统一请求、错误、降频及下拉增量已有。<br>Owner `web/hooks/use-resource.ts` | 全部沿用；首错/刷新错/乱序/隐藏/窄屏/键盘/全量可达验收，左右布局不变。 |
+
+#### 35种战法的完整筛选与准入边界
+
+以下逐项保留参考代码与名称。现有5个策略登记键不等于全系统只有5个因子；参考35个名称也不等于35套可运行、有效的算法。参考本机只读快照，策略卡胜率/收益曲线明确为伪随机；不得据此晋级。分组用于候选检索，不改变现役评分、入选、TradingAgents研究范围或模拟硬门。
+
+| 分组 | 完整名单（名称／参考代码） | 取舍与准入判断 |
+| --- | --- | --- |
+| 题材、资金、事件（6） | 热点题材／`hot_theme`<br>龙头策略／`dragon_head`<br>事件驱动／`event_driven`<br>资金热度／`capital_heat`<br>情绪周期／`emotion_cycle`<br>预期重估／`expectation_repricing` | 优先借热门题材发现和分类，复用官方成分/热股/资金。事件与预期重估复用真实公司依据；没有点时增量证据不改评分。Owner `web/components/tape/themes-tab.tsx`、`web/components/market/board-flow.tsx`。 |
+| 趋势、动量、放量（6） | 均线金叉／`ma_golden_cross`<br>均线多头／`ma_bullish`<br>趋势质量／`momentum_quality`<br>放量突破／`volume_breakout`<br>MACD 金叉／`macd_golden_cross`<br>底部放量／`bottom_volume` | 先核现有MA/MACD/动量/量能因子及重复性，冻结定义与成本后才作独立候选验证；不重复造指标。Owner `web/lib/technical-analysis.ts`、`be/picks/strategy_registry.py`。 |
+| 反转、回踩、箱体（6） | 低位反弹精选／`low_rebound_quality`<br>打板涨停回调／`limit_up_pullback`<br>RSI 超卖反转／`rsi_reversal`<br>缩量回踩／`shrink_pullback`<br>W底突破／`w_bottom_breakout`<br>箱体震荡／`box_oscillation` | 先核已观察反攻与已否决量价策略反例；确认行情完整、形态不看未来，再作同成本验证，不能改名复活旧否决。Owner `be/picks/strategy_registry.py`。 |
+| 形态、量价、竞价（5） | 涨停基因／`limit_up_gene`<br>箱体首板突破／`box_first_board_breakout`<br>L1-L2量价共振／`l1_l2_volume_resonance`<br>一阳夹三阴／`one_yang_three_yin`<br>二进三竞价爆量／`auction_breakout_2to3` | 先取得逐条满足/失效证据；竞价必须真实窗口与可执行条件，L1/L2不能只凭名称当新增收益。Owner `web/lib/technical-analysis.ts`、`be/picks/strategy_registry.py`。 |
+| 价值、质量、多因子（6） | 蓝筹收益质量／`blue_chip_income`<br>双低选股／`dual_low`<br>成长质量／`growth_quality`<br>稳健价值／`quality_value`<br>均衡多因子／`balanced_alpha`<br>低波质量／`low_volatility_quality` | 财报/估值等点时输入未取得时不得以日线代理“质量”；权重、基准、成本、样本外效果须独立核。Owner `be/picks/strategy_registry.py`。 |
+| 复杂形态（2） | 波浪理论／`wave_theory`<br>缠论／`chan_theory` | 先把波浪/缠论规则写成可重复、可证伪定义并核人工分歧；名称与教材不证明有效。Owner `be/picks/strategy_registry.py`。 |
+| ETF（4） | ETF 极寒反弹／`etf_cold_rebound`<br>ETF 底部放量／`etf_bottom_volume`<br>ETF 动量轮动／`etf_momentum_rotation`<br>ETF 趋势起航／`etf_trend_takeoff` | 独立未来候选；资产宇宙、价格/复权、撮合、费用与风险契约未完整批准前，不扩大当前A股选股或模拟范围。Owner `be/picks/strategy_registry.py`。 |
+
+优先取舍：先补“热门题材独立发现＋原名单分类＋现有资金/方法入口”，继续原左右布局与下拉增量。原入选、事件、通知、委托及账户身份保持；不把参考集合视作真正入选，不复制假绩效、占位AI或无源目标价。其余候选按真实消费者和证据判断，不机械新增页面、策略与常驻请求。
