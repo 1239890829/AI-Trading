@@ -17,6 +17,9 @@ export interface DiscoveryDetailTarget {
 export interface DiscoveryDetailSelection {
   date: string | null;
   loaded: boolean;
+  readError?: boolean;
+  pending?: boolean;
+  retry?: () => void;
   entries: readonly { symbol: string; name?: string | null; open: () => void }[];
 }
 
@@ -83,11 +86,11 @@ export function DiscoveryDetail({ target, active = true, selection, onClose }: D
   const incremental = useIncremental(shown, { resetKey: `${scope}/${query}/${ascending}`, active });
   const selected = useMemo(() => {
     const entries = new Map<string, DiscoveryDetailSelection["entries"][number]>();
-    if (selection.loaded) for (const entry of selection.entries) {
+    if (selection.loaded && !selection.readError) for (const entry of selection.entries) {
       if (isSymbol(entry.symbol) && !entries.has(entry.symbol)) entries.set(entry.symbol, entry);
     }
     return entries;
-  }, [selection.loaded, selection.entries]);
+  }, [selection.loaded, selection.readError, selection.entries]);
   const matches = new Set(members.filter(member => selected.has(member.symbol)).map(member => member.symbol)).size;
   const degraded = read?.kind === "board" ? read.detail.degraded : [];
   const declaredTotal = read?.kind === "theme" ? finite(read.detail.total) : null;
@@ -103,8 +106,9 @@ export function DiscoveryDetail({ target, active = true, selection, onClose }: D
     <div className="space-y-1 text-[11px] leading-relaxed text-zinc-600 dark:text-zinc-400">
       <p>{target.kind === "theme" ? "当前目录成分" : "资金成员样本，非完整成分全集"} · 目录归属与报价时点未核</p>
       {read?.kind === "board" && <p>读取记录时间：{readMoment(read.detail.updated_at)}；不等于来源时刻。{read.detail.delayed && "资金为延迟口径。"}</p>}
-      <p>原名单日期：{selection.loaded ? selection.date || "未记录" : "待读取"}
-        {selection.loaded && read && !unavailable ? ` · 代码相同 ${matches} 只` : ""}</p>
+      <p>原名单日期：{selection.readError ? "读取失败，未作对照" : selection.loaded ? selection.date || "未记录" : "待读取"}
+        {selection.loaded && !selection.readError && read && !unavailable ? ` · 代码相同 ${matches} 只` : ""}</p>
+      {selection.readError && selection.retry && <p role="alert"><button type="button" className="quiet-action" disabled={selection.pending} onClick={selection.retry}>{selection.pending ? "正在重试原名单…" : "重试原名单"}</button></p>}
       <p>仅代码对照，非当时归属；成分展示不产生入选、研究或模拟资格。</p>
     </div>
     {resource.error != null && <div role="alert" className="space-y-1 text-xs text-amber-800 dark:text-amber-300">

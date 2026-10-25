@@ -244,6 +244,33 @@ describe("真实分类发现的来源与范围", () => {
 });
 
 describe("原入选名单的目录对照边界", () => {
+  it("原名单失败可单独重试，等待时禁用，恢复后才对照且不重取分类源", async () => {
+    const retry=vi.fn();
+    const failed={...selected,loaded:false,readError:true,pending:false,retry};
+    const page=render(<Browser selection={failed}/>);
+    await screen.findByRole("button",{name:"查看未涨停新题材成分"});
+    expect(screen.getByText("原名单读取失败，归属对照未完成。")).toBeTruthy();
+    expect(resultRows()[0].textContent).toContain("原名单读取失败");
+    expect(screen.queryByText("本组原名单已确认空")).toBeNull();
+    expect(jsonMock.mock.calls.map(call=>call[0])).toEqual(["/api/themes/hot?limit=30"]);
+
+    fireEvent.click(screen.getByRole("button",{name:"重试原名单"}));
+    expect(retry).toHaveBeenCalledTimes(1);
+    page.rerender(<Browser selection={{...failed,pending:true}}/>);
+    const pending=screen.getByRole("button",{name:"正在重试原名单…"});
+    expect(pending).toHaveProperty("disabled",true);
+    fireEvent.click(pending);expect(retry).toHaveBeenCalledTimes(1);
+    expect(jsonMock).toHaveBeenCalledTimes(1);
+
+    page.rerender(<Browser selection={{...selected,readError:false,pending:false,retry}}/>);
+    await screen.findByText("已核匹配 1 只");
+    expect(screen.queryByText("原名单读取失败，归属对照未完成。")).toBeNull();
+    expect(jsonMock.mock.calls.filter(([url])=>String(url).includes("themes/hot"))).toHaveLength(1);
+    expect(jsonMock.mock.calls.filter(([url])=>String(url).includes("discovery-memberships"))).toHaveLength(1);
+    expect(jsonMock.mock.calls.some(([url])=>String(url).includes("board-fund-flow"))).toBe(false);
+    expect(navigateMock).not.toHaveBeenCalled();
+  });
+
   it("只作当前目录对照，不冒充历史归属或原入选依据", async () => {
     render(<Browser selection={selected}/>);
     await screen.findByText("已核匹配 1 只");

@@ -87,6 +87,48 @@ describe("发现成分是原右栏只读参考", () => {
     expect(screen.queryByRole("button", {name: /返回原名单/})).toBeNull();
   });
 
+  it.each([
+    {target: theme, loaded: false, memberName: "上行成员"},
+    {target: board, loaded: true, memberName: "资金成员"},
+  ])("retries only the failed original selection beside readable $target.kind members and restores code matching", async ({target, loaded, memberName}) => {
+    const original = vi.fn(), retry = vi.fn(), close = vi.fn();
+    const failedSelection: DiscoveryDetailSelection = {...selection, loaded, readError: true, retry,
+      entries: [{symbol: "600001", name: "原名单名称", open: original},
+        {symbol: "600009", name: "名单其他股票", open: vi.fn()}]};
+    const view = render(<DiscoveryDetail target={target} selection={failedSelection} onClose={close}/>);
+    const list = await screen.findByRole("list", {name: "已读取成分"});
+    const member = within(list).getByRole("link", {name: memberName});
+    expect(screen.getByText("原名单日期：读取失败，未作对照")).toBeTruthy();
+    expect(screen.queryByText(/原名单含该股|代码相同|未入选/)).toBeNull();
+    expect(screen.queryByRole("button", {name: /返回原名单/})).toBeNull();
+    fireEvent.click(screen.getByRole("button", {name: "重试原名单"}));
+    expect(retry).toHaveBeenCalledTimes(1);
+    expect(original).not.toHaveBeenCalled();
+    expect(close).not.toHaveBeenCalled();
+
+    view.rerender(<DiscoveryDetail target={target} selection={{...failedSelection, pending: true}} onClose={close}/>);
+    const pending = screen.getByRole("button", {name: "正在重试原名单…"});
+    expect(pending).toHaveProperty("disabled", true);
+    fireEvent.click(pending);
+    expect(retry).toHaveBeenCalledTimes(1);
+    expect(screen.getByText("原名单日期：读取失败，未作对照")).toBeTruthy();
+    expect(screen.getByRole("list", {name: "已读取成分"})).toBe(list);
+    expect(within(list).getByRole("link", {name: memberName})).toBe(member);
+
+    view.rerender(<DiscoveryDetail target={target} selection={{...failedSelection, loaded: true,
+      readError: false, pending: false}} onClose={close}/>);
+    expect(screen.getByText("原名单日期：2026-10-23 · 代码相同 1 只")).toBeTruthy();
+    expect(screen.getAllByText("原名单含该股")).toHaveLength(1);
+    expect(screen.queryByText(/读取失败，未作对照/)).toBeNull();
+    expect(screen.queryByRole("button", {name: /重试原名单/})).toBeNull();
+    expect(screen.queryByRole("button", {name: /研究|买入|模拟/})).toBeNull();
+    fireEvent.click(screen.getByRole("button", {name: `返回原名单核对${memberName}`}));
+    expect(original).toHaveBeenCalledTimes(1);
+    expect(retry).toHaveBeenCalledTimes(1);
+    expect(getConceptDetail).toHaveBeenCalledTimes(target.kind === "theme" ? 1 : 0);
+    expect(getBoardFlowMembers).toHaveBeenCalledTimes(target.kind === "board" ? 1 : 0);
+  });
+
   it("describes BK results as a limited sample, keeps its received clock separate and preserves a measured zero", async () => {
     vi.mocked(getBoardFlowMembers).mockResolvedValue(boardMembers(board.code, {
       delayed: true, updated_at: "2026-10-25T10:00:00+08:00", degraded: ["部分报价缺失"],

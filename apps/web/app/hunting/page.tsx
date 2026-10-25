@@ -288,9 +288,9 @@ function HuntingInner() {
     const date = fromDaily ? data?.date ?? null : top?.trade_date ?? null;
     const rows = fromDaily ? data?.items ?? [] : top?.items ?? [];
     const loaded = fromDaily ? picksLoaded && !picksFailed && !!data : intradayLoaded && !topReadFailed && !!top;
-    return {date, loaded, entries: rows.map(row => ({symbol: row.symbol, name: row.name,
+    return {date, loaded, readError: fromDaily ? picksFailed : topReadFailed, pending: fromDaily ? daily.pending : intraday.pending, retry: fromDaily ? daily.refresh : intraday.refresh, entries: rows.map(row => ({symbol: row.symbol, name: row.name,
       open: () => router.push(discoveryUrl(sp.toString(), {browse: null, disc_code: null, selection: row.symbol}), {scroll: false})}))};
-  }, [selectedGroup, data, top, picksLoaded, picksFailed, intradayLoaded, topReadFailed, router, sp]);
+  }, [selectedGroup, data, top, picksLoaded, picksFailed, intradayLoaded, topReadFailed, daily.pending, daily.refresh, intraday.pending, intraday.refresh, router, sp]);
   const selectedSymbol = sp.get("selection");
   const focusedSelection = useRef<string | null>(null);
   useEffect(() => {
