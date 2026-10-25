@@ -452,6 +452,34 @@ async def picks_strategy_registry() -> dict:
     return {"data": {"strategies": items}, "meta": {}}
 
 
+@router.get("/discovery-memberships")
+async def picks_discovery_memberships(
+    request: Request,
+    symbols: str = Query(..., min_length=1, max_length=1399),
+    trade_date: str | None = Query(None, min_length=10, max_length=10),
+) -> dict:
+    """当前本地归属参考；不拉源、不同步、不替换历史或扩大真实入选。"""
+    from app.core.bjtime import beijing_now
+    from app.picks.discovery import discovery_symbols, discovery_trade_date, membership_view
+
+    try:
+        names = discovery_symbols(symbols)
+        requested_date = discovery_trade_date(trade_date)
+    except ValueError as exc:
+        raise HTTPException(422, detail=str(exc)) from None
+    svc = getattr(request.app.state, "theme_catalog", None)
+    mapping: dict[str, list[dict]] = {}
+    unavailable = svc is None
+    if svc is not None:
+        try:
+            mapping = await asyncio.to_thread(svc.official_for_symbols_bulk, names)
+        except Exception:  # Local missing evidence must not trigger sync or stock-level calls.
+            log.warning("discovery memberships read unavailable", exc_info=True)
+            unavailable = True
+    return membership_view(names, mapping, requested_trade_date=requested_date,
+                           observed_at=beijing_now().isoformat(), unavailable=unavailable)
+
+
 @router.get("/method-runs")
 async def method_runs(
     method: Literal["daily_picks", "intraday_watch"],

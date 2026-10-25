@@ -70,6 +70,8 @@ import { WatchLedgerPanel } from "@/components/hunting/watch-ledger-panel";
 import { PickDetailModal } from "@/components/picks/pick-detail-modal";
 import { SelectionRail } from "@/components/ui/selection-rail";
 import { CandidateCollection } from "@/components/ui/candidate-collection";
+import { DiscoveryBrowser, DiscoveryNavigation, discoveryLocation, discoveryUrl } from "@/components/hunting/discovery-browser";
+import { DiscoveryDetail, type DiscoveryDetailTarget } from "@/components/hunting/discovery-detail";
 
 /**
  * Real selection consumers, organised by discover / observe / verify.
@@ -80,6 +82,8 @@ function HuntingInner() {
   const { open: inspect } = useInspection();
   const router = useRouter();
   const sp = useSearchParams();
+  const discovery = discoveryLocation(sp.toString());
+  const selectedOnly = discovery.mode === "selected";
   const requestedView = sp.get("view");
   const view = requestedView === "validation" || requestedView === "evidence" || requestedView === "tracking" || requestedView === "research" || requestedView === "review"
     ? requestedView : sp.get("sec") === "review" || sp.get("review") === "1" ? "review" : "discover";
@@ -106,19 +110,49 @@ function HuntingInner() {
   const flowRef = useRef<HTMLDivElement>(null);
   const discoveryRef = useRef<HTMLDivElement>(null);
   const groupScroll = useRef({candidates: 0, daily: 0});
+  const browseScroll = useRef<Record<string, number>>({});
+  const browseScrollKey = JSON.stringify([discovery.mode, discovery.kind, discovery.range, discovery.query, discovery.sort]);
+  const [resolvedDiscovery, setResolvedDiscovery] = useState<{scope: string; target: DiscoveryDetailTarget | null} | null>(null);
+  const resolveDiscovery = useCallback((scope: string, target: DiscoveryDetailTarget | null) => setResolvedDiscovery(previous =>
+    previous?.scope === scope && previous.target?.kind === target?.kind && previous.target?.code === target?.code && previous.target?.name === target?.name ? previous : {scope, target}), []);
+  const discoveryTarget = isDiscoverView && !selectedOnly && resolvedDiscovery?.scope === discovery.scope ? resolvedDiscovery.target : null;
+  const previousTarget = useRef<DiscoveryDetailTarget | null>(null);
+  const contextRef = useRef<HTMLElement>(null);
+  const contextScroll = useRef(0);
+  const previousContextKey = useRef("");
+  const contextKey = discoveryTarget ? `${discoveryTarget.kind}:${discoveryTarget.code}` : selectedOnly ? "context" : "browse";
+  useLayoutEffect(() => {
+    const side = contextRef.current;
+    if (side && contextKey !== previousContextKey.current) side.scrollTop = contextKey === "context" ? contextScroll.current : 0;
+    previousContextKey.current = contextKey;
+  }, [contextKey]);
+  const navigateDiscovery = useCallback((href: string, push = false) => {if (push) router.push(href, {scroll: false}); else router.replace(href, {scroll: false});}, [router]);
+  const closeDiscovery = useCallback(() => router.replace(discoveryUrl(sp.toString(), {disc_code: null}), {scroll: false}), [router, sp]);
   const scrollOwner = useCallback(() => {
     const flow = flowRef.current;
     return flow && ["auto", "scroll", "overlay"].includes(window.getComputedStyle(flow).overflowY) ? flow : discoveryRef.current;
   }, []);
   const recordGroupScroll = (event: UIEvent<HTMLDivElement>) => {
     const owner = scrollOwner();
-    if (owner && event.currentTarget === owner && event.target === owner) groupScroll.current[selectedGroup] = owner.scrollTop;
+    if (owner && event.currentTarget === owner && event.target === owner) {if (!selectedOnly && discoveryTarget && window.matchMedia("(max-width: 1023px)").matches) return; if (selectedOnly) groupScroll.current[selectedGroup] = owner.scrollTop; else browseScroll.current[browseScrollKey] = owner.scrollTop;}
   };
   useLayoutEffect(() => {
     if (!isDiscoverView) return;
     const owner = scrollOwner();
-    if (owner) owner.scrollTop = groupScroll.current[selectedGroup];
-  }, [selectedGroup, isDiscoverView, scrollOwner]);
+    if (owner) owner.scrollTop = selectedOnly ? groupScroll.current[selectedGroup] : browseScroll.current[browseScrollKey] ?? 0;
+  }, [selectedGroup, selectedOnly, browseScrollKey, isDiscoverView, scrollOwner]);
+  useEffect(() => {
+    const prior = previousTarget.current;
+    previousTarget.current = discoveryTarget;
+    if (discoveryTarget && window.matchMedia("(max-width: 1023px)").matches) {
+      discoveryRef.current?.querySelector<HTMLElement>("[data-testid=discovery-detail] h2")?.focus({preventScroll: true});
+      const owner = scrollOwner(); if (owner) owner.scrollTop = 0;
+    } else if (prior && !discoveryTarget && !selectedOnly) {
+      const button = Array.from(flowRef.current?.querySelectorAll<HTMLButtonElement>("[data-discovery-code]") ?? []).find(button => button.dataset.discoveryCode === prior.code);
+      const owner = scrollOwner(); if (owner) owner.scrollTop = browseScroll.current[browseScrollKey] ?? 0;
+      button?.focus({preventScroll: true});
+    }
+  }, [discoveryTarget, selectedOnly, scrollOwner, browseScrollKey]);
   const secValid = /^(overview|candidates|daily|opportunity|postmarket|brief|watcher|reminders|review)$/.test(sec ?? "");
   // 折叠区开合：?sec= 深链自动展开对应组；?review=1 / 生成复盘成功展开复盘组
   const [beatsOpen, setBeatsOpen] = useState(false);
@@ -149,11 +183,14 @@ function HuntingInner() {
   );
 
   // Each visible result owns its request. An auxiliary report never holds back candidates.
-  const options = {intervalMs: 60_000, enabled: isDiscovery};
-  const discoveryOptions = {...options, enabled: isDiscoverView};
-  const daily = useResource(getTodayPicks, options);
+  const legacyReading = isDiscovery && (view === "review" || selectedOnly);
+  const options = {intervalMs: 60_000, enabled: legacyReading};
+  const discoveryOptions = {...options, enabled: isDiscoverView && selectedOnly};
+  const needsSelection = isDiscoverView && discovery.mode !== "methods";
+  const daily = useResource(getTodayPicks, {intervalMs: selectedOnly ? 60_000 : null,
+    enabled: legacyReading || (needsSelection && selectedGroup === "daily")});
   // Closed review panels do not poll archives. Current gates keep their own live read.
-  const reviewOptions = {...options, enabled: isDiscovery && (view === "review" || reviewOpen)};
+  const reviewOptions = {...options, enabled: legacyReading && (view === "review" || reviewOpen)};
   const historyResource = useResource(() => getPicksHistory(10), {...reviewOptions,
     enabled: reviewOptions.enabled && (daily.data !== undefined || !!daily.error), intervalMs: null,
     key: `${daily.data?.date ?? ""}/${daily.data?.meta?.selection_version ?? ""}`});
@@ -169,7 +206,7 @@ function HuntingInner() {
   const watcherResource = useResource(getWatcherState, discoveryOptions);
   const statsResource = useResource(getIntradayReview, options);
   const opportunitiesResource = useResource(getIntradayOpportunities, discoveryOptions);
-  const intraday = useResource(getIntradayTop, discoveryOptions);
+  const intraday = useResource(getIntradayTop, {intervalMs: selectedOnly ? 60_000 : null, enabled: isDiscoverView && (selectedOnly || needsSelection && selectedGroup === "candidates")});
   const data = daily.data ?? null;
   const history = historyResource.data ?? [];
   const reviews = reviewsResource.data ?? [];
@@ -193,7 +230,7 @@ function HuntingInner() {
   const intradayFailed = briefReadFailed || !!statsResource.error || (isDiscoverView && (topReadFailed || !!opportunitiesResource.error || !!watcherResource.error || !!healthResource.error));
   // A failed re-read retains observation content, never current gate eligibility.
   const gateView = daily.error ? undefined : data?.meta?.gate_live ?? data?.meta?.gate;
-  const detailItem = dailyDetail && isDiscoverView && dailyDetail.group === selectedGroup && data?.date === dailyDetail.date && (data?.meta?.selection_version ?? null) === dailyDetail.version
+  const detailItem = dailyDetail && isDiscoverView && selectedOnly && dailyDetail.group === selectedGroup && data?.date === dailyDetail.date && (data?.meta?.selection_version ?? null) === dailyDetail.version
     ? data?.items.find(item => item.symbol === dailyDetail.item.symbol) ?? null : null;
   // Do not revive a captured ready snapshot after its date/version/member identity exits.
   if (dailyDetail && !detailItem) setDailyDetail(null);
@@ -222,21 +259,21 @@ function HuntingInner() {
 
   // ?sec= 滚动定位（展开已在上方渲染期完成，这里只负责滚动）
   useEffect(() => {
-    if (!secValid || sec === "candidates" || sec === "daily") return;
+    if (!secValid || !selectedOnly || sec === "candidates" || sec === "daily") return;
     const scroll = () => {
       document.getElementById(`sec-${sec}`)?.scrollIntoView({ behavior: window.matchMedia("(prefers-reduced-motion: reduce)").matches ? "instant" : "smooth", block: "start" });
     };
     scroll();
     const t = window.setTimeout(scroll, 400);
     return () => window.clearTimeout(t);
-  }, [sec, secValid, pending, view]);
+  }, [sec, secValid, pending, view, selectedOnly]);
 
 
 
   // Existing task links switch complete intraday/daily groups; neither producer loses same-symbol rows.
   // 闭环「标签」：已模拟持仓/已真实持仓（持仓状态派生，60s 轮询）
   // 2026-09-11（S2-5）：原为裸 setInterval，已收编到统一入口（与 workbench 同款重复实现）。
-  const positions = useResource(getPositionLabels, {intervalMs: 60_000, enabled: view === "discover"});
+  const positions = useResource(getPositionLabels, {intervalMs: 60_000, enabled: view === "discover" && selectedOnly});
   const posLabels = positions.data ?? {};
 
   const pickItems = data?.items ?? [];
@@ -246,6 +283,26 @@ function HuntingInner() {
     !data?.stale && data?.date && data.date === top?.trade_date
       ? data.items.map(item => [item.symbol, item] as const) : []
   ), [data, top]);
+  const discoverySelection = useMemo(() => {
+    const fromDaily = selectedGroup === "daily";
+    const date = fromDaily ? data?.date ?? null : top?.trade_date ?? null;
+    const rows = fromDaily ? data?.items ?? [] : top?.items ?? [];
+    const loaded = fromDaily ? picksLoaded && !picksFailed && !!data : intradayLoaded && !topReadFailed && !!top;
+    return {date, loaded, entries: rows.map(row => ({symbol: row.symbol, name: row.name,
+      open: () => router.push(discoveryUrl(sp.toString(), {browse: null, disc_code: null, selection: row.symbol}), {scroll: false})}))};
+  }, [selectedGroup, data, top, picksLoaded, picksFailed, intradayLoaded, topReadFailed, router, sp]);
+  const selectedSymbol = sp.get("selection");
+  const focusedSelection = useRef<string | null>(null);
+  useEffect(() => {
+    if (!selectedOnly || !selectedSymbol || !/^\d{6}$/.test(selectedSymbol)) {focusedSelection.current = null; return;}
+    const intent = `${selectedGroup}/${selectedSymbol}`;
+    if (focusedSelection.current === intent) return;
+    const section = document.getElementById(`sec-${selectedGroup}`);
+    const link = Array.from(section?.querySelectorAll<HTMLAnchorElement>('a[href*="symbol="]') ?? []).find(link => {
+      try {return new URL(link.href).searchParams.get("symbol") === selectedSymbol;} catch {return false;}
+    });
+    if (link) {link.focus(); focusedSelection.current = intent;}
+  }, [selectedOnly, selectedSymbol, selectedGroup, data, top]);
   const minPickScore = data?.meta?.min_pick_score;
   // 换股门槛/换股上限已进控制台参数白名单（P1-15）⇒ **必须读 meta 的生效值**，
   // 不能硬编码：硬编码会在参数被调整后继续显示旧数（口径漂移）。
@@ -428,7 +485,7 @@ function HuntingInner() {
         <div><h1>选股</h1><p className="hunting-page-intro">先发现，再核对条件，持续跟踪变化。</p></div>
         <div className="workspace-context">
         <span role="status" aria-live="polite" aria-atomic="true" className="hunting-read-status">
-        {isDiscovery && extraReading ? <span>{primaryReading ? "正在读取名单…" : "正在读取附加资料…"}</span> : isDiscovery && (picksFailed || intradayFailed || (reviewOptions.enabled && reviewReadFailures.length > 0)) ? (
+        {isDiscovery && !selectedOnly ? <span>按需读取</span> : isDiscovery && extraReading ? <span>{primaryReading ? "正在读取名单…" : "正在读取附加资料…"}</span> : isDiscovery && (picksFailed || intradayFailed || (reviewOptions.enabled && reviewReadFailures.length > 0)) ? (
           <span
             className="rounded border border-amber-500/40 bg-amber-500/10 px-1.5 py-0.5 text-[10px] text-amber-800 dark:text-amber-300"
             title="部分数据端点失败（后端不可达或网络中断）。每 60s 自动重试，也可点「刷新数据」。"
@@ -442,7 +499,7 @@ function HuntingInner() {
         )}
         </span>
         <div className="ml-auto flex flex-wrap items-center justify-end gap-1.5">
-          {isDiscovery && <button data-action="secondary"
+          {isDiscovery && selectedOnly && <button data-action="secondary"
             onClick={() => void load()}
             disabled={primaryReading} aria-busy={primaryReading}
             className="quiet-action"
@@ -471,15 +528,17 @@ function HuntingInner() {
       <div className="hunting-content min-h-0 flex-1" data-view={view} aria-label="选股内容">
         {view === "validation" ? <SelectionValidationPanel /> : view === "evidence" ? <OpportunityEvidencePanel date={sp.get("date") ?? undefined} onDateChange={date => { const p = new URLSearchParams(sp.toString()); p.set("date", date); router.replace(`/hunting?${p.toString()}`, {scroll:false}); }} /> : view === "tracking" ? <WatchLedgerPanel date={sp.get("date") ?? undefined} /> : view === "research" ? <LeaderResearchPanel date={sp.get("date") ?? undefined} onDateChange={date => router.replace(patchWorkspaceUrl("/hunting", sp.toString(), {date: date ?? null}), {scroll: false})} /> : <>
         {view === "discover" && <>
-<div ref={discoveryRef} className="hunting-discovery-grid" onScroll={recordGroupScroll}><div ref={flowRef} className="hunting-candidate-flow" onScroll={recordGroupScroll} tabIndex={0} role="region" aria-label="候选结果与题材">
-        <div className="hunting-list-toolbar">
+<div ref={discoveryRef} className="hunting-discovery-grid" data-detail-open={!!discoveryTarget} onScroll={recordGroupScroll}><div ref={flowRef} className="hunting-candidate-flow" onScroll={recordGroupScroll} tabIndex={0} role="region" aria-label="候选结果与题材">
+        <DiscoveryNavigation search={sp.toString()} />
+        <div className="hunting-list-toolbar" hidden={!selectedOnly} inert={!selectedOnly}>
           {candidateSwitch}
           <SelectionRail activeKey={collectionViews[selectedGroup]} label="候选呈现方式">
             {(["cards", "list"] as const).map(mode => <button key={mode} type="button" aria-pressed={collectionViews[selectedGroup] === mode}
               onClick={() => setCollectionViews(previous => previous[selectedGroup] === mode ? previous : {...previous, [selectedGroup]:mode})}>{mode === "cards" ? "卡片" : "列表"}</button>)}
           </SelectionRail>
         </div>
-        <div className="hunting-candidate-notices">
+        {!selectedOnly && <DiscoveryBrowser search={sp.toString()} selection={discoverySelection} onNavigate={navigateDiscovery} onTarget={resolveDiscovery} />}
+        <div className="hunting-candidate-notices" hidden={!selectedOnly} inert={!selectedOnly}>
         {/* ── 空仓闸门横幅（风险提示置顶）──
             2026-09-16 动态化：以**读取时刻复核**（meta.gate_live）为准展示，
             生成时刻落库值（meta.gate）作对照。此前只显示落库值 ⇒ 开盘 3 分钟的
@@ -496,7 +555,7 @@ function HuntingInner() {
         )}
         {sourceStatus}
         </div>
-        <section id="sec-candidates" className="hunting-candidates space-y-3" hidden={selectedGroup !== "candidates"} inert={selectedGroup !== "candidates"}>
+        <section id="sec-candidates" className="hunting-candidates space-y-3" hidden={selectedGroup !== "candidates" || !selectedOnly} inert={selectedGroup !== "candidates" || !selectedOnly}>
           <CandidateCollection view={collectionViews.candidates} onViewChange={mode => setCollectionViews(previous => ({...previous,candidates:mode}))} toolbar={false} description={<>
             <div className="hunting-section-heading hunting-group-heading">
               <h2 className="sr-only">盘中候选</h2>
@@ -507,7 +566,7 @@ function HuntingInner() {
           </>}>
             {!intradayLoaded ? <div className="hunting-collection-placeholder"><CardListSkeleton count={2}/></div>
               : !top ? <div role="alert" className="hunting-empty hunting-collection-placeholder">盘中候选读取失败。请刷新重试；当前无法判断是否有符合条件的标的。</div>
-              : topItems.length > 0 ? topItems.map(it => <PickCard compact active={selectedGroup === "candidates"} key={JSON.stringify([top.trade_date, top.selection_identity_version, it.symbol])} item={fromIntradayStock(it)}
+              : topItems.length > 0 ? topItems.map(it => <PickCard compact active={selectedGroup === "candidates" && selectedOnly} key={JSON.stringify([top.trade_date, top.selection_identity_version, it.symbol])} item={fromIntradayStock(it)}
                   readError={!!intraday.error}
                   dailyEvidence={dailyBySymbol.has(it.symbol) && data?.date ? {item: dailyBySymbol.get(it.symbol)!, date: data.date, generatedAt: data.meta?.generated_at ?? null, version: data.meta?.selection_version ?? null} : undefined}
                   onShowDailyEvidence={showDailyDetail} positionLabel={(posLabels[it.symbol] as "sim" | "real" | undefined) ?? null} />)
@@ -525,13 +584,13 @@ function HuntingInner() {
               <div className="motion-disclosure-body">
                 {referencePresence.value !== null && <>
                   <p className="hunting-source-note">{top?.reference_criteria ?? "保留今日曾封板身份；当前仍封、已开板或未判，以卡片对应时点为准。仅用于观察资金集中方向。"}</p>
-                  <CandidateCollection>{topRefItems.map(it => <PickCard compact active={selectedGroup === "candidates" && referencePresence.active} key={JSON.stringify([top?.trade_date, top?.selection_identity_version, it.symbol])} item={fromIntradayStock(it)} readError={!!intraday.error} positionLabel={(posLabels[it.symbol] as "sim" | "real" | undefined) ?? null} />)}</CandidateCollection>
+                  <CandidateCollection>{topRefItems.map(it => <PickCard compact active={selectedGroup === "candidates" && selectedOnly && referencePresence.active} key={JSON.stringify([top?.trade_date, top?.selection_identity_version, it.symbol])} item={fromIntradayStock(it)} readError={!!intraday.error} positionLabel={(posLabels[it.symbol] as "sim" | "real" | undefined) ?? null} />)}</CandidateCollection>
                 </>}
               </div>
             </div>
           </div>}
         </section>
-        <section id="sec-daily" className="hunting-daily space-y-3" hidden={selectedGroup !== "daily"} inert={selectedGroup !== "daily"}>
+        <section id="sec-daily" className="hunting-daily space-y-3" hidden={selectedGroup !== "daily" || !selectedOnly} inert={selectedGroup !== "daily" || !selectedOnly}>
           <CandidateCollection view={collectionViews.daily} onViewChange={mode => setCollectionViews(previous => ({...previous,daily:mode}))} toolbar={false} description={<>
             <div className="hunting-section-heading hunting-group-heading"><h2 className="sr-only">每日精选</h2><p>{data?.date ?? "组合日期待读取"} · 当日持久候选</p></div>
             {picksFailed && data && <p role="alert" className="hunting-empty">每日精选读取失败。以下保留上次读取的组合与原生成依据，当前执行复核待重新读取。</p>}
@@ -539,26 +598,29 @@ function HuntingInner() {
             {!picksLoaded ? <div className="hunting-collection-placeholder"><CardListSkeleton count={2}/></div>
               : !data ? <div role="alert" className="hunting-empty hunting-collection-placeholder">每日精选读取失败。请刷新重试；读取失败不表示没有组合。</div>
               : pickTotal === 0 ? <div className="hunting-empty hunting-collection-placeholder">{dailyEmptySummary(data)}</div>
-              : pickItems.map(it => <PickCard compact active={selectedGroup === "daily"} key={JSON.stringify([data.date, data.meta?.selection_version, it.symbol])} item={fromDailyPick(it, {date: data.date!, version: data.meta?.selection_version ?? null})} readError={!!daily.error} positionLabel={(posLabels[it.symbol] as "sim" | "real" | undefined) ?? null} />)}
+              : pickItems.map(it => <PickCard compact active={selectedGroup === "daily" && selectedOnly} key={JSON.stringify([data.date, data.meta?.selection_version, it.symbol])} item={fromDailyPick(it, {date: data.date!, version: data.meta?.selection_version ?? null})} readError={!!daily.error} positionLabel={(posLabels[it.symbol] as "sim" | "real" | undefined) ?? null} />)}
           </CandidateCollection>
           <p className="hunting-source-note">{minPickScore != null ? `综合分≥${minPickScore} · ` : ""}{replaceThreshold != null ? `换股门槛 ${replaceThreshold} 分` : "换股门槛未返回"} · {maxSwaps != null ? `每日换股上限 ${maxSwaps} 只` : "换股上限未返回"}；够格几只就保留几只。</p>
         </section>
 
         {/* ── 异动手风琴（题材 → 个股瀑布流）── */}
-        <div id="sec-opportunity" className="scroll-mt-2">
-          {opps ? (
+        <div id="sec-opportunity" className="scroll-mt-2" hidden={!selectedOnly} inert={!selectedOnly}>
+          {selectedOnly && (opps ? (
             <FadeIn>
               {!!opportunitiesResource.error && <p role="alert" className="hunting-empty">题材机会读取失败，保留上次题材结果；当前参与条件待重新核实。</p>}
               <OpportunitySection opps={opps} expanded={expandedTheme} onToggle={toggleTheme} showLedger={false} readError={!!opportunitiesResource.error} />
             </FadeIn>
           ) : (
             opportunitiesResource.pending ? <CardListSkeleton count={3} /> : <p role="alert" className="hunting-empty">题材参与数据读取失败，请刷新重试。无法据此判断没有题材机会。</p>
-          )}
+          ))}
         </div>
 
         {/* ── 盘后增强（P1-5/6）：接力质量排序 + 潜伏观察池，默认收起 ── */}
-        <div id="sec-postmarket"><PostMarketEnhance initiallyOpen={sec === "postmarket"} /></div>
-        </div><aside className="hunting-context-column" tabIndex={0} aria-label="市场环境、节拍与复盘">
+        <div id="sec-postmarket" hidden={!selectedOnly} inert={!selectedOnly}>{selectedOnly && <PostMarketEnhance initiallyOpen={sec === "postmarket"} />}</div>
+        </div><aside ref={contextRef} onScroll={event => {if (selectedOnly && !discoveryTarget && event.target === event.currentTarget) contextScroll.current = event.currentTarget.scrollTop;}} className="hunting-context-column" tabIndex={0} aria-label={discoveryTarget ? `分类详情 ${discoveryTarget.name}` : "市场环境、节拍与复盘"}>
+        {discoveryTarget && <DiscoveryDetail key={`${discoveryTarget.kind}:${discoveryTarget.code}`} target={discoveryTarget} selection={discoverySelection} onClose={closeDiscovery} />}
+        {!selectedOnly && !discoveryTarget && <div className="hunting-reading-note"><h2>{discovery.mode === "methods" ? "核对真实方法" : "点选分类，核对成分"}</h2><p>{discovery.mode === "methods" ? "从方法进入原日期与版本。观察、已否决和现役分别保留。" : "右侧就近核对成分、涨跌与原名单；分类浏览不新增入选或研究。"}</p></div>}
+        <div className="hunting-original-context" hidden={!!discoveryTarget || !selectedOnly} inert={!!discoveryTarget || !selectedOnly}>
         {/* ── 相位→风格路由（审查 §4.1）：当日风格 + 权重偏移，路由未生效时显式说明 ── */}
         {data?.meta?.style_routing && (
           <StyleRoutingChip sr={data.meta.style_routing} />
@@ -594,7 +656,7 @@ function HuntingInner() {
         <div className="hunting-reading-note"><h2>如何使用这份名单</h2><p>先看形成依据，再核对来源时间、参与条件和失效条件。强势、入选与可成交是不同事实。</p><p>需要持续留痕时进入“跟踪记录”；需要核验历史判断时进入“验证复盘”。</p></div>
         {beatsPanel}
         {journalPanel}
-        </aside></div></>}
+        </div></aside></div></>}
         {view === "review" && journalPanel}
 
         </>}

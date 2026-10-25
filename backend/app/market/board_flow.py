@@ -234,7 +234,8 @@ async def get_board_list(kind: str) -> tuple[list[dict] | None, list[str]]:
         rows = _board_rows_from_diff(diff, kind)
         if not rows:
             raise _BoardListUnavailable(degraded + ["板块列表解析为空"])
-        return {"rows": rows, "degraded": degraded, "source": host}
+        return {"rows": rows, "degraded": degraded, "source": host,
+                "received_at": beijing_now().isoformat()}
 
     async def read() -> tuple[bool, dict]:
         try:
@@ -334,7 +335,8 @@ async def _load_board_members(board_code: str) -> dict:
     """板块成员个股资金排行 Top20（fs=b:BKxxxx，fid=f62 服务端降序）。"""
     diff, host = await _clist_pages(f"b:{board_code}", _MEMBER_FIELDS, pz=20, first_page_only=True)
     if diff is None:
-        raise _DrillUnavailable({"available": False, "reason": "板块成员资金排行不可用（双域已重试）", "rows": [], "degraded": []})
+        raise _DrillUnavailable({"available": False, "board_code": board_code,
+                                 "reason": "板块成员资金排行不可用（双域已重试）", "rows": [], "degraded": []})
     rows: list[dict] = []
     for it in diff[:20]:
         code, name = it.get("f12"), it.get("f14")
@@ -361,6 +363,7 @@ async def _load_board_members(board_code: str) -> dict:
         "degraded": (["主域不可达，使用延迟口径（push2delay）"] if host == _HOSTS[1] else []),
     }
     if not out["available"]:
+        out["reason"] = "板块成员资金排行未返回可用记录"
         raise _DrillUnavailable(out)
     return out
 
@@ -551,10 +554,13 @@ async def get_board_fund_flow(kind: str, range_key: str) -> dict:
     if kind not in _KIND_FS:
         return {"available": False, "reason": f"kind 非法：{kind!r}", "rows": [], "degraded": []}
     if range_key == "20d":
-        return _local_board_history(kind)
+        return {**_local_board_history(kind), "source_as_of": None,
+                "received_at": None, "coverage_state": "local_sample",
+                "time_basis": "as_of 为本地已存完成日记录的截止日；未补齐缺日"}
     rows, degraded = await get_board_list(kind)
     if rows is None:
-        return {"available": False, "reason": degraded[0] if degraded else "数据源不可用", "rows": [], "degraded": degraded}
+        return {"available": False, "kind": kind, "range": range_key,
+                "reason": degraded[0] if degraded else "数据源不可用", "rows": [], "degraded": degraded}
 
     sort_key = _RANGE_SORT_KEY[range_key]
     rows.sort(key=lambda r: (r.get(sort_key) is None, -(r.get(sort_key) or 0)))
@@ -572,6 +578,11 @@ async def get_board_fund_flow(kind: str, range_key: str) -> dict:
         # 昨日 Top50 之外的板块无基线 → None（三态，绝不冒充 0）
         r["rank_delta"] = (prev - r["rank"]) if prev is not None else None
         r["streak"] = streaks.get(r["board_code"])
+    # Receipt time belongs to the shared source load, not this rendering. The
+    # upstream clist fields contain no trustworthy source date or timestamp.
+    source_cache, source_key = board_list_read_identity(kind)
+    _, source_evidence = source_cache.get(source_key)
+    source_evidence = source_evidence or {}
     return {
         "available": True,
         "kind": kind,
@@ -580,6 +591,13 @@ async def get_board_fund_flow(kind: str, range_key: str) -> dict:
         "total_boards": len(rows),
         "coverage": None,
         "updated_at": beijing_now().strftime("%H:%M:%S"),
+        "source": "eastmoney_board_clist",
+        "source_as_of": None,
+        "received_at": source_evidence.get("received_at"),
+        "coverage_state": "unknown",
+        "time_basis": "updated_at 为本次读取时刻；上游未提供可核源时点，返回数量不证明全市场覆盖",
+        "source_mode": "delayed" if source_evidence.get("source") == _HOSTS[1] else
+                       "primary" if source_evidence.get("source") == _HOSTS[0] else "unknown",
         "rank_basis_date": basis_date,
         "degraded": degraded,
     }

@@ -615,6 +615,11 @@ export interface BoardFundFlowPayload {
   historical?: boolean;
   as_of?: string | null;
   source?: string;
+  source_as_of?: string | null;
+  received_at?: string | null;
+  coverage_state?: "unknown" | "local_sample";
+  source_mode?: "primary" | "delayed" | "unknown";
+  time_basis?: string;
   quality?: "medium" | "stale";
   degraded: string[];
 }
@@ -655,9 +660,10 @@ export interface BoardFlowMembersPayload {
 export async function getBoardFundFlow(
   kind: BoardFlowKind = "concept",
   range: BoardFlowRange = "intraday",
+  options: ReadOptions = {},
 ): Promise<BoardFundFlowPayload> {
   return (await getJson<BoardFundFlowPayload>(
-    `/api/market/board-fund-flow?kind=${kind}&range=${range}`, 30_000,
+    `/api/market/board-fund-flow?kind=${kind}&range=${range}`, 30_000, options,
   )).data;
 }
 
@@ -667,9 +673,9 @@ export async function getBoardFlowMinute(boardCode: string): Promise<BoardFlowMi
   )).data;
 }
 
-export async function getBoardFlowMembers(boardCode: string): Promise<BoardFlowMembersPayload> {
+export async function getBoardFlowMembers(boardCode: string, options: ReadOptions = {}): Promise<BoardFlowMembersPayload> {
   return (await getJson<BoardFlowMembersPayload>(
-    `/api/market/board-fund-flow/${boardCode}/members`, 30_000,
+    `/api/market/board-fund-flow/${encodeURIComponent(boardCode)}/members`, 30_000, options,
   )).data;
 }
 

@@ -133,6 +133,112 @@ def test_board_warm_cache_keeps_delay_and_unmodified_rows(monkeypatch, isolated_
     _run(go())
 
 
+def test_discovery_board_receipt_is_shared_and_not_source_time(monkeypatch, isolated_list_reads):
+    """Switching a display window reuses the source load, not a new clock."""
+    from datetime import timedelta
+
+    fake = FakeHTTP()
+    fake.add("push2.eastmoney", [RuntimeError("fixture primary unavailable")])
+    fake.add("push2delay.eastmoney", [_clist_payload([_em_board()])])
+    monkeypatch.setattr(bf, "_HTTP", fake)
+
+    async def go():
+        first = await bf.get_board_fund_flow("concept", "intraday")
+        received = first["received_at"]
+        assert received == isolated_list_reads["now"].isoformat()
+        isolated_list_reads["now"] += timedelta(seconds=10)
+        second = await bf.get_board_fund_flow("concept", "5d")
+        assert second["received_at"] == received
+        assert second["source_as_of"] is None and second["coverage_state"] == "unknown"
+        assert second["source_mode"] == "delayed"
+        assert first["updated_at"] != second["updated_at"]
+        assert len(fake.calls) == 2
+
+    _run(go())
+
+
+@pytest.mark.parametrize("kind", ["industry", "concept"])
+@pytest.mark.parametrize("range_key", ["intraday", "5d", "10d"])
+def test_board_fund_source_failure_keeps_request_identity(monkeypatch, isolated_list_reads, kind, range_key):
+    """A source outage is unavailable evidence, not a mismatched response."""
+    from fastapi import FastAPI
+    from fastapi.testclient import TestClient
+    from app.api.routes.market_flow import router
+
+    fake = FakeHTTP()
+    fake.add("push2.eastmoney", [RuntimeError("fixture primary unavailable")])
+    fake.add("push2delay.eastmoney", [RuntimeError("fixture backup unavailable")])
+    monkeypatch.setattr(bf, "_HTTP", fake)
+    app = FastAPI()
+    app.include_router(router, prefix="/api")
+    with TestClient(app) as probe:
+        response = probe.get("/api/market/board-fund-flow", params={"kind": kind, "range": range_key})
+    assert response.status_code == 200
+    data = response.json()["data"]
+    assert data["kind"] == kind and data["range"] == range_key
+    assert data["available"] is False and data["rows"] == []
+    assert data["reason"] and data["degraded"]
+    assert data.get("received_at") is None and data.get("source_as_of") is None
+    assert "total_boards" not in data  # A failed fetch does not prove zero boards.
+    assert len(fake.calls) == 2
+
+
+@pytest.mark.parametrize("kind", ["industry", "concept"])
+def test_board_fund_empty_local_history_keeps_identity_without_fetch(monkeypatch, fresh_memo, kind):
+    async def forbidden(*_args):
+        raise AssertionError("20d history must never fetch live boards")
+
+    monkeypatch.setattr(bf, "get_board_list", forbidden)
+    data = _run(bf.get_board_fund_flow(kind, "20d"))
+    assert data["kind"] == kind and data["range"] == "20d"
+    assert data["available"] is False and data["rows"] == [] and data["historical"]
+    assert data["coverage_state"] == "local_sample"
+    assert data["as_of"] is None and data["received_at"] is None
+
+
+@pytest.mark.parametrize("board_code", ["BK0917", "bk0001"])
+@pytest.mark.parametrize("failure", ["source_failure", "no_valid_rows"])
+def test_board_member_unavailable_retains_normalized_identity(monkeypatch, fresh_memo, board_code, failure):
+    from fastapi import FastAPI
+    from fastapi.testclient import TestClient
+    from app.api.routes.market_flow import router
+
+    monkeypatch.setattr(bf, "_MEMBERS_CACHE", TTLCache("test-member-identity", 60, maxsize=4))
+    monkeypatch.setattr(bf, "_DRILL_READS", {})
+    fake = FakeHTTP()
+    if failure == "source_failure":
+        fake.add("push2.eastmoney", [RuntimeError("fixture primary unavailable")])
+        fake.add("push2delay.eastmoney", [RuntimeError("fixture backup unavailable")])
+    else:
+        fake.add("push2.eastmoney", [_clist_payload([{"f12": "600001"}])])
+    monkeypatch.setattr(bf, "_HTTP", fake)
+    app = FastAPI()
+    app.include_router(router, prefix="/api")
+    with TestClient(app) as probe:
+        response = probe.get(f"/api/market/board-fund-flow/{board_code}/members")
+    assert response.status_code == 200
+    data = response.json()["data"]
+    assert data["board_code"] == board_code.upper()
+    assert data["available"] is False and data["rows"] == [] and data["reason"]
+    assert len(fake.calls) == (2 if failure == "source_failure" else 1)
+
+
+def test_board_minute_unavailable_already_retains_identity(monkeypatch, fresh_memo):
+    from app.market import fund_flow
+
+    monkeypatch.setattr(bf, "_MINUTE_CACHE", TTLCache("test-minute-identity", 60, maxsize=4))
+    monkeypatch.setattr(bf, "_DRILL_READS", {})
+
+    async def unavailable(_code):
+        return None
+
+    monkeypatch.setattr(fund_flow, "_em_fflow_kline", unavailable)
+    data = _run(bf.get_board_minute("BK0917"))
+    assert data["board_code"] == "BK0917"
+    assert data["available"] is False and data["items"] == [] and data["reason"]
+    assert data["daily_bars"] == []
+
+
 def test_board_list_cache_separates_kind_and_date(monkeypatch, isolated_list_reads):
     calls = []
 

@@ -262,3 +262,18 @@ gate 相位分位闸门 · exit_engine 角色分档 · echelon 题材阶段系�
 intraday_rules 分时段确认线 · halt_risk 板块映射 · two_thirty_five 大盘环境分层 ·
 candidate_b 市值分档+同市值段中性化 · triple_volume 位置分层 · watch_ledger T+1 守卫 ·
 P2-33② 执行时点双口径（日线反选/盘中正选——条件化翻结论的既有先例）
+
+
+## 2026-10-25 发现分类元数据
+
+原五键增加discovery类别/时段/短用途及supports_saved_runs，仅作选股读者索引，不改生命周期、准入或规则。分类机器源仍是strategy_registry的StrategySpec，不以note关键词猜，不引入平行登记册。
+
+| 原键 | 类别 | 时段 | 原记录入口 |
+|---|---|---|---|
+| daily_picks | 多因子组合 | 每日生成 | 原保存运行与版本 |
+| intraday_watch | 盘中跟踪 | 盘中观察 | 原保存运行与版本 |
+| pullback_reversal | 超跌反转 | 离线研究 | 原核验与反例，仍观察 |
+| triple_volume | 量价形态 | 离线研究 | 原核验与反例，仍否决 |
+| two_thirty_five | 盘尾时段 | 离线研究 | 原核验与反例，仍否决 |
+
+耗时/入选数/原版本来自runtime保存事实，缺失明确未记录；最近保存与所选日期不同分别说明。读取和分类不重跑方法或模型。
