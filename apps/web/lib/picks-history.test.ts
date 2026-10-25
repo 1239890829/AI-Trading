@@ -1,7 +1,7 @@
 import {beforeEach,describe,expect,it,vi} from "vitest";
-import {getStrategyMethodRun,getStrategyMethodRuns,type SavedMethodRunIdentity} from "./picks";
+import {getStrategyMethodRun,getStrategyMethodRuns,type SavedMethodRunIdentity} from "./api/picks";
 const read=vi.hoisted(()=>vi.fn());
-vi.mock("./internal",()=>({getJson:read,getJsonArray:vi.fn(),sendJson:vi.fn()}));
+vi.mock("./api/internal",()=>({getJson:read,getJsonArray:vi.fn(),sendJson:vi.fn()}));
 const identity:SavedMethodRunIdentity={method:"daily_picks",run_id:"42",trade_date:"2026-10-22",source_version:"original+source",content_version:"a".repeat(64),strategy_version:"method-old",state:"saved"};
 beforeEach(()=>{read.mockReset();read.mockResolvedValue({data:{state:"saved"}});});
 describe("saved selection history API",()=>{
