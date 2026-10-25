@@ -86,3 +86,54 @@ def test_corrupt_rank_evidence_preserves_unknown_not_zero_selection(sf):
     assert run['state'] == 'partial' and run['counts']['selected'] is None
     assert run['items'][0]['state'] == 'unknown'
     assert run['items'][0]['decision'] == 'ranked'
+
+
+def test_daily_rejected_reason_uses_producer_fields_not_technical_score(sf):
+    rejected = [
+        {'symbol': '600000', 'score': 47.2, 'tech': 61.1, 'selection_reason': 'below_min_score',
+         'score_shortfall': 2.8, 'bases': {'tech': '原技术依据'}, 'vetoes': []},
+        {'symbol': '600001', 'tech': 80, 'selection_reason': 'capacity_or_replacement', 'score_shortfall': 0},
+        {'symbol': '600002', 'reason': 99, 'tech': 61.1, 'selection_reason': 'future_reason'},
+        {'symbol': '600003', 'reason': '原文本理由', 'selection_reason': 'below_min_score', 'score_shortfall': 1},
+        {'symbol': '600004', 'tech': 61.1, 'selection_reason': 'below_min_score'},
+    ]
+    with sf() as db:
+        db.add(DailyPickSet(date='2026-10-23', items='[{"symbol":"600005","bases":{"tech":"原评分依据"}}]',
+            rejected=json.dumps(rejected), meta='{"min_pick_score":99}'))
+        db.commit()
+    rows = saved_method_runs(sf)['daily_picks']['items']
+    assert rows[0]['reason'] == '' and rows[0]['basis'] == {'tech': '原评分依据'}
+    assert rows[1]['reason'] == '低于原入选分线；原记录差额 2.8 分'
+    assert rows[1]['score'] == 47.2 and rows[1]['basis'] == {'tech': '原技术依据'}
+    assert rows[2]['reason'] == '原记录为容量或换股约束；具体原因未区分'
+    assert rows[3]['reason'] == '原入选原因未识别（future_reason）'
+    assert rows[4]['reason'] == '原文本理由'
+    assert rows[5]['reason'] == '低于原入选分线；原差额未记录'
+    assert all('61.1' not in row['reason'] for row in rows)
+
+
+def test_rank_rows_remain_visible_after_large_hard_gate_archive(sf):
+    with sf() as db:
+        db.add(OpportunityDecisionRun(run_id='large', trade_date='2026-10-23', as_of=datetime(2026, 10, 23, 10),
+            scenario='intraday_opportunity', strategy_version='s1', feature_version='f1', evidence_digest='fixture',
+            candidate_rows=477, hard_gate_rows=477, rank_rows=8))
+        common = dict(run_id='large', trade_date='2026-10-23', as_of=datetime(2026, 10, 23, 10),
+            scenario='intraday_opportunity', strategy_version='s1', feature_version='f1')
+        for i in range(210):
+            db.add(OpportunityDecisionSnapshot(**common, snapshot_id=f'hard-{i}', stage='hard_gate',
+                symbol=str(600000+i), decision='passed', evidence='{}'))
+        db.flush()
+        for i in range(8):
+            db.add(OpportunityDecisionSnapshot(**common, snapshot_id=f'rank-{i}', stage='rank',
+                symbol=str(600000+i), decision='ranked', rank=i+1,
+                evidence=json.dumps({'effective_limit':5,'within_display_capacity':i<5})))
+        db.commit()
+    run = saved_method_runs(sf)['intraday_watch']
+    assert len(run['items']) == 200 and run['possibly_truncated'] is True
+    assert [row['stage'] for row in run['items'][:8]] == ['rank'] * 8
+    assert [row['symbol'] for row in run['items'] if row['state']=='selected'] == [str(600000+i) for i in range(5)]
+    assert run['counts'] == {'candidate_rows':477,'hard_gate_rows':477,'rank_rows':8,'selected':5}
+    with sf() as db:
+        db.get(OpportunityDecisionRun, 'large').rank_rows = 9
+        db.commit()
+    assert saved_method_runs(sf)['intraday_watch']['counts']['selected'] is None

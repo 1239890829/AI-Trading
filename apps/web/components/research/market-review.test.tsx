@@ -2,7 +2,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { cleanup, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import type { ReactNode } from "react";
 import { MarketReview, reviewSegmentBound } from "./market-review";
-import type { ReviewProvenance, ReviewReportDetail } from "@/lib/api";
+import type { ReviewData, ReviewProvenance, ReviewReportDetail } from "@/lib/api";
 
 vi.mock("@/components/stock-link", () => ({StockLink: ({symbol,children}: {symbol: string;children: ReactNode}) => <a href={`/workbench?symbol=${symbol}`}>{children}</a>}));
 vi.mock("@/lib/api", async () => ({...await vi.importActual<typeof import("@/lib/api")>("@/lib/api"),getReviewReport: vi.fn()}));
@@ -19,6 +19,9 @@ function report(): ReviewReportDetail {
     dimensions:[{key:"market",title:"市场环境研判",status:"ok",findings:["原市场观察"],judgements:["等待后续确认"],gaps:[]}],
     data:{trade_date:"20261023",collected_at:"2026-10-23T15:30:00+08:00",market:{trade_date:"20261023",contract_version:"date_bound_v1",provenance:{indices:provenance(),breadth:provenance(),sentiment:provenance(),themes:provenance(),sector_boards:provenance()},indices:[{symbol:"sh000001",name:"上证指数",close:3200,change_pct:0,binding_state:"verified",source:"saved_source"}],breadth:{up:0,down:20,flat:0,total:20,limit_up:0,limit_down:2,total_amount:0},sentiment:{phase:"分歧"},themes:[],sector_boards:{industry:[{board_code:"i1",name:"强行业",change_pct:2,main_net_yi:0},{board_code:"i2",name:"弱行业",change_pct:-1,main_net_yi:null},{board_code:"i3",name:"缺涨幅行业",change_pct:null,main_net_yi:null}],concept:[{board_code:"c1",name:"原概念",change_pct:1,main_net_yi:3}]},gaps:[]},trading:{trade_date:"20261023",contract_version:"date_bound_v1",provenance:{orders:provenance(),account:provenance(),positions:provenance()},account:{name:"主模拟",cash:0},positions:[],orders:[],trade_count:0,gaps:[]},picks:{trade_date:"20261023",combo_date:"2026-10-23",items:[{symbol:"000333",name:"美的集团",score:51.8,themes:["家电"],observation_only:true,basis:"原主营与盈利依据"}],reviews:[],gaps:[]}},
   };
+}
+function savedOutlook(review_state?: "saved" | "unknown", reviewed_at?: string | null): NonNullable<ReviewData["outlook"]> {
+  return {state:"saved",trade_date:"2026-10-23",source:"picks.morning_brief",generated_at:"2026-10-23T08:30:00+08:00",missing:[],reason:"原保存简报",directions:[{direction:"电力",logic:"原产业逻辑",basis:"原政策依据",entry_mode:"观察",entry_basis:"原参与范围",trigger_conditions:["原确认条件"],falsify_conditions:["原失效条件"],review:{outcome:"未确认",actual_pct:0,note:"成交额条件未满足"},review_state,reviewed_at}]};
 }
 
 describe("market review dated evidence",()=>{
@@ -45,10 +48,20 @@ describe("market review dated evidence",()=>{
     render(<MarketReview report={report()}/>);
     expect(screen.getByRole("img",{name:"已记录涨跌分布：上涨0家，下跌20家，平盘0家"})).toBeTruthy();
     expect(screen.getByText("0.00%")).toBeTruthy();
-    expect(screen.queryByText("本日已保存的精选名单为空。")).toBeNull();
+    expect(screen.queryByText("本报告没有可展示的精选条目；不证明该日零入选。")).toBeNull();
     expect(screen.getByRole("link",{name:/美的集团/}).getAttribute("href")).toContain("symbol=000333");
     expect(screen.getByText("逐股归因未记录，不能当作成功或失败。")).toBeTruthy();
     expect(screen.getByText("已保存成交状态").textContent).toBe("已保存成交状态 0");
+    expect(api.getReviewReport).not.toHaveBeenCalled();
+  });
+  it("does not turn matching legacy pick dates and empty items into proof of zero selections",()=>{
+    const value=report();value.trade_date="20261022";value.data!.trade_date="20261022";value.data!.market.trade_date="20261022";
+    delete value.data!.market.contract_version;delete value.data!.market.provenance;
+    value.data!.picks={trade_date:"20261022",combo_date:"2026-10-22",items:[],reviews:[],gaps:[]};
+    render(<MarketReview report={value}/>);
+    expect(screen.getByText("本报告没有可展示的精选条目；不证明该日零入选。")).toBeTruthy();
+    expect(screen.queryByText("本日已保存的精选名单为空。")).toBeNull();
+    expect(screen.queryByText("当日持久入选")).toBeNull();
     expect(api.getReviewReport).not.toHaveBeenCalled();
   });
   it("sorts only saved sector rows, keeps missing returns last, and switches category",()=>{
@@ -67,6 +80,7 @@ describe("market review dated evidence",()=>{
     value.data!.market.sector_boards={industry:[],concept:[]};
     render(<MarketReview report={value}/>);
     expect(screen.getByText("板块采集参考")).toBeTruthy();
+    expect(screen.getByText(/原数据源按日保存的资金Top50样本/)).toBeTruthy();
     expect(screen.getByText(/不是已核同日的全市场领涨/)).toBeTruthy();
     expect(screen.getByText("强行业")).toBeTruthy();
     expect(reviewSegmentBound(value.data,"sector_boards",value.trade_date)).toBe(false);
@@ -101,12 +115,33 @@ describe("market review dated evidence",()=>{
     expect(api.getReviewReport).toHaveBeenCalledTimes(1);
   });
   it("reads saved trigger, falsifier and actual review without generating a new outlook",()=>{
-    const value=report();value.data!.outlook={state:"saved",trade_date:"2026-10-23",source:"picks.morning_brief",generated_at:"2026-10-23T08:30:00+08:00",missing:[],reason:"原保存简报",directions:[{direction:"电力",logic:"原产业逻辑",basis:"原政策依据",entry_mode:"观察",entry_basis:"原参与范围",trigger_conditions:["原确认条件"],falsify_conditions:["原失效条件"],review:{outcome:"未确认",actual_pct:0,note:"成交额条件未满足"}}]};
+    const value=report();value.data!.outlook=savedOutlook();
     render(<MarketReview report={value}/>);
     expect(screen.getByText("原确认条件")).toBeTruthy();expect(screen.getByText("原失效条件")).toBeTruthy();
     expect(screen.getByText(/已存后验回看（记录时点未核）：未确认 · 板块 0.00%/)).toBeTruthy();
     expect(screen.getByText(/不是本次新生成的明日预测/)).toBeTruthy();
     expect(api.getReviewReport).not.toHaveBeenCalled();
+  });
+  it("shows the independently saved outlook review clock in Beijing time",()=>{
+    const value=report();value.data!.outlook=savedOutlook("saved","2026-10-23T07:20:00Z");
+    value.data!.outlook.directions[0].trigger_conditions=null;value.data!.outlook.directions[0].falsify_conditions=null;
+    render(<MarketReview report={value}/>);
+    expect(screen.getByText(/已存后验回看（回看于 2026-10-23 15:20）：未确认 · 板块 0.00%/)).toBeTruthy();
+    expect(screen.queryByText(/已存后验回看（记录时点未核）/)).toBeNull();
+    expect(screen.getByText("原记录未列确认条件。")).toBeTruthy();expect(screen.getByText("原记录未列失效条件。")).toBeTruthy();
+    expect(api.getReviewReport).not.toHaveBeenCalled();
+  });
+  it.each([
+    {label:"missing review clock",state:"saved" as const,at:undefined},
+    {label:"null review clock",state:"saved" as const,at:null},
+    {label:"invalid review clock",state:"saved" as const,at:"not-a-time"},
+    {label:"timezone-free review clock",state:"saved" as const,at:"2026-10-23T15:20:00"},
+    {label:"unverified clock despite a timestamp",state:"unknown" as const,at:"2026-10-23T07:20:00Z"},
+  ])("keeps the review moment unknown for $label",({state,at})=>{
+    const value=report();value.data!.outlook=savedOutlook(state,at);
+    render(<MarketReview report={value}/>);
+    expect(screen.getByText(/已存后验回看（记录时点未核）：未确认/)).toBeTruthy();
+    expect(screen.queryByText(/已存后验回看（回看于/)).toBeNull();
   });
   it("preserves the original selection binding and does not turn accepted into delivered",()=>{
     const value=report();value.data!.selection_journey={state:"saved",trade_date:"2026-10-23",source:"alert_event",reason:"按原入选身份连接",items:[{symbol:"000333",name:"美的集团",selection_source:"intraday",selection_ref:"selection-reference-original",source_version:"version-original",source_as_of:"2026-10-23T10:00:00+08:00",origin_event_id:42,basis:"原盘中入选依据",event_refs:[],notification:{in_app_recorded:true,outbox:[{id:9,channel:"in_app",state:"accepted",reason:"通道受理",accepted_at:"2026-10-23T10:00:02+08:00"}],delivery_state:"unknown",read_state:"unknown"},execution:{state:"rejected",reason:"价格不在原区间",order:null}}]};

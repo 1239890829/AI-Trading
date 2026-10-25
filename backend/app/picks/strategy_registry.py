@@ -277,7 +277,7 @@ def saved_method_runs(session_factory) -> dict:
     """Project existing run owners; no execution, market read or outcome fabrication."""
     import json
     import math
-    from sqlalchemy import select
+    from sqlalchemy import case, select
     from app.models.daily_pick import DailyPickSet
     from app.models.opportunity_learning import OpportunityDecisionRun, OpportunityDecisionSnapshot
     from app.core.bjtime import beijing_now, BJ_TZ
@@ -295,6 +295,21 @@ def saved_method_runs(session_factory) -> dict:
 
     def number(value):
         return value if not isinstance(value, bool) and isinstance(value, (int, float)) and math.isfinite(value) else None
+
+    def daily_reason(row):
+        reason = row.get('reason')
+        if isinstance(reason, str) and reason.strip():
+            return reason
+        selection_reason = row.get('selection_reason')
+        if selection_reason == 'below_min_score':
+            shortfall = number(row.get('score_shortfall'))
+            return ('低于原入选分线；原记录差额 ' + format(shortfall, 'g') + ' 分'
+                    if shortfall is not None and shortfall >= 0 else '低于原入选分线；原差额未记录')
+        if selection_reason == 'capacity_or_replacement':
+            return '原记录为容量或换股约束；具体原因未区分'
+        if isinstance(selection_reason, str) and selection_reason:
+            return f'原入选原因未识别（{selection_reason}）'
+        return ''
 
     now = beijing_now()
     today = now.date().isoformat()
@@ -328,7 +343,7 @@ def saved_method_runs(session_factory) -> dict:
                              'max_picks': number(meta.get('max_picks'))},
                 'items': [{'symbol': str(row.get('symbol') or ''), 'name': str(row.get('name') or row.get('symbol') or ''),
                            'state': state, 'score': number(row.get('score')),
-                           'reason': str(row.get('reason') or row.get('tech') or ''),
+                           'reason': daily_reason(row),
                            'basis': row.get('bases') if isinstance(row.get('bases'), dict) else {}}
                           for state, rows in [('selected', selected), ('rejected', rejected)]
                           for row in rows[:200] if isinstance(row, dict)],
@@ -342,13 +357,26 @@ def saved_method_runs(session_factory) -> dict:
             rows = db.scalars(select(OpportunityDecisionSnapshot).where(
                 OpportunityDecisionSnapshot.run_id == run.run_id,
                 OpportunityDecisionSnapshot.stage.in_(['rank', 'hard_gate']))
-                .order_by(OpportunityDecisionSnapshot.id).limit(200)).all()
+                .order_by(case((OpportunityDecisionSnapshot.stage == 'rank', 0), else_=1),
+                          OpportunityDecisionSnapshot.id).limit(200)).all()
             items, selected_symbols, invalid_evidence = [], set(), False
+            rank_rows_read, rank_evidence_known = 0, True
             for row in rows:
                 stored_evidence = checked_obj(row.evidence, dict)
                 invalid_evidence = invalid_evidence or stored_evidence is None
                 evidence = stored_evidence if stored_evidence is not None else {}
                 capacity = evidence.get('effective_limit')
+                if row.stage == 'rank':
+                    rank_rows_read += 1
+                    rank_evidence_known = rank_evidence_known and stored_evidence is not None
+                    if row.decision == 'ranked':
+                        rank_evidence_known = rank_evidence_known and (
+                            not isinstance(capacity, bool) and isinstance(capacity, int) and capacity >= 1
+                            and row.rank is not None and row.rank >= 1
+                            and isinstance(evidence.get('within_display_capacity'), bool)
+                            and evidence['within_display_capacity'] == (row.rank <= capacity))
+                    elif row.decision not in {'unknown', 'rejected', 'blocked'}:
+                        rank_evidence_known = False
                 selected = (row.stage == 'rank' and row.decision == 'ranked'
                             and evidence.get('within_display_capacity') is True
                             and not isinstance(capacity, bool) and isinstance(capacity, int)
@@ -377,7 +405,7 @@ def saved_method_runs(session_factory) -> dict:
                 'elapsed_ms': None, 'data_state': run.data_state,
                 'counts': {'candidate_rows': run.candidate_rows, 'rank_rows': run.rank_rows,
                            'hard_gate_rows': run.hard_gate_rows,
-                           'selected': None if len(rows) >= 200 or invalid_evidence else len(selected_symbols)},
+                           'selected': len(selected_symbols) if rank_rows_read == run.rank_rows and rank_evidence_known else None},
                 'items': items, 'possibly_truncated': len(rows) >= 200,
                 'semantics': 'saved_run_rows_not_unique_stock_outcomes_or_fills'}
     return result

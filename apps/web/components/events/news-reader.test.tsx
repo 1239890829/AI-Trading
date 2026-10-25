@@ -44,4 +44,21 @@ describe("同源快讯阅读",()=>{
   expect(screen.queryByText(/原版引用/)).toBeNull();
  });
 
+ it("keeps a legacy proposed tag separate from verification when the headline contains a denial",async()=>{
+  calls.read.mockResolvedValue({...payload(),items:[{...base,title:"公司：无筹划转让控制权相关计划"}]});
+  render(<NewsReader/>);
+  expect(await screen.findByText("公司：无筹划转让控制权相关计划")).toBeTruthy();
+  expect(screen.getByText("原阶段标记：拟议").getAttribute("title")).toContain("不证明交易或事项已经发生");
+  expect(screen.queryByText("已确认收购")).toBeNull();
+  expect(calls.read).toHaveBeenCalledTimes(1);
+ });
+
+ it("does not call a fresh revision-pending event expired merely because it is inactive",async()=>{
+  calls.read.mockResolvedValue({...payload(),items:[{...base,is_active:false,title:"刚发布后等待修订核验的事件"}]});
+  render(<NewsReader/>);
+  expect(await screen.findByText("非当前机会")).toBeTruthy();
+  expect(screen.getByText("非当前机会").getAttribute("title")).toContain("不能断言过期");
+  expect(screen.queryByText("超出机会时效")).toBeNull();
+ });
+
 });

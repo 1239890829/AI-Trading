@@ -45,7 +45,7 @@ export interface ReviewData {
     trade_date: string;
     source: string;
     generated_at: string | null;
-    directions: {direction: string; logic: string; basis: string; entry_mode: string; entry_basis: string; trigger_conditions: string[]; falsify_conditions: string[]; review: Record<string, unknown> | null}[];
+    directions: {direction: string; logic: string; basis: string; entry_mode: string; entry_basis: string; trigger_conditions: string[] | null; falsify_conditions: string[] | null; review: Record<string, unknown> | null; review_state?: "saved" | "unknown"; reviewed_at?: string | null}[];
     missing: string[];
     reason: string;
   };

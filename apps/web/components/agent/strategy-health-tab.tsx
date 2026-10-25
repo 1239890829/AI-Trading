@@ -111,7 +111,7 @@ function SavedRun({ run, method }: {run: SavedStrategyRun | null | undefined; me
           {row.stage && <span className="text-[11px] text-zinc-600 dark:text-zinc-400">{row.stage === "hard_gate" ? "硬门" : row.stage === "rank" ? "排序" : row.stage}：{row.decision ? DECISION_LABELS[row.decision] || `未识别（${row.decision}）` : "未记录"}</span>}
           <span className="ml-auto tabular-nums">{typeof row.score === "number" && Number.isFinite(row.score) ? `原分 ${row.score}` : "未保存分数"}</span>
         </div>
-        <p className="mt-1 break-words text-zinc-600 dark:text-zinc-400">{row.reason || "原存档没有简短理由，不能据此推定通过。"}</p>
+        <p className="mt-1 break-words text-zinc-600 dark:text-zinc-400">{row.reason || (Object.keys(row.basis || {}).length > 0 ? "原评分依据已保存，可展开核对；简短理由未记录。" : "原存档没有简短理由，不能据此推定通过。")}</p>
         {(Object.keys(row.basis || {}).length > 0 || row.snapshot_id) && <details className="mt-1 text-[11px] text-zinc-600 dark:text-zinc-400"><summary className="cursor-pointer">核对原依据与身份</summary>
           {Object.entries(row.basis || {}).map(([key,value]) => <p key={key} className="mt-1 break-words">{key}：{value}</p>)}
           {row.snapshot_id && <p className="mt-1 break-all font-mono">快照 {row.snapshot_id}</p>}

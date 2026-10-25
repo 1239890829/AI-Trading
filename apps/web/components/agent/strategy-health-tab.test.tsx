@@ -265,3 +265,19 @@ it("损坏的原名单明确提示并保留未知计数，不制造零入选", a
   expect(screen.getByText("可读拒绝股")).toBeTruthy();
   expect(screen.getByText("原分 0")).toBeTruthy();
 });
+
+it("已保存评分依据不误称没有依据，拒绝理由与原分分开", async () => {
+  stub({strategies:[]},[{key:"daily_picks",name:"真实理由投影",runtime:{state:"saved",items:[
+    {symbol:"600000",name:"有依据股",state:"selected",score:70,basis:{tech:"原技术依据"}},
+    {symbol:"600001",name:"低分股",state:"rejected",score:47.2,reason:"低于原入选分线；原记录差额 2.8 分"},
+  ]}}]);
+  render(<StrategyHealthTab/>);
+  await screen.findByText("有依据股");
+  expect(screen.getByText(/原评分依据已保存，可展开核对/)).toBeTruthy();
+  expect(screen.queryByText(/原存档没有简短理由/)).toBeNull();
+  expect(screen.getByText("tech：原技术依据")).toBeTruthy();
+  fireEvent.click(screen.getByRole("button",{name:"拒绝存档"}));
+  expect(screen.getByText("原分 47.2")).toBeTruthy();
+  expect(screen.getByText("低于原入选分线；原记录差额 2.8 分")).toBeTruthy();
+  expect(screen.queryByText("61.1")).toBeNull();
+});
