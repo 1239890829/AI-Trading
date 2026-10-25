@@ -1,7 +1,7 @@
 import {afterEach, describe, expect, it} from "vitest";
-import {cleanup, fireEvent, render, screen} from "@testing-library/react";
+import {cleanup, fireEvent, render, screen, within} from "@testing-library/react";
 import {ValidationContent} from "./validation-panel";
-import type {ValidationReport} from "@/lib/api/validation";
+import type {ValidationReport, ValidationVersionGroup} from "@/lib/api/validation";
 
 afterEach(cleanup);
 export const report: ValidationReport = {
@@ -68,4 +68,70 @@ it("shows the saved closing-basis gap without inventing a return or an execution
   expect(screen.getByText(/结果缺口：等待决策日 qfq日收\/raw日收价格基准/)).toBeTruthy();
   expect(screen.getByText(/目标收盘 2026-10-13/)).toBeTruthy();
   expect(screen.queryByText("0.00%")).toBeNull();
+});
+
+function comparedReport(): ValidationReport {
+  const a = {...report.entries[0],return_pct:0,method_version:"同名方法",feature_version:"f1"};
+  const b = {...report.entries[1],id:"intraday:2026-10-13:600127",name:"盘中样本",scope:"intraday" as const,
+    state:"recorded",return_pct:-5,method_version:"同名方法",feature_version:"f1"};
+  const unknown = {...report.entries[1],id:"daily:2026-10-14:600128",symbol:"600128",name:"旧版待核",
+    date:"2026-10-14",method_version:null,feature_version:null};
+  const groups: ValidationVersionGroup[] = [a,b,unknown].map(entry => {
+    const observed = entry.return_pct == null ? 0 : 1;
+    return {key:JSON.stringify([entry.scope,entry.method_version,entry.feature_version]),scope:entry.scope,
+      method_version:entry.method_version,feature_version:entry.feature_version,
+      version_state:entry.method_version ? "recorded" : "missing",entry_ids:[entry.id],
+      selection:{count:1,observed,missing:1-observed,mean_pct:entry.return_pct,median_pct:entry.return_pct},
+      daily:[{date:entry.date,count:1,observed,mean_pct:entry.return_pct,median_pct:entry.return_pct}],
+      coverage:{versions:[],basis:"原版本覆盖",reasons:[{state:observed ? "observed" : "result_missing",label:observed ? "已有同口径结果" : "结果待补",count:1}]},
+      window:{first_entry_date:entry.date,last_entry_date:entry.date,observed_start:observed ? entry.date:null,
+        observed_end:observed ? entry.date:null,observed_days:observed}};
+  });
+  return {...report,entries:[a,b,unknown],version_entries:[a,b,unknown],version_groups:groups,
+    selection:{count:3,observed:2,missing:1,mean_pct:-2.5,median_pct:-2.5}};
+}
+
+describe("original version A/B observation",()=>{
+  it("shows both summaries and switches statistics, plots, rows and coverage together",()=>{
+    render(<ValidationContent report={comparedReport()}/>);
+    expect(within(screen.getByLabelText("A 原观察摘要")).getAllByText("0.00%")).toHaveLength(2);
+    expect(within(screen.getByLabelText("B 原观察摘要")).getAllByText("-5.00%")).toHaveLength(2);
+    expect(screen.getByText(/两组实际覆盖日不同/)).toBeTruthy();
+    fireEvent.click(screen.getByRole("button",{name:"查看 A"}));
+    expect(screen.getByRole("button",{name:/金健米业，/})).toBeTruthy();
+    expect(screen.queryByRole("button",{name:/盘中样本，/})).toBeNull();
+    expect(within(screen.getByRole("region",{name:"入选后平均涨跌幅"})).getByRole("button",{name:"10-12 0.00%，查看记录"})).toBeTruthy();
+    expect(screen.getByRole("button",{name:"已有同口径结果 1"})).toBeTruthy();
+    fireEvent.click(screen.getByRole("button",{name:"查看 B"}));
+    expect(screen.queryByRole("button",{name:/金健米业，/})).toBeNull();
+    expect(screen.getByRole("button",{name:/盘中样本，/})).toBeTruthy();
+    expect(within(screen.getByRole("region",{name:"入选后平均涨跌幅"})).getByRole("button",{name:"10-13 -5.00%，查看记录"})).toBeTruthy();
+  });
+
+  it("keeps unknown versions and missing results separate from zero, without filtering actual fills",()=>{
+    const data=comparedReport();
+    render(<ValidationContent report={data}/>);
+    fireEvent.change(screen.getByRole("combobox",{name:"版本 B"}),{target:{value:data.version_groups![2].key}});
+    fireEvent.click(screen.getByRole("button",{name:"查看 B"}));
+    expect(screen.getByRole("button",{name:/旧版待核，/})).toBeTruthy();
+    expect(screen.getByText(/原版本未完整记录/)).toBeTruthy();
+    expect(screen.getByRole("button",{name:"结果待补 1"})).toBeTruthy();
+    expect(screen.getByRole("region",{name:"入选后平均涨跌幅"}).querySelectorAll(".validation-point")).toHaveLength(0);
+    fireEvent.click(screen.getByRole("button",{name:"实际买入"}));
+    expect(screen.queryByRole("combobox",{name:"版本 A"})).toBeNull();
+    expect(screen.getByText("0.0%")).toBeTruthy();
+    expect(screen.getByRole("button",{name:/金健米业/})).toBeTruthy();
+  });
+
+  it("rechecks A/B identity after date, horizon or response changes",()=>{
+    const data=comparedReport();
+    const view=render(<ValidationContent report={data}/>);
+    fireEvent.click(screen.getByRole("button",{name:"查看 A"}));
+    view.rerender(<ValidationContent report={{...data,horizon:"d3_close"}}/>);
+    expect(screen.getByRole("button",{name:"全部原入选"}).getAttribute("aria-pressed")).toBe("true");
+    fireEvent.click(screen.getByRole("button",{name:"查看 A"}));
+    view.rerender(<ValidationContent report={{...data,horizon:"d3_close",version_groups:data.version_groups!.slice(1)}}/>);
+    expect(screen.getByText(/所选版本已不在当前范围/)).toBeTruthy();
+    expect(screen.getByRole("button",{name:"全部原入选"}).getAttribute("aria-pressed")).toBe("true");
+  });
 });

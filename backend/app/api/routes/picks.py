@@ -20,6 +20,7 @@ from __future__ import annotations
 import asyncio
 import json
 import logging
+from typing import Literal
 
 from fastapi import APIRouter, Depends, HTTPException, Query, Request
 from sqlalchemy import select
@@ -449,3 +450,50 @@ async def picks_strategy_registry() -> dict:
     items = [{**item, **({"runtime": runs[item["key"]]} if item["key"] in runs else {})}
              for item in list_strategy_keys()]
     return {"data": {"strategies": items}, "meta": {}}
+
+
+@router.get("/method-runs")
+async def method_runs(
+    method: Literal["daily_picks", "intraday_watch"],
+    trade_date: str | None = Query(None, max_length=10),
+    source_version: str | None = Query(None, min_length=1, max_length=64),
+    strategy_version: str | None = Query(None, min_length=1, max_length=64),
+    source_version_missing: bool = False,
+    offset: int = Query(0, ge=0), limit: int = Query(30, ge=1, le=200),
+) -> dict:
+    """只读已保存运行目录；每日旧覆盖版本缺失，不重评分或补造历史。"""
+    from app.picks.selection_history import list_method_runs
+
+    try:
+        data = await asyncio.to_thread(list_method_runs, get_session_factory(), method,
+            trade_date=trade_date, source_version=source_version, strategy_version=strategy_version,
+            source_version_missing=source_version_missing, offset=offset, limit=limit)
+    except ValueError as exc:
+        raise HTTPException(422, detail=str(exc)) from None
+    return {"data": data, "meta": {}}
+
+
+@router.get("/method-runs/{method}/{run_id}")
+async def method_run_detail(
+    method: Literal["daily_picks", "intraday_watch"], run_id: str,
+    trade_date: str = Query(..., min_length=8, max_length=10),
+    content_version: str = Query(..., pattern="^[0-9a-f]{64}$"),
+    source_version: str | None = Query(None, min_length=1, max_length=64),
+    strategy_version: str | None = Query(None, min_length=1, max_length=64),
+    source_version_missing: bool = False,
+    offset: int = Query(0, ge=0), limit: int = Query(200, ge=1, le=200),
+    stage: Literal["rank", "hard_gate", "candidate", "notification"] | None = None,
+) -> dict:
+    """精确运行与内容版本读取；身份消失或变化返回404，不回退最近记录。"""
+    from app.picks.selection_history import SavedRunMissing, get_method_run
+
+    try:
+        data = await asyncio.to_thread(get_method_run, get_session_factory(), method, run_id,
+            trade_date=trade_date, content_version=content_version, source_version=source_version,
+            strategy_version=strategy_version, source_version_missing=source_version_missing,
+            offset=offset, limit=limit, stage=stage)
+    except SavedRunMissing as exc:
+        raise HTTPException(404, detail=str(exc)) from None
+    except ValueError as exc:
+        raise HTTPException(422, detail=str(exc)) from None
+    return {"data": data, "meta": {}}

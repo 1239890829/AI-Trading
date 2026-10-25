@@ -122,3 +122,17 @@ def test_close_maturity_boundary_invalidates_without_database_write(sf, monkeypa
     monkeypatch.setattr(reader, 'beijing_now', lambda: datetime(2026,10,16,15,0,tzinfo=BJ_TZ))
     read(sf)
     assert len(calls) == 2
+
+
+def test_version_identity_correction_invalidates_same_row_revision(sf):
+    before, revision = read(sf)
+    assert before['version_groups'][0]['method_version'] is None
+    with sf() as db:
+        row = db.scalar(select(DailyPickSet))
+        row.meta = json.dumps({'selection_entries':{'600127':{'strategy_version':'original-m','feature_version':'original-f'}}})
+        db.commit()
+    after, corrected = read(sf)
+    assert revision != corrected
+    assert after['version_groups'][0]['method_version']=='original-m'
+    assert {group['scope'] for group in read(sf,scope='daily')[0]['version_groups']} == {'daily'}
+    assert read(sf,scope='intraday')[0]['version_groups']==[]

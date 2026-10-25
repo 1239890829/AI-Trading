@@ -31,6 +31,7 @@ async def report(start: str | None = Query(None), end: str | None = Query(None),
         raise HTTPException(status_code=422, detail=str(exc)) from exc
     return {'data': None if known_revision == revision else data,
             'meta': {'revision': revision, 'not_modified': known_revision == revision,
+                     'version_identity': ['scope', 'method_version', 'feature_version'],
                      'basis': 'selection_observation_and_manual_fills_separate',
                                  'disclaimer': '不构成买卖建议；人工记录未经券商核验'}}
 

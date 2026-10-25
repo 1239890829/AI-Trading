@@ -281,6 +281,7 @@ def saved_method_runs(session_factory) -> dict:
     from app.models.daily_pick import DailyPickSet
     from app.models.opportunity_learning import OpportunityDecisionRun, OpportunityDecisionSnapshot
     from app.core.bjtime import beijing_now, BJ_TZ
+    from app.picks.selection_history import diagnostics
 
     def checked_obj(value, kind):
         try:
@@ -344,6 +345,7 @@ def saved_method_runs(session_factory) -> dict:
                 'items': [{'symbol': str(row.get('symbol') or ''), 'name': str(row.get('name') or row.get('symbol') or ''),
                            'state': state, 'score': number(row.get('score')),
                            'reason': daily_reason(row),
+                           'diagnostics': diagnostics(row, meta),
                            'basis': row.get('bases') if isinstance(row.get('bases'), dict) else {}}
                           for state, rows in [('selected', selected), ('rejected', rejected)]
                           for row in rows[:200] if isinstance(row, dict)],
@@ -395,6 +397,7 @@ def saved_method_runs(session_factory) -> dict:
                 items.append({'symbol': row.symbol, 'name': row.name or row.symbol,
                     'state': state, 'stage': row.stage, 'decision': row.decision,
                     'score': number(evidence.get('score')),
+                    'diagnostics': diagnostics(evidence, {}),
                     'reason': str(evidence.get('reason') or evidence.get('filter_reason')
                                   or evidence.get('linkage_basis') or row.decision),
                     'rank': row.rank, 'source_theme': row.source_theme, 'snapshot_id': row.snapshot_id})

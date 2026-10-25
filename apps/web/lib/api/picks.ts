@@ -1058,6 +1058,7 @@ export interface StrategyHealthPayload {
 }
 
 export interface SavedStrategyRunItem {
+  item_id?: string;
   symbol: string;
   name?: string | null;
   state: "selected" | "rejected" | "candidate" | "unknown";
@@ -1069,6 +1070,81 @@ export interface SavedStrategyRunItem {
   rank?: number | null;
   source_theme?: string | null;
   snapshot_id?: string | null;
+  evidence?: Record<string, unknown> | null;
+  diagnostics?: {
+    state: "saved" | "partial" | "missing";
+    sub_scores: Record<string, number | null> | null;
+    dimension_evidence: Record<string, DimensionEvidence> | null;
+    scoring_trace: SelectionScoringTrace | null;
+    vetoes: unknown[] | null;
+    selection_reason: string | null;
+    score_shortfall: number | null;
+    min_pick_score: number | null;
+    missing: string[];
+  };
+}
+
+export type SavedMethodKey = "daily_picks" | "intraday_watch";
+export interface SavedMethodRunIdentity {
+  method: SavedMethodKey;
+  run_id: string;
+  trade_date: string;
+  source_version: string | null;
+  content_version: string;
+  strategy_version?: string | null;
+  feature_version?: string | null;
+  version_state?: "legacy" | "bound" | "mismatch";
+  run_at?: string | null;
+  state: SavedStrategyRun["state"];
+}
+export interface SavedMethodRunCoverage {
+  limit: number;
+  offset?: number;
+  total?: number | null;
+  returned?: number;
+  next_offset?: number | null;
+  possibly_truncated: boolean;
+  history_semantics: string;
+  scanned?: number;
+  excluded_source_rows?: number;
+  fingerprint_rows?: number;
+}
+export interface SavedMethodRunIndex {
+  method: SavedMethodKey;
+  items: SavedMethodRunIdentity[];
+  coverage: SavedMethodRunCoverage;
+}
+export interface SavedMethodRunDetail extends SavedStrategyRun {
+  method: SavedMethodKey;
+  run_id: string;
+  content_version: string;
+  coverage: SavedMethodRunCoverage;
+}
+export interface SavedMethodRunQuery {
+  method: SavedMethodKey;
+  trade_date?: string;
+  source_version?: string;
+  source_version_missing?: boolean;
+  strategy_version?: string;
+  limit?: number;
+  offset?: number;
+}
+export async function getStrategyMethodRuns(query: SavedMethodRunQuery, signal?: AbortSignal): Promise<SavedMethodRunIndex> {
+  const params = new URLSearchParams({method: query.method, limit: String(query.limit ?? 30)});
+  if (query.offset !== undefined) params.set("offset",String(query.offset));
+  if (query.trade_date) params.set("trade_date", query.trade_date);
+  if (query.source_version) params.set("source_version", query.source_version);
+  if (query.source_version_missing) params.set("source_version_missing", "true");
+  if (query.strategy_version) params.set("strategy_version", query.strategy_version);
+  return (await getJson<SavedMethodRunIndex>(`/api/picks/method-runs?${params}`, undefined, {signal})).data;
+}
+export async function getStrategyMethodRun(identity: SavedMethodRunIdentity, options: {offset?: number; limit?: number; signal?: AbortSignal} = {}): Promise<SavedMethodRunDetail> {
+  const params = new URLSearchParams({trade_date: identity.trade_date, content_version: identity.content_version,
+    offset: String(options.offset ?? 0), limit: String(options.limit ?? 200)});
+  if (identity.source_version !== null) params.set("source_version", identity.source_version);
+  else params.set("source_version_missing", "true");
+  if (identity.strategy_version) params.set("strategy_version", identity.strategy_version);
+  return (await getJson<SavedMethodRunDetail>(`/api/picks/method-runs/${encodeURIComponent(identity.method)}/${encodeURIComponent(identity.run_id)}?${params}`, undefined, {signal: options.signal})).data;
 }
 
 /** Saved run projection; counts and selection are never execution/fill evidence. */
@@ -1078,6 +1154,8 @@ export interface SavedStrategyRun {
   trade_date?: string | null;
   source_version?: string | null;
   strategy_version?: string | null;
+  feature_version?: string | null;
+  version_state?: "legacy" | "bound" | "mismatch";
   run_at?: string | null;
   elapsed_ms?: number | null;
   data_state?: string | null;

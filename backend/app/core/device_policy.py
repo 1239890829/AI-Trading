@@ -37,6 +37,7 @@ READ_PATHS = frozenset({
     "/paper/selection-action",
     "/picks/watcher/state", "/picks/signal-health",
     "/picks/strategy-health", "/picks/strategy-registry",
+    "/picks/method-runs", "/picks/method-runs/{method}/{run_id}",
     "/agent/kb/tree", "/agent/kb/file",
     "/agent/research/tradingagents/{symbol}",
     '/announcements/{symbol}',
