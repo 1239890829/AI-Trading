@@ -575,7 +575,7 @@ export async function getFundFlowHistory(days = 20): Promise<FundFlowHistory> {
 
 export type BoardFlowKind = "concept" | "industry";
 
-export type BoardFlowRange = "intraday" | "5d" | "10d" | "20d";
+export type BoardFlowRange = "intraday" | "5d" | "10d" | "20d" | "latest_saved";
 
 export interface BoardFlowRow {
   board_code: string;
@@ -606,7 +606,7 @@ export interface BoardFundFlowPayload {
   kind: BoardFlowKind;
   range: BoardFlowRange;
   rows: BoardFlowRow[];
-  total_boards?: number;
+  total_boards?: number | null;
   /** 20d 视图：本地沉淀板块数 */
   coverage?: number | null;
   updated_at?: string;
@@ -614,6 +614,8 @@ export interface BoardFundFlowPayload {
   /** Local day-K archive; never a replacement for today's board ranking. */
   historical?: boolean;
   as_of?: string | null;
+  /** Latest saved daily Top50 sample's storage clock, not its source clock. */
+  stored_at?: string | null;
   source?: string;
   source_as_of?: string | null;
   received_at?: string | null;

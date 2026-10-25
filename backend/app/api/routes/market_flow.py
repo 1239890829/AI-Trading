@@ -97,21 +97,22 @@ async def market_fund_flow_history(
 @router.get("/market/board-fund-flow")
 async def market_board_fund_flow(
     kind: str = Query(default="concept", description="concept 概念 / industry 行业"),
-    range: str = Query(default="intraday", description="intraday 今日 / 5d / 10d / 20d"),
+    range: str = Query(default="intraday", description="intraday 今日 / 5d / 10d / 20d / latest_saved 最近单日存档"),
 ) -> dict:
     """板块资金流榜（L2 唯一实现，docs/summary/architecture-design.md §2 四层级模型）。
 
     - intraday/5d/10d：一次翻页全量（f62 今日 / f164 5日 / f174 10日，官方字段已实测），
       前端排序筛选纯内存，切换不回源；
     - 20d 与连续流入天数：只读落盘（每日收盘后自动沉淀 Top 板块 daykline），读路径零外呼；
+    - latest_saved：只读已完成日的原净流入 Top50 样本，不替代即时榜或全市场目录；
     - 板块 f62 是东财官方板块口径，不与个股新浪口径混算。
     """
     from app.market.board_flow import get_board_fund_flow
 
     if kind not in ("concept", "industry"):
         raise HTTPException(status_code=422, detail="kind 仅允许 concept / industry")
-    if range not in ("intraday", "5d", "10d", "20d"):
-        raise HTTPException(status_code=422, detail="range 仅允许 intraday / 5d / 10d / 20d")
+    if range not in ("intraday", "5d", "10d", "20d", "latest_saved"):
+        raise HTTPException(status_code=422, detail="range 仅允许 intraday / 5d / 10d / 20d / latest_saved")
     return {"data": await get_board_fund_flow(kind, range), "meta": {}}
 
 
