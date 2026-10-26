@@ -4,6 +4,7 @@ import WorkbenchPage from "@/app/workbench/page";
 import type { SymbolBoardFund } from "@/lib/api";
 import {notifyWatchlistChanged} from "@/lib/watchlist-sync";
 import {getWatchlist as readActualWatchlist} from "@/lib/api/watchlist";
+import {getMarketOverview as readActualOverview} from "@/lib/api/market";
 import {SymbolDetailStateCtx} from "@/components/detail/symbol-detail-context";
 import type {Quote} from "@/types/market";
 
@@ -12,7 +13,7 @@ const state = vi.hoisted(() => ({
   params: new URLSearchParams("symbol=600127&ct=minute&rt=info&from=%2Fmarket%3Ftab%3Devents"),
   push: vi.fn(), replace: vi.fn(),
   watch: [{symbol: "600127", group_name: "默认"}, {symbol: "603256", group_name: "材料观察"}],
-  quoteStream: {status: "live", quoteFeed: {subscribe: () => () => {}, getSnapshot: () => undefined}, quotes: {
+  quoteStream: {status: "live", quoteFeed: {subscribe: () => () => {}, getSnapshot: () => undefined}, observations: {} as Record<string, Quote | null>, quotes: {
     "600127": {symbol: "600127", name: "金健米业", price: 8.13, change_pct: 2.52, source: "fixture", quality: "high", quality_reasons: [], received_at: "2026-10-08T09:55:00+08:00", data_timestamp: "2026-10-08T09:55:00+08:00"},
   } as Record<string, Quote>},
   realPositions: {items: [{symbol: "600127"}]},
@@ -27,7 +28,7 @@ vi.mock("@/hooks/use-quote-stream", () => ({
 // Match the real hooks' stable data identity between network updates.
 // A fresh items array on every render repeatedly triggers the REST fallback effect.
 vi.mock("@/hooks/use-real-positions", () => ({useRealPositions: () => ({data: state.realPositions, error: null, reload: state.reloadReal})}));
-vi.mock("@/components/stock-detail", () => ({StockDetailPanel: ({symbol, chartTab, rightTab, active, realPositions, quoteFeed, watchlistMembership, onWatchlistAdded, indexQuote}: {symbol: string; chartTab?: string; rightTab?: string; active?: boolean; realPositions?: {reload: () => Promise<void>}; quoteFeed?: unknown; watchlistMembership?: boolean | null; onWatchlistAdded?: (symbol: string) => void; indexQuote?: Quote | null}) => <><div data-testid="stock-detail" data-active={String(active)} data-shared-positions={String(realPositions?.reload === state.reloadReal)} data-shared-quote-feed={String(quoteFeed === state.quoteStream.quoteFeed)} data-membership={String(watchlistMembership)} data-index-source={indexQuote === null ? "missing" : indexQuote?.source ?? "no-owner"}>{symbol}/{chartTab}/{rightTab}</div><button onClick={() => onWatchlistAdded?.(symbol)}>确认加入回执</button></>}));
+vi.mock("@/components/stock-detail", () => ({StockDetailPanel: ({symbol, chartTab, rightTab, active, realPositions, quoteFeed, watchlistMembership, onWatchlistAdded, indexQuote}: {symbol: string; chartTab?: string; rightTab?: string; active?: boolean; realPositions?: {reload: () => Promise<void>}; quoteFeed?: unknown; watchlistMembership?: boolean | null; onWatchlistAdded?: (symbol: string) => void; indexQuote?: Quote | null}) => <><div data-testid="stock-detail" data-active={String(active)} data-shared-positions={String(realPositions?.reload === state.reloadReal)} data-shared-quote-feed={String(quoteFeed === state.quoteStream.quoteFeed)} data-membership={String(watchlistMembership)} data-index-source={indexQuote === null ? "missing" : indexQuote?.source ?? "no-owner"} data-index-observation={JSON.stringify(indexQuote)}>{symbol}/{chartTab}/{rightTab}</div><button onClick={() => onWatchlistAdded?.(symbol)}>确认加入回执</button></>}));
 vi.mock("@/components/index-cards", () => ({IndexCards: ({onSelect, indices}: {onSelect: (symbol: string) => void; indices: Quote[]}) => <div data-testid="index-cards">指数摘要{indices.map(q => <span key={q.symbol} data-testid={`index-${q.market?.toLowerCase()}${q.symbol.replace(/^(sh|sz|bj)/, "")}`} data-observation={JSON.stringify(q)}>{q.price}</span>)}<button onClick={() => onSelect("sh000688")}>查看科创50</button></div>}));
 vi.mock("@/components/detail/account-scope-panel", () => ({AccountScopePanel: ({account}: {account: string}) => <div>账户结果 {account}</div>}));
 vi.mock("@/components/picks/pick-detail-modal", () => ({PickDetailModal: ({target}: {target: {kind: string; item: {symbol: string}} | null}) => target ? <div role="dialog">{target.kind}/{target.item.symbol}</div> : null}));
@@ -141,6 +142,119 @@ describe("B+C workbench production consumers", () => {
     state.quoteStream.quotes = old;
   });
 
+  it("指数当前缺项与概览失败不能复活旧high，下一次成功REST及新live均可恢复", async () => {
+    vi.useFakeTimers();
+    const previousQuotes = state.quoteStream.quotes, previousObservations = state.quoteStream.observations;
+    const read = vi.mocked(api.getMarketOverview).getMockImplementation();
+    const old: Quote = {symbol: "000001", market: "SH", source: "tencent", quality: "high", quality_reasons: [], price: 3000, prev_close: 2990,
+      data_timestamp: "2026-10-26T10:00:00+08:00", received_at: "2026-10-26T10:00:01+08:00",
+      display_session: {phase: "continuous", trade_date: "2026-10-26", as_of: "2026-10-26T10:00:01+08:00", trade_day_result: true}};
+    vi.mocked(api.getMarketOverview).mockResolvedValueOnce({indices: [old], total_amount: null, total_amount_freshness: null});
+    const observation = () => JSON.parse(screen.getByTestId("index-sh000001").dataset.observation!) as Quote;
+    const detailObservation = () => JSON.parse(screen.getByTestId("stock-detail").dataset.indexObservation!) as Quote;
+    try {
+      const view = render(<WorkbenchPage/>); await act(async () => {});
+      expect(observation().quality).toBe("high");
+      state.quoteStream.observations = {sh000001: null};
+      view.rerender(<WorkbenchPage/>);
+      expect(observation()).toMatchObject({price: 3000, quality: "stale", quality_reasons: ["index_batch_missing"], data_timestamp: old.data_timestamp, display_session: old.display_session});
+      expect(detailObservation().quality_reasons).toContain("index_batch_missing");
+      vi.mocked(api.getMarketOverview).mockRejectedValueOnce(new Error("new Hub overview unavailable"));
+      await act(async () => {await vi.advanceTimersByTimeAsync(10_000);});
+      expect(detailObservation().quality).toBe("stale");
+      const recovered = {...old, price: 3002, data_timestamp: "2026-10-26T10:00:10+08:00",
+        display_session: {...old.display_session!, as_of: "2026-10-26T10:00:11+08:00"}};
+      vi.mocked(api.getMarketOverview).mockResolvedValueOnce({indices: [recovered], total_amount: null, total_amount_freshness: null});
+      fireEvent.click(screen.getByRole("button", {name: "重试读取"})); await act(async () => {});
+      expect(observation()).toMatchObject({price: 3002, quality: "high", data_timestamp: recovered.data_timestamp});
+      const live = {...recovered, symbol: "sh000001", price: 3003, data_timestamp: "2026-10-26T10:00:12+08:00",
+        display_session: {...old.display_session!, as_of: "2026-10-26T10:00:13+08:00"}};
+      state.quoteStream.quotes = {...previousQuotes, sh000001: live};
+      state.quoteStream.observations = {sh000001: live}; view.rerender(<WorkbenchPage/>);
+      expect(detailObservation()).toMatchObject({price: 3003, quality: "high"});
+      state.quoteStream.quotes = previousQuotes; state.quoteStream.observations = {sh000001: null}; view.rerender(<WorkbenchPage/>);
+      expect(detailObservation().quality).toBe("stale");
+      expect(JSON.stringify(old)).not.toContain("index_batch_missing");
+    } finally {
+      state.quoteStream.quotes = previousQuotes; state.quoteStream.observations = previousObservations;
+      vi.mocked(api.getMarketOverview).mockImplementation(read!);
+    }
+  });
+
+  it("跨过新缺项的旧overview在途回包不洗白，缺项已知后原节拍成功读取可恢复", async () => {
+    vi.useFakeTimers();
+    const previousObservations = state.quoteStream.observations;
+    const read = vi.mocked(api.getMarketOverview).getMockImplementation();
+    const old: Quote = {symbol: "000001", market: "SH", source: "tencent", quality: "high", quality_reasons: [], price: 3000,
+      data_timestamp: "2026-10-26T10:00:00+08:00", received_at: "2026-10-26T10:00:01+08:00"};
+    let finish!: (value: Awaited<ReturnType<typeof api.getMarketOverview>>) => void;
+    const pending = new Promise<Awaited<ReturnType<typeof api.getMarketOverview>>>(resolve => {finish = resolve;});
+    vi.mocked(api.getMarketOverview).mockResolvedValueOnce({indices: [old], total_amount: null, total_amount_freshness: null}).mockReturnValueOnce(pending);
+    const observation = () => JSON.parse(screen.getByTestId("stock-detail").dataset.indexObservation!) as Quote;
+    try {
+      const view = render(<WorkbenchPage/>); await act(async () => {});
+      await act(async () => {await vi.advanceTimersByTimeAsync(10_000);});
+      state.quoteStream.observations = {sh000001: null}; view.rerender(<WorkbenchPage/>);
+      await act(async () => {finish({indices: [old], total_amount: null, total_amount_freshness: null});});
+      expect(observation().quality).toBe("stale");
+      vi.mocked(api.getMarketOverview).mockResolvedValueOnce({indices: [{...old, price: 3002}], total_amount: null, total_amount_freshness: null});
+      state.quoteStream.observations = {sh000001: null}; view.rerender(<WorkbenchPage/>);
+      await act(async () => {await vi.advanceTimersByTimeAsync(10_000);});
+      expect(observation()).toMatchObject({price: 3002, quality: "high"});
+      expect(api.getMarketOverview).toHaveBeenCalledTimes(3);
+    } finally {
+      finish({indices: [old], total_amount: null, total_amount_freshness: null});
+      state.quoteStream.observations = previousObservations;
+      vi.mocked(api.getMarketOverview).mockImplementation(read!);
+    }
+  });
+
+  it("缺项后的原节拍overview穿过真实共享API发起新HTTP，旧弹窗消费者独立收尾", async () => {
+    vi.useFakeTimers(); vi.setSystemTime(new Date("2026-10-26T10:00:00+08:00"));
+    const previousObservations = state.quoteStream.observations;
+    const read = vi.mocked(api.getMarketOverview).getMockImplementation();
+    const old: Quote = {symbol: "000001", market: "SH", source: "tencent", quality: "high", quality_reasons: [], price: 3000,
+      data_timestamp: "2026-10-26T10:00:00+08:00", received_at: "2026-10-26T10:00:00+08:00",
+      display_session: {phase: "continuous", trade_date: "2026-10-26", as_of: "2026-10-26T10:00:00+08:00", trade_day_result: true}};
+    const recovered: Quote = {...old, price: 3002, data_timestamp: "2026-10-26T10:00:10+08:00", received_at: "2026-10-26T10:00:10+08:00",
+      display_session: {...old.display_session!, as_of: "2026-10-26T10:00:10+08:00"}};
+    const pending: {signal: AbortSignal; finish: (quote: Quote) => void}[] = [];
+    vi.stubGlobal("fetch", vi.fn((url: string, init: RequestInit) => {
+      if (url !== "/backend/api/market/overview") throw new Error(`unexpected offline URL: ${url}`);
+      return new Promise<Response>((resolve, reject) => {
+        pending.push({signal: init.signal!, finish: quote => resolve(new Response(JSON.stringify({data: {
+          indices: [quote], total_amount: null, total_amount_freshness: null,
+        }})))});
+        init.signal?.addEventListener("abort", () => reject(new DOMException("aborted", "AbortError")), {once: true});
+      });
+    }));
+    vi.mocked(api.getMarketOverview).mockImplementation(readActualOverview)
+      .mockResolvedValueOnce({indices: [old], total_amount: null, total_amount_freshness: null});
+    const view = render(<WorkbenchPage/>); await act(async () => {});
+    await act(async () => {await vi.advanceTimersByTimeAsync(9_999);});
+    const oldPopup = readActualOverview();
+    const observation = () => JSON.parse(screen.getByTestId("stock-detail").dataset.indexObservation!) as Quote;
+    try {
+      state.quoteStream.observations = {sh000001: null}; view.rerender(<WorkbenchPage/>);
+      expect(observation().quality).toBe("stale");
+      await act(async () => {await vi.advanceTimersByTimeAsync(1);});
+      expect(pending).toHaveLength(2);
+      expect(pending[0].signal.aborted).toBe(false);
+      await act(async () => {pending[1].finish(recovered);});
+      expect(observation()).toMatchObject({price: 3002, quality: "high", data_timestamp: recovered.data_timestamp});
+      await act(async () => {pending[0].finish(old); await oldPopup;});
+      expect((await oldPopup).indices[0]).toMatchObject({price: 3000, data_timestamp: old.data_timestamp});
+      expect(observation()).toMatchObject({price: 3002, quality: "high", data_timestamp: recovered.data_timestamp});
+      expect(api.getMarketOverview).toHaveBeenCalledTimes(2);
+    } finally {
+      view.unmount();
+      pending.forEach(call => call.finish(old));
+      await oldPopup;
+      state.quoteStream.observations = previousObservations;
+      vi.mocked(api.getMarketOverview).mockImplementation(read!);
+    }
+  });
+
   it("详情复用已有概览的上证观察，空成功明确缺项而非新建指数读取", async () => {
     const sh: Quote = {symbol: "000001", market: "SH", source: "tencent", quality: "high", quality_reasons: [], received_at: "2026-10-14T15:00:01+08:00", data_timestamp: "2026-10-14T15:00:00+08:00", price: 3000, prev_close: 2990};
     vi.mocked(api.getMarketOverview).mockResolvedValueOnce({indices: [sh], total_amount: null, total_amount_freshness: null});
@@ -185,6 +299,42 @@ describe("B+C workbench production consumers", () => {
     } finally {
       state.realPositions = previousPositions;
       vi.mocked(api.getQuotes).mockImplementation(previousRead!);
+    }
+  });
+
+  it("完整缺项帧不能复活首屏补价或其high质量，尚无首帧的其它证券仍可用补价", async () => {
+    const previous = state.quoteStream.quotes;
+    const read = vi.mocked(api.getQuotes).getMockImplementation();
+    const bootstrap = {...previous["600127"], price: 8, source: "tencent"};
+    const other = {...bootstrap, symbol: "603256", name: "合成其它证券", price: 9};
+    state.quoteStream.quotes = {};
+    state.quoteStream.observations = {};
+    vi.mocked(api.getQuotes).mockImplementation(async symbols => [bootstrap, other].filter(q => symbols?.includes(q.symbol)));
+    try {
+      const view = render(<WorkbenchPage/>);
+      await screen.findByRole("button", {name: "查看 合成其它证券 603256"});
+      expect(screen.getByRole("button", {name: "查看 金健米业 600127"}).textContent).toContain("8.00");
+      const live = {...bootstrap, price: 10};
+      state.quoteStream.quotes = {"600127": live};
+      state.quoteStream.observations = {"600127": live};
+      view.rerender(<WorkbenchPage/>);
+      expect(screen.getByRole("button", {name: "查看 金健米业 600127"}).textContent).toContain("10.00");
+      state.quoteStream.quotes = {};
+      state.quoteStream.observations = {"600127": null};
+      view.rerender(<WorkbenchPage/>);
+      const missing = screen.getByRole("button", {name: "查看 600127 600127"}).closest("article")!;
+      expect(missing.textContent).toContain("待报价");
+      expect(missing.querySelector('[data-quality="high"]')).toBeNull();
+      expect(screen.getByRole("button", {name: "查看 合成其它证券 603256"}).textContent).toContain("9.00");
+      const recovered = {...live, price: 11};
+      state.quoteStream.quotes = {"600127": recovered};
+      state.quoteStream.observations = {"600127": recovered};
+      view.rerender(<WorkbenchPage/>);
+      expect(screen.getByRole("button", {name: "查看 金健米业 600127"}).textContent).toContain("11.00");
+    } finally {
+      state.quoteStream.quotes = previous;
+      state.quoteStream.observations = {};
+      vi.mocked(api.getQuotes).mockImplementation(read!);
     }
   });
 

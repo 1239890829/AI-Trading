@@ -25,6 +25,8 @@ describe("calendar session and source quality are independent", () => {
     [session("14:57:00", "auction"), "收盘竞价"],
     [session("14:59:59", "auction"), "收盘竞价"],
     [session("08:00:00", "closed"), "未开盘"],
+    [session("15:00:00", "closed"), "已收盘"],
+    [session("15:00:59", "closed"), "已收盘"],
     [session("19:00:00", "closed"), "已收盘"],
     [session("10:00:00", "closed", false), "休市"],
   ] as const)("session %j remains visible even with no source observation", (context, label) => {
@@ -156,7 +158,7 @@ describe("calendar-backed closed display preserves stale", () => {
 
   it.each([
     ["08:00:00", "未开盘"], ["11:31:00", "午间休息"],
-    ["12:59:59", "午间休息"], ["15:01:00", "已收盘"], ["19:34:00", "已收盘"],
+    ["12:59:59", "午间休息"], ["15:00:00", "已收盘"], ["15:00:59", "已收盘"], ["15:01:00", "已收盘"], ["19:34:00", "已收盘"],
   ])("closed at %s explains %s for stocks and indices without upgrading source quality", (clock, label) => {
     for (const symbol of ["sh000001", "600519"]) {
       const sourceDate = clock === "08:00:00" ? "2026-10-12" : "2026-10-13";
@@ -244,8 +246,9 @@ describe("calendar-backed closed display preserves stale", () => {
     }
   });
 
-  it.each(["09:15:00", "09:29:59", "09:30:00", "11:30:59", "13:00:00", "15:00:59"])("closed conflicts with trade-day %s and remains an age warning", clock => {
-    expect(quoteQualityView({...aged, dataTimestamp: "2026-10-13T09:00:00+08:00", session: closedSession(clock, "2026-10-13", true, "2026-10-13T08:59:50+08:00")}).label).toBe("报价未更新");
+  it.each(["09:15:00", "09:29:59", "09:30:00", "11:30:59", "13:00:00", "15:00:59"])("invalid closed phase or a pre-tail source at%s remains an age warning", clock => {
+    const expectedAfter = clock === "15:00:59" ? "14:59:50" : "08:59:50";
+    expect(quoteQualityView({...aged, dataTimestamp: "2026-10-13T09:00:00+08:00", session: closedSession(clock, "2026-10-13", true, `2026-10-13T${expectedAfter}+08:00`)}).label).toBe("报价未更新");
   });
 
   it("unknown, wrong-date, future-source or naive clocks cannot establish a closed pause", () => {
@@ -281,5 +284,17 @@ describe("calendar-backed closed display preserves stale", () => {
     expect(view.label).toBe("报价未更新");
     expect(view.tone).toBe("warning");
     expect(view.title).toContain("future_unknown_failure");
+  });
+
+  it.each([["source_quality_low", "来源质量偏低"], ["source_quality_medium", "来源为降级数据"]])("超龄低质标记%s在闭市尾仍保留来源问题", (reason, label) => {
+    const input = {...aged, dataTimestamp: "2026-10-13T15:00:00+08:00", reasons: [reason, "quote_age_exceeded", "market_closed"], session: closedSession("19:34:00", "2026-10-13")};
+    const before = JSON.stringify(input);
+    const view = quoteQualityView(input);
+    expect(view.sessionLabel).toBe("已收盘");
+    expect(view.label).not.toBe("已收盘");
+    expect(view.sessionIssue).not.toBeNull();
+    expect(view.title).toContain(label);
+    expect(view.tone).toBe("warning");
+    expect(JSON.stringify(input)).toBe(before);
   });
 });

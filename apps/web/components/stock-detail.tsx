@@ -466,7 +466,7 @@ export const StockDetailPanel = memo(function StockDetailPanel({
     if (!active || !symbol) return;
     // Prefetch and a visible perspective share one application of each result.
     // A manual retry owns a new generation, so a slow old read cannot overwrite it.
-    const managedRead = <T,>(kind: DetailReadKind, load: () => Promise<T>, apply: (value: T) => void) => {
+    const managedRead = <T,>(kind: DetailReadKind, load: (fresh: boolean) => Promise<T>, apply: (value: T) => void) => {
       let flight: Promise<T> | null = null;
       let generation = 0;
       let financialSnapshot: {date: string; value: T} | null = null;
@@ -479,7 +479,7 @@ export const StockDetailPanel = memo(function StockDetailPanel({
         const next = Promise.resolve().then(async () => {
           if (current()) setReadStates(previous => ({...previous, [kind]: {...previous[kind], pending: true}}));
           try {
-            const value = await load();
+            const value = await load(fresh);
             if (current()) {
               apply(value);
               if (kind === "financials") financialSnapshot = {date, value};
@@ -507,7 +507,7 @@ export const StockDetailPanel = memo(function StockDetailPanel({
         if (value.symbol !== symbol) throw new Error("盘口证券身份不匹配");
         setBook(value);
       }),
-      minute: managedRead("minute", () => getMinuteLineWithBaseline(symbol), value => {
+      minute: managedRead("minute", fresh => getMinuteLineWithBaseline(symbol, {fresh}), value => {
         if ("symbol" in value && value.symbol !== symbol) throw new Error("分钟证券身份不匹配");
         setMinutes(value.points);
         setVrBaseline(previous => {
@@ -601,6 +601,7 @@ export const StockDetailPanel = memo(function StockDetailPanel({
     alive: boolean; request: number; inFlight: number; failed: boolean; used: boolean;
     parentAtStart: Quote | null | undefined; candidate: Quote | null; failureAsOf: number;
   } | null>(null);
+  const indexFreshRef = useRef<typeof indexRecoveryRef.current>(null);
   useEffect(() => {
     if (!indexEnabled) return;
     const owner = {alive: true, request: 0, inFlight: 0, failed: false, used: false,
@@ -608,8 +609,10 @@ export const StockDetailPanel = memo(function StockDetailPanel({
     indexRecoveryRef.current = owner;
     return () => {owner.alive = false; owner.candidate = null;};
   }, [indexKey, indexEnabled]);
-  const indexResource = useResource(async () => {
+  const indexResource = useResource(async signal => {
     const owner = indexRecoveryRef.current;
+    const fresh = owner !== null && indexFreshRef.current === owner;
+    indexFreshRef.current = null;
     const request = owner ? ++owner.request : 0;
     const current = () => owner?.alive && owner === indexRecoveryRef.current && owner.request === request;
     if (owner) {owner.parentAtStart = parentIndexRef.current; owner.candidate = null;}
@@ -634,10 +637,10 @@ export const StockDetailPanel = memo(function StockDetailPanel({
     try {
       const parent = parentIndexRef.current;
       const quoteRead = parent === undefined ? track(async () => {
-        const overview = await getMarketOverview();
+        const overview = await getMarketOverview({signal, fresh});
         sourceQuote = overview.indices.find(value => value.symbol === "000001" || value.symbol === "sh000001");
       }) : Promise.resolve().then(() => {sourceQuote = parent ?? undefined;});
-      const [points] = await Promise.all([track(() => getMinuteLine("sh000001")), quoteRead]);
+      const [points] = await Promise.all([track(() => getMinuteLine("sh000001", {signal, fresh})), quoteRead]);
       // A parent owner may arrive while standalone fallback drains. Its explicit
       // missing/bad observation must not be replaced by the older REST success.
       if (parentIndexRef.current !== undefined) sourceQuote = parentIndexRef.current ?? undefined;
@@ -654,8 +657,12 @@ export const StockDetailPanel = memo(function StockDetailPanel({
       settled = true;
       if (owner?.alive && owner === indexRecoveryRef.current) setIndexCompletion(value => value + 1);
     }
-  }, {key: indexKey, intervalMs: 60_000, enabled: indexEnabled});
+  }, {key: indexKey, intervalMs: 60_000, enabled: indexEnabled, abortable: true});
   const {refresh: refreshIndexOverlay, error: indexReadError, data: indexReadData} = indexResource;
+  const retryIndexOverlay = () => {
+    indexFreshRef.current = indexRecoveryRef.current;
+    refreshIndexOverlay();
+  };
   useEffect(() => {
     const owner = indexRecoveryRef.current;
     if (!indexEnabled || !owner?.alive || owner.used) return;
@@ -675,9 +682,20 @@ export const StockDetailPanel = memo(function StockDetailPanel({
     }
   }, [indexEnabled, indexDate, indexQuote, indexCompletion, indexReadError, indexReadData, refreshIndexOverlay]);
   const indexOverlay = indexResource.data ?? null;
-  const indexIssueLabel = indexResource.error instanceof IndexOverlayError
-    ? indexResource.error.issue === "reference_age" ? "指数基准未更新"
-      : indexResource.error.issue === "reference" ? "指数基准待核" : "指数数据时点或字段待核"
+  // A newer parent observation can invalidate a retained overlay before the
+  // next minute GET. Validation reports that fact without issuing another read.
+  const indexObservationIssue = useMemo(() => {
+    if (!indexEnabled || !indexReadData || indexQuote === undefined) return null;
+    try {
+      buildIndexOverlay(indexReadData.openingAnchor ? [indexReadData.openingAnchor, ...indexReadData.points] : indexReadData.points,
+        indexQuote ?? undefined, indexDate);
+      return null;
+    } catch (error) {return error;}
+  }, [indexEnabled, indexReadData, indexQuote, indexDate]);
+  const indexError = indexResource.error ?? indexObservationIssue;
+  const indexIssueLabel = indexError instanceof IndexOverlayError
+    ? indexError.issue === "reference_age" ? "指数基准未更新"
+      : indexError.issue === "reference" ? "指数基准待核" : "指数数据时点或字段待核"
     : "指数叠加读取失败";
   const retryRead = (kind: DetailReadKind) => {
     const reads = dataReadsRef.current; if (reads?.alive) void reads[kind](true).catch(() => {});
@@ -755,7 +773,7 @@ export const StockDetailPanel = memo(function StockDetailPanel({
   </>;
   const klineDiagnostics = <>{quoteDiagnostics}{bars.at(-1) && <p>REST基座：{sourceLabel(bars.at(-1)?.source)} · 尾记录 {dateTimeTextBJ(bars.at(-1)?.ts, {seconds: true})} · 质量 {bars.at(-1)?.quality}</p>}</>;
   const minuteTail = minutes.at(-1);
-  const minuteDiagnostics = <>{quoteDiagnostics}{minuteTail && <p>REST基座：{sourceLabel(minuteTail.source)} · {minuteTail.time_label === "opening_anchor" ? <>竞价观察 {dateTimeTextBJ(minuteTail.observation_ts, {seconds: true})} · 原标签 {dateTimeTextBJ(minuteTail.ts, {seconds: true})}（非连续分钟）</> : <>源分钟 {dateTimeTextBJ(minuteTail.ts, {seconds: true})}</>}</p>}{indexOverlay?.points.at(-1) && <p>指数叠加截至 {dateTimeTextBJ(indexOverlay.points.at(-1)?.ts, {seconds: true})}</p>}{indexOverlay?.openingAnchor && <p>指数竞价观察 {dateTimeTextBJ(indexOverlay.openingAnchor.observation_ts, {seconds: true})}（非连续分钟）</p>}{indexResource.error instanceof Error && <p>指数叠加：{indexResource.error.message}</p>}</>;
+  const minuteDiagnostics = <>{quoteDiagnostics}{minuteTail && <p>REST基座：{sourceLabel(minuteTail.source)} · {minuteTail.time_label === "opening_anchor" ? <>竞价观察 {dateTimeTextBJ(minuteTail.observation_ts, {seconds: true})} · 原标签 {dateTimeTextBJ(minuteTail.ts, {seconds: true})}（非连续分钟）</> : <>源分钟 {dateTimeTextBJ(minuteTail.ts, {seconds: true})}</>}</p>}{indexOverlay?.points.at(-1) && <p>指数叠加截至 {dateTimeTextBJ(indexOverlay.points.at(-1)?.ts, {seconds: true})}</p>}{indexOverlay?.openingAnchor && <p>指数竞价观察 {dateTimeTextBJ(indexOverlay.openingAnchor.observation_ts, {seconds: true})}（非连续分钟）</p>}{indexError instanceof Error && <p>指数叠加：{indexError.message}</p>}</>;
 
 
   return (
@@ -905,10 +923,10 @@ export const StockDetailPanel = memo(function StockDetailPanel({
                41px 给分时图；两个图表 tab 也不再有「一个有头一个无头」的高度跳动
                （2026-09-02 用户要求） */
             <Panel bodyClassName="overflow-hidden flex flex-col" className="detail-chart-panel min-h-0 flex-1">
-              <DetailReadStatus label="分钟" state={readStates.minute} onRetry={() => retryRead("minute")} diagnostics={minuteDiagnostics} diagnosticIssue={!!indexResource.error} identity={`${symbol}:minute`} active={active}/>
+              <DetailReadStatus label="分钟" state={readStates.minute} onRetry={() => retryRead("minute")} diagnostics={minuteDiagnostics} diagnosticIssue={!!indexError} identity={`${symbol}:minute`} active={active}/>
               {indexOverlay?.mode === "historical" && <p className="px-3 pb-1 text-xs text-zinc-600 dark:text-zinc-400">上证叠加 · {indexOverlay.referenceDate} · 非实时</p>}
-              {!indexResource.error && indexOverlay?.mode === "waiting" && <p role="status" className="px-3 pb-1 text-xs text-zinc-600 dark:text-zinc-400">上证叠加 · {indexOverlay.waitingPhase === "closing_auction" ? "收盘竞价等待" : indexOverlay.waitingPhase === "pre_open_gap" ? "开盘等待" : "开盘竞价等待"} · {indexOverlay.points.length ? `观察截至 ${dateTimeTextBJ(indexOverlay.sourceClock, {seconds: true})}` : "尚无连续分时"}</p>}
-              {!!indexResource.error && <div className="flex flex-wrap items-center gap-2 px-3 pb-1 text-xs"><p role="alert" className="text-amber-800 dark:text-amber-300">{indexIssueLabel}{indexOverlay ? " · 保留结果" : ""}</p><button type="button" data-action="secondary" disabled={indexResource.pending} onClick={indexResource.refresh}>重新读取指数叠加</button></div>}
+              {!indexError && indexOverlay?.mode === "waiting" && <p role="status" className="px-3 pb-1 text-xs text-zinc-600 dark:text-zinc-400">上证叠加 · {indexOverlay.waitingPhase === "closing_auction" ? "收盘竞价等待" : indexOverlay.waitingPhase === "pre_open_gap" ? "开盘等待" : "开盘竞价等待"} · {indexOverlay.points.length ? `观察截至 ${dateTimeTextBJ(indexOverlay.sourceClock, {seconds: true})}` : "尚无连续分时"}</p>}
+              {!!indexError && <div className="flex flex-wrap items-center gap-2 px-3 pb-1 text-xs"><p role="alert" className="text-amber-800 dark:text-amber-300">{indexIssueLabel}{indexOverlay ? " · 保留结果" : ""}</p><button type="button" data-action="secondary" disabled={indexResource.pending} onClick={retryIndexOverlay}>重新读取指数叠加</button></div>}
               {displayMinutes.length > 0 ? (
                 <div className="relative min-h-0 flex-1">
                   {/* 停牌遮罩：分时是当日数据，停牌股当日无成交，

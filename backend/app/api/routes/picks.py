@@ -369,7 +369,7 @@ async def execution_gate(request: Request, date: str | None = Query(default=None
     from app.core.ttl_cache import cache_on
     from app.picks.execution_gate import collect_execution_gate
 
-    hub = get_hub(request)
+    hub = await get_hub(request)
     cache = cache_on(request.app.state, "picks.execution_gate", 60, maxsize=2)
     _, payload = await cache.get_or_set(
         ("execution-gate", date),

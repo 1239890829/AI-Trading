@@ -4,6 +4,7 @@ import asyncio
 import logging
 import time
 from collections import Counter, deque
+from copy import deepcopy
 from dataclasses import dataclass, field
 from datetime import datetime, timedelta, timezone
 from typing import Callable
@@ -32,6 +33,16 @@ SUBSCRIBER_QUEUE_MAX = 64
 _DROP_LOG_EVERY = 100
 """丢弃日志节流：首次丢必报，之后每 100 帧报一次（1Hz 下不至于刷屏）。"""
 
+_SOURCE_REJECTION_HISTORY_MAX = 64
+MAX_SUBSCRIPTION_ID = 2**31 - 1
+
+
+def validate_subscription_id(value: object) -> int:
+    """Bound a connection-local scope generation; JSON booleans are not IDs."""
+    if type(value) is not int or not 0 <= value <= MAX_SUBSCRIPTION_ID:
+        raise ValueError("subscription_id must be an integer from 0 to 2147483647")
+    return value
+
 
 @dataclass
 class Subscriber:
@@ -46,6 +57,7 @@ class Subscriber:
     queue: asyncio.Queue
     dropped: int = 0
     created_at: datetime = field(default_factory=utcnow)
+    subscription_id: int = 0
 
 
 @dataclass
@@ -88,6 +100,19 @@ def offer(queue: asyncio.Queue, msg: dict) -> bool:
     except asyncio.QueueFull:  # pragma: no cover - 同上
         return False
     return True
+
+
+def _validate_source_quote(q: Quote, prev: Quote | None = None) -> Quote:
+    """Add local checks without upgrading the provider's own quality verdict."""
+    original_quality, original_reasons = q.quality, list(q.quality_reasons)
+    validate_quote(q, prev)
+    if original_quality != Quality.high:
+        if original_quality == Quality.invalid or q.quality == Quality.invalid:
+            q.quality = Quality.invalid
+        elif original_quality == Quality.stale or q.quality == Quality.high:
+            q.quality = original_quality
+        q.quality_reasons = list(dict.fromkeys(original_reasons + q.quality_reasons))
+    return q
 
 
 def _rejected_source_observation(q: Quote, prev: Quote | None = None) -> str | None:
@@ -184,6 +209,7 @@ class QuoteHub:
         self.last_missing_symbols: list[str] = []
         self.last_batch_coverage: float | None = None
         self.last_quote_rejections: dict[str, str] = {}
+        self._source_rejection_events: deque[dict] = deque(maxlen=_SOURCE_REJECTION_HISTORY_MAX)
         # 以共同请求目录为分母；首次缺席也计数，但不臆造报价。
         self.last_missing_indices: list[str] = []
         self.last_index_coverage: float | None = None
@@ -291,7 +317,7 @@ class QuoteHub:
                     or not q.market or q.market != prev.market
                     or (domain == "indices" and q.market != INDEX_MARKETS.get(q.symbol))):
                 continue
-            checked = validate_quote(q.model_copy(deep=True), prev)
+            checked = _validate_source_quote(q.model_copy(deep=True), prev)
             if _rejected_source_observation(checked, prev) == "source_time_regress_ignored":
                 rejected[q.symbol, q.market] = q.source
         if not rejected:
@@ -304,7 +330,7 @@ class QuoteHub:
             prev = current[key[0]]
             if q.market != prev.market:
                 return None
-            checked = validate_quote(q.model_copy(deep=True), prev)
+            checked = _validate_source_quote(q.model_copy(deep=True), prev)
             rejection = _rejected_source_observation(checked, prev)
             if checked.price is None or rejection not in {None, "source_time_regress_ignored"}:
                 return None
@@ -426,20 +452,24 @@ class QuoteHub:
             expected_market = INDEX_MARKETS.get(q.symbol)
             if expected_market is None:
                 rejected_indices[f"{q.market or '?'}:{q.symbol}"] = "source_identity_unexpected_ignored"
+                self._record_source_rejection("indices", q, "source_identity_unexpected_ignored")
                 continue
             if q.market != expected_market:
                 rejected_indices[q.symbol] = "source_identity_market_mismatch_ignored"
+                self._record_source_rejection("indices", q, "source_identity_market_mismatch_ignored")
                 continue
             if counts[q.symbol, q.market] != 1:
                 rejected_indices[q.symbol] = "source_identity_duplicate_ignored"
+                self._record_source_rejection("indices", q, "source_identity_duplicate_ignored")
                 continue
             candidate_indices.append(q)
         for q in candidate_indices:
             prev = self.indices.get(q.symbol)
-            validate_quote(q, prev)
+            _validate_source_quote(q, prev)
             rejected = _rejected_source_observation(q, prev)
             if rejected is not None:
                 rejected_indices[q.symbol] = rejected
+                self._record_source_rejection("indices", q, rejected)
                 continue
             if closed:
                 _mark_confirmed_closed(q)
@@ -455,22 +485,26 @@ class QuoteHub:
         quote_counts = Counter(q.symbol for q in new_quotes)
         returned_by_symbol = {q.symbol: q for q in new_quotes}
         accepted_by_symbol: dict[str, Quote] = {}
-        rejected_quotes: dict[str, str] = {
-            q.symbol: "source_identity_unrequested_ignored"
-            for q in new_quotes if q.symbol not in watchlist
-        }
+        rejected_quotes: dict[str, str] = {}
+        for q in new_quotes:
+            if q.symbol not in watchlist:
+                rejected_quotes[q.symbol] = "source_identity_unrequested_ignored"
+                self._record_source_rejection("quotes", q, "source_identity_unrequested_ignored")
+            elif quote_counts[q.symbol] > 1:
+                rejected_quotes[q.symbol] = "source_identity_duplicate_ignored"
+                self._record_source_rejection("quotes", q, "source_identity_duplicate_ignored")
         for symbol in watchlist:
-            if quote_counts.get(symbol, 0) > 1:
-                rejected_quotes[symbol] = "source_identity_duplicate_ignored"
+            if symbol in rejected_quotes:
                 continue
             q = returned_by_symbol.get(symbol)
             if q is None:
                 continue
             prev = self.quotes.get(symbol)
-            validate_quote(q, prev)
+            _validate_source_quote(q, prev)
             rejected = _rejected_source_observation(q, prev)
             if rejected is not None:
                 rejected_quotes[symbol] = rejected
+                self._record_source_rejection("quotes", q, rejected)
                 continue
             if closed:
                 _mark_confirmed_closed(q)
@@ -587,6 +621,23 @@ class QuoteHub:
             "quotes": summary(self.last_quote_rejections),
             "indices": summary(self.last_index_rejections),
         }
+
+    def _record_source_rejection(self, domain: str, quote: Quote, reason: str) -> None:
+        """Keep only rejected Hub admission metadata, separate from current facts."""
+        current = (self.indices if domain == "indices" else self.quotes).get(quote.symbol)
+        self._source_rejection_events.append({
+            "domain": domain, "identity": {"symbol": quote.symbol, "market": quote.market},
+            "source": quote.source,
+            "observed_source_at": quote.data_timestamp.isoformat() if quote.data_timestamp is not None else None,
+            "current_source_at": current.data_timestamp.isoformat() if current is not None and current.data_timestamp is not None else None,
+            "received_at": quote.received_at.isoformat() if quote.received_at is not None else None,
+            "reason": reason, "observed_at": utcnow().isoformat(),
+        })
+
+    def source_rejection_observations(self) -> dict:
+        """Maintenance-only newest-first snapshots; transport/recovery prefilters are outside this scope."""
+        return {"scope": "hub_admission", "limit": _SOURCE_REJECTION_HISTORY_MAX,
+                "events": deepcopy(list(reversed(self._source_rejection_events)))}
 
     def _mark_batch_gaps(
         self, watchlist: list[str], by_symbol: dict[str, Quote],
@@ -819,7 +870,14 @@ class QuoteHub:
         })
         if (quote.quality not in (Quality.stale, Quality.invalid)
                 and quote.freshness(fresh_within=self.stale_after).state == "stale"):
-            mark_stale(visible, "quote_age_exceeded")
+            if quote.quality in (Quality.low, Quality.medium):
+                source_reason = "source_quality_low" if quote.quality == Quality.low else "source_quality_medium"
+                visible.quality = Quality.stale
+                visible.quality_reasons = list(dict.fromkeys([
+                    *visible.quality_reasons, source_reason, "quote_age_exceeded",
+                ]))
+            else:
+                mark_stale(visible, "quote_age_exceeded")
         return visible
 
     def get_indices(self) -> list[Quote]:
@@ -892,7 +950,7 @@ class QuoteHub:
 
     # ---------- 订阅 ----------
 
-    def subscribe(self, symbols: set[str] | None = None) -> asyncio.Queue:
+    def subscribe(self, symbols: set[str] | None = None, *, subscription_id: int = 0) -> asyncio.Queue:
         """注册订阅者。返回的队列终身复用——**改订阅集用 update_symbols，
         绝不 unsubscribe+subscribe 换新队列**：writer 正 parked 在旧队列的
         get() 上，换队列后 writer 永远等在孤儿队列（2026-09-01 实测事故：
@@ -902,15 +960,18 @@ class QuoteHub:
         队列**有界**（`SUBSCRIBER_QUEUE_MAX`，R24）：旧实现无界，消费者卡住时
         积压无上限且投递侧无法察觉。有界后投递走 `offer()`（丢最旧、保最新）。
         """
+        subscription_id = validate_subscription_id(subscription_id)
         queue: asyncio.Queue = asyncio.Queue(maxsize=SUBSCRIBER_QUEUE_MAX)
-        self._subscribers.append(Subscriber(symbols=symbols, queue=queue))
+        self._subscribers.append(Subscriber(symbols=symbols, queue=queue, subscription_id=subscription_id))
         return queue
 
-    def update_symbols(self, queue: asyncio.Queue, symbols: set[str] | None) -> bool:
+    def update_symbols(self, queue: asyncio.Queue, symbols: set[str] | None, *, subscription_id: int = 0) -> bool:
         """原地更新订阅集（同一队列，writer 无感）。队列不存在返回 False。"""
+        subscription_id = validate_subscription_id(subscription_id)
         for sub in self._subscribers:
             if sub.queue is queue:
                 sub.symbols = symbols
+                sub.subscription_id = subscription_id
                 return True
         return False
 
@@ -965,6 +1026,7 @@ class QuoteHub:
                 sub.queue,
                 {
                     "type": frame_type,
+                    "subscription_id": sub.subscription_id,
                     "seq": seq,
                     "ts": ts,
                     "data": [q.model_dump(mode="json") for q in payload],

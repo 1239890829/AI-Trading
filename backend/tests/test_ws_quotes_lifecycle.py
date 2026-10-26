@@ -60,12 +60,12 @@ class FakeHub:
     def get_quotes(self, symbols: list[str] | None = None) -> list:
         return []
 
-    def subscribe(self, symbols: set[str] | None = None) -> asyncio.Queue:
+    def subscribe(self, symbols: set[str] | None = None, *, subscription_id: int = 0) -> asyncio.Queue:
         q: asyncio.Queue = asyncio.Queue(maxsize=SUBSCRIBER_QUEUE_MAX)
         self.subscribed.append(q)
         return q
 
-    def update_symbols(self, queue: asyncio.Queue, symbols: set[str] | None) -> bool:
+    def update_symbols(self, queue: asyncio.Queue, symbols: set[str] | None, *, subscription_id: int = 0) -> bool:
         return queue in self.subscribed
 
     def unsubscribe(self, queue: asyncio.Queue) -> None:

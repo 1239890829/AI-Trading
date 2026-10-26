@@ -95,10 +95,34 @@ def test_regressed_stock_uses_fresh_backup_without_touching_normal_primary_row()
         assert backup.requested == [["600105"]]
         assert primary.calls == {"get_quotes": 1} and backup.calls == {"get_quotes": 1}
         assert not hub.last_quote_rejections and hub.last_batch_coverage == 1
+        events = hub.source_rejection_observations()["events"]
+        assert len(events) == 1 and events[0]["source"] == "primary"
+        assert events[0]["identity"] == {"symbol": "600105", "market": "SH"}
+        assert events[0]["reason"] == "source_time_regress_ignored"
+        assert events[0]["current_source_at"] == (NOW - timedelta(seconds=2)).isoformat()
+        assert events[0]["observed_source_at"] == (NOW - timedelta(seconds=3)).isoformat()
         assert len(hub.quote_history) == 2, "accept/history advance only once per row"
         metrics = hub.provider.provider_health()["method_attempts"]
         assert metrics["get_quotes@primary"]["source_observation_rejected"] == 1
         assert metrics["get_quotes@backup"]["method_started"] == 1
+    asyncio.run(check())
+
+
+def test_recovery_preserves_a_backups_original_low_quality_and_reason():
+    async def check():
+        hub, _, _ = hub_for(
+            [quote(age=3), quote("600002")],
+            [quote(source="backup", age=0.5, quality=Quality.low,
+                   quality_reasons=["provider_contract_degraded"])],
+        )
+        await hub._refresh_domain("quotes")
+        recovered = hub.quotes["600105"]
+        assert recovered.source == "backup" and recovered.quality is Quality.low
+        assert recovered.quality_reasons == ["provider_contract_degraded"]
+        assert recovered.data_timestamp == NOW - timedelta(seconds=0.5)
+        assert recovered.freshness(fresh_within=10).state == "degraded"
+        assert not hub.last_quote_rejections
+
     asyncio.run(check())
 
 

@@ -361,7 +361,7 @@ it("the immediate feed prunes removed subscriptions, rejects old frames and clea
   expect(feed?.getSnapshot("600519")).toBeUndefined();
   const fast = renderHook(() => useFastQuote(feed, "000001"));
   await act(async () => {
-    ws.onmessage?.({data: JSON.stringify({type: "quotes", data: [quote("000001", 20)]})});
+    ws.onmessage?.({data: JSON.stringify({type: "quotes", subscription_id: 1, data: [quote("000001", 20)]})});
     ws.onmessage?.({data: JSON.stringify({type: "stale", data: [quote("600519", 99)]})});
   });
   expect(fast.result.current).toEqual(quote("000001", 20));
@@ -415,6 +415,9 @@ it("an explicit missing frame is distinct from no observation and unmount cancel
   await act(async () => {await vi.advanceTimersByTimeAsync(1000); ws.onmessage?.({data: JSON.stringify({type: "quotes", data: []})});});
   expect(fast.result.current).toBeNull();
   expect(owner.result.current.quotes["600519"].price).toBe(100);
+  await act(async () => {await vi.advanceTimersByTimeAsync(2000);});
+  expect(owner.result.current.observations).toEqual({"600519": null});
+  expect(owner.result.current.quotes).toEqual({});
   owner.unmount();
   expect(fast.result.current).toBeUndefined();
   await act(async () => {await vi.advanceTimersByTimeAsync(3000); ws.onmessage?.({data: JSON.stringify({type: "quotes", data: [quote("600519", 200)]})});});
@@ -508,14 +511,55 @@ it("live symbol subscriptions stay on one socket and an old-symbol snapshot cann
   await act(async () => { ws.readyState = FakeWS.OPEN; ws.onopen?.(); });
   rerender({symbols: ["000001"]});
   expect(FakeWS.instances).toHaveLength(1);
-  expect(send).toHaveBeenLastCalledWith(JSON.stringify({action: "subscribe", symbols: ["000001"]}));
+  expect(send).toHaveBeenLastCalledWith(JSON.stringify({action: "subscribe", symbols: ["000001"], subscription_id: 1}));
   await act(async () => {
-    ws.onmessage?.({data: JSON.stringify({type: "quotes", data: [quote("000001", 20)]})});
+    ws.onmessage?.({data: JSON.stringify({type: "quotes", subscription_id: 1, data: [quote("000001", 20)]})});
     ws.onmessage?.({data: JSON.stringify({type: "stale", data: [quote("600519", 100)]})});
   });
   expect(result.current.quotes).toEqual({"000001": quote("000001", 20)});
   expect(result.current.status).toBe("live");
   unmount();
+});
+
+it("订阅代次拒绝同socket旧scope的重叠帧及A→B→A旧帧，当前代次真实空帧仍明确缺项", async () => {
+  const owner = renderHook(({symbols}) => useQuoteStream(symbols), {initialProps: {symbols: ["600519"]}});
+  await settle(); const ws = FakeWS.instances[0];
+  const emit = (subscription_id: number, data: Quote[]) => ws.onmessage?.({data: JSON.stringify({type: "snapshot", subscription_id, data})});
+  await act(async () => {ws.readyState = FakeWS.OPEN; ws.onopen?.(); emit(0, [quote("600519", 100)]);});
+  owner.rerender({symbols: ["600519", "600127"]});
+  await act(async () => {emit(0, [quote("600519", 99)]);});
+  expect(owner.result.current.quoteFeed.getSnapshot("600127")).toBeUndefined();
+  expect(owner.result.current.quoteFeed.getSnapshot("600519")?.price).toBe(100);
+  await act(async () => {emit(1, [quote("600519", 101), quote("600127", 8)]);});
+  expect(owner.result.current.quotes["600127"].price).toBe(8);
+  owner.rerender({symbols: ["600127"]});
+  owner.rerender({symbols: ["600519", "600127"]});
+  await act(async () => {emit(1, [quote("600519", 90), quote("600127", 7)]);});
+  expect(owner.result.current.quoteFeed.getSnapshot("600519")).toBeUndefined();
+  expect(owner.result.current.quoteFeed.getSnapshot("600127")?.price).toBe(8);
+  await act(async () => {emit(3, []);});
+  expect(owner.result.current.quoteFeed.getSnapshot("600519")).toBeNull();
+  expect(owner.result.current.observations).toEqual({"600127": null, "600519": null});
+  expect(FakeWS.instances).toHaveLength(1);
+  owner.unmount();
+});
+
+it("legacy无id帧只属于初始URL订阅；切scope后不续行情watchdog，重连仍能兼容旧服", async () => {
+  const owner = renderHook(({symbols}) => useQuoteStream(symbols), {initialProps: {symbols: ["600519"]}});
+  await settle(); const ws = FakeWS.instances[0];
+  await act(async () => {ws.readyState = FakeWS.OPEN; ws.onopen?.(); ws.onmessage?.({data: JSON.stringify({type: "snapshot", data: [quote("600519", 100)]})});});
+  owner.rerender({symbols: ["600127"]});
+  for (let count = 0; count < 3; count++) await act(async () => {
+    await vi.advanceTimersByTimeAsync(15_000);
+    ws.onmessage?.({data: JSON.stringify({type: "quotes", data: [quote("600127", 8)]})});
+  });
+  expect(owner.result.current.quoteFeed.getSnapshot("600127")).toBeUndefined();
+  expect(ws.readyState).toBe(3);
+  await act(async () => {ws.onclose?.(); await vi.advanceTimersByTimeAsync(2000);});
+  const next = FakeWS.instances.at(-1)!;
+  await act(async () => {next.readyState = FakeWS.OPEN; next.onopen?.(); next.onmessage?.({data: JSON.stringify({type: "snapshot", data: []})});});
+  expect(owner.result.current.quoteFeed.getSnapshot("600127")).toBeNull();
+  owner.unmount();
 });
 
 it("late messages from a replaced socket cannot overwrite a recovered connection", async () => {

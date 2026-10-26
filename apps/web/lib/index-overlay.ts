@@ -1,7 +1,7 @@
 import type {MinutePoint} from "@/lib/api";
 import {bjDate} from "@/lib/format";
 import {hasTrustedQuoteObservation} from "@/lib/kline-live";
-import {calendarPause, calendarPhase} from "@/lib/quote-quality-view";
+import {calendarPause, calendarPhase, hasExpectedPausedSource} from "@/lib/quote-quality-view";
 import type {Quote} from "@/types/market";
 
 const KNOWN_SOURCES = new Set(["ths", "tencent", "eastmoney", "sina", "tdx", "tdx_m1"]);
@@ -56,6 +56,7 @@ export function indexQuoteReference(quote: Quote | undefined, mainDate: string, 
   if (hasTrustedQuoteObservation(quote)) return {referenceDate, mode: "live"};
   const session = quote.display_session;
   const nowMs = now.getTime();
+  const pause = calendarPause(session);
   // Check the same existing calendar rule against both the server context and now.
   // An old 08:00 closed context must not authorize a new 09:30 historical read.
   const historical = quote.quality === "stale" && Array.isArray(quote.quality_reasons)
@@ -64,12 +65,16 @@ export function indexQuoteReference(quote: Quote | undefined, mainDate: string, 
     && session && Number.isFinite(nowMs) && bjDate(now.toISOString()) === session.trade_date
     && Date.parse(quote.data_timestamp) <= Date.parse(session.as_of)
     && Date.parse(session.as_of) <= nowMs
-    && calendarPause(session) !== null
-    && calendarPause({...session, as_of: now.toISOString()}) !== null;
+    && pause !== null
+    && calendarPause({...session, as_of: now.toISOString()}) === pause;
   if (!historical) {
     const onlyAge = quote.quality === "stale" && Array.isArray(quote.quality_reasons) && quote.quality_reasons.length > 0
       && quote.quality_reasons.every(reason => reason === "quote_age_exceeded");
     throw new IndexOverlayError("指数基准质量或来源时刻未确认", onlyAge ? "reference_age" : "reference");
+  }
+  if (pause === "已收盘" && (session?.expected_source_date !== session.trade_date
+    || !hasExpectedPausedSource(quote.data_timestamp, session))) {
+    throw new IndexOverlayError("指数收盘基准尾点未确认", "reference");
   }
   return {referenceDate, mode: "historical"};
 }
@@ -127,6 +132,11 @@ export function buildIndexOverlay(points: MinutePoint[], quote: Quote | undefine
   }
   if (continuousPoints.length === 0) throw new IndexOverlayError("指数尚无可用连续分钟记录", "minutes");
   const reference = indexQuoteReference(quote, mainDate, now);
+  if (reference.mode === "historical" && calendarPause(quote.display_session) === "已收盘") {
+    const tail = continuousPoints.at(-1)!;
+    const observed = tail.time_label === "interval_end" ? tail.observation_ts : tail.ts;
+    if (!hasExpectedPausedSource(observed, quote.display_session)) throw new IndexOverlayError("指数收盘分钟尾点未确认", "minutes");
+  }
   if (reference.mode === "historical" && continuousPoints.some(point => Date.parse(point.ts) > Date.parse(quote.display_session!.as_of))) {
     throw new IndexOverlayError("指数基准质量或来源时刻未确认", "minutes");
   }

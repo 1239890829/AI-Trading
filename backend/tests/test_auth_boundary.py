@@ -413,14 +413,14 @@ class _FakeHub:
     def get_quotes(self, symbols=None) -> list:
         return []
 
-    def subscribe(self, symbols=None):
+    def subscribe(self, symbols=None, *, subscription_id=0):
         import asyncio
 
         q: asyncio.Queue = asyncio.Queue()
         self.subscribed.append(q)
         return q
 
-    def update_symbols(self, queue, symbols) -> bool:
+    def update_symbols(self, queue, symbols, *, subscription_id=0) -> bool:
         return True
 
     def unsubscribe(self, queue) -> None:

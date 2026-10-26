@@ -30,6 +30,45 @@ describe("safe read in-flight ownership", () => {
     source.calls[1].finish({symbol: "sh000001", points}); await next;
   });
 
+  it("分钟人工fresh绕过旧共享原包，旧消费者仍能收到自己的结果", async () => {
+    const source = pendingFetch();
+    const old = getMinuteLine("sh000001");
+    const current = getMinuteLineWithBaseline("sh000001", {fresh: true});
+    const oldPoints = [{ts: "2026-10-26T10:00:00+08:00", price: 3000, source: "tencent"}];
+    const newPoints = [{...oldPoints[0], price: 3030}];
+    try {
+      expect(source.fetcher).toHaveBeenCalledTimes(2);
+      source.calls[1].finish({symbol: "sh000001", points: newPoints, vr_baseline_5m: null});
+      expect((await current).points).toEqual(newPoints);
+      expect(source.calls[0].init.signal?.aborted).toBe(false);
+      source.calls[0].finish({symbol: "sh000001", points: oldPoints});
+      expect(await old).toEqual(oldPoints);
+    } finally {
+      source.calls.forEach(call => call.finish({symbol: "sh000001", points: oldPoints}));
+      await Promise.allSettled([old, current]);
+    }
+  });
+
+  it("分钟包装取消一个共享消费者不伤另一位，最后离开才取消网络", async () => {
+    const source = pendingFetch();
+    const one = new AbortController(), two = new AbortController();
+    const overlay = getMinuteLine("sh000001", {signal: one.signal}).catch(error => error);
+    const chart = getMinuteLineWithBaseline("sh000001", {signal: two.signal}).catch(error => error);
+    try {
+      expect(source.fetcher).toHaveBeenCalledTimes(1);
+      one.abort();
+      await Promise.resolve();
+      expect(source.calls[0].init.signal?.aborted).toBe(false);
+      two.abort();
+      expect(source.calls[0].init.signal?.aborted).toBe(true);
+      expect(await overlay).toMatchObject({code: "canceled"});
+      expect(await chart).toMatchObject({code: "canceled"});
+    } finally {
+      source.calls.forEach(call => call.finish({symbol: "sh000001", points: []}));
+      await Promise.allSettled([overlay, chart]);
+    }
+  });
+
   it("整日增强资格池已有在途单飞，默认池与不同交易日不串包", async () => {
     const source = pendingFetch();
     const one = getLimitUpPoolSnapshot("2026-10-14", {includeBreaks: true});

@@ -160,7 +160,7 @@ async def stock_themes(
         from app.api.deps import get_hub
         from app.services.theme_catalog_service import direction_alignment
 
-        hub = get_hub(request)
+        hub = await get_hub(request)
         snap = getattr(request.app.state, "snapshot_service", None)
         chg_by_symbol = {
             r["symbol"]: r.get("change_pct")

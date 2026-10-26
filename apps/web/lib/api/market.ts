@@ -410,17 +410,17 @@ export interface Sentiment {
   pool_yesterday_count?: number;
 }
 
-export async function getMinuteLine(symbol: string): Promise<MinutePoint[]> {
-  return (await getJson<{ symbol: string; points: MinutePoint[] }>(`/api/minute-line/${symbol}`, 20_000)).data.points;
+export async function getMinuteLine(symbol: string, options: ReadOptions = {}): Promise<MinutePoint[]> {
+  return (await getJson<{ symbol: string; points: MinutePoint[] }>(`/api/minute-line/${symbol}`, 20_000, options)).data.points;
 }
 
-export async function getMinuteLineWithBaseline(symbol: string): Promise<{
+export async function getMinuteLineWithBaseline(symbol: string, options: ReadOptions = {}): Promise<{
   points: MinutePoint[];
   vr_baseline_5m: number[] | null;
 }> {
   return (
     await getJson<{ symbol: string; points: MinutePoint[]; vr_baseline_5m: number[] | null }>(
-      `/api/minute-line/${symbol}`, 20_000
+      `/api/minute-line/${symbol}`, 20_000, options
     )
   ).data;
 }

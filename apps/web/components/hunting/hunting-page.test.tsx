@@ -631,10 +631,10 @@ it("stops previously opened review archives when their context is hidden by clas
   expect(api.getPickReviews).toHaveBeenCalledTimes(reads);
 });
 
-const savedMethodFixture = ():api.StrategyRegistryItem => ({
+const savedMethodFixture = () => ({
   key:"daily_picks",name:"每日精选六维组合",catalog_kind:"registered",status:"active",basis:"market_neutral",source:"daily_pick_review",evaluable:true,
   discovery:{category:"multi_factor",category_label:"多因子组合",session:"daily",session_label:"每日生成",summary:"原六维组合记录",supports_saved_runs:true},
-});
+} satisfies api.StrategyRegistryItem);
 
 it("opens the chosen method in the existing right column with one opt-in directory read", async () => {
   vi.mocked(getStrategyRegistry).mockResolvedValue([savedMethodFixture()]);
@@ -655,18 +655,30 @@ it("opens the chosen method in the existing right column with one opt-in directo
 });
 
 it("refreshing the same method updates its data without stealing mobile reading focus", async () => {
-  vi.mocked(getStrategyRegistry).mockResolvedValue([savedMethodFixture()]);
+  const original=savedMethodFixture();
+  vi.mocked(getStrategyRegistry).mockResolvedValue([original]);
   search=new URLSearchParams({browse:"methods",disc_method:"daily_picks"});
   render(<HuntingPage/>);
   const side=await screen.findByLabelText("方法详情 每日精选六维组合");
+  const heading=within(side).getByRole("heading",{name:"每日精选六维组合"});
+  await waitFor(()=>expect(document.activeElement).toBe(heading));
   const close=within(side).getByRole("button",{name:"返回方法目录"});
   close.focus();side.scrollTop=93;
-  vi.mocked(getStrategyRegistry).mockResolvedValue([{...savedMethodFixture(),note:"新读取的原方法说明"}]);
+  expect(document.activeElement).toBe(close);
+  let finish!: (rows: api.StrategyRegistryItem[]) => void;
+  vi.mocked(getStrategyRegistry).mockReturnValueOnce(new Promise(resolve=>{finish=resolve;}));
   fireEvent.click(screen.getByRole("button",{name:"刷新方法"}));
   await waitFor(()=>expect(getStrategyRegistry).toHaveBeenCalledTimes(2));
+  expect(screen.getByLabelText("方法详情 每日精选六维组合")).toBe(side);
+  expect(document.activeElement).toBe(close);
+  await act(async()=>{finish([{...original,discovery:{...original.discovery,summary:"新读取的原方法说明"}}]);});
+  await within(side).findByText("新读取的原方法说明");
   await act(async()=>{});
+  expect(screen.getByLabelText("方法详情 每日精选六维组合")).toBe(side);
+  expect(within(side).getByRole("button",{name:"返回方法目录"})).toBe(close);
   expect(document.activeElement).toBe(close);
   expect(side.scrollTop).toBe(93);
+  expect(getStrategyRegistry).toHaveBeenCalledTimes(2);
 });
 
 it.each(["desktop", "mobile"])("returns %s method focus to search when unfollowing removes the original row", async layout => {
