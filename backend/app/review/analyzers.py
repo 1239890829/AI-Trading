@@ -22,8 +22,10 @@ from app.core.grounding import evidence_pool, grounding_violations
 from app.sentiment.engine import ADVERSE_PHASES  # S2-7：相位集合唯一权威
 from app.review.config import MethodologyConfig
 from app.review.schemas import (
+    DataGap,
     DimensionResult,
     ReviewData,
+    ShadowSnapshot,
 )
 
 log = logging.getLogger(__name__)
@@ -107,13 +109,21 @@ class RulesAnalyzer:
                 findings=findings, judgements=judgements, evidence=evidence, gaps=[],
             )
 
+        shadow_findings, shadow_evidence, shadow_gaps = self._shadow(p.shadow)
+        gaps = list(p.gaps)
+        for gap in shadow_gaps:
+            if not any(existing.field == gap.field for existing in gaps):
+                gaps.append(gap)
+        if shadow_evidence:
+            evidence["shadow"] = shadow_evidence
+
         if not p.items:
             findings.append(f"复盘日（含此前）无精选组合：{p.combo_date or '无记录'}")
             judgements.append("无推荐可对照。组合缺失属常态（首日部署/未到生成时点），不判失误")
             return DimensionResult(
                 key="picks", title=self._TITLES["picks"],
-                status="degraded" if p.gaps else "ok",
-                findings=findings, judgements=judgements, evidence=evidence, gaps=p.gaps,
+                status="degraded" if gaps else "ok",
+                findings=[*findings, *shadow_findings], judgements=judgements, evidence=evidence, gaps=gaps,
             )
 
         findings.append(
@@ -123,7 +133,7 @@ class RulesAnalyzer:
             findings.append("逐股归因行缺失：generate_daily_review 未成功执行（见 gaps）")
             return DimensionResult(
                 key="picks", title=self._TITLES["picks"], status="degraded",
-                findings=findings, judgements=judgements, evidence=evidence, gaps=p.gaps,
+                findings=[*findings, *shadow_findings], judgements=judgements, evidence=evidence, gaps=gaps,
             )
 
         item_by_symbol = {i.symbol: i for i in p.items}
@@ -186,43 +196,73 @@ class RulesAnalyzer:
                 "——本就未建议出手（闸门日看方向验证，不看个股对错）"
             )
 
-        # 影子持仓小节（P0-B）：空仓闸门的 A/B 对照——影子照常执行最新组合，
-        # 其绩效就是"如果不空仓会怎样"的逐日答案
-        sh = p.shadow
-        if sh is not None and sh.enabled:
-            ex = sh.execution or {}
-            if not ex:
-                findings.append("影子持仓：当日无执行日志（晨窗未执行或服务未运行，见 gaps）")
-            else:
-                bought = ex.get("bought") or []
-                skipped = ex.get("skipped") or []
-                filled = [b for b in bought if b.get("status") == "filled"]
-                gate = ex.get("gate_summary") or {}
-                findings.append(
-                    f"影子持仓：买入成交 {len(filled)}/{len(bought)}"
-                    f"（闸门拦下 {len(skipped)}：禁买 {gate.get('blocked', '?')}、"
-                    f"观察 {gate.get('observe', '?')}、异常 {gate.get('anomaly', '?')}、"
-                    f"未知 {gate.get('unknown', '?')}）"
-                )
-                acc = sh.account or {}
-                ret = acc.get("total_return_pct")
-                if ret is not None:
-                    findings.append(
-                        f"影子账户累计收益 {ret:+.2f}%（现金 {acc.get('cash')}）"
-                        "——与真实空仓决策对照，量化 gate 的机会成本"
-                    )
-                for b in skipped[:3]:
-                    findings.append(
-                        f"闸门跳过：{b.get('symbol')} {b.get('name') or ''}（{b.get('state')}）{b.get('reason') or ''}"
-                    )
-        elif sh is None:
-            findings.append("影子持仓未采集（服务旧版本或采集异常，见 gaps）")
+        findings.extend(shadow_findings)
 
         return DimensionResult(
             key="picks", title=self._TITLES["picks"],
-            status="degraded" if p.gaps else "ok",
-            findings=findings, judgements=judgements, evidence=evidence, gaps=p.gaps,
+            status="degraded" if gaps else "ok",
+            findings=findings, judgements=judgements, evidence=evidence, gaps=gaps,
         )
+
+    @staticmethod
+    def _shadow(sh: ShadowSnapshot | None) -> tuple[list[str], dict, list[DataGap]]:
+        from app.picks.shadow import execution_log_issues, has_execution_evidence
+
+        if sh is None:
+            return ["影子持仓未采集（服务旧版本或采集异常，见 gaps）"], {}, []
+        if not sh.enabled:
+            return [], {}, []
+        issues = execution_log_issues(sh.execution, sh.account)
+        gaps = [DataGap(field=f"picks.shadow.{field}", source="picks/shadow", reason=reason,
+                        impact="picks.影子对照（空仓 A/B）", severity="warn")
+                for field, reason in issues.items()]
+        ex = sh.execution or {}
+        if not ex:
+            return ["影子持仓：当日无执行日志（未执行与记录缺失无法区分，见 gaps）"], {"state": "unknown"}, gaps
+        raw_skip = ex.get("skipped")
+        reason = ex.get("skipped_reason")
+        reason = reason if isinstance(reason, str) and reason else (raw_skip if isinstance(raw_skip, str) else None)
+        recorded = has_execution_evidence(ex)
+        proof = {"state": "execution_recorded" if recorded else "skip_recorded" if reason else "unknown",
+                 "executed_at": ex.get("executed_at"), "skip_reason": reason,
+                 "bought_count": None, "sold_count": None, "skipped_count": None,
+                 "execution_details_complete": recorded and not issues,
+                 "basis": "已保存影子摘要，未独立核对订单账本"}
+        if not recorded:
+            caveat = ex.get("caveat") if isinstance(ex.get("caveat"), str) else ""
+            finding = (f"影子持仓：本次跳过（{reason}）{caveat}；不据此推断当日成交数量"
+                       if reason else "影子持仓：记录形状不明，执行状态未知（见 gaps）")
+            return [finding], proof, gaps
+
+        def rows(field):
+            value = ex.get(field)
+            return [dict(row) for row in value if isinstance(row, dict)] if isinstance(value, list) else []
+
+        bought, sold, skipped = rows("bought"), rows("sold"), rows("skipped")
+        proof.update(buy_fills=[row for row in bought if row.get("status") == "filled"],
+                     sell_fills=[row for row in sold if row.get("status") == "filled"],
+                     bought_count=len(bought) if "bought" not in issues else None,
+                     sold_count=len(sold) if "sold" not in issues else None,
+                     skipped_count=len(skipped) if "skipped" not in issues else None)
+        buy_text = (f"买入已见成交 {len(proof['buy_fills'])} 笔（完整成交数与委托总数未知）"
+                    if proof["bought_count"] is None
+                    else f"买入成交 {len(proof['buy_fills'])}/{proof['bought_count']}")
+        sell_text = (f"卖出已见成交 {len(proof['sell_fills'])} 笔（完整成交数与委托总数未知）"
+                     if proof["sold_count"] is None
+                     else f"卖出成交 {len(proof['sell_fills'])}/{proof['sold_count']}")
+        findings = [f"影子持仓：已有执行记录；{buy_text}，{sell_text}"]
+        if proof["skipped_count"] is None:
+            findings.append(f"逐股跳过明细未知；原跳过标记={reason or '未提供'}，不能按字符串长度统计只数")
+        else:
+            gate = ex.get("gate_summary") if "gate_summary" not in issues else {}
+            findings.append(f"逐股跳过 {len(skipped)}；闸门禁买 {gate.get('blocked', '?')}、观察 {gate.get('observe', '?')}、异常 {gate.get('anomaly', '?')}、未知 {gate.get('unknown', '?')}")
+        account = sh.account if isinstance(sh.account, dict) else {}
+        ret = account.get("total_return_pct")
+        if ret is not None and "account" not in issues:
+            findings.append(f"影子账户累计收益 {ret:+.2f}%（现金 {account.get('cash')}）——仅为影子账户对照")
+        for row in skipped[:3]:
+            findings.append(f"闸门跳过：{row.get('symbol')} {row.get('name') or ''}（{row.get('state')}）{row.get('reason') or ''}")
+        return findings, proof, gaps
 
     # ---- 维度 1：当日操作评估 ----
 

@@ -306,7 +306,7 @@
 | strategy/backtest-rules.md | 回测强制禁令（代码级校验） |
 | strategy/risk-management.md | 风险拦截位置与规则 |
 | halt-check-risk-analysis.md | 停牌核查/异动对情绪的传导设计 · **已删除**（精华见 `summary/stock-strategy.md`） |
-| review/review-agent.md | 盘后复盘 Agent 架构说明 |
+| review/review-agent.md | 盘后复盘架构、影子执行契约与缺口说明 |
 | review-strategy-update-2026-09-02.md | 复盘策略增量迭代方案 · **已删除**（精华见 `summary/review-governance.md`） |
 | review/daily-review-sop.md | 每日复盘 SOP（怎么判） |
 | review/daily-review-checklist.md | 每日复盘执行清单（逐项勾） |

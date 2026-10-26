@@ -22,7 +22,8 @@ import asyncio
 import contextlib
 import json
 import logging
-from datetime import date, timezone
+import math
+from datetime import date, datetime, timezone
 from pathlib import Path
 
 from app.core.db import get_session_factory
@@ -98,6 +99,67 @@ SKIP_GATE_NOT_JUDGEABLE = "gate_not_judgeable"
 SKIP_NO_RUNNER = "runner_not_ready"
 
 
+def has_execution_evidence(record: dict) -> bool:
+    """Execution fields, including empty order lists, must survive later skip beats."""
+    return any(key in record for key in ("bought", "sold", "executed_at")) or isinstance(record.get("skipped"), list)
+
+
+def execution_log_issues(record: dict | None, account: dict) -> dict[str, str]:
+    """Read-only shape checks shared by review collection and presentation."""
+    if not isinstance(record, dict) or not record:
+        return {"execution": "当日无影子执行日志，不能判断未执行还是记录缺失"}
+    skipped = record.get("skipped")
+    raw_reason = record.get("skipped_reason")
+    reason = raw_reason if isinstance(raw_reason, str) and raw_reason else (skipped if isinstance(skipped, str) else None)
+    issues = {}
+    if raw_reason is not None and not isinstance(raw_reason, str):
+        issues["skipped_reason"] = "影子跳过原因字段非法，保留原标记，不推断执行状态"
+    if record.get("caveat") is not None and not isinstance(record["caveat"], str):
+        issues["caveat"] = "影子跳过依据字段非法，不能当作可读原因"
+    if not has_execution_evidence(record) and isinstance(skipped, str) and skipped:
+        if reason in {SKIP_WINDOW_CLOSED, SKIP_NOT_TRADING_DAY}:
+            return issues
+        issues["execution"] = f"影子本次跳过：{reason}；当日执行明细未确认"
+        return issues
+    for field in ("bought", "sold", "skipped"):
+        rows = record.get(field)
+        if not isinstance(rows, list):
+            issues[field] = (f"已有执行记录，但逐股跳过明细未知；原跳过标记={skipped}"
+                             if field == "skipped" and isinstance(skipped, str)
+                             else f"影子{field}字段不是明细列表，数量与完整性未知")
+        elif any(not isinstance(row, dict) for row in rows):
+            issues[field] = f"影子{field}列表含非法明细，仅保留可识别记录，数量不完整"
+        elif field in {"bought", "sold"} and any(
+            not isinstance(row.get("symbol"), str) or not row["symbol"]
+            or row.get("status") not in ("filled", "pending", "rejected", "cancelled", "canceled", "error")
+            for row in rows
+        ):
+            issues[field] = f"影子{field}明细缺有效标的或委托状态，数量不完整"
+        elif field == "skipped" and any(
+            not isinstance(row.get("symbol"), str) or not row["symbol"]
+            or not isinstance(row.get("state"), str) or not row["state"] for row in rows
+        ):
+            issues[field] = "影子跳过明细缺标的或状态，逐股跳过数量未知"
+    try:
+        stamp = datetime.fromisoformat(record["executed_at"])
+        if stamp.tzinfo is None:
+            raise ValueError("missing timezone")
+    except (KeyError, TypeError, ValueError):
+        issues["executed_at"] = "影子执行时点缺失或非法，不能补成当前时刻"
+    gate = record.get("gate_summary")
+    if not isinstance(gate, dict) or any(
+        key in gate and (type(gate[key]) is not int or gate[key] < 0)
+        for key in ("blocked", "observe", "anomaly", "unknown")
+    ):
+        issues["gate_summary"] = "影子闸门汇总缺失或非法，不推算闸门分桶数量"
+    ret = account.get("total_return_pct") if isinstance(account, dict) else None
+    if not isinstance(account, dict) or (ret is not None and (
+        type(ret) not in (int, float) or not math.isfinite(ret)
+    )):
+        issues["account"] = "影子账户收益字段非法，未按零收益补齐"
+    return issues
+
+
 def persist_shadow_skip(day: str, reason: str, **extra) -> Path | None:
     """**跳过分支留痕**（N4，2026-09-11）。
 
@@ -113,9 +175,24 @@ def persist_shadow_skip(day: str, reason: str, **extra) -> Path | None:
 
     :returns: 写入的路径；未写入（应保留原状）时返回 None。
     """
-    existing = load_execution_log(day)
+    p = _shadow_dir() / f"{day}.json"
+    try:
+        existing = load_execution_log(day)
+    except OSError:
+        return None
+    if existing is None:
+        try:
+            p.lstat()
+        except FileNotFoundError:
+            pass
+        except OSError:
+            return None
+        else:
+            return None  # Existing unreadable JSON or a dangling link is not a missing log.
     # 已有真实执行记录 ⇒ 保留，绝不覆盖
-    if existing and not existing.get("skipped"):
+    if existing is not None and not isinstance(existing, dict):
+        return None  # A malformed historical record is not permission to overwrite it.
+    if existing and (has_execution_evidence(existing) or not existing.get("skipped")):
         return None
     # 同一原因已记录 ⇒ 幂等跳过
     if existing and existing.get("skipped_reason") == reason:
@@ -124,9 +201,8 @@ def persist_shadow_skip(day: str, reason: str, **extra) -> Path | None:
     payload = {**(existing or {}), "day": day, "skipped": reason,
                "skipped_reason": reason, "updated_at": beijing_now().isoformat()}
     payload.update(extra)
-    d = _shadow_dir()
+    d = p.parent
     d.mkdir(parents=True, exist_ok=True)
-    p = d / f"{day}.json"
     p.write_text(json.dumps(payload, ensure_ascii=False, indent=1), encoding="utf-8")
     log.info("[SHADOW] skip recorded: %s (%s) → %s", day, reason, p)
     return p

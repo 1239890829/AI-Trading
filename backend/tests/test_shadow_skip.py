@@ -15,6 +15,7 @@
 from __future__ import annotations
 
 import json
+import hashlib
 from pathlib import Path
 
 import pytest
@@ -145,3 +146,39 @@ def test_load_execution_log_returns_none_when_missing(shadow_dir):
 def test_load_execution_log_returns_none_on_corrupt_file(shadow_dir):
     (shadow_dir / "2026-09-11.json").write_text("{ broken", encoding="utf-8")
     assert sh.load_execution_log("2026-09-11") is None
+
+
+def test_skip_preserves_an_existing_invalid_json_original(shadow_dir):
+    day = "2026-09-11"
+    path = shadow_dir / f"{day}.json"
+    path.write_bytes(b"{ broken historical original")
+    before = path.read_bytes()
+    digest = hashlib.sha256(before).hexdigest()
+    assert sh.persist_shadow_skip(day, sh.SKIP_WINDOW_CLOSED) is None
+    assert path.read_bytes() == before and hashlib.sha256(path.read_bytes()).hexdigest() == digest
+
+
+def test_skip_preserves_an_existing_unreadable_original(shadow_dir, monkeypatch):
+    day = "2026-09-11"
+    path = shadow_dir / f"{day}.json"
+    path.write_bytes(b'{"bought":[],"sold":[],"skipped":[]}')
+    before = path.read_bytes()
+    read_text = Path.read_text
+
+    def unreadable(candidate, *args, **kwargs):
+        if candidate == path:
+            raise PermissionError("isolated unreadable shadow original")
+        return read_text(candidate, *args, **kwargs)
+
+    monkeypatch.setattr(Path, "read_text", unreadable)
+    assert sh.persist_shadow_skip(day, sh.SKIP_WINDOW_CLOSED) is None
+    assert path.read_bytes() == before
+
+
+def test_skip_does_not_follow_an_existing_dangling_day_link(shadow_dir, tmp_path):
+    day = "2026-09-11"
+    target = tmp_path / "uncreated-target.json"
+    path = shadow_dir / f"{day}.json"
+    path.symlink_to(target)
+    assert sh.persist_shadow_skip(day, sh.SKIP_WINDOW_CLOSED) is None
+    assert path.is_symlink() and not target.exists()

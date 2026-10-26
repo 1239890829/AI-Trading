@@ -288,9 +288,28 @@ def test_run_morning_buys_normal_and_skips_gate(tmp_path, monkeypatch):
     day = summary["day"]
     log_row = json.loads((tmp_path / f"{day}.json").read_text(encoding="utf-8"))
     assert log_row["bought"][0]["symbol"] == "600001"
+    original = (tmp_path / f"{day}.json").read_bytes()
+    assert shadow_mod.persist_shadow_skip(day, shadow_mod.SKIP_WINDOW_CLOSED) is None
+    assert (tmp_path / f"{day}.json").read_bytes() == original
     # 幂等：同日再跑 skipped
     summary2 = asyncio.run(runner.run_morning(_hub(quotes), _gate(_gate_items())))
     assert summary2["skipped"] == "already_executed"
+
+
+def test_run_morning_zero_orders_still_protects_its_nonempty_skip_list(tmp_path, monkeypatch):
+    _reset_paper_tables()
+    from app.picks import shadow as shadow_mod
+
+    monkeypatch.setattr(shadow_mod, "_shadow_dir", lambda: tmp_path)
+    runner = _runner({})
+    gate = _gate([{"symbol": "600002", "state": "blocked", "reason": "竞价禁买"}])
+    summary = asyncio.run(runner.run_morning(_hub({}), gate))
+    assert summary["bought"] == summary["sold"] == []
+    assert len(summary["skipped"]) == 1 and summary["executed_at"]
+    path = tmp_path / f"{summary['day']}.json"
+    original = path.read_bytes()
+    assert shadow_mod.persist_shadow_skip(summary["day"], shadow_mod.SKIP_WINDOW_CLOSED) is None
+    assert path.read_bytes() == original
 
 
 def test_run_morning_sells_yesterday_position(tmp_path, monkeypatch):
