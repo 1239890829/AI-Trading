@@ -1013,8 +1013,12 @@ class NativeTradingAgentsDriver:
         failure = None
         # Short random socket path avoids AF_UNIX path length limits; only its
         # exact path is granted to this worker. It is never an HTTP listener.
-        with tempfile.TemporaryDirectory(prefix="ta-ipc-", dir="/private/tmp") as ipc:
-            socket_path = Path(ipc) / "broker.sock"
+        with tempfile.TemporaryDirectory(prefix="ta-ipc-", dir="/tmp") as ipc:
+            # /tmp exists on both supported POSIX hosts. Resolve its macOS
+            # alias for the seatbelt literal without using a long user TMPDIR.
+            socket_path = Path(ipc).resolve() / "broker.sock"
+            if len(os.fsencode(socket_path)) >= 104:
+                raise DriverUnavailable("native_ipc_path_too_long")
             policy = sandbox_policy(python=self.python, dependencies=self.dependencies,
                 upstream=self.upstream, code=code, run=run, socket_path=socket_path)
             policy_path = run / "sandbox.sb"

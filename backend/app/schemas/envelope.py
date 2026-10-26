@@ -128,9 +128,11 @@ class MinutePointModel(BaseModel):
     """分钟分时点（与 /api/minute-line points 元素一致）。"""
 
     ts: str
-    # 仅同次源响应证明的当前尾桶观测钟；ts 始终保留源分钟标签。
+    # 仅同次源响应证明的源观测钟；ts 始终保留源分钟标签。
     observation_ts: str | None = None
-    time_label: Literal["interval_end"] | None = None
+    # 接收钟独立于源钟；不能据此升级行情质量或交易资格。
+    received_at: str | None = None
+    time_label: Literal["interval_end", "opening_anchor"] | None = None
     price: float
     volume: float | None = None
     cum_amount: float | None = None

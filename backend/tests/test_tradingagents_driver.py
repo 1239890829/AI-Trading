@@ -3,6 +3,7 @@ import asyncio
 from copy import deepcopy
 from datetime import date, timedelta
 import json
+import os
 from pathlib import Path
 import sqlite3
 from threading import Event
@@ -260,6 +261,19 @@ def test_cooperative_cancel_delivers_known_reply_and_waits_for_native_checkpoint
     """Cancel flags cannot replace an accounted answer with a broker error."""
     d, rec, budget = native(tmp_path), Recorder(), Budget()
     run = tmp_path / "isolated-run"; run.mkdir()
+    # Linux has no /private/tmp; macOS's default per-user TMPDIR may exceed
+    # sockaddr_un. Exercise both boundaries without creating an OS alias.
+    long_default = tmp_path / ("long-default-" * 10)
+    long_default.mkdir()
+    monkeypatch.setattr(driver.tempfile, "tempdir", str(long_default))
+    real_temporary = driver.tempfile.TemporaryDirectory
+    requested_roots = []
+    def portable_temporary(*args, **kwargs):
+        requested_roots.append(str(kwargs.get("dir")))
+        if str(kwargs.get("dir")) == "/private/tmp":
+            raise FileNotFoundError("Linux has no macOS private temporary directory")
+        return real_temporary(*args, **kwargs)
+    monkeypatch.setattr(driver.tempfile, "TemporaryDirectory", portable_temporary)
     monkeypatch.setattr(d, "_dependency_identity", lambda **kwargs: {})
     wire, replies, signaled = {}, [], []
     class Reader:
@@ -273,6 +287,9 @@ def test_cooperative_cancel_delivers_known_reply_and_waits_for_native_checkpoint
         def close(self): pass
         async def wait_closed(self): pass
     async def server(handler, **kwargs):
+        socket_path = Path(kwargs["path"])
+        assert len(os.fsencode(socket_path)) < 104
+        assert socket_path.parent.parent == Path("/tmp").resolve()
         wire["handler"] = handler
         Path(kwargs["path"]).touch()
         return Server()
@@ -309,6 +326,25 @@ def test_cooperative_cancel_delivers_known_reply_and_waits_for_native_checkpoint
     assert json.loads((run / "usage-receipts/1.json").read_text())["usage_known"] is True
     assert (run / "native-checkpoint-marker").exists() and signaled == []
     assert [row[0] for row in budget.events] == ["reserve", "start", "finish"]
+    assert requested_roots == ["/tmp"]
+
+
+def test_native_ipc_rejects_overlong_canonical_path_before_socket_or_worker(tmp_path, monkeypatch):
+    d, rec = native(tmp_path), Recorder()
+    run = tmp_path / "run"; run.mkdir()
+    long_path = tmp_path / ("long-unix-socket-" * 8); long_path.mkdir()
+    class LongTemporary:
+        def __init__(self, **kwargs): pass
+        def __enter__(self): return str(long_path)
+        def __exit__(self, *args): pass
+    monkeypatch.setattr(driver.tempfile, "TemporaryDirectory", LongTemporary)
+    monkeypatch.setattr(d, "_dependency_identity", lambda **kwargs: {})
+    async def forbidden(*args, **kwargs): pytest.fail("Oversized Unix path must not reach IPC or process launch")
+    monkeypatch.setattr(asyncio, "start_unix_server", forbidden)
+    monkeypatch.setattr(asyncio, "create_subprocess_exec", forbidden)
+    with pytest.raises(driver.DriverUnavailable, match="native_ipc_path_too_long"):
+        asyncio.run(d._execute(rec=rec, packet=packet(), run=run, budget=Budget(),
+            identity={"transport": d.transport.method_identity()}, max_calls=22))
 
 
 def test_native_visible_required_peer_identity():

@@ -17,7 +17,7 @@ import type { RealPositionsResource } from "@/hooks/use-real-positions";
 import { analyze } from "@/lib/technical-analysis";
 import { buildEventMarks, buildMinuteNewsEvents } from "@/lib/event-markers";
 import { hasTrustedQuoteObservation, mergeQuoteIntoBars, mergeQuoteIntoMinutes } from "@/lib/kline-live";
-import {buildIndexOverlay, indexQuoteReference} from "@/lib/index-overlay";
+import {buildIndexOverlay, IndexOverlayError, indexQuoteReference} from "@/lib/index-overlay";
 import {limitQualification} from "@/lib/limit-qualification";
 import { isIndexSymbol } from "@/lib/api";
 import { notifyWatchlistChanged, subscribeWatchlist } from "@/lib/watchlist-sync";
@@ -675,6 +675,10 @@ export const StockDetailPanel = memo(function StockDetailPanel({
     }
   }, [indexEnabled, indexDate, indexQuote, indexCompletion, indexReadError, indexReadData, refreshIndexOverlay]);
   const indexOverlay = indexResource.data ?? null;
+  const indexIssueLabel = indexResource.error instanceof IndexOverlayError
+    ? indexResource.error.issue === "reference_age" ? "指数基准未更新"
+      : indexResource.error.issue === "reference" ? "指数基准待核" : "指数数据时点或字段待核"
+    : "指数叠加读取失败";
   const retryRead = (kind: DetailReadKind) => {
     const reads = dataReadsRef.current; if (reads?.alive) void reads[kind](true).catch(() => {});
   };
@@ -750,7 +754,8 @@ export const StockDetailPanel = memo(function StockDetailPanel({
     {STREAM_ABNORMAL.includes(streamStatus) && <p>行情连接：{STREAM_STATUS_LABEL[streamStatus].text}；连接状态不代表源报价时效。</p>}
   </>;
   const klineDiagnostics = <>{quoteDiagnostics}{bars.at(-1) && <p>REST基座：{sourceLabel(bars.at(-1)?.source)} · 尾记录 {dateTimeTextBJ(bars.at(-1)?.ts, {seconds: true})} · 质量 {bars.at(-1)?.quality}</p>}</>;
-  const minuteDiagnostics = <>{quoteDiagnostics}{minutes.at(-1) && <p>REST基座：{sourceLabel(minutes.at(-1)?.source)} · 源分钟 {dateTimeTextBJ(minutes.at(-1)?.ts, {seconds: true})}</p>}{indexOverlay?.points.at(-1) && <p>指数叠加截至 {dateTimeTextBJ(indexOverlay.points.at(-1)?.ts, {seconds: true})}</p>}{indexResource.error instanceof Error && <p>指数叠加：{indexResource.error.message}</p>}</>;
+  const minuteTail = minutes.at(-1);
+  const minuteDiagnostics = <>{quoteDiagnostics}{minuteTail && <p>REST基座：{sourceLabel(minuteTail.source)} · {minuteTail.time_label === "opening_anchor" ? <>竞价观察 {dateTimeTextBJ(minuteTail.observation_ts, {seconds: true})} · 原标签 {dateTimeTextBJ(minuteTail.ts, {seconds: true})}（非连续分钟）</> : <>源分钟 {dateTimeTextBJ(minuteTail.ts, {seconds: true})}</>}</p>}{indexOverlay?.points.at(-1) && <p>指数叠加截至 {dateTimeTextBJ(indexOverlay.points.at(-1)?.ts, {seconds: true})}</p>}{indexOverlay?.openingAnchor && <p>指数竞价观察 {dateTimeTextBJ(indexOverlay.openingAnchor.observation_ts, {seconds: true})}（非连续分钟）</p>}{indexResource.error instanceof Error && <p>指数叠加：{indexResource.error.message}</p>}</>;
 
 
   return (
@@ -903,7 +908,7 @@ export const StockDetailPanel = memo(function StockDetailPanel({
               <DetailReadStatus label="分钟" state={readStates.minute} onRetry={() => retryRead("minute")} diagnostics={minuteDiagnostics} diagnosticIssue={!!indexResource.error} identity={`${symbol}:minute`} active={active}/>
               {indexOverlay?.mode === "historical" && <p className="px-3 pb-1 text-xs text-zinc-600 dark:text-zinc-400">上证叠加 · {indexOverlay.referenceDate} · 非实时</p>}
               {!indexResource.error && indexOverlay?.mode === "waiting" && <p role="status" className="px-3 pb-1 text-xs text-zinc-600 dark:text-zinc-400">上证叠加 · {indexOverlay.waitingPhase === "closing_auction" ? "收盘竞价等待" : indexOverlay.waitingPhase === "pre_open_gap" ? "开盘等待" : "开盘竞价等待"} · {indexOverlay.points.length ? `观察截至 ${dateTimeTextBJ(indexOverlay.sourceClock, {seconds: true})}` : "尚无连续分时"}</p>}
-              {!!indexResource.error && <div className="flex flex-wrap items-center gap-2 px-3 pb-1 text-xs"><p role="alert" className="text-amber-800 dark:text-amber-300">指数叠加读取失败{indexOverlay ? " · 保留结果" : ""}</p><button type="button" data-action="secondary" disabled={indexResource.pending} onClick={indexResource.refresh}>重新读取指数叠加</button></div>}
+              {!!indexResource.error && <div className="flex flex-wrap items-center gap-2 px-3 pb-1 text-xs"><p role="alert" className="text-amber-800 dark:text-amber-300">{indexIssueLabel}{indexOverlay ? " · 保留结果" : ""}</p><button type="button" data-action="secondary" disabled={indexResource.pending} onClick={indexResource.refresh}>重新读取指数叠加</button></div>}
               {displayMinutes.length > 0 ? (
                 <div className="relative min-h-0 flex-1">
                   {/* 停牌遮罩：分时是当日数据，停牌股当日无成交，

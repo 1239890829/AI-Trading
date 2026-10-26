@@ -380,9 +380,12 @@ export async function searchSymbols(q: string): Promise<SymbolSearchItem[]> {
 
 export interface MinutePoint {
   ts: string;
-  /** 同次源响应证明的当前尾桶观测钟；不替换原分钟标签 ts。 */
+  /** 同次源响应证明的观测钟；不替换原分钟标签 ts。 */
   observation_ts?: string | null;
-  time_label?: "interval_end" | null;
+  /** opening_anchor 是开盘竞价记录，不是 09:30 连续分钟。 */
+  time_label?: "interval_end" | "opening_anchor" | null;
+  /** HTTP 包接收钟，不代替 observation_ts。 */
+  received_at?: string | null;
   price: number;
   volume?: number | null;
   cum_amount?: number | null;

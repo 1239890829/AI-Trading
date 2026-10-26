@@ -29,7 +29,7 @@ interface MinuteLivePoint {
   minute_amount?: number | null;
   /** Only a same-response source quote can prove a forming interval's end label. */
   observation_ts?: string | null;
-  time_label?: "interval_end" | null;
+  time_label?: "interval_end" | "opening_anchor" | null;
 }
 
 function nonnegative(value: unknown): value is number {
@@ -50,6 +50,7 @@ export function hasTrustedQuoteObservation(quote: Quote | null | undefined): quo
 }
 
 function adjacentMinutes(previous: MinuteLivePoint | undefined, point: MinuteLivePoint): boolean {
+  if (previous?.time_label === "opening_anchor" || point.time_label === "opening_anchor") return false;
   if (previous?.volume_basis === "observed_only" || point.volume_basis === "observed_only") return false;
   if (!previous || !bjDate(point.ts) || bjDate(previous.ts) !== bjDate(point.ts)) return false;
   // A forming end-labelled point is not a sealed cumulative baseline. This
@@ -168,6 +169,14 @@ export function mergeQuoteIntoMinutes<T extends MinuteLivePoint>(
   const qMin = hhmmToMin(qHHMM);
   const lastMin = hhmmToMin(lastHHMM);
   if (!isContinuousSession(qMin) || !isContinuousSession(lastMin)) return null;
+
+  if (last.time_label === "opening_anchor") {
+    // A real continuous-session quote establishes a new observation. Keep the
+    // auction record unchanged; do not spread its marker/clock or use its
+    // cumulative auction volume as a sealed continuous-minute baseline.
+    const observed = mergeQuoteIntoMinutes<T>([], quote, isIndex);
+    return observed ? [...points, ...observed] : null;
+  }
 
   // Tencent can label the forming minute by its end (13:48 for a 13:47 quote).
   // Preserve that label; compare real observation times only when the provider

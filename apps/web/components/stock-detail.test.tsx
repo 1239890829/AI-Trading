@@ -1372,6 +1372,56 @@ describe("StockDetailPanel · 每个端点只读取一次首屏", () => {
     expect(view.getByRole("alert").textContent).toContain("指数叠加读取失败");
   });
 
+  it("成功分钟读取被仅age基准拒绝时不冒充HTTP失败，保留原叠加并区分重试的真实失败", async () => {
+    vi.setSystemTime(new Date("2026-10-09T10:00:02+08:00"));
+    const good: Quote = {...audit, symbol: "sh000001", price: 3000, prev_close: 2990,
+      data_timestamp: "2026-10-09T10:00:00+08:00"};
+    const aged = {...good, quality: "stale" as const, quality_reasons: ["quote_age_exceeded"]};
+    const original = JSON.stringify(aged);
+    api.getMinuteLine.mockResolvedValue(minute(3000).points);
+    const view = render(<StockDetailPanel symbol="600519" chartTab="minute" indexQuote={good}/>); await settle();
+    expect(view.getByTestId("minute-price").getAttribute("data-index-last")).toBe("3000");
+    view.rerender(<StockDetailPanel symbol="600519" chartTab="minute" indexQuote={aged}/>);
+    api.getMinuteLine.mockResolvedValue(minute(3030).points);
+    await advance(60_000);
+    expect(api.getMinuteLine).toHaveBeenCalledTimes(2);
+    expect(view.getByRole("alert").textContent).toBe("指数基准未更新 · 保留结果");
+    expect(view.queryByText(/指数叠加读取失败/)).toBeNull();
+    expect(view.getByTestId("minute-price").getAttribute("data-index-last")).toBe("3000");
+    const retry = deferred<MinutePoint[]>(); api.getMinuteLine.mockReturnValueOnce(retry.promise);
+    fireEvent.click(view.getByRole("button", {name: "重新读取指数叠加"})); await settle();
+    const button = view.getByRole("button", {name: "重新读取指数叠加"}) as HTMLButtonElement;
+    expect(button.disabled).toBe(true);
+    fireEvent.click(button); await settle();
+    expect(api.getMinuteLine).toHaveBeenCalledTimes(3);
+    expect(view.getByRole("alert").textContent).toBe("指数基准未更新 · 保留结果");
+    await act(async () => {retry.reject(new Error("isolated HTTP failure"));}); await settle();
+    expect(view.getByRole("alert").textContent).toBe("指数叠加读取失败 · 保留结果");
+    expect((view.getByRole("button", {name: "重新读取指数叠加"}) as HTMLButtonElement).disabled).toBe(false);
+    expect(view.getByTestId("minute-price").getAttribute("data-index-last")).toBe("3000");
+    expect(api.getMarketOverview).not.toHaveBeenCalled();
+    expect(JSON.stringify(aged)).toBe(original);
+    api.getMinuteLine.mockResolvedValueOnce(minute(3030).points);
+    view.rerender(<StockDetailPanel symbol="600519" chartTab="minute" indexQuote={good}/>); await settle();
+    expect(api.getMinuteLine).toHaveBeenCalledTimes(4);
+    expect(view.queryByRole("alert")).toBeNull();
+    expect(view.getByTestId("minute-price").getAttribute("data-index-last")).toBe("3030");
+  });
+
+  it.each(["future", "invalid_price"])("成功分钟GET含%s仍明确时点字段未核，不显示为成功或网络失败", async kind => {
+    vi.setSystemTime(new Date("2026-10-09T10:00:02+08:00"));
+    const quote: Quote = {...audit, symbol: "sh000001", price: 3000, prev_close: 2990,
+      data_timestamp: "2026-10-09T10:00:00+08:00"};
+    const bad = {...minute(3000).points[0], ...(kind === "future" ? {ts: "2026-10-09T10:01:00+08:00"} : {price: 0})};
+    api.getMinuteLine.mockResolvedValue([bad]);
+    const view = render(<StockDetailPanel symbol="600519" chartTab="minute" indexQuote={quote}/>); await settle();
+    expect(view.getByRole("alert").textContent).toBe("指数数据时点或字段待核");
+    expect(view.queryByText(/指数叠加读取失败/)).toBeNull();
+    expect(view.getByTestId("minute-price").getAttribute("data-index-last")).toBe("none");
+    fireEvent.click(view.getByRole("button", {name: "分钟诊断"}));
+    expect(within(view.getByRole("dialog", {name: "分钟诊断"})).getByText(kind === "future" ? /指数叠加：指数基准或分钟来源时刻未确认/ : /指数叠加：指数分钟价格或来源未确认/)).toBeTruthy();
+  });
+
   it("指数叠加可展示已确认休市同日历史，保留非实时标签和实际 stale 质量，后续失败可重试", async () => {
     const fetcher = vi.fn(() => {throw new Error("offline test: unexpected fetch");});
     vi.stubGlobal("fetch", fetcher);
@@ -1413,7 +1463,7 @@ describe("StockDetailPanel · 每个端点只读取一次首屏", () => {
       display_session: {phase: "closed", trade_date: "2026-10-14", as_of: "2026-10-14T08:08:35+08:00", trade_day_result: true}}]});
     const view = render(<StockDetailPanel symbol="600519" chartTab="minute" />);
     await settle();
-    expect(view.getByRole("alert").textContent).toContain("指数叠加读取失败");
+    expect(view.getByRole("alert").textContent).toContain("指数基准待核");
     expect(view.getByTestId("minute-price").getAttribute("data-index-last")).toBe("none");
     expect(view.queryByText(/上证叠加 · .*非实时/)).toBeNull();
     expect(api.getNewsDigest).not.toHaveBeenCalled();
@@ -1438,7 +1488,7 @@ describe("StockDetailPanel · 已有指数观察驱动一次恢复校准", () =>
     api.getMinuteLine.mockResolvedValueOnce(minute(3000).points).mockResolvedValue([{ts: "2026-10-09T02:00:01Z", price: 3030, source: "tencent"}]);
     const view = render(<StockDetailPanel symbol="600519" chartTab="minute" indexQuote={null}/>);
     await settle();
-    expect(view.getByRole("alert").textContent).toContain("指数叠加读取失败");
+    expect(view.getByRole("alert").textContent).toContain("指数基准待核");
     const recovered = {...indexQuote(), prev_close: 3020};
     view.rerender(<StockDetailPanel symbol="600519" chartTab="minute" indexQuote={recovered}/>);
     await settle();
@@ -1776,7 +1826,7 @@ describe("StockDetailPanel · 同owner请求复用", () => {
     await act(async () => {pending.resolve({indices: [currentIndex()]});});
     expect(api.getMarketOverview).toHaveBeenCalledTimes(1);
     expect(view.getByTestId("minute-price").getAttribute("data-index-last")).toBe("none");
-    expect(view.getByRole("alert").textContent).toContain("指数叠加读取失败");
+    expect(view.getByRole("alert").textContent).toContain("指数基准待核");
   });
 
   it("真实live补齐后跳过估值，后来再次缺项仍按原30秒节拍读取", async () => {
@@ -1950,6 +2000,32 @@ describe("StockDetailPanel · 指数竞价等待与真实失败", () => {
   beforeEach(() => {
     vi.stubGlobal("fetch", vi.fn(() => {throw new Error("offline auction test: unexpected fetch");}));
     api.getMinuteLineWithBaseline.mockResolvedValue({points: [{ts: "2026-10-09T09:15:00+08:00", price: 20, source: "tdx"}], vr_baseline_5m: null});
+  });
+  it.each([["09:18:00", "auction", 0], ["09:25:22", "pre_open_gap", 12_880_400]] as const)("主股和指数都是09:30竞价锚点时%s仍启动一次指数读取并显示真实等待", async (clock, phase, volume) => {
+    vi.setSystemTime(new Date(`2026-10-09T${clock}+08:00`));
+    const anchor: MinutePoint = {ts: "2026-10-09T09:30:00+08:00", price: 4.5, source: "tencent", time_label: "opening_anchor",
+      observation_ts: `2026-10-09T${clock === "09:18:00" ? clock : "09:25:19"}+08:00`, cum_volume: volume, cum_amount: volume * 4.5};
+    api.getMinuteLineWithBaseline.mockResolvedValue({points: [anchor], vr_baseline_5m: null});
+    api.getMinuteLine.mockResolvedValue([{...anchor, price: 3000}]);
+    const view = render(<StockDetailPanel symbol="600519" chartTab="minute" indexQuote={auctionIndex(clock, phase)}/>); await settle();
+    expect(view.getByText(phase === "auction" ? /上证叠加 · 开盘竞价等待 · 尚无连续分时/ : /上证叠加 · 开盘等待 · 尚无连续分时/)).toBeTruthy();
+    expect(view.queryByText(/指数叠加读取失败/)).toBeNull();
+    expect(view.getByTestId("minute-price").getAttribute("data-index-last")).toBe("none");
+    expect(api.getMinuteLine).toHaveBeenCalledTimes(1);
+    expect(api.getMarketOverview).not.toHaveBeenCalled();
+    vi.setSystemTime(new Date("2026-10-09T09:30:02+08:00"));
+    const fresh = {...auctionIndex("09:30:02", "continuous"), quality: "high" as const, quality_reasons: []};
+    view.rerender(<StockDetailPanel symbol="600519" chartTab="minute" indexQuote={fresh}/>); await settle();
+    expect(api.getMinuteLine).toHaveBeenCalledTimes(2);
+    expect(view.getByRole("alert").textContent).toContain("指数数据时点或字段待核");
+    expect(view.getByTestId("minute-price").getAttribute("data-index-last")).toBe("none");
+    expect(view.queryByText(/上证叠加 · 开盘竞价等待|上证叠加 · 开盘等待/)).toBeNull();
+    fireEvent.click(view.getByRole("button", {name: "分钟诊断"}));
+    const diagnostics = within(view.getByRole("dialog", {name: "分钟诊断"}));
+    const base = diagnostics.getByText(/REST基座/).textContent;
+    expect(base).toContain(`竞价观察 2026-10-09 ${clock === "09:18:00" ? clock : "09:25:19"}`);
+    expect(base).toContain("原标签 2026-10-09 09:30:00（非连续分钟）");
+    expect(base).not.toContain("源分钟");
   });
   it("开盘空连续点显示等待，阶段转连续交易只补一次真实指数读", async () => {
     vi.setSystemTime(new Date("2026-10-09T09:20:00+08:00")); api.getMinuteLine.mockResolvedValue([]);
