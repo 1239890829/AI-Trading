@@ -496,19 +496,16 @@ def collect_picks(session_factory, trade_date: date) -> "PicksSnapshot":
     shadow: "ShadowSnapshot | None" = None
     try:
         from app.core.config import settings as _settings
-        from app.picks.shadow import collect_shadow_for_review
+        from app.picks.shadow import collect_shadow_for_review, execution_log_issues
 
         if _settings.picks_shadow_enabled:
             shadow_raw = collect_shadow_for_review(session_factory, trade_date)
-            if shadow_raw is None:
-                shadow = ShadowSnapshot(enabled=True)
+            shadow = ShadowSnapshot(enabled=True, **(shadow_raw or {}))
+            for field, reason in execution_log_issues(shadow.execution, shadow.account).items():
                 gaps.append(DataGap(
-                    field="picks.shadow.execution", source="picks/shadow",
-                    reason=f"影子已启用但复盘日 {td} 无执行日志（晨窗未执行或服务当日未运行）",
+                    field=f"picks.shadow.{field}", source="picks/shadow", reason=reason,
                     impact="picks.影子对照（空仓 A/B）", severity="warn",
                 ))
-            else:
-                shadow = ShadowSnapshot(enabled=True, **shadow_raw)
     except Exception as exc:
         log.warning("review collect: shadow snapshot failed: %s", exc)
         shadow = ShadowSnapshot(enabled=False)
