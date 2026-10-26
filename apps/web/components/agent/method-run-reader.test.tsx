@@ -1,7 +1,7 @@
 import {afterEach,beforeEach,describe,expect,it,vi} from "vitest";
 import {act,cleanup,fireEvent,render,screen,waitFor,within} from "@testing-library/react";
 import type {ReactNode} from "react";
-import type {SavedMethodRunDetail,SavedMethodRunIdentity,SavedStrategyRunItem} from "@/lib/api/picks";
+import type {ReferenceResearchRowState,SavedMethodRunDetail,SavedMethodRunIdentity,SavedStrategyRunItem} from "@/lib/api/picks";
 import {MethodRunReader} from "./method-run-reader";
 import {ApiError} from "@/lib/api/client";
 import {identityLocation,methodRunKey,methodRunUrl,readMethodRunLocation} from "./method-run-location";
@@ -23,6 +23,135 @@ beforeEach(()=>{
   window.history.replaceState({},"","/agent?area=research&tab=strategies");
   mocks.index.mockImplementation(async({method}:{method:string})=>({method,items:[newer,original],coverage:{limit:30,possibly_truncated:false,history_semantics:"原索引范围"}}));
   mocks.detail.mockImplementation(async(identity:SavedMethodRunIdentity)=>detail(identity));
+});
+
+describe("reference research state paging",()=>{
+  const identity:SavedMethodRunIdentity={...original,method:"reference:macd_golden_cross",run_id:"research-state-23",trade_date:"2026-10-23",strategy_version:"v1"};
+  const counts={universe:5580,eligible:5434,matched:353,not_matched:5081,unknown:146};
+  const rows=(state:"matched"|"not_matched"|"unknown",length:number,offset=0)=>Array.from({length},(_,index):SavedStrategyRunItem=>({
+    item_id:`${state}:${offset+index}`,symbol:"600000",name:`${state}原行${offset+index}`,state,stage:"research",score:null,
+    conditions:[{key:"input_valid",met:state==="unknown"?null:true,value:null,reference:null}]}));
+  function page(state:ReferenceResearchRowState,items:SavedStrategyRunItem[],offset=0,total=state==="all"?5580:counts[state],batchTotal=5580):SavedMethodRunDetail {
+    return {...detail(identity,items,offset,total),row_state:state,counts,
+      coverage:{offset,limit:200,total,batch_total:batchTotal,returned:items.length,next_offset:offset+items.length<total?offset+items.length:null,
+        possibly_truncated:offset+items.length<total,history_semantics:"按原保存状态分页，全批计数不变"}};
+  }
+  function locateState(state:ReferenceResearchRowState="all") {
+    const location={...identityLocation(identity,readMethodRunLocation("",identity.method)),filter:state};
+    window.history.replaceState({},"",methodRunUrl("/agent","area=research&tab=strategies",identity.method,location));
+  }
+  beforeEach(()=>{locateState();mocks.index.mockResolvedValue({method:identity.method,items:[identity],coverage:{limit:30,possibly_truncated:false,history_semantics:"原研究索引"}});});
+
+  it("reads the selected state from offset zero instead of blindly traversing 5580 rows or filtering the first 200 matches",async()=>{
+    mocks.detail.mockImplementation(async(_identity:SavedMethodRunIdentity,{rowState="all",offset=0}:{rowState?:ReferenceResearchRowState;offset?:number})=>
+      page(rowState,rows(rowState==="all"?"matched":rowState,rowState==="unknown"?146:200,offset),offset));
+    render(<MethodRunReader method={identity.method}/>);
+    await screen.findByText("matched原行0");
+    expect(mocks.detail).toHaveBeenCalledTimes(1);
+    fireEvent.click(screen.getByRole("button",{name:"待核"}));
+    expect(await screen.findByText("unknown原行0")).toBeTruthy();
+    expect(mocks.detail).toHaveBeenCalledTimes(2);
+    expect(mocks.detail.mock.calls[1][1]).toMatchObject({rowState:"unknown"});
+    expect(mocks.detail.mock.calls[1][1].offset??0).toBe(0);
+    const saved=screen.getByLabelText("原保存运行");
+    expect(within(saved).getByText("原样本").nextElementSibling?.textContent).toBe("5,580");
+    expect(within(saved).getByText("未知",{selector:"dt"}).nextElementSibling?.textContent).toBe("146");
+    expect(screen.getByText(/本状态已读 146 \/ 146 条；全批 5,580 条原行/)).toBeTruthy();
+    fireEvent.click(screen.getByRole("button",{name:"未符合"}));
+    expect(await screen.findByText("not_matched原行0")).toBeTruthy();
+    expect(screen.queryByText("unknown原行0")).toBeNull();
+    expect(mocks.detail).toHaveBeenCalledTimes(3);
+    expect(mocks.detail.mock.calls.map(([,options])=>options.rowState)).toEqual(["all","unknown","not_matched"]);
+    expect(mocks.detail.mock.calls.every(([value])=>methodRunKey(value)===methodRunKey(identity))).toBe(true);
+  });
+
+  it("keeps state controls during a pending read and ignores a late response after a rapid switch",async()=>{
+    let finish!:(value:SavedMethodRunDetail)=>void;
+    mocks.detail.mockImplementation((_identity:SavedMethodRunIdentity,{rowState="all"}:{rowState?:ReferenceResearchRowState})=>rowState==="unknown"
+      ?new Promise< SavedMethodRunDetail >(resolve=>{finish=resolve;})
+      :Promise.resolve(page(rowState,rows(rowState==="all"?"matched":rowState,1))));
+    render(<MethodRunReader method={identity.method}/>);await screen.findByText("matched原行0");
+    fireEvent.click(screen.getByRole("button",{name:"待核"}));
+    await waitFor(()=>expect(mocks.detail).toHaveBeenCalledTimes(2));
+    expect(screen.getByText("读取指定原批次…")).toBeTruthy();
+    fireEvent.click(screen.getByRole("button",{name:"未符合"}));
+    await screen.findByText("not_matched原行0");
+    expect(mocks.detail.mock.calls[1][1].signal.aborted).toBe(true);
+    await act(async()=>finish(page("unknown",rows("unknown",1))));
+    expect(screen.queryByText("unknown原行0")).toBeNull();
+    expect(screen.getByText("not_matched原行0")).toBeTruthy();
+    expect(mocks.detail).toHaveBeenCalledTimes(3);
+  });
+
+  it.each(["state_echo","missing_batch_total","foreign_row"])("rejects an initial %s response instead of displaying or silently filtering foreign rows",async issue=>{
+    locateState("unknown");
+    const value=page("unknown",rows("unknown",1));
+    if(issue==="state_echo")value.row_state="all";
+    if(issue==="missing_batch_total")delete value.coverage.batch_total;
+    if(issue==="foreign_row")value.items=rows("matched",1);
+    mocks.detail.mockResolvedValue(value);
+    render(<MethodRunReader method={identity.method}/>);
+    expect((await screen.findByRole("alert")).textContent).toContain("状态或分页范围不符");
+    expect(screen.queryByLabelText("原保存运行")).toBeNull();
+    expect(screen.queryByText("unknown原行0")).toBeNull();expect(screen.queryByText("matched原行0")).toBeNull();
+  });
+
+  it.each(["state_echo","batch_total","counts"])("keeps existing unknown rows when a continuation has changed %s and retries the same exact offset",async issue=>{
+    locateState("unknown");
+    const bad=page("unknown",rows("unknown",1,1),1);
+    if(issue==="state_echo")bad.row_state="all";
+    else if(issue==="batch_total")bad.coverage.batch_total=5581;
+    else bad.counts={...counts,unknown:145};
+    mocks.detail.mockResolvedValueOnce(page("unknown",rows("unknown",1))).mockResolvedValueOnce(bad)
+      .mockResolvedValueOnce(page("unknown",rows("unknown",1,1),1));
+    render(<MethodRunReader method={identity.method}/>);await screen.findByText("unknown原行0");
+    await screen.findByRole("button",{name:"继续读取原批次"});
+    fireEvent.scroll(window,{bubbles:false});
+    expect((await screen.findByRole("alert")).textContent).toContain("状态或分页范围不符");
+    expect(screen.getByText("unknown原行0")).toBeTruthy();expect(screen.queryByText("unknown原行1")).toBeNull();
+    fireEvent.click(screen.getByRole("button",{name:"重试原批次后续行"}));
+    await screen.findByText("unknown原行1");
+    expect(mocks.detail.mock.calls[1][1]).toMatchObject({rowState:"unknown",offset:1,limit:200});
+    expect(mocks.detail.mock.calls[2][1]).toMatchObject({rowState:"unknown",offset:1,limit:200});
+  });
+
+  it("does not append an old state's pending continuation after another state becomes current",async()=>{
+    locateState("unknown");let finish!:(value:SavedMethodRunDetail)=>void;
+    mocks.detail.mockImplementation((_identity:SavedMethodRunIdentity,{rowState="all",offset=0}:{rowState?:ReferenceResearchRowState;offset?:number})=>
+      rowState==="unknown"&&offset===1?new Promise<SavedMethodRunDetail>(resolve=>{finish=resolve;})
+        :Promise.resolve(page(rowState,rows(rowState==="all"?"matched":rowState,1),offset)));
+    render(<MethodRunReader method={identity.method}/>);await screen.findByText("unknown原行0");
+    fireEvent.click(screen.getByRole("button",{name:"继续读取原批次"}));await waitFor(()=>expect(mocks.detail).toHaveBeenCalledTimes(2));
+    fireEvent.click(screen.getByRole("button",{name:"未符合"}));await screen.findByText("not_matched原行0");
+    expect(mocks.detail.mock.calls[1][1].signal.aborted).toBe(true);
+    await act(async()=>finish(page("unknown",rows("unknown",1,1),1)));
+    expect(screen.queryByText("unknown原行1")).toBeNull();expect(screen.queryByText("unknown原行0")).toBeNull();
+    expect(screen.getByText("not_matched原行0")).toBeTruthy();
+  });
+
+  it("shows a source-confirmed state zero without erasing the batch's unknown denominator",async()=>{
+    locateState("not_matched");
+    mocks.detail.mockResolvedValue({...page("not_matched",[],0,0,1),counts:{universe:1,eligible:0,matched:0,not_matched:0,unknown:1}});
+    render(<MethodRunReader method={identity.method}/>);
+    await screen.findByText("原研究批次已保存：未符合 0 条原行。");
+    const saved=screen.getByLabelText("原保存运行");
+    expect(within(saved).getByText("未知",{selector:"dt"}).nextElementSibling?.textContent).toBe("1");
+    expect(screen.getByText(/本状态已读 0 \/ 0 条；全批 1 条原行/)).toBeTruthy();
+    expect(screen.queryByText(/所查扫描范围没有可读取/)).toBeNull();
+    expect(mocks.detail).toHaveBeenCalledTimes(1);
+  });
+
+  it("keeps inconsistent old summary counts separate from actual saved-row coverage instead of replacing either",async()=>{
+    locateState("unknown");
+    mocks.detail.mockResolvedValue({...page("unknown",rows("unknown",1),0,1,1),counts:{universe:3,eligible:1,matched:0,not_matched:1,unknown:2}});
+    render(<MethodRunReader method={identity.method}/>);await screen.findByText("unknown原行0");
+    expect(screen.getByText("原分母与实际保存行覆盖不一致，分别保留；未用当前可见行改写原计数。")).toBeTruthy();
+    const saved=screen.getByLabelText("原保存运行");
+    expect(within(saved).getByText("原样本").nextElementSibling?.textContent).toBe("3");
+    expect(within(saved).getByText("未知",{selector:"dt"}).nextElementSibling?.textContent).toBe("2");
+    expect(screen.getByText(/本状态已读 1 \/ 1 条；全批 1 条原行/)).toBeTruthy();
+    expect(screen.queryByText(/0 条原行/)).toBeNull();
+  });
 });
 afterEach(()=>{cleanup();vi.clearAllMocks();mocks.index.mockReset();mocks.detail.mockReset();});
 
@@ -49,7 +178,10 @@ describe("saved method run reader",()=>{
       {item_id:"600001.SH",symbol:"600001",name:"600001",state:"not_matched",stage:"research",decision:"not_matched",score:null,conditions:[{key:"dif_above_dea",met:false,value:-1,reference:0}]},
       {item_id:"600002.SH",symbol:"600002",name:"600002",state:"unknown",stage:"research",decision:"unknown",score:null,reason:"缺少原交易日",conditions:[{key:"input_valid",met:null,value:null,reference:null}]}];
     mocks.index.mockResolvedValue({method:identity.method,items:[identity],coverage:{limit:30,possibly_truncated:false,history_semantics:"手动研究，不是选股"}});
-    mocks.detail.mockResolvedValue({...detail(identity,rows),counts:{universe:3,eligible:2,matched:1,not_matched:1,unknown:1},source_completed_date:"2026-10-23",source_as_of:null,source_cutoff_at:"2026-10-23T16:00:00+08:00",definition_digest:"c".repeat(64),definition_supplement:"EMA从首个输入初始化；这是本系统v1。",data_limitations:["历史全集未认证"]});
+    mocks.detail.mockImplementation(async(_identity:SavedMethodRunIdentity,{rowState="all"}:{rowState?:ReferenceResearchRowState})=>{
+      const filtered=rowState==="all"?rows:rows.filter(row=>row.state===rowState);
+      return {...detail(identity,filtered),row_state:rowState,coverage:{...detail(identity,filtered).coverage,batch_total:rows.length},counts:{universe:3,eligible:2,matched:1,not_matched:1,unknown:1},source_completed_date:"2026-10-23",source_as_of:null,source_cutoff_at:"2026-10-23T16:00:00+08:00",definition_digest:"c".repeat(64),definition_supplement:"EMA从首个输入初始化；这是本系统v1。",data_limitations:["历史全集未认证"]};
+    });
     render(<MethodRunReader method={identity.method} initialIdentity={identity} compact/>);
     const result=await screen.findByLabelText("原保存运行");
     expect(within(result).getByText("原样本").nextElementSibling?.textContent).toBe("3");
@@ -60,9 +192,11 @@ describe("saved method run reader",()=>{
     expect(within(result).queryByText("未保存分数")).toBeNull();
     expect(within(result).queryByRole("button",{name:"原入选"})).toBeNull();
     expect(screen.getByText("批次与版本筛选").closest("details")?.open).toBe(false);
-    fireEvent.click(within(result).getByRole("button",{name:"未符合"}));
-    expect(within(result).queryByLabelText("600000研究条件")).toBeNull();
-    expect(within(result).getByLabelText("600001研究条件")).toBeTruthy();
+    fireEvent.click(screen.getByRole("button",{name:"未符合"}));
+    await screen.findByLabelText("600001研究条件");
+    const filtered=screen.getByLabelText("原保存运行");
+    expect(within(filtered).queryByLabelText("600000研究条件")).toBeNull();
+    expect(within(filtered).getByLabelText("600001研究条件")).toBeTruthy();
     expect(mocks.detail.mock.calls[0][0]).toEqual(identity);
   });
 

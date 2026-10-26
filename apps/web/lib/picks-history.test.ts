@@ -11,6 +11,16 @@ describe("saved selection history API",()=>{
     expect(url.pathname).toBe("/api/picks/method-runs/daily_picks/42");
     for(const [key,value] of Object.entries({trade_date:identity.trade_date,source_version:identity.source_version,strategy_version:identity.strategy_version,content_version:identity.content_version,offset:"200",limit:"200"}))expect(url.searchParams.get(key)).toBe(value);
     expect(options.signal).toBe(controller.signal);expect(url.searchParams.has("source_version_missing")).toBe(false);
+    expect(url.searchParams.has("row_state")).toBe(false);
+  });
+  it.each([undefined,"unknown","not_matched"] as const)("research row state %s is bound to the exact page without changing the batch identity",async rowState=>{
+    const research={...identity,method:"reference:macd_golden_cross" as const};
+    await getStrategyMethodRun(research,{rowState,offset:rowState ? 200 : 0,limit:200});
+    const url=new URL(read.mock.calls[0][0],"http://localhost");
+    expect(url.searchParams.get("row_state")).toBe(rowState??"all");
+    expect(url.searchParams.get("content_version")).toBe(identity.content_version);
+    expect(url.searchParams.get("source_version")).toBe(identity.source_version);
+    expect(url.searchParams.get("offset")).toBe(rowState?"200":"0");
   });
   it("sends missing source state without inventing or dropping a version binding",async()=>{
     await getStrategyMethodRun({...identity,source_version:null});

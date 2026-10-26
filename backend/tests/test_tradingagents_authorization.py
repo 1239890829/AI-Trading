@@ -1,11 +1,13 @@
 """Local explicit rebind: no model, real environment, source or business DB."""
 from copy import deepcopy
 from datetime import timedelta
+import ast
 import fcntl
 import hashlib
 import json
 import os
 import stat
+from pathlib import Path
 from types import SimpleNamespace
 
 import pytest
@@ -17,6 +19,15 @@ from app.core.config import settings
 from app.models.agent import AgentResourceUsage, AgentTask
 from app.models.watchlist import Base
 from app.services import _tradingagents_authorization as owner, tradingagents_research as research
+
+OWNER_PATH = "data_providers/tencent.py"
+OWNER_REVIEW = "packet_builder.owner_sources." + OWNER_PATH
+OLD_OWNER = "32699b46cc03f0038e8e9d4969461bd336d9465c0363f984f8dca56b0b828aa9"
+NEW_OWNER = "73af8b2ff111c04b57deda0dc3432c678815d0c2cef0c884f6f022ac51ea1af5"
+# The old and new complete module were compared locally before implementation.
+# CI has a shallow checkout: verify the current reviewed bytes and common AST,
+# without fetching history or copying an obsolete provider into the repository.
+UNCHANGED_OWNER_AST = "e7a8c6c8fca612f13191f720940e47be30a30a9dfe9a7be75c3735e3ebd7efa1"
 
 
 @pytest.fixture
@@ -68,6 +79,180 @@ def env(tmp_path, monkeypatch):
 
 def prepare(env):
     return owner.prepare_rebind(["tradingagents_research.py", "tradingagents_recovery.py"], **env.kwargs)
+
+
+def _replace_original(env, monkeypatch, identity):
+    env.auth["method_identity"] = deepcopy(identity)
+    env.auth["unknown_usage_exception"]["method_sha256"] = research._digest(identity)
+    env.before = json.dumps(env.auth, ensure_ascii=False, indent=2).encode()
+    (env.root / "authorization.json").write_bytes(env.before)
+    pin = owner._sha(env.before)
+    _, span = owner._pin(env.env_before)
+    env.env_before = env.env_before[:span[0]] + pin.encode() + env.env_before[span[1]:]
+    env.env_path.write_bytes(env.env_before)
+    monkeypatch.setattr(settings, "tradingagents_research_authorization_digest", pin)
+
+
+@pytest.fixture
+def native_owner_env(env, tmp_path, monkeypatch):
+    """Use the real Native method/StoredBuilder shape, without executing its graph."""
+    from app.services import tradingagents_driver as native
+
+    upstream, native_root = tmp_path / "upstream", tmp_path / "native"
+    upstream.mkdir(); native_root.mkdir()
+    (upstream / "a.py").write_text("isolated = True\n")
+    manifest = {"upstream_sha": research.UPSTREAM_SHA,
+                "source_hashes": {"a.py": native.file_sha(upstream / "a.py")}}
+    (native_root / "upstream-manifest.json").write_text(json.dumps(manifest))
+    monkeypatch.setattr(native, "NATIVE", native_root)
+    transport_identity = deepcopy(env.current["transport"])
+    transport = SimpleNamespace(method_identity=lambda: deepcopy(transport_identity))
+    driver = native.NativeTradingAgentsDriver(upstream_dir=upstream, python=Path(__file__), dependencies=tmp_path,
+        transport=transport, sandbox_executable=__file__)
+    dependency_identity = {"fixed": "2" * 64}
+    monkeypatch.setattr(driver, "_dependency_identity", lambda: deepcopy(dependency_identity))
+    packet_identity = driver.packet_builder.method_identity
+    overrides = {"packet": lambda value: None}
+
+    def current_packet():
+        value = packet_identity()
+        overrides["packet"](value)
+        return value
+
+    monkeypatch.setattr(driver.packet_builder, "method_identity", current_packet)
+    identity = driver.method_identity()
+    assert identity["packet_builder"]["owner_sources"][OWNER_PATH] == NEW_OWNER
+    old = deepcopy(identity)
+    old["packet_builder"]["owner_sources"][OWNER_PATH] = OLD_OWNER
+    _replace_original(env, monkeypatch, old)
+    env.driver, env.kwargs["driver"] = driver, driver
+    env.current = identity
+    env.native = SimpleNamespace(module=native, packet_overrides=overrides, transport=transport_identity,
+                                 dependencies=dependency_identity)
+    return env
+
+
+def test_reviewed_owner_proof_matches_current_whole_module_and_unaffected_ast():
+    from app.services import tradingagents_driver as native
+
+    path = Path(native.__file__).resolve().parents[1] / OWNER_PATH
+    raw = path.read_bytes()
+    assert hashlib.sha256(raw).hexdigest() == NEW_OWNER
+    tree = ast.parse(raw)
+    tree.body = [node for node in tree.body if not isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef))
+                 or node.name != "_mark_opening_anchor"]
+    for node in tree.body:
+        if isinstance(node, ast.ClassDef) and node.name == "TencentProvider":
+            node.body = [child for child in node.body if not isinstance(child, (ast.FunctionDef, ast.AsyncFunctionDef))
+                         or child.name != "get_minute_line"]
+    assert hashlib.sha256(ast.dump(tree, include_attributes=False).encode()).hexdigest() == UNCHANGED_OWNER_AST
+
+
+def test_actual_native_identity_reviewed_owner_only_can_prepare_and_apply_without_scope_expansion(native_owner_env, monkeypatch):
+    env = native_owner_env
+    inspected = owner.inspect_rebind(**env.kwargs)
+    assert inspected["changed_sources"] == [OWNER_REVIEW] and inspected["already_bound"] is False
+    assert inspected["unknown_count"] == 7 and inspected["automatic_dispatch"] is False
+    with pytest.raises(owner.AuthorizationBlocked, match="exact_source_review_required"):
+        owner.prepare_rebind([], **env.kwargs)
+    plan = owner.prepare_rebind([OWNER_REVIEW], **env.kwargs)
+    result = owner.apply_plan(plan["plan_id"], **env.kwargs)
+    assert result["changed_sources"] == [OWNER_REVIEW] and result["restart_required"] is True
+    assert result["expiry_extended"] is False and result["unknowns_added"] == result["new_cooperative_grants"] == 0
+    expected = deepcopy(env.auth)
+    expected["method_identity"] = env.driver.method_identity()
+    expected["unknown_usage_exception"]["method_sha256"] = research._digest(expected["method_identity"])
+    actual = json.loads((env.root / "authorization.json").read_bytes())
+    assert actual == expected  # All scope fields, dates, seven exceptions and old grants remain exact.
+    _, span = owner._pin(env.env_before)
+    updated = env.env_path.read_bytes()
+    assert updated[:span[0]] == env.env_before[:span[0]] and updated[span[1]:] == env.env_before[span[1]:]
+    folder = env.root / "authorization-maintenance" / plan["plan_id"]
+    assert (folder / "authorization.before.json").read_bytes() == env.before
+    assert all(stat.S_IMODE(path.stat().st_mode) == 0o600 for path in folder.iterdir())
+    assert all(b"fixture-secret-never-copy" not in path.read_bytes() for path in folder.iterdir())
+    # Simulate the required configuration reload, rather than treating cached
+    # old settings as an already-installed authorization.
+    monkeypatch.setattr(settings, "tradingagents_research_authorization_digest", owner._pin(updated)[0])
+    assert owner.inspect_rebind(**env.kwargs)["already_bound"] is True
+
+
+@pytest.mark.parametrize("function_name", ["get_kline", "get_quotes"])
+def test_actual_native_owner_pin_rejects_unreviewed_ta_consumer_code(native_owner_env, tmp_path, monkeypatch,
+                                                                   function_name):
+    env, native = native_owner_env, native_owner_env.native.module
+    path = Path(native.__file__).resolve().parents[1] / OWNER_PATH
+    body = path.read_text()
+    cls = next(node for node in ast.parse(body).body if isinstance(node, ast.ClassDef) and node.name == "TencentProvider")
+    function = next(node for node in cls.body if isinstance(node, ast.AsyncFunctionDef) and node.name == function_name)
+    lines = body.splitlines(keepends=True)
+    lines.insert(function.body[0].lineno - 1, "        raise RuntimeError('unreviewed consumer change')\n")
+    candidate = tmp_path / "tampered_tencent.py"
+    candidate.write_text("".join(lines))
+    ast.parse(candidate.read_text())  # Parse only. Never execute the mutated provider.
+    original_sha = native.file_sha
+    monkeypatch.setattr(native, "file_sha", lambda value: original_sha(candidate if Path(value) == path else value))
+    assert env.driver.method_identity()["packet_builder"]["owner_sources"][OWNER_PATH] not in {OLD_OWNER, NEW_OWNER}
+    with pytest.raises(owner.AuthorizationBlocked, match="unreviewed_packet_owner_changed"):
+        owner.inspect_rebind(**env.kwargs)
+    assert (env.root / "authorization.json").read_bytes() == env.before and env.env_path.read_bytes() == env.env_before
+
+
+def test_actual_native_identity_owner_and_reviewed_host_changes_are_explicit_together(native_owner_env, monkeypatch):
+    env = native_owner_env
+    original = deepcopy(env.auth["method_identity"])
+    original["source_files"]["driver.py"] = "a" * 64
+    _replace_original(env, monkeypatch, original)
+    assert owner.inspect_rebind(**env.kwargs)["changed_sources"] == ["driver.py", OWNER_REVIEW]
+    for incomplete in (["driver.py"], [OWNER_REVIEW]):
+        with pytest.raises(owner.AuthorizationBlocked, match="exact_source_review_required"):
+            owner.prepare_rebind(incomplete, **env.kwargs)
+    prepared = owner.prepare_rebind([OWNER_REVIEW, "driver.py"], **env.kwargs)
+    assert owner.apply_plan(prepared["plan_id"], **env.kwargs)["state"] == "applied"
+
+
+@pytest.mark.parametrize("mutation", ["future", "reverse", "other_owner", "extra_owner", "missing_owner",
+                                    "invalid_owner", "builder_version", "builder_policy", "model", "dependency", "upstream"])
+def test_actual_native_shape_rejects_every_unreviewed_nested_or_scope_change(native_owner_env, monkeypatch, mutation):
+    env = native_owner_env
+    if mutation == "reverse":
+        original = deepcopy(env.auth["method_identity"])
+        original["packet_builder"]["owner_sources"][OWNER_PATH] = NEW_OWNER
+        _replace_original(env, monkeypatch, original)
+
+    def drift(packet):
+        owners = packet["owner_sources"]
+        if mutation in {"future", "reverse"}:
+            owners[OWNER_PATH] = "f" * 64 if mutation == "future" else OLD_OWNER
+        elif mutation == "other_owner": owners["services/quote_hub.py"] = "a" * 64
+        elif mutation == "extra_owner": owners["unreviewed.py"] = "a" * 64
+        elif mutation == "missing_owner": owners.pop("models/event.py")
+        elif mutation == "invalid_owner": owners["models/event.py"] = "not-a-sha"
+        elif mutation == "builder_version": packet["version"] += 1
+        elif mutation == "builder_policy": packet["implicit_collection"] = True
+
+    env.native.packet_overrides["packet"] = drift
+    if mutation == "model": env.native.transport["model"] = "other-model"
+    elif mutation == "dependency": env.native.dependencies["fixed"] = "f" * 64
+    elif mutation == "upstream":
+        original = deepcopy(env.auth["method_identity"])
+        original["upstream_sha"] = "f" * 40
+        _replace_original(env, monkeypatch, original)
+    with pytest.raises(owner.AuthorizationBlocked):
+        owner.inspect_rebind(**env.kwargs)
+    assert (env.root / "authorization.json").read_bytes() == env.before
+    assert env.env_path.read_bytes() == env.env_before
+    assert not (env.root / "authorization-maintenance").exists()
+
+
+def test_prepared_owner_transition_rechecks_full_native_identity_before_apply(native_owner_env):
+    env = native_owner_env
+    plan = owner.prepare_rebind([OWNER_REVIEW], **env.kwargs)
+    env.native.packet_overrides["packet"] = lambda packet: packet["owner_sources"].update({OWNER_PATH: "f" * 64})
+    with pytest.raises(owner.AuthorizationBlocked):
+        owner.apply_plan(plan["plan_id"], **env.kwargs)
+    assert (env.root / "authorization.json").read_bytes() == env.before
+    assert env.env_path.read_bytes() == env.env_before
 
 
 def test_default_inspection_is_read_only_and_has_no_sensitive_values(env):

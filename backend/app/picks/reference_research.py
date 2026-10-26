@@ -235,9 +235,11 @@ def list_runs(method, *, trade_date=None, source_version=None, strategy_version=
 
 
 def get_run(method, run_id, *, trade_date, content_version, source_version=None, strategy_version=None,
-            source_version_missing=False, offset=0, limit=200, stage=None, root=None):
+            source_version_missing=False, offset=0, limit=200, stage=None, row_state='all', root=None):
     code = _method(method)
     _bounds(offset, limit)
+    if type(row_state) is not str or row_state not in {'all', 'matched', 'not_matched', 'unknown'}:
+        raise ValueError('invalid reference row_state')
     _day(trade_date)
     if not re.fullmatch('[0-9a-f]{64}', run_id) or stage not in {None, 'research'}:
         raise SavedRunMissing('研究运行身份不符')
@@ -251,12 +253,16 @@ def get_run(method, run_id, *, trade_date, content_version, source_version=None,
         or strategy_version is not None and strategy_version != identity['strategy_version']):
         raise SavedRunMissing('请求版本已不存在；不回落最近结果')
     entry = batch['methods'][code]
-    total = len(entry['items'])
+    # Identity and the complete saved content digest have already been checked.
+    # Filter saved states before slicing; no counts/order-derived offset guesses.
+    batch_total = len(entry['items'])
+    rows = entry['items'] if row_state == 'all' else [row for row in entry['items'] if row['state'] == row_state]
+    total = len(rows)
     more = offset + limit < total
-    return {**identity, 'items': entry['items'][offset:offset + limit], 'counts': entry['counts'],
+    return {**identity, 'row_state': row_state, 'items': rows[offset:offset + limit], 'counts': entry['counts'],
         **{key: batch[key] for key in ('source_completed_date', 'source_as_of', 'source_cutoff_at', 'source_as_of_semantics',
             'definition_digest', 'data_limitations', 'semantics', 'elapsed_ms')},
         'definition': entry['definition'], 'definition_supplement': entry['definition_supplement'],
-        'data_state': 'historical_research', 'coverage': {'offset': offset, 'limit': limit, 'total': total,
-            'returned': len(entry['items'][offset:offset + limit]), 'next_offset': offset + limit if more else None,
+        'data_state': 'historical_research', 'coverage': {'offset': offset, 'limit': limit, 'total': total, 'batch_total': batch_total,
+            'returned': len(rows[offset:offset + limit]), 'next_offset': offset + limit if more else None,
             'possibly_truncated': more, 'history_semantics': SEMANTICS}}

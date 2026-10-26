@@ -21,15 +21,41 @@ export function DiscoveryMethodDetail({row, date, search = "", onClose}: {
   const favorites = useMethodFavorites();
   const [notice, setNotice] = useState("");
   const [savedRun, setSavedRun] = useState<SavedMethodRunIdentity | undefined>();
-  const [showRuns, setShowRuns] = useState(false);
-  const completed = useCallback((identity: SavedMethodRunIdentity) => {setSavedRun(identity); setShowRuns(true);}, []);
-  if (!validMethodRow(row)) return <section data-testid="discovery-method-detail" aria-label="方法规则" className="space-y-3">
+  const valid = validMethodRow(row);
+  const methodKey = valid ? row.key : "";
+  const manual = valid && methodSupportsManualResearch(row);
+  const executionVersion = manual ? row.candidate!.execution!.version : "";
+  const disclosureValue = JSON.stringify([methodKey, executionVersion]);
+  const params = new URLSearchParams(search);
+  const disclosureScope = JSON.stringify([methodKey, executionVersion, params.get("browse"), params.get("disc_method"), params.get("disc_saved")]);
+  const requestedOpen = manual && params.get("browse") === "methods" && params.get("disc_method") === methodKey && params.get("disc_saved") === disclosureValue;
+  const [disclosure, setDisclosure] = useState({scope:disclosureScope, open:requestedOpen});
+  if (disclosure.scope !== disclosureScope) setDisclosure({scope:disclosureScope, open:requestedOpen});
+  const showRuns = disclosure.scope === disclosureScope ? disclosure.open : requestedOpen;
+  const setSavedOpen = useCallback((open: boolean) => {
+    setDisclosure({scope:disclosureScope, open});
+    // Display intent only: no task, permission, run identity or saved result is
+    // created here. The reader's exact-run pin preserves this same owner marker.
+    const next = new URLSearchParams(window.location.search);
+    if (!manual || next.get("disc_method") !== methodKey || next.get("browse") !== "methods") return;
+    if (open) next.set("disc_saved", disclosureValue);
+    else if (next.get("disc_saved") === disclosureValue) next.delete("disc_saved");
+    const url = `${window.location.pathname}${next.size ? `?${next}` : ""}${window.location.hash}`;
+    // Next copies its router state on the external-history path. Replaying
+    // __NA/_N here would bypass its useSearchParams update after manual close.
+    if (url !== window.location.pathname + window.location.search + window.location.hash) window.history.replaceState({}, "", url);
+  }, [disclosureScope, disclosureValue, manual, methodKey]);
+  const completed = useCallback((identity: SavedMethodRunIdentity) => {
+    if (!manual || identity.method !== methodKey || identity.strategy_version !== executionVersion) return;
+    setSavedRun(identity); setSavedOpen(true);
+  }, [manual, methodKey, executionVersion, setSavedOpen]);
+  const ownedSavedRun = savedRun?.method === methodKey && savedRun.strategy_version === executionVersion ? savedRun : undefined;
+  if (!valid) return <section data-testid="discovery-method-detail" aria-label="方法规则" className="space-y-3">
     <h2 tabIndex={-1} className="text-sm font-semibold">方法身份未核</h2><p role="alert" className="text-xs">来源规则结构不完整，未显示为可用方法。</p>
     <button className="quiet-action" type="button" onClick={onClose}>返回方法目录</button></section>;
   const metadata = discoveryMetadata(row);
   const candidate = row.catalog_kind === "reference" ? row.candidate : null;
   const supportsRuns = methodSupportsRuns(row);
-  const manual = methodSupportsManualResearch(row);
   return <section data-testid="discovery-method-detail" aria-label="方法规则" className="min-w-0 space-y-4">
     <header className="flex flex-wrap items-start justify-between gap-2">
       <div className="min-w-0"><h2 tabIndex={-1} className="break-words text-sm font-semibold">{row.name || row.key}</h2>
@@ -54,8 +80,8 @@ export function DiscoveryMethodDetail({row, date, search = "", onClose}: {
       {manual && <>
         <p className="text-[11px] text-zinc-600 dark:text-zinc-400">本系统明确版本 {candidate.execution!.version}；本系统定义与补充口径保留在保存批次。</p>
         <ReferenceMethodResearch key={`${row.key}:${date ?? "latest"}:${candidate.execution!.version}`} method={row.key} version={candidate.execution!.version} date={date} onComplete={completed}/>
-        <details open={showRuns} onToggle={event => {if (event.currentTarget.open !== showRuns) setShowRuns(event.currentTarget.open);}}><summary className="cursor-pointer text-xs">保存研究结果</summary>
-          {showRuns && <div className="mt-3"><MethodRunReader key={`${row.key}:${date ?? "latest"}:${savedRun?.run_id ?? "browse"}`} method={row.key} initialDate={date} initialIdentity={savedRun} compact/></div>}
+        <details open={showRuns} onToggle={event => {if (event.currentTarget.open !== showRuns) setSavedOpen(event.currentTarget.open);}}><summary className="cursor-pointer text-xs">保存研究结果</summary>
+          {showRuns && <div className="mt-3"><MethodRunReader key={`${row.key}:${date ?? "latest"}:${ownedSavedRun?.run_id ?? "browse"}`} method={row.key} initialDate={date} initialIdentity={ownedSavedRun} compact/></div>}
         </details>
       </>}
     </> : <>

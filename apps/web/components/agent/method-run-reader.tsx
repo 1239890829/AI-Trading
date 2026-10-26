@@ -10,7 +10,7 @@ import {IncrementalSentinel} from "@/components/ui/incremental-sentinel";
 import {useIncremental} from "@/hooks/use-incremental";
 import {useResource} from "@/hooks/use-resource";
 import {dateTimeTextBJ, fmt} from "@/lib/format";
-import {getStrategyMethodRun, getStrategyMethodRuns, isReferenceResearchMethod, type SavedMethodKey, type SavedMethodRunDetail, type SavedMethodRunIdentity, type SavedMethodRunIndex, type SavedStrategyRunItem} from "@/lib/api/picks";
+import {getStrategyMethodRun, getStrategyMethodRuns, isReferenceResearchMethod, type ReferenceResearchRowState, type SavedMethodKey, type SavedMethodRunDetail, type SavedMethodRunIdentity, type SavedMethodRunIndex, type SavedStrategyRunItem} from "@/lib/api/picks";
 import {identityLocation, methodRunDay, methodRunIdentity, methodRunKey, methodRunMatches, methodRunUrl, readMethodRunLocation, type MethodRowFilter, type MethodRunLocation} from "./method-run-location";
 
 const ROW_LABELS: Record<MethodRowFilter, string> = {selected:"原入选",rejected:"拒绝存档",candidate:"候选",unknown:"待核",all:"全部存档行",matched:"符合条件",not_matched:"未符合"};
@@ -21,6 +21,26 @@ const stringList = (value: unknown): string[] => Array.isArray(value) ? value.fi
 const countText = (value: unknown) => finite(value) && value >= 0 ? value.toLocaleString("zh-CN") : "未记录";
 const errorText = (value: unknown) => value instanceof Error ? value.message : "读取异常";
 const emptyLocation = (method: string) => readMethodRunLocation(typeof window === "undefined" ? "" : window.location.search,method);
+
+function researchPageMatches(value: SavedMethodRunDetail, state: ReferenceResearchRowState, offset = 0) {
+  const coverage = value.coverage, items = value.items;
+  const total = coverage?.total, batchTotal = coverage?.batch_total;
+  if (value.row_state !== state || !Array.isArray(items) || coverage.offset !== offset
+    || !finite(total) || !Number.isInteger(total) || total < 0
+    || !finite(batchTotal) || !Number.isInteger(batchTotal) || batchTotal < total
+    || state === "all" && total !== batchTotal || coverage.returned !== items.length
+    || !Number.isInteger(coverage.limit) || coverage.limit <= 0 || coverage.limit > 200 || items.length > coverage.limit
+    || offset + items.length > total
+    || items.some(row => !["matched", "not_matched", "unknown"].includes(row.state) || state !== "all" && row.state !== state)) return false;
+  return offset + items.length < total
+    ? items.length > 0 && coverage.next_offset === offset + items.length && coverage.possibly_truncated === true
+    : coverage.next_offset === null && coverage.possibly_truncated === false;
+}
+
+function RowStateFilters({research, value, onChange}: {research: boolean; value: MethodRowFilter; onChange: (filter: MethodRowFilter) => void}) {
+  const filters: MethodRowFilter[] = research ? ["all", "matched", "not_matched", "unknown"] : ["selected", "rejected", "candidate", "unknown", "all"];
+  return <div className="flex flex-wrap gap-2 text-xs" role="group" aria-label="运行结果筛选">{filters.map(filter => <button key={filter} type="button" data-action="secondary" aria-pressed={value === filter} onClick={() => onChange(filter)}>{ROW_LABELS[filter]}</button>)}</div>;
+}
 
 function RunFilters({value, onApply}: {value: MethodRunLocation; onApply: (next: MethodRunLocation) => void}) {
   const [date,setDate] = useState(value.date);
@@ -112,7 +132,7 @@ function RunRows({run, identity, location, onLocation}: {run: SavedMethodRunDeta
   useEffect(()=>{alive.current=true;return()=>{alive.current=false;controller.current?.abort();};},[]);
   const allPages=[run,...pages];
   const items=allPages.flatMap(page=>(page.items ?? []).map((row,index)=>({row,id:row.item_id || `${page.coverage.offset ?? 0}:${index}`})));
-  const matching=items.filter(({row})=>location.filter==="all" || row.state===location.filter);
+  const matching=research ? items : items.filter(({row})=>location.filter==="all" || row.state===location.filter);
   const incremental=useIncremental(matching,{pageSize:20,step:20,resetKey:location.filter});
   const latest=allPages[allPages.length-1], nextOffset=latest.coverage.next_offset;
   const hasRemote=typeof nextOffset==="number" && Number.isInteger(nextOffset) && nextOffset>=(latest.coverage.offset ?? 0)+(latest.items?.length ?? 0) && nextOffset>(latest.coverage.offset ?? 0);
@@ -127,9 +147,12 @@ function RunRows({run, identity, location, onLocation}: {run: SavedMethodRunDeta
     if (!hasRemote || inFlight.current) return;
     inFlight.current=true;setLoading(true);setError(null);controller.current=new AbortController();
     try {
-      const result=await getStrategyMethodRun(identity,{offset:nextOffset!,limit:200,signal:controller.current.signal});
+      const result=await getStrategyMethodRun(identity,{offset:nextOffset!,limit:200,signal:controller.current.signal,
+        ...(research ? {rowState:run.row_state!} : {})});
       if (!alive.current) return;
       if (!methodRunMatches(result,identity,nextOffset!)) throw new Error("后续页的原批次身份不符，未追加其他记录");
+      if (research && (!researchPageMatches(result,run.row_state!,nextOffset!) || result.coverage.batch_total !== run.coverage.batch_total
+        || result.coverage.total !== run.coverage.total || Object.keys({...run.counts,...result.counts}).some(key=>run.counts?.[key]!==result.counts?.[key]))) throw new Error("后续页的状态或分页范围不符，未追加其他状态");
       setPages(previous=>[...previous,result]);
     } catch (problem) {if (alive.current) setError(errorText(problem));}
     finally {inFlight.current=false;if(alive.current)setLoading(false);}
@@ -150,7 +173,8 @@ function RunRows({run, identity, location, onLocation}: {run: SavedMethodRunDeta
   },[hasRemote,incremental.hasMore,incremental.sentinelRef,matching.length,location.filter,location.row,loading,error]);
   const counts=research ? [["原样本",run.counts?.universe],["指标可评价",run.counts?.eligible],["符合条件",run.counts?.matched],["未符合",run.counts?.not_matched],["未知",run.counts?.unknown]] : identity.method==="daily_picks" ? [["候选母集",run.counts?.candidates],["评分成功",run.counts?.scored],["原入选",run.counts?.selected],["拒绝存档",run.counts?.rejected_saved]]
     : [["候选行",run.counts?.candidate_rows],["排序行",run.counts?.rank_rows],["硬门行",run.counts?.hard_gate_rows],["原入选",run.counts?.selected]];
-  const filters: MethodRowFilter[] = research ? ["all", "matched", "not_matched", "unknown"] : ["selected", "rejected", "candidate", "unknown", "all"];
+  const researchCountMismatch = research && (finite(run.counts?.universe) && run.counts.universe !== run.coverage.batch_total
+    || run.row_state !== "all" && finite(run.counts?.[run.row_state!]) && run.counts![run.row_state!] !== run.coverage.total);
   function toggleRow(id: string) {
     onLocation({...exactLocation,row:location.row===id?"":id});
   }
@@ -163,11 +187,12 @@ function RunRows({run, identity, location, onLocation}: {run: SavedMethodRunDeta
     <p className="text-[11px] text-zinc-600 dark:text-zinc-400">{research ? "仅手动价格研究：指标可评价不是风控资格；匹配不构成入选、通知、模拟或收益证据。" : identity.method==="daily_picks"?"入选与拒绝均为原保存结果，不代表执行通过。":"各阶段按行计数，可能包含同股/同题材多行，不是递减漏斗。"} 运行、健康窗口与离线核验分别读取。</p>
     {research && <p className="text-[11px] text-zinc-600 dark:text-zinc-400">来源已完成日 {run.source_completed_date || "未记录"}；源首次发布时间 {run.source_as_of ? dateTimeTextBJ(run.source_as_of) : "未知"}；筛选界限 {run.source_cutoff_at ? dateTimeTextBJ(run.source_cutoff_at) : "未记录"}（不是发布时间）。</p>}
     {research && <p className="text-[11px] text-zinc-600 dark:text-zinc-400">比较采用保存原值；条件小数显示4位，完整精度见本股指标原值。</p>}
+    {researchCountMismatch && <p role="status" className="text-xs text-amber-700 dark:text-amber-300">原分母与实际保存行覆盖不一致，分别保留；未用当前可见行改写原计数。</p>}
     {run.data_state && <p className="text-[11px] text-zinc-600 dark:text-zinc-400">运行输入：{run.data_state}（原保存状态）；存档存在不等于输入完整。</p>}
     {!allRowsRead && <p role="status" className="text-xs text-amber-700 dark:text-amber-300">{research ? "当前仅已读部分，不以可见行替换完整样本、未符合或未知分母。" : run.counts?.selected==null?"原入选总数未知；不能以当前行数冒充全集。":"原存档投影可能截断，不按当前行数替换原计数。"}</p>}
     {(finite(run.criteria?.min_pick_score)||finite(run.criteria?.max_picks)) && <p className="text-[11px] text-zinc-600 dark:text-zinc-400">原入选条件：{finite(run.criteria?.min_pick_score)?`分线 ${run.criteria.min_pick_score}`:"分线未记录"} · {finite(run.criteria?.max_picks)?`容量 ${run.criteria.max_picks}`:"容量未记录"}；执行资格另行复核。</p>}
-    <div className="flex flex-wrap gap-2 text-xs" aria-label="运行结果筛选">{filters.map(filter=><button key={filter} type="button" data-action="secondary" aria-pressed={location.filter===filter} onClick={()=>onLocation({...exactLocation,filter,row:""})}>{ROW_LABELS[filter]}</button>)}</div>
-    {matching.length===0 ? <p className="py-2 text-xs text-zinc-600 dark:text-zinc-400">{savedZero?"原批次已保存：0只入选。":"已读部分没有此类保存行"+(hasRemote?"，可继续下拉读取原批次":"")+(research?"；不据此推断当时零匹配或未运行。":"；不据此推断当时零入选或未运行。")}</p> : <ul className="divide-y divide-zinc-200 dark:divide-zinc-700">{incremental.shown.map(({row,id})=><li key={id} className="py-2 text-xs">
+    {!research && <RowStateFilters research={false} value={location.filter} onChange={filter=>onLocation({...exactLocation,filter,row:""})}/>}
+    {matching.length===0 ? <p className="py-2 text-xs text-zinc-600 dark:text-zinc-400">{research && allRowsRead && coverage.complete && run.coverage.total===0 ? `原研究批次已保存：${ROW_LABELS[run.row_state!]} 0 条原行。` : savedZero?"原批次已保存：0只入选。":"已读部分没有此类保存行"+(hasRemote?"，可继续下拉读取原批次":"")+(research?"；不据此推断当时零匹配或未运行。":"；不据此推断当时零入选或未运行。")}</p> : <ul className="divide-y divide-zinc-200 dark:divide-zinc-700">{incremental.shown.map(({row,id})=><li key={id} className="py-2 text-xs">
       <div className="flex flex-wrap items-baseline gap-x-2 gap-y-1">{/^\d{6}$/.test(row.symbol)?<StockLink symbol={row.symbol} className="font-medium">{row.name || row.symbol}</StockLink>:<span className="font-medium">{row.name || row.symbol || "证券未记录"}</span>}<span className="font-mono text-[10px] text-zinc-600 dark:text-zinc-400">{row.symbol}</span><span className="text-[11px] text-zinc-600 dark:text-zinc-400">{ROW_LABELS[row.state] || row.state}</span>{row.stage && <span className="text-[11px] text-zinc-600 dark:text-zinc-400">{row.stage==="research"?"研究":row.stage==="hard_gate"?"硬门":row.stage==="rank"?"排序":row.stage}：{row.decision?DECISION_LABELS[row.decision] || `未识别（${row.decision}）`:"未记录"}</span>}{!research && <span className="ml-auto tabular-nums">{finite(row.score)?`原分 ${row.score}`:"未保存分数"}</span>}</div>
       <p className="mt-1 break-words text-zinc-600 dark:text-zinc-400">{row.reason || (research ? row.state === "matched" ? "本版价格条件符合，逐项原值见下方；不是买点或入选。" : row.state === "not_matched" ? "未满足全部价格条件，逐项原值见下方。" : "研究输入未知，不当作未符合或零值。" : Object.keys(row.basis ?? {}).length?"原评分依据已保存，可展开核对；简短理由未记录。":"原存档没有简短理由，不能据此推定通过。")}</p>
       {research && <ResearchConditions row={row}/>}
@@ -176,7 +201,7 @@ function RunRows({run, identity, location, onLocation}: {run: SavedMethodRunDeta
     </li>)}</ul>}
     {location.row && !items.some(item=>item.id===location.row) && <p role="status" className="text-xs text-zinc-600 dark:text-zinc-400">链接指定的原行尚未读到；继续读取原批次，不按同股代码换行。</p>}
     <IncrementalSentinel sentinelRef={incremental.sentinelRef} visible={Math.min(incremental.visible,matching.length)} total={matching.length} onLoadMore={incremental.loadMore}/>
-    <p className="text-[11px] text-zinc-600 dark:text-zinc-400">本批已读 {items.length} / {countText(run.coverage.total)} 条原行；筛选当前已读部分。{run.coverage.history_semantics}</p>
+    <p className="text-[11px] text-zinc-600 dark:text-zinc-400">{research ? `本状态已读 ${countText(items.length)} / ${countText(run.coverage.total)} 条；全批 ${countText(run.coverage.batch_total)} 条原行。` : `本批已读 ${items.length} / ${countText(run.coverage.total)} 条原行；筛选当前已读部分。`}{run.coverage.history_semantics}</p>
     {error && <p role="alert" className="text-xs text-rose-700 dark:text-rose-300">后续页读取失败：{error}。已读行保留，未换成最新批次。</p>}
     {hasRemote && <button type="button" data-action="secondary" disabled={loading} onClick={()=>void readNext()}>{loading?"读取原批次后续行…":error?"重试原批次后续行":"继续读取原批次"}</button>}
     <div className="flex flex-wrap gap-3 border-t border-zinc-200 pt-2 text-xs dark:border-zinc-700"><Link href={`/agent?area=research&tab=review&date=${encodeURIComponent(identity.trade_date)}`}>同日复盘</Link>{!research && <Link href={identity.method==="daily_picks"?"/hunting?view=discover&sec=daily":"/hunting?view=discover&sec=candidates"}>另看当前名单（非本次历史）</Link>}</div>
@@ -191,6 +216,8 @@ export function MethodRunReader({method, initialIdentity, initialDate, compact =
   const [scope,setScope]=useState(seed);
   useEffect(()=>{const sync=()=>{const next=emptyLocation(method);setLocation(next);setScope(next);};window.addEventListener("popstate",sync);return()=>window.removeEventListener("popstate",sync);},[method]);
   const supported=(method==="daily_picks" || method==="intraday_watch" || isReferenceResearchMethod(method)) && (!initialIdentity || initialIdentity.method === method);
+  const research=isReferenceResearchMethod(method);
+  const rowState:ReferenceResearchRowState=research && ["matched","not_matched","unknown"].includes(location.filter) ? location.filter as ReferenceResearchRowState : "all";
   const day=methodRunDay(location.date);
   const scopeDay=methodRunDay(scope.date);
   const invalidDate=!!location.date && !day;
@@ -236,10 +263,11 @@ export function MethodRunReader({method, initialIdentity, initialDate, compact =
   if(supported && identity && !explicit)setLocation(identityLocation(identity,location));
   const key=identity?methodRunKey(identity):"none";
   const detail=useResource(async signal=>{
-    const result=await getStrategyMethodRun(identity!,{signal});
+    const result=await getStrategyMethodRun(identity!,{signal,...(research ? {rowState} : {})});
     if(!methodRunMatches(result,identity!))throw new Error("返回的日期、来源版本或内容指纹不符，未使用其他批次");
+    if(research && !researchPageMatches(result,rowState))throw new Error("返回的状态或分页范围不符，未使用其他状态");
     return result;
-  },{key,enabled:supported && !!identity && !invalidDate,marketHours:false,abortable:true});
+  },{key:research?JSON.stringify([key,rowState]):key,enabled:supported && !!identity && !invalidDate,marketHours:false,abortable:true});
   useEffect(()=>{
     const original=methodRunIdentity(method as SavedMethodKey,location);
     if(original) {
@@ -267,10 +295,11 @@ export function MethodRunReader({method, initialIdentity, initialDate, compact =
     {moreIndex.error && <p role="alert" className="text-xs text-rose-700 dark:text-rose-300">较早批次索引读取失败：{moreIndex.error}；已读批次保留。</p>}
     {moreIndexAvailable && <button type="button" data-action="quiet" disabled={moreIndex.loading} onClick={()=>void readMoreIndex()}>{moreIndex.loading?"读取较早批次…":moreIndex.error?"重试较早批次":"继续读取更早批次"}</button>}
     {explicit && !identity && <p role="alert" className="text-xs text-rose-700 dark:text-rose-300">原批次链接缺少有效日期、内容指纹或来源版本状态；没有换成最新运行。可重选保存批次。</p>}
+    {research && identity && !invalidDate && <RowStateFilters research value={rowState} onChange={filter=>navigate({...identityLocation(identity,location),filter,row:""})}/>}
     {!explicit && !identity && !index.pending && !index.error && !invalidDate && <p className="text-xs text-zinc-600 dark:text-zinc-400">{moreIndexAvailable?"本次扫描没有匹配批次，仍有未读范围；可继续读取更早批次。":isReferenceResearchMethod(method)?"所查扫描范围没有可读取的研究批次；不证明源日未运行或零匹配。":"所查扫描范围没有可读取的保存批次；不证明当日未运行或零入选。"}</p>}
     {detail.pending && !detail.data && <p role="status" className="text-xs text-zinc-600 dark:text-zinc-400">读取指定原批次…</p>}
     {detail.error != null && <p role="alert" className="text-xs text-rose-700 dark:text-rose-300">指定原批次读取失败：{errorText(detail.error)}。{detail.data?"保留已读原批次，当前重读未确认。":"未回落最新运行或当前名单。"}<button type="button" data-action="quiet" onClick={detail.refresh}>重试原批次</button></p>}
-    {detail.data && identity && (detail.data.state==="saved" || detail.data.state==="partial") && <RunRows key={key} run={detail.data} identity={identity} location={location} onLocation={navigate}/>}
+    {detail.data && identity && (detail.data.state==="saved" || detail.data.state==="partial") && <RunRows key={research?`${key}:${rowState}`:key} run={detail.data} identity={identity} location={location} onLocation={navigate}/>}
     {detail.data && !["saved","partial"].includes(detail.data.state) && <p role="status" className="text-xs text-zinc-600 dark:text-zinc-400">{detail.data.reason || "原批次内容不可读取，不代表没有运行。"}</p>}
   </section>;
 }

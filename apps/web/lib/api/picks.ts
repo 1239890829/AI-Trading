@@ -1092,6 +1092,7 @@ export interface SavedStrategyRunItem {
 
 export const REFERENCE_RESEARCH_METHODS = ["reference:macd_golden_cross", "reference:ma_bullish", "reference:ma_golden_cross"] as const;
 export type ReferenceResearchMethod = typeof REFERENCE_RESEARCH_METHODS[number];
+export type ReferenceResearchRowState = "all" | "matched" | "not_matched" | "unknown";
 export type SavedMethodKey = "daily_picks" | "intraday_watch" | ReferenceResearchMethod;
 export function isReferenceResearchMethod(value: string): value is ReferenceResearchMethod {return (REFERENCE_RESEARCH_METHODS as readonly string[]).includes(value);}
 export interface SavedMethodRunIdentity {
@@ -1110,6 +1111,8 @@ export interface SavedMethodRunCoverage {
   limit: number;
   offset?: number;
   total?: number | null;
+  /** Entire immutable research batch; total/offset refer to the echoed row_state. */
+  batch_total?: number;
   returned?: number;
   next_offset?: number | null;
   possibly_truncated: boolean;
@@ -1127,6 +1130,7 @@ export interface SavedMethodRunDetail extends SavedStrategyRun {
   method: SavedMethodKey;
   run_id: string;
   content_version: string;
+  row_state?: ReferenceResearchRowState;
   coverage: SavedMethodRunCoverage;
 }
 export interface SavedMethodRunQuery {
@@ -1147,12 +1151,13 @@ export async function getStrategyMethodRuns(query: SavedMethodRunQuery, signal?:
   if (query.strategy_version) params.set("strategy_version", query.strategy_version);
   return (await getJson<SavedMethodRunIndex>(`/api/picks/method-runs?${params}`, undefined, {signal})).data;
 }
-export async function getStrategyMethodRun(identity: SavedMethodRunIdentity, options: {offset?: number; limit?: number; signal?: AbortSignal} = {}): Promise<SavedMethodRunDetail> {
+export async function getStrategyMethodRun(identity: SavedMethodRunIdentity, options: {offset?: number; limit?: number; signal?: AbortSignal; rowState?: ReferenceResearchRowState} = {}): Promise<SavedMethodRunDetail> {
   const params = new URLSearchParams({trade_date: identity.trade_date, content_version: identity.content_version,
     offset: String(options.offset ?? 0), limit: String(options.limit ?? 200)});
   if (identity.source_version !== null) params.set("source_version", identity.source_version);
   else params.set("source_version_missing", "true");
   if (identity.strategy_version) params.set("strategy_version", identity.strategy_version);
+  if (isReferenceResearchMethod(identity.method) || options.rowState !== undefined) params.set("row_state", options.rowState ?? "all");
   return (await getJson<SavedMethodRunDetail>(`/api/picks/method-runs/${encodeURIComponent(identity.method)}/${encodeURIComponent(identity.run_id)}?${params}`, undefined, {signal: options.signal})).data;
 }
 
