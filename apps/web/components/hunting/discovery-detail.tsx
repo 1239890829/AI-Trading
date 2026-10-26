@@ -48,6 +48,20 @@ function readMoment(value?: string | null) {
     ? dateTimeTextBJ(value) : `${value}（时区未核）`;
 }
 
+/** Keep operational limitations visible; stable definitions stay in the original-source disclosure. */
+function sinaLimitLabel(reason: string): string | null {
+  if (["来源未给本次榜单或成员的源日/秒钟；接收钟不代表源钟", "netamount为全部净额；r0_net为新浪主力口径，均非东财f62",
+    "opendate仅为原日线日期，不是源秒钟或成分生效时刻", "日线日期不是接收当日，不能据此断言本次成员同日"].includes(reason)) return null;
+  if (/^quote_(?:price|change)_(?:missing|invalid|nonpositive):\d+$/.test(reason)) return null;
+  const counted = /^(net_inflow_ratio|net_inflow|r0_net)_(missing|invalid):(\d+)$/.exec(reason);
+  if (counted) {
+    const field = {net_inflow_ratio:"净流入占比",net_inflow:"全部净流入",r0_net:"主力净额"}[counted[1]];
+    return `${field}${counted[2] === "missing" ? "缺失" : "无效"} ${counted[3]}只`;
+  }
+  if (reason === "成员与榜单/日线净额不一致，非原子同批/时点待核") return "金额对照不一致，时点待核";
+  return /[A-Za-z]/.test(reason) && !/[\u3400-\u9fff]/.test(reason) ? "来源返回异常，查看原始限制" : reason;
+}
+
 /** Current membership is a reading reference, never a historic selection or a research command. */
 export function DiscoveryDetail({ target, active = true, selection, onClose }: DiscoveryDetailProps) {
   const sinaTarget = target.kind === "board" && target.source === "sina";
@@ -132,7 +146,16 @@ export function DiscoveryDetail({ target, active = true, selection, onClose }: D
   const subject = rankingTarget ? "资金排行" : "成分";
   const daily = read?.kind === "sina" ? read.detail.daily_snapshot : null;
   const dailyDay = daily?.available === true && typeof daily.source_day === "string" && /^\d{4}-\d{2}-\d{2}$/.test(daily.source_day) ? daily.source_day : null;
-  const dailyReasons = Array.isArray(daily?.degraded) ? daily.degraded.filter((reason):reason is string=>typeof reason === "string" && !!reason.trim()).slice(0,3) : [];
+  const dailyReasons = Array.isArray(daily?.degraded) ? daily.degraded.filter((reason):reason is string=>typeof reason === "string" && !!reason.trim()) : [];
+  const received = read?.kind === "sina" ? readMoment(read.detail.received_at) : "未提供";
+  const receivedDay = /^\d{4}-\d{2}-\d{2} /.test(received) && !received.includes("时区未核") ? received.slice(0,10) : null;
+  const crossDay = !!dailyDay && (!!receivedDay && receivedDay !== dailyDay || dailyReasons.includes("日线日期不是接收当日，不能据此断言本次成员同日"));
+  const missingQuotes = members.filter(member=>member.price === null || member.change === null).length;
+  const sinaWarnings = sinaTarget ? [...new Set([...degraded,...dailyReasons].map(sinaLimitLabel).filter((label):label is string=>!!label))] : [];
+
+  const selectionReadout = <><p>原名单日期：{selection.readError ? "读取失败，未作对照" : selection.loaded ? selection.date || "未记录" : "待读取"}
+    {selection.loaded && !selection.readError && read && !unavailable ? ` · 代码相同 ${matches} 只` : ""}</p>
+    {selection.readError && selection.retry && <p role="alert"><button type="button" className="quiet-action" disabled={selection.pending} onClick={selection.retry}>{selection.pending ? "正在重试原名单…" : "重试原名单"}</button></p>}</>;
 
   if (!active) return null;
 
@@ -143,26 +166,27 @@ export function DiscoveryDetail({ target, active = true, selection, onClose }: D
       <button type="button" className="quiet-action shrink-0" onClick={onClose}>返回环境</button>
     </header>
     <div className="space-y-1 text-[11px] leading-relaxed text-zinc-600 dark:text-zinc-400">
-      <p>{target.kind === "theme" ? "来源目录成分记录 · 目录归属与报价时点未核" : sinaTarget ? "新浪板块同源成分 · 全部净流入与主力口径分开" : "东财个股资金排行 Top20 · 不是成分全集"}</p>
+      {!sinaTarget && <p>{target.kind === "theme" ? "来源目录成分记录 · 目录归属与报价时点未核" : "东财个股资金排行 Top20 · 不是成分全集"}</p>}
       {read?.kind === "theme" && <>
         {read.detail.membership_state === "stale" && <p role="status">成员记录已过保鲜期，当前变动待核；不当作最新归属。</p>}
         {read.detail.catalog_state === "stale" && <p role="status">目录同步已过保鲜期，保留来源原名与原代码。</p>}
         {read.detail.quote_freshness && read.detail.quote_freshness.state !== "ready" && <p>报价状态：{read.detail.quote_freshness.state === "stale" ? "已存旧快照" : "当前时效未核"}。{read.detail.quote_freshness.reason}</p>}
       </>}
-      {read?.kind === "sina" && <>
-        <p>成分来源：新浪资金 · 来源时刻 {readMoment(read.detail.source_as_of)}</p>
-        {read.detail.available && read.detail.name !== target.name && <p>成员来源名称：{read.detail.name}；代码保持 {target.code}。</p>}
-        <p>读取完成：{readMoment(read.detail.received_at)}；不等于来源时刻或历史归属。</p>
-        {read.detail.available && <p>覆盖 {read.detail.coverage.returned} / {read.detail.coverage.total ?? "未核"} 只 · {read.detail.coverage.complete ? "本次来源范围已读全" : "来源覆盖尚不完整"}；报价缺失不代表没有成分。</p>}
-      </>}
-      {read?.kind === "sina" && <p role={daily?.available === false ? "status" : undefined}>金额为亿元；全部净流入与主力（单笔≥100万元）分开。
-        {daily?.available === false ? "日线核对未完成。" : dailyDay ? `日线核对日期 ${dailyDay}，不作为盘中来源时刻。` : "日线核对状态未核。"}
-        {dailyReasons.length > 0 && `日线限制：${dailyReasons.join("；")}。`}</p>}
+      {sinaTarget && <div data-testid="sina-member-facts" className="grid grid-cols-2 gap-x-3 gap-y-1">
+        <span>新浪资金 · {target.catalogKind === "industry" ? "行业" : "概念"}</span>
+        <span>{read?.kind === "sina" && read.detail.available ? `${resource.error ? "上次覆盖" : "覆盖"} ${read.detail.coverage.returned}/${read.detail.coverage.total ?? "未核"} · ${read.detail.coverage.complete ? "已读全" : "尚不完整"}` : "覆盖待核"}</span>
+        {read?.kind === "sina" && read.detail.available && read.detail.name !== target.name && <span className="col-span-2" role="status">成员来源名称：{read.detail.name}；代码保持 {target.code}。</span>}
+        <span className="text-amber-800 dark:text-amber-300">源钟未提供</span>
+        <span title={`接收记录：${received}（北京）；不代表来源时刻`}>接收 {receivedDay ? received.slice(5) : received}</span>
+        <span className={crossDay || daily?.available === false ? "col-span-2 text-amber-800 dark:text-amber-300" : "col-span-2"} role={crossDay || daily?.available === false ? "status" : undefined}
+          title="日线原日期不是来源秒钟或成分生效时刻">
+          {daily?.available === false ? "日线核对未完成" : dailyDay ? `日线 ${dailyDay}${crossDay ? " · 跨日，非本次成员同日证明" : " · 非来源时刻"}` : "日线核对状态未核"}
+        </span>
+        {read?.kind === "sina" && read.detail.available && <span className={`col-span-2 ${missingQuotes ? "text-amber-800 dark:text-amber-300" : ""}`} role={missingQuotes ? "status" : undefined}>缺报价 {missingQuotes}/{members.length}只 · 缺数保留成员</span>}
+      </div>}
       {read?.kind === "board" && <p>东方财富主力资金排行样本，仅返回接口前20名；不能据此判断板块全部成员。{read.detail.delayed ? "来源标记延迟。" : ""}读取记录 {readMoment(read.detail.updated_at)}，来源时点未核。</p>}
-      <p>原名单日期：{selection.readError ? "读取失败，未作对照" : selection.loaded ? selection.date || "未记录" : "待读取"}
-        {selection.loaded && !selection.readError && read && !unavailable ? ` · 代码相同 ${matches} 只` : ""}</p>
-      {selection.readError && selection.retry && <p role="alert"><button type="button" className="quiet-action" disabled={selection.pending} onClick={selection.retry}>{selection.pending ? "正在重试原名单…" : "重试原名单"}</button></p>}
-      <p>仅代码对照，非当时归属；展示不产生入选、研究或模拟资格。</p>
+      {sinaTarget ? <div className="flex flex-wrap items-center gap-x-2 gap-y-1">{selectionReadout}</div> : selectionReadout}
+      {!sinaTarget && <p>仅代码对照，非当时归属；展示不产生入选、研究或模拟资格。</p>}
     </div>
     {resource.error != null && <div role="alert" className="space-y-1 text-xs text-amber-800 dark:text-amber-300">
       <p>{mismatch ? `返回${subject}身份不符，未展示该返回。` : read ? `${subject}刷新失败，保留上次读取；当前状态未核。` : `${subject}读取失败，当前无法确认${rankingTarget ? "排行" : "成员"}。`}</p>
@@ -172,7 +196,18 @@ export function DiscoveryDetail({ target, active = true, selection, onClose }: D
       <p>{subject}来源暂不可用。{read.detail.reason || "来源未提供原因。"}未将附带记录当作当前{subject}。</p>
       <button type="button" className="quiet-action" disabled={resource.pending} onClick={retry}>重试{subject}读取</button>
     </div>}
-    {!!degraded.length && <p role="status" className="text-xs text-amber-800 dark:text-amber-300">来源限制：{degraded.join("；")}</p>}
+    {!sinaTarget && !!degraded.length && <p role="status" className="text-xs text-amber-800 dark:text-amber-300">来源限制：{degraded.join("；")}</p>}
+    {sinaTarget && sinaWarnings.length > 0 && <p role="status" className="text-xs text-amber-800 dark:text-amber-300">来源提示：{sinaWarnings.join("；")}</p>}
+    {sinaTarget && <details data-testid="sina-source-details" className="text-[11px] leading-relaxed text-zinc-600 dark:text-zinc-400">
+      <summary className="cursor-pointer py-1">口径与来源详情{degraded.length + dailyReasons.length > 0 ? ` · ${degraded.length + dailyReasons.length}项原始记录` : ""}</summary>
+      <div className="mt-1 space-y-1">
+        <p>金额为亿元；全部净流入与主力（单笔≥100万元）分开，均非东财f62。接收记录不等于来源时刻；日线日期不是来源秒钟或成分生效时刻。</p>
+        <p>仅代码对照，非当时归属；展示不产生入选、研究或模拟资格。</p>
+
+        {degraded.length > 0 && <ul aria-label="来源原始限制">{degraded.map((reason,index)=><li key={index}>{reason}</li>)}</ul>}
+        {dailyReasons.length > 0 && <ul aria-label="日线原始限制">{dailyReasons.map((reason,index)=><li key={index}>{reason}</li>)}</ul>}
+      </div>
+    </details>}
     {resource.pending && !read && !resource.error && <div aria-label={`正在读取${subject}`} className="space-y-2 py-1">
       {[0, 1, 2].map(index => <div key={index} className="h-10 animate-pulse rounded bg-zinc-100 dark:bg-zinc-800"/>)}</div>}
     {read && !unavailable && <>
@@ -187,9 +222,9 @@ export function DiscoveryDetail({ target, active = true, selection, onClose }: D
           涨跌幅 {ascending ? "从低到高" : "从高到低"}
         </button>
       </div>
-      <p className="text-[11px] text-zinc-600 dark:text-zinc-400">匹配 {shown.length} / 已读 {members.length - invalidCount} 条
+      {(!sinaTarget || query || invalidCount > 0) && <p className="text-[11px] text-zinc-600 dark:text-zinc-400">匹配 {shown.length} / 已读 {members.length - invalidCount} 条
         {declaredTotal !== null && ` · 目录声明 ${declaredTotal} 只`}
-        {invalidCount > 0 && `；${invalidCount} 条证券身份无效，未展示`}</p>
+        {invalidCount > 0 && `；${invalidCount} 条证券身份无效，未展示`}</p>}
       {!shown.length && <p role="status" className="py-3 text-xs text-zinc-600 dark:text-zinc-400">
         {members.length === 0 ? "本次返回没有成员记录，不表示历史上没有成分。"
           : members.length === invalidCount ? "返回记录缺少有效证券代码，未展示成员。"
