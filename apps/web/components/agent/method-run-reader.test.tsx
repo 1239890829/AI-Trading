@@ -3,6 +3,7 @@ import {act,cleanup,fireEvent,render,screen,waitFor,within} from "@testing-libra
 import type {ReactNode} from "react";
 import type {SavedMethodRunDetail,SavedMethodRunIdentity,SavedStrategyRunItem} from "@/lib/api/picks";
 import {MethodRunReader} from "./method-run-reader";
+import {ApiError} from "@/lib/api/client";
 import {identityLocation,methodRunKey,methodRunUrl,readMethodRunLocation} from "./method-run-location";
 
 const mocks=vi.hoisted(()=>({index:vi.fn(),detail:vi.fn()}));
@@ -26,6 +27,45 @@ beforeEach(()=>{
 afterEach(()=>{cleanup();vi.clearAllMocks();mocks.index.mockReset();mocks.detail.mockReset();});
 
 describe("saved method run reader",()=>{
+  it("a 409 damaged research index renders an error rather than zero records, and explicit retry keeps research semantics",async()=>{
+    const method="reference:macd_golden_cross";
+    mocks.index.mockRejectedValue(new ApiError(409,"研究目录存在损坏记录；未静默丢弃","http_409"));
+    render(<MethodRunReader method={method}/>);
+    expect((await screen.findByRole("alert")).textContent).toContain("运行索引读取失败：研究目录存在损坏记录");
+    expect(screen.queryByText(/所查扫描范围没有可读取/)).toBeNull();
+    expect(screen.queryByText(/原批次已保存：0/)).toBeNull();
+    expect(mocks.detail).not.toHaveBeenCalled();
+    mocks.index.mockResolvedValue({method,items:[],coverage:{offset:0,limit:30,total:0,returned:0,next_offset:null,possibly_truncated:false,history_semantics:"手动价格研究"}});
+    fireEvent.click(screen.getByRole("button",{name:"重试索引"}));
+    await screen.findByText("所查扫描范围没有可读取的研究批次；不证明源日未运行或零匹配。");
+    expect(screen.queryByRole("alert")).toBeNull();
+    expect(screen.queryByText(/零入选/)).toBeNull();
+    expect(mocks.detail).not.toHaveBeenCalled();
+  });
+
+  it("reads an exact manual research batch with all denominators, unknown conditions and no selection or score claims",async()=>{
+    const identity:SavedMethodRunIdentity={...original,method:"reference:macd_golden_cross",run_id:"research-23",trade_date:"2026-10-23",strategy_version:"v1"};
+    const rows:SavedStrategyRunItem[]=[{item_id:"600000.SH",symbol:"600000",name:"600000",state:"matched",stage:"research",decision:"matched",score:null,conditions:[{key:"dif_above_dea",met:true,value:0,reference:-1}],metrics:{dif:0}},
+      {item_id:"600001.SH",symbol:"600001",name:"600001",state:"not_matched",stage:"research",decision:"not_matched",score:null,conditions:[{key:"dif_above_dea",met:false,value:-1,reference:0}]},
+      {item_id:"600002.SH",symbol:"600002",name:"600002",state:"unknown",stage:"research",decision:"unknown",score:null,reason:"缺少原交易日",conditions:[{key:"input_valid",met:null,value:null,reference:null}]}];
+    mocks.index.mockResolvedValue({method:identity.method,items:[identity],coverage:{limit:30,possibly_truncated:false,history_semantics:"手动研究，不是选股"}});
+    mocks.detail.mockResolvedValue({...detail(identity,rows),counts:{universe:3,eligible:2,matched:1,not_matched:1,unknown:1},source_completed_date:"2026-10-23",source_as_of:null,source_cutoff_at:"2026-10-23T16:00:00+08:00",definition_digest:"c".repeat(64),definition_supplement:"EMA从首个输入初始化；这是本系统v1。",data_limitations:["历史全集未认证"]});
+    render(<MethodRunReader method={identity.method} initialIdentity={identity} compact/>);
+    const result=await screen.findByLabelText("原保存运行");
+    expect(within(result).getByText("原样本").nextElementSibling?.textContent).toBe("3");
+    expect(within(result).getByText("指标可评价").nextElementSibling?.textContent).toBe("2");
+    expect(within(result).getByText(/源首次发布时间 未知；筛选界限 2026-10-23 16:00/)).toBeTruthy();
+    expect(within(result).getByLabelText("600000研究条件").textContent).toContain("原值 0.0000 · 对照 -1.0000");
+    expect(within(result).getByLabelText("600002研究条件").textContent).toContain("输入有效性未知原值 未提供 · 对照 未提供");
+    expect(within(result).queryByText("未保存分数")).toBeNull();
+    expect(within(result).queryByRole("button",{name:"原入选"})).toBeNull();
+    expect(screen.getByText("批次与版本筛选").closest("details")?.open).toBe(false);
+    fireEvent.click(within(result).getByRole("button",{name:"未符合"}));
+    expect(within(result).queryByLabelText("600000研究条件")).toBeNull();
+    expect(within(result).getByLabelText("600001研究条件")).toBeTruthy();
+    expect(mocks.detail.mock.calls[0][0]).toEqual(identity);
+  });
+
   it("restores the original row and shows saved zero, missing evidence, veto and contribution without recomputing",async()=>{
     locate(original,"rejected","rejected:0");render(<MethodRunReader method="daily_picks"/>);
     expect(await screen.findByText("原落选股")).toBeTruthy();

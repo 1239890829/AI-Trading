@@ -18,6 +18,26 @@ beforeEach(() => {
 afterEach(() => vi.unstubAllGlobals());
 
 describe("index overlay historical display is separate from live eligibility", () => {
+  it.each([
+    ["reference_age", "age"], ["reference", "identity"], ["reference", "quote_future"],
+    ["minutes", "minute_future"], ["minutes", "minute_date"], ["minutes", "minute_price"], ["minutes", "age_and_minute_future"],
+  ])("rejected %s input %s keeps its exact validation failure distinct from an HTTP failure", (issue, kind) => {
+    const at = new Date("2026-10-14T10:00:02+08:00");
+    const quote: Quote = {...closedQuote(), quality: "high", quality_reasons: [], data_timestamp: "2026-10-14T10:00:00+08:00",
+      display_session: {...session, phase: "continuous", as_of: at.toISOString()}};
+    const input: MinutePoint[] = [{ts: quote.data_timestamp!, price: 3010, source: "tencent"}];
+    if (kind === "age" || kind === "age_and_minute_future") {quote.quality = "stale"; quote.quality_reasons = ["quote_age_exceeded"];}
+    if (kind === "identity") quote.market = "SZ";
+    if (kind === "quote_future") quote.data_timestamp = "2026-10-14T10:01:00+08:00";
+    if (kind === "minute_future" || kind === "age_and_minute_future") input[0].ts = "2026-10-14T10:01:00+08:00";
+    if (kind === "minute_date") input[0].ts = "2026-10-13T10:00:00+08:00";
+    if (kind === "minute_price") input[0].price = 0;
+    const before = JSON.stringify({quote, input});
+    let error: unknown;
+    try {buildIndexOverlay(input, quote, "2026-10-14", at);} catch (caught) {error = caught;}
+    expect(error).toMatchObject({name: "IndexOverlayError", issue});
+    expect(JSON.stringify({quote, input})).toBe(before);
+  });
   it.each(["09:20:00", "09:27:00"])("confirmed opening phase at%s treats an empty continuous series as waiting", clock => {
     const at = new Date(`2026-10-14T${clock}+08:00`);
     const quote: Quote = {...closedQuote(), data_timestamp: "2026-10-14T09:15:00+08:00", quality_reasons: ["quote_age_exceeded"],
@@ -25,6 +45,48 @@ describe("index overlay historical display is separate from live eligibility", (
     const before = JSON.stringify(quote);
     expect(buildIndexOverlay([], quote, "2026-10-14", at)).toMatchObject({points: [], mode: "waiting"});
     expect(JSON.stringify(quote)).toBe(before);
+  });
+
+  const openingAnchor = (clock = "09:25:19", volume = 12_880_400): MinutePoint => ({
+    ts: "2026-10-14T09:30:00+08:00", time_label: "opening_anchor", source: "tencent", price: 4.5,
+    observation_ts: `2026-10-14T${clock}+08:00`, received_at: "2026-10-14T09:25:22+08:00",
+    cum_volume: volume, cum_amount: volume * 4.5,
+  });
+  const openingQuote = (clock: string, phase: "auction" | "pre_open_gap" | "continuous" = "pre_open_gap"): Quote => ({
+    ...closedQuote(), data_timestamp: `2026-10-14T${clock}+08:00`, quality_reasons: ["quote_age_exceeded"],
+    display_session: {...session, phase, as_of: `2026-10-14T${clock}+08:00`},
+  });
+  it.each([["09:18:00", "auction", 0], ["09:25:22", "pre_open_gap", 12_880_400]] as const)("opening anchor at%s retains auction facts without drawing a future continuous minute", (clock, phase, volume) => {
+    const anchor = openingAnchor(clock === "09:18:00" ? clock : "09:25:19", volume);
+    const quote = openingQuote(clock, phase), input = [anchor], before = JSON.stringify({input, quote});
+    expect(buildIndexOverlay(input, quote, "2026-10-14", new Date(`2026-10-14T${clock}+08:00`)))
+      .toMatchObject({points: [], openingAnchor: anchor, mode: "waiting", waitingPhase: phase});
+    expect(JSON.stringify({input, quote})).toBe(before);
+    expect(quote.quality).toBe("stale");
+  });
+  it.each([
+    {time_label: null}, {source: "tdx"}, {observation_ts: null}, {observation_ts: "2026-10-14T09:25:19"},
+    {observation_ts: "2026-10-13T09:25:19+08:00"}, {observation_ts: "2026-10-14T09:25:23+08:00"},
+    {observation_ts: "2026-10-14T09:14:59+08:00"}, {observation_ts: "2026-10-14T09:30:00+08:00"},
+    {ts: "2026-10-14T09:31:00+08:00"}, {price: 0},
+  ] as Partial<MinutePoint>[])("opening anchor never hides malformed/generic future input %j", patch => {
+    expect(() => buildIndexOverlay([{...openingAnchor(), ...patch}], openingQuote("09:25:22"), "2026-10-14", new Date("2026-10-14T09:25:22+08:00"))).toThrow();
+  });
+  it("advancing the local clock never upgrades an old opening anchor to live or closing-auction minutes", () => {
+    const quote = {...openingQuote("09:30:02", "continuous"), quality: "high" as const, quality_reasons: []};
+    const delayed = {...openingAnchor(), received_at: "2026-10-14T09:30:02+08:00"};
+    expect(() => buildIndexOverlay([delayed], quote, "2026-10-14", new Date("2026-10-14T09:30:02+08:00"))).toThrow();
+    const closing = {...openingQuote("14:57:00", "auction"), quality: "high" as const, quality_reasons: []};
+    expect(() => buildIndexOverlay([openingAnchor()], closing, "2026-10-14", new Date("2026-10-14T14:57:00+08:00"))).toThrow();
+    const actual: MinutePoint = {ts: "2026-10-14T09:31:00+08:00", price: 3010, source: "tencent"};
+    const result = buildIndexOverlay([openingAnchor(), actual], {...quote, data_timestamp: actual.ts}, "2026-10-14", new Date(actual.ts));
+    expect(result).toMatchObject({points: [actual], mode: "live"});
+  });
+  it("an opening anchor cannot rescue a failed quote, unknown calendar or wrong reference day", () => {
+    const at = new Date("2026-10-14T09:25:22+08:00"), quote = openingQuote("09:25:22");
+    expect(() => buildIndexOverlay([openingAnchor()], {...quote, quality_reasons: ["refresh_failed"]}, "2026-10-14", at)).toThrow();
+    expect(() => buildIndexOverlay([openingAnchor()], {...quote, display_session: {...quote.display_session!, trade_day_result: null}}, "2026-10-14", at)).toThrow();
+    expect(() => buildIndexOverlay([openingAnchor()], quote, "2026-10-13", at)).toThrow();
   });
 
   it("confirmed closing auction keeps only a same-day proven tail and does not upgrade stale", () => {

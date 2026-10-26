@@ -78,7 +78,9 @@ async def list_positions(hub: QuoteHub = Depends(get_hub)) -> dict:
     """
     from app.data_quality.validator import validate_quote
 
-    positions = load_positions(_sf)
+    # The repository creates and closes its Session in this worker. A SQLite
+    # lock wait must not stall quote/WS and device-access work on the same loop.
+    positions = await asyncio.to_thread(load_positions, _sf)
     quotes = await _quotes_for(hub, [p.symbol for p in positions]) if positions else {}
     items = []
     cleared = []

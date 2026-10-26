@@ -8,6 +8,14 @@ const KNOWN_SOURCES = new Set(["ths", "tencent", "eastmoney", "sina", "tdx", "td
 const ZONED = /(?:Z|[+-]\d{2}:\d{2})$/;
 const positive = (value: unknown): value is number => typeof value === "number" && Number.isFinite(value) && value > 0;
 
+/** A completed read rejected by display validation is distinct from a failed request. */
+export class IndexOverlayError extends Error {
+  constructor(message: string, readonly issue: "reference_age" | "reference" | "minutes") {
+    super(message);
+    this.name = "IndexOverlayError";
+  }
+}
+
 export interface IndexOverlay {
   points: MinutePoint[];
   prevClose: number;
@@ -15,6 +23,19 @@ export interface IndexOverlay {
   mode: "live" | "historical" | "waiting";
   waitingPhase?: NonNullable<ReturnType<typeof calendarPhase>>;
   sourceClock?: string;
+  /** Retained auction fact, never part of the continuous plotted series. */
+  openingAnchor?: MinutePoint;
+}
+
+/** Tencent's explicit 09:30 opening label needs its own same-packet pre-open source clock. */
+export function openingAnchorObservationTime(point: MinutePoint, nowMs = Date.now()): number | null {
+  if (point.time_label !== "opening_anchor" || point.source !== "tencent" || !positive(point.price)
+    || !ZONED.test(point.ts) || !point.observation_ts || !ZONED.test(point.observation_ts)) return null;
+  const date = bjDate(point.ts), label = Date.parse(point.ts), observed = Date.parse(point.observation_ts);
+  if (!date || !Number.isFinite(label) || !Number.isFinite(observed) || !Number.isFinite(nowMs)
+    || label !== Date.parse(`${date}T09:30:00+08:00`) || bjDate(point.observation_ts) !== date
+    || observed < Date.parse(`${date}T09:15:00+08:00`) || observed >= label || observed > nowMs) return null;
+  return observed;
 }
 
 function requireIndexQuote(quote: Quote | undefined): asserts quote is Quote & {data_timestamp: string; prev_close: number} {
@@ -22,16 +43,16 @@ function requireIndexQuote(quote: Quote | undefined): asserts quote is Quote & {
     || (quote.market != null && quote.market !== "SH")
     || !KNOWN_SOURCES.has(quote.source) || !positive(quote.price) || !positive(quote.prev_close)
     || !quote.data_timestamp || !ZONED.test(quote.data_timestamp) || !Number.isFinite(Date.parse(quote.data_timestamp))) {
-    throw new Error("指数基准质量或来源时刻未确认");
+    throw new IndexOverlayError("指数基准质量或来源时刻未确认", "reference");
   }
 }
 
 /** The same quote gate is used for display and for a bounded recovery hint. */
 export function indexQuoteReference(quote: Quote | undefined, mainDate: string, now = new Date()): Pick<IndexOverlay, "referenceDate" | "mode"> {
   requireIndexQuote(quote);
-  if (!Number.isFinite(now.getTime()) || Date.parse(quote.data_timestamp) > now.getTime()) throw new Error("指数基准质量或来源时刻未确认");
+  if (!Number.isFinite(now.getTime()) || Date.parse(quote.data_timestamp) > now.getTime()) throw new IndexOverlayError("指数基准质量或来源时刻未确认", "reference");
   const referenceDate = bjDate(quote.data_timestamp);
-  if (!referenceDate || !mainDate || mainDate !== referenceDate) throw new Error("指数分钟、基准与主图非同一交易日");
+  if (!referenceDate || !mainDate || mainDate !== referenceDate) throw new IndexOverlayError("指数分钟、基准与主图非同一交易日", "reference");
   if (hasTrustedQuoteObservation(quote)) return {referenceDate, mode: "live"};
   const session = quote.display_session;
   const nowMs = now.getTime();
@@ -45,7 +66,11 @@ export function indexQuoteReference(quote: Quote | undefined, mainDate: string, 
     && Date.parse(session.as_of) <= nowMs
     && calendarPause(session) !== null
     && calendarPause({...session, as_of: now.toISOString()}) !== null;
-  if (!historical) throw new Error("指数基准质量或来源时刻未确认");
+  if (!historical) {
+    const onlyAge = quote.quality === "stale" && Array.isArray(quote.quality_reasons) && quote.quality_reasons.length > 0
+      && quote.quality_reasons.every(reason => reason === "quote_age_exceeded");
+    throw new IndexOverlayError("指数基准质量或来源时刻未确认", onlyAge ? "reference_age" : "reference");
+  }
   return {referenceDate, mode: "historical"};
 }
 
@@ -54,28 +79,36 @@ export function buildIndexOverlay(points: MinutePoint[], quote: Quote | undefine
   requireIndexQuote(quote);
   const referenceDate = bjDate(quote.data_timestamp);
   const nowMs = now.getTime();
-  if (!Number.isFinite(nowMs) || Date.parse(quote.data_timestamp) > nowMs) throw new Error("指数基准质量或来源时刻未确认");
-  if (!Array.isArray(points)) throw new Error("指数尚无可用分钟记录");
-  if (!referenceDate || !mainDate || mainDate !== referenceDate
-    || points.some(point => !ZONED.test(point.ts) || bjDate(point.ts) !== referenceDate)) {
-    throw new Error("指数分钟、基准与主图非同一交易日");
+  if (!Number.isFinite(nowMs) || Date.parse(quote.data_timestamp) > nowMs) throw new IndexOverlayError("指数基准质量或来源时刻未确认", "reference");
+  if (!Array.isArray(points)) throw new IndexOverlayError("指数尚无可用分钟记录", "minutes");
+  if (!referenceDate || !mainDate || mainDate !== referenceDate) {
+    throw new IndexOverlayError("指数分钟、基准与主图非同一交易日", "reference");
+  }
+  if (points.some(point => !ZONED.test(point.ts) || bjDate(point.ts) !== referenceDate)) {
+    throw new IndexOverlayError("指数分钟、基准与主图非同一交易日", "minutes");
   }
   if (points.some(point => !positive(point.price) || !KNOWN_SOURCES.has(point.source))) {
-    throw new Error("指数分钟价格或来源未确认");
+    throw new IndexOverlayError("指数分钟价格或来源未确认", "minutes");
   }
   if (points.some(point => {
     const label = Date.parse(point.ts);
     if (!Number.isFinite(label)) return true;
+    if (point.time_label === "opening_anchor") return openingAnchorObservationTime(point, nowMs) === null;
     if (point.time_label === "interval_end") {
       const observed = point.observation_ts && ZONED.test(point.observation_ts) ? Date.parse(point.observation_ts) : NaN;
       return point.source !== "tencent" || !Number.isFinite(observed) || observed > nowMs || observed > label
         || bjDate(point.observation_ts) !== referenceDate || label - observed > 60_000;
     }
     return label > nowMs;
-  })) throw new Error("指数基准或分钟来源时刻未确认");
+  })) throw new IndexOverlayError("指数基准或分钟来源时刻未确认", "minutes");
+  const openingAnchor = points.findLast(point => point.time_label === "opening_anchor");
+  // Preserve the provider's original label/value separately. Neither a later
+  // receive/local clock nor a fresh quote makes this old auction record a minute.
+  const continuousPoints = openingAnchor ? points.filter(point => point.time_label !== "opening_anchor") : points;
   const session = quote.display_session;
   const phase = calendarPhase(session);
   const waiting = phase && session && session.trade_date === bjDate(now.toISOString())
+    && referenceDate === session.trade_date
     && Date.parse(session.as_of) <= nowMs && Date.parse(quote.data_timestamp) <= Date.parse(session.as_of)
     && calendarPhase({...session, as_of: now.toISOString()}) === phase
     && (hasTrustedQuoteObservation(quote) || quote.quality === "stale" && quote.quality_reasons.length > 0
@@ -84,17 +117,18 @@ export function buildIndexOverlay(points: MinutePoint[], quote: Quote | undefine
     if (phase === "closing_auction") {
       // 14:56 is the final continuous minute bucket, not a freshness extension.
       const start = Date.parse(`${session.trade_date}T14:56:00+08:00`);
-      const tail = points.at(-1);
+      const tail = continuousPoints.at(-1);
       const observed = tail?.time_label === "interval_end" ? Date.parse(tail.observation_ts ?? "") : Date.parse(tail?.ts ?? "");
       if (referenceDate !== session.trade_date || !tail || Date.parse(tail.ts) < start
-        || Date.parse(quote.data_timestamp) < start || observed < start) throw new Error("指数收盘竞价前尾点未确认");
+        || Date.parse(quote.data_timestamp) < start || observed < start) throw new IndexOverlayError("指数收盘竞价前尾点未确认", "minutes");
     }
-    return {points, prevClose: quote.prev_close, referenceDate, mode: "waiting", waitingPhase: phase, sourceClock: quote.data_timestamp};
+    return {points: continuousPoints, prevClose: quote.prev_close, referenceDate, mode: "waiting", waitingPhase: phase,
+      sourceClock: quote.data_timestamp, ...(openingAnchor ? {openingAnchor} : {})};
   }
-  if (points.length === 0) throw new Error("指数尚无可用分钟记录");
+  if (continuousPoints.length === 0) throw new IndexOverlayError("指数尚无可用连续分钟记录", "minutes");
   const reference = indexQuoteReference(quote, mainDate, now);
-  if (reference.mode === "historical" && points.some(point => Date.parse(point.ts) > Date.parse(quote.display_session!.as_of))) {
-    throw new Error("指数基准质量或来源时刻未确认");
+  if (reference.mode === "historical" && continuousPoints.some(point => Date.parse(point.ts) > Date.parse(quote.display_session!.as_of))) {
+    throw new IndexOverlayError("指数基准质量或来源时刻未确认", "minutes");
   }
-  return {points, prevClose: quote.prev_close, ...reference};
+  return {points: continuousPoints, prevClose: quote.prev_close, ...reference};
 }

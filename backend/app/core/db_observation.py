@@ -2,10 +2,13 @@
 
 Connection hold duration includes Python work and commit/rollback. It is an
 upper bound on potential lock duration, not proof of the actual lock owner.
+Dedicated retention keeps lock errors and this process's longest completed
+write-seen connection holds; ordinary reads cannot evict those observations.
 """
 from __future__ import annotations
 
 from collections import deque
+from datetime import datetime, timezone
 from itertools import count
 from threading import Lock
 import sys
@@ -14,6 +17,10 @@ import time
 from sqlalchemy import event
 
 _recent = deque(maxlen=64)
+_LOCK_ERROR_CAPACITY = 32
+_WRITE_HOLD_CAPACITY = 16
+_lock_errors = deque(maxlen=_LOCK_ERROR_CAPACITY)
+_longest_write_holds = []
 _guard = Lock()
 _ids = count(1)
 _SLOW_MS = 300
@@ -37,15 +44,27 @@ def _caller():
 def _record(info, kind, *, duration_ms, error=None):
     row = {'kind': kind, 'connection_use': info.get('id'), 'owner': info.get('owner'),
            'duration_ms': round(duration_ms, 2), 'write_seen': info.get('write_seen', False),
-           'error_type': error, 'monotonic_at': time.monotonic()}
+           'error_type': error, 'monotonic_at': time.monotonic(),
+           'observed_at': datetime.now(timezone.utc).isoformat()}
     with _guard:
         _recent.append(row)
+        if kind == 'lock_error':
+            _lock_errors.append(row)
+        if kind == 'connection_hold' and row['write_seen']:
+            _longest_write_holds.append(row)
+            _longest_write_holds.sort(key=lambda entry: entry['duration_ms'], reverse=True)
+            del _longest_write_holds[_WRITE_HOLD_CAPACITY:]
 
 
 def snapshot():
     with _guard:
-        rows = list(_recent)
-    return {'recent': rows, 'capacity': 64, 'basis': 'bounded observations, not a request denominator; connection hold is not measured lock time'}
+        rows = [row.copy() for row in _recent]
+        lock_errors = [row.copy() for row in _lock_errors]
+        write_holds = [row.copy() for row in _longest_write_holds]
+    return {'recent': rows, 'capacity': 64, 'basis': 'bounded observations, not a request denominator; connection hold is not measured lock time',
+            'lock_errors': lock_errors, 'lock_error_capacity': _LOCK_ERROR_CAPACITY,
+            'longest_write_holds': write_holds, 'write_hold_capacity': _WRITE_HOLD_CAPACITY,
+            'write_hold_basis': 'longest completed write_seen connections in this process, not proven lock owners or measured lock time'}
 
 
 def install(engine):

@@ -116,6 +116,17 @@ async def tradingagents_research_view(symbol: str, request: Request, saved_only:
         raise HTTPException(status_code=422, detail=str(exc))
 
 
+@router.get("/agent/research/tradingagents/{symbol}/recovery", dependencies=[Depends(require_write_token)])
+async def tradingagents_research_recovery_view(symbol: str, request: Request):
+    """Explicit maintenance read; never inherit the ordinary saved-reader capability."""
+    from app.services.tradingagents_research import read_view
+
+    try:
+        return {"data": await at._db_thread(read_view, symbol, request.app, saved_only=True, check_recovery=True)}
+    except ValueError as exc:
+        raise HTTPException(status_code=422, detail=str(exc))
+
+
 
 
 @router.get("/agent/resource-usage")

@@ -158,6 +158,50 @@ def _mark_current_minute_observation(points: list[dict], fields, trade_date: str
     last["time_label"] = "interval_end"
 
 
+def _mark_opening_anchor(points: list[dict], fields, trade_date: str, code: str,
+                         received_at: datetime) -> None:
+    """同包竞价报价解释唯一的 09:30 锚点，不将标签改写成成交分钟。
+
+    qt 源钟而非请求钟决定其含义。09:30 后收到同一旧包仍是竞价锚点，
+    消费者必须另核交易日/阶段，不能将它提升为连续分时或有效行情。
+    """
+    if len(points) != 1 or not isinstance(fields, list) or len(fields) <= 36:
+        return
+    if not all(isinstance(fields[i], str) for i in (2, 3, 30, 36)):
+        return
+    if fields[2] != code[2:] or not re.fullmatch(r"\d{14}", fields[30]):
+        return
+    observed = _bj(fields[30])
+    if observed is None or received_at.tzinfo is None or observed > received_at:
+        return
+    clock = observed.astimezone(BJ_TZ)
+    if (clock.strftime("%Y%m%d") != trade_date
+            or received_at.astimezone(BJ_TZ).strftime("%Y%m%d") != trade_date
+            or not 9 * 60 + 15 <= clock.hour * 60 + clock.minute < 9 * 60 + 30):
+        return
+    point = points[0]
+    label = clock.replace(hour=9, minute=30, second=0, microsecond=0)
+    if datetime.fromisoformat(point["ts"]) != label:
+        return
+    price = _num(fields[3])
+    quote_volume = volume_to_shares(code, _num(fields[36]))
+    if price is None or not math.isfinite(price) or price <= 0 or quote_volume is None:
+        return
+    if price != point["price"]:
+        return
+    for key in ("cum_volume", "cum_amount"):
+        value = point.get(key)
+        if value is None or not math.isfinite(value) or value < 0:
+            return
+    # 指数竞价 qt 已有成交量时，minute 锚点仍可为 0；两者不是同一量口径。
+    # 个股同包量必须一致，避免把残留的另一价格/量片段解释为本次竞价。
+    if not is_index_minute_symbol(code) and quote_volume != point["cum_volume"]:
+        return
+    point["observation_ts"] = observed.isoformat()
+    point["received_at"] = received_at.astimezone(timezone.utc).isoformat()
+    point["time_label"] = "opening_anchor"
+
+
 def to_tencent_symbol(symbol: str) -> str:
     """转腾讯代码（sh/sz/bj + 6 位）。
 
@@ -514,13 +558,14 @@ class TencentProvider:
             "https://web.ifzq.gtimg.cn/appstock/app/minute/query",
             params={"code": code_sym},
         )
+        received_at = beijing_now()
         if resp.status_code != 200:
             raise ProviderError(f"tencent minute HTTP {resp.status_code}")
         payload = ((resp.json().get("data") or {}).get(code_sym) or {})
         node = payload.get("data") or {}
         rows = node.get("data") or []
         trade_date = str(node.get("date") or "")
-        points = build_minute_points(rows, trade_date, beijing_now().date(), symbol)
+        points = build_minute_points(rows, trade_date, received_at.date(), symbol)
         if is_index_minute_symbol(symbol):
             # 指数无均价概念（点位≠成交额/成交量），avg 留空防分时 Y 轴被拉爆
             for p in points:
@@ -530,6 +575,8 @@ class TencentProvider:
         qt = payload.get("qt")
         _mark_current_minute_observation(points, qt.get(code_sym) if isinstance(qt, dict) else None,
                                          trade_date, code_sym)
+        _mark_opening_anchor(points, qt.get(code_sym) if isinstance(qt, dict) else None,
+                             trade_date, code_sym, received_at)
         return points
 
     async def get_limit_up_pool(self, trade_date) -> list:

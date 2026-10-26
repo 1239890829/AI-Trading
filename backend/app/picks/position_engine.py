@@ -20,8 +20,12 @@ from __future__ import annotations
 import json
 import logging
 import os
+import asyncio
+from collections import Counter
+from copy import deepcopy
 from datetime import datetime
 from pathlib import Path
+from threading import RLock
 from app.core.bjtime import beijing_now
 
 
@@ -46,6 +50,124 @@ DEFAULT_WEIGHT = 0.30
 OPEN_TRIGGERS = ("buy_point", "confirm")
 
 _PLAN_DIR = Path(__file__).resolve().parents[2] / "data" / "position_plans"
+_PLAN_FILE_LOCK = RLock()  # Short file operations only; never held over DB work or an await.
+_ABSENT = object()
+
+
+class PlanConflict(RuntimeError):
+    """A concurrent writer changed the same plan fact; do not overwrite it."""
+
+
+class _PlanSnapshot(dict):
+    def __init__(self, value):
+        super().__init__(value)
+        self.base = deepcopy(dict(value))  # An object attribute, never part of saved JSON.
+
+
+def _canonical(value) -> str:
+    return json.dumps(value, ensure_ascii=False, sort_keys=True, separators=(",", ":"), allow_nan=False)
+
+
+def _row_identity(row):
+    if isinstance(row, dict):
+        for key in ("order_id", "trigger_event_id"):
+            if type(row.get(key)) is int and row[key] > 0:
+                return key, row[key]
+    return None
+
+
+def _row_source(row):
+    return _canonical({k: v for k, v in row.items() if k not in {"event_id", "event_projected"}})
+
+
+def _merge_rows(base, desired, current):
+    """Append-only decision/exit rows; anonymous history keeps every occurrence."""
+    historical = Counter(_canonical(row) for row in base if _row_identity(row) is None)
+    orders, triggers = {}, {}
+    for row in [*base, *desired, *current]:
+        if not isinstance(row, dict):
+            continue
+        order, trigger = row.get("order_id"), row.get("trigger_event_id")
+        if type(order) is int and order > 0 and type(trigger) is int and trigger > 0:
+            if orders.get(order, trigger) != trigger or triggers.get(trigger, order) != order:
+                raise PlanConflict("conflicting position-plan order/trigger identities")
+            orders[order], triggers[trigger] = trigger, order
+
+    def indexed(rows, side):
+        result, seen = {}, Counter()
+        for index, row in enumerate(rows):
+            key = _row_identity(row)
+            if key is not None and key[0] == "trigger_event_id" and key[1] in triggers:
+                key = "order_id", triggers[key[1]]
+            if key is None:
+                body = _canonical(row)
+                seen[body] += 1
+                key = ("history", body, seen[body]) if seen[body] <= historical[body] else (side, index)
+            if key in result:
+                raise PlanConflict("duplicate durable position-plan identity")
+            result[key] = row
+        return result
+
+    before, ours, latest = indexed(base, "base"), indexed(desired, "desired"), indexed(current, "current")
+    if not before.keys() <= ours.keys() or not before.keys() <= latest.keys():
+        raise PlanConflict("concurrent position-plan row removal or anonymous-row change")
+    merged = deepcopy(latest)
+    for key, row in ours.items():
+        old, actual = before.get(key, _ABSENT), latest.get(key, _ABSENT)
+        if row == old:
+            continue
+        if actual is _ABSENT or actual == old or actual == row:
+            merged[key] = deepcopy(row)
+        elif (old is not _ABSENT and isinstance(row, dict) and isinstance(actual, dict)
+              and _row_source(old) == _row_source(row) == _row_source(actual)):
+            receipt = deepcopy(actual)
+            for field in ("event_id", "event_projected"):
+                wanted, prior, now = row.get(field, _ABSENT), old.get(field, _ABSENT), actual.get(field, _ABSENT)
+                if wanted == prior:
+                    continue
+                if now != prior and now != wanted:
+                    raise PlanConflict("conflicting position-plan projection receipt")
+                if wanted is not _ABSENT:
+                    receipt[field] = deepcopy(wanted)
+            merged[key] = receipt
+        else:
+            raise PlanConflict("conflicting position-plan source facts")
+    return list(merged.values())
+
+
+def _merge_plan(base: dict, desired: dict, current: dict) -> dict:
+    if not (base.get("date") == desired.get("date") == current.get("date")):
+        raise PlanConflict("position-plan date changed")
+    merged = deepcopy(current)
+    for key in base.keys() | desired.keys():
+        old, wanted, actual = base.get(key, _ABSENT), desired.get(key, _ABSENT), current.get(key, _ABSENT)
+        if wanted == old:
+            continue
+        if actual == old:
+            if wanted is _ABSENT:
+                merged.pop(key, None)
+            else:
+                merged[key] = deepcopy(wanted)
+        elif key in {"decisions", "exits"} and all(isinstance(value, list) for value in (old, wanted, actual)):
+            merged[key] = _merge_rows(old, wanted, actual)
+        elif actual == wanted:
+            merged[key] = deepcopy(wanted)
+        elif key == "peaks" and all(isinstance(value, dict) for value in (old, wanted, actual)):
+            peaks = deepcopy(actual)
+            for symbol in old.keys() | wanted.keys():
+                prior, value, now = old.get(symbol, _ABSENT), wanted.get(symbol, _ABSENT), actual.get(symbol, _ABSENT)
+                if value == prior:
+                    continue
+                if now != prior and now != value:
+                    raise PlanConflict("conflicting position-plan peak")
+                if value is _ABSENT:
+                    peaks.pop(symbol, None)
+                else:
+                    peaks[symbol] = deepcopy(value)
+            merged[key] = peaks
+        else:
+            raise PlanConflict("conflicting position-plan field")
+    return merged
 
 
 def _plan_path(d: str) -> Path:
@@ -53,6 +175,11 @@ def _plan_path(d: str) -> Path:
 
 
 def load_plan(d: str | None = None) -> dict:
+    with _PLAN_FILE_LOCK:
+        return _PlanSnapshot(_load_plan_contents(d))
+
+
+def _load_plan_contents(d: str | None = None) -> dict:
     d = d or beijing_now().date().isoformat()
     p = _plan_path(d)
     if not p.exists():
@@ -76,12 +203,23 @@ def save_plan(plan: dict) -> None:
     直接 write_text 的窗口期里进程被杀 / 磁盘写满会留下**半截 JSON**，
     而 load_plan 对半截文件只能判为损坏 ⇒ 当日决策台账整体作废。
     与 morning_brief / heat_history / board_flow 同型。
+
+    A plain dict retains explicit replacement semantics. Real load→save writers
+    carry an object-only baseline so an async wait cannot erase another writer.
     """
-    _PLAN_DIR.mkdir(parents=True, exist_ok=True)
-    target = _plan_path(plan["date"])
-    tmp = target.with_name(f"{target.name}.tmp")
-    tmp.write_text(json.dumps(plan, ensure_ascii=False, indent=1), encoding="utf-8")
-    os.replace(tmp, target)
+    with _PLAN_FILE_LOCK:
+        value = dict(plan)
+        if isinstance(plan, _PlanSnapshot):
+            value = _merge_plan(plan.base, value, _load_plan_contents(plan["date"]))
+        _PLAN_DIR.mkdir(parents=True, exist_ok=True)
+        target = _plan_path(plan["date"])
+        tmp = target.with_name(f"{target.name}.tmp")
+        tmp.write_text(json.dumps(value, ensure_ascii=False, indent=1), encoding="utf-8")
+        os.replace(tmp, target)
+        if isinstance(plan, _PlanSnapshot):
+            # Keep the caller's live row references. Its next save describes only
+            # changes since its own last view, not deletion of unseen additions.
+            plan.base = deepcopy(dict(plan))
 
 
 def record_confirm_result(alert, event_id, result, session_factory, *, reference_price=None):
@@ -198,6 +336,81 @@ def reconcile_position_open_events() -> int:
     if dirty:
         save_plan(plan)
     return repaired
+
+
+async def _project_saved_plan_row(plan, collection, row, publisher, *, read_plan=None, write_plan=None) -> bool:
+    """Worker owns only copies; the loop merges receipts into the latest saved fact."""
+    read_plan, write_plan = read_plan or load_plan, write_plan or save_plan
+    original = deepcopy(row)
+    if type(original.get("order_id")) is not int or original["order_id"] <= 0:
+        return False
+    copied_plan, copied_row = deepcopy(plan), deepcopy(row)
+    task = asyncio.create_task(asyncio.to_thread(publisher, copied_plan, copied_row))
+    canceled, error, result = False, None, None
+    try:
+        result = await asyncio.shield(task)
+    except asyncio.CancelledError:
+        canceled = True
+        while not task.done():
+            try:
+                await asyncio.shield(task)
+            except asyncio.CancelledError:
+                continue
+            except Exception:
+                break
+        try:
+            result = task.result()
+        except Exception as exc:
+            error = exc
+    except Exception as exc:
+        error = exc
+    merged = False
+    if error is not None:
+        log.error("saved %s projection failed for order %s; original fact retained", collection, original["order_id"],
+                  exc_info=(type(error), error, error.__traceback__))
+    elif (isinstance(result, tuple) and len(result) == 2 and type(result[0]) is int and result[0] > 0
+          and type(result[1]) is bool and copied_row.get("event_id") == result[0]
+          and copied_row.get("event_projected") is result[1] and _row_source(copied_row) == _row_source(original)):
+        try:
+            latest = read_plan()
+            matches = [item for item in latest.get(collection, [])
+                       if isinstance(item, dict) and type(item.get("order_id")) is int
+                       and item["order_id"] == original["order_id"]]
+            if latest.get("date") != plan.get("date") or len(matches) != 1 or _row_source(matches[0]) != _row_source(original):
+                raise PlanConflict("saved projection source identity changed")
+            matches[0].update(event_id=result[0], event_projected=result[1])
+            write_plan(latest)
+            merged = True
+        except Exception:
+            log.exception("saved %s projection receipt remains pending for order %s", collection, original["order_id"])
+    if canceled:
+        raise asyncio.CancelledError
+    return merged
+
+
+async def reconcile_position_open_events_async() -> int:
+    """Read/write the plan on its loop owner; only source-event projection waits in a worker."""
+    plan = load_plan()
+    repaired = 0
+    for decision in plan.get("decisions", []):
+        if decision.get("action") == "open" and not (decision.get("event_id") and decision.get("event_projected")):
+            repaired += bool(await _project_saved_plan_row(plan, "decisions", decision, _publish_open_decision))
+    return repaired
+
+
+def preserve_filled_exit(plan_date: str, row: dict) -> None:
+    """A known filled order survives unrelated optimistic-plan conflicts."""
+    if type(row.get("order_id")) is not int or row["order_id"] <= 0:
+        raise PlanConflict("filled exit lacks durable order identity")
+    with _PLAN_FILE_LOCK:
+        latest = load_plan(plan_date)
+        matches = [item for item in latest.get("exits", []) if item.get("order_id") == row["order_id"]]
+        if matches:
+            if len(matches) != 1 or _row_source(matches[0]) != _row_source(row):
+                raise PlanConflict("filled exit source identity conflicts")
+            return
+        latest.setdefault("exits", []).append(deepcopy(row))
+        save_plan(latest)
 
 
 def phase_caps(market_phase: str | None, gate: dict | None) -> tuple[float, int, str]:

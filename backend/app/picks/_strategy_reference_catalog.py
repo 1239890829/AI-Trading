@@ -1,4 +1,4 @@
-"""Private reading metadata owned by strategy_registry; no execution adapters.
+"""Reference metadata owned by strategy_registry; explicit manual-only adapters.
 
 The reference names, codes and declared versions identify the supplied TSP
 catalog snapshot. Conditions below are concise independent descriptions of
@@ -143,5 +143,33 @@ _ENTRIES = (
 
 
 def reference_catalog_entries() -> list[dict]:
-    """Return fresh reading records; never add them to SPECS or collectors."""
-    return deepcopy(list(_ENTRIES))
+    """Research execution is explicit; never add these to SPECS or collectors."""
+    from app.picks._strategy_reference_rules import DEFINITION_DIGEST, reference_rule_metadata
+
+    rules = reference_rule_metadata()
+    rows = deepcopy(list(_ENTRIES))
+    reused = {'hot_theme': 'themes', 'dragon_head': 'ladder', 'event_driven': 'events',
+              'balanced_alpha': 'daily_picks', 'capital_heat': 'fundflow', 'emotion_cycle': 'market_regime'}
+    for row in rows:
+        code = row['candidate']['source_code']
+        if code in rules:
+            rule = rules[code]
+            row['status'] = 'research_ready'
+            row['candidate']['runnable'] = True
+            row['candidate']['execution'] = {'mode': 'manual_research', 'version': rule['version'],
+                'definition_digest': DEFINITION_DIGEST, 'production_enabled': False,
+                'definition': rule['definition'], 'definition_supplement': rule['supplement']}
+            row['candidate']['definition_supplement'] = rule['supplement']
+            row['candidate']['limitations'] = ['仅启用手动研究筛选；匹配不等于正式入选、通知或模拟资格。',
+                                              '历史点时宇宙、可执行成本与效果准入未完成，禁止改生产权重或风控。']
+            row['discovery']['supports_saved_runs'] = True
+            row['discovery']['session_label'] = '已完成日线研究'
+        elif code in reused:
+            row['candidate']['adoption'] = {'state': 'reuse_existing', 'consumer': reused[code],
+                                          'reason': '已有真实消费者；保留来源和条件，不另造重复策略。'}
+        elif code in {'wave_theory', 'chan_theory'}:
+            row['candidate']['adoption'] = {'state': 'not_adopted', 'reason': '确认规则及未来重绘边界不明，无法可靠复现。'}
+        else:
+            row['candidate']['adoption'] = {'state': 'needs_contract_or_data',
+                                          'reason': '；'.join(row['candidate']['limitations'][1:])}
+    return rows

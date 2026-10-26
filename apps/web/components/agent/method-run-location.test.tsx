@@ -36,4 +36,11 @@ describe("saved method location",()=>{
     for(const patch of [{run_id:"43"},{trade_date:"2026-10-23"},{source_version:null},{content_version:"b".repeat(64)},{strategy_version:"current"},{method:"intraday_watch"},{coverage:{...detail.coverage,offset:0}}])
       expect(methodRunMatches({...detail,...patch} as SavedMethodRunDetail,identity,200)).toBe(false);
   });
+  it("manual research defaults to all saved rows and cannot inherit a selection-only filter",()=>{
+    const method="reference:macd_golden_cross";
+    expect(readMethodRunLocation("",method).filter).toBe("all");
+    expect(readMethodRunLocation("?run_state=selected",method).filter).toBe("all");
+    expect(readMethodRunLocation("?run_state=matched",method).filter).toBe("matched");
+    expect(readMethodRunLocation("?run_state=matched","daily_picks").filter).toBe("selected");
+  });
 });

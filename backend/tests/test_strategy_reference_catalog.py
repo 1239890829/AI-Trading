@@ -1,4 +1,4 @@
-"""A reading catalog cannot silently become a running strategy or a track record."""
+"""Only three declared manual research adapters; no production or fake track record."""
 from collections import Counter
 
 from fastapi import Depends, FastAPI
@@ -24,6 +24,8 @@ bottom_volume box_oscillation low_volatility_quality expectation_repricing aucti
 V3 = {"low_rebound_quality", "box_first_board_breakout", "l1_l2_volume_resonance",
       "w_bottom_breakout", "auction_breakout_2to3"}
 ETF = {"etf_cold_rebound", "etf_bottom_volume", "etf_momentum_rotation", "etf_trend_takeoff"}
+MANUAL = {"macd_golden_cross": "ashare-macd-12-26-9-v1", "ma_bullish": "ashare-ma-5-10-20-v1",
+          "ma_golden_cross": "ashare-ma-cross-volume5-v1"}
 
 
 @pytest.fixture
@@ -57,17 +59,27 @@ def test_complete_reference_identity_versions_and_asset_scope(verification):
         code = item["source_code"]
         assert row["key"] == f"reference:{code}"
         assert item["source_version"] == f"20261025:v{5 if code in ETF else 3 if code in V3 else 4}"
-        assert row["status"] == ("out_of_scope" if code in ETF else "candidate")
+        assert row["status"] == ("out_of_scope" if code in ETF else "research_ready" if code in MANUAL else "candidate")
         assert row["catalog_kind"] == "reference" and row["basis"] == "not_evaluated"
         if code in ETF:
             assert any("ETF范围尚未开放" in text for text in item["limitations"])
 
 
-def test_reference_metadata_never_claims_execution_or_performance(verification):
+def test_reference_research_never_claims_production_execution_or_performance(verification):
     for row in registry.list_strategy_keys(include_candidates=True)[5:]:
+        code = row["candidate"]["source_code"]
+        manual = code in MANUAL
         assert row["evaluable"] is False
-        assert row["discovery"]["supports_saved_runs"] is False
-        assert row["candidate"]["runnable"] is False
+        assert row["discovery"]["supports_saved_runs"] is manual
+        assert row["candidate"]["runnable"] is manual
+        if manual:
+            execution = row["candidate"]["execution"]
+            assert execution["mode"] == "manual_research" and execution["production_enabled"] is False
+            assert execution["version"] == MANUAL[code]
+            assert len(execution["definition_digest"]) == 64
+            assert execution["definition"] and execution["definition_supplement"]
+        else:
+            assert "execution" not in row["candidate"]
         assert "runtime" not in row and "verification" not in row
         assert row["discovery"]["category_label"] and row["discovery"]["session_label"]
         assert row["discovery"]["category"] in {
@@ -78,7 +90,11 @@ def test_reference_metadata_never_claims_execution_or_performance(verification):
             assert all(isinstance(text, str) and text for text in row["candidate"][field])
         assert all(field not in row["candidate"] for field in
                    ("win_rate", "return", "equity_curve", "picks", "tenant_id", "user_id"))
-        assert any("未通过" in text and "不启用" in text for text in row["candidate"]["limitations"])
+        if manual:
+            assert any("不等于正式入选" in text for text in row["candidate"]["limitations"])
+            assert any("禁止改生产权重或风控" in text for text in row["candidate"]["limitations"])
+        else:
+            assert any("未通过" in text and "不启用" in text for text in row["candidate"]["limitations"])
 
 
 def test_known_numeric_conditions_and_missing_definitions_survive(verification):

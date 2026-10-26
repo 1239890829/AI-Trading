@@ -1065,7 +1065,7 @@ export interface SavedStrategyRunItem {
   item_id?: string;
   symbol: string;
   name?: string | null;
-  state: "selected" | "rejected" | "candidate" | "unknown";
+  state: "selected" | "rejected" | "candidate" | "unknown" | "matched" | "not_matched";
   stage?: string;
   decision?: string;
   score: number | null;
@@ -1075,6 +1075,8 @@ export interface SavedStrategyRunItem {
   source_theme?: string | null;
   snapshot_id?: string | null;
   evidence?: Record<string, unknown> | null;
+  conditions?: {key: string; label?: string; met: boolean | null; value: number | string | null; reference: number | string | null}[];
+  metrics?: Record<string, number | string | null>;
   diagnostics?: {
     state: "saved" | "partial" | "missing";
     sub_scores: Record<string, number | null> | null;
@@ -1088,7 +1090,10 @@ export interface SavedStrategyRunItem {
   };
 }
 
-export type SavedMethodKey = "daily_picks" | "intraday_watch";
+export const REFERENCE_RESEARCH_METHODS = ["reference:macd_golden_cross", "reference:ma_bullish", "reference:ma_golden_cross"] as const;
+export type ReferenceResearchMethod = typeof REFERENCE_RESEARCH_METHODS[number];
+export type SavedMethodKey = "daily_picks" | "intraday_watch" | ReferenceResearchMethod;
+export function isReferenceResearchMethod(value: string): value is ReferenceResearchMethod {return (REFERENCE_RESEARCH_METHODS as readonly string[]).includes(value);}
 export interface SavedMethodRunIdentity {
   method: SavedMethodKey;
   run_id: string;
@@ -1168,6 +1173,14 @@ export interface SavedStrategyRun {
   items?: SavedStrategyRunItem[];
   possibly_truncated?: boolean;
   semantics?: string;
+  source_completed_date?: string | null;
+  source_as_of?: string | null;
+  source_cutoff_at?: string | null;
+  source_as_of_semantics?: string;
+  definition_digest?: string;
+  definition?: string;
+  definition_supplement?: string;
+  data_limitations?: string[];
 }
 
 export interface StrategyRegistryItem {
@@ -1181,7 +1194,8 @@ export interface StrategyRegistryItem {
     criteria: string[];
     existing_coverage: string[];
     limitations: string[];
-    runnable: false;
+    runnable: boolean;
+    execution?: {mode: "manual_research"; version: string; definition_digest: string; production_enabled: false; definition: string; definition_supplement: string};
   };
   runtime?: SavedStrategyRun | null;
   name?: string;

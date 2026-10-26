@@ -11,9 +11,11 @@ from contextlib import contextmanager
 from datetime import datetime
 import hashlib
 import json
+import os
 from pathlib import Path
 import re
 import sqlite3
+import tempfile
 import uuid
 
 from sqlalchemy import select
@@ -39,6 +41,7 @@ MAX_RECOVERY_HISTORY = 8  # Bounded artifact parsing, not a model-call allowance
 PARALLEL_ANALYSTS = {"Market Analyst", "Sentiment Analyst", "News Analyst", "Fundamentals Analyst"}
 PARALLEL_BINDING_KEYS = (BINDING_KEYS - {"expected_pending_role"}) | {"expected_pending_roles", "pending_message_fingerprints"}
 EMPTY_SHA = hashlib.sha256(b"").hexdigest()
+COOPERATIVE_STAGE_MESSAGE = "同版恢复仅支持初始四分析师阶段（root step 0）的已知步骤；当前检查点未满足该范围。原任务、原答和用量保留，未重新调用。"
 PRELAUNCH_TAIL_KEYS = {"version", "call_id", "source_task_error_sha256", "source_execution_sha256",
     "source_model_usage_facts_sha256", "model_receipts_prefix", "first_broker_error_record_sha256"}
 # The reviewed historical chain persisted the counter before reserve, serialized
@@ -97,7 +100,9 @@ REVIEWED_COMPONENT_TRANSITIONS = {
 
 
 def _blocked(code):
-    return research.ResearchBlocked([{"code": code, "message": "原生恢复条件不满足；保留原任务、原答及用量记录，未自动重试。"}])
+    message = (COOPERATIVE_STAGE_MESSAGE if code == "recovery_cooperative_checkpoint_invalid" else
+               "原生恢复条件不满足；保留原任务、原答及用量记录，未自动重试。")
+    return research.ResearchBlocked([{"code": code, "message": message}])
 
 
 def _id(value):
@@ -152,6 +157,12 @@ def _json(path):
 
 def _compatibility(grant, identity):
     old, new, compatibility = (grant[key] for key in ("source_method_identity", "continuation_method_identity", "compatibility"))
+    if (isinstance(compatibility, dict) and compatibility.get("kind") == "same_method_cooperative_stop_v1"):
+        if (compatibility != {"kind": "same_method_cooperative_stop_v1", "source_hash_pairs": {}}
+                or old != new or new != identity or not isinstance(old, dict)
+                or not isinstance(grant.get("binding", {}).get("cooperative_stop"), dict)):
+            raise _blocked("recovery_method_incompatible")
+        return research._digest(old), research._digest(new)
     if (not isinstance(old, dict) or new != identity or not isinstance(compatibility, dict)
             or compatibility.get("kind") not in {"reviewed_host_diagnostics_and_recovery_v1", "reviewed_frozen_packet_owner_v1"}
             or set(compatibility) != ({"kind", "source_hash_pairs", "packet_owner_hash_pairs"}
@@ -201,6 +212,187 @@ def _checkpoint_files(dbpath):
     return files
 
 
+def _source_claim_path(grant, run, method):
+    if "cooperative_stop" in grant["binding"]:
+        archived = _safe(run / "recovery-history" / grant["grant_id"] / "source-selection.json")
+        if archived.exists():
+            return archived
+    return _safe(research._selection_claim(grant["binding"]["selection"], method))
+
+
+def _cooperative_stop(grant, run, sf=None):
+    """Prove an actual canceled task with every physical answer known and retained."""
+    from app.services.tradingagents_native.transport_process import project_usage_evidence
+
+    binding = grant["binding"]
+    proof = binding["cooperative_stop"]
+    required = {"version", "source_execution_sha256", "source_model_usage_facts_sha256", "cancel_requested_at", "finished_at", "pending_roles"}
+    pending = proof.get("pending_roles")
+    if (set(proof) != required or type(proof["version"]) is not int or proof["version"] != 1
+            or not isinstance(pending, list) or not 1 <= len(pending) <= 4 or len(set(pending)) != len(pending)
+            or not set(pending) <= PARALLEL_ANALYSTS or binding["expected_pending_role"] != pending[0]
+            or grant["compatibility"] != {"kind": "same_method_cooperative_stop_v1", "source_hash_pairs": {}}
+            or grant["source_method_identity"] != grant["continuation_method_identity"]):
+        raise _blocked("recovery_cooperative_proof_invalid")
+    counter = binding["call_counter"]
+    if (type(counter) is not int or not 0 < counter <= 4096
+            or set(binding["outputs"]) != {str(n) for n in range(1, counter + 1)}
+            or set(binding["usage_receipts"]) != set(binding["outputs"])):
+        raise _blocked("recovery_cooperative_usage_incomplete")
+    archive = _safe(run / "recovery-history" / grant["grant_id"])
+    execution_path = archive / "execution.json" if (archive / "execution.json").exists() else run / "execution.json"
+    execution = _json(execution_path)
+    method = research._digest(grant["source_method_identity"])
+    if (_sha(execution_path) != proof["source_execution_sha256"] or execution.get("state") != "canceled"
+            or execution.get("error_kind") != "CancelledError" or execution.get("task_id") != grant["source_task_id"]
+            or execution.get("run_id") != grant["run_id"] or execution.get("symbol") != grant["symbol"]
+            or execution.get("method_sha256") != method or execution.get("automatic_retry") is not False):
+        raise _blocked("recovery_cooperative_execution_drift")
+    with (sf or research.get_session_factory())() as db:
+        task = db.get(AgentTask, grant["source_task_id"])
+        rows = db.scalars(select(AgentResourceUsage).where(AgentResourceUsage.task_id == grant["source_task_id"],
+            AgentResourceUsage.kind == "model").order_by(AgentResourceUsage.id).limit(4097)).all()
+        facts = [{column.name: (value.isoformat() if isinstance(value, datetime) else value)
+            for column in AgentResourceUsage.__table__.columns for value in (getattr(row, column.name),)} for row in rows]
+        if (task is None or task.type != "tradingagents_research" or task.status != "canceled"
+                or json.loads(task.params) != {"symbol": grant["symbol"]} or task.cancel_requested_at is None or task.finished_at is None
+                or task.cancel_requested_at > task.finished_at or task.error is not None
+                or task.finished_at > research._now().replace(tzinfo=None)
+                or task.finished_at.replace(tzinfo=research._now().tzinfo) > research._clock(grant["authorized_at"])
+                or task.cancel_requested_at.isoformat() != proof["cancel_requested_at"] or task.finished_at.isoformat() != proof["finished_at"]
+                or research._digest(facts) != proof["source_model_usage_facts_sha256"] or len(rows) != counter):
+            raise _blocked("recovery_cooperative_task_or_usage_drift")
+        by_id = {row.id: row for row in rows}
+        seen, finals = set(), []
+        for number in range(1, counter + 1):
+            key = str(number)
+            receipt, output = (_json(run / folder / (key + ".json")) for folder in ("usage-receipts", "model-outputs"))
+            usage = project_usage_evidence(receipt.get("usage"))[0]
+            value = output.get("structured_output")
+            row = by_id.get(receipt.get("usage_id"))
+            if (row is None or row.id in seen or usage is None or receipt.get("usage_known") is not True
+                    or receipt.get("terminal_kind") != "typed_response" or receipt.get("task_id") != task.id
+                    or receipt.get("method_sha256") != method or type(receipt.get("call_id")) is not int or receipt["call_id"] != number
+                    or output.get("call_id") != number or type(output.get("call_id")) is not int
+                    or output.get("role") not in PARALLEL_ANALYSTS or receipt.get("role") != output["role"]
+                    or not isinstance(value, dict) or output.get("output_sha256") != research._digest(value)
+                    or receipt.get("output_sha256") != output["output_sha256"]
+                    or row.state != "succeeded" or row.usage_known != 1 or row.started_at is None or row.finished_at is None
+                    or row.finished_at < row.started_at or row.finished_at > task.finished_at
+                    or row.scope != agent_budget.SCOPE_SELECTED_RESEARCH_LLM or row.budget_date != row.started_at.date().isoformat()
+                    or row.provider != grant["source_method_identity"]["transport"]["provider"]
+                    or row.model != grant["source_method_identity"]["transport"]["model"] or row.attempts != 1 or row.max_retries != 0
+                    or row.purpose != "tradingagents." + output["role"].replace(" ", "_").lower()
+                    or row.input_tokens != usage["input_tokens"] or row.output_tokens != usage["output_tokens"]):
+                raise _blocked("recovery_cooperative_usage_incomplete")
+            seen.add(row.id)
+            if not value.get("tool_calls"):
+                finals.append({"role": output["role"], "call_id": number, "output_sha256": output["output_sha256"]})
+        if finals != binding["completed_roles"] or {row["role"] for row in finals} != PARALLEL_ANALYSTS - set(pending):
+            raise _blocked("recovery_cooperative_roles_drift")
+    return facts
+
+
+def _cooperative_checkpoint(run, symbol, binding, *, offline=None, discover=False):
+    """Initial-analysis-stage-only (root step 0), including completed siblings."""
+    if binding["checkpoint"].get("step") != 0:
+        raise _blocked("recovery_cooperative_checkpoint_invalid")
+    thread, root_id = (binding["checkpoint"][key] for key in ("thread_id", "checkpoint_id"))
+    reports = {"Market Analyst": "market_report", "Sentiment Analyst": "sentiment_report", "News Analyst": "news_report", "Fundamentals Analyst": "fundamentals_report"}
+    with _checkpoint_reader(run, symbol, offline=offline) as db:
+        errors = db.execute("SELECT task_path FROM writes WHERE thread_id=? AND checkpoint_ns='' AND checkpoint_id=? AND channel='__error__' LIMIT 5", (thread, root_id)).fetchall()
+        pending = sorted(row[0].removeprefix("~__pregel_pull, ") for row in errors)
+        if (not 1 <= len(pending) <= 4 or len(set(pending)) != len(pending) or not set(pending) <= PARALLEL_ANALYSTS
+                or not discover and pending != binding["cooperative_stop"]["pending_roles"]):
+            raise _blocked("recovery_cooperative_checkpoint_invalid")
+        namespaces = db.execute("SELECT checkpoint_ns,MAX(checkpoint_id) FROM checkpoints WHERE thread_id=? AND checkpoint_ns<>'' GROUP BY checkpoint_ns LIMIT 5", (thread,)).fetchall()
+        found = set()
+        for namespace, checkpoint_id in namespaces:
+            role, separator, suffix = namespace.partition(":")
+            row = db.execute("SELECT metadata FROM checkpoints WHERE thread_id=? AND checkpoint_ns=? AND checkpoint_id=?", (thread, namespace, checkpoint_id)).fetchone()
+            metadata = json.loads(row[0])
+            failures = db.execute("SELECT 1 FROM writes WHERE thread_id=? AND checkpoint_ns=? AND checkpoint_id=? AND channel='__error__' LIMIT 1", (thread, namespace, checkpoint_id)).fetchone()
+            finished = db.execute("SELECT 1 FROM writes WHERE thread_id=? AND checkpoint_ns='' AND checkpoint_id=? AND task_path=? AND channel=? LIMIT 1", (thread, root_id, "~__pregel_pull, " + role, reports.get(role))).fetchone()
+            if (not separator or not re.fullmatch(r"[0-9a-f-]{36}", suffix) or role not in PARALLEL_ANALYSTS or role in found
+                    or metadata.get("parents") != {"": root_id} or type(metadata.get("step")) is not int or metadata["step"] < 0
+                    or (not failures if role in pending else failures or not finished)):
+                raise _blocked("recovery_cooperative_checkpoint_invalid")
+            found.add(role)
+        if found != PARALLEL_ANALYSTS:
+            raise _blocked("recovery_cooperative_checkpoint_invalid")
+    return pending
+
+
+def prepare_cooperative_grant(source_task_id, run_id, identity, *, grant_id, authorized_at, valid_until, sf):
+    """Initial-analysis-stage-only: prepare an exact grant; never install or dispatch."""
+    _id(source_task_id); _id(run_id); _id(grant_id)
+    with sf() as db:
+        task = db.get(AgentTask, source_task_id)
+        if task is None or task.status != "canceled" or task.cancel_requested_at is None or task.finished_at is None:
+            raise _blocked("recovery_cooperative_task_or_usage_drift")
+        params = json.loads(task.params)
+        symbol = research.validate_params(params)
+        if params != {"symbol": symbol}:
+            raise _blocked("recovery_source_task_invalid")
+        cancel_at, finished_at = task.cancel_requested_at.isoformat(), task.finished_at.isoformat()
+        rows = db.scalars(select(AgentResourceUsage).where(AgentResourceUsage.task_id == source_task_id,
+            AgentResourceUsage.kind == "model").order_by(AgentResourceUsage.id).limit(4097)).all()
+        facts = [{column.name: (value.isoformat() if isinstance(value, datetime) else value)
+            for column in AgentResourceUsage.__table__.columns for value in (getattr(row, column.name),)} for row in rows]
+    folder, method = research._folder(symbol), research._digest(identity)
+    run = _safe(folder / run_id)
+    if (run / "result.json").exists() or (run / "recovery-history").exists():
+        raise _blocked("recovery_cooperative_already_owned")
+    claims = [(_sha(p), _json(p)) for p in folder.glob("selection-*.json")]
+    matches = [(sha, c) for sha, c in claims if c.get("task_id") == source_task_id
+               and c.get("state") == "needs_recovery" and c.get("method_sha256") == method]
+    if len(matches) != 1:
+        raise _blocked("recovery_selection_drift")
+    source_sha, source = matches[0]
+    packet, counter = _json(run / "packet.json"), _json(run / "call-counter.json").get("reserved")
+    if type(counter) is not int or not 0 < counter <= 4096:
+        raise _blocked("recovery_counter_invalid")
+    prefixes, peers = {}, []
+    for name in ("role-outputs.jsonl", "source-audit.jsonl", "graph/node-trace.jsonl"):
+        path = _safe(run / name)
+        body = _body(path) if path.exists() else b""
+        prefixes[name] = {"bytes": len(body), "sha256": hashlib.sha256(body).hexdigest()}
+        if name == "role-outputs.jsonl":
+            peers = [json.loads(line)["peer"] for line in body.splitlines() if line.strip()]
+    completed = [{key: row[key] for key in ("role", "call_id", "output_sha256")} for row in peers]
+    pending = sorted(PARALLEL_ANALYSTS - {row["role"] for row in completed})
+    if not pending:
+        raise _blocked("recovery_cooperative_checkpoint_invalid")
+    files = _checkpoint_files(run / "graph/cache/checkpoints" / (symbol + ".db"))
+    if files["-wal"] is not None or files["-shm"] is not None:
+        raise _blocked("recovery_cooperative_writer_not_closed")
+    binding = {"selection": source["selection"], "source_claim_sha256": source_sha,
+        **{key: _sha(run / name) for name, key in (("packet.json", "packet_sha256"), ("config.json", "config_sha256"),
+            ("staged-code.json", "staged_code_sha256"), ("graph/run-manifest.json", "manifest_sha256"),
+            ("worker-terminal.json", "worker_terminal_sha256"))},
+        "checkpoint": {"files": files}, "call_counter": counter,
+        "outputs": {p.stem: _sha(p) for p in _safe(run / "model-outputs").glob("*.json")},
+        "usage_receipts": {p.stem: _sha(p) for p in _safe(run / "usage-receipts").glob("*.json")},
+        "prefixes": prefixes, "completed_roles": completed, "expected_pending_role": pending[0],
+        "cooperative_stop": {"version": 1, "source_execution_sha256": _sha(run / "execution.json"),
+            "source_model_usage_facts_sha256": research._digest(facts), "cancel_requested_at": cancel_at,
+            "finished_at": finished_at, "pending_roles": pending}}
+    grant = {"version": 1, "grant_id": grant_id, "user_authorization": "EXPLICIT", "authorized_at": authorized_at,
+        "valid_until": valid_until, "source_task_id": source_task_id, "symbol": symbol, "run_id": run_id,
+        "source_method_identity": deepcopy(identity), "continuation_method_identity": deepcopy(identity),
+        "compatibility": {"kind": "same_method_cooperative_stop_v1", "source_hash_pairs": {}}, "binding": binding}
+    _source_task(source_task_id, symbol, sf)
+    _compatibility(grant, identity)
+    _binding(binding)
+    _cooperative_stop(grant, run, sf)
+    offline = {"grant": grant, "session_factory": sf}
+    binding["checkpoint"] = checkpoint_snapshot(run, symbol, offline=offline)
+    _frozen_records(run, binding, _history_segments(grant, run, sf), grant=grant, sf=sf)
+    _prefixes(run, prefixes, binding)
+    _initial_snapshot(run, binding, symbol, packet, source_grant=grant, sf=sf)
+    return grant
+
+
 @contextmanager
 def _checkpoint_reader(run, symbol, *, offline=None):
     """Immutable reads require a proved, terminated native failure with no sidecars."""
@@ -213,13 +405,16 @@ def _checkpoint_reader(run, symbol, *, offline=None):
         binding = _binding(grant["binding"])
         files = binding["checkpoint"].get("files")
         input_tail = "input_prelaunch_tail" in binding
-        if (not (_first_parallel_failure(binding, grant) or input_tail) or grant.get("symbol") != symbol
+        cooperative = "cooperative_stop" in binding
+        if (not (_first_parallel_failure(binding, grant) or input_tail or cooperative) or grant.get("symbol") != symbol
                 or not isinstance(files, dict) or set(files) != {"db", "-wal", "-shm"}
                 or not _hash(files["db"]) or files["-wal"] is not None or files["-shm"] is not None):
             raise _blocked("recovery_offline_checkpoint_unproven")
         if input_tail:
             _input_prelaunch_tail(grant, run, _history_segments(grant, run, offline["session_factory"]), offline["session_factory"])
-        if _source_task(grant["source_task_id"], symbol, offline["session_factory"]) != "failed":
+        if cooperative:
+            _cooperative_stop(grant, run, offline["session_factory"])
+        if _source_task(grant["source_task_id"], symbol, offline["session_factory"]) != ("canceled" if cooperative else "failed"):
             raise _blocked("recovery_offline_checkpoint_unproven")
         terminal = _json(run / "worker-terminal.json")
         if (_sha(run / "worker-terminal.json") != binding["worker_terminal_sha256"]
@@ -312,9 +507,12 @@ def _grant(source_task_id, run_id, app, sf):
 
 
 def _binding(value):
-    if (not isinstance(value, dict) or set(value) - {"recovery_history", "prelaunch_tail", "input_prelaunch_tail", "input_wrapup_message_fingerprints"} not in (BINDING_KEYS, PARALLEL_BINDING_KEYS)
+    if (not isinstance(value, dict) or set(value) - {"recovery_history", "prelaunch_tail", "input_prelaunch_tail", "input_wrapup_message_fingerprints", "cooperative_stop"} not in (BINDING_KEYS, PARALLEL_BINDING_KEYS)
             or any(not isinstance(value.get(key), dict) for key in ("selection", "outputs", "usage_receipts", "prefixes", "checkpoint"))):
         raise _blocked("recovery_binding_invalid")
+    if "cooperative_stop" in value:
+        if (set(value) != BINDING_KEYS | {"cooperative_stop"} or not isinstance(value["cooperative_stop"], dict)):
+            raise _blocked("recovery_cooperative_binding_invalid")
     if "input_prelaunch_tail" in value and ("prelaunch_tail" in value or "expected_pending_roles" in value):
         raise _blocked("recovery_input_prelaunch_tail_invalid")
     if "input_wrapup_message_fingerprints" in value:
@@ -345,7 +543,7 @@ def _stream_body(run, name, binding):
     except FileNotFoundError:
         # Only the explicitly frozen empty streams of a zero-final parallel
         # checkpoint may be absent. Permission/IO/symlink errors still escape.
-        if ("expected_pending_roles" in binding and name in {"role-outputs.jsonl", "source-audit.jsonl"}
+        if (("expected_pending_roles" in binding or "cooperative_stop" in binding) and name in {"role-outputs.jsonl", "source-audit.jsonl"}
                 and binding["prefixes"].get(name) == {"bytes": 0, "sha256": EMPTY_SHA}):
             return b""
         raise
@@ -759,6 +957,8 @@ def _first_failure_receipt(run, grant, sf=None):
 def _frozen_records(run, binding, segments, *, grant=None, sf=None):
     counter = binding["call_counter"]
     outputs, usages = binding["outputs"], binding["usage_receipts"]
+    if "cooperative_stop" in binding:
+        _cooperative_stop(grant, run, sf)
     gap = (_input_prelaunch_tail(grant, run, segments, sf) if "input_prelaunch_tail" in binding
            else _prelaunch_tail(grant, run, segments, sf)) if grant is not None else None
     if ("prelaunch_tail" in binding or "input_prelaunch_tail" in binding) and gap is None:
@@ -800,7 +1000,7 @@ def _load_context(source_task_id, run_id, app, sf, *, initial=True):
     _source_task(source_task_id, symbol, sf)
     run = _safe(research.ROOT / symbol / run_id)
     packet = _json(run / "packet.json")
-    source_claim = _safe(research._selection_claim(binding["selection"], old_method))
+    source_claim = _source_claim_path(grant, run, old_method)
     source = _json(source_claim)
     if (_sha(source_claim) != binding["source_claim_sha256"] or source.get("state") != "needs_recovery"
             or source.get("task_id") != source_task_id or source.get("selection") != binding["selection"]
@@ -853,7 +1053,7 @@ def _initial_snapshot(run, binding, symbol, packet, admission=None, *, source_gr
             or not _hash(files["db"]) or any(value is not None and not _hash(value) for value in files.values())):
         raise _blocked("recovery_checkpoint_or_terminal_drift")
     offline = ({"grant": source_grant, "session_factory": sf}
-               if (_first_parallel_failure(binding, source_grant) or "input_prelaunch_tail" in binding)
+               if (_first_parallel_failure(binding, source_grant) or "input_prelaunch_tail" in binding or "cooperative_stop" in binding)
                and files.get("-wal") is None and files.get("-shm") is None else None)
     if checkpoint_snapshot(run, symbol, offline=offline) != binding["checkpoint"]:
         raise _blocked("recovery_checkpoint_or_terminal_drift")
@@ -861,6 +1061,8 @@ def _initial_snapshot(run, binding, symbol, packet, admission=None, *, source_gr
     expected_thread = hashlib.sha256((symbol + ":" + packet["trade_date"] + ":" + manifest["config_signature"]).encode()).hexdigest()[:16]
     if binding["checkpoint"].get("thread_id") != expected_thread:
         raise _blocked("recovery_checkpoint_thread_drift")
+    if "cooperative_stop" in binding:
+        _cooperative_checkpoint(run, symbol, binding, offline=offline)
     if "input_prelaunch_tail" in binding:
         if any(int(path.stem) > counter for folder in ("model-outputs", "usage-receipts")
                for path in _safe(run / folder).iterdir()):
@@ -971,14 +1173,21 @@ def _parallel_checkpoint(run, symbol, binding, allowed_unknown_usage=(), *, offl
 
 def _pending_guard(binding):
     first = True
-    pending = set(binding.get("expected_pending_roles", []))
+    cooperative = binding.get("cooperative_stop")
+    pending = set(cooperative["pending_roles"] if cooperative else binding.get("expected_pending_roles", []))
     def check(request, counter):
         nonlocal first
         role = request.get("role")
-        if "input_prelaunch_tail" in binding and role in {row["role"] for row in binding["completed_roles"]}:
+        if ("input_prelaunch_tail" in binding or cooperative) and role in {row["role"] for row in binding["completed_roles"]}:
             raise _blocked("recovery_completed_role_replay_refused")
         if first and counter != binding["call_counter"]:
             raise _blocked("recovery_fresh_or_pending_role_mismatch")
+        if cooperative:
+            if first and role not in pending or pending and role not in PARALLEL_ANALYSTS:
+                raise _blocked("recovery_fresh_or_pending_role_mismatch")
+            pending.discard(role)
+            first = False
+            return
         if "expected_pending_roles" not in binding:
             if first and role != binding["expected_pending_role"]:
                 raise _blocked("recovery_fresh_or_pending_role_mismatch")
@@ -1040,6 +1249,12 @@ def _dispatch(context):
         if (_sha(context["source_claim"]) != context["binding"]["source_claim_sha256"]
                 or {row["method_sha256"] for row in records if row["method_sha256"] in prior_methods} != prior_methods):
             raise _blocked("recovery_selection_drift")
+        cooperative = "cooperative_stop" in context["binding"]
+        if cooperative and len(records) == 1 and records[0].get("native_recovery"):
+            info = _recovery_info(records[0])
+            if info["grant_sha256"] == context["grant_sha256"]:
+                return _owned(context, info["dispatch_owner"]), False
+            raise _blocked("recovery_selection_already_owned")
         others = [row for row in records if row["method_sha256"] not in prior_methods]
         if others:
             info = _recovery_info(others[0]) if len(others) == 1 else {}
@@ -1058,6 +1273,27 @@ def _dispatch(context):
             "native_recovery": {"grant_sha256": context["grant_sha256"], "dispatch_owner": owner,
                 "source_task_id": context["grant"]["source_task_id"], "run_id": context["grant"]["run_id"],
                 "source_method_sha256": context["old_method"], "source_claim_sha256": context["binding"]["source_claim_sha256"]}}
+        if cooperative:
+            archive = _safe(context["run"] / "recovery-history" / context["grant"]["grant_id"])
+            target = archive / "source-selection.json"
+            if _sha(context["claim"]) != context["binding"]["source_claim_sha256"]:
+                raise _blocked("recovery_selection_drift")
+            if archive.exists():
+                # The original CAS may have failed after its complete archive
+                # became durable. Adopt only this exact unconsumed prefix.
+                if (not archive.is_dir() or {p.name for p in archive.iterdir()} != {target.name}
+                        or _sha(target) != context["binding"]["source_claim_sha256"]):
+                    raise _blocked("recovery_history_start_drift")
+            else:
+                archive.parent.mkdir(parents=True, exist_ok=True)
+                body = _body(context["source_claim"])
+                with tempfile.TemporaryDirectory(prefix=".source-", dir=archive.parent) as temporary:
+                    staged = Path(temporary) / target.name
+                    fd = os.open(staged, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600)
+                    with os.fdopen(fd, "wb") as handle:
+                        handle.write(body);handle.flush();os.fsync(handle.fileno())
+                    os.replace(temporary, archive)
+            context["source_claim"] = target
         atomic_json(context["claim"], claim)
         return claim, True
 
@@ -1137,6 +1373,13 @@ def completed_recovery(records, binding, method):
 
 
 def _completed_recovery(records, binding, method):
+    if len(records) == 1 and records[0].get("native_recovery"):
+        info = _recovery_info(records[0])
+        run = _safe(research._folder(binding["symbol"]) / _id(records[0].get("run_id")))
+        result, actual = research._read_bound(run / "result.json")
+        grant = _json(run / "recovery-history" / _id(result.get("recovery_grant_id")) / "grant.json")
+        if "cooperative_stop" in grant.get("binding", {}):
+            return _completed_cooperative(records[0], binding, method, info, run, result, actual, grant)
     current = [row for row in records if row.get("method_sha256") == method]
     if len(current) != 1 or current[0].get("state") != "completed":
         raise _blocked("selection_needs_recovery")
@@ -1181,6 +1424,32 @@ def _completed_recovery(records, binding, method):
             or _sha(path) != info.get("source_claim_sha256") or not _hash(info.get("grant_sha256"))
             or info.get("run_id") != lineage["source_run_id"] or claim.get("run_id") != lineage["source_run_id"]
             or info.get("source_task_id") != lineage["source_task_id"] or info.get("source_method_sha256") != lineage["source_method_sha256"]):
+        raise _blocked("recovery_completion_drift")
+    return claim
+
+
+def _completed_cooperative(claim, binding, method, info, run, result, actual, grant):
+    lineage = public_lineage(result.get("recovery_lineage"))
+    old, new = _compatibility(grant, grant["continuation_method_identity"])
+    source_path = _source_claim_path(grant, run, old)
+    source = _json(source_path)
+    segments = _history_segments(grant, run)
+    _frozen_records(run, grant["binding"], segments, grant=grant)
+    if (set(grant) != GRANT_KEYS or type(grant.get("version")) is not int or grant["version"] != 1
+            or grant.get("user_authorization") != "EXPLICIT"
+            or claim.get("state") != "completed" or claim.get("method_sha256") != method or method != old or method != new
+            or result.get("selection") != binding or grant.get("binding", {}).get("selection") != binding
+            or actual != claim.get("result_sha256") or result.get("recovery_grant_id") != grant["grant_id"]
+            or research._digest(grant) != info["grant_sha256"] or _sha(source_path) != info["source_claim_sha256"]
+            or source.get("state") != "needs_recovery" or source.get("task_id") != grant["source_task_id"]
+            or source.get("selection") != binding or source.get("method_sha256") != method
+            or lineage["source_task_id"] != grant["source_task_id"] or lineage["source_run_id"] != grant["run_id"]
+            or lineage["source_method_sha256"] != method or lineage["recovery_method_sha256"] != method
+            or lineage["recovery_task_id"] != claim.get("task_id") or lineage["inherited_unknown_usage_count"] != 0
+            or lineage["new_call_from"] != grant["binding"]["call_counter"] + 1
+            or lineage["reused_original_outputs"] != len(grant["binding"]["outputs"])
+            or info["source_task_id"] != grant["source_task_id"] or info["run_id"] != grant["run_id"]
+            or info["source_method_sha256"] != method):
         raise _blocked("recovery_completion_drift")
     return claim
 
@@ -1244,7 +1513,11 @@ async def run_recovery(rec, params, app):
                 await drain_thread(_advance, context, supplied["dispatch_owner"], "recovering", task_id=rec.task_id)
                 run, binding, grant = (context[key] for key in ("run", "binding", "grant"))
                 history = _safe(run / "recovery-history" / grant["grant_id"])
-                history.mkdir(parents=True, exist_ok=False)
+                if "cooperative_stop" in binding:
+                    if not history.is_dir() or {p.name for p in history.iterdir()} != {"source-selection.json"}:
+                        raise _blocked("recovery_history_start_drift")
+                else:
+                    history.mkdir(parents=True, exist_ok=False)
                 for name in ("execution.json", "worker-terminal.json", "graph/run-manifest.json"):
                     (history / name.replace("/", "-")).write_bytes(_body(run / name))
                 atomic_json(history / "grant.json", grant)
@@ -1282,7 +1555,8 @@ async def run_recovery(rec, params, app):
                 atomic_json(run / "result.json", result)
                 result_sha = file_sha(run / "result.json")
                 atomic_json(research._folder(params["symbol"]) / "latest.json", {"run_id": grant["run_id"], "result_sha256": result_sha})
-                atomic_json(run / "execution.json", {"state": "completed", "completed_at": research._now().isoformat(),
+                atomic_json(run / "execution.json", {"state": "completed", "task_id": rec.task_id, "run_id": grant["run_id"],
+                    "symbol": params["symbol"], "method_sha256": context["method"], "completed_at": research._now().isoformat(),
                     "recovery_task_id": rec.task_id, "source_task_id": grant["source_task_id"], "quality": "unverified"})
                 await drain_thread(_advance, context, supplied["dispatch_owner"], "completed", task_id=rec.task_id, result_sha256=result_sha)
                 await research._materialize_completed_summary(params["symbol"], grant["run_id"])

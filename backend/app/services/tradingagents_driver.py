@@ -722,6 +722,10 @@ class NativeTradingAgentsDriver:
             run.mkdir(mode=0o700)
             atomic_json(claim, {"run_id": run_id, "input_sha256": digest(packet), "source_input_sha256": source_identity,
                                 "method_sha256": digest(identity)})
+            execution_identity = {"task_id": rec.task_id, "run_id": run_id, "symbol": symbol,
+                                  "method_sha256": digest(identity)}
+            atomic_json(run / "execution.json", {"state": "running", **execution_identity,
+                                                  "started_at": beijing_now().isoformat()})
             try:
                 usage_authorizer = lambda: authorized_unknown_usage(app,
                     method_sha256=digest(identity), authorization_sha256=admitted["admission"]["artifact_sha256"])
@@ -754,13 +758,13 @@ class NativeTradingAgentsDriver:
                 atomic_json(claim, {"run_id": run_id, "input_sha256": digest(packet),
                                     "method_sha256": digest(identity), "source_input_sha256": source_identity, "result_sha256": result_sha})
                 atomic_json(folder / "latest.json", {"run_id": run_id, "result_sha256": result_sha})
-                atomic_json(run / "execution.json", {"state": "completed", "completed_at": beijing_now().isoformat(),
+                atomic_json(run / "execution.json", {"state": "completed", **execution_identity, "completed_at": beijing_now().isoformat(),
                     "quality": "not established by engineering completion", "checkpoint_policy": "native pending memory retained"})
                 return {"kind": "tradingagents_research", "state": "completed", "symbol": symbol, "run_id": run_id,
                         "verification": verification, "production_eligible": False}
             except BaseException as error:
                 state = "canceled" if isinstance(error, asyncio.CancelledError) else "needs_native_recovery"
-                atomic_json(run / "execution.json", {"state": state, "error_kind": type(error).__name__,
+                atomic_json(run / "execution.json", {"state": state, **execution_identity, "error_kind": type(error).__name__,
                     "finished_at": beijing_now().isoformat(), "automatic_retry": False,
                     "native_checkpoint_files_present": any((run / "graph/cache/checkpoints").glob(symbol + ".db*"))})
                 raise
@@ -1009,8 +1013,12 @@ class NativeTradingAgentsDriver:
         failure = None
         # Short random socket path avoids AF_UNIX path length limits; only its
         # exact path is granted to this worker. It is never an HTTP listener.
-        with tempfile.TemporaryDirectory(prefix="ta-ipc-", dir="/private/tmp") as ipc:
-            socket_path = Path(ipc) / "broker.sock"
+        with tempfile.TemporaryDirectory(prefix="ta-ipc-", dir="/tmp") as ipc:
+            # /tmp exists on both supported POSIX hosts. Resolve its macOS
+            # alias for the seatbelt literal without using a long user TMPDIR.
+            socket_path = Path(ipc).resolve() / "broker.sock"
+            if len(os.fsencode(socket_path)) >= 104:
+                raise DriverUnavailable("native_ipc_path_too_long")
             policy = sandbox_policy(python=self.python, dependencies=self.dependencies,
                 upstream=self.upstream, code=code, run=run, socket_path=socket_path)
             policy_path = run / "sandbox.sb"
@@ -1058,7 +1066,8 @@ class NativeTradingAgentsDriver:
                                 handle.write(canonical({"peer": peer}) + "\n")
                                 handle.flush()
                                 os.fsync(handle.fileno())
-                        await rec.checkpoint_async()
+                        # A paid known answer must reach its native checkpoint.
+                        # Cancellation gates the next request, not this reply.
                 except BaseException as error:
                     stopped = True
                     if failure is None:
@@ -1110,8 +1119,12 @@ class NativeTradingAgentsDriver:
                     # First drain any launched provider. Only then stop the graph.
                     if active:
                         await wait_drained(asyncio.gather(*active, return_exceptions=True))
-                    if proc.returncode is None:
-                        os.killpg(proc.pid, signal.SIGTERM)
+                    if not waiting.done():
+                        try:
+                            await asyncio.wait_for(asyncio.shield(waiting), timeout=5)
+                        except asyncio.TimeoutError:
+                            if proc.returncode is None:
+                                os.killpg(proc.pid, signal.SIGTERM)
                 if stopped and not waiting.done():
                     try:
                         await asyncio.wait_for(asyncio.shield(waiting), timeout=5)

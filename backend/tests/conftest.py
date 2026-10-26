@@ -192,6 +192,11 @@ _company_impact.ROOT = _DATA_SANDBOX / "company_impact"
 import app.services.tradingagents_research as _tradingagents_research  # noqa: E402
 _tradingagents_research.ROOT = _DATA_SANDBOX / "tradingagents_research"
 
+# Research batches share a production reader/writer default. Neither endpoint
+# smoke reads nor a task test may inspect or publish actual saved batches.
+import app.picks.reference_research as _reference_research  # noqa: E402
+_reference_research.ROOT = _DATA_SANDBOX / "reference-runs"
+
 
 # TDX 分钟 K 是另一条独立 TCP 7709 外部边界（不受逐笔 fallback 开关控制）。
 # 默认测试必须在该边界失败；专项 minute-backfill 测试会显式 monkeypatch 自己的 fake。

@@ -55,6 +55,41 @@ describe("MinuteChart 图内读点与固定", () => {
   const tip = (container: HTMLElement, field: string) => container.querySelector(`[data-f="${field}"]`)?.textContent;
   const props = {symbol: "600410", name: "样本公司", prevClose: 10, referenceDate: "2026-09-17"};
 
+  it.each([0, 12_880_400])("开盘竞价锚点保留源观察与累计量%s，不画成09:30连续分钟", volume => {
+    const anchor: MinutePoint = {...point(4.5), source: "tencent", time_label: "opening_anchor",
+      observation_ts: "2026-09-17T09:25:19+08:00", received_at: "2026-09-17T09:30:02+08:00",
+      cum_volume: volume, cum_amount: volume * 4.5};
+    const before = JSON.stringify(anchor);
+    const view = render(<MinuteChart {...props} points={[anchor]}/>);
+    expect(charts).toHaveLength(0);
+    expect(surface().tabIndex).toBe(-1);
+    expect(screen.getByRole("status").textContent).toContain("尚无连续分时");
+    expect(screen.getByRole("status").textContent).toContain("竞价观察 09:25:19");
+    expect(screen.getByRole("status").textContent).toContain("4.50");
+    expect(screen.getByRole("status").textContent).toContain(volume === 0 ? "0 股" : "12,880,400 股");
+    expect(JSON.stringify(anchor)).toBe(before);
+    // A later render/local clock cannot turn the retained anchor into a plotted minute.
+    view.rerender(<MinuteChart {...props} points={[{...anchor}]}/>);
+    expect(charts).toHaveLength(0);
+    const actual = {...point(4.6, "31"), source: "tencent"};
+    view.rerender(<MinuteChart {...props} points={[anchor, actual]} index={{prevClose: 3000, referenceDate: "2026-09-17", points: [anchor]}}/>);
+    expect(charts).toHaveLength(1);
+    const values = charts[0].series.find(series => series.kind === "price")!.values;
+    expect(values.find(row => row.time === Date.UTC(2026, 8, 17, 9, 30) / 1000)?.value).toBeUndefined();
+    expect(values.find(row => row.time === Date.UTC(2026, 8, 17, 9, 31) / 1000)?.value).toBe(4.6);
+    expect(screen.queryByText(/上证 [+-]/)).toBeNull();
+    expect(screen.queryByRole("status")).toBeNull();
+    expect(view.container.querySelector('[data-chart-surface]')?.className).toContain("h-full w-full");
+  });
+
+  it("错误竞价标记只说明未核，不能借未来接收钟绘图或伪造观察事实", () => {
+    render(<MinuteChart {...props} points={[{...point(4.5), source: "tdx", time_label: "opening_anchor", observation_ts: null,
+      received_at: "2026-09-17T09:25:19+08:00"}]}/>);
+    expect(charts).toHaveLength(0);
+    expect(screen.getByRole("status").textContent).toContain("竞价记录时点未核");
+    expect(screen.queryByText(/竞价观察 09:25:19/)).toBeNull();
+  });
+
   it("取消额外对照区域，图内读点与指数叠加仍按有效同日基准归一且不补指数缺槽", () => {
     const points = [point(10), point(10.5, "31")];
     const view = render(<MinuteChart {...props} points={points} index={{prevClose: 3000, referenceDate: "2026-09-17", points: [point(3000), point(3030, "31")]}}/>);

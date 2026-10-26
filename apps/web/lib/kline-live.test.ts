@@ -452,6 +452,32 @@ it("首个可信实时报价可先建立分时观察点，不伪造此前分钟�
   expect(mergeQuoteIntoMinutes([], {...q,data_timestamp:null})).toBeNull();
 });
 
+it.each(["09:30", "09:31"])("真实连续盘%s观察不继承竞价锚点标记，也不重写原竞价事实", clock => {
+  const anchor: MinutePoint = {ts: `${TODAY}T09:30:00+08:00`, price: 4.5, source: "tencent", time_label: "opening_anchor",
+    observation_ts: `${TODAY}T09:25:19+08:00`, cum_volume: 12_880_400, cum_amount: 57_961_800};
+  const before = JSON.stringify(anchor), fresh = quoteAt(clock, 4.6, 13_000_000, 59_000_000);
+  const out = mergeQuoteIntoMinutes([anchor], fresh)!;
+  expect(out).toHaveLength(2);
+  expect(out[0]).toBe(anchor);
+  expect(out[1]).toMatchObject({price: 4.6, source: "tencent", observation_ts: fresh.data_timestamp,
+    volume: null, minute_amount: null, cum_volume: 13_000_000});
+  expect(out[1].time_label).not.toBe("opening_anchor");
+  expect(JSON.stringify(anchor)).toBe(before);
+  const old = {...fresh, data_timestamp: anchor.observation_ts};
+  expect(mergeQuoteIntoMinutes([anchor], old)).toBeNull();
+  expect(mergeQuoteIntoMinutes([anchor], {...fresh, quality: "stale"})).toBeNull();
+  expect(mergeQuoteIntoMinutes([anchor], {...fresh, data_timestamp: null, received_at: fresh.data_timestamp!})).toBeNull();
+  expect(getMinuteAmount(out[1], out[0])).toBeNull();
+});
+
+it("竞价累计额不能成为后续连续分钟的差分基线", () => {
+  const anchor: MinutePoint = {ts: `${TODAY}T09:30:00+08:00`, price: 4.5, source: "tencent", time_label: "opening_anchor",
+    observation_ts: `${TODAY}T09:25:19+08:00`, cum_amount: 57_961_800};
+  const actual: MinutePoint = {...anchor, ts: `${TODAY}T09:31:00+08:00`, time_label: null,
+    observation_ts: null, cum_amount: 58_961_800};
+  expect(getMinuteAmount(actual, anchor)).toBeNull();
+});
+
 it("报价首点不是完整分钟的累计基线，后续不能把部分区间当分钟成交额", () => {
   const q = {symbol:"600127",price:10,source:"tencent",quality:"high",quality_reasons:[],received_at:"2026-10-15T10:00:30+08:00",data_timestamp:"2026-10-15T10:00:30+08:00",volume:1000,amount:10000} as Quote;
   const first = mergeQuoteIntoMinutes<MinutePoint>([], q)!;

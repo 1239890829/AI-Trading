@@ -37,6 +37,8 @@ from app.services.quote_hub import QuoteHub
 
 log = logging.getLogger(__name__)
 router = APIRouter(prefix="/picks", tags=["daily-picks"])
+SavedMethod = Literal["daily_picks", "intraday_watch", "reference:macd_golden_cross",
+                      "reference:ma_bullish", "reference:ma_golden_cross"]
 
 
 def _db():
@@ -486,7 +488,7 @@ async def picks_discovery_memberships(
 
 @router.get("/method-runs")
 async def method_runs(
-    method: Literal["daily_picks", "intraday_watch"],
+    method: SavedMethod,
     trade_date: str | None = Query(None, max_length=10),
     source_version: str | None = Query(None, min_length=1, max_length=64),
     strategy_version: str | None = Query(None, min_length=1, max_length=64),
@@ -497,9 +499,16 @@ async def method_runs(
     from app.picks.selection_history import list_method_runs
 
     try:
-        data = await asyncio.to_thread(list_method_runs, get_session_factory(), method,
+        if method.startswith('reference:'):
+            from app.picks.reference_research import list_runs
+            reader, args = list_runs, (method,)
+        else:
+            reader, args = list_method_runs, (get_session_factory(), method)
+        data = await asyncio.to_thread(reader, *args,
             trade_date=trade_date, source_version=source_version, strategy_version=strategy_version,
             source_version_missing=source_version_missing, offset=offset, limit=limit)
+    except LookupError as exc:
+        raise HTTPException(409, detail=str(exc)) from None
     except ValueError as exc:
         raise HTTPException(422, detail=str(exc)) from None
     return {"data": data, "meta": {}}
@@ -507,20 +516,25 @@ async def method_runs(
 
 @router.get("/method-runs/{method}/{run_id}")
 async def method_run_detail(
-    method: Literal["daily_picks", "intraday_watch"], run_id: str,
+    method: SavedMethod, run_id: str,
     trade_date: str = Query(..., min_length=8, max_length=10),
     content_version: str = Query(..., pattern="^[0-9a-f]{64}$"),
     source_version: str | None = Query(None, min_length=1, max_length=64),
     strategy_version: str | None = Query(None, min_length=1, max_length=64),
     source_version_missing: bool = False,
     offset: int = Query(0, ge=0), limit: int = Query(200, ge=1, le=200),
-    stage: Literal["rank", "hard_gate", "candidate", "notification"] | None = None,
+    stage: Literal["rank", "hard_gate", "candidate", "notification", "research"] | None = None,
 ) -> dict:
     """精确运行与内容版本读取；身份消失或变化返回404，不回退最近记录。"""
     from app.picks.selection_history import SavedRunMissing, get_method_run
 
     try:
-        data = await asyncio.to_thread(get_method_run, get_session_factory(), method, run_id,
+        if method.startswith('reference:'):
+            from app.picks.reference_research import get_run
+            reader, args = get_run, (method, run_id)
+        else:
+            reader, args = get_method_run, (get_session_factory(), method, run_id)
+        data = await asyncio.to_thread(reader, *args,
             trade_date=trade_date, content_version=content_version, source_version=source_version,
             strategy_version=strategy_version, source_version_missing=source_version_missing,
             offset=offset, limit=limit, stage=stage)

@@ -216,6 +216,23 @@ def _publish_paper_exit(plan: dict, exit_row: dict) -> tuple[int, bool] | None:
     return event_id, projected
 
 
+async def _notify_off_loop(*args, **kwargs) -> bool:
+    task = asyncio.create_task(asyncio.to_thread(_notify, *args, **kwargs))
+    try:
+        return await asyncio.shield(task)
+    except asyncio.CancelledError:
+        while not task.done():
+            try:
+                await asyncio.shield(task)
+            except asyncio.CancelledError:
+                continue
+            except Exception:
+                break
+        if not task.cancelled():
+            task.exception()
+        raise
+
+
 def reconcile_paper_exit_events() -> int:
     """Retry same-day filled-exit projections; never resubmit the sell order."""
     plan = load_plan()
@@ -230,6 +247,18 @@ def reconcile_paper_exit_events() -> int:
             log.exception("position_exit event reconciliation failed for order %s", row.get("order_id"))
     if repaired:
         save_plan(plan)
+    return repaired
+
+
+async def reconcile_paper_exit_events_async() -> int:
+    from app.picks.position_engine import _project_saved_plan_row
+
+    plan = load_plan()
+    repaired = 0
+    for row in plan.get("exits", []):
+        if row.get("order_id") is not None and not (row.get("event_id") and row.get("event_projected")):
+            repaired += bool(await _project_saved_plan_row(
+                plan, "exits", row, _publish_paper_exit, read_plan=load_plan, write_plan=save_plan))
     return repaired
 
 
@@ -384,6 +413,21 @@ def _rule_for(pos: dict, price: float, pct: float | None, prev_close: float | No
     return None
 
 
+def _read_paper_positions(session_factory, scope: str) -> list[dict]:
+    """One short, thread-owned read; no live Session/ORM object crosses an await."""
+    from app.models.paper import PaperPosition
+
+    with session_factory() as db:
+        rows = db.query(PaperPosition).filter(
+            PaperPosition.scope == scope, PaperPosition.quantity > 0
+        ).all()
+        return [
+            {"symbol": p.symbol, "quantity": p.quantity, "available": p.available,
+             "cost_price": p.cost_price, "buy_date": p.buy_date}
+            for p in rows
+        ]
+
+
 async def evaluate_once(app) -> list[dict]:
     """监护一轮：模拟持仓逐只裁定 → 离场/提醒；真实持仓同规则只提醒。返回信号列表。"""
     state = app.state if hasattr(app, "state") else app
@@ -409,17 +453,7 @@ async def evaluate_once(app) -> list[dict]:
         # 监护每轮都走第 419 行「T+1 当日买入不可卖」分支 —— **硬止损被无限期跳过**。
         # 结算失败即视为读取失败（进 degraded），不带着不可信的 available 去判断。
         await engine.settle_t1()
-        from app.models.paper import PaperPosition
-
-        with engine._sf() as db:
-            rows = db.query(PaperPosition).filter(
-                PaperPosition.scope == engine.scope, PaperPosition.quantity > 0
-            ).all()
-        positions = [
-            {"symbol": p.symbol, "quantity": p.quantity, "available": p.available,
-             "cost_price": p.cost_price, "buy_date": p.buy_date}
-            for p in rows
-        ]
+        positions = await asyncio.to_thread(_read_paper_positions, engine._sf, engine.scope)
         _PAPER_READ.update(state="ok" if positions else "empty", as_of=beijing_now(),
                            age_seconds=0.0, reason=None, failures=0)
     except Exception as exc:  # noqa: BLE001
@@ -433,7 +467,7 @@ async def evaluate_once(app) -> list[dict]:
                       _PAPER_READ["failures"])
         key = f"position-monitor-degraded:paper:{today}"
         if key not in _NOTIFIED:
-            if _notify(app, "-", "", "position_monitor_degraded",
+            if await _notify_off_loop(app, "-", "", "position_monitor_degraded",
                        f"模拟持仓读取失败（连续 {_PAPER_READ['failures']} 轮），"
                        f"**本轮自动离场与硬止损已跳过**：{_PAPER_READ['reason']}", key=key):
                 _NOTIFIED.add(key)
@@ -470,7 +504,7 @@ async def evaluate_once(app) -> list[dict]:
         if action == "wave":
             if key in _NOTIFIED:
                 continue
-            if _notify(app, sym, name, "position_wave", f"{reason}（持仓监护·持有）", key=key):
+            if await _notify_off_loop(app, sym, name, "position_wave", f"{reason}（持仓监护·持有）", key=key):
                 _NOTIFIED.add(key)
             fired.append({"symbol": sym, "action": "wave", "reason": reason})
             continue
@@ -481,7 +515,7 @@ async def evaluate_once(app) -> list[dict]:
             reason += "（T+1 当日买入不可卖——下一交易日自动执行）"
             if key in _NOTIFIED:
                 continue
-            if _notify(app, sym, name, "position_exit", reason, key=key):
+            if await _notify_off_loop(app, sym, name, "position_exit", reason, key=key):
                 _NOTIFIED.add(key)
             fired.append({"symbol": sym, "action": "exit_deferred", "reason": reason})
             continue
@@ -500,7 +534,7 @@ async def evaluate_once(app) -> list[dict]:
             # 与峰值轨迹全部对不上。此处只留痕「挂单受理」，离场判定留给下一轮
             # （持仓仍在持仓表里，下一轮仍会被检查到）。
             if key not in _NOTIFIED:
-                if _notify(app, sym, name, "position_exit_pending",
+                if await _notify_off_loop(app, sym, name, "position_exit_pending",
                            f"离场挂单受理未成交：{reason}（限价 {price} 未达现价，等待撮合）",
                            key=f"paper_sell_pending:{getattr(order, 'id', key)}",
                            source_id=str(getattr(order, "id", key))):
@@ -514,8 +548,21 @@ async def evaluate_once(app) -> list[dict]:
                     "price": price, "order_id": getattr(order, "id", None)}
         plan["exits"].append(exit_row)
         peaks.pop(sym, None)
+        # Preserve the filled order before the new async projection boundary.
+        # An unrelated peak/row conflict must not erase its repair identity.
         try:
-            _publish_paper_exit(plan, exit_row)
+            save_plan(plan)
+        except Exception:
+            log.exception("filled paper exit plan save failed for order %s", exit_row["order_id"])
+            try:
+                from app.picks.position_engine import preserve_filled_exit
+                preserve_filled_exit(plan["date"], exit_row)
+            except Exception:
+                log.exception("filled paper exit repair identity save failed for order %s", exit_row["order_id"])
+        try:
+            from app.picks.position_engine import _project_saved_plan_row
+            await _project_saved_plan_row(plan, "exits", exit_row, _publish_paper_exit,
+                                          read_plan=load_plan, write_plan=save_plan)
         except Exception:
             log.exception("filled paper sell event failed for order %s; reconciliation will retry",
                           exit_row["order_id"])
@@ -528,7 +575,7 @@ async def evaluate_once(app) -> list[dict]:
         log.warning("[离场引擎] 模拟仓自动卖出 %s %d 股 @ %s（%s）", sym, pos["available"], price, reason)
 
     # ---------- 真实持仓（只提醒，CRITICAL 级） ----------
-    real_pos = _real_positions()
+    real_pos = await asyncio.to_thread(_real_positions)
     snapshot_service = getattr(state, 'snapshot_service', None)
     real_snap: dict = {}
     snapshot_reason = '全市场快照未就绪，真实持仓风险未完成'
@@ -553,7 +600,7 @@ async def evaluate_once(app) -> list[dict]:
         # 留审计，不推飞书；不能静默当作"没有真实持仓"。
         key = f"position-monitor-degraded:{today}"
         if key not in _NOTIFIED:
-            if _notify(app, "-", "", "position_monitor_degraded",
+            if await _notify_off_loop(app, "-", "", "position_monitor_degraded",
                        f"真实持仓读取失败（连续 {_REAL_READ['failures']} 轮），"
                        f"**本轮真实持仓止损检查已跳过**：{_REAL_READ['reason']}", key=key):
                 _NOTIFIED.add(key)
@@ -583,7 +630,7 @@ async def evaluate_once(app) -> list[dict]:
                 missed[sym] = reason if raw or sym in real_snap else snapshot_reason
         if sym in missed:
             key = f'position-monitor-degraded:quote:{today}:{sym}'
-            if key not in _NOTIFIED and _notify(app, sym, rp.get('name') or '', 'position_monitor_degraded',
+            if key not in _NOTIFIED and await _notify_off_loop(app, sym, rp.get('name') or '', 'position_monitor_degraded',
                     f'{missed[sym]}；本轮未检查止损，请核对持仓与当前行情。', key=key):
                 _NOTIFIED.add(key)
             fired.append({'symbol': sym, 'action': 'degraded', 'reason': missed[sym]})
@@ -603,7 +650,7 @@ async def evaluate_once(app) -> list[dict]:
                     f"的 -{stop:.0%} 线——请确认是否卖出；"
                     "若已实际卖出，**登记卖出流水**即可（不必删除历史流水）"
                 )
-                if _notify(app, sym, rp.get("name") or "", "real_exit_alert", text,
+                if await _notify_off_loop(app, sym, rp.get("name") or "", "real_exit_alert", text,
                            critical=True, key=key,
                            source_as_of=source_times[sym], source_evidence={
                                'quote': trusted.model_dump(mode='json'), 'cost': cost,
@@ -647,7 +694,7 @@ async def evaluate_once(app) -> list[dict]:
         key = f"take-profit:{today}:{sym}"
         if key in _NOTIFIED:
             continue
-        if _notify(app, sym, nm or str(q.get("name") or ""), "take_profit", rule["reason"], key=key):
+        if await _notify_off_loop(app, sym, nm or str(q.get("name") or ""), "take_profit", rule["reason"], key=key):
             _NOTIFIED.add(key)
         fired.append({"symbol": sym, "action": "take_profit",
                       "reason": rule["reason"], "pct": rule["pct"], "held": held})
@@ -669,10 +716,10 @@ async def position_loop(app, stop: asyncio.Event) -> None:
     while not stop.is_set():
         try:
             if radar_active_now():
-                from app.picks.position_engine import reconcile_position_open_events
+                from app.picks.position_engine import reconcile_position_open_events_async
 
-                reconcile_position_open_events()
-                reconcile_paper_exit_events()
+                await reconcile_position_open_events_async()
+                await reconcile_paper_exit_events_async()
                 await evaluate_once(app)
                 if await wait_or_stop(stop, 15):
                     return

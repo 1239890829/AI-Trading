@@ -1,5 +1,7 @@
 # 文档索引（INDEX）
 
+2026-10-26接续：[手动完整研究与可运行战法](product/hunting-decision-design.md#2026-10-26-手动完整研究承接与可运行战法) → [原授权方法承接/恢复](ai/semantic-decisions.md#2026-10-26-原授权方法承接与安全取消恢复) → [三规则定义及35项取舍](strategy/strategy-registry.md#2026-10-26-三项可运行价格研究与逐项取舍)。工程、运行、发布与策略效果分开，当前证据归handoff与关联PR，不增加独立总账。
+
 > 定位：**docs 唯一入口**。查东西先来这里；写新文档必须在此登记。
 > 维护约定：状态在所属阶段单点更新，成果提炼与恢复按 `kb/07-doc-curation.md` §3.2；新建/迁移同步本表，未知资产不删除。
 > 当前入口（2026-09-26）：从最新 `master` 的 `AGENTS.md` → 本索引；`retro-and-gaps.md` §5.9 是执行门序治理、§6.0 是 W00–W09 领域索引，`stages/` 存任务唯一状态与调度元数据，`handoff.md` 仅存当前主门/现场。 `implementation-plan.md` 是 v9.13 规划修订，不单独定义当前执行模式；允许动作以最新 `handoff.md` + 所属 stage 为准。分工与逐轮审核见 `collaboration-workflow.md`；旧平台目录已退休，历史迁移证据归 `archive/platform-directory-migration-20260920.md`。
@@ -59,7 +61,7 @@
 | **FN-10** | `archive/jev-integration-retired-20261011.md` | L2 | 历史档案 | 已退役Jev蓝图与历史实测；不得作为当前调用/安装/评分义务，现役入口为FN-12 |
 | **FN-12** | `ai/semantic-decisions.md` | L2 | AI/Agent 架构 | 当前规则/已有LLM；[六新场景完整图与四臂对照](ai/semantic-decisions.md#2026-10-20-六新场景完整图与四臂对照)：114真实调用加35已见修复回归，净增益未证；原图/七报告保留；真正入选研究按[独立授权](ai/semantic-decisions.md#2026-10-21-真正入选后完整研究与交互纠偏)，[运行前置](system/deployment.md#tradingagents完整研究运行边界)；旧四例等保留历史，状态归W07/IMP-091、W04/RSH-030 |
 | **FN-13** | `product/limit-up-attribution.md` | L2 | 产品/事件归因 | 多维消息证据、逐股依据与AI适用范围、经营报告选择/缓存分层与[公司依据常规管线](product/limit-up-attribution.md#2026-10-20-公司依据常规管线)、市场响应、连续采集及选股/通知/复盘边界；工程状态归W00/IMP-092 |
-| **FN-11** | `system/runtime-performance.md` | L2 | 性能测量 | IMP-019 可复现入口；§23首图否决、§24重复工作/首帧、§25锁竞争测量、§26本机启动鉴权及盘前WS刷新、§27真实交易双窗/SQLite读取隔离；工程与交易窗口分层；§31工作台身份/重复失败纠偏；§32时段稳定/同源在飞复用 |
+| **FN-11** | `system/runtime-performance.md` | L2 | 性能测量 | IMP-019 可复现入口；§23首图否决、§24重复工作/首帧、§25锁竞争测量、§26本机启动鉴权及盘前WS刷新、§27真实交易双窗/SQLite读取隔离；工程与交易窗口分层；§31工作台身份/重复失败纠偏；§32时段稳定/同源在飞复用；§34含10/26同包开盘锚点误报纠偏及源钟/接收钟边界 |
 | **EX-01** | `archive/live-trading-guosen-plan.md` | L1 | 搁置历史 | 国信 miniQMT 实盘蓝图。**用户已搁置**（不接受 Windows 依赖），恢复条件见文档头 |
 | **RV-01** | `review/review-agent.md` | L2 | 复盘 | 盘后复盘 Agent 架构 |
 | **RV-02** | `review/daily-review-sop.md` | L2 | 复盘 | 每日复盘 SOP（怎么判） |

@@ -6,12 +6,12 @@ import type { StrategyRegistryItem } from "@/lib/api/picks";
 const {registryMock, runsMock, healthMock} = vi.hoisted(() => ({
   registryMock: vi.fn(), runsMock: vi.fn(), healthMock: vi.fn(),
 }));
-vi.mock("@/lib/api/picks", () => ({
+vi.mock("@/lib/api/picks", async () => ({...await vi.importActual<typeof import("@/lib/api/picks")>("@/lib/api/picks"),
   getStrategyRegistry: (options: {signal?: AbortSignal; includeCandidates?: boolean}) => registryMock(options), getStrategyMethodRuns: () => runsMock(),
   getStrategyHealth: () => healthMock(),
 }));
 
-import { DiscoveryMethods, discoveryMethodHref, discoveryMethodScope } from "./discovery-methods";
+import { DiscoveryMethods, discoveryMethodHref, discoveryMethodScope, methodSupportsManualResearch, validMethodRow } from "./discovery-methods";
 import {DiscoveryMethodDetail} from "./discovery-method-detail";
 
 const favoritesKey="ashare.discovery.methods.favorites.v1";
@@ -48,6 +48,23 @@ beforeEach(() => {
 afterEach(() => {cleanup(); vi.restoreAllMocks(); vi.clearAllMocks();});
 
 describe("选股发现：真实战法分类", () => {
+  it("only the three bound manual research methods become runnable without becoming production selection",async()=>{
+    const manual:StrategyRegistryItem={...referenceMethod(),key:"reference:macd_golden_cross",name:"MACD金叉",status:"research_ready",candidate:{...referenceMethod().candidate!,source_code:"macd_golden_cross",runnable:true,execution:{mode:"manual_research",version:"ashare-macd-12-26-9-v1",definition_digest:"a".repeat(64),production_enabled:false,definition:"前日DIF≤DEA且当日DIF>DEA",definition_supplement:"至少60根，首个输入初始化EMA"}},discovery:{category:"trend",category_label:"趋势量价",session:"after_hours",session_label:"盘后参考",summary:"手动价格条件研究",supports_saved_runs:true}};
+    expect(validMethodRow(manual)).toBe(true);expect(methodSupportsManualResearch(manual)).toBe(true);
+    expect(validMethodRow({...manual,key:"reference:method_0",candidate:{...manual.candidate!,source_code:"method_0"}})).toBe(false);
+    expect(validMethodRow({...manual,candidate:{...manual.candidate!,execution:{...manual.candidate!.execution!,production_enabled:true as never}}})).toBe(false);
+    expect(validMethodRow({...manual,candidate:{...manual.candidate!,execution:undefined}})).toBe(false);
+    registryMock.mockResolvedValue([...registeredMethods(),manual]);
+    render(<DiscoveryMethods/>);
+    await screen.findByText("MACD金叉");
+    expect(screen.getByText("研究可运行 · 仅手动研究")).toBeTruthy();
+    const row=screen.getByText("MACD金叉").closest("li")!;
+    expect(within(row).getByText("保存研究结果按需读取")).toBeTruthy();
+    expect(within(row).queryByText("尚无保存运行")).toBeNull();
+    expect(screen.getByRole("option",{name:"现役 2"})).toBeTruthy();
+    expect(runsMock).not.toHaveBeenCalled();expect(healthMock).not.toHaveBeenCalled();
+  });
+
   it("只在激活时读一次完整目录，默认全部，不运行方法或取逐方法历史", async () => {
     const page = render(<DiscoveryMethods active={false}/>);
     expect(registryMock).not.toHaveBeenCalled();

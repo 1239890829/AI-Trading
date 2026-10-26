@@ -17,12 +17,12 @@ from app.models.notification_outbox import BuyPointConsumption as Progress
 log = logging.getLogger(__name__)
 
 
-async def consume_pending(app, sf, *, event_id=None):
-    await _project_positions(sf)
-    now_ms = int(time.time() * 1000)
+def _has_pending(sf):
     with sf() as db:
-        if db.scalar(select(Progress.event_id).where(Progress.state.in_(("pending", "running"))).limit(1)) is None:
-            return
+        return db.scalar(select(Progress.event_id).where(Progress.state.in_(("pending", "running"))).limit(1)) is not None
+
+
+def _pending_keys(sf, now_ms, event_id):
     with sf() as db:
         # Reclaim only idempotent watch work. Interrupted paper work is uncertain.
         for consumer, state in (("watch", "pending"), ("position", "unknown")):
@@ -35,17 +35,59 @@ async def consume_pending(app, sf, *, event_id=None):
             query = query.where(Progress.event_id == event_id)
         keys = [(r.event_key, r.consumer) for r in db.scalars(query.limit(20))]
         db.commit()
+        return keys
+
+
+def _claim(sf, key, now_ms):
+    with sf() as db:
+        claimed = db.execute(update(Progress).where(
+            Progress.event_key == key[0], Progress.consumer == key[1], Progress.state == "pending",
+        ).values(state="running", updated_at_ms=now_ms, attempts=Progress.attempts + 1))
+        db.commit()
+        if not claimed.rowcount:
+            return None
+        row = db.get(Progress, key)
+        return row.payload, row.expires_at_ms, row.attempts
+
+
+def _finish(sf, key, now_ms, state, reason, execution_result, payload, meta):
+    with sf() as db:
+        values = {"state": state, "reason": reason, "updated_at_ms": int(time.time() * 1000)}
+        if execution_result is not None:
+            current = db.get(Progress, key)
+            saved_payload = json.loads(current.payload) if current else payload
+            atomic_result = saved_payload.get("execution_result") or {}
+            if type(atomic_result.get("order_id")) is int and atomic_result["order_id"] > 0:
+                # The financial transaction knows this order even if the
+                # wrapper/refresh failed before returning its identity.
+                execution_result = {**execution_result, **atomic_result}
+            saved_payload = {**saved_payload, "execution_result": execution_result}
+            order_id = execution_result.get("order_id")
+            if (state == "done" and type(order_id) is int and order_id > 0
+                    and meta.get("selection_ref") and meta.get("selection_source_version")):
+                saved_payload["paper_projection"] = {"state": "pending"}
+            values["payload"] = json.dumps(saved_payload, ensure_ascii=False)
+        saved = db.execute(update(Progress).where(
+            Progress.event_key == key[0], Progress.consumer == key[1], Progress.state == "running",
+            Progress.updated_at_ms == now_ms,
+        ).values(**values))
+        db.commit()
+        return saved.rowcount
+
+
+async def consume_pending(app, sf, *, event_id=None):
+    await _project_positions(sf)
+    now_ms = int(time.time() * 1000)
+    if not await asyncio.to_thread(_has_pending, sf):
+        return
+    keys = await asyncio.to_thread(_pending_keys, sf, now_ms, event_id)
     for key in keys:
-        with sf() as db:
-            claimed = db.execute(update(Progress).where(
-                Progress.event_key == key[0], Progress.consumer == key[1], Progress.state == "pending",
-            ).values(state="running", updated_at_ms=now_ms, attempts=Progress.attempts + 1))
-            db.commit()
-            if not claimed.rowcount:
-                continue
-            row = db.get(Progress, key)
-            raw, expiry, attempts = row.payload, row.expires_at_ms, row.attempts
+        claimed = await asyncio.to_thread(_claim, sf, key, now_ms)
+        if claimed is None:
+            continue
+        raw, expiry, attempts = claimed
         state, reason, execution_result = "done", "consumed", None
+        payload, meta = None, None
         try:
             payload = json.loads(raw)
             alert, snapshot = payload["alert"], payload["snapshot"]
@@ -65,7 +107,7 @@ async def consume_pending(app, sf, *, event_id=None):
                     at = datetime.fromisoformat(alert["at"])
                     if at.tzinfo is None or at.date().isoformat() != trade_date:
                         raise ValueError("original observation time invalid")
-                    record_sighting(
+                    await asyncio.to_thread(record_sighting,
                         trade_date=trade_date, symbol=alert["symbol"], name=alert["name"],
                         layer="today_strongest", source_theme=alert.get("direction") or "",
                         reason={"kind": "buy_point", "text": (alert.get("text") or "")[:300],
@@ -83,8 +125,9 @@ async def consume_pending(app, sf, *, event_id=None):
                 from app.picks.opportunity_learning import latest_notification_execution
                 from app.picks.position_engine import maybe_open
 
-                latest = latest_notification_execution(trade_date, sf,
-                    selection_ref=meta.get("selection_ref"), source_version=meta.get("selection_source_version")).get(alert["symbol"]) or {}
+                executions = await asyncio.to_thread(latest_notification_execution, trade_date, sf,
+                    selection_ref=meta.get("selection_ref"), source_version=meta.get("selection_source_version"))
+                latest = executions.get(alert["symbol"]) or {}
                 executable = latest.get("executable_snapshot") or {}
                 if (latest.get("decision_id") != ref.get("decision_id")
                         or latest.get("decision_version") != ref.get("decision_version")
@@ -112,28 +155,8 @@ async def consume_pending(app, sf, *, event_id=None):
             state = "pending" if key[1] == "watch" and attempts < 3 else "unknown"
             reason = f"consumer_error:{type(exc).__name__}"
             log.warning("buy-point consumer %s/%s: %s", *key, reason, exc_info=True)
-        with sf() as db:
-            values = {"state": state, "reason": reason, "updated_at_ms": int(time.time() * 1000)}
-            if execution_result is not None:
-                current = db.get(Progress, key)
-                saved_payload = json.loads(current.payload) if current else payload
-                atomic_result = saved_payload.get("execution_result") or {}
-                if type(atomic_result.get("order_id")) is int and atomic_result["order_id"] > 0:
-                    # The financial transaction knows this order even if the
-                    # wrapper/refresh failed before returning its identity.
-                    execution_result = {**execution_result, **atomic_result}
-                saved_payload = {**saved_payload, "execution_result": execution_result}
-                order_id = execution_result.get("order_id")
-                if (state == "done" and type(order_id) is int and order_id > 0
-                        and meta.get("selection_ref") and meta.get("selection_source_version")):
-                    saved_payload["paper_projection"] = {"state": "pending"}
-                values["payload"] = json.dumps(saved_payload, ensure_ascii=False)
-            saved = db.execute(update(Progress).where(
-                Progress.event_key == key[0], Progress.consumer == key[1], Progress.state == "running",
-                Progress.updated_at_ms == now_ms,
-            ).values(**values))
-            db.commit()
-        if saved.rowcount and key[1] == "position" and state == "done":
+        saved = await asyncio.to_thread(_finish, sf, key, now_ms, state, reason, execution_result, payload, meta)
+        if saved and key[1] == "position" and state == "done":
             await _project_positions(sf, event_key=key[0])
 
 

@@ -1,9 +1,11 @@
 "use client";
 
-import {useState} from "react";
+import {useCallback, useState} from "react";
 import Link from "next/link";
-import type {StrategyRegistryItem} from "@/lib/api/picks";
-import {discoveryMetadata, discoveryMethodHref, MethodFavoriteButton, methodStatusLabel, methodSupportsRuns, SavedRunSummary, useMethodFavorites, validMethodRow} from "./discovery-methods";
+import type {SavedMethodRunIdentity, StrategyRegistryItem} from "@/lib/api/picks";
+import {discoveryMetadata, discoveryMethodHref, MethodFavoriteButton, methodStatusLabel, methodSupportsManualResearch, methodSupportsRuns, SavedRunSummary, useMethodFavorites, validMethodRow} from "./discovery-methods";
+import {ReferenceMethodResearch} from "./reference-method-research";
+import {MethodRunReader} from "@/components/agent/method-run-reader";
 
 function RuleList({title, items, empty}: {title: string; items: readonly string[]; empty: string}) {
   return <section className="space-y-1.5" aria-label={title}><h3 className="text-xs font-medium">{title}</h3>
@@ -18,12 +20,16 @@ export function DiscoveryMethodDetail({row, date, search = "", onClose}: {
 }) {
   const favorites = useMethodFavorites();
   const [notice, setNotice] = useState("");
+  const [savedRun, setSavedRun] = useState<SavedMethodRunIdentity | undefined>();
+  const [showRuns, setShowRuns] = useState(false);
+  const completed = useCallback((identity: SavedMethodRunIdentity) => {setSavedRun(identity); setShowRuns(true);}, []);
   if (!validMethodRow(row)) return <section data-testid="discovery-method-detail" aria-label="方法规则" className="space-y-3">
     <h2 tabIndex={-1} className="text-sm font-semibold">方法身份未核</h2><p role="alert" className="text-xs">来源规则结构不完整，未显示为可用方法。</p>
     <button className="quiet-action" type="button" onClick={onClose}>返回方法目录</button></section>;
   const metadata = discoveryMetadata(row);
   const candidate = row.catalog_kind === "reference" ? row.candidate : null;
   const supportsRuns = methodSupportsRuns(row);
+  const manual = methodSupportsManualResearch(row);
   return <section data-testid="discovery-method-detail" aria-label="方法规则" className="min-w-0 space-y-4">
     <header className="flex flex-wrap items-start justify-between gap-2">
       <div className="min-w-0"><h2 tabIndex={-1} className="break-words text-sm font-semibold">{row.name || row.key}</h2>
@@ -39,11 +45,19 @@ export function DiscoveryMethodDetail({row, date, search = "", onClose}: {
     {notice && favorites.keys.length >= 40 && <p role="status" className="text-xs text-amber-800 dark:text-amber-300">{notice}</p>}
     <p className="text-xs leading-relaxed text-zinc-600 dark:text-zinc-400">{metadata.summary}</p>
     {candidate ? <>
-      <p role="status" className="text-xs text-amber-800 dark:text-amber-300">来源候选，不可运行；关注不会启用方法或生成选股。</p>
+      <p role="status" className="text-xs text-amber-800 dark:text-amber-300">{manual ? "仅手动价格研究；不参与正式入选、通知或模拟。" : "来源候选，不可运行；关注不会启用方法或生成选股。"}</p>
       <p className="break-words text-[11px] text-zinc-600 dark:text-zinc-400">来源 {candidate.source_label} · 原版本 {candidate.source_version} · {candidate.source_code}</p>
       <RuleList title="原规则" items={candidate.criteria} empty="来源未给出可核规则。"/>
+      {manual && <RuleList title="本系统v1明确口径" items={[candidate.execution!.definition, candidate.execution!.definition_supplement]} empty="补充口径未登记。"/>}
       <RuleList title="现有覆盖" items={candidate.existing_coverage} empty="现有覆盖尚未登记。"/>
       <RuleList title="仍缺什么" items={candidate.limitations} empty="限制未登记，不代表已验收。"/>
+      {manual && <>
+        <p className="text-[11px] text-zinc-600 dark:text-zinc-400">本系统明确版本 {candidate.execution!.version}；本系统定义与补充口径保留在保存批次。</p>
+        <ReferenceMethodResearch key={`${row.key}:${date ?? "latest"}:${candidate.execution!.version}`} method={row.key} version={candidate.execution!.version} date={date} onComplete={completed}/>
+        <details open={showRuns} onToggle={event => {if (event.currentTarget.open !== showRuns) setShowRuns(event.currentTarget.open);}}><summary className="cursor-pointer text-xs">保存研究结果</summary>
+          {showRuns && <div className="mt-3"><MethodRunReader key={`${row.key}:${date ?? "latest"}:${savedRun?.run_id ?? "browse"}`} method={row.key} initialDate={date} initialIdentity={savedRun} compact/></div>}
+        </details>
+      </>}
     </> : <>
       {supportsRuns ? <div className="flex flex-wrap gap-x-3 gap-y-1 text-xs text-zinc-600 dark:text-zinc-400"><SavedRunSummary row={row} date={date}/></div>
         : <p className="text-xs text-zinc-600 dark:text-zinc-400">{row.verification?.available === true ? "有核验产物，可查看原依据与反例。" : row.verification?.available === false ? "尚无核验产物。" : "核验状态未记录。"}</p>}

@@ -20,6 +20,7 @@ import {
   minuteLimitPriceState,
 } from "@/lib/minute-axis";
 import { bjDate } from "@/lib/format";
+import {openingAnchorObservationTime} from "@/lib/index-overlay";
 import styles from "./minute-chart.module.css";
 import { tradingSeqFromHHMM } from "@/lib/market-hours";
 import { getMinuteAmount } from "@/lib/kline-live";
@@ -220,11 +221,11 @@ const emptyBundle = (): SeriesBundle => ({
 export function MinuteChart({
   symbol,
   name,
-  points,
+  points: sourcePoints,
   prevClose,
   referenceDate,
   yesterdayVol,
-  index,
+  index: sourceIndex,
   auction,
   exactBaseline,
   newsEvents,
@@ -260,6 +261,12 @@ export function MinuteChart({
   lowerPrice?: number | null;
   className?: string;
 }) {
+  // Opening auction labels remain source facts even after 09:30. They are never
+  // continuous minute prices, volume baselines, read-points or index overlays.
+  const points = useMemo(() => sourcePoints.filter(point => point.time_label !== "opening_anchor"), [sourcePoints]);
+  const openingAnchor = sourcePoints.findLast(point => point.time_label === "opening_anchor");
+  const openingObserved = openingAnchor ? openingAnchorObservationTime(openingAnchor) : null;
+  const index = useMemo(() => sourceIndex ? {...sourceIndex, points: sourceIndex.points.filter(point => point.time_label !== "opening_anchor")} : sourceIndex, [sourceIndex]);
   const ref = useRef<HTMLDivElement>(null);
   const tipRef = useRef<HTMLDivElement>(null);
   const focusMinuteRef = useRef<((point: P) => void) | null>(null);
@@ -1188,6 +1195,9 @@ export function MinuteChart({
       </div>
       <div className="relative min-h-0 w-full flex-1">
         <div ref={ref} data-chart-surface="true" data-escape-owner="minute-chart" data-escape-active={inspection.fixed || inspection.ts !== null ? "true" : undefined} role="group" aria-label={`${name ?? symbol ?? "当前证券"}分时读点`} title="方向键逐点；空格固定分钟；Esc恢复跟随" tabIndex={inspectionPoints.length ? 0 : -1} onKeyDown={readWithKeyboard} className={`h-full w-full ${styles.surface} ${className ?? ""}`} />
+        {points.length === 0 && openingAnchor && <div role="status" className="pointer-events-none absolute inset-0 flex items-center justify-center px-3 text-center text-xs text-zinc-600 dark:text-zinc-400">
+          <p>{openingObserved !== null ? <>竞价观察 {new Date(openingObserved + 8 * 3600_000).toISOString().slice(11, 19)} · {openingAnchor.price.toFixed(2)} · 累计量 {typeof openingAnchor.cum_volume === "number" && Number.isFinite(openingAnchor.cum_volume) && openingAnchor.cum_volume >= 0 ? `${openingAnchor.cum_volume.toLocaleString("en-US")} 股` : "未核"}<br/></> : <>竞价记录时点未核<br/></>}尚无连续分时</p>
+        </div>}
         <div
           ref={tipRef}
           hidden={fixedMissing}

@@ -2,16 +2,218 @@ import {act, cleanup, fireEvent, render, screen, waitFor} from "@testing-library
 import {afterEach, beforeEach, describe, expect, it, vi} from "vitest";
 import {useDeviceAccess} from "@/components/access/device-access";
 import {TradingAgentsResearchPanel} from "./tradingagents-research-panel";
-import {createAgentTask, getTradingAgentsResearch, type AgentTask, type TradingAgentsResearchView} from "@/lib/api/agent";
+import {cancelAgentTask, createAgentTask, getTradingAgentsResearch, recoverTradingAgentsResearch, type AgentTask, type TradingAgentsResearchView} from "@/lib/api/agent";
 
 vi.mock("@/components/access/device-access", () => ({useDeviceAccess:vi.fn()}));
-vi.mock("@/lib/api/agent", () => ({createAgentTask: vi.fn(), getTradingAgentsResearch: vi.fn()}));
+vi.mock("@/lib/api/agent", () => ({cancelAgentTask: vi.fn(), createAgentTask: vi.fn(), getTradingAgentsResearch: vi.fn(), recoverTradingAgentsResearch: vi.fn()}));
 const view = (symbol = "002121"): TradingAgentsResearchView => ({
   symbol, enabled: false, executable: false, required_model_slots: 22,
   blockers: [{code: "disabled", message: "完整研究未启用"}, {code: "quality_not_admitted", message: "净增益尚未准入"}],
   budget: {date: "2026-10-20", limit: 8, used: 0, remaining: 8, scope: "autonomy_llm"},
   admission: {state: "not_admitted", method_sha256: "current-method"},
   verification: "unverified_full_graph_research", production_eligible: false, latest: null, task: null,
+});
+
+const sourceTaskId = "1".repeat(32), sourceRunId = "2".repeat(32), recoveryTaskId = "3".repeat(32);
+function recoveryView(state: "not_checked" | "available" | "blocked" | "none" | "unknown" = "not_checked", symbol = "002121"): TradingAgentsResearchView {
+  return {...saved(symbol), task: {id: sourceTaskId, status: "canceled", cancel_requested: true, failed: false,
+    created_at: "2026-10-26T10:00:00+08:00", finished_at: "2026-10-26T10:01:00+08:00", error: null, result_run_id: null},
+    recovery: {state, source_task_id: state === "none" ? null : sourceTaskId, run_id: state === "none" ? null : sourceRunId,
+      blockers: state === "blocked" ? [{code: "checkpoint_changed", message: "原检查点身份已变"}] : []}};
+}
+function recoveryReceipt(): AgentTask {
+  return {id: recoveryTaskId, type: "tradingagents_research", params: {symbol: "002121", native_recovery: {source_task_id: sourceTaskId, run_id: sourceRunId}},
+    status: "queued", steps: [], result_ref: null, error: null, risk_level: "L0", created_by: "maintenance", created_at: null, started_at: null, finished_at: null};
+}
+function serveRecovery() {
+  vi.mocked(getTradingAgentsResearch).mockImplementation(async (symbol, options) => recoveryView(options?.checkRecovery ? "available" : "not_checked", symbol));
+}
+async function checkRecovery() {
+  fireEvent.click(await screen.findByRole("button", {name: "检查原任务恢复"}));
+  return await screen.findByRole("button", {name: "恢复未完成步骤"});
+}
+
+describe("完整研究的维护恢复与任务关联", () => {
+  it("ordinary saved-only readers never offer recovery or cancellation, even if a mocked response claims eligibility", async () => {
+    vi.mocked(useDeviceAccess).mockReturnValue({device: {state: "active", maintenance: false}, open: vi.fn(), refresh: vi.fn(async () => {})});
+    vi.mocked(getTradingAgentsResearch).mockResolvedValue(recoveryView("available"));
+    render(<TradingAgentsResearchPanel symbol="002121" defaultOpen allowStart />);
+    await screen.findByText(/已保存完整七报告/);
+    expect(screen.queryByRole("button", {name: /恢复|取消本次研究|检查启动/})).toBeNull();
+    expect(getTradingAgentsResearch).toHaveBeenCalledExactlyOnceWith("002121", {savedOnly: true});
+    expect(recoverTradingAgentsResearch).not.toHaveBeenCalled();
+    expect(cancelAgentTask).not.toHaveBeenCalled();
+  });
+
+  it("checks the original checkpoint only on request and submits one exact recovery without recreating research", async () => {
+    serveRecovery();
+    let finish!: (task: AgentTask) => void;
+    vi.mocked(recoverTradingAgentsResearch).mockImplementation(() => new Promise(resolve => {finish = resolve;}));
+    render(<TradingAgentsResearchPanel symbol="002121" compact allowStart />);
+    expect(screen.queryByRole("button", {name: "恢复未完成步骤"})).toBeNull();
+    const resume = await checkRecovery();
+    expect(getTradingAgentsResearch).toHaveBeenLastCalledWith("002121", {savedOnly: true, checkRecovery: true});
+    expect(recoverTradingAgentsResearch).not.toHaveBeenCalled();
+    expect(screen.getByText(/已保存原答不重新生成/)).toBeTruthy();
+    fireEvent.click(resume); fireEvent.click(resume);
+    expect(recoverTradingAgentsResearch).toHaveBeenCalledExactlyOnceWith(sourceTaskId, sourceRunId);
+    await act(async () => finish(recoveryReceipt()));
+    await screen.findByText(/持久状态待校准/);
+    expect(screen.getByRole("button", {name: "恢复未完成步骤"})).toHaveProperty("disabled", true);
+    expect(createAgentTask).not.toHaveBeenCalled();
+  });
+
+  it("a maintenance recovery check does not strand the separate normal launch preflight", async () => {
+    vi.mocked(getTradingAgentsResearch).mockImplementation(async (_symbol, options) => options?.checkRecovery
+      ? {...recoveryView("available"), startup_conditions_not_checked:true}
+      : {...view(), enabled:true, executable:true, blockers:[], startup_conditions_not_checked:options?.savedOnly === true, recovery:recoveryView().recovery});
+    render(<TradingAgentsResearchPanel symbol="002121" defaultOpen />);
+    fireEvent.click(await screen.findByRole("button", {name:"检查启动条件"}));
+    await waitFor(()=>expect(screen.getByRole("button", {name:"开始完整研究"})).toHaveProperty("disabled",false));
+    await checkRecovery();
+    expect(screen.getByRole("button", {name:"开始完整研究"})).toHaveProperty("disabled",true);
+    fireEvent.click(screen.getByRole("button", {name:"检查启动条件"}));
+    await waitFor(()=>expect(getTradingAgentsResearch).toHaveBeenLastCalledWith("002121", {savedOnly:false}));
+    expect(screen.queryByRole("button", {name:"恢复未完成步骤"})).toBeNull();
+    expect(createAgentTask).not.toHaveBeenCalled();expect(recoverTradingAgentsResearch).not.toHaveBeenCalled();
+  });
+
+  it.each(["blocked", "unknown", "none"] as const)("server recovery state %s never becomes an actionable recovery", async state => {
+    vi.mocked(getTradingAgentsResearch).mockImplementation(async (_symbol, options) => recoveryView(options?.checkRecovery ? state : "not_checked"));
+    render(<TradingAgentsResearchPanel symbol="002121" defaultOpen />);
+    fireEvent.click(await screen.findByRole("button", {name: "检查原任务恢复"}));
+    await screen.findByLabelText("原任务恢复条件");
+    expect(screen.queryByRole("button", {name: "恢复未完成步骤"})).toBeNull();
+    expect(recoverTradingAgentsResearch).not.toHaveBeenCalled();
+    expect(createAgentTask).not.toHaveBeenCalled();
+  });
+
+  it("a failed eligibility refresh preserves originals while disabling stale recovery permission", async () => {
+    serveRecovery();
+    render(<TradingAgentsResearchPanel symbol="002121" defaultOpen />);
+    await checkRecovery();
+    vi.mocked(getTradingAgentsResearch).mockRejectedValue(new Error("recovery read unavailable"));
+    fireEvent.click(screen.getByRole("button", {name: "重新读取研究"}));
+    await screen.findByText(/保留本股上次读取报告/);
+    expect(screen.getByText("恢复条件重读失败，当前资格未确认。")).toBeTruthy();
+    expect(screen.getByRole("button", {name: "恢复未完成步骤"})).toHaveProperty("disabled", true);
+    expect(screen.getByRole("tab", {name: /最终判断/})).toBeTruthy();
+    fireEvent.click(screen.getByRole("button", {name: "恢复未完成步骤"}));
+    expect(recoverTradingAgentsResearch).not.toHaveBeenCalled();
+  });
+
+  it("an unknown recovery submission stays locked after fresh reads and never regenerates preserved answers", async () => {
+    let finishAutomaticRead!: (value: TradingAgentsResearchView) => void;
+    let reads = 0;
+    vi.mocked(getTradingAgentsResearch).mockImplementation(async (_symbol, options) => {
+      if (++reads === 3) return new Promise(resolve => {finishAutomaticRead = resolve;});
+      return recoveryView(options?.checkRecovery ? "available" : "not_checked");
+    });
+    vi.mocked(recoverTradingAgentsResearch).mockRejectedValue(new Error("response lost"));
+    render(<TradingAgentsResearchPanel symbol="002121" defaultOpen />);
+    fireEvent.click(await checkRecovery());
+    await screen.findByText(/提交结果未确认，已停止重复操作/);
+    await waitFor(() => expect(getTradingAgentsResearch).toHaveBeenCalledTimes(3));
+    const reread = screen.getByRole("button", {name: "重新读取研究"});
+    expect(reread).toHaveProperty("disabled", true);
+    fireEvent.click(reread);
+    expect(getTradingAgentsResearch).toHaveBeenCalledTimes(3);
+    await act(async () => finishAutomaticRead(recoveryView("available")));
+    await waitFor(() => expect(reread).toHaveProperty("disabled", false));
+    expect(screen.getByRole("button", {name: "恢复未完成步骤"})).toHaveProperty("disabled", true);
+    fireEvent.click(reread);
+    await waitFor(() => expect(getTradingAgentsResearch).toHaveBeenCalledTimes(4));
+    expect(screen.getByRole("button", {name: "恢复未完成步骤"})).toHaveProperty("disabled", true);
+    expect(screen.getByRole("tab", {name: /最终判断/})).toBeTruthy();
+    expect(recoverTradingAgentsResearch).toHaveBeenCalledTimes(1);
+    expect(createAgentTask).not.toHaveBeenCalled();
+  });
+
+  it("maintenance expiry retires checked recovery permission and reauthorization requires a new explicit check", async () => {
+    serveRecovery();
+    const panel = render(<TradingAgentsResearchPanel symbol="002121" defaultOpen />);
+    await checkRecovery();
+    vi.mocked(useDeviceAccess).mockReturnValue({device: {state: "active", maintenance: false}, open: vi.fn(), refresh: vi.fn(async () => {})});
+    panel.rerender(<TradingAgentsResearchPanel symbol="002121" defaultOpen />);
+    await waitFor(() => expect(getTradingAgentsResearch).toHaveBeenLastCalledWith("002121", {savedOnly: true}));
+    expect(screen.queryByRole("button", {name: "恢复未完成步骤"})).toBeNull();
+    vi.mocked(useDeviceAccess).mockReturnValue({device: {state: "active", maintenance: true}, open: vi.fn(), refresh: vi.fn(async () => {})});
+    panel.rerender(<TradingAgentsResearchPanel symbol="002121" defaultOpen />);
+    expect(await screen.findByRole("button", {name: "检查原任务恢复"})).toBeTruthy();
+    expect(screen.queryByRole("button", {name: "恢复未完成步骤"})).toBeNull();
+    expect(recoverTradingAgentsResearch).not.toHaveBeenCalled();
+  });
+
+  it("late recovery permission from another stock never enables the current stock", async () => {
+    let finish!: (value: TradingAgentsResearchView) => void;
+    vi.mocked(getTradingAgentsResearch).mockImplementation(async (symbol, options) =>
+      symbol === "002121" && options?.checkRecovery ? new Promise(resolve => {finish = resolve;}) : recoveryView("not_checked", symbol));
+    const panel = render(<TradingAgentsResearchPanel symbol="002121" defaultOpen />);
+    fireEvent.click(await screen.findByRole("button", {name: "检查原任务恢复"}));
+    panel.rerender(<TradingAgentsResearchPanel symbol="600276" defaultOpen />);
+    await screen.findByText(/600276 · 已保存完整七报告/);
+    await act(async () => finish(recoveryView("available")));
+    expect(screen.queryByRole("button", {name: "恢复未完成步骤"})).toBeNull();
+    expect(recoverTradingAgentsResearch).not.toHaveBeenCalled();
+  });
+
+  it("a late recovery submission receipt cannot calibrate or poll another stock", async () => {
+    serveRecovery();
+    let finish!: (task: AgentTask) => void;
+    vi.mocked(recoverTradingAgentsResearch).mockImplementation(() => new Promise(resolve => {finish = resolve;}));
+    const panel = render(<TradingAgentsResearchPanel symbol="002121" defaultOpen />);
+    fireEvent.click(await checkRecovery());
+    panel.rerender(<TradingAgentsResearchPanel symbol="600276" defaultOpen />);
+    await screen.findByText(/600276 · 已保存完整七报告/);
+    const reads = vi.mocked(getTradingAgentsResearch).mock.calls.length;
+    await act(async () => finish(recoveryReceipt()));
+    expect(getTradingAgentsResearch).toHaveBeenCalledTimes(reads);
+    expect(screen.queryByText(/持久状态待校准/)).toBeNull();
+    expect(screen.queryByRole("button", {name: "恢复未完成步骤"})).toBeNull();
+    expect(createAgentTask).not.toHaveBeenCalled();
+  });
+
+  it("cooperative cancellation remains pending until the server reports a terminal state", async () => {
+    const running = {...recoveryView(), task: {...recoveryView().task!, status: "running" as const, cancel_requested: false, finished_at: null}};
+    vi.mocked(getTradingAgentsResearch).mockResolvedValue(running);
+    let finish!: (task: AgentTask) => void;
+    vi.mocked(cancelAgentTask).mockImplementation(() => new Promise(resolve => {finish = resolve;}));
+    render(<TradingAgentsResearchPanel symbol="002121" defaultOpen />);
+    const cancel = await screen.findByRole("button", {name: "取消本次研究"});
+    fireEvent.click(cancel); fireEvent.click(cancel);
+    expect(cancelAgentTask).toHaveBeenCalledExactlyOnceWith(sourceTaskId);
+    await act(async () => finish({...recoveryReceipt(), id: sourceTaskId, params: {symbol: "002121"}, status: "running"}));
+    await screen.findByRole("button", {name: "取消处理中"});
+    expect(screen.getByText(/取消请求已记录，等待当前步骤结束/)).toBeTruthy();
+    expect(screen.queryByText(/本股最近任务：已取消/)).toBeNull();
+    vi.mocked(getTradingAgentsResearch).mockResolvedValue(recoveryView());
+    fireEvent.click(screen.getByRole("button", {name: "重新读取研究"}));
+    await screen.findByText(/本股最近任务：已取消/);
+    expect(screen.queryByRole("button", {name: /取消本次研究|取消处理中/})).toBeNull();
+    expect(cancelAgentTask).toHaveBeenCalledTimes(1);
+  });
+
+  it.each([false, true])("saved report association uses the task's exact run identity, matching=%s", async matches => {
+    const result = recoveryView();
+    result.latest!.run_id = sourceRunId;
+    result.task = {...result.task!, status: "succeeded", result_run_id: matches ? sourceRunId : "4".repeat(32)};
+    vi.mocked(getTradingAgentsResearch).mockResolvedValue(result);
+    render(<TradingAgentsResearchPanel symbol="002121" defaultOpen />);
+    expect((await screen.findByLabelText("报告与任务关联")).textContent).toBe(matches ? "本次任务的保存报告。" : "上次已保存报告，不是本次任务结果。");
+    expect(createAgentTask).not.toHaveBeenCalled();
+    expect(recoverTradingAgentsResearch).not.toHaveBeenCalled();
+  });
+
+  it("a foreign recovery receipt remains unknown and cannot unlock a repeat command", async () => {
+    serveRecovery();
+    vi.mocked(recoverTradingAgentsResearch).mockResolvedValue({...recoveryReceipt(), params: {symbol: "002121", native_recovery: {source_task_id: "4".repeat(32), run_id: sourceRunId}}});
+    render(<TradingAgentsResearchPanel symbol="002121" defaultOpen />);
+    fireEvent.click(await checkRecovery());
+    await screen.findByText(/恢复回执原任务或运行不匹配/);
+    expect(screen.getByRole("button", {name: "恢复未完成步骤"})).toHaveProperty("disabled", true);
+    expect(recoverTradingAgentsResearch).toHaveBeenCalledTimes(1);
+    expect(createAgentTask).not.toHaveBeenCalled();
+  });
 });
 const saved = (symbol = "002121"): TradingAgentsResearchView => ({...view(symbol), latest: {
   symbol, version: 1, state: "completed", run_id: `${symbol}-run`, generated_at: "2026-10-19T21:00:00+08:00",
