@@ -1,4 +1,4 @@
-import { cleanup, fireEvent, render, screen, within, waitFor } from "@testing-library/react";
+import { act, cleanup, fireEvent, render, screen, within, waitFor } from "@testing-library/react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 import {
@@ -1006,18 +1006,35 @@ it("uses the recorded selection rationale before a high-scoring dimension as the
 });
 
 it("has one selection reader and loads related messages and saved research only after opening it", async () => {
+ let finish!: (value: AgentAPI.TradingAgentsResearchView) => void;
+ vi.mocked(AgentAPI.getTradingAgentsResearch).mockReturnValueOnce(new Promise(resolve=>{finish=resolve;}));
  render(<PickCard item={fromDailyPick(base)}/>);
  expect(screen.queryByRole("button",{name:"关联消息"})).toBeNull();
  expect(screen.queryByLabelText("相关消息与AI解读")).toBeNull();
  expect(AgentAPI.getTradingAgentsResearch).not.toHaveBeenCalled();
+ expect(API.getStockAttribution).not.toHaveBeenCalled();
  fireEvent.click(screen.getByRole("button",{name:"入选解读"}));
  expect(screen.getByLabelText("本次筛选考虑")).toBeTruthy();
  expect(screen.getByLabelText("相关消息与AI解读")).toBeTruthy();
  expect(screen.queryByLabelText("入选依据核对")).toBeNull();
  await waitFor(()=>expect(AgentAPI.getTradingAgentsResearch).toHaveBeenCalledExactlyOnceWith(base.symbol,{savedOnly:true}));
- expect(screen.getByLabelText("TradingAgents完整研究").textContent).toContain("暂无可核验的完整七报告；不代表从未研究");
+ const dialog=screen.getByRole("dialog",{name:`${base.name} · 入选解读`});
+ const panel=within(dialog).getByLabelText("TradingAgents完整研究");
+ expect(within(panel).getByText(`正在读取 ${base.symbol} 的完整研究…`)).toBeTruthy();
+ expect(panel.textContent).not.toContain("暂无可核验的完整七报告；不代表从未研究");
+ await act(async()=>{finish(savedResearch(base.symbol));});
+ await within(panel).findByText("暂无可核验的完整七报告；不代表从未研究。");
+ expect(screen.getByRole("dialog",{name:`${base.name} · 入选解读`})).toBe(dialog);
+ expect(screen.getAllByLabelText("TradingAgents完整研究")).toHaveLength(1);
+ expect(screen.getByLabelText("TradingAgents完整研究")).toBe(panel);
+ expect(within(panel).getByText(`${base.symbol} · 暂无可读完整报告`)).toBeTruthy();
+ expect(panel.textContent).toContain("暂无可核验的完整七报告；不代表从未研究");
  fireEvent.click(screen.getByRole("button",{name:"原筛选完整依据"}));
  expect(screen.getByLabelText("入选依据核对")).toBeTruthy();
+ expect(screen.getByLabelText("TradingAgents完整研究")).toBe(panel);
+ expect(AgentAPI.getTradingAgentsResearch).toHaveBeenCalledExactlyOnceWith(base.symbol,{savedOnly:true});
+ expect(API.getStockAttribution).toHaveBeenCalledExactlyOnceWith(base.symbol);
+ expect(AgentAPI.createAgentTask).not.toHaveBeenCalled();
 });
 
 it("keeps exact archived event references in the combined reader and performs one read only on open", async () => {

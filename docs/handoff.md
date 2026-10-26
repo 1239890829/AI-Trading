@@ -12,9 +12,11 @@
 
 施工及验收契约见[复盘现役修订](review/review-agent.md#2026-10-26-影子执行跳过记录与复盘恢复)：保护已有执行记录，区分整次未执行、完整空执行、缺失与历史混合明细未知，无精选早退亦保留影子事实。执行清单里“比例100%即日期错误”的陈旧判据按原SOP §1就地更正为先核样本/身份，证据不够保留未知。规则/模型/调度/通知/模拟风控和任务八类元数据不变；总方案、plan-registry、AGENTS与Skills无新增机制、权限或产品方向，不适用变更。
 
-施工提交`d3113bcf5ff7216b3d98383cde8c11de012259bb`冻结后完整后端8294 passed／87 skipped／372 subtests，pytest658.16秒、命令667.690秒；全量pyflakes通过，879后端输入零漂移。相关7文件120 passed；正确夹具的基线23 failed／2 passed及非法原件保全3 failed为有效红证据，最初夹具漏必填字段的失败另存但不作行为证明。只读作者团队反证未见剩余P1/P2，不冒充独立Review。前端422输入与PR #351逐字相同，复用默认/UTC各2594及类型、ESLint和生产构建证据，不为无前端改动重复构建。
+施工提交`d3113bcf5ff7216b3d98383cde8c11de012259bb`冻结后完整后端8294 passed／87 skipped／372 subtests，pytest658.16秒、命令667.690秒；全量pyflakes通过，879后端输入零漂移。相关7文件120 passed；正确夹具的基线23 failed／2 passed及非法原件保全3 failed为有效红证据，最初夹具漏必填字段的失败另存但不作行为证明。只读作者团队反证未见剩余P1/P2，不冒充独立Review。
 
-文档/账本/发布守卫与最终差异另验；新准确HEAD的DegradedRelease、三项CI、release_check、合并后CI及正常调度生成/实页读取仍按本批PR真实回执完成。发布前主目录仍是上述旧服务，报告生成尚未验；本机忽略证据归`artifacts/runs/review-runtime-closure-20261026`，不把测试成功说成已经运行恢复。
+首HEAD `d1a7ebb144cf57781d579b499fa23153b0a79f82`的CI40302836603后端/docs通过，但前端原`pick-card.test.tsx`只等API开始就检查最终七报告提示，实际仍在合法读取中。该HEAD前端422输入与PR #351逐字一致的复用事实保留，不能用它盖过新CI失败。补修仅把该测试做成deferred pending→完成，保留原精确内容、同dialog/panel、证券、恰一次读取及不启动任务断言；默认等待阈值不变。真实屏蔽最终提示的注入准确判红，生产panel恢复hash `7ba1da92bfe64395322de3045a55ee2c7b0de5e4fbb29edd9ce9c21274aca424`、无生产前端diff。单文件默认/UTC各84通过后，完整前端174文件默认/UTC各2594 passed，命令288.734／297.903秒；类型、ESLint和生产构建`TSd9LD5JGx0Y1l2Cer1GH`及生成引用恢复后类型复验通过，422输入零漂移。879后端输入仍逐字相同，复用上述完整后端门；准确新HEAD仍须三项required CI。
+
+文档/账本/发布守卫与最终差异另验；新准确HEAD的DegradedRelease、三项CI、release_check、合并后CI及真实报告保存/页面读取仍按本批PR真实回执完成。恢复时避开已知快照首轮60秒冷启动：维护期间暂关本自动触发，等原快照首拍后经正式恢复接口生成一次，再恢复原自动调度并核持久去重；不改默认15:30、模型或通知策略，不与下一拍并发POST。发布前主目录仍是上述旧服务，报告生成尚未验；本机忽略证据归`artifacts/runs/review-runtime-closure-20261026`，不把测试成功说成已经运行恢复。
 
 原TradingAgents源码方法承接仍被2026-10-26议程`autonomy_llm`未知用量阻断，官方CLI返回`authorization_maintenance_unavailable`；原授权/pin/七旧许可未改，旧12角色/七报告可读。此限制不阻断rules复盘，不借本修补扩许可。RSH-031既有系统目录授权拒绝继续保持，不重试、换路径或采集。
 
