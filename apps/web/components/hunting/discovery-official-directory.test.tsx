@@ -165,10 +165,13 @@ describe("官方目录与可选报价独立读取", () => {
     page.rerender(<DiscoveryOfficialDirectory kind="industry" search="disc_code=400000.TI" scope="parent-industry" onTarget={target} onNavigate={navigate}/>);
     await screen.findByRole("button",{name:"查看正式行业0成分"});
     expect(signal.aborted).toBe(true);
-    expect(target.mock.lastCall).toEqual(["parent-industry",{kind:"theme",code:"400000.TI",name:"正式行业0",catalogKind:"industry"}]);
+    const expectedTarget=["parent-industry",{kind:"theme",code:"400000.TI",name:"正式行业0",catalogKind:"industry"}];
+    // Catalog presence does not confirm that the parent passive effect has reported.
+    await waitFor(() => expect(target.mock.lastCall).toEqual(expectedTarget));
     await act(async() => finish({data:quoteReply("concept",quoteCodes(quoteCalls()[0]))}));
     expect(screen.queryByRole("button",{name:"查看正式概念0成分"})).toBeNull();
     expect(screen.getByRole("list",{name:"官方目录结果"}).textContent).not.toContain("300000.TI");
+    expect(target.mock.lastCall).toEqual(expectedTarget);
   });
 
   it("旧目录回包也不能覆盖新kind，首错可独立重试且不把失败当空目录",async()=>{
