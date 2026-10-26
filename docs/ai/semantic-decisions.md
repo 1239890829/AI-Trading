@@ -996,3 +996,7 @@ known原答完整回送后在下一请求前合作停止，先等待worker真实
 真实取消揭示`counter.reserved`是先分配的编号高水位，不是实发数量。旧`same_method_cooperative_stop_v1`的连续全known规则不扩；`reviewed_cooperative_prelaunch_tail_v1`仅在已审driver/budget/transport的真实start前取消链中，接受四分析师root step0的一个末尾未启动编号。前缀答/receipt/正式账逐一known闭合，原流的取消/停止顺序、worker终止、全部源与检查点哈希一致，且已付工具提案和结果确已进入对应检查点；中间缺口、多尾、started/unknown/额外账、坏流或错阶段均拒绝。保留高水位与原件，不造尾回执、补0token或退款；新编号从原高水位+1开始，实发数量只数已核回执。
 
 该kind同方法可核同形状未来取消；本轮旧→新方法仅允许已审host恢复源码变化，必须由CLI显式引用原算子已applied的准确source-rebind-plan，读取其受控旧授权并同时绑定原run/原method及当前已授权完整method。模型、packet、原生图、上游/依赖、scope、期限与7unknown不变；原selection claim保留，新execution claim归准确新task/method。不能从HTTP、任意路径或手填hash自授旧身份，也不自动挑选历史计划；旧kind及冻结packet恢复规则不扩用。
+
+PR #349已合并`027ed3a5769087f3191f8d0756659b5473608958`并通过master CI。原P2/P3承接已实际执行且不延期，7条旧unknown/旧grant保留。真实恢复任务b729ddfa…沿原run27a33e8d…完成12角色、7报告与Memory：复用原答1，新编号3–16共14次全部known，合计15次实际调用、新unknown0；模型`gpt-6.1-sol`。普通保存读取及实际页面逐角色/报告、原答、对照、重读和血缘已核，原任务canceled、未启动编号2及旧2237文件/五份用户原件的事实保留。原检查点归档仅hash和元数据，不声称保有其物理DB副本。此为手动研究工程/运行可用，不证明净提升、模型accuracy、收益或生产资格；精确发布身份与读延迟见handoff顶部和PR评论6409087831。
+
+当前报告仍为`finite_failed_requires_review`：唯一FAIL来自call8 Market Analyst的“200日SMA在所返回观察区间持续上行”，检查器将SMA对象误归`DAILY_PRICE_PATH`。只读核验冻结60日工具窗有36值、35个相邻差分均正，adapter回包SHA与原receipt一致；只证明该冻结计算依据，不证明独立源真值、历史全集或整份报告gold。忽略证据`artifacts/runs/cooperative-recovery-allocation-tail-20261026/real-report-finite-review.json`的SHA为`99ac88f919b15fdf4a59cc12be778fe5cf81f4e47840e4b49f8d2ebd6301d3b1`。原有限FAIL1、同伴待审7、`source_verified=false`及页面警告原样保留，检查器/报告未改；不以局部反证替代整份语义或投资效果验收。

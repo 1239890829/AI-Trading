@@ -4,13 +4,17 @@
 
 ## 1. 本轮范围与已核现场
 
-### 当前接续：真实取消后的未启动尾编号
+### 当前已发布：原授权承接、完整恢复与保存读取
 
-PR #348准确HEAD1697850aa5941993cd6546ba33bde955c9ffa918、DegradedRelease6407812354、PR CI40266051120及master CI40266557183三项通过，原release_check返回0，精确合并66cdef8082d6689ff6fc02dbd036b8226f8e1664。主目录已同步并以原CLI计划0e2bf78b…承接，非pin环境字节、原policy不变量和runtime哈希相同，期限未续、7unknown与旧grant保留；已加载build kbu4l1B900JQEKYlNcrU2，启动器检查通过。三战法17次真实原批API读取通过且原文件不变；MACD实页已核待核146/146、未符合200/5081、全批5580，22日明确无所查批次、回23日同批；明确收起提交后刷新保持关闭。
+PR #349准确HEAD `2754eecd7c2df89415fb98088da736fb16cb50c3`以DegradedRelease6408634541、release_check exit0和PR CI40272096918三项通过，精确合并`027ed3a5769087f3191f8d0756659b5473608958`；master CI40272723361三项通过。完整后端8175 passed／87 skipped／372 subtests及全量pyflakes通过；前端422个输入复用PR #348默认/UTC各2569及构建证据，1803个非文档输入无漂移。本机已实际加载BE6728／FE77077、build `kbu4l1B900JQEKYlNcrU2`，原定P2/P3承接已执行，期限未延期、7条旧unknown及旧grant保留。运行回执为[PR评论6409087831](https://github.com/1239890829/AI-Trading/pull/349#issuecomment-6409087831)，作者团队核验不冒充独立Review。
 
-真实入选000333任务63ceeed8…、run27a33e8d…已获得1个typed known答并正常取消，worker真实退出、无WAL/SHM、新unknown为0。恢复CLI拒绝`recovery_cooperative_usage_incomplete`，未安装新grant、未重跑答1。只读实据确定counter reserved=2但正式model账仅1条succeeded/known；第2号在start前取消，不是遗失用量或数据库最终化延迟。原生Fundamentals检查点已保存答1的5个工具提案及对应5个结果，其余三角色仍初始pending。当前修补只为严格证明的单个never-started尾贯通原图恢复，保留原counter2/答1/账/流和旧kind，新调用从3开始；已审方法承接、完整门、发布与真实续行完成前不能称本任务收口。
+原入选任务63ceeed8…仍保留canceled事实；恢复任务b729ddfa…已succeeded，沿原run27a33e8d…完成12角色、7报告及Memory。原答1复用，编号2保留未启动缺口，新调用3–16共14次全部known；合计15次实际调用、新unknown0，模型`gpt-6.1-sol`。两次普通保存GET为39.554／31.587ms，实际Chrome逐一核12角色、7报告页签、原答、同层对照、重读及版本血缘。任务13:21:46–13:34:16约749.35秒，不是同质量提速或实付费用对照。
 
-修补代码[c96f2db4](https://github.com/1239890829/AI-Trading/commit/c96f2db4f758737cb90aac8e92cd7626e46403ee)冻结后完整后端8175 passed／87 skipped／372 subtests（4worker/loadfile，408.61秒），全量pyflakes通过；852个后端及1803个非文档输入无漂移。前端422个输入与PR #348本机完整/UTC各2569及build kbu4l1B900JQEKYlNcrU2的验证清单相同，本批未重复本机前端全量；新HEAD三项required CI仍必须重新通过。作者团队终审闭合安全原生解码、单尾证据、已付提案真实进入检查点、源计划和新增grant不自锁、双claim/原图及已完成保存读；原授权撤销或到期不阻断历史读取。409项整组及最后12项回归有证据，真实解码与独立只读投影一致，原件哈希不变。12:59发布前快照仍未安装本批新grant或恢复模型，真实续行与最终读取必须在承载该代码的PR后续运行回执核验。
+手动完整研究的生成、保存、读取和恢复已验收；收益、accuracy及生产效果未准入。唯一有限FAIL已定位为检查器把“200日SMA在返回观察区间持续上行”误归股价路径；冻结工具窗36值／35差分均上行，重建回包哈希与原receipt相同。此局部审阅只核给定计算依据，原`finite_failures=1`、`peer_review_required=7`、`source_verified=false`及页面警告不改，不冒称整份语义通过。实据归忽略的`artifacts/runs/cooperative-recovery-allocation-tail-20261026/real-completed-recovery-verification.json`、`real-completed-recovery-ui.json`、`actual-preservation-review.json`和`real-report-finite-review.json`。
+
+三战法17次原批API读取及真实页面通过，原文件不变；每项全批5580，MACD待核146/146、未符合首200/5081可直接读取并下拉继续。22日明确无所查批次，回23日恢复同批；显式收起后刷新保持关闭，另两方法按各自版本/计数读取。仅手动条件研究可用，不改变正式入选、通知或模拟资格。旧32运行2237原件与五份用户原件保全；原检查点只归档hash/元数据，不是物理DB副本。活授权计划、原生证据和依赖保留；可再生测试沙箱按准确清单单次清理，实际结果以承载本交接的PR最终运行回执为准，不以候选占用估算冒充已释放空间。连续行情短窗仍见真实源失败/502和stale，不能由恢复后正常推断全天稳定，见[性能§34](system/runtime-performance.md#34-2026-10-23-被拒观测与当前事实分离)。
+
+历史阻断：PR #348后原任务仅known答1、reserved=2，恢复曾返回`recovery_cooperative_usage_incomplete`；第2号已核为start前取消，非遗失用量。该事实及12:59发布前未安装grant的快照保留，已由PR #349上述真实承接/续行结果取代当前阻断描述。本次仅回填发布和运行事实；INDEX、总方案、plan-registry、AGENTS及Skills无新语义/入口/权限变化，不适用修改。
 
 ### 前版已发布：嵌套owner的准确版本承接
 
@@ -22,7 +26,7 @@ PR #347以HEAD5847754354125ab359e61d40c024a57e576a3528和DegradedRelease64069972
 
 接续代码[e284c066](https://github.com/1239890829/AI-Trading/commit/e284c066d38738530efbbe3b641106cceec03316)冻结后完整门已通过：后端8130 passed／87 skipped／372 subtests（856.96秒），前端174文件、默认和UTC各2569 passed（325.175／313.285秒）；全量pyflakes、类型、ESLint exit0（3项原基线warning）、生产构建`kbu4l1B900JQEKYlNcrU2`及恢复生成入口后的类型复验通过。852个后端、422个前端及1803个非文档输入无漂移。作者团队反证另纠正Next私有history标记绕过通知导致关闭后复开的窗口，真实规则2红后相关93绿；不是独立网页Review。11:48记录时尚未写生产pin或新增TA调用；本段是发布前快照，准确HEAD回执、CI、合并、实际承接/生成/恢复与资产处置，以承载该代码提交的PR最终运行回执为接续依据，不把旧阻断或本地绿色冒充当前运行状态。
 
-### 当前任务：原授权承接、完整恢复和三项价格研究
+### 本批原始范围：原授权承接、完整恢复和三项价格研究（历史快照）
 
 用户2026-10-26直派从master `36acb55aa06b2f3ca961883dfe8c8feb18eef51f`接续，分支`codex/manual-research-and-strategies`。DEGRADED_FULL_CONTROL未撤销，五份evolution用户原件哈希保全。原授权仍在有效期内，阻断是当前宿主方法指纹变化，不是需要再次确认产品方向或另批相同模型。默认只读的本安装维护CLI检查原scope/模型/effort/期限/七unknown/在途锁，明确已审源文件后准备和CAS承接；只保全原授权与旧pin，不复制整份环境或续签/扩权。
 
