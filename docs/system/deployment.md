@@ -558,7 +558,7 @@ CLI启动warning的兼容依据与固定版本见[语义纠错记录](../ai/sema
 
 2026-10-26发布后实测：PR #349准确HEAD `2754eecd7c2df89415fb98088da736fb16cb50c3`、DegradedRelease6408634541、release_check exit0，PR CI40272096918和合并master CI40272723361三项通过；合并`027ed3a5769087f3191f8d0756659b5473608958`已加载BE6728／FE77077及build `kbu4l1B900JQEKYlNcrU2`。P2/P3原计划承接和单次grant已安装、期限未延长，旧7unknown/旧grant未改。恢复任务b729ddfa…在原run27a33e8d…成功完成12角色/7报告/Memory，复用原答1、新3–16全部known、新unknown0；两次普通GET为39.554／31.587ms，实际Chrome角色/报告、原答、对照、重读与血缘通过。运行回执归PR评论6409087831；手动研究可用，不代表语义、accuracy、收益或自动生产准入。
 
-原32运行2237文件、五份用户原件、旧答/receipt/流前缀已核保全；原检查点历史归档仅元数据及hash，不是物理DB副本，恢复中的活动检查点可以合法推进。`authorization-maintenance`下source-rebind计划、before/applied及grant证据仍为活恢复依赖，不能按缓存清理；可再生测试沙箱只按已审准确清单清理，实际删除/保留及可用空间变化以本批最终PR运行回执核验。有限检查FAIL1/同伴待审7/`source_verified=false`原样保留，局部SMA反证不使原警告自动撤销。三参考方法原存档的17次读取和实页状态/日期/下拉验收未运行模型或重新扫描。
+原32运行2237文件、五份用户原件、旧答/receipt/流前缀已核保全；原检查点历史归档仅元数据及hash，不是物理DB副本，恢复中的活动检查点可以合法推进。`authorization-maintenance`下source-rebind计划、before/applied及grant证据仍为活恢复依赖，不能按缓存清理；本批已按准确清单清理41个结束的可再生测试沙箱，64份外置证据不变，清理后启动器/卫生/保存读取通过；真实空间变化及保留资产以本批最终PR运行回执核验。有限检查FAIL1/同伴待审7/`source_verified=false`原样保留，局部SMA反证不使原警告自动撤销。三参考方法原存档的17次读取和实页状态/日期/下拉验收未运行模型或重新扫描。
 
 三项参考价格研究使用原任务中心`reference_strategies`，只接受可选ISO完成日trade_date。固定本机marketdb只读、完整前缀共享，默认最新已完成源日，不接任意SQL/路径/阈值/模型。原子存档在忽略的`backend/data/picks/reference-runs/`，读取现有method-runs接口要求准确方法/日期/内容版本，不写正式选股/通知/模拟表。相同源/定义复用；首次源钟未知。`verify_reference_strategies.py`仅产描述研究，不是生产晋级回执。
 

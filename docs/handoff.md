@@ -12,9 +12,11 @@ PR #349准确HEAD `2754eecd7c2df89415fb98088da736fb16cb50c3`以DegradedRelease64
 
 手动完整研究的生成、保存、读取和恢复已验收；收益、accuracy及生产效果未准入。唯一有限FAIL已定位为检查器把“200日SMA在返回观察区间持续上行”误归股价路径；冻结工具窗36值／35差分均上行，重建回包哈希与原receipt相同。此局部审阅只核给定计算依据，原`finite_failures=1`、`peer_review_required=7`、`source_verified=false`及页面警告不改，不冒称整份语义通过。实据归忽略的`artifacts/runs/cooperative-recovery-allocation-tail-20261026/real-completed-recovery-verification.json`、`real-completed-recovery-ui.json`、`actual-preservation-review.json`和`real-report-finite-review.json`。
 
-三战法17次原批API读取及真实页面通过，原文件不变；每项全批5580，MACD待核146/146、未符合首200/5081可直接读取并下拉继续。22日明确无所查批次，回23日恢复同批；显式收起后刷新保持关闭，另两方法按各自版本/计数读取。仅手动条件研究可用，不改变正式入选、通知或模拟资格。旧32运行2237原件与五份用户原件保全；原检查点只归档hash/元数据，不是物理DB副本。活授权计划、原生证据和依赖保留；可再生测试沙箱按准确清单单次清理，实际结果以承载本交接的PR最终运行回执为准，不以候选占用估算冒充已释放空间。连续行情短窗仍见真实源失败/502和stale，不能由恢复后正常推断全天稳定，见[性能§34](system/runtime-performance.md#34-2026-10-23-被拒观测与当前事实分离)。
+三战法17次原批API读取及真实页面通过，原文件不变；每项全批5580，MACD待核146/146、未符合首200/5081可直接读取并下拉继续。22日明确无所查批次，回23日恢复同批；显式收起后刷新保持关闭，另两方法按各自版本/计数读取。仅手动条件研究可用，不改变正式入选、通知或模拟资格。旧32运行2237原件与五份用户原件保全；原检查点只归档hash/元数据，不是物理DB副本。活授权计划、原生证据和依赖保留。已按准确清单删除41个结束的测试沙箱，64份外置证据校验不变；磁盘可用空间实测增加12,299,096,064字节（约11.45GiB，受并发写入/APFS影响，不当逐文件释放量）。清理后启动器、卫生与保存报告读取通过；计划和逐项结果只留忽略证据。连续行情短窗仍见真实源失败/502和stale，不能由恢复后正常推断全天稳定，见[性能§34](system/runtime-performance.md#34-2026-10-23-被拒观测与当前事实分离)。
 
-历史阻断：PR #348后原任务仅known答1、reserved=2，恢复曾返回`recovery_cooperative_usage_incomplete`；第2号已核为start前取消，非遗失用量。该事实及12:59发布前未安装grant的快照保留，已由PR #349上述真实承接/续行结果取代当前阻断描述。本次仅回填发布和运行事实；INDEX、总方案、plan-registry、AGENTS及Skills无新语义/入口/权限变化，不适用修改。
+历史阻断：PR #348后原任务仅known答1、reserved=2，恢复曾返回`recovery_cooperative_usage_incomplete`；第2号已核为start前取消，非遗失用量。该事实及12:59发布前未安装grant的快照保留，已由PR #349上述真实承接/续行结果取代当前阻断描述。本次回填发布/运行事实及下述测试同步修正；INDEX、总方案、plan-registry、AGENTS及Skills无新语义/入口/权限变化，不适用修改。
+
+收尾PR #350首HEAD `344e9893db481bc0eb856aa89a0d9fc89e4c357c`的CI40276242893保留真实前端失败：行业目录已渲染后，测试同步读取父层spy，可能先读到合法的清空中间态；DOM出现不保证被动effect已回报目标。代码点`e50a5449b2ee968f802f4f1717c85a605f371393`只让该测试以原默认waitFor等待原精确lastCall，并在迟到概念回包后追加同一父target校验；取消/DOM/身份断言不降，组件和超时不改。补修冻结后完整前端174文件、默认/UTC各2569 passed（370.281／328.813秒），类型、ESLint exit0（原基线warning保留）、生产构建`3FBaFEdZpIybXJ1yFEqBR`及恢复生成引用后的类型复验通过，422个输入无漂移。1803个非文档输入中仅该1个测试变化，后端852输入相同，复用PR #349完整本地后端门；本批文档守卫另验，新准确HEAD仍须三项CI/DegradedRelease/release_check，旧344回执不能放行补修。应用逻辑字节相同，本机继续使用已实页验收的kbu构建，不为测试/文档改动重启服务。
 
 ### 前版已发布：嵌套owner的准确版本承接
 
