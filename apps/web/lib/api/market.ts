@@ -693,6 +693,47 @@ export interface BoardFlowMembersPayload {
   degraded: string[];
 }
 
+/** Sina's source namespace and whole net inflow are distinct from Eastmoney f62. */
+export interface SinaBoardFlowRow {
+  category: string;
+  name: string;
+  kind: BoardFlowKind;
+  rank: number;
+  change_pct: number | null;
+  net_inflow_yi: number | null;
+  net_inflow_ratio_pct: number | null;
+  leader_symbol: string | null;
+  leader_name: string | null;
+}
+
+export interface SinaBoardFundFlowPayload {
+  available: boolean;
+  reason?: string;
+  kind: BoardFlowKind;
+  source: "sina_board_funds";
+  source_as_of: null;
+  received_at: string | null;
+  coverage: {total: number | null; returned: number; complete: boolean};
+  rows: SinaBoardFlowRow[];
+  degraded: string[];
+}
+
+export interface SinaBoardConstituentsPayload {
+  available: boolean;
+  reason?: string;
+  category: string;
+  name: string;
+  kind: BoardFlowKind;
+  source: "sina_board_funds";
+  source_as_of: null;
+  received_at: string | null;
+  coverage: {total: number | null; returned: number; complete: boolean};
+  rows: {symbol: string; name: string; price: number | null; change_pct: number | null;
+    net_inflow_yi: number | null; r0_net_yi: number | null; source_as_of: null}[];
+  daily_snapshot?: {available: boolean; source_day: string | null; degraded: string[]; [key: string]: unknown} | null;
+  degraded: string[];
+}
+
 export async function getBoardFundFlow(
   kind: BoardFlowKind = "concept",
   range: BoardFlowRange = "intraday",
@@ -712,6 +753,18 @@ export async function getBoardFlowMinute(boardCode: string): Promise<BoardFlowMi
 export async function getBoardFlowMembers(boardCode: string, options: ReadOptions = {}): Promise<BoardFlowMembersPayload> {
   return (await getJson<BoardFlowMembersPayload>(
     `/api/market/board-fund-flow/${encodeURIComponent(boardCode)}/members`, 30_000, options,
+  )).data;
+}
+
+export async function getSinaBoardFundFlow(kind: BoardFlowKind, options: ReadOptions = {}): Promise<SinaBoardFundFlowPayload> {
+  return (await getJson<SinaBoardFundFlowPayload>(
+    `/api/market/sina-board-fund-flow?kind=${kind}${options.fresh ? "&fresh=true" : ""}`, 30_000, options,
+  )).data;
+}
+
+export async function getSinaBoardConstituents(category: string, kind: BoardFlowKind, options: ReadOptions = {}): Promise<SinaBoardConstituentsPayload> {
+  return (await getJson<SinaBoardConstituentsPayload>(
+    `/api/market/sina-board-fund-flow/${encodeURIComponent(category)}/constituents?kind=${kind}${options.fresh ? "&fresh=true" : ""}`, 30_000, options,
   )).data;
 }
 

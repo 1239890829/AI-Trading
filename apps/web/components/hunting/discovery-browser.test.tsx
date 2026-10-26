@@ -1,7 +1,8 @@
 import { useState, type ReactNode } from "react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { act, cleanup, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
-import type { BoardFundFlowPayload, BoardFlowRow, DiscoveryMemberships, OfficialCatalogKind, ThemesHotPayload } from "@/lib/api";
+import type { BoardFundFlowPayload, BoardFlowRow, DiscoveryMemberships, OfficialCatalogKind, ThemesHotPayload, SinaBoardFlowRow, SinaBoardFundFlowPayload } from "@/lib/api";
+import { getSinaBoardFundFlow, getSinaBoardConstituents, getBoardFlowMembers } from "@/lib/api";
 
 const {jsonMock} = vi.hoisted(() => ({jsonMock: vi.fn()}));
 vi.mock("@/lib/api/internal", async () => ({
@@ -18,6 +19,19 @@ const targetMock = vi.fn();
 const navigateMock = vi.fn();
 const emptySelection: DiscoverySelection = {date:"2026-10-23",loaded:true,entries:[]};
 const selected: DiscoverySelection = {date:"2026-10-23",loaded:true,entries:[{symbol:"600519",name:"原入选公司",open:vi.fn()}]};
+
+it("Sina uses its own list and constituent namespace, and explicit retries preserve kind and abort signal",async()=>{
+  jsonMock.mockResolvedValue({data:{available:true,category:"gn_ldc",kind:"concept",rows:[]}});
+  const controller=new AbortController();
+  await getSinaBoardFundFlow("concept",{signal:controller.signal});
+  await getSinaBoardConstituents("new_dlhy","industry",{signal:controller.signal,fresh:true});
+  await getBoardFlowMembers("BK0001",{signal:controller.signal});
+  expect(jsonMock.mock.calls).toEqual([
+    ["/api/market/sina-board-fund-flow?kind=concept",30_000,{signal:controller.signal}],
+    ["/api/market/sina-board-fund-flow/new_dlhy/constituents?kind=industry&fresh=true",30_000,{signal:controller.signal,fresh:true}],
+    ["/api/market/board-fund-flow/BK0001/members",30_000,{signal:controller.signal}],
+  ]);
+});
 const farRect = {top:5000,bottom:5001,left:0,right:0,width:0,height:1,x:0,y:5000,toJSON:() => ({})} as DOMRect;
 
 function hotPayload(): ThemesHotPayload {
@@ -51,6 +65,14 @@ function flow(rows: BoardFlowRow[], kind: BoardFundFlowPayload["kind"] = "concep
       observation_state:"current_batch" as const,source_age_seconds:0,source_age_limit_seconds:300,quality:"medium" as const}:{}),
   };
 }
+function sinaBoard(overrides:Partial<SinaBoardFlowRow>={}):SinaBoardFlowRow {
+  return {category:"gn_ldc",name:"来源概念甲",kind:"concept",rank:1,change_pct:2,net_inflow_yi:3,
+    net_inflow_ratio_pct:5,leader_symbol:"600001",leader_name:"同源领涨股",...overrides};
+}
+function sinaFlow(rows:SinaBoardFlowRow[]= [sinaBoard()],kind:SinaBoardFundFlowPayload["kind"]="concept"):SinaBoardFundFlowPayload {
+  return {available:true,source:"sina_board_funds",kind,source_as_of:null,received_at:"2026-10-26T15:00:01+08:00",
+    coverage:{total:rows.length,returned:rows.length,complete:true},rows,degraded:[]};
+}
 function memberships(symbols: string[], date: string | null, state: "matched" | "unknown" = "matched"): DiscoveryMemberships {
   return {scope:"current_not_historical",requested_trade_date:date,content_version:"a".repeat(64),state:state==="matched"?"ready":"partial",
     source:"ths_official",source_as_of:null,observed_at:"2026-10-25T09:50:01+08:00",count:symbols.length,
@@ -64,6 +86,10 @@ function route(url: string) {
   if (query.pathname === "/api/themes/catalog/quotes") {
     const codes=(query.searchParams.get("codes")??"").split(",");
     return {data:{kind:query.searchParams.get("kind"),source:"ths_official",source_basis:"index_snapshot",source_as_of:null,source_ready_at:null,received_at:"2026-10-25T09:50:01+08:00",available:true,rows:codes.map(code=>({code,change_pct:null,price:null})),missing_codes:[]}};
+  }
+  if (query.pathname === "/api/market/sina-board-fund-flow") {
+    const kind=query.searchParams.get("kind")==="industry"?"industry":"concept";
+    return {data:sinaFlow([sinaBoard({kind})],kind)};
   }
   if (query.pathname === "/api/market/board-fund-flow") {
     const kind = query.searchParams.get("kind") as BoardFundFlowPayload["kind"];
@@ -94,6 +120,129 @@ beforeEach(() => {
 afterEach(() => {cleanup();vi.restoreAllMocks();});
 
 describe("真实分类发现的来源与范围", () => {
+  it("a plain funds entry immediately reads Sina, preserves its identity and never waits for Eastmoney",async()=>{
+    jsonMock.mockImplementation((url:string)=>url.startsWith("/api/market/board-fund-flow")?new Promise(()=>{}):Promise.resolve(route(url)));
+    render(<Harness initial="browse=funds&disc_q=&date=2026-10-23"/>);
+    const open=await screen.findByRole("button",{name:"查看来源概念甲成分"});
+    expect(screen.getByRole("combobox",{name:"资金来源"})).toHaveProperty("value","sina");
+    expect(screen.queryByRole("combobox",{name:"资金区间"})).toBeNull();
+    expect(jsonMock.mock.calls.map(([url])=>url)).toEqual(["/api/market/sina-board-fund-flow?kind=concept"]);
+    expect(screen.getByText(/来源时点未提供/)).toBeTruthy();
+    expect(screen.getByText(/覆盖 1\/1 个板块 · 本次来源范围已读全/)).toBeTruthy();
+    expect(within(open).getByText("全部净流入")).toBeTruthy();
+    expect(within(open).queryByText("主力净额")).toBeNull();
+    fireEvent.click(open);
+    expect(targetMock.mock.lastCall).toEqual([JSON.stringify(["funds","concept","intraday","gn_ldc","sina"]),{kind:"board",source:"sina",code:"gn_ldc",name:"来源概念甲",catalogKind:"concept"}]);
+    expect(jsonMock).toHaveBeenCalledTimes(1);
+  });
+
+  it("legacy BK deep links stay Eastmoney; changing source clears the old identity and query",async()=>{
+    expect(discoveryLocation("browse=funds&disc_code=BK0001").fundsSource).toBe("eastmoney");
+    expect(discoveryLocation("browse=funds").fundsSource).toBe("sina");
+    render(<Harness initial="browse=funds&disc_code=BK0001&disc_q=默认&selection=600519&disc_range=5d&date=2026-10-23"/>);
+    await screen.findByRole("button",{name:"查看默认板块资金排行"});
+    expect(targetMock.mock.lastCall?.[1]).toMatchObject({source:"eastmoney",code:"BK0001"});
+    fireEvent.change(screen.getByRole("combobox",{name:"资金来源"}),{target:{value:"sina"}});
+    await screen.findByRole("button",{name:"查看来源概念甲成分"});
+    const next=new URL(navigateMock.mock.lastCall![0],"http://localhost");
+    for(const key of ["disc_code","disc_range","disc_q","selection"])expect(next.searchParams.has(key)).toBe(false);
+    expect(next.searchParams.get("disc_source")).toBe("sina");
+    expect(next.searchParams.get("date")).toBe("2026-10-23");
+    expect(targetMock.mock.lastCall?.[1]).toBeNull();
+    expect(jsonMock.mock.calls.map(([url])=>url)).toEqual(["/api/market/board-fund-flow?kind=concept&range=5d","/api/market/sina-board-fund-flow?kind=concept"]);
+  });
+
+  it.each(["20d","latest_saved","intraday"] as const)("legacy %s funds URLs without source or code preserve the original Eastmoney read and exact scope",async range=>{
+    const original=`browse=funds&disc_range=${range}&date=2026-10-23`;
+    expect(discoveryLocation(original)).toMatchObject({fundsSource:"eastmoney",range,scope:JSON.stringify(["funds","concept",range,"","eastmoney"])});
+    render(<Harness initial={original}/>);
+    const open=await screen.findByRole("button",{name:"查看默认板块资金排行"});
+    expect(screen.getByRole("combobox",{name:"资金来源"})).toHaveProperty("value","eastmoney");
+    expect(screen.getByRole("combobox",{name:"资金区间"})).toHaveProperty("value",range);
+    expect(targetMock.mock.lastCall).toEqual([JSON.stringify(["funds","concept",range,"","eastmoney"]),null]);
+    expect(jsonMock.mock.calls.map(([url])=>url)).toEqual([`/api/market/board-fund-flow?kind=concept&range=${range}`]);
+    fireEvent.click(open);
+    await waitFor(()=>expect(targetMock.mock.lastCall).toEqual([JSON.stringify(["funds","concept",range,"BK0001","eastmoney"]),{kind:"board",source:"eastmoney",code:"BK0001",name:"默认板块",catalogKind:"concept"}]));
+    const selectedUrl=new URL(navigateMock.mock.lastCall![0],"http://localhost");
+    expect(selectedUrl.searchParams.get("disc_range")).toBe(range);
+    expect(selectedUrl.searchParams.get("date")).toBe("2026-10-23");
+    expect(jsonMock).toHaveBeenCalledTimes(1);
+  });
+
+  it("an explicit source wins over a legacy range while an invalid range does not claim historical intent",()=>{
+    expect(discoveryLocation("browse=funds&disc_source=sina&disc_range=20d")).toMatchObject({fundsSource:"sina",range:"intraday"});
+    expect(discoveryLocation("browse=funds&disc_source=eastmoney")).toMatchObject({fundsSource:"eastmoney",range:"changes"});
+    expect(discoveryLocation("browse=funds&disc_range=unknown")).toMatchObject({fundsSource:"sina",range:"intraday"});
+  });
+
+  it("switching source cancels the departed read and never mixes a late board payload",async()=>{
+    let finish!:(value:unknown)=>void;
+    jsonMock.mockImplementationOnce(()=>new Promise(resolve=>{finish=resolve;})).mockImplementation((url:string)=>Promise.resolve(route(url)));
+    render(<Harness initial="browse=funds&disc_source=eastmoney"/>);
+    await waitFor(()=>expect(jsonMock).toHaveBeenCalledTimes(1));
+    const signal=jsonMock.mock.calls[0][2].signal as AbortSignal;
+    fireEvent.change(screen.getByRole("combobox",{name:"资金来源"}),{target:{value:"sina"}});
+    await screen.findByRole("button",{name:"查看来源概念甲成分"});
+    expect(signal.aborted).toBe(true);
+    await act(async()=>finish({data:flow([board({name:"过时东财回包"})],"concept","changes")}));
+    expect(screen.queryByText("过时东财回包")).toBeNull();
+    expect(resultNames()).toEqual(["来源概念甲"]);
+  });
+
+  it("Sina sorting and filtering are local, missing values stay unknown and do not use main-net fields",async()=>{
+    const rows=[sinaBoard({category:"gn_u",name:"未知净额",net_inflow_yi:null,change_pct:null}),sinaBoard({category:"gn_out",name:"全部流出",net_inflow_yi:-2}),sinaBoard({category:"gn_zero",name:"真实零额",net_inflow_yi:0}),sinaBoard({category:"gn_in",name:"全部流入",net_inflow_yi:5})];
+    jsonMock.mockResolvedValue({data:sinaFlow(rows)});
+    render(<Harness initial="browse=funds"/>);
+    await screen.findByRole("button",{name:"查看全部流入成分"});
+    expect(resultNames()).toEqual(["全部流入","真实零额","全部流出","未知净额"]);
+    expect(within(resultRows()[3]).getByText("未提供")).toBeTruthy();
+    fireEvent.change(screen.getByRole("combobox",{name:"分类排序"}),{target:{value:"asc"}});
+    expect(resultNames()).toEqual(["全部流出","真实零额","全部流入","未知净额"]);
+    fireEvent.change(screen.getByRole("textbox",{name:"搜索分类"}),{target:{value:"gn_out"}});
+    expect(resultNames()).toEqual(["全部流出"]);
+    expect(jsonMock).toHaveBeenCalledTimes(1);
+    expect(rows[0].name).toBe("未知净额");
+  });
+
+  it("Sina's complete list uses the same single scroll owner and incremental loading beyond24",async()=>{
+    jsonMock.mockResolvedValue({data:sinaFlow(Array.from({length:61},(_,index)=>sinaBoard({category:`gn_${index}`,name:`新浪范围${index}`,net_inflow_yi:61-index})))});
+    render(<Harness initial="browse=funds"/>);
+    await screen.findByRole("button",{name:"查看新浪范围0成分"});
+    expect(resultRows()).toHaveLength(24);
+    fireEvent.click(screen.getByRole("button",{name:"继续加载"}));
+    expect(resultRows()).toHaveLength(48);
+    fireEvent.click(screen.getByRole("button",{name:"继续加载"}));
+    expect(resultRows()).toHaveLength(61);
+    expect(screen.getByText("已全部加载（61 个分类）")).toBeTruthy();
+    expect(screen.getByRole("region",{name:"资金方向发现"}).querySelector('[class*="overflow"]')).toBeNull();
+    expect(jsonMock).toHaveBeenCalledTimes(1);
+  });
+
+  it.each(["source","kind","category","coverage"])("a Sina %s mismatch rejects the data and never falls back or invents complete coverage",async issue=>{
+    const data=sinaFlow();
+    if(issue==="source")(data as unknown as {source:string}).source="eastmoney_board_changes";
+    if(issue==="kind")data.kind="industry";
+    if(issue==="category")data.rows[0].category="BK0001";
+    if(issue==="coverage")data.coverage.total=2;
+    jsonMock.mockResolvedValue({data});render(<Browser search="browse=funds&disc_code=gn_ldc"/>);
+    expect((await screen.findByRole("alert")).textContent).toContain("身份或结构不一致");
+    expect(screen.queryByRole("button",{name:"查看来源概念甲成分"})).toBeNull();
+    expect(screen.queryByText(/本次来源范围已读全/)).toBeNull();
+    expect(targetMock.mock.calls.every(([,target])=>target===null)).toBe(true);
+    expect(jsonMock.mock.calls.map(([url])=>url)).toEqual(["/api/market/sina-board-fund-flow?kind=concept"]);
+  });
+
+  it("only an explicit Sina retry requests a fresh read and keeps source failure visible",async()=>{
+    jsonMock.mockResolvedValueOnce({data:{...sinaFlow([],"concept"),available:false,reason:"上游暂不可用"}}).mockResolvedValueOnce({data:sinaFlow()});
+    render(<Browser search="browse=funds"/>);
+    expect((await screen.findByRole("alert")).textContent).toContain("上游暂不可用");
+    expect(screen.queryByText(/本次来源范围已读全/)).toBeNull();
+    fireEvent.click(screen.getByRole("button",{name:"重试分类"}));
+    await screen.findByRole("button",{name:"查看来源概念甲成分"});
+    expect(jsonMock.mock.calls.map(([url])=>url)).toEqual(["/api/market/sina-board-fund-flow?kind=concept","/api/market/sina-board-fund-flow?kind=concept&fresh=true"]);
+    expect(screen.queryByRole("alert")).toBeNull();
+  });
+
   it("an explicit historical date wins over the cached latest selection when opening a method", async () => {
     jsonMock.mockResolvedValue({data:{strategies:[{key:"daily_picks",name:"每日精选",status:"active"}]}});
     render(<Browser search="browse=methods&date=2026-10-22" selection={selected}/>);
@@ -114,7 +263,7 @@ describe("真实分类发现的来源与范围", () => {
     render(<DiscoveryBrowser search="browse=methods&disc_method=daily_picks&method=intraday_watch&run_id=old" selection={selected}
       methodDate="2026-10-22" onNavigate={navigateMock} onTarget={targetMock} onMethodTarget={methodTarget}/>);
     await screen.findByRole("link",{name:"查看方法规则：每日精选"});
-    expect(methodTarget.mock.lastCall).toEqual([JSON.stringify(["methods","2026-10-22","daily_picks"]),row]);
+    await waitFor(()=>expect(methodTarget.mock.lastCall).toEqual([JSON.stringify(["methods","2026-10-22","daily_picks"]),row]));
     expect(jsonMock.mock.calls.map(([url])=>url)).toEqual(["/api/picks/strategy-registry?include_candidates=true"]);
   });
   it("巨大人气不能替代集中度或成为全市场主线结论", async () => {
@@ -238,17 +387,17 @@ describe("真实分类发现的来源与范围", () => {
     ["industry","5d"], ["concept","10d"],
   ] as const)("请求concept/5d却收到%s/%s时禁止显示和下钻", async (kind,range) => {
     jsonMock.mockResolvedValue({data:flow([board({name:"错误身份板块",kind})],kind,range)});
-    render(<Browser search="browse=funds&disc_kind=concept&disc_range=5d&disc_code=BK0001"/>);
+    render(<Browser search="browse=funds&disc_source=eastmoney&disc_kind=concept&disc_range=5d&disc_code=BK0001"/>);
     expect(await screen.findByRole("alert")).toHaveProperty("textContent",expect.stringContaining("身份或结构不一致"));
-    expect(screen.queryByRole("button",{name:"查看错误身份板块成分"})).toBeNull();
+    expect(screen.queryByRole("button",{name:"查看错误身份板块资金排行"})).toBeNull();
     expect(targetMock.mock.calls.every(([,target]) => target===null)).toBe(true);
   });
 
   it("整包种类正确但行属于另一种类时也不串入当前概念", async () => {
     jsonMock.mockResolvedValue({data:flow([board({name:"夹入的行业行",kind:"industry"})],"concept","5d")});
-    render(<Browser search="browse=funds&disc_kind=concept&disc_range=5d&disc_code=BK0001"/>);
+    render(<Browser search="browse=funds&disc_source=eastmoney&disc_kind=concept&disc_range=5d&disc_code=BK0001"/>);
     await screen.findByRole("alert");
-    expect(screen.queryByRole("button",{name:"查看夹入的行业行成分"})).toBeNull();
+    expect(screen.queryByRole("button",{name:"查看夹入的行业行资金排行"})).toBeNull();
     expect(targetMock.mock.calls.every(([,target]) => target===null)).toBe(true);
   });
 
@@ -256,15 +405,15 @@ describe("真实分类发现的来源与范围", () => {
     let finishOld!: (value: unknown) => void;
     jsonMock.mockImplementationOnce(() => new Promise(resolve => {finishOld=resolve;}))
       .mockResolvedValueOnce({data:flow([board({name:"新行业存档",kind:"industry"})],"industry","20d")});
-    const page = render(<Browser search="browse=funds&disc_kind=concept&disc_range=5d&disc_code=BK0001"/>);
+    const page = render(<Browser search="browse=funds&disc_source=eastmoney&disc_kind=concept&disc_range=5d&disc_code=BK0001"/>);
     await waitFor(() => expect(jsonMock).toHaveBeenCalledTimes(1));
     const signal = jsonMock.mock.calls[0][2].signal as AbortSignal;
-    page.rerender(<Browser search="browse=funds&disc_kind=industry&disc_range=20d&disc_code=BK0001"/>);
-    await screen.findByRole("button",{name:"查看新行业存档成分"});
+    page.rerender(<Browser search="browse=funds&disc_source=eastmoney&disc_kind=industry&disc_range=20d&disc_code=BK0001"/>);
+    await screen.findByRole("button",{name:"查看新行业存档资金排行"});
     expect(signal.aborted).toBe(true);
     await act(async () => finishOld({data:flow([board({name:"旧概念"})],"concept","5d")}));
     expect(screen.queryByText("旧概念")).toBeNull();
-    expect(targetMock.mock.lastCall).toEqual([JSON.stringify(["funds","industry","20d","BK0001"]),{kind:"board",code:"BK0001",name:"新行业存档"}]);
+    expect(targetMock.mock.lastCall).toEqual([JSON.stringify(["funds","industry","20d","BK0001","eastmoney"]),{kind:"board",source:"eastmoney",code:"BK0001",name:"新行业存档",catalogKind:"industry"}]);
   });
 
   it("真实净流入/流出分向排序，缺值沉底且不冒充0；排序不再发来源请求", async () => {
@@ -272,8 +421,8 @@ describe("真实分类发现的来源与范围", () => {
       board({board_code:"BK2",name:"大额流出",main_net_yi:-10}),board({board_code:"BK3",name:"真实零额",main_net_yi:0}),
       board({board_code:"BK4",name:"正向流入",main_net_yi:5})];
     jsonMock.mockResolvedValue({data:flow(rows)});
-    render(<Harness initial="browse=funds&disc_kind=concept&disc_range=intraday"/>);
-    await screen.findByRole("button",{name:"查看正向流入成分"});
+    render(<Harness initial="browse=funds&disc_source=eastmoney&disc_kind=concept&disc_range=intraday"/>);
+    await screen.findByRole("button",{name:"查看正向流入资金排行"});
     expect(resultNames()).toEqual(["正向流入","真实零额","大额流出","未知净额"]);
     const unknown = resultRows()[3];
     expect(within(unknown).getByText("未提供")).toBeTruthy();
@@ -318,8 +467,8 @@ describe("真实分类发现的来源与范围", () => {
   it("超过24条可连续下拉到全部，换筛选回到首批且不重取来源", async () => {
     const rows=Array.from({length:61},(_,i) => board({board_code:`BK${i}`,name:`方向${i}`,main_net_yi:61-i}));
     jsonMock.mockResolvedValue({data:flow(rows)});
-    const page=render(<Harness initial="browse=funds&disc_range=intraday"/>);
-    await screen.findByRole("button",{name:"查看方向0成分"});
+    const page=render(<Harness initial="browse=funds&disc_source=eastmoney&disc_range=intraday"/>);
+    await screen.findByRole("button",{name:"查看方向0资金排行"});
     expect(resultRows()).toHaveLength(24);
     const sentinel=page.container.querySelector<HTMLElement>(".h-px")!;
     vi.spyOn(sentinel,"getBoundingClientRect").mockReturnValue({...farRect,top:100,bottom:101} as DOMRect);
@@ -351,12 +500,12 @@ describe("行业概念的显式最近存档", () => {
     expect(screen.queryByRole("button",{name:"查看最近存档"})).toBeNull();
     // The old explicit archive link remains historical; a failed directory never selects it automatically.
     page.rerender(<Browser search={`${base}&disc_range=latest_saved`}/>);
-    await screen.findByRole("button",{name:"查看原行业样本成分"});
+    await screen.findByRole("button",{name:"查看原行业样本资金排行"});
     expect(navigateMock).not.toHaveBeenCalled();
     expect(screen.getByText("原榜单日期 2026-10-23")).toBeTruthy();
     expect(screen.getByText("Top50净流入存档样本，非全目录")).toBeTruthy();
     expect(screen.getByText(/历史参考，不表示即时源已恢复/)).toBeTruthy();
-    expect(screen.getByText(/成分下钻另读当前样本，不是原日归属/)).toBeTruthy();
+    expect(screen.getByText(/下钻另读当前资金排行样本，不是原日归属/)).toBeTruthy();
     expect(screen.getByText(/存档保存于/).textContent).toContain("15:10（北京） · 来源时刻未核");
     expect(screen.queryByText(/源读取完成/)).toBeNull();
     expect(screen.getByText("原日涨跌幅")).toBeTruthy();expect(screen.getByText("原当日净额")).toBeTruthy();
@@ -380,15 +529,15 @@ describe("行业概念的显式最近存档", () => {
       board({board_code:"BK1",name:"原涨幅",change_pct:2,main_net_yi:3,main_net_20d_yi:999}),
     ],"concept","latest_saved")});
     render(<Harness initial="browse=catalog&disc_kind=concept&disc_range=latest_saved"/>);
-    await screen.findByRole("button",{name:"查看原涨幅成分"});
+    await screen.findByRole("button",{name:"查看原涨幅资金排行"});
     expect(resultNames()).toEqual(["原涨幅","原零","原未知"]);
     expect(resultRows()[0].textContent).toContain("+3亿");expect(resultRows()[0].textContent).not.toContain("999");
     expect(resultRows()[1].textContent).toContain("0亿");expect(within(resultRows()[2]).getByText("未提供")).toBeTruthy();
     expect(resultRows()[2].textContent).not.toContain("0亿");
     fireEvent.change(screen.getByRole("combobox",{name:"分类排序"}),{target:{value:"asc"}});
     expect(resultNames()).toEqual(["原零","原涨幅","原未知"]);
-    fireEvent.click(screen.getByRole("button",{name:"查看原涨幅成分"}));
-    expect(targetMock.mock.lastCall).toEqual([JSON.stringify(["catalog","concept","latest_saved","BK1"]),{kind:"board",code:"BK1",name:"原涨幅"}]);
+    fireEvent.click(screen.getByRole("button",{name:"查看原涨幅资金排行"}));
+    expect(targetMock.mock.lastCall).toEqual([JSON.stringify(["catalog","concept","latest_saved","BK1"]),{kind:"board",source:"eastmoney",code:"BK1",name:"原涨幅",catalogKind:"concept"}]);
     expect(jsonMock).toHaveBeenCalledTimes(1);
     expect(screen.queryByRole("button",{name:/研究|买入|模拟/})).toBeNull();
   });
@@ -399,7 +548,7 @@ describe("行业概念的显式最近存档", () => {
     jsonMock.mockResolvedValue({data:{...flow([board({name:"不可信归档"})],"concept","latest_saved"),...patch}});
     render(<Browser search="browse=catalog&disc_kind=concept&disc_range=latest_saved&disc_code=BK0001"/>);
     expect((await screen.findByRole("alert")).textContent).toContain("身份或结构不一致");
-    expect(screen.queryByRole("button",{name:"查看不可信归档成分"})).toBeNull();
+    expect(screen.queryByRole("button",{name:"查看不可信归档资金排行"})).toBeNull();
     expect(targetMock.mock.calls.every(([,target])=>target===null)).toBe(true);
   });
 
@@ -410,17 +559,17 @@ describe("行业概念的显式最近存档", () => {
     expect(await screen.findByText("本次范围没有可展示板块；缺数不按零处理。")).toBeTruthy();
     fireEvent.click(screen.getByRole("button",{name:"刷新分类"}));
     expect((await screen.findByRole("alert")).textContent).toContain("没有可用日归档");
-    expect(screen.queryByRole("button",{name:"查看不可用附带行成分"})).toBeNull();
+    expect(screen.queryByRole("button",{name:"查看不可用附带行资金排行"})).toBeNull();
     expect(jsonMock.mock.calls.map(([url])=>url)).toEqual(Array(2).fill("/api/market/board-fund-flow?kind=industry&range=latest_saved"));
   });
 
   it("显式单日资金存档保留原日期身份；目录旧20日链接不借资金范围改义",async()=>{
     expect(discoveryLocation("browse=catalog&disc_range=latest_saved").range).toBe("latest_saved");
     expect(discoveryLocation("browse=catalog&disc_range=20d").range).toBe("intraday");
-    expect(discoveryLocation("browse=funds&disc_range=latest_saved").range).toBe("latest_saved");
+    expect(discoveryLocation("browse=funds&disc_source=eastmoney&disc_range=latest_saved").range).toBe("latest_saved");
     expect(discoveryLocation("browse=hot&disc_range=latest_saved").range).toBe("intraday");
-    render(<Browser search="browse=funds&disc_range=latest_saved"/>);
-    await screen.findByRole("button",{name:"查看默认板块成分"});
+    render(<Browser search="browse=funds&disc_source=eastmoney&disc_range=latest_saved"/>);
+    await screen.findByRole("button",{name:"查看默认板块资金排行"});
     expect(screen.queryByRole("combobox",{name:"目录范围"})).toBeNull();
     expect(within(screen.getByRole("combobox",{name:"资金区间"})).getAllByRole("option").map(option=>option.getAttribute("value"))).toEqual(["changes","intraday","latest_saved","5d","10d","20d"]);
     expect(screen.getByText("原榜单日期 2026-10-23")).toBeTruthy();
@@ -429,10 +578,10 @@ describe("行业概念的显式最近存档", () => {
   });
 
   it("资金默认独立异动统计视角，批钟和目录覆盖可见，旧intraday链接不改义",async()=>{
-    expect(discoveryLocation("browse=funds").range).toBe("changes");
-    expect(discoveryLocation("browse=funds&disc_range=intraday").range).toBe("intraday");
-    const page=render(<Harness initial="browse=funds&disc_kind=industry"/>);
-    await screen.findByRole("button",{name:"查看默认板块成分"});
+    expect(discoveryLocation("browse=funds&disc_source=eastmoney").range).toBe("changes");
+    expect(discoveryLocation("browse=funds&disc_source=eastmoney&disc_range=intraday").range).toBe("intraday");
+    const page=render(<Harness initial="browse=funds&disc_source=eastmoney&disc_kind=industry"/>);
+    await screen.findByRole("button",{name:"查看默认板块资金排行"});
     expect(screen.getByRole("combobox",{name:"资金区间"})).toHaveProperty("value","changes");
     expect(screen.getByText("东财异动统计资金 · 行业")).toBeTruthy();
     expect(screen.getByText(/原批 1015\/1015 · 正式目录匹配 1\/128 · 未核归属 344/)).toBeTruthy();
@@ -442,7 +591,7 @@ describe("行业概念的显式最近存档", () => {
     page.unmount();
     jsonMock.mockClear();
     jsonMock.mockResolvedValue({data:{...flow([],"industry","intraday"),available:false,reason:"原源断连"}});
-    render(<Browser search="browse=funds&disc_kind=industry&disc_range=intraday"/>);
+    render(<Browser search="browse=funds&disc_source=eastmoney&disc_kind=industry&disc_range=intraday"/>);
     await screen.findByText(/原源断连/);
     expect(jsonMock.mock.calls.map(([url])=>url)).toEqual(["/api/market/board-fund-flow?kind=industry&range=intraday"]);
     expect(screen.getByRole("button",{name:"查看最近存档"})).toBeTruthy();
@@ -453,8 +602,8 @@ describe("行业概念的显式最近存档", () => {
       board({board_code:"BK0001",name:"涨幅高但流出",change_pct:7,main_net_yi:-3}),
       board({board_code:"BK0002",name:"涨幅低但流入",change_pct:-2,main_net_yi:4}),
     ],"concept","latest_saved")});
-    render(<Harness initial="browse=funds&disc_range=latest_saved"/>);
-    await screen.findByRole("button",{name:"查看涨幅低但流入成分"});
+    render(<Harness initial="browse=funds&disc_source=eastmoney&disc_range=latest_saved"/>);
+    await screen.findByRole("button",{name:"查看涨幅低但流入资金排行"});
     expect(resultNames()).toEqual(["涨幅低但流入","涨幅高但流出"]);
     fireEvent.change(screen.getByRole("combobox",{name:"分类排序"}),{target:{value:"asc"}});
     expect(resultNames()).toEqual(["涨幅高但流出","涨幅低但流入"]);
@@ -462,12 +611,12 @@ describe("行业概念的显式最近存档", () => {
   });
 
   it("人工重读向原实时来源传fresh，自动首读和本地存档不增加外呼意图",async()=>{
-    const page=render(<Browser search="browse=funds&disc_range=intraday"/>);
-    await screen.findByRole("button",{name:"查看默认板块成分"});
+    const page=render(<Browser search="browse=funds&disc_source=eastmoney&disc_range=intraday"/>);
+    await screen.findByRole("button",{name:"查看默认板块资金排行"});
     fireEvent.click(screen.getByRole("button",{name:"刷新分类"}));
     await waitFor(()=>expect(jsonMock).toHaveBeenCalledTimes(2));
     expect(jsonMock.mock.calls.map(([url])=>url)).toEqual(["/api/market/board-fund-flow?kind=concept&range=intraday","/api/market/board-fund-flow?kind=concept&range=intraday&fresh=true"]);
-    page.rerender(<Browser search="browse=funds&disc_range=latest_saved"/>);
+    page.rerender(<Browser search="browse=funds&disc_source=eastmoney&disc_range=latest_saved"/>);
     await screen.findByText("原榜单日期 2026-10-23");
     fireEvent.click(screen.getByRole("button",{name:"刷新分类"}));
     await waitFor(()=>expect(jsonMock).toHaveBeenCalledTimes(4));
@@ -479,8 +628,8 @@ describe("行业概念的显式最近存档", () => {
   ],["closed_observation","收盘批次观察 · 非即时",true,19800]] as const)("%s保留原资金数值和双钟，但不冒即时结果",async(state,label,historical,age)=>{
     jsonMock.mockResolvedValue({data:{...flow([board({main_net_yi:4})],"concept","changes"),quality:"stale",observation_state:state,
       source_age_seconds:age,historical,received_at:"2026-10-25T20:30:00+08:00"}});
-    render(<Browser search="browse=funds"/>);
-    await screen.findByRole("button",{name:"查看默认板块成分"});
+    render(<Browser search="browse=funds&disc_source=eastmoney"/>);
+    await screen.findByRole("button",{name:"查看默认板块资金排行"});
     expect(screen.getByText(label)).toBeTruthy();expect(screen.getByText("+4亿")).toBeTruthy();
     expect(screen.getByText(/^来源批次 /).textContent).toContain("15:00");
     expect(screen.getByText(/源读取完成/).textContent).toContain("20:30");
@@ -489,9 +638,9 @@ describe("行业概念的显式最近存档", () => {
 
   it("批次年龄已到300秒却仍自称current时拒绝该不一致状态",async()=>{
     jsonMock.mockResolvedValue({data:{...flow([board()],"concept","changes"),source_age_seconds:300}});
-    render(<Browser search="browse=funds"/>);
+    render(<Browser search="browse=funds&disc_source=eastmoney"/>);
     await screen.findByRole("alert");
-    expect(screen.queryByRole("button",{name:"查看默认板块成分"})).toBeNull();
+    expect(screen.queryByRole("button",{name:"查看默认板块资金排行"})).toBeNull();
   });
 });
 
