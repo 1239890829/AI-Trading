@@ -550,6 +550,8 @@ CLI启动warning的兼容依据与固定版本见[语义纠错记录](../ai/sema
 
 2026-10-26原授权版本承接：从backend运行`PYTHONPATH=. .venv/bin/python scripts/tradingagents_authorization.py`默认只读。核准确source差异，用重复`--reviewed-source`与`--prepare`冻结私有计划，再以`--apply PLAN_ID`在原pin/文件/活动锁未漂移时承接同一授权。只备份授权及旧pin，不复制整份.env，不创建/延期/扩模型；重载前核无活动模型，仍走local-services/check及真实页面。
 
+嵌套owner需按实际inspect逐项核：本批仅Tencent完整模块32699b46…→73af8b2f…允许具名路径`packet_builder.owner_sources.data_providers/tencent.py`的准确正向承接。新分钟节点不在TA实际get_kline/search读取链，其他AST不变有冻结证明；仍须显式声明该完整路径及所有实际host差异。原恢复kind/旧grants、模型/依赖、期限/7unknown和非pin环境字节不动，不能手改authorization/runtime文件跳检查。
+
 新增安全同版取消恢复仅支持四分析师fan-out/root step0，必须known原答完整回送、worker真实结束、原生流/receipt/账/检查点完整；`--prepare-grant SOURCE_TASK_ID --run RUN_ID`只准备准确单次恢复许可，按同owner CAS安装。旧缺流故障不放宽。检查使用独立维护GET `/api/agent/research/tradingagents/{symbol}/recovery`；普通保存GET即使附旧query也不运行检查，恢复POST只含run_id，不重跑原答。
 
 三项参考价格研究使用原任务中心`reference_strategies`，只接受可选ISO完成日trade_date。固定本机marketdb只读、完整前缀共享，默认最新已完成源日，不接任意SQL/路径/阈值/模型。原子存档在忽略的`backend/data/picks/reference-runs/`，读取现有method-runs接口要求准确方法/日期/内容版本，不写正式选股/通知/模拟表。相同源/定义复用；首次源钟未知。`verify_reference_strategies.py`仅产描述研究，不是生产晋级回执。
