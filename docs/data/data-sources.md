@@ -720,3 +720,11 @@ TSP仅指用户给定的本机版本：`server/src/index.js`的两处金十`conn
 默认资金阅读显式标出独立产品，原`intraday/5d/10d`链接保持原合同。最近已存单日复用原10月23日Top50有限存档，二十日历史继续标原覆盖与陈旧，不暗换今天。成功档保留源hash/目录hash及日期，归档不触碰原f62数组；失败后不能只重读旧档就称来源恢复。人工fresh实际回源，闭市后台失败退避不放宽数据时效。
 
 异动统计盘中源龄按原300秒窗口逐响应重算，接收钟/缓存命中不能续龄；超窗保留数值但标stale。当天15:00闭市批显式作为收盘观察而非即时，quality=stale/historical=true；源钟为整批，逐行时点未认证。
+
+## 2026-10-26 新浪独立板块资金与成员
+
+用户允许采用其他真实来源。本轮新增的是新浪独立只读资金方向，原board_flow仍为唯一L2 owner；不透明替换东财f62、不混BK/THS/Sina成员身份。旧“非f62同义字段”限制仅阻止混算，不能据此拒绝一套明确标源的完整产品。
+
+官方[资金页脚本](https://n.sinaimg.cn/finance/cnstock/pc/zjlx.z.js?ver=1.1)声明板块`MoneyFlow.ssl_bkzj_bk`/`ssc_bkzj_bk`和成员`ssl_bkzj_ssggzj`/`ssc_bkzj_ssggzj`，接口根为新浪quotes_service；cate_type/category原身份完整保留。netamount为全部净额（元÷1e8展示亿元），ratioamount/changeratio为比例×100；r0_net仅成员/日线主力，[官方帮助](https://finance.sina.com.cn/temp/guest4377.shtml)定义单笔≥100万元，Level1通常延迟5–10分钟，非东财“超大＋大”同义。源未给当前榜/成员源秒钟，质量不得升级实时；原opendate日标签独立保留。
+
+真实验证行业48/48、概念181/181，电力62/62及锂电池112/112成员，金额与本源榜/当日日线勾稽一致。两例零报价2/9不丢成员，不补零价格或零涨幅。完整性由前后计数、分页长度、原身份唯一性/顺序校验；有界4并发、22秒整轮、单页512KiB、最多80页。正常缓存60秒、失败15秒并显式失败，人工重试可重新取源；暖读不改源钟/接收钟。读路径不另建同步器或写交易、选股、研究、通知数据。对应产品及实测归[猎场](../product/hunting-decision-design.md#2026-10-26-新浪资金方向与同源成员)、handoff和本批PR。

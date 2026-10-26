@@ -53,6 +53,7 @@ const PATH_VALUES = {
   // 板块代码（2026-09-10 补：此前缺省值 → /market/board-fund-flow/{board_code}/*
   // 两个下钻端点一直被跳过，属巡检盲区。BK1024=绿色电力，实测存在）
   board_code: "BK1024",
+  category: "gn_ldc", // 新浪锂电池分类，与BK身份独立。
   run_id: "missing-run",
   method: "daily_picks",
 };

@@ -82,6 +82,8 @@ _CHANGES_FAILURES = TTLCache("boardflow-changes-failure", ttl=86400.0, maxsize=2
 #: 单板块分钟/成员：下钻时才拉，小容量防驻留
 _MINUTE_CACHE = TTLCache("boardflow-minute", ttl=60.0, maxsize=4)
 _MEMBERS_CACHE = TTLCache("boardflow-members", ttl=60.0, maxsize=8)
+_SINA_BOARD_CACHE = TTLCache("boardflow-sina-groups", ttl=60.0, maxsize=4)
+_SINA_MEMBER_CACHE = TTLCache("boardflow-sina-members", ttl=60.0, maxsize=8)
 
 _HTTP = None
 _STORE_WRITE_LOCK = threading.RLock()
@@ -314,6 +316,75 @@ async def get_board_minute(board_code: str) -> dict:
 async def get_board_members(board_code: str) -> dict:
     """成员 Top20 保留原 60s TTL；并发同板块共享一轮，失败下一轮可恢复。"""
     return await _drill_read(_MEMBERS_CACHE, board_code, lambda: _load_board_members(board_code))
+
+
+async def _sina_read(cache, identity, load, *, fresh):
+    async def read():
+        if fresh:
+            cache.invalidate(identity)
+        else:
+            hit, value = cache.get(identity)
+            if hit:
+                return value, True
+        value = await load()
+        cache.set(identity, value, ttl=60.0 if value["available"] else 15.0)
+        return value, False
+
+    value, cached = await read_inflight(sys.modules[__name__], ("sina-board-read", cache, *identity), read)
+    if fresh and cached:
+        return await _sina_read(cache, identity, load, fresh=True)
+    return deepcopy(value)
+
+
+def _sina_unavailable(kind, *, category=None):
+    payload = {"available": False, "source": "sina_board_funds", "kind": kind,
+               "source_as_of": None, "received_at": None,
+               "coverage": {"total": None, "returned": 0, "complete": False}, "rows": [],
+               "reason": "本次新浪板块读取未完成；未用其他来源或旧金额代替",
+               "degraded": ["来源失败不证明没有板块或成员，完整范围与源时点未知"]}
+    if category is not None:
+        payload.update(category=category, name="")
+    return payload
+
+
+async def get_sina_board_fund_flow(kind="concept", *, fresh=False):
+    """Independent Sina total-net funds; never a replacement for Eastmoney f62."""
+    from app.market._sina_board_source import fetch_boards
+
+    if kind not in _KIND_FS:
+        raise ValueError("板块类别无效")
+    identity = (beijing_now().date().isoformat(), kind)
+
+    async def load():
+        try:
+            return await fetch_boards(_http(), kind, beijing_now)
+        except Exception as exc:
+            log.warning("Sina board list read failed: %s", type(exc).__name__)
+            return _sina_unavailable(kind)
+
+    return await _sina_read(_SINA_BOARD_CACHE, identity, load, fresh=fresh)
+
+
+async def get_sina_board_constituents(category, *, kind="concept", fresh=False):
+    from app.market._sina_board_source import fetch_members
+
+    if (kind not in _KIND_FS or not isinstance(category, str)
+            or not re.fullmatch(r"[A-Za-z0-9_]{1,64}", category)):
+        raise ValueError("新浪板块原始身份无效")
+    identity = (beijing_now().date().isoformat(), kind, category)
+
+    async def load():
+        try:
+            async with asyncio.timeout(22):
+                directory = await get_sina_board_fund_flow(kind, fresh=fresh)
+                if not directory["available"]:
+                    return _sina_unavailable(kind, category=category)
+                return await fetch_members(_http(), kind, category, beijing_now, directory=directory)
+        except Exception as exc:
+            log.warning("Sina board member read failed: %s", type(exc).__name__)
+            return _sina_unavailable(kind, category=category)
+
+    return await _sina_read(_SINA_MEMBER_CACHE, identity, load, fresh=fresh)
 
 
 async def _load_board_members(board_code: str) -> dict:

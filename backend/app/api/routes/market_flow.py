@@ -9,6 +9,7 @@ from __future__ import annotations
 import asyncio
 import logging
 from datetime import datetime
+from typing import Literal
 from fastapi import APIRouter, Depends, HTTPException, Query, Request
 from app.api.deps import get_hub
 from app.core.ttl_cache import cache_on
@@ -145,6 +146,26 @@ async def market_board_flow_members(board_code: str) -> dict:
     if code is None:
         raise HTTPException(status_code=422, detail=f"board_code 须为 BKxxxx 形式：{board_code!r}")
     return {"data": await get_board_members(code), "meta": {}}
+
+
+@router.get("/market/sina-board-fund-flow")
+async def sina_board_fund_flow(kind: Literal["concept", "industry"] = "concept", fresh: bool = False) -> dict:
+    """新浪正式分类资金，全净额口径，独立于东财f62与主力资金。"""
+    from app.market.board_flow import get_sina_board_fund_flow
+
+    return {"data": await get_sina_board_fund_flow(kind, fresh=fresh is True), "meta": {}}
+
+
+@router.get("/market/sina-board-fund-flow/{category}/constituents")
+async def sina_board_constituents(
+    category: str, kind: Literal["concept", "industry"] = "concept", fresh: bool = False,
+) -> dict:
+    from app.market.board_flow import get_sina_board_constituents
+    import re
+
+    if not re.fullmatch(r"[A-Za-z0-9_]{1,64}", category):
+        raise HTTPException(status_code=422, detail="category须为新浪原始分类代码")
+    return {"data": await get_sina_board_constituents(category, kind=kind, fresh=fresh is True), "meta": {}}
 
 
 @router.get("/market/board-fund/by-symbols")

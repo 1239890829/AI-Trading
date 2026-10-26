@@ -393,3 +393,7 @@ RSH-031有限前向运行与触发修复入口：[研究§39.5](research/limit-u
 ## 2026-10-26 研究操作、资金视角与战法统计
 
 [研究操作与资金阅读](product/hunting-decision-design.md#2026-10-26-研究操作与资金阅读纠错) → [十一法研究及统计](strategy/strategy-registry.md#2026-10-26-研究筛选与效果统计修订) / [完整报告阅读](ai/semantic-decisions.md#2026-10-26-研究重读反馈与角色阅读)。来源、请求与权限边界仍归原数据/性能和部署入口，原W04、W07、W06维护任务事实，发布和主目录生效查handoff及本批PR准确回执。
+
+## 2026-10-26 新浪资金方向与同源成员
+
+[独立来源合同](data/data-sources.md#2026-10-26-新浪独立板块资金与成员) → [真实来源比较](data/data-source-comparison.md#20-2026-10-26-新浪资金方向整链替代) / [猎场同源读取](product/hunting-decision-design.md#2026-10-26-新浪资金方向与同源成员)。状态仅归原W06/IMP-019，准确发布和主目录生效查handoff及关联PR；不改策略、模型或模拟资格。

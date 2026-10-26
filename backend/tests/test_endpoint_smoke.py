@@ -76,6 +76,7 @@ PATH_VALUES = {
     "name": "default",
     "strategy_id": "ma_cross",
     "board_code": "BK1024",
+    "category": "gn_ldc",  # 新浪原始概念身份，不跨源换成BK代码。
     # 补于 2026-09-11：缺它时 `/api/events/{event_id}` 被静默跳过
     # （由 test_path_values_cover_every_path_parameter 抓出）
     "event_id": "1",

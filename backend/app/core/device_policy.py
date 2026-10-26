@@ -73,6 +73,8 @@ READ_PATHS = frozenset({
     '/market/anomalies/stock',
     '/market/board-fund-flow',
     '/market/board-fund-flow/{board_code}/members',
+    '/market/sina-board-fund-flow',
+    '/market/sina-board-fund-flow/{category}/constituents',
     '/market/board-fund-flow/{board_code}/minute',
     '/market/board-fund/by-symbols',
     '/market/breadth',
