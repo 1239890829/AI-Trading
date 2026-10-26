@@ -991,4 +991,8 @@ selected消费者在原request/恢复指纹核验之后，由driver传已核pack
 
 PR #347实际安装暴露嵌套owner指纹遗漏：本次Tencent竞价修补改变全模块hash，但StoredCompanyPacketBuilder实际使用的get_kline/search及其余模块AST未改，不调用get_minute_line。原模块32699b46…到73af8b2f…剔除新增开盘锚点和分钟读取两节点后的共同AST摘要e7a8c6c8…已核。因此仅本安装显式承接允许该准确、具名、单向owner对；`packet_builder.owner_sources.data_providers/tencent.py`必须加入真实changed_sources并以原`--reviewed-source`明确列出。其它owner、键集合、builder版本/选项、模型/上游/依赖与期限继续严格比较；反向、未来和任何其他owner变化拒绝。旧冻结packet恢复pair/kind/grant完全不扩用，新规则不自动迁移授权或产生调用。真实Native identity和源篡改反例已补，CI不依赖旧Git对象或联网取证。
 
-known原答完整回送后在下一请求前合作停止，先等待worker真实终止/原生错误检查点落盘，不能杀进程制造恢复样本。本次新增同版恢复仅支持四分析师fan-out的原生step0，不泛化到后续辩论阶段；必须有准确任务/run、持久取消意图与canceled、真实known receipts及账行、完整原生流/检查点、无在途/无SQLite旁车且哈希稳定、同完整方法/model/graph及原一次性grant。缺任一则拒绝；旧早期缺流/receipt不造空文件放行。任务结果读取关联result_run_id，不把同股最近旧报告当成本任务完成。真实新生成/保存/读取/续行另取运行证据，作者自检不是独立Review或gold。
+known原答完整回送后在下一请求前合作停止，先等待worker真实终止/原生错误检查点落盘，不能杀进程制造恢复样本。`same_method_cooperative_stop_v1`同版恢复仅支持四分析师fan-out的原生step0，不泛化到后续辩论阶段；必须有准确任务/run、持久取消意图与canceled、真实known receipts及账行、完整原生流/检查点、无在途/无SQLite旁车且哈希稳定、同完整方法/model/graph及原一次性grant。缺任一则拒绝；旧早期缺流/receipt不造空文件放行。任务结果读取关联result_run_id，不把同股最近旧报告当成本任务完成。真实新生成/保存/读取/续行另取运行证据，作者自检不是独立Review或gold。
+
+真实取消揭示`counter.reserved`是先分配的编号高水位，不是实发数量。旧`same_method_cooperative_stop_v1`的连续全known规则不扩；`reviewed_cooperative_prelaunch_tail_v1`仅在已审driver/budget/transport的真实start前取消链中，接受四分析师root step0的一个末尾未启动编号。前缀答/receipt/正式账逐一known闭合，原流的取消/停止顺序、worker终止、全部源与检查点哈希一致，且已付工具提案和结果确已进入对应检查点；中间缺口、多尾、started/unknown/额外账、坏流或错阶段均拒绝。保留高水位与原件，不造尾回执、补0token或退款；新编号从原高水位+1开始，实发数量只数已核回执。
+
+该kind同方法可核同形状未来取消；本轮旧→新方法仅允许已审host恢复源码变化，必须由CLI显式引用原算子已applied的准确source-rebind-plan，读取其受控旧授权并同时绑定原run/原method及当前已授权完整method。模型、packet、原生图、上游/依赖、scope、期限与7unknown不变；原selection claim保留，新execution claim归准确新task/method。不能从HTTP、任意路径或手填hash自授旧身份，也不自动挑选历史计划；旧kind及冻结packet恢复规则不扩用。

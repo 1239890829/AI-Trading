@@ -4,7 +4,15 @@
 
 ## 1. 本轮范围与已核现场
 
-### 当前接续：嵌套owner的准确版本承接
+### 当前接续：真实取消后的未启动尾编号
+
+PR #348准确HEAD1697850aa5941993cd6546ba33bde955c9ffa918、DegradedRelease6407812354、PR CI40266051120及master CI40266557183三项通过，原release_check返回0，精确合并66cdef8082d6689ff6fc02dbd036b8226f8e1664。主目录已同步并以原CLI计划0e2bf78b…承接，非pin环境字节、原policy不变量和runtime哈希相同，期限未续、7unknown与旧grant保留；已加载build kbu4l1B900JQEKYlNcrU2，启动器检查通过。三战法17次真实原批API读取通过且原文件不变；MACD实页已核待核146/146、未符合200/5081、全批5580，22日明确无所查批次、回23日同批；明确收起提交后刷新保持关闭。
+
+真实入选000333任务63ceeed8…、run27a33e8d…已获得1个typed known答并正常取消，worker真实退出、无WAL/SHM、新unknown为0。恢复CLI拒绝`recovery_cooperative_usage_incomplete`，未安装新grant、未重跑答1。只读实据确定counter reserved=2但正式model账仅1条succeeded/known；第2号在start前取消，不是遗失用量或数据库最终化延迟。原生Fundamentals检查点已保存答1的5个工具提案及对应5个结果，其余三角色仍初始pending。当前修补只为严格证明的单个never-started尾贯通原图恢复，保留原counter2/答1/账/流和旧kind，新调用从3开始；已审方法承接、完整门、发布与真实续行完成前不能称本任务收口。
+
+修补代码[c96f2db4](https://github.com/1239890829/AI-Trading/commit/c96f2db4f758737cb90aac8e92cd7626e46403ee)冻结后完整后端8175 passed／87 skipped／372 subtests（4worker/loadfile，408.61秒），全量pyflakes通过；852个后端及1803个非文档输入无漂移。前端422个输入与PR #348本机完整/UTC各2569及build kbu4l1B900JQEKYlNcrU2的验证清单相同，本批未重复本机前端全量；新HEAD三项required CI仍必须重新通过。作者团队终审闭合安全原生解码、单尾证据、已付提案真实进入检查点、源计划和新增grant不自锁、双claim/原图及已完成保存读；原授权撤销或到期不阻断历史读取。409项整组及最后12项回归有证据，真实解码与独立只读投影一致，原件哈希不变。12:59发布前快照仍未安装本批新grant或恢复模型，真实续行与最终读取必须在承载该代码的PR后续运行回执核验。
+
+### 前版已发布：嵌套owner的准确版本承接
 
 PR #347以HEAD5847754354125ab359e61d40c024a57e576a3528和DegradedRelease6406997283完成原release_check，精确合并1579eff5db65f0e323ee4866cd3b96e8278f8d16；PR CI40260035910及master CI40260530281三项通过。主目录已同步该master、加载build gwhIdtfkVGZ3oIGTbwIbg，五份用户原件与旧32原生运行2237文件hash不变。10:55真实Chrome已连接、有当日源钟，9自选/3可见指数及盘口正常、叠加可见；这是短窗而非全天SLO。三战法正式任务f152a6a…已成功且reused=true，两次准确读一致，未新增模型或重扫原料。
 
