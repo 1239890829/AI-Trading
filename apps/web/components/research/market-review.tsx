@@ -19,6 +19,7 @@ const finite = (value: unknown): number | null => typeof value === "number" && N
 const text = (value: unknown) => typeof value === "string" && value.trim() ? value : null;
 const strings = (value: unknown): string[] => Array.isArray(value) ? value.filter((v): v is string => typeof v === "string" && !!v.trim()) : [];
 const count = (value: unknown) => { const n = finite(value); return n !== null && n >= 0 ? fmt(n, 0) : "未记录"; };
+const objectValue = (value: unknown): Record<string, unknown> | null => value && typeof value === "object" && !Array.isArray(value) ? value as Record<string, unknown> : null;
 const reviewMomentLabel = (state?: string, at?: string | null) => state === "saved" && at
   && /(?:Z|[+-]\d{2}:?\d{2})$/i.test(at) && Number.isFinite(Date.parse(at)) ? `回看于 ${dateTimeTextBJ(at)}` : "记录时点未核";
 
@@ -58,6 +59,37 @@ function MissingSegment({label, record}: {label: string; record?: ReviewProvenan
   return <p className="market-review-unavailable">{label}：{record?.reason || "旧记录未保存同日来源凭据，暂不据此判断。"}</p>;
 }
 
+function AuctionPremium({market, tradeDate, bound}: {market: ReviewData["market"] | undefined; tradeDate: string; bound: boolean}) {
+  const proof=market?.provenance?.auction_premium;
+  const reference=!bound && market?.contract_version==="date_bound_v1" && proof?.state==="unverified"
+    && compactDay(market.trade_date)===compactDay(tradeDate) && compactDay(proof.requested_trade_date)===compactDay(tradeDate)
+    && (!proof.source_trade_date || compactDay(proof.source_trade_date)===compactDay(tradeDate));
+  const value=objectValue(bound ? market?.auction_premium : reference ? market?.reported_values?.auction_premium : undefined);
+  const summary=objectValue(value?.summary);
+  const total=finite(summary?.total), judged=finite(summary?.judged), unknown=finite(summary?.unknown);
+  const countsValid=total!==null && judged!==null && unknown!==null
+    && [total,judged,unknown].every(n=>Number.isInteger(n) && n>=0) && judged+unknown===total;
+  const dateMatches=value && compactDay(text(value.trade_date))===compactDay(tradeDate);
+  const usable=dateMatches && summary && countsValid;
+  const median=judged!==null && judged>0 ? finite(summary?.median_pct) : null;
+  const share=(raw: unknown) => {const n=finite(raw);return judged!==null && judged>0 && n!==null && n>=0 && n<=1 ? `${fmt(n*100)}%` : "未判定";};
+  return <>
+    {usable ? <div aria-label={reference?"原竞价采集参考":"昨日涨停股竞价承接"}>
+      <h5>{reference?"原竞价采集参考 · 未核同日":"昨日涨停股竞价承接"}</h5>
+      {reference && <p className="market-review-caption">来源日期未核，以下为报告保存的原值，不纳入本日市场判断。</p>}
+      <dl className="market-review-facts">
+        <div><dt>可判定 / 原样本</dt><dd>{count(judged)} / {count(total)}</dd></div>
+        <div><dt>未判定</dt><dd>{count(unknown)}</dd></div>
+        <div><dt>竞价溢价中位数</dt><dd className={pctColor(median)}>{median!==null?pctText(median):"未判定"}</dd></div>
+        <div><dt>弱 / 强溢价</dt><dd>{share(summary.weak_share)} / {share(summary.strong_share)}</dd></div>
+      </dl>
+      <p className="market-review-caption">原涨停样本日 {text(value.pool_date) || "未记录"}。弱 &lt;3%、强 ≥5%；占比只以可判定样本为分母，不是上涨概率。</p>
+      {strings(value.caveats).map((caveat,i)=><p className="market-review-caption" key={i}>{caveat}</p>)}
+    </div> : value && !dateMatches ? <p className="market-review-unavailable">竞价承接：原汇总日期与报告日期不符，未展示溢价数值。</p> : value && !countsValid ? <p className="market-review-unavailable">竞价承接：原汇总计数不一致，未展示溢价数值。</p> : <MissingSegment label="竞价承接" record={proof}/>}
+    <SourceRecord record={proof} bound={bound}/>
+  </>;
+}
+
 function ReportComparison({report, previousDate, active}: {report: ReviewReportDetail; previousDate?: string; active: boolean}) {
   const [open, setOpen] = useState(false);
   const identity = `${report.trade_date}:${report.review_id}:${report.generated_at}:${previousDate ?? ""}`;
@@ -92,6 +124,7 @@ export function MarketReview({report, previousDate, active = true}: {report: Rev
   const provenance = market?.provenance;
   const bound = (key: string) => reviewSegmentBound(data, key, report.trade_date);
   const breadth = bound("breadth") ? market?.breadth : undefined;
+  const breadthCoverage=objectValue(breadth?.coverage);
   const up = finite(breadth?.up), down = finite(breadth?.down), flat = finite(breadth?.flat);
   const distribution = up !== null && down !== null && up >= 0 && down >= 0 && (flat === null || flat >= 0) && up + down + (flat ?? 0) > 0
     ? [{label: "上涨", value: up, tone: "up"}, {label: "下跌", value: down, tone: "down"}, ...(flat === null ? [] : [{label: "平盘", value: flat, tone: "flat"}])] : [];
@@ -107,7 +140,18 @@ export function MarketReview({report, previousDate, active = true}: {report: Rev
     const row=value as Record<string,unknown>;
     return typeof row.board_code==="string" && typeof row.name==="string" ? [{board_code:row.board_code,name:row.name,change_pct:finite(row.change_pct),main_net_yi:finite(row.main_net_yi)}] : [];
   }) : [];
-  const boards = bound("sector_boards") ? market?.sector_boards?.[sector] ?? [] : referenceAllowed ? referenceBoards : [];
+  const boardSummary=objectValue(market?.sector_board_summary?.[sector]);
+  const candidateBoards = bound("sector_boards") ? market?.sector_boards?.[sector] ?? [] : referenceAllowed ? referenceBoards : [];
+  const boards = bound("sector_boards") && boardSummary ? candidateBoards.filter(row=>{
+    const at=row.source_as_of, dayLabel=finite(row.source_date_ms);
+    const clockValid=!!at && /(?:Z|[+-]\d{2}:?\d{2})$/i.test(at) && Number.isFinite(Date.parse(at))
+      && compactDay(bjDate(at))===compactDay(report.trade_date) && Date.parse(at)<=Date.parse(report.generated_at)+30_000;
+    const labelValid=dayLabel!==null && Number.isInteger(dayLabel) && Number.isFinite(new Date(dayLabel).getTime())
+      && compactDay(bjDate(new Date(dayLabel).toISOString()))===compactDay(report.trade_date);
+    return (clockValid || labelValid) && (!at || clockValid) && (row.source_date_ms==null || labelValid)
+      && compactDay(row.source_trade_date)===compactDay(report.trade_date) && row.source===boardSummary.source
+      && ["verified","partial"].includes(row.binding_state ?? "");
+  }) : candidateBoards;
   const sortedBoards = [...boards].sort((a,b) => {
     const av=finite(a.change_pct), bv=finite(b.change_pct);
     if (av===null) return bv===null ? 0 : 1;
@@ -139,20 +183,23 @@ export function MarketReview({report, previousDate, active = true}: {report: Rev
         <div><dt>已记录覆盖</dt><dd>{count(breadth.total)} 家</dd></div>
       </dl>{distribution.length > 0 && <div className="market-review-breadth" role="img" aria-label={`已记录涨跌分布：${distribution.map(v=>`${v.label}${count(v.value)}家`).join("，")}${flat === null ? "；平盘未记录" : ""}`}>
         {distribution.map(v => <span key={v.tone} data-tone={v.tone} style={{flexGrow:v.value / distributionTotal}}/>)}
-      </div>}</> : <MissingSegment label="市场宽度" record={provenance?.breadth}/>}
+      </div>}{text(breadth.basis) && <p className="market-review-caption">{text(breadth.basis)}{breadthCoverage?` · 已核 ${count(breadthCoverage.verified_count)} / ${count(breadthCoverage.universe_count)} 家，未核 ${count(breadthCoverage.missing_count)} 家。`:""}</p>}{text(breadth.amount_basis) && <p className="market-review-caption">成交额口径：{text(breadth.amount_basis)}</p>}</> : <MissingSegment label="市场宽度" record={provenance?.breadth}/>}
       <SourceRecord record={provenance?.breadth} bound={bound("breadth")}/>
       {indices.length ? <div className="market-review-indices">{indices.map(q => <div key={q.symbol}><span>{q.name || q.symbol}</span><strong className={pctColor(q.change_pct)}>{pctText(q.change_pct)}</strong><span>{fmt(q.close)}</span></div>)}</div> : <MissingSegment label="指数" record={provenance?.indices}/>}
       <SourceRecord record={provenance?.indices} bound={bound("indices")}/>
       {bound("sentiment") ? <p className="market-review-phase">原情绪状态：<strong>{text(market?.sentiment.phase) || "未记录"}</strong>{text(market?.sentiment.confidence) ? ` · ${text(market?.sentiment.confidence)}` : ""}。状态不是上涨概率。</p> : <MissingSegment label="情绪状态" record={provenance?.sentiment}/>}
       <SourceRecord record={provenance?.sentiment} bound={bound("sentiment")}/>
+      <AuctionPremium market={market} tradeDate={report.trade_date} bound={bound("auction_premium")}/>
       <ReviewMetricTrends key={`${report.trade_date}:${report.review_id}:${report.generated_at}`} reference={report.metric_history_reference} tradeDate={report.trade_date}/>
       <ResearchDisclosure label="原报告的市场判断" identity={`${report.review_id}:market:${report.generated_at}`}><ul>{marketDimension?.judgements.map((v,i)=><li key={i}>{v}</li>)}</ul>{!marketDimension?.judgements.length && <p>原报告没有市场判断。</p>}<p>原判断按原报告保存，不因后来行情改写；来源未核时不升级结论。</p></ResearchDisclosure>
     </section>
     <section id={`${prefix}-sectors`} className="market-review-section" aria-label="行业与概念主线">
       <div className="market-review-section-title"><h4>{referenceAllowed ? "板块采集参考" : "主线强弱"}</h4><Link href="/market?tab=fund">核对当前板块资金</Link></div>
       {referenceAllowed && <p className="market-review-caption">原数据源按日保存的资金Top50样本，缺逐行源钟。以下只重排这份采集参考，不是已核同日的全市场领涨/领跌榜。</p>}
+      {boardSummary && bound("sector_boards") && <p className="market-review-caption">已核验 {boards.length} 条 · 源快照 {count(boardSummary.snapshot_count)} 条 / 原目录 {count(boardSummary.universe_count)} 条；候选 {count(boardSummary.candidate_count)} 条，未核 {count(boardSummary.missing_count)} 条。有限核验样本，非全市场最强主线。{text(boardSummary.reason)}</p>}
+      {boardSummary && candidateBoards.length>boards.length && <p className="market-review-caption">另有 {candidateBoards.length-boards.length} 条原行的日期或来源凭据不符，未展示。</p>}
       <div className="market-review-controls"><div role="group" aria-label="板块分类">{(["industry","concept"] as const).map(key=><button key={key} type="button" aria-pressed={sector===key} onClick={()=>{setSector(key);setAllBoards(false);}}>{key==="industry"?"行业":"概念"}</button>)}</div><div role="group" aria-label="板块排序"><button type="button" aria-pressed={sectorOrder==="strong"} onClick={()=>setSectorOrder("strong")}>涨幅优先</button><button type="button" aria-pressed={sectorOrder==="weak"} onClick={()=>setSectorOrder("weak")}>跌幅优先</button></div></div>
-      {sortedBoards.length ? <><ol className="market-review-board-list">{sortedBoards.slice(0,allBoards?undefined:8).map((board,i)=><li key={`${sector}:${board.board_code}`}><span className="market-review-rank">{i+1}</span><strong>{board.name}</strong><span className={pctColor(board.change_pct)}>{pctText(board.change_pct)}</span><span title="主力净额（亿元），不是该板块全部资金">{signedYi(board.main_net_yi)}</span></li>)}</ol><p className="market-review-caption">本报告已存 {boards.length} 条{boards.length>8 && <button type="button" aria-expanded={allBoards} onClick={()=>setAllBoards(!allBoards)}>{allBoards?"只看前8条":"展示本报告全部记录"}</button>}；有限存档不代表全市场全集。</p></> : <MissingSegment label={sector==="industry"?"行业榜":"概念榜"} record={provenance?.sector_boards}/>}
+      {sortedBoards.length ? <><ol className="market-review-board-list">{sortedBoards.slice(0,allBoards?undefined:8).map((board,i)=><li key={`${sector}:${board.board_code}`}><span className="market-review-rank">{i+1}</span><strong title={board.source_as_of?`来源时刻 ${dateTimeTextBJ(board.source_as_of)}`:undefined}>{board.name}{boardSummary && <span className="block text-[11px] font-normal text-zinc-600 dark:text-zinc-400">{board.board_code} · {["ths","ths_official_kline"].includes(board.source ?? "")?"同花顺":board.source || "来源未记录"}</span>}</strong><span className={pctColor(board.change_pct)}>{pctText(board.change_pct)}</span><span title="主力净额（亿元），不是该板块全部资金">{finite(board.main_net_yi)===null?"未提供":signedYi(board.main_net_yi)}</span></li>)}</ol><p className="market-review-caption">本报告已存 {boards.length} 条{boards.length>8 && <button type="button" aria-expanded={allBoards} onClick={()=>setAllBoards(!allBoards)}>{allBoards?"只看前8条":"展示本报告全部记录"}</button>}；有限存档不代表全市场全集。</p></> : <MissingSegment label={sector==="industry"?"行业榜":"概念榜"} record={provenance?.sector_boards}/>}
       <SourceRecord record={provenance?.sector_boards} bound={bound("sector_boards")}/>
       {bound("themes") && !!market?.themes.length && <div className="market-review-themes"><h5>原题材记录</h5>{market.themes.map((theme,i)=><span key={`${text(theme.theme)}:${i}`}>{text(theme.name) || text(theme.theme) || "未命名题材"}</span>)}</div>}
       <SourceRecord record={provenance?.themes} bound={bound("themes")}/>

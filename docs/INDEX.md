@@ -226,7 +226,7 @@
 | 想知道… | 看 |
 |---|---|
 | **用户教过的选股规则/历史教训/拍板过的决策** | **`kb/00-INDEX.md`（知识库，KB-ID 引用制）** |
-| **盘后复盘怎么自动跑（不依赖会话）** | **后端常驻调度承担**：`review-scheduler`（交易日 **15:30**，`ASHARE_REVIEW_SCHEDULER_ENABLED`）+ `picks-intraday-review`（15:35），日程可见 `GET /api/system/schedulers`，产物 `data/review/reports/YYYYMMDD.json`。⚠️ **独立 launchd 通道已拆除**（2026-09-12，裁定 B）：`~/Desktop` 属 macOS TCC 保护目录，launchd 进程无权访问 ⇒ `runs=4` 全 exit 126、**零产出**；教训见 `kb/09-verification-pitfalls.md` KB-ENG-62 |
+| **盘后复盘怎么自动跑（不依赖会话）** | **后端常驻调度承担**：`review-scheduler`（交易日 **15:30起检查**；已启用的既存日线owner按[有界等待契约](review/review-agent.md#2026-10-26-复盘内容与来源承接)承接，`ASHARE_REVIEW_SCHEDULER_ENABLED`）+ `picks-intraday-review`（15:35），日程可见 `GET /api/system/schedulers`，产物 `data/review/reports/YYYYMMDD/<payload-sha256>.json`（数据库指向当前版本）。⚠️ **独立 launchd 通道已拆除**（2026-09-12，裁定 B）：`~/Desktop` 属 macOS TCC 保护目录，launchd 进程无权访问 ⇒ `runs=4` 全 exit 126、**零产出**；教训见 `kb/09-verification-pitfalls.md` KB-ENG-62 |
 | **怎么执行一次复盘（LLM SOP）** | **`kb/06-review-framework.md`（七阶段复盘框架 v1.0，复盘任务先读它）** |
 | 趋势转龙头连板的成因实例 | `summary/stock-strategy.md`（百大集团六维剖析+规律提炼，KB-STOCK-23/24 实证） |
 | 新闻/事件模块排查与改造 | `summary/architecture-design.md` §4 + `kb/03-engineering.md`（根因/刷新方案/判定状态机/弹窗改造；剩余待办见 `retro-and-gaps.md` P0-2~P0-5） |
@@ -306,7 +306,7 @@
 | strategy/backtest-rules.md | 回测强制禁令（代码级校验） |
 | strategy/risk-management.md | 风险拦截位置与规则 |
 | halt-check-risk-analysis.md | 停牌核查/异动对情绪的传导设计 · **已删除**（精华见 `summary/stock-strategy.md`） |
-| review/review-agent.md | 盘后复盘架构、影子执行契约与缺口说明 |
+| review/review-agent.md | 盘后复盘架构、内容来源承接、影子执行契约与缺口说明 |
 | review-strategy-update-2026-09-02.md | 复盘策略增量迭代方案 · **已删除**（精华见 `summary/review-governance.md`） |
 | review/daily-review-sop.md | 每日复盘 SOP（怎么判） |
 | review/daily-review-checklist.md | 每日复盘执行清单（逐项勾） |

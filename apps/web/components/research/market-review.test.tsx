@@ -23,6 +23,9 @@ function report(): ReviewReportDetail {
 function savedOutlook(review_state?: "saved" | "unknown", reviewed_at?: string | null): NonNullable<ReviewData["outlook"]> {
   return {state:"saved",trade_date:"2026-10-23",source:"picks.morning_brief",generated_at:"2026-10-23T08:30:00+08:00",missing:[],reason:"原保存简报",directions:[{direction:"电力",logic:"原产业逻辑",basis:"原政策依据",entry_mode:"观察",entry_basis:"原参与范围",trigger_conditions:["原确认条件"],falsify_conditions:["原失效条件"],review:{outcome:"未确认",actual_pct:0,note:"成交额条件未满足"},review_state,reviewed_at}]};
 }
+function auction(value: Record<string, number | null> = {total:4,judged:3,unknown:1,median_pct:0,weak_share:0,strong_share:1/3}) {
+  return {trade_date:"2026-10-23",pool_date:"2026-10-22",items:[],summary:value,caveats:["一只源日期未核，保留在未判定分母"]};
+}
 
 describe("market review dated evidence",()=>{
   it("requires source date and requested date, not merely the report label",()=>{
@@ -84,6 +87,109 @@ describe("market review dated evidence",()=>{
     expect(screen.getByText(/不是已核同日的全市场领涨/)).toBeTruthy();
     expect(screen.getByText("强行业")).toBeTruthy();
     expect(reviewSegmentBound(value.data,"sector_boards",value.trade_date)).toBe(false);
+  });
+  it("shows source-bound auction coverage, genuine zero and unknown without another request",()=>{
+    const value=report();value.data!.market.auction_premium=auction();
+    value.data!.market.provenance!.auction_premium={...provenance(),state:"partial"};
+    render(<MarketReview report={value}/>);
+    const section=within(screen.getByLabelText("昨日涨停股竞价承接"));
+    expect(section.getByText("可判定 / 原样本").parentElement?.textContent).toBe("可判定 / 原样本3 / 4");
+    expect(section.getByText("未判定").parentElement?.textContent).toBe("未判定1");
+    expect(section.getByText("竞价溢价中位数").parentElement?.textContent).toBe("竞价溢价中位数0.00%");
+    expect(section.getByText("弱 / 强溢价").parentElement?.textContent).toBe("弱 / 强溢价0.00% / 33.33%");
+    expect(section.getByText(/2026-10-22/)).toBeTruthy();
+    expect(section.getByText(/一只源日期未核/)).toBeTruthy();
+    expect(api.getReviewReport).not.toHaveBeenCalled();
+  });
+  it("keeps unverified saved auction values separate from same-day facts and refuses mismatched provenance",()=>{
+    const value=report();value.data!.market.reported_values={auction_premium:auction()};
+    value.data!.market.provenance!.auction_premium={...provenance(),state:"unverified",source_trade_date:null,source_as_of:null,reason:"原汇总缺逐行来源日"};
+    const view=render(<MarketReview report={value}/>);
+    const reference=within(screen.getByLabelText("原竞价采集参考"));
+    expect(reference.getByText(/来源日期未核/)).toBeTruthy();
+    expect(reference.getByText("3 / 4")).toBeTruthy();
+    expect(screen.queryByLabelText("昨日涨停股竞价承接")).toBeNull();
+    value.data!.market.provenance!.auction_premium={...provenance("2026-10-22"),state:"mismatch",requested_trade_date:"2026-10-23",reason:"来源日期不符"};
+    view.rerender(<MarketReview report={value}/>);
+    expect(screen.queryByLabelText("原竞价采集参考")).toBeNull();
+    expect(screen.queryByText("3 / 4")).toBeNull();
+    expect(screen.getByText("竞价承接：来源日期不符")).toBeTruthy();
+  });
+  it("does not turn entirely unknown auction observations into zero premium",()=>{
+    const value=report();value.data!.market.auction_premium=auction({total:3,judged:0,unknown:3,median_pct:null,weak_share:null,strong_share:null});
+    value.data!.market.provenance!.auction_premium={...provenance(),state:"partial"};
+    render(<MarketReview report={value}/>);
+    const section=within(screen.getByLabelText("昨日涨停股竞价承接"));
+    expect(section.getByText("竞价溢价中位数").parentElement?.textContent).toBe("竞价溢价中位数未判定");
+    expect(section.getByText("弱 / 强溢价").parentElement?.textContent).toBe("弱 / 强溢价未判定 / 未判定");
+    expect(section.queryByText("0.00%")).toBeNull();
+  });
+  it("rejects impossible auction summary counts while keeping a visible reason",()=>{
+    const value=report();value.data!.market.auction_premium=auction({total:3,judged:3,unknown:1,median_pct:8,weak_share:0,strong_share:1});
+    value.data!.market.provenance!.auction_premium=provenance();
+    render(<MarketReview report={value}/>);
+    expect(screen.getByText("竞价承接：原汇总计数不一致，未展示溢价数值。")).toBeTruthy();
+    expect(screen.queryByText("+8.00%")).toBeNull();
+  });
+  it("rejects a different auction body date even when the section provenance claims verified",()=>{
+    const value=report();value.data!.market.auction_premium={...auction(),trade_date:"2026-10-22"};
+    value.data!.market.provenance!.auction_premium=provenance();
+    render(<MarketReview report={value}/>);
+    expect(screen.getByText("竞价承接：原汇总日期与报告日期不符，未展示溢价数值。")).toBeTruthy();
+    expect(screen.queryByLabelText("昨日涨停股竞价承接")).toBeNull();
+    expect(screen.queryByText("3 / 4")).toBeNull();
+  });
+  it("shows the verified board sample scope and original identities without inventing missing fund flow",()=>{
+    const value=report();value.data!.market.sector_board_summary={industry:{source:"ths",ranking_basis:"source_snapshot_change_pct",universe_count:90,snapshot_count:86,candidate_count:20,verified_count:2,missing_count:4,limit:20,reason:"同花顺行业源快照候选，非全集强弱结论"}};
+    value.data!.market.sector_boards!.industry=[
+      {board_code:"881001.TI",name:"原行业甲",change_pct:2,main_net_yi:null,source:"ths",source_trade_date:"2026-10-23",source_as_of:"2026-10-23T15:00:00+08:00",binding_state:"verified"},
+      {board_code:"881002.TI",name:"原行业乙",change_pct:-1,main_net_yi:0,source:"ths",source_trade_date:"2026-10-23",source_as_of:"2026-10-23T15:00:00+08:00",binding_state:"verified"},
+      {board_code:"881003.TI",name:"异日行业",change_pct:9,main_net_yi:5,source:"ths",source_trade_date:"2026-10-22",source_as_of:"2026-10-22T15:00:00+08:00",binding_state:"verified"},
+    ];
+    render(<MarketReview report={value}/>);
+    const section=within(screen.getByLabelText("行业与概念主线"));
+    expect(section.getByText(/已核验 2 条/)).toBeTruthy();
+    expect(section.getByText(/原目录 90 条/)).toBeTruthy();
+    expect(section.getByText(/非全市场/)).toBeTruthy();
+    expect(section.getByText("原行业甲")).toBeTruthy();expect(section.getByText(/881001.TI/)).toBeTruthy();
+    expect(section.queryByText("异日行业")).toBeNull();
+    expect(section.getByText("未提供")).toBeTruthy();expect(section.getByText("+0.0亿")).toBeTruthy();
+    fireEvent.click(section.getByRole("button",{name:"跌幅优先"}));
+    expect(section.getAllByRole("listitem")[0].textContent).toContain("原行业乙");
+  });
+  it("accepts an independently date-labelled official daily row without inventing an intraday clock",()=>{
+    const value=report();value.data!.market.provenance!.sector_boards={...provenance(),state:"partial",source_as_of:null};
+    value.data!.market.sector_board_summary={industry:{source:"ths_official_kline",ranking_basis:"daily_change_pct",universe_count:90,snapshot_count:86,candidate_count:20,verified_count:1,missing_count:4}};
+    value.data!.market.sector_boards!.industry=[{board_code:"881001.TI",name:"原行业日线",change_pct:2,main_net_yi:null,source:"ths_official_kline",source_trade_date:"2026-10-23",source_date_ms:Date.parse("2026-10-23T00:00:00+08:00"),source_as_of:null,binding_state:"partial"}];
+    render(<MarketReview report={value}/>);
+    const section=within(screen.getByLabelText("行业与概念主线"));
+    expect(section.getByText("原行业日线")).toBeTruthy();
+    expect(section.getByText("881001.TI · 同花顺")).toBeTruthy();
+    expect(section.getByText("未提供")).toBeTruthy();
+    expect(section.queryByTitle(/来源时刻/)).toBeNull();
+  });
+  it.each([
+    {label:"wrong official date tag",extra:{source_date_ms:Date.parse("2026-10-22T00:00:00+08:00"),source_as_of:null}},
+    {label:"timezone-free clock",extra:{source_as_of:"2026-10-23T15:00:00"}},
+    {label:"future clock",extra:{source_as_of:"2026-10-23T16:00:00+08:00"}},
+    {label:"different source",extra:{source:"other"}},
+  ])("rejects a board with $label even when its parent section says verified",({extra})=>{
+    const value=report();value.data!.market.sector_board_summary={industry:{source:"ths",snapshot_count:1,universe_count:1,candidate_count:1,verified_count:1,missing_count:0}};
+    value.data!.market.sector_boards!.industry=[{board_code:"881001.TI",name:"未核原行",change_pct:9,main_net_yi:null,source:"ths",source_trade_date:"2026-10-23",source_as_of:"2026-10-23T15:00:00+08:00",binding_state:"verified",...extra}];
+    render(<MarketReview report={value}/>);
+    const section=within(screen.getByLabelText("行业与概念主线"));
+    expect(section.queryByText("未核原行")).toBeNull();
+    expect(section.getByText(/1 条原行的日期或来源凭据不符/)).toBeTruthy();
+  });
+  it("labels the daily breadth basis and coverage while leaving missing limit counts unknown",()=>{
+    const value=report();value.data!.market.provenance!.breadth={...provenance(),state:"partial",source_as_of:null};
+    value.data!.market.breadth={up:4000,down:1500,flat:67,total:5567,total_amount:null,basis:"复权日线对照，非官方实时涨跌幅",amount_basis:"原始同日成交额仅有0笔有效记录，未汇总为0",source_day:"2026-10-23",coverage:{verified_count:5567,universe_count:5568,missing_count:1}};
+    render(<MarketReview report={value}/>);
+    const section=within(screen.getByLabelText("盘面事实"));
+    expect(section.getByText(/复权日线对照，非官方实时涨跌幅 · 已核 5,567 \/ 5,568 家，未核 1 家/)).toBeTruthy();
+    expect(section.getByText("涨停 / 跌停").parentElement?.textContent).toBe("涨停 / 跌停未记录 / 未记录");
+    expect(section.getByText("成交额").parentElement?.textContent).toBe("成交额--");
+    expect(section.getByText("成交额口径：原始同日成交额仅有0笔有效记录，未汇总为0")).toBeTruthy();
   });
   it("loads comparison only on request and refuses a different returned date",async()=>{
     const wrong=report();wrong.summary="错误日期的摘要";

@@ -63,6 +63,14 @@ def test_summarize_unknown_not_in_denominator():
     assert s["median_pct"] == 2.0
 
 
+def test_nonfinite_and_boolean_premiums_are_unknown_not_flat():
+    values = [float("nan"), float("inf"), True, 0.0]
+    assert [classify_premium(value) for value in values] == [BAND_UNKNOWN, BAND_UNKNOWN, BAND_UNKNOWN, BAND_WEAK]
+    summary = summarize_premiums(values)
+    assert summary["total"] == 4 and summary["judged"] == 1 and summary["unknown"] == 3
+    assert summary["median_pct"] == 0.0
+
+
 # ---------------------------------------------------------------- 采集
 
 
@@ -151,6 +159,35 @@ def test_collect_premium_degrades_on_auction_failure():
     ))
     assert any("竞价快照批次 1 拉取失败" in c for c in r["caveats"])
     assert r["items"][0]["band"] == BAND_UNKNOWN
+
+
+@pytest.mark.parametrize("status,pct", [("not_ready", 6.0), ("suspended", 6.0),
+                                        ("final", float("nan")), ("final", True)])
+def test_unready_and_invalid_numbers_remain_unknown(status, pct):
+    import asyncio
+    pool = [_Rec(symbol="600001", name="甲", consecutive_boards=1)]
+    rows = [{"symbol": "600001", "auction_pct": pct, "data_status": status}]
+    got = asyncio.run(collect_premium(_fake_hub(pool, rows), _ASOF))
+    assert got["summary"]["judged"] == 0 and got["summary"]["unknown"] == 1
+    assert got["items"][0]["premium_pct"] is None
+
+
+def test_duplicate_stock_cannot_select_a_convenient_return():
+    import asyncio
+    pool = [_Rec(symbol="600001", name="甲", consecutive_boards=1)]
+    rows = [{"symbol": "600001", "auction_pct": pct, "data_status": "final"} for pct in (6.0, -2.0)]
+    got = asyncio.run(collect_premium(_fake_hub(pool, rows), _ASOF))
+    assert got["summary"]["judged"] == 0 and "重复" in got["items"][0]["reason"]
+
+
+def test_ready_time_is_not_auction_source_day():
+    import asyncio
+    pool = [_Rec(symbol="600001", name="甲", consecutive_boards=1)]
+    rows = [{"symbol": "600001", "auction_pct": 6.0, "data_status": "final", "source_ready_at": 1793011616943}]
+    got = asyncio.run(collect_premium(_fake_hub(pool, rows), _ASOF))
+    assert got["summary"]["judged"] == 1
+    assert got["date_binding"] == "unverified" and "就绪" in got["source_time_semantics"]
+    assert "source_trade_date" not in got["items"][0]
 
 
 def test_collect_premium_calendar_unavailable(monkeypatch: pytest.MonkeyPatch):

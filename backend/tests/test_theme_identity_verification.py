@@ -367,7 +367,8 @@ def test_board_bars_accepts_an_explicit_successful_empty_window():
         svc = ThemeCatalogService.__new__(ThemeCatalogService)
         svc._base = "https://source.invalid"
         async with httpx.AsyncClient(transport=httpx.MockTransport(
-                lambda request: httpx.Response(200, json={"code": 0, "data": {"item": []}}))) as client:
+                lambda request: httpx.Response(200, json={"code": 0, "data": {
+                    "thscode": "885517.TI", "interval": "1d", "adjust": None, "item": []}}))) as client:
             svc._client = client
             assert await svc.fetch_board_bars("885517.TI") == []
 

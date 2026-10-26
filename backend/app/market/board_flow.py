@@ -47,6 +47,7 @@ from math import isfinite
 import os
 from pathlib import Path
 import re
+import threading
 
 from app.core.ttl_cache import TTLCache
 from app.market import trade_calendar
@@ -78,6 +79,7 @@ _MEMBERS_CACHE = TTLCache("boardflow-members", ttl=60.0, maxsize=8)
 _DRILL_READS: dict[tuple, asyncio.Task] = {}
 
 _HTTP = None
+_STORE_WRITE_LOCK = threading.RLock()
 
 
 def _http():
@@ -391,12 +393,29 @@ def _read_store_memo(path: Path, key: str) -> dict:
     return data
 
 
-def _write_json_atomic(path: Path, payload: dict) -> bool:
+def _write_json_atomic(path: Path, payload: dict, *, review_versions: dict | None = None) -> bool:
     try:
-        path.parent.mkdir(parents=True, exist_ok=True)
-        tmp = path.with_suffix(".tmp")
-        tmp.write_text(json.dumps(payload, ensure_ascii=False), encoding="utf-8")
-        os.replace(tmp, path)
+        with _STORE_WRITE_LOCK:
+            if path == _DAILY_STORE and path.exists():
+                latest = json.loads(path.read_text(encoding="utf-8"))
+                # A slow funds/member snapshot may have started before a
+                # review completed. Preserve that owner's immutable review
+                # fields instead of overwriting them with the old copy.
+                payload = deepcopy(payload)
+                for day, row in (payload.get("days") or {}).items():
+                    current = (latest.get("days") or {}).get(day) or {}
+                    if review_versions is not None and day in review_versions:
+                        actual = (current.get("review_source") or {}).get("frozen_version")
+                        if actual != review_versions[day]:
+                            return False  # stale explicit recovery cannot overwrite a newer version
+                        continue
+                    for key in ("review_source", "verified_boards", "review_summary", "review_history"):
+                        if key in current:
+                            row[key] = deepcopy(current[key])
+            path.parent.mkdir(parents=True, exist_ok=True)
+            tmp = path.with_suffix(".tmp")
+            tmp.write_text(json.dumps(payload, ensure_ascii=False), encoding="utf-8")
+            os.replace(tmp, path)
         return True
     except Exception:  # noqa: BLE001
         log.warning("boardflow store persist failed: %s", path, exc_info=True)
@@ -405,6 +424,17 @@ def _write_json_atomic(path: Path, payload: dict) -> bool:
 
 def _load_dayk_store() -> dict:
     return _read_store_memo(_DAYK_STORE, "dayk").get("boards") or {}
+
+
+async def collect_review_boards(provider, day: date, *, catalog_service=None, retry_missing: bool = False) -> dict:
+    """Original board owner: bounded official-price sample, stored in daily.json.
+
+    Funds and old Top50 arrays keep their own identities and time limitations.
+    The fallback never relabels a snapshot readiness clock as a market clock.
+    """
+    from app.market.board_review import collect_review_boards as collect
+
+    return await collect(provider, day, catalog_service=catalog_service, retry_missing=retry_missing)
 
 
 def _yesterday_ranks(kind: str) -> tuple[dict | None, str | None]:

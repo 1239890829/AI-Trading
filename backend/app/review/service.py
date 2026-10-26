@@ -145,7 +145,8 @@ class ReviewService:
         # --- 采集：市场（异步 IO）与交易、每日精选（DB 同步）并行 ---
         sentinel = getattr(self.state, "ths_sentinel", None) if self.state else None
         market_coro = collect_market(
-            self.hub, self.snapshot_service, anchor, sentinel=sentinel
+            self.hub, self.snapshot_service, anchor, sentinel=sentinel,
+            theme_catalog=getattr(self.state, "theme_catalog", None),
         )
         trading_task = asyncio.to_thread(
             collect_trading, self.session_factory, anchor, self._price_map(anchor)
@@ -327,6 +328,10 @@ async def review_scheduler(
     run_hour: int = 15,
     run_minute: int = 30,
     check_interval_seconds: float = 60.0,
+    daily_sync_enabled: bool = False,
+    daily_sync_hour: int = 16,
+    daily_sync_minute: int = 30,
+    daily_sync_check_interval_seconds: float = 300.0,
     stop: asyncio.Event | None = None,
 ):
     """收盘后自动触发复盘。
@@ -335,6 +340,8 @@ async def review_scheduler(
     1. 今天是交易日（走 trade_calendar，不用 weekday 猜）
     2. 当前北京时间已过 run_hour:run_minute
     3. 今天还没跑过（查库里有没有当日报告，**不能**用内存变量去重）
+    4. 已启用且有仓的日线来源等待其原同步完成；按原同步时点加两拍设上界，
+       到期保留真实缺失生成，不另同步、不重跑已存报告。
 
     第 3 条必须持久化：内存变量在进程重启后清空，而"时间已过触发点"这个条件
     在重启后天然成立 → 每次重启都重跑当日复盘。重跑会生成新的 review_id，
@@ -347,6 +354,7 @@ async def review_scheduler(
     from app.review.storage import report_exists
     stop = stop or asyncio.Event()
     reconciled_date: str | None = None
+    waiting_for_source: tuple[str, str] | None = None
 
     log.info("review scheduler started: daily %02d:%02d CST", run_hour, run_minute)
     while not stop.is_set():
@@ -368,11 +376,27 @@ async def review_scheduler(
                         today,
                     )
                 elif day_state and not report_exists(service.session_factory, ymd):
-                    log.info("review scheduler trigger: %s", today)
-                    try:
-                        await service.run(today)
-                    except Exception:
-                        log.exception("scheduled review failed: %s", today)
+                    from app.review.daily_market import daily_source_wait_reason
+
+                    pending = daily_source_wait_reason(
+                        now, enabled=daily_sync_enabled, sync_hour=daily_sync_hour,
+                        sync_minute=daily_sync_minute,
+                        sync_interval_seconds=daily_sync_check_interval_seconds,
+                    )
+                    if pending:
+                        identity = ymd, pending
+                        if identity != waiting_for_source:
+                            log.info("review scheduler: %s %s", today, pending)
+                            waiting_for_source = identity
+                    else:
+                        if waiting_for_source is not None:
+                            log.info("review scheduler: %s 来源等待结束，进入原复盘流程", today)
+                            waiting_for_source = None
+                        log.info("review scheduler trigger: %s", today)
+                        try:
+                            await service.run(today)
+                        except Exception:
+                            log.exception("scheduled review failed: %s", today)
                 elif day_state and reconciled_date != ymd:
                     try:
                         from app.picks.source_events import record_review_report

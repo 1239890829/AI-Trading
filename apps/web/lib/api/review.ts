@@ -36,7 +36,12 @@ export interface ReviewIndexQuote {
   source?: string | null; data_timestamp?: string | null; received_at?: string | null;
   quality?: string | null; binding_state?: string;
 }
-export interface ReviewSectorBoard {board_code: string; name: string; change_pct: number | null; main_net_yi: number | null}
+export interface ReviewSectorBoard {
+  board_code: string; name: string; change_pct: number | null; main_net_yi: number | null;
+  source?: string | null; source_trade_date?: string | null; source_as_of?: string | null;
+  source_date_ms?: number | null;
+  binding_state?: string;
+}
 export interface ReviewData {
   trade_date: string;
   collected_at?: string;
@@ -69,6 +74,8 @@ export interface ReviewData {
     themes: Record<string, unknown>[];
     theme_summary?: Record<string, unknown>;
     sector_boards?: {industry: ReviewSectorBoard[]; concept: ReviewSectorBoard[]};
+    sector_board_summary?: Record<string, unknown>;
+    auction_premium?: Record<string, unknown> | null;
     reported_values?: Record<string, unknown>;
     gaps: ReviewGap[];
   };

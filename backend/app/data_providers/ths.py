@@ -555,7 +555,10 @@ class ThsFuyaoProvider:
                 "auction_volume_ratio": num(it.get("auction_volume_ratio")),
                 "auction_unmatched": num(it.get("auction_unmatched")),
                 "pre_close_price": num(it.get("pre_close_price")),
-                "data_status": it.get("data_status"),
+                "data_status": it.get("data_status") or data.get("data_status"),
+                # This envelope clock is data readiness, not an auction trade date.
+                "source_ready_at": data.get("timestamp"),
+                "auction_phase": data.get("auction_phase"),
                 "source": SOURCE,
             })
         if not out:

@@ -1,11 +1,11 @@
 """方法论自我迭代：记录「哪种复盘方式有效、哪种无效」。
 
-需求 5 的关键不是"框架可配置"，而是**能判断配置好不好**。
-如果一个复盘框架跑一百天，从没产生过被采纳的改进项，那它就是无效的——
-但如果不记录，你永远不会知道。
+需求 5 记录复盘产出、证据限制与改进项的管理处置，供后续复核。
+没有判断或未被采纳，本身不足以证明框架无效；资料或覆盖不足时先核数据。
+管理采纳率不等于判断准确率、策略胜率或交易效果。
 
 三层元结论：
-1. **当场观察**（每次复盘）：哪些维度产出了有效判断、哪些维度空转
+1. **当场观察**（每次复盘）：各维度保留的判断、合法无动作与证据缺口
 2. **历史回顾**（跨复盘统计）：各方法论版本的改进项采纳率、回退率
 3. **演进建议**：基于上面两层，给出"下一版方法论该怎么改"
 
@@ -28,7 +28,7 @@ log = logging.getLogger(__name__)
 def build_meta_insights(
     data: ReviewData, dimensions: list[DimensionResult], method: MethodologyConfig
 ) -> list[MetaInsight]:
-    """本次复盘的当场元结论：哪些维度在空转。"""
+    """记录产出及证据限制，不以缺少判断反推策略或阈值有误。"""
     out: list[MetaInsight] = []
 
     for d in dimensions:
@@ -38,15 +38,24 @@ def build_meta_insights(
                 observation=f"维度「{d.key}」因数据缺失被阻断，本次未产出任何结论",
                 effectiveness="ineffective",
                 evidence=str(d.evidence.get("blocked_reason", ""))[:200],
-                suggestion="若该数据长期取不到，应关闭该维度而不是每次标记为 blocked",
+                suggestion="先核实数据来源、日期与覆盖；本次阻断不能证明维度无用，不据此关闭维度或调整策略阈值",
+            ))
+        elif d.status != "ok" or d.gaps:
+            out.append(MetaInsight(
+                dimension=d.key,
+                observation=f"维度「{d.key}」资料或覆盖不足，保留 {len(d.findings)} 条观察、{len(d.judgements)} 条判断；本次方法效果未核",
+                effectiveness="unknown",
+                evidence=("; ".join(f"{g.field}:{g.reason}" for g in d.gaps[:3])
+                          or "; ".join(d.findings[:3]))[:200],
+                suggestion="先核实数据来源、日期与覆盖；资料补齐前不据此调整策略或阈值，也不把判断条数当作效果证明",
             ))
         elif not d.judgements:
             out.append(MetaInsight(
                 dimension=d.key,
-                observation=f"维度「{d.key}」采集成功但无判断产出（findings {len(d.findings)} 条）",
+                observation=f"维度「{d.key}」已记录 {len(d.findings)} 条观察，本次无判断产出",
                 effectiveness="unknown",
                 evidence="; ".join(d.findings[:3])[:200],
-                suggestion="观察是否持续空转；连续空转说明该维度阈值过高或指标选取不当",
+                suggestion="无判断可能是合法空集合或无需行动；先核对原触发条件，不能仅凭无判断认定阈值或指标有问题",
             ))
         else:
             out.append(MetaInsight(

@@ -53,7 +53,33 @@ def evidence(day: date, *, state: str = "unavailable", source: str | None = None
     )
 
 
-def quote_evidence(quote: Any, day: date, now: datetime) -> SectionProvenance:
+def _closed_report_observation(raw: dict, day: date, now: datetime, stamp: datetime) -> bool:
+    """Recognize the Hub's confirmed close, without upgrading live quote quality."""
+    reasons = raw.get("quality_reasons")
+    if (not isinstance(reasons, list) or not reasons
+            or not all(isinstance(reason, str) for reason in reasons)
+            or "market_closed" not in reasons
+            or not set(reasons) <= {"market_closed", "off_session"}):
+        return False
+    session = raw.get("display_session")
+    if not isinstance(session, dict):
+        session = vars(session) if hasattr(session, "__dict__") else {}
+    observed, tail, checked = (source_time(session.get("as_of")),
+                               source_time(session.get("expected_source_after")), source_time(now))
+    close = datetime(day.year, day.month, day.day, 15, tzinfo=BJ_TZ)
+    return bool(
+        checked and observed and tail and session.get("phase") == "closed"
+        and session.get("trade_day_result") is True
+        and date_key(session.get("trade_date")) == day.isoformat()
+        and date_key(session.get("expected_source_date")) == day.isoformat()
+        and checked.date() == day and observed.date() == day and tail.date() == day
+        and close <= checked and close <= stamp
+        and tail <= close and tail <= stamp <= observed <= checked + timedelta(seconds=30)
+    )
+
+
+def quote_evidence(quote: Any, day: date, now: datetime, *,
+                   allow_closed_observation: bool = False) -> SectionProvenance:
     raw = quote if isinstance(quote, dict) else vars(quote)
     stamp = source_time(raw.get("data_timestamp"))
     source = raw.get("source")
@@ -66,7 +92,11 @@ def quote_evidence(quote: Any, day: date, now: datetime) -> SectionProvenance:
     elif stamp > now + timedelta(seconds=30):
         state, reason = "mismatch", "报价源时刻在采集时刻之后，未进入当日事实"
     elif quality not in {"high", "medium"}:
-        state, reason = "unverified", "报价质量不可用于有效复盘事实"
+        if (allow_closed_observation and quality == "stale"
+                and _closed_report_observation(raw, day, now, stamp)):
+            state, reason = "partial", "日历已确认闭市；保留同日收盘后源观测及原stale质量，不当作实时行情或官方收盘价"
+        else:
+            state, reason = "unverified", "报价质量不可用于有效复盘事实"
     elif quality == "medium":
         state, reason = "partial", "源日期匹配，报价自身质量降级；保留原质量与时点"
     return evidence(day, state=state, source=str(source) if source else None,
