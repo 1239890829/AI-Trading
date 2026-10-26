@@ -15,6 +15,7 @@ import os
 from pathlib import Path
 import re
 import sqlite3
+import subprocess
 import tempfile
 import uuid
 
@@ -39,6 +40,16 @@ BINDING_KEYS = {"selection", "source_claim_sha256", "packet_sha256", "config_sha
 HISTORY_KEYS = {"grant_id", "grant_sha256", "task_id", "method_identity", "call_from", "call_to", "claim_sha256"}
 MAX_RECOVERY_HISTORY = 8  # Bounded artifact parsing, not a model-call allowance.
 PARALLEL_ANALYSTS = {"Market Analyst", "Sentiment Analyst", "News Analyst", "Fundamentals Analyst"}
+COOPERATIVE_TAIL_KIND = "reviewed_cooperative_prelaunch_tail_v1"
+# Allocation precedes reserve, atomic start precedes launch, and release can
+# delete only never-started reservations. Future implementations inherit none
+# of these proofs merely by retaining their file names.
+COOPERATIVE_TAIL_SOURCES = {
+    "driver.py": "0bb69fbf9be1ccf43e71e8fb19ce8c9114ca7c9bbf1e1a0bbb88b2dc65533d08",
+    "agent_budget.py": "cd3ce2af0ff893f3570185a6d811df9c9bacf4f5d51d9824eb8afc9b487d72ec",
+    "codex_transport.py": "4bd6a2321ebb68dc0891258e42eb2cf0e8102acc763aa1f22acb7c9db962d876",
+    "transport_process.py": "ff2812c801be847b6c6e83b0edf109f82fb7fe65ea9077e4473597437af4e592",
+}
 PARALLEL_BINDING_KEYS = (BINDING_KEYS - {"expected_pending_role"}) | {"expected_pending_roles", "pending_message_fingerprints"}
 EMPTY_SHA = hashlib.sha256(b"").hexdigest()
 COOPERATIVE_STAGE_MESSAGE = "同版恢复仅支持初始四分析师阶段（root step 0）的已知步骤；当前检查点未满足该范围。原任务、原答和用量保留，未重新调用。"
@@ -157,6 +168,32 @@ def _json(path):
 
 def _compatibility(grant, identity):
     old, new, compatibility = (grant[key] for key in ("source_method_identity", "continuation_method_identity", "compatibility"))
+    if isinstance(compatibility, dict) and compatibility.get("kind") == COOPERATIVE_TAIL_KIND:
+        if (new != identity or not isinstance(old, dict) or not isinstance(new, dict) or set(compatibility) != {"kind", "source_hash_pairs"}
+                or not isinstance(grant.get("binding", {}).get("cooperative_prelaunch_tail"), dict)):
+            raise _blocked("recovery_cooperative_tail_method_drift")
+        a, b = deepcopy(old), deepcopy(new)
+        af, bf = a.pop("source_files", {}), b.pop("source_files", {})
+        if not isinstance(af, dict) or not isinstance(bf, dict):
+            raise _blocked("recovery_cooperative_tail_method_drift")
+        changed = {key for key in af.keys() | bf.keys() if af.get(key) != bf.get(key)}
+        pairs = {key: {"old": af.get(key), "new": bf.get(key)} for key in changed}
+        proof = grant["binding"]["cooperative_prelaunch_tail"].get("source_rebind_plan")
+        if (a != b or af.keys() != bf.keys() or compatibility["source_hash_pairs"] != pairs
+                or changed not in (set(), {"tradingagents_recovery.py"})
+                or any(not _hash(value) for value in [*af.values(), *bf.values()])
+                or any(af.get(key) != value or bf.get(key) != value for key, value in COOPERATIVE_TAIL_SOURCES.items())):
+            raise _blocked("recovery_cooperative_tail_method_drift")
+        if changed:
+            from app.services._tradingagents_authorization import _source_rebind_plan
+            if not isinstance(proof, dict):
+                raise _blocked("recovery_source_rebind_plan_required")
+            source, _ = _source_rebind_plan(proof.get("plan_id"), new, expected=proof)
+            if source != old:
+                raise _blocked("recovery_cooperative_tail_method_drift")
+        elif proof is not None:
+            raise _blocked("recovery_cooperative_tail_method_drift")
+        return research._digest(old), research._digest(new)
     if (isinstance(compatibility, dict) and compatibility.get("kind") == "same_method_cooperative_stop_v1"):
         if (compatibility != {"kind": "same_method_cooperative_stop_v1", "source_hash_pairs": {}}
                 or old != new or new != identity or not isinstance(old, dict)
@@ -228,15 +265,20 @@ def _cooperative_stop(grant, run, sf=None):
     proof = binding["cooperative_stop"]
     required = {"version", "source_execution_sha256", "source_model_usage_facts_sha256", "cancel_requested_at", "finished_at", "pending_roles"}
     pending = proof.get("pending_roles")
+    tail = binding.get("cooperative_prelaunch_tail")
+    new_kind = grant["compatibility"].get("kind") == COOPERATIVE_TAIL_KIND
     if (set(proof) != required or type(proof["version"]) is not int or proof["version"] != 1
             or not isinstance(pending, list) or not 1 <= len(pending) <= 4 or len(set(pending)) != len(pending)
             or not set(pending) <= PARALLEL_ANALYSTS or binding["expected_pending_role"] != pending[0]
-            or grant["compatibility"] != {"kind": "same_method_cooperative_stop_v1", "source_hash_pairs": {}}
-            or grant["source_method_identity"] != grant["continuation_method_identity"]):
+            or not new_kind and (tail is not None
+                or grant["compatibility"] != {"kind": "same_method_cooperative_stop_v1", "source_hash_pairs": {}}
+                or grant["source_method_identity"] != grant["continuation_method_identity"])):
         raise _blocked("recovery_cooperative_proof_invalid")
     counter = binding["call_counter"]
+    gap = _cooperative_tail_gap(grant, run) if new_kind else None
+    expected = {str(n) for n in range(1, counter + 1) if n != gap} if type(counter) is int else set()
     if (type(counter) is not int or not 0 < counter <= 4096
-            or set(binding["outputs"]) != {str(n) for n in range(1, counter + 1)}
+            or set(binding["outputs"]) != expected
             or set(binding["usage_receipts"]) != set(binding["outputs"])):
         raise _blocked("recovery_cooperative_usage_incomplete")
     archive = _safe(run / "recovery-history" / grant["grant_id"])
@@ -260,11 +302,13 @@ def _cooperative_stop(grant, run, sf=None):
                 or task.finished_at > research._now().replace(tzinfo=None)
                 or task.finished_at.replace(tzinfo=research._now().tzinfo) > research._clock(grant["authorized_at"])
                 or task.cancel_requested_at.isoformat() != proof["cancel_requested_at"] or task.finished_at.isoformat() != proof["finished_at"]
-                or research._digest(facts) != proof["source_model_usage_facts_sha256"] or len(rows) != counter):
+                or research._digest(facts) != proof["source_model_usage_facts_sha256"] or len(rows) != len(expected)):
             raise _blocked("recovery_cooperative_task_or_usage_drift")
         by_id = {row.id: row for row in rows}
         seen, finals = set(), []
         for number in range(1, counter + 1):
+            if number == gap:
+                continue
             key = str(number)
             receipt, output = (_json(run / folder / (key + ".json")) for folder in ("usage-receipts", "model-outputs"))
             usage = project_usage_evidence(receipt.get("usage"))[0]
@@ -291,6 +335,238 @@ def _cooperative_stop(grant, run, sf=None):
         if finals != binding["completed_roles"] or {row["role"] for row in finals} != PARALLEL_ANALYSTS - set(pending):
             raise _blocked("recovery_cooperative_roles_drift")
     return facts
+
+
+def _cooperative_tail_gap(grant, run):
+    """Prove exactly one last allocation never became a started model call."""
+    binding = grant["binding"]
+    tail, counter = binding.get("cooperative_prelaunch_tail"), binding["call_counter"]
+    keys = {"version", "call_id", "model_receipts_prefix", "first_error_sha256", "source_rebind_plan", "checkpoint_messages"}
+    if (grant["compatibility"].get("kind") != COOPERATIVE_TAIL_KIND or not isinstance(tail, dict)
+            or set(tail) != keys or type(tail["version"]) is not int or tail["version"] != 1
+            or type(counter) is not int or not 1 < counter <= 4096 or type(tail["call_id"]) is not int
+            or tail["call_id"] != counter or binding.get("recovery_history", [])
+            or any(grant["source_method_identity"]["source_files"].get(key) != value for key, value in COOPERATIVE_TAIL_SOURCES.items())
+            or set(binding["outputs"]) != {str(n) for n in range(1, counter)}
+            or set(binding["usage_receipts"]) != set(binding["outputs"])
+            or any(_safe(run / folder / f"{counter}.json").exists() for folder in ("model-outputs", "usage-receipts"))):
+        raise _blocked("recovery_cooperative_tail_invalid")
+    prefix = tail["model_receipts_prefix"]
+    if (not isinstance(prefix, dict) or set(prefix) != {"bytes", "sha256"} or type(prefix["bytes"]) is not int
+            or not 0 < prefix["bytes"] <= MAX_BYTES or not _hash(prefix["sha256"])):
+        raise _blocked("recovery_cooperative_tail_stream_drift")
+    body = _body(run / "graph/model-receipts.jsonl")[:prefix["bytes"]]
+    if len(body) != prefix["bytes"] or hashlib.sha256(body).hexdigest() != prefix["sha256"]:
+        raise _blocked("recovery_cooperative_tail_stream_drift")
+    rows = [json.loads(line) for line in body.splitlines() if line.strip()]
+    returned, errors = rows[:counter - 1], rows[counter - 1:]
+    if not 1 <= len(errors) <= 16 or len(returned) != counter - 1:
+        raise _blocked("recovery_cooperative_tail_stream_drift")
+    for number, row in enumerate(returned, 1):
+        output = _json(run / "model-outputs" / f"{number}.json")
+        if (not isinstance(row, dict) or row.get("status") != "returned" or row.get("call_id") != number or type(row.get("call_id")) is not int
+                or row.get("role") != output["role"] or row.get("response_sha256") != output["output_sha256"]):
+            raise _blocked("recovery_cooperative_tail_stream_drift")
+    cancel, finish = (datetime.fromisoformat(binding["cooperative_stop"][key]) for key in ("cancel_requested_at", "finished_at"))
+    cancel = cancel.replace(tzinfo=research._now().tzinfo) if cancel.tzinfo is None else cancel
+    finish = finish.replace(tzinfo=research._now().tzinfo) if finish.tzinfo is None else finish
+    for index, row in enumerate(errors):
+        if (not isinstance(row, dict) or row.get("status") != "broker_error" or row.get("call_id") is not None
+                or row.get("role") not in binding["cooperative_stop"]["pending_roles"]
+                or row.get("error_type") != ("{'kind': 'CancelledError'}" if index == 0 else "{'kind': 'DriverUnavailable'}")
+                or not cancel <= research._clock(row.get("at")) <= finish):
+            raise _blocked("recovery_cooperative_tail_stream_drift")
+    if (research._digest(errors[0]) != tail["first_error_sha256"]
+            or any(row.get("case_id") != grant["symbol"] or row.get("arm") != "ta-luna" for row in rows)):
+        raise _blocked("recovery_cooperative_tail_stream_drift")
+    return counter
+
+
+def _passive_checkpoint_messages(messages):
+    """Recognize inert native message data; never import or invoke constructors."""
+    from types import SimpleNamespace
+
+    allowed = {"human": ("langchain_core.messages.human", "HumanMessage"),
+        "ai": ("langchain_core.messages.ai", "AIMessage"), "tool": ("langchain_core.messages.tool", "ToolMessage"),
+        "system": ("langchain_core.messages.system", "SystemMessage")}
+    if not isinstance(messages, list) or not 1 <= len(messages) <= 128:
+        raise ValueError("bounded native messages required")
+    passive = []
+    for message in messages:
+        if not isinstance(message, dict) or message.get("ext") != 5:
+            raise ValueError("passive message encoding required")
+        raw = message.get("raw")
+        if not isinstance(raw, list) or len(raw) != 4 or not isinstance(raw[2], dict):
+            raise ValueError("passive message constructor required")
+        kwargs = raw[2]
+        if raw[3] != "model_validate_json" or tuple(raw[:2]) != allowed.get(kwargs.get("type")):
+            raise ValueError("unapproved message type")
+        passive.append(SimpleNamespace(**kwargs))
+    return passive
+
+
+_TAIL_CP_SCRIPT = r'''
+import hashlib, json, resource, sqlite3, sys
+from copy import deepcopy
+from pathlib import Path
+from types import SimpleNamespace
+from urllib.parse import quote
+import ormsgpack
+resource.setrlimit(resource.RLIMIT_CPU, (5, 5))
+resource.setrlimit(resource.RLIMIT_FSIZE, (0, 0))
+resource.setrlimit(resource.RLIMIT_NOFILE, (64, 64))
+CodecError = ValueError
+depth = 0
+def passive_ext(code, body):
+    global depth
+    depth += 1
+    try:
+        if depth > 64 or len(body) > 8388608:
+            raise ValueError('bounded extension required')
+        return {'ext': code, 'raw': ormsgpack.unpackb(body, ext_hook=passive_ext)}
+    finally:
+        depth -= 1
+def digest(value):
+    return hashlib.sha256(json.dumps(value, ensure_ascii=False, sort_keys=True,
+        separators=(',', ':'), allow_nan=False).encode()).hexdigest()
+def project():
+    path = Path(sys.argv[1])
+    supplied = sys.stdin.buffer.read(1048577)
+    if len(supplied) > 1048576:
+        raise ValueError('bounded proposal identity required')
+    expected = json.loads(supplied)
+    if path.is_symlink() or any(Path(str(path)+tail).exists() for tail in ('-wal', '-shm')):
+        raise ValueError('closed checkpoint required')
+    before = hashlib.sha256(path.read_bytes()).hexdigest()
+    uri = 'file:' + quote(str(path.resolve()), safe='/') + '?mode=ro&immutable=1'
+    with sqlite3.connect(uri, uri=True) as db:
+        db.execute('PRAGMA query_only=ON')
+        db.set_authorizer(lambda action,*args: sqlite3.SQLITE_DENY if action in {
+            sqlite3.SQLITE_INSERT,sqlite3.SQLITE_UPDATE,sqlite3.SQLITE_DELETE,
+            sqlite3.SQLITE_ATTACH,sqlite3.SQLITE_DETACH,sqlite3.SQLITE_ALTER_TABLE,
+            sqlite3.SQLITE_CREATE_TABLE,sqlite3.SQLITE_DROP_TABLE} else sqlite3.SQLITE_OK)
+        rows = db.execute("SELECT checkpoint_ns,MAX(checkpoint_id) FROM checkpoints WHERE checkpoint_ns<>'' GROUP BY checkpoint_ns LIMIT 5").fetchall()
+        if len(rows) != 4:
+            raise ValueError('four original analyst namespaces required')
+        all_wire = {}
+        for ns, checkpoint_id in rows:
+            role = ns.partition(':')[0]
+            if role in all_wire:
+                raise ValueError('unique role required')
+            kind, body = db.execute('SELECT type,checkpoint FROM checkpoints WHERE checkpoint_ns=? AND checkpoint_id=?', (ns,checkpoint_id)).fetchone()
+            if kind != 'msgpack' or len(body) > 8388608:
+                raise ValueError('bounded native msgpack required')
+            checkpoint = ormsgpack.unpackb(body, ext_hook=passive_ext)
+            messages = checkpoint['channel_values']['messages']
+            all_wire[role] = serialize_langchain_messages(_passive_checkpoint_messages(messages))
+    proofs = {}
+    for number, proposal in expected.items():
+        role = proposal['role']
+        wire = all_wire[role]
+        matches = [i for i,row in enumerate(wire) if row['role']=='assistant' and digest(row)==proposal['assistant_sha256']]
+        if len(matches) != 1:
+            raise ValueError('original paid proposal missing or repeated in checkpoint')
+        start = matches[0] + 1
+        tools = wire[start:start+len(proposal['tool_ids'])]
+        if (len(tools)!=len(proposal['tool_ids']) or
+            any(row['role']!='tool' or row['tool_call_id']!=identity or row['status'] not in ('success','error')
+                for row,identity in zip(tools,proposal['tool_ids']))):
+            raise ValueError('original frozen tool results missing')
+        proofs[number] = {**proposal, 'tool_results_sha256':digest(tools)}
+    if hashlib.sha256(path.read_bytes()).hexdigest()!=before:
+        raise ValueError('checkpoint changed')
+    return {'messages':{role:[digest(row) for row in rows] for role,rows in all_wire.items()},'proposals':proofs}
+'''
+
+
+def _checkpoint_proposals(run, binding):
+    prefix = binding["cooperative_prelaunch_tail"]["model_receipts_prefix"]["bytes"]
+    rows = [json.loads(line) for line in _body(run / "graph/model-receipts.jsonl")[:prefix].splitlines() if line.strip()]
+    proposals = {}
+    for number in sorted(binding["outputs"], key=int):
+        output = _json(run / "model-outputs" / (number + ".json"))
+        value, role = output["structured_output"], output["role"]
+        calls = value.get("tool_calls")
+        if not calls:
+            continue  # Completed role reports are proved by the root checkpoint.
+        record = rows[int(number) - 1]
+        mapping = record.get("tool_call_id_map")
+        if (not isinstance(value.get("content"), str) or not isinstance(calls, list) or not 1 <= len(calls) <= 16
+                or not isinstance(mapping, list) or len(mapping) != len(calls)):
+            raise _blocked("recovery_cooperative_tail_proposal_invalid")
+        by_id = {item.get("model_id"): item.get("graph_id") for item in mapping if isinstance(item, dict)}
+        if (len(by_id) != len(calls) or len(set(by_id.values())) != len(calls)
+                or any(not isinstance(identity, str) or not identity for identity in by_id.values())):
+            raise _blocked("recovery_cooperative_tail_proposal_invalid")
+        try:
+            projected = [{"id": by_id[call["id"]], "name": call["name"], "args": call["arguments"], "type": "tool_call"}
+                         for call in calls]
+        except (TypeError, KeyError):
+            raise _blocked("recovery_cooperative_tail_proposal_invalid") from None
+        wire = {"role": "assistant", "content": value["content"], "tool_calls": projected}
+        proposals[number] = {"role": role, "assistant_sha256": research._digest(wire),
+                             "tool_ids": [call["id"] for call in projected]}
+    return proposals
+
+
+def _checkpoint_wire_projection(run, symbol, binding, driver=None):
+    """Fixed local decoder: pinned native dependencies; no class construction or context export."""
+    import inspect
+    from app.services.tradingagents_driver import DriverUnavailable, driver_from_server_manifest, sandbox_policy
+    from app.services.tradingagents_native.native_codec import serialize_langchain_messages
+
+    driver = driver or driver_from_server_manifest(research.ROOT / "runtime.json", enabled=True)
+    try:
+        # This decoder executes native dependency code. A cached ordinary-read
+        # observation is insufficient at this explicit execution boundary.
+        verify = getattr(driver, "_dependency_identity", None)
+        if not callable(verify):
+            raise ValueError("native dependency proof required")
+        verify(force=True)
+        driver.method_identity()
+    except (OSError, ValueError, DriverUnavailable):
+        raise _blocked("recovery_cooperative_tail_decoder_unavailable") from None
+    proposals = _checkpoint_proposals(run, binding)
+    checkpoint = _safe(run / "graph/cache/checkpoints" / (symbol + ".db"))
+    before = _checkpoint_files(checkpoint)
+    if before["-wal"] is not None or before["-shm"] is not None:
+        raise _blocked("recovery_cooperative_writer_not_closed")
+    # This one existing codec remains the wire owner. Copy its fixed source into
+    # the restricted decoder; do not independently invent a message hash format.
+    script = "from __future__ import annotations\n" + _TAIL_CP_SCRIPT
+    script += "\n" + inspect.getsource(_passive_checkpoint_messages) + "\n" + inspect.getsource(serialize_langchain_messages)
+    script += "\nprint(json.dumps(project(),ensure_ascii=False))\n"
+    with tempfile.TemporaryDirectory(prefix="ta-cp-", dir="/tmp") as temporary:
+        folder = Path(temporary)
+        policy = sandbox_policy(python=driver.python, dependencies=driver.dependencies, upstream=driver.upstream,
+            code=folder, run=run, socket_path=folder / "unused.sock")
+        # The graph policy's output and IPC permissions are deliberately absent.
+        policy = "\n".join(line for line in policy.splitlines() if not line.startswith((
+            "(allow file-write*", "(allow network-outbound", "(allow file-read* file-write-data"))) + "\n"
+        policy_path = folder / "read.sb"
+        policy_path.write_text(policy)
+        try:
+            result = subprocess.run([str(driver.sandbox), "-f", str(policy_path), str(driver.python), "-I", "-B", "-c", script, str(checkpoint)],
+                input=json.dumps(proposals), text=True, capture_output=True, timeout=12,
+                env={"PATH": "/usr/bin:/bin", "HOME": temporary, "TMPDIR": temporary, "PYTHONDONTWRITEBYTECODE": "1"}, cwd=folder)
+        except (OSError, subprocess.TimeoutExpired):
+            raise _blocked("recovery_cooperative_tail_decoder_unavailable") from None
+    if result.returncode or len(result.stdout.encode()) > 1024 * 1024 or _checkpoint_files(checkpoint) != before:
+        raise _blocked("recovery_cooperative_tail_decoder_invalid")
+    try:
+        projection = json.loads(result.stdout)
+    except (ValueError, TypeError):
+        raise _blocked("recovery_cooperative_tail_checkpoint_invalid") from None
+    if (not isinstance(projection, dict) or set(projection) != {"messages", "proposals"}
+            or not isinstance(projection["messages"], dict) or not isinstance(projection["proposals"], dict)
+            or set(projection["messages"]) != PARALLEL_ANALYSTS or set(projection["proposals"]) != set(proposals)
+            or any(not isinstance(rows, list) or not 1 <= len(rows) <= 128 or any(not _hash(row) for row in rows)
+                   for rows in projection["messages"].values())
+            or any(not isinstance(proof, dict) for proof in projection["proposals"].values())
+            or any({key: value for key, value in proof.items() if key != "tool_results_sha256"} != proposals[number]
+                   or not _hash(proof.get("tool_results_sha256")) for number, proof in projection["proposals"].items())):
+        raise _blocked("recovery_cooperative_tail_checkpoint_invalid")
+    return projection
 
 
 def _cooperative_checkpoint(run, symbol, binding, *, offline=None, discover=False):
@@ -323,7 +599,8 @@ def _cooperative_checkpoint(run, symbol, binding, *, offline=None, discover=Fals
     return pending
 
 
-def prepare_cooperative_grant(source_task_id, run_id, identity, *, grant_id, authorized_at, valid_until, sf):
+def prepare_cooperative_grant(source_task_id, run_id, identity, *, grant_id, authorized_at, valid_until, sf,
+                              prelaunch_tail=False, source_identity=None, source_rebind_proof=None, driver=None):
     """Initial-analysis-stage-only: prepare an exact grant; never install or dispatch."""
     _id(source_task_id); _id(run_id); _id(grant_id)
     with sf() as db:
@@ -339,8 +616,12 @@ def prepare_cooperative_grant(source_task_id, run_id, identity, *, grant_id, aut
             AgentResourceUsage.kind == "model").order_by(AgentResourceUsage.id).limit(4097)).all()
         facts = [{column.name: (value.isoformat() if isinstance(value, datetime) else value)
             for column in AgentResourceUsage.__table__.columns for value in (getattr(row, column.name),)} for row in rows]
-    folder, method = research._folder(symbol), research._digest(identity)
+    original_identity = source_identity if prelaunch_tail and source_identity is not None else identity
+    folder, method = research._folder(symbol), research._digest(original_identity)
     run = _safe(folder / run_id)
+    if (prelaunch_tail and original_identity == identity
+            and _json(run / "execution.json").get("method_sha256") != method):
+        raise _blocked("recovery_source_rebind_plan_required")
     if (run / "result.json").exists() or (run / "recovery-history").exists():
         raise _blocked("recovery_cooperative_already_owned")
     claims = [(_sha(p), _json(p)) for p in folder.glob("selection-*.json")]
@@ -379,12 +660,26 @@ def prepare_cooperative_grant(source_task_id, run_id, identity, *, grant_id, aut
             "finished_at": finished_at, "pending_roles": pending}}
     grant = {"version": 1, "grant_id": grant_id, "user_authorization": "EXPLICIT", "authorized_at": authorized_at,
         "valid_until": valid_until, "source_task_id": source_task_id, "symbol": symbol, "run_id": run_id,
-        "source_method_identity": deepcopy(identity), "continuation_method_identity": deepcopy(identity),
+        "source_method_identity": deepcopy(original_identity), "continuation_method_identity": deepcopy(identity),
         "compatibility": {"kind": "same_method_cooperative_stop_v1", "source_hash_pairs": {}}, "binding": binding}
+    if prelaunch_tail:
+        old_files, new_files = original_identity["source_files"], identity["source_files"]
+        pairs = {key: {"old": old_files.get(key), "new": new_files.get(key)} for key in old_files.keys() | new_files.keys()
+                 if old_files.get(key) != new_files.get(key)}
+        grant["compatibility"] = {"kind": COOPERATIVE_TAIL_KIND, "source_hash_pairs": pairs}
+        body = _body(run / "graph/model-receipts.jsonl")
+        records = [json.loads(line) for line in body.splitlines() if line.strip()]
+        first = records[counter - 1] if len(records) >= counter else {}
+        binding["cooperative_prelaunch_tail"] = {"version": 1, "call_id": counter,
+            "model_receipts_prefix": {"bytes": len(body), "sha256": hashlib.sha256(body).hexdigest()},
+            "first_error_sha256": research._digest(first), "source_rebind_plan": source_rebind_proof,
+            "checkpoint_messages": {}}
     _source_task(source_task_id, symbol, sf)
     _compatibility(grant, identity)
-    _binding(binding)
     _cooperative_stop(grant, run, sf)
+    if prelaunch_tail:
+        binding["cooperative_prelaunch_tail"]["checkpoint_messages"] = _checkpoint_wire_projection(run, symbol, binding, driver)
+    _binding(binding)
     offline = {"grant": grant, "session_factory": sf}
     binding["checkpoint"] = checkpoint_snapshot(run, symbol, offline=offline)
     _frozen_records(run, binding, _history_segments(grant, run, sf), grant=grant, sf=sf)
@@ -507,12 +802,22 @@ def _grant(source_task_id, run_id, app, sf):
 
 
 def _binding(value):
-    if (not isinstance(value, dict) or set(value) - {"recovery_history", "prelaunch_tail", "input_prelaunch_tail", "input_wrapup_message_fingerprints", "cooperative_stop"} not in (BINDING_KEYS, PARALLEL_BINDING_KEYS)
+    if (not isinstance(value, dict) or set(value) - {"recovery_history", "prelaunch_tail", "input_prelaunch_tail", "input_wrapup_message_fingerprints", "cooperative_stop", "cooperative_prelaunch_tail"} not in (BINDING_KEYS, PARALLEL_BINDING_KEYS)
             or any(not isinstance(value.get(key), dict) for key in ("selection", "outputs", "usage_receipts", "prefixes", "checkpoint"))):
         raise _blocked("recovery_binding_invalid")
     if "cooperative_stop" in value:
-        if (set(value) != BINDING_KEYS | {"cooperative_stop"} or not isinstance(value["cooperative_stop"], dict)):
+        allowed = BINDING_KEYS | {"cooperative_stop"} | ({"cooperative_prelaunch_tail"} if "cooperative_prelaunch_tail" in value else set())
+        if (set(value) != allowed or not isinstance(value["cooperative_stop"], dict)):
             raise _blocked("recovery_cooperative_binding_invalid")
+    if "cooperative_prelaunch_tail" in value:
+        if not isinstance(value["cooperative_prelaunch_tail"], dict):
+            raise _blocked("recovery_cooperative_tail_checkpoint_invalid")
+        projection = value["cooperative_prelaunch_tail"].get("checkpoint_messages", {})
+        messages = projection.get("messages") if isinstance(projection, dict) else None
+        if ("cooperative_stop" not in value or not isinstance(messages, dict) or set(messages) != PARALLEL_ANALYSTS
+                or any(not isinstance(rows, list) or not 1 <= len(rows) <= 128 or any(not _hash(row) for row in rows)
+                       for rows in messages.values()) or not isinstance(projection.get("proposals"), dict)):
+            raise _blocked("recovery_cooperative_tail_checkpoint_invalid")
     if "input_prelaunch_tail" in value and ("prelaunch_tail" in value or "expected_pending_roles" in value):
         raise _blocked("recovery_input_prelaunch_tail_invalid")
     if "input_wrapup_message_fingerprints" in value:
@@ -959,7 +1264,8 @@ def _frozen_records(run, binding, segments, *, grant=None, sf=None):
     outputs, usages = binding["outputs"], binding["usage_receipts"]
     if "cooperative_stop" in binding:
         _cooperative_stop(grant, run, sf)
-    gap = (_input_prelaunch_tail(grant, run, segments, sf) if "input_prelaunch_tail" in binding
+    gap = (_cooperative_tail_gap(grant, run) if "cooperative_prelaunch_tail" in binding else
+           _input_prelaunch_tail(grant, run, segments, sf) if "input_prelaunch_tail" in binding
            else _prelaunch_tail(grant, run, segments, sf)) if grant is not None else None
     if ("prelaunch_tail" in binding or "input_prelaunch_tail" in binding) and gap is None:
         raise _blocked("recovery_prelaunch_tail_invalid")
@@ -1063,6 +1369,9 @@ def _initial_snapshot(run, binding, symbol, packet, admission=None, *, source_gr
         raise _blocked("recovery_checkpoint_thread_drift")
     if "cooperative_stop" in binding:
         _cooperative_checkpoint(run, symbol, binding, offline=offline)
+        if "cooperative_prelaunch_tail" in binding:
+            if _checkpoint_wire_projection(run, symbol, binding) != binding["cooperative_prelaunch_tail"]["checkpoint_messages"]:
+                raise _blocked("recovery_cooperative_tail_checkpoint_drift")
     if "input_prelaunch_tail" in binding:
         if any(int(path.stem) > counter for folder in ("model-outputs", "usage-receipts")
                for path in _safe(run / folder).iterdir()):
@@ -1185,6 +1494,16 @@ def _pending_guard(binding):
         if cooperative:
             if first and role not in pending or pending and role not in PARALLEL_ANALYSTS:
                 raise _blocked("recovery_fresh_or_pending_role_mismatch")
+            frozen_role = role in pending
+            tail = binding.get("cooperative_prelaunch_tail")
+            if tail is not None and frozen_role:
+                expected = tail["checkpoint_messages"]["messages"][role]
+                messages = request.get("messages")
+                if (not isinstance(messages, list) or len(messages) < len(expected)
+                        or [research._digest(row) for row in messages[-len(expected):]] != expected):
+                    raise _blocked("recovery_checkpoint_messages_drift")
+                # Only the first call for each resumed role is its frozen tail.
+                # Later turns legitimately append new tool messages.
             pending.discard(role)
             first = False
             return
@@ -1249,7 +1568,7 @@ def _dispatch(context):
         if (_sha(context["source_claim"]) != context["binding"]["source_claim_sha256"]
                 or {row["method_sha256"] for row in records if row["method_sha256"] in prior_methods} != prior_methods):
             raise _blocked("recovery_selection_drift")
-        cooperative = "cooperative_stop" in context["binding"]
+        cooperative = "cooperative_stop" in context["binding"] and context["old_method"] == context["method"]
         if cooperative and len(records) == 1 and records[0].get("native_recovery"):
             info = _recovery_info(records[0])
             if info["grant_sha256"] == context["grant_sha256"]:
@@ -1513,7 +1832,7 @@ async def run_recovery(rec, params, app):
                 await drain_thread(_advance, context, supplied["dispatch_owner"], "recovering", task_id=rec.task_id)
                 run, binding, grant = (context[key] for key in ("run", "binding", "grant"))
                 history = _safe(run / "recovery-history" / grant["grant_id"])
-                if "cooperative_stop" in binding:
+                if "cooperative_stop" in binding and context["old_method"] == context["method"]:
                     if not history.is_dir() or {p.name for p in history.iterdir()} != {"source-selection.json"}:
                         raise _blocked("recovery_history_start_drift")
                 else:

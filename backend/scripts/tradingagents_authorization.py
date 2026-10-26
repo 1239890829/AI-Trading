@@ -15,16 +15,24 @@ def main(argv=None) -> int:
     action.add_argument("--apply", metavar="PLAN_ID", help="比较原文件与已准备版本后仅替换授权及pin；需重载服务")
     action.add_argument("--prepare-grant", metavar="SOURCE_TASK_ID", help="仅初始四分析师阶段(root step 0)的known步骤取消可准备同版恢复；不启动任务")
     parser.add_argument("--run", help="prepare-grant的准确原run_id")
+    parser.add_argument("--cooperative-prelaunch-tail", action="store_true", help="显式核验单一未启动末尾编号；不补用量或重跑原答")
+    parser.add_argument("--source-rebind-plan", metavar="PLAN_ID", help="仅原恢复代码版本变化时引用正式已安装重绑计划")
     parser.add_argument("--reviewed-source", action="append", default=[],
                         help="prepare时逐项声明已审源码名或具名packet_builder.owner_sources路径，必须等于实际差异")
     args = parser.parse_args(argv)
     if bool(args.run) != bool(args.prepare_grant):
         parser.error("--run与--prepare-grant必须一起使用")
+    if (args.cooperative_prelaunch_tail or args.source_rebind_plan) and not args.prepare_grant:
+        parser.error("末尾编号与原计划选项只用于prepare-grant")
+    if args.source_rebind_plan and not args.cooperative_prelaunch_tail:
+        parser.error("原计划选项须明确选择末尾编号核验")
     try:
         if args.prepare_grant:
             if args.reviewed_source:
                 parser.error("同版恢复不声明源码变化")
-            result = owner.prepare_grant(args.prepare_grant, args.run)
+            result = owner.prepare_grant(args.prepare_grant, args.run,
+                **({"cooperative_prelaunch_tail": True, "source_rebind_plan": args.source_rebind_plan}
+                   if args.cooperative_prelaunch_tail else {}))
         elif args.apply:
             if args.reviewed_source:
                 parser.error("apply只消费已冻结计划")

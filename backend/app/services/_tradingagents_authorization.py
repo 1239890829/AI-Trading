@@ -277,7 +277,44 @@ def prepare_rebind(reviewed_sources, **kwargs) -> dict:
     return _store_plan(root, raw, env, span, candidate, changed)
 
 
-def prepare_grant(source_task_id, run_id, **kwargs) -> dict:
+def _source_rebind_plan(plan_id, identity, *, root=None, expected=None, current=None):
+    """Read one applied local rebind, never discover history or accept a path."""
+    from app.services import tradingagents_research as research
+
+    if not isinstance(plan_id, str) or not PLAN_ID.fullmatch(plan_id):
+        raise AuthorizationBlocked("authorization_source_plan_invalid")
+    parent = (Path(root) if root is not None else research.ROOT) / "authorization-maintenance"
+    folder = parent / plan_id
+    if any(path.is_symlink() or stat.S_IMODE(path.stat().st_mode) != 0o700 for path in (parent, folder)):
+        raise AuthorizationBlocked("authorization_source_plan_invalid")
+    raw, before, applied = (_read(folder / name) for name in ("plan.json", "authorization.before.json", "applied.json"))
+    if any(stat.S_IMODE((folder / name).stat().st_mode) != 0o600 for name in ("plan.json", "authorization.before.json", "applied.json")):
+        raise AuthorizationBlocked("authorization_source_plan_invalid")
+    plan, source = json.loads(raw), json.loads(before)
+    target = plan.get("candidate")
+    proof = {"plan_id": plan_id, "plan_sha256": _sha(raw), "authorization_before_sha256": _sha(before),
+             "applied_sha256": _sha(applied)}
+    desired = deepcopy(source)
+    desired["method_identity"] = deepcopy(identity)
+    if desired.get("unknown_usage_exception") is not None:
+        desired["unknown_usage_exception"]["method_sha256"] = research._digest(identity)
+    old = source.get("method_identity", {})
+    old_files, new_files = old.get("source_files", {}), identity.get("source_files", {})
+    changes = {key for key in old_files.keys() | new_files.keys() if old_files.get(key) != new_files.get(key)}
+    old_base, new_base = deepcopy(old), deepcopy(identity)
+    old_base.pop("source_files", None); new_base.pop("source_files", None)
+    if (plan.get("version") != 1 or plan.get("kind") != "rebind"
+            or plan.get("authorization_sha256") != _sha(before)
+            or plan.get("reviewed_sources") != ["tradingagents_recovery.py"]
+            or json.loads(applied) != {"version": 1, "state": "applied", "restart_required": True}
+            or changes != {"tradingagents_recovery.py"} or old_files.keys() != new_files.keys()
+            or old_base != new_base or target != desired
+            or current is not None and current != target or expected is not None and proof != expected):
+        raise AuthorizationBlocked("authorization_source_plan_drift")
+    return deepcopy(old), proof
+
+
+def prepare_grant(source_task_id, run_id, *, cooperative_prelaunch_tail=False, source_rebind_plan=None, **kwargs) -> dict:
     from app.services.tradingagents_recovery import prepare_cooperative_grant
 
     root, _env_path, sf, driver, raw, env, span, candidate, changed = _snapshot(**kwargs)
@@ -287,13 +324,23 @@ def prepare_grant(source_task_id, run_id, **kwargs) -> dict:
         raise AuthorizationBlocked("authorization_grant_history_full")
     now = kwargs.get("now") or beijing_now()
     until = min(now + timedelta(hours=2), datetime.fromisoformat(candidate["valid_until"]))
-    grant = prepare_cooperative_grant(source_task_id, run_id, driver.method_identity(), grant_id=uuid.uuid4().hex,
-        authorized_at=now.isoformat(), valid_until=until.isoformat(), sf=sf)
+    identity = driver.method_identity()
+    if source_rebind_plan is not None and not cooperative_prelaunch_tail:
+        raise AuthorizationBlocked("authorization_source_plan_requires_tail_mode")
+    source, proof = identity, None
+    if source_rebind_plan is not None:
+        source, proof = _source_rebind_plan(source_rebind_plan, identity, root=root, current=candidate)
+    grant = prepare_cooperative_grant(source_task_id, run_id, identity, grant_id=uuid.uuid4().hex,
+        authorized_at=now.isoformat(), valid_until=until.isoformat(), sf=sf,
+        **({"prelaunch_tail": True, "source_identity": source, "source_rebind_proof": proof, "driver": driver}
+           if cooperative_prelaunch_tail else {}))
     if any(g.get("source_task_id") == source_task_id and g.get("run_id") == run_id for g in candidate["native_recovery_grants"]):
         raise AuthorizationBlocked("authorization_grant_already_present")
     candidate["native_recovery_grants"].append(grant)
-    return _store_plan(root, raw, env, span, candidate, changed, kind="cooperative_grant",
-        extra={"grant_target": {"source_task_id": source_task_id, "run_id": run_id}})
+    target = {"source_task_id": source_task_id, "run_id": run_id}
+    if cooperative_prelaunch_tail:
+        target.update(cooperative_prelaunch_tail=True, source_rebind_plan=source_rebind_plan)
+    return _store_plan(root, raw, env, span, candidate, changed, kind="cooperative_grant", extra={"grant_target": target})
 
 
 def apply_plan(plan_id: str, **kwargs) -> dict:
@@ -323,8 +370,18 @@ def apply_plan(plan_id: str, **kwargs) -> dict:
             at, end = (datetime.fromisoformat(proposed[key]) for key in ("authorized_at", "valid_until"))
             if (changed or not at <= now < end or end != min(at + timedelta(hours=2), datetime.fromisoformat(candidate["valid_until"]))) :
                 raise AuthorizationBlocked("authorization_grant_plan_expired_or_changed")
-            grant = prepare_cooperative_grant(target["source_task_id"], target["run_id"], driver.method_identity(),
-                grant_id=proposed["grant_id"], authorized_at=proposed["authorized_at"], valid_until=proposed["valid_until"], sf=sf)
+            identity = driver.method_identity()
+            source, proof = identity, None
+            tail_mode = target.get("cooperative_prelaunch_tail") is True
+            if set(target) != ({"source_task_id", "run_id", "cooperative_prelaunch_tail", "source_rebind_plan"}
+                               if tail_mode else {"source_task_id", "run_id"}):
+                raise AuthorizationBlocked("authorization_grant_plan_expired_or_changed")
+            if tail_mode and target["source_rebind_plan"] is not None:
+                source, proof = _source_rebind_plan(target["source_rebind_plan"], identity, root=root, current=candidate)
+            grant = prepare_cooperative_grant(target["source_task_id"], target["run_id"], identity,
+                grant_id=proposed["grant_id"], authorized_at=proposed["authorized_at"], valid_until=proposed["valid_until"], sf=sf,
+                **({"prelaunch_tail": True, "source_identity": source, "source_rebind_proof": proof, "driver": driver}
+                   if tail_mode else {}))
             candidate["native_recovery_grants"].append(grant)
         if (raw != before or _sha(env) != plan.get("env_sha256") or plan.get("candidate") != candidate
                 or plan.get("reviewed_sources") != changed or plan["kind"] == "rebind" and not changed
