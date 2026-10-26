@@ -24,6 +24,18 @@ from app.core.config import settings
 from app.models.agent import AgentTask
 
 HOST_SOURCES = {"driver.py", "tradingagents_research.py", "tradingagents_recovery.py"}
+# PR 347 changed only the minute/auction path in this complete provider module.
+# StoredCompanyPacketBuilder uses its unchanged get_kline path and cached Hub
+# quotes, never get_minute_line. Both complete blobs and all other module AST
+# nodes were reviewed: common AST SHA-256 (excluding only _mark_opening_anchor
+# and TencentProvider.get_minute_line) is
+# e7a8c6c8fca612f13191f720940e47be30a30a9dfe9a7be75c3735e3ebd7efa1.
+# This exact forward pair belongs to local explicit rebind only. It neither
+# migrates a recovery grant nor permits future/reverse/other owner revisions.
+REVIEWED_PACKET_OWNER_PAIRS = {"data_providers/tencent.py": (
+    "32699b46cc03f0038e8e9d4969461bd336d9465c0363f984f8dca56b0b828aa9",
+    "73af8b2ff111c04b57deda0dc3432c678815d0c2cef0c884f6f022ac51ea1af5",
+)}
 PIN_KEY = "ASHARE_TRADINGAGENTS_RESEARCH_AUTHORIZATION_DIGEST"
 PIN_LINE = re.compile(rb"(?im)^[ \t]*(?:export[ \t]+)?" + PIN_KEY.encode()
                       + rb"[ \t]*=[ \t]*(['\"]?)([0-9a-f]{64})\1[ \t]*(?:\#[^\r\n]*)?(?:\r?\n|$)")
@@ -145,6 +157,27 @@ def _owner(root=None, env_path=None, sf=None, driver=None):
     return root, env_path, sf, driver
 
 
+def _reviewed_packet_owner_changes(old: dict, new: dict) -> list[str]:
+    """Normalize only a pinned non-consumer change before full method equality."""
+    old_packet, new_packet = old.get("packet_builder"), new.get("packet_builder")
+    if not isinstance(old_packet, dict) or not isinstance(new_packet, dict):
+        return []  # The full identity comparison below still rejects differences.
+    old_owners, new_owners = old_packet.get("owner_sources"), new_packet.get("owner_sources")
+    if not isinstance(old_owners, dict) or not isinstance(new_owners, dict):
+        return []
+    changed = sorted(key for key in old_owners.keys() | new_owners.keys() if old_owners.get(key) != new_owners.get(key))
+    if not changed:
+        return []
+    if (old_owners.keys() != new_owners.keys()
+            or any(not isinstance(value, str) or not re.fullmatch(r"[0-9a-f]{64}", value)
+                   for value in [*old_owners.values(), *new_owners.values()])
+            or any((old_owners.get(key), new_owners.get(key)) != REVIEWED_PACKET_OWNER_PAIRS.get(key) for key in changed)):
+        raise AuthorizationBlocked("authorization_unreviewed_packet_owner_changed")
+    for key in changed:
+        old_owners[key] = new_owners[key]
+    return ["packet_builder.owner_sources." + key for key in changed]
+
+
 def _candidate(raw: bytes, identity: dict, sf, now: datetime) -> tuple[dict, list[str]]:
     from app.services import tradingagents_research as research
 
@@ -158,6 +191,7 @@ def _candidate(raw: bytes, identity: dict, sf, now: datetime) -> tuple[dict, lis
         raise AuthorizationBlocked("authorization_scope_or_term_invalid")
     old, new = deepcopy(value["method_identity"]), deepcopy(identity)
     old_files, new_files = old.pop("source_files", None), new.pop("source_files", None)
+    owner_changes = _reviewed_packet_owner_changes(old, new)
     if not isinstance(old_files, dict) or not isinstance(new_files, dict) or old != new:
         raise AuthorizationBlocked("authorization_method_scope_changed")
     changed = sorted(key for key in old_files.keys() | new_files.keys() if old_files.get(key) != new_files.get(key))
@@ -175,7 +209,7 @@ def _candidate(raw: bytes, identity: dict, sf, now: datetime) -> tuple[dict, lis
     candidate["method_identity"] = deepcopy(identity)
     if exception is not None:
         candidate["unknown_usage_exception"]["method_sha256"] = research._digest(identity)
-    return candidate, changed
+    return candidate, sorted([*changed, *owner_changes])
 
 
 def _snapshot(*, root=None, env_path=None, sf=None, driver=None, now=None, locks_held=False):

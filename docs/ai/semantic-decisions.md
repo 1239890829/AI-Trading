@@ -987,6 +987,8 @@ selected消费者在原request/恢复指纹核验之后，由driver传已核pack
 
 ## 2026-10-26 原授权方法承接与安全取消恢复
 
-此次只承接原selected_stock_explanation消费者的准确宿主方法版本。维护脚本默认dry-run，必须列出准确已审源文件；原授权有效、原pin匹配、原7unknown具名范围、模型/effort/上游/依赖/构包不变、无活动任务/租约/worker及锁后才可prepare/apply。保全原授权和旧pin/hash，权限0600；不备份整份.env、不外显凭据、不扩日期或scope。安装计划绑定旧新文件哈希，CAS失败不覆盖并保留回滚证据；服务重载后重新实际检查。
+此次只承接原selected_stock_explanation消费者的准确宿主方法版本。维护脚本默认dry-run，必须列出准确已审源文件；原授权有效、原pin匹配、原7unknown具名范围、模型/effort/上游/依赖及构包版本/参数/实际调用路径不变、无活动任务/租约/worker及锁后才可prepare/apply。保全原授权和旧pin/hash，权限0600；不备份整份.env、不外显凭据、不扩日期或scope。安装计划绑定旧新文件哈希，CAS失败不覆盖并保留回滚证据；服务重载后重新实际检查。
+
+PR #347实际安装暴露嵌套owner指纹遗漏：本次Tencent竞价修补改变全模块hash，但StoredCompanyPacketBuilder实际使用的get_kline/search及其余模块AST未改，不调用get_minute_line。原模块32699b46…到73af8b2f…剔除新增开盘锚点和分钟读取两节点后的共同AST摘要e7a8c6c8…已核。因此仅本安装显式承接允许该准确、具名、单向owner对；`packet_builder.owner_sources.data_providers/tencent.py`必须加入真实changed_sources并以原`--reviewed-source`明确列出。其它owner、键集合、builder版本/选项、模型/上游/依赖与期限继续严格比较；反向、未来和任何其他owner变化拒绝。旧冻结packet恢复pair/kind/grant完全不扩用，新规则不自动迁移授权或产生调用。真实Native identity和源篡改反例已补，CI不依赖旧Git对象或联网取证。
 
 known原答完整回送后在下一请求前合作停止，先等待worker真实终止/原生错误检查点落盘，不能杀进程制造恢复样本。本次新增同版恢复仅支持四分析师fan-out的原生step0，不泛化到后续辩论阶段；必须有准确任务/run、持久取消意图与canceled、真实known receipts及账行、完整原生流/检查点、无在途/无SQLite旁车且哈希稳定、同完整方法/model/graph及原一次性grant。缺任一则拒绝；旧早期缺流/receipt不造空文件放行。任务结果读取关联result_run_id，不把同股最近旧报告当成本任务完成。真实新生成/保存/读取/续行另取运行证据，作者自检不是独立Review或gold。

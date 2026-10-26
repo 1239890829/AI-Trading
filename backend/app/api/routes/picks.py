@@ -524,20 +524,25 @@ async def method_run_detail(
     source_version_missing: bool = False,
     offset: int = Query(0, ge=0), limit: int = Query(200, ge=1, le=200),
     stage: Literal["rank", "hard_gate", "candidate", "notification", "research"] | None = None,
+    row_state: Literal["all", "matched", "not_matched", "unknown"] = "all",
 ) -> dict:
     """精确运行与内容版本读取；身份消失或变化返回404，不回退最近记录。"""
     from app.picks.selection_history import SavedRunMissing, get_method_run
 
     try:
+        options = {}
         if method.startswith('reference:'):
             from app.picks.reference_research import get_run
             reader, args = get_run, (method, run_id)
+            options['row_state'] = row_state
         else:
+            if row_state != 'all':
+                raise ValueError('row_state筛选仅用于手动参考研究')
             reader, args = get_method_run, (get_session_factory(), method, run_id)
         data = await asyncio.to_thread(reader, *args,
             trade_date=trade_date, content_version=content_version, source_version=source_version,
             strategy_version=strategy_version, source_version_missing=source_version_missing,
-            offset=offset, limit=limit, stage=stage)
+            offset=offset, limit=limit, stage=stage, **options)
     except SavedRunMissing as exc:
         raise HTTPException(404, detail=str(exc)) from None
     except ValueError as exc:

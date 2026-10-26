@@ -1,6 +1,7 @@
 """Real DuckDB fixture, immutable saved reads and no production selection writes."""
 import asyncio
 from datetime import datetime, timedelta, timezone
+import hashlib
 import json
 
 import duckdb
@@ -55,6 +56,11 @@ def test_three_rules_shared_saved_denominator_unknown_missing_adjusted_and_exclu
     matched = detail(source, next(i for i in result['runs'] if i['method'].endswith('ma_bullish')))
     assert matched['counts']['matched'] == 1
     assert owner.list_runs(matched['method'], root=source[1])['items'][0]['content_version'] == matched['content_version']
+    zero = detail(source, next(i for i in result['runs'] if i['method'].endswith('ma_bullish')), row_state='not_matched')
+    assert zero['row_state'] == 'not_matched' and zero['items'] == []
+    assert zero['coverage']['total'] == zero['coverage']['returned'] == 0
+    assert zero['coverage']['batch_total'] == zero['counts']['universe'] == 2
+    assert zero['counts']['unknown'] == 1 and zero['coverage']['next_offset'] is None
 
 
 def test_repeat_reuses_original_batch_without_rule_call(source, monkeypatch):
@@ -154,3 +160,117 @@ def test_registry_only_three_explicit_research_adapters_and_original_production_
     assert len([row for row in rows if row['candidate'].get('adoption', {}).get('state') == 'reuse_existing']) == 6
     assert len([row for row in rows if row['candidate']['asset'] == 'etf' and not row['candidate']['runnable']]) == 4
     assert [spec.key for spec in SPECS] == ['daily_picks', 'intraday_watch', 'pullback_reversal', 'triple_volume', 'two_thirty_five']
+
+
+@pytest.fixture
+def partitioned_saved_run(tmp_path, monkeypatch):
+    """Synthetic saved rows reproduce the real 353/146/5081 partition, not strategy performance."""
+    monkeypatch.setattr(bjtime, 'beijing_now', lambda: datetime(2026, 10, 26, 8, tzinfo=bjtime.BJ_TZ))
+    rows = []
+    for index, state in enumerate(['matched'] * 353 + ['unknown'] * 146 + ['not_matched'] * 5081):
+        rows.append({'item_id': f'{600000+index:06}.SH', 'symbol': f'{600000+index:06}', 'state': state,
+            'metrics': {'dif': None if state == 'unknown' else 0}, 'execution_eligible': False,
+            'score_contribution': False, 'reason': 'saved-' + state})
+    code = owner.METHODS[0].split(':', 1)[1]
+    counts = {'universe': 5580, 'eligible': 5434, 'matched': 353, 'unknown': 146, 'not_matched': 5081}
+    batch = {'run_id': '1' * 64, 'trade_date': '2026-10-23', 'source_version': 'fixture-source',
+        'run_at': '2026-10-26T08:00:00+08:00', 'source_completed_date': '2026-10-23',
+        'source_as_of': None, 'source_cutoff_at': '2026-10-23T23:59:59+08:00',
+        'source_as_of_semantics': 'fixture unknown', 'definition_digest': '2' * 64,
+        'data_limitations': ['synthetic saved projection fixture'], 'semantics': owner.SEMANTICS, 'elapsed_ms': 0,
+        'methods': {code: {'version': 'fixture-v1', 'definition': 'saved fixture, no rule execution',
+            'definition_supplement': 'not performance evidence', 'items': rows, 'counts': counts}}}
+    batch['content_version'] = hashlib.sha256(owner._json(batch).encode()).hexdigest()
+    root = tmp_path / 'saved'
+    root.mkdir()
+    path = root / (batch['run_id'] + '.json')
+    path.write_text(owner._json(batch))
+    monkeypatch.setattr(owner, 'evaluate_reference_rules', lambda *a, **kw: pytest.fail('saved read must not rescan rules'))
+    return root, owner._identity(batch, code), path, rows, counts
+
+
+def read_partition(fixture, **kwargs):
+    root, identity, _path, _rows, _counts = fixture
+    return owner.get_run(identity['method'], identity['run_id'], root=root,
+        trade_date=identity['trade_date'], content_version=identity['content_version'],
+        source_version=identity['source_version'], **kwargs)
+
+
+def test_state_filter_reads_original_whole_partition_before_bounded_slice(partitioned_saved_run):
+    fixture = partitioned_saved_run
+    _root, identity, path, rows, counts = fixture
+    original_hash = hashlib.sha256(path.read_bytes()).hexdigest()
+    first = read_partition(fixture)
+    assert first['row_state'] == 'all' and len(first['items']) == 200
+    assert all(row['state'] == 'matched' for row in first['items'])
+    assert first['coverage']['total'] == first['coverage']['batch_total'] == 5580
+    for state, total in [('matched', 353), ('unknown', 146), ('not_matched', 5081)]:
+        page = read_partition(fixture, row_state=state)
+        expected = [row for row in rows if row['state'] == state]
+        assert page['items'] == expected[:200] and page['row_state'] == state
+        assert page['counts'] == counts and page['content_version'] == identity['content_version']
+        assert page['coverage'] == {'offset': 0, 'limit': 200, 'total': total, 'batch_total': 5580,
+            'returned': min(total, 200), 'next_offset': 200 if total > 200 else None,
+            'possibly_truncated': total > 200, 'history_semantics': owner.SEMANTICS}
+        if total > 200:
+            next_page = read_partition(fixture, row_state=state, offset=200)
+            assert next_page['items'] == expected[200:400] and next_page['row_state'] == state
+            assert next_page['counts'] == counts and next_page['coverage']['total'] == total
+            assert next_page['coverage']['batch_total'] == 5580
+    unknown = read_partition(fixture, row_state='unknown')
+    assert len(unknown['items']) == 146 and all(row['metrics']['dif'] is None for row in unknown['items'])
+    assert hashlib.sha256(path.read_bytes()).hexdigest() == original_hash
+
+
+def test_exhausted_offset_does_not_zero_the_original_denominator(partitioned_saved_run):
+    exhausted = read_partition(partitioned_saved_run, row_state='unknown', offset=146)
+    assert exhausted['items'] == [] and exhausted['coverage']['total'] == exhausted['counts']['unknown'] == 146
+    assert exhausted['coverage']['returned'] == 0 and exhausted['coverage']['next_offset'] is None
+
+
+@pytest.mark.parametrize('state', ['rejected', 'selected', '', None, []])
+def test_reference_state_rejects_unsupported_scope(partitioned_saved_run, state):
+    with pytest.raises(ValueError, match='row_state'):
+        read_partition(partitioned_saved_run, row_state=state)
+
+
+def test_content_identity_is_checked_before_state_iteration(partitioned_saved_run, monkeypatch):
+    original = owner._load
+
+    class NoIteration(list):
+        def __iter__(self):
+            pytest.fail('a mismatched content identity must not filter or iterate saved rows')
+
+    def load(path):
+        batch = original(path)
+        for entry in batch['methods'].values():
+            entry['items'] = NoIteration(entry['items'])
+        return batch
+
+    monkeypatch.setattr(owner, '_load', load)
+    root, identity, _path, _rows, _counts = partitioned_saved_run
+    with pytest.raises(SavedRunMissing):
+        owner.get_run(identity['method'], identity['run_id'], root=root, row_state='unknown',
+            trade_date=identity['trade_date'], content_version='f' * 64, source_version=identity['source_version'])
+
+
+def test_reference_state_filter_in_real_router_preserves_exact_identity_and_auth(partitioned_saved_run, monkeypatch):
+    from fastapi.testclient import TestClient
+    from app.core.config import settings
+    from app.main import app
+
+    root, identity, _path, _rows, _counts = partitioned_saved_run
+    monkeypatch.setattr(owner, 'ROOT', root)
+    monkeypatch.setattr(settings, 'api_token', 'fixture-reference-token')
+    path = f"/api/picks/method-runs/{identity['method']}/{identity['run_id']}"
+    params = {key: identity[key] for key in ('trade_date', 'content_version', 'source_version')}
+    client = TestClient(app)
+    assert client.get(path, params={**params, 'row_state': 'unknown'}).status_code == 401
+    headers = {'X-API-Token': 'fixture-reference-token'}
+    result = client.get(path, params={**params, 'row_state': 'unknown'}, headers=headers)
+    assert result.status_code == 200
+    payload = result.json()['data']
+    assert payload['row_state'] == 'unknown' and len(payload['items']) == 146
+    assert payload['coverage']['batch_total'] == payload['counts']['universe'] == 5580
+    assert client.get(path, params={**params, 'row_state': 'not_matched', 'content_version': 'f' * 64}, headers=headers).status_code == 404
+    assert client.get(path, params={**params, 'row_state': 'rejected'}, headers=headers).status_code == 422

@@ -4,6 +4,16 @@
 
 ## 1. 本轮范围与已核现场
 
+### 当前接续：嵌套owner的准确版本承接
+
+PR #347以HEAD5847754354125ab359e61d40c024a57e576a3528和DegradedRelease6406997283完成原release_check，精确合并1579eff5db65f0e323ee4866cd3b96e8278f8d16；PR CI40260035910及master CI40260530281三项通过。主目录已同步该master、加载build gwhIdtfkVGZ3oIGTbwIbg，五份用户原件与旧32原生运行2237文件hash不变。10:55真实Chrome已连接、有当日源钟，9自选/3可见指数及盘口正常、叠加可见；这是短窗而非全天SLO。三战法正式任务f152a6a…已成功且reused=true，两次准确读一致，未新增模型或重扫原料。
+
+真实安装CLI在调用模型之前因`authorization_method_scope_changed`停止：Tencent新增竞价分钟节点也改变了嵌套构包owner的全模块hash，首版维护工具仅处理顶层source_files。原授权文件/pin没有改；当前没有新TA调用。接续分支codex/research-owner-pin-carry从最新1579eff5施工，仅为已审32699b46…→73af8b2f…且TA get_kline/search读取不变的具名单向owner对提供显式prepare/CAS承接，其他完整身份/期限/unknown/grant仍拒变。不是重新批准产品方向或为自己造新授权。新HEAD完整门、发布/合并和实际承接/生成/保存/恢复仍须完成，未完成前不得写本任务已闭环。
+
+同轮真实页面核出两项保存读者缺陷：自动绑定原日期/批次后重挂载意外收起；状态按钮只筛已读200行，无法直接读取后面的未知/未匹配。接续修补沿原布局/按需读取，显式展开意图绑定方法/执行版本，参考API在核准确原批后按状态切片，完整分母与状态子集分母分开。11:11正常中断仅auth修补的完整后端批（4357 passed／85 skipped后中断，不算全绿），最终冻结完整批见下文；不借前版绿色或假数据称实页完成。
+
+接续代码[e284c066](https://github.com/1239890829/AI-Trading/commit/e284c066d38738530efbbe3b641106cceec03316)冻结后完整门已通过：后端8130 passed／87 skipped／372 subtests（856.96秒），前端174文件、默认和UTC各2569 passed（325.175／313.285秒）；全量pyflakes、类型、ESLint exit0（3项原基线warning）、生产构建`kbu4l1B900JQEKYlNcrU2`及恢复生成入口后的类型复验通过。852个后端、422个前端及1803个非文档输入无漂移。作者团队反证另纠正Next私有history标记绕过通知导致关闭后复开的窗口，真实规则2红后相关93绿；不是独立网页Review。11:48记录时尚未写生产pin或新增TA调用；本段是发布前快照，准确HEAD回执、CI、合并、实际承接/生成/恢复与资产处置，以承载该代码提交的PR最终运行回执为接续依据，不把旧阻断或本地绿色冒充当前运行状态。
+
 ### 当前任务：原授权承接、完整恢复和三项价格研究
 
 用户2026-10-26直派从master `36acb55aa06b2f3ca961883dfe8c8feb18eef51f`接续，分支`codex/manual-research-and-strategies`。DEGRADED_FULL_CONTROL未撤销，五份evolution用户原件哈希保全。原授权仍在有效期内，阻断是当前宿主方法指纹变化，不是需要再次确认产品方向或另批相同模型。默认只读的本安装维护CLI检查原scope/模型/effort/期限/七unknown/在途锁，明确已审源文件后准备和CAS承接；只保全原授权与旧pin，不复制整份环境或续签/扩权。

@@ -236,6 +236,8 @@ def test_get_routes_are_exact_and_pure_reads_in_real_router_assembly(sf, monkeyp
         params = {key:ident[key] for key in ['trade_date','content_version','source_version']}
         response = client.get(path,params=params,headers=headers)
         assert response.status_code == 200 and response.json()['data']['items'][0]['score'] == 0
+        assert client.get(path, params={**params, 'row_state': 'all'}, headers=headers).json()['data'] == response.json()['data']
+        assert client.get(path, params={**params, 'row_state': 'unknown'}, headers=headers).status_code == 422
         assert client.get(path,params={**params,'trade_date':'2026-10-22'},headers=headers).status_code == 404
         assert client.get(path,params={**params,'content_version':'f'*64},headers=headers).status_code == 404
         assert client.get(path,params={'trade_date':'2026-10-23'},headers=headers).status_code == 422

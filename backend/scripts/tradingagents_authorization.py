@@ -15,7 +15,8 @@ def main(argv=None) -> int:
     action.add_argument("--apply", metavar="PLAN_ID", help="比较原文件与已准备版本后仅替换授权及pin；需重载服务")
     action.add_argument("--prepare-grant", metavar="SOURCE_TASK_ID", help="仅初始四分析师阶段(root step 0)的known步骤取消可准备同版恢复；不启动任务")
     parser.add_argument("--run", help="prepare-grant的准确原run_id")
-    parser.add_argument("--reviewed-source", action="append", default=[], help="prepare时逐项声明已审源码名，必须等于实际差异")
+    parser.add_argument("--reviewed-source", action="append", default=[],
+                        help="prepare时逐项声明已审源码名或具名packet_builder.owner_sources路径，必须等于实际差异")
     args = parser.parse_args(argv)
     if bool(args.run) != bool(args.prepare_grant):
         parser.error("--run与--prepare-grant必须一起使用")
