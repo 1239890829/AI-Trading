@@ -81,7 +81,7 @@ def _date_key(d: date) -> str:
 
 
 async def collect_market(
-    hub, snapshot_service, trade_date: date, *, sentinel=None
+    hub, snapshot_service, trade_date: date, *, sentinel=None, theme_catalog=None
 ) -> MarketSnapshot:
     """Collect only source-date-bound facts; retain rejected values as audit records."""
     from types import SimpleNamespace
@@ -104,7 +104,7 @@ async def collect_market(
     rejected_indices: list[dict] = []
     try:
         for q in hub.get_indices() or []:
-            proof = quote_evidence(q, trade_date, now)
+            proof = quote_evidence(q, trade_date, now, allow_closed_observation=True)
             close, pct = finite(getattr(q, "price", None)), finite(getattr(q, "change_pct", None))
             if proof.state not in {"verified", "partial"} or close is None or close <= 0 or pct is None:
                 rejected_indices.append({"symbol": getattr(q, "symbol", None),
@@ -162,6 +162,27 @@ async def collect_market(
         provenance["breadth"] = evidence(trade_date, source="snapshot_service", reason=str(exc)[:200])
         gap("breadth", str(exc), source="snapshot_service")
 
+    if not breadth:
+        from app.market import trade_calendar
+        from app.review.daily_market import DEFAULT_DB_PATH, collect_daily_breadth
+
+        # Read an existing completed source version. Never initiate a sync or use
+        # the parquet filename / local receipt to invent the missing source day.
+        if DEFAULT_DB_PATH.is_file():
+            try:
+                days = await trade_calendar.trading_days(hub.provider)
+                daily, proof, audit = await asyncio.to_thread(
+                    collect_daily_breadth, trade_date, trade_days=days, now=now)
+                reported["daily_breadth_audit"] = audit
+                if daily:
+                    breadth = daily
+                    provenance["breadth"] = proof
+                    gaps = [g for g in gaps if g.field != "breadth"]
+                    if (daily.get("coverage") or {}).get("missing_count"):
+                        gap("breadth", proof.reason, source=proof.source or "marketdb")
+            except Exception as exc:
+                reported["daily_breadth_audit"] = {"unavailable_reason": str(exc)[:200]}
+
     sentiment: dict = {}
     try:
         if trade_date != now.date() or provenance["breadth"].state != "verified":
@@ -204,15 +225,40 @@ async def collect_market(
         provenance["themes"] = evidence(trade_date, source="theme_service.build_theme_board", reason=str(exc)[:200])
         gap("themes", str(exc), source="theme_service.build_theme_board")
 
+    sector_boards: dict[str, list] = {"industry": [], "concept": []}
+    sector_board_summary: dict = {}
     try:
         boards, board_proof = collect_sector_boards(trade_date)
         provenance["sector_boards"] = board_proof
         # Preserve old owner values, but do not promote their absent source clocks.
         reported["sector_boards"] = boards
+        if board_proof.state in {"verified", "partial"}:
+            sector_boards = boards
     except Exception as exc:
         provenance["sector_boards"] = evidence(trade_date, source="board_flow.daily", reason=str(exc)[:200])
     if provenance["sector_boards"].state not in {"verified", "partial"}:
+        from app.market.board_review import collect_review_boards
+
+        try:
+            verified = await collect_review_boards(hub.provider, trade_date, catalog_service=theme_catalog,
+                                                   retry_missing=True)
+        except Exception as exc:
+            verified = {"state": "unavailable", "reason": f"板块日期证据读取失败：{type(exc).__name__}"}
+        sector_board_summary = verified.get("summary") or {}
+        reported["sector_board_audit"] = {key: value for key, value in verified.items() if key != "boards"}
+        if verified.get("state") in {"verified", "partial"}:
+            sector_boards = verified["boards"]
+            provenance["sector_boards"] = evidence(trade_date, state=verified["state"],
+                source=verified.get("source"), source_day=verified.get("source_trade_date"),
+                as_of=verified.get("source_as_of"), received=verified.get("received_at"),
+                reason=verified.get("reason") or "")
+        elif verified.get("reason") and not any(boards for boards in reported.get("sector_boards", {}).values()):
+            provenance["sector_boards"] = evidence(trade_date, source="board_flow.review_source",
+                reason=verified["reason"])
+    if provenance["sector_boards"].state not in {"verified", "partial"}:
         gap("sector_boards", provenance["sector_boards"].reason, source="board_flow.daily")
+    elif any(summary.get("missing_count") for summary in sector_board_summary.values() if isinstance(summary, dict)):
+        gap("sector_boards", "部分候选缺当日有效日线；仅已核样本参与强弱排序", source="board_flow.review_source")
 
     provider_health: dict | None = None
     try:
@@ -253,7 +299,8 @@ async def collect_market(
 
     return MarketSnapshot(trade_date=td, contract_version="date_bound_v1", provenance=provenance,
         reported_values=reported, indices=indices, breadth=breadth, sentiment=sentiment,
-        themes=themes, theme_summary=theme_summary, sector_boards={"industry": [], "concept": []}, gaps=gaps,
+        themes=themes, theme_summary=theme_summary, sector_boards=sector_boards,
+        sector_board_summary=sector_board_summary, gaps=gaps,
         provider_health=provider_health, auction_premium=auction_premium)
 
 
@@ -524,7 +571,7 @@ def collect_picks(session_factory, trade_date: date) -> "PicksSnapshot":
                 score=i.get("score"),
                 themes=i.get("themes") or [],
                 observation_only=bool(i.get("observation_only")),
-                basis=str(i.get("pick_basis") or i.get("source_basis") or "") or None,
+                basis=_saved_pick_basis(i),
                 selection_ref=i.get("selection_ref") if isinstance(i.get("selection_ref"), dict) else None,
                 source_version=str(i.get("source_version")) if i.get("source_version") else None,
                 event_refs=[r for r in (i.get("related_event_refs") or i.get("event_refs") or []) if isinstance(r, dict)],
@@ -535,3 +582,23 @@ def collect_picks(session_factory, trade_date: date) -> "PicksSnapshot":
         shadow=shadow,
         gaps=gaps,
     )
+
+
+def _saved_pick_basis(item: dict) -> str | None:
+    """Read the original scoring/observation explanation; never invent a rationale."""
+    explicit = item.get("pick_basis") or item.get("source_basis")
+    if isinstance(explicit, str) and explicit.strip():
+        return explicit
+    pieces: list[str] = []
+    if item.get("observation_only"):
+        reasons = item.get("follow_reasons")
+        if isinstance(reasons, list):
+            saved = [v for v in reasons if isinstance(v, str) and v.strip()]
+            if saved:
+                pieces.append("原观察约束：" + "；".join(saved))
+    bases = item.get("bases")
+    if isinstance(bases, dict):
+        saved = [v for v in bases.values() if isinstance(v, str) and v.strip()]
+        if saved:
+            pieces.append("原评分依据（非买入理由）：" + "；".join(saved))
+    return "。".join(pieces) or None

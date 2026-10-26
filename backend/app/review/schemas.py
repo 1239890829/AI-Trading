@@ -68,6 +68,7 @@ class MarketSnapshot(BaseModel):
     provenance: dict[str, SectionProvenance] = Field(default_factory=dict)
     reported_values: dict[str, Any] = Field(default_factory=dict)
     sector_boards: dict[str, list[dict[str, Any]]] = Field(default_factory=dict)
+    sector_board_summary: dict[str, Any] = Field(default_factory=dict)
     indices: list[IndexQuote] = Field(default_factory=list)
     breadth: dict[str, Any] = Field(default_factory=dict)
     sentiment: dict[str, Any] = Field(default_factory=dict)

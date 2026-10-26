@@ -398,7 +398,7 @@ export function ReviewTab({ focusDate, allowDispose = false }: { focusDate?: str
 
   return (
     <div className="review-workspace">
-      <p className="review-reader-hint">选择日期查看报告，完整依据按需展开</p>
+      <p className="review-reader-hint">自动复盘15:30起检查；已启用日线时等待同步，超时保留缺失生成。</p>
       {error && <p role="alert" className="px-4 py-2 text-xs text-amber-800 dark:text-amber-300">报告列表刷新失败，保留上次读取：{error} <button onClick={list.refresh}>重试列表</button></p>}
     <div className={`review-layout${allowDispose ? " review-layout-with-disposition" : ""}`} role="region" aria-label="报告索引、正文与处置阅读区" tabIndex={0}>
       <Panel title="复盘报告（冻结版本）" className="review-index" bodyClassName="review-index-scroll overflow-auto">

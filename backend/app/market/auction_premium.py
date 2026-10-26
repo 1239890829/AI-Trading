@@ -16,6 +16,7 @@ from __future__ import annotations
 import logging
 from datetime import date
 from statistics import median
+from math import isfinite
 
 log = logging.getLogger(__name__)
 
@@ -32,7 +33,7 @@ BAND_UNKNOWN = "unknown"
 
 def classify_premium(pct: float | None) -> str:
     """单股溢价分档。None → unknown（缺失≠平开）。"""
-    if pct is None:
+    if not isinstance(pct, (int, float)) or isinstance(pct, bool) or not isfinite(pct):
         return BAND_UNKNOWN
     if pct >= PREMIUM_STRONG_PCT:
         return BAND_STRONG
@@ -47,7 +48,7 @@ def summarize_premiums(pcts: list[float | None]) -> dict:
     median / 占比只对可判定样本计算；unknown 单列计数。
     全部缺失时 judged=0，median/占比为 None（调用方据此显式降级，勿当 0 用）。
     """
-    judged = [p for p in pcts if p is not None]
+    judged = [p for p in pcts if isinstance(p, (int, float)) and not isinstance(p, bool) and isfinite(p)]
     n = len(pcts)
     unknown = n - len(judged)
     if not judged:
@@ -105,11 +106,21 @@ async def collect_premium(hub, asof: date) -> dict:
         except Exception as exc:  # noqa: BLE001
             log.warning("auction premium chunk %d failed: %s", i // 100 + 1, exc)
             caveats.append(f"竞价快照批次 {i // 100 + 1} 拉取失败：{exc}")
-    auction_by_sym = {r["symbol"]: r for r in auction_rows}
+    auction_by_sym: dict[str, dict] = {}
+    duplicates: set[str] = set()
+    for row in auction_rows:
+        symbol = row.get("symbol")
+        if symbol in auction_by_sym:
+            duplicates.add(symbol)
+        auction_by_sym[symbol] = row
 
     for rec in pool:
         row = auction_by_sym.get(rec.symbol)
-        pct = (row or {}).get("auction_pct")
+        raw_pct = (row or {}).get("auction_pct")
+        ready = (row or {}).get("data_status") in {"ready", "final"}
+        pct = (float(raw_pct) if ready and rec.symbol not in duplicates
+               and isinstance(raw_pct, (int, float)) and not isinstance(raw_pct, bool)
+               and isfinite(raw_pct) else None)
         items.append({
             "symbol": rec.symbol,
             "name": rec.name or (row or {}).get("name"),
@@ -117,6 +128,11 @@ async def collect_premium(hub, asof: date) -> dict:
             "premium_pct": pct,
             "band": classify_premium(pct),
             "data_status": (row or {}).get("data_status"),
+            "source": (row or {}).get("source"),
+            "source_ready_at": (row or {}).get("source_ready_at"),
+            "reported_premium_pct": raw_pct if isinstance(raw_pct, (int, float)) and not isinstance(raw_pct, bool) and isfinite(raw_pct) else None,
+            "reason": ("同股竞价返回重复，未选取其一" if rec.symbol in duplicates else
+                       "竞价未就绪或涨幅无效" if pct is None else None),
         })
 
     summary = summarize_premiums([it["premium_pct"] for it in items])
@@ -125,5 +141,7 @@ async def collect_premium(hub, asof: date) -> dict:
         "pool_date": pool_date.isoformat(),
         "items": items,
         "summary": summary,
+        "date_binding": "unverified",
+        "source_time_semantics": "source_ready_at仅为接口就绪时刻；原端点未给逐行交易日，不能用于同日行情证明",
         "caveats": caveats,
     }

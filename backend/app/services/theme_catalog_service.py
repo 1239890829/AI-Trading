@@ -597,7 +597,33 @@ class ThemeCatalogService:
         if (not isinstance(payload, dict) or type(payload.get("code")) is not int or payload["code"] != 0
                 or not isinstance(raw, list) or any(not isinstance(row, dict) for row in raw)):
             raise RuntimeError("theme board bars: incomplete or failed snapshot")
-        return parse_board_bars(payload)
+        if (data.get("thscode") != code or data.get("interval") != "1d"
+                or "adjust" not in data or data["adjust"] is not None):
+            raise RuntimeError("theme board bars: identity or daily index contract mismatch")
+        dates = [row.get("date_ms") for row in raw]
+        if len(set(str(value) for value in dates)) != len(dates):
+            raise RuntimeError("theme board bars: duplicate source date")
+        source_dates = {}
+        for row in raw:
+            stamp = row.get("date_ms")
+            if type(stamp) is not int or stamp <= 0:
+                continue
+            try:
+                day = datetime.fromtimestamp(stamp / 1000, tz=BJ_TZ).date().isoformat()
+            except (ValueError, OverflowError, OSError):
+                continue
+            if day in source_dates:
+                raise RuntimeError("theme board bars: duplicate trading-day identity")
+            source_dates[day] = stamp
+            close = row.get("close_price")
+            if close is not None and (isinstance(close, bool) or not isinstance(close, (int, float))
+                                      or not math.isfinite(close) or close <= 0):
+                raise RuntimeError("theme board bars: invalid close value")
+        bars = parse_board_bars(payload)
+        for bar in bars:
+            bar.update(source="ths_official_kline", source_code=code,
+                       source_date_ms=source_dates[bar["date"]])
+        return bars
 
     # -- sync ------------------------------------------------------------
 

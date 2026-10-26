@@ -432,10 +432,16 @@ class RulesAnalyzer:
 
         # 宽度
         if m.breadth:
+            def saved_count(key: str) -> str:
+                value = m.breadth.get(key)
+                return str(value) if isinstance(value, int) and not isinstance(value, bool) and value >= 0 else "未记录"
+
             findings.append(
-                f"涨 {m.breadth.get('up')} / 跌 {m.breadth.get('down')}，"
-                f"涨停 {m.breadth.get('limit_up')} / 跌停 {m.breadth.get('limit_down')}"
+                f"涨 {saved_count('up')} / 跌 {saved_count('down')}，"
+                f"涨停 {saved_count('limit_up')} / 跌停 {saved_count('limit_down')}"
             )
+            if m.breadth.get("basis"):
+                findings.append(str(m.breadth["basis"]))
             evidence["breadth"] = m.breadth
             anom = m.breadth.get("limit_anomaly")
             if anom:
@@ -443,6 +449,18 @@ class RulesAnalyzer:
                     f"有 {anom} 只个股涨幅超出其限价档位（限价口径存疑），"
                     "涨跌停统计可能失真，需核对 ST / 板块口径"
                 )
+
+        board_proof = m.provenance.get("sector_boards")
+        if (m.contract_version == "date_bound_v1" and board_proof is not None
+                and board_proof.state in {"verified", "partial"}
+                and board_proof.source_trade_date == board_proof.requested_trade_date
+                and board_proof.source_trade_date.replace("-", "") == data.trade_date.replace("-", "")):
+            for kind, label in (("industry", "行业"), ("concept", "概念")):
+                rows = m.sector_boards.get(kind) or []
+                if rows:
+                    findings.append(f"{label}已核强弱样本 {len(rows)} 个；仅描述本报告核验范围，不代表全市场最强")
+            evidence["sector_boards"] = m.sector_boards
+            evidence["sector_board_summary"] = m.sector_board_summary
 
         # 题材
         if m.theme_summary:

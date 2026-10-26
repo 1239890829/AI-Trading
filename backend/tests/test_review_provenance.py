@@ -282,6 +282,56 @@ def test_requested_theme_date_does_not_prove_mixed_current_board_facts(monkeypat
     assert "历史复盘不调用" in old.provenance["themes"].reason
 
 
+def test_market_collector_consumes_bound_board_sample_without_hiding_it(monkeypatch, tmp_path):
+    import app.market.board_review as boards
+    from app.review.provenance import evidence
+    hub, svc, _ = setup_market(monkeypatch, tmp_path)
+    catalog = object()
+    original = {"board_code": "881101.TI", "name": "正式行业", "change_pct": 0,
+                "main_net_yi": None, "source_trade_date": DAY.isoformat(),
+                "source": "ths_official_kline", "source_date_ms": 1792684800000, "binding_state": "partial"}
+
+    async def sample(provider, day, *, catalog_service, retry_missing):
+        assert provider is hub.provider and day == DAY and catalog_service is catalog and retry_missing
+        return {"boards": {"industry": [original], "concept": []},
+                "summary": {"industry": {"verified_count": 1, "universe_count": 320, "missing_count": 0}},
+                **evidence(DAY, state="partial", source="ths_official_kline", source_day=DAY).model_dump()}
+
+    monkeypatch.setattr(boards, "collect_review_boards", sample)
+    got = asyncio.run(collect_market(hub, svc, DAY, theme_catalog=catalog))
+    assert got.sector_boards["industry"] == [original]
+    assert got.sector_board_summary["industry"]["verified_count"] == 1
+    assert got.provenance["sector_boards"].state == "partial"
+
+
+def test_existing_daily_source_fills_missing_breadth_without_mixing_sentiment(monkeypatch, tmp_path):
+    import app.review.daily_market as daily
+    import app.market.trade_calendar as calendar
+    from app.review.provenance import evidence
+    hub, svc, calls = setup_market(monkeypatch, tmp_path, rows=[])
+    path = tmp_path / "existing.duckdb"
+    path.touch()
+    monkeypatch.setattr(daily, "DEFAULT_DB_PATH", path)
+
+    async def dates(provider):
+        return [date(2026, 10, 22), DAY]
+
+    def saved(day, *, trade_days, now):
+        assert day == DAY and trade_days[-1] == DAY
+        return ({"up": 2, "down": 0, "total": 3, "basis": "复权日线对照", "coverage": {"missing_count": 1}},
+                evidence(day, state="partial", source="marketdb.daily_k+daily_k_adj", source_day=day, reason="2/3；无源日内钟"),
+                {"source_version": "existing-version"})
+
+    monkeypatch.setattr(calendar, "trading_days", dates)
+    monkeypatch.setattr(daily, "collect_daily_breadth", saved)
+    got = asyncio.run(collect_market(hub, svc, DAY))
+    assert got.breadth["up"] == 2 and "limit_up" not in got.breadth
+    assert got.reported_values["daily_breadth_audit"]["source_version"] == "existing-version"
+    assert got.provenance["breadth"].source_trade_date == DAY.isoformat()
+    assert got.sentiment == {} and "sentiment" not in calls
+    assert [g for g in got.gaps if g.field == "breadth"][0].source == "marketdb.daily_k+daily_k_adj"
+
+
 def test_outlook_post_review_has_its_own_cutoff_not_plan_generation_clock(monkeypatch):
     from app.review.reader_context import collect_outlook
     import app.picks.morning_brief as brief
