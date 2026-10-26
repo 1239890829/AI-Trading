@@ -9,6 +9,7 @@ import pytest
 from app.market import board_flow as bf
 from app.core.bjtime import BJ_TZ  # S2-8 时区收敛
 from app.core.ttl_cache import TTLCache
+from app.core.inflight_reads import close_inflight_reads
 
 
 def _run(coro):
@@ -72,6 +73,8 @@ def fresh_memo(monkeypatch, tmp_path):
     monkeypatch.setattr(bf, "_DAILY_STORE", tmp_path / "daily.json")
     monkeypatch.setattr(bf, "_DAYK_STORE", tmp_path / "daykline.json")
     monkeypatch.setattr(bf, "_mem_memo", {"daily": (None, {}), "dayk": (None, {})})
+    monkeypatch.setattr(bf, "_inflight_source_reads", None, raising=False)
+    monkeypatch.setattr(bf, "_SNAPSHOT_LIST_RETRY", TTLCache("fixture-snapshot-retry", 3600, maxsize=4))
     return tmp_path
 
 
@@ -87,7 +90,6 @@ def isolated_list_reads(monkeypatch, fresh_memo):
     monkeypatch.setattr(bf, "beijing_now", lambda: clock["now"])
     monkeypatch.setattr(bf, "_LIST_CACHE", TTLCache("test-board-list", 30, maxsize=4))
     monkeypatch.setattr(bf, "_LIST_EOD_CACHE", TTLCache("test-board-list-eod", 300, maxsize=4))
-    monkeypatch.setattr(bf, "_LIST_READS", {}, raising=False)
     return clock
 
 
@@ -204,7 +206,6 @@ def test_board_member_unavailable_retains_normalized_identity(monkeypatch, fresh
     from app.api.routes.market_flow import router
 
     monkeypatch.setattr(bf, "_MEMBERS_CACHE", TTLCache("test-member-identity", 60, maxsize=4))
-    monkeypatch.setattr(bf, "_DRILL_READS", {})
     fake = FakeHTTP()
     if failure == "source_failure":
         fake.add("push2.eastmoney", [RuntimeError("fixture primary unavailable")])
@@ -227,7 +228,6 @@ def test_board_minute_unavailable_already_retains_identity(monkeypatch, fresh_me
     from app.market import fund_flow
 
     monkeypatch.setattr(bf, "_MINUTE_CACHE", TTLCache("test-minute-identity", 60, maxsize=4))
-    monkeypatch.setattr(bf, "_DRILL_READS", {})
 
     async def unavailable(_code):
         return None
@@ -350,6 +350,82 @@ def test_board_failure_does_not_block_other_kind_or_next_day(monkeypatch, isolat
         assert (await bf.get_board_list("concept"))[0] is None
         assert len(calls) == 3
 
+    _run(go())
+
+
+def test_manual_board_retry_bypasses_failure_and_success_cache_without_parallel_pages(monkeypatch, isolated_list_reads):
+    calls = []
+
+    async def pages(fs, fields):
+        calls.append(fs)
+        await asyncio.sleep(0)
+        return (None, None) if len(calls) == 1 else ([_em_board(f62=len(calls) * 1e8)], bf._HOSTS[0])
+
+    monkeypatch.setattr(bf, "_clist_pages", pages)
+
+    async def go():
+        assert (await bf.get_board_list("concept"))[0] is None
+        assert (await bf.get_board_list("concept"))[0] is None
+        assert len(calls) == 1
+        results = await asyncio.gather(*(bf.get_board_list("concept", fresh=True) for _ in range(8)))
+        assert len(calls) == 2
+        assert all(rows[0]["main_net_yi"] == 2 for rows, _ in results)
+        rows, _ = await bf.get_board_list("concept", fresh=True)
+        assert len(calls) == 3 and rows[0]["main_net_yi"] == 3
+
+    _run(go())
+
+
+@pytest.mark.parametrize("kind", ["list", "fresh_list", "members", "minute"])
+def test_original_board_sources_share_service_shutdown_owner_after_waiter_cancels(monkeypatch, fresh_memo, kind):
+    from app.market import fund_flow
+    monkeypatch.setattr(bf, "_LIST_CACHE", TTLCache("fixture-owned-list",30,maxsize=4))
+    monkeypatch.setattr(bf, "_LIST_EOD_CACHE", TTLCache("fixture-owned-list-eod",300,maxsize=4))
+    monkeypatch.setattr(bf, "_MEMBERS_CACHE", TTLCache("fixture-owned-members",60,maxsize=8))
+    monkeypatch.setattr(bf, "_MINUTE_CACHE", TTLCache("fixture-owned-minute",60,maxsize=4))
+    monkeypatch.setattr(bf, "beijing_now", lambda: _bj(hour=10))
+
+    async def go():
+        entered, release, finished = asyncio.Event(), asyncio.Event(), asyncio.Event()
+        calls, canceled = [], []
+        async def wait_source():
+            calls.append(1);entered.set()
+            try:
+                await release.wait()
+            except asyncio.CancelledError:
+                canceled.append(1)
+                raise
+            finally:
+                finished.set()
+        async def pages(fs, fields, fid="f62", pz=100, *, first_page_only=False):
+            await wait_source()
+            return [_em_board(code="600001" if first_page_only else "BK0001")], bf._HOSTS[0]
+        async def minute(secid: str, *, max_age=None, _refresh_expired=True):
+            await wait_source()
+            return [("10:00", {"main_yi":1.0})]
+        monkeypatch.setattr(bf,"_clist_pages",pages)
+        monkeypatch.setattr(fund_flow,"_em_fflow_kline",minute)
+        def read():
+            if kind in {"list","fresh_list"}:
+                return bf.get_board_list("concept",fresh=kind=="fresh_list")
+            return bf.get_board_members("BK0001") if kind=="members" else bf.get_board_minute("BK0001")
+        waiter=asyncio.create_task(read());closing=None
+        try:
+            await asyncio.wait_for(entered.wait(),1)
+            waiter.cancel()
+            with pytest.raises(asyncio.CancelledError):await waiter
+            assert not finished.is_set() and canceled==[]
+            closing=asyncio.create_task(close_inflight_reads(bf))
+            await asyncio.sleep(0)
+            assert not closing.done()
+            with pytest.raises(RuntimeError,match="closing"):await read()
+            release.set();await asyncio.wait_for(closing,1)
+            assert finished.is_set() and canceled==[] and calls==[1]
+            # A completed success cache cannot bypass the closed read owner.
+            with pytest.raises(RuntimeError,match="closing"):await read()
+        finally:
+            release.set()
+            if closing is not None:await asyncio.gather(closing,return_exceptions=True)
     _run(go())
 
 

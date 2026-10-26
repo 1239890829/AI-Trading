@@ -19,8 +19,10 @@ from __future__ import annotations
 
 import uuid
 import re
+import hashlib
+import json
 from datetime import date as date_type, timedelta
-from sqlalchemy import and_, delete, or_, select, update
+from sqlalchemy import and_, delete, insert, literal, or_, select, update
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import aliased
 
@@ -132,21 +134,56 @@ def validate_unknown_usage_exceptions(values) -> tuple[dict, ...]:
         raise ValueError("invalid named unknown usage exceptions")
     facts, seen = [], set()
     for item in values:
-        if (not isinstance(item, dict) or set(item) != {"usage_id", "budget_date", "scope"}
+        selected = isinstance(item, dict) and set(item) == {"usage_id", "budget_date", "scope"} and item.get("scope") == SCOPE_SELECTED_RESEARCH_LLM
+        retained = (isinstance(item, dict) and set(item) == {"usage_id", "budget_date", "scope", "purpose", "state", "source_row_sha256"}
+                    and item.get("scope") == SCOPE_AUTONOMY_LLM and isinstance(item.get("state"), str) and item["state"] in _TERMINAL
+                    and isinstance(item.get("purpose"), str) and 0 < len(item["purpose"].strip()) <= 80
+                    and isinstance(item.get("source_row_sha256"), str) and re.fullmatch(r"[0-9a-f]{64}", item["source_row_sha256"]))
+        if (not (selected or retained)
                 or not isinstance(item["usage_id"], str) or not re.fullmatch(r"[0-9a-f]{32}", item["usage_id"])
                 or item["usage_id"] in seen or not isinstance(item["budget_date"], str)
-                or date_type.fromisoformat(item["budget_date"]).isoformat() != item["budget_date"]
-                or item["scope"] != SCOPE_SELECTED_RESEARCH_LLM):
+                or date_type.fromisoformat(item["budget_date"]).isoformat() != item["budget_date"]):
             raise ValueError("invalid named unknown usage exception identity")
         seen.add(item["usage_id"])
         facts.append(dict(item))
     return tuple(facts)
 
 
-def _unexcepted_unknown(model, date, consumer_scope, allowed_unknown_usage):
+def _retained_snapshots(db, facts):
+    """Recheck the complete immutable source inside each budget transaction."""
+    snapshots = {}
+    for fact in facts:
+        if "source_row_sha256" not in fact:
+            continue
+        row = db.get(AgentResourceUsage, fact["usage_id"])
+        digest = hashlib.sha256(json.dumps(dump(row), ensure_ascii=False, sort_keys=True,
+            separators=(",", ":"), allow_nan=False).encode()).hexdigest() if row is not None else None
+        if digest != fact["source_row_sha256"]:
+            raise BudgetError("retained_usage_identity_drift", "原具名用量未知事实已变化；拒绝新的模型调用")
+        snapshots[fact["usage_id"]] = {column.name: getattr(row, column.name) for column in row.__table__.columns}
+    return snapshots
+
+
+def _retained_guards(snapshots):
+    """Positive full-row CAS predicates survive changes after the hash read."""
+    guards = []
+    for snapshot in snapshots.values():
+        source = aliased(AgentResourceUsage)
+        guards.append(select(source.id).where(*(getattr(source, key) == value
+            for key, value in snapshot.items())).exists())
+    return guards
+
+
+def _unexcepted_unknown(model, date, consumer_scope, allowed_unknown_usage, snapshots=None):
     facts = validate_unknown_usage_exceptions(allowed_unknown_usage)
+    snapshots = snapshots or {}
+    if any("source_row_sha256" in fact and fact["usage_id"] not in snapshots for fact in facts):
+        raise ValueError("retained usage requires a complete transaction-bound source snapshot")
     permitted = [and_(model.id == fact["usage_id"], model.budget_date == fact["budget_date"],
-                      model.scope == fact["scope"]) for fact in facts
+                      model.scope == fact["scope"],
+                      *([model.purpose == fact["purpose"], model.state == fact["state"],
+                         *(getattr(model, key) == value for key, value in snapshots[fact["usage_id"]].items())]
+                        if "purpose" in fact else [])) for fact in facts
                  if consumer_scope == SCOPE_SELECTED_RESEARCH_LLM and fact["budget_date"] == date]
     return ~or_(*permitted) if permitted else True
 
@@ -168,8 +205,11 @@ def acquire_selected_call_lease(usage_id, *, method_sha256, cancel_check=None, s
 
 
 def _unknown_usage_exists(sf, date: str, *, consumer_scope=None, allowed_unknown_usage=()) -> bool:
-    retained = _unexcepted_unknown(AgentResourceUsage, date, consumer_scope, allowed_unknown_usage)
-    conditions = (AgentResourceUsage.budget_date == date,
+    facts = validate_unknown_usage_exceptions(allowed_unknown_usage)
+    def conditions(db):
+        snapshots = _retained_snapshots(db, facts)
+        retained = _unexcepted_unknown(AgentResourceUsage, date, consumer_scope, facts, snapshots)
+        return (AgentResourceUsage.budget_date == date,
                   AgentResourceUsage.scope.in_(_MODEL_BUDGET_SCOPES),
                   AgentResourceUsage.state.in_(_STARTED_OR_TERMINAL),
                   AgentResourceUsage.started_at.is_not(None), AgentResourceUsage.kind == "model",
@@ -178,14 +218,14 @@ def _unknown_usage_exists(sf, date: str, *, consumer_scope=None, allowed_unknown
     # concurrent start between the two reads as lost usage. New starts remain
     # covered by the atomic start CAS, never by this admission snapshot.
     with sf() as db:
-        observed = tuple(db.scalars(select(AgentResourceUsage.id).where(*conditions).limit(33)))
+        observed = tuple(db.scalars(select(AgentResourceUsage.id).where(*conditions(db)).limit(33)))
     if not observed:
         return False
     if consumer_scope != SCOPE_SELECTED_RESEARCH_LLM or len(observed) >= 33:
         return True
     in_flight = _unexcepted_inflight(AgentResourceUsage, date, consumer_scope, sf)
     with sf() as db:
-        return db.scalar(select(AgentResourceUsage.id).where(*conditions,
+        return db.scalar(select(AgentResourceUsage.id).where(*conditions(db),
             AgentResourceUsage.id.in_(observed), in_flight).limit(1)) is not None
 
 
@@ -311,11 +351,19 @@ def reserve(
             created_at=now,
         )
         with sf() as db:
-            db.add(row)
             try:
+                snapshots = _retained_snapshots(db, allowed_unknown_usage)
+                if snapshots:
+                    values = {column.name: getattr(row, column.name) for column in row.__table__.columns}
+                    statement = insert(AgentResourceUsage).from_select(list(values), select(*(
+                        literal(value, type_=AgentResourceUsage.__table__.c[key].type) for key, value in values.items()
+                    )).where(*_retained_guards(snapshots)))
+                    if db.execute(statement).rowcount != 1:
+                        raise BudgetError("retained_usage_identity_drift", "原具名用量未知事实在预留前变化；未新增模型调用")
+                else:
+                    db.add(row)
                 db.commit()
-                db.refresh(row)
-                return dump(row)
+                return dump(db.get(AgentResourceUsage, row.id))
             except IntegrityError:
                 db.rollback()  # another process owns this numbered slot; try next
                 if slot is None:
@@ -350,9 +398,11 @@ def _start_once(usage_id: str, session_factory=None, *, allowed_unknown_usage=()
     now = beijing_now_naive()
     with sf() as db:
         row = db.get(AgentResourceUsage, usage_id)
+        snapshots = _retained_snapshots(db, allowed_unknown_usage)
         conditions = [
             AgentResourceUsage.id == usage_id,
             AgentResourceUsage.state == "reserved",
+            *_retained_guards(snapshots),
         ]
         if row is not None and row.scope in _MODEL_BUDGET_SCOPES:
             conditions.extend((AgentResourceUsage.scope == row.scope,
@@ -371,7 +421,7 @@ def _start_once(usage_id: str, session_factory=None, *, allowed_unknown_usage=()
                 other.kind == "model",
                 other.usage_known == 0,
                 other.id != usage_id,
-                _unexcepted_unknown(other, row.budget_date, row.scope, allowed_unknown_usage),
+                _unexcepted_unknown(other, row.budget_date, row.scope, allowed_unknown_usage, snapshots),
                 _unexcepted_inflight(other, row.budget_date, row.scope, sf),
             ).exists())
         result = db.execute(

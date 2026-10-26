@@ -669,7 +669,7 @@ def test_a_valid_adjacent_selection_does_not_block_the_current_selection(env, mo
     assert path.read_bytes() == before
 
 
-def test_old_completed_report_remains_readable_but_is_not_reissued_as_the_new_method(env, monkeypatch):
+def test_old_completed_report_is_reused_as_historical_and_not_reissued_as_the_new_method(env, monkeypatch):
     daily(env)
     authorize(env, monkeypatch)
     asyncio.run(research.run_research(Recorder(), {"symbol": "600001"}, env.app))
@@ -679,8 +679,9 @@ def test_old_completed_report_remains_readable_but_is_not_reissued_as_the_new_me
     authorize(env, monkeypatch)
     latest = research.read_view("600001", env.app)["latest"]
     assert latest == old and latest["method_sha256"] != research._digest(identity)
-    with pytest.raises(research.ResearchBlocked):
-        asyncio.run(research.run_research(Recorder(), {"symbol": "600001"}, env.app))
+    reused = asyncio.run(research.run_research(Recorder(), {"symbol": "600001"}, env.app))
+    assert reused['reused_identical_selection'] is True and reused['run_id'] == old['run_id']
+    assert research.read_view('600001', env.app)['latest'] == old
     assert env.driver.calls == 1
 
 
@@ -948,6 +949,90 @@ def usage_facts(env):
     with env.sf() as db:
         return {row.id: {column.name: getattr(row, column.name) for column in row.__table__.columns}
                 for row in db.scalars(select(AgentResourceUsage))}
+
+
+def retained_agenda_permission(env):
+    with env.sf() as db:
+        row=AgentResourceUsage(id="f"*32,budget_date=NOW.date().isoformat(),scope=budget.SCOPE_AUTONOMY_LLM,
+            kind="model",purpose="agenda.fixture",state="failed",usage_known=0,error_kind="LLMError",
+            created_at=(NOW-timedelta(minutes=6)).replace(tzinfo=None),
+            started_at=(NOW-timedelta(minutes=5)).replace(tzinfo=None),finished_at=(NOW-timedelta(minutes=2)).replace(tzinfo=None))
+        db.add(row);db.commit()
+        fact={"usage_id":row.id,"budget_date":row.budget_date,"scope":row.scope,"purpose":row.purpose,"state":row.state}
+        digest=research._digest(budget.dump(row))
+    return {"version":1,"user_authorization":"EXPLICIT","consumer":"selected_stock_explanation","dispatch":"manual",
+            "reason":"Fixture user explicitly retains one terminal agenda unknown for selected research only.",
+            "authorized_at":NOW.isoformat(),"source_authorization_sha256":"a"*64,
+            "authorized_method_sha256":research._digest(env.driver.method_identity()),"source_usage":fact,"source_row_sha256":digest}
+
+
+def test_retained_agenda_projection_requires_pinned_authorization_and_keeps_other_consumers_blocked(env, monkeypatch):
+    monkeypatch.setattr(settings,"tradingagents_auto_research_enabled",False)
+    daily(env)
+    permission=retained_agenda_permission(env)
+    before=usage_facts(env)
+    authorize(env,monkeypatch)
+    assert "usage_unknown" in {item["code"] for item in research.preflight("600001",env.app)["blockers"]}
+    authorize(env,monkeypatch,retained_unknown_authorizations=[permission])
+    view=research.preflight("600001",env.app)
+    assert view["executable"] is True
+    allowed=research.authorized_unknown_usage(env.app,method_sha256=view["admission"]["method_sha256"],authorization_sha256=view["admission"]["artifact_sha256"])
+    assert allowed==({**permission["source_usage"],"source_row_sha256":permission["source_row_sha256"]},)
+    for scope in (budget.SCOPE_AUTONOMY_LLM,budget.SCOPE_ALERT_TRIAGE_LLM):
+        with pytest.raises(budget.BudgetError,match="用量未知"):
+            budget.ensure_model_usage_known(env.sf,consumer_scope=scope,allowed_unknown_usage=allowed)
+    monkeypatch.setattr(settings,"tradingagents_research_authorization_digest","b"*64)
+    with pytest.raises(research.ResearchBlocked):
+        research.authorized_unknown_usage(env.app,method_sha256=view["admission"]["method_sha256"],authorization_sha256=view["admission"]["artifact_sha256"])
+    assert usage_facts(env)==before and env.driver.calls==0
+
+
+@pytest.mark.parametrize("mutation",["reason","consumer","future","source_hash","scope","purpose","state","usage_known","provider"])
+def test_retained_permission_drift_fails_closed_without_rewriting_original_unknown(env,monkeypatch,mutation):
+    monkeypatch.setattr(settings,"tradingagents_auto_research_enabled",False)
+    daily(env);permission=retained_agenda_permission(env)
+    if mutation=="reason":permission["reason"]=" "
+    elif mutation=="consumer":permission["consumer"]="autonomy_llm"
+    elif mutation=="future":permission["authorized_at"]=(NOW+timedelta(seconds=1)).isoformat()
+    elif mutation=="source_hash":permission["source_row_sha256"]="0"*64
+    elif mutation in {"scope","purpose","state"}:permission["source_usage"][mutation]={"scope":"alert_triage_llm","purpose":"another.fixture","state":"unknown"}[mutation]
+    else:
+        with env.sf() as db:
+            row=db.get(AgentResourceUsage,"f"*32)
+            if mutation=="usage_known":row.usage_known=1
+            else:row.provider="drift"
+            db.commit()
+    before=usage_facts(env)
+    authorize(env,monkeypatch,retained_unknown_authorizations=[permission])
+    assert "research_not_authorized" in {item["code"] for item in research.preflight("600001",env.app)["blockers"]}
+    assert usage_facts(env)==before and env.driver.calls==0
+
+
+def test_retained_permission_is_history_after_its_beijing_day_not_a_future_blanket_exception(env,monkeypatch):
+    monkeypatch.setattr(settings,"tradingagents_auto_research_enabled",False)
+    permission=retained_agenda_permission(env)
+    assert research._retained_unknown_usage([permission],env.sf,now=NOW+timedelta(days=1))==()
+    # The legacy seven-fact schema cannot smuggle a new cross-scope permission.
+    with pytest.raises(ValueError):
+        research._unknown_usage_exception(continuation(env,permission["source_usage"]),research._digest(env.driver.method_identity()),env.sf)
+
+
+@pytest.mark.parametrize("created_by",["scheduler","ai","user","maintenance"])
+def test_retained_permission_only_flows_into_existing_manual_task_identity(env,monkeypatch,created_by):
+    monkeypatch.setattr(settings,"tradingagents_auto_research_enabled",False)
+    daily(env);permission=retained_agenda_permission(env)
+    authorize(env,monkeypatch,retained_unknown_authorizations=[permission])
+    with env.sf() as db:
+        db.add(AgentTask(id="manual-fixture",type="tradingagents_research",status="queued",created_by=created_by,params='{"symbol":"600001"}'))
+        db.commit()
+    if created_by in {"user","maintenance"}:
+        assert research.require_start({"symbol":"600001"},env.app,task_id="manual-fixture")["executable"] is True
+    else:
+        with pytest.raises(research.ResearchBlocked) as blocked:
+            research.require_start({"symbol":"600001"},env.app,task_id="manual-fixture")
+        assert blocked.value.code=="retained_usage_manual_task_required"
+    monkeypatch.setattr(settings,"tradingagents_auto_research_enabled",True)
+    assert "research_not_authorized" in {item["code"] for item in research.preflight("600001",env.app)["blockers"]}
 
 
 def test_pinned_continuation_permits_only_new_selected_research_without_rewriting_unknown(env, monkeypatch):
@@ -1360,3 +1445,74 @@ def test_auto_mode_off_does_not_disable_explicit_research_or_repeat_completed_se
     second = asyncio.run(research.run_research(Recorder(), {"symbol": "600001"}, env.app))
     assert first["state"] == "completed" and second["reused_identical_selection"] is True
     assert env.driver.calls == 1
+
+
+def test_explicit_same_selection_reuses_a_verified_old_complete_method_without_new_claim_or_call(env, monkeypatch):
+    daily(env)
+    authorize(env, monkeypatch)
+    first = asyncio.run(research.run_research(Recorder(), {"symbol": "600001"}, env.app))
+    folder = research.ROOT/"600001"
+    original = {path: path.read_bytes() for path in folder.rglob('*') if path.is_file()}
+    old_method = research._digest(env.driver.method_identity())
+    current = {**env.driver.method_identity(), "reviewed_executor_revision": "new"}
+    monkeypatch.setattr(env.driver, 'method_identity', lambda: current)
+    authorize(env, monkeypatch)
+    second = asyncio.run(research.run_research(Recorder(), {"symbol": "600001"}, env.app))
+    assert second['reused_identical_selection'] is True and second['run_id'] == first['run_id']
+    assert env.driver.calls == 1 and all(path.read_bytes() == raw for path, raw in original.items())
+    assert {path for path in folder.rglob('*') if path.is_file()} == set(original)
+    assert research._latest('600001')['method_sha256'] == old_method
+
+
+@pytest.mark.parametrize('failure', ['hash_drift', 'empty_report', 'extra_unknown_claim', 'two_completed_claims'])
+def test_changed_method_cannot_reuse_incomplete_conflicting_or_changed_prior_results(env, monkeypatch, failure):
+    daily(env)
+    authorize(env, monkeypatch)
+    first = asyncio.run(research.run_research(Recorder(), {"symbol": "600001"}, env.app))
+    binding = research.selected_bindings(env.sf)['600001']
+    old_method = research._digest(env.driver.method_identity())
+    claim_path = research._selection_claim(binding, old_method)
+    claim = json.loads(claim_path.read_text())
+    result_path = research.ROOT/'600001'/first['run_id']/'result.json'
+    if failure in {'hash_drift', 'empty_report'}:
+        result = json.loads(result_path.read_text())
+        result['reports']['market_report'] = ''
+        result_path.write_text(json.dumps(result))
+        if failure == 'empty_report':
+            claim['result_sha256'] = hashlib.sha256(result_path.read_bytes()).hexdigest()
+            claim_path.write_text(json.dumps(claim))
+    else:
+        other_method = 'f'*64
+        extra = {**claim, 'method_sha256': other_method,
+                 'state': 'unknown' if failure == 'extra_unknown_claim' else 'completed'}
+        research._selection_claim(binding, other_method).write_text(json.dumps(extra))
+    original = {path: path.read_bytes() for path in (research.ROOT/'600001').rglob('*') if path.is_file()}
+    current = {**env.driver.method_identity(), "reviewed_executor_revision": "new"}
+    monkeypatch.setattr(env.driver, 'method_identity', lambda: current)
+    authorize(env, monkeypatch)
+    with pytest.raises(research.ResearchBlocked):
+        asyncio.run(research.run_research(Recorder(), {"symbol": "600001"}, env.app))
+    assert env.driver.calls == 1 and all(path.read_bytes() == raw for path, raw in original.items())
+
+
+@pytest.mark.parametrize('flag', [True, False, None, 1, 'true'])
+@pytest.mark.parametrize('binding', ['exact', 'foreign_symbol', 'missing_symbols', 'invalid_run', 'failed_task'])
+def test_public_reuse_flag_requires_an_explicit_boolean_and_exact_successful_report_binding(flag, binding):
+    result = {'symbol': '600001', 'run_id': 'a'*32}
+    if flag is not None:
+        result['reused_identical_selection'] = flag
+    params = {'symbol': '600001'}
+    if binding == 'foreign_symbol':
+        result['symbol'] = '600002'
+    elif binding == 'missing_symbols':
+        result.pop('symbol');params = {}
+    elif binding == 'invalid_run':
+        result['run_id'] = 'not-a-run'
+    task = SimpleNamespace(id='b'*32, type='tradingagents_research', status='failed' if binding == 'failed_task' else 'succeeded',
+        result_ref=json.dumps(result), params=json.dumps(params), error=None, cancel_requested_at=None,
+        created_at=NOW, finished_at=NOW)
+    view = research._public_task(task)
+    if binding == 'exact' and type(flag) is bool:
+        assert view['reused_identical_selection'] is flag and view['result_run_id'] == 'a'*32
+    else:
+        assert 'reused_identical_selection' not in view

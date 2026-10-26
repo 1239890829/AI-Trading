@@ -46,6 +46,9 @@ function flow(rows: BoardFlowRow[], kind: BoardFundFlowPayload["kind"] = "concep
   return {available:true,kind,range,rows,degraded:[],received_at:"2026-10-25T09:50:01+08:00",source_as_of:null,
     historical:range==="20d" || range==="latest_saved",as_of:range==="20d" || range==="latest_saved"?"2026-10-23":null,
     ...(range==="latest_saved"?{received_at:null,stored_at:"2026-10-23T15:10:00+08:00",coverage_state:"local_sample" as const,quality:"stale" as const}:{}),
+    ...(range==="changes"?{source:"eastmoney_board_changes",source_as_of:"2026-10-25T15:00:00+08:00",as_of:"2026-10-25",coverage_state:"source_sample" as const,
+      source_total:1015,source_returned:1015,directory_total:Math.max(rows.length,128),unknown_count:344,
+      observation_state:"current_batch" as const,source_age_seconds:0,source_age_limit_seconds:300,quality:"medium" as const}:{}),
   };
 }
 function memberships(symbols: string[], date: string | null, state: "matched" | "unknown" = "matched"): DiscoveryMemberships {
@@ -269,7 +272,7 @@ describe("真实分类发现的来源与范围", () => {
       board({board_code:"BK2",name:"大额流出",main_net_yi:-10}),board({board_code:"BK3",name:"真实零额",main_net_yi:0}),
       board({board_code:"BK4",name:"正向流入",main_net_yi:5})];
     jsonMock.mockResolvedValue({data:flow(rows)});
-    render(<Harness initial="browse=funds&disc_kind=concept"/>);
+    render(<Harness initial="browse=funds&disc_kind=concept&disc_range=intraday"/>);
     await screen.findByRole("button",{name:"查看正向流入成分"});
     expect(resultNames()).toEqual(["正向流入","真实零额","大额流出","未知净额"]);
     const unknown = resultRows()[3];
@@ -315,7 +318,7 @@ describe("真实分类发现的来源与范围", () => {
   it("超过24条可连续下拉到全部，换筛选回到首批且不重取来源", async () => {
     const rows=Array.from({length:61},(_,i) => board({board_code:`BK${i}`,name:`方向${i}`,main_net_yi:61-i}));
     jsonMock.mockResolvedValue({data:flow(rows)});
-    const page=render(<Harness initial="browse=funds"/>);
+    const page=render(<Harness initial="browse=funds&disc_range=intraday"/>);
     await screen.findByRole("button",{name:"查看方向0成分"});
     expect(resultRows()).toHaveLength(24);
     const sentinel=page.container.querySelector<HTMLElement>(".h-px")!;
@@ -411,16 +414,84 @@ describe("行业概念的显式最近存档", () => {
     expect(jsonMock.mock.calls.map(([url])=>url)).toEqual(Array(2).fill("/api/market/board-fund-flow?kind=industry&range=latest_saved"));
   });
 
-  it("新URL只在行业概念生效，旧目录20日链接仍回本次、资金范围不增项",async()=>{
+  it("显式单日资金存档保留原日期身份；目录旧20日链接不借资金范围改义",async()=>{
     expect(discoveryLocation("browse=catalog&disc_range=latest_saved").range).toBe("latest_saved");
     expect(discoveryLocation("browse=catalog&disc_range=20d").range).toBe("intraday");
-    expect(discoveryLocation("browse=funds&disc_range=latest_saved").range).toBe("intraday");
+    expect(discoveryLocation("browse=funds&disc_range=latest_saved").range).toBe("latest_saved");
     expect(discoveryLocation("browse=hot&disc_range=latest_saved").range).toBe("intraday");
     render(<Browser search="browse=funds&disc_range=latest_saved"/>);
     await screen.findByRole("button",{name:"查看默认板块成分"});
     expect(screen.queryByRole("combobox",{name:"目录范围"})).toBeNull();
-    expect(within(screen.getByRole("combobox",{name:"资金区间"})).getAllByRole("option").map(option=>option.getAttribute("value"))).toEqual(["intraday","5d","10d","20d"]);
-    expect(jsonMock.mock.calls.map(([url])=>url)).toEqual(["/api/market/board-fund-flow?kind=concept&range=intraday"]);
+    expect(within(screen.getByRole("combobox",{name:"资金区间"})).getAllByRole("option").map(option=>option.getAttribute("value"))).toEqual(["changes","intraday","latest_saved","5d","10d","20d"]);
+    expect(screen.getByText("原榜单日期 2026-10-23")).toBeTruthy();
+    expect(screen.getByText(/历史参考，不表示即时源已恢复/)).toBeTruthy();
+    expect(jsonMock.mock.calls.map(([url])=>url)).toEqual(["/api/market/board-fund-flow?kind=concept&range=latest_saved"]);
+  });
+
+  it("资金默认独立异动统计视角，批钟和目录覆盖可见，旧intraday链接不改义",async()=>{
+    expect(discoveryLocation("browse=funds").range).toBe("changes");
+    expect(discoveryLocation("browse=funds&disc_range=intraday").range).toBe("intraday");
+    const page=render(<Harness initial="browse=funds&disc_kind=industry"/>);
+    await screen.findByRole("button",{name:"查看默认板块成分"});
+    expect(screen.getByRole("combobox",{name:"资金区间"})).toHaveProperty("value","changes");
+    expect(screen.getByText("东财异动统计资金 · 行业")).toBeTruthy();
+    expect(screen.getByText(/原批 1015\/1015 · 正式目录匹配 1\/128 · 未核归属 344/)).toBeTruthy();
+    expect(screen.getByText(/^来源批次 /).textContent).toContain("15:00");
+    expect(screen.getByText(/万元÷10000→亿元/)).toBeTruthy();
+    expect(jsonMock.mock.calls.map(([url])=>url)).toEqual(["/api/market/board-fund-flow?kind=industry&range=changes"]);
+    page.unmount();
+    jsonMock.mockClear();
+    jsonMock.mockResolvedValue({data:{...flow([],"industry","intraday"),available:false,reason:"原源断连"}});
+    render(<Browser search="browse=funds&disc_kind=industry&disc_range=intraday"/>);
+    await screen.findByText(/原源断连/);
+    expect(jsonMock.mock.calls.map(([url])=>url)).toEqual(["/api/market/board-fund-flow?kind=industry&range=intraday"]);
+    expect(screen.getByRole("button",{name:"查看最近存档"})).toBeTruthy();
+  });
+
+  it("单日资金按原净额排序而非涨幅，不发实时或20日补取",async()=>{
+    jsonMock.mockResolvedValue({data:flow([
+      board({board_code:"BK0001",name:"涨幅高但流出",change_pct:7,main_net_yi:-3}),
+      board({board_code:"BK0002",name:"涨幅低但流入",change_pct:-2,main_net_yi:4}),
+    ],"concept","latest_saved")});
+    render(<Harness initial="browse=funds&disc_range=latest_saved"/>);
+    await screen.findByRole("button",{name:"查看涨幅低但流入成分"});
+    expect(resultNames()).toEqual(["涨幅低但流入","涨幅高但流出"]);
+    fireEvent.change(screen.getByRole("combobox",{name:"分类排序"}),{target:{value:"asc"}});
+    expect(resultNames()).toEqual(["涨幅高但流出","涨幅低但流入"]);
+    expect(jsonMock).toHaveBeenCalledTimes(1);
+  });
+
+  it("人工重读向原实时来源传fresh，自动首读和本地存档不增加外呼意图",async()=>{
+    const page=render(<Browser search="browse=funds&disc_range=intraday"/>);
+    await screen.findByRole("button",{name:"查看默认板块成分"});
+    fireEvent.click(screen.getByRole("button",{name:"刷新分类"}));
+    await waitFor(()=>expect(jsonMock).toHaveBeenCalledTimes(2));
+    expect(jsonMock.mock.calls.map(([url])=>url)).toEqual(["/api/market/board-fund-flow?kind=concept&range=intraday","/api/market/board-fund-flow?kind=concept&range=intraday&fresh=true"]);
+    page.rerender(<Browser search="browse=funds&disc_range=latest_saved"/>);
+    await screen.findByText("原榜单日期 2026-10-23");
+    fireEvent.click(screen.getByRole("button",{name:"刷新分类"}));
+    await waitFor(()=>expect(jsonMock).toHaveBeenCalledTimes(4));
+    expect(jsonMock.mock.calls.slice(2).map(([url])=>url)).toEqual(Array(2).fill("/api/market/board-fund-flow?kind=concept&range=latest_saved"));
+  });
+
+  it.each([[
+    "stale_batch","来源批次已超5分钟 · 原值仅供参考",false,3600,
+  ],["closed_observation","收盘批次观察 · 非即时",true,19800]] as const)("%s保留原资金数值和双钟，但不冒即时结果",async(state,label,historical,age)=>{
+    jsonMock.mockResolvedValue({data:{...flow([board({main_net_yi:4})],"concept","changes"),quality:"stale",observation_state:state,
+      source_age_seconds:age,historical,received_at:"2026-10-25T20:30:00+08:00"}});
+    render(<Browser search="browse=funds"/>);
+    await screen.findByRole("button",{name:"查看默认板块成分"});
+    expect(screen.getByText(label)).toBeTruthy();expect(screen.getByText("+4亿")).toBeTruthy();
+    expect(screen.getByText(/^来源批次 /).textContent).toContain("15:00");
+    expect(screen.getByText(/源读取完成/).textContent).toContain("20:30");
+    expect(screen.queryByText("5分钟内来源批次 · 逐行时点未核")).toBeNull();
+  });
+
+  it("批次年龄已到300秒却仍自称current时拒绝该不一致状态",async()=>{
+    jsonMock.mockResolvedValue({data:{...flow([board()],"concept","changes"),source_age_seconds:300}});
+    render(<Browser search="browse=funds"/>);
+    await screen.findByRole("alert");
+    expect(screen.queryByRole("button",{name:"查看默认板块成分"})).toBeNull();
   });
 });
 

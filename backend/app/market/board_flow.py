@@ -41,15 +41,19 @@ from __future__ import annotations
 import asyncio
 from copy import deepcopy
 from datetime import date, datetime, timedelta
+import hashlib
 import json
 import logging
 from math import isfinite
 import os
 from pathlib import Path
 import re
+import sys
 import threading
+from time import monotonic
 
 from app.core.ttl_cache import TTLCache
+from app.core.inflight_reads import read_inflight
 from app.market import trade_calendar
 
 log = logging.getLogger(__name__)
@@ -72,11 +76,12 @@ _KIND_FS = {"concept": "m:90+t:3+f:!50", "industry": "m:90+t:2+f:!50"}
 #: 板块现值缓存：盘中 30s（一次翻页全市场拉齐，前端排序不回源）/ 盘外 300s
 _LIST_CACHE = TTLCache("boardflow-list", ttl=30.0, maxsize=4)
 _LIST_EOD_CACHE = TTLCache("boardflow-list-eod", ttl=300.0, maxsize=4)
-_LIST_READS: dict[tuple, asyncio.Task] = {}
+_SNAPSHOT_LIST_RETRY = TTLCache("boardflow-snapshot-list-retry", ttl=3600.0, maxsize=4)
+_CHANGES_CACHE = TTLCache("boardflow-changes", ttl=300.0, maxsize=2)
+_CHANGES_FAILURES = TTLCache("boardflow-changes-failure", ttl=86400.0, maxsize=2)
 #: 单板块分钟/成员：下钻时才拉，小容量防驻留
 _MINUTE_CACHE = TTLCache("boardflow-minute", ttl=60.0, maxsize=4)
 _MEMBERS_CACHE = TTLCache("boardflow-members", ttl=60.0, maxsize=8)
-_DRILL_READS: dict[tuple, asyncio.Task] = {}
 
 _HTTP = None
 _STORE_WRITE_LOCK = threading.RLock()
@@ -222,12 +227,11 @@ class _BoardListUnavailable(Exception):
         self.degraded = degraded
 
 
-async def get_board_list(kind: str) -> tuple[list[dict] | None, list[str]]:
+async def get_board_list(kind: str, *, fresh: bool = False) -> tuple[list[dict] | None, list[str]]:
     """成功缓存盘中30s/盘外300s；失败保留不可用并退避30s，期满单飞复查。"""
     if kind not in _KIND_FS:
         return None, [f"kind 非法：{kind!r}"]
     cache, key = board_list_read_identity(kind)
-    pending_key = (cache, key)
 
     async def load() -> dict:
         diff, host = await _clist_pages(_KIND_FS[kind], _BOARD_LIST_FIELDS)
@@ -237,32 +241,30 @@ async def get_board_list(kind: str) -> tuple[list[dict] | None, list[str]]:
         rows = _board_rows_from_diff(diff, kind)
         if not rows:
             raise _BoardListUnavailable(degraded + ["板块列表解析为空"])
+        _SNAPSHOT_LIST_RETRY.invalidate((beijing_now().date().isoformat(), kind))
         return {"rows": rows, "degraded": degraded, "source": host,
                 "received_at": beijing_now().isoformat()}
 
-    async def read() -> tuple[bool, dict]:
+    async def read() -> tuple[dict, bool]:
+        if fresh:
+            cache.invalidate(key)
+        else:
+            hit, payload = cache.get(key)
+            if hit:
+                return payload, True
         try:
-            return await cache.get_or_set(key, load)
+            _, payload = await cache.get_or_set(key, load)
+            return payload, False
         except _BoardListUnavailable as exc:
             # Store the failure before this shared task completes. Consumers
             # still receive unavailable, never an empty successful source pool.
             payload = {"rows": None, "degraded": list(exc.degraded), "source": None}
             cache.set(key, payload, ttl=30.0)
-            return False, payload
+            return payload, False
 
-    task = _LIST_READS.get(pending_key)
-    if task is None or task.done():
-        task = asyncio.create_task(read())
-        _LIST_READS[pending_key] = task
-
-        def completed(done: asyncio.Task) -> None:
-            if _LIST_READS.get(pending_key) is done:
-                _LIST_READS.pop(pending_key, None)
-            if not done.cancelled():
-                done.exception()
-
-        task.add_done_callback(completed)
-    _, payload = await asyncio.shield(task)
+    payload, reused = await read_inflight(sys.modules[__name__], ("board-list", cache, key), read)
+    if fresh and reused:
+        return await get_board_list(kind, fresh=True)
     if payload["rows"] is None:
         return None, list(payload["degraded"])
     # 各消费者会排序、补榜位/连续流入；这些写操作不能污染源缓存和其他消费者。
@@ -279,30 +281,10 @@ class _DrillUnavailable(Exception):
 
 async def _drill_read(cache: TTLCache, board_code: str, factory) -> dict:
     key = (beijing_now().date().isoformat(), board_code)
-    hit, cached = cache.get(key)
-    if hit:
-        return deepcopy(cached)
-    identity = (cache, key)
-    task = _DRILL_READS.get(identity)
-    if task is None or task.done():
-        if len(_DRILL_READS) >= 128:
-            try:
-                _, result = await cache.get_or_set(key, factory)
-            except _DrillUnavailable as exc:
-                result = exc.payload
-            return deepcopy(result)
-        task = asyncio.create_task(cache.get_or_set(key, factory))
-        _DRILL_READS[identity] = task
-
-        def completed(done: asyncio.Task) -> None:
-            if _DRILL_READS.get(identity) is done:
-                _DRILL_READS.pop(identity, None)
-            if not done.cancelled():
-                done.exception()
-
-        task.add_done_callback(completed)
+    async def read():
+        return await cache.get_or_set(key, factory)
     try:
-        _, result = await asyncio.shield(task)
+        _, result = await read_inflight(sys.modules[__name__], ("board-drill", cache, key), read)
     except _DrillUnavailable as exc:
         result = exc.payload
     return deepcopy(result)
@@ -501,6 +483,136 @@ def get_board_streaks(f62_by_code: dict[str, float | None]) -> dict[str, int | N
 
 # ---------------------------------------------------------------- 主入口：板块资金流榜
 
+def _persist_changes_snapshot(snapshot: dict) -> bool:
+    """Immutable distinct-product observations; never write f62 daily arrays."""
+    try:
+        body = json.dumps(snapshot, ensure_ascii=False, sort_keys=True, separators=(",", ":"))
+        digest = hashlib.sha256(body.encode()).hexdigest()
+        source_at = datetime.fromisoformat(snapshot["source_as_of"])
+        path = _STORE_DIR / "changes" / source_at.date().isoformat() / f"{source_at.strftime('%H%M%S')}-{digest}.json"
+        with _STORE_WRITE_LOCK:
+            if path.exists():
+                return json.loads(path.read_text(encoding="utf-8")) == snapshot
+            # A repeated real read of the same batch and same consumed facts
+            # keeps its first capture; new receipt clocks alone do not create
+            # another full copy. Corrected source facts retain a new version.
+            comparable = {k: v for k, v in snapshot.items() if k not in ("received_at", "source_receipts")}
+            existing = list(path.parent.glob(f"{source_at.strftime('%H%M%S')}-*.json"))
+            if len(existing) > 128:
+                return False
+            for prior_path in existing:
+                if prior_path.stat().st_size > 2 * 1024 * 1024:
+                    continue
+                prior = json.loads(prior_path.read_text(encoding="utf-8"))
+                prior_body = json.dumps(prior, ensure_ascii=False, sort_keys=True, separators=(",", ":"))
+                prior_digest = hashlib.sha256(prior_body.encode()).hexdigest()
+                if (prior_path.name == f"{source_at.strftime('%H%M%S')}-{prior_digest}.json"
+                        and {k: v for k, v in prior.items() if k not in ("received_at", "source_receipts")} == comparable):
+                    return True
+            return _write_json_atomic(path, snapshot)
+    except (KeyError, TypeError, ValueError, OSError):
+        log.warning("board changes observation could not be archived", exc_info=True)
+        return False
+
+
+def _read_closed_changes_snapshot() -> dict | None:
+    """Reuse a hash-checked same-day closing observation, never an intraday old value."""
+    now = beijing_now()
+    if (now.hour, now.minute) < (15, 5):
+        return None
+    folder = _STORE_DIR / "changes" / now.date().isoformat()
+    if not folder.is_dir():
+        return None
+    paths = sorted(folder.glob("*.json"), reverse=True)
+    if len(paths) > 128:
+        return None  # No unbounded directory ingestion.
+    candidates = []
+    for path in paths:
+        try:
+            if path.stat().st_size > 2 * 1024 * 1024:
+                continue
+            snapshot = json.loads(path.read_text(encoding="utf-8"))
+            source_at = datetime.fromisoformat(snapshot["source_as_of"])
+            received = datetime.fromisoformat(snapshot["received_at"])
+            body = json.dumps(snapshot, ensure_ascii=False, sort_keys=True, separators=(",", ":"))
+            digest = hashlib.sha256(body.encode()).hexdigest()
+            if (snapshot.get("version") == 1 and snapshot.get("source") == "eastmoney_board_changes"
+                    and source_at.utcoffset() is not None and received.utcoffset() is not None
+                    and source_at.date() == now.date() and (source_at.hour, source_at.minute) >= (15, 0)
+                    and source_at <= received <= now and path.name == f"{source_at.strftime('%H%M%S')}-{digest}.json"):
+                candidates.append((source_at, received, path.name, snapshot))
+        except (KeyError, TypeError, ValueError, OSError):
+            continue
+    return max(candidates, key=lambda item: item[:3])[3] if candidates else None
+
+
+async def _get_changes_fund_flow(kind: str, *, fresh: bool = False) -> dict:
+    from app.market._board_changes_source import fetch_snapshot
+
+    key = (beijing_now().date().isoformat(),)
+
+    async def load():
+        failed_before, _ = _CHANGES_FAILURES.get(key)
+        if not fresh and not failed_before:
+            saved = await asyncio.to_thread(_read_closed_changes_snapshot)
+            if saved is not None:
+                return {"snapshot": saved, "degraded": [], "loaded_from_archive": True}
+        try:
+            snapshot = await fetch_snapshot(_http(), beijing_now)
+            _CHANGES_FAILURES.invalidate(key)
+            persisted = await asyncio.to_thread(_persist_changes_snapshot, snapshot)
+            return {"snapshot": snapshot, "degraded": [] if persisted else ["本次来源已读，归档未成功，旧存档未覆盖"], "loaded_from_archive": False}
+        except Exception as exc:  # noqa: BLE001 — source failure stays distinct from valid empty kind.
+            log.warning("board changes source unavailable: %s", exc)
+            detail = str(exc) if type(exc) is ValueError else "读取超时" if isinstance(exc, TimeoutError) else "来源连接或响应失败"
+            payload = {"snapshot": None, "degraded": [f"东财异动统计资金不可用：{detail}；未以原资金或历史数据替代"]}
+            _CHANGES_FAILURES.set(key, True)
+            return payload
+
+    async def read():
+        if fresh:
+            _CHANGES_CACHE.invalidate(key)
+        else:
+            hit, value = _CHANGES_CACHE.get(key)
+            if hit:
+                return {**value, "reused_completed_cache": True}
+        value = await load()
+        _CHANGES_CACHE.set(key, value, ttl=30.0 if value["snapshot"] is None else 300.0)
+        return value
+
+    payload = await read_inflight(sys.modules[__name__], ("board-changes", *key), read)
+    if fresh and (payload.get("loaded_from_archive") or payload.get("reused_completed_cache")):
+        return await _get_changes_fund_flow(kind, fresh=True)
+    base = {"kind": kind, "range": "changes", "source": "eastmoney_board_changes",
+            "source_product": "东财异动统计资金", "unit_basis": "来源万元；展示亿元（÷10000），不等同clist f62",
+            "coverage_state": "source_sample", "degraded": list(payload["degraded"])}
+    snapshot = payload["snapshot"]
+    if snapshot is None:
+        return {**base, "available": False, "rows": [], "reason": base["degraded"][0]}
+    now = beijing_now()
+    source_at = datetime.fromisoformat(snapshot["source_as_of"])
+    source_age = (now - source_at).total_seconds()
+    source_age_limit = _CHANGES_CACHE.ttl
+    closed_observation = source_at.date() == now.date() and source_at.hour >= 15 and now.hour >= 15
+    historical = snapshot["as_of"] != now.date().isoformat() or closed_observation
+    observation_state = ("clock_unknown" if source_age < 0 else "closed_observation" if closed_observation
+                         else "historical_observation" if historical else "stale_batch" if source_age >= source_age_limit
+                         else "current_batch")
+    rows = deepcopy(snapshot["rows"][kind])
+    return {**base, "available": True, "rows": rows, "as_of": snapshot["as_of"],
+            "source_as_of": snapshot["source_as_of"], "received_at": snapshot["received_at"],
+            "historical": historical, "quality": "medium" if observation_state == "current_batch" else "stale",
+            "observation_state": observation_state, "source_age_seconds": source_age,
+            "source_age_limit_seconds": source_age_limit,
+            "source_total": snapshot["source_total"], "source_returned": snapshot["source_returned"],
+            "directory_total": snapshot["directory_counts"][kind], "coverage": len(rows),
+            "unknown_count": len(snapshot["unknown_codes"]),
+            "name_mismatch_count": len(snapshot["name_mismatch_codes"]),
+            "excluded_region_count": len(snapshot["excluded_region_codes"]),
+            "degraded": [*base["degraded"],
+                         "异动统计为独立来源视角，不接管原f62、策略、评分或资金资格",
+                         "源钟为整批时刻，未证明逐行同步或全市场资金排名；多日与分单字段保留缺失"]}
+
 _RANGE_SORT_KEY = {
     "intraday": "main_net_yi",
     "5d": "main_net_5d_yi",
@@ -657,25 +769,28 @@ def _local_board_history(kind: str) -> dict:
     }
 
 
-async def get_board_fund_flow(kind: str, range_key: str) -> dict:
+async def get_board_fund_flow(kind: str, range_key: str, *, fresh: bool = False) -> dict:
     """板块资金流榜（前端只切参数；排序/筛选纯内存）。
 
     - intraday/5d/10d：一次翻页全量（clist f62/f164/f174），零额外上游调用；
     - 20d：只读落盘 daykline 自算（读路径零外呼），未沉淀板块不参与排名，显式 coverage；
     - latest_saved：独立的已完成单日 Top50 样本，身份/归档日独立，不代替即时榜；
+    - changes：独立异动统计资金，保留源批钟/单位/目录交集，不能接管f62或策略；
     - 连续流入天数：只对落盘板块可判，其余 None。
     """
-    if range_key not in ("intraday", "5d", "10d", "20d", "latest_saved"):
+    if range_key not in ("intraday", "5d", "10d", "20d", "latest_saved", "changes"):
         return {"available": False, "reason": f"range 非法：{range_key!r}", "rows": [], "degraded": []}
     if kind not in _KIND_FS:
         return {"available": False, "reason": f"kind 非法：{kind!r}", "rows": [], "degraded": []}
+    if range_key == "changes":
+        return await _get_changes_fund_flow(kind, fresh=fresh)
     if range_key == "latest_saved":
         return await asyncio.to_thread(_local_board_latest_saved, kind)
     if range_key == "20d":
         return {**_local_board_history(kind), "source_as_of": None,
                 "received_at": None, "coverage_state": "local_sample",
                 "time_basis": "as_of 为本地已存完成日记录的截止日；未补齐缺日"}
-    rows, degraded = await get_board_list(kind)
+    rows, degraded = await get_board_list(kind, fresh=True) if fresh else await get_board_list(kind)
     if rows is None:
         return {"available": False, "kind": kind, "range": range_key,
                 "reason": degraded[0] if degraded else "数据源不可用", "rows": [], "degraded": degraded}
@@ -807,7 +922,8 @@ def _dayk_captured(record: dict | None, today: str) -> bool:
 async def snapshot_daily_if_closed() -> bool:
     """收盘后（≥15:05）且当日为交易日，沉淀榜位、成员及日线；部分失败只重试缺项。
 
-    由 review_intraday 调度 tick 调用（15:00-23:00 窗口内每分钟尝试，当日幂等）。
+    由 review_intraday 调度 tick 调用（15:00-23:00窗口，当日幂等）。列表全败后
+    原kind按5/10/20/30分钟有界退避；显式源重读成功可解除，不将失败记为完成。
     返回是否写入。任何子项失败只跳过该子项并 warning，不阻塞其余沉淀。
 
     **交易日闸门（F5，2026-09-14）两道，只在能确定时拦截**（三态纪律）：
@@ -840,10 +956,18 @@ async def snapshot_daily_if_closed() -> bool:
             continue
         top = snap_day["boards"].get(kind) or []
         if not top or not snap_day["ranks"].get(kind):
+            retry_key = (today, kind)
+            _, retry = _SNAPSHOT_LIST_RETRY.get(retry_key)
+            if retry and monotonic() < retry["after"]:
+                continue
             rows, _deg = await get_board_list(kind)
             if not rows:
+                failures = min((retry or {}).get("failures", 0) + 1, 4)
+                delay = min(300 * 2 ** (failures - 1), 1800)
+                _SNAPSHOT_LIST_RETRY.set(retry_key, {"failures": failures, "after": monotonic() + delay})
                 log.warning("boardflow snapshot: %s rows unavailable", kind)
                 continue
+            _SNAPSHOT_LIST_RETRY.invalidate(retry_key)
             rows = sorted(rows, key=lambda r: (r.get("main_net_yi") is None, -(r.get("main_net_yi") or 0)))
             top = [
                 [r["board_code"], r["name"], r.get("main_net_yi"), r.get("main_net_ratio"), r.get("change_pct")]

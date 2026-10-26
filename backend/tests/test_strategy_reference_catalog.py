@@ -25,7 +25,11 @@ V3 = {"low_rebound_quality", "box_first_board_breakout", "l1_l2_volume_resonance
       "w_bottom_breakout", "auction_breakout_2to3"}
 ETF = {"etf_cold_rebound", "etf_bottom_volume", "etf_momentum_rotation", "etf_trend_takeoff"}
 MANUAL = {"macd_golden_cross": "ashare-macd-12-26-9-v1", "ma_bullish": "ashare-ma-5-10-20-v1",
-          "ma_golden_cross": "ashare-ma-cross-volume5-v1"}
+          "ma_golden_cross": "ashare-ma-cross-volume5-v1", "rsi_reversal": "ashare-rsi-reversal-v1",
+          "shrink_pullback": "ashare-shrink-pullback-v1", "volume_breakout": "ashare-volume-breakout-v1",
+          "l1_l2_volume_resonance": "ashare-l1-l2-volume-resonance-v1",
+          "one_yang_three_yin": "ashare-one-yang-three-yin-v1", "w_bottom_breakout": "ashare-w-bottom-breakout-v1",
+          "bottom_volume": "ashare-bottom-volume-v1", "box_oscillation": "ashare-box-oscillation-v1"}
 
 
 @pytest.fixture
@@ -104,7 +108,7 @@ def test_known_numeric_conditions_and_missing_definitions_survive(verification):
     box = text("box_first_board_breakout")
     assert all(value in box for value in ("T-20至T-1", "15%至25%", "10%", "20%", "高于5%", "待定"))
     resonance = text("l1_l2_volume_resonance")
-    assert all(value in resonance for value in ("30日", "12个交易日", "60日均量的3倍", "未完全"))
+    assert all(value in resonance for value in ("30日", "12个交易日", "60日均量的3倍"))
     bottom = text("w_bottom_breakout")
     assert all(value in bottom for value in ("60日", "20日低点不超过15%", "禁止借未来拐点"))
     auction = text("auction_breakout_2to3")

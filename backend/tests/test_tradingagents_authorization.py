@@ -358,6 +358,119 @@ def test_prepared_exact_rebind_preserves_scope_dates_unknowns_grants_and_other_e
     assert owner._pin(new_env)[0] == hashlib.sha256((env.root / "authorization.json").read_bytes()).hexdigest() != old_pin
 
 
+def _retained_source(env, monkeypatch):
+    from app.services import agent_budget
+    identity = deepcopy(env.auth["method_identity"])
+    identity["source_files"]["agent_budget.py"] = "4" * 64
+    _replace_original(env, monkeypatch, identity)
+    env.current["source_files"]["agent_budget.py"] = "5" * 64
+    with env.sf() as db:
+        row = AgentResourceUsage(id="8"*32, budget_date=env.now.date().isoformat(), scope="autonomy_llm",
+            kind="model", purpose="agenda.fixture", state="failed", usage_known=0,
+            created_at=(env.now-timedelta(minutes=10)).replace(tzinfo=None),
+            started_at=(env.now-timedelta(minutes=5)).replace(tzinfo=None),
+            finished_at=(env.now-timedelta(minutes=2)).replace(tzinfo=None), error_kind="LLMError")
+        db.add(row); db.commit(); before = agent_budget.dump(row)
+    fact = {"usage_id":before["id"], "budget_date":before["budget_date"], "scope":before["scope"],
+            "purpose":before["purpose"], "state":before["state"]}
+    return fact, before
+
+
+def _prepare_retained(env, fact, **changes):
+    return owner.prepare_retained_unknown(fact, "Explicit fixture permission: retain unknown; selected research only.",
+        ["agent_budget.py", "tradingagents_research.py", "tradingagents_recovery.py"], **{**env.kwargs, **changes})
+
+
+def test_explicit_retained_plan_rebinds_exact_method_without_rewriting_original_facts(env, monkeypatch):
+    from app.services import agent_budget
+    fact, original = _retained_source(env, monkeypatch)
+    with pytest.raises(agent_budget.BudgetError, match="用量未知"):
+        owner.inspect_rebind(**env.kwargs)
+    prepared = _prepare_retained(env, fact)
+    folder = env.root / "authorization-maintenance" / prepared["plan_id"]
+    assert all(stat.S_IMODE(p.stat().st_mode) == 0o600 for p in folder.iterdir())
+    assert all(b"fixture-secret-never-copy" not in p.read_bytes() for p in folder.iterdir())
+    assert (env.root/"authorization.json").read_bytes() == env.before
+    result = owner.apply_plan(prepared["plan_id"], **env.kwargs)
+    assert result["retained_unknown_authorizations_added"] == 1 and result["unknowns_added"] == 0
+    actual = json.loads((env.root/"authorization.json").read_bytes())
+    expected = deepcopy(env.auth)
+    expected["method_identity"] = env.current
+    expected["unknown_usage_exception"]["method_sha256"] = research._digest(env.current)
+    history = actual.pop("retained_unknown_authorizations")
+    assert actual == expected and len(history) == 1
+    assert history[0]["source_usage"] == fact and history[0]["source_row_sha256"] == research._digest(original)
+    assert history[0]["source_authorization_sha256"] == owner._sha(env.before)
+    assert history[0]["authorized_method_sha256"] == research._digest(env.current)
+    assert research._retained_unknown_usage(history, env.sf, now=env.now) == ({**fact, "source_row_sha256": history[0]["source_row_sha256"]},)
+    with env.sf() as db:
+        assert agent_budget.dump(db.get(AgentResourceUsage, fact["usage_id"])) == original
+    _, span = owner._pin(env.env_before)
+    new_env = env.env_path.read_bytes()
+    assert new_env[:span[0]] == env.env_before[:span[0]] and new_env[span[1]:] == env.env_before[span[1]:]
+
+
+@pytest.mark.parametrize("mutation", ["source_state", "source_purpose", "source_provider", "source_tokens", "new_unknown",
+    "source_started", "active_task", "candidate_reason", "method", "next_day"])
+def test_retained_installation_rechecks_original_row_new_unknown_and_frozen_plan(env, monkeypatch, mutation):
+    fact, _ = _retained_source(env, monkeypatch)
+    prepared = _prepare_retained(env, fact)
+    if mutation.startswith("source_") or mutation in {"new_unknown", "active_task"}:
+        with env.sf() as db:
+            row = db.get(AgentResourceUsage, fact["usage_id"])
+            if mutation == "source_state": row.state = "unknown"
+            elif mutation == "source_purpose": row.purpose = "another.fixture"
+            elif mutation == "source_provider": row.provider = "drift"
+            elif mutation == "source_tokens": row.input_tokens = 7
+            elif mutation == "source_started": row.state = "started"; row.finished_at = None
+            elif mutation == "active_task": db.add(AgentTask(id="active", type="review", status="running"))
+            else: db.add(AgentResourceUsage(id="9"*32,budget_date=env.now.date().isoformat(),scope="autonomy_llm",kind="model",purpose="new.fixture",state="unknown",usage_known=0,started_at=env.now.replace(tzinfo=None)))
+            db.commit()
+    elif mutation == "candidate_reason":
+        path=env.root/"authorization-maintenance"/prepared["plan_id"]/"plan.json"
+        value=json.loads(path.read_text());value["candidate"]["retained_unknown_authorizations"][0]["reason"]="changed";path.write_text(json.dumps(value))
+    elif mutation == "method": env.current["source_files"]["agent_budget.py"]="6"*64
+    overrides = {"now":env.now+timedelta(days=1)} if mutation=="next_day" else {}
+    with pytest.raises((ValueError, RuntimeError)):
+        owner.apply_plan(prepared["plan_id"], **{**env.kwargs, **overrides})
+    assert (env.root/"authorization.json").read_bytes() == env.before and env.env_path.read_bytes() == env.env_before
+
+
+@pytest.mark.parametrize("field,value", [("scope","selected_research_llm"),("budget_date","2000-01-01"),
+    ("purpose","different.fixture"),("state","started")])
+def test_new_retained_permission_requires_exact_explicit_terminal_source(env,monkeypatch,field,value):
+    fact,_=_retained_source(env,monkeypatch);fact[field]=value
+    with pytest.raises((ValueError,RuntimeError)):_prepare_retained(env,fact)
+    assert (env.root/"authorization.json").read_bytes()==env.before
+
+
+def test_cli_named_retention_is_explicit_and_default_inspection_never_adds_permission(monkeypatch,capsys):
+    from scripts.tradingagents_authorization import main
+    seen=[]
+    monkeypatch.setattr(owner,"inspect_rebind",lambda: {"state":"dry_run"})
+    monkeypatch.setattr(owner,"prepare_retained_unknown",lambda *args: seen.append(args) or {"state":"prepared"})
+    assert main([])==0 and seen==[]
+    assert json.loads(capsys.readouterr().out)=={"state":"dry_run"}
+    assert main(["--prepare-retained-unknown","8"*32,"--source-budget-date","2026-10-21",
+        "--source-scope","autonomy_llm","--source-purpose","agenda.fixture","--source-state","failed",
+        "--authorization-reason","Explicit fixture authorization.","--reviewed-source","agent_budget.py"])==0
+    assert seen==[({"usage_id":"8"*32,"budget_date":"2026-10-21","scope":"autonomy_llm",
+        "purpose":"agenda.fixture","state":"failed"},"Explicit fixture authorization.",["agent_budget.py"])]
+    assert json.loads(capsys.readouterr().out)=={"state":"prepared"}
+
+
+@pytest.mark.parametrize("args",[["--prepare-retained-unknown","8"*32],["--source-purpose","agenda.fixture"],
+    ["--prepare","--authorization-reason","unbound"],["--apply","a"*32,"--source-state","failed"]])
+def test_cli_incomplete_or_mixed_retained_permission_never_reaches_an_operator(monkeypatch,args):
+    from scripts.tradingagents_authorization import main
+    def forbidden(*args,**kwargs):raise AssertionError("No operator belongs to invalid arguments")
+    monkeypatch.setattr(owner,"inspect_rebind",forbidden)
+    monkeypatch.setattr(owner,"prepare_retained_unknown",forbidden)
+    monkeypatch.setattr(owner,"apply_plan",forbidden)
+    with pytest.raises(SystemExit) as failure:main(args)
+    assert failure.value.code==2
+
+
 @pytest.mark.parametrize("mutation", ["consumer", "term", "model", "deps", "builder", "graph", "auto", "active", "new_unknown"])
 def test_scope_or_observation_changes_never_become_rebind_permission(env, monkeypatch, mutation):
     if mutation in {"consumer", "term"}:
@@ -486,6 +599,18 @@ def test_cli_help_states_recovery_scope_and_unknown_errors_are_sanitized(monkeyp
     monkeypatch.setattr(owner,"inspect_rebind",unavailable)
     assert main([])==1
     assert json.loads(capsys.readouterr().out)=={"state":"blocked","code":"authorization_maintenance_unavailable"}
+
+
+@pytest.mark.parametrize("code,expected", [("usage_unknown", "usage_unknown"),
+    ("/private/DO_NOT_PRINT", "authorization_maintenance_unavailable")])
+def test_cli_keeps_budget_blocker_code_without_exposing_private_error(monkeypatch, capsys, code, expected):
+    from scripts.tradingagents_authorization import main
+    from app.services.agent_budget import BudgetError
+    def blocked(**kwargs):
+        raise BudgetError(code, "PRIVATE_MODEL_CONTEXT_AND_PATH")
+    monkeypatch.setattr(owner, "inspect_rebind", blocked)
+    assert main([]) == 1
+    assert json.loads(capsys.readouterr().out) == {"state": "blocked", "code": expected}
 
 
 def test_cli_tail_grant_passes_only_explicit_fixed_plan_identity(monkeypatch, capsys):

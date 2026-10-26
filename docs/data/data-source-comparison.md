@@ -582,7 +582,7 @@ marketdb 离线导出是三个运行入口，分属各自预算/错误/恢复链
 
 push2ex保留核心补源价值，不能因超大单、占比、5/10日等非核心字段缺失一票否决；相应能力缺口仍须显式保留。现阶段不接生产：同BK0596的既有fflow交叉读仍断连，尚无与f62精确同刻同值的证据；`dt`只是官方批次时刻，未证每行完整源钟、盘中推进/延迟与稳定性。三个盘后成功请求不构成SLA。新浪是异口径独立视角，现役THS板块目录/价格与新浪涨跌榜也不能自动接管资金字段；AKShare东财包装仍是相同上游。
 
-原始证据在忽略的`artifacts/runs/chart-first-paint-board-sources-20261014/`：`source/transport-observations.json`和`source/official-board-page.body`；`source-contract/`内的`candidate-contract.json`、`sina-current-id-probe.json`、`sina-help-receipt.json`、`em-changes-one-shot-probe.json`、`em-changes-boundary-pages-probe.json`、`em-public-board-directory.json`及静态JS回执保留参数、字段、源日期与原body哈希。后续只按独立LAB预算核盘中时效与上述口径/覆盖缺口，不改原生产TTL、轮频、时效门、源序或选股/通知资格。
+原始证据在忽略的`artifacts/runs/chart-first-paint-board-sources-20261014/`：`source/transport-observations.json`和`source/official-board-page.body`；`source-contract/`内的`candidate-contract.json`、`sina-current-id-probe.json`、`sina-help-receipt.json`、`em-changes-one-shot-probe.json`、`em-changes-boundary-pages-probe.json`、`em-public-board-directory.json`及静态JS回执保留参数、字段、源日期与原body哈希。这是2026-10-14的LAB边界；2026-10-26的独立只读视角按§20明确承接，盘中时效及精确f62等价仍未证，不改原时效门、原源序或选股/通知资格。
 
 
 ## 17. 工作台数据故障核对（2026-10-20）
@@ -621,3 +621,9 @@ qfq是前复权。固定stockstats 0.6.9实际MFI为0–1，原上游80/20描述
 已有marketdb实际5568只当日日线、5567只有相邻日复权收盘可比，涨2250/跌3156/平161；另1只缺前日。原币成交额5568/5568条有效，合计1,623,083,608,217.06元。一次只读核验0.7828秒，使用两日输入摘要与源版本，不哈希无关多年全库。该口径不是官方实时报价涨跌幅，不推断涨跌停、停牌数或情绪阶段。
 
 六指数源钟均可核为同日，唯一质量原因market_closed；报告可在Hub日历closed证据下读partial历史观察，普通陈旧/失败/错日仍拒绝。竞价单行实抓为data_status=final的顶层就绪状态，逐行无源日；就绪时刻与接收时刻均不能补源日，原值仅展示为未核采集参考。完整行为门禁、准确发布与真实页面加载分别归handoff和本批PR；实源隔离成功不冒充已生效。
+
+## 20. 2026-10-26 资金方向来源与读取纠错
+
+重核原clist双域各一次均在响应前断开，并非8秒超时；增加等待或盲重试无改善证据。原数据商的[官方板块异动页](https://quote.eastmoney.com/changes/boardlist.html)及原站JS确认`zjl`单位万元。本次复用首50行并补齐其余20页：1015/1015、同批15:00，完整分页5.457秒只证明当前观察，不能外推稳定率。正式目录精确交集124行业/516概念，地域31及未知344分别计，原目录行业4项未覆盖。
+
+旧§16仅LAB的结论是当时采用边界；本轮用户要求修资金方向后，准入独立标识的只读资金视角，仍不把它当原f62恢复、同根备源独立性或策略效果证明。与原clist同时点逐值等价证据仍无；使用不同标签及合同即可研究其原始产品，不能以断连旧源构造永远无法满足的前置，也不能悄悄替换指标。最近单日和20日历史保留旧日期/有限覆盖；即时失败、显式fresh、后台退避与独立产品状态分别验收。原始body/目录/分页hash归本机忽略`research-record-actions-20261026`，公共仓不发布源全集。

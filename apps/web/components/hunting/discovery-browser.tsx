@@ -1,7 +1,7 @@
 "use client";
 
 import Link from "next/link";
-import { useEffect, useMemo, useState, type KeyboardEvent } from "react";
+import { useEffect, useMemo, useRef, useState, type KeyboardEvent } from "react";
 import { useResource } from "@/hooks/use-resource";
 import { useIncremental } from "@/hooks/use-incremental";
 import { IncrementalSentinel } from "@/components/ui/incremental-sentinel";
@@ -25,7 +25,7 @@ export function discoveryLocation(search: string) {
   const kind: BoardFlowKind = params.get("disc_kind") === "industry" ? "industry" : params.get("disc_kind") === "concept" ? "concept" : mode === "catalog" ? "industry" : "concept";
   const rawRange = params.get("disc_range");
   const range: BoardFlowRange = mode === "catalog" ? rawRange === "latest_saved" ? "latest_saved" : "intraday"
-    : mode === "funds" && ["5d", "10d", "20d"].includes(rawRange ?? "") ? rawRange as BoardFlowRange : "intraday";
+    : mode === "funds" ? ["intraday", "5d", "10d", "20d", "latest_saved", "changes"].includes(rawRange ?? "") ? rawRange as BoardFlowRange : "changes" : "intraday";
   const code = params.get("disc_code") ?? "";
   return {mode, kind, range, code, query: params.get("disc_q") ?? "", sort: params.get("disc_sort") ?? "desc",
     scope: JSON.stringify([mode, kind, range, code])};
@@ -92,6 +92,16 @@ function checkBoards(data: BoardFundFlowPayload, kind: string, range: string) {
     || data.rows.some(row => !object(row) || !text(row.name) || !text(row.board_code) || row.kind !== kind
       || ![row.change_pct, row.main_net_yi, row.main_net_5d_yi, row.main_net_10d_yi, row.main_net_20d_yi].every(nullableNumber))
     || range === "intraday" && data.historical === true
+    || range === "changes" && data.available && (data.source !== "eastmoney_board_changes" || data.coverage_state !== "source_sample"
+      || !text(data.source_as_of) || !/(?:Z|[+-]\d{2}:?\d{2})$/.test(data.source_as_of) || !Number.isFinite(Date.parse(data.source_as_of))
+      || !text(data.as_of) || data.source_as_of.slice(0, 10) !== data.as_of
+      || !Number.isSafeInteger(data.source_total) || (data.source_total as number) < 1 || data.source_returned !== data.source_total
+      || !Number.isSafeInteger(data.directory_total) || (data.directory_total as number) < data.rows.length
+      || !Number.isSafeInteger(data.unknown_count) || (data.unknown_count as number) < 0
+      || !["current_batch", "stale_batch", "closed_observation", "historical_observation", "clock_unknown"].includes(String(data.observation_state))
+      || !validNumber(data.source_age_seconds) || !validNumber(data.source_age_limit_seconds) || data.source_age_limit_seconds !== 300
+      || data.quality !== (data.observation_state === "current_batch" ? "medium" : "stale")
+      || data.observation_state === "current_batch" && (data.source_age_seconds < 0 || data.source_age_seconds >= data.source_age_limit_seconds))
     || range === "latest_saved" && data.available && (data.historical !== true || data.coverage_state !== "local_sample" || data.quality !== "stale"
       || !text(data.as_of) || !/^\d{4}-\d{2}-\d{2}$/.test(data.as_of) || !Number.isFinite(Date.parse(`${data.as_of}T00:00:00Z`))
       || new Date(`${data.as_of}T00:00:00Z`).toISOString().slice(0, 10) !== data.as_of)) throw new DiscoveryReadError("板块返回身份或结构不一致");
@@ -107,9 +117,16 @@ export function DiscoveryBrowser({search, selection, onNavigate, onTarget, onMet
 }) {
   const location = discoveryLocation(search);
   const {mode, kind, range, code, query, sort, scope} = location;
-  const savedDirectory = mode === "catalog" && range === "latest_saved";
+  const savedDirectory = (mode === "catalog" || mode === "funds") && range === "latest_saved";
+  const freshBoardRead = useRef<string | null>(null);
   const hot = useResource(async signal => checkHot(await getThemesHot(30, {signal})), {enabled: mode === "hot", key: "hot/30", abortable: true});
-  const boards = useResource(async signal => checkBoards(await getBoardFundFlow(kind, range, {signal}), kind, range), {enabled: savedDirectory || mode === "funds", key: `${kind}/${range}`, abortable: true});
+  const boards = useResource(async signal => {
+    const key = `${kind}/${range}`;
+    const fresh = freshBoardRead.current === key;
+    freshBoardRead.current = null;
+    return checkBoards(await getBoardFundFlow(kind, range, {signal, fresh}), kind, range);
+  }, {enabled: savedDirectory || mode === "funds", key: `${kind}/${range}`, abortable: true});
+  useEffect(() => {freshBoardRead.current = null;}, [kind, range]);
   const symbols = [...new Set(selection.entries.map(entry => entry.symbol).filter(symbol => /^\d{6}$/.test(symbol)))].sort();
   const membershipKey = JSON.stringify([selection.date, symbols]);
   const memberships = useResource(signal => getDiscoveryMemberships(symbols, selection.date, {signal}), {
@@ -145,7 +162,7 @@ export function DiscoveryBrowser({search, selection, onNavigate, onTarget, onMet
   const pending = source.pending && source.data === undefined;
   const sourceAvailable = isHot ? !malformed : !malformed && boards.data?.available === true;
   const membershipKnown = selection.loaded && !selection.readError && memberships.data && !memberships.pending && !memberships.error && ["ready", "partial"].includes(memberships.data.state);
-  const refresh = () => {source.refresh(); if (isHot && selection.loaded && !selection.readError && symbols.length > 0 && symbols.length <= 200) memberships.refresh();};
+  const refresh = () => {if (!isHot) freshBoardRead.current = `${kind}/${range}`; source.refresh(); if (isHot && selection.loaded && !selection.readError && symbols.length > 0 && symbols.length <= 200) memberships.refresh();};
   const select = (next: DiscoveryDetailTarget) => onNavigate(discoveryUrl(search, {disc_code: next.code, selection: null}), true);
   return <section className="discovery-browser" aria-label={isHot ? "热门题材发现" : mode === "catalog" ? "行业概念发现" : "资金方向发现"}>
     <header className="discovery-heading"><div><h2>{isHot ? "热门题材" : mode === "catalog" ? "行业与概念" : "资金方向"}</h2>
@@ -156,7 +173,7 @@ export function DiscoveryBrowser({search, selection, onNavigate, onTarget, onMet
       {mode === "catalog" && <label>目录范围<select aria-label="目录范围" value={range} onChange={event => changeDirectoryRange(event.target.value === "latest_saved" ? "latest_saved" : "intraday")}>
         <option value="intraday">本次榜单</option><option value="latest_saved">最近存档</option></select></label>}
       {mode === "funds" && <label>区间<select aria-label="资金区间" value={range} onChange={event => change({disc_range: event.target.value})}>
-        <option value="intraday">本次榜单</option><option value="5d">5日</option><option value="10d">10日</option><option value="20d">20日存档</option></select></label>}
+        <option value="changes">东财异动统计资金</option><option value="intraday">原资金榜（clist）</option><option value="latest_saved">最近已存单日资金</option><option value="5d">5日</option><option value="10d">10日</option><option value="20d">20日存档</option></select></label>}
       <label>排序<select aria-label="分类排序" value={ascending ? "asc" : "desc"} onChange={event => change({disc_sort: event.target.value})}>
         <option value="desc">{isHot ? "集中度优先" : mode === "catalog" ? "涨幅优先" : "净流入优先"}</option>
         <option value="asc">{isHot ? "集中度反向" : mode === "catalog" ? "跌幅优先" : "净流出优先"}</option></select></label>
@@ -172,12 +189,15 @@ export function DiscoveryBrowser({search, selection, onNavigate, onTarget, onMet
         {compact && <span>仅将热股样本重合≥75%的条目收拢；各名称、代码和成分独立保留，不合并为新题材。</span>}
         {hot.data?.catalog_state !== "ready" && <span>目录或成员保鲜未核；缺失集中度不参与领先判断。</span>}
         {hot.data?.membership_state === "unavailable" && <span>本次归属读取失败，不能判断没有热门题材。</span>}</>
-        : <><span>东财板块口径 · {kind === "industry" ? "行业" : "概念"}</span><span>{savedDirectory ? `原榜单日期 ${boards.data?.as_of || "未提供"}` : range === "20d" ? `本地存档截至 ${boards.data?.as_of || "未提供"}` : "源时点未提供"}</span>
+        : <><span>{range === "changes" ? "东财异动统计资金" : "东财板块口径"} · {kind === "industry" ? "行业" : "概念"}</span><span>{savedDirectory ? `原榜单日期 ${boards.data?.as_of || "未提供"}` : range === "20d" ? `本地存档截至 ${boards.data?.as_of || "未提供"}` : range === "changes" ? `来源批次 ${boards.data?.source_as_of ? dateTimeTextBJ(boards.data.source_as_of) : "未提供"}（北京）` : "源时点未提供"}</span>
           {savedDirectory ? <><span>Top50净流入存档样本，非全目录</span>
             <span title={boards.data?.stored_at ?? undefined}>存档保存于 {boards.data?.stored_at && /(?:Z|[+-]\d{2}:?\d{2})$/i.test(boards.data.stored_at) && Number.isFinite(Date.parse(boards.data.stored_at)) ? `${dateTimeTextBJ(boards.data.stored_at)}（北京）` : "未提供"} · 来源时刻未核</span>
             <span>历史参考，不表示即时源已恢复。成分下钻另读当前样本，不是原日归属。</span></>
             : boards.data?.received_at && <span title={boards.data.received_at}>源读取完成 {dateTimeTextBJ(boards.data.received_at)}（北京）</span>}
-          <span>已返回 {boardRows.length} 个板块{range === "20d" || savedDirectory ? " · 有限本地样本" : " · 全市场覆盖未核"}</span></>}
+          <span>已返回 {boardRows.length} 个板块{range === "20d" || savedDirectory ? " · 有限本地样本" : " · 全市场覆盖未核"}</span>
+          {range === "changes" && <><span>原批 {boards.data?.source_returned ?? "—"}/{boards.data?.source_total ?? "—"} · 正式目录匹配 {boardRows.length}/{boards.data?.directory_total ?? "—"} · 未核归属 {boards.data?.unknown_count ?? "—"}</span>
+            {boards.data?.observation_state && <span role="status">{boards.data.observation_state === "closed_observation" ? "收盘批次观察 · 非即时" : boards.data.observation_state === "historical_observation" ? "历史批次观察 · 非即时" : boards.data.observation_state === "stale_batch" ? "来源批次已超5分钟 · 原值仅供参考" : boards.data.observation_state === "clock_unknown" ? "源批钟异常 · 即时状态未知" : "5分钟内来源批次 · 逐行时点未核"}</span>}
+            <span>官网主力净流入：万元÷10000→亿元。独立统计口径；概念可重叠，净额不相加，不作策略依据。</span></>}</>}
       <span>分类浏览不改变原入选，不构成买卖建议。</span>
     </div>
     {selection.readError && <div role="alert" className="discovery-error">
@@ -187,7 +207,7 @@ export function DiscoveryBrowser({search, selection, onNavigate, onTarget, onMet
     {(source.error != null || malformed || (!isHot && boards.data?.available === false)) && <div className="discovery-error" role="alert">
       {malformed ? "分类返回身份或结构不一致，已停止展示。" : source.error ? `分类读取失败。${source.data ? "以下为上次成功结果，当前时效待核。" : "请重试，不能据此判断没有分类。"}` : `板块资料暂不可用：${boards.data?.reason || "原因未提供"}`}
       <button type="button" className="quiet-action" disabled={source.pending} onClick={refresh}>重试分类</button>
-      {mode === "catalog" && range === "intraday" && <button type="button" className="quiet-action" onClick={() => changeDirectoryRange("latest_saved")}>查看最近存档</button>}</div>}
+      {(mode === "catalog" || mode === "funds") && range === "intraday" && <button type="button" className="quiet-action" onClick={() => changeDirectoryRange("latest_saved")}>查看最近存档</button>}</div>}
     {!!boards.data?.degraded?.length && !isHot && <p className="discovery-warning">{boards.data.degraded.join("；")}</p>}
     {pending && <div role="status" className="discovery-skeleton" aria-busy="true">正在读取分类…</div>}
     {!pending && sourceAvailable && source.data && rows.length === 0 && <p className="discovery-empty">{query ? "没有匹配分类。可清除搜索查看已返回范围。" : isHot ? "热榜暂未映射到可确认题材；不是没有市场热点。" : "本次范围没有可展示板块；缺数不按零处理。"}</p>}
@@ -203,7 +223,7 @@ export function DiscoveryBrowser({search, selection, onNavigate, onTarget, onMet
             onClick={() => rowCode && select({kind: row ? "theme" : "board", code: rowCode, name})}>
             <span className="discovery-order">{index + 1}</span><span className="discovery-name"><strong>{name}</strong><small>{rowCode || "代码未确认"}</small></span>
             <span className={`discovery-measure ${board ? pctColor(board.change_pct) : ""}`}>{row ? validNumber(row.concentration_pct) ? `${row.concentration_pct.toLocaleString("zh-CN", {maximumFractionDigits: 2})}%` : "未核" : pctText(board!.change_pct)}<small>{row ? "热股集中度" : savedDirectory ? "原日涨跌幅" : "板块涨跌幅"}</small></span>
-            <span className={`discovery-measure ${board && net != null ? net >= 0 ? "text-up-ink dark:text-up" : "text-down-ink dark:text-down" : ""}`}>{row ? `${row.hot_count}只` : signed(net)}<small>{row ? "榜内热股" : savedDirectory ? "原当日净额" : range === "intraday" ? "主力净额" : `${range.replace("d", "日")}主力净额`}</small></span>
+            <span className={`discovery-measure ${board && net != null ? net >= 0 ? "text-up-ink dark:text-up" : "text-down-ink dark:text-down" : ""}`}>{row ? `${row.hot_count}只` : signed(net)}<small>{row ? "榜内热股" : savedDirectory ? "原当日净额" : range === "changes" ? "异动统计主力净额" : range === "intraday" ? "主力净额" : `${range.replace("d", "日")}主力净额`}</small></span>
             <svg aria-hidden="true" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.5"><path d="m9 5 7 7-7 7"/></svg>
           </button>
           <div className="discovery-result-context">

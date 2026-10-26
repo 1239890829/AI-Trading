@@ -42,13 +42,16 @@ def detail(source, identity, **kwargs):
 
 def test_three_rules_shared_saved_denominator_unknown_missing_adjusted_and_exclude_index(source):
     result = run(source)
-    assert len(result['runs']) == 3 and result['reused'] is False
+    assert len(result['runs']) == 11 and result['reused'] is False
     assert len({item['run_id'] for item in result['runs']}) == 1
     for identity in result['runs']:
         data = detail(source, identity)
         assert data['counts']['universe'] == 2
-        assert data['counts']['unknown'] == 1
-        assert data['counts']['matched'] + data['counts']['not_matched'] == 1
+        if identity['method'] in owner.METHODS[:3]:
+            assert data['counts']['unknown'] == 1
+            assert data['counts']['matched'] + data['counts']['not_matched'] == 1
+        else:
+            assert data['counts']['unknown'] >= 1
         missing = next(row for row in data['items'] if row['symbol'] == '600000')
         assert missing['state'] == 'unknown'
         assert 'invalid_or_missing_close' in missing['reason_codes']
@@ -66,7 +69,7 @@ def test_three_rules_shared_saved_denominator_unknown_missing_adjusted_and_exclu
 def test_repeat_reuses_original_batch_without_rule_call(source, monkeypatch):
     first = run(source)
     original = next(source[1].glob('*.json')).read_bytes()
-    monkeypatch.setattr(owner, 'evaluate_reference_rules', lambda *a, **k: pytest.fail('must reuse saved answers'))
+    monkeypatch.setattr(owner, 'iter_reference_rules', lambda *a, **k: pytest.fail('must reuse saved answers'))
     second = run(source)
     assert second['reused'] and second['runs'] == first['runs']
     assert next(source[1].glob('*.json')).read_bytes() == original
@@ -74,7 +77,7 @@ def test_repeat_reuses_original_batch_without_rule_call(source, monkeypatch):
 
 def test_saved_read_needs_no_marketdb_or_current_rule_replay(source, monkeypatch):
     identity = run(source)['runs'][0]
-    monkeypatch.setattr(owner, 'evaluate_reference_rules', lambda *a, **k: pytest.fail('read must not run rules'))
+    monkeypatch.setattr(owner, 'iter_reference_rules', lambda *a, **k: pytest.fail('read must not run rules'))
     source[0].unlink()
     assert detail(source, identity)['state'] == 'saved'
     with pytest.raises(SavedRunMissing):
@@ -132,12 +135,12 @@ def test_cancel_before_scan_leaves_no_partial_success(source):
 
 
 def test_source_change_during_scan_does_not_publish_mixed_snapshot(source, monkeypatch):
-    original = owner.evaluate_reference_rules
+    original = owner.iter_reference_rules
     def changing(*args, **kwargs):
         result = original(*args, **kwargs)
         (source[0].parent/'quality_report.json').write_text('{"available":true,"status":"ok","issues":[],"new":1}')
         return result
-    monkeypatch.setattr(owner, 'evaluate_reference_rules', changing)
+    monkeypatch.setattr(owner, 'iter_reference_rules', changing)
     with pytest.raises(RuntimeError, match='源版本变化'):
         run(source)
     assert not list(source[1].glob('*.json'))
@@ -185,7 +188,7 @@ def partitioned_saved_run(tmp_path, monkeypatch):
     root.mkdir()
     path = root / (batch['run_id'] + '.json')
     path.write_text(owner._json(batch))
-    monkeypatch.setattr(owner, 'evaluate_reference_rules', lambda *a, **kw: pytest.fail('saved read must not rescan rules'))
+    monkeypatch.setattr(owner, 'iter_reference_rules', lambda *a, **kw: pytest.fail('saved read must not rescan rules'))
     return root, owner._identity(batch, code), path, rows, counts
 
 

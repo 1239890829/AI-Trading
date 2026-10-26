@@ -38,7 +38,10 @@ from app.services.quote_hub import QuoteHub
 log = logging.getLogger(__name__)
 router = APIRouter(prefix="/picks", tags=["daily-picks"])
 SavedMethod = Literal["daily_picks", "intraday_watch", "reference:macd_golden_cross",
-                      "reference:ma_bullish", "reference:ma_golden_cross"]
+                      "reference:ma_bullish", "reference:ma_golden_cross", "reference:rsi_reversal",
+                      "reference:shrink_pullback", "reference:volume_breakout", "reference:l1_l2_volume_resonance",
+                      "reference:one_yang_three_yin", "reference:w_bottom_breakout", "reference:bottom_volume",
+                      "reference:box_oscillation"]
 
 
 def _db():

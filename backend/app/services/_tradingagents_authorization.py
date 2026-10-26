@@ -1,7 +1,8 @@
 """Explicit local maintenance of an existing selected-research authorization.
 
-This operator cannot create a consumer, extend a term, grant an unknown, start a
-task or change a model. A prepared plan binds the exact observed installation.
+This operator cannot create a consumer, extend a term, start a task or change a
+model. Separately explicit retained-unknown permission binds one terminal row;
+it never clears that row. Every prepared plan binds the observed installation.
 """
 from __future__ import annotations
 
@@ -23,7 +24,7 @@ from app.core.bjtime import beijing_now
 from app.core.config import settings
 from app.models.agent import AgentTask
 
-HOST_SOURCES = {"driver.py", "tradingagents_research.py", "tradingagents_recovery.py"}
+HOST_SOURCES = {"driver.py", "tradingagents_research.py", "tradingagents_recovery.py", "agent_budget.py"}
 # PR 347 changed only the minute/auction path in this complete provider module.
 # StoredCompanyPacketBuilder uses its unchanged get_kline path and cached Hub
 # quotes, never get_minute_line. Both complete blobs and all other module AST
@@ -186,7 +187,7 @@ def _reviewed_packet_owner_changes(old: dict, new: dict) -> list[str]:
     return ["packet_builder.owner_sources." + key for key in changed]
 
 
-def _candidate(raw: bytes, identity: dict, sf, now: datetime) -> tuple[dict, list[str]]:
+def _candidate(raw: bytes, identity: dict, sf, now: datetime, *, retained_authorization=None) -> tuple[dict, list[str]]:
     from app.services import tradingagents_research as research
 
     value = json.loads(raw)
@@ -210,17 +211,31 @@ def _candidate(raw: bytes, identity: dict, sf, now: datetime) -> tuple[dict, lis
     checked = None
     if exception is not None:
         checked = research._unknown_usage_exception(exception, research._digest(value["method_identity"]), sf)
+    retained = deepcopy(value.get("retained_unknown_authorizations", []))
+    research._retained_unknown_usage(retained, sf, now=now)
+    if retained_authorization is not None:
+        research._retained_unknown_usage([retained_authorization], sf, now=now)
+        if (retained_authorization.get("source_authorization_sha256") != _sha(raw)
+                or retained_authorization.get("authorized_method_sha256") != research._digest(identity)
+                or retained_authorization.get("source_usage", {}).get("budget_date") != now.date().isoformat()
+                or any(row["source_usage"]["usage_id"] == retained_authorization.get("source_usage", {}).get("usage_id") for row in retained)):
+            raise AuthorizationBlocked("authorization_retained_usage_permission_drift")
+        retained.append(deepcopy(retained_authorization))
+    projected = research._retained_unknown_usage(retained, sf, now=now)
     from app.services import agent_budget
     agent_budget.ensure_model_usage_known(sf, consumer_scope=agent_budget.SCOPE_SELECTED_RESEARCH_LLM,
-        allowed_unknown_usage=research._allowed_unknown_usage({"unknown_usage_exception": checked} if checked else {}))
+        allowed_unknown_usage=research._allowed_unknown_usage({"unknown_usage_exception": checked or {}, "retained_unknown_usage": projected}))
     candidate = deepcopy(value)
     candidate["method_identity"] = deepcopy(identity)
+    if retained_authorization is not None:
+        candidate["retained_unknown_authorizations"] = retained
     if exception is not None:
         candidate["unknown_usage_exception"]["method_sha256"] = research._digest(identity)
     return candidate, sorted([*changed, *owner_changes])
 
 
-def _snapshot(*, root=None, env_path=None, sf=None, driver=None, now=None, locks_held=False):
+def _snapshot(*, root=None, env_path=None, sf=None, driver=None, now=None, locks_held=False,
+              retained_request=None, retained_authorization=None):
     root, env_path, sf, driver = _owner(root, env_path, sf, driver)
     if not settings.tradingagents_research_enabled or settings.tradingagents_auto_research_enabled:
         raise AuthorizationBlocked("authorization_manual_mode_required")
@@ -231,7 +246,12 @@ def _snapshot(*, root=None, env_path=None, sf=None, driver=None, now=None, locks
     with (nullcontext() if locks_held else _runtime_locks(root)):
         _no_active(sf)
         identity = driver.method_identity()
-        candidate, changed = _candidate(raw, identity, sf, now or beijing_now())
+        now = now or beijing_now()
+        if retained_request is not None:
+            if retained_authorization is not None:
+                raise AuthorizationBlocked("authorization_retained_usage_request_invalid")
+            retained_authorization = _retained_permission(retained_request, raw, identity, sf, now)
+        candidate, changed = _candidate(raw, identity, sf, now, retained_authorization=retained_authorization)
     return root, env_path, sf, driver, raw, env, span, candidate, changed
 
 
@@ -240,6 +260,7 @@ def inspect_rebind(**kwargs) -> dict:
     return {"state": "dry_run", "changed_sources": changed, "already_bound": not changed,
             "consumer": candidate["consumer"], "valid_until": candidate["valid_until"],
             "unknown_count": len(candidate.get("unknown_usage_exception", {}).get("allowed_unknown_usage", [])),
+            "retained_unknown_count": len(candidate.get("retained_unknown_authorizations", [])),
             "existing_grant_count": len(candidate["native_recovery_grants"]), "automatic_dispatch": False}
 
 
@@ -283,6 +304,42 @@ def prepare_rebind(reviewed_sources, **kwargs) -> dict:
     if not changed or set(reviewed_sources) != set(changed):
         raise AuthorizationBlocked("authorization_exact_source_review_required")
     return _store_plan(root, raw, env, span, candidate, changed)
+
+
+def _retained_permission(request, raw, identity, sf, now):
+    from app.services import agent_budget, tradingagents_research as research
+    from app.models.agent import AgentResourceUsage
+
+    if (not isinstance(request, dict) or set(request) != {"source_usage", "reason"}
+            or not isinstance(request["reason"], str) or not 0 < len(request["reason"].strip()) <= 2000):
+        raise AuthorizationBlocked("authorization_explicit_retained_permission_required")
+    fact = request["source_usage"]
+    if (not isinstance(fact, dict) or set(fact) != {"usage_id", "budget_date", "scope", "purpose", "state"}
+            or not isinstance(fact["usage_id"], str) or not re.fullmatch(r"[0-9a-f]{32}", fact["usage_id"])
+            or fact["scope"] != agent_budget.SCOPE_AUTONOMY_LLM or fact["budget_date"] != now.date().isoformat()):
+        raise AuthorizationBlocked("authorization_retained_usage_source_invalid")
+    with sf() as db:
+        row = db.get(AgentResourceUsage, fact["usage_id"])
+        if row is None:
+            raise AuthorizationBlocked("authorization_retained_usage_source_invalid")
+        source_sha = research._digest(agent_budget.dump(row))
+    agent_budget.validate_unknown_usage_exceptions([{**fact, "source_row_sha256": source_sha}])
+    permission = {"version": 1, "user_authorization": "EXPLICIT", "consumer": "selected_stock_explanation", "dispatch": "manual",
+                  "reason": request["reason"], "authorized_at": now.isoformat(), "source_authorization_sha256": _sha(raw),
+                  "authorized_method_sha256": research._digest(identity), "source_usage": fact, "source_row_sha256": source_sha}
+    research._retained_unknown_usage([permission], sf, now=now)
+    return permission
+
+
+def prepare_retained_unknown(source_usage, reason, reviewed_sources, **kwargs) -> dict:
+    """Only an operator's new explicit instruction can add this named history."""
+    root, _, _, _, raw, env, span, candidate, changed = _snapshot(
+        **kwargs, retained_request={"source_usage": source_usage, "reason": reason})
+    if set(reviewed_sources) != set(changed):
+        raise AuthorizationBlocked("authorization_exact_source_review_required")
+    permission = candidate["retained_unknown_authorizations"][-1]
+    return _store_plan(root, raw, env, span, candidate, changed, kind="retained_unknown",
+                       extra={"retained_authorization": permission})
 
 
 def _source_rebind_plan(plan_id, identity, *, root=None, expected=None, current=None):
@@ -366,10 +423,13 @@ def apply_plan(plan_id: str, **kwargs) -> dict:
         folder = parent / plan_id
         plan = json.loads(_read(folder / "plan.json"))
         before = _read(folder / "authorization.before.json")
-        if plan.get("version") != 1 or plan.get("kind") not in {"rebind", "cooperative_grant"} or _sha(before) != plan.get("authorization_sha256"):
+        if plan.get("version") != 1 or plan.get("kind") not in {"rebind", "cooperative_grant", "retained_unknown"} or _sha(before) != plan.get("authorization_sha256"):
+            raise AuthorizationBlocked("authorization_plan_invalid")
+        if plan["kind"] == "retained_unknown" and not isinstance(plan.get("retained_authorization"), dict):
             raise AuthorizationBlocked("authorization_plan_invalid")
         _, _, _, _, raw, env, span, candidate, changed = _snapshot(
-            root=root, env_path=env_path, sf=sf, driver=driver, now=kwargs.get("now"), locks_held=True)
+            root=root, env_path=env_path, sf=sf, driver=driver, now=kwargs.get("now"), locks_held=True,
+            retained_authorization=plan.get("retained_authorization") if plan["kind"] == "retained_unknown" else None)
         if plan["kind"] == "cooperative_grant":
             from app.services.tradingagents_recovery import prepare_cooperative_grant
             proposed = plan["candidate"]["native_recovery_grants"][-1]
@@ -399,6 +459,8 @@ def apply_plan(plan_id: str, **kwargs) -> dict:
         new_env = env[:span[0]] + _sha(target).encode() + env[span[1]:]
         auth_path = root / "authorization.json"
         _no_active(sf)
+        from app.services import tradingagents_research as research
+        research._retained_unknown_usage(candidate.get("retained_unknown_authorizations", []), sf, now=kwargs.get("now") or beijing_now())
         if _read(auth_path) != raw or _read(env_path) != env or driver.method_identity() != candidate["method_identity"]:
             raise AuthorizationBlocked("authorization_installation_changed")
         _write(auth_path, target)
@@ -417,6 +479,7 @@ def apply_plan(plan_id: str, **kwargs) -> dict:
         _write(folder / "applied.json", _json_bytes({"version": 1, "state": "applied", "restart_required": True}))
         return {"state": "applied", "plan_id": plan_id, "changed_sources": changed, "restart_required": True,
                 "expiry_extended": False, "unknowns_added": 0, "existing_grants_changed": False,
+                "retained_unknown_authorizations_added": int(plan["kind"] == "retained_unknown"),
                 "new_cooperative_grants": int(plan["kind"] == "cooperative_grant")}
     except BlockingIOError:
         raise AuthorizationBlocked("authorization_operator_busy") from None

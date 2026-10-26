@@ -389,3 +389,7 @@ RSH-031有限前向运行与触发修复入口：[研究§39.5](research/limit-u
 ## 2026-10-25 正式板块身份与按需研究
 
 [正式身份与按需研究](product/hunting-decision-design.md#2026-10-25-正式板块身份与按需研究) → [58项全功能复核](product/feature-closure-audit.md#2026-10-25-正式板块身份与按需研究) → [模型边界](ai/semantic-decisions.md#2026-10-25-正式板块身份与按需研究) / [性能与读取](system/runtime-performance.md#2026-10-25-正式板块身份与按需研究) / [来源](data/data-sources.md#2026-10-25-正式板块身份与按需研究)。原5键与35参考项归strategy/strategy-registry；默认自动派发取代关系及旧摘要命令归system/deployment。状态仍在原W07/IMP-050、W04/RSH-030，当前发布与主目录生效只读handoff及准确PR回执。
+
+## 2026-10-26 研究操作、资金视角与战法统计
+
+[研究操作与资金阅读](product/hunting-decision-design.md#2026-10-26-研究操作与资金阅读纠错) → [十一法研究及统计](strategy/strategy-registry.md#2026-10-26-研究筛选与效果统计修订) / [完整报告阅读](ai/semantic-decisions.md#2026-10-26-研究重读反馈与角色阅读)。来源、请求与权限边界仍归原数据/性能和部署入口，原W04、W07、W06维护任务事实，发布和主目录生效查handoff及本批PR准确回执。

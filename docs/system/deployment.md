@@ -565,3 +565,11 @@ CLI启动warning的兼容依据与固定版本见[语义纠错记录](../ai/sema
 总开关`ASHARE_TRADINGAGENTS_RESEARCH_ENABLED`继续管原手工完整研究和准确授权；新增`ASHARE_TRADINGAGENTS_AUTO_RESEARCH_ENABLED=0`只管新自动派发，不能通过关闭总开关冒充只停自动。原queued/running任务及unknown不取消、不清账，恢复仍按原准确任务/方法/具名许可。
 
 旧报告的小摘要维护命令归本安装backend：`PYTHONPATH=. .venv/bin/python scripts/tradingagents_saved_summary.py --all-saved`默认dry-run；核验后显式加`--write`仅写derived旁车。支持重复`--symbol`限定，不接受任意root路径，不重跑模型或改原件/业务数据库；坏原件保留并明确unavailable，不能为显示完整状态补造。主目录启服前核开关/在途状态、原授权和来源副作用，沿原启动器激活并单独验HTTP/代理与实际页面。
+
+## 2026-10-26 具名未知用量保留与研究反馈
+
+重读保存结果与生成/恢复分开；新报告仍需原维护能力、真实入选、完整执行器及准确pinned研究授权。当前启动阻断在操作区直接可见，重读不会自动解决版本/用量问题。
+
+用户对一条新的跨来源未知用量作具名许可后，原本机CLI支持`--prepare-retained-unknown USAGE_ID`，并必须显式给`--source-budget-date`、`--source-scope`、`--source-purpose`、`--source-state`、`--authorization-reason`及每个`--reviewed-source`。只准备0600私有计划，再由原`--apply PLAN_ID`比较源码、原行元数据hash、原授权和pin后安装；不接受任意路径/SQL，不保存整份环境备份，不改原用量行或自动重试模型。
+
+该入口追加独立历史许可，不覆旧七条/恢复grant或延期；只解除准确具名事实对selected_research_llm的阻断，其他消费者和新unknown继续拒绝。`agent_budget.py`是完整方法指纹的一部分，必须列入实际已审source差异；安装后重载及真实读取/复用/新任务分别验收。CLI已定义BudgetError输出稳定code，未知/含私路径错误继续脱敏。

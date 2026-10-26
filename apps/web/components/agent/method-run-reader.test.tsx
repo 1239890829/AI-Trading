@@ -188,7 +188,8 @@ describe("saved method run reader",()=>{
     expect(within(result).getByText("指标可评价").nextElementSibling?.textContent).toBe("2");
     expect(within(result).getByText(/源首次发布时间 未知；筛选界限 2026-10-23 16:00/)).toBeTruthy();
     expect(within(result).getByLabelText("600000研究条件").textContent).toContain("原值 0.0000 · 对照 -1.0000");
-    expect(within(result).getByLabelText("600002研究条件").textContent).toContain("输入有效性未知原值 未提供 · 对照 未提供");
+    // Unknown stays explicit; two absent numeric values no longer add repeated boilerplate.
+    expect(within(result).getByLabelText("600002研究条件").textContent).toBe("输入有效性未知");
     expect(within(result).queryByText("未保存分数")).toBeNull();
     expect(within(result).queryByRole("button",{name:"原入选"})).toBeNull();
     expect(screen.getByText("批次与版本筛选").closest("details")?.open).toBe(false);

@@ -52,3 +52,27 @@ it("supports keyboard report selection, ignores IME navigation, and preserves ev
     expect(screen.getByLabelText(`${label}完整原文`).querySelector("pre")?.textContent).toBe(report.reports[key]);
   }
 });
+
+it("gives older seven-report results a whole-passage navigator while retaining the full source",()=>{
+  const raw="收入增长。回款未核实，不能确认盈利修复。\n\n第二段给出产品业务范围，尚无订单证据。";
+  render(<TradingAgentsReportExplorer report={{...report,reports:{...report.reports,fundamentals_report:raw}}}/>);
+  fireEvent.click(screen.getByRole("tab",{name:/公司/}));
+  expect(screen.getByRole("tabpanel").textContent).toContain("收入增长。回款未核实，不能确认盈利修复。");
+  expect(screen.queryByText("第二段给出产品业务范围，尚无订单证据。")).toBeNull();
+  fireEvent.click(screen.getByRole("button",{name:"原文论据"}));
+  fireEvent.click(screen.getByRole("button",{name:/原文第2段/}));
+  expect(screen.getByText("第二段给出产品业务范围，尚无订单证据。")).toBeTruthy();
+  fireEvent.click(screen.getByRole("button",{name:"上一段"}));
+  expect(screen.getByRole("button",{name:"上一段"}).hasAttribute("disabled")).toBe(true);
+  fireEvent.click(screen.getByRole("button",{name:"核对公司完整原文"}));
+  expect(screen.getByLabelText("公司完整原文").querySelector("pre")?.textContent).toBe(raw);
+});
+
+it("opens the chosen comparison source directly in its own original-evidence view",()=>{
+  render(<TradingAgentsReportExplorer report={report}/>);
+  fireEvent.click(screen.getByRole("button",{name:"并排对照"}));
+  fireEvent.click(screen.getByRole("button",{name:"核对公司论据"}));
+  expect(screen.getByRole("tab",{name:/公司/}).getAttribute("aria-selected")).toBe("true");
+  expect(screen.getByLabelText("公司原文索引")).toBeTruthy();
+  expect(screen.queryByLabelText("对照报告摘录")).toBeNull();
+});

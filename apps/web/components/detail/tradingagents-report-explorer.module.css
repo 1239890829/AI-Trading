@@ -10,6 +10,7 @@
 .dot {width:5px;height:5px;border-radius:50%;background:var(--ui-muted);}
 .rail button[aria-selected=true] .dot {background:var(--ui-accent);}
 .toolbar {display:flex;justify-content:space-between;align-items:center;gap:10px;padding:12px 0 6px;color:var(--ui-muted);font-size:.6875rem;}
+.toolbar>div {display:flex;flex-wrap:wrap;justify-content:flex-end;gap:5px;}
 .toolbar button,.rawButton {height:auto;min-height:32px;padding:4px 8px;background:transparent;border:1px solid var(--ui-line);border-radius:7px;color:var(--ui-ink);font-size:.6875rem;}
 .toolbar button[aria-pressed=true] {border-color:var(--ui-accent);background:var(--ui-selected);}
 .reading {display:grid;grid-template-columns:minmax(0,1fr);gap:18px;}

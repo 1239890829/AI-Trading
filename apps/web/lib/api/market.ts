@@ -598,7 +598,7 @@ export async function getFundFlowHistory(days = 20): Promise<FundFlowHistory> {
 
 export type BoardFlowKind = "concept" | "industry";
 
-export type BoardFlowRange = "intraday" | "5d" | "10d" | "20d" | "latest_saved";
+export type BoardFlowRange = "intraday" | "5d" | "10d" | "20d" | "latest_saved" | "changes";
 
 export interface BoardFlowRow {
   board_code: string;
@@ -642,7 +642,18 @@ export interface BoardFundFlowPayload {
   source?: string;
   source_as_of?: string | null;
   received_at?: string | null;
-  coverage_state?: "unknown" | "local_sample";
+  coverage_state?: "unknown" | "local_sample" | "source_sample";
+  source_product?: string;
+  source_total?: number;
+  source_returned?: number;
+  directory_total?: number;
+  unknown_count?: number;
+  name_mismatch_count?: number;
+  excluded_region_count?: number;
+  unit_basis?: string;
+  observation_state?: "current_batch" | "stale_batch" | "closed_observation" | "historical_observation" | "clock_unknown";
+  source_age_seconds?: number;
+  source_age_limit_seconds?: number;
   source_mode?: "primary" | "delayed" | "unknown";
   time_basis?: string;
   quality?: "medium" | "stale";
@@ -688,7 +699,7 @@ export async function getBoardFundFlow(
   options: ReadOptions = {},
 ): Promise<BoardFundFlowPayload> {
   return (await getJson<BoardFundFlowPayload>(
-    `/api/market/board-fund-flow?kind=${kind}&range=${range}`, 30_000, options,
+    `/api/market/board-fund-flow?kind=${kind}&range=${range}${options.fresh && !["20d", "latest_saved"].includes(range) ? "&fresh=true" : ""}`, 30_000, options,
   )).data;
 }
 

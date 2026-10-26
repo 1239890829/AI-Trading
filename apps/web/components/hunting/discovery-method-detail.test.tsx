@@ -57,6 +57,23 @@ beforeEach(()=>{
 });
 afterEach(()=>{cleanup();vi.restoreAllMocks();});
 
+it("reused capabilities have a real internal reading entry without starting research",()=>{
+  const reused: StrategyRegistryItem = {...row,key:"reference:hot_theme",name:"热点题材",status:"candidate",
+    candidate:{...row.candidate!,source_code:"hot_theme",runnable:false,execution:undefined,
+      adoption:{state:"reuse_existing",consumer:"themes",reason:"复用既有正式题材",href:"/hunting?browse=hot"}}};
+  render(<DiscoveryMethodDetail row={reused} onClose={()=>{}}/>);
+  expect(screen.getByRole("link",{name:"打开已有热点题材能力"}).getAttribute("href")).toBe("/hunting?browse=hot");
+  expect(mocks.create).not.toHaveBeenCalled();expect(mocks.index).not.toHaveBeenCalled();
+});
+
+it("never turns an unrecognized capability URL into a navigation action",()=>{
+  const unsafe: StrategyRegistryItem = {...row,key:"reference:hot_theme",name:"热点题材",status:"candidate",
+    candidate:{...row.candidate!,source_code:"hot_theme",runnable:false,execution:undefined,
+      adoption:{state:"reuse_existing",reason:"bad reference",href:"javascript:alert(1)"}}};
+  render(<DiscoveryMethodDetail row={unsafe} onClose={()=>{}}/>);
+  expect(screen.queryByRole("link",{name:"打开已有热点题材能力"})).toBeNull();
+});
+
 it("keeps the user's first saved-result disclosure open after the real reader pins a date and exact run through a scope remount",async()=>{
   let finish!:(value:SavedMethodRunIndex)=>void;
   mocks.index.mockImplementationOnce(()=>new Promise(resolve=>{finish=resolve;}));

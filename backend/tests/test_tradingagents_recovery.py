@@ -470,6 +470,21 @@ def test_symlink_refused(env,tmp_path):
     p=env.run/'packet.json'; p.unlink(); outside=tmp_path/'outside'; outside.write_text('{}'); p.symlink_to(outside)
     with pytest.raises(research.ResearchBlocked): context(env)
 
+
+def test_later_executor_reuses_old_completed_recovery_only_after_original_chain_verifies(env):
+    c, owner = consumed(env)
+    result = asyncio.run(agent_tasks._h_tradingagents_research(env.rec, params(c, owner), env.app))
+    assert result['state'] == 'completed' and env.native.calls == 1
+    originals = {path: path.read_bytes() for path in env.run.rglob('*') if path.is_file()}
+    prior = research._execution_prior(env.selection, 'f'*64)
+    assert prior['method_sha256'] == research._digest(env.current)
+    assert research._completed_selection(prior, env.selection)['run_id'] == result['run_id']
+    assert env.native.calls == 1 and all(path.read_bytes() == raw for path, raw in originals.items())
+    env.source_claim.write_text('{}')
+    with pytest.raises(research.ResearchBlocked):
+        research._execution_prior(env.selection, 'f'*64)
+    assert env.native.calls == 1
+
 def test_full_continuation_preserves_old_and_reuses_normal_scheduler(env,monkeypatch):
     c,owner=consumed(env); old=env.source_claim.read_bytes(); originals={p:p.read_bytes() for p in (env.run/'model-outputs/1.json',env.run/'usage-receipts/1.json',env.run/'usage-receipts/2.json')}
     result=asyncio.run(agent_tasks._h_tradingagents_research(env.rec,params(c,owner),env.app))
