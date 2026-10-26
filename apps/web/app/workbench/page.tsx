@@ -66,7 +66,9 @@ function subscribeMobile(listener: () => void) {
 }
 
 /** Source time orders prices; the backend display clock orders calendar/reading state. */
-function indexQuoteForDisplay(overview: Quote, streamed: Quote | undefined): Quote {
+function indexQuoteForDisplay(overview: Quote, streamed: Quote | null | undefined): Quote {
+  if (streamed === null) return {...overview, quality: overview.quality === "invalid" ? "invalid" : "stale",
+    quality_reasons: [...new Set([...(overview.quality_reasons ?? []), "index_batch_missing"])]};
   if (!streamed || streamed.market !== overview.market
     || indexDetailSymbol(streamed.symbol, streamed.market) !== indexDetailSymbol(overview.symbol, overview.market)) return overview;
   const clock = (value: string | null | undefined) => value && /(?:Z|[+-]\d{2}:\d{2})$/.test(value) ? Date.parse(value) : NaN;
@@ -145,7 +147,8 @@ function WorkbenchInner() {
   const symbolDetail = useContext(SymbolDetailStateCtx);
   const detailActive = (!isMobile || mobileView !== "list") && !symbolDetail;
   const realSymbols = useMemo(() => realData?.items.map((i) => i.symbol) ?? [], [realData]);
-  const [indices, setIndices] = useState<Quote[] | undefined>();
+  const [indexRead, setIndexRead] = useState<{indices: Quote[] | undefined; missingAtStart: Record<string, object>}>({indices: undefined, missingAtStart: {}});
+  const indices = indexRead.indices;
   const [totalAmount, setTotalAmount] = useState<number | null>(null);
   // 成交额的三态判据（S2-1 契约）。**必须与数值分开存**：`null` 有「上游尚未就绪」
   // 与「真的没有数据」两种成因，只凭数值无法区分（2026-09-14 报障根因）。
@@ -201,12 +204,37 @@ function WorkbenchInner() {
     () => [...new Set([...symbols, ...realSymbols, ...picksSymbols, ...topSymbols, activeSymbol, ...(indices ?? []).map(q => indexDetailSymbol(q.symbol, q.market))])],
     [symbols, realSymbols, picksSymbols, topSymbols, activeSymbol, indices],
   );
-  const { quotes, status, quoteFeed } = useQuoteStream(streamSymbols, { throttleMs: 3000 });
-  const [extra, setExtra] = useState<Record<string, Quote>>({});
+  const { quotes, observations, status, quoteFeed } = useQuoteStream(streamSymbols, { throttleMs: 3000 });
+  // Each transition into missing owns a bounded token. Repeated missing frames
+  // are one episode; a successful REST read begun in that episode can recover.
+  const [indexObservation, setIndexObservation] = useState<{observations: typeof observations; missing: Record<string, object>}>(() => ({observations: {}, missing: {}}));
+  let indexOwner = indexObservation;
+  if (indexObservation.observations !== observations) {
+    const missing = Object.fromEntries(Object.entries(observations)
+      .filter(([symbol, quote]) => isIndexSymbol(symbol) && quote === null)
+      .map(([symbol]) => [symbol, indexObservation.missing[symbol] ?? {}]));
+    indexOwner = {observations, missing};
+    setIndexObservation(indexOwner);
+  }
+  const indexMissingRef = useRef(indexOwner.missing);
+  useEffect(() => {indexMissingRef.current = indexOwner.missing;}, [indexOwner.missing]);
+  const [extra, setExtra] = useState({observations, quotes: {} as Record<string, Quote>});
+  // A full stream observation retires its one-time bootstrap, including null.
+  // Retiring the stored value also prevents A→B→A from reviving an old bootstrap.
+  let bootstrap = extra;
+  if (extra.observations !== observations) {
+    bootstrap = {observations, quotes: Object.fromEntries(Object.entries(extra.quotes).filter(([symbol]) => !(symbol in observations)))};
+    setExtra(bootstrap);
+  }
   // WS 每 5s tick 全量替换 quotes：merged/列表查找都必须 memo 化，
   // 否则每次 tick 触发整列表 O(n²) 重算（评审 F2）
-  const merged: Record<string, Quote> = useMemo(() => ({ ...extra, ...quotes }), [extra, quotes]);
-  const displayedIndices = useMemo(() => indices?.map(q => indexQuoteForDisplay(q, merged[indexDetailSymbol(q.symbol, q.market)])), [indices, merged]);
+  const merged: Record<string, Quote> = useMemo(() => ({ ...bootstrap.quotes, ...quotes }), [bootstrap.quotes, quotes]);
+  const displayedIndices = useMemo(() => indices?.map(q => {
+    const identity = indexDetailSymbol(q.symbol, q.market);
+    const missing = observations[identity] === null
+      && (baseErrors.overview || indexRead.missingAtStart[identity] !== indexOwner.missing[identity]);
+    return indexQuoteForDisplay(q, missing ? null : merged[identity]);
+  }), [indices, merged, observations, baseErrors.overview, indexRead.missingAtStart, indexOwner.missing]);
 
   const [risk, setRisk] = useState<RiskState | null>(null);
 
@@ -292,10 +320,12 @@ function WorkbenchInner() {
   }, {intervalMs: 60_000, marketHours: false});
   const {refresh: refreshOverview} = useResource(async (signal) => {
     const version = baseReadRef.current.overview;
+    const missingAtStart = indexMissingRef.current;
     try {
-      const value = await getMarketOverview({signal});
+      // Recovery must start a real read, rather than join a popup's pre-missing HTTP.
+      const value = await getMarketOverview({signal, fresh: Object.keys(missingAtStart).length > 0});
       if (signal.aborted || version !== baseReadRef.current.overview) return;
-      setIndices(value.indices); setTotalAmount(value.total_amount);
+      setIndexRead({indices: value.indices, missingAtStart}); setTotalAmount(value.total_amount);
       setAmountFreshness(value.total_amount_freshness);
       setUpdatedAt(new Date().toLocaleTimeString("zh-CN", {hour12: false}));
       reportBase("overview");
@@ -368,7 +398,10 @@ function WorkbenchInner() {
     if (missing.length > 0) {
       const requested = new Set(missing);
       getQuotes(missing)
-        .then((qs) => {if (alive) setExtra((prev) => Object.fromEntries([...Object.entries(prev), ...qs.filter(q => requested.has(q.symbol)).map((q) => [q.symbol, q])]));})
+        .then((qs) => {if (alive) setExtra((prev) => ({...prev, quotes: Object.fromEntries([
+          ...Object.entries(prev.quotes),
+          ...qs.filter(q => requested.has(q.symbol) && !(q.symbol in prev.observations)).map(q => [q.symbol, q]),
+        ])}));})
         .catch(() => {});
     }
     return () => {alive = false;};

@@ -35,6 +35,14 @@ HOST_SOURCES = {"driver.py", "tradingagents_research.py", "tradingagents_recover
 REVIEWED_PACKET_OWNER_PAIRS = {"data_providers/tencent.py": (
     "32699b46cc03f0038e8e9d4969461bd336d9465c0363f984f8dca56b0b828aa9",
     "73af8b2ff111c04b57deda0dc3432c678815d0c2cef0c884f6f022ac51ea1af5",
+), "services/quote_hub.py": (
+    # Reviewed market admission fix and connection-local subscription metadata.
+    # Cached get_quotes/present_quote AST is unchanged. The visible copy also
+    # retains degraded-source reasons when source age becomes stale. Provider
+    # low/stale stays ineligible; medium keeps its reasons while still fresh.
+    # This exact forward pair preserves scope, cutoffs and all old grants.
+    "5d970afc948ea70e8d5ef3cc6a1efe68d2a3df09d3044fc1c92c405c864db0b0",
+    "c4386ec9cd0d10e0a5e3931e4ee0046cfff48b4b35e70ae99a3cccee8f5273ab",
 )}
 PIN_KEY = "ASHARE_TRADINGAGENTS_RESEARCH_AUTHORIZATION_DIGEST"
 PIN_LINE = re.compile(rb"(?im)^[ \t]*(?:export[ \t]+)?" + PIN_KEY.encode()
@@ -158,7 +166,7 @@ def _owner(root=None, env_path=None, sf=None, driver=None):
 
 
 def _reviewed_packet_owner_changes(old: dict, new: dict) -> list[str]:
-    """Normalize only a pinned non-consumer change before full method equality."""
+    """Normalize only reviewed exact owner pairs before full method equality."""
     old_packet, new_packet = old.get("packet_builder"), new.get("packet_builder")
     if not isinstance(old_packet, dict) or not isinstance(new_packet, dict):
         return []  # The full identity comparison below still rejects differences.

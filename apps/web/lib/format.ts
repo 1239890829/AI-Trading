@@ -244,6 +244,8 @@ const QUALITY_REASON_LABELS: Record<string, string> = {
   source_time_regress_ignored: "源返回晚到旧行情，保留最近可信值；本轮刷新未接纳",
   source_time_unknown: "源行情未提供数据时间，保留本次返回数值；无法确认时点与新鲜度",
   source_time_unknown_ignored: "源行情缺源时间，保留最近可信值",
+  source_quality_low: "来源质量偏低",
+  source_quality_medium: "来源为降级数据",
   source_invalid_ignored: "源返回非法行情，保留最近可信值",
   source_missing_price_ignored: "源本轮缺最新价，保留最近可信值",
   source_identity_duplicate_ignored: "源返回重复标的身份，本轮未接纳",

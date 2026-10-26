@@ -5,6 +5,7 @@ import { StockDetailPanel, type ChartTab, type RightTab } from "@/components/sto
 import type { KlinePayload, MinutePoint, PaperAccountInfo, PaperFill, PaperPositionInfo, StockThemes } from "@/lib/api";
 import { mergeQuoteIntoMinutes } from "@/lib/kline-live";
 import { getWatchlist as readActualWatchlist } from "@/lib/api/watchlist";
+import {getMinuteLine as readActualMinuteLine, getMinuteLineWithBaseline as readActualMinuteWithBaseline} from "@/lib/api/market";
 import { notifyWatchlistChanged } from "@/lib/watchlist-sync";
 import type { Kline, OrderBook, Quote, Trade } from "@/types/market";
 import {DetailModalProvider} from "@/components/detail/detail-modal";
@@ -1506,12 +1507,27 @@ describe("StockDetailPanel · 已有指数观察驱动一次恢复校准", () =>
     expect(fetch).not.toHaveBeenCalled();
   });
 
+  it("父指数当前缺项立即标出旧叠加待核，合法父观察恢复不额外读取分钟", async () => {
+    const good = indexQuote();
+    const view = render(<StockDetailPanel symbol="600519" chartTab="minute" indexQuote={good}/>); await settle();
+    expect(view.queryByRole("alert")).toBeNull();
+    view.rerender(<StockDetailPanel symbol="600519" chartTab="minute" indexQuote={{...good, quality: "stale", quality_reasons: ["index_batch_missing"]}}/>); await settle();
+    expect(view.getByRole("alert").textContent).toContain("指数基准待核 · 保留结果");
+    expect(view.getByTestId("minute-price").getAttribute("data-index-last")).toBe("3000");
+    expect(api.getMinuteLine).toHaveBeenCalledTimes(1);
+    view.rerender(<StockDetailPanel symbol="600519" chartTab="minute" indexQuote={good}/>); await settle();
+    expect(view.queryByRole("alert")).toBeNull();
+    expect(api.getMinuteLine).toHaveBeenCalledTimes(1);
+  });
+
   it("收盘后缺批恢复为严格closed历史观察才校准，仍显示非实时且不升级stale", async () => {
     vi.setSystemTime(new Date("2026-10-09T17:15:00+08:00"));
-    const recovered: Quote = {...indexQuote("2026-10-09T17:14:54+08:00"), quality: "stale", quality_reasons: ["market_closed"],
-      display_session: {phase: "closed", trade_date: "2026-10-09", as_of: "2026-10-09T17:14:54+08:00", trade_day_result: true}};
+    const recovered: Quote = {...indexQuote("2026-10-09T17:14:54+08:00"), quality: "stale", quality_reasons: ["market_closed"], data_timestamp: "2026-10-09T15:00:00+08:00",
+      display_session: {phase: "closed", trade_date: "2026-10-09", as_of: "2026-10-09T17:14:54+08:00", trade_day_result: true,
+        expected_source_date: "2026-10-09", expected_source_after: "2026-10-09T14:59:50+08:00"}};
     const before = JSON.stringify(recovered);
     api.getMarketOverview.mockResolvedValueOnce({indices: [{...recovered, quality_reasons: ["market_closed", "index_batch_missing"], display_session: {...recovered.display_session!, as_of: "2026-10-09T17:14:45+08:00"}}]}).mockResolvedValue({indices: [recovered]});
+    api.getMinuteLine.mockResolvedValue([{...minute(3000).points[0], ts: recovered.data_timestamp!}]);
     const view = render(<StockDetailPanel symbol="600519" chartTab="minute" indexQuote={null}/>); await settle();
     expect(view.getByRole("alert")).toBeTruthy();
     view.rerender(<StockDetailPanel symbol="600519" chartTab="minute" indexQuote={recovered}/>); await settle();
@@ -1575,6 +1591,40 @@ describe("StockDetailPanel · 已有指数观察驱动一次恢复校准", () =>
     await act(async () => {recovery.resolve(minute(3030).points);}); await settle();
     expect(view.queryByText(/指数叠加读取失败/)).toBeNull();
     expect(view.getByTestId("minute-price").getAttribute("data-index-last")).toBe("3030");
+  });
+
+  it("人工指数重读穿过真实共享API读取新原包，旧共享消费者及其晚回不覆盖新图", async () => {
+    const pending: {signal: AbortSignal; finish: (price: number) => void}[] = [];
+    vi.stubGlobal("fetch", vi.fn((url: string, init: RequestInit) => {
+      if (url !== "/backend/api/minute-line/sh000001") throw new Error(`unexpected offline URL: ${url}`);
+      return new Promise<Response>((resolve, reject) => {
+        pending.push({signal: init.signal!, finish: price => resolve(new Response(JSON.stringify({data: {
+          symbol: "sh000001", points: minute(price).points, vr_baseline_5m: null,
+        }})))});
+        init.signal?.addEventListener("abort", () => reject(new DOMException("aborted", "AbortError")), {once: true});
+      });
+    }));
+    const index: Quote = {...audit, symbol: "sh000001", price: 3000, prev_close: 2990, data_timestamp: "2026-10-09T10:00:00+08:00"};
+    api.getMinuteLine.mockImplementation(readActualMinuteLine).mockRejectedValueOnce(new Error("prior read failed"));
+    const view = render(<StockDetailPanel symbol="600519" chartTab="minute" indexQuote={index}/>); await settle();
+    await advance(59_999);
+    const otherConsumer = readActualMinuteWithBaseline("sh000001");
+    try {
+      await advance(1);
+      expect(pending).toHaveLength(1);
+      fireEvent.click(view.getByRole("button", {name: "重新读取指数叠加"})); await settle();
+      expect(pending).toHaveLength(2);
+      expect(pending[0].signal.aborted).toBe(false);
+      await act(async () => {pending[1].finish(3030);}); await settle();
+      expect(view.getByTestId("minute-price").getAttribute("data-index-last")).toBe("3030");
+      await act(async () => {pending[0].finish(2999); await otherConsumer;}); await settle();
+      expect(view.getByTestId("minute-price").getAttribute("data-index-last")).toBe("3030");
+      expect((await otherConsumer).points.at(-1)?.price).toBe(2999);
+    } finally {
+      view.unmount();
+      pending.forEach(call => call.finish(3000));
+      await otherConsumer;
+    }
   });
 
   it("一个输入先失败也须等另一个真实读取结束，仍按原时机显示失败", async () => {

@@ -43,11 +43,12 @@ export function calendarPause(session: QuoteDisplaySession | null | undefined): 
   const minute = beijingMinute(session.as_of);
   if (minute === null) return null;
   if (session.trade_day_result === false) return "休市";
-  // The calendar phase must agree with the existing continuous-session bounds.
+  // Display closes at 15:00; the inclusive 15:00 chart bucket is a data label.
+  if (minute >= 900) return "已收盘";
+  // Other calendar pauses must agree with the existing minute-session bounds.
   if (isContinuousSession(minute)) return null;
   if (minute < 555) return "未开盘";
   if (minute > 690 && minute < 780) return "午间休息";
-  if (minute > 900) return "已收盘";
   return null;
 }
 
@@ -57,7 +58,7 @@ function isKnownIndex(symbol: string | undefined, market: string | null | undefi
   return ["sh000001", "sh000688", "sz399006", "sz399001", "sh000300", "sh000852"].includes(identity);
 }
 
-function hasExpectedPausedSource(dataTimestamp: string | null | undefined, session: QuoteDisplaySession | null | undefined): boolean {
+export function hasExpectedPausedSource(dataTimestamp: string | null | undefined, session: QuoteDisplaySession | null | undefined): boolean {
   const after = session?.expected_source_after;
   if (!session || !dataTimestamp || !after || !/(?:Z|[+-]\d{2}:\d{2})$/.test(dataTimestamp)
     || !/(?:Z|[+-]\d{2}:\d{2})$/.test(after)) return false;

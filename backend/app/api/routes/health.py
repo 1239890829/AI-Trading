@@ -218,6 +218,8 @@ async def system_providers(request: Request, hub: QuoteHub = Depends(get_hub)) -
     from app.core.ttl_cache import live_caches
 
     payload["caches"] = live_caches()
+    if hasattr(hub, "source_rejection_observations"):
+        payload["quote_source_rejections"] = hub.source_rejection_observations()
     # ths 涨停原因单点哨兵（P0-B）：无实例 = 未启用/未到首拍
     sent = getattr(request.app.state, "ths_sentinel", None)
     payload["ths_reason_sentinel"] = sent.snapshot() if sent is not None else {"state": "not_started"}

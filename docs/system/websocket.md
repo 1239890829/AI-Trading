@@ -10,30 +10,32 @@
 
 ## `/ws/quotes`（已实现）
 
-**连接**：`ws://127.0.0.1:8000/ws/quotes?symbols=600519,000001`（缺省订阅全部自选）。
+**连接**：`ws://127.0.0.1:8000/ws/quotes?symbols=600519,000001&subscription_id=0`（缺省订阅全部自选；旧客户端省略代次时为0）。
 **注意路径无 `/api` 前缀**（router 挂载时未带 prefix）。
 
 **服务端 → 客户端**
 
 ```json
-{ "type": "snapshot", "seq": 42, "ts": "2026-08-28T06:30:00Z", "data": [ /* Quote[] */ ] }
-{ "type": "quotes",   "seq": 43, "ts": "...", "data": [ /* 增量 Quote[] */ ] }
-{ "type": "stale",    "seq": 44, "ts": "...", "data": [ /* quality=stale 的 Quote[] */ ] }
+{ "type": "snapshot", "subscription_id": 0, "seq": 42, "ts": "2026-08-28T06:30:00Z", "data": [ /* Quote[] */ ] }
+{ "type": "quotes",   "subscription_id": 0, "seq": 43, "ts": "...", "data": [ /* Quote[] */ ] }
+{ "type": "stale",    "subscription_id": 0, "seq": 44, "ts": "...", "data": [ /* Quote[] */ ] }
 { "type": "pong",     "ts": "..." }
 ```
 
-- `seq` 单调递增；客户端检测 seq 跳变即触发快照重拉（丢包检测）。
+- `seq` 是Hub全局序号，其他订阅也会消耗；跳号本身不证明本连接丢包，当前客户端不据此额外重拉。
+- 三类市场帧均为对应订阅范围的完整快照，空列表是明确缺项；不能把`quotes`误作增量再永久保留缺项旧价。
+- `subscription_id`在帧入队时固化。客户端更新订阅即推进代次，只让当前代次帧裁决缺项；A→A+B甚至A→B→A的旧队列包均不能冒充新订阅回执。
 - 每条 Quote 自带 `source / quality / quality_reasons / data_timestamp / received_at`。
-- `stale` 消息表示上游失败，客户端必须把对应标的显示为“数据过期”。
+- `stale`可来自源龄、部分缺项、读取失败或已确认暂停，按各Quote的原因及日历语境呈现；帧类型不抹去原质量，也不直接决定所有证券的交易阶段。
 
 **客户端 → 服务端**
 
 ```json
 { "action": "ping" }
-{ "action": "subscribe", "symbols": ["600519", "300750"] }
+{ "action": "subscribe", "symbols": ["600519", "300750"], "subscription_id": 1 }
 ```
 
-`subscribe` 更新本连接订阅集并立即回推新快照。
+`subscribe`更新本连接订阅集并立即回推同代次新快照，原出站队列保持。代次为有界非负整数，不能用布尔值或非法值改写订阅；它只关联读取范围，不是鉴权凭据。源钟、队列上限、票据与连接权限不因代次改变。
 
 **发送互斥纪律（2026-09-01 修复）**：服务端所有出站消息（hub 推送/pong/subscribe
 快照）必须经**同一条出站队列**由单一 writer task 串行 `send_json`——Starlette

@@ -1,7 +1,9 @@
 """Rejected packets do not replace the retained quote's own clock or phase."""
 from __future__ import annotations
 
+import asyncio
 from datetime import date, datetime, timedelta, timezone
+from types import SimpleNamespace
 
 import pytest
 
@@ -50,6 +52,224 @@ def accept(hub, domain, stamp, bad=None):
 def rejection(hub, domain):
     rows = hub.last_index_rejections if domain == "indices" else hub.last_quote_rejections
     return rows["000001" if domain == "indices" else "600519"]
+
+
+@pytest.mark.parametrize("domain", ["indices", "quotes"])
+@pytest.mark.parametrize("quality", [Quality.medium, Quality.low, Quality.stale])
+def test_batch_preserves_provider_quality_without_replacing_source_clocks(clock, domain, quality):
+    hub = qh.QuoteHub(None, 1, stale_after=10)
+    now = clock["now"].astimezone(timezone.utc)
+    current = accept(hub, domain, now - timedelta(seconds=2))
+    observed = quote(current.symbol, now - timedelta(seconds=1), current.market, 101)
+    observed.received_at = now
+    observed.quality = quality
+    observed.quality_reasons = ["provider_contract_degraded"]
+    before = (observed.price, observed.data_timestamp, observed.received_at)
+
+    accepted = accept(hub, domain, now, observed)
+
+    assert accepted.quality == quality
+    assert accepted.quality_reasons == ["provider_contract_degraded"]
+    assert (accepted.price, accepted.data_timestamp, accepted.received_at) == before
+    assert accepted.freshness(fresh_within=10).state == ("stale" if quality is Quality.stale else "degraded")
+    assert hub.source_rejections()[domain] == {"count": 0, "reasons": {}}
+    state = hub._domains[domain]
+    state.requested_symbols = (current.symbol,)
+    observed_domain = hub.refresh_domains()[domain]
+    assert observed_domain["source_stale_count"] == int(quality is Quality.stale)
+    assert observed_domain["source_degraded_count"] == int(quality is not Quality.stale)
+
+
+@pytest.mark.parametrize("domain", ["indices", "quotes"])
+@pytest.mark.parametrize("has_current", [False, True])
+def test_provider_invalid_never_enters_current_or_replaces_a_trusted_fact(clock, domain, has_current):
+    hub = qh.QuoteHub(None, 1, stale_after=10)
+    now = clock["now"].astimezone(timezone.utc)
+    current = accept(hub, domain, now - timedelta(seconds=2)) if has_current else None
+    before = current.model_dump() if current is not None else None
+    symbol = "000001" if domain == "indices" else "600519"
+    observed = quote(symbol, now - timedelta(seconds=1), price=101)
+    observed.quality, observed.quality_reasons = Quality.invalid, ["provider_identity_untrusted"]
+    if domain == "indices":
+        hub._accept_indices([observed])
+    else:
+        hub._accept_quotes([symbol], [observed])
+
+    cached = (hub.indices if domain == "indices" else hub.quotes).get(symbol)
+    assert cached is current
+    if current is not None:
+        assert current.model_dump() == before
+    assert observed.quality is Quality.invalid
+    assert observed.quality_reasons == ["provider_identity_untrusted"]
+    assert rejection(hub, domain) == "source_invalid_ignored"
+
+
+@pytest.mark.parametrize("domain", ["indices", "quotes"])
+def test_same_second_trusted_update_still_advances_values(clock, domain):
+    hub = qh.QuoteHub(None, 1, stale_after=10)
+    stamp = clock["now"].astimezone(timezone.utc) - timedelta(seconds=1)
+    current = accept(hub, domain, stamp)
+    observed = quote(current.symbol, stamp, current.market, 101)
+    accepted = accept(hub, domain, stamp, observed)
+    assert accepted.price == 101 and accepted.data_timestamp == stamp
+    assert accepted.quality is Quality.high
+    assert hub.source_rejections()[domain] == {"count": 0, "reasons": {}}
+    assert hub.source_rejection_observations()["events"] == []
+
+
+@pytest.mark.parametrize("domain", ["indices", "quotes"])
+@pytest.mark.parametrize("unknown_clock", [False, True])
+def test_rejection_observation_keeps_minimal_original_clocks(clock, domain, unknown_clock):
+    hub = qh.QuoteHub(None, 1, stale_after=10)
+    now = clock["now"].astimezone(timezone.utc)
+    current = accept(hub, domain, now - timedelta(seconds=1))
+    observed = quote(current.symbol, now - timedelta(seconds=3), current.market, 99)
+    observed.received_at = now - timedelta(milliseconds=200)
+    if unknown_clock:
+        observed.data_timestamp = None
+    accept(hub, domain, now, observed)
+
+    assert hub.source_rejection_observations() == {
+        "scope": "hub_admission", "limit": 64, "events": [{
+            "domain": domain, "identity": {"symbol": current.symbol, "market": current.market},
+            "source": observed.source,
+            "observed_source_at": observed.data_timestamp.isoformat() if observed.data_timestamp else None,
+            "current_source_at": current.data_timestamp.isoformat(),
+            "received_at": observed.received_at.isoformat(),
+            "reason": "source_time_unknown_ignored" if unknown_clock else "source_time_regress_ignored",
+            "observed_at": now.isoformat(),
+        }],
+    }
+
+
+def test_rejection_observations_are_bounded_detached_and_survive_clean_admission(clock):
+    hub = qh.QuoteHub(None, 1, stale_after=10)
+    stamp = clock["now"].astimezone(timezone.utc) - timedelta(seconds=1)
+    current = accept(hub, "quotes", stamp)
+    for _ in range(66):
+        clock["now"] += timedelta(seconds=1)
+        observed = quote(current.symbol, stamp - timedelta(seconds=1), price=99)
+        observed.received_at = clock["now"].astimezone(timezone.utc)
+        accept(hub, "quotes", stamp, observed)
+    history = hub.source_rejection_observations()
+    assert len(history["events"]) == history["limit"] == 64
+    assert history["events"][0]["observed_at"] > history["events"][-1]["observed_at"]
+    assert history["events"][0]["current_source_at"] == stamp.isoformat()
+    detached = hub.source_rejection_observations()
+    detached["events"][0]["identity"]["symbol"] = "altered"
+    detached["events"].clear()
+    assert hub.source_rejection_observations() == history
+
+    accept(hub, "quotes", clock["now"].astimezone(timezone.utc))
+    assert hub.source_rejections()["quotes"]["count"] == 0
+    assert hub.source_rejection_observations() == history
+
+
+def test_rejection_details_only_reach_the_existing_maintenance_provider_endpoint(clock):
+    from app.api.routes.health import health, system_providers
+    from app.api.routes.market_envelope import meta_payload
+
+    hub = qh.QuoteHub(SimpleNamespace(name="offline-provider", realtime=True), 1)
+    stamp = clock["now"].astimezone(timezone.utc) - timedelta(seconds=1)
+    current = accept(hub, "quotes", stamp)
+    accept(hub, "quotes", stamp, quote(current.symbol, stamp - timedelta(seconds=1)))
+    request = SimpleNamespace(app=SimpleNamespace(state=SimpleNamespace()))
+    expected = hub.source_rejection_observations()
+    assert asyncio.run(system_providers(request, hub))["quote_source_rejections"] == expected
+    assert "quote_source_rejections" not in asyncio.run(health(request, hub))
+    assert "events" not in hub.source_rejections()
+    assert "quote_source_rejections" not in meta_payload(hub)
+
+
+@pytest.mark.parametrize("domain", ["indices", "quotes"])
+@pytest.mark.parametrize("quality", [Quality.low, Quality.stale, Quality.invalid])
+def test_provider_verdict_reaches_health_and_a_clean_packet_recovers(clock, domain, quality):
+    from app.api.routes.health import health
+
+    hub = qh.QuoteHub(SimpleNamespace(name="offline-provider"), 1, stale_after=10)
+    now = clock["now"].astimezone(timezone.utc)
+    current = accept(hub, domain, now - timedelta(seconds=2))
+    hub.last_success_refresh = now
+    for state in hub._domains.values():
+        state.last_success = now
+    state = hub._domains[domain]
+    state.requested, state.requested_symbols = True, (current.symbol,)
+    request = SimpleNamespace(app=SimpleNamespace(state=SimpleNamespace()))
+    assert asyncio.run(health(request, hub))["status"] == "ok"
+    observed = quote(current.symbol, now - timedelta(seconds=1), current.market, 101)
+    observed.quality, observed.quality_reasons = quality, ["provider_contract_degraded"]
+    accept(hub, domain, now, observed)
+
+    status = asyncio.run(health(request, hub))
+    assert status["status"] == "degraded"
+    diagnostics = status["refresh_domains"][domain]
+    assert diagnostics["freshness"]["state"] == "ready"
+    assert diagnostics["source_stale_count"] == int(quality is Quality.stale)
+    assert diagnostics["source_degraded_count"] == int(quality is Quality.low)
+    assert diagnostics["rejected_count"] == int(quality is Quality.invalid)
+
+    accept(hub, domain, now)
+    assert asyncio.run(health(request, hub))["status"] == "ok"
+
+
+@pytest.mark.parametrize("domain", ["indices", "quotes"])
+@pytest.mark.parametrize("quality", [Quality.low, Quality.medium])
+@pytest.mark.parametrize("has_reason", [True, False])
+def test_closed_tail_http_and_ws_copies_keep_aged_source_quality(clock, monkeypatch, domain, quality, has_reason):
+    from fastapi import FastAPI
+    from fastapi.testclient import TestClient
+    from app.api.deps import get_hub
+    from app.api.routes.market_quotes import router as market_router
+    from app.core.config import settings
+    from app.websocket.routes import router as ws_router
+
+    clock["now"] = datetime.fromisoformat("2026-10-13T14:59:56+08:00")
+    hub = qh.QuoteHub(SimpleNamespace(name="offline-provider", realtime=True), 1, stale_after=10)
+    symbol = "000001" if domain == "indices" else "600519"
+    requested = "sh000001" if domain == "indices" else symbol
+    stamp = clock["now"].astimezone(timezone.utc) - timedelta(seconds=1)
+    row = quote(symbol, stamp)
+    row.quality = quality
+    row.quality_reasons = ["provider_contract_degraded"] if has_reason else []
+    current = accept(hub, domain, stamp, row)
+    before = current.model_dump()
+    clock["now"] = datetime.fromisoformat("2026-10-13T15:00:20+08:00")
+    monkeypatch.setattr(settings, "auth_mode", "local")
+    monkeypatch.setattr(settings, "api_token", "")
+    app = FastAPI()
+    app.state.hub = hub
+    app.include_router(market_router, prefix="/api")
+    app.include_router(ws_router)
+    app.dependency_overrides[get_hub] = lambda: hub
+
+    with TestClient(app) as client:
+        response = client.get("/api/quotes", params={"symbols": requested})
+        assert response.status_code == 200
+        http_row = response.json()["data"][0]
+        with client.websocket_connect(f"/ws/quotes?symbols={requested}") as socket:
+            ws_row = socket.receive_json()["data"][0]
+    expected = (["provider_contract_degraded"] if has_reason else []) + [
+        f"source_quality_{quality.value}", "quote_age_exceeded",
+    ]
+    for visible in (http_row, ws_row):
+        assert visible["quality"] == "stale" and visible["quality_reasons"] == expected
+        assert visible["display_session"]["phase"] == "closed"
+        assert visible["display_session"]["expected_source_after"] == "2026-10-13T14:59:50+08:00"
+        assert visible["data_timestamp"] == current.model_dump(mode="json")["data_timestamp"]
+        assert visible["received_at"] == current.model_dump(mode="json")["received_at"]
+    assert current.model_dump() == before and not hub._subscribers
+
+
+@pytest.mark.parametrize("domain", ["indices", "quotes"])
+def test_high_quality_closed_tail_age_copy_keeps_its_existing_contract(clock, domain):
+    clock["now"] = datetime.fromisoformat("2026-10-13T14:59:56+08:00")
+    hub = qh.QuoteHub(None, 1, stale_after=10)
+    stamp = clock["now"].astimezone(timezone.utc) - timedelta(seconds=1)
+    current = accept(hub, domain, stamp)
+    clock["now"] = datetime.fromisoformat("2026-10-13T15:00:20+08:00")
+    visible = hub.get_indices()[0] if domain == "indices" else hub.get_quotes()[0]
+    assert visible.quality is Quality.stale and visible.quality_reasons == ["quote_age_exceeded"]
+    assert current.quality is Quality.high and current.quality_reasons == []
 
 
 @pytest.mark.parametrize("domain", ["indices", "quotes"])

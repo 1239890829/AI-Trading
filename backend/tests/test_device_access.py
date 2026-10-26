@@ -161,7 +161,7 @@ def test_default_deny_capability_policy(method,path,maintenance):
 
 class Hub:
     def __init__(self): self.queues = set()
-    def subscribe(self, symbols):
+    def subscribe(self, symbols, *, subscription_id=0):
         queue = asyncio.Queue()
         self.queues.add(queue)
         return queue

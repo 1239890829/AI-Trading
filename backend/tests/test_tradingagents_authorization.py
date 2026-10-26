@@ -28,6 +28,11 @@ NEW_OWNER = "73af8b2ff111c04b57deda0dc3432c678815d0c2cef0c884f6f022ac51ea1af5"
 # CI has a shallow checkout: verify the current reviewed bytes and common AST,
 # without fetching history or copying an obsolete provider into the repository.
 UNCHANGED_OWNER_AST = "e7a8c6c8fca612f13191f720940e47be30a30a9dfe9a7be75c3735e3ebd7efa1"
+HUB_OWNER_PATH = "services/quote_hub.py"
+HUB_OWNER_REVIEW = "packet_builder.owner_sources." + HUB_OWNER_PATH
+OLD_HUB_OWNER = "5d970afc948ea70e8d5ef3cc6a1efe68d2a3df09d3044fc1c92c405c864db0b0"
+# Independent whole-module pin for the reviewed quality/diagnostic/WS revision.
+NEW_HUB_OWNER = "c4386ec9cd0d10e0a5e3931e4ee0046cfff48b4b35e70ae99a3cccee8f5273ab"
 
 
 @pytest.fixture
@@ -146,6 +151,76 @@ def test_reviewed_owner_proof_matches_current_whole_module_and_unaffected_ast():
             node.body = [child for child in node.body if not isinstance(child, (ast.FunctionDef, ast.AsyncFunctionDef))
                          or child.name != "get_minute_line"]
     assert hashlib.sha256(ast.dump(tree, include_attributes=False).encode()).hexdigest() == UNCHANGED_OWNER_AST
+
+
+@pytest.fixture
+def native_hub_owner_env(native_owner_env, monkeypatch):
+    env = native_owner_env
+    current = env.driver.method_identity()
+    assert current["packet_builder"]["owner_sources"][HUB_OWNER_PATH] == NEW_HUB_OWNER
+    old = deepcopy(current)
+    old["packet_builder"]["owner_sources"][HUB_OWNER_PATH] = OLD_HUB_OWNER
+    _replace_original(env, monkeypatch, old)
+    env.current = current
+    return env
+
+
+def test_actual_hub_owner_transition_preserves_scope_unknowns_grants_and_environment(native_hub_owner_env, monkeypatch):
+    env = native_hub_owner_env
+    assert owner.inspect_rebind(**env.kwargs)["changed_sources"] == [HUB_OWNER_REVIEW]
+    with pytest.raises(owner.AuthorizationBlocked, match="exact_source_review_required"):
+        owner.prepare_rebind([], **env.kwargs)
+    assert (env.root / "authorization.json").read_bytes() == env.before
+    assert env.env_path.read_bytes() == env.env_before
+
+    plan = owner.prepare_rebind([HUB_OWNER_REVIEW], **env.kwargs)
+    applied = owner.apply_plan(plan["plan_id"], **env.kwargs)
+    assert applied["state"] == "applied" and applied["changed_sources"] == [HUB_OWNER_REVIEW]
+    assert applied["restart_required"] is True and applied["expiry_extended"] is False
+    assert applied["unknowns_added"] == applied["new_cooperative_grants"] == 0
+    expected = deepcopy(env.auth)
+    expected["method_identity"] = env.current
+    expected["unknown_usage_exception"]["method_sha256"] = research._digest(env.current)
+    installed = (env.root / "authorization.json").read_bytes()
+    assert json.loads(installed) == expected
+    assert expected["native_recovery_grants"] == env.auth["native_recovery_grants"]
+    assert len(expected["unknown_usage_exception"]["allowed_unknown_usage"]) == 7
+    _, span = owner._pin(env.env_before)
+    environment = env.env_path.read_bytes()
+    assert environment[:span[0]] == env.env_before[:span[0]]
+    assert environment[span[1]:] == env.env_before[span[1]:]
+    assert owner._pin(environment)[0] == hashlib.sha256(installed).hexdigest()
+    monkeypatch.setattr(settings, "tradingagents_research_authorization_digest", owner._pin(environment)[0])
+    assert owner.inspect_rebind(**env.kwargs)["already_bound"] is True
+
+
+@pytest.mark.parametrize("reverse", [False, True])
+def test_actual_hub_owner_transition_refuses_any_other_or_reversed_version(native_hub_owner_env, monkeypatch, reverse):
+    env = native_hub_owner_env
+    target = "f" * 64
+    if reverse:
+        old = deepcopy(env.current)
+        _replace_original(env, monkeypatch, old)
+        target = OLD_HUB_OWNER
+    env.native.packet_overrides["packet"] = lambda packet: packet["owner_sources"].update({HUB_OWNER_PATH: target})
+    with pytest.raises(owner.AuthorizationBlocked, match="unreviewed_packet_owner_changed"):
+        owner.inspect_rebind(**env.kwargs)
+    assert (env.root / "authorization.json").read_bytes() == env.before
+    assert env.env_path.read_bytes() == env.env_before
+
+
+def test_prepared_hub_owner_transition_rechecks_actual_module_bytes_before_cas(native_hub_owner_env, tmp_path, monkeypatch):
+    env, native = native_hub_owner_env, native_hub_owner_env.native.module
+    plan = owner.prepare_rebind([HUB_OWNER_REVIEW], **env.kwargs)
+    path = Path(native.__file__).resolve().parents[1] / HUB_OWNER_PATH
+    changed = tmp_path / "unreviewed_quote_hub.py"
+    changed.write_bytes(path.read_bytes() + b"\n# unreviewed future module revision\n")
+    original_sha = native.file_sha
+    monkeypatch.setattr(native, "file_sha", lambda value: original_sha(changed if Path(value) == path else value))
+    with pytest.raises(owner.AuthorizationBlocked, match="unreviewed_packet_owner_changed"):
+        owner.apply_plan(plan["plan_id"], **env.kwargs)
+    assert (env.root / "authorization.json").read_bytes() == env.before
+    assert env.env_path.read_bytes() == env.env_before
 
 
 def test_actual_native_identity_reviewed_owner_only_can_prepare_and_apply_without_scope_expansion(native_owner_env, monkeypatch):

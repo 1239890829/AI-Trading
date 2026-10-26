@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useRef, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import { getQuotes, wsBase } from "@/lib/api";
 import { wsSubprotocols } from "@/lib/ws-credential";
 import type { Quote } from "@/types/market";
@@ -74,7 +74,12 @@ export const STREAM_ABNORMAL: readonly StreamStatus[] = ["connecting", "polling"
 export function useQuoteStream(symbols: string[], opts?: { throttleMs?: number }) {
   const [owner] = useState(() => createQuoteFeed(symbols));
   useEffect(() => () => owner.dispose(), [owner]);
-  const [quotes, setQuotes] = useState<Record<string, Quote>>({});
+  // Keep explicit missing observations on the same throttled snapshot as prices.
+  // A bootstrap consumer must distinguish them from no frame received yet.
+  const [observations, setObservations] = useState<Record<string, Quote | null>>({});
+  const quotes = useMemo<Record<string, Quote>>(() => Object.fromEntries(
+    Object.entries(observations).filter((entry): entry is [string, Quote] => entry[1] !== null),
+  ), [observations]);
   const [status, setStatus] = useState<StreamStatus>("connecting");
   // 已发送的订阅 key（去重用，见下方订阅 effect 注释）
   const [sentKey, setSentKey] = useState("");
@@ -99,6 +104,7 @@ export function useQuoteStream(symbols: string[], opts?: { throttleMs?: number }
 
   const wsRef = useRef<WebSocket | null>(null);
   const connectedRef = useRef(false);
+  const subscriptionRef = useRef<{socket: WebSocket; id: number; key: string} | null>(null);
 
   useEffect(() => {
     if (!hasSymbols || connectedRef.current) return;
@@ -134,7 +140,9 @@ export function useQuoteStream(symbols: string[], opts?: { throttleMs?: number }
       if (list.length && !current.length) return;
       lastAppliedAt = Date.now();
       pending = null;
-      setQuotes(Object.fromEntries(current.map((q) => [q.symbol, q])));
+      const snapshot: Record<string, Quote | null> = Object.fromEntries([...selected].map(symbol => [symbol, null]));
+      for (const quote of current) snapshot[quote.symbol] = quote;
+      setObservations(snapshot);
     };
     const apply = (list: Quote[]) => {
       if (closed) return;
@@ -270,10 +278,12 @@ export function useQuoteStream(symbols: string[], opts?: { throttleMs?: number }
         return;
       }
       let ws: WebSocket;
+      const openingKey = [...symbolsRef.current].sort().join(",");
       try {
-        const url = `${wsBase()}/ws/quotes?symbols=${symbolsRef.current.join(",")}`;
+        const url = `${wsBase()}/ws/quotes?symbols=${symbolsRef.current.join(",")}&subscription_id=0`;
         ws = new WebSocket(url, protocols);
         wsRef.current = ws;
+        subscriptionRef.current = {socket: ws, id: 0, key: openingKey};
       } catch {
         startPolling();
         return;
@@ -293,7 +303,6 @@ export function useQuoteStream(symbols: string[], opts?: { throttleMs?: number }
       // 重连失败 3 次自然落入 REST 轮询兜底）
       let lastFrameAt = Date.now();
       let receivedMarketFrame = false;
-      const openingKey = [...symbolsRef.current].sort().join(",");
       ws.onopen = () => {
         if (closed || wsRef.current !== ws) return;
         clearOpenTimer();
@@ -315,10 +324,17 @@ export function useQuoteStream(symbols: string[], opts?: { throttleMs?: number }
       ws.onmessage = (ev) => {
         if (closed || wsRef.current !== ws) return;
         try {
-          const msg = JSON.parse(ev.data as string) as { type: string; data?: Quote[] };
+          const msg = JSON.parse(ev.data as string) as { type: string; data?: Quote[]; subscription_id?: unknown };
           // All three frames prove communication, including an explicit empty
           // full snapshot. Per-symbol stale/closed/missing facts stay in the feed.
           if ((msg.type === "snapshot" || msg.type === "quotes" || msg.type === "stale") && Array.isArray(msg.data)) {
+            const subscription = subscriptionRef.current;
+            if (!subscription || subscription.socket !== ws || subscription.key !== symbolsRef.current.join(",")) return;
+            // Legacy servers are authoritative only for this socket's initial
+            // URL set. After a subscribe, an unscoped frame cannot prove missing
+            // symbols or renew the market watchdog; normal reconnect/REST recovers.
+            const legacyInitial = msg.subscription_id === undefined && subscription.id === 0;
+            if (!legacyInitial && (!Number.isInteger(msg.subscription_id) || msg.subscription_id !== subscription.id)) return;
             const selected = new Set(symbolsRef.current);
             const currentData = msg.data.filter(quote => selected.has(quote.symbol));
             if (msg.data.length && !currentData.length) return;
@@ -369,6 +385,7 @@ export function useQuoteStream(symbols: string[], opts?: { throttleMs?: number }
       owner.clear();
       wsRef.current?.close();
       wsRef.current = null;
+      subscriptionRef.current = null;
     };
     // throttleMs 是**数字**（`opts?.throttleMs ?? 0`），依赖按值比较——
     // 调用方每次传内联对象也不会导致重连；真改动节流值时才重连，符合预期。
@@ -384,14 +401,18 @@ export function useQuoteStream(symbols: string[], opts?: { throttleMs?: number }
     const ws = wsRef.current;
     if (!connectedRef.current || !ws || ws.readyState !== WebSocket.OPEN) return;
     if (!key || key === sentKey) return;
+    const subscription = subscriptionRef.current;
+    if (!subscription || subscription.socket !== ws) return;
+    if (subscription.id >= 2 ** 31 - 1) {ws.close(); return;}
+    const nextId = subscription.id + 1;
+    subscriptionRef.current = {socket: ws, id: nextId, key};
     // setSentKey 必须留在 effect 同步路径：它与下方 ws.send 是同一次订阅切换的
     // 原子操作（渲染期做会把网络发送放进渲染、拆散两步的原子性）。
-    // eslint-disable-next-line react-hooks/set-state-in-effect
     setSentKey(key);
     try {
-      ws.send(JSON.stringify({ action: "subscribe", symbols: [...new Set(symbolsRef.current)] }));
-    } catch {}
+      ws.send(JSON.stringify({ action: "subscribe", symbols: [...new Set(symbolsRef.current)], subscription_id: nextId }));
+    } catch {ws.close();}
   }, [key, sentKey]);
 
-  return { quotes, status, quoteFeed: owner.feed };
+  return { quotes, observations, status, quoteFeed: owner.feed };
 }

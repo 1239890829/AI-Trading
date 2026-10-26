@@ -160,6 +160,32 @@ describe("index overlay historical display is separate from live eligibility", (
     expect(fetch).not.toHaveBeenCalled();
   });
 
+  it.each(["15:00:00", "15:00:59", "15:01:00"])("收盘从%s承接合法历史尾点，不放行空分钟、失败或未知日历", clock => {
+    const at = new Date(`2026-10-13T${clock}+08:00`);
+    const quote: Quote = {...closedQuote(), data_timestamp: points[0].ts,
+      display_session: {...session, trade_date: "2026-10-13", as_of: at.toISOString(),
+        expected_source_date: "2026-10-13", expected_source_after: "2026-10-13T14:59:50+08:00"}};
+    const before = JSON.stringify(quote);
+    expect(buildIndexOverlay(points, quote, "2026-10-13", at)).toMatchObject({mode: "historical", points});
+    expect(() => buildIndexOverlay([], quote, "2026-10-13", at)).toThrow();
+    expect(() => buildIndexOverlay(points, {...quote, quality_reasons: ["market_closed", "refresh_failed"]}, "2026-10-13", at)).toThrow();
+    expect(() => buildIndexOverlay(points, {...quote, display_session: {...quote.display_session!, trade_day_result: null}}, "2026-10-13", at)).toThrow();
+    expect(JSON.stringify(quote)).toBe(before);
+    expect(quote.quality).toBe("stale");
+  });
+
+  it.each(["quote_before_tail", "minutes_before_tail", "forming_before_tail", "missing_tail_contract"])("收盘历史%s不冒充完整收盘叠加", kind => {
+    for (const clock of ["15:00:00", "15:01:00"]) {
+      const at = new Date(`2026-10-13T${clock}+08:00`);
+      const quote: Quote = {...closedQuote(), data_timestamp: kind === "quote_before_tail" ? "2026-10-13T10:00:00+08:00" : points[0].ts,
+        display_session: {...session, trade_date: "2026-10-13", as_of: at.toISOString(), expected_source_date: "2026-10-13",
+          expected_source_after: kind === "missing_tail_contract" ? null : "2026-10-13T14:59:50+08:00"}};
+      const input: MinutePoint[] = kind === "minutes_before_tail" ? [{...points[0], ts: "2026-10-13T10:00:00+08:00"}]
+        : kind === "forming_before_tail" ? [{...points[0], time_label: "interval_end", observation_ts: "2026-10-13T14:59:40+08:00"}] : points;
+      expect(() => buildIndexOverlay(input, quote, "2026-10-13", at)).toThrow();
+    }
+  });
+
   it.each(["high", "medium"] as const)("%s keeps the existing trusted-live path", quality => {
     expect(buildIndexOverlay(points, {...closedQuote(), quality, quality_reasons: [], display_session: undefined}, "2026-10-13", now).mode).toBe("live");
   });
@@ -183,7 +209,7 @@ describe("index overlay historical display is separate from live eligibility", (
     for (const quality_reasons of [[], ["off_session"]]) expect(() => buildIndexOverlay(points, {...closedQuote(), quality_reasons}, "2026-10-13", now)).toThrow(/基准/);
   });
 
-  it.each(["09:15:00", "09:25:00", "09:30:00", "11:30:00", "13:00:00", "15:00:00"])("a frozen 08:08 closed context cannot authorize a new read at %s", clock => {
+  it.each(["09:15:00", "09:25:00", "09:30:00", "11:30:00", "13:00:00", "15:00:00", "15:00:59", "15:01:00"])("a frozen 08:08 closed context cannot authorize a new read at %s", clock => {
     expect(() => buildIndexOverlay(points, closedQuote(), "2026-10-13", new Date(`2026-10-14T${clock}+08:00`))).toThrow(/基准/);
   });
 

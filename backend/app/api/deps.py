@@ -28,11 +28,11 @@ def normalize_symbol(symbol: str) -> str:
     return sym
 
 
-def get_hub(request: Request) -> QuoteHub:
+async def get_hub(request: Request) -> QuoteHub:
     return request.app.state.hub
 
 
-def get_watchlist_repository(request: Request) -> WatchlistRepository:
+async def get_watchlist_repository(request: Request) -> WatchlistRepository:
     return request.app.state.watchlist_repo
 
 

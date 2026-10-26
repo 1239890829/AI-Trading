@@ -14,7 +14,7 @@ from app.core.auth import (
     ws_token_subprotocol,
 )
 from app.core.config import settings
-from app.services.quote_hub import offer
+from app.services.quote_hub import MAX_SUBSCRIPTION_ID, offer, validate_subscription_id
 from app.core.device_access import (
     AccessError, WS_RECHECK_SECONDS, WS_TICKET_PREFIX, get_device_store,
 )
@@ -26,6 +26,7 @@ router = APIRouter()
 #: 刻意不用 4401 之类的应用自定义码——1008 的语义（"你违反了服务端策略"）
 #: 在此恰好准确，且被所有浏览器识别为"正常关闭、别当异常重试"。
 _WS_CLOSE_UNAUTHORIZED = 1008
+_WS_CLOSE_BAD_SUBSCRIPTION = 1008
 
 
 def _now_iso() -> str:
@@ -66,10 +67,10 @@ def _report_task_failures(fut: "asyncio.Future") -> None:
 async def quotes_ws(websocket: WebSocket):
     """行情推送。**入站凭据在 `accept()` 之前校验**（R22 统一鉴权边界）。
 
-    - 连接参数 ?symbols=600519,000001 指定订阅，缺省为全部自选
-    - 服务端消息：{"type":"snapshot"|"quotes"|"stale","seq":n,"ts":iso,"data":[Quote...]}
+    - 连接参数 ?symbols=600519,000001 指定订阅，缺省为全部自选；subscription_id 缺省0。
+    - 服务端消息：{"type":"snapshot"|"quotes"|"stale","subscription_id":n,"seq":n,"ts":iso,"data":[Quote...]}
     - 客户端消息：{"action":"ping"} → {"type":"pong"}；
-      {"action":"subscribe","symbols":[...]} 更新本连接的订阅集（会回推新快照）
+      {"action":"subscribe","symbols":[...],"subscription_id":n} 更新本连接的订阅集（会回推新快照）
 
     ⚠️ **为什么校验必须在 `accept()` 之前**：`accept()` 一发出，升级就算完成，
     对端的 `onopen` 已经触发——此时再 `close()`，客户端看到的形态是
@@ -104,17 +105,30 @@ async def quotes_ws(websocket: WebSocket):
         await websocket.close(code=_WS_CLOSE_UNAUTHORIZED)
         return
 
+    raw_subscription_id = websocket.query_params.get("subscription_id")
+    try:
+        if raw_subscription_id is not None and (
+            not raw_subscription_id or len(raw_subscription_id) > len(str(MAX_SUBSCRIPTION_ID))
+            or not raw_subscription_id.isascii() or not raw_subscription_id.isdecimal()
+        ):
+            raise ValueError("invalid subscription_id")
+        subscription_id = validate_subscription_id(int(raw_subscription_id) if raw_subscription_id is not None else 0)
+    except ValueError:
+        await websocket.close(code=_WS_CLOSE_BAD_SUBSCRIPTION)
+        return
+
     await websocket.accept(subprotocol=offered)
     hub = websocket.app.state.hub
 
     raw = websocket.query_params.get("symbols", "")
     symbols: set[str] | None = {s.strip() for s in raw.split(",") if s.strip()} or None
 
-    slot: list[asyncio.Queue] = [hub.subscribe(symbols)]
+    slot: list[asyncio.Queue] = [hub.subscribe(symbols, subscription_id=subscription_id)]
 
     def _snapshot() -> dict:
         return {
             "type": "snapshot",
+            "subscription_id": subscription_id,
             "seq": hub.next_seq(),
             "ts": _now_iso(),
             "data": [q.model_dump(mode="json") for q in hub.get_quotes(sorted(symbols) if symbols else None)],
@@ -131,8 +145,10 @@ async def quotes_ws(websocket: WebSocket):
         hub.unsubscribe(slot[0])
         return
 
+    invalid_subscription = False
+
     async def reader() -> None:
-        nonlocal symbols
+        nonlocal symbols, subscription_id, invalid_subscription
         while True:
             raw_msg = await websocket.receive_text()
             try:
@@ -147,14 +163,20 @@ async def quotes_ws(websocket: WebSocket):
                 # 连接健康（实测盘中自选列表/详情/图全部冻结在初始值）。
                 offer(slot[0], {"type": "pong", "ts": _now_iso()})
             elif msg.get("action") == "subscribe":
+                try:
+                    new_subscription_id = validate_subscription_id(msg.get("subscription_id", 0))
+                except ValueError:
+                    invalid_subscription = True
+                    return
                 new_syms = msg.get("symbols") or []
                 symbols = {s for s in new_syms if s} or None
+                subscription_id = new_subscription_id
                 # ⚠️ 2026-09-01 P0：原地更新订阅集（hub.update_symbols）——
                 # 旧实现 unsubscribe + subscribe 换新队列，而 writer 正 parked
                 # 在旧队列的 get() 上：换队列后 writer 永远等在孤儿队列，推送
                 # 静默死亡（前端 32s 心跳自愈重连才见一次快照 = 用户体感
                 # "约 30 秒才更新一次"的根因）。同一队列终身复用，竞态不存在。
-                hub.update_symbols(slot[0], symbols)
+                hub.update_symbols(slot[0], symbols, subscription_id=subscription_id)
                 offer(slot[0], _snapshot())
 
     async def writer() -> None:
@@ -189,10 +211,10 @@ async def quotes_ws(websocket: WebSocket):
         # 内存无限增长；若 hub 恰好不推送（休市 / 无匹配标的），连 writer 都不会醒，
         # 这对任务就永久挂着。且 reader 的异常从未被取用。
         done, _ = await asyncio.wait(tasks, return_when=asyncio.FIRST_COMPLETED)
-        if access_task is not None and access_task in done:
+        if invalid_subscription or (access_task is not None and access_task in done):
             writer_task.cancel()
             await asyncio.gather(writer_task, return_exceptions=True)
-            await websocket.close(code=_WS_CLOSE_UNAUTHORIZED)
+            await websocket.close(code=_WS_CLOSE_BAD_SUBSCRIPTION if invalid_subscription else _WS_CLOSE_UNAUTHORIZED)
     finally:
         for t in tasks:
             t.cancel()
