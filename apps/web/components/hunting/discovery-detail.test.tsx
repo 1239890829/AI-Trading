@@ -138,12 +138,62 @@ describe("发现成分是原右栏只读参考", () => {
     await screen.findByRole("link", {name: "正式成分"});
     expect(getSinaBoardConstituents).toHaveBeenCalledWith(board.code, "industry", {signal: expect.any(AbortSignal)});
     expect(getConceptDetail).not.toHaveBeenCalled();
-    expect(screen.getByText(/新浪板块同源成分 · 全部净流入与主力口径分开/)).toBeTruthy();
-    expect(screen.getByText(/读取完成：.*不等于来源时刻或历史归属/)).toBeTruthy();
-    expect(screen.getByText(/覆盖 1 \/ 1 只 · 本次来源范围已读全/)).toBeTruthy();
-    expect(screen.getByText(/来源限制：部分报价缺失/)).toBeTruthy();
+    expect(screen.getByText("新浪资金 · 行业")).toBeTruthy();
+    expect(screen.getByTitle("接收记录：2026-10-25 10:00（北京）；不代表来源时刻")).toBeTruthy();
+    expect(screen.getByText(/覆盖 1\/1 · 已读全/)).toBeTruthy();
+    expect(screen.getByText(/来源提示：部分报价缺失/)).toBeTruthy();
     expect(screen.queryByText(/主力净额/)).toBeNull();
     expect(screen.getByTitle("成分报价涨跌幅，来源时刻未核").textContent).toMatch(/0\.00%/);
+  });
+
+  it("keeps the112-member facts compact while every raw limitation remains in one native disclosure",async()=>{
+    const sourceReasons=["来源未给本次榜单或成员的源日/秒钟；接收钟不代表源钟","netamount为全部净额；r0_net为新浪主力口径，均非东财f62","quote_price_nonpositive:9","net_inflow_ratio_missing:9"];
+    const dayReasons=["opendate仅为原日线日期，不是源秒钟或成分生效时刻","日线日期不是接收当日，不能据此断言本次成员同日"];
+    vi.mocked(getSinaBoardConstituents).mockResolvedValue(boardMembers(board.code,{received_at:"2026-10-27T00:08:00+08:00",coverage:{total:112,returned:112,complete:true},degraded:sourceReasons,
+      daily_snapshot:{available:true,source_day:"2026-10-26",degraded:dayReasons},rows:Array.from({length:112},(_,i)=>({symbol:String(600000+i),name:`成分记录${i}`,price:i<9?null:10,change_pct:i<9?null:i,net_inflow_yi:null,r0_net_yi:null,source_as_of:null}))}));
+    render(<DiscoveryDetail target={board} selection={selection} onClose={vi.fn()}/>);
+    await screen.findByRole("list",{name:"已读取成分"});
+    const facts=screen.getByTestId("sina-member-facts"),details=screen.getByTestId("sina-source-details") as HTMLDetailsElement;
+    expect(within(facts).getByText("覆盖 112/112 · 已读全")).toBeTruthy();
+    expect(within(facts).getByText("源钟未提供")).toBeTruthy();
+    expect(within(facts).getByText("接收 10-27 00:08")).toBeTruthy();
+    expect(within(facts).getByText("日线 2026-10-26 · 跨日，非本次成员同日证明")).toBeTruthy();
+    expect(within(facts).getByText("缺报价 9/112只 · 缺数保留成员")).toBeTruthy();
+    const ratio=screen.getByText("来源提示：净流入占比缺失 9只");
+    expect(ratio.closest("details")).toBeNull();
+    for(const reason of [...sourceReasons,...dayReasons])expect(within(details).getByText(reason)).toBeTruthy();
+    expect(details.open).toBe(false);
+    const firstScreen=screen.getByTestId("discovery-detail").cloneNode(true) as HTMLElement;
+    firstScreen.querySelector("details")!.remove();
+    expect(firstScreen.textContent).not.toMatch(/quote_price_nonpositive|net_inflow_ratio_missing|netamount|r0_net|opendate/);
+    expect(screen.getByTestId("discovery-detail").querySelector('[class*="overflow"]')).toBeNull();
+    fireEvent.click(within(details).getByText(/口径与来源详情/));
+    expect(details.open).toBe(true);
+    expect(getSinaBoardConstituents).toHaveBeenCalledTimes(1);
+    expect(within(screen.getByRole("list",{name:"已读取成分"})).getAllByRole("listitem")).toHaveLength(30);
+  });
+
+  it("leaves unknown source failures visible and does not shorten their negative condition",async()=>{
+    const limitation="来源回包仍未核实，不可视为完整结果";
+    vi.mocked(getSinaBoardConstituents).mockResolvedValue(boardMembers(board.code,{degraded:[limitation]}));
+    render(<DiscoveryDetail target={board} selection={selection} onClose={vi.fn()}/>);
+    await screen.findByRole("link",{name:"正式成分"});
+    const notice=screen.getByText(`来源提示：${limitation}`);
+    expect(notice.closest("details")).toBeNull();
+    expect(notice.getAttribute("role")).toBe("status");
+    expect(within(screen.getByTestId("sina-source-details")).getByText(limitation)).toBeTruthy();
+  });
+
+  it("keeps refresh failure outside the disclosure and labels retained Sina coverage as the previous read",async()=>{
+    vi.mocked(getSinaBoardConstituents).mockResolvedValueOnce(boardMembers(board.code)).mockRejectedValueOnce(new Error("offline"));
+    render(<DiscoveryDetail target={board} selection={selection} onClose={vi.fn()}/>);
+    await screen.findByRole("link",{name:"正式成分"});
+    fireEvent(document,new Event("visibilitychange"));
+    const alert=await screen.findByRole("alert");
+    expect(alert.textContent).toContain("成分刷新失败，保留上次读取；当前状态未核");
+    expect(alert.closest("details")).toBeNull();
+    expect(screen.getByText("上次覆盖 1/1 · 已读全")).toBeTruthy();
+    expect(screen.getByRole("link",{name:"正式成分"})).toBeTruthy();
   });
 
   it("keeps legacy Eastmoney funds Top20 explicitly separate from complete membership",async()=>{
@@ -180,8 +230,8 @@ describe("发现成分是原右栏只读参考", () => {
     const row=(await screen.findByRole("link",{name:"双口径成员"})).closest("li")!;
     expect(row.textContent).toContain("全部净流入 1.25亿");
     expect(row.textContent).toContain("主力 -0.50亿");
-    expect(screen.getByText(/日线核对日期 2026-10-26，不作为盘中来源时刻/)).toBeTruthy();
-    expect(screen.getByText(/成分来源：新浪资金 · 来源时刻 未提供/)).toBeTruthy();
+    expect(screen.getByText(/日线 2026-10-26 · 非来源时刻/)).toBeTruthy();
+    expect(screen.getByText(/源钟未提供/)).toBeTruthy();
     expect(screen.queryByText(/主力净额/)).toBeNull();
   });
 
@@ -191,8 +241,10 @@ describe("发现成分是原右栏只读参考", () => {
     expect(await screen.findByRole("link",{name:"正式成分"})).toBeTruthy();
     const status=screen.getByText(/日线核对未完成/);
     expect(status.getAttribute("role")).toBe("status");
-    expect(status.textContent).toContain(`日线限制：新浪日线读取或校验失败；${reason}。`);
-    expect(screen.getByText(/覆盖 1 \/ 1 只 · 本次来源范围已读全/)).toBeTruthy();
+    expect(status.closest("details")).toBeNull();
+    expect(screen.getByText(/来源提示：新浪日线读取或校验失败/)).toBeTruthy();
+    expect(within(screen.getByTestId("sina-source-details")).getByText(reason)).toBeTruthy();
+    expect(screen.getByText(/覆盖 1\/1 · 已读全/)).toBeTruthy();
     expect(screen.queryByText(/日线核对日期未提供|成分来源暂不可用/)).toBeNull();
     expect(screen.getByRole("list",{name:"已读取成分"})).toBeTruthy();
   });
@@ -201,8 +253,9 @@ describe("发现成分是原右栏只读参考", () => {
     vi.mocked(getSinaBoardConstituents).mockResolvedValue(boardMembers(board.code,{daily_snapshot:{available:true,source_day:"2026-10-23",degraded:["日线日期不是接收当日，不能据此断言本次成员同日"]}}));
     render(<DiscoveryDetail target={board} selection={selection} onClose={vi.fn()}/>);
     await screen.findByRole("link",{name:"正式成分"});
-    expect(screen.getByText(/日线核对日期 2026-10-23，不作为盘中来源时刻/).textContent).toContain("日线日期不是接收当日，不能据此断言本次成员同日");
-    expect(screen.getByText(/成分来源：新浪资金 · 来源时刻 未提供/)).toBeTruthy();
+    expect(screen.getByText("日线 2026-10-23 · 跨日，非本次成员同日证明").closest("details")).toBeNull();
+    expect(within(screen.getByTestId("sina-source-details")).getByText("日线日期不是接收当日，不能据此断言本次成员同日")).toBeTruthy();
+    expect(screen.getByText(/源钟未提供/)).toBeTruthy();
   });
 
   it("rejects another source even when it echoes the exact category and kind",async()=>{
@@ -220,11 +273,12 @@ describe("发现成分是原右栏只读参考", () => {
   });
 
   it("does not promote unavailable Sina rows into a current member list and can retry", async () => {
-    vi.mocked(getSinaBoardConstituents).mockResolvedValueOnce(boardMembers(board.code, {available: false, reason: "窗口未取得"}))
+    vi.mocked(getSinaBoardConstituents).mockResolvedValueOnce(boardMembers(board.code, {available: false, name: "", reason: "窗口未取得"}))
       .mockResolvedValueOnce(boardMembers(board.code));
     render(<DiscoveryDetail target={board} selection={selection} onClose={vi.fn()}/>);
     expect((await screen.findByRole("alert")).textContent).toContain("成分来源暂不可用。窗口未取得");
     expect(screen.queryByRole("link", {name: "正式成分"})).toBeNull();
+    expect(screen.queryByText(/成员来源名称/)).toBeNull();
     expect(screen.queryByRole("searchbox")).toBeNull();
     fireEvent.click(screen.getByRole("button", {name: "重试成分读取"}));
     await screen.findByRole("link", {name: "正式成分"});
@@ -237,8 +291,8 @@ describe("发现成分是原右栏只读参考", () => {
     render(<DiscoveryDetail target={board} selection={selection} onClose={vi.fn()}/>);
     expect(await screen.findByRole("link",{name:"可核成分"})).toBeTruthy();
     expect(screen.getByTitle("涨跌幅未提供")).toBeTruthy();
-    expect(screen.getByText(/覆盖 1 \/ 1 只 · 本次来源范围已读全/)).toBeTruthy();
-    expect(screen.getByText(/成分已读，个股报价未取得/)).toBeTruthy();
+    expect(screen.getByText(/覆盖 1\/1 · 已读全/)).toBeTruthy();
+    expect(screen.getByText("来源提示：成分已读，个股报价未取得").closest("details")).toBeNull();
     expect(screen.queryByText(/主力净额|个股资金 0|成分来源暂不可用/)).toBeNull();
   });
 
@@ -246,15 +300,15 @@ describe("发现成分是原右栏只读参考", () => {
     vi.mocked(getSinaBoardConstituents).mockResolvedValue(boardMembers(board.code,{coverage:{total:3,returned:1,complete:false}}));
     render(<DiscoveryDetail target={board} selection={selection} onClose={vi.fn()}/>);
     await screen.findByRole("link",{name:"正式成分"});
-    expect(screen.getByText(/覆盖 1 \/ 3 只 · 来源覆盖尚不完整/)).toBeTruthy();
-    expect(screen.queryByText(/本次来源范围已读全/)).toBeNull();
+    expect(screen.getByText(/覆盖 1\/3 · 尚不完整/)).toBeTruthy();
+    expect(screen.queryByText(/已读全/)).toBeNull();
   });
 
   it("distinguishes a confirmed empty source from failure or unknown membership",async()=>{
     vi.mocked(getSinaBoardConstituents).mockResolvedValue(boardMembers(board.code,{coverage:{total:0,returned:0,complete:true},rows:[]}));
     render(<DiscoveryDetail target={board} selection={selection} onClose={vi.fn()}/>);
     await screen.findByText(/本次返回没有成员记录/);
-    expect(screen.getByText(/覆盖 0 \/ 0 只 · 本次来源范围已读全/)).toBeTruthy();
+    expect(screen.getByText(/覆盖 0\/0 · 已读全/)).toBeTruthy();
     expect(screen.queryByRole("alert")).toBeNull();
   });
 
@@ -277,7 +331,7 @@ describe("发现成分是原右栏只读参考", () => {
     vi.mocked(getSinaBoardConstituents).mockResolvedValue(boardMembers(board.code,{name:"来源现名"}));
     render(<DiscoveryDetail target={board} selection={selection} onClose={vi.fn()}/>);
     await screen.findByRole("link",{name:"正式成分"});
-    expect(screen.getByText(`成员来源名称：来源现名；代码保持 ${board.code}。`)).toBeTruthy();
+    expect(screen.getByText(`成员来源名称：来源现名；代码保持 ${board.code}。`).closest("details")).toBeNull();
     expect(screen.getByRole("heading",{name:"行业甲"})).toBeTruthy();
   });
 
