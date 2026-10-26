@@ -55,6 +55,8 @@ export function DiscoveryMethodDetail({row, date, search = "", onClose}: {
     <button className="quiet-action" type="button" onClick={onClose}>返回方法目录</button></section>;
   const metadata = discoveryMetadata(row);
   const candidate = row.catalog_kind === "reference" ? row.candidate : null;
+  const existingHref = candidate?.adoption?.state === "reuse_existing" && typeof candidate.adoption.href === "string"
+    && /^\/(?:hunting|market)(?:\?|$)/.test(candidate.adoption.href) ? candidate.adoption.href : null;
   const supportsRuns = methodSupportsRuns(row);
   return <section data-testid="discovery-method-detail" aria-label="方法规则" className="min-w-0 space-y-4">
     <header className="flex flex-wrap items-start justify-between gap-2">
@@ -71,7 +73,8 @@ export function DiscoveryMethodDetail({row, date, search = "", onClose}: {
     {notice && favorites.keys.length >= 40 && <p role="status" className="text-xs text-amber-800 dark:text-amber-300">{notice}</p>}
     <p className="text-xs leading-relaxed text-zinc-600 dark:text-zinc-400">{metadata.summary}</p>
     {candidate ? <>
-      <p role="status" className="text-xs text-amber-800 dark:text-amber-300">{manual ? "仅手动价格研究；不参与正式入选、通知或模拟。" : "来源候选，不可运行；关注不会启用方法或生成选股。"}</p>
+      <p role="status" className="text-xs text-amber-800 dark:text-amber-300">{manual ? "仅手动价格研究；不参与正式入选、通知或模拟。" : existingHref ? "复用已有能力；从下方入口读取真实结果，此目录不重复运行。" : "来源候选，不可运行；关注不会启用方法或生成选股。"}</p>
+      {existingHref && <Link className="quiet-action inline-flex" href={existingHref}>打开已有{row.name}能力</Link>}
       <p className="break-words text-[11px] text-zinc-600 dark:text-zinc-400">来源 {candidate.source_label} · 原版本 {candidate.source_version} · {candidate.source_code}</p>
       <RuleList title="原规则" items={candidate.criteria} empty="来源未给出可核规则。"/>
       {manual && <RuleList title="本系统v1明确口径" items={[candidate.execution!.definition, candidate.execution!.definition_supplement]} empty="补充口径未登记。"/>}

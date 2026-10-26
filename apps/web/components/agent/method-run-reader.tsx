@@ -10,11 +10,31 @@ import {IncrementalSentinel} from "@/components/ui/incremental-sentinel";
 import {useIncremental} from "@/hooks/use-incremental";
 import {useResource} from "@/hooks/use-resource";
 import {dateTimeTextBJ, fmt} from "@/lib/format";
-import {getStrategyMethodRun, getStrategyMethodRuns, isReferenceResearchMethod, type ReferenceResearchRowState, type SavedMethodKey, type SavedMethodRunDetail, type SavedMethodRunIdentity, type SavedMethodRunIndex, type SavedStrategyRunItem} from "@/lib/api/picks";
+import {getStrategyMethodRun, getStrategyMethodRuns, isReferenceResearchMethod, type ReferenceResearchRowState, type SavedMethodKey, type SavedMethodRunDetail, type SavedMethodRunIdentity, type SavedMethodRunIndex, type SavedStrategyRunItem, type SavedStrategyRun} from "@/lib/api/picks";
 import {identityLocation, methodRunDay, methodRunIdentity, methodRunKey, methodRunMatches, methodRunUrl, readMethodRunLocation, type MethodRowFilter, type MethodRunLocation} from "./method-run-location";
 
 const ROW_LABELS: Record<MethodRowFilter, string> = {selected:"原入选",rejected:"拒绝存档",candidate:"候选",unknown:"待核",all:"全部存档行",matched:"符合条件",not_matched:"未符合"};
 const DECISION_LABELS: Record<string,string> = {passed:"通过",ranked:"已排序",rejected:"未过",blocked:"阻断",unknown:"待核",included:"纳入候选",excluded:"排除",matched:"符合条件",not_matched:"未符合"};
+
+export function ReferenceOutcomeSummary({outcomes}: {outcomes: SavedStrategyRun["outcomes"]}) {
+  const [horizon, setHorizon] = useState("1");
+  if (!outcomes) return <p className="text-[11px] text-zinc-600 dark:text-zinc-400">此旧批未保存参考价表现；不将缺项当作零胜率。</p>;
+  const row = outcomes.horizons?.[horizon];
+  const consistent = row && [row.signals,row.matured,row.immature,row.missing,row.wins].every(n=>Number.isSafeInteger(n) && n>=0)
+    && row.matured+row.immature+row.missing===row.signals && row.wins<=row.matured
+    && (row.matured===0 ? row.positive_rate===null && row.mean_return_pct===null && row.stress_mean_return_pct===null
+      : Number.isFinite(row.positive_rate) && Math.abs(row.positive_rate!-row.wins/row.matured)<1e-9
+        && Number.isFinite(row.mean_return_pct) && Number.isFinite(row.stress_mean_return_pct));
+  const pct = (value: number | null) => value===null ? "未测得" : `${value.toFixed(2)}%`;
+  return <section aria-label="战法参考价表现" className="space-y-2 border-b border-zinc-200 pb-3 text-xs dark:border-zinc-700">
+    <div className="flex flex-wrap items-center justify-between gap-2"><h4 className="font-medium">历史参考价表现</h4><div role="group" aria-label="参考价观察周期" className="flex gap-1">{["1","3","5"].map(day=><button key={day} type="button" data-action="quiet" aria-pressed={horizon===day} onClick={()=>setHorizon(day)}>D{day}</button>)}</div></div>
+    {consistent ? <><div className="flex flex-wrap items-center gap-2"><span>上涨 {row.wins} / 可测 {row.matured}</span><strong className="tabular-nums">{row.positive_rate===null?"未测得":`${(row.positive_rate*100).toFixed(1)}%`}</strong>
+      {row.positive_rate!==null && <meter className="min-w-16 flex-1 accent-red-500" min={0} max={1} value={row.positive_rate} aria-label={`D${horizon}参考价上涨比例`}/>}</div>
+      <dl className="grid grid-cols-2 gap-x-3 gap-y-2 sm:grid-cols-4"><div><dt className="text-zinc-600 dark:text-zinc-400">平均变化</dt><dd className="tabular-nums">{pct(row.mean_return_pct)}</dd></div><div><dt className="text-zinc-600 dark:text-zinc-400">{outcomes.cost_bps}bps压力后</dt><dd className="tabular-nums">{pct(row.stress_mean_return_pct)}</dd></div><div><dt className="text-zinc-600 dark:text-zinc-400">未成熟</dt><dd className="tabular-nums">{row.immature}</dd></div><div><dt className="text-zinc-600 dark:text-zinc-400">已成熟缺价</dt><dd className="tabular-nums">{row.missing}</dd></div></dl>
+      <p className="text-[11px] text-zinc-600 dark:text-zinc-400">原信号 {row.signals}；{outcomes.window_start}–{outcomes.signal_through}，结果截至{outcomes.outcome_through}。复权收盘参考，不是成交胜率。</p></>
+      : <p role="alert" className="text-amber-800 dark:text-amber-300">保存统计的分母未能核对，不显示比例或均值。</p>}
+  </section>;
+}
 const GAP_LABELS: Record<string,string> = {sub_scores:"原六维分项",dimension_evidence:"原分项证据状态",scoring_trace:"原合成贡献",vetoes:"原否决项",min_pick_score:"原入选分线",score_shortfall:"原距分线差额",source_clock:"原来源时间"};
 const finite = (value: unknown): value is number => typeof value === "number" && Number.isFinite(value);
 const stringList = (value: unknown): string[] => Array.isArray(value) ? value.filter((item): item is string => typeof item === "string" && !!item.trim()) : [];
@@ -108,14 +128,19 @@ function RunDiagnostics({row, identity}: {row: SavedStrategyRunItem; identity: s
 }
 
 function ResearchConditions({row}: {row: SavedStrategyRunItem}) {
-  const labels: Record<string,string> = {input_valid:"输入有效性",previous_dif_lte_dea:"前日DIF≤DEA",dif_above_dea:"当日DIF>DEA",close_above_ma5:"收盘>MA5",ma5_above_ma10:"MA5>MA10",ma10_above_ma20:"MA10>MA20",ma5_cross_ma10_or_ma20:"MA5上穿MA10或MA20",volume_above_previous5:"成交量>前5日均量"};
-  const metricLabels: Record<string,string> = {close:"复权收盘",volume:"成交量（来源单位）",dif:"DIF",dea:"DEA",previous_dif:"前日DIF",previous_dea:"前日DEA",volume_ma5_previous:"前5日均量",volume_ratio5:"相对前5日量比",ma5:"MA5",ma10:"MA10",ma20:"MA20",previous_ma5:"前日MA5",previous_ma10:"前日MA10",previous_ma20:"前日MA20"};
+  const labels: Record<string,string> = {input_valid:"输入有效性",previous_dif_lte_dea:"前日DIF≤DEA",dif_above_dea:"当日DIF>DEA",close_above_ma5:"收盘>MA5",ma5_above_ma10:"MA5>MA10",ma10_above_ma20:"MA10>MA20",ma5_cross_ma10_or_ma20:"MA5上穿MA10或MA20",volume_above_previous5:"成交量>前5日均量",
+    rsi14_crosses_above_30:"RSI14上穿30",close_above_previous:"收盘上升",ma20_not_declining:"MA20不下降",close_at_or_above_ma20:"守住MA20",distance_to_ma10_or_ma20_lte_2pct:"距支撑≤2%",volume_below_previous5_08:"量比<0.8",
+    close_breaks_previous20_high:"突破前20日高点",turnover_above_previous5_15:"成交额放大≥1.5倍",prior_l1_12_to_30_sessions:"12–30日前有L1",volume_above_previous60_3:"量/前60日均量≥3",lower_wick_above_twice_body:"非零实体，下影≥2倍",close_in_upper_half:"收在区间上半部",
+    first_body_above_5pct:"先有≥5%大阳",three_small_bearish_bodies:"随后三根小阴",three_volume_contracts:"三日均量收缩",three_lows_hold_first_open:"守住阳线开盘",confirmed_double_bottom:"已确认双底",close_above_ma5_10_20:"站上三条均线",distance_to_low20_lte_15pct:"距20日低点≤15%",volume_above_previous5_15:"量比≥1.5",
+    return60_lte_minus20pct:"60日跌幅≥20%",positive_body_above_3pct:"阳线实体≥3%",volume_above_previous20_2:"量/前20日均量≥2",first_in_previous20:"20日首次信号",box20_amplitude_lte_15pct:"箱体振幅≤15%",close_in_lower20pct:"处箱体下20%",positive_body:"当日阳线"};
+  const metricLabels: Record<string,string> = {close:"复权收盘",volume:"成交量（来源单位）",dif:"DIF",dea:"DEA",previous_dif:"前日DIF",previous_dea:"前日DEA",volume_ma5_previous:"前5日均量",volume_ratio5:"相对前5日量比",ma5:"MA5",ma10:"MA10",ma20:"MA20",previous_ma5:"前日MA5",previous_ma10:"前日MA10",previous_ma20:"前日MA20",
+    previous_rsi14:"前日RSI14",rsi14:"RSI14",support_distance:"支撑距离（比例）",turnover_ratio5:"成交额/前5均额",previous_high20:"前20日复权高点",volume_ratio60:"量/前60日均量",lower_wick:"复权下影长度",candle_body:"复权实体长度",distance_to_low20:"距20日低点（比例）",return60:"60日变化（比例）",volume_ratio20:"量/前20日均量",box_top:"复权箱顶",box_bottom:"复权箱底",box_amplitude:"箱体振幅（比例）",box_position:"箱体位置（比例）"};
   const text = (value: unknown) => finite(value) ? fmt(value, 4) : typeof value === "string" && value.trim() ? value : "未提供";
   const conditions = Array.isArray(row.conditions) ? row.conditions : [];
   return <section className="mt-2 space-y-2" aria-label={`${row.name || row.symbol}研究条件`}>
     {conditions.length ? <ul className="flex flex-wrap gap-1.5">{conditions.map((condition,index) => <li key={`${condition.key}:${index}`} className="rounded border border-zinc-200 px-2 py-1 text-[11px] dark:border-zinc-700">
       <span className="font-medium">{condition.label || labels[condition.key] || condition.key}</span><span className="ml-1">{condition.met === true ? "符合" : condition.met === false ? "未符合" : "未知"}</span>
-      <span className="block text-zinc-600 dark:text-zinc-400">原值 {text(condition.value)} · 对照 {text(condition.reference)}</span>
+      {(condition.value!==null || condition.reference!==null) && <span className="block text-zinc-600 dark:text-zinc-400">原值 {text(condition.value)} · 对照 {text(condition.reference)}</span>}
     </li>)}</ul> : <p className="text-xs text-zinc-600 dark:text-zinc-400">逐项条件未记录，不补成通过。</p>}
     {row.metrics && <ResearchDisclosure label="本股指标原值" identity={row.item_id || row.symbol}><FactCards label="保存的研究指标" items={Object.entries(row.metrics).map(([label,value]) => ({label:metricLabels[label] || label,value:finite(value) ? String(value) : text(value)}))}/></ResearchDisclosure>}
   </section>;
@@ -184,6 +209,7 @@ function RunRows({run, identity, location, onLocation}: {run: SavedMethodRunDeta
     {run.version_state==="legacy" && <p className="text-xs text-zinc-600 dark:text-zinc-400">旧档没有完整方法或来源版本，只按原内容指纹绑定；不补写现行版本。</p>}
     {run.version_state==="mismatch" && <p role="status" className="text-xs text-amber-700 dark:text-amber-300">原入选版本与所保存内容不一致；可读原记录，不作为已核入选版本。</p>}
     <dl className="grid grid-cols-2 gap-x-4 gap-y-2 border-b border-zinc-200 pb-3 text-xs sm:grid-cols-4 dark:border-zinc-700">{counts.map(([label,value])=><div key={String(label)}><dt className="text-zinc-600 dark:text-zinc-400">{label}</dt><dd className="mt-0.5 font-medium tabular-nums">{countText(value)}</dd></div>)}</dl>
+    {research && <ReferenceOutcomeSummary outcomes={run.outcomes}/>}
     <p className="text-[11px] text-zinc-600 dark:text-zinc-400">{research ? "仅手动价格研究：指标可评价不是风控资格；匹配不构成入选、通知、模拟或收益证据。" : identity.method==="daily_picks"?"入选与拒绝均为原保存结果，不代表执行通过。":"各阶段按行计数，可能包含同股/同题材多行，不是递减漏斗。"} 运行、健康窗口与离线核验分别读取。</p>
     {research && <p className="text-[11px] text-zinc-600 dark:text-zinc-400">来源已完成日 {run.source_completed_date || "未记录"}；源首次发布时间 {run.source_as_of ? dateTimeTextBJ(run.source_as_of) : "未知"}；筛选界限 {run.source_cutoff_at ? dateTimeTextBJ(run.source_cutoff_at) : "未记录"}（不是发布时间）。</p>}
     {research && <p className="text-[11px] text-zinc-600 dark:text-zinc-400">比较采用保存原值；条件小数显示4位，完整精度见本股指标原值。</p>}

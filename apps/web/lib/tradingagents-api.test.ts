@@ -15,6 +15,21 @@ const completed = () => ({...fixture(), latest: {symbol: "002121", version: 1, s
   reports: Object.fromEntries(["market_report", "sentiment_report", "news_report", "fundamentals_report", "investment_plan", "trader_investment_plan", "final_trade_decision"].map(key => [key, "原报告保留，尚待复核"]))}});
 beforeEach(() => {vi.clearAllMocks();});
 
+it("accepts a completed report reuse only with the exact succeeded task result", async () => {
+  const task = {id: "task", status: "succeeded", result_run_id: "2".repeat(32), reused_identical_selection: true};
+  vi.mocked(getJson).mockResolvedValue({data: {...completed(), task}, meta: {}} as never);
+  expect((await getTradingAgentsResearch("002121")).task?.reused_identical_selection).toBe(true);
+});
+
+it.each([
+  {status: "running", result_run_id: "2".repeat(32), reused_identical_selection: true},
+  {status: "succeeded", result_run_id: null, reused_identical_selection: true},
+  {status: "succeeded", result_run_id: "2".repeat(32), reused_identical_selection: "true"},
+])("rejects an unsupported report reuse claim %j", async task => {
+  vi.mocked(getJson).mockResolvedValue({data: {...completed(), task}, meta: {}} as never);
+  await expect(getTradingAgentsResearch("002121")).rejects.toThrow("身份或报告不完整");
+});
+
 it("reads exactly the declared ordinary route without task submission or arbitrary fields", async () => {
   vi.mocked(getJson).mockResolvedValue({data: fixture(), meta: {}} as never);
   expect((await getTradingAgentsResearch("002121")).symbol).toBe("002121");

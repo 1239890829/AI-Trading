@@ -2,7 +2,7 @@
 
 import {useId, useState, type KeyboardEvent, type ReactNode} from "react";
 import type {TradingAgentsResearchReport, TradingAgentsRoleName, TradingAgentsRoleOutput} from "@/lib/api/agent";
-import {originalRating, researchExcerpt, researchField} from "@/lib/research-presentation";
+import {originalRating, researchLead, researchPassages, researchSentences, researchTable} from "@/lib/research-presentation";
 import styles from "./tradingagents-role-reader.module.css";
 
 const GROUPS = ["四位分析", "多空辩论", "交易规划", "风险复核"];
@@ -26,12 +26,84 @@ function shortSource(role: TradingAgentsRoleOutput): string {
   const raw = ["executive_summary","rationale","narrative","reasoning","content","investment_thesis"]
     .map(key=>role.fields[key]).find(value=>typeof value==="string" && value.trim());
   if (typeof raw!=="string") return "原答未提供可独立摘录的短句，请核对本角色原文。";
-  return researchExcerpt(researchField(raw,"Executive Summary") ?? raw, 210);
+  return researchLead(raw, 220);
 }
 function valueText(value: unknown): string | null {
   if (typeof value==="string" && value.trim() && value.length<=100) return value;
   if (typeof value==="number" && Number.isFinite(value)) return String(value);
   return null;
+}
+
+const FIELD_LABELS: Record<string,string> = {...LABELS,executive_summary:"结论",investment_thesis:"研究论据",rationale:"判断依据",narrative:"分析原文",reasoning:"推理依据",content:"分析原文",strategic_actions:"后续核验",price_target:"原研究目标价",overall_score:"原情绪分值",tool_calls:"工具提案"};
+function OriginalValue({value}: {value: unknown}) {
+  if (value === null || value === undefined) return <span>原答未提供</span>;
+  if (Array.isArray(value)) return value.length ? <ul>{value.map((item,index)=><li key={index}><OriginalValue value={item}/></li>)}</ul> : <span>原答无条目</span>;
+  if (typeof value === "object") return <dl>{Object.entries(value).map(([key,item])=><div key={key}><dt>{FIELD_LABELS[key] ?? key}</dt><dd><OriginalValue value={item}/></dd></div>)}</dl>;
+  return <p>{String(value)}</p>;
+}
+
+function indexKeyboard(event: KeyboardEvent<HTMLButtonElement>, index: number, count: number, select: (index: number)=>void) {
+  if(event.nativeEvent.isComposing || event.keyCode===229 || event.altKey || event.ctrlKey || event.metaKey || !["ArrowLeft","ArrowRight","Home","End"].includes(event.key))return;
+  event.preventDefault();event.stopPropagation();
+  const next=event.key==="Home"?0:event.key==="End"?count-1:(index+(event.key==="ArrowRight"?1:-1)+count)%count;
+  select(next);event.currentTarget.parentElement?.querySelectorAll<HTMLButtonElement>("button")[next]?.focus({preventScroll:true});
+}
+
+function SourceSentenceFocus({text}: {text: string}) {
+  const id=useId();
+  const [selected,setSelected]=useState(0);
+  const [whole,setWhole]=useState(false);
+  const sentences=researchSentences(text);
+  if(sentences.length<2)return <><p className={styles.sourceNote}>句界无法安全细分，保留本段完整条件。</p><p className={styles.passageText}>{text}</p></>;
+  return <section className={styles.sentenceFocus} aria-label="长段原句定位">
+    <div className={styles.passageHeader}><strong>原文定位 · 节选</strong><span>第 {selected+1} / {sentences.length} 句</span></div>
+    <p className={styles.sourceNote}>同时保留相邻原句；不能将节选当作独立结论。</p>
+    <div className={styles.passageIndex} aria-label="选择原文句子">{sentences.map((sentence,index)=><button key={index} type="button" aria-label={`定位原文第${index+1}句`} title={sentence.trim()} aria-pressed={selected===index} aria-controls={`${id}-focus`} onClick={()=>setSelected(index)} onKeyDown={event=>indexKeyboard(event,index,sentences.length,setSelected)}>{index+1}</button>)}</div>
+    <dl id={`${id}-focus`} className={styles.sentenceContext}>{[selected-1,selected,selected+1].filter(index=>index>=0 && index<sentences.length).map(index=><div key={index} data-focused={index===selected || undefined}><dt>{index===selected?"定位原句":index<selected?"上句原文":"下句原文"}</dt><dd>{sentences[index].trim()}</dd></div>)}</dl>
+    <button type="button" className={styles.wholePassage} aria-expanded={whole} aria-controls={`${id}-whole`} onClick={()=>setWhole(value=>!value)}>{whole?"收起本段整文":"核对本段完整原文"}</button>
+    {whole && <p id={`${id}-whole`} className={styles.passageText} aria-label="本段完整原文">{text}</p>}
+  </section>;
+}
+
+function SourceTableFocus({text, table}: {text: string; table: NonNullable<ReturnType<typeof researchTable>>}) {
+  const id=useId();
+  const [selected,setSelected]=useState(0);
+  const [whole,setWhole]=useState(false);
+  const row=table.rows[selected] ?? table.rows[0];
+  return <section className={styles.tableFocus} aria-label="原文表格定位">
+    <div className={styles.passageHeader}><strong>原表逐行核对</strong><span>{selected+1} / {table.rows.length} 行</span></div>
+    <label htmlFor={`${id}-row`}>{table.headers[0]}</label><select id={`${id}-row`} value={selected} onChange={event=>setSelected(Number(event.target.value))}>{table.rows.map((item,index)=><option value={index} key={index}>{item[0] || `原表第${index+1}行`}</option>)}</select>
+    <dl className={styles.tableValues}>{table.headers.slice(1).map((header,index)=><div key={index} data-last={index===table.headers.length-2 || undefined}><dt>{header}</dt><dd>{row[index+1]}</dd></div>)}</dl>
+    <p className={styles.sourceNote}>保留原表数值与限制；单位和口径以完整原报告为准。</p>
+    <button type="button" className={styles.wholePassage} aria-expanded={whole} aria-controls={`${id}-whole`} onClick={()=>setWhole(value=>!value)}>{whole?"收起本段整文":"核对本段完整原文"}</button>
+    {whole && <p id={`${id}-whole`} className={styles.passageText} aria-label="本段完整原文">{text}</p>}
+  </section>;
+}
+
+function SourcePassageFocus({text}: {text: string}) {
+  const table=researchTable(text);
+  return table?<SourceTableFocus text={text} table={table}/>:<SourceSentenceFocus text={text}/>;
+}
+
+/** A source index and one whole paragraph; it never labels extracted text as verified evidence. */
+export function ResearchPassageReader({raw, label}: {raw: string; label: string}) {
+  const id=useId();
+  const passages=researchPassages(raw);
+  const [selected,setSelected]=useState(0);
+  const current=passages[selected] ?? passages[0];
+  if (!current) return <p>原答没有可读取正文。</p>;
+  return <div className={styles.passages} aria-label={`${label}原文索引`}>
+    <div className={styles.passageHeader}><strong>逐条核对原文</strong><span>{current.index+1} / {passages.length} 段 · 保留整段条件</span></div>
+    <div className={styles.passageIndex} aria-label="选择原文段落">{passages.map(item=><button key={item.index} type="button" aria-label={`原文第${item.index+1}段：${item.title}`} aria-pressed={current.index===item.index} aria-controls={`${id}-passage`} title={item.title} onClick={()=>setSelected(item.index)} onKeyDown={event=>indexKeyboard(event,item.index,passages.length,setSelected)}>{item.index+1}</button>)}</div>
+    <div id={`${id}-passage`}>{current.text.length>500?<SourcePassageFocus key={current.index} text={current.text}/>:<p className={styles.passageText}>{current.text}</p>}</div>
+    <div className={styles.passageActions}><button type="button" disabled={current.index===0} onClick={()=>setSelected(current.index-1)}>上一段</button><span>原答观点，尚待核验</span><button type="button" disabled={current.index===passages.length-1} onClick={()=>setSelected(current.index+1)}>下一段</button></div>
+  </div>;
+}
+
+function roleBody(output: TradingAgentsRoleOutput): string {
+  const body=["investment_thesis","content","narrative","rationale","reasoning","strategic_actions"]
+    .flatMap(key=>typeof output.fields[key]==="string" && (output.fields[key] as string).trim() ? [output.fields[key] as string] : []).join("\n\n");
+  return body || (typeof output.fields.executive_summary==="string" ? output.fields.executive_summary : "");
 }
 
 /** Explore the twelve saved voices. No synthetic verdict, score or model call. */
@@ -40,16 +112,22 @@ export function TradingAgentsRoleReader({report, originals}: {report: TradingAge
   const [selected,setSelected]=useState<TradingAgentsRoleName>("Portfolio Manager");
   const [raw,setRaw]=useState(false);
   const [showReports,setShowReports]=useState(false);
+  const [evidence,setEvidence]=useState(false);
+  const [compare,setCompare]=useState(false);
   const available=ROLES.filter(role=>report.roles?.some(output=>output.role===role.name));
   if (!available.length) return <>{originals}</>;
   const current=available.find(role=>role.name===selected) ?? available.at(-1)!;
   const output=report.roles!.find(role=>role.role===current.name)!;
+  const body=roleBody(output);
+  const passageCount=researchPassages(body).length;
   const peers=available.filter(role=>role.group===current.group);
+  const counterpart=available.find(role=>role.name===(current.name==="Bull Researcher"?"Bear Researcher":current.name==="Bear Researcher"?"Bull Researcher":current.name==="Aggressive Analyst"?"Conservative Analyst":current.name==="Conservative Analyst"?"Aggressive Analyst":"Bull Researcher"));
+  const peerOutput=counterpart && report.roles!.find(role=>role.role===counterpart.name);
   const rating=originalRating(report.reports.final_trade_decision);
   const facts=Object.entries(LABELS).flatMap(([key,label])=>{
     const value=valueText(output.fields[key]);return value===null?[]:[{key,label,value}];
   });
-  function select(name: TradingAgentsRoleName) {setSelected(name);setRaw(false);}
+  function select(name: TradingAgentsRoleName) {setSelected(name);setRaw(false);setEvidence(false);setCompare(false);}
   function keyboard(event: KeyboardEvent<HTMLButtonElement>,index:number) {
     if (event.nativeEvent.isComposing || event.keyCode===229 || event.altKey || event.ctrlKey || event.metaKey || !["ArrowLeft","ArrowRight","Home","End"].includes(event.key)) return;
     event.preventDefault();event.stopPropagation();
@@ -66,10 +144,12 @@ export function TradingAgentsRoleReader({report, originals}: {report: TradingAge
       </button>)}</div>
       <section className={styles.content} role="tabpanel" id={`${id}-content`} aria-labelledby={`${id}-${current.name.replaceAll(" ","-")}`} tabIndex={0}>
         <div className={styles.identity}><h4>{current.label}</h4><span>原答摘录</span></div>
-        <p>{shortSource(output)}</p>
+        <div className={styles.lenses} aria-label="阅读方式"><button type="button" aria-pressed={!evidence} onClick={()=>setEvidence(false)}>结论速读</button><button type="button" disabled={!passageCount} aria-pressed={evidence} onClick={()=>setEvidence(true)}>原文论据 <small>{passageCount}</small></button>{peerOutput && <button type="button" aria-pressed={compare} onClick={()=>setCompare(value=>!value)}>{compare?"结束角色对照":`对照${counterpart.label}`}</button>}</div>
+        {evidence ? <ResearchPassageReader key={`${current.name}:evidence`} raw={body} label={current.label}/> : <p className={styles.lead}>{shortSource(output)}</p>}
         {facts.length>0 && <dl className={styles.facts}>{facts.map(fact=><div key={fact.key}><dt>{fact.label}</dt><dd>{fact.value}</dd></div>)}</dl>}
+        {compare && peerOutput && <section aria-label={`${current.label}与${counterpart.label}角色对照`} className={styles.comparison}><div><strong>{current.label}</strong><p>{shortSource(output)}</p></div><div><strong>{counterpart.label}</strong><p>{shortSource(peerOutput)}</p><button type="button" onClick={()=>{select(counterpart.name);setEvidence(true);}}>转看{counterpart.label}论据</button></div></section>}
         <div className={styles.tools}><span>研究意见不等于账户指令</span><button type="button" aria-expanded={raw} aria-controls={`${id}-original`} onClick={()=>setRaw(value=>!value)}>{raw?"收起原答":`核对${current.label}原答`}</button></div>
-        {raw && <section id={`${id}-original`} aria-label={`${current.label}角色原答`} className={styles.original}><pre>{JSON.stringify(output.fields,null,2)}</pre><small>调用 {output.call_id} · 原答 {output.output_sha256}</small></section>}
+        {raw && <section id={`${id}-original`} aria-label={`${current.label}角色原答`} className={styles.original}><dl>{Object.entries(output.fields).map(([key,value])=><div key={key}><dt>{FIELD_LABELS[key] ?? key}</dt><dd><OriginalValue value={value}/></dd></div>)}</dl><small>调用 {output.call_id} · 原答 {output.output_sha256}</small></section>}
       </section>
     </>}
   </section>;

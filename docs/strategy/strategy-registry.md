@@ -286,7 +286,7 @@ P2-33② 执行时点双口径（日线反选/盘中正选——条件化翻结�
 
 ## 2026-10-26 三项可运行价格研究与逐项取舍
 
-以下为自有明确v1，不冒称参考工程已公开完整算法。仅维护权限显式运行；普通设备读取原保存批次/日期/内容哈希，沿既有方法右栏展示条件。三项共享一次本机仓扫描，完整前缀初始化EMA，不截60根改变seed；缺档/坏值/源质量警告保留unknown。相同源文件、质量报告、规则定义及日期复用原批，文件原子保存，不向原选股事实表注入研究记录。
+下表保留最初三项自有v1定义及历史检验，不冒称参考工程已公开完整算法。当前手动研究已按本节后续修订扩充为十一项；研究运行与正式策略效果准入分开。仅维护权限显式运行；普通设备读取原保存批次/日期/内容哈希，沿既有方法右栏展示条件。共享一次本机仓扫描，完整前缀初始化EMA，不截60根改变seed；缺档/坏值/源质量警告保留unknown。相同源文件、质量报告、规则定义及日期复用原批，文件原子保存，不向原选股事实表注入研究记录。
 
 | 方法 | 冻结定义 | 已启用范围 |
 |---|---|---|
@@ -310,8 +310,17 @@ P2-33② 执行时点双口径（日线反选/盘中正选——条件化翻结�
 |---|---|
 | hot_theme、dragon_head、event_driven、balanced_alpha、capital_heat、emotion_cycle | 复用正式题材/梯队/公司事件/原六维/资金/市场情绪，保留各自来源；无新增重复算法或虚构阈值 |
 | macd_golden_cross、ma_bullish、ma_golden_cross | 上表三项实际规则、保存和读者，不再只有目录 |
-| low_rebound_quality、limit_up_pullback、rsi_reversal、shrink_pullback、box_first_board_breakout、volume_breakout、l1_l2_volume_resonance、one_yang_three_yin、w_bottom_breakout、bottom_volume、box_oscillation | 低位/容差/确认/量能分母或形态算法不全；不把样例反推出阈值，已有指标或反例继续复用 |
+| rsi_reversal、shrink_pullback、volume_breakout、l1_l2_volume_resonance、one_yang_three_yin、w_bottom_breakout、bottom_volume、box_oscillation | 采用另行披露的本系统研究定义；本节后续修订允许真实筛选与描述统计，不追认为TSP原版或正式策略 |
+| low_rebound_quality、limit_up_pullback、box_first_board_breakout | 仍缺估值/历史涨停身份或明确复合规则；逐项说明缺项，不能以9.5%涨幅代理正式涨停身份 |
 | blue_chip_income、dual_low、momentum_quality、growth_quality、quality_value、low_volatility_quality、expectation_repricing | 估值/财务/原预期的点时版本或组合定义不足；不能用日价冒充；双低两指标本身未明确 |
 | limit_up_gene、auction_breakout_2to3 | 前者缺历史板块/ST涨停身份与回踩定义，后者另缺真实09:25竞价分母及放大量定义；错过窗口不回填 |
 | etf_cold_rebound、etf_bottom_volume、etf_momentum_rotation、etf_trend_takeoff | 本机可用A股仓无相应ETF范围及完整轮换/退出合同，不混入A股 |
 | wave_theory、chan_theory | 确认规则/变体与未来重绘边界不明、成本高；本轮不采用，不生成自动买卖点 |
+
+### 2026-10-26 研究筛选与效果统计修订
+
+用户明确要求先运行战法看候选及表现。缺生产准入本身不能阻止隔离研究；缺真实规则、数据或资产域则说明具体缺项。TSP运行接口返回固定示例名单，不能将其当完整真实算法。新增八项规则的窗口、阈值、版本及补充假设由原登记册的`execution`给出，运行前冻结，不按收益调整；原三项版本与条件不改。
+
+十一项共用一次扫描，并在同一已完成源日截点计算近60个源交易日的D1/D3/D5参考价表现。信号只用当时及此前数据，后续报价只在该批所选日截点内用于结果观察；上涨占比、平均涨跌幅和35bps压力均值分别呈现。信号总数、可测、未成熟、成熟缺价独立保留，成熟缺价不能塞入未成熟分母。重叠股票日、当前复权版本、幸存身份与非点时资料限制仍在；这些是历史重算研究，不是原真实入选或模拟成交胜率。
+
+旧三法存档保持原件可读，未记录新统计便显示未记录；新十一法批次同源同版复用。研究结果不自动改正式策略权重、入选、通知、TradingAgents研究资格、模拟或风控。

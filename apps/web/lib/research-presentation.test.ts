@@ -1,5 +1,47 @@
 import {describe, expect, it} from "vitest";
-import {originalRating, researchExcerpt, researchField, researchPlainText} from "./research-presentation";
+import {originalRating, researchExcerpt, researchField, researchLead, researchPassages, researchPlainText, researchSentences, researchTable} from "./research-presentation";
+
+describe("whole-passage research reading",()=>{
+  it("keeps a later qualifying sentence with the opening claim",()=>{
+    expect(researchLead("收入已有增长。回款仍未核实，不能证明盈利质量改善。\n\n其余原文。")).toBe("收入已有增长。回款仍未核实，不能证明盈利质量改善。");
+    expect(researchLead("## 增长背景\n\n收入增长。回款尚未核实。")).toBe("增长背景\n\n收入增长。回款尚未核实。");
+  });
+  it("indexes every whole paragraph without converting a clipped index label to a conclusion",()=>{
+    const first="收入已有增长，"+"但原材料并不完整，".repeat(30)+"不能推断现金回款。";
+    const raw=`${first}\n\n第二段保留反证。<PEER_REFS>{"citations":[]}</PEER_REFS>`;
+    const passages=researchPassages(raw);
+    expect(passages).toHaveLength(2);expect(passages[0].text).toBe(first);
+    expect(passages[0].title).toHaveLength(27);expect(passages[1].text).toBe("第二段保留反证。");
+    expect(researchLead(raw)).toBe("本段条件较多，请点“原文论据”逐条核对。");
+    expect(raw).toContain("PEER_REFS");
+  });
+  it("keeps empty inputs and a bodyless original heading honest",()=>{
+    expect(researchPassages("<PEER_REFS>{}")).toEqual([]);
+    expect(researchLead("\n ")).toBe("原报告没有可摘录正文。");
+    expect(researchLead("原文只有标题")).toBe("原文只有标题");
+  });
+  it("locates whole mixed-language sentences without splitting decimals, dates, abbreviations or citations",()=>{
+    const raw="2026.10.23的观察仍待核实。Dr. Wang quoted U.S. revenue of 3.14. Cash flow remains unknown. [source: A. B.] 不能认定风险消失。";
+    const parts=researchSentences(raw);
+    expect(parts.join("")).toBe(raw);
+    expect(parts).toHaveLength(3);
+    expect(parts[1]).toContain("Dr. Wang quoted U.S. revenue of 3.14.");
+    expect(parts[2]).toContain("[source: A. B.] 不能认定风险消失。");
+    expect(researchSentences("公司表示“收入增长。现金仍未知。”但不等于已经收款。其后还需核实。 ").join("")).toBe("公司表示“收入增长。现金仍未知。”但不等于已经收款。其后还需核实。 ");
+  });
+  it("keeps an uncertain or unbalanced citation as a whole passage",()=>{
+    const raw="收入增长。[原文引用含未闭合限制。不能确认现金流。";
+    expect(researchSentences(raw)).toEqual([raw]);
+    expect(researchSentences("No sentence boundary is safely available")).toEqual(["No sentence boundary is safely available"]);
+  });
+  it("reads only complete rectangular source tables without changing missing values or adding units",()=>{
+    const raw="| 报告期 | 收入 | 原限制 |\n|---|---:|---|\n| 2026上半年 | 21.1576 | 回款尚未核实 |\n| 订单 | — | 规模未知 |";
+    expect(researchTable(raw)).toEqual({headers:["报告期","收入","原限制"],rows:[["2026上半年","21.1576","回款尚未核实"],["订单","—","规模未知"]]});
+    expect(researchTable(raw.replace("| 订单 | — | 规模未知 |","| 订单 | — |"))).toBeNull();
+    expect(researchTable(raw+"\n非表格条件不能被丢掉。" )).toBeNull();
+    expect(researchTable(raw.replace("规模未知","规模\\|未知"))).toBeNull();
+  });
+});
 
 describe("saved research excerpts", () => {
   it("extracts declared fields and removes peer metadata from excerpts without changing the source", () => {

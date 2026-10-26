@@ -77,7 +77,7 @@ def test_stock_set_identity_cancellation_copy_and_date(monkeypatch):
 def test_board_cold_reads_coalesce_cancel_and_retry(monkeypatch, kind):
     monkeypatch.setattr(bf, "_MINUTE_CACHE", TTLCache("board-minute-test", 60, maxsize=4))
     monkeypatch.setattr(bf, "_MEMBERS_CACHE", TTLCache("board-member-test", 60, maxsize=8))
-    monkeypatch.setattr(bf, "_DRILL_READS", {}, raising=False)
+    monkeypatch.setattr(bf, "_inflight_source_reads", None, raising=False)
     now = [datetime(2026, 10, 13, 10, 0, tzinfo=BJ_TZ)]
     monkeypatch.setattr(bf, "beijing_now", lambda: now[0])
     monkeypatch.setattr(bf, "_load_dayk_store", lambda: {"BK0001": {"bars": [["2026-10-12", 3, None]]}})

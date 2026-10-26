@@ -17,7 +17,14 @@ from app.picks import watcher as wt
 
 
 @pytest.fixture()
-def board_state(monkeypatch, tmp_path):
+def snapshot_retry_clock(monkeypatch):
+    clock = [0.0]
+    monkeypatch.setattr(bf, "monotonic", lambda: clock[0])
+    return clock
+
+
+@pytest.fixture()
+def board_state(monkeypatch, tmp_path, snapshot_retry_clock):
     now = datetime(2026, 9, 7, 15, 6, tzinfo=BJ_TZ)
     monkeypatch.setattr(bf, "beijing_now", lambda: now)
     monkeypatch.setattr(bf, "_is_trade_day", lambda _: True)
@@ -25,6 +32,8 @@ def board_state(monkeypatch, tmp_path):
     monkeypatch.setattr(bf, "_DAYK_STORE", tmp_path / "daykline.json")
     monkeypatch.setattr(bf, "_mem_memo", {"daily": (None, {}), "dayk": (None, {})})
     monkeypatch.setattr(bf, "_MEMBERS_CACHE", TTLCache("fixture-members", 60, maxsize=8))
+    monkeypatch.setattr(bf, "_inflight_source_reads", None, raising=False)
+    monkeypatch.setattr(bf, "_SNAPSHOT_LIST_RETRY", TTLCache("fixture-snapshot-retry", 3600, maxsize=4))
 
     async def gather(coros, limit=5):
         return await asyncio.gather(*coros, return_exceptions=True)
@@ -82,11 +91,12 @@ def _snapshot_sources(monkeypatch, *, unavailable=(), missing_members=(), missin
     return calls, faults
 
 
-def test_failed_snapshot_is_not_saved_as_completed_and_recovers(monkeypatch, board_state):
+def test_failed_snapshot_is_not_saved_as_completed_and_recovers(monkeypatch, board_state, snapshot_retry_clock):
     calls, faults = _snapshot_sources(monkeypatch, unavailable=("concept", "industry"))
     assert asyncio.run(bf.snapshot_daily_if_closed()) is False
     assert not (board_state / "daily.json").exists()
     faults["list"].clear()
+    snapshot_retry_clock[0] = 300
     assert asyncio.run(bf.snapshot_daily_if_closed()) is True
     saved = json.loads((board_state / "daily.json").read_text())["days"]["2026-09-07"]
     assert set(saved["ranks"]) == {"concept", "industry"}
@@ -94,11 +104,53 @@ def test_failed_snapshot_is_not_saved_as_completed_and_recovers(monkeypatch, boa
     assert calls[("list", "concept")] == calls[("list", "industry")] == 2
 
 
-def test_partial_snapshot_preserves_completed_kind_and_repairs_missing_kind(monkeypatch, board_state):
+def test_closed_failed_lists_back_off_without_success_or_empty_archive(monkeypatch, board_state, snapshot_retry_clock):
+    calls, _ = _snapshot_sources(monkeypatch, unavailable=("concept", "industry"))
+    for attempt, when in enumerate((0, 300, 900, 2100, 3900), 1):
+        snapshot_retry_clock[0] = when
+        assert asyncio.run(bf.snapshot_daily_if_closed()) is False
+        assert calls[("list", "concept")] == calls[("list", "industry")] == attempt
+        snapshot_retry_clock[0] += 60
+        assert asyncio.run(bf.snapshot_daily_if_closed()) is False
+        assert calls[("list", "concept")] == calls[("list", "industry")] == attempt
+        assert not (board_state / "daily.json").exists()
+
+
+def test_snapshot_failure_backoff_does_not_hide_fresh_visible_source_recovery(monkeypatch, board_state, snapshot_retry_clock):
+    calls, failed = [], [True]
+    class HTTP:
+        async def get(self, url, params, headers):
+            calls.append(url)
+            if failed[0]:
+                raise ValueError("fixture outage")
+            return SimpleNamespace(raise_for_status=lambda: None, json=lambda: {"data": {"total": 1, "diff": [
+                {"f12": "BK0001", "f14": "fixture", "f62": 3e8}]}})
+    monkeypatch.setattr(bf, "_HTTP", HTTP())
+    monkeypatch.setattr(bf, "_in_session", lambda: False)
+    monkeypatch.setattr(bf, "_LIST_EOD_CACHE", TTLCache("fixture-board-list", 300, maxsize=4))
+    async def members(code):
+        return {"available": True, "rows": [{"symbol": "600001", "name": "fixture", "main_net_yi": 3.0, "main_net_ratio": None}]}
+    async def dayk(code):
+        return [["2026-09-07", 3.0, None]]
+    monkeypatch.setattr(bf, "get_board_members", members)
+    monkeypatch.setattr(bf, "_fetch_board_dayk", dayk)
+    assert asyncio.run(bf.snapshot_daily_if_closed()) is False
+    assert len(calls) == 4
+    failed[0] = False
+    snapshot_retry_clock[0] = 60
+    rows, _ = asyncio.run(bf.get_board_list("concept", fresh=True))
+    assert rows[0]["main_net_yi"] == 3 and len(calls) == 5
+    assert asyncio.run(bf.snapshot_daily_if_closed()) is True
+    saved = json.loads((board_state / "daily.json").read_text())["days"]["2026-09-07"]
+    assert set(saved["boards"]) == {"concept"} and len(calls) == 5
+
+
+def test_partial_snapshot_preserves_completed_kind_and_repairs_missing_kind(monkeypatch, board_state, snapshot_retry_clock):
     calls, faults = _snapshot_sources(monkeypatch, unavailable=("industry",))
     assert asyncio.run(bf.snapshot_daily_if_closed()) is True
     first = json.loads((board_state / "daily.json").read_text())["days"]["2026-09-07"]
     faults["list"].clear()
+    snapshot_retry_clock[0] = 300
     assert asyncio.run(bf.snapshot_daily_if_closed()) is True
     second = json.loads((board_state / "daily.json").read_text())["days"]["2026-09-07"]
     assert second["boards"]["concept"] == first["boards"]["concept"]
@@ -409,7 +461,7 @@ def test_watcher_failure_uses_one_board_read_per_kind_per_beat(monkeypatch):
     monkeypatch.setattr(bf, "beijing_now", lambda: now)
     monkeypatch.setattr(bf, "_in_session", lambda: True)
     monkeypatch.setattr(bf, "_LIST_CACHE", TTLCache("fixture-beat", 30, maxsize=4))
-    monkeypatch.setattr(bf, "_LIST_READS", {})
+    monkeypatch.setattr(bf, "_inflight_source_reads", None, raising=False)
     calls = []
 
     async def clist(fs, fields):

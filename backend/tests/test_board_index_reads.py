@@ -22,7 +22,6 @@ def index_scope(monkeypatch, tmp_path):
     monkeypatch.setattr(bf, "_in_session", lambda: clock["session"])
     monkeypatch.setattr(bf, "_LIST_CACHE", TTLCache("index-test-list", 30, maxsize=4))
     monkeypatch.setattr(bf, "_LIST_EOD_CACHE", TTLCache("index-test-eod", 300, maxsize=4))
-    monkeypatch.setattr(bf, "_LIST_READS", {})
     monkeypatch.setattr(bf, "_inflight_source_reads", None, raising=False)
     monkeypatch.setattr(bf, "_DAILY_STORE", tmp_path / "daily.json")
     monkeypatch.setattr(bf, "_DAYK_STORE", tmp_path / "daykline.json")
@@ -233,7 +232,7 @@ def test_all_cancelled_waiters_keep_owner_until_application_close_drains(monkeyp
                 await asyncio.wait_for(closing, 1)
             assert provider_closed.is_set() and catalog_closed.is_set()
             assert calls == {"industry": 1, "concept": 1}
-            assert not any(not t.done() for t in bf._LIST_READS.values())
+            assert not any(not t.done() for t in bf._inflight_source_reads.tasks.values())
             with pytest.raises(RuntimeError, match="closing"):
                 await asyncio.wait_for(ts._board_index(), 1)
             bf.start_board_read_lifecycle()

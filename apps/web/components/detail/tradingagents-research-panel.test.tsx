@@ -236,6 +236,60 @@ beforeEach(() => {vi.clearAllMocks(); vi.mocked(useDeviceAccess).mockReturnValue
 afterEach(() => {cleanup(); vi.useRealTimers();});
 
 describe("完整TradingAgents研究读者", () => {
+  it("makes an exact server-confirmed completed-selection reuse visible without implying a new report", async () => {
+    const result = saved();
+    result.task = {id: "task", status: "succeeded", cancel_requested: false, failed: false,
+      created_at: "2026-10-26T20:00:00+08:00", finished_at: "2026-10-26T20:00:01+08:00", error: null,
+      result_run_id: result.latest!.run_id, reused_identical_selection: true};
+    vi.mocked(getTradingAgentsResearch).mockResolvedValue(result);
+    render(<TradingAgentsResearchPanel symbol="002121" compact allowStart={false}/>);
+    expect((await screen.findByLabelText("研究复用结果")).textContent).toContain("没有重复生成");
+    expect(createAgentTask).not.toHaveBeenCalled();
+  });
+  it("confirms a same-version reread without posting a generation or losing the saved report", async () => {
+    vi.mocked(getTradingAgentsResearch).mockImplementation(async () => saved());
+    render(<TradingAgentsResearchPanel symbol="002121" compact allowStart={false}/>);
+    await screen.findByText("002121 · 已有保存报告 · 历史报告 · 待核");
+    fireEvent.click(screen.getByRole("button", {name: "重新读取研究"}));
+    expect((await screen.findByLabelText("研究重读结果")).textContent).toContain("仍是同一保存版本");
+    expect(getTradingAgentsResearch).toHaveBeenLastCalledWith("002121", {savedOnly: true});
+    expect(createAgentTask).not.toHaveBeenCalled();
+    expect(screen.getByRole("tab", {name: /最终判断/})).toBeTruthy();
+  });
+
+  it("shows concrete generation blockers before the retained report without hiding them in disclosure", async () => {
+    vi.mocked(getTradingAgentsResearch).mockImplementation(async (_symbol, options) => ({...saved(),
+      startup_conditions_not_checked: options?.savedOnly === true,
+      blockers: [{code: "usage_unknown", message: "有一次模型用量尚未核实"},
+        {code: "research_not_authorized", message: "原授权尚未承接当前方法"}]}));
+    render(<TradingAgentsResearchPanel symbol="002121" compact allowStart/>);
+    fireEvent.click(await screen.findByRole("button", {name: "检查启动条件"}));
+    const blockers = await screen.findByLabelText("新研究启动阻断");
+    expect(blockers.textContent).toContain("有一次模型用量尚未核实");
+    expect(blockers.textContent).toContain("原授权尚未承接当前方法");
+    expect(blockers.closest("details")).toBeNull();
+    expect(screen.getByRole("button", {name: "开始完整研究"})).toHaveProperty("disabled", true);
+    expect(createAgentTask).not.toHaveBeenCalled();
+  });
+
+  it("discards late manual-read feedback after maintenance permission changes the read owner", async () => {
+    const panel = render(<TradingAgentsResearchPanel symbol="002121" compact allowStart/>);
+    await screen.findByRole("button", {name: "检查启动条件"});
+    let finish!: (value: TradingAgentsResearchView) => void;
+    vi.mocked(getTradingAgentsResearch).mockImplementationOnce(() => new Promise(resolve => {finish = resolve;}));
+    fireEvent.click(screen.getByRole("button", {name: "检查启动条件"}));
+    await waitFor(() => expect(getTradingAgentsResearch).toHaveBeenLastCalledWith("002121", {savedOnly: false}));
+    await act(async () => {finish({...saved(), executable: true, blockers: []});});
+    vi.mocked(getTradingAgentsResearch).mockImplementationOnce(() => new Promise(resolve => {finish = resolve;}));
+    fireEvent.click(screen.getByRole("button", {name: "重新读取研究"}));
+    vi.mocked(useDeviceAccess).mockReturnValue({device: {state: "active", maintenance: false}, open: vi.fn(), refresh: vi.fn(async () => {})});
+    vi.mocked(getTradingAgentsResearch).mockResolvedValue(saved());
+    panel.rerender(<TradingAgentsResearchPanel symbol="002121" compact allowStart/>);
+    await waitFor(() => expect(getTradingAgentsResearch).toHaveBeenLastCalledWith("002121", {savedOnly: true}));
+    await act(async () => {finish(saved());});
+    expect(screen.queryByLabelText("研究重读结果")).toBeNull();
+    expect(createAgentTask).not.toHaveBeenCalled();
+  });
   it("ordinary paired readers can reuse full saved reports but cannot inspect launch gates or submit tasks", async () => {
     const open=vi.fn();
     vi.mocked(useDeviceAccess).mockReturnValue({device:{state:"active",maintenance:false},open,refresh:vi.fn(async()=>{})});

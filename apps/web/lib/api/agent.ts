@@ -155,7 +155,7 @@ export interface TradingAgentsResearchView {
   latest: TradingAgentsResearchReport | null;
   task: {id: string; status: AgentTaskStatus; cancel_requested: boolean; failed: boolean;
     created_at: string; finished_at: string | null; error: {code: string; message: string} | null;
-    result_run_id?: string | null} | null;
+    result_run_id?: string | null; reused_identical_selection?: boolean} | null;
   task_read_unavailable?: boolean;
   recovery?: {
     state: "not_checked" | "available" | "blocked" | "none" | "unknown";
@@ -199,6 +199,8 @@ export async function getTradingAgentsResearch(symbol: string, options: {savedOn
     || data.verification !== "unverified_full_graph_research" || data.production_eligible !== false || invalidLineage || invalidRecovery
     || data.task?.result_run_id !== undefined && data.task.result_run_id !== null
       && (data.task.status !== "succeeded" || typeof data.task.result_run_id !== "string" || !/^[0-9a-f]{32}$/.test(data.task.result_run_id))
+    || data.task?.reused_identical_selection !== undefined && (typeof data.task.reused_identical_selection !== "boolean"
+      || data.task.reused_identical_selection && (data.task.status !== "succeeded" || !data.task.result_run_id))
     || data.latest && (data.latest.symbol !== symbol || data.latest.verification !== data.verification
       || data.latest.production_eligible !== false || !data.latest.reports
       || !["unreviewed", "finite_failed_requires_review"].includes(data.latest.review_state)

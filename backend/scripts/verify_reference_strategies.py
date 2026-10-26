@@ -22,7 +22,8 @@ import duckdb
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 from app.core.bjtime import BJ_TZ  # noqa: E402
 from app.picks._strategy_reference_rules import (  # noqa: E402
-    DEFINITION_DIGEST, REFERENCE_STOCK_PATTERN, RULES, iter_reference_rules, reference_rule_metadata,
+    BASE_DEFINITION_DIGEST as DEFINITION_DIGEST, REFERENCE_STOCK_PATTERN, BASE_RULES as RULES,
+    iter_reference_rules, reference_rule_metadata,
 )
 from app.research import strategy_verify as sv  # noqa: E402
 
@@ -137,6 +138,8 @@ def run_verification(source_db: Path, *, through: str, window_sessions: int = 60
                 symbols += 1
                 for day, verdicts in iter_reference_rules(bars, through=through, since=start, expected_sessions=sessions):
                     for key, verdict in verdicts.items():
+                        if key not in RULES:
+                            continue  # This immutable historical study contract retains its original three-rule family.
                         counts[key][verdict["state"]] += 1
                         unknown_reasons[key].update(verdict["reason_codes"])
                         if verdict["state"] == "matched":
@@ -150,7 +153,7 @@ def run_verification(source_db: Path, *, through: str, window_sessions: int = 60
     if before != after:
         raise RuntimeError("source database changed during study; report not issued")
     return {"study_version": 1, "definition_digest": DEFINITION_DIGEST,
-            "frozen_rules": reference_rule_metadata(), "trial_family": list(RULES), "trials_total": len(RULES),
+            "frozen_rules": {key: value for key, value in reference_rule_metadata().items() if key in RULES}, "trial_family": list(RULES), "trials_total": len(RULES),
             "requested_through": through, "window_start": start, "window_sessions": min(window_sessions, len(sessions)),
             "source_symbols": symbols, "source_basis": "daily_k rows present; not a certified full historical universe",
             "stock_scope": REFERENCE_STOCK_PATTERN,

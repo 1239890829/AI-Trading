@@ -64,7 +64,7 @@ TASK_TYPES: dict[str, dict[str, str]] = {
     },
     "reference_strategies": {
         "label": "参考战法研究筛选", "risk": "L0",
-        "desc": "仅用本机已完成日线共享核验三项价格规则；保存全分母，不调用模型、不改变正式入选或模拟资格",
+        "desc": "本机已完成日线共享核验11项研究规则及D1/D3/D5参考价表现；保存全分母，不调用模型、不改变正式入选或模拟资格",
     },
     "mutation": {
         "label": "系统变更留痕",
@@ -601,8 +601,8 @@ async def _h_reference_strategies(rec: _StepRecorder, params: dict, app: Any) ->
     await rec.checkpoint_async()
     started = time.perf_counter()
     result = await _db_thread(run_batch, params, checkpoint=rec.checkpoint)
-    await rec.add_async(name="三规则共享筛选与保存", input_summary="本机复权收盘/实际成交量；已完成交易日",
-                        output_summary="复用原版本" if result['reused'] else "三个方法已保存；未改变正式选股或执行资格",
+    await rec.add_async(name="11项研究规则共享筛选与保存", input_summary="本机复权OHLC/实际量额；已完成交易日",
+                        output_summary="复用原版本" if result['reused'] else "11个方法及参考价表现已保存；未改变正式选股或执行资格",
                         duration_ms=int((time.perf_counter() - started) * 1000), ok=True)
     return result
 

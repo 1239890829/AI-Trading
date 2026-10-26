@@ -320,6 +320,119 @@ def test_named_unknown_exception_only_allows_new_selected_research_and_keeps_ori
         ab.ensure_model_usage_known(sf, allowed_unknown_usage=allowed)
 
 
+def _retained_autonomy_unknown(sf):
+    from app.services.tradingagents_research import _digest
+    row = ab.reserve(ab.SCOPE_AUTONOMY_LLM, purpose="agenda.fixture", kind="model", session_factory=sf)
+    ab.start(row["id"], sf)
+    original = ab.finish(row["id"], state="failed", error_kind="LLMError", session_factory=sf)
+    return original, ({"usage_id": row["id"], "budget_date": row["budget_date"], "scope": row["scope"],
+                       "purpose": row["purpose"], "state": "failed", "source_row_sha256": _digest(original)},)
+
+
+def test_explicit_retained_autonomy_fact_only_unblocks_selected_and_never_rewrites_source(sf):
+    pending = {scope: ab.reserve(scope, purpose="before.fixture", kind="model", session_factory=sf)
+               for scope in (ab.SCOPE_AUTONOMY_LLM, ab.SCOPE_ALERT_TRIAGE_LLM)}
+    original, allowed = _retained_autonomy_unknown(sf)
+    ab.ensure_model_usage_known(sf, consumer_scope=ab.SCOPE_SELECTED_RESEARCH_LLM, allowed_unknown_usage=allowed)
+    selected = ab.reserve(ab.SCOPE_SELECTED_RESEARCH_LLM, purpose="tradingagents.new", kind="model", allowed_unknown_usage=allowed, session_factory=sf)
+    ab.start(selected["id"], sf, allowed_unknown_usage=allowed)
+    ab.finish(selected["id"], state="succeeded", usage={"input_tokens": 3, "output_tokens": 2}, session_factory=sf)
+    for scope in pending:
+        with pytest.raises(ab.BudgetError, match="用量未知"):
+            ab.ensure_model_usage_known(sf, consumer_scope=scope, allowed_unknown_usage=allowed)
+        with pytest.raises(ab.BudgetError, match="用量未知"):
+            ab.reserve(scope, purpose="forbidden.new", kind="model", allowed_unknown_usage=allowed, session_factory=sf)
+        with pytest.raises(ab.BudgetError, match="用量未知"):
+            ab.start(pending[scope]["id"], sf, allowed_unknown_usage=allowed)
+    assert next(value for value in ab.recent_usage(sf) if value["id"] == original["id"]) == original
+    assert ab.budget_status(sf)["token_accounting_complete"] is False
+
+
+@pytest.mark.parametrize("field,value", [("usage_id", "f"*32), ("budget_date", "2000-01-01"),
+    ("purpose", "another.purpose"), ("state", "unknown")])
+def test_retained_autonomy_fact_matches_all_named_source_identity_at_reserve(sf, field, value):
+    _, allowed = _retained_autonomy_unknown(sf)
+    allowed[0][field] = value
+    with pytest.raises(ab.BudgetError, match="用量未知"):
+        ab.reserve(ab.SCOPE_SELECTED_RESEARCH_LLM, purpose="tradingagents.new", kind="model", allowed_unknown_usage=allowed, session_factory=sf)
+
+
+def test_retained_source_terminal_drift_and_new_unknown_still_block_atomic_start(sf):
+    from app.models.agent import AgentResourceUsage
+    original, allowed = _retained_autonomy_unknown(sf)
+    selected = ab.reserve(ab.SCOPE_SELECTED_RESEARCH_LLM, purpose="tradingagents.new", kind="model", allowed_unknown_usage=allowed, session_factory=sf)
+    with sf() as db:
+        db.get(AgentResourceUsage, original["id"]).state = "unknown"
+        db.commit()
+    with pytest.raises(ab.BudgetError, match="用量未知"):
+        ab.start(selected["id"], sf, allowed_unknown_usage=allowed)
+
+
+@pytest.mark.parametrize("field", ["provider", "input_tokens", "finished_at"])
+@pytest.mark.parametrize("operation", ["ensure", "reserve", "start"])
+def test_frozen_retained_metadata_survives_authorizer_to_budget_gap(sf, field, operation):
+    from app.models.agent import AgentResourceUsage
+    original, allowed = _retained_autonomy_unknown(sf)
+    pending = ab.reserve(ab.SCOPE_SELECTED_RESEARCH_LLM, purpose="tradingagents.new", kind="model", allowed_unknown_usage=allowed, session_factory=sf)
+    with sf() as db:
+        row = db.get(AgentResourceUsage, original["id"])
+        setattr(row, field, "changed-provider" if field=="provider" else 7 if field=="input_tokens" else row.finished_at+timedelta(seconds=1))
+        db.commit()
+    before = ab.recent_usage(sf)
+    with pytest.raises(ab.BudgetError) as blocked:
+        if operation=="ensure":ab.ensure_model_usage_known(sf,consumer_scope=ab.SCOPE_SELECTED_RESEARCH_LLM,allowed_unknown_usage=allowed)
+        elif operation=="reserve":ab.reserve(ab.SCOPE_SELECTED_RESEARCH_LLM,purpose="tradingagents.later",kind="model",allowed_unknown_usage=allowed,session_factory=sf)
+        else:ab.start(pending["id"],sf,allowed_unknown_usage=allowed)
+    assert blocked.value.code=="retained_usage_identity_drift"
+    assert ab.recent_usage(sf)==before
+    assert next(row for row in before if row["id"]==pending["id"])["state"]=="reserved"
+
+
+@pytest.mark.parametrize("field", ["provider", "input_tokens", "finished_at", "usage_known"])
+def test_full_source_cas_rejects_drift_after_transaction_hash_read_before_atomic_start(sf,monkeypatch,field):
+    from app.models.agent import AgentResourceUsage
+    original, allowed = _retained_autonomy_unknown(sf)
+    pending=ab.reserve(ab.SCOPE_SELECTED_RESEARCH_LLM,purpose="tradingagents.new",kind="model",allowed_unknown_usage=allowed,session_factory=sf)
+    inspect=ab._retained_snapshots
+    changed=[]
+    def inject(db,facts):
+        snapshots=inspect(db,facts)
+        if not changed:
+            with sf() as other:
+                row=other.get(AgentResourceUsage,original["id"])
+                setattr(row,field,"changed-provider" if field=="provider" else 7 if field=="input_tokens" else 1 if field=="usage_known" else row.finished_at+timedelta(seconds=1))
+                other.commit();changed.append(ab.dump(row))
+        return snapshots
+    monkeypatch.setattr(ab,"_retained_snapshots",inject)
+    with pytest.raises(ab.BudgetError):ab.start(pending["id"],sf,allowed_unknown_usage=allowed)
+    with sf() as db:
+        assert ab.dump(db.get(AgentResourceUsage,original["id"]))==changed[0]
+        assert ab.dump(db.get(AgentResourceUsage,pending["id"]))==pending
+
+
+def test_retained_reserve_cas_does_not_create_a_receipt_after_last_hash_read_drifts(sf,monkeypatch):
+    from app.models.agent import AgentResourceUsage
+    original, allowed = _retained_autonomy_unknown(sf)
+    inspect=ab._retained_snapshots
+    seen=[]
+    def inject(db,facts):
+        snapshots=inspect(db,facts);seen.append(1)
+        if len(seen)==2:  # First is admission; second belongs to the INSERT transaction.
+            with sf() as other:
+                row=other.get(AgentResourceUsage,original["id"]);row.input_tokens=7;other.commit()
+        return snapshots
+    monkeypatch.setattr(ab,"_retained_snapshots",inject)
+    with pytest.raises(ab.BudgetError):ab.reserve(ab.SCOPE_SELECTED_RESEARCH_LLM,purpose="tradingagents.new",kind="model",allowed_unknown_usage=allowed,session_factory=sf)
+    receipts=ab.recent_usage(sf)
+    assert len(receipts)==1 and receipts[0]["input_tokens"]==7 and receipts[0]["usage_known"] is False
+
+
+def test_partial_cross_scope_projection_without_full_metadata_digest_is_rejected(sf):
+    _,allowed=_retained_autonomy_unknown(sf)
+    allowed[0].pop("source_row_sha256")
+    with pytest.raises(ValueError):ab.ensure_model_usage_known(sf,consumer_scope=ab.SCOPE_SELECTED_RESEARCH_LLM,allowed_unknown_usage=allowed)
+
+
 @pytest.mark.parametrize("scope", [ab.SCOPE_AUTONOMY_LLM, ab.SCOPE_ALERT_TRIAGE_LLM])
 def test_selected_exception_cannot_unblock_another_model_scope_even_at_atomic_start(sf, scope):
     pending = ab.reserve(scope, purpose="other.fixture", kind="model", session_factory=sf)

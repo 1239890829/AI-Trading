@@ -1090,7 +1090,9 @@ export interface SavedStrategyRunItem {
   };
 }
 
-export const REFERENCE_RESEARCH_METHODS = ["reference:macd_golden_cross", "reference:ma_bullish", "reference:ma_golden_cross"] as const;
+export const REFERENCE_RESEARCH_METHODS = ["reference:macd_golden_cross", "reference:ma_bullish", "reference:ma_golden_cross",
+  "reference:rsi_reversal", "reference:shrink_pullback", "reference:volume_breakout", "reference:l1_l2_volume_resonance",
+  "reference:one_yang_three_yin", "reference:w_bottom_breakout", "reference:bottom_volume", "reference:box_oscillation"] as const;
 export type ReferenceResearchMethod = typeof REFERENCE_RESEARCH_METHODS[number];
 export type ReferenceResearchRowState = "all" | "matched" | "not_matched" | "unknown";
 export type SavedMethodKey = "daily_picks" | "intraday_watch" | ReferenceResearchMethod;
@@ -1186,6 +1188,12 @@ export interface SavedStrategyRun {
   definition?: string;
   definition_supplement?: string;
   data_limitations?: string[];
+  outcomes?: {
+    state: "descriptive_reference"; window_start: string; signal_through: string; outcome_through: string;
+    cost_bps: number; return_identity: string; semantics: string; production_promotion_eligible: false;
+    horizons: Record<string, {signals: number; matured: number; immature: number; missing: number; wins: number;
+      positive_rate: number | null; mean_return_pct: number | null; stress_mean_return_pct: number | null}>;
+  } | null;
 }
 
 export interface StrategyRegistryItem {
@@ -1200,6 +1208,7 @@ export interface StrategyRegistryItem {
     existing_coverage: string[];
     limitations: string[];
     runnable: boolean;
+    adoption?: {state: string; consumer?: string; reason: string; href?: string};
     execution?: {mode: "manual_research"; version: string; definition_digest: string; production_enabled: false; definition: string; definition_supplement: string};
   };
   runtime?: SavedStrategyRun | null;

@@ -70,7 +70,7 @@ export function ReferenceMethodResearch({method, version, date, onComplete}: {me
     } finally {busy.current = false; if (alive.current) setSubmitting(false);}
   }
   return <section className="space-y-2 border-t border-zinc-200 pt-3 text-xs dark:border-zinc-700" aria-label="手动战法研究运行">
-    <p className="text-zinc-600 dark:text-zinc-400">共享扫描三个价格战法，无模型调用；只保存研究结果，不产生入选、通知或模拟资格。</p>
+    <p className="text-zinc-600 dark:text-zinc-400">一次扫描11项研究规则与D1/D3/D5参考价表现，无模型调用；不改变正式入选、通知或模拟资格。</p>
     <p className="text-[11px] text-zinc-600 dark:text-zinc-400">{selectedDate ? `请求源日 ${selectedDate}；服务端仅接受来源已完成日。` : "未指定日期时读取来源最新已完成日，不以界面今日代替。"}</p>
     {allowed && <div className="flex flex-wrap items-end gap-2"><label className="min-w-0 text-[11px] text-zinc-600 dark:text-zinc-400">研究源日（空为最新已完成日）<input type="date" aria-label="研究源日" value={sourceDate} disabled={submitting || running || resource.pending || failure?.unknown} onChange={event=>setSourceDate(event.target.value)} className="mt-1 block min-h-8 w-full rounded border border-zinc-300 bg-transparent px-2 dark:border-zinc-600"/></label>
       <button type="button" className="quiet-action" disabled={!sourceDate || submitting || running || resource.pending || failure?.unknown} onClick={()=>setSourceDate("")}>使用最新已完成日</button></div>}

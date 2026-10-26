@@ -29,7 +29,6 @@ def test_dynamic_fields_do_not_outlive_original_input_cache(monkeypatch, input_t
     )
     monkeypatch.setattr(board_flow, "_LIST_CACHE", ttl_cache.TTLCache("audit-list", 30, maxsize=4))
     monkeypatch.setattr(board_flow, "_LIST_EOD_CACHE", ttl_cache.TTLCache("audit-eod", 300, maxsize=4))
-    monkeypatch.setattr(board_flow, "_LIST_READS", {})
     monkeypatch.setattr(board_flow, "get_board_streaks", lambda rows: {})
     monkeypatch.setattr(market_flow, "meta_payload", lambda hub: {})
     monkeypatch.setattr(

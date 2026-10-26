@@ -150,6 +150,9 @@ def reference_catalog_entries() -> list[dict]:
     rows = deepcopy(list(_ENTRIES))
     reused = {'hot_theme': 'themes', 'dragon_head': 'ladder', 'event_driven': 'events',
               'balanced_alpha': 'daily_picks', 'capital_heat': 'fundflow', 'emotion_cycle': 'market_regime'}
+    existing_links = {'hot_theme': '/hunting?browse=hot', 'dragon_head': '/market',
+        'event_driven': '/market?tab=events', 'balanced_alpha': '/hunting?sec=daily', 'capital_heat': '/hunting?browse=funds',
+        'emotion_cycle': '/market'}
     for row in rows:
         code = row['candidate']['source_code']
         if code in rules:
@@ -161,12 +164,14 @@ def reference_catalog_entries() -> list[dict]:
                 'definition': rule['definition'], 'definition_supplement': rule['supplement']}
             row['candidate']['definition_supplement'] = rule['supplement']
             row['candidate']['limitations'] = ['仅启用手动研究筛选；匹配不等于正式入选、通知或模拟资格。',
-                                              '历史点时宇宙、可执行成本与效果准入未完成，禁止改生产权重或风控。']
+                                              '历史点时宇宙、可执行成本与效果准入未完成，禁止改生产权重或风控。',
+                                              '只用信号日及此前已完成日线，禁止借未来拐点。']
             row['discovery']['supports_saved_runs'] = True
             row['discovery']['session_label'] = '已完成日线研究'
         elif code in reused:
             row['candidate']['adoption'] = {'state': 'reuse_existing', 'consumer': reused[code],
-                                          'reason': '已有真实消费者；保留来源和条件，不另造重复策略。'}
+                                          'reason': '已有真实消费者；保留来源和条件，不另造重复策略。',
+                                          'href': existing_links[code]}
         elif code in {'wave_theory', 'chan_theory'}:
             row['candidate']['adoption'] = {'state': 'not_adopted', 'reason': '确认规则及未来重绘边界不明，无法可靠复现。'}
         else:

@@ -137,7 +137,7 @@ def _unknown_usage_exception(value, method_sha256, session_factory=None):
     if authorized_at > _now():
         raise ValueError("future unknown usage continuation")
     facts = agent_budget.validate_unknown_usage_exceptions(value["allowed_unknown_usage"])
-    if not facts:
+    if not facts or any(fact["scope"] != agent_budget.SCOPE_SELECTED_RESEARCH_LLM for fact in facts):
         raise ValueError("named original unknown usage required")
     sf, active = session_factory or get_session_factory(), []
     with sf() as db:
@@ -154,6 +154,49 @@ def _unknown_usage_exception(value, method_sha256, session_factory=None):
                 active.append(dict(fact))
     return {**value, "allowed_unknown_usage": [dict(fact) for fact in facts],
             "active_allowed_unknown_usage": active}
+
+
+def _retained_unknown_usage(values, session_factory=None, *, now=None):
+    """Project explicit local history only after the outer authorization is pinned."""
+    now = now or _now()
+    if not isinstance(values, list) or len(values) > 16:
+        raise ValueError("invalid retained usage authorizations")
+    keys = {"version", "user_authorization", "consumer", "dispatch", "reason", "authorized_at", "source_authorization_sha256",
+            "authorized_method_sha256", "source_usage", "source_row_sha256"}
+    active, seen = [], set()
+    with (session_factory or get_session_factory())() as db:
+        for value in values:
+            if (not isinstance(value, dict) or set(value) != keys or type(value["version"]) is not int
+                    or value["version"] != 1 or value["user_authorization"] != "EXPLICIT"
+                    or value["consumer"] != "selected_stock_explanation" or value["dispatch"] != "manual"
+                    or not isinstance(value["reason"], str) or not 0 < len(value["reason"].strip()) <= 2000
+                    or any(not isinstance(value[key], str) or not re.fullmatch(r"[0-9a-f]{64}", value[key])
+                           for key in ("source_authorization_sha256", "authorized_method_sha256", "source_row_sha256"))):
+                raise ValueError("retained usage authorization identity mismatch")
+            source_usage = value["source_usage"]
+            if not isinstance(source_usage, dict) or set(source_usage) != {"usage_id", "budget_date", "scope", "purpose", "state"}:
+                raise ValueError("retained source usage identity required")
+            fact, = agent_budget.validate_unknown_usage_exceptions([{**source_usage, "source_row_sha256": value["source_row_sha256"]}])
+            if fact["scope"] != agent_budget.SCOPE_AUTONOMY_LLM or "purpose" not in fact or fact["usage_id"] in seen:
+                raise ValueError("retained source usage must be separately named")
+            at = _clock(value["authorized_at"])
+            row = db.get(AgentResourceUsage, fact["usage_id"])
+            if (at > now or fact["budget_date"] != at.astimezone(now.tzinfo).date().isoformat() or row is None or row.kind != "model"
+                    or row.usage_known or row.started_at is None or row.finished_at is None
+                    or row.scope != fact["scope"] or row.budget_date != fact["budget_date"]
+                    or row.purpose != fact["purpose"] or row.state != fact["state"]
+                    or _digest(agent_budget.dump(row)) != value["source_row_sha256"]):
+                raise ValueError("retained source usage drift")
+            started, finished = (clock.replace(tzinfo=now.tzinfo) if clock.tzinfo is None else clock
+                                 for clock in (row.started_at, row.finished_at))
+            if not started <= finished <= at:
+                raise ValueError("retained source usage was not terminal at authorization")
+            seen.add(fact["usage_id"])
+            if fact["budget_date"] == now.date().isoformat():
+                if settings.tradingagents_auto_research_enabled:
+                    raise ValueError("retained usage permission is manual only")
+                active.append(fact)
+    return tuple(active)
 
 
 def _quality(app, *, session_factory=None) -> tuple[dict, list[dict]]:
@@ -197,6 +240,8 @@ def _quality(app, *, session_factory=None) -> tuple[dict, list[dict]]:
             if "unknown_usage_exception" in artifact:
                 admitted["unknown_usage_exception"] = _unknown_usage_exception(
                     artifact["unknown_usage_exception"], _digest(identity), session_factory)
+            if "retained_unknown_authorizations" in artifact:
+                admitted["retained_unknown_usage"] = _retained_unknown_usage(artifact["retained_unknown_authorizations"], session_factory)
         except (OSError, ValueError, TypeError, KeyError, SQLAlchemyError, RuntimeError):
             blockers.append({"code": "research_not_authorized", "message": "准确版本的选股后研究授权缺失、失效或漂移；没有冒充效果准入。"})
         return admitted, blockers
@@ -223,7 +268,8 @@ def _quality(app, *, session_factory=None) -> tuple[dict, list[dict]]:
 
 
 def _allowed_unknown_usage(admission):
-    return tuple(admission.get("unknown_usage_exception", {}).get("active_allowed_unknown_usage", ()))
+    return (*admission.get("unknown_usage_exception", {}).get("active_allowed_unknown_usage", ()),
+            *admission.get("retained_unknown_usage", ()))
 
 
 def authorized_unknown_usage(app, *, method_sha256, authorization_sha256):
@@ -344,6 +390,8 @@ def preflight(symbol: str, app, *, session_factory=None) -> dict:
 
 def require_start(params: dict, app, *, session_factory=None, task_id=None) -> dict:
     state = preflight(validate_params(params), app, session_factory=session_factory)
+    if task_id:
+        _manual_retained_task(_allowed_unknown_usage(state["admission"]), task_id, session_factory or get_session_factory())
     if task_id and state["admission"].get("state") == "research_only_authorized":
         owned = _task_selection(params["symbol"], task_id, state["admission"]["method_sha256"],
                                 session_factory or get_session_factory())
@@ -353,6 +401,16 @@ def require_start(params: dict, app, *, session_factory=None, task_id=None) -> d
     if state["blockers"]:
         raise ResearchBlocked(state["blockers"])
     return state
+
+
+def _manual_retained_task(facts, task_id, sf):
+    if not any(fact["scope"] == agent_budget.SCOPE_AUTONOMY_LLM for fact in facts):
+        return
+    with sf() as db:
+        task = db.get(AgentTask, task_id)
+        if (task is None or task.type != "tradingagents_research" or task.created_by not in {"user", "maintenance"}
+                or task.status not in {"queued", "running"}):
+            raise ResearchBlocked([{"code":"retained_usage_manual_task_required", "message":"这条保留未知用量许可仅用于手工研究；未用于自动任务或新调用。"}])
 
 
 def _entry_digest(binding, sf):
@@ -453,6 +511,7 @@ def _task_selection(symbol, task_id, method, sf, *, running=False):
 
 def authorized_selected_usage(app, *, method_sha256, authorization_sha256, task_id, selection, intent):
     allowed = authorized_unknown_usage(app, method_sha256=method_sha256, authorization_sha256=authorization_sha256)
+    _manual_retained_task(allowed, task_id, get_session_factory())
     owned = _task_selection(selection["symbol"], task_id, method_sha256, get_session_factory(), running=True)
     if owned != (selection, intent):
         raise ResearchBlocked([{"code": "selection_intent_owner_drift", "message": "原入选研究归属已变或已撤回；保留原结果。"}])
@@ -590,18 +649,21 @@ def _public_task(task):
         if not isinstance(code, str) or not re.fullmatch(r"[A-Za-z0-9_]{1,64}", code):
             code = "TaskError"
         error = {"code": code, "message": "本轮任务未完成；已保存报告保留，具体恢复条件见启动门禁和任务中心。"}
-    result_run = None
+    result_run, reuse = None, {}
     try:
         result, params = json.loads(task.result_ref or "{}"), json.loads(task.params or "{}")
         if (task.status == "succeeded" and isinstance(result, dict) and isinstance(params, dict)
+                and isinstance(params.get("symbol"), str) and re.fullmatch(r"[0-9]{6}", params["symbol"])
                 and result.get("symbol") == params.get("symbol") and isinstance(result.get("run_id"), str)
                 and re.fullmatch(r"[0-9a-f]{32}", result["run_id"])):
             result_run = result["run_id"]
+            if type(result.get("reused_identical_selection")) is bool:
+                reuse = {"reused_identical_selection": result["reused_identical_selection"]}
     except (ValueError, TypeError):
         pass
     return {"id": task.id, "status": task.status, "result_run_id": result_run, "cancel_requested": task.cancel_requested_at is not None,
             "created_at": task.created_at.isoformat(), "finished_at": task.finished_at.isoformat() if task.finished_at else None,
-            "failed": bool(task.error), "error": error}
+            "failed": bool(task.error), "error": error, **reuse}
 
 
 def _read_task_states(symbols, session_factory=None):
@@ -853,6 +915,16 @@ def _execution_prior(binding, method):
         records = _selection_records(binding)
         if any(row["method_sha256"] != method for row in records):
             from app.services.tradingagents_recovery import completed_recovery
+            completed = [row for row in records if row.get("state") == "completed"]
+            if len(completed) == 1:
+                prior = completed[0]
+                # An executor revision does not authorize another paid graph for
+                # the exact same selection. Verify the original complete report
+                # and, where present, its entire original recovery chain.
+                if len(records) > 1:
+                    completed_recovery(records, binding, prior["method_sha256"])
+                _completed_selection(prior, binding)
+                return prior
             return completed_recovery(records, binding, method)
         return next(iter(records), None)
 
@@ -903,7 +975,8 @@ def _completed_selection(prior, binding):
                 or value.get("selection") != binding or value.get("net_gain_verified") is not False
                 or value.get("authorization_mode") != "RESEARCH_ONLY_AUTHORIZED"
                 or value.get("production_eligible") is not False
-                or set(value.get("reports", {})) != set(REPORTS)):
+                or not isinstance(value.get("reports"), dict) or set(value["reports"]) != set(REPORTS)
+                or any(not isinstance(report, str) or not report.strip() for report in value["reports"].values())):
             raise ValueError("completed artifact drift")
         if "recovery_lineage" in value:
             from app.services.tradingagents_recovery import completed_recovery

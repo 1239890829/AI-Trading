@@ -7,7 +7,7 @@ import math
 import pytest
 
 from app.picks._strategy_reference_rules import (
-    DEFINITION_DIGEST, RULES, evaluate_reference_rules, iter_reference_rules,
+    DEFINITION_DIGEST, BASE_RULES, RULES, evaluate_reference_rules, iter_reference_rules,
     reference_rule_metadata, is_reference_stock_code,
 )
 
@@ -26,8 +26,8 @@ def evaluate(rows, **kwargs):
 def test_three_explicit_conditions_and_previous_five_volume_denominator():
     result = evaluate(bars())
     assert set(result) == set(RULES)
-    assert all(value["state"] == "matched" for value in result.values())
-    for value in result.values():
+    assert all(result[key]["state"] == "matched" for key in BASE_RULES)
+    for value in (result[key] for key in BASE_RULES):
         assert value["definition_digest"] == DEFINITION_DIGEST
         assert value["score_contribution"] is False and value["execution_eligible"] is False
         assert value["input_rows"] == 60 and all(c["met"] is True for c in value["conditions"])
@@ -37,7 +37,7 @@ def test_three_explicit_conditions_and_previous_five_volume_denominator():
 
 
 def test_non_crossing_and_equal_volume_are_not_passing():
-    assert all(value["state"] == "not_matched" for value in evaluate(bars(last=100)).values())
+    assert all(evaluate(bars(last=100))[key]["state"] == "not_matched" for key in BASE_RULES)
     result = evaluate(bars(volume=100))
     assert result["ma_golden_cross"]["state"] == "not_matched"
     assert result["macd_golden_cross"]["state"] == "matched"
@@ -157,7 +157,7 @@ def test_explicit_shared_stock_scope_rejects_indexes_funds_and_bad_shapes(code):
 def test_old_volume_does_not_poison_unrelated_price_or_current_volume_features(volume):
     rows = bars(90); rows[3]["volume"] = volume
     result = evaluate(rows)
-    assert all(value["state"] == "matched" for value in result.values())
+    assert all(result[key]["state"] == "matched" for key in BASE_RULES)
     assert all(value["data_warnings"] for value in result.values())
 
 
