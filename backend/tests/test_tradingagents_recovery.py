@@ -4,6 +4,7 @@ from copy import deepcopy
 from datetime import datetime,timedelta
 import hashlib
 import json
+from pathlib import Path
 import sqlite3
 from threading import Event
 from types import SimpleNamespace
@@ -63,7 +64,8 @@ def env(tmp_path,monkeypatch):
             if self.fail: raise self.fail
             if self.revoke: monkeypatch.setattr(settings,'tradingagents_research_authorization_digest','f'*64)
             recovery_guard({'role':self.first_role},self.resume_counter); usage_authorizer(); n=self.resume_counter
-            completed={json.loads(row)['peer']['role'] for row in (run/'role-outputs.jsonl').read_text().splitlines() if row.strip()}
+            stream=run/'role-outputs.jsonl'
+            completed={json.loads(row)['peer']['role'] for row in (stream.read_text().splitlines() if stream.exists() else []) if row.strip()}
             for role in [self.first_role]+[r for r in research.ROLES if r not in completed|{self.first_role}]:
                 n+=1; output={'content':role+' engineering continuation','tool_calls':[]}
                 put(run/'model-outputs'/f'{n}.json',dict(structured_output=output,call_id=n,role=role,output_sha256=research._digest(output)))
@@ -527,6 +529,148 @@ def test_summary_cancellation_after_recovery_keeps_completed_owner_and_original_
     prior=research._execution_prior(env.selection,research._digest(env.current))
     assert research._completed_selection(prior,env.selection)['reused_identical_selection']
     with env.sf() as db: assert db.get(AgentResourceUsage,f'{2:032x}').usage_known==0
+
+
+def cooperative_env(e):
+    """A new-format API-canceled analyst graph; all paid proposals are known."""
+    e=parallel_env(e)
+    (e.run/'usage-receipts/3.json').unlink()
+    put(e.run/'call-counter.json',{'reserved':2})
+    method=research._digest(e.current)
+    old_claim=recovery._json(e.source_claim)
+    e.source_claim.unlink();e.source_claim=research._selection_claim(e.selection,method)
+    old_claim['method_sha256']=method;put(e.source_claim,old_claim)
+    with e.sf() as db:
+        db.query(AgentResourceUsage).delete()
+        task=db.get(AgentTask,OLD);task.status='canceled';task.error=None
+        task.cancel_requested_at=(NOW-timedelta(seconds=30)).replace(tzinfo=None)
+        for n,role in enumerate(('Fundamentals Analyst','Market Analyst'),1):
+            output=recovery._json(e.run/f'model-outputs/{n}.json')
+            put(e.run/f'usage-receipts/{n}.json',dict(task_id=OLD,method_sha256=method,call_id=n,
+                role=role,usage_id=f'{n:032x}',usage_known=True,usage={'input_tokens':1,'output_tokens':1},
+                terminal_kind='typed_response',output_sha256=output['output_sha256']))
+            db.add(AgentResourceUsage(id=f'{n:032x}',budget_date=NOW.date().isoformat(),scope=agent_budget.SCOPE_SELECTED_RESEARCH_LLM,
+                kind='model',purpose='tradingagents.'+role.replace(' ','_').lower(),task_id=OLD,state='succeeded',usage_known=1,
+                provider=e.current['transport']['provider'],model=e.current['transport']['model'],attempts=1,max_retries=0,
+                input_tokens=1,output_tokens=1,started_at=(NOW-timedelta(minutes=1)).replace(tzinfo=None),
+                finished_at=(NOW-timedelta(seconds=20)).replace(tzinfo=None)))
+        db.commit()
+    put(e.run/'execution.json',dict(state='canceled',task_id=OLD,run_id=RUN,symbol=SYMBOL,method_sha256=method,
+        error_kind='CancelledError',automatic_retry=False,finished_at=NOW.isoformat()))
+    e.auth.pop('unknown_usage_exception');e.auth['native_recovery_grants']=[];e.pin()
+    e.grant=recovery.prepare_cooperative_grant(OLD,RUN,e.current,grant_id=GRANT,
+        authorized_at=NOW.isoformat(),valid_until=(NOW+timedelta(hours=1)).isoformat(),sf=e.sf)
+    e.auth['native_recovery_grants']=[e.grant];e.pin()
+    e.native.first_role='Fundamentals Analyst';e.native.resume_counter=2
+    return e
+
+
+def test_same_method_cooperative_recovery_preserves_source_claim_and_never_replays_known_proposals(env):
+    e=cooperative_env(env)
+    original=e.source_claim.read_bytes()
+    originals={p:p.read_bytes() for p in (e.run/'model-outputs/1.json',e.run/'model-outputs/2.json',e.run/'usage-receipts/1.json',e.run/'usage-receipts/2.json')}
+    cp=e.run/'graph/cache/checkpoints'/f'{SYMBOL}.db';before=cp.read_bytes()
+    c=context(e)
+    assert cp.read_bytes()==before and not Path(str(cp)+'-wal').exists() and not Path(str(cp)+'-shm').exists()
+    c,owner=consumed(e)
+    archived=e.run/'recovery-history'/GRANT/'source-selection.json'
+    assert archived.read_bytes()==original
+    again,fresh=recovery._dispatch(c);assert not fresh and again['task_id']==NEW
+    result=asyncio.run(recovery.run_recovery(e.rec,params(c,owner),e.app))
+    assert result['state']=='completed' and result['recovery_lineage']['new_call_from']==3
+    assert result['recovery_lineage']['reused_original_outputs']==2 and e.native.calls==1
+    assert archived.read_bytes()==original and all(p.read_bytes()==raw for p,raw in originals.items())
+    assert research._latest(SYMBOL)['recovery_lineage']['inherited_unknown_usage_count']==0
+    prior=research._execution_prior(e.selection,research._digest(e.current))
+    assert research._completed_selection(prior,e.selection)['reused_identical_selection']
+    with e.sf() as db:
+        assert db.get(AgentTask,OLD).status=='canceled'
+        assert db.query(AgentResourceUsage).filter(AgentResourceUsage.task_id==OLD).count()==2
+
+
+def test_cooperative_dispatch_resumes_only_its_exact_archive_after_claim_write_failure(env,monkeypatch):
+    e=cooperative_env(env);c=context(e);before=e.source_claim.read_bytes()
+    atomic=recovery.atomic_json;failed=[]
+    def once(path,value):
+        if path==c['claim'] and value.get('state')=='recovery_dispatching' and not failed:
+            failed.append(True);raise OSError('isolated atomic replacement failed')
+        return atomic(path,value)
+    monkeypatch.setattr(recovery,'atomic_json',once)
+    with pytest.raises(OSError):recovery._dispatch(c)
+    archive=e.run/'recovery-history'/GRANT/'source-selection.json'
+    assert archive.read_bytes()==before and e.source_claim.read_bytes()==before
+    fresh_context=context(e)
+    claim,fresh=recovery._dispatch(fresh_context)
+    assert fresh and claim['state']=='recovery_dispatching' and archive.read_bytes()==before
+    again,new=recovery._dispatch(fresh_context)
+    assert not new and again['native_recovery']==claim['native_recovery'] and e.native.calls==0
+
+
+def test_cooperative_partial_archive_with_extra_content_is_not_adopted(env,monkeypatch):
+    e=cooperative_env(env);c=context(e);atomic=recovery.atomic_json
+    def fail(path,value):
+        if path==c['claim']:raise OSError('isolated claim failure')
+        return atomic(path,value)
+    monkeypatch.setattr(recovery,'atomic_json',fail)
+    with pytest.raises(OSError):recovery._dispatch(c)
+    archive=e.run/'recovery-history'/GRANT
+    (archive/'unowned.json').write_text('{}')
+    monkeypatch.setattr(recovery,'atomic_json',atomic)
+    with pytest.raises(research.ResearchBlocked):recovery._dispatch(context(e))
+    assert recovery._json(e.source_claim)['state']=='needs_recovery' and e.native.calls==0
+
+
+@pytest.mark.parametrize('mutation',['not_canceled','no_request','unknown','extra_row','token','missing_receipt','output_drift',
+    'wrong_run','method','execution','root_error','writer','source_claim'])
+def test_cooperative_recovery_rejects_incomplete_or_changed_proof(env,mutation):
+    e=cooperative_env(env)
+    if mutation in {'not_canceled','no_request','unknown','extra_row','token'}:
+        with e.sf() as db:
+            if mutation=='not_canceled':db.get(AgentTask,OLD).status='failed'
+            elif mutation=='no_request':db.get(AgentTask,OLD).cancel_requested_at=None
+            elif mutation=='extra_row':db.add(AgentResourceUsage(id='f'*32,task_id=OLD,kind='model',scope=agent_budget.SCOPE_SELECTED_RESEARCH_LLM,
+                budget_date=NOW.date().isoformat(),purpose='unexpected',state='started',usage_known=0))
+            elif mutation=='unknown':db.get(AgentResourceUsage,f'{2:032x}').usage_known=0
+            else:db.get(AgentResourceUsage,f'{2:032x}').input_tokens=9
+            db.commit()
+    elif mutation=='missing_receipt':(e.run/'usage-receipts/2.json').unlink()
+    elif mutation=='output_drift':put(e.run/'model-outputs/2.json',{})
+    elif mutation=='wrong_run':e.grant['run_id']='e'*32;e.pin()
+    elif mutation=='method':e.grant['continuation_method_identity']['transport']['model']='other';e.pin()
+    elif mutation=='execution':put(e.run/'execution.json',dict(state='canceled',error_kind='TimeoutError'))
+    elif mutation=='root_error':
+        cp=e.run/'graph/cache/checkpoints'/f'{SYMBOL}.db'
+        with sqlite3.connect(cp) as db:db.execute("DELETE FROM writes WHERE checkpoint_ns='' AND task_path='~__pregel_pull, Market Analyst'")
+    elif mutation=='writer':Path(str(e.run/'graph/cache/checkpoints'/f'{SYMBOL}.db')+'-wal').write_bytes(b'live writer fixture')
+    else:put(e.source_claim,{})
+    with pytest.raises(research.ResearchBlocked):context(e)
+    assert e.native.calls==0 and not (e.run/'recovery-history').exists()
+
+
+@pytest.mark.parametrize('drift',[False,True])
+def test_explicit_grant_operator_retains_outer_authorization_and_cas_checks_originals(env,tmp_path,monkeypatch,drift):
+    from app.services import _tradingagents_authorization as operator
+    e=cooperative_env(env)
+    e.auth['native_recovery_grants']=[{'historical':'retained expired fixture'}];e.pin()
+    env_path=tmp_path/'.env'
+    env_path.write_text('OTHER_SECRET=fixture-do-not-copy\n'+operator.PIN_KEY+'='+settings.tradingagents_research_authorization_digest+'\n')
+    monkeypatch.setattr(settings,'tradingagents_auto_research_enabled',False)
+    kwargs=dict(root=research.ROOT,env_path=env_path,sf=e.sf,driver=e.native,now=NOW)
+    original=(research.ROOT/'authorization.json').read_bytes();original_env=env_path.read_bytes()
+    plan=operator.prepare_grant(OLD,RUN,**kwargs)
+    assert (research.ROOT/'authorization.json').read_bytes()==original and env_path.read_bytes()==original_env
+    if drift:
+        put(e.run/'model-outputs/1.json',{})
+        with pytest.raises(research.ResearchBlocked):operator.apply_plan(plan['plan_id'],**kwargs)
+        assert (research.ROOT/'authorization.json').read_bytes()==original and env_path.read_bytes()==original_env
+    else:
+        assert operator.apply_plan(plan['plan_id'],**kwargs)['new_cooperative_grants']==1
+        auth=recovery._json(research.ROOT/'authorization.json')
+        assert auth['created_at']==e.auth['created_at'] and auth['valid_until']==e.auth['valid_until']
+        assert auth['method_identity']==e.auth['method_identity'] and auth['native_recovery_grants'][:-1]==e.auth['native_recovery_grants']
+        assert 'unknown_usage_exception' not in auth and e.native.calls==0
+        monkeypatch.setattr(settings,'tradingagents_research_authorization_digest',operator._sha((research.ROOT/'authorization.json').read_bytes()))
+        assert context(e)['grant']['source_task_id']==OLD
 
 @pytest.mark.parametrize('revoke',[False,True])
 def test_pending_guard_and_revocation_prevent_new_call(env,revoke):

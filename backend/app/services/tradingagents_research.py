@@ -590,7 +590,16 @@ def _public_task(task):
         if not isinstance(code, str) or not re.fullmatch(r"[A-Za-z0-9_]{1,64}", code):
             code = "TaskError"
         error = {"code": code, "message": "本轮任务未完成；已保存报告保留，具体恢复条件见启动门禁和任务中心。"}
-    return {"id": task.id, "status": task.status, "cancel_requested": task.cancel_requested_at is not None,
+    result_run = None
+    try:
+        result, params = json.loads(task.result_ref or "{}"), json.loads(task.params or "{}")
+        if (task.status == "succeeded" and isinstance(result, dict) and isinstance(params, dict)
+                and result.get("symbol") == params.get("symbol") and isinstance(result.get("run_id"), str)
+                and re.fullmatch(r"[0-9a-f]{32}", result["run_id"])):
+            result_run = result["run_id"]
+    except (ValueError, TypeError):
+        pass
+    return {"id": task.id, "status": task.status, "result_run_id": result_run, "cancel_requested": task.cancel_requested_at is not None,
             "created_at": task.created_at.isoformat(), "finished_at": task.finished_at.isoformat() if task.finished_at else None,
             "failed": bool(task.error), "error": error}
 
@@ -620,7 +629,7 @@ def _read_task_state(symbol, session_factory=None):
     return _read_task_states([symbol], session_factory)[symbol]
 
 
-def read_view(symbol: str, app, *, session_factory=None, saved_only=False) -> dict:
+def read_view(symbol: str, app, *, session_factory=None, saved_only=False, check_recovery=False) -> dict:
     """Ordinary paired reading. Saved-only reads do not inspect launch machinery."""
     validate_params({"symbol": symbol})
     if saved_only:
@@ -640,6 +649,9 @@ def read_view(symbol: str, app, *, session_factory=None, saved_only=False) -> di
         roles, projection = _role_projection(_folder(symbol) / result["run_id"], result)
         result["roles"], result["role_projection_state"] = roles, projection
     state.update(_read_task_state(symbol, session_factory))
+    from app.services._tradingagents_recovery_view import projection
+    state["recovery"] = projection(symbol, state["task"], app,
+        session_factory=session_factory, check=check_recovery)
     return state
 
 

@@ -1,5 +1,7 @@
 # 文档索引（INDEX）
 
+2026-10-26接续：[手动完整研究与可运行战法](product/hunting-decision-design.md#2026-10-26-手动完整研究承接与可运行战法) → [原授权方法承接/恢复](ai/semantic-decisions.md#2026-10-26-原授权方法承接与安全取消恢复) → [三规则定义及35项取舍](strategy/strategy-registry.md#2026-10-26-三项可运行价格研究与逐项取舍)。工程、运行、发布与策略效果分开，当前证据归handoff与关联PR，不增加独立总账。
+
 > 定位：**docs 唯一入口**。查东西先来这里；写新文档必须在此登记。
 > 维护约定：状态在所属阶段单点更新，成果提炼与恢复按 `kb/07-doc-curation.md` §3.2；新建/迁移同步本表，未知资产不删除。
 > 当前入口（2026-09-26）：从最新 `master` 的 `AGENTS.md` → 本索引；`retro-and-gaps.md` §5.9 是执行门序治理、§6.0 是 W00–W09 领域索引，`stages/` 存任务唯一状态与调度元数据，`handoff.md` 仅存当前主门/现场。 `implementation-plan.md` 是 v9.13 规划修订，不单独定义当前执行模式；允许动作以最新 `handoff.md` + 所属 stage 为准。分工与逐轮审核见 `collaboration-workflow.md`；旧平台目录已退休，历史迁移证据归 `archive/platform-directory-migration-20260920.md`。

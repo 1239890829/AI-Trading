@@ -2,7 +2,8 @@
 
 import {useEffect, useRef, useState} from "react";
 import {useResource} from "@/hooks/use-resource";
-import {createAgentTask, getTradingAgentsResearch, type AgentTask, type TradingAgentsResearchView} from "@/lib/api/agent";
+import {cancelAgentTask, createAgentTask, getTradingAgentsResearch, recoverTradingAgentsResearch, type AgentTask} from "@/lib/api/agent";
+import {ApiError} from "@/lib/api/client";
 import {dateTimeTextBJ} from "@/lib/format";
 import {TradingAgentsReportExplorer} from "./tradingagents-report-explorer";
 import {useDeviceAccess} from "@/components/access/device-access";
@@ -28,21 +29,32 @@ export function TradingAgentsResearchPanel({symbol, active = true, defaultOpen =
 
 function ResearchReader({symbol, allowStart, compact}: {symbol: string; allowStart: boolean; compact: boolean}) {
   const access = useDeviceAccess();
-  const canStart = allowStart && access.device?.maintenance === true;
+  const canStart = allowStart && access.device?.state === "active" && access.device.maintenance === true;
   const [startupChecked, setStartupChecked] = useState(false);
-  const resource = useResource(() => getTradingAgentsResearch(symbol, {savedOnly: !startupChecked}), {key: `${symbol}:${startupChecked ? "conditions" : "saved"}`, marketHours: false, intervalMs: null});
+  const [recoveryChecked, setRecoveryChecked] = useState(false);
+  const [priorPermission, setPriorPermission] = useState(canStart);
+  if (priorPermission !== canStart) {
+    setPriorPermission(canStart);
+    if (!canStart) {setStartupChecked(false); setRecoveryChecked(false);}
+  }
+  const readConditions = canStart && startupChecked;
+  const readRecovery = canStart && recoveryChecked;
+  const resource = useResource(() => getTradingAgentsResearch(symbol, {savedOnly: !readConditions, ...(readRecovery ? {checkRecovery: true} : {})}), {key: `${symbol}:${readConditions ? "conditions" : "saved"}:${readRecovery ? "recovery" : "ordinary"}`, marketHours: false, intervalMs: null});
   const view = resource.data;
-  const [submitting, setSubmitting] = useState(false);
+  const [submitting, setSubmitting] = useState<"start" | "recover" | "cancel" | null>(null);
   const [submitted, setSubmitted] = useState<AgentTask | null>(null);
-  const [error, setError] = useState<{message: string; snapshot: TradingAgentsResearchView | undefined} | null>(null);
+  const [cancelReceipt, setCancelReceipt] = useState<string | null>(null);
+  const [error, setError] = useState<{message: string; uncertain: boolean} | null>(null);
   const busy = useRef(false);
   const alive = useRef(true);
   useEffect(() => { alive.current = true; return () => { alive.current = false; }; }, []);
   const task = view?.task;
   const receiptPending = submitted !== null && task?.id !== submitted.id;
   const activeTask = task?.status === "queued" || task?.status === "running";
-  const canceling = activeTask && task.cancel_requested;
-  const uncertain = error !== null && view === error.snapshot;
+  const canceling = activeTask && (task.cancel_requested || cancelReceipt === task.id);
+  const uncertain = error?.uncertain === true;
+  const recovery = view?.recovery;
+  const unavailable = resource.pending || resource.error != null || view?.task_read_unavailable || !!submitting || receiptPending || uncertain;
   const {pending, error: readError, refresh} = resource;
   useEffect(() => {
     if (pending || readError || !activeTask && !receiptPending) return;
@@ -50,25 +62,41 @@ function ResearchReader({symbol, allowStart, compact}: {symbol: string; allowSta
     return () => clearTimeout(timer);
   }, [pending, readError, refresh, activeTask, receiptPending, task?.status]);
 
-  async function start() {
-    if (!canStart || !startupChecked || busy.current || !view?.executable || resource.pending || resource.error || activeTask || receiptPending || uncertain || view.task_read_unavailable) return;
+  async function submit(operation: "start" | "recover" | "cancel") {
+    if (!canStart || busy.current || unavailable || !view) return;
+    if (operation === "start" && (!readConditions || !view.executable || activeTask)) return;
+    if (operation === "recover" && (!readRecovery || recovery?.state !== "available" || !recovery.source_task_id || !recovery.run_id || activeTask)) return;
+    if (operation === "cancel" && (!task || !activeTask || canceling)) return;
     busy.current = true;
-    setSubmitting(true);
+    setSubmitting(operation);
     setError(null);
     try {
-      const result = await createAgentTask("tradingagents_research", {symbol});
+      const result = operation === "start" ? await createAgentTask("tradingagents_research", {symbol})
+        : operation === "recover" ? await recoverTradingAgentsResearch(recovery!.source_task_id!, recovery!.run_id!)
+        : await cancelAgentTask(task!.id);
       if (!alive.current) return;
-      if (result.type !== "tradingagents_research" || result.params.symbol !== symbol) throw new Error("任务回执证券不匹配，请到任务中心核对");
-      setSubmitted(result);
+      if (!result || result.type !== "tradingagents_research" || !result.params || result.params.symbol !== symbol) throw new Error("任务回执证券不匹配，请到任务中心核对");
+      if (operation === "recover") {
+        const binding = result.params.native_recovery;
+        if (!binding || typeof binding !== "object" || Array.isArray(binding)
+          || (binding as Record<string, unknown>).source_task_id !== recovery!.source_task_id
+          || (binding as Record<string, unknown>).run_id !== recovery!.run_id) throw new Error("恢复回执原任务或运行不匹配，请到任务中心核对");
+      }
+      if (operation === "cancel") {
+        if (result.id !== task!.id) throw new Error("取消回执任务不匹配，请到任务中心核对");
+        setCancelReceipt(result.id);
+      } else setSubmitted(result);
     } catch (failure) {
-      if (alive.current) setError({message: failure instanceof Error ? failure.message : "研究提交未确认", snapshot: view});
+      if (alive.current) setError({message: failure instanceof Error ? failure.message : "研究提交未确认",
+        uncertain: !(failure instanceof ApiError && [400, 401, 403, 404, 409, 422].includes(failure.status))});
     } finally {
       busy.current = false;
-      if (alive.current) { setSubmitting(false); resource.refresh(); }
+      if (alive.current) { setSubmitting(null); resource.refresh(); }
     }
   }
 
   const report = view?.latest;
+  const boundReport = !!report && !!task?.result_run_id && task.result_run_id === report.run_id;
   const lineage = report?.recovery_lineage;
   const selectedResearch = view?.admission.state === "research_only_authorized";
   const methodChanged = report && view?.admission.method_sha256 && report.method_sha256 !== view.admission.method_sha256;
@@ -93,6 +121,7 @@ function ResearchReader({symbol, allowStart, compact}: {symbol: string; allowSta
       {!report && <p>暂无可核验的完整七报告；不代表从未研究。</p>}
       {report && <div>
         {!compact && <p className="font-medium">{symbol} · 已保存完整七报告 · 待核</p>}
+        {task && <p aria-label="报告与任务关联" className="text-zinc-600 dark:text-zinc-400">{boundReport ? "本次任务的保存报告。" : "上次已保存报告，不是本次任务结果。"}</p>}
         {report.review_state === "finite_failed_requires_review" && <p role="alert" className="text-amber-800 dark:text-amber-300">自动来源或引用检查有{report.review_summary.finite_failures}项未通过，原报告保留待复核，不能视为已验证结论。</p>}
         {!compact && <p>同伴释义待审：{report.review_summary.peer_review_required}项。尚无独立人工验收，不代表投资正确率。</p>}
         <p>生成：{dateTimeTextBJ(report.generated_at)} · 材料截点：{dateTimeTextBJ(report.as_of)}。来源披露日期见各原报告。</p>
@@ -107,11 +136,18 @@ function ResearchReader({symbol, allowStart, compact}: {symbol: string; allowSta
       </div>}
       {compact && <details><summary className="cursor-pointer">运行条件与承接状态</summary><div className="mt-2 space-y-2">{runtimeConditions}<p>此处只读已保存结果；查看或重读都不会发起模型调用。</p></div></details>}
     </>}
-    {error && <p role="alert" className="text-amber-800 dark:text-amber-300">{error.message}。请先核对任务状态；提交失败不表示已执行研究。</p>}
+    {error && <p role="alert" className="text-amber-800 dark:text-amber-300">{error.message}。{uncertain ? "提交结果未确认，已停止重复操作；请先到任务中心核对。" : "本次操作被拒绝，可重读条件后再试。"}</p>}
+    {canStart && recovery && recovery.state !== "not_checked" && <div className="text-zinc-600 dark:text-zinc-400" aria-label="原任务恢复条件">
+      <p>{resource.error ? "恢复条件重读失败，当前资格未确认。" : resource.pending ? "正在核对恢复条件，暂不可提交。" : recovery.state === "available" ? "原任务已核对：仅接续未完成步骤，已保存原答不重新生成。" : recovery.state === "none" ? "未发现可恢复的原任务。" : recovery.state === "unknown" ? "恢复状态未确认，不能提交恢复。" : "原任务暂不能恢复。"}</p>
+      {recovery.blockers.length > 0 && <details><summary className="cursor-pointer">查看恢复阻断（{recovery.blockers.length}项）</summary><ul className="list-disc space-y-1 pl-4">{recovery.blockers.map((blocker, index) => <li key={`${blocker.code}:${index}`}>{blocker.message}</li>)}</ul></details>}
+    </div>}
     <div className="flex flex-wrap gap-2">
-      <button type="button" data-action="secondary" disabled={resource.pending || submitting} onClick={resource.refresh}>重新读取研究</button>
-      {canStart && !startupChecked && <button type="button" data-action="quiet" disabled={resource.pending} onClick={()=>setStartupChecked(true)}>检查启动条件</button>}
-      {canStart && <button type="button" data-action="command" disabled={!startupChecked || !view?.executable || resource.pending || resource.error != null || submitting || activeTask || receiptPending || uncertain || view?.task_read_unavailable} onClick={() => void start()}>{submitting ? "正在提交…" : "开始完整研究"}</button>}
+      <button type="button" data-action="secondary" disabled={resource.pending || !!submitting} onClick={resource.refresh}>重新读取研究</button>
+      {canStart && (!startupChecked || view?.startup_conditions_not_checked) && <button type="button" data-action="quiet" disabled={resource.pending} onClick={()=>{if (readConditions && !readRecovery) resource.refresh(); else {setRecoveryChecked(false); setStartupChecked(true);}}}>检查启动条件</button>}
+      {canStart && <button type="button" data-action="command" disabled={!readConditions || !view?.executable || unavailable || activeTask} onClick={() => void submit("start")}>{submitting === "start" ? "正在提交…" : "开始完整研究"}</button>}
+      {canStart && recovery && <button type="button" data-action="quiet" disabled={resource.pending || !!submitting} onClick={() => {if (readRecovery) resource.refresh(); else setRecoveryChecked(true);}}>检查原任务恢复</button>}
+      {canStart && readRecovery && recovery?.state === "available" && <button type="button" data-action="command" disabled={unavailable || activeTask} onClick={() => void submit("recover")}>{submitting === "recover" ? "正在提交恢复…" : "恢复未完成步骤"}</button>}
+      {canStart && activeTask && <button type="button" data-action="quiet" disabled={unavailable || canceling} onClick={() => void submit("cancel")}>{submitting === "cancel" ? "正在请求取消…" : canceling ? "取消处理中" : "取消本次研究"}</button>}
       {canStart && <a href="/agent?area=maintenance&tab=tasks" data-action="quiet">任务中心查看或取消</a>}
     </div>
     {allowStart && !canStart && <p className="text-zinc-600 dark:text-zinc-400">已有报告可直接读取。生成新研究需要维护授权。<button type="button" data-action="quiet" className="ml-2" onClick={access.open}>设备与权限</button></p>}

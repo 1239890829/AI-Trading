@@ -548,6 +548,12 @@ CLI启动warning的兼容依据与固定版本见[语义纠错记录](../ai/sema
 
 ## 2026-10-25 正式板块身份与按需研究
 
+2026-10-26原授权版本承接：从backend运行`PYTHONPATH=. .venv/bin/python scripts/tradingagents_authorization.py`默认只读。核准确source差异，用重复`--reviewed-source`与`--prepare`冻结私有计划，再以`--apply PLAN_ID`在原pin/文件/活动锁未漂移时承接同一授权。只备份授权及旧pin，不复制整份.env，不创建/延期/扩模型；重载前核无活动模型，仍走local-services/check及真实页面。
+
+新增安全同版取消恢复仅支持四分析师fan-out/root step0，必须known原答完整回送、worker真实结束、原生流/receipt/账/检查点完整；`--prepare-grant SOURCE_TASK_ID --run RUN_ID`只准备准确单次恢复许可，按同owner CAS安装。旧缺流故障不放宽。检查使用独立维护GET `/api/agent/research/tradingagents/{symbol}/recovery`；普通保存GET即使附旧query也不运行检查，恢复POST只含run_id，不重跑原答。
+
+三项参考价格研究使用原任务中心`reference_strategies`，只接受可选ISO完成日trade_date。固定本机marketdb只读、完整前缀共享，默认最新已完成源日，不接任意SQL/路径/阈值/模型。原子存档在忽略的`backend/data/picks/reference-runs/`，读取现有method-runs接口要求准确方法/日期/内容版本，不写正式选股/通知/模拟表。相同源/定义复用；首次源钟未知。`verify_reference_strategies.py`仅产描述研究，不是生产晋级回执。
+
 总开关`ASHARE_TRADINGAGENTS_RESEARCH_ENABLED`继续管原手工完整研究和准确授权；新增`ASHARE_TRADINGAGENTS_AUTO_RESEARCH_ENABLED=0`只管新自动派发，不能通过关闭总开关冒充只停自动。原queued/running任务及unknown不取消、不清账，恢复仍按原准确任务/方法/具名许可。
 
 旧报告的小摘要维护命令归本安装backend：`PYTHONPATH=. .venv/bin/python scripts/tradingagents_saved_summary.py --all-saved`默认dry-run；核验后显式加`--write`仅写derived旁车。支持重复`--symbol`限定，不接受任意root路径，不重跑模型或改原件/业务数据库；坏原件保留并明确unavailable，不能为显示完整状态补造。主目录启服前核开关/在途状态、原授权和来源副作用，沿原启动器激活并单独验HTTP/代理与实际页面。

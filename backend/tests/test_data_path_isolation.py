@@ -64,6 +64,8 @@ def _is_real_data_path(p: Path) -> bool:
 _DECLARED: dict[str, tuple[bool, str]] = {
     "services/tradingagents_research.py:ROOT": (
         True, "完整图读取与写入替身统一沙箱隔离，普通GET及冒烟也不读真实研究报告"),
+    "picks/reference_research.py:ROOT": (
+        True, "手动研究写入与普通保存读取统一沙箱，冒烟不读真实批次；专项源库和出参另注入tmp"),
     "events/company_impact.py:ROOT": (
         True, "显式发布CLI的默认落盘与普通读取统一沙箱隔离，专项另注入tmp根，禁止读写实际已发布资料"),
     "core/device_access.py:STORE_PATH": (True, "设备会话 API 及全端点冒烟统一隔离到测试沙箱"),
@@ -386,11 +388,13 @@ def test_test_writable_paths_are_sandboxed():
     import app.review.storage as review_storage
     import app.services.leader_archive as leader_archive
     import app.services.tradingagents_research as tradingagents_research
+    import app.picks.reference_research as reference_research
 
     writable = [k for k, (flag, _) in _DECLARED.items() if flag]
     assert writable, "登记表里没有任何「测试可写」项，疑似登记被误清空"
 
     modules = {
+        "picks/reference_research.py:ROOT": reference_research,
         "services/tradingagents_research.py:ROOT": tradingagents_research,
         "events/company_impact.py:ROOT": company_impact,
         "core/device_access.py:STORE_PATH": device_access,

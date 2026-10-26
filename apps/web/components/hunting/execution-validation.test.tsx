@@ -1,5 +1,5 @@
 import {afterEach,describe,expect,it,vi} from "vitest";
-import {cleanup,fireEvent,render,screen,waitFor} from "@testing-library/react";
+import {cleanup,fireEvent,render,screen,waitFor,within} from "@testing-library/react";
 import {ExecutionContent} from "./execution-validation";
 import {ValidationContent} from "./validation-panel";
 import type {ExecutionReport,ValidationReport} from "@/lib/api/validation";
@@ -13,9 +13,11 @@ describe("internal execution consolidation",() => {
   it("shows existing fills and unknown run evidence without trading actions",() => {
     render(<ExecutionContent report={execution}/>);
     expect(screen.queryByRole("button",{name:/下单|快速建仓|重跑/})).toBeNull();
-    fireEvent.click(screen.getByRole("button",{name:/600127/}));
+    const orders=screen.getByRole("region",{name:"内部委托明细，可横向滚动"});
+    fireEvent.click(within(orders).getByRole("button",{name:/600127/}));
     expect(screen.getByText("5.00 元")).toBeTruthy();
-    fireEvent.click(screen.getByRole("button",{name:/10-13/}));
+    const runs=screen.getByLabelText("每日运行留痕");
+    fireEvent.click(within(runs).getByRole("button",{name:/10-13/}));
     expect(screen.getByText("无可读运行留痕，不能判断是否执行")).toBeTruthy();
   });
   it("filters original orders by result without changing the account facts",() => {

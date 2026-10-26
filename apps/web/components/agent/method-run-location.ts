@@ -1,6 +1,6 @@
-import type {SavedMethodKey, SavedMethodRunDetail, SavedMethodRunIdentity} from "@/lib/api/picks";
+import {isReferenceResearchMethod, type SavedMethodKey, type SavedMethodRunDetail, type SavedMethodRunIdentity} from "@/lib/api/picks";
 
-export type MethodRowFilter = "selected" | "rejected" | "candidate" | "unknown" | "all";
+export type MethodRowFilter = "selected" | "rejected" | "candidate" | "unknown" | "all" | "matched" | "not_matched";
 export interface MethodRunLocation {
   date: string;
   sourceVersion: string;
@@ -24,7 +24,7 @@ export function readMethodRunLocation(search: string, method: string): MethodRun
   return {date: params.get("date") ?? "", sourceVersion: own ? params.get("source_version") ?? "" : "",
     missingSource: own && params.get("source_version_missing") === "true", strategyVersion: own ? params.get("strategy_version") ?? "" : "",
     runId: own ? params.get("run_id") ?? "" : "", contentVersion: own ? params.get("content_version") ?? "" : "",
-    filter: ["selected","rejected","candidate","unknown","all"].includes(filter ?? "") ? filter as MethodRowFilter : "selected",
+    filter: (isReferenceResearchMethod(method) ? ["matched", "not_matched", "unknown", "all"] : ["selected","rejected","candidate","unknown","all"]).includes(filter ?? "") ? filter as MethodRowFilter : isReferenceResearchMethod(method) ? "all" : "selected",
     row: own ? params.get("run_row") ?? "" : ""};
 }
 export function methodRunIdentity(method: SavedMethodKey, location: MethodRunLocation): SavedMethodRunIdentity | null {

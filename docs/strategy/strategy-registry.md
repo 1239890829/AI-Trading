@@ -280,6 +280,28 @@ P2-33② 执行时点双口径（日线反选/盘中正选——条件化翻结�
 
 ## 2026-10-25 正式板块身份与按需研究
 
-默认运行登记与健康监控继续仅原5键。`include_candidates=true`的读者投影额外包含本机TSP参考35项，机器元数据仍由本owner私有目录导出，不建立第二个可执行注册表。31项A股标candidate，4项ETF标out_of_scope，均`runnable=false/evaluable=false`，不能附伪造运行历史或被健康循环执行。
+默认运行登记与健康监控继续仅原5键。`include_candidates=true`的读者投影额外包含本机TSP参考35项，机器元数据仍由本owner私有目录导出，不建立第二个策略注册表。10月25日全部只读；10月26日下节对其中三项开放手动价格研究，其余28项A股参考和4项ETF仍不可运行。研究匹配不进入健康循环、正式选股或模拟。
 
 原名称/参考代码、固定来源版本、简短原条件、现有组件覆盖与缺口进入右侧规则读者；资产/类别/时段/生命周期可筛选，本机关注最多40项只是偏好。原35项完整名单与逐项取舍仍见细功能审计，不复制参考种子结果、伪随机绩效或未获许可代码。下一步验证需冻结可重复的完整规则、基线、点时输入/成本与未见样本；原已否决策略不能改名复活。
+
+## 2026-10-26 三项可运行价格研究与逐项取舍
+
+以下为自有明确v1，不冒称参考工程已公开完整算法。仅维护权限显式运行；普通设备读取原保存批次/日期/内容哈希，沿既有方法右栏展示条件。三项共享一次本机仓扫描，完整前缀初始化EMA，不截60根改变seed；缺档/坏值/源质量警告保留unknown。相同源文件、质量报告、规则定义及日期复用原批，文件原子保存，不向原选股事实表注入研究记录。
+
+| 方法 | 冻结定义 | 已启用范围 |
+|---|---|---|
+| `macd_golden_cross` | EMA12/26的DIF由不高于DEA9转为高于 | 手动价格研究；12/26/9沿现有指标公式 |
+| `ma_bullish` | 收盘价>MA5>MA10>MA20 | 手动价格研究；不臆造未公开发散条件 |
+| `ma_golden_cross` | MA5上穿MA10或MA20、价>MA5、当日量/前5根均量>1 | 手动价格研究；前5根且不含当日是本系统新增的明确假设 |
+
+三项不贡献生产分数，不赋予入选/通知/风控/模拟资格。源库仅有已保存代码行，未认证当前存续或历史全集；日线为当前复权，历史ST/停牌/可成交与发布版本不全，故完整历史准确率、胜率、点时效果仍未知。验证脚本复用原`strategy_verify`的T+5/35bps描述口径，保留全部三次假设及未成熟/未知，不写生产准入记录或按结果找参数。生产仍须原PIT、purge/embargo、试验分母、重叠、成本及真实shadow fill。
+
+| 参考代码（完整35项去向） | 取舍与具体原因 |
+|---|---|
+| hot_theme、dragon_head、event_driven、balanced_alpha、capital_heat、emotion_cycle | 复用正式题材/梯队/公司事件/原六维/资金/市场情绪，保留各自来源；无新增重复算法或虚构阈值 |
+| macd_golden_cross、ma_bullish、ma_golden_cross | 上表三项实际规则、保存和读者，不再只有目录 |
+| low_rebound_quality、limit_up_pullback、rsi_reversal、shrink_pullback、box_first_board_breakout、volume_breakout、l1_l2_volume_resonance、one_yang_three_yin、w_bottom_breakout、bottom_volume、box_oscillation | 低位/容差/确认/量能分母或形态算法不全；不把样例反推出阈值，已有指标或反例继续复用 |
+| blue_chip_income、dual_low、momentum_quality、growth_quality、quality_value、low_volatility_quality、expectation_repricing | 估值/财务/原预期的点时版本或组合定义不足；不能用日价冒充；双低两指标本身未明确 |
+| limit_up_gene、auction_breakout_2to3 | 前者缺历史板块/ST涨停身份与回踩定义，后者另缺真实09:25竞价分母及放大量定义；错过窗口不回填 |
+| etf_cold_rebound、etf_bottom_volume、etf_momentum_rotation、etf_trend_takeoff | 本机可用A股仓无相应ETF范围及完整轮换/退出合同，不混入A股 |
+| wave_theory、chan_theory | 确认规则/变体与未来重绘边界不明、成本高；本轮不采用，不生成自动买卖点 |

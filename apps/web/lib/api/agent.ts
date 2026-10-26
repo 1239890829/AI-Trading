@@ -7,6 +7,7 @@
  */
 
 import { getJson, getJsonArray, sendJson } from "./internal";
+import type {SavedMethodRunIdentity} from "./picks";
 
 export type AgentTaskStatus =
   | "queued"
@@ -48,6 +49,8 @@ export interface AgentTaskResult {
   symbols?: AgentCompanyEvidenceResult[];
   /** 缺失表示未记录，不能当成零调用。 */
   model_calls?: number | null;
+  runs?: SavedMethodRunIdentity[];
+  reused?: boolean;
 }
 
 export interface AgentTask {
@@ -85,12 +88,25 @@ export async function getAgentTasks(type?: string): Promise<AgentTask[]> {
   return getJsonArray<AgentTask>(`/api/agent/tasks${q}`);
 }
 
+export async function getAgentTask(id: string): Promise<AgentTask> {
+  if (!/^[0-9a-f]{32}$/.test(id)) throw new Error("读取任务需要准确任务编号");
+  const value = (await getJson<AgentTask>(`/api/agent/tasks/${id}`)).data;
+  if (!value || value.id !== id) throw new Error("返回任务编号不符");
+  return value;
+}
+
 export async function createAgentTask(type: string, params: Record<string, unknown> = {}): Promise<AgentTask> {
   return (await sendJson<AgentTask>("/api/agent/tasks", "POST", { type, params })).data;
 }
 
 export async function cancelAgentTask(id: string): Promise<AgentTask> {
   return (await sendJson<AgentTask>(`/api/agent/tasks/${id}/cancel`, "POST")).data;
+}
+
+/** Server-bound checkpoint only; runtime, grant and model fields are never supplied by the client. */
+export async function recoverTradingAgentsResearch(sourceTaskId: string, runId: string): Promise<AgentTask> {
+  if (![sourceTaskId, runId].every(value => typeof value === "string" && /^[0-9a-f]{32}$/.test(value))) throw new Error("恢复研究需要准确的原任务与运行编号");
+  return (await sendJson<AgentTask>(`/api/agent/tasks/${sourceTaskId}/recover`, "POST", {run_id: runId})).data;
 }
 
 export type TradingAgentsReportKey = "market_report" | "sentiment_report" | "news_report" | "fundamentals_report"
@@ -138,14 +154,23 @@ export interface TradingAgentsResearchView {
   verification: "unverified_full_graph_research"; production_eligible: false;
   latest: TradingAgentsResearchReport | null;
   task: {id: string; status: AgentTaskStatus; cancel_requested: boolean; failed: boolean;
-    created_at: string; finished_at: string | null; error: {code: string; message: string} | null} | null;
+    created_at: string; finished_at: string | null; error: {code: string; message: string} | null;
+    result_run_id?: string | null} | null;
   task_read_unavailable?: boolean;
+  recovery?: {
+    state: "not_checked" | "available" | "blocked" | "none" | "unknown";
+    source_task_id: string | null;
+    run_id: string | null;
+    blockers: {code: string; message: string}[];
+  };
 }
 
 /** Ordinary paired read. Opening this reader never creates a research task. */
-export async function getTradingAgentsResearch(symbol: string, options: {savedOnly?: boolean} = {}): Promise<TradingAgentsResearchView> {
+export async function getTradingAgentsResearch(symbol: string, options: {savedOnly?: boolean; checkRecovery?: boolean} = {}): Promise<TradingAgentsResearchView> {
   if (!/^\d{6}$/.test(symbol)) throw new Error("完整研究需要六位证券代码");
-  const data = (await getJson<TradingAgentsResearchView>(`/api/agent/research/tradingagents/${symbol}${options.savedOnly ? "?saved_only=true" : ""}`)).data;
+  const params = new URLSearchParams();
+  if (options.savedOnly && !options.checkRecovery) params.set("saved_only", "true");
+  const data = (await getJson<TradingAgentsResearchView>(`/api/agent/research/tradingagents/${symbol}${options.checkRecovery ? "/recovery" : ""}${params.size ? `?${params}` : ""}`)).data;
   const keys: TradingAgentsReportKey[] = ["market_report", "sentiment_report", "news_report", "fundamentals_report", "investment_plan", "trader_investment_plan", "final_trade_decision"];
   const lineage = data?.latest?.recovery_lineage;
   const lineageKeys = ["version", "source_task_id", "source_run_id", "recovery_task_id", "source_method_sha256", "recovery_method_sha256",
@@ -159,12 +184,21 @@ export async function getTradingAgentsResearch(symbol: string, options: {savedOn
     || ![lineage.reused_original_outputs, lineage.inherited_unknown_usage_count].every(value => Number.isSafeInteger(value) && value >= 0 && value <= 10000)
     || !Number.isSafeInteger(lineage.new_call_from) || lineage.new_call_from < 1
     || !Number.isSafeInteger(lineage.new_call_to) || lineage.new_call_to < lineage.new_call_from);
+  const recovery = data?.recovery;
+  const invalidRecovery = recovery !== undefined && (!recovery || typeof recovery !== "object" || Array.isArray(recovery)
+    || !["not_checked", "available", "blocked", "none", "unknown"].includes(recovery.state)
+    || ![recovery.source_task_id, recovery.run_id].every(value => value === null || typeof value === "string" && /^[0-9a-f]{32}$/.test(value))
+    || !Array.isArray(recovery.blockers) || recovery.blockers.some(row => !row || typeof row.code !== "string" || typeof row.message !== "string")
+    || recovery.state === "available" && (!recovery.source_task_id || !recovery.run_id || recovery.blockers.length > 0)
+    || recovery.state === "available" && !options.checkRecovery);
   if (!data || data.symbol !== symbol || typeof data.enabled !== "boolean" || typeof data.executable !== "boolean"
     || !Array.isArray(data.blockers) || data.blockers.some(row => !row || typeof row.code !== "string" || typeof row.message !== "string")
     || data.executable && (!data.enabled || data.blockers.length > 0)
     || !data.admission || typeof data.admission.state !== "string"
     || data.latest === undefined || data.task === undefined
-    || data.verification !== "unverified_full_graph_research" || data.production_eligible !== false || invalidLineage
+    || data.verification !== "unverified_full_graph_research" || data.production_eligible !== false || invalidLineage || invalidRecovery
+    || data.task?.result_run_id !== undefined && data.task.result_run_id !== null
+      && (data.task.status !== "succeeded" || typeof data.task.result_run_id !== "string" || !/^[0-9a-f]{32}$/.test(data.task.result_run_id))
     || data.latest && (data.latest.symbol !== symbol || data.latest.verification !== data.verification
       || data.latest.production_eligible !== false || !data.latest.reports
       || !["unreviewed", "finite_failed_requires_review"].includes(data.latest.review_state)

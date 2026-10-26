@@ -62,6 +62,10 @@ TASK_TYPES: dict[str, dict[str, str]] = {
         "label": "完整多角色研究", "risk": "L0",
         "desc": "真正入选后运行完整TradingAgents；独立研究授权不设每日次数配额，保留用量/来源/恢复核验；报告待核",
     },
+    "reference_strategies": {
+        "label": "参考战法研究筛选", "risk": "L0",
+        "desc": "仅用本机已完成日线共享核验三项价格规则；保存全分母，不调用模型、不改变正式入选或模拟资格",
+    },
     "mutation": {
         "label": "系统变更留痕",
         "risk": "L1",
@@ -591,7 +595,20 @@ async def _h_tradingagents_research(rec: _StepRecorder, params: dict, app: Any) 
     return await run_research(rec, params, app)
 
 
+async def _h_reference_strategies(rec: _StepRecorder, params: dict, app: Any) -> dict:
+    from app.picks.reference_research import run_batch
+
+    await rec.checkpoint_async()
+    started = time.perf_counter()
+    result = await _db_thread(run_batch, params, checkpoint=rec.checkpoint)
+    await rec.add_async(name="三规则共享筛选与保存", input_summary="本机复权收盘/实际成交量；已完成交易日",
+                        output_summary="复用原版本" if result['reused'] else "三个方法已保存；未改变正式选股或执行资格",
+                        duration_ms=int((time.perf_counter() - started) * 1000), ok=True)
+    return result
+
+
 _HANDLERS: dict[str, Callable[[_StepRecorder, dict, Any], Awaitable[dict]]] = {
+    "reference_strategies": _h_reference_strategies,
     "company_evidence": _h_company_evidence,
     "tradingagents_research": _h_tradingagents_research,
     "review": _h_review,

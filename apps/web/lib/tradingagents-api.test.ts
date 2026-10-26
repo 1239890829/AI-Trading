@@ -1,6 +1,6 @@
 import {beforeEach, expect, it, vi} from "vitest";
-import {getTradingAgentsResearch} from "./api/agent";
-import {getJson} from "./api/internal";
+import {getAgentTask, getTradingAgentsResearch, recoverTradingAgentsResearch} from "./api/agent";
+import {getJson, sendJson} from "./api/internal";
 
 vi.mock("./api/internal", () => ({getJson: vi.fn(), getJsonArray: vi.fn(), sendJson: vi.fn()}));
 const fixture = () => ({symbol: "002121", enabled: false, executable: false, blockers: [], admission: {state: "not_admitted"}, verification: "unverified_full_graph_research", production_eligible: false, latest: null, task: null});
@@ -75,4 +75,70 @@ it("uses the saved-only read and retains valid originals when a role projection 
   expect(result.latest!.roles).toBeUndefined();
   expect(result.latest!.role_projection_state).toBe("unavailable");
   expect(value.latest.roles).toHaveLength(1);
+});
+
+const recovery = () => ({state: "available", source_task_id: "1".repeat(32), run_id: "2".repeat(32), blockers: []});
+it("checks recovery explicitly without checking normal launch conditions or submitting a task", async () => {
+  const value = {...fixture(), recovery: recovery()};
+  vi.mocked(getJson).mockResolvedValue({data: value, meta: {}} as never);
+  expect((await getTradingAgentsResearch("002121", {savedOnly: true, checkRecovery: true})).recovery).toEqual(recovery());
+  expect(getJson).toHaveBeenCalledWith("/api/agent/research/tradingagents/002121/recovery");
+  expect(sendJson).not.toHaveBeenCalled();
+});
+
+it.each([
+  {...recovery(), state: "other"}, {...recovery(), source_task_id: null}, {...recovery(), run_id: "../run"},
+  {...recovery(), blockers: [{code: "blocked", message: "已阻断"}]}, {...recovery(), blockers: null},
+])("rejects contradictory or unbound recovery conditions %j", async value => {
+  vi.mocked(getJson).mockResolvedValue({data: {...fixture(), recovery: value}, meta: {}} as never);
+  await expect(getTradingAgentsResearch("002121", {checkRecovery: true})).rejects.toThrow("身份或报告不完整");
+});
+
+it("does not accept an available recovery grant from an ordinary unchecked response", async () => {
+  vi.mocked(getJson).mockResolvedValue({data: {...fixture(), recovery: recovery()}, meta: {}} as never);
+  await expect(getTradingAgentsResearch("002121", {savedOnly: true})).rejects.toThrow("身份或报告不完整");
+});
+
+it("recovers only the exact original task and run without model, grant or runtime parameters", async () => {
+  vi.mocked(sendJson).mockResolvedValue({data: {id: "3".repeat(32)}, meta: {}} as never);
+  await recoverTradingAgentsResearch("1".repeat(32), "2".repeat(32));
+  expect(sendJson).toHaveBeenCalledExactlyOnceWith(`/api/agent/tasks/${"1".repeat(32)}/recover`, "POST", {run_id: "2".repeat(32)});
+});
+
+it.each([["../task", "2".repeat(32)], ["1".repeat(32), "A".repeat(32)]])("rejects invalid recovery identity %j before a request", async (taskId, runId) => {
+  await expect(recoverTradingAgentsResearch(taskId, runId)).rejects.toThrow("准确的原任务与运行编号");
+  expect(sendJson).not.toHaveBeenCalled();
+});
+
+it.each(["running", "failed"])("rejects a %s task falsely claiming a saved result_run_id", async status => {
+  vi.mocked(getJson).mockResolvedValue({data: {...completed(), task: {id: "1".repeat(32), status, result_run_id: "2".repeat(32)}}, meta: {}} as never);
+  await expect(getTradingAgentsResearch("002121")).rejects.toThrow("身份或报告不完整");
+});
+
+it.each(["not_checked", "blocked", "none", "unknown"])("retains explicit non-executable recovery state %s without inferring permission", async state => {
+  const value = {...fixture(), recovery: {state, source_task_id: null, run_id: null, blockers: []}};
+  vi.mocked(getJson).mockResolvedValue({data: value, meta: {}} as never);
+  expect((await getTradingAgentsResearch("002121", {savedOnly: true})).recovery?.state).toBe(state);
+});
+
+it("retains the successful task's exact report run identity without replacing it with the latest symbol report", async () => {
+  const value = {...completed(), task: {id: "1".repeat(32), status: "succeeded", result_run_id: "4".repeat(32)}};
+  vi.mocked(getJson).mockResolvedValue({data: value, meta: {}} as never);
+  const result = await getTradingAgentsResearch("002121", {savedOnly: true});
+  expect(result.task?.result_run_id).toBe("4".repeat(32));
+  expect(result.latest!.run_id).toBe("2".repeat(32));
+});
+
+it("reads only the exact submitted maintenance task and rejects a foreign task response", async () => {
+  const id="1".repeat(32);
+  vi.mocked(getJson).mockResolvedValueOnce({data:{id},meta:{}} as never);
+  expect((await getAgentTask(id)).id).toBe(id);
+  expect(getJson).toHaveBeenCalledWith(`/api/agent/tasks/${id}`);
+  vi.mocked(getJson).mockResolvedValueOnce({data:{id:"2".repeat(32)},meta:{}} as never);
+  await expect(getAgentTask(id)).rejects.toThrow("任务编号不符");
+});
+
+it.each(["../task", "A".repeat(32), ""])("rejects unsafe single-task read identity %s", async id => {
+  await expect(getAgentTask(id)).rejects.toThrow("准确任务编号");
+  expect(getJson).not.toHaveBeenCalled();
 });

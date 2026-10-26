@@ -3,7 +3,7 @@
 import { useEffect, useMemo, useState, useSyncExternalStore } from "react";
 import Link from "next/link";
 import { useResource } from "@/hooks/use-resource";
-import { getStrategyRegistry, type StrategyRegistryItem } from "@/lib/api/picks";
+import { getStrategyRegistry, isReferenceResearchMethod, type StrategyRegistryItem } from "@/lib/api/picks";
 import { methodRunDay, methodRunUrl, readMethodRunLocation } from "@/components/agent/method-run-location";
 
 interface MethodDiscovery {
@@ -16,7 +16,7 @@ interface MethodDiscovery {
 }
 
 const LIFECYCLES = [
-  ["all", "全部"], ["active", "现役"], ["candidate", "来源候选"], ["out_of_scope", "范围未开放"], ["observing", "观察"], ["rejected", "已否决"],
+  ["all", "全部"], ["active", "现役"], ["research_ready", "研究可运行"], ["candidate", "来源候选"], ["out_of_scope", "范围未开放"], ["observing", "观察"], ["rejected", "已否决"],
 ] as const;
 
 export function discoveryMetadata(row: StrategyRegistryItem): MethodDiscovery {
@@ -53,7 +53,7 @@ export function discoveryMethodHref(method: string, search: string, date?: strin
   };
   if (params.get("method") !== method) {
     clearIdentity();
-    location.filter = "selected";
+    location.filter = isReferenceResearchMethod(method) ? "all" : "selected";
   }
   if (date !== undefined && date !== location.date && (!methodRunDay(date) || methodRunDay(date) !== methodRunDay(location.date))) {
     location.date = date;
@@ -64,6 +64,7 @@ export function discoveryMethodHref(method: string, search: string, date?: strin
 
 export function SavedRunSummary({ row, date }: {row: StrategyRegistryItem; date?: string}) {
   const run = row.runtime;
+  if (!run && methodSupportsManualResearch(row)) return <span>保存研究结果按需读取</span>;
   if (!run || run.state === "missing") return <span>尚无保存运行</span>;
   if (run.state === "error") return <span>原运行读取异常</span>;
   if (run.state !== "saved" && run.state !== "partial") return <span>原运行状态未核</span>;
@@ -81,20 +82,31 @@ export function SavedRunSummary({ row, date }: {row: StrategyRegistryItem; date?
 
 export function discoveryMethodScope(date: string | undefined, key: string) {return JSON.stringify(["methods", date ?? null, key]);}
 
+export function methodSupportsManualResearch(row: StrategyRegistryItem): boolean {
+  const execution = row.candidate?.execution;
+  return row.catalog_kind === "reference" && row.status === "research_ready" && isReferenceResearchMethod(row.key) && row.candidate?.asset === "stock"
+    && row.candidate.runnable === true && execution?.mode === "manual_research" && execution.production_enabled === false
+    && typeof execution.version === "string" && !!execution.version.trim()
+    && typeof execution.definition === "string" && !!execution.definition.trim()
+    && typeof execution.definition_supplement === "string" && !!execution.definition_supplement.trim()
+    && typeof execution.definition_digest === "string" && /^[0-9a-f]{64}$/.test(execution.definition_digest);
+}
+
 export function validMethodRow(row: StrategyRegistryItem): boolean {
   if (!row || typeof row.key !== "string" || !/^[a-zA-Z0-9_:-]{1,128}$/.test(row.key)) return false;
   if (row.name !== undefined && (typeof row.name !== "string" || !row.name.trim())) return false;
   if (row.status !== undefined && typeof row.status !== "string") return false;
   if (row.catalog_kind !== "reference") return !row.key.startsWith("reference:") && (row.catalog_kind === undefined || row.catalog_kind === "registered");
   const value = row.candidate;
-  return !!value && value.runnable === false && ["stock", "etf"].includes(value.asset) && row.key === `reference:${value.source_code}`
-    && row.status === (value.asset === "etf" ? "out_of_scope" : "candidate")
+  return !!value && (value.runnable === false || methodSupportsManualResearch(row)) && ["stock", "etf"].includes(value.asset) && row.key === `reference:${value.source_code}`
+    && row.status === (value.asset === "etf" ? "out_of_scope" : value.runnable === true ? "research_ready" : "candidate")
     && [value.source_label, value.source_code, value.source_version].every(item => typeof item === "string" && !!item.trim())
     && [value.criteria, value.existing_coverage, value.limitations].every(items => Array.isArray(items) && items.every(item => typeof item === "string" && !!item.trim()));
 }
 
 export function methodSupportsRuns(row: StrategyRegistryItem) {
-  return row.catalog_kind !== "reference" && discoveryMetadata(row).supports_saved_runs && ["daily_picks", "intraday_watch"].includes(row.key);
+  return discoveryMetadata(row).supports_saved_runs && (methodSupportsManualResearch(row)
+    || row.catalog_kind !== "reference" && ["daily_picks", "intraday_watch"].includes(row.key));
 }
 export function methodStatusLabel(row: StrategyRegistryItem) {return LIFECYCLES.find(([key]) => key !== "all" && key === row.status)?.[1] || "状态未登记";}
 
@@ -267,7 +279,7 @@ export function DiscoveryMethods({active = true, date, search = "", onNavigate, 
           </div>
           <p className="mt-1 text-xs leading-relaxed text-zinc-600 dark:text-zinc-400">{metadata.summary}</p>
           <div className="mt-2 flex flex-wrap items-center gap-x-3 gap-y-1 text-[11px] text-zinc-600 dark:text-zinc-400">
-            <span>{statusLabel}{row.catalog_kind === "reference" ? ` · ${row.candidate?.asset === "etf" ? "ETF参考" : "待评价，不可运行"}` : ""}</span>
+            <span>{statusLabel}{row.catalog_kind === "reference" ? ` · ${row.candidate?.asset === "etf" ? "ETF参考" : methodSupportsManualResearch(row) ? "仅手动研究" : "待评价，不可运行"}` : ""}</span>
             {supportsRuns ? <SavedRunSummary row={row} date={date}/> : row.catalog_kind !== "reference" && <span>{verificationLabel}{row.verification?.stale ? " · 需复核" : ""}</span>}
             {row.catalog_kind !== "reference" && <Link className="quiet-action ml-auto" href={discoveryMethodHref(row.key, search, date)}>
               {supportsRuns ? "查看原运行与版本" : "查看核验与反例"}<span className="sr-only">：{row.name || row.key}</span>
@@ -276,6 +288,6 @@ export function DiscoveryMethods({active = true, date, search = "", onNavigate, 
         </li>;
       })}
     </ul>
-    <p className="text-[11px] text-zinc-600 dark:text-zinc-400">关注仅本机偏好，不启用方法；来源候选、观察及否决方法不参与当前选股。</p>
+    <p className="text-[11px] text-zinc-600 dark:text-zinc-400">关注仅本机偏好；来源候选、手动研究、观察及否决方法不参与当前选股。</p>
   </section>;
 }

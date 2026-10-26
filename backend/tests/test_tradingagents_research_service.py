@@ -327,3 +327,93 @@ def test_api_rejects_runtime_override_params_before_task_creation(env, monkeypat
     assert response.status_code == 422
     with sf() as db:
         assert db.execute(select(AgentTask)).scalars().all() == []
+
+
+def test_saved_only_recovery_identity_is_lazy_and_explicit_check_does_not_require_current_selection(env, monkeypatch):
+    from app.services import tradingagents_recovery as recovery
+    sf, app = env
+    task_id, run_id = "a" * 32, "b" * 32
+    with sf() as db:
+        db.add(AgentTask(id=task_id, type="tradingagents_research", status="canceled", params='{"symbol":"600276"}',
+            created_at=beijing_now_naive(), finished_at=beijing_now_naive()))
+        db.commit()
+    run = research.ROOT / "600276" / run_id; run.mkdir(parents=True)
+    (run / "execution.json").write_text(json.dumps({"state": "canceled", "task_id": task_id, "run_id": run_id, "symbol": "600276"}))
+    monkeypatch.setattr(research, "_latest", lambda *a: None)
+    monkeypatch.setattr(research, "preflight", lambda *a, **k: pytest.fail("Saved recovery reads must not require today's selection"))
+    checked = []
+    monkeypatch.setattr(recovery, "_context", lambda *a, **k: checked.append(a[:2]))
+    view = research.read_view("600276", app, saved_only=True)
+    assert view["recovery"] == {"state": "not_checked", "source_task_id": task_id, "run_id": run_id, "blockers": []}
+    assert view["task"]["result_run_id"] is None and checked == []
+    view = research.read_view("600276", app, saved_only=True, check_recovery=True)
+    assert view["recovery"]["state"] == "available" and checked == [(task_id, run_id)]
+    assert research.read_view("600150", app, saved_only=True)["recovery"]["state"] == "none"
+
+
+@pytest.mark.parametrize("fault", ["legacy", "wrong_symbol", "two_runs", "grant_denied"])
+def test_recovery_projection_never_guesses_latest_run_or_grants_a_denied_source(env, monkeypatch, fault):
+    from app.services import tradingagents_recovery as recovery
+    sf, app = env
+    task_id, run_id = "a" * 32, "b" * 32
+    with sf() as db:
+        db.add(AgentTask(id=task_id, type="tradingagents_research", status="failed", params='{"symbol":"600276"}'))
+        db.commit()
+    run = research.ROOT / "600276" / run_id; run.mkdir(parents=True)
+    value = {"state": "canceled", "task_id": task_id, "run_id": run_id, "symbol": "600276"}
+    if fault == "legacy": value.pop("task_id")
+    if fault == "wrong_symbol": value["symbol"] = "600150"
+    (run / "execution.json").write_text(json.dumps(value))
+    if fault == "two_runs":
+        other = run.parent / ("c" * 32); other.mkdir()
+        (other / "execution.json").write_text(json.dumps({**value, "run_id": other.name}))
+    monkeypatch.setattr(research, "_latest", lambda *a: None)
+    def denied(*a, **kw): raise research.ResearchBlocked([{"code": "recovery_grant_missing", "message": "Exact original grant required"}])
+    monkeypatch.setattr(recovery, "_context", denied)
+    view = research.read_view("600276", app, saved_only=True, check_recovery=True)
+    assert view["recovery"]["state"] == ("blocked" if fault == "grant_denied" else "unknown")
+    assert view["recovery"]["blockers"] and view["task"]["result_run_id"] is None
+
+
+@pytest.mark.parametrize("status,symbol,run_id,expected", [
+    ("succeeded", "600276", "b" * 32, "b" * 32), ("failed", "600276", "b" * 32, None),
+    ("succeeded", "600150", "b" * 32, None), ("succeeded", "600276", "../latest", None)])
+def test_report_run_belongs_to_exact_successful_task(env, status, symbol, run_id, expected):
+    sf, _ = env
+    with sf() as db:
+        task = AgentTask(id="a" * 32, type="tradingagents_research", status=status, params='{"symbol":"600276"}',
+            result_ref=json.dumps({"symbol": symbol, "run_id": run_id}))
+        db.add(task); db.commit()
+        assert research._public_task(task)["result_run_id"] == expected
+
+
+def test_real_assembled_recovery_check_requires_maintenance_and_ordinary_query_cannot_trigger_it(env,tmp_path,monkeypatch):
+    from fastapi.testclient import TestClient
+    from app.main import app
+    from app.core import device_access as access
+    monkeypatch.setattr(access,"STORE_PATH",tmp_path/'paired.sqlite3')
+    monkeypatch.setattr(settings,"api_token","fixture-service")
+    store=access.get_device_store();origin='http://device.test:3000'
+    admin,_=store.bootstrap(store.bootstrap_code(),'电脑',origin)
+    mobile,mobile_row=store.start('普通设备',origin)
+    store.manage(admin,origin,mobile_row['id'],'approve')
+    headers={'X-API-Token':'fixture-service',access.BROWSER_HEADER:'1',access.SESSION_HEADER:mobile,access.ORIGIN_HEADER:origin}
+    observed=[]
+    def read(symbol,application,*,saved_only=False,check_recovery=False,**kwargs):
+        observed.append((symbol,saved_only,check_recovery))
+        return {'symbol':symbol,'latest':None,'recovery':{'state':'not_checked' if not check_recovery else 'blocked',
+            'source_task_id':None,'run_id':None,'blockers':[]}}
+    monkeypatch.setattr(research,'read_view',read)
+    probe=TestClient(app)  # Actual mounted routers/auth, without any lifespan worker.
+    path='/api/agent/research/tradingagents/600276'
+    response=probe.get(path+'?saved_only=true&check_recovery=true',headers=headers)
+    assert response.status_code==200 and observed==[('600276',True,False)]
+    assert probe.get(path+'/recovery?saved_only=true',headers=headers).status_code==403
+    assert len(observed)==1
+    store.manage(admin,origin,mobile_row['id'],'grant-maintenance')
+    response=probe.get(path+'/recovery?saved_only=false',headers=headers)
+    assert response.status_code==200 and observed[-1]==('600276',True,True)
+    store.manage(admin,origin,mobile_row['id'],'end-maintenance')
+    assert probe.get(path+'/recovery',headers=headers).status_code==403
+    assert probe.get(path+'?saved_only=true',headers=headers).status_code==200
+    assert observed[-1]==('600276',True,False) and store.authorize(admin,origin)['maintenance'] is False
