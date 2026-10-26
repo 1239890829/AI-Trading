@@ -1,5 +1,6 @@
 """Hermetic native continuation contracts, never model quality evidence."""
 import asyncio
+import ast
 from copy import deepcopy
 from datetime import datetime,timedelta
 import hashlib
@@ -22,6 +23,7 @@ from app.services import tradingagents_driver as driver,tradingagents_research a
 NOW=datetime.fromisoformat('2026-10-21T16:00:00+08:00')
 OLD,NEW,RUN,GRANT=('a'*32,'b'*32,'c'*32,'d'*32)
 SYMBOL='002264'
+_REAL_CHECKPOINT_PROJECTION = recovery._checkpoint_wire_projection
 
 def put(path,value):
     path.parent.mkdir(parents=True,exist_ok=True); atomic_json(path,value)
@@ -1735,3 +1737,342 @@ def test_frozen_search_owner_pair_refuses_an_unreviewed_quote_function_change(en
     e.current['packet_builder']['owner_sources']['data_providers/tencent.py']=changed
     e.grant['compatibility']['packet_owner_hash_pairs']['data_providers/tencent.py']['new']=changed
     with pytest.raises(research.ResearchBlocked):recovery._compatibility(e.grant,e.current)
+
+
+# Single never-started allocation-tail contracts.
+def allocation_tail(e, monkeypatch):
+    e = cooperative_env(e)
+    e.current["source_files"].update(recovery.COOPERATIVE_TAIL_SOURCES)
+    method = research._digest(e.current)
+    source = recovery._json(e.source_claim)
+    e.source_claim.unlink(); e.source_claim = research._selection_claim(e.selection, method)
+    source["method_sha256"] = method; put(e.source_claim, source)
+    execution = recovery._json(e.run / "execution.json"); execution["method_sha256"] = method
+    put(e.run / "execution.json", execution)
+    for folder in ("model-outputs", "usage-receipts"):
+        (e.run / folder / "2.json").unlink()
+    with e.sf() as db:
+        db.query(AgentResourceUsage).filter(AgentResourceUsage.id == f"{2:032x}").delete()
+        db.commit()
+    output = {"content": "original bounded proposal", "tool_calls": [
+        {"id": f"original-{n}", "name": "get_news", "arguments": {"symbol": SYMBOL}} for n in range(5)]}
+    put(e.run / "model-outputs/1.json", {"call_id": 1, "role": "Fundamentals Analyst",
+        "structured_output": output, "output_sha256": research._digest(output)})
+    receipt = recovery._json(e.run / "usage-receipts/1.json")
+    receipt.update(output_sha256=research._digest(output), method_sha256=method)
+    put(e.run / "usage-receipts/1.json", receipt)
+    rows = [{"at": (NOW - timedelta(seconds=31)).isoformat(), "case_id": SYMBOL, "arm": "ta-luna",
+        "role": "Fundamentals Analyst", "upstream_node": "agent", "status": "returned", "call_id": 1,
+        "response_sha256": research._digest(output), "tool_calls": 5,
+        "tool_call_id_map": [{"model_id": f"original-{n}", "graph_id": f"mapped-{n}"} for n in range(5)]}]
+    for n, role in enumerate(("News Analyst", "Market Analyst", "Fundamentals Analyst", "Sentiment Analyst")):
+        rows.append({"at": (NOW - timedelta(seconds=20)).isoformat(), "case_id": SYMBOL, "arm": "ta-luna",
+            "role": role, "upstream_node": "agent", "status": "broker_error", "call_id": None,
+            "error_type": "{'kind': 'CancelledError'}" if n == 0 else "{'kind': 'DriverUnavailable'}"})
+    (e.run / "graph/model-receipts.jsonl").write_text("".join(json.dumps(row) + "\n" for row in rows))
+    wire = {role: [{"role": "user", "content": "original bounded issuer evidence"}] for role in PARALLEL_ROLES}
+    wire["Fundamentals Analyst"].append({"role": "assistant", "content": output["content"], "tool_calls": [
+        {"id": f"mapped-{n}", "name": "get_news", "args": {"symbol": SYMBOL}, "type": "tool_call"} for n in range(5)]})
+    tools = [{"role": "tool", "content": "frozen tool result", "tool_call_id": f"mapped-{n}", "name": "get_news", "status": "success"} for n in range(5)]
+    wire["Fundamentals Analyst"].extend(tools)
+    e.messages = wire
+    e.projection = {"messages": {role: [research._digest(row) for row in messages] for role, messages in wire.items()},
+        "proposals": {"1": {"role": "Fundamentals Analyst", "assistant_sha256": research._digest(wire["Fundamentals Analyst"][1]),
+            "tool_ids": [f"mapped-{n}" for n in range(5)], "tool_results_sha256": research._digest(tools)}}}
+    # Protocol tests bind a narrow projection fixture. The actual pinned native
+    # decoder is checked separately against passive message encodings and the
+    # exact real-run checkpoint; this stub does not claim native decoding.
+    monkeypatch.setattr(recovery, "_checkpoint_wire_projection", lambda *args, **kwargs: deepcopy(e.projection))
+    e.auth["native_recovery_grants"] = []
+    e.pin()
+    return e
+
+
+def test_legacy_cooperative_proof_stays_strict_for_reserved_but_unstarted_tail(env, monkeypatch):
+    e = allocation_tail(env, monkeypatch)
+    with pytest.raises(research.ResearchBlocked) as failure:
+        recovery.prepare_cooperative_grant(OLD, RUN, e.current, grant_id=GRANT,
+            authorized_at=NOW.isoformat(), valid_until=(NOW + timedelta(hours=1)).isoformat(), sf=e.sf)
+    assert failure.value.code == "recovery_cooperative_usage_incomplete"
+    assert recovery._json(e.run / "call-counter.json") == {"reserved": 2}
+    assert e.native.calls == 0
+
+
+def test_explicit_single_tail_preparation_preserves_counter_and_originals(env, monkeypatch):
+    e = allocation_tail(env, monkeypatch)
+    method = research._digest(e.current)
+    originals = {path: path.read_bytes() for path in (e.run / "model-outputs/1.json", e.run / "usage-receipts/1.json")}
+    grant = recovery.prepare_cooperative_grant(OLD, RUN, e.current, grant_id=GRANT,
+        authorized_at=NOW.isoformat(), valid_until=(NOW + timedelta(hours=1)).isoformat(), sf=e.sf,
+        prelaunch_tail=True, driver=e.native)
+    assert grant["compatibility"]["kind"] == "reviewed_cooperative_prelaunch_tail_v1"
+    assert grant["source_method_identity"] == grant["continuation_method_identity"] == e.current
+    assert grant["binding"]["call_counter"] == 2
+    assert set(grant["binding"]["outputs"]) == set(grant["binding"]["usage_receipts"]) == {"1"}
+    assert recovery._json(e.run / "call-counter.json") == {"reserved": 2}
+    assert all(path.read_bytes() == raw for path, raw in originals.items())
+    assert not (e.run / "usage-receipts/2.json").exists() and e.native.calls == 0
+    assert research._digest(grant["source_method_identity"]) == method
+
+
+def prepared_allocation_tail(e, monkeypatch, *, target_recovery_hash=None, source_proof=None):
+    e = allocation_tail(e, monkeypatch)
+    original_identity = deepcopy(e.current)
+    if target_recovery_hash is not None:
+        e.current["source_files"]["tradingagents_recovery.py"] = target_recovery_hash
+    e.grant = recovery.prepare_cooperative_grant(OLD, RUN, e.current, grant_id=GRANT,
+        authorized_at=NOW.isoformat(), valid_until=(NOW + timedelta(hours=1)).isoformat(), sf=e.sf,
+        prelaunch_tail=True, source_identity=original_identity, source_rebind_proof=source_proof, driver=e.native)
+    e.auth["native_recovery_grants"] = [e.grant]
+    e.pin()
+    original_execute = e.native._execute
+    async def continue_wire(*, recovery_guard, **kwargs):
+        def guard(request, counter):
+            recovery_guard({**request, "messages": e.messages[request["role"]]}, counter)
+        return await original_execute(recovery_guard=guard, **kwargs)
+    e.native._execute = continue_wire
+    e.native.first_role = "Fundamentals Analyst"
+    e.native.resume_counter = 2
+    return e
+
+
+def test_single_tail_original_graph_continuation_uses_next_allocation_and_keeps_paid_answer(env, monkeypatch):
+    e = prepared_allocation_tail(env, monkeypatch)
+    original = {path: path.read_bytes() for path in (e.run / "model-outputs/1.json", e.run / "usage-receipts/1.json")}
+    c, owner = consumed(e)
+    result = asyncio.run(recovery.run_recovery(e.rec, params(c, owner), e.app))
+    assert result["state"] == "completed" and result["recovery_lineage"]["new_call_from"] == 3
+    assert result["recovery_lineage"]["reused_original_outputs"] == 1
+    assert result["recovery_lineage"]["inherited_unknown_usage_count"] == 0
+    last = recovery._json(e.run / "call-counter.json")["reserved"]
+    receipts = list((e.run / "usage-receipts").glob("*.json"))
+    assert len(receipts) == 1 + (last - 2) == last - 1
+    assert not (e.run / "usage-receipts/2.json").exists()
+    assert all(path.read_bytes() == raw for path, raw in original.items())
+    assert research._latest(SYMBOL)["recovery_lineage"] == result["recovery_lineage"]
+    prior = research._execution_prior(e.selection, research._digest(e.current))
+    assert research._completed_selection(prior, e.selection)["reused_identical_selection"]
+
+
+@pytest.mark.parametrize("mutation", ["interior_gap", "two_tail", "receipt_tail", "started", "unknown", "extra_known",
+    "future_driver", "future_budget", "future_transport", "stream_hash", "error_type", "returned_after_cancel", "error_role",
+    "token", "output", "receipt", "wrong_checkpoint", "original_not_checkpointed"])
+def test_single_tail_rejects_nonproof_or_paid_drift_before_any_new_request(env, monkeypatch, mutation):
+    e = prepared_allocation_tail(env, monkeypatch)
+    if mutation in {"started", "unknown", "extra_known", "token"}:
+        with e.sf() as db:
+            if mutation == "token": db.get(AgentResourceUsage, f"{1:032x}").input_tokens += 1
+            elif mutation == "unknown": db.get(AgentResourceUsage, f"{1:032x}").usage_known = 0
+            else: db.add(AgentResourceUsage(id="f" * 32, task_id=OLD, kind="model", state="started" if mutation == "started" else "succeeded",
+                scope=agent_budget.SCOPE_SELECTED_RESEARCH_LLM, purpose="unexpected original call",
+                budget_date=NOW.date().isoformat(), usage_known=mutation == "extra_known",
+                started_at=(NOW-timedelta(seconds=25)).replace(tzinfo=None)))
+            db.commit()
+    elif mutation in {"interior_gap", "two_tail"}:
+        if mutation == "interior_gap": (e.run / "model-outputs/1.json").unlink()
+        else: e.grant["binding"]["call_counter"] = 3
+    elif mutation == "receipt_tail": put(e.run / "usage-receipts/2.json", {})
+    elif mutation.startswith("future_"):
+        name = {"future_driver":"driver.py", "future_budget":"agent_budget.py", "future_transport":"codex_transport.py"}[mutation]
+        e.current["source_files"][name] = "f" * 64
+        e.grant["source_method_identity"]["source_files"][name] = "f" * 64
+        e.grant["continuation_method_identity"]["source_files"][name] = "f" * 64
+    elif mutation in {"stream_hash", "error_type", "returned_after_cancel", "error_role"}:
+        path = e.run / "graph/model-receipts.jsonl"
+        records = [json.loads(line) for line in path.read_text().splitlines()]
+        if mutation == "error_type": records[1]["error_type"] = "{'kind': 'ValueError'}"
+        elif mutation == "returned_after_cancel": records.append(records[0])
+        elif mutation == "error_role": records[1]["role"] = "Trader"
+        else: records[0]["response_sha256"] = "f" * 64
+        path.write_text("".join(json.dumps(row) + "\n" for row in records))
+        prefix = e.grant["binding"]["cooperative_prelaunch_tail"]["model_receipts_prefix"]
+        prefix.update(bytes=path.stat().st_size, sha256=recovery._sha(path))
+        e.grant["binding"]["cooperative_prelaunch_tail"]["first_error_sha256"] = research._digest(records[1])
+    elif mutation == "wrong_checkpoint": e.projection["messages"]["News Analyst"] = ["f" * 64]
+    elif mutation == "original_not_checkpointed": e.projection["proposals"] = {}
+    elif mutation == "output": put(e.run / "model-outputs/1.json", {})
+    else: put(e.run / "usage-receipts/1.json", {})
+    e.pin()
+    with pytest.raises((research.ResearchBlocked, KeyError, ValueError)):
+        context(e)
+    assert e.native.calls == 0 and not (e.run / "recovery-history").exists()
+
+
+def test_single_tail_guard_requires_frozen_messages_once_for_each_pending_role(env, monkeypatch):
+    e = prepared_allocation_tail(env, monkeypatch)
+    guard = recovery._pending_guard(e.grant["binding"])
+    with pytest.raises(research.ResearchBlocked):
+        guard({"role": "Fundamentals Analyst", "messages": [{"role":"user", "content":"fresh restart"}]}, 2)
+    guard = recovery._pending_guard(e.grant["binding"])
+    guard({"role":"Fundamentals Analyst", "messages":e.messages["Fundamentals Analyst"]}, 2)
+    guard({"role":"Fundamentals Analyst", "messages":[{"role":"user", "content":"later legitimate turn"}]}, 3)
+    with pytest.raises(research.ResearchBlocked):
+        guard({"role":"News Analyst", "messages":[{"role":"user", "content":"wrong evidence"}]}, 4)
+
+
+def installed_tail_operator(e, monkeypatch):
+    from app.services import _tradingagents_authorization as owner
+    e = allocation_tail(e, monkeypatch)
+    old_method = deepcopy(e.current)
+    e.auth["method_identity"] = deepcopy(old_method)
+    facts = []
+    with e.sf() as db:
+        for n in range(101, 108):
+            day = (NOW - timedelta(days=1)).date().isoformat()
+            db.add(AgentResourceUsage(id=f"{n:032x}", budget_date=day, scope=agent_budget.SCOPE_SELECTED_RESEARCH_LLM,
+                kind="model", purpose="historical retained exception", state="failed", usage_known=0,
+                started_at=(NOW-timedelta(days=1)).replace(tzinfo=None)))
+            facts.append({"usage_id":f"{n:032x}", "budget_date":day, "scope":agent_budget.SCOPE_SELECTED_RESEARCH_LLM})
+        db.commit()
+    e.auth["unknown_usage_exception"] = {"version":1, "user_authorization":"EXPLICIT", "reason":"Original seven retained facts.",
+        "authorized_at":(NOW-timedelta(minutes=1)).isoformat(), "method_sha256":research._digest(old_method), "allowed_unknown_usage":facts}
+    historical = {"grant_id":"1"*32, "source_task_id":"2"*32, "run_id":"3"*32,
+                  "valid_until":(NOW-timedelta(days=1)).isoformat()}
+    e.auth["native_recovery_grants"] = [historical]
+    e.pin()
+    env_path = e.run.parent.parent / "operator.env"
+    env_path.write_text("UNRELATED_SECRET=retained-local-fixture\n" + owner.PIN_KEY + "=" + recovery._sha(research.ROOT/"authorization.json") + "\n")
+    original_scope = deepcopy(e.auth)
+    e.current["source_files"]["tradingagents_recovery.py"] = "f" * 64
+    options = {"root":research.ROOT, "env_path":env_path, "sf":e.sf, "driver":e.native, "now":NOW}
+    rebind = owner.prepare_rebind(["tradingagents_recovery.py"], **options)
+    owner.apply_plan(rebind["plan_id"], **options)
+    monkeypatch.setattr(settings, "tradingagents_research_authorization_digest", owner._pin(env_path.read_bytes())[0])
+    prepared = owner.prepare_grant(OLD, RUN, cooperative_prelaunch_tail=True, source_rebind_plan=rebind["plan_id"], **options)
+    owner.apply_plan(prepared["plan_id"], **options)
+    # Required process reload: take only the installed pin, not another write.
+    monkeypatch.setattr(settings, "tradingagents_research_authorization_digest", owner._pin(env_path.read_bytes())[0])
+    actual = recovery._json(research.ROOT / "authorization.json")
+    e.auth.clear(); e.auth.update(actual)
+    e.grant = actual["native_recovery_grants"][-1]
+    e.source_plan = research.ROOT / "authorization-maintenance" / rebind["plan_id"]
+    e.operator_options, e.original_scope = options, original_scope
+    e.native.first_role, e.native.resume_counter = "Fundamentals Analyst", 2
+    execute = e.native._execute
+    async def frozen_wire(*, recovery_guard, **kwargs):
+        def guard(request, counter):
+            recovery_guard({**request, "messages":e.messages[request["role"]]}, counter)
+        return await execute(recovery_guard=guard, **kwargs)
+    e.native._execute = frozen_wire
+    return e
+
+
+def test_source_rebind_then_grant_install_reload_recover_and_completed_reader_are_one_closed_chain(env, monkeypatch):
+    e = installed_tail_operator(env, monkeypatch)
+    assert e.grant["source_method_identity"] != e.grant["continuation_method_identity"] == e.current
+    assert e.auth["native_recovery_grants"][:-1] == e.original_scope["native_recovery_grants"]
+    assert e.auth["unknown_usage_exception"]["allowed_unknown_usage"] == e.original_scope["unknown_usage_exception"]["allowed_unknown_usage"]
+    for key in ("consumer", "mode", "created_at", "valid_until", "user_authorization", "net_gain_verified", "production_eligible"):
+        assert e.auth[key] == e.original_scope[key]
+    original = e.source_claim.read_bytes()
+    c, owner = consumed(e)
+    result = asyncio.run(recovery.run_recovery(e.rec, params(c, owner), e.app))
+    assert result["state"] == "completed" and result["recovery_lineage"]["new_call_from"] == 3
+    assert e.source_claim.read_bytes() == original
+    assert research._latest(SYMBOL)["recovery_lineage"] == result["recovery_lineage"]
+    prior = research._execution_prior(e.selection, research._digest(e.current))
+    assert research._completed_selection(prior, e.selection)["reused_identical_selection"]
+    with e.sf() as db:
+        assert db.query(AgentResourceUsage).filter(AgentResourceUsage.usage_known==0).count() == 7
+        assert db.query(AgentResourceUsage).filter(AgentResourceUsage.task_id==OLD).count() == 1
+    assert len((e.auth["native_recovery_grants"])) == 2
+    # Saved reading is not another execution admission. Withdrawal/expiry may
+    # stop new calls, but cannot erase already-owned reports and lineage proof.
+    (research.ROOT / "authorization.json").unlink()
+    monkeypatch.setattr(settings, "tradingagents_research_enabled", False)
+    monkeypatch.setattr(settings, "tradingagents_research_authorization_digest", "")
+    monkeypatch.setattr(research, "_now", lambda: NOW+timedelta(days=3))
+    def no_admission(*args, **kwargs): pytest.fail("saved reader invoked live authorization or native runtime")
+    monkeypatch.setattr(research, "_quality", no_admission)
+    monkeypatch.setattr(e.native, "method_identity", no_admission)
+    monkeypatch.setattr(driver, "driver_from_server_manifest", no_admission)
+    assert research._latest(SYMBOL)["recovery_lineage"] == result["recovery_lineage"]
+    assert research._completed_selection(prior, e.selection)["reused_identical_selection"]
+
+
+@pytest.mark.parametrize("mutation", ["plan", "before", "applied", "permissions", "missing", "symlink"])
+def test_applied_source_plan_remains_exact_readonly_evidence_after_grant_is_added(env, monkeypatch, mutation):
+    e = installed_tail_operator(env, monkeypatch)
+    if mutation == "missing": (e.source_plan / "authorization.before.json").unlink()
+    elif mutation == "permissions": (e.source_plan / "applied.json").chmod(0o644)
+    elif mutation == "symlink":
+        path = e.source_plan / "applied.json"; body = path.read_bytes(); path.unlink()
+        alternate = e.source_plan / "alternate.json"; alternate.write_bytes(body); path.symlink_to(alternate)
+    else:
+        name = {"plan":"plan.json", "before":"authorization.before.json", "applied":"applied.json"}[mutation]
+        path = e.source_plan / name; path.write_bytes(path.read_bytes() + b" ")
+    with pytest.raises((research.ResearchBlocked, ValueError, OSError)):
+        context(e)
+    assert e.native.calls == 0 and recovery._json(e.run / "call-counter.json") == {"reserved":2}
+
+
+def test_passive_native_message_projection_uses_exact_existing_wire_codec_without_constructor_execution():
+    from app.services.tradingagents_native.native_codec import serialize_langchain_messages
+    def passive(kind, name, values):
+        return {"ext":5, "raw":["langchain_core.messages."+kind, name, values, "model_validate_json"]}
+    raw = [passive("human", "HumanMessage", {"type":"human", "content":"frozen evidence"}),
+        passive("ai", "AIMessage", {"type":"ai", "content":"bounded proposal", "tool_calls":[{"id":"mapped", "name":"get_news", "args":{}, "type":"tool_call"}], "additional_kwargs":{}}),
+        passive("tool", "ToolMessage", {"type":"tool", "content":"frozen result", "tool_call_id":"mapped", "name":"get_news", "status":"success"})]
+    assert serialize_langchain_messages(recovery._passive_checkpoint_messages(raw)) == [
+        {"role":"user", "content":"frozen evidence"},
+        {"role":"assistant", "content":"bounded proposal", "tool_calls":[{"id":"mapped", "name":"get_news", "args":{}, "type":"tool_call"}]},
+        {"role":"tool", "content":"frozen result", "tool_call_id":"mapped", "name":"get_news", "status":"success"}]
+    for changed in ({"ext":1, "raw":raw[0]["raw"]}, {"ext":5, "raw":["os", "system", {"type":"human", "content":"x"}, "model_validate_json"]},
+                    {"ext":5, "raw":[*raw[0]["raw"][:3], "__call__"]}):
+        with pytest.raises(ValueError): recovery._passive_checkpoint_messages([changed])
+
+
+@pytest.mark.parametrize("failure", [None, "malformed", "missing_role", "missing_paid", "nonhash", "changed_cp", "stderr_failure", "timeout", "oversized", "dependency_drift"])
+def test_native_decoder_bridge_is_fixed_readonly_bounded_and_never_gets_context_or_credentials(env, monkeypatch, failure):
+    e = allocation_tail(env, monkeypatch)
+    binding = {"outputs":{"1":recovery._sha(e.run/"model-outputs/1.json")}, "cooperative_prelaunch_tail":{
+        "model_receipts_prefix":{"bytes":(e.run/"graph/model-receipts.jsonl").stat().st_size,
+                                 "sha256":recovery._sha(e.run/"graph/model-receipts.jsonl")}}}
+    e.native.python = e.run/"isolated-python"
+    e.native.dependencies, e.native.upstream = e.run/"dependencies", e.run/"upstream"
+    e.native.sandbox = e.run/"sandbox-exec"
+    verification = []
+    def verify(*, force):
+        assert force is True
+        verification.append(True)
+        if failure == "dependency_drift": raise driver.DriverUnavailable("fixture native dependency changed")
+    e.native._dependency_identity = verify
+    calls = []
+    def bridge(command, **options):
+        calls.append(command)
+        assert command[:3] == [str(e.native.sandbox), "-f", command[2]]
+        policy = Path(command[2]).read_text()
+        assert "network-outbound" not in policy and "(allow file-write*" not in policy
+        assert command[3] == str(e.native.python) and command[4:7] == ["-I", "-B", "-c"]
+        ast.parse(command[7])
+        assert "JsonPlusSerializer" not in command[7] and "pickle.loads" not in command[7]
+        assert "mode=ro&immutable=1" in command[7] and "PRAGMA query_only=ON" in command[7]
+        assert set(options["env"]) == {"PATH", "HOME", "TMPDIR", "PYTHONDONTWRITEBYTECODE"}
+        assert options["timeout"] == 12 and options["capture_output"] is True and "shell" not in options
+        assert "original bounded proposal" not in options["input"] and "original bounded issuer evidence" not in options["input"]
+        assert set(json.loads(options["input"])) == {"1"}
+        if failure == "timeout": raise recovery.subprocess.TimeoutExpired(command, 12)
+        projection = deepcopy(e.projection)
+        if failure == "missing_role": projection["messages"].pop("News Analyst")
+        elif failure == "missing_paid": projection["proposals"] = {}
+        elif failure == "nonhash": projection["messages"]["News Analyst"] = ["not-a-hash"]
+        elif failure == "changed_cp":
+            path=e.run/"graph/cache/checkpoints"/(SYMBOL+".db");path.write_bytes(path.read_bytes()+b"drift")
+        stdout = "invalid JSON" if failure == "malformed" else "x"*1048577 if failure == "oversized" else json.dumps(projection)
+        return SimpleNamespace(returncode=1 if failure == "stderr_failure" else 0, stdout=stdout, stderr="suppressed fixture diagnostic")
+    monkeypatch.setattr(recovery.subprocess, "run", bridge)
+    if failure is None:
+        assert _REAL_CHECKPOINT_PROJECTION(e.run, SYMBOL, binding, e.native) == e.projection
+    else:
+        with pytest.raises(research.ResearchBlocked): _REAL_CHECKPOINT_PROJECTION(e.run, SYMBOL, binding, e.native)
+    assert len(calls) == (0 if failure == "dependency_drift" else 1) and e.native.calls == 0
+    assert verification == [True]
+
+
+def test_version_changed_tail_requires_explicit_source_plan_not_current_method_substitution(env, monkeypatch):
+    e = allocation_tail(env, monkeypatch)
+    e.current["source_files"]["tradingagents_recovery.py"] = "f"*64
+    with pytest.raises(research.ResearchBlocked) as failure:
+        recovery.prepare_cooperative_grant(OLD, RUN, e.current, grant_id=GRANT, authorized_at=NOW.isoformat(),
+            valid_until=(NOW+timedelta(hours=1)).isoformat(), sf=e.sf, prelaunch_tail=True, driver=e.native)
+    assert failure.value.code == "recovery_source_rebind_plan_required" and e.native.calls == 0

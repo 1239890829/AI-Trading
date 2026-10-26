@@ -411,3 +411,25 @@ def test_cli_help_states_recovery_scope_and_unknown_errors_are_sanitized(monkeyp
     monkeypatch.setattr(owner,"inspect_rebind",unavailable)
     assert main([])==1
     assert json.loads(capsys.readouterr().out)=={"state":"blocked","code":"authorization_maintenance_unavailable"}
+
+
+def test_cli_tail_grant_passes_only_explicit_fixed_plan_identity(monkeypatch, capsys):
+    from scripts.tradingagents_authorization import main
+    calls = []
+    def prepared(task, run, **kwargs):
+        calls.append((task, run, kwargs)); return {"state":"prepared", "plan_id":"d"*32}
+    monkeypatch.setattr(owner, "prepare_grant", prepared)
+    assert main(["--prepare-grant", "a"*32, "--run", "b"*32, "--cooperative-prelaunch-tail", "--source-rebind-plan", "c"*32]) == 0
+    assert calls == [("a"*32,"b"*32,{"cooperative_prelaunch_tail":True,"source_rebind_plan":"c"*32})]
+    assert json.loads(capsys.readouterr().out)["state"] == "prepared"
+
+
+@pytest.mark.parametrize("arguments", [["--cooperative-prelaunch-tail"], ["--source-rebind-plan","c"*32],
+    ["--prepare-grant","a"*32,"--run","b"*32,"--source-rebind-plan","c"*32]])
+def test_cli_tail_options_never_become_implicit_rebind_or_grant(monkeypatch, arguments):
+    from scripts.tradingagents_authorization import main
+    def forbidden(*args, **kwargs): pytest.fail("invalid CLI scope reached an operator")
+    for name in ("prepare_grant", "prepare_rebind", "apply_plan", "inspect_rebind"):
+        monkeypatch.setattr(owner, name, forbidden)
+    with pytest.raises(SystemExit) as error: main(arguments)
+    assert error.value.code == 2
