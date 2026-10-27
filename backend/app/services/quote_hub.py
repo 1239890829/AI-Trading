@@ -302,6 +302,7 @@ class QuoteHub:
     async def _recover_regressions(
         self, domain: str, rows: list[Quote], requested: tuple[str, ...], read_started: float,
     ) -> list[Quote]:
+        """Use the same spare read slot for regressions and admitted old clocks."""
         recover = getattr(self.provider, "recover_quote_regressions", None)
         if not callable(recover):
             return []
@@ -309,26 +310,48 @@ class QuoteHub:
         current = self.indices if domain == "indices" else self.quotes
         rejections = self.last_index_rejections if domain == "indices" else self.last_quote_rejections
         rejected = {}
+        age_exceeded = set()
+        session = None
         for q in rows:
-            if rejections.get(q.symbol) != "source_time_regress_ignored":
-                continue
             prev = current.get(q.symbol)
             if (q.symbol not in requested or prev is None
                     or not q.market or q.market != prev.market
                     or (domain == "indices" and q.market != INDEX_MARKETS.get(q.symbol))):
                 continue
-            checked = _validate_source_quote(q.model_copy(deep=True), prev)
-            if _rejected_source_observation(checked, prev) == "source_time_regress_ignored":
-                rejected[q.symbol, q.market] = q.source
+            if rejections.get(q.symbol) == "source_time_regress_ignored":
+                checked = _validate_source_quote(q.model_copy(deep=True), prev)
+                if _rejected_source_observation(checked, prev) == "source_time_regress_ignored":
+                    rejected[q.symbol, q.market] = q.source
+            elif (not rejections.get(q.symbol) and prev is q
+                  and q.quality not in {Quality.invalid, Quality.stale}
+                  and q.market in {"SH", "SZ", "BJ"} and q.data_timestamp is not None):
+                # Only the exact row accepted by the original admission gate
+                # qualifies. Missing/duplicate/invalid rows do not expand this
+                # read. Received time is never a substitute for source time.
+                now = utcnow()
+                if (q.data_timestamp.astimezone(BJ_TZ).date() == now.astimezone(BJ_TZ).date()
+                        and (now - q.data_timestamp).total_seconds() > self.stale_after):
+                    session = session or self._display_session()
+                    if session.phase == "continuous" and session.trade_day_result is True:
+                        rejected[q.symbol, q.market] = q.source
+                        age_exceeded.add((q.symbol, q.market))
         if not rejected:
             return []
+
+        def age_recovery_allowed() -> bool:
+            current_session = self._display_session()
+            return (current_session.phase == "continuous" and current_session.trade_day_result is True
+                    and session is not None and current_session.trade_date == session.trade_date)
 
         def validate_recovery(q: Quote, key: tuple[str, str]) -> Quote | RecoveryRejection | None:
             # Do not let validate_quote's recomputation launder a stale provider cache.
             if q.quality in {Quality.invalid, Quality.stale} or q.data_timestamp is None:
                 return None
-            prev = current[key[0]]
-            if q.market != prev.market:
+            prev = current.get(key[0])
+            if (prev is None or prev.data_timestamp is None or prev.market != key[1]
+                    or q.symbol != key[0] or q.market != prev.market):
+                return None
+            if key in age_exceeded and not age_recovery_allowed():
                 return None
             checked = _validate_source_quote(q.model_copy(deep=True), prev)
             rejection = _rejected_source_observation(checked, prev)
@@ -340,9 +363,12 @@ class QuoteHub:
                 previous_time = previous_time.replace(tzinfo=timezone.utc)
             source_time = checked.data_timestamp
             if (source_time > now
-                    or source_time.astimezone(BJ_TZ).date() != now.astimezone(BJ_TZ).date()
-                    or checked.freshness(fresh_within=self.stale_after).state not in {"ready", "degraded"}):
+                    or source_time.astimezone(BJ_TZ).date() != now.astimezone(BJ_TZ).date()):
                 return None
+            if checked.freshness(fresh_within=self.stale_after).state not in {"ready", "degraded"}:
+                # A valid but old backup does not repair age. It is not proof
+                # of a transport/format failure under the normal read budget.
+                return RecoveryRejection.age_exceeded if key in age_exceeded else None
             if source_time <= previous_time:
                 return RecoveryRejection.not_newer
             return checked
@@ -352,9 +378,11 @@ class QuoteHub:
             replacements = await recover(
                 method, rejected, deadline=read_started + min(method_budget, self.poll_interval),
                 idle_limited=self.poll_interval < method_budget, validate=validate_recovery,
+                **({"age_exceeded": age_exceeded, "age_recovery_allowed": age_recovery_allowed}
+                   if age_exceeded else {}),
             )
         except Exception as exc:
-            log.warning("source clock regression recovery unavailable (%s)", type(exc).__name__)
+            log.warning("source clock recovery unavailable (%s)", type(exc).__name__)
             return []
         # Another trusted update may have advanced current while a source was in
         # flight. Recheck now and never replay the normal rows or their history.
