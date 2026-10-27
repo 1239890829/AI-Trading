@@ -87,6 +87,32 @@ export function themesUrl(focus?: string): string {
   return tapeUrl("themes", focus ? { focus } : undefined);
 }
 
+/** Retired discovery funds links keep exact Eastmoney scope or pause at the market reader. */
+export function legacyDiscoveryFundsMarketUrl(search: string): string | null {
+  const previous = new URLSearchParams(search);
+  if (previous.get("browse") !== "funds") return null;
+  const next = new URLSearchParams({tab:"fund"});
+  const kind = previous.get("disc_kind");
+  const source = previous.get("disc_source");
+  const code = previous.get("disc_code");
+  const range = previous.get("disc_range");
+  const ranges = ["website", "intraday", "5d", "10d", "20d", "latest_saved", "changes"];
+  const unsupported = source && !["eastmoney", "website"].includes(source) || code && !/^BK\d{3,4}$/.test(code)
+    || kind && !["concept", "industry"].includes(kind) || range && !ranges.includes(range);
+  next.set("board_kind", kind === "industry" ? "industry" : "concept");
+  if (unsupported) {
+    next.set("board_notice", "unmapped_legacy_funds");
+    if (source) next.set("legacy_source", source);
+    if (code) next.set("legacy_code", code);
+    if (range) next.set("legacy_range", range);
+    if (kind) next.set("legacy_kind", kind);
+  } else {
+    next.set("board_range", range || (source === "website" ? "website" : source === "eastmoney" || code ? "changes" : "website"));
+    if (code) next.set("board_code", code);
+  }
+  return `/market?${next}`;
+}
+
 /**
  * 盘面页 tab 地址（2026-09-04 市场页涨跌停入口联动新增）。
  * tab 是盘面页 ?tab= 的真相源 keys；params 为该 tab 自治的附加查询参数。

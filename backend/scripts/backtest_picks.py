@@ -11,7 +11,7 @@
   cd backend && .venv/bin/python scripts/backtest_picks.py --days 200      # 扩窗复验
   cd backend && .venv/bin/python scripts/backtest_picks.py --out docs/x.md
 
-报告输出：docs/stock-picking-backtest-<date>.md + stdout。
+报告输出：docs/stock-picking-backtest-<date>-<method_version>.md + stdout。
 纪律：报告只给建议，**不自动回写** intraday_rules 常量（§8 防过拟合，
 回写须人工拍板并换窗口复验）。
 """
@@ -34,6 +34,11 @@ from app.services.theme_catalog_service import ThemeCatalogService
 ROOT = Path(__file__).resolve().parent.parent.parent
 
 
+def default_report_path(day) -> Path:
+    """新方法另存同日文件；不覆盖未带方法版本的历史报告。"""
+    return ROOT / "docs" / f"stock-picking-backtest-{day.isoformat()}-{bt.METHOD_VERSION}.md"
+
+
 async def main(days: int, out: Path | None) -> int:
     provider = ThsFuyaoProvider(api_key=settings.ths_api_key)
     # session_factory=None：跑批只用 fetch_catalog/fetch_board_bars，不碰 DB
@@ -49,7 +54,7 @@ async def main(days: int, out: Path | None) -> int:
         await provider._client.aclose()
         await svc.aclose()
     # 报告日期归属走权威时钟（`date.today()` 按进程时区取日，非 CST 机器差一天）
-    target = out or (ROOT / "docs" / f"stock-picking-backtest-{beijing_today().isoformat()}.md")
+    target = out or default_report_path(beijing_today())
     target.parent.mkdir(parents=True, exist_ok=True)
     target.write_text(report, encoding="utf-8")
     print(report)

@@ -598,7 +598,7 @@ export async function getFundFlowHistory(days = 20): Promise<FundFlowHistory> {
 
 export type BoardFlowKind = "concept" | "industry";
 
-export type BoardFlowRange = "intraday" | "5d" | "10d" | "20d" | "latest_saved" | "changes";
+export type BoardFlowRange = "intraday" | "5d" | "10d" | "20d" | "latest_saved" | "changes" | "website";
 
 export interface BoardFlowRow {
   board_code: string;
@@ -631,7 +631,7 @@ export interface BoardFundFlowPayload {
   rows: BoardFlowRow[];
   total_boards?: number | null;
   /** 20d 视图：本地沉淀板块数 */
-  coverage?: number | null;
+  coverage?: number | {total: number | null; returned: number; complete: boolean} | null;
   updated_at?: string;
   rank_basis_date?: string | null;
   /** Local day-K archive; never a replacement for today's board ranking. */
@@ -641,12 +641,13 @@ export interface BoardFundFlowPayload {
   stored_at?: string | null;
   source?: string;
   source_as_of?: string | null;
+  quote_source_as_of?: string | null;
   received_at?: string | null;
-  coverage_state?: "unknown" | "local_sample" | "source_sample";
+  coverage_state?: "unknown" | "local_sample" | "source_sample" | "source_complete";
   source_product?: string;
-  source_total?: number;
-  source_returned?: number;
-  directory_total?: number;
+  source_total?: number | null;
+  source_returned?: number | null;
+  directory_total?: number | null;
   unknown_count?: number;
   name_mismatch_count?: number;
   excluded_region_count?: number;
@@ -681,6 +682,7 @@ export interface BoardFlowMember {
   super_net_yi: number | null;
   big_net_yi: number | null;
   main_net_ratio: number | null;
+  quote_source_as_of?: string | null;
 }
 
 export interface BoardFlowMembersPayload {
@@ -690,6 +692,20 @@ export interface BoardFlowMembersPayload {
   rows: BoardFlowMember[];
   delayed?: boolean;
   updated_at?: string;
+  source?: string;
+  name?: string | null;
+  kind?: BoardFlowKind;
+  coverage?: {total: number | null; returned: number; complete: boolean};
+  source_as_of?: string | null;
+  received_at?: string | null;
+  quote_source_as_of?: string | null;
+  as_of?: string | null;
+  quality?: "stale";
+  observation_state?: "clock_unknown";
+  coverage_state?: "source_complete" | "unknown";
+  source_total?: number | null;
+  source_returned?: number;
+  directory_total?: number | null;
   degraded: string[];
 }
 
@@ -750,9 +766,9 @@ export async function getBoardFlowMinute(boardCode: string): Promise<BoardFlowMi
   )).data;
 }
 
-export async function getBoardFlowMembers(boardCode: string, options: ReadOptions = {}): Promise<BoardFlowMembersPayload> {
+export async function getBoardFlowMembers(boardCode: string, options: ReadOptions & {view?: "website"; kind?: BoardFlowKind} = {}): Promise<BoardFlowMembersPayload> {
   return (await getJson<BoardFlowMembersPayload>(
-    `/api/market/board-fund-flow/${encodeURIComponent(boardCode)}/members`, 30_000, options,
+    `/api/market/board-fund-flow/${encodeURIComponent(boardCode)}/members${options.view === "website" ? `?view=website&kind=${options.kind ?? "concept"}${options.fresh ? "&fresh=true" : ""}` : ""}`, 30_000, options,
   )).data;
 }
 

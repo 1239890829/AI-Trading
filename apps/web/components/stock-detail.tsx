@@ -17,7 +17,8 @@ import type { RealPositionsResource } from "@/hooks/use-real-positions";
 import { analyze } from "@/lib/technical-analysis";
 import { buildEventMarks, buildMinuteNewsEvents } from "@/lib/event-markers";
 import { hasTrustedQuoteObservation, mergeQuoteIntoBars, mergeQuoteIntoMinutes } from "@/lib/kline-live";
-import {buildIndexOverlay, IndexOverlayError, indexQuoteReference} from "@/lib/index-overlay";
+import {buildIndexOverlay, IndexOverlayError, indexQuoteReference, minuteObservationTime} from "@/lib/index-overlay";
+import {bjMinuteOfDay, bjToday, isAuctionComparisonWindow, isContinuousSession} from "@/lib/market-hours";
 import {limitQualification} from "@/lib/limit-qualification";
 import { isIndexSymbol } from "@/lib/api";
 import { notifyWatchlistChanged, subscribeWatchlist } from "@/lib/watchlist-sync";
@@ -60,6 +61,10 @@ import { IndexMembersPanel } from "@/components/detail/index-members-panel";
 import { BoardRankPanel } from "@/components/detail/board-rank-panel";
 import { RealPositionPanel } from "@/components/detail/real-position-panel";
 import { SuspendedBadge, SuspendedNotice, isSuspended } from "@/components/detail/suspended-badge";
+
+function isIndexAuctionPaused(tradeDate: string, now = new Date()): boolean {
+  return tradeDate === bjToday(now) && isAuctionComparisonWindow(bjMinuteOfDay(now));
+}
 
 /** 个股详情终端 v3（工作台右栏 / 个股页共用）：
  * 顶部紧凑行情条 → 中部 [左：图表区(K线/分时/资金图) | 右：盘口↔逐笔] → 右列：盘口↔逐笔 + 财务摘要。龙虎榜见独立页面。
@@ -133,6 +138,10 @@ export const StockDetailPanel = memo(function StockDetailPanel({
   const {open: openDetail} = useDetailModal();
   const {open: openSymbolDetail} = useSymbolDetail();
   const [chartTab, setChartTab] = useState<ChartTab>(chartTabInit ?? "kline");
+  const [indexChoice, setIndexChoice] = useState({symbol, selected: false});
+  if (indexChoice.symbol !== symbol) setIndexChoice({symbol, selected: false});
+  const indexSelected = indexChoice.symbol === symbol && indexChoice.selected;
+  const toggleIndexOverlay = () => setIndexChoice(previous => ({symbol, selected: previous.symbol !== symbol || !previous.selected}));
   const [rightTab, setRightTab] = useState<RightTab>(rightTabInit ?? "book");
   // 深链跟随：同一只股票内（面板未重挂载）外部改了 ct/rt 也要生效。
   // 用「渲染期比对上一轮 props 后调整 state」而非 effect——effect 里 setState 会被
@@ -592,8 +601,34 @@ export const StockDetailPanel = memo(function StockDetailPanel({
   usePollingFetch(loadDigest, null, symbol, {enabled: rightActive && !isIndex && rightTab === "info", marketHours: false});
 
   const indexDate = minutes[0]?.ts ? bjDate(minutes[0].ts) : "unknown";
-  const indexKey = `${symbol}:${indexDate}`;
-  const indexEnabled = active && !isIndex && chartTab === "minute" && minutes.length > 0;
+  // Display-only auction veto never disables the stock minute owner.
+  const indexPaused = isIndexAuctionPaused(indexDate);
+  const [, advanceIndexPhaseClock] = useState(0);
+  useEffect(() => {
+    if (!active || isIndex || chartTab !== "minute" || !indexSelected) return;
+    let timer: ReturnType<typeof setTimeout> | undefined;
+    const schedule = () => {
+      const now = Date.now();
+      if (indexDate !== bjToday(new Date(now))) return;
+      const start = Date.parse(`${indexDate}T00:00:00+08:00`);
+      const next = [555, 570, 897, 900, 1440].map(minute => start + minute * 60_000).find(time => time > now);
+      if (next === undefined) return;
+      // Boundary-only invalidation works even when the market stream is silent.
+      timer = setTimeout(() => {advanceIndexPhaseClock(value => value + 1); schedule();}, next - now);
+    };
+    schedule();
+    return () => {if (timer !== undefined) clearTimeout(timer);};
+  }, [active, isIndex, chartTab, indexSelected, indexDate]);
+  const indexHasMainMinute = displayMinutes.some(point => {
+    if (point.time_label === "opening_anchor") return false;
+    const observed = minuteObservationTime(point, indexDate);
+    return observed !== null && isContinuousSession(bjMinuteOfDay(new Date(observed)));
+  });
+  const indexEnabled = active && !isIndex && chartTab === "minute" && indexSelected && !indexPaused && indexHasMainMinute;
+  const indexContext = `${symbol}:${indexDate}:${indexSelected}:${indexPaused}:${indexEnabled}`;
+  const [indexGeneration, setIndexGeneration] = useState({context: indexContext, serial: 0});
+  if (indexGeneration.context !== indexContext) setIndexGeneration({context: indexContext, serial: indexGeneration.serial + 1});
+  const indexKey = `${symbol}:${indexDate}:${indexGeneration.serial}`;
   const parentIndexRef = useRef(indexQuote);
   useEffect(() => {parentIndexRef.current = indexQuote;}, [indexQuote]);
   const [indexCompletion, setIndexCompletion] = useState(0);
@@ -610,6 +645,7 @@ export const StockDetailPanel = memo(function StockDetailPanel({
     return () => {owner.alive = false; owner.candidate = null;};
   }, [indexKey, indexEnabled]);
   const indexResource = useResource(async signal => {
+    if (isIndexAuctionPaused(indexDate)) return null;
     const owner = indexRecoveryRef.current;
     const fresh = owner !== null && indexFreshRef.current === owner;
     indexFreshRef.current = null;
@@ -637,10 +673,13 @@ export const StockDetailPanel = memo(function StockDetailPanel({
     try {
       const parent = parentIndexRef.current;
       const quoteRead = parent === undefined ? track(async () => {
+        if (isIndexAuctionPaused(indexDate)) return;
         const overview = await getMarketOverview({signal, fresh});
         sourceQuote = overview.indices.find(value => value.symbol === "000001" || value.symbol === "sh000001");
       }) : Promise.resolve().then(() => {sourceQuote = parent ?? undefined;});
-      const [points] = await Promise.all([track(() => getMinuteLine("sh000001", {signal, fresh})), quoteRead]);
+      const [points] = await Promise.all([track(() => isIndexAuctionPaused(indexDate)
+        ? Promise.resolve(null) : getMinuteLine("sh000001", {signal, fresh})), quoteRead]);
+      if (points === null || isIndexAuctionPaused(indexDate)) return null;
       // A parent owner may arrive while standalone fallback drains. Its explicit
       // missing/bad observation must not be replaced by the older REST success.
       if (parentIndexRef.current !== undefined) sourceQuote = parentIndexRef.current ?? undefined;
@@ -681,7 +720,7 @@ export const StockDetailPanel = memo(function StockDetailPanel({
       refreshIndexOverlay();
     }
   }, [indexEnabled, indexDate, indexQuote, indexCompletion, indexReadError, indexReadData, refreshIndexOverlay]);
-  const indexOverlay = indexResource.data ?? null;
+  const indexOverlay = indexEnabled ? indexResource.data ?? null : null;
   // A newer parent observation can invalidate a retained overlay before the
   // next minute GET. Validation reports that fact without issuing another read.
   const indexObservationIssue = useMemo(() => {
@@ -692,7 +731,7 @@ export const StockDetailPanel = memo(function StockDetailPanel({
       return null;
     } catch (error) {return error;}
   }, [indexEnabled, indexReadData, indexQuote, indexDate]);
-  const indexError = indexResource.error ?? indexObservationIssue;
+  const indexError = indexEnabled ? indexResource.error ?? indexObservationIssue : null;
   const indexIssueLabel = indexError instanceof IndexOverlayError
     ? indexError.issue === "reference_age" ? "指数基准未更新"
       : indexError.issue === "reference" ? "指数基准待核" : "指数数据时点或字段待核"
@@ -711,15 +750,16 @@ export const StockDetailPanel = memo(function StockDetailPanel({
     } catch (error) { setError(`加入自选失败：${error instanceof Error ? error.message : "请重试"}`); }
   }
 
-  // 技术评估：displayBars 随 WS 秒级 tick 变化，必须 memo——否则每 tick
-  // 全量重算 MA/MACD/KDJ（评审 F1，replay-chart 同口径示范）
+  // K线标题也是消费者，折叠依据仍需计算；分时/资金页签不运行分析。
   const techInput = useMemo(
-    () => displayBars.map((b) => ({ ts: b.ts, open: b.open ?? 0, high: b.high ?? 0, low: b.low ?? 0, close: b.close ?? 0, volume: b.volume, change_pct: b.change_pct })),
-    [displayBars]
+    () => chartTab === "kline" ? displayBars.map((b) => ({ ts: b.ts, open: b.open ?? 0, high: b.high ?? 0, low: b.low ?? 0, close: b.close ?? 0, volume: b.volume, change_pct: b.change_pct })) : null,
+    [chartTab, displayBars]
   );
-  const tech = useMemo(() => analyze(techInput), [techInput]);
+  const tech = useMemo(() => techInput === null ? null : analyze(techInput), [techInput]);
   const techVisible = chartTab === "kline" && techOpen && !!tech;
-  const techPresence = useExitPresence(techVisible ? true : null);
+  const techReading = useMemo(() => techVisible && tech ? {symbol, value: tech} : null, [techVisible, tech, symbol]);
+  const techPresence = useExitPresence(techReading);
+  const basisTech = techPresence.value?.symbol === symbol ? techPresence.value.value : null;
 
   // 当前个股的模拟持仓（用于 K 线成本线）
   const costPrice = realPositions?.data?.items.find(p => p.symbol === symbol)?.avg_cost ?? null;
@@ -859,12 +899,12 @@ export const StockDetailPanel = memo(function StockDetailPanel({
       </div>
 
       {/* 依据明细：正常文档流展开（打开时图表下移让位，不遮挡任何元素） */}
-      {techPresence.value && tech && <div className="tech-basis-presence motion-disclosure shrink-0" data-open={techVisible} aria-hidden={!techVisible || undefined} inert={!techVisible}>
+      {basisTech && <div className="tech-basis-presence motion-disclosure shrink-0" data-open={techVisible} aria-hidden={!techVisible || undefined} inert={!techVisible}>
       <div className="motion-disclosure-body">
       {(
         <div id={`${perspectiveId}-technical-basis`} className="tech-signal-details shrink-0 rounded-lg border border-zinc-200 bg-white/90 p-2 text-[11px] leading-relaxed shadow-sm dark:border-zinc-700 dark:bg-zinc-900/90" role="region" tabIndex={techVisible ? 0 : -1} aria-label="技术评估依据">
           <ul className="space-y-0.5">
-            {tech.signals.map((sg) => (
+            {basisTech.signals.map((sg) => (
               <li key={sg.name} className="flex items-start gap-1.5">
                 <span
                   className={`mt-1 inline-block h-1.5 w-1.5 shrink-0 rounded-full ${
@@ -948,6 +988,10 @@ export const StockDetailPanel = memo(function StockDetailPanel({
                   referenceDate={minuteReferenceDate}
                   yesterdayVol={displayBars.length >= 2 ? (displayBars[displayBars.length - 2]?.volume ?? null) : null}
                   index={indexOverlay}
+                  indexSelected={indexSelected}
+                  indexPaused={indexPaused}
+                  indexWaiting={indexSelected && !indexPaused && !indexHasMainMinute}
+                  onIndexToggle={toggleIndexOverlay}
                   auction={auctionProp}
                   exactBaseline={vrBaseline}
                   newsEvents={minuteNewsEvents}

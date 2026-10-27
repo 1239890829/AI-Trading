@@ -9,6 +9,7 @@
 from __future__ import annotations
 
 import asyncio
+import hashlib
 import logging
 from datetime import date, datetime
 from typing import Annotated, Any
@@ -237,7 +238,7 @@ async def theme_catalog_quotes(
 @router.get("/themes/catalog/strength")
 async def theme_strength(
     request: Request,
-    codes: str = Query(default="", description="逗号分隔题材代码（88xxxx.TI）；缺省=全部有成分的题材"),
+    codes: str = Query(default="", description="逗号分隔题材代码（88xxxx.TI）；缺省取当前目录查询范围内有成分的题材（目录最多500条）"),
     hub: QuoteHub = Depends(get_hub),
     svc: ThemeCatalogService = Depends(get_service),
 ) -> dict:
@@ -255,7 +256,7 @@ async def theme_strength(
     # 代价：key 不再随「哪些题材有成分」变化 ⇒ 成分刚同步时最多多返回 60s 旧值（TTL 内），
     # 与既有 60s 缓存语义一致，可接受。
     cache = cache_on(request.app.state, "themes.catalog.strength", 60, maxsize=8)
-    cache_key = ",".join(sorted(code_list))[:512] if code_list else "__all__"
+    cache_key = ("source-identity-v3", hashlib.sha256(",".join(sorted(code_list)).encode()).hexdigest())
     hit, payload = cache.get(cache_key)
     if hit:
         return payload
@@ -306,15 +307,29 @@ async def theme_strength(
             "themes": {
                 code: {
                     **s,
+                    "code": code,
                     "name": names.get(code, code),
-                    "board": board_rows.get(names.get(code, code)),
+                    "board": None,
+                    "candidate_board": (board_rows.get(names.get(code, code)) or {}).get("candidate_board"),
+                    "coverage": {
+                        "member_total": len(member_map[code]), "sampled": s["count"],
+                        "not_sampled": len(member_map[code]) - s["count"],
+                        "quote_returned": sum(sym in quotes_raw for sym in theme_members[code]),
+                        "valid_change_count": s["count"] - s["missing"],
+                        "amount_count": s["amount_count"], "missing_amount": s["count"] - s["amount_count"],
+                        "sample_limit": 200, "complete_members": len(member_map[code]) == s["count"],
+                    },
+                    "basis": f"采样 {s['count']}/{len(member_map[code])} 成分；未采 {len(member_map[code]) - s['count']}；"
+                             f"金额有效 {s['amount_count']}/{s['count']}；{s['basis']}",
                 }
                 for code, s in strength.items()
             }
         },
         "meta": {
             "basis": "合力=官方成分批量快照聚合（涨跌家数/等权涨幅/成交额合计），数据有延迟",
-            "board_basis": "板块资金=东财板块主力净额（f62 口径）+ 连续流入天数；与合力口径不同，不可相加",
+            "board_basis": "东财名称候选仅参考，未核为同一THS概念，不参与合力或资金验证；不可相加",
+            "catalog_scope": {"query_limit": 500, "returned": len(catalog_rows),
+                              "complete": None, "basis": "当前目录查询范围，不宣称全目录覆盖"},
         },
     }
     cache.set(cache_key, payload)

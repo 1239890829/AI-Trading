@@ -197,10 +197,30 @@ def test_watcher_routes_themes_by_direction():
 
 def test_match_board_pct_exact_contains_none():
     board = {"粮食": 1.0, "种业概念": 3.0, "转基因种业": 4.0, "地产": 2.0}
-    assert match_board_pct("粮食", board) == 1.0        # 精确优先
-    assert match_board_pct("种业", board) == 3.0        # 包含关系取板块名最短
+    assert match_board_pct("粮食", board) is None      # 精确同名也没有跨源桥
+    assert match_board_pct("种业", board) is None      # 包含只能作候选参考
     assert match_board_pct("白酒", board) is None       # 匹配不到 = unknown，不冒充
     assert match_board_pct("粮食", {}) is None
+
+
+def test_source_identity_online_name_pct_cannot_confirm_a_ths_direction():
+    assert match_board_pct("低空经济", {"低空经济": 9.9}) is None
+    assert match_board_pct("低空", {"低空经济": 9.9}) is None
+
+
+def test_source_identity_unknown_pct_never_advances_negative_or_peak_falsification():
+    tr = DirectionTracker("低空经济")
+    tr.peak_pct = 9.0
+    tr.below_zero_beats = 14
+    for _ in range(3):
+        assert tr.step(_theme(pct=None, limit_up=5, max_boards=4, leader_pct=10, volume_ratio=3), ENV_OK, 610) == []
+    assert tr.peak_pct == 9.0 and tr.below_zero_beats == 14 and not tr.falsified
+    assert tr.last_confirm["confirmed"] is False
+    # 真实0有数值语义：会重置连续转负，并能相对已知峰值构成真实回撤。
+    zero = DirectionTracker("低空经济")
+    zero.peak_pct, zero.below_zero_beats = 9.0, 14
+    assert zero.step(_theme(pct=0), ENV_OK, 610)
+    assert zero.below_zero_beats == 0 and zero.falsified
 
 
 # ---------------------------------------------------------------- 一拍取数的纯部件
@@ -641,7 +661,7 @@ def test_board_flows_io_reads_net_ratio_pct_code(monkeypatch):
 
     monkeypatch.setattr(bf, "get_board_list", fake_list)
     out = asyncio.run(wt._board_flows(None))
-    assert out["甲板"] == {"net": 1.5, "ratio": 3.2, "pct": 0.8, "code": "BK1"}
+    assert out["甲板"] == {"net": 1.5, "ratio": 3.2, "pct": 0.8, "code": "BK1", "kind": "concept"}
     assert out["乙板"]["net"] is None
     assert out["乙板"]["ratio"] is None      # 缺 f184 → 如实 None，不填 0
     assert "" not in out

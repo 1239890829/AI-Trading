@@ -219,7 +219,7 @@ def review_direction(
     d: dict, tracker: dict | None, closing_theme: dict | None, env: dict
 ) -> dict:
     """单方向复盘（无 IO）。tracker=盘中状态（watcher.state 的 tracker 项），
-    closing_theme=收盘涨停池题材节拍（pct 已匹配东财板块涨幅）。"""
+    closing_theme=收盘涨停池题材节拍（无正式跨源身份的pct保持unknown）。"""
     theme = dict(closing_theme or {})
     conf = confirm_signal(
         theme_pct=theme.get("pct"),
@@ -262,7 +262,7 @@ def review_direction(
     if tracker is None:
         notes.append("盘中 tracker 不可用（重启丢失），按收盘快照口径复盘")
     if theme.get("pct") is None:
-        notes.append("板块涨幅未匹配到东财板块（unknown），涨幅项按缺失计")
+        notes.append("同概念板块涨幅跨源身份未核，涨幅未知（unknown），不拿东财名称候选补值")
     if failure == FAILURE_DATA_GAP and missing_ratio is not None:
         notes.append(f"缺数据拍占比 {missing_ratio:.0%}，结论可信度受限")
 
@@ -294,7 +294,7 @@ def _normalize_state(app_state):
 
 async def collect_closing_facts(state) -> dict:
     """收盘口径的当日事实：涨停池题材归因（复用 watcher 的同一份数据路径）
-    + 东财板块涨幅匹配 + 情绪环境（每天一次，全量重算不心疼配额）。
+    + 同概念涨幅身份核验 + 情绪环境。无正式THS↔EM桥时涨幅保持unknown。
 
     复用 watcher._beat_themes_from_pool / _board_pcts / match_board_pct——
     盘中与盘后同一口径，不出现"复盘用的板块涨幅和盘中不是一套"。

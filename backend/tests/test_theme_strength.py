@@ -65,3 +65,15 @@ def test_unknown_theme_members_all_missing():
     s = aggregate_theme_strength({"889999.TI": ["600001", "600002"]}, QUOTES)["889999.TI"]
     assert s["up"] == 0 and s["down"] == 0 and s["missing"] == 2
     assert s["avg_change_pct"] is None
+    assert s["total_amount"] is None and s["amount_count"] == 0
+
+
+def test_amount_coverage_keeps_unknown_separate_from_real_zero():
+    members = {"881156.TI": ["600001", "600002", "600003"]}
+    result = aggregate_theme_strength(members, {
+        "600001": {"change_pct": 0, "amount": 0},
+        "600002": {"change_pct": 1, "amount": None},
+        "600003": {"change_pct": None, "amount": 9e8},
+    })["881156.TI"]
+    assert result["count"] == 3 and result["missing"] == 1
+    assert result["total_amount"] == 0 and result["amount_count"] == 1

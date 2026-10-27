@@ -7,7 +7,8 @@ import { getStrategyRegistry } from "@/lib/api/picks";
 import {CardEntryRow} from "@/components/picks/card-entries";
 
 let search = new URLSearchParams();
-vi.mock("next/navigation", () => ({ useRouter: () => ({ replace: vi.fn(), push: vi.fn() }), useSearchParams: () => search }));
+const movedReplace = vi.hoisted(()=>vi.fn());
+vi.mock("next/navigation", () => ({ useRouter: () => ({ replace: movedReplace, push: vi.fn() }), useSearchParams: () => search }));
 vi.mock("@/hooks/use-polling-fetch", () => ({ usePollingFetch: (fn: () => Promise<unknown>, _ms: number, _key: unknown, options?: {enabled?: boolean}) => {
   const latest = useRef(fn);
   useEffect(() => { latest.current = fn; });
@@ -60,6 +61,17 @@ afterEach(() => { cleanup(); vi.useRealTimers(); vi.clearAllMocks(); vi.unstubAl
 
 const group = (name: "candidates" | "daily") => document.getElementById(`sec-${name}`)!;
 const card = (symbol: string, name: "candidates" | "daily" = "candidates") => within(group(name)).getByText(`候选 ${symbol}`).closest("article")!;
+
+it.each(["browse=funds&disc_kind=industry&disc_code=BK0475&disc_range=5d","browse=funds&disc_source=sina&disc_code=gn_ldc","browse=funds&disc_code=886069.TI"])("旧资金链接先迁移、不挂载原选股或资金读取：%s",async query=>{
+  search=new URLSearchParams(query);render(<HuntingPage/>);
+  await waitFor(()=>expect(movedReplace).toHaveBeenCalled());
+  const url=new URL(movedReplace.mock.lastCall![0],"http://localhost");
+  expect(url.pathname).toBe("/market");expect(url.searchParams.get("tab")).toBe("fund");
+  if(query.includes("BK0475"))expect(Object.fromEntries(url.searchParams)).toEqual({tab:"fund",board_kind:"industry",board_range:"5d",board_code:"BK0475"});
+  else expect(url.searchParams.get("board_notice")).toBe("unmapped_legacy_funds");
+  expect(screen.queryByRole("navigation",{name:"选股分类发现"})).toBeNull();
+  for(const reader of [api.getTodayPicks,api.getPicksHistory,api.getThemesHot,api.getBoardFundFlow,api.getBoardFlowMembers,api.getIntradayTop,api.getDiscoveryMemberships])expect(reader).not.toHaveBeenCalled();
+});
 
 it("keeps one shared switch and presentation preference available through pending, valid empty and failed reads", async () => {
   search = new URLSearchParams({sec:"daily"});

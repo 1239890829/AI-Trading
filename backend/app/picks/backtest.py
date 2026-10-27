@@ -20,8 +20,8 @@
 - **phase 不回放**：精确回放需要全市场快照历史（缺）→ confirm 输入 phase=None，
   环境项仅由 promo 分位判定（promo_1to2 在截止 T 日窗口的分位，与线上
   `calibration.describe` 同口径）。退潮/冰点否决在回测中测不到。
-- **题材→板块映射**：与盘中 `watcher.match_board_pct` 同口径
-  （精确 → 双向包含取最短板块名）；匹配不到的方向如实计入 `unmatched`。
+- **题材→板块身份**：仅唯一精确THS正式目录代码；名称包含候选不参与。
+  在线EM候选没有跨源桥，不能把两条数据合同视为相同。
 - **leader_pct**：题材内连板最高成员的涨停池 `change_pct`（涨停事实，
   非臆造）；缺字段 → unknown 三态。
 - 板块涨幅/量比（turnover 比）/前瞻收益：ths 官方板块日 K
@@ -44,10 +44,11 @@ from datetime import date
 from app.market.performance import compute_performance
 from app.picks.intraday_rules import confirm_signal, is_performance_tag
 from app.sentiment.calibration import percentile_of
-from app.services.theme_service import match_board_name_shortest, parse_theme_tags
+from app.services.theme_service import parse_theme_tags
 from app.core.bjtime import beijing_now
 
 log = logging.getLogger(__name__)
+METHOD_VERSION = "unique-exact-ths-completed-v3"
 
 #: 伪盘前预判的方向数（§8 协议：top3）
 TOP_N_DIRECTIONS = 3
@@ -111,13 +112,8 @@ def tag_stats(pool, tag: str) -> dict | None:
 
 
 def match_board_name(tag: str, board_names: list[str]) -> str | None:
-    """题材标签 → ths 官方板块名。
-
-    口径（精确优先 → 双向包含取**板块名最短**）的唯一实现在
-    `theme_service.match_board_name_shortest`；本函数是薄委托，保留此名是因为
-    报告与测试按它检索（R-1 收敛后不再有第二份实现）。匹配不到 → None。
-    """
-    return match_board_name_shortest(tag, board_names)
+    """同一THS来源内只接受唯一精确名称；包含候选不提供回测身份。"""
+    return tag if tag and board_names.count(tag) == 1 else None
 
 
 # ---------------------------------------------------------------- 纯函数：板块日 K 视图
@@ -262,6 +258,8 @@ def build_samples(
                 },
             })
     stats = {
+        "method_version": METHOD_VERSION,
+        "source": "ths_official_kline",
         "days": len(dates) - 1 if len(dates) > 1 else 0,
         "unmatched": unmatched,
         "no_board_bars": no_board_bars,
@@ -433,6 +431,10 @@ def format_report(
         f"- 回测窗口：{window[0]} ~ {window[1]}（{stats['days']} 个交易日，协议要求 ≥120）"
         if window else "- 回测窗口：未知",
         f"- 样本：(交易日 × top{TOP_N_DIRECTIONS} 预判题材) 共 {len(samples)} 条",
+        f"- 方法版本：{stats.get('method_version', 'legacy_unspecified')}；"
+        "题材仅接受唯一精确THS正式代码；与在线EM名称候选不可互代",
+        f"- 日K完成日截止：交易日 < {stats.get('bar_cutoff_exclusive', '未记录')}；"
+        "仅排除今日形成中K线，不证明历史首次可用或PIT",
         f"- 协议：T-1 题材 top{TOP_N_DIRECTIONS} 为伪预判 → §5.1 确认规则 → "
         "T+1 开盘买、T+3 收盘卖（板块指数口径）"
         + (f"；对照口径 {len(extra_runs)} 个" if extra_runs else ""),
@@ -489,6 +491,7 @@ def format_report(
 async def collect(
     *,
     trade_days: list[date],
+    today: date,
     pool_fetcher,
     bars_fetcher,
     catalog: list[dict],
@@ -500,6 +503,7 @@ async def collect(
 
     Args:
         trade_days: 升序交易日（调用方截好窗口，需比样本多 1 天供 T-1）。
+        today: 本次运行冻结的北京日期；只有交易日<today的日K可供两种收益口径。
         pool_fetcher: async (d: date) -> list[LimitUpRecord]（ths 涨停池）。
         bars_fetcher: async (code: str, calendar_days: int) -> list[dict]
             （parse_board_bars 产物；调用方决定窗口长度，须覆盖全回测期+3 日）。
@@ -528,6 +532,11 @@ async def collect(
         prev, prev_date = pool, d.isoformat()
 
     # 需要的板块：所有 (T-1 预判题材) 匹配到的板块去重
+    # Only returned formal THS codes can identify a replay series. A duplicate
+    # name must stay ambiguous; never collapse it into code_by_name first.
+    catalog = [c for c in catalog if isinstance(c.get("code"), str)
+               and len(c["code"]) == 9 and c["code"].endswith(".TI")
+               and c["code"][:6].isdigit() and c.get("source", "ths_official") == "ths_official"]
     board_names = [c["name"] for c in catalog]
     needed: set[str] = set()
     for d in sorted(pools_by_day)[1:]:
@@ -543,7 +552,11 @@ async def collect(
         if not code:
             continue
         try:
-            bars_by_board[name] = await bars_fetcher(code, span)
+            raw_bars = await bars_fetcher(code, span)
+            # date_ms为今日00:00也可能携带盘中形成价，不能当T+3收盘。
+            # 保留原日期/原字段，不把今日改写成前一完成日；此截止不证明PIT。
+            bars_by_board[name] = [dict(row) for row in raw_bars
+                                   if date.fromisoformat(row["date"]) < today]
         except Exception as exc:
             log.warning("backtest: board bars %s(%s) failed: %s", name, code, exc)
             bars_by_board[name] = []
@@ -555,11 +568,20 @@ async def collect(
         metric_rows=metric_rows,
         top_n=top_n,
     )
+    stats["bar_cutoff_exclusive"] = today.isoformat()
+    identities = {name: {"code": code_by_name[name], "source": "ths_official_kline",
+                         "method_version": METHOD_VERSION} for name in sorted(set(board_names))
+                  if board_names.count(name) == 1}
+    for sample in samples:
+        sample["board_identity"] = identities.get(sample["board"])
     return {
+        "method_version": METHOD_VERSION,
+        "source": "ths_official_kline",
         "samples": samples,
         "stats": stats,
         "bars_by_board": bars_by_board,
         "pools_by_day": pools_by_day,
+        "board_identities": identities,
     }
 
 
@@ -583,6 +605,7 @@ async def run_backtest(*, days: int = 120, provider, catalog_fetcher, bars_fetch
     metric_rows = metric_history_rows()
     data = await collect(
         trade_days=window,
+        today=today,
         pool_fetcher=provider.get_limit_up_pool,
         bars_fetcher=bars_fetcher,
         catalog=catalog,
@@ -596,14 +619,16 @@ async def run_backtest(*, days: int = 120, provider, catalog_fetcher, bars_fetch
     # confirm 输入与买入口径无关，只重算 fwd，不重复拉数据。
     extra_runs = []
     if "pullback" in BUY_MODES and catalog:
-        catalog_names = [c["name"] for c in catalog]
         pb_samples, pb_stats = build_samples(
             pools_by_day=data["pools_by_day"],
             bars_by_board=data["bars_by_board"],
-            board_names=catalog_names,
+            board_names=list(data["board_identities"]),
             metric_rows=metric_rows,
             buy_mode="pullback",
         )
+        for sample in pb_samples:
+            sample["board_identity"] = data["board_identities"].get(sample["board"])
+        pb_stats["bar_cutoff_exclusive"] = today.isoformat()
         extra_runs.append({
             "mode": "pullback",
             "label": BUY_MODE_LABELS["pullback"],

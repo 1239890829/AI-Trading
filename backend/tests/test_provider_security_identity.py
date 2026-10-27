@@ -6,6 +6,7 @@ import asyncio
 import httpx
 import pytest
 
+from app.data_providers.eastmoney import EastmoneyProvider, to_secid
 from app.data_providers.sina import SinaProvider
 from app.data_providers.tencent import TencentProvider, to_tencent_symbol
 from app.data_providers.ths import ThsFuyaoProvider
@@ -99,6 +100,33 @@ def test_sina_prefixed_order_book_matches_market_key():
 ])
 def test_tencent_market_mapping_does_not_treat_bj_920_as_sh(symbol, expected):
     assert to_tencent_symbol(symbol) == expected
+
+
+@pytest.mark.parametrize("symbol,expected", [
+    ("920819", "0.920819"), ("430047", "0.430047"), ("833171", "0.833171"),
+    ("900901", "1.900901"), ("200002", "0.200002"), ("510300", "1.510300"),
+    ("600519", "1.600519"), ("000001", "0.000001"), (" 920819 ", "0.920819"),
+])
+def test_eastmoney_request_market_keeps_bj_and_existing_security_families(symbol, expected):
+    # 东财把北交所放在市场0；900沪B仍属市场1，不能用整个9段判沪市。
+    assert to_secid(symbol) == expected
+
+
+@pytest.mark.parametrize("source_market", [0, 1])
+def test_eastmoney_bj_request_and_quote_decode_share_verified_identity(source_market):
+    def respond(request):
+        assert request.url.params["secids"] == "0.920627"
+        return httpx.Response(200, json={"data": {"diff": [
+            {"f12": "920627", "f13": source_market, "f2": 17.61, "f14": "身份夹具"},
+        ]}})
+
+    # 正常来源市场0才可成为BJ报价；同代码错误市场1必须拒收整包。
+    if source_market == 1:
+        with pytest.raises(ValueError, match="market identity"):
+            _run(EastmoneyProvider(), respond, "get_quotes", ["920627"])
+    else:
+        quotes = _run(EastmoneyProvider(), respond, "get_quotes", ["920627"])
+        assert [(q.symbol, q.market, q.source) for q in quotes] == [("920627", "BJ", "eastmoney")]
 
 
 def test_sina_preserves_bj_market():

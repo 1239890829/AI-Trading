@@ -8,6 +8,7 @@ import { CloseButton } from "@/components/ui/icon-button";
 import { useCallback, useEffect, useId, useLayoutEffect, useMemo, useRef, useState } from "react";
 import { useExitPresence } from "@/hooks/use-exit-presence";
 import { ApiError, addToWatchlist, searchSymbols } from "@/lib/api";
+import {indexDetailSymbol} from "@/lib/api/client";
 import { notifyWatchlistChanged } from "@/lib/watchlist-sync";
 import { useSymbolDetail } from "@/components/detail/symbol-detail-context";
 import type { SymbolSearchItem } from "@/types/market";
@@ -18,16 +19,39 @@ const DEBOUNCE_MS = 250;
 const MIN_QUERY_LEN = 2;
 const HISTORY_KEY = "ashare-security-search-history-v1";
 const HISTORY_LIMIT = 12;
-type SearchHistory = {query: string; symbol: string; name: string; market: string};
+type SelectedHistory = {query: string; symbol: string; name: string; market: string};
+type SearchHistory = SelectedHistory | {query: string};
+function selectedHistory(entry: SearchHistory): entry is SelectedHistory {return "symbol" in entry;}
+function historyIdentity(entry: SearchHistory) {return selectedHistory(entry) ? `${entry.market}:${entry.symbol}` : `query:${entry.query}`;}
+
+/** Market-qualified index segments use the existing detail contract; names never supply identity. */
+function historySymbol(symbol: string, market: string): string | null {
+  const match = /^(?:(sh|sz|bj))?(\d{6})$/i.exec(symbol);
+  if (!match || match[1] && match[1].toUpperCase() !== market) return null;
+  const code = match[2];
+  const index = market === "SH" && /^(000|880|950)/.test(code)
+    || market === "SZ" && code.startsWith("399") || market === "BJ" && code.startsWith("899");
+  if (index) return market === "BJ" ? `bj${code}` : indexDetailSymbol(code, market);
+  const knownMarket = /^(6|5|900)/.test(code) ? "SH" : /^[0123]/.test(code) ? "SZ" : /^(4|8|920)/.test(code) ? "BJ" : null;
+  return knownMarket === market ? code : null;
+}
 function validHistory(value: unknown): SearchHistory[] {
   if (!Array.isArray(value)) return [];
   const result: SearchHistory[] = [];
-  for (const entry of value.slice(0, HISTORY_LIMIT * 4)) {
-    if (!entry || typeof entry !== "object" || typeof entry.query !== "string" || entry.query.trim().length < MIN_QUERY_LEN
-      || entry.query.length > 64 || typeof entry.symbol !== "string" || !/^(?:(?:sh|sz|bj))?\d{6}$/i.test(entry.symbol)
-      || !["SH", "SZ", "BJ"].includes(entry.market) || typeof entry.name !== "string" || entry.name.length > 80
-      || result.some(row => row.symbol === entry.symbol && row.market === entry.market)) continue;
-    result.push({query: entry.query.trim(), symbol: entry.symbol, name: entry.name, market: entry.market});
+  for (const raw of value.slice(0, HISTORY_LIMIT * 4)) {
+    const entry = typeof raw === "string" ? {query: raw} : raw;
+    if (!entry || typeof entry !== "object" || typeof entry.query !== "string" || entry.query.trim().length < MIN_QUERY_LEN || entry.query.length > 64) continue;
+    const query = entry.query.trim();
+    let record: SearchHistory;
+    if (!("symbol" in entry) && !("market" in entry)) record = {query};
+    else {
+      if (typeof entry.symbol !== "string" || !["SH", "SZ", "BJ"].includes(entry.market)
+        || typeof entry.name !== "string" || entry.name.length > 80) continue;
+      const symbol = historySymbol(entry.symbol, entry.market);
+      record = symbol ? {query, symbol, name: entry.name, market: entry.market} : {query};
+    }
+    if (result.some(row => historyIdentity(row) === historyIdentity(record))) continue;
+    result.push(record);
     if (result.length === HISTORY_LIMIT) break;
   }
   return result;
@@ -159,22 +183,32 @@ export function SearchBox({collapsible = false}: {collapsible?: boolean}) {
     return () => { document.removeEventListener("mousedown", onClick); seqRef.current += 1; };
   }, [dismiss]);
 
-  function go(item: SymbolSearchItem) {
-    const entry = validHistory([{query: q.trim(), symbol: item.symbol, name: item.name ?? item.symbol, market: item.market}])[0];
-    if (entry && resultQuery === q.trim() && results.some(row => row.symbol === item.symbol && row.market === item.market)) {
-      const next = [entry, ...history.filter(row => row.symbol !== entry.symbol || row.market !== entry.market)].slice(0, HISTORY_LIMIT);
-      setHistory(next);
-      try {localStorage.setItem(HISTORY_KEY, JSON.stringify(next));} catch {}
+  function remember(entry: SearchHistory) {
+    const next = [entry, ...history.filter(row => historyIdentity(row) !== historyIdentity(entry))].slice(0, HISTORY_LIMIT);
+    setHistory(next);
+    try {localStorage.setItem(HISTORY_KEY, JSON.stringify(next));} catch {}
+  }
+
+  function go(item: Pick<SymbolSearchItem, "symbol" | "name" | "market">, recalled?: SelectedHistory) {
+    const parsed = validHistory([{query: q.trim(), symbol: item.symbol, name: item.name ?? item.symbol, market: item.market}])[0];
+    const entry = recalled ?? (parsed && selectedHistory(parsed) ? parsed : undefined);
+    if (!entry) {
+      const term = parsed ?? validHistory([q.trim()])[0];
+      if (term) remember(term);
+      setError("证券身份待核：代码与市场不一致或代码段未确认，暂不能打开详情");
+      setOpen(true);
+      return;
     }
-    // The result disappears. Give the detail overlay a stable return target.
+    if (recalled || resultQuery === q.trim() && results.some(row => row.symbol === item.symbol && row.market === item.market)) remember(entry);
+    // Both a current result and a proved selection history use this one detail path.
     inputRef.current?.focus();
-    setOpen(false);
+    dismiss();
     setQ("");
-    resetTransient(); // 弹窗后清空，飞行中的旧请求若返回不得再弹开面板
-    openSymbolDetail({ symbol: item.symbol });
+    openSymbolDetail({symbol: entry?.symbol ?? item.symbol});
   }
 
   function recall(entry: SearchHistory) {
+    if (selectedHistory(entry)) {go(entry, entry); return;}
     resetTransient(); setItems([]); setResultQuery(""); setQ(entry.query); setOpen(true);
     inputRef.current?.focus();
   }
@@ -197,15 +231,17 @@ export function SearchBox({collapsible = false}: {collapsible?: boolean}) {
 
   async function quickAdd(e: React.MouseEvent, item: SymbolSearchItem) {
     e.stopPropagation();
-    if (addLock.current) return;
+    const symbol = historySymbol(item.symbol, item.market ?? "");
+    // WatchlistAdd accepts bare six-digit securities, never canonical index IDs.
+    if (!symbol || !/^\d{6}$/.test(symbol) || addLock.current) return;
     addLock.current = true;
-    setAdding(item.symbol);
+    setAdding(`${item.market}:${symbol}`);
     setAddNote(null);
     const seq = seqRef.current;
     try {
-      await addToWatchlist(item.symbol, item.name ?? undefined);
+      await addToWatchlist(symbol, item.name ?? undefined);
       if (seq === seqRef.current) {
-        setItems((prev) => prev.map((i) => (i.symbol === item.symbol ? { ...i, is_realtime: true } : i)));
+        setItems((prev) => prev.map((i) => (i.market === item.market && historySymbol(i.symbol, i.market ?? "") === symbol ? { ...i, is_realtime: true } : i)));
         setAddNote(`${item.name ?? item.symbol} 已加入自选`);
       }
       notifyWatchlistChanged();
@@ -320,12 +356,18 @@ export function SearchBox({collapsible = false}: {collapsible?: boolean}) {
       {panel && (
         <section id={panelId} data-motion-state={showPanel ? "open" : "closed"} aria-hidden={!showPanel || undefined} inert={!showPanel} className="ui-glass-overlay search-popover motion-float" aria-label="证券搜索结果">
           <header className="search-popover-heading">
-            <div><strong>证券搜索</strong><span>{panel.historyMode ? "最近成功选择" : "代码、名称或拼音"}</span></div>
+            <div><strong>证券搜索</strong><span>{panel.historyMode ? "最近查看 / 检索词" : "代码、名称或拼音"}</span></div>
             <CloseButton onClose={closeAndFocus} label="关闭搜索结果" autoFocus={false} />
           </header>
         <ul className="search-result-list">
           {panel.historyMode && <li className="flex items-center justify-between px-3 py-2 text-xs text-zinc-600 dark:text-zinc-400"><span>仅保存在本机</span><button type="button" className="quiet-action" aria-label="清除搜索历史" onClick={() => {setHistory([]); try {localStorage.removeItem(HISTORY_KEY);} catch {} inputRef.current?.focus();}}>清除历史</button></li>}
-          {panel.historyMode && panel.history.map(entry => <li key={`${entry.market}:${entry.symbol}`}><button type="button" className="search-result-open search-history-open" aria-label={`重搜 ${entry.name} ${entry.query}`} onKeyDown={moveChoice} onClick={() => recall(entry)}><span className="search-result-name">{entry.name}</span><span className="search-result-code">{entry.query}<span>{entry.symbol}</span></span></button></li>)}
+          {panel.historyMode && panel.history.map(entry => <li key={historyIdentity(entry)}><button type="button" className="search-result-open search-history-open"
+            aria-label={selectedHistory(entry) ? `查看 ${entry.name} ${entry.symbol} ${entry.market}` : `检索词 ${entry.query}`}
+            title={selectedHistory(entry) ? `直接查看详情；原检索词 ${entry.query}` : "仅保存了检索词，尚未确认证券身份"}
+            onKeyDown={moveChoice} onClick={() => recall(entry)}>
+            <span className="search-result-name">{selectedHistory(entry) ? entry.name : entry.query}</span>
+            <span className="search-result-code">{selectedHistory(entry) ? entry.symbol : "检索词"}<span>{selectedHistory(entry) ? entry.market : "重新搜索"}</span></span>
+          </button></li>)}
           {panel.addNote && <li role="status" className="px-3 py-2 text-xs">{panel.addNote}</li>}
           {panel.error !== null && (
             <li className="px-3 py-2 text-xs text-red-700 dark:text-red-400" role="alert">
@@ -343,23 +385,25 @@ export function SearchBox({collapsible = false}: {collapsible?: boolean}) {
               未找到与「{panel.kw}」匹配的股票
             </li>
           )}
-          {panel.results.map((it) => (
-            <li key={`${it.source}-${it.symbol}`}>
+          {panel.results.map((it) => {
+            const symbol = historySymbol(it.symbol, it.market ?? "");
+            const index = symbol !== null && !/^\d{6}$/.test(symbol);
+            return <li key={`${it.source}-${it.market ?? "unknown"}-${it.symbol}`}>
               <div className="search-result-row">
                 <button type="button" onClick={() => go(it)} className="search-result-open" onKeyDown={moveChoice}>
                   <span className="search-result-name">{it.name ?? it.symbol}</span>
                   <span className="search-result-code">{it.symbol}<span>{it.market}</span></span>
                 </button>
-                {it.is_realtime ? (
+                {index ? <span className="search-watch-state">指数 · 仅查看</span> : symbol === null ? <span className="search-watch-state">身份待核</span> : it.is_realtime ? (
                   <span className="search-watch-state">已自选 ✓</span>
                 ) : (
                   <button type="button" disabled={panel.adding !== null} aria-label={`加入自选 ${it.name ?? it.symbol}`} onClick={(e) => void quickAdd(e, it)} className="search-watch-action" title="加入自选">
-                    {panel.adding === it.symbol ? "保存中" : "＋"}
+                    {panel.adding === `${it.market}:${symbol}` ? "保存中" : "＋"}
                   </button>
                 )}
               </div>
-            </li>
-          ))}
+            </li>;
+          })}
         </ul>
         </section>
       )}

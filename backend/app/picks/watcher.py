@@ -82,15 +82,13 @@ VR_FETCH_CONCURRENCY = 8
 
 
 def match_board_pct(tag: str, board_pct: dict[str, float]) -> float | None:
-    """题材标签 → 东财板块涨幅。
+    """THS原因标签无EM正式代码桥，在线确认涨幅保持unknown。
 
-    匹配口径（精确优先 → 双向包含取**板块名最短**）的**唯一实现**在
-    `theme_service.match_board_name_shortest`——本函数只负责把命中的板块名换成涨幅
-    （R-1，2026-09-12 评审批次 1：此前 `watcher` 与 `backtest` 各写一份同口径实现）。
-    匹配不到 → None（unknown）。绝不拿不相干的板块冒充。
+    策略A名称匹配仅在候选参考使用，不修改确认阈值/未知规则。
     """
-    name = match_board_name_shortest(tag, board_pct.keys())
-    return board_pct[name] if name is not None else None
+    # tag来自THS原因，board_pct来自东财；精确同名也没有正式身份桥。
+    # 策略A仍可给候选参考，但候选涨幅不得送入确认/证伪状态机。
+    return None
 
 
 # ---------------------------------------------------------------- 纯状态机
@@ -659,6 +657,7 @@ async def _board_flows(hub) -> dict[str, dict]:
                 "ratio": row.get("main_net_ratio"),
                 "pct": row.get("change_pct"),
                 "code": row.get("board_code"),
+                "kind": row.get("kind") or kind,
             }
     return out
 
@@ -791,6 +790,7 @@ async def collect_beat_inputs(app, env_cache: dict, *, env_refresh_seconds: floa
         "env": env_cache.get("env"),
         "pool_count": 0,
         "board_count": 0,
+        "source_version": "ths-labels-em-candidate-v2",
     }
     days = None
     try:
@@ -826,6 +826,15 @@ async def collect_beat_inputs(app, env_cache: dict, *, env_refresh_seconds: floa
         beat["board_flows"] = flows
     for tag, st in themes.items():
         st["pct"] = match_board_pct(tag, board_pct)
+        name = match_board_name_shortest(tag, board_pct.keys()) if tag else None
+        row = (flows or {}).get(name) if name else None
+        st["candidate_board"] = ({"name": name, "board_code": (row or {}).get("code"),
+                                  "kind": (row or {}).get("kind"), "source": "eastmoney",
+                                  "source_product": "legacy_clist", "change_pct": board_pct.get(name),
+                                  "relationship": "name_candidate", "same_concept_verified": False,
+                                  "match_method": "exact_name" if name == tag else "contains_shortest"}
+                                 if name else None)
+        st["board_identity_state"] = "unknown"
 
     # 量比接线（§5.1#4 降级口径）：快照当日量 + 昨日量按日缓存。
     # 失败路径全部落 unknown——量比判不出来时 confirm 只是缺一项，不阻断其他判定。

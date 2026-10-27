@@ -175,8 +175,48 @@ export interface ThemeBoardMetrics {
   chg_3d?: number | null;
   chg_5d?: number | null;
   chg_10d?: number | null;
-  /** 3/5/10 日涨幅已经同花顺官方板块 K 线交叉验证（T3/B3）；缺省 = 仍为东财字段序推断 */
+  /** 旧响应兼容字段。不能据此把东财名称候选确认为同花顺身份。 */
   multi_day_verified?: boolean;
+}
+
+/** 名称匹配只产生参考候选，保留东财自身身份。 */
+export interface ThemeBoardCandidate extends ThemeBoardMetrics {
+  board_code: string;
+  name: string;
+  kind: string;
+  source: "eastmoney";
+  source_product: "legacy_clist";
+  requested_name: string;
+  relationship: "name_candidate";
+  match_method: "exact_name" | "suffix" | "contains";
+  same_concept_verified: false;
+  main_net_yi?: number | null;
+  streak?: number | null;
+}
+
+export interface ThemeOfficialInterval {
+  code: string | null;
+  name: string | null;
+  source: "ths_official_kline";
+  state: "verified" | "partial" | "pending" | "unmapped" | "catalog_unavailable" | "source_unavailable";
+  chg_3d: number | null;
+  chg_5d: number | null;
+  chg_10d: number | null;
+  /** 日线日期标签，可能含当日形成条；不证明完成、首次发布或秒级源时点。 */
+  source_as_of: string | null;
+  requested_trade_date: string;
+  /** 仅核同源身份及区间日期，不证明收盘完成或价格准确性。 */
+  verified: boolean;
+}
+
+export interface ThemePersistenceCheck {
+  q: string;
+  axis: "evidence" | "risk";
+  value: string;
+  pass: boolean | null;
+  state?: "pass" | "fail" | "unknown";
+  breadth_pass?: boolean;
+  note: string;
 }
 
 export interface ThemePerformance {
@@ -218,8 +258,10 @@ export interface ThemeCard {
   health_note: string;
   risks: string[];
   core?: { type: string; label: string; basis?: string; votes?: Record<string, number> };
-  persistence?: Record<string, unknown>;
+  persistence?: Record<string, unknown> & {checks?: ThemePersistenceCheck[]};
   board?: ThemeBoardMetrics | null;
+  candidate_board?: ThemeBoardCandidate | null;
+  official_interval?: ThemeOfficialInterval;
   board_matched: boolean;
   performance: ThemePerformance;
   ladder: LadderRung[];

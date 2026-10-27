@@ -419,16 +419,18 @@ def test_verify_board_multi_day_replaces_and_flags(monkeypatch: pytest.MonkeyPat
     request = SimpleNamespace(app=SimpleNamespace(state=SimpleNamespace(theme_catalog=svc)))
     asyncio.run(_verify_board_multi_day(request, payload, date(2026, 8, 21)))
 
-    board = payload["themes"][0]["board"]
-    assert board["multi_day_verified"] is True
-    assert board["chg_3d"] == round((111 / 108 - 1) * 100, 2), "官方值覆盖推断值"
-    assert board["chg_3d_inferred"] == 99.0, "推断值保留供审计"
-    assert board["multi_day_source"] == "ths_official_kline"
+    board = payload["themes"][0]["official_interval"]
+    assert board["verified"] is True
+    assert board["chg_3d"] == round((111 / 108 - 1) * 100, 2)
+    assert payload["themes"][0]["candidate_board"]["chg_3d"] == 99.0
+    assert payload["themes"][0]["board"] is None
+    assert board["source"] == "ths_official_kline" and board["code"] == GRAIN
 
-    other = payload["themes"][1]["board"]
-    assert other["multi_day_verified"] is False, "目录外题材保留推断值、不打验证标"
-    assert other["multi_day_verification_state"] == "unmapped"
-    assert any("已用同花顺官方板块 K 线交叉验证" in c for c in payload["caveats"])
+    other = payload["themes"][1]["official_interval"]
+    assert other["verified"] is False and other["chg_3d"] is None
+    assert other["state"] == "unmapped"
+    assert payload["themes"][1]["candidate_board"]["chg_3d"] == 1.0
+    assert any("THS正式代码区间独立记录" in c for c in payload["caveats"])
     assert any("board_multi_day_verified=false" in c for c in payload["caveats"]) is False
 
     # 缓存命中短路：再次调用不再重复拉取（fetch 计数不变）
@@ -479,9 +481,9 @@ def test_verify_board_multi_day_upgrades_persistence_position(monkeypatch: pytes
     request = SimpleNamespace(app=SimpleNamespace(state=SimpleNamespace(theme_catalog=svc)))
     asyncio.run(_verify_board_multi_day(request, payload, date(2026, 8, 21)))
 
-    board = payload["themes"][0]["board"]
+    board = payload["themes"][0]["official_interval"]
     assert board["chg_5d"] == round((121 / 106 - 1) * 100, 2), "官方值覆盖"
-    assert board.get("multi_day_verified") is not True, "K 线不足 11 根，10 日涨幅缺失不打验证标"
+    assert board["verified"] is False, "K 线不足 11 根，10 日涨幅缺失不打验证标"
     card = payload["themes"][0]
     assert card["persistence"]["position_risk"] is True, "官方 5 日涨幅超阈值 → 位置转高"
     assert "官方 K 线" in next(c for c in card["persistence"]["checks"] if c["axis"] == "risk")["value"]

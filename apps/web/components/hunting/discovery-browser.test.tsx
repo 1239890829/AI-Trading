@@ -719,6 +719,8 @@ describe("分类导航的键盘与深链", () => {
     const search="browse=hot&disc_kind=concept&disc_range=5d&disc_code=old&disc_method=daily_picks&disc_group=all&disc_q=old&disc_sort=asc&selection=daily&date=2026-10-23&account=paper&symbol=600519&panel=evidence&review=1";
     render(<DiscoveryNavigation search={search}/>);
     const nav=screen.getByRole("navigation",{name:"选股分类发现"});
+    expect(within(nav).queryByRole("link",{name:"资金方向"})).toBeNull();
+    expect(within(nav).getAllByRole("link")).toHaveLength(4);
     const hot=within(nav).getByRole("link",{name:"热门题材"});
     const catalog=within(nav).getByRole("link",{name:"行业概念"});
     hot.focus();fireEvent.keyDown(hot,{key:"ArrowRight"});expect(document.activeElement).toBe(catalog);

@@ -78,11 +78,22 @@ def normalize_index(raw: dict) -> Quote:
 
 
 def normalize_quote(raw: dict) -> Quote:
+    symbol = str(raw.get("f12") or "")
+    market = _market(raw.get("f13"))
+    if len(symbol) == 6 and symbol.isdigit() and market in {"SH", "SZ"}:
+        is_bj = symbol.startswith(("4", "8", "920"))
+        expected = ("SZ" if symbol.startswith(("0", "1", "2", "3", "4", "8", "920")) else
+                    "SH" if symbol.startswith(("5", "6", "900")) else None)
+        if expected is not None and market != expected:
+            raise ValueError(f"eastmoney quote market identity mismatch: {symbol}/{raw.get('f13')}")
+        # 东财市场0同时承载深市与北交所；只在来源市场与已知代码段一致时细分。
+        if is_bj:
+            market = "BJ"
     volume_hands = _num(raw.get("f5"))
     return Quote(
-        symbol=str(raw.get("f12") or ""),
+        symbol=symbol,
         name=raw.get("f14"),
-        market=_market(raw.get("f13")),
+        market=market,
         price=_num(raw.get("f2")),
         change=_num(raw.get("f4")),
         change_pct=_num(raw.get("f3")),

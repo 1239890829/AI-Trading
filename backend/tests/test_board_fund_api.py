@@ -423,9 +423,9 @@ def test_strength_payload_carries_board_alongside_force(monkeypatch):
 
     async def fake_rows(names):
         assert "绿色电力" in names
-        return {"绿色电力": {"board_code": "BK1024", "name": "绿色电力", "kind": "concept",
+        return {"绿色电力": {"candidate_board": {"board_code": "BK1024", "name": "绿色电力", "kind": "concept",
                              "change_pct": 0.19, "main_net_yi": 32.33, "main_net_ratio": 5.1,
-                             "streak": 4}}
+                             "streak": 4, "source": "eastmoney", "same_concept_verified": False}}}
 
     monkeypatch.setattr(ts, "board_rows_for_names", fake_rows)
     _patch_quotes(monkeypatch, {"600105": _q("600105", "永鼎股份", 5.2)})
@@ -436,8 +436,10 @@ def test_strength_payload_carries_board_alongside_force(monkeypatch):
     ))
     row = payload["data"]["themes"]["881156.TI"]
     assert row["up"] == 1                       # 合力字段（ths 成分快照聚合）照旧存在
-    assert row["board"]["main_net_yi"] == 32.33  # 东财 f62 口径单独挂载
-    assert row["board"]["streak"] == 4
+    assert row["board"] is None
+    assert row["candidate_board"]["main_net_yi"] == 32.33
+    assert row["candidate_board"]["streak"] == 4
+    assert row["candidate_board"]["same_concept_verified"] is False
     # 两套口径各自标注，避免混算
     assert "合力" in payload["meta"]["basis"]
     assert "不可相加" in payload["meta"]["board_basis"]
@@ -534,3 +536,20 @@ def test_strength_cache_hit_performs_zero_member_queries(monkeypatch):
     assert svc.bulk_calls == 1, "缓存命中不得再查成分"
     assert svc.catalog_calls == 1, "缓存命中不得再查目录"
     assert svc.member_calls == 0
+
+
+def test_source_identity_strength_discloses_482_members_and_200_sample(monkeypatch):
+    import asyncio
+
+    _patch_board_rows(monkeypatch)
+    members = [str(600000 + i) for i in range(482)]
+    _patch_quotes(monkeypatch, {members[0]: _q(members[0], "真实零额", 0, amount=0)})
+    svc = _FakeSvc({"881156.TI": "绿色电力"}, {"881156.TI": members})
+    result = asyncio.run(tc_route.theme_strength(
+        request=_request(), codes="881156.TI", hub=_hub(_ProfileProvider({}, {})), svc=svc))
+    row = result["data"]["themes"]["881156.TI"]
+    assert row["count"] == 200
+    assert row["coverage"] == {"member_total": 482, "sampled": 200, "not_sampled": 282,
+        "quote_returned": 1, "valid_change_count": 1, "amount_count": 1, "missing_amount": 199,
+        "sample_limit": 200, "complete_members": False}
+    assert row["total_amount"] == 0

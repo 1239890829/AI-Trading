@@ -13,16 +13,14 @@
 ------------------------------------------
 - 题材归因 / 连板数 / 封单额：ths limit_up_pool
 - 换手率 / 开板次数 / 末封时间 / 流通市值 / 成交额 / 行业：东财 push2ex
-- 板块涨跌幅 / 涨跌家数 / 成交额 / 主力净流入 / 领涨股：东财 push2delay 板块列表
+- 东财板块原值只作按名称检索的候选参考，不视为同一THS题材的涨幅/资金
 - 题材连续活跃天数：近 N 日 ths 涨停池（自建，衡量「资金是否持续」）
 - 接力赚钱效应（溢价）：前一日题材涨停股 + 全市场快照
 
 已知边界（不可臆造）
 --------------------
-- 板块的 3/5/10 日涨跌幅原为东财字段序推断；2026-08-31 起由路由层用同花顺
-  官方板块 K 线交叉验证并替换（board.multi_day_verified=true，推断值保留在
-  chg_*_inferred 供审计，见 market.py _verify_board_multi_day）。
-  目录服务不可用/题材不在目录时保留推断值并如实标注。
+- THS正式代码的3/5/10日区间由路由层单独放official_interval；
+  东财candidate_board不能继承该代码或其官方区间，也不进入同概念资金证据。
 - 炸板池无法按题材归属（东财/ths 炸板池都不带题材），题材级只能用「开板过的涨停股占比」
   近似，全市场炸板率另行给出作为背景。
 """
@@ -744,7 +742,7 @@ async def _em_enhancement_map(provider, trade_date: date) -> dict[str, dict]:
     return {r.symbol: r for r in rows}
 
 
-#: 东财板块名的常见后缀，匹配前剥离（"黄金概念" 与 "黄金珠宝" 实际同源）
+#: 候选名称检索的后缀；剥离命中不证明两个来源是同一概念。
 BOARD_SUFFIXES = ("概念", "板块", "指数", "产业")
 
 
@@ -807,10 +805,10 @@ def match_board_name_shortest(tag: str, names: Iterable[str]) -> str | None:
 
 
 def match_board(theme: str, index: dict[str, dict]) -> dict | None:
-    """把题材名匹配到东财板块（**策略 B：剥后缀 → 多命中取最长**）。
+    """按题材名检索东财候选（**策略 B：剥后缀 → 多命中取最长**）。
 
     ths 题材标签体系与东财板块名体系不同（"转基因玉米" vs "转基因"、
-    "黄金珠宝" vs "黄金概念"），精确匹配命中率极低，必须做剥离后缀后的双向包含匹配；
+    "黄金珠宝" vs "黄金概念"），名称命中只能给独立候选，不能证明跨源身份；
     多命中时取板块名最长的（更具体）。
 
     ⚠️ 本函数与 `match_board_name_shortest`（策略 A）**政策不同、答案可能不同**，
@@ -869,7 +867,7 @@ async def _load_board_index() -> dict[str, dict]:
             mapped = {
                 "board_code": row.get("board_code"),
                 "name": name,
-                "kind": row.get("kind"),
+                "kind": row.get("kind") or kind,
                 "change_pct": row.get("change_pct"),
                 # main_net_inflow 以元为单位（news_persistence 展示口径）；
                 # main_net_yi 保留亿单位（连续流入天数按亿比对落盘 bar，单位必须一致）
@@ -885,15 +883,10 @@ async def _load_board_index() -> dict[str, dict]:
 
 
 async def board_rows_for_names(names: list[str]) -> dict[str, dict]:
-    """名字（题材名或东财板块名）→ 东财板块资金行（含**连续流入天数**）。
+    """名称→东财候选参考；同概念指标全为unknown，不产生THS↔EM身份桥。
 
-    L3 映射层的唯一批量入口（P1-5，2026-09-10）：P1-5 传 ths 题材名，
-    P1-4 传东财板块代码时走 `board_rows_for_codes`（免名字歧义）。
-
-    数据链路：`_board_index()`（复用 board_flow 盘中 30s 缓存，零额外上游调用）
-    → `match_board` 匹配 → `board_flow.get_board_streaks`（纯读落盘，零外呼）。
-    匹配不到的名字**不出现在返回里**——调用方按三态处理，绝不臆造；
-    连续流入天数只对落盘 Top 板块可判，其余 None（区别于 0=今日净流出）。
+    原BK/单位/streak只保留在candidate_board。匹配不到不造候选。
+    已知EM正式代码的独立请求继续走board_rows_for_codes，不受此限制。
     """
     if not names:
         return {}
@@ -902,10 +895,28 @@ async def board_rows_for_names(names: list[str]) -> dict[str, dict]:
     for n in dict.fromkeys(names):  # 去重保序
         if not n:
             continue
-        row = match_board(n, index)
+        row = board_candidate_for_name(n, index)
         if row:
-            matched[n] = dict(row)
-    return _attach_streaks(matched)
+            matched[n] = row
+    candidates = _attach_streaks(matched)
+    # 名称（包括精确同名）不构成THS原因标签到东财BK的正式身份桥。
+    # 保留候选原值供独立参考，旧数值入口一律未知，避免旧消费者误用。
+    return {name: {"candidate_board": row, "change_pct": None, "main_net_yi": None,
+                   "main_net_inflow": None, "main_net_ratio": None, "streak": None}
+            for name, row in candidates.items()}
+
+
+def board_candidate_for_name(name: str, index: dict[str, dict]) -> dict | None:
+    """策略B只给东财候选参考，不产生跨源身份或可用于资金判定的事实。"""
+    row = match_board(name, index)
+    if row is None:
+        return None
+    method = ("exact_name" if name in index else
+              "suffix" if _strip_board_suffix(name) == _strip_board_suffix(str(row.get("name") or "")) else
+              "contains")
+    return {**row, "source": "eastmoney", "source_product": "legacy_clist",
+            "requested_name": name, "relationship": "name_candidate", "match_method": method,
+            "same_concept_verified": False}
 
 
 async def board_rows_for_codes(codes: list[str]) -> dict[str, dict]:
@@ -1232,7 +1243,7 @@ def _build_card(
     )
     formation = formation_level(total)
 
-    board = match_board(theme, board_index)
+    candidate_board = board_candidate_for_name(theme, board_index)
     ladder_leader = next((r for r in ladder if r["role"] in ("空间板", "龙头")), None)
     middle_weights = [r for r in ladder if r["role"] == "中军"]
     candidates = [r for r in ladder if r["role"] in ("补涨", "反包")]
@@ -1247,8 +1258,8 @@ def _build_card(
         core_type=core["type"],
         limit_up_count=total,
         active_days=active_days,
-        board_change_pct=(board or {}).get("change_pct"),
-        main_net_inflow=(board or {}).get("main_net_inflow"),
+        board_change_pct=None,
+        main_net_inflow=None,
         has_second_board=theme_max_boards >= 2,
         reasons=reasons,
     )
@@ -1268,8 +1279,9 @@ def _build_card(
         "risks": risks,
         "core": core,
         "persistence": persistence,
-        "board": board,
-        "board_matched": board is not None,
+        "board": None,
+        "board_matched": False,
+        "candidate_board": candidate_board,
         "performance": {
             "limit_up_count": total,
             "max_boards": theme_max_boards,

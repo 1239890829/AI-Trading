@@ -728,7 +728,8 @@ def test_run_review_end_to_end(brief_dir, monkeypatch):
     result = asyncio.run(ri.run_review(NS(state=state), trigger="schedule"))
     assert result["ok"] is True
     by_dir = {r["direction"]: r for r in result["directions"]}
-    # 粮食：收盘池 1 家涨停 + 板块 +3.2%（≥晚盘 2.5）→ 可判定项全过 → 发酵
+    # 粮食：真实涨停高度/龙头与环境响应可按既有收盘口径判断；
+    # EM‘粮食概念’+3.2%无正式THS桥，涨幅必须unknown，不贡献通过项。
     assert by_dir["粮食"]["outcome"] == ri.OUTCOME_FERMENT
     # AI应用：收盘池无数据（全 unknown）→ 无波动；缺数据拍 90% → 数据缺失误导
     assert by_dir["AI应用"]["outcome"] == ri.OUTCOME_FLAT
@@ -737,7 +738,13 @@ def test_run_review_end_to_end(brief_dir, monkeypatch):
     saved = json.loads((brief_dir / "20260902.json").read_text(encoding="utf-8"))
     assert saved["review"]["trigger"] == "schedule"
     assert saved["review"]["outcomes"] == {"粮食": "发酵", "AI应用": "无波动"}
-    assert saved["directions"][0]["review"]["actual_pct"] == 3.2
+    review = saved["directions"][0]["review"]
+    assert review["actual_pct"] is None
+    assert review["closing_unknown"] == 2  # 涨幅与量比未知
+    assert review["closing_met"] == 3
+    assert "跨源身份未核" in review["note"] and "涨幅未知" in review["note"]
+    assert review["actual_limit_up"] == 1 and review["actual_max_boards"] == 3
+    assert review["actual_leader"] == "600001 龙头股"
     assert saved["directions"][0]["review"]["source"] == "tracker"
     assert horizon_scopes and all(scope is False for scope in horizon_scopes)
 

@@ -593,7 +593,8 @@ def apply_position_with_5d(persistence: dict, chg_5d: float) -> dict:
     real_high = chg_5d >= POSITION_5D_HIGH
     high = proxy_high or real_high
     check["pass"] = not high
-    check["value"] = f"{check['value']}，板块 5 日 {chg_5d:+.1f}%（官方 K 线）"
+    original = str(check["value"]).split("，板块 5 日", 1)[0]
+    check["value"] = f"{original}，板块 5 日 {chg_5d:+.1f}%（官方 K 线）"
     if real_high and not proxy_high:
         check["note"] = (
             f"连续活跃天数未到高位，但板块 5 日已涨逾 {POSITION_5D_HIGH:.0f}%——"
@@ -679,12 +680,11 @@ def news_persistence(
     })
 
     # ③ 资金认可度（题材内多只同步 + 主力真金白银）
-    # main_net_inflow 为 None 时按「缺失不参与判定」处理，既不奖也不罚——
-    # 把它当 0 会把「数据没取到」误判成「主力在出货」。
+    # 缺失既不能当0/流出，也不能靠涨停广度冒充资金验证通过。
     broad = limit_up_count >= 3
     if main_net_inflow is None:
-        money_pass = broad
-        inflow_txt = "主力净流入缺失（不参与判定）"
+        money_pass = None
+        inflow_txt = "同概念主力净流入缺失，资金未知（不计资金证据）"
     else:
         money_pass = broad and main_net_inflow > 0
         inflow_txt = f"主力净流入 {main_net_inflow} 元"
@@ -693,6 +693,8 @@ def news_persistence(
         "axis": "evidence",
         "value": f"题材内涨停 {limit_up_count} 只；{inflow_txt}",
         "pass": money_pass,
+        "state": "unknown" if money_pass is None else "pass" if money_pass else "fail",
+        "breadth_pass": broad,
         "note": "仅个别标的脉冲、多数无响应 = 游资短线套利，不宜追；"
                 "涨停家数多但主力净流出 = 拉抬出货嫌疑",
     })
@@ -709,7 +711,7 @@ def news_persistence(
 
     # ---- 评级：证据定资格，风险只封顶 ----
     # evidence 只统计①③④（位置项 ② 是风险轴，不进计数器，见 docstring）
-    evidence = sum(1 for c in checks if c["pass"] and c["axis"] == "evidence")
+    evidence = sum(1 for c in checks if c["pass"] is True and c["axis"] == "evidence")
     position_risk = position_high
     grade, veto = _grade_of(evidence, position_risk, has_second_board is False and limit_up_count <= 2)
 

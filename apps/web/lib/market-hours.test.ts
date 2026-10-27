@@ -6,6 +6,7 @@ import {
   POLLING_SESSIONS,
   TRADING_MINUTES,
   isContinuousSession,
+  isAuctionComparisonWindow,
   isPollingSession,
   isTradingSession,
   tradingSeqFromHHMM,
@@ -26,6 +27,12 @@ import {
 const hhmm = (m: number) => `${String(Math.floor(m / 60)).padStart(2, "0")}:${String(m % 60).padStart(2, "0")}`;
 
 describe("时段判定（R-2：两个意图，一份边界）", () => {
+  it("竞价比较禁窗独立于个股显示和轮询，覆盖开盘等待与收盘竞价", () => {
+    for (const minute of [555, 564, 565, 569, 897, 899]) expect(isAuctionComparisonWindow(minute)).toBe(true);
+    for (const minute of [554, 570, 896, 900, Number.NaN]) expect(isAuctionComparisonWindow(minute)).toBe(false);
+    expect(isPollingSession(555)).toBe(true);
+    expect(isContinuousSession(899)).toBe(true); // Existing stock observation projection is not disabled.
+  });
   it("严格口径 = 连续竞价 09:30-11:30 / 13:00-15:00", () => {
     expect(CONTINUOUS_SESSIONS).toEqual([
       [570, 690],

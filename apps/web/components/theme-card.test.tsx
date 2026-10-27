@@ -3,7 +3,7 @@ import { act, cleanup, fireEvent, render, screen, within } from "@testing-librar
 import { ThemeCardView } from "@/components/theme-card";
 import { JUMP_PILL_CLASS } from "@/components/ui/jump-link";
 import type { ThemeStrengthRow } from "@/lib/api";
-import type { LadderRung, ThemeCard } from "@/types/market";
+import type { LadderRung, ThemeCard, ThemeBoardCandidate } from "@/types/market";
 
 // 题材卡内的个股跳转依赖 useRouter，测试环境需桩掉（同 search-box.test.tsx）
 vi.mock("next/navigation", () => ({ useRouter: () => ({ push: vi.fn() }) }));
@@ -57,7 +57,8 @@ function card(over: Partial<ThemeCard> = {}): ThemeCard {
     formation: "成建制",
     health_note: "梯队完整",
     risks: [],
-    board_matched: true,
+    board_matched: false,
+    exact_catalog: {code: "885333.TI", name: "商业航天", source: "ths_official", basis: "exact_name"},
     performance: {
       limit_up_count: 3,
       max_boards: 4,
@@ -81,7 +82,9 @@ function card(over: Partial<ThemeCard> = {}): ThemeCard {
 
 function strength(over: Partial<ThemeStrengthRow> = {}): ThemeStrengthRow {
   return {
+    code: "885333.TI",
     name: "商业航天",
+    coverage: {member_total: 482, sampled: 200, not_sampled: 282, quote_returned: 190, valid_change_count: 180, amount_count: 170, missing_amount: 30, sample_limit: 200, complete_members: false},
     count: 200,
     up: 46,
     down: 151,
@@ -92,73 +95,94 @@ function strength(over: Partial<ThemeStrengthRow> = {}): ThemeStrengthRow {
     total_amount: 1.1e11,
     top_gainers: [],
     basis: "官方成分批量快照聚合",
-    board: {
-      board_code: "BK1234",
-      name: "商业航天",
-      kind: "concept",
-      change_pct: -1.5,
-      main_net_yi: -21.3,
-      main_net_ratio: -2.0,
-      streak: 2,
-    },
+    board: null,
+    candidate_board: candidate(),
     ...over,
   };
 }
 
-describe("题材卡 · 板块资金徽标（P1-5，东财 f62 口径）", () => {
-  it("有 board 时并列渲染两套口径（合力 + 板块资金），金额带符号", () => {
+function candidate(over: Partial<ThemeBoardCandidate> = {}): ThemeBoardCandidate {
+  return {board_code: "BK1234", name: "商业航天", kind: "concept", source: "eastmoney", source_product: "legacy_clist",
+    requested_name: "商业航天", relationship: "name_candidate", match_method: "exact_name", same_concept_verified: false,
+    change_pct: -1.5, main_net_yi: -21.3, main_net_ratio: -2, streak: 2, ...over};
+}
+
+describe("题材卡 · 正式身份、样本与名称候选", () => {
+  it("常显候选身份并保留东财代码，净额不成为正式题材资金", () => {
     render(<ThemeCardView card={card()} rank={1} strength={strength()} />);
-    // 合力（ths 成分快照聚合）照旧
-    expect(screen.getByTitle(/官方成分批量快照聚合/)).toBeTruthy();
-    // 板块资金（东财 f62）
-    const badge = screen.getByTitle(/f62 主力净额口径/);
-    expect(badge.textContent).toContain("商业航天");
+    const badge = screen.getByTitle(/BK1234.*身份未核/);
+    expect(badge.textContent).toContain("东财候选 · 身份未核");
     expect(badge.textContent).toContain("-21.3亿");
-    // 口径分离：标题里必须写明不可与合力相加
-    expect(badge.getAttribute("title")).toContain("不可相加");
+    expect(badge.textContent).toContain("BK1234");
+    expect(badge.getAttribute("title")).toContain("不参与同花顺资金核验");
+    expect(screen.queryByText("-1.50%")).toBeNull();
   });
 
-  it("board 为 null 时不渲染板块徽标（三态：匹配不到就不显示，不占位不臆造）", () => {
-    render(<ThemeCardView card={card()} rank={1} strength={strength({ board: null })} />);
-    expect(screen.queryByTitle(/f62 主力净额口径/)).toBeNull();
-    // 合力徽标不受影响
-    expect(screen.getByTitle(/官方成分批量快照聚合/)).toBeTruthy();
-  });
-
-  it("streak >= 1 才在 title 里给出「连续 N 日净流入」", () => {
+  it("首屏披露采样与两个有效分母，不把样本成交额称为完整题材额", () => {
     render(<ThemeCardView card={card()} rank={1} strength={strength()} />);
-    expect(screen.getByTitle(/f62 主力净额口径/).getAttribute("title")).toContain("连续 2 日净流入");
+    const badge = screen.getByTitle(/官方成分批量快照聚合/);
+    expect(badge.textContent).toContain("样本200/482");
+    expect(badge.textContent).toContain("涨幅180/200");
+    expect(badge.textContent).toContain("金额170/200");
+    expect(badge.textContent).toContain("样本成交额");
+    expect(badge.getAttribute("title")).toContain("未采样282");
   });
 
-  it("streak = 0（今日转流出）与 null（未沉淀）都不显示连续天数", () => {
-    const { unmount } = render(
-      <ThemeCardView card={card()} rank={1} strength={strength({ board: { ...strength().board!, streak: 0 } })} />,
-    );
-    expect(screen.getByTitle(/f62 主力净额口径/).getAttribute("title")).not.toContain("日净流入");
+  it("缺失金额显示待核；真实零成交额和零净额仍保留", () => {
+    const {unmount} = render(<ThemeCardView card={card()} rank={1} strength={strength({total_amount: null, candidate_board: candidate({main_net_yi: null})})} />);
+    expect(screen.getByTitle(/官方成分批量快照聚合/).textContent).toContain("样本成交额 待核");
+    expect(screen.getByTitle(/BK1234.*身份未核/).textContent).toContain("净额待核");
     unmount();
-
-    render(
-      <ThemeCardView card={card()} rank={1} strength={strength({ board: { ...strength().board!, streak: null } })} />,
-    );
-    expect(screen.getByTitle(/f62 主力净额口径/).getAttribute("title")).not.toContain("日净流入");
+    render(<ThemeCardView card={card()} rank={1} strength={strength({total_amount: 0, candidate_board: candidate({main_net_yi: 0})})} />);
+    expect(screen.getByTitle(/官方成分批量快照聚合/).textContent).not.toContain("成交额 待核");
+    expect(screen.getByTitle(/BK1234.*身份未核/).textContent).not.toContain("净额待核");
   });
 
-  it("金额缺失（null）如实显示 --，不冒充 0", () => {
-    render(
-      <ThemeCardView
-        card={card()}
-        rank={1}
-        strength={strength({ board: { ...strength().board!, main_net_yi: null } })}
-      />,
-    );
-    expect(screen.getByTitle(/f62 主力净额口径/).textContent).toContain("--");
+  it("旧 board 返回值也不能升级为已确认涨幅或资金证据", () => {
+    render(<ThemeCardView card={card({board: {name: "同名旧板块", board_code: "BK0001", change_pct: 9.99, main_net_inflow: 777e8}})} rank={1}
+      strength={strength({candidate_board: null, board: {board_code: "BK0001", name: "同名旧板块", kind: "concept", change_pct: 9.99, main_net_yi: 777, main_net_ratio: 1, streak: 3}})} />);
+    expect(screen.queryByText(/777.*亿|9.99%|同名旧板块/)).toBeNull();
   });
 
-  it("无 strength（合力取数失败）时两套徽标都不渲染，卡片其余部分照常", () => {
-    render(<ThemeCardView card={card()} rank={1} strength={null} />);
-    expect(screen.queryByTitle(/f62 主力净额口径/)).toBeNull();
+  it("仅正式同花顺区间独立展示源日期与风险用途，不借用候选涨幅", () => {
+    render(<ThemeCardView card={card({official_interval: {code: "885333.TI", name: "商业航天", source: "ths_official_kline", state: "verified", verified: true,
+      chg_3d: 3.25, chg_5d: null, chg_10d: 6.5, source_as_of: "2026-10-26", requested_trade_date: "2026-10-27"}})} rank={1} strength={strength()} />);
+    fireEvent.click(screen.getByRole("tab", {name: /强度指标与板块表现/}));
+    expect(screen.getByText("同花顺区间 · 仅作风险参照")).toBeTruthy();
+    expect(screen.getByText(/885333.TI.*日线日期 2026-10-26.*同源区间已核/)).toBeTruthy();
+    expect(screen.getByText("+3.25%")).toBeTruthy();
+    expect(screen.queryByText("已交叉验证")).toBeNull();
+  });
+
+  it("当日日线标签不证明已完成或价格已核，只作同源区间风险参照", () => {
+    const {container} = render(<ThemeCardView card={card({official_interval: {code: "885333.TI", name: "商业航天", source: "ths_official_kline", state: "verified", verified: true,
+      chg_3d: 3.25, chg_5d: 4, chg_10d: 6.5, source_as_of: "2026-10-27", requested_trade_date: "2026-10-27"}})} rank={1} />);
+    fireEvent.click(screen.getByRole("tab", {name: /强度指标与板块表现/}));
+    expect(screen.getByText(/日线日期 2026-10-27.*同源区间已核/)).toBeTruthy();
+    expect(container.textContent).not.toMatch(/完成日|已完成|收盘已核|价格已核/);
+    expect(screen.getAllByTitle(/可能含当日形成条，仅风险参考/)).toHaveLength(3);
+  });
+
+  it("区间代码不等于正式身份时不借同名展示，错接样本也不显示", () => {
+    render(<ThemeCardView card={card({official_interval: {code: "885999.TI", name: "商业航天", source: "ths_official_kline", state: "verified", verified: true,
+      chg_3d: 19.99, chg_5d: 29.99, chg_10d: 39.99, source_as_of: "2026-10-26", requested_trade_date: "2026-10-27"}})} rank={1}
+      strength={strength({code: "885999.TI", candidate_board: null})} />);
+    fireEvent.click(screen.getByRole("tab", {name: /强度指标与板块表现/}));
+    expect(screen.queryByText(/19.99|29.99|39.99/)).toBeNull();
     expect(screen.queryByTitle(/官方成分批量快照聚合/)).toBeNull();
-    expect(screen.getByText("商业航天")).toBeTruthy();
+  });
+
+  it("候选来自卡片且无合力时也明确身份未核，资金缺失为中性待核", () => {
+    render(<ThemeCardView card={card({candidate_board: candidate({main_net_yi: null})})} rank={1} strength={null} />);
+    expect(screen.getByTitle(/BK1234.*身份未核/).textContent).toContain("净额待核");
+    const status = screen.getByText("资金待核");
+    expect(status.className).not.toMatch(/rose|red|text-up/);
+  });
+
+  it("无合力响应时保留题材与既有梯队", () => {
+    render(<ThemeCardView card={card()} rank={1} strength={null} />);
+    expect(screen.queryByTitle(/官方成分批量快照聚合/)).toBeNull();
+    expect(screen.getByRole("heading", {name: "商业航天"})).toBeTruthy();
   });
 });
 

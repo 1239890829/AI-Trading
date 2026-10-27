@@ -82,7 +82,7 @@ def _theme_in_reason(theme: str, reason: str | None) -> bool:
     """涨停 reason（ths「+」分隔的题材串）是否含该题材。空题材/空 reason 不匹配。"""
     if not theme or not reason:
         return False
-    return theme in reason
+    return theme in [tag.strip() for tag in reason.split("+") if tag.strip()]
 
 
 def verify_event(
@@ -157,6 +157,8 @@ def verify_event(
 
     if has_new and inflow:
         status, basis = "confirmed", f"观察到市场呼应：消息可见后新涨停 {new_limit_ups} 家 且 关联板块主力净流入 {net:+.2f} 亿"
+    elif has_new and net is None:
+        status, basis = "fermenting", f"消息可见后新涨停 {new_limit_ups} 家；同概念资金身份未核，资金未知"
     elif has_new:
         status, basis = "fermenting", f"消息可见后新涨停 {new_limit_ups} 家，但板块资金未净流入"
     elif inflow:
@@ -209,7 +211,11 @@ async def verify_active_events(
 
     from app.services.theme_service import board_rows_for_names
 
-    board_rows = await board_rows_for_names(all_targets) if all_targets else {}
+    try:
+        board_rows = await board_rows_for_names(all_targets) if all_targets else {}
+    except Exception as exc:
+        log.warning("event verification: optional EM candidates unavailable: %s", exc)
+        board_rows = {}
 
     out: list[dict] = []
     for e in events:
@@ -217,21 +223,19 @@ async def verify_active_events(
                   if d.target_type == "theme" and getattr(d, "matched_by", None) != "llm_aux"]
         has_model_theme = any(d.target_type == "theme" and getattr(d, "matched_by", None) == "llm_aux"
                               for d in e.directions)
-        # 关联板块资金：取匹配到的板块里净额绝对值最大的（「资金最想说的那个板块」）
+        # EventDirection只有名称，当前没有THS↔EM正式桥。候选不可进资金判定，
+        # 即使旧桩/旧返回拼了BK或verified布尔也不能制造已确认身份。
         matched = [board_rows[t] for t in themes if t in board_rows]
-        fund = None
-        if matched:
-            fund = max(
-                (r for r in matched if r.get("main_net_yi") is not None),
-                key=lambda r: abs(r.get("main_net_yi") or 0),
-                default=matched[0],
-            )
+        candidates = [{**{k: v for k, v in (r.get("candidate_board") or r).items()
+                          if k not in {"identity_verified", "verified", "same_concept_verified"}},
+                       "source": "eastmoney", "source_product": "legacy_clist", "relationship": "name_candidate",
+                       "same_concept_verified": False} for r in matched]
         verdict = verify_event(
             published_at=e.published_at,
             visible_at=_interpretation_visible_at(e),
             theme_targets=themes,
             limit_up_pool=limit_up_pool,
-            board_fund=fund,
+            board_fund=None,
             trade_date=trade_date,
         )
         if has_model_theme and not themes:
@@ -241,7 +245,8 @@ async def verify_active_events(
             "title": e.title,
             "published_at": e.published_at.isoformat() if e.published_at else None,
             "themes": themes,
-            "board_name": fund.get("name") if fund else None,
+            "board_name": None,
+            "candidate_boards": candidates,
             **verdict,
         })
     return out

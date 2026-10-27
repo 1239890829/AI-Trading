@@ -979,6 +979,7 @@ def aggregate_theme_strength(
         up = down = flat = missing = 0
         limit_up = 0
         total_amount = 0.0
+        amount_count = 0
         chg_sum = 0.0
         chg_n = 0
         gainers: list[dict] = []
@@ -1004,6 +1005,7 @@ def aggregate_theme_strength(
             amount = q.get("amount")
             if amount is not None:
                 total_amount += float(amount)
+                amount_count += 1
             gainers.append({"symbol": sym, "name": q.get("name"), "change_pct": chg})
         gainers.sort(key=lambda g: -(g["change_pct"] or 0))
         basis_parts = [f"{up}涨/{down}跌/{flat}平"]
@@ -1019,7 +1021,8 @@ def aggregate_theme_strength(
             "missing": missing,
             "limit_up_count": limit_up,
             "avg_change_pct": round(chg_sum / chg_n, 2) if chg_n else None,
-            "total_amount": round(total_amount, 0) if total_amount else 0.0,
+            "total_amount": round(total_amount, 0) if amount_count else None,
+            "amount_count": amount_count,
             "top_gainers": gainers[:3],
             "basis": "；".join(basis_parts),
         }
