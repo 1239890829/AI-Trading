@@ -220,7 +220,7 @@ describe("saved candidate source traces",()=>{
       candidate_audit:{state:"saved",input_total:2,saved_total:2,omitted_total:0,complete:true}});
     render(<MethodRunReader method="daily_picks"/>);
     const scored=(await screen.findByText("评分尝试原行")).closest("li")!;
-    expect(within(scored).getByText("成功评分未保存")).toBeTruthy();
+    expect(within(scored).getByText("未保存成功评分")).toBeTruthy();
     expect(within(scored).getByText("评分")).toBeTruthy();
     expect(within(scored).queryByText("未评分")).toBeNull();
     const missing=screen.getByText("后续缺项原行").closest("li")!;

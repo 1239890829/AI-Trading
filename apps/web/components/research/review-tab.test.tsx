@@ -419,7 +419,35 @@ it("retains the entered candidate after draft save failure and does not retry au
   fireEvent.change(within(form).getByRole("textbox", {name: "验证计划"}), {target: {value: "全分母对照；未知不补"}});
   fireEvent.click(within(form).getByRole("button", {name: "保存评估草案"}));
   expect(await screen.findByText(/复盘行动已变化，请刷新/)).toBeTruthy();
+  expect(screen.getByRole("alert").textContent).toContain("请求被拒绝");
+  expect(screen.getByRole("alert").textContent).not.toContain("保存结果未确认");
   expect(within(form).getByRole("textbox", {name: "候选新值"})).toHaveProperty("value", "12");
+  expect(mocked.createAgentParamChange).toHaveBeenCalledTimes(1);
+  expect(mocked.updateActionItemStatus).not.toHaveBeenCalled();
+});
+
+it.each([0, 500])("treats an unconfirmed draft response (%s) as possibly saved, keeps inputs and never resends", async status => {
+  setup(); vi.mocked(mocked.getAgentParams).mockResolvedValue([PARAMETER]);
+  // The server may have committed before the response was lost or returned 5xx.
+  const committed = {id: 91, after: "12"};
+  const stored: typeof committed[] = [];
+  vi.mocked(mocked.createAgentParamChange).mockImplementation(async () => {
+    stored.push(committed);
+    throw new mocked.ApiError(status, status ? "响应服务失败" : "连接中断", status ? "http_500" : "network_error");
+  });
+  render(<ReviewTab allowDispose/>);
+  const form = await openReviewDraft();
+  fireEvent.change(within(form).getByRole("combobox", {name: "评估参数"}), {target: {value: PARAMETER.key}});
+  fireEvent.change(within(form).getByRole("textbox", {name: "候选新值"}), {target: {value: "12"}});
+  fireEvent.change(within(form).getByRole("textbox", {name: "验证计划"}), {target: {value: "原输入留存，先核对保存记录"}});
+  fireEvent.click(within(form).getByRole("button", {name: "保存评估草案"}));
+  const alert = await screen.findByRole("alert");
+  expect(alert.textContent).toContain("保存结果未确认，请先到参数评估核对再操作");
+  expect(alert.textContent).not.toContain("保存失败");
+  expect(within(alert).getByRole("link", {name: "到参数评估核对"}).getAttribute("href")).toBe("/agent?area=maintenance&tab=params");
+  expect(within(form).getByRole("textbox", {name: "候选新值"})).toHaveProperty("value", "12");
+  expect(within(form).getByRole("textbox", {name: "验证计划"})).toHaveProperty("value", "原输入留存，先核对保存记录");
+  expect(stored).toHaveLength(1);
   expect(mocked.createAgentParamChange).toHaveBeenCalledTimes(1);
   expect(mocked.updateActionItemStatus).not.toHaveBeenCalled();
 });

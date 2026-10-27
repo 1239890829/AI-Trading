@@ -357,7 +357,12 @@ class ThemeCatalogService:
                 await self.sync_catalog()
 
             def stored():
-                rows = [row for row in self.get_catalog(limit=1000) if row.source == "ths_official"]
+                with self._sf() as db:
+                    rows = list(db.execute(select(Theme).where(
+                        Theme.catalog_active.is_(True), Theme.source == "ths_official",
+                    ).order_by(Theme.name).limit(1001)).scalars())
+                if len(rows) > 1000:
+                    raise RuntimeError("official concept directory exceeds supported complete range")
                 items = [{"code": row.code, "name": row.name, "source": row.source,
                           "kind": kind, "synced_at": source_saved_clock(row.catalog_synced_at)}
                          for row in rows if row.source == "ths_official"]

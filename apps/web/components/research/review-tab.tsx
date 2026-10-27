@@ -172,7 +172,10 @@ function ActionItemDispose({
       setDraftValue("");
       setValidationPlan("");
     } catch (e) {
-      setError(e instanceof Error ? e.message : String(e));
+      const reason = e instanceof Error ? e.message : String(e);
+      setError(e instanceof ApiError && e.status >= 400 && e.status < 500
+        ? `请求被拒绝：${reason}`
+        : `保存结果未确认，请先到参数评估核对再操作。${reason}`);
     } finally {
       setBusy(false);
     }
@@ -241,7 +244,7 @@ function ActionItemDispose({
           <button type="submit" disabled={busy || disabled || !parameter || !draftValue.trim() || !validationPlan.trim()}
             className="rounded border border-sky-600 px-2 py-1 text-sky-700 disabled:opacity-40 dark:text-sky-400">保存评估草案</button>
         </>}
-        <button type="button" disabled={busy} onClick={() => {setDraftOpen(false); draftTrigger.current?.focus();}} className="ml-2 text-zinc-600 dark:text-zinc-400">取消评估</button>
+        <button type="button" disabled={busy} onClick={() => {setDraftOpen(false); setError(null); draftTrigger.current?.focus();}} className="ml-2 text-zinc-600 dark:text-zinc-400">取消评估</button>
       </form>}
       {status !== "confirmed" && (
         <button
@@ -319,7 +322,7 @@ function ActionItemDispose({
           </div>
         </div>
       )}
-      {error && <div role="alert" className="w-full text-[11px] text-red-700 dark:text-red-400">{draftOpen ? "草案保存失败" : "处置失败"}：{error}</div>}
+      {error && <div role="alert" className="w-full text-[11px] text-red-700 dark:text-red-400">{draftOpen ? "草案状态" : "处置失败"}：{error}{draftOpen && <> <a href="/agent?area=maintenance&tab=params" className="underline">到参数评估核对</a></>}</div>}
     </div>
   );
 }

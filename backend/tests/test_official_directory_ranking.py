@@ -35,6 +35,45 @@ def source(monkeypatch, *, count=103, transform=None):
     return svc, calls
 
 
+@pytest.mark.parametrize("count", [390, 1000, 1001])
+def test_real_stored_concept_directory_never_calls_a_truncated_limit_complete(tmp_path, monkeypatch, count):
+    from sqlalchemy import create_engine
+    from sqlalchemy.orm import sessionmaker
+    from app.models.theme_catalog import Theme
+    engine = create_engine(f"sqlite:///{tmp_path / 'formal-concepts.sqlite3'}")
+    Theme.__table__.create(engine)
+    factory = sessionmaker(engine, expire_on_commit=False)
+    with factory() as db:
+        db.add_all([Theme(code=f"{880000+i}.TI", name=f"来源原名{i:04d}", source="ths_official", catalog_active=True)
+                    for i in range(count)])
+        db.add_all([Theme(code="990000.TI", name="A人工标签", source="manual", catalog_active=True),
+                    Theme(code="990001.TI", name="A退出目录", source="ths_official", catalog_active=False)])
+        db.commit()
+    async def run():
+        svc = ThemeCatalogService(factory, api_key="fixture")
+        async def forbidden(*args, **kwargs):
+            pytest.fail("stored complete-directory boundary must not issue a source request")
+        monkeypatch.setattr(svc._client, "get", forbidden)
+        try:
+            if count > 1000:
+                with pytest.raises(RuntimeError, match="exceeds supported complete range"):
+                    await svc.read_board_catalog("concept")
+                with pytest.raises(RuntimeError, match="exceeds supported complete range"):
+                    await svc.read_board_ranking("concept")
+                assert len(svc._ranking_reads) == 0
+            else:
+                result = await svc.read_board_catalog("concept")
+                assert result["total"] == len(result["items"]) == count
+                assert result["items"][0]["name"] == "来源原名0000"
+                assert result["items"][-1]["code"] == f"{880000+count-1}.TI"
+        finally:
+            await svc.aclose()
+    try:
+        asyncio.run(run())
+    finally:
+        engine.dispose()
+
+
 def test_exhaustive_original_identities_not_top20_or_member_averages(monkeypatch):
     async def run():
         svc, calls = source(monkeypatch)

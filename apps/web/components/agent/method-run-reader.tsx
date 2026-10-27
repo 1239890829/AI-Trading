@@ -46,7 +46,7 @@ const errorText = (value: unknown) => value instanceof Error ? value.message : "
 const emptyLocation = (method: string) => readMethodRunLocation(typeof window === "undefined" ? "" : window.location.search,method);
 const candidateRow = (row: SavedStrategyRunItem) => !!row.item_id?.startsWith("candidate:") && typeof row.reason_code === "string";
 const scoreText = (row: SavedStrategyRunItem) => finite(row.score) ? `原分 ${row.score}` : !candidateRow(row) ? "未保存分数"
-  : UNSCORED_REASONS.has(row.reason_code!) ? "未评分" : row.reason_code==="scoring_unavailable" ? "成功评分未保存" : "评分状态未记录";
+  : UNSCORED_REASONS.has(row.reason_code!) ? "未评分" : row.reason_code==="scoring_unavailable" ? "未保存成功评分" : "评分状态未记录";
 
 function sourceText(row: SavedStrategyRunItem) {
   const saved = Array.isArray(row.evidence?.candidate_sources) ? row.evidence.candidate_sources : [];
