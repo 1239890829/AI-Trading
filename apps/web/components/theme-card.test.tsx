@@ -10,6 +10,8 @@ vi.mock("next/navigation", () => ({ useRouter: () => ({ push: vi.fn() }) }));
 
 // 展开行内嵌的介入条件清单自带取数，入口测试只关心「按钮 ↔ 展开行」的联动，
 // 因此桩成纯展示组件，避免在单测里发请求（清单自身行为见 entry-checklist.test.tsx）
+vi.mock("@/components/concept-detail-modal",()=>({ConceptDetailModal:({code,catalogKind,referenceDate,active}: {code:string;catalogKind:string;referenceDate?:string;active:boolean})=>active?<div data-testid="official-detail">{catalogKind}:{code}:{referenceDate}</div>:null}));
+
 vi.mock("@/components/entry-checklist", () => ({
   EntryChecklist: ({ symbol, active = true }: { symbol: string; active?: boolean }) => (
     <div data-testid="stub-checklist" data-active={String(active)}>{symbol}</div>
@@ -58,7 +60,8 @@ function card(over: Partial<ThemeCard> = {}): ThemeCard {
     health_note: "梯队完整",
     risks: [],
     board_matched: false,
-    exact_catalog: {code: "885333.TI", name: "商业航天", source: "ths_official", basis: "exact_name"},
+    exact_catalog: {code: "885333.TI", name: "商业航天", source: "ths_official", basis: "exact_name",kind:"concept",catalog_version:"a".repeat(64),observed_at:"2026-10-27T12:00:00+08:00"},
+    catalog_mapping_state:"exact",
     performance: {
       limit_up_count: 3,
       max_boards: 4,
@@ -145,7 +148,7 @@ describe("题材卡 · 正式身份、样本与名称候选", () => {
   });
 
   it("仅正式同花顺区间独立展示源日期与风险用途，不借用候选涨幅", () => {
-    render(<ThemeCardView card={card({official_interval: {code: "885333.TI", name: "商业航天", source: "ths_official_kline", state: "verified", verified: true,
+    render(<ThemeCardView card={card({official_interval: {code: "885333.TI", name: "商业航天", source: "ths_official_kline",kind:"concept",catalog_version:"a".repeat(64),observed_at:"2026-10-27T12:00:00+08:00", state: "verified", verified: true,
       chg_3d: 3.25, chg_5d: null, chg_10d: 6.5, source_as_of: "2026-10-26", requested_trade_date: "2026-10-27"}})} rank={1} strength={strength()} />);
     fireEvent.click(screen.getByRole("tab", {name: /强度指标与板块表现/}));
     expect(screen.getByText("同花顺区间 · 仅作风险参照")).toBeTruthy();
@@ -155,7 +158,7 @@ describe("题材卡 · 正式身份、样本与名称候选", () => {
   });
 
   it("当日日线标签不证明已完成或价格已核，只作同源区间风险参照", () => {
-    const {container} = render(<ThemeCardView card={card({official_interval: {code: "885333.TI", name: "商业航天", source: "ths_official_kline", state: "verified", verified: true,
+    const {container} = render(<ThemeCardView card={card({official_interval: {code: "885333.TI", name: "商业航天", source: "ths_official_kline",kind:"concept",catalog_version:"a".repeat(64),observed_at:"2026-10-27T12:00:00+08:00", state: "verified", verified: true,
       chg_3d: 3.25, chg_5d: 4, chg_10d: 6.5, source_as_of: "2026-10-27", requested_trade_date: "2026-10-27"}})} rank={1} />);
     fireEvent.click(screen.getByRole("tab", {name: /强度指标与板块表现/}));
     expect(screen.getByText(/日线日期 2026-10-27.*同源区间已核/)).toBeTruthy();
@@ -164,7 +167,7 @@ describe("题材卡 · 正式身份、样本与名称候选", () => {
   });
 
   it("区间代码不等于正式身份时不借同名展示，错接样本也不显示", () => {
-    render(<ThemeCardView card={card({official_interval: {code: "885999.TI", name: "商业航天", source: "ths_official_kline", state: "verified", verified: true,
+    render(<ThemeCardView card={card({official_interval: {code: "885999.TI", name: "商业航天", source: "ths_official_kline",kind:"concept",catalog_version:"a".repeat(64),observed_at:"2026-10-27T12:00:00+08:00", state: "verified", verified: true,
       chg_3d: 19.99, chg_5d: 29.99, chg_10d: 39.99, source_as_of: "2026-10-26", requested_trade_date: "2026-10-27"}})} rank={1}
       strength={strength({code: "885999.TI", candidate_board: null})} />);
     fireEvent.click(screen.getByRole("tab", {name: /强度指标与板块表现/}));
@@ -266,7 +269,7 @@ describe("题材卡 · 跳转入口可发现性（P1-18）", () => {
   });
 
   it("无目录映射时不渲染「成分 ↗」（缺省不占位）", () => {
-    render(<ThemeCardView card={card()} rank={1} strength={null} />);
+    render(<ThemeCardView card={card({exact_catalog:null,catalog_mapping_state:"unmapped"})} rank={1} strength={null} />);
     expect(screen.queryByRole("button", { name: "成分 ↗" })).toBeNull();
   });
 
@@ -277,4 +280,57 @@ describe("题材卡 · 跳转入口可发现性（P1-18）", () => {
     expect(link.className).toBe(JUMP_PILL_CLASS);
     expect(link.getAttribute("href")).toContain("limitup");
   });
+});
+
+
+it("行业映射走同类成分，不套概念合力或未核代码",()=>{
+  const value=card({theme:"汽车零部件",catalog_code:"885999.TI",exact_catalog:{code:"881126.TI",name:"汽车零部件",source:"ths_official",basis:"exact_name",kind:"industry",catalog_version:"b".repeat(64),observed_at:"2026-10-27T12:00:00+08:00"}});
+  render(<ThemeCardView card={value} rank={1} tradeDate="2026-10-23" strength={strength({code:"881126.TI"})}/>);
+  expect(screen.getByText("行业合力分析尚未覆盖")).toBeTruthy();
+  expect(screen.queryByTitle(/官方成分批量快照聚合/)).toBeNull();
+  fireEvent.click(screen.getByRole("button",{name:"成分 ↗"}));
+  expect(screen.getByTestId("official-detail").textContent).toBe("industry:881126.TI:2026-10-23");
+});
+it("映射原名不符时不套同码指标，也不开放catalog_code入口",()=>{
+  const base=card();
+  render(<ThemeCardView card={card({exact_catalog:{...base.exact_catalog!,name:"其他来源标签"},catalog_code:"885333.TI"})} rank={1} strength={strength()}/>);
+  expect(screen.queryByRole("button",{name:"成分 ↗"})).toBeNull();
+  expect(screen.queryByTitle(/官方成分批量快照聚合/)).toBeNull();
+});
+
+
+it("区间kind或目录版本与正式身份不符时不借同码显示",()=>{
+  render(<ThemeCardView card={card({official_interval:{code:"885333.TI",name:"商业航天",source:"ths_official_kline",kind:"industry",catalog_version:"b".repeat(64),observed_at:"2026-10-27T12:00:00+08:00",state:"verified",verified:true,chg_3d:19.99,chg_5d:29.99,chg_10d:39.99,source_as_of:"2026-10-26",requested_trade_date:"2026-10-27"}})} rank={1}/>);
+  fireEvent.click(screen.getByRole("tab",{name:/强度指标与板块表现/}));
+  expect(screen.queryByText(/19.99|29.99|39.99/)).toBeNull();
+});
+
+
+it("历史卡仅旁列当前目录，正确行业导航不套历史合力或区间",()=>{
+  const historical=card({theme:"汽车零部件",exact_catalog:null,catalog_mapping_state:"unavailable",catalog_mapping_context:{reason:"historical_identity_not_frozen"},catalog_code:null,official_interval:{code:"881126.TI",name:"汽车零部件",source:"ths_official_kline",kind:"industry",catalog_version:"a".repeat(64),observed_at:"2026-10-27T12:00:00+08:00",state:"verified",verified:true,chg_3d:19.99,chg_5d:29.99,chg_10d:39.99,source_as_of:"2026-10-23",requested_trade_date:"2026-10-23"}});
+  const reference={scope:"current_directory_reference" as const,catalog_version:"a".repeat(64),observed_at:"2026-10-27T12:00:00+08:00",items:[{theme:"汽车零部件",catalog_mapping_state:"exact" as const,exact_catalog:{code:"881126.TI",name:"汽车零部件",source:"ths_official",basis:"exact_name",kind:"industry" as const,catalog_version:"a".repeat(64),observed_at:"2026-10-27T12:00:00+08:00"}}]};
+  const before=JSON.stringify(historical);
+  const view=render(<ThemeCardView card={historical} rank={1} tradeDate="2026-10-23" currentThemeCatalog={reference} strength={strength({code:"881126.TI"})}/>);
+  expect(screen.getByRole("heading",{name:"汽车零部件"})).toBeTruthy();
+  expect(screen.getByText("现目录同名参考 · 881126.TI")).toBeTruthy();
+  expect(screen.getByText("原标签 · 当时未记录映射")).toBeTruthy();
+  expect(screen.queryByText("目录未就绪 · 保留原标签")).toBeNull();
+  expect(screen.queryByText("同花顺 · 881126.TI")).toBeNull();
+  expect(screen.queryByRole("button",{name:"成分 ↗"})).toBeNull();
+  expect(screen.queryByTitle(/官方成分批量快照聚合/)).toBeNull();
+  fireEvent.click(screen.getByRole("tab",{name:/强度指标与板块表现/}));
+  expect(screen.queryByText(/19.99|29.99|39.99/)).toBeNull();
+  fireEvent.click(screen.getByRole("button",{name:"当前成分 ↗"}));
+  expect(screen.getByTestId("official-detail").textContent).toBe("industry:881126.TI:2026-10-23");
+  expect(JSON.stringify(historical)).toBe(before);
+  view.rerender(<ThemeCardView card={historical} rank={1} tradeDate="2026-10-22" currentThemeCatalog={reference}/>);
+  expect(screen.queryByTestId("official-detail")).toBeNull();
+  view.rerender(<ThemeCardView card={historical} rank={1} tradeDate="2026-10-23" currentThemeCatalog={reference}/>);
+  expect(screen.queryByTestId("official-detail")).toBeNull();
+});
+it("历史主标签没有同名对应时不套其子标签的当前代码",()=>{
+  const reference={scope:"current_directory_reference" as const,catalog_version:"a".repeat(64),observed_at:"2026-10-27T12:00:00+08:00",items:[{theme:"羊字辈",catalog_mapping_state:"unmapped" as const,exact_catalog:null},{theme:"冷链物流",catalog_mapping_state:"exact" as const,exact_catalog:{code:"885502.TI",name:"冷链物流",source:"ths_official",basis:"exact_name",kind:"concept" as const,catalog_version:"a".repeat(64),observed_at:"2026-10-27T12:00:00+08:00"}}]};
+  render(<ThemeCardView card={card({theme:"羊字辈",raw_tags:["冷链物流"],exact_catalog:null,catalog_mapping_state:undefined})} rank={1} tradeDate="2026-10-23" currentThemeCatalog={reference}/>);
+  expect(screen.getByText("当前目录无同名对应")).toBeTruthy();
+  expect(screen.queryByRole("button",{name:"当前成分 ↗"})).toBeNull();
 });

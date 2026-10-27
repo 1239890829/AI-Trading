@@ -225,6 +225,11 @@ async def today_picks(request: Request, hub: QuoteHub = Depends(get_hub)) -> dic
     # This later evidence read stays after live judgement; do not freeze it into
     # the earlier selection snapshot or run a synchronous Session on the loop.
     data["items"] = await asyncio.to_thread(_attach_latest_execution, data["items"], data["date"], meta)
+    from app.services.official_match import current_catalog_reference
+
+    # Current directory names are a reading aid, never evidence at selection time.
+    data["current_theme_catalog"] = await current_catalog_reference(
+        request, [item.get("theme") for item in data["items"]])
     return {"data": data, "meta": {}}
 
 

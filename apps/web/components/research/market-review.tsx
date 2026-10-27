@@ -9,6 +9,9 @@ import { bjDate, dateTimeTextBJ, fmt, fmtAmount, pctColor, pctText, signedYi } f
 import { readerExcerpt } from "@/lib/reader-copy";
 import { getReviewReport, type ReviewData, type ReviewProvenance, type ReviewReportDetail, type ReviewSectorBoard } from "@/lib/api";
 import { ReviewMetricTrends } from "./review-metric-trends";
+import {CurrentThemeReference, SourceThemeIdentity} from "@/components/source-theme-identity";
+import {officialThemeIdentity} from "@/lib/theme-identity";
+import type {ThemeMappingState} from "@/types/market";
 
 const STATE_LABEL: Record<ReviewProvenance["state"], string> = {
   verified: "已核同日", partial: "同日 · 部分覆盖", unverified: "未核同日", unavailable: "未取得", mismatch: "日期不符",
@@ -141,6 +144,12 @@ export function MarketReview({report, previousDate, active = true}: {report: Rev
     return typeof row.board_code==="string" && typeof row.name==="string" ? [{board_code:row.board_code,name:row.name,change_pct:finite(row.change_pct),main_net_yi:finite(row.main_net_yi)}] : [];
   }) : [];
   const boardSummary=objectValue(market?.sector_board_summary?.[sector]);
+  const rawThemeReference = Array.isArray(market?.reported_values?.themes) ? market.reported_values.themes : [];
+  const originalThemes = Array.isArray(market?.themes) ? market.themes : [];
+  const savedThemes = bound("themes") ? originalThemes : [...rawThemeReference,...originalThemes].filter((value,index,rows)=>{
+    const row=objectValue(value), name=text(row?.theme) || text(row?.name);
+    return name && rows.findIndex(other=>{const item=objectValue(other);return (text(item?.theme) || text(item?.name))===name;})===index;
+  });
   const candidateBoards = bound("sector_boards") ? market?.sector_boards?.[sector] ?? [] : referenceAllowed ? referenceBoards : [];
   const boards = bound("sector_boards") && boardSummary ? candidateBoards.filter(row=>{
     const at=row.source_as_of, dayLabel=finite(row.source_date_ms);
@@ -201,7 +210,13 @@ export function MarketReview({report, previousDate, active = true}: {report: Rev
       <div className="market-review-controls"><div role="group" aria-label="板块分类">{(["industry","concept"] as const).map(key=><button key={key} type="button" aria-pressed={sector===key} onClick={()=>{setSector(key);setAllBoards(false);}}>{key==="industry"?"行业":"概念"}</button>)}</div><div role="group" aria-label="板块排序"><button type="button" aria-pressed={sectorOrder==="strong"} onClick={()=>setSectorOrder("strong")}>涨幅优先</button><button type="button" aria-pressed={sectorOrder==="weak"} onClick={()=>setSectorOrder("weak")}>跌幅优先</button></div></div>
       {sortedBoards.length ? <><ol className="market-review-board-list">{sortedBoards.slice(0,allBoards?undefined:8).map((board,i)=><li key={`${sector}:${board.board_code}`}><span className="market-review-rank">{i+1}</span><strong title={board.source_as_of?`来源时刻 ${dateTimeTextBJ(board.source_as_of)}`:undefined}>{board.name}{boardSummary && <span className="block text-[11px] font-normal text-zinc-600 dark:text-zinc-400">{board.board_code} · {["ths","ths_official_kline"].includes(board.source ?? "")?"同花顺":board.source || "来源未记录"}</span>}</strong><span className={pctColor(board.change_pct)}>{pctText(board.change_pct)}</span><span title="主力净额（亿元），不是该板块全部资金">{finite(board.main_net_yi)===null?"未提供":signedYi(board.main_net_yi)}</span></li>)}</ol><p className="market-review-caption">本报告已存 {boards.length} 条{boards.length>8 && <button type="button" aria-expanded={allBoards} onClick={()=>setAllBoards(!allBoards)}>{allBoards?"只看前8条":"展示本报告全部记录"}</button>}；有限存档不代表全市场全集。</p></> : <MissingSegment label={sector==="industry"?"行业榜":"概念榜"} record={provenance?.sector_boards}/>}
       <SourceRecord record={provenance?.sector_boards} bound={bound("sector_boards")}/>
-      {bound("themes") && !!market?.themes.length && <div className="market-review-themes"><h5>原题材记录</h5>{market.themes.map((theme,i)=><span key={`${text(theme.theme)}:${i}`}>{text(theme.name) || text(theme.theme) || "未命名题材"}</span>)}</div>}
+      {!!savedThemes.length && <div className="market-review-themes"><h5>{bound("themes") ? "原题材记录" : "原采集标签 · 当日归属未核"}</h5>{savedThemes.map((value,i)=>{
+        const theme=objectValue(value), name=text(theme?.theme) || text(theme?.name) || "未命名标签";
+        const state=["exact","unmapped","ambiguous","unclassified","unavailable"].includes(String(theme?.catalog_mapping_state)) ? theme?.catalog_mapping_state as ThemeMappingState : undefined;
+        const completionClock=/(?:Z|[+-]\d{2}:?\d{2})$/i.test(report.generated_at) ? report.generated_at : "unknown";
+        const exact=officialThemeIdentity(name,theme?.exact_catalog,state,completionClock);
+        return <span key={`${name}:${i}`}><span>{name}</span> <SourceThemeIdentity reason={name} exact={exact} state={state} historical notAfter={completionClock}/>{!exact && <CurrentThemeReference reason={name} reference={report.current_theme_catalog}/>}</span>;
+      })}<p className="market-review-caption">映射仅取本报告已存凭据，不证明当时成分或板块涨幅；未用今日目录补写。</p></div>}
       <SourceRecord record={provenance?.themes} bound={bound("themes")}/>
     </section>
     <section id={`${prefix}-picks`} className="market-review-section" aria-label="原入选与模拟记录">

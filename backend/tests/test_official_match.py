@@ -38,11 +38,24 @@ def catalog(tmp_path):
     # Read methods only need the factory; do not construct an upstream HTTP client.
     svc = ThemeCatalogService.__new__(ThemeCatalogService)
     svc._sf = sf
+
+    async def directory(kind):
+        rows = (await asyncio.to_thread(svc.get_catalog, limit=1000) if kind == "concept" else
+                [SimpleNamespace(code="881126.TI", name="汽车零部件", source="ths_official")])
+        return {"kind": kind, "source": "ths_official", "catalog_state": "ready", "total": len(rows),
+                "synced_at": "2026-10-27T08:00:00+00:00", "items": [
+                    {"code": row.code, "name": row.name, "kind": kind, "source": row.source} for row in rows]}
+
+    svc.read_board_catalog = directory
     queries = []
     event.listen(engine, "before_cursor_execute",
                  lambda _conn, _cursor, statement, *_args: queries.append(statement))
     yield svc, engine, queries
     engine.dispose()
+
+
+def _attach(holder, cards):
+    return asyncio.run(official.attach_official_async(holder, cards))
 
 
 def _cards():
@@ -88,37 +101,38 @@ def test_attachment_keeps_hot_exact_match_read_and_filters_large_concept(catalog
     svc, _engine, queries = catalog
     state = SimpleNamespace(theme_catalog=svc)
     first = _cards()
-    official.attach_official(state, first)
+    _attach(state, first)
     assert [row["official"] for row in first[0]["stocks"]] == [True, True, False]
     assert "official" not in first[1]["ladder"][0]
     matches = [{"code": code, "name": name, "hits": 2, "relationship": "membership_overlap",
-                "basis": "member_overlap", "source": "ths_official"}
+                "basis": "member_overlap", "source": "ths_official", "kind": "concept"}
                for code, name in [("885001.TI", "A概念"), ("885002.TI", "B概念")]]
     assert first[0]["official_matches"] == first[1]["official_matches"] == matches
-    assert first[0]["exact_catalog"] == {"code": "885001.TI", "name": "A概念", "source": "ths_official",
-                                         "basis": "exact_name"}
+    assert {key: first[0]["exact_catalog"][key] for key in ("code", "name", "source", "basis", "kind")} == {
+        "code": "885001.TI", "name": "A概念", "source": "ths_official", "basis": "exact_name", "kind": "concept"}
     assert first[0]["catalog_code"] == "885001.TI" and first[0]["candidate_catalog_code"] is None
     assert first[1]["exact_catalog"] is None and first[1]["catalog_mapping_state"] == "unmapped"
     assert first[1]["catalog_code"] is None, "a related overlap must never become the source label identity"
-    assert first[2]["stocks"][0]["official"] is False
+    assert "official" not in first[2]["stocks"][0]
+    assert first[2]["catalog_membership_state"] == "unavailable", "no saved members is not proof of an empty official universe"
     assert first[2]["official_matches"] == [] and first[2]["catalog_code"] == "885004.TI"
-    assert len(queries) == 5
+    assert len(queries) == 4
     # A hot reverse index must not replace the existing fresh exact-name member read.
     with svc._sf() as db:
         db.query(ThemeMember).filter_by(theme_code="885001.TI", symbol="600001").delete()
         db.commit()
     queries.clear()
     second = _cards()
-    official.attach_official(state, second)
+    _attach(state, second)
     assert second[0]["stocks"][0]["official"] is False
     assert second[0]["official_matches"] == matches
-    assert len(queries) == 3
+    assert len(queries) == 1
 
 
 def test_large_exact_catalog_identity_is_not_filtered_as_a_navigation_overlap(catalog):
     svc, _engine, _queries = catalog
     card = {"theme": "C大概念", "stocks": [{"symbol": s} for s in ("600001", "600002")]}
-    official.attach_official(SimpleNamespace(theme_catalog=svc), [card])
+    _attach(SimpleNamespace(theme_catalog=svc), [card])
     assert card["theme"] == "C大概念"
     assert card["exact_catalog"]["code"] == card["catalog_code"] == card["candidate_catalog_code"] == "885003.TI"
     assert card["catalog_mapping_state"] == "exact"
@@ -130,7 +144,7 @@ def test_missing_catalog_clears_previous_projection_without_claiming_non_members
     card = {"theme": "动态标签", "exact_catalog": {"code": "old"}, "catalog_code": "old",
             "candidate_catalog_code": "old", "official_matches": [{"code": "old"}],
             "stocks": [{"symbol": "600001", "official": True}]}
-    official.attach_official(SimpleNamespace(), [card])
+    _attach(SimpleNamespace(), [card])
     assert card["theme"] == "动态标签"
     assert card["catalog_mapping_state"] == "unavailable"
     assert card["exact_catalog"] is card["catalog_code"] is card["candidate_catalog_code"] is None
@@ -177,12 +191,12 @@ def test_catalog_revision_invalidates_related_names_and_exact_identity(catalog):
     svc, _engine, _queries = catalog
     state = SimpleNamespace(theme_catalog=svc)
     first = _cards()
-    official.attach_official(state, first)
+    _attach(state, first)
     assert first[0]["catalog_code"] == "885001.TI"
     svc._write_catalog([{"code": code, "name": name} for code, name in [
         ("885001.TI", "A正式新名"), ("885002.TI", "B概念"), ("885003.TI", "C大概念"), ("885004.TI", "空概念")]])
     second = _cards()
-    official.attach_official(state, second)
+    _attach(state, second)
     assert second[0]["exact_catalog"] is None and second[0]["catalog_code"] is None
     assert second[0]["candidate_catalog_code"] is None
     assert second[0]["official_matches"][0]["name"] == "A正式新名"
@@ -256,6 +270,9 @@ def test_real_attachment_sessions_yield_loop_and_isolate_cached_cards(catalog, m
             return result
 
     svc._sf = sessionmaker(bind=engine, class_=RecordedSession)
+    import app.core.bjtime as clock
+    from datetime import datetime
+    monkeypatch.setattr(clock, "beijing_now", lambda: datetime.fromisoformat("2026-10-12T10:00:00+08:00"))
     state = SimpleNamespace(theme_catalog=svc, hub=SimpleNamespace(provider=object()))
     app = SimpleNamespace(state=state)
     cached_cards = _cards()
@@ -267,7 +284,7 @@ def test_real_attachment_sessions_yield_loop_and_isolate_cached_cards(catalog, m
     async def cached(*_args):
         return {"data": {"themes": cached_cards}, "meta": {}}
 
-    async def verify(*_args):
+    async def verify(*_args, **_kwargs):
         return None
 
     monkeypatch.setattr(theme_service, "build_theme_board", board)
@@ -278,6 +295,21 @@ def test_real_attachment_sessions_yield_loop_and_isolate_cached_cards(catalog, m
     monkeypatch.setattr(opportunity, "attach_participants", lambda *_args, **_kwargs: {})
     monkeypatch.setattr(market_themes, "_theme_board_cached", cached)
     monkeypatch.setattr(market_themes, "_verify_board_multi_day", verify)
+    attached, referenced = [], []
+    attach, reference = official.attach_official_async, official.current_catalog_reference
+
+    async def observed_attach(*args, **kwargs):
+        result = await attach(*args, **kwargs)
+        attached.append(result)
+        return result
+
+    async def observed_reference(*args, resolution=None, **kwargs):
+        assert resolution is attached[-1], "flattened cards must reuse the exact parent resolution"
+        referenced.append(resolution)
+        return await reference(*args, resolution=resolution, **kwargs)
+
+    monkeypatch.setattr(official, "attach_official_async", observed_attach)
+    monkeypatch.setattr(official, "current_catalog_reference", observed_reference)
 
     async def run():
         if consumer == "opportunities":
@@ -306,6 +338,12 @@ def test_real_attachment_sessions_yield_loop_and_isolate_cached_cards(catalog, m
         assert all(thread != main_thread for _session, thread in opened)
         assert len({id(session) for session, _thread in opened}) == len(opened)
         assert payload["data"]["themes"][0]["official_matches"][0]["code"] == "885001.TI"
+        if consumer == "opportunities":
+            assert len(referenced) == 1
+            ref = payload["data"]["current_theme_catalog"]
+            assert ref["scope"] == "current_directory_reference"
+            assert ref["items"][0]["exact_catalog"] == payload["data"]["themes"][0]["exact_catalog"]
+            assert [item["theme"] for item in ref["items"]] == [card["theme"] for card in cached_cards]
         assert cached_cards == original_cards
 
     asyncio.run(run())

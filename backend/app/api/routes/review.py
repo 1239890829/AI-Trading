@@ -84,6 +84,18 @@ async def review_detail(trade_date: str, request: Request):
     payload = report.model_dump()
     # Distinct read-time reference: never rewrite the saved report's input/body.
     payload["metric_history_reference"] = await asyncio.to_thread(read_metric_history_reference, day)
+    from app.services.official_match import current_catalog_reference
+
+    market = (payload.get("data") or {}).get("market") or {}
+    reported = market.get("reported_values") or {}
+    names = []
+    for item in [*(market.get("themes") or []), *(reported.get("themes") or [])]:
+        if isinstance(item, dict):
+            names.append(item.get("theme"))
+            tags = item.get("raw_tags")
+            if isinstance(tags, list):
+                names.extend(tags)
+    payload["current_theme_catalog"] = await current_catalog_reference(request, names)
     return {"data": payload}
 
 

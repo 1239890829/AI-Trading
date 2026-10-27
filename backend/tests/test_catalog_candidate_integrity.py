@@ -13,7 +13,7 @@ from sqlalchemy.orm import sessionmaker
 from app.core.db import utcnow
 from app.models.theme_catalog import Theme, ThemeMember, ThemeOverride
 from app.services.theme_catalog_service import ThemeCatalogService
-from app.services.official_match import attach_official
+from app.services.official_match import attach_official_async
 from app.picks.intraday_opportunity import attach_participants
 from app.picks.board_surge import build_theme_index
 
@@ -96,7 +96,21 @@ def test_unknown_and_partial_overlap_cannot_supply_candidate_theme(svc):
     partial = {"theme": "存储芯片", "stocks": rows,
                "supporting_symbols": ["600171", "600001", "600999"]}
     exact = {"theme": "存储芯片", "stocks": rows}
-    attach_official(SimpleNamespace(theme_catalog=svc), [unknown, partial, exact])
+    async def run():
+        await svc._client.aclose()
+
+        def industry(request):
+            assert request.url.path.endswith("/catalog/ths-index-list")
+            assert request.url.params.get("tag") == "industry"
+            return httpx.Response(200, json={"code": 0, "data": {"item": [
+                {"thscode": "881126.TI", "name": "汽车零部件"}]}})
+
+        async with httpx.AsyncClient(transport=httpx.MockTransport(industry)) as client:
+            svc._client = client
+            await attach_official_async(SimpleNamespace(theme_catalog=svc), [unknown, partial, exact],
+                                        view_budget=None)
+
+    asyncio.run(run())
     assert unknown["official_matches"] == [] and unknown["catalog_code"] is None
     assert partial["official_matches"] and partial["candidate_catalog_code"] is None
     assert exact["candidate_catalog_code"] == "886042.TI"

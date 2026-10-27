@@ -8,13 +8,13 @@ import type {ThemeStrengthRow, HotTheme} from "@/lib/api";
 const scope = vi.hoisted(() => ({params: new URLSearchParams()}));
 vi.mock("@/components/inspection/surface-scope", () => ({useSurfaceScope: () => ({searchParams: scope.params, replaceSearch: vi.fn()})}));
 vi.mock("@/components/detail/symbol-detail-context", () => ({useSymbolDetail: () => ({open: vi.fn()}), symbolDetailClick: () => () => {}}));
-vi.mock("@/components/theme-card", () => ({RankDelta: () => null, ThemeCardView: ({card, strength, hot}: {card: {theme: string}; strength: ThemeStrengthRow | null; hot?: HotTheme}) =>
-  <div data-testid={card.theme}>{strength ? `${strength.code}:${strength.count}` : "无正式成分样本"}{hot && <span data-testid={`${card.theme}-hot`}>{hot.theme_code}:{hot.heat}</span>}</div>}));
+vi.mock("@/components/theme-card", () => ({RankDelta: () => null, ThemeCardView: ({card, strength, hot, currentThemeCatalog}: {card: {theme: string}; strength: ThemeStrengthRow | null; hot?: HotTheme; currentThemeCatalog?: {scope:string}}) =>
+  <div data-testid={card.theme}>{strength ? `${strength.code}:${strength.count}` : "无正式成分样本"}{hot && <span data-testid={`${card.theme}-hot`}>{hot.theme_code}:{hot.heat}</span>}{currentThemeCatalog && <span data-testid={`${card.theme}-current-reference`}>{currentThemeCatalog.scope}</span>}</div>}));
 vi.mock("@/lib/api", () => ({getThemes: vi.fn(), getThemesHot: vi.fn(), getThemeStrength: vi.fn(), getAuctionBenchmark: vi.fn(), getSkyrocket: vi.fn()}));
 vi.mock("@/lib/market-hours", () => ({isTradingSession: () => true}));
 
 const row = (code: string, name: string, count: number) => ({code, name, count} as ThemeStrengthRow);
-const payload = (themes: Record<string, unknown>[]) => ({trade_date: "2026-10-27", themes, broken_ladder: [], caveats: [],
+const payload = (themes: Record<string, unknown>[]) => ({trade_date: "2026-10-27", themes: themes.map(theme=>{const identity=theme.exact_catalog as Record<string,unknown>|null;return {...theme,...(identity?{catalog_mapping_state:"exact",exact_catalog:{name:theme.theme,basis:"exact_name",kind:"concept",catalog_version:"a".repeat(64),observed_at:"2026-10-27T12:00:00+08:00",...identity}}:{})};}), broken_ladder: [], caveats: [],
   summary: {limit_up_total: 3, theme_count: themes.length, market_max_boards: 2}} as unknown as ThemeBoardPayload);
 const hotPayload = (themes: HotTheme[]) => ({ts: null, themes, stocks: [], ranking_basis: "hot_stock_concentration" as const,
   catalog_revision: 1, catalog_state: "ready" as const, membership_state: "ready" as const, scope: "本次读取同花顺热股与已存正式目录的成分交集"});
@@ -167,4 +167,28 @@ describe("合力只请求当前可见正式成员范围", () => {
     await act(async () => {finishOld({"885001.TI": row("885001.TI", "甲", 999)}); await old;});
     expect(screen.getByTestId("乙").textContent).toBe("885002.TI:22");
   });
+});
+
+
+it("正式行业及缺冻结凭据的概念不误调用概念合力",async()=>{
+  vi.mocked(getThemes).mockResolvedValue(payload([
+    {theme:"汽车零部件",exact_catalog:{code:"881126.TI",source:"ths_official",kind:"industry"}},
+    {theme:"凭据缺失",exact_catalog:{code:"885001.TI",source:"ths_official",catalog_version:null}},
+    {theme:"概念原名",exact_catalog:{code:"885002.TI",source:"ths_official"}},
+  ]));
+  render(<ThemesTab/>);
+  await waitFor(()=>expect(getThemeStrength).toHaveBeenCalledTimes(1));
+  expect(getThemeStrength).toHaveBeenCalledWith(["885002.TI"],{signal:expect.any(AbortSignal)});
+  expect(screen.getByTestId("汽车零部件").textContent).toBe("无正式成分样本");
+});
+
+
+it("历史市场旁列当前目录sidecar但不请求当前概念合力或人气",async()=>{
+  scope.params=new URLSearchParams({date:"2026-10-23"});
+  const value=payload([{theme:"汽车零部件",exact_catalog:null,catalog_mapping_state:"unavailable",catalog_mapping_context:{reason:"historical_identity_not_frozen"}}]);
+  value.trade_date="2026-10-23";value.current_theme_catalog={scope:"current_directory_reference",catalog_version:"a".repeat(64),observed_at:"2026-10-27T12:00:00+08:00",items:[{theme:"汽车零部件",catalog_mapping_state:"exact",exact_catalog:{code:"881126.TI",name:"汽车零部件",source:"ths_official",basis:"exact_name",kind:"industry",catalog_version:"a".repeat(64),observed_at:"2026-10-27T12:00:00+08:00"}}]};
+  vi.mocked(getThemes).mockResolvedValue(value);
+  render(<ThemesTab/>);
+  expect((await screen.findByTestId("汽车零部件-current-reference")).textContent).toBe("current_directory_reference");
+  expect(getThemeStrength).not.toHaveBeenCalled();expect(getThemesHot).not.toHaveBeenCalled();
 });

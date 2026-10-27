@@ -1,6 +1,7 @@
 "use client";
 
-import { SourceThemeIdentity } from "@/components/source-theme-identity";
+import {currentThemeMapping, officialThemeIdentity, type OfficialThemeIdentity} from "@/lib/theme-identity";
+import { CurrentThemeReference, SourceThemeIdentity } from "@/components/source-theme-identity";
 
 import { Fragment, useState } from "react";
 import { useExitPresence } from "@/hooks/use-exit-presence";
@@ -14,7 +15,7 @@ import { EntryChecklist } from "@/components/entry-checklist";
 import { JUMP_PILL_CLASS, JumpLink } from "@/components/ui/jump-link";
 import { inspectionClick, useInspection } from "@/components/inspection/inspection-context";
 import { roleClass } from "@/lib/role-style";
-import type { ThemeCard as ThemeCardType } from "@/types/market";
+import type { CurrentThemeCatalogReference, ThemeCard as ThemeCardType } from "@/types/market";
 import { ConditionList, ExplanationMap, NarrativeText } from "@/components/ui/explanation-map";
 import { readingRowClasses } from "@/components/ui/reading-row";
 
@@ -184,6 +185,7 @@ export function ThemeCardView({
   tradeDate,
   hot,
   strength,
+  currentThemeCatalog,
 }: {
   card: ThemeCardType;
   rank: number;
@@ -191,17 +193,26 @@ export function ThemeCardView({
   hot?: HotTheme | null;
   /** 仅由正式同花顺代码连接的成分样本；不是板块资金榜。 */
   strength?: ThemeStrengthRow | null;
+  currentThemeCatalog?: CurrentThemeCatalogReference;
 }) {
   const { open: inspect } = useInspection();
   const p = card.performance;
-  const exactCode = card.exact_catalog?.code;
-  const sample = exactCode && strength?.code === exactCode ? strength : null;
+  const identity = officialThemeIdentity(card.theme,card.exact_catalog,card.catalog_mapping_state);
+  const currentIdentity = !identity ? currentThemeMapping(card.theme,currentThemeCatalog)?.identity ?? null : null;
+  const exactCode = identity?.code;
+  const sample = identity?.kind === "concept" && strength?.code === exactCode ? strength : null;
   const candidate = card.candidate_board ?? sample?.candidate_board;
   const interval = exactCode && card.official_interval?.code === exactCode
-    && card.official_interval.source === "ths_official_kline" ? card.official_interval : null;
+    && card.official_interval.source === "ths_official_kline" && card.official_interval.kind === identity?.kind
+    && card.official_interval.name === identity?.name && card.official_interval.catalog_version === identity?.catalog_version
+    && card.official_interval.observed_at === identity?.observed_at ? card.official_interval : null;
   const stockNav = useStockRowNav();
-  const [detailCode, setDetailCode] = useState<string | null>(null);
-  const detailPresence = useExitPresence(detailCode);
+  const [detailTarget, setDetailTarget] = useState<{identity: OfficialThemeIdentity; date?: string} | null>(null);
+  const detailIdentity = detailTarget && [identity,currentIdentity].some(value=>value?.code === detailTarget.identity.code
+    && value.kind === detailTarget.identity.kind && value.catalog_version === detailTarget.identity.catalog_version)
+    && detailTarget.date === tradeDate ? detailTarget : null;
+  if (detailTarget && !detailIdentity) setDetailTarget(null);
+  const detailPresence = useExitPresence(detailIdentity);
   /** 介入条件清单（P1-13）：展开哪只票的清单；null = 全部收起。按需请求，不参与轮询。 */
   const [checklistSymbol, setChecklistSymbol] = useState<string | null>(null);
   const checklistPresence = useExitPresence(checklistSymbol);
@@ -237,12 +248,12 @@ export function ThemeCardView({
 
         {/* 概念详情入口（09-08 用户需求）：打开官方成分全量弹窗（默认「全部成分」
             tab + 官方归因细分 tab）；仅在有目录映射时显示，无映射缺省 */}
-        {card.catalog_code && (
+        {identity && (
           <button
             onClick={(e) => {
               e.preventDefault();
               e.stopPropagation();
-              setDetailCode(card.catalog_code!);
+              setDetailTarget({identity,date:tradeDate});
             }}
             className={JUMP_PILL_CLASS}
             title="读取同花顺正式成分记录；涨停归因按需补充"
@@ -251,8 +262,13 @@ export function ThemeCardView({
           </button>
         )}
 
-        <SourceThemeIdentity reason={card.theme} exact={card.exact_catalog} related={card.official_matches} />
-        <span className="text-[11px] text-zinc-600 dark:text-zinc-400" title="尚无已核同概念身份的主力净流入；东财名称候选不作资金证据">资金待核</span>
+        <SourceThemeIdentity reason={card.theme} exact={card.exact_catalog} state={card.catalog_mapping_context?.reason === "historical_identity_not_frozen" ? undefined : card.catalog_mapping_state} related={card.official_matches} historical={!!tradeDate} />
+        {!identity && <CurrentThemeReference reason={card.theme} reference={currentThemeCatalog} compact/>}
+        {currentIdentity && <button type="button" className={JUMP_PILL_CLASS} onClick={event=>{
+          event.preventDefault();event.stopPropagation();setDetailTarget({identity:currentIdentity,date:tradeDate});
+        }} title="读取当前正式成分参考，不证明原日期归属">当前成分 ↗</button>}
+        <span className="text-[11px] text-zinc-600 dark:text-zinc-400" title="尚无已核同目录身份的主力净流入；东财名称候选不作资金证据">资金待核</span>
+        {identity?.kind === "industry" && <span className="text-[11px] text-zinc-600 dark:text-zinc-400">行业合力分析尚未覆盖</span>}
 
         <Badge className={FORMATION_STYLE[card.formation]} title="按涨停家数判定题材是否成建制">
           {card.formation}
@@ -262,7 +278,7 @@ export function ThemeCardView({
         </Badge>
 
         {/* 题材人气（B1）：官方成分热股人气合计，ths 24 小时榜口径（估算数据）；失败静默不显示 */}
-        {hot && (
+        {hot && identity?.kind === "concept" && hot.source === "ths_official" && hot.theme_code === identity.code && (
           <Badge
             className="border-fuchsia-500/40 bg-fuchsia-500/10 text-fuchsia-700 dark:text-fuchsia-300"
             title={hot.basis ? `${hot.basis}（ths 热股榜 24 小时口径，人气为估算数据）` : "ths 热股榜（估算数据）"}
@@ -595,7 +611,7 @@ export function ThemeCardView({
       ]} /></div>
 
       {detailPresence.value && (
-        <ConceptDetailModal key={detailPresence.value} code={detailPresence.value} name={card.theme} active={detailPresence.active} onClose={() => setDetailCode(null)} />
+        <ConceptDetailModal key={`${detailPresence.value.identity.kind}:${detailPresence.value.identity.code}`} code={detailPresence.value.identity.code} name={detailPresence.value.identity.name} catalogKind={detailPresence.value.identity.kind} referenceDate={detailPresence.value.date || undefined} active={detailPresence.active} onClose={() => setDetailTarget(null)} />
       )}
     </section>
   );

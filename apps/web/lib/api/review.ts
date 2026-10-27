@@ -127,6 +127,7 @@ export interface ReviewReportDetail {
   model: { requested?: string; actual?: string; degraded?: boolean; reason?: string };
   /** Older reports remain readable; absence is not a zero-valued market snapshot. */
   data?: ReviewData;
+  current_theme_catalog?: import("@/types/market").CurrentThemeCatalogReference;
   /** Added when read; not part of the frozen original report or its known inputs. */
   metric_history_reference?: ReviewMetricHistoryReference;
   dimensions: { key: string; title: string; status: string; findings: string[]; judgements: string[]; gaps: string[] }[];

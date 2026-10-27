@@ -27,12 +27,13 @@ from app.services.market_snapshot import (
 )
 from app.services.dragon_service import apply_position_with_5d
 from app.services.theme_catalog_service import official_multi_day_changes
+from app.services.official_match import OFFICIAL_CATALOG_VIEW_BUDGET_SECONDS
 
 router = APIRouter(tags=["market"])
 log = logging.getLogger("app.api.routes.market")
 
 # Optional K-line enrichment must not hold the basic theme list behind slow batches.
-THEME_KLINE_VIEW_BUDGET_SECONDS = 0.25
+THEME_KLINE_VIEW_BUDGET_SECONDS = OFFICIAL_CATALOG_VIEW_BUDGET_SECONDS
 THEME_KLINE_SOURCE_BUDGET_SECONDS = 15.0
 
 from app.api.routes.market_envelope import (
@@ -74,33 +75,10 @@ async def market_overview(request: Request, hub: QuoteHub = Depends(get_hub)) ->
 
 
 async def _official_identities_cached(request: Request) -> dict:
-    """Share a local primitive projection; canceled views do not abandon its thread."""
-    from app.services.official_match import catalog_identity_index
+    """Compatibility entry for the shared concept/industry identity owner."""
+    from app.services.official_match import resolve_official_catalog
 
-    svc = request.app.state.theme_catalog
-    revision = getattr(svc, "revision", 0)
-    cache = cache_on(svc, "themes.official.identities", 60, maxsize=4)
-    key = ("source-identity-v3", revision)
-    hit, result = cache.get(key)
-    if hit:
-        return deepcopy(result)
-
-    async def load():
-        hit, result = cache.get(key)
-        if hit:
-            return result
-        try:
-            rows = await asyncio.to_thread(svc.get_catalog, limit=1000)
-            identities = catalog_identity_index(rows)
-            if getattr(svc, "revision", 0) != revision:
-                raise RuntimeError("catalog_revision_changed")
-            result = {"state": "available", "identities": identities, "reason": None}
-        except Exception as exc:
-            result = {"state": "unavailable", "identities": {}, "reason": type(exc).__name__}
-        cache.set(key, result, ttl=60 if result["state"] == "available" else 5)
-        return result
-
-    return await read_inflight(svc, ("theme-official-identities", cache, key), load)
+    return await resolve_official_catalog(request)
 
 
 async def _official_bars_cached(request: Request, code: str, trade_date: date) -> dict:
@@ -160,13 +138,17 @@ async def _official_bars_cached(request: Request, code: str, trade_date: date) -
     return await read_inflight(owner, ("theme-official-bars", id(svc), key), load)
 
 
-async def _verify_board_multi_day(request: Request, board_payload: dict, trade_date: date) -> None:
+async def _verify_board_multi_day(request: Request, board_payload: dict, trade_date: date,
+                                  *, resolution: dict | None = None,
+                                  view_deadline: float | None = None) -> None:
     """THS正式目录代码的独立区间事实；不得覆盖东财名称候选。
 
     目录精确且唯一才取该THS代码日K；缺失/迟包保留unknown。
     官方5日涨幅仍只收紧原位置风险，不增加资金证据或候选资格。
     """
     deadline = asyncio.get_running_loop().time() + THEME_KLINE_VIEW_BUDGET_SECONDS
+    if view_deadline is not None:
+        deadline = min(deadline, view_deadline)
     svc = getattr(request.app.state, "theme_catalog", None)
     cards = board_payload.get("themes") or []
     for card in cards:
@@ -192,21 +174,22 @@ async def _verify_board_multi_day(request: Request, board_payload: dict, trade_d
         }
     if svc is None:
         return
-    catalog_waiter = asyncio.create_task(_official_identities_cached(request))
-    catalog_done = set()
-    try:
-        catalog_done, _pending = await asyncio.wait(
-            {catalog_waiter}, timeout=max(0, deadline - asyncio.get_running_loop().time()))
-    finally:
-        if not catalog_waiter.done():
-            catalog_waiter.cancel()
-            await asyncio.gather(catalog_waiter, return_exceptions=True)
-    result = None
-    if catalog_done:
+    result = resolution
+    if result is None:
+        catalog_waiter = asyncio.create_task(_official_identities_cached(request))
+        catalog_done = set()
         try:
-            result = catalog_waiter.result()
-        except (Exception, asyncio.CancelledError) as exc:
-            result = {"state": "unavailable", "reason": type(exc).__name__}
+            catalog_done, _pending = await asyncio.wait(
+                {catalog_waiter}, timeout=max(0, deadline - asyncio.get_running_loop().time()))
+        finally:
+            if not catalog_waiter.done():
+                catalog_waiter.cancel()
+                await asyncio.gather(catalog_waiter, return_exceptions=True)
+        if catalog_done:
+            try:
+                result = catalog_waiter.result()
+            except (Exception, asyncio.CancelledError) as exc:
+                result = {"state": "unavailable", "reason": type(exc).__name__}
     if result is None or result["state"] != "available":
         for card in cards:
             card["official_interval"].update(
@@ -219,9 +202,10 @@ async def _verify_board_multi_day(request: Request, board_payload: dict, trade_d
         interval = card["official_interval"]
         identity = identities.get(card.get("theme") or "") if not card.get("is_unclassified") else None
         if identity is None:
-            interval["state"] = "unmapped"
+            interval["state"] = "ambiguous" if card.get("theme") in result.get("ambiguous", []) else "unmapped"
             continue
-        interval.update(code=identity["code"], name=identity["name"])
+        interval.update(code=identity["code"], name=identity["name"], kind=identity["kind"],
+                        catalog_version=identity["catalog_version"], observed_at=identity["observed_at"])
         targets.setdefault(identity["code"], []).append((card, interval))
     if not targets:
         return
@@ -269,15 +253,6 @@ async def _verify_board_multi_day(request: Request, board_payload: dict, trade_d
                    f"位置判定同步升级 {position_upgraded} 张，只收紧风险；东财候选不参与同概念资金验证")
 
 
-def _attach_official_flags(request: Request, themes_list: list[dict]) -> None:
-    """L5（architecture-design §1）+ 09-08 簇级官方概念挂靠：见 app/services/official_match.py。
-
-    盘面题材看板与猎场机会视图共用精确目录身份；成分重叠另作相关导航。
-    """
-    from app.services.official_match import attach_official
-
-    attach_official(request, themes_list)
-
 
 @router.get("/themes", response_model=Envelope[ThemeBoardPayload])
 async def themes(
@@ -303,12 +278,27 @@ async def themes(
 
     payload = await _theme_board_cached(request, hub, trade_date)
 
-    # T3/B3：官方板块 K 线交叉验证（缓存的 payload 已验证过时内部直接跳过）
-    await _verify_board_multi_day(request, payload["data"], trade_date)
+    from app.core.bjtime import beijing_now
+    from app.services.official_match import (
+        attach_official_async, current_catalog_reference, resolve_official_catalog_view,
+    )
+
+    view_deadline = asyncio.get_running_loop().time() + THEME_KLINE_VIEW_BUDGET_SECONDS
+    resolution = await resolve_official_catalog_view(
+        request, wait_seconds=max(0, view_deadline - asyncio.get_running_loop().time()))
+    current_day = trade_date == beijing_now().date()
+    # A current directory may explain today's observation; it cannot rewrite a
+    # historical source label, constituents, or position using today's identity.
+    if current_day:
+        await _verify_board_multi_day(request, payload["data"], trade_date,
+                                      resolution=resolution, view_deadline=view_deadline)
+        observed_resolution = resolution
+    else:
+        observed_resolution = {"state": "unavailable", "reason": "historical_identity_not_frozen"}
 
     # 挂靠会写卡片与嵌套成员标记；worker 只修改本请求副本。
     themes_list = deepcopy(payload["data"]["themes"])
-    await asyncio.to_thread(_attach_official_flags, request, themes_list)
+    await attach_official_async(request, themes_list, resolution=observed_resolution)
     if min_boards > 0:
         themes_list = [t for t in themes_list if t["performance"]["max_boards"] >= min_boards]
     if min_count > 1:
@@ -320,6 +310,9 @@ async def themes(
 
     out = dict(payload["data"])
     out["themes"] = themes_list[:limit]
+    if not current_day:
+        out["current_theme_catalog"] = await current_catalog_reference(
+            request, [card.get("theme") for card in out["themes"]], resolution=resolution)
     out["filters"] = {"sort": sort, "min_boards": min_boards, "min_count": min_count, "limit": limit}
     return {"data": out, "meta": payload["meta"]}
 

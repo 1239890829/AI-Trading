@@ -1,5 +1,6 @@
 "use client";
 
+import {officialThemeIdentity} from "@/lib/theme-identity";
 import { SourceThemeIdentity } from "@/components/source-theme-identity";
 
 import { useId, useState } from "react";
@@ -18,7 +19,7 @@ import { WatchLedgerPanel } from "@/components/hunting/watch-ledger-panel";
 import { PickCard, fromIntradayStock } from "@/components/picks/pick-card";
 import { StockLink } from "@/components/stock-link";
 import { pctColor, pctText, timeText, winRateColor } from "@/lib/format";
-import { themesUrl } from "@/lib/routing";
+import { tapeUrl } from "@/lib/routing";
 import type {
   BriefAlert,
   BriefDirection,
@@ -87,16 +88,19 @@ export function IntradayThemeRow({
   expanded,
   onToggle,
   readError = false,
+  tradeDate,
 }: {
   t: OpportunityTheme;
   expanded: boolean;
   onToggle: () => void;
   readError?: boolean;
+  tradeDate?: string;
 }) {
   const stage = t.stage ?? "未知";
   const detailsId = useId();
   const [detailOpen, setDetailOpen] = useState(false);
-  const detailPresence = useExitPresence(detailOpen ? t.catalog_code ?? null : null);
+  const identity = officialThemeIdentity(t.theme,t.exact_catalog,t.catalog_mapping_state);
+  const detailPresence = useExitPresence(detailOpen ? identity?.code ?? null : null);
   const bodyPresence = useExitPresence(expanded ? true : null);
   const { open: openInspection } = useInspection();
   return (
@@ -124,7 +128,7 @@ export function IntradayThemeRow({
                   : "孕育待发酵"}
             </span>
           )}
-          <SourceThemeIdentity reason={t.theme} exact={t.exact_catalog} related={t.official_matches} />
+          <SourceThemeIdentity reason={t.theme} exact={t.exact_catalog} state={t.catalog_mapping_state} related={t.official_matches} historical={!!tradeDate} />
           <span className={`rounded px-1.5 py-0.5 text-[10px] ${STAGE_TONE[stage] ?? "bg-zinc-500/10 text-zinc-600 dark:text-zinc-400"}`} title={(t.stage_basis || []).join("；")}>
             {stage}
           </span>
@@ -145,26 +149,26 @@ export function IntradayThemeRow({
           </span>
         </button>
         <span data-reading-action><JumpLink
-          href={themesUrl(t.theme)}
+          href={tapeUrl("themes",{focus:t.theme,...(tradeDate ? {date:tradeDate} : {})})}
           title="在当前页核对该题材的市场梯队"
-          onClick={inspectionClick(openInspection, {kind: "themes", focus: t.theme})}
+          onClick={inspectionClick(openInspection, {kind: "themes", focus: t.theme, date:tradeDate})}
         >
           市场梯队
         </JumpLink></span>
-        {t.catalog_code && (
+        {identity && (
           <button
             type="button"
             data-reading-action
             onClick={() => setDetailOpen(true)}
             className={`${readingRowClasses.action} ${JUMP_PILL_CLASS}`}
-            title="查看官方成分全量（与同花顺逐符号一致）与涨停细分"
+            title="读取同花顺正式目录成分；当前记录不证明历史归属"
           >
             官方成分
           </button>
         )}
       </div>
       {detailPresence.value && (
-        <ConceptDetailModal key={detailPresence.value} code={detailPresence.value} name={t.theme} active={detailPresence.active} onClose={() => setDetailOpen(false)} />
+        <ConceptDetailModal key={`${identity?.kind}:${detailPresence.value}`} code={detailPresence.value} name={t.theme} catalogKind={identity?.kind} referenceDate={tradeDate} active={detailPresence.active && !!identity} onClose={() => setDetailOpen(false)} />
       )}
       {!expanded && <ConditionList label="题材风险" items={t.risks} tone="warning" />}
       {bodyPresence.value && (
@@ -263,7 +267,7 @@ export function OpportunitySection({
       ) : (
         <div className="space-y-2">
           {opps.themes.map((t) => (
-            <IntradayThemeRow key={t.theme} t={t} expanded={expanded === t.theme} onToggle={() => onToggle(t.theme)} readError={readError} />
+            <IntradayThemeRow key={t.theme} t={t} tradeDate={opps.trade_date ?? undefined} expanded={expanded === t.theme} onToggle={() => onToggle(t.theme)} readError={readError} />
           ))}
         </div>
       )}

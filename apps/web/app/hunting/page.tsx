@@ -594,7 +594,7 @@ function HuntingInner() {
           </>}>
             {!intradayLoaded ? <div className="hunting-collection-placeholder"><CardListSkeleton count={2}/></div>
               : !top ? <div role="alert" className="hunting-empty hunting-collection-placeholder">{candidateDataError ? `候选数据待核：${candidateDataError.message}。当前无法判断是否有符合条件的标的。` : "盘中候选读取失败。请刷新重试；当前无法判断是否有符合条件的标的。"}</div>
-              : topItems.length > 0 ? topItems.map(it => <PickCard compact active={selectedGroup === "candidates" && selectedOnly} key={JSON.stringify([top.trade_date, top.selection_identity_version, it.symbol])} item={fromIntradayStock(it)}
+              : topItems.length > 0 ? topItems.map(it => <PickCard compact active={selectedGroup === "candidates" && selectedOnly} key={JSON.stringify([top.trade_date, top.selection_identity_version, it.symbol])} item={fromIntradayStock(it,top.current_theme_catalog)}
                   readError={!!intraday.error}
                   dailyEvidence={dailyBySymbol.has(it.symbol) && data?.date ? {item: dailyBySymbol.get(it.symbol)!, date: data.date, generatedAt: data.meta?.generated_at ?? null, version: data.meta?.selection_version ?? null} : undefined}
                   onShowDailyEvidence={showDailyDetail} positionLabel={(posLabels[it.symbol] as "sim" | "real" | undefined) ?? null} />)
@@ -612,7 +612,7 @@ function HuntingInner() {
               <div className="motion-disclosure-body">
                 {referencePresence.value !== null && <>
                   <p className="hunting-source-note">{top?.reference_criteria ?? "保留今日曾封板身份；当前仍封、已开板或未判，以卡片对应时点为准。仅用于观察资金集中方向。"}</p>
-                  <CandidateCollection>{topRefItems.map(it => <PickCard compact active={selectedGroup === "candidates" && selectedOnly && referencePresence.active} key={JSON.stringify([top?.trade_date, top?.selection_identity_version, it.symbol])} item={fromIntradayStock(it)} readError={!!intraday.error} positionLabel={(posLabels[it.symbol] as "sim" | "real" | undefined) ?? null} />)}</CandidateCollection>
+                  <CandidateCollection>{topRefItems.map(it => <PickCard compact active={selectedGroup === "candidates" && selectedOnly && referencePresence.active} key={JSON.stringify([top?.trade_date, top?.selection_identity_version, it.symbol])} item={fromIntradayStock(it,top?.current_theme_catalog)} readError={!!intraday.error} positionLabel={(posLabels[it.symbol] as "sim" | "real" | undefined) ?? null} />)}</CandidateCollection>
                 </>}
               </div>
             </div>
@@ -626,7 +626,7 @@ function HuntingInner() {
             {!picksLoaded ? <div className="hunting-collection-placeholder"><CardListSkeleton count={2}/></div>
               : !data ? <div role="alert" className="hunting-empty hunting-collection-placeholder">每日精选读取失败。请刷新重试；读取失败不表示没有组合。</div>
               : pickTotal === 0 ? <div className="hunting-empty hunting-collection-placeholder">{dailyEmptySummary(data)}</div>
-              : pickItems.map(it => <PickCard compact active={selectedGroup === "daily" && selectedOnly} key={JSON.stringify([data.date, data.meta?.selection_version, it.symbol])} item={fromDailyPick(it, {date: data.date!, version: data.meta?.selection_version ?? null})} readError={!!daily.error} positionLabel={(posLabels[it.symbol] as "sim" | "real" | undefined) ?? null} />)}
+              : pickItems.map(it => <PickCard compact active={selectedGroup === "daily" && selectedOnly} key={JSON.stringify([data.date, data.meta?.selection_version, it.symbol])} item={fromDailyPick(it, {date: data.date!, version: data.meta?.selection_version ?? null, currentThemeCatalog:data.current_theme_catalog})} readError={!!daily.error} positionLabel={(posLabels[it.symbol] as "sim" | "real" | undefined) ?? null} />)}
           </CandidateCollection>
           <p className="hunting-source-note">{minPickScore != null ? `综合分≥${minPickScore} · ` : ""}{replaceThreshold != null ? `换股门槛 ${replaceThreshold} 分` : "换股门槛未返回"} · {maxSwaps != null ? `每日换股上限 ${maxSwaps} 只` : "换股上限未返回"}；够格几只就保留几只。</p>
         </section>

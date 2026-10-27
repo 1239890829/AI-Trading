@@ -5,7 +5,7 @@ import { MarketReview, reviewSegmentBound } from "./market-review";
 import type { ReviewData, ReviewProvenance, ReviewReportDetail } from "@/lib/api";
 
 vi.mock("@/components/stock-link", () => ({StockLink: ({symbol,children}: {symbol: string;children: ReactNode}) => <a href={`/workbench?symbol=${symbol}`}>{children}</a>}));
-vi.mock("@/lib/api", async () => ({...await vi.importActual<typeof import("@/lib/api")>("@/lib/api"),getReviewReport: vi.fn()}));
+vi.mock("@/lib/api", async () => ({...await vi.importActual<typeof import("@/lib/api")>("@/lib/api"),getReviewReport: vi.fn(),getOfficialCatalog:vi.fn(),getThemesCatalog:vi.fn()}));
 const api = await import("@/lib/api");
 afterEach(cleanup);
 beforeEach(() => vi.clearAllMocks());
@@ -270,4 +270,46 @@ describe("market review dated evidence",()=>{
     expect(screen.queryByText("现金")).toBeNull();
     expect(screen.queryByText("该次采集的主模拟持仓为空。")).toBeNull();
   });
+});
+
+
+it("复盘只显示原冻结行业映射，原标签及未映射仍保留，不读今日目录",()=>{
+  const value=report();
+  value.data!.market.themes=[];value.data!.market.provenance!.themes={...provenance(),state:"unverified",source_trade_date:null};
+  value.data!.market.reported_values={themes:[
+    {theme:"汽车零部件",catalog_mapping_state:"exact",exact_catalog:{code:"881126.TI",name:"汽车零部件",source:"ths_official",basis:"exact_name",kind:"industry",catalog_version:"a".repeat(64),observed_at:"2026-10-23T15:29:59+08:00"}},
+    {theme:"具身智能",catalog_mapping_state:"unmapped",exact_catalog:null},
+    {theme:"原始旧标签"},
+  ]};
+  render(<MarketReview report={value}/>);
+  expect(screen.getByText("原采集标签 · 当日归属未核")).toBeTruthy();
+  expect(screen.getByTitle(/同花顺正式行业 · 汽车零部件 · 881126.TI/)).toBeTruthy();
+  expect(screen.getByText("具身智能")).toBeTruthy();
+  expect(screen.getByText("原标签 · 无正式目录对应")).toBeTruthy();
+  expect(screen.getByText("原标签 · 当时未记录映射")).toBeTruthy();
+  expect(api.getOfficialCatalog).not.toHaveBeenCalled();expect(api.getThemesCatalog).not.toHaveBeenCalled();
+});
+it("报告完成后才观察到的目录映射不升级成原报告身份",()=>{
+  const value=report();
+  value.data!.market.themes=[{theme:"机器人概念",catalog_mapping_state:"exact",exact_catalog:{code:"885517.TI",name:"机器人概念",source:"ths_official",basis:"exact_name",kind:"concept",catalog_version:"a".repeat(64),observed_at:"2026-10-24T12:00:00+08:00"}}];
+  render(<MarketReview report={value}/>);
+  expect(screen.getByText("机器人概念")).toBeTruthy();expect(screen.queryByText("同花顺 · 885517.TI")).toBeNull();
+  expect(api.getOfficialCatalog).not.toHaveBeenCalled();
+});
+
+
+it("旧报告只旁列当前同名参考，可信冻结映射优先且不借当前指标",()=>{
+  const value=report();
+  value.data!.market.themes=[{theme:"汽车零部件"},{theme:"冷链物流",catalog_mapping_state:"exact",exact_catalog:{code:"885502.TI",name:"冷链物流",source:"ths_official",basis:"exact_name",kind:"concept",catalog_version:"b".repeat(64),observed_at:"2026-10-23T15:29:59+08:00"}}];
+  value.current_theme_catalog={scope:"current_directory_reference",catalog_version:"a".repeat(64),observed_at:"2026-10-27T12:00:00+08:00",items:[
+    {theme:"汽车零部件",catalog_mapping_state:"exact",exact_catalog:{code:"881126.TI",name:"汽车零部件",source:"ths_official",basis:"exact_name",kind:"industry",catalog_version:"a".repeat(64),observed_at:"2026-10-27T12:00:00+08:00"}},
+    {theme:"冷链物流",catalog_mapping_state:"exact",exact_catalog:{code:"885502.TI",name:"冷链物流",source:"ths_official",basis:"exact_name",kind:"concept",catalog_version:"a".repeat(64),observed_at:"2026-10-27T12:00:00+08:00"}},
+  ]};
+  const before=JSON.stringify(value.data);
+  render(<MarketReview report={value}/>);
+  expect(screen.getByText("当前目录同名参考，非当时归属 · 881126.TI")).toBeTruthy();
+  expect(screen.getByText("同花顺 · 885502.TI")).toBeTruthy();
+  expect(screen.queryByText("当前目录同名参考，非当时归属 · 885502.TI")).toBeNull();
+  expect(JSON.stringify(value.data)).toBe(before);
+  expect(api.getOfficialCatalog).not.toHaveBeenCalled();
 });

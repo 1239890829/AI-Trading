@@ -216,10 +216,14 @@ async def _build_opportunities_uncached(
     # 簇级官方概念挂靠（09-08「代糖/玉米搜不到」修复）：猎场手风琴与工作台
     # 题材归属由此获得 official_matches（如「功能糖」→官方「代糖概念/玉米」）；
     # 缓存前写入，两端点共用同一份。
-    from app.services.official_match import attach_official
+    from app.services.official_match import attach_official_async, current_catalog_reference
 
     # 目录服务的同步读在 worker 内自建 Session，不能阻塞行情事件循环。
-    await asyncio.to_thread(attach_official, app, payload["data"].get("themes") or [])
+    resolution = await attach_official_async(app, payload["data"].get("themes") or [])
+    payload["data"]["current_theme_catalog"] = await current_catalog_reference(
+        app, [theme.get("theme") for theme in payload["data"].get("themes") or []],
+        resolution=resolution,
+    )
 
     # Candidate identity is separate from navigation overlap. Only a verified
     # common catalyst + official container can supply participants. Runtime scope

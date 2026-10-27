@@ -18,6 +18,7 @@ import { fmt, pctColor, pctText, winRateColor } from "@/lib/format";
 import {PlainExplanation as NarrativeText} from "@/components/ui/reader-brief";
 import { ExplanationMap } from "@/components/ui/explanation-map";
 import { readingRowClasses } from "@/components/ui/reading-row";
+import {SourceThemeIdentity} from "@/components/source-theme-identity";
 
 export function WatchLedgerPanel({ date, readOnly = false }: { date?: string; readOnly?: boolean } = {}) {
   const scopeDate = date?.replace(/^(\d{4})(\d{2})(\d{2})$/, "$1-$2-$3");
@@ -85,7 +86,7 @@ export function WatchLedgerPanel({ date, readOnly = false }: { date?: string; re
               <tr className="border-b border-zinc-200 text-left text-[10px] text-zinc-600 dark:text-zinc-400 dark:border-zinc-800">
                 <th className="py-1 pr-2 font-normal">入选时间</th>
                 <th className="py-1 pr-2 font-normal">个股</th>
-                <th className="py-1 pr-2 font-normal">题材</th>
+                <th className="py-1 pr-2 font-normal">原标签</th>
                 <th className="py-1 pr-2 text-right font-normal">入选价</th>
                 <th className="py-1 pr-2 text-right font-normal">收盘</th>
                 <th className="py-1 pr-2 text-right font-normal">盈亏</th>
@@ -114,6 +115,7 @@ export function WatchLedgerPanel({ date, readOnly = false }: { date?: string; re
                   </td>
                   <td className="max-w-[8em] truncate py-1.5 pr-2 text-zinc-600 dark:text-zinc-400" title={r.source_theme}>
                     {r.source_theme || "--"}
+                    {r.source_theme && <SourceThemeIdentity reason={r.source_theme} historical/>}
                   </td>
                   <td className="py-1.5 pr-2 text-right font-mono tabular-nums text-zinc-600 dark:text-zinc-300">
                     {r.entry_price != null ? fmt(r.entry_price) : "--"}

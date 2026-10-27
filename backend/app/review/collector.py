@@ -209,7 +209,14 @@ async def collect_market(
             raise ValueError("题材构建含当前板块指标；历史复盘不调用当前混合数据构建")
         from app.services.theme_service import build_theme_board
         board = await build_theme_board(hub.provider, trade_date)
-        reported["themes"] = [t for t in board.get("themes", []) if isinstance(t, dict)][:10]
+        # New observations freeze the same exact source identity as market/picks.
+        # This is current catalog evidence, never proof of the report day's prices.
+        from copy import deepcopy
+        from app.services.official_match import attach_official_async
+
+        observed_themes = deepcopy([t for t in board.get("themes", []) if isinstance(t, dict)][:10])
+        await attach_official_async(SimpleNamespace(theme_catalog=theme_catalog), observed_themes, view_budget=None)
+        reported["themes"] = observed_themes
         reported["theme_summary"] = {
             "theme_count": len(board.get("themes") or []),
             "broken_ladder": len(board.get("broken_ladder") or []),
