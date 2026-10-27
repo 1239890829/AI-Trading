@@ -51,9 +51,10 @@ class BudgetExhausted(TimeoutError):
 
 
 class RecoveryRejection(Enum):
-    """Hub verdict: a trusted fresh observation cannot advance its current value."""
+    """Hub verdict: a trusted observation cannot repair the current clock gap."""
 
     not_newer = "not_newer"
+    age_exceeded = "age_exceeded"
 
 
 #: 秒级实时方法：Hub 以 1Hz 轮询这些方法，走 realtime_rank 排序——
@@ -403,8 +404,10 @@ class CompositeProvider:
     async def recover_quote_regressions(
         self, method: str, rejected: dict[tuple[str, str], str], *, deadline: float,
         validate: Callable[[Quote, tuple[str, str]], Quote | RecoveryRejection | None], idle_limited: bool = False,
+        age_exceeded: set[tuple[str, str]] | None = None,
+        age_recovery_allowed: Callable[[], bool] | None = None,
     ) -> dict[tuple[str, str], Quote]:
-        """Retry only Hub-confirmed clock regressions within the original deadline.
+        """Retry only Hub-confirmed clock gaps within the original deadline.
 
         The Hub owns source-time/quality validation and merges once before accepting.
         This reader has no independent budget, cache, or normal-path invocation.
@@ -413,11 +416,20 @@ class CompositeProvider:
             raise ValueError("regression recovery only supports quote batches")
         sources = {p.name for p in self._pick(method)}
         remaining = {key: source for key, source in rejected.items() if source in sources}
-        for source in set(remaining.values()):
-            self._observe_attempt(method, source, "source_observation_rejected", "SourceTimeRegression")
+        aged = set(age_exceeded or ()) & remaining.keys()
+        for source, error_type in sorted({(source, "SourceQuoteAgeExceeded" if key in aged else "SourceTimeRegression")
+                                          for key, source in remaining.items()}):
+            self._observe_attempt(method, source, "source_observation_rejected", error_type)
         recovered = {}
         errors: list[str] = []
         for p in self._pick(method):
+            if aged and age_recovery_allowed is not None and not age_recovery_allowed():
+                # A first backup can return across a market phase boundary.
+                # Recheck the Hub's same calendar verdict before another read;
+                # original regression targets retain their existing behavior.
+                remaining = {key: source for key, source in remaining.items() if key not in aged}
+                if not remaining:
+                    break
             targets = {key for key, source in remaining.items() if source != p.name}
             if not targets or self._in_cooldown(method, p.name):
                 continue
@@ -431,6 +443,7 @@ class CompositeProvider:
             _, rows, exc = await self._attempt(method, p, args, deadline)
             accepted = {}
             nonadvancing = set()
+            expired = set()
             invalid_result = False
             if exc is None and isinstance(rows, list):
                 identities = Counter(
@@ -453,6 +466,8 @@ class CompositeProvider:
                         accepted[key] = checked
                     elif checked is RecoveryRejection.not_newer:
                         nonadvancing.add(key)
+                    elif checked is RecoveryRejection.age_exceeded and key in aged:
+                        expired.add(key)
                     else:
                         invalid_result = True
             if accepted:
@@ -464,12 +479,13 @@ class CompositeProvider:
                     break
             else:
                 if exc is None:
-                    self._observe_attempt(method, p.name, "source_observation_rejected", "SourceObservationRejected")
-                # A source can return a trusted fresh quote that is older than
-                # another source's retained value. That is no repair, not a
+                    error_type = "SourceQuoteAgeExceeded" if expired == targets else "SourceObservationRejected"
+                    self._observe_attempt(method, p.name, "source_observation_rejected", error_type)
+                # A source can return a trusted quote that cannot advance the
+                # retained value or repair its age. That is no repair, not a
                 # transport/format failure. Preserve any real failure history;
                 # neither trip nor clear the normal method circuit breaker.
-                trusted_nonadvancing = nonadvancing == targets and not invalid_result
+                trusted_nonadvancing = (nonadvancing | expired) == targets and not invalid_result
                 # Spending a short spare poll slot says nothing about the
                 # backup's health under its normal full request budget.
                 if not trusted_nonadvancing and not (

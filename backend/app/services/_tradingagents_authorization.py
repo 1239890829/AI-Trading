@@ -33,10 +33,10 @@ HOST_SOURCES = {"driver.py", "tradingagents_research.py", "tradingagents_recover
 # e7a8c6c8fca612f13191f720940e47be30a30a9dfe9a7be75c3735e3ebd7efa1.
 # This exact forward pair belongs to local explicit rebind only. It neither
 # migrates a recovery grant nor permits future/reverse/other owner revisions.
-REVIEWED_PACKET_OWNER_PAIRS = {"data_providers/tencent.py": (
+REVIEWED_PACKET_OWNER_PAIRS = {"data_providers/tencent.py": frozenset({(
     "32699b46cc03f0038e8e9d4969461bd336d9465c0363f984f8dca56b0b828aa9",
     "73af8b2ff111c04b57deda0dc3432c678815d0c2cef0c884f6f022ac51ea1af5",
-), "services/quote_hub.py": (
+)}), "services/quote_hub.py": frozenset({(
     # Reviewed market admission fix and connection-local subscription metadata.
     # Cached get_quotes/present_quote AST is unchanged. The visible copy also
     # retains degraded-source reasons when source age becomes stale. Provider
@@ -44,7 +44,17 @@ REVIEWED_PACKET_OWNER_PAIRS = {"data_providers/tencent.py": (
     # This exact forward pair preserves scope, cutoffs and all old grants.
     "5d970afc948ea70e8d5ef3cc6a1efe68d2a3df09d3044fc1c92c405c864db0b0",
     "c4386ec9cd0d10e0a5e3931e4ee0046cfff48b4b35e70ae99a3cccee8f5273ab",
-)}
+), (
+    # Reviewed same-slot recovery for admitted same-day old source clocks.
+    # Fresh cache facts can change when a trusted backup repairs the old row.
+    # Stored snapshot free-source/quality/cutoff/10s checks are unchanged; all
+    # Hub AST except _recover_regressions has common SHA-256
+    # 3621cd0f57e5b5c7a1c28e552bf5db013cbd28990038441cdd4059a236a6252c.
+    # These are exact single forward edges, never a transitive migration path.
+    # Old frozen packets/grants are neither recollected nor rebound here.
+    "c4386ec9cd0d10e0a5e3931e4ee0046cfff48b4b35e70ae99a3cccee8f5273ab",
+    "4b2fd81d0acfb07c925e9e26d48e976619795578a026467c61117f9f4a419856",
+)})}
 PIN_KEY = "ASHARE_TRADINGAGENTS_RESEARCH_AUTHORIZATION_DIGEST"
 PIN_LINE = re.compile(rb"(?im)^[ \t]*(?:export[ \t]+)?" + PIN_KEY.encode()
                       + rb"[ \t]*=[ \t]*(['\"]?)([0-9a-f]{64})\1[ \t]*(?:\#[^\r\n]*)?(?:\r?\n|$)")
@@ -180,7 +190,8 @@ def _reviewed_packet_owner_changes(old: dict, new: dict) -> list[str]:
     if (old_owners.keys() != new_owners.keys()
             or any(not isinstance(value, str) or not re.fullmatch(r"[0-9a-f]{64}", value)
                    for value in [*old_owners.values(), *new_owners.values()])
-            or any((old_owners.get(key), new_owners.get(key)) != REVIEWED_PACKET_OWNER_PAIRS.get(key) for key in changed)):
+            or any((old_owners.get(key), new_owners.get(key)) not in REVIEWED_PACKET_OWNER_PAIRS.get(key, ())
+                   for key in changed)):
         raise AuthorizationBlocked("authorization_unreviewed_packet_owner_changed")
     for key in changed:
         old_owners[key] = new_owners[key]

@@ -30,9 +30,12 @@ NEW_OWNER = "73af8b2ff111c04b57deda0dc3432c678815d0c2cef0c884f6f022ac51ea1af5"
 UNCHANGED_OWNER_AST = "e7a8c6c8fca612f13191f720940e47be30a30a9dfe9a7be75c3735e3ebd7efa1"
 HUB_OWNER_PATH = "services/quote_hub.py"
 HUB_OWNER_REVIEW = "packet_builder.owner_sources." + HUB_OWNER_PATH
-OLD_HUB_OWNER = "5d970afc948ea70e8d5ef3cc6a1efe68d2a3df09d3044fc1c92c405c864db0b0"
-# Independent whole-module pin for the reviewed quality/diagnostic/WS revision.
-NEW_HUB_OWNER = "c4386ec9cd0d10e0a5e3931e4ee0046cfff48b4b35e70ae99a3cccee8f5273ab"
+LEGACY_HUB_OWNER = "5d970afc948ea70e8d5ef3cc6a1efe68d2a3df09d3044fc1c92c405c864db0b0"
+OLD_HUB_OWNER = "c4386ec9cd0d10e0a5e3931e4ee0046cfff48b4b35e70ae99a3cccee8f5273ab"
+# Exact reviewed spare-slot age-recovery revision. Fresh cache facts can change;
+# the stored snapshot reader and all other Hub AST nodes are unchanged.
+NEW_HUB_OWNER = "4b2fd81d0acfb07c925e9e26d48e976619795578a026467c61117f9f4a419856"
+UNCHANGED_HUB_AST = "3621cd0f57e5b5c7a1c28e552bf5db013cbd28990038441cdd4059a236a6252c"
 
 
 @pytest.fixture
@@ -151,6 +154,39 @@ def test_reviewed_owner_proof_matches_current_whole_module_and_unaffected_ast():
             node.body = [child for child in node.body if not isinstance(child, (ast.FunctionDef, ast.AsyncFunctionDef))
                          or child.name != "get_minute_line"]
     assert hashlib.sha256(ast.dump(tree, include_attributes=False).encode()).hexdigest() == UNCHANGED_OWNER_AST
+
+
+def test_reviewed_hub_owner_proof_matches_current_whole_module_and_unaffected_ast():
+    from app.services import tradingagents_driver as native
+
+    raw = (Path(native.__file__).resolve().parents[1] / HUB_OWNER_PATH).read_bytes()
+    assert hashlib.sha256(raw).hexdigest() == NEW_HUB_OWNER
+    tree = ast.parse(raw)
+    for node in tree.body:
+        if isinstance(node, ast.ClassDef) and node.name == "QuoteHub":
+            node.body = [child for child in node.body if getattr(child, "name", None) != "_recover_regressions"]
+    assert hashlib.sha256(ast.dump(tree, include_attributes=False).encode()).hexdigest() == UNCHANGED_HUB_AST
+
+
+@pytest.mark.parametrize("before,after,allowed", [
+    (LEGACY_HUB_OWNER, OLD_HUB_OWNER, True),
+    (OLD_HUB_OWNER, NEW_HUB_OWNER, True),
+    (LEGACY_HUB_OWNER, NEW_HUB_OWNER, False),
+    (OLD_HUB_OWNER, LEGACY_HUB_OWNER, False),
+    (NEW_HUB_OWNER, OLD_HUB_OWNER, False),
+    (NEW_HUB_OWNER, "f" * 64, False),
+])
+def test_hub_owner_pairs_are_single_forward_edges(before, after, allowed):
+    old = {"packet_builder": {"owner_sources": {HUB_OWNER_PATH: before}}}
+    new = {"packet_builder": {"owner_sources": {HUB_OWNER_PATH: after}}}
+    if allowed:
+        assert owner._reviewed_packet_owner_changes(old, new) == [HUB_OWNER_REVIEW]
+        assert old == new
+    else:
+        unchanged = deepcopy(old)
+        with pytest.raises(owner.AuthorizationBlocked, match="unreviewed_packet_owner_changed"):
+            owner._reviewed_packet_owner_changes(old, new)
+        assert old == unchanged
 
 
 @pytest.fixture

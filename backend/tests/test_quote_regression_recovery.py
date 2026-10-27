@@ -1,4 +1,4 @@
-"""Only a confirmed source-clock regression may spend the remaining read budget."""
+"""Confirmed source-clock gaps share the original bounded recovery read."""
 from __future__ import annotations
 
 import asyncio
@@ -47,18 +47,23 @@ class Source:
         return await self.read("get_indices")
 
 
-@pytest.fixture(autouse=True)
-def clock_and_calendar(monkeypatch):
+def set_wall_clock(monkeypatch, now):
     class Clock(datetime):
         @classmethod
         def now(cls, tz=None):
-            return NOW.astimezone(tz) if tz else NOW.replace(tzinfo=None)
+            return now.astimezone(tz) if tz else now.replace(tzinfo=None)
     monkeypatch.setattr(freshness, "datetime", Clock)
-    monkeypatch.setattr(qh, "utcnow", lambda: NOW)
-    monkeypatch.setattr(qh, "beijing_now", lambda: NOW.astimezone(BJ_TZ))
-    monkeypatch.setattr(validator, "utcnow", lambda: NOW)
+    monkeypatch.setattr(qh, "utcnow", lambda: now)
+    monkeypatch.setattr(qh, "beijing_now", lambda: now.astimezone(BJ_TZ))
+    monkeypatch.setattr(validator, "utcnow", lambda: now)
+
+
+@pytest.fixture(autouse=True)
+def clock_and_calendar(monkeypatch):
+    set_wall_clock(monkeypatch, NOW)
     monkeypatch.setattr(qh.tc, "in_trading_window", lambda: True)
     monkeypatch.setattr(qh.tc, "market_open_state", lambda *a, **k: qh.tc.MARKET_OPEN)
+    monkeypatch.setattr(qh.tc, "known_trade_days", lambda: [NOW.astimezone(BJ_TZ).date()])
 
 
 def hub_for(primary_rows, backup_rows, *, indices=False, current_age=2):
@@ -576,4 +581,275 @@ def test_recovery_orchestration_cannot_expand_provider_capabilities(method):
                 method, {}, deadline=0, validate=lambda row, key: row,
             )
         assert not source.calls
+    asyncio.run(check())
+
+
+@pytest.mark.parametrize("indices", [False, True])
+@pytest.mark.parametrize("has_current", [False, True])
+def test_accepted_old_source_clock_uses_fresh_backup(indices, has_current):
+    async def check():
+        if indices:
+            primary_rows = [quote(s, market=m, age=20 if s == "000001" else 1)
+                            for s, m in INDEX_MARKETS.items()]
+            backup_rows = [quote(s, market=m, source="backup", age=2)
+                           for s, m in INDEX_MARKETS.items()]
+        else:
+            primary_rows = [quote(age=20), quote("600002")]
+            backup_rows = [quote(source="backup", age=2), quote("600002", source="backup", price=99)]
+        hub, primary, backup = hub_for(primary_rows, backup_rows, indices=indices, current_age=21)
+        current = hub.indices if indices else hub.quotes
+        if not has_current:
+            current.clear()
+        await hub._refresh_domain("indices" if indices else "quotes")
+        symbol = "000001" if indices else "600105"
+        recovered = current[symbol]
+        assert recovered.source == "backup" and recovered.quality is Quality.high
+        assert recovered.data_timestamp == NOW - timedelta(seconds=2)
+        assert recovered.received_at == NOW
+        assert not (hub.last_index_rejections if indices else hub.last_quote_rejections)
+        assert not hub.source_rejection_observations()["events"], "old age is not an admission regression"
+        assert all(q.source == "primary" for s, q in current.items() if s != symbol)
+        if not indices:
+            assert backup.requested == [["600105"]]
+            assert [s for s, _, _ in hub.quote_history].count("600002") == 1
+            assert len(hub.quote_history) == 3, "two distinct target observations, normal row accepted only once"
+        method = "get_indices" if indices else "get_quotes"
+        assert primary.calls == backup.calls == {method: 1}
+        metrics = hub.provider.provider_health()["method_attempts"][f"{method}@primary"]
+        assert metrics["last_error_type"] == "SourceQuoteAgeExceeded"
+        assert (method, "primary") not in hub.provider._failures
+    asyncio.run(check())
+
+
+@pytest.mark.parametrize("change", [
+    {"age": 20}, {"age": 21}, {"age": 15}, {"age": 86400}, {"age": -1},
+    {"data_timestamp": None}, {"market": "SZ"}, {"symbol": "600003"},
+    {"source": "source_unknown"}, {"price": None}, {"quality": Quality.stale},
+])
+def test_age_repair_cannot_launder_an_old_or_untrusted_backup(change):
+    async def check():
+        hub, _, backup = hub_for([quote(age=20), quote("600002")],
+                                 [quote(**{"source": "backup", "age": 2, **change})], current_age=21)
+        await hub._refresh_domain("quotes")
+        current = hub.quotes["600105"]
+        assert current.source == "primary" and current.quality is Quality.high
+        assert current.data_timestamp == NOW - timedelta(seconds=20) and current.received_at == NOW
+        visible = hub.get_quotes(["600105"])[0]
+        assert visible.quality is Quality.stale and visible.quality_reasons == ["quote_age_exceeded"]
+        assert visible.data_timestamp == current.data_timestamp and visible.received_at == NOW
+        assert backup.requested == [["600105"]] and len(hub.quote_history) == 2
+        assert not hub.last_quote_rejections and hub.last_batch_coverage == 1
+        # Valid same-day old observations are classified by age, not transport
+        # failure. Bad clocks, provider verdicts, or identity keep original errors.
+        trusted_old = change.get("age") in {15, 20, 21}
+        assert hub.provider._failures.get(("get_quotes", "backup"), 0) == (0 if trusted_old else 1)
+        if trusted_old:
+            metrics = hub.provider.provider_health()["method_attempts"]["get_quotes@backup"]
+            assert metrics["last_error_type"] == "SourceQuoteAgeExceeded"
+    asyncio.run(check())
+
+
+def test_two_old_sources_do_not_trip_the_normal_backup_transport_circuit():
+    async def check():
+        hub, primary, backup = hub_for([quote(age=20), quote("600002")],
+                                       [quote(source="backup", age=15)], current_age=21)
+        for _ in range(cp.FAILURE_THRESHOLD):
+            await hub._refresh_domain("quotes")
+        assert not hub.provider._in_cooldown("get_quotes", "backup")
+        assert ("get_quotes", "backup") not in hub.provider._failures
+        async def unavailable(method, symbols):
+            raise RuntimeError("offline primary transport failure")
+        primary.rows = unavailable
+        backup.rows = [quote(source="backup", age=2)]
+        assert (await hub.provider.get_quotes(["600105"]))[0].source == "backup"
+        assert backup.calls["get_quotes"] == cp.FAILURE_THRESHOLD + 1
+    asyncio.run(check())
+
+
+@pytest.mark.parametrize("change", [
+    {"age": 2}, {"age": 10}, {"age": -1}, {"age": 86400},
+    {"data_timestamp": None}, {"price": None}, {"quality": Quality.stale},
+])
+def test_only_admitted_same_day_known_old_clocks_expand_the_read(change):
+    async def check():
+        hub, _, backup = hub_for([quote(**change), quote("600002")],
+                                 [quote(source="backup", age=2)], current_age=90000)
+        # A source-clock-unknown first observation is not an age observation.
+        hub.quotes.clear()
+        await hub._refresh_domain("quotes")
+        assert not backup.calls
+    asyncio.run(check())
+
+
+@pytest.mark.parametrize("indices", [False, True])
+@pytest.mark.parametrize("duplicate_at", ["primary", "backup"])
+def test_duplicate_identity_never_becomes_an_age_repair(indices, duplicate_at):
+    async def check():
+        symbol = "000001" if indices else "600105"
+        old = quote(symbol, age=20)
+        primary_rows = ([quote(s, market=m, age=20 if s == symbol else 1)
+                         for s, m in INDEX_MARKETS.items()] if indices else [old, quote("600002")])
+        backup_rows = [quote(symbol, source="backup", age=2)]
+        if duplicate_at == "primary":
+            primary_rows.append(old)
+        else:
+            backup_rows.append(backup_rows[0].model_copy(deep=True))
+        hub, _, backup = hub_for(primary_rows, backup_rows, indices=indices, current_age=21)
+        await hub._refresh_domain("indices" if indices else "quotes")
+        current = hub.indices if indices else hub.quotes
+        assert current[symbol].source == "primary"
+        assert current[symbol].data_timestamp == NOW - timedelta(seconds=21 if duplicate_at == "primary" else 20)
+        assert bool(backup.calls) is (duplicate_at == "backup")
+    asyncio.run(check())
+
+
+@pytest.mark.parametrize("clock,calendar", [
+    ("09:20:00", "known"), ("09:27:00", "known"), ("11:40:00", "known"),
+    ("14:58:00", "known"), ("15:10:00", "known"),
+    ("09:38:28", "unknown"), ("09:38:28", "holiday"),
+])
+def test_age_repair_does_not_chase_quotes_outside_confirmed_continuous_session(monkeypatch, clock, calendar):
+    async def check():
+        now = datetime.fromisoformat(f"2026-10-14T{clock}+08:00").astimezone(timezone.utc)
+        set_wall_clock(monkeypatch, now)
+        if calendar != "known":
+            days = [] if calendar == "unknown" else [now.astimezone(BJ_TZ).date() + timedelta(days=1)]
+            monkeypatch.setattr(qh.tc, "known_trade_days", lambda: days)
+        hub, _, backup = hub_for(
+            [quote(data_timestamp=now - timedelta(seconds=20)),
+             quote("600002", data_timestamp=now - timedelta(seconds=1))],
+            [quote(source="backup", data_timestamp=now - timedelta(seconds=2))], current_age=86400,
+        )
+        await hub._refresh_domain("quotes")
+        assert not backup.calls
+        assert hub.quotes["600105"].data_timestamp == now - timedelta(seconds=20)
+        assert hub.get_quotes(["600105"])[0].quality is Quality.stale
+    asyncio.run(check())
+
+
+@pytest.mark.parametrize("consumed", [0.9, 1.1])
+def test_age_repair_uses_only_the_original_remaining_poll_slot(monkeypatch, consumed):
+    async def check():
+        clock = [100.0]
+        fake_time = NS(monotonic=lambda: clock[0])
+        monkeypatch.setattr(cp, "time", fake_time)
+        monkeypatch.setattr(qh, "time", fake_time)
+        async def primary_rows(method, symbols):
+            clock[0] += consumed
+            return [quote(age=20), quote("600002")]
+        hub, _, backup = hub_for(primary_rows, [quote(source="backup", age=2)], current_age=21)
+        attempts = []
+        original = hub.provider._attempt
+        async def tracked(method, source, args, deadline=None):
+            attempts.append((source.name, deadline))
+            return await original(method, source, args, deadline)
+        monkeypatch.setattr(hub.provider, "_attempt", tracked)
+        await hub._refresh_domain("quotes")
+        assert attempts[0] == ("primary", 104)
+        assert attempts[1:] == ([("backup", 101)] if consumed < 1 else [])
+        assert bool(backup.calls) is (consumed < 1)
+        assert hub.quotes["600105"].source == ("backup" if consumed < 1 else "primary")
+        assert not hub.provider._failures
+    asyncio.run(check())
+
+
+def test_age_repair_cancellation_drains_backup_and_keeps_original_observations():
+    async def check():
+        entered, cancelled = asyncio.Event(), []
+        async def hung(method, symbols):
+            entered.set()
+            try:
+                await asyncio.Event().wait()
+            finally:
+                cancelled.append(True)
+        hub, _, backup = hub_for([quote(age=20), quote("600002", price=10.2)], hung, current_age=21)
+        first = asyncio.create_task(hub._read_domain("quotes"))
+        second = asyncio.create_task(hub._read_domain("quotes"))
+        await asyncio.wait_for(entered.wait(), 1)
+        first.cancel()
+        await asyncio.gather(first, return_exceptions=True)
+        assert not cancelled, "one waiter cannot cancel the shared read"
+        assert hub.quotes["600002"].price == 10.2 and len(hub.quote_history) == 2
+        assert hub.get_quotes(["600105"])[0].quality is Quality.stale
+        hub._domain_tasks["quotes"].cancel()
+        await asyncio.gather(second, *hub._domain_tasks.values(), return_exceptions=True)
+        assert cancelled == [True] and backup.calls == {"get_quotes": 1}
+        assert hub.quotes["600105"].data_timestamp == NOW - timedelta(seconds=20)
+        assert hub.quotes["600105"].received_at == NOW and len(hub.quote_history) == 2
+        assert ("get_quotes", "backup") not in hub.provider._failures
+        assert asyncio.all_tasks() == {asyncio.current_task()}
+    asyncio.run(check())
+
+
+@pytest.mark.parametrize("advance", ["current", "auction"])
+def test_age_repair_rechecks_current_and_session_after_the_backup_returns(monkeypatch, advance):
+    async def check():
+        now = datetime.fromisoformat("2026-10-14T14:56:59+08:00").astimezone(timezone.utc)
+        set_wall_clock(monkeypatch, now)
+        async def backup_rows(method, symbols):
+            if advance == "current":
+                hub.quotes["600105"] = quote(source="latest", data_timestamp=now - timedelta(seconds=0.1))
+            else:
+                set_wall_clock(monkeypatch, now + timedelta(seconds=1))
+            return [quote(source="backup", data_timestamp=now - timedelta(seconds=2))]
+        hub, _, _ = hub_for(
+            [quote(data_timestamp=now - timedelta(seconds=20)),
+             quote("600002", data_timestamp=now - timedelta(seconds=1))], backup_rows, current_age=86400,
+        )
+        await hub._refresh_domain("quotes")
+        assert hub.quotes["600105"].source == ("latest" if advance == "current" else "primary")
+        assert hub.quotes["600002"].source == "primary" and len(hub.quote_history) == 2
+    asyncio.run(check())
+
+
+def test_age_repair_does_not_dispatch_another_source_after_crossing_into_auction(monkeypatch):
+    async def check():
+        now = datetime.fromisoformat("2026-10-14T14:56:59.900+08:00").astimezone(timezone.utc)
+        set_wall_clock(monkeypatch, now)
+        async def failed_backup(method, symbols):
+            set_wall_clock(monkeypatch, now + timedelta(milliseconds=100))
+            return []
+        hub, primary, backup = hub_for(
+            [quote(data_timestamp=now - timedelta(seconds=20)),
+             quote("600002", data_timestamp=now - timedelta(seconds=1))], failed_backup, current_age=86400,
+        )
+        next_source = Source("next", [quote(source="next", data_timestamp=now - timedelta(seconds=2))])
+        hub.provider = cp.CompositeProvider([primary, backup, next_source])
+        await hub._refresh_domain("quotes")
+        assert backup.calls == {"get_quotes": 1}
+        assert not next_source.calls, "an expired spare slot cannot open a new auction read"
+        assert hub.quotes["600105"].source == "primary"
+        assert hub.quotes["600105"].data_timestamp == now - timedelta(seconds=20)
+    asyncio.run(check())
+
+
+@pytest.mark.parametrize("indices", [False, True])
+@pytest.mark.parametrize("backup_age", [2, 20, -1, 86400])
+def test_naive_source_clocks_use_utc_before_age_recovery_and_keep_future_day_guards(indices, backup_age):
+    async def check():
+        symbol = "000001" if indices else "600105"
+        original = quote(symbol, data_timestamp=(NOW - timedelta(seconds=20)).replace(tzinfo=None))
+        primary_rows = ([original] + [quote(s, market=m) for s, m in INDEX_MARKETS.items() if s != symbol]
+                        if indices else [original, quote("600002")])
+        async def primary(method, symbols):
+            return primary_rows
+        hub, _, backup = hub_for(primary, [quote(symbol, source="backup",
+            data_timestamp=(NOW - timedelta(seconds=backup_age)).replace(tzinfo=None))],
+            indices=indices, current_age=21)
+        await hub._refresh_domain("indices" if indices else "quotes")
+        # Admission calls the actual validator on this same object before age
+        # arithmetic. Naive means UTC, never inferred Beijing wall-clock time.
+        assert original.data_timestamp == NOW - timedelta(seconds=20)
+        assert original.data_timestamp.tzinfo is timezone.utc
+        current = (hub.indices if indices else hub.quotes)[symbol]
+        assert current.source == ("backup" if backup_age == 2 else "primary")
+        assert current.data_timestamp == NOW - timedelta(seconds=2 if backup_age == 2 else 20)
+        assert current.data_timestamp.tzinfo is timezone.utc
+        assert current.received_at == NOW
+        visible = (hub.get_indices() if indices else hub.get_quotes([symbol]))
+        row = next(q for q in visible if q.symbol == symbol)
+        assert row.quality is (Quality.high if backup_age == 2 else Quality.stale)
+        assert not (hub.last_index_rejections if indices else hub.last_quote_rejections)
+        assert backup.calls == {"get_indices" if indices else "get_quotes": 1}
+        assert hub._domains["indices" if indices else "quotes"].last_error_type is None
     asyncio.run(check())

@@ -7,6 +7,7 @@ import type { MinutePoint } from "@/lib/api";
 import { mergeQuoteIntoMinutes } from "@/lib/kline-live";
 import type { Quote } from "@/types/market";
 import { ModalShell } from "./ui/modal-shell";
+import {DetailReadStatus} from "./detail/read-status";
 
 const charts = vi.hoisted(() => [] as ReturnType<typeof makeChart>[]);
 type Options = Record<string, unknown> & { autoscaleInfoProvider?: () => { priceRange: { minValue: number; maxValue: number } } };
@@ -574,6 +575,42 @@ it("magnetic focus shows the exact selected minute price and hides on leaving", 
 });
 
 describe("MinuteChart 轴契约", () => {
+  it("停牌遮罩仍盖Canvas，真实工具条的错误、诊断和重试在遮罩上层", () => {
+    const retry = vi.fn();
+    const view = render(<div className="relative"><div data-testid="suspension-mask" className="absolute inset-0 z-10">停牌遮罩</div>
+      <MinuteChart points={[point(10)]} prevClose={10} indexStatus={<DetailReadStatus inline label="分钟" state={{pending: false, loaded: true, error: "合成停牌重取失败", readAt: null}} onRetry={retry} diagnostics={<p>旧分钟源钟仍保留</p>}/>}/>
+    </div>);
+    const controls = view.container.querySelector(".kline-controls")!;
+    expect(controls.classList.contains("relative")).toBe(true);
+    expect(controls.classList.contains("z-20")).toBe(true);
+    expect(view.getByTestId("suspension-mask").classList.contains("z-10")).toBe(true);
+    expect(view.container.querySelector("[data-chart-surface]")!.closest(".z-20")).toBeNull();
+    expect(screen.getByRole("alert").parentElement).toBe(controls);
+    fireEvent.click(screen.getByRole("button", {name: "重新读取分钟"})); expect(retry).toHaveBeenCalledOnce();
+    fireEvent.click(screen.getByRole("button", {name: "分钟诊断"}));
+    expect(screen.getByRole("dialog", {name: "分钟诊断"})).toBeTruthy();
+    expect(screen.getByText("旧分钟源钟仍保留")).toBeTruthy();
+    expect(view.getByTestId("suspension-mask")).toBeTruthy();
+  });
+  it("历史、等待与错误状态进入原工具条，不新增占高行或重建图表", () => {
+    const points = [point(10)], retry = vi.fn();
+    const view = render(<MinuteChart points={points} prevClose={10} indexStatus={<span role="status" title="上证叠加 · 2026-09-17 · 非实时" aria-label="上证叠加 · 2026-09-17 · 非实时">非实时</span>}/>);
+    const chart = charts[0], controls = view.container.querySelector(".kline-controls")!;
+    expect(screen.getByRole("status").parentElement).toBe(controls);
+    expect(screen.getByRole("status").textContent).toBe("非实时");
+    expect(screen.getByRole("status").getAttribute("aria-label")).toBe("上证叠加 · 2026-09-17 · 非实时");
+    expect(controls.parentElement?.children.length).toBe(2);
+    view.rerender(<MinuteChart points={points} prevClose={10} indexStatus={<span role="status" title="上证叠加 · 收盘竞价等待 · 尚无连续分时" aria-label="上证叠加 · 收盘竞价等待 · 尚无连续分时">收盘竞价等待</span>}/>);
+    expect(screen.getByRole("status").parentElement).toBe(controls);
+    expect(screen.getByRole("status").textContent).toBe("收盘竞价等待");
+    expect(screen.getByRole("status").getAttribute("title")).toContain("尚无连续分时");
+    view.rerender(<MinuteChart points={points} prevClose={10} indexStatus={<><span role="alert" title="指数基准未更新 · 保留结果" aria-label="指数基准未更新 · 保留结果">基准未更新</span><button type="button" aria-label="重新读取指数叠加" onClick={retry}>重试</button></>}/>);
+    expect(screen.getByRole("alert").parentElement).toBe(controls);
+    expect(screen.getByRole("button", {name: "重新读取指数叠加"}).parentElement).toBe(controls);
+    fireEvent.click(screen.getByRole("button", {name: "重新读取指数叠加"})); expect(retry).toHaveBeenCalledTimes(1);
+    expect(controls.querySelector("p")).toBeNull(); expect(controls.parentElement?.children.length).toBe(2);
+    expect(charts).toHaveLength(1); expect(chart.remove).not.toHaveBeenCalled();
+  });
   it("真实涨跌停线保留参考，但不撑大小波动显示域", () => {
     render(<MinuteChart points={[point(9.99), point(10.01, "31")]} prevClose={10} limitPct={10} upperPrice={11} lowerPrice={9}/>);
     const chart = charts[0], axis = range(chart.series[0])!;

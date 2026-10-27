@@ -736,6 +736,14 @@ export const StockDetailPanel = memo(function StockDetailPanel({
     ? indexError.issue === "reference_age" ? "指数基准未更新"
       : indexError.issue === "reference" ? "指数基准待核" : "指数数据时点或字段待核"
     : "指数叠加读取失败";
+  const indexShortIssueLabel = indexError instanceof IndexOverlayError
+    ? indexError.issue === "reference_age" ? "基准未更新" : indexError.issue === "reference" ? "基准待核" : "数据待核"
+    : "读取失败";
+  const indexErrorLabel = `${indexIssueLabel}${indexOverlay ? " · 保留结果" : ""}`;
+  const indexHistoryLabel = indexOverlay?.mode === "historical" ? `上证叠加 · ${indexOverlay.referenceDate} · 非实时` : undefined;
+  const indexWaitPhase = indexOverlay?.waitingPhase === "closing_auction" ? "收盘竞价等待"
+    : indexOverlay?.waitingPhase === "pre_open_gap" ? "开盘等待" : "开盘竞价等待";
+  const indexWaitLabel = `上证叠加 · ${indexWaitPhase} · ${indexOverlay?.points.length ? `观察截至 ${dateTimeTextBJ(indexOverlay.sourceClock, {seconds: true})}` : "尚无连续分时"}`;
   const retryRead = (kind: DetailReadKind) => {
     const reads = dataReadsRef.current; if (reads?.alive) void reads[kind](true).catch(() => {});
   };
@@ -963,10 +971,7 @@ export const StockDetailPanel = memo(function StockDetailPanel({
                41px 给分时图；两个图表 tab 也不再有「一个有头一个无头」的高度跳动
                （2026-09-02 用户要求） */
             <Panel bodyClassName="overflow-hidden flex flex-col" className="detail-chart-panel min-h-0 flex-1">
-              <DetailReadStatus label="分钟" state={readStates.minute} onRetry={() => retryRead("minute")} diagnostics={minuteDiagnostics} diagnosticIssue={!!indexError} identity={`${symbol}:minute`} active={active}/>
-              {indexOverlay?.mode === "historical" && <p className="px-3 pb-1 text-xs text-zinc-600 dark:text-zinc-400">上证叠加 · {indexOverlay.referenceDate} · 非实时</p>}
-              {!indexError && indexOverlay?.mode === "waiting" && <p role="status" className="px-3 pb-1 text-xs text-zinc-600 dark:text-zinc-400">上证叠加 · {indexOverlay.waitingPhase === "closing_auction" ? "收盘竞价等待" : indexOverlay.waitingPhase === "pre_open_gap" ? "开盘等待" : "开盘竞价等待"} · {indexOverlay.points.length ? `观察截至 ${dateTimeTextBJ(indexOverlay.sourceClock, {seconds: true})}` : "尚无连续分时"}</p>}
-              {!!indexError && <div className="flex flex-wrap items-center gap-2 px-3 pb-1 text-xs"><p role="alert" className="text-amber-800 dark:text-amber-300">{indexIssueLabel}{indexOverlay ? " · 保留结果" : ""}</p><button type="button" data-action="secondary" disabled={indexResource.pending} onClick={retryIndexOverlay}>重新读取指数叠加</button></div>}
+              {displayMinutes.length === 0 && <DetailReadStatus label="分钟" state={readStates.minute} onRetry={() => retryRead("minute")} diagnostics={minuteDiagnostics} diagnosticIssue={!!indexError} identity={`${symbol}:minute`} active={active}/>}
               {displayMinutes.length > 0 ? (
                 <div className="relative min-h-0 flex-1">
                   {/* 停牌遮罩：分时是当日数据，停牌股当日无成交，
@@ -992,6 +997,12 @@ export const StockDetailPanel = memo(function StockDetailPanel({
                   indexPaused={indexPaused}
                   indexWaiting={indexSelected && !indexPaused && !indexHasMainMinute}
                   onIndexToggle={toggleIndexOverlay}
+                  indexStatus={<>
+                    <DetailReadStatus inline label="分钟" state={readStates.minute} onRetry={() => retryRead("minute")} diagnostics={minuteDiagnostics} diagnosticIssue={!!indexError} identity={`${symbol}:minute`} active={active}/>
+                    {indexHistoryLabel && <span className="whitespace-nowrap text-zinc-600 dark:text-zinc-400" title={indexHistoryLabel} aria-label={indexHistoryLabel}>非实时</span>}
+                    {!indexError && indexOverlay?.mode === "waiting" && <span role="status" className="whitespace-nowrap text-zinc-600 dark:text-zinc-400" title={indexWaitLabel} aria-label={indexWaitLabel}>{indexWaitPhase}</span>}
+                    {!!indexError && <><span role="alert" className="whitespace-nowrap text-amber-800 dark:text-amber-300" title={indexErrorLabel} aria-label={indexErrorLabel}>{indexShortIssueLabel}</span><button type="button" data-action="secondary" aria-label="重新读取指数叠加" title="重新读取指数叠加" disabled={indexResource.pending} onClick={retryIndexOverlay}>重试</button></>}
+                  </>}
                   auction={auctionProp}
                   exactBaseline={vrBaseline}
                   newsEvents={minuteNewsEvents}
