@@ -215,7 +215,7 @@ class ThsFuyaoProvider:
             low=num(it.get("low_price")),
             prev_close=num(it.get("prev_price")),
             change=num(it.get("price_change")),
-            change_pct=round(num(it.get("price_change_ratio_pct")) or 0, 2),
+            change_pct=round(float(it["price_change_ratio_pct"]), 2) if it.get("price_change_ratio_pct") is not None else None,
             volume=num(it.get("volume")),
             amount=num(it.get("turnover")),
             data_timestamp=datetime.fromtimestamp(ts_ms / 1000, tz=timezone.utc) if ts_ms else None,

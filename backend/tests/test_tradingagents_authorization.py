@@ -669,3 +669,113 @@ def test_cli_tail_options_never_become_implicit_rebind_or_grant(monkeypatch, arg
         monkeypatch.setattr(owner, name, forbidden)
     with pytest.raises(SystemExit) as error: main(arguments)
     assert error.value.code == 2
+
+
+BJ_OWNER_PAIRS = {
+    'data_providers/eastmoney.py': (
+        'ffe9108f81f83d1a40d0fdb7d26fab2733aafab0eb62f6417e3b524d0b9fc1b4',
+        'fd5c9a055c4f14f3c3fd9851771c49e7b7efa5e779b0736d708daec118d88ccc'),
+    'market/normalizer.py': (
+        '3a81768d35acc15f5168f363d54073516d978849f735e0ef419d9e6b6e08d5ec',
+        '53026c7530e54001b1dcfbb9f1fb4ab29794b119220cc506890c9e8d1b873b1b'),
+}
+
+
+@pytest.mark.parametrize('path,pair', BJ_OWNER_PAIRS.items())
+def test_reviewed_bj_owner_pairs_match_actual_whole_modules(path, pair):
+    from app.services import tradingagents_driver as native
+
+    actual = (Path(native.__file__).resolve().parents[1] / path).read_bytes()
+    assert hashlib.sha256(actual).hexdigest() == pair[1]
+    assert owner.REVIEWED_PACKET_OWNER_PAIRS[path] == frozenset({pair})
+
+
+@pytest.fixture
+def native_bj_owner_env(native_owner_env, monkeypatch):
+    env = native_owner_env
+    current = env.driver.method_identity()
+    old = deepcopy(current)
+    for path, pair in BJ_OWNER_PAIRS.items():
+        assert current['packet_builder']['owner_sources'][path] == pair[1]
+        old['packet_builder']['owner_sources'][path] = pair[0]
+    # The real outstanding installation also needs the already-reviewed Hub edge.
+    old['packet_builder']['owner_sources'][HUB_OWNER_PATH] = OLD_HUB_OWNER
+    _replace_original(env, monkeypatch, old)
+    env.current = current
+    env.bj_reviews = sorted(['packet_builder.owner_sources.' + path for path in BJ_OWNER_PAIRS] + [HUB_OWNER_REVIEW])
+    return env
+
+
+def test_actual_bj_and_hub_owner_maintenance_needs_exact_reviews_and_preserves_scope(native_bj_owner_env, monkeypatch):
+    env = native_bj_owner_env
+    inspected = owner.inspect_rebind(**env.kwargs)
+    assert inspected['changed_sources'] == env.bj_reviews
+    assert inspected['unknown_count'] == 7 and inspected['automatic_dispatch'] is False
+    for missing in ([], env.bj_reviews[:-1], [HUB_OWNER_REVIEW]):
+        with pytest.raises(owner.AuthorizationBlocked, match='exact_source_review_required'):
+            owner.prepare_rebind(missing, **env.kwargs)
+    assert (env.root / 'authorization.json').read_bytes() == env.before
+    assert env.env_path.read_bytes() == env.env_before
+    plan = owner.prepare_rebind(env.bj_reviews, **env.kwargs)
+    applied = owner.apply_plan(plan['plan_id'], **env.kwargs)
+    assert applied['state'] == 'applied' and applied['changed_sources'] == env.bj_reviews
+    assert applied['expiry_extended'] is False and applied['restart_required'] is True
+    assert applied['unknowns_added'] == applied['new_cooperative_grants'] == 0
+    expected = deepcopy(env.auth)
+    expected['method_identity'] = env.current
+    expected['unknown_usage_exception']['method_sha256'] = research._digest(env.current)
+    actual = (env.root / 'authorization.json').read_bytes()
+    assert json.loads(actual) == expected
+    assert expected['native_recovery_grants'] == env.auth['native_recovery_grants']
+    assert len(expected['unknown_usage_exception']['allowed_unknown_usage']) == 7
+    _, span = owner._pin(env.env_before)
+    updated = env.env_path.read_bytes()
+    assert updated[:span[0]] == env.env_before[:span[0]] and updated[span[1]:] == env.env_before[span[1]:]
+    assert owner._pin(updated)[0] == hashlib.sha256(actual).hexdigest()
+    monkeypatch.setattr(settings, 'tradingagents_research_authorization_digest', owner._pin(updated)[0])
+    assert owner.inspect_rebind(**env.kwargs)['already_bound'] is True
+
+
+@pytest.mark.parametrize('path', BJ_OWNER_PAIRS)
+@pytest.mark.parametrize('change', ['reverse', 'future'])
+def test_bj_owner_maintenance_never_accepts_reverse_or_future(native_bj_owner_env, monkeypatch, path, change):
+    env = native_bj_owner_env
+    target = 'f' * 64
+    if change == 'reverse':
+        old = deepcopy(env.auth['method_identity'])
+        old['packet_builder']['owner_sources'][path] = BJ_OWNER_PAIRS[path][1]
+        _replace_original(env, monkeypatch, old)
+        target = BJ_OWNER_PAIRS[path][0]
+    env.native.packet_overrides['packet'] = lambda packet: packet['owner_sources'].update({path: target})
+    with pytest.raises(owner.AuthorizationBlocked, match='unreviewed_packet_owner_changed'):
+        owner.inspect_rebind(**env.kwargs)
+    assert (env.root / 'authorization.json').read_bytes() == env.before
+    assert env.env_path.read_bytes() == env.env_before
+
+
+@pytest.mark.parametrize('path', BJ_OWNER_PAIRS)
+def test_bj_owner_apply_rechecks_actual_module_before_cas(native_bj_owner_env, monkeypatch, tmp_path, path):
+    env, native = native_bj_owner_env, native_bj_owner_env.native.module
+    plan = owner.prepare_rebind(env.bj_reviews, **env.kwargs)
+    original = Path(native.__file__).resolve().parents[1] / path
+    changed = tmp_path / ('unreviewed_' + original.name)
+    changed.write_bytes(original.read_bytes() + b'\n# unreviewed future owner revision\n')
+    original_sha = native.file_sha
+    monkeypatch.setattr(native, 'file_sha', lambda value: original_sha(changed if Path(value) == original else value))
+    with pytest.raises(owner.AuthorizationBlocked, match='unreviewed_packet_owner_changed'):
+        owner.apply_plan(plan['plan_id'], **env.kwargs)
+    assert (env.root / 'authorization.json').read_bytes() == env.before
+    assert env.env_path.read_bytes() == env.env_before
+
+
+@pytest.mark.parametrize('change', ['model', 'packet_policy'])
+def test_reviewed_bj_owner_changes_do_not_authorize_other_method_changes(native_bj_owner_env, change):
+    env = native_bj_owner_env
+    if change == 'model':
+        env.native.transport['model'] = 'unreviewed-model'
+    else:
+        env.native.packet_overrides['packet'] = lambda packet: packet.update({'history_max_rows': 999})
+    with pytest.raises(owner.AuthorizationBlocked, match='authorization_method_scope_changed'):
+        owner.inspect_rebind(**env.kwargs)
+    assert (env.root / 'authorization.json').read_bytes() == env.before
+    assert env.env_path.read_bytes() == env.env_before
