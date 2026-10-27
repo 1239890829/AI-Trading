@@ -1,5 +1,8 @@
 # 文档索引（INDEX）
 
+2026-10-27选股续修：[正式指数涨幅与来源交易题材](product/hunting-decision-design.md#2026-10-27-正式指数涨幅与来源交易题材) / [股票身份与逐阶段留痕](product/hunting-decision-design.md#2026-10-27-股票身份与逐阶段候选留痕) / [原复盘行动到评估草案](review/review-agent.md#2026-10-27-原行动到评估草案)。原风格/评分/晋级门保留，发布与实页按handoff核。
+
+
 2026-10-27资金接续：[市场资金唯一入口与迁移](product/hunting-decision-design.md#2026-10-27-东财官网全集资金与成员) → [官网全集合同](data/data-sources.md#2026-10-27-东财官网全集资金与成员) / [来源与身份边界](data/data-source-comparison.md#21-2026-10-27-官网资金全集与身份边界) / [全系统核验与不满足项](data/data-source-comparison.md#22-2026-10-27-全系统来源核验)。Discovery撤资金入口，只留`/market?tab=fund`；THS选股目录和各模块source+code保留，不做全THS资金聚合。工程/准确发布/运行按handoff及本批PR回执分层。
 
 2026-10-26接续：[手动完整研究与可运行战法](product/hunting-decision-design.md#2026-10-26-手动完整研究承接与可运行战法) → [原授权方法承接/恢复](ai/semantic-decisions.md#2026-10-26-原授权方法承接与安全取消恢复) → [三规则定义及35项取舍](strategy/strategy-registry.md#2026-10-26-三项可运行价格研究与逐项取舍)。工程、运行、发布与策略效果分开；恢复核嵌套owner与严格单个未启动尾，编号高水位不冒充实发次数。当前证据归handoff与关联PR，不增加独立总账。
