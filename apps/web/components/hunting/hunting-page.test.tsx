@@ -4,6 +4,7 @@ import { act, cleanup, fireEvent, render, screen, waitFor, within } from "@testi
 import HuntingPage from "@/app/hunting/page";
 import * as api from "@/lib/api";
 import { getStrategyRegistry } from "@/lib/api/picks";
+import { getOfficialBoardRanking, type OfficialBoardRanking } from "@/lib/api/themes";
 import {CardEntryRow} from "@/components/picks/card-entries";
 
 let search = new URLSearchParams();
@@ -36,6 +37,18 @@ vi.mock("@/components/hunting/watch-ledger-panel", () => ({ WatchLedgerPanel: ()
 vi.mock("@/components/hunting/leader-research-panel", () => ({ LeaderResearchPanel: () => <div>真实研究组件</div> }));
 vi.mock("@/lib/api", () => ({ ApiError: class extends Error { status = 500; }, getTodayPicks: vi.fn(), getPicksHistory: vi.fn(), getPickReviews: vi.fn(), getPicksMeta: vi.fn(), getSignalHealth: vi.fn(), getMorningBriefToday: vi.fn(), getWatcherState: vi.fn(), getIntradayReview: vi.fn(), getIntradayOpportunities: vi.fn(), getIntradayTop: vi.fn(), getPositionLabels: vi.fn(), getEventsForSymbol: vi.fn(), getThemesHot: vi.fn(), getBoardFundFlow: vi.fn(), getDiscoveryMemberships: vi.fn(), getConceptDetail: vi.fn(), getBoardFlowMembers: vi.fn() }));
 vi.mock("@/lib/api/picks", async () => ({...await vi.importActual<typeof import("@/lib/api/picks")>("@/lib/api/picks"), getStrategyRegistry:vi.fn()}));
+vi.mock("@/lib/api/themes", async () => ({...await vi.importActual<typeof import("@/lib/api/themes")>("@/lib/api/themes"), getOfficialBoardRanking:vi.fn()}));
+
+const officialRankingFixture = (): OfficialBoardRanking => ({
+  scope:"directory",kind:"concept",source:"ths_official",source_basis:"index_snapshot",available:true,
+  catalog_version:"c".repeat(64),catalog_state:"ready",catalog_synced_at:"2026-10-25T08:00:00+08:00",
+  directory_total:1,source_total:1,source_returned:1,value_count:1,coverage_state:"source_complete",missing_codes:[],
+  source_as_of:null,trade_date:null,quality:"stale",observation_state:"clock_unknown",
+  source_ready_from:"2026-10-25T09:50:00+08:00",source_ready_at:"2026-10-25T09:50:00+08:00",
+  received_from:"2026-10-25T09:50:01+08:00",received_at:"2026-10-25T09:50:01+08:00",
+  rows:[{code:"885517.TI",name:"机器人概念",source:"ths_official",kind:"concept",synced_at:"2026-10-25T08:00:00+08:00",
+    price:100,change_pct:0,quote_state:"value"}],
+});
 
 beforeEach(() => {
   search = new URLSearchParams();
@@ -52,6 +65,7 @@ beforeEach(() => {
   vi.mocked(api.getPositionLabels).mockResolvedValue({});
   vi.mocked(api.getEventsForSymbol).mockImplementation(async symbol => ({symbol, themes: [], count: 0, items: []}));
   vi.mocked(api.getThemesHot).mockResolvedValue({ranking_basis:"hot_stock_concentration",catalog_revision:1,catalog_state:"ready",membership_state:"ready",scope:"隔离夹具：热股×正式目录",ts:"2026-10-25T02:00:00Z", stocks:[{rank:1,symbol:"600127",name:"原标的",heat:10,rank_change:0,themes:["机器人概念"]}],themes:[{theme:"机器人概念",theme_code:"885517.TI",heat:10,heat_complete:true,hot_count:1,hot_symbols:["600127"],source:"ths_official",member_count:100,member_as_of:"2026-10-25T02:00:00Z",concentration_pct:1,best:null,basis:"隔离夹具：正式目录归属"}]});
+  vi.mocked(getOfficialBoardRanking).mockResolvedValue(officialRankingFixture());
   vi.mocked(api.getDiscoveryMemberships).mockResolvedValue({scope:"current_not_historical", requested_trade_date:"2026-10-08",content_version:"a".repeat(64),state:"unknown",source:"local_theme_catalog",source_as_of:null,observed_at:"2026-10-25T10:00:00+08:00",count:1,matched_count:0,unknown_count:1,items:[{symbol:"600127",state:"unknown",themes:[],reason:"未核"}]});
   vi.mocked(api.getConceptDetail).mockResolvedValue({code:"885517.TI",name:"机器人概念",total:1,limit_up_count:0,members:[{symbol:"600127",name:"原标的",price:10,change_pct:0,tags:[]}],tag_groups:[],meta_note:"当前目录"} as unknown as api.ConceptDetail);
   HTMLElement.prototype.scrollIntoView = vi.fn();
@@ -70,7 +84,7 @@ it.each(["browse=funds&disc_kind=industry&disc_code=BK0475&disc_range=5d","brows
   if(query.includes("BK0475"))expect(Object.fromEntries(url.searchParams)).toEqual({tab:"fund",board_kind:"industry",board_range:"5d",board_code:"BK0475"});
   else expect(url.searchParams.get("board_notice")).toBe("unmapped_legacy_funds");
   expect(screen.queryByRole("navigation",{name:"选股分类发现"})).toBeNull();
-  for(const reader of [api.getTodayPicks,api.getPicksHistory,api.getThemesHot,api.getBoardFundFlow,api.getBoardFlowMembers,api.getIntradayTop,api.getDiscoveryMemberships])expect(reader).not.toHaveBeenCalled();
+  for(const reader of [api.getTodayPicks,api.getPicksHistory,api.getThemesHot,getOfficialBoardRanking,api.getBoardFundFlow,api.getBoardFlowMembers,api.getIntradayTop,api.getDiscoveryMemberships])expect(reader).not.toHaveBeenCalled();
 });
 
 it("keeps one shared switch and presentation preference available through pending, valid empty and failed reads", async () => {
@@ -518,13 +532,21 @@ it("labels the real role summary as bound price observations and retains its exi
 it("loads only the chosen discovery source and original selected group, without hidden market or research polling", async () => {
   search=new URLSearchParams({browse:"hot"});render(<HuntingPage/>);
   await screen.findByRole("button",{name:"查看机器人概念成分"});
-  expect(api.getThemesHot).toHaveBeenCalledTimes(1);
+  expect(getOfficialBoardRanking).toHaveBeenCalledTimes(1);
+  expect(getOfficialBoardRanking).toHaveBeenCalledWith("concept",{signal:expect.any(AbortSignal),fresh:false});
+  expect(api.getThemesHot).not.toHaveBeenCalled();
+  expect(api.getDiscoveryMemberships).not.toHaveBeenCalled();
+  expect(screen.getByText(/来源交易日与行情时点未提供/)).toBeTruthy();
   expect(screen.getByText("按需读取")).toBeTruthy();
   expect(screen.queryByRole("button",{name:"刷新数据"})).toBeNull();
   expect(api.getIntradayTop).toHaveBeenCalledTimes(1);
   for(const read of [api.getTodayPicks,api.getSignalHealth,api.getMorningBriefToday,api.getWatcherState,api.getIntradayReview,api.getIntradayOpportunities,api.getPositionLabels,api.getEventsForSymbol,api.getBoardFundFlow]) expect(read).not.toHaveBeenCalled();
   expect(group("candidates").hidden).toBe(true);
   expect(card("600127").dataset.active).toBe("false");
+  vi.useFakeTimers();await act(async()=>{await vi.advanceTimersByTimeAsync(120_001);});
+  expect(getOfficialBoardRanking).toHaveBeenCalledTimes(1);
+  expect(api.getThemesHot).not.toHaveBeenCalled();expect(api.getDiscoveryMemberships).not.toHaveBeenCalled();
+  expect(api.getIntradayTop).toHaveBeenCalledTimes(1);
 });
 
 it.each(["candidates","daily"] as const)("retries the failed %s original list independently and restores real membership/code comparison",async currentGroup=>{
@@ -541,7 +563,7 @@ it.each(["candidates","daily"] as const)("retries the failed %s original list in
     source_as_of:null,observed_at:"2026-10-25T10:00:00+08:00",count:symbols.length,matched_count:symbols.length,unknown_count:0,
     items:symbols.map(symbol=>({symbol,state:"matched" as const,themes:[{theme_code:"885517.TI",theme_name:"机器人概念",source:"ths_official"}],reason:null})),
   }));
-  search=new URLSearchParams({browse:"hot",sec:currentGroup});
+  search=new URLSearchParams({browse:"hot",disc_view:"concentration",sec:currentGroup});
   const page=render(<HuntingPage/>);
   await screen.findByRole("button",{name:"查看机器人概念成分"});
   await screen.findByText("原名单读取失败，归属对照未完成。");
@@ -549,6 +571,7 @@ it.each(["candidates","daily"] as const)("retries the failed %s original list in
   expect(screen.queryByText("本组原名单已确认空")).toBeNull();
   expect(api.getDiscoveryMemberships).not.toHaveBeenCalled();
   expect(api.getThemesHot).toHaveBeenCalledTimes(1);
+  expect(getOfficialBoardRanking).not.toHaveBeenCalled();
   expect(screen.queryByRole("button",{name:"刷新数据"})).toBeNull();
 
   fireEvent.click(screen.getByRole("button",{name:"重试原名单"}));
@@ -565,7 +588,7 @@ it.each(["candidates","daily"] as const)("retries the failed %s original list in
   expect(api.getDiscoveryMemberships).toHaveBeenCalledTimes(1);
   expect(api.getDiscoveryMemberships).toHaveBeenCalledWith(["600127"],day,{signal:expect.any(AbortSignal)});
 
-  search=new URLSearchParams({browse:"hot",sec:currentGroup,disc_code:"885517.TI"});page.rerender(<HuntingPage/>);
+  search=new URLSearchParams({browse:"hot",disc_view:"concentration",sec:currentGroup,disc_code:"885517.TI"});page.rerender(<HuntingPage/>);
   expect(await screen.findByRole("button",{name:"返回原名单核对原标的"})).toBeTruthy();
   const detail=screen.getByTestId("discovery-detail");
   expect(detail.textContent).toContain(`原名单日期：${day}`);

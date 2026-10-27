@@ -966,3 +966,44 @@ def test_entry_checklist_from_board_marks_missing_inputs():
     got = entry_checklist_from_board(board, "600540", market_phase=None)
     assert got is not None
     assert {"封单额", "换手率", "市场阶段"} <= set(got["missing"])
+
+
+def test_theme_board_captions_preserve_source_tags_and_explain_primary_group_scope(monkeypatch):
+    """Primary-card dedup must not claim the full source membership or invent an index."""
+    import asyncio
+    from datetime import date
+    from app.schemas.market import LimitUpRecord
+    from app.services import theme_service as service
+
+    day = date(2026, 10, 27)
+    reasons = {'001317': '“羊”字辈+汽车物流+多式联运',
+               '001318': '乳制品+冷链物流+“羊”字辈',
+               '000001': '乳制品', '600001': '汽车物流'}
+    pool = [LimitUpRecord(symbol=symbol, name=symbol, trade_date=day, source='ths',
+                reason=reason, consecutive_boards=boards, change_pct=5., first_seal_time='10:11:54')
+            for (symbol, reason), boards in zip(reasons.items(), [1, 2, 3, 2])]
+    async def get_pool(_day):
+        assert _day == day
+        return pool
+    async def empty_map(*_args, **_kwargs):
+        return {}
+    async def empty_history(*_args, **_kwargs):
+        return []
+    async def break_rate(*_args, **_kwargs):
+        return 0.
+    for name in ('_em_enhancement_map', '_board_index', '_auction_gaps'):
+        monkeypatch.setattr(service, name, empty_map)
+    monkeypatch.setattr(service, '_load_history', empty_history)
+    monkeypatch.setattr(service, '_market_break_rate', break_rate)
+    payload = asyncio.run(service.build_theme_board(SimpleNamespace(get_limit_up_pool=get_pool), day))
+    rows = {row['symbol']: (card, row) for card in payload['themes'] for row in card['ladder']}
+    assert rows['001317'][0]['theme'] != rows['001318'][0]['theme']
+    assert all(rows[symbol][1]['reason'] == reasons[symbol] for symbol in reasons)
+    assert all('“羊”字辈' in parse_theme_tags(rows[symbol][1]['reason']) for symbol in ('001317', '001318'))
+    assert '“羊”字辈' in rows['001318'][1]['other_themes']
+    assert rows['001318'][1]['source'] == 'ths' and rows['001318'][1]['trade_date'] == day.isoformat()
+    caveats = '；'.join(payload['caveats'])
+    assert '同花顺原始涨停原因' in caveats
+    assert '本系统去重主归属' in caveats and '非源标签完整成分' in caveats
+    assert '未核实同源正式代码' in caveats and '不作本题材指数依据' in caveats
+    assert '东财字段序推断' not in caveats and 'board_multi_day_verified=false' not in caveats
