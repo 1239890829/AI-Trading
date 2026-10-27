@@ -1,6 +1,6 @@
 "use client";
 
-import { useCallback, useEffect, useMemo, useRef, useState, type KeyboardEvent } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState, type KeyboardEvent, type ReactNode } from "react";
 import {
   createChart,
   CrosshairMode,
@@ -233,6 +233,7 @@ export function MinuteChart({
   indexPaused = false,
   indexWaiting = false,
   onIndexToggle,
+  indexStatus,
   auction,
   exactBaseline,
   newsEvents,
@@ -256,6 +257,8 @@ export function MinuteChart({
   indexPaused?: boolean;
   indexWaiting?: boolean;
   onIndexToggle?: () => void;
+  /** Inline owner status shares the existing toolbar, never a new chart row. */
+  indexStatus?: ReactNode;
   auction?: { price: number; pct: number | null } | null;
   /** 精确量比基线（最近 5 个完整交易日逐 5min 槽同期累计量均值）。缺失回退近似口径。 */
   exactBaseline?: number[] | null;
@@ -1176,6 +1179,7 @@ export function MinuteChart({
             : "text-zinc-600 dark:text-zinc-400 hover:text-zinc-900 dark:hover:text-zinc-100"}`}>
           上证指数{indexSelected && indexPaused ? " · 暂停" : indexSelected && indexWaiting ? " · 等待" : ""}
         </button>
+        {indexStatus}
         <span ref={focusRef} hidden={fixedMissing || inspection.ts === null} className="chart-focus" aria-label="图表当前焦点"><span data-focus-time /> <span data-focus-price className="chart-focus-price" /></span>
         {fixedMissing && <span role="status" className="text-amber-800 dark:text-amber-300">固定分钟已不在当前资料中；没有用近邻分钟替代。</span>}
         {invalidPrices > 0 && <span className="text-amber-800 dark:text-amber-300">{invalidPrices} 个无效价格已留空</span>}

@@ -574,6 +574,25 @@ it("magnetic focus shows the exact selected minute price and hides on leaving", 
 });
 
 describe("MinuteChart 轴契约", () => {
+  it("历史、等待与错误状态进入原工具条，不新增占高行或重建图表", () => {
+    const points = [point(10)], retry = vi.fn();
+    const view = render(<MinuteChart points={points} prevClose={10} indexStatus={<span role="status" title="上证叠加 · 2026-09-17 · 非实时" aria-label="上证叠加 · 2026-09-17 · 非实时">非实时</span>}/>);
+    const chart = charts[0], controls = view.container.querySelector(".kline-controls")!;
+    expect(screen.getByRole("status").parentElement).toBe(controls);
+    expect(screen.getByRole("status").textContent).toBe("非实时");
+    expect(screen.getByRole("status").getAttribute("aria-label")).toBe("上证叠加 · 2026-09-17 · 非实时");
+    expect(controls.parentElement?.children.length).toBe(2);
+    view.rerender(<MinuteChart points={points} prevClose={10} indexStatus={<span role="status" title="上证叠加 · 收盘竞价等待 · 尚无连续分时" aria-label="上证叠加 · 收盘竞价等待 · 尚无连续分时">收盘竞价等待</span>}/>);
+    expect(screen.getByRole("status").parentElement).toBe(controls);
+    expect(screen.getByRole("status").textContent).toBe("收盘竞价等待");
+    expect(screen.getByRole("status").getAttribute("title")).toContain("尚无连续分时");
+    view.rerender(<MinuteChart points={points} prevClose={10} indexStatus={<><span role="alert" title="指数基准未更新 · 保留结果" aria-label="指数基准未更新 · 保留结果">基准未更新</span><button type="button" aria-label="重新读取指数叠加" onClick={retry}>重试</button></>}/>);
+    expect(screen.getByRole("alert").parentElement).toBe(controls);
+    expect(screen.getByRole("button", {name: "重新读取指数叠加"}).parentElement).toBe(controls);
+    fireEvent.click(screen.getByRole("button", {name: "重新读取指数叠加"})); expect(retry).toHaveBeenCalledTimes(1);
+    expect(controls.querySelector("p")).toBeNull(); expect(controls.parentElement?.children.length).toBe(2);
+    expect(charts).toHaveLength(1); expect(chart.remove).not.toHaveBeenCalled();
+  });
   it("真实涨跌停线保留参考，但不撑大小波动显示域", () => {
     render(<MinuteChart points={[point(9.99), point(10.01, "31")]} prevClose={10} limitPct={10} upperPrice={11} lowerPrice={9}/>);
     const chart = charts[0], axis = range(chart.series[0])!;

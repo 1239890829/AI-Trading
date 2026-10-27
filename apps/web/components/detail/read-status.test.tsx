@@ -29,6 +29,8 @@ it("an error outranks a closed label, keeps retry visible and explains retained 
   const retry = vi.fn();
   render(<DetailReadStatus label="分钟" state={{...state, error: "合成读取失败"}} onRetry={retry} status={{label: "已收盘"}} />);
   expect(screen.getByRole("alert").textContent).toBe("分钟读取失败 · 保留结果");
+  expect(screen.getByRole("alert").tagName).toBe("P");
+  expect(screen.getByRole("alert").parentElement?.className).toContain("min-h-7");
   expect(screen.queryByText("已收盘")).toBeNull();
   fireEvent.click(screen.getByRole("button", {name: "重新读取分钟"})); expect(retry).toHaveBeenCalledOnce();
   fireEvent.click(screen.getByRole("button", {name: "分钟诊断"}));
@@ -53,4 +55,22 @@ it("healthy successful reads do not keep a diagnostic row or a refresh spacer", 
   expect(view.container.textContent).toBe("");
   view.rerender(<DetailReadStatus label="分钟" state={{...state, pending: true}} diagnostics={<p>合成源钟</p>} />);
   expect(view.container.textContent).toBe("");
+});
+
+it("inline mode keeps errors, retry and real diagnostics directly in the existing toolbar", () => {
+  const retry = vi.fn();
+  const view = render(<div data-testid="toolbar" className="kline-controls"><DetailReadStatus inline label="分钟" state={{...state, error: "合成源读取失败"}} onRetry={retry} diagnostics={<p>原始源钟保留</p>}/></div>);
+  const toolbar = screen.getByTestId("toolbar");
+  expect(screen.getByRole("alert").tagName).toBe("SPAN");
+  expect(screen.getByRole("alert").textContent).toBe("分钟失败 · 保留");
+  expect(screen.getByRole("alert").getAttribute("aria-label")).toBe("分钟读取失败 · 保留结果");
+  expect(screen.getByRole("alert").parentElement).toBe(toolbar);
+  expect(screen.getByRole("button", {name: "重新读取分钟"}).parentElement).toBe(toolbar);
+  expect(screen.getByRole("button", {name: "分钟诊断"}).parentElement).toBe(toolbar);
+  expect(screen.getByRole("button", {name: "重新读取分钟"}).textContent).toBe("重试");
+  expect(screen.getByRole("button", {name: "分钟诊断"}).textContent).toBe("诊断");
+  expect(view.container.querySelector(".min-h-7")).toBeNull();
+  fireEvent.click(screen.getByRole("button", {name: "重新读取分钟"})); expect(retry).toHaveBeenCalledOnce();
+  fireEvent.click(screen.getByRole("button", {name: "分钟诊断"}));
+  expect(within(screen.getByRole("dialog", {name: "分钟诊断"})).getByText("原始源钟保留")).toBeTruthy();
 });
