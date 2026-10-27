@@ -3,6 +3,7 @@ import { afterEach, expect, it, vi } from "vitest";
 import { IntradayThemeRow, OpportunitySection } from "./intraday-sections";
 import type { IntradayOpportunities, OpportunityTheme } from "@/lib/api";
 
+vi.mock("@/components/concept-detail-modal",()=>({ConceptDetailModal:({code,catalogKind,referenceDate,active}: {code:string;catalogKind:string;referenceDate?:string;active:boolean})=>active?<div data-testid="official-detail">{catalogKind}:{code}:{referenceDate}</div>:null}));
 vi.mock("@/components/picks/pick-card", () => ({
   fromIntradayStock: (item: unknown) => item,
   PickCard: ({ item, readError }: { item: { symbol: string }; readError?: boolean }) =>
@@ -51,4 +52,15 @@ it("theme collapse removes candidates from the accessible scope immediately and 
   view.rerender(<OpportunitySection opps={opps} expanded="固定题材" onToggle={() => {}} showLedger={false} />);
   act(() => vi.advanceTimersByTime(200));
   expect(screen.getAllByRole("article")).toHaveLength(2);
+});
+
+
+it("行业官方成分保留类别与原日期，旧catalog_code不形成入口",()=>{
+  const exact={code:"881126.TI",name:"汽车零部件",source:"ths_official",basis:"exact_name",kind:"industry" as const,catalog_version:"a".repeat(64),observed_at:"2026-10-27T12:00:00+08:00"};
+  const view=render(<IntradayThemeRow t={{...theme,theme:"汽车零部件",exact_catalog:exact,catalog_mapping_state:"exact",catalog_code:"885999.TI"}} expanded={false} tradeDate="2026-10-23" onToggle={()=>{}}/>);
+  const href=screen.getByRole("link",{name:"市场梯队"}).getAttribute("href")!;expect(new URL(href,"https://example.invalid").searchParams.get("date")).toBe("2026-10-23");
+  fireEvent.click(screen.getByRole("button",{name:"官方成分"}));
+  expect(screen.getByTestId("official-detail").textContent).toBe("industry:881126.TI:2026-10-23");
+  view.rerender(<IntradayThemeRow t={{...theme,catalog_code:"885999.TI",catalog_mapping_state:"unmapped"}} expanded={false} onToggle={()=>{}}/>);
+  expect(screen.queryByRole("button",{name:"官方成分"})).toBeNull();
 });

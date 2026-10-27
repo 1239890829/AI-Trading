@@ -8,6 +8,7 @@
 
 import { getJson, getJsonArray, sendJson, type ReadOptions } from "./internal";
 import {ApiError} from "./client";
+import type {CurrentThemeCatalogReference, ThemeCatalogIdentity, ThemeMappingState} from "@/types/market";
 import type {EventInterpretationRef} from "./events";
 
 export interface StopLossRef {
@@ -276,6 +277,7 @@ export interface StandAsideGate {
 export interface DailyPicksPayload {
   date: string | null;
   items: DailyPickItem[];
+  current_theme_catalog?: CurrentThemeCatalogReference;
   stale?: boolean;
   replaced?: { out: string; in: string; delta: number }[];
   note?: string;
@@ -803,8 +805,8 @@ export interface OpportunityTheme {
   /** 机会三层（需求 4）：today_strongest / quiet_starting / brewing */
   opportunity_layer?: string | null;
   layer_basis?: string | null;
-  exact_catalog?: {code: string; name: string; source: string; basis: "exact_name"} | null;
-  catalog_mapping_state?: "exact" | "unmapped" | "unclassified" | "unavailable";
+  exact_catalog?: ThemeCatalogIdentity | null;
+  catalog_mapping_state?: ThemeMappingState;
   /** Shared members are navigation evidence, not official identity. */
   official_matches?: { code: string; name: string; hits: number }[];
   /** Exact official identity only. */
@@ -959,6 +961,7 @@ export interface IntradayTopStock {
 }
 
 export interface IntradayTopPayload {
+  current_theme_catalog?: CurrentThemeCatalogReference;
   read_state?: "ready" | "partial" | "unavailable";
   empty_reasons?: string[];
   read_context?: {

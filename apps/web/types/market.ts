@@ -1,5 +1,24 @@
 export type Quality = "high" | "medium" | "low" | "stale" | "invalid";
 
+/** Optional evidence fields preserve legacy records without upgrading their identity. */
+export interface ThemeCatalogIdentity {
+  code: string;
+  name: string;
+  source: string;
+  basis: string;
+  kind?: "concept" | "industry";
+  catalog_version?: string | null;
+  observed_at?: string | null;
+}
+export type ThemeMappingState = "exact" | "unmapped" | "ambiguous" | "unclassified" | "unavailable";
+export interface CurrentThemeCatalogReference {
+  scope: "current_directory_reference";
+  catalog_version: string | null;
+  observed_at: string | null;
+  items: {theme: string; exact_catalog?: ThemeCatalogIdentity | null; catalog_mapping_state?: ThemeMappingState;
+    catalog_mapping_context?: Record<string, unknown> | null}[];
+}
+
 export interface AuditFields {
   source: string;
   quality: Quality;
@@ -198,6 +217,9 @@ export interface ThemeOfficialInterval {
   code: string | null;
   name: string | null;
   source: "ths_official_kline";
+  kind?: "concept" | "industry";
+  catalog_version?: string | null;
+  observed_at?: string | null;
   state: "verified" | "partial" | "pending" | "unmapped" | "catalog_unavailable" | "source_unavailable";
   chg_3d: number | null;
   chg_5d: number | null;
@@ -277,8 +299,9 @@ export interface ThemeCard {
     }[];
   };
   /** Exact source identity is independent of source reasons and shared members. */
-  exact_catalog?: {code: string; name: string; source: string; basis: "exact_name"} | null;
-  catalog_mapping_state?: "exact" | "unmapped" | "unclassified" | "unavailable";
+  exact_catalog?: ThemeCatalogIdentity | null;
+  catalog_mapping_state?: ThemeMappingState;
+  catalog_mapping_context?: {reason?: string | null; [key: string]: unknown};
   official_matches?: { code: string; name: string; hits: number }[];
   /** Exact official identity only. Membership overlap cannot supply this code. */
   catalog_code?: string | null;
@@ -288,6 +311,7 @@ export interface ThemeBoardPayload {
   trade_date: string;
   prev_trade_date?: string | null;
   themes: ThemeCard[];
+  current_theme_catalog?: CurrentThemeCatalogReference;
   broken_ladder: {
     symbol: string;
     name?: string | null;

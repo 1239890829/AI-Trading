@@ -3,14 +3,21 @@
 ``theme`` 保留源原因标签。只有完整同名的目录条目可给出 ``exact_catalog`` /
 ``catalog_code``；不拼别名、不用成员重叠改名。``official_matches`` 仅为兼容
 旧消费者保留的成员重叠导航，不证明官方身份、共同驱动或候选资格。
-候选资格仍要求精确同名且全部支持股均为该目录的官方成分。
+候选资格仍仅沿既有概念容器，要求精确同名且全部支持股均为该目录的官方成分；行业映射不新增资格。
 """
 from __future__ import annotations
 
+import asyncio
+import hashlib
+import json
 import logging
 import re
 import threading
 
+from copy import deepcopy
+from datetime import datetime, timezone
+
+from app.core.inflight_reads import read_inflight
 from app.core.ttl_cache import cache_on
 
 log = logging.getLogger(__name__)
@@ -21,6 +28,8 @@ MAX_CONCEPT_SIZE = 300
 MIN_HITS = 2
 #: 每簇最多挂靠的官方概念数
 MAX_MATCHES = 3
+# Existing optional theme-view wait, shared by all foreground projections.
+OFFICIAL_CATALOG_VIEW_BUDGET_SECONDS = 0.25
 
 _INDEX_LOCK_INIT = threading.Lock()
 
@@ -32,12 +41,12 @@ def catalog_identity_index(catalog) -> dict[str, dict]:
     for row in catalog:
         code, name = getattr(row, "code", None), getattr(row, "name", None)
         if (not isinstance(code, str) or not re.fullmatch(r"[0-9]{6}\.TI", code)
-                or not isinstance(name, str) or not name
+                or not isinstance(name, str) or not name.strip()
                 or getattr(row, "source", None) != "ths_official"
                 or getattr(row, "catalog_active", None) is not True):
             continue
         identity = {"code": code, "name": name, "source": "ths_official",
-                    "basis": "exact_name"}
+                    "basis": "exact_name", "kind": getattr(row, "kind", "concept")}
         if name in identities and identities[name] != identity:
             ambiguous.add(name)
         identities[name] = identity
@@ -91,72 +100,206 @@ def _get_index(holder) -> tuple[dict[str, list[tuple[str, str]]], dict[str, int]
         return cached
 
 
-def attach_official(holder, themes_list: list[dict]) -> None:
-    """Attach exact identity and separately labelled membership navigation.
+def _directory_resolution(directories: dict, observed_at: str) -> dict:
+    """Validate the complete declared source scope before exact-name resolution."""
+    from types import SimpleNamespace
 
-    先清除本函数旧投影，目录不可用时明确 unknown，不沿用旧官方身份。
-    """
-    for card in themes_list:
-        card.update(exact_catalog=None, catalog_mapping_state="unavailable", catalog_code=None,
-                    candidate_catalog_code=None, official_matches=[],
-                    official_matches_basis="membership_overlap")
-        for member in card.get("ladder") or card.get("stocks") or []:
-            member.pop("official", None)
+    rows, details = [], {}
+    for kind in ("concept", "industry"):
+        value = directories[kind]
+        if isinstance(value, BaseException):
+            raise RuntimeError(f"{kind}_directory_{type(value).__name__}")
+        items = value.get("items") if isinstance(value, dict) else None
+        if (not isinstance(value, dict) or value.get("source") != "ths_official"
+                or value.get("kind") != kind or value.get("catalog_state") != "ready"
+                or not isinstance(items, list) or type(value.get("total")) is not int
+                or value["total"] != len(items) or not 0 < len(items) <= 1000):
+            raise RuntimeError(f"{kind}_directory_incomplete")
+        codes = set()
+        for row in items:
+            if (not isinstance(row, dict) or row.get("source") != "ths_official"
+                    or row.get("kind") != kind or not isinstance(row.get("name"), str)
+                    or not row["name"].strip() or not isinstance(row.get("code"), str)
+                    or not re.fullmatch(r"[0-9]{6}\.TI", row["code"])
+                    or row["code"] in codes):
+                raise RuntimeError(f"{kind}_directory_invalid_identity")
+            codes.add(row["code"])
+            rows.append(SimpleNamespace(code=row["code"], name=row["name"], source="ths_official",
+                                        kind=kind, catalog_active=True))
+        version = hashlib.sha256(json.dumps(sorted(
+            (r["code"], r["name"]) for r in items), ensure_ascii=False).encode()).hexdigest()
+        details[kind] = {"state": "ready", "version": version,
+                         "synced_at": value.get("synced_at"), "total": len(items)}
+    version = hashlib.sha256(json.dumps(details, sort_keys=True, ensure_ascii=False).encode()).hexdigest()
+    identities = catalog_identity_index(rows)
+    ambiguous = sorted({row.name for row in rows} - identities.keys())
+    for identity in identities.values():
+        identity.update(catalog_version=version, observed_at=observed_at)
+    return {"state": "available", "identities": identities, "ambiguous": ambiguous,
+            "catalog_version": version, "observed_at": observed_at, "directories": details, "reason": None}
+
+
+async def resolve_official_catalog(holder) -> dict:
+    """Share the existing directory owners; no name aliases or independent registry."""
     state = _state(holder)
     svc = getattr(state, "theme_catalog", None)
-    if svc is None or svc.catalog_size() == 0:
+    unavailable = {"state": "unavailable", "identities": {}, "ambiguous": [],
+                   "catalog_version": None, "observed_at": None, "directories": {},
+                   "reason": "catalog_service_unavailable"}
+    if svc is None or not callable(getattr(svc, "read_board_catalog", None)):
+        return unavailable
+    revision = getattr(svc, "revision", 0)
+    # This replaces the former route-local primitive cache, not the source owner.
+    cache = cache_on(svc, "themes.official.identities", 60, maxsize=4)
+    key = ("source-identity-v4-kinds", revision)
+    hit, result = cache.get(key)
+    if hit:
+        return deepcopy(result)
+
+    async def load():
+        hit, result = cache.get(key)
+        if hit:
+            return result
+        try:
+            values = await asyncio.gather(*(svc.read_board_catalog(kind) for kind in
+                                            ("concept", "industry")), return_exceptions=True)
+            result = _directory_resolution(dict(zip(("concept", "industry"), values)),
+                                           datetime.now(timezone.utc).isoformat())
+            if getattr(svc, "revision", 0) != revision:
+                raise RuntimeError("catalog_revision_changed")
+            result["catalog_revision"] = revision
+        except Exception as exc:
+            result = {**unavailable, "reason": str(exc) if isinstance(exc, RuntimeError) else type(exc).__name__}
+        cache.set(key, result, ttl=60 if result["state"] == "available" else 5)
+        return result
+
+    return await read_inflight(svc, ("theme-official-identities", key), load)
+
+
+async def resolve_official_catalog_view(holder, *, wait_seconds: float = OFFICIAL_CATALOG_VIEW_BUDGET_SECONDS) -> dict:
+    """Bound foreground waiting; the shared source owner continues and is reused."""
+    waiter = asyncio.create_task(resolve_official_catalog(holder))
+    try:
+        done, _pending = await asyncio.wait({waiter}, timeout=max(0, wait_seconds))
+        if done:
+            return waiter.result()
+        return {"state": "unavailable", "identities": {}, "ambiguous": [], "catalog_version": None,
+                "observed_at": None, "directories": {}, "reason": "catalog_read_pending"}
+    finally:
+        if not waiter.done():
+            waiter.cancel()
+            await asyncio.gather(waiter, return_exceptions=True)
+
+
+def mapping_for_name(name: str, resolution: dict | None) -> dict:
+    """Pure source-name projection; historical references use the same policy."""
+    context = {"catalog_version": (resolution or {}).get("catalog_version"),
+               "observed_at": (resolution or {}).get("observed_at"),
+               "reason": (resolution or {}).get("reason")}
+    identity = None
+    if name == "未分类":
+        state = "unclassified"
+    elif not resolution or resolution.get("state") != "available":
+        state = "unavailable"
+    else:
+        identity = resolution["identities"].get(name)
+        state = "exact" if identity else "ambiguous" if name in resolution.get("ambiguous", []) else "unmapped"
+    return {"theme": name, "exact_catalog": deepcopy(identity), "catalog_mapping_state": state,
+            "catalog_mapping_context": context}
+
+
+async def current_catalog_reference(holder, names, *, resolution: dict | None = None) -> dict:
+    """Read-only current reference beside frozen records, never inside their facts."""
+    wanted = list(dict.fromkeys(name for name in names if isinstance(name, str) and name.strip()))
+    if resolution is None:
+        resolution = await resolve_official_catalog_view(holder) if wanted else {}
+    return {"scope": "current_directory_reference", "catalog_version": resolution.get("catalog_version"),
+            "observed_at": resolution.get("observed_at"),
+            "items": [mapping_for_name(name, resolution) for name in wanted]}
+
+
+def attach_official(holder, themes_list: list[dict], *, resolution: dict | None = None) -> None:
+    """Apply a frozen directory projection; optional constituent reads cannot erase it.
+
+    A synchronous caller must supply a resolved snapshot. Production readers use
+    ``attach_official_async``. Missing snapshots fail closed instead of silently
+    resolving only the concept half of the source scope.
+    """
+    for card in themes_list:
+        card.update(mapping_for_name(card.get("theme"), resolution))
+        card.update(catalog_code=None,
+                    candidate_catalog_code=None, official_matches=[],
+                    official_matches_basis="membership_overlap", catalog_membership_state="unavailable")
+        for member in card.get("ladder") or card.get("stocks") or []:
+            member.pop("official", None)
+    if not resolution or resolution.get("state") != "available":
         return
+    for card in themes_list:
+        if card.get("is_unclassified") or card.get("theme") == "未分类":
+            card["catalog_mapping_state"] = "unclassified"
+            card["exact_catalog"] = None
+            continue
+        identity = card.get("exact_catalog")
+        card["catalog_code"] = identity["code"] if identity else None
+
+    state = _state(holder)
+    svc = getattr(state, "theme_catalog", None)
+    if svc is None or resolution.get("catalog_revision") != getattr(svc, "revision", 0):
+        return  # frozen identity survives; mixed-revision membership cannot grant eligibility
+    # Navigation remains the existing concept-only consumer. It does not grant
+    # official identity and must not send industry codes to the concept DB.
     try:
         symbol_index, concept_sizes = _get_index(holder)
-        identities = catalog_identity_index(svc.get_catalog(limit=1000))
-        by_code = {identity["code"]: identity for identity in identities.values()}
-        exact_codes = list({identities[c["theme"]]["code"] for c in themes_list
-                            if c.get("theme") in identities and not c.get("is_unclassified")})
-        # Fresh membership read stays independent of the reverse-index cache.
-        # One batch replaces N exact-name reads without extending freshness.
-        try:
-            members_by_code = {code: set(symbols) for code, symbols
-                               in svc.member_symbols_bulk(exact_codes).items()}
-        except Exception:
-            members_by_code = {code: {m.symbol for m in svc.get_members(code)} for code in exact_codes}
-        for card in themes_list:
-            if card.get("is_unclassified") or card.get("theme") == "未分类":
-                card["catalog_mapping_state"] = "unclassified"
-                continue
-            # 成员行：看板用 ladder，机会视图用 stocks（两结构 symbol 字段同名）
-            member_rows = card.get("ladder") or card.get("stocks") or []
-            # 成员级：簇名与目录精确同名时，成员在官方成分内打 official 布尔
-            identity = identities.get(card.get("theme") or "")
-            code = identity["code"] if identity else None
-            card["exact_catalog"] = dict(identity) if identity else None
-            card["catalog_mapping_state"] = "exact" if identity else "unmapped"
-            card["catalog_code"] = code
-            official = set()
-            if code:
-                official = members_by_code.get(code, set())
-                for it in member_rows:
-                    it["official"] = it.get("symbol") in official
-
-            # Only an exact official name with the complete supporting membership
-            # can supply the candidate container. Overlap remains navigation evidence.
-            supporting = card.get("supporting_symbols") or [it.get("symbol") for it in member_rows]
-            if code and supporting and set(supporting) <= official:
+    except Exception:
+        log.warning("optional official membership navigation unavailable")
+        symbol_index, concept_sizes = {}, {}
+    exact_codes = list({c["exact_catalog"]["code"] for c in themes_list
+                        if (c.get("exact_catalog") or {}).get("kind") == "concept"})
+    members_by_code = {}
+    try:
+        members_by_code = {code: set(symbols) for code, symbols
+                           in svc.member_symbols_bulk(exact_codes).items()}
+    except Exception:
+        for code in exact_codes:
+            try:
+                members_by_code[code] = {m.symbol for m in svc.get_members(code)}
+            except Exception:
+                pass  # absent proof remains unknown, not an empty official set
+    if resolution.get("catalog_revision") != getattr(svc, "revision", 0):
+        return
+    for card in themes_list:
+        if card["catalog_mapping_state"] == "unclassified":
+            continue
+        member_rows = card.get("ladder") or card.get("stocks") or []
+        identity = card.get("exact_catalog")
+        code = identity["code"] if identity else None
+        if identity and identity["kind"] == "concept" and code in members_by_code:
+            official = members_by_code[code]
+            card["catalog_membership_state"] = "available"
+            for item in member_rows:
+                item["official"] = item.get("symbol") in official
+            supporting = card.get("supporting_symbols") or [item.get("symbol") for item in member_rows]
+            if supporting and set(supporting) <= official:
                 card["candidate_catalog_code"] = code
+        symbols = {item.get("symbol") for item in member_rows if item.get("symbol")}
+        match_counts = {}
+        for symbol in symbols:
+            for candidate_code, name in symbol_index.get(symbol, []):
+                if concept_sizes.get(candidate_code, 10**9) <= MAX_CONCEPT_SIZE:
+                    key = (candidate_code, name)
+                    match_counts[key] = match_counts.get(key, 0) + 1
+        matches = [{"code": code, "name": name, "hits": hits, "relationship": "membership_overlap",
+                    "basis": "member_overlap", "source": "ths_official", "kind": "concept"}
+                   for (code, name), hits in match_counts.items() if hits >= MIN_HITS]
+        matches.sort(key=lambda value: -value["hits"])
+        card["official_matches"] = matches[:MAX_MATCHES]
 
-            # 簇级：成分重叠挂靠
-            symbols = {it.get("symbol") for it in member_rows if it.get("symbol")}
-            match_counts: dict[tuple[str, str], int] = {}
-            for sym in symbols:
-                for code2, name2 in symbol_index.get(sym, []):
-                    if concept_sizes.get(code2, 10**9) <= MAX_CONCEPT_SIZE:
-                        match_counts[(code2, name2)] = match_counts.get((code2, name2), 0) + 1
-            matches = [
-                {"code": c, "name": n, "hits": h, "relationship": "membership_overlap",
-                 "basis": "member_overlap", "source": (by_code.get(c) or {}).get("source", "unknown")}
-                for (c, n), h in match_counts.items()
-                if h >= MIN_HITS
-            ]
-            matches.sort(key=lambda x: -x["hits"])
-            card["official_matches"] = matches[:MAX_MATCHES]
-    except Exception:  # noqa: BLE001 - 挂靠失败不影响看板
-        log.exception("attach official matches failed")
+
+async def attach_official_async(holder, themes_list: list[dict], *, resolution: dict | None = None,
+                                view_budget: float | None = OFFICIAL_CATALOG_VIEW_BUDGET_SECONDS) -> dict:
+    """Use one source identity snapshot in every live consumer and new report."""
+    if resolution is None:
+        resolution = (await resolve_official_catalog(holder) if view_budget is None
+                      else await resolve_official_catalog_view(holder, wait_seconds=view_budget))
+    await asyncio.to_thread(attach_official, holder, themes_list, resolution=resolution)
+    return resolution

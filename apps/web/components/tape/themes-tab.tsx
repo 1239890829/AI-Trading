@@ -1,5 +1,6 @@
 "use client";
 
+import {officialThemeIdentity} from "@/lib/theme-identity";
 import { useId, useMemo, useState, useSyncExternalStore } from "react";
 import { useExitPresence } from "@/hooks/use-exit-presence";
 import Link from "next/link";
@@ -88,8 +89,7 @@ export function ThemesTab() {
   const skyRead = useResource(() => getSkyrocket("day"), {intervalMs: 60_000, enabled: !date});
   const sky = !date && skyRead.data?.length ? skyRead.data : null;
   const focus = searchParams.get("focus") ?? "";
-  /** 聚焦过滤：题材名精确/包含 + 原始归因标签 + 官方概念挂靠名（09-08：搜「代糖」
-   *  命中「功能糖」簇——簇名与同花顺概念板块口径不同，靠 official_matches 桥接） */
+  /** 原名、原标签或成分重合候选名称检索；命中不建立正式目录身份。 */
   const visibleThemes = useMemo(() => {
     if (!data) return [];
     const themes = brokenOnly ? data.themes.filter(theme => theme.performance.has_succession === false) : data.themes;
@@ -104,7 +104,7 @@ export function ThemesTab() {
   }, [data, focus, brokenOnly]);
 
   const strengthCodes = useMemo(() => [...new Set(visibleThemes.flatMap(card =>
-    card.exact_catalog?.source === "ths_official" && card.exact_catalog.code ? [card.exact_catalog.code] : []))].sort(), [visibleThemes]);
+    officialThemeIdentity(card.theme, card.exact_catalog, card.catalog_mapping_state)?.kind === "concept" ? [card.exact_catalog!.code] : []))].sort(), [visibleThemes]);
   const strengthRead = useResource(signal => getThemeStrength(strengthCodes, {signal}), {
     key: strengthCodes.join(","), intervalMs: 60_000, enabled: !date && strengthCodes.length > 0, abortable: true,
   });
@@ -413,8 +413,9 @@ export function ThemesTab() {
               card={c}
               rank={i + 1}
               tradeDate={data?.trade_date ?? ""}
-              hot={c.exact_catalog?.source === "ths_official" ? hotByCode.get(c.exact_catalog.code) : undefined}
-              strength={c.exact_catalog?.source === "ths_official" ? strength?.get(c.exact_catalog.code) ?? null : null}
+              currentThemeCatalog={data?.current_theme_catalog}
+              hot={officialThemeIdentity(c.theme,c.exact_catalog,c.catalog_mapping_state)?.kind === "concept" ? hotByCode.get(c.exact_catalog!.code) : undefined}
+              strength={officialThemeIdentity(c.theme,c.exact_catalog,c.catalog_mapping_state)?.kind === "concept" ? strength?.get(c.exact_catalog!.code) ?? null : null}
             />
           ))}
         </div>

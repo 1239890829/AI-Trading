@@ -402,3 +402,5 @@ RSH-031有限前向运行与触发修复入口：[研究§39.5](research/limit-u
 ## 2026-10-26 新浪资金方向与同源成员
 
 [独立来源合同](data/data-sources.md#2026-10-26-新浪独立板块资金与成员) → [真实来源比较](data/data-source-comparison.md#201-2026-10-26-新浪资金方向整链替代) / [猎场同源读取](product/hunting-decision-design.md#2026-10-26-新浪资金方向与同源成员)。状态仅归原W06/IMP-019，准确发布和主目录生效查handoff及关联PR；不改策略、模型或模拟资格。
+
+2026-10-27正式题材身份修补入口：[同源目录联合映射与历史参照](product/hunting-decision-design.md#2026-10-27-同源目录联合映射与历史参照)、[来源合同](data/data-sources.md#2026-10-27-正式目录映射与原始标签)、[细功能对账](product/feature-closure-audit.md#2026-10-27-正式目录映射子功能)。准确原名/source/kind/code及版本共用；旧档旁列当前参考，不改历史输入、指标或成员。

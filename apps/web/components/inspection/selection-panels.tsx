@@ -96,7 +96,7 @@ function CurrentSelection({ theme, dailyOnly = false, intradayOnly = false }: { 
   const dailyBySymbol = new Map(items.map(item => [item.symbol, item]));
   const references = intraday.data?.trade_date === bjToday() ? intraday.data.reference_items ?? [] : [];
   const all = new Set<string>();
-  const cards = [...top.map(fromIntradayStock), ...items.filter(item => !top.some(row => row.symbol === item.symbol)).map(item=>fromDailyPick(item, daily.data?.date ? {date: daily.data.date, version: daily.data.meta?.selection_version ?? null} : undefined))]
+  const cards = [...top.map(stock=>fromIntradayStock(stock,intraday.data?.current_theme_catalog)), ...items.filter(item => !top.some(row => row.symbol === item.symbol)).map(item=>fromDailyPick(item, daily.data?.date ? {date: daily.data.date, version: daily.data.meta?.selection_version ?? null, currentThemeCatalog:daily.data.current_theme_catalog} : undefined))]
     .filter(card => (!theme || card.theme === theme || card.themeSources?.some(source => source.theme === theme)) && !all.has(card.symbol) && !!all.add(card.symbol));
   return <div className="space-y-3">
     <p className="text-xs text-zinc-600 dark:text-zinc-400">当前入选条件旁览{theme ? ` · ${theme}` : ""}。首次加入记录用于复盘；观察或已封板不代表可执行，不构成买卖建议。</p>
@@ -107,7 +107,7 @@ function CurrentSelection({ theme, dailyOnly = false, intradayOnly = false }: { 
       return r.error ? <p role="alert" key={String(label)}>{String(label)}读取失败，此来源不能确认。<button className="quiet-action" onClick={r.refresh}>重试</button></p> : null;
     })}
     {cards.length ? <div className="grid gap-3 xl:grid-cols-2">{cards.map(card => <div key={card.symbol} className="min-w-0"><PickCard item={card} />{card.origin === "intraday" && dailyBySymbol.has(card.symbol) && <button className="quiet-action mt-2" onClick={() => setDetail(dailyBySymbol.get(card.symbol)!)}>每日原生成依据</button>}</div>)}</div> : (!intradayOnly && daily.pending) || (!dailyOnly && intraday.pending) ? <p role="status">读取当前候选…</p> : <p>当前范围没有可展示候选；失败或过期的来源未当成有效空集。</p>}
-    {!dailyOnly && references.length > 0 && <details><summary className="cursor-pointer py-2 text-xs">已封板 / 仅参考 · {references.length} 只</summary><p className="mb-3 text-xs text-zinc-400">保留原首次加入事实，当前不可参与或状态待核，不代表可成交。</p><div className="grid gap-3 xl:grid-cols-2">{references.map(stock => <PickCard key={stock.symbol} item={fromIntradayStock(stock)} />)}</div></details>}
+    {!dailyOnly && references.length > 0 && <details><summary className="cursor-pointer py-2 text-xs">已封板 / 仅参考 · {references.length} 只</summary><p className="mb-3 text-xs text-zinc-400">保留原首次加入事实，当前不可参与或状态待核，不代表可成交。</p><div className="grid gap-3 xl:grid-cols-2">{references.map(stock => <PickCard key={stock.symbol} item={fromIntradayStock(stock,intraday.data?.current_theme_catalog)} />)}</div></details>}
     <PickDetailModal target={detail ? {kind: "pick", item: detail, current: daily.data?.date ? {date: daily.data.date, version: daily.data.meta?.selection_version ?? null} : undefined} : null} onClose={() => setDetail(null)} />
   </div>;
 }

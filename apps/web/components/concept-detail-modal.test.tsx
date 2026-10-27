@@ -9,9 +9,9 @@ vi.mock("@/components/ui/modal-shell", () => ({
   ModalShell: ({ children, header }: { children: React.ReactNode; header: React.ReactNode }) => <section>{header}{children}</section>,
 }));
 afterEach(() => { cleanup(); vi.resetAllMocks(); });
-const detail = (code: string, name: string): ConceptDetail => ({
-  code, name, total: 1, limit_up_count: 0, meta_note: "fixture",
-  tag_groups: [], members: [{ symbol: code, name, price: 20, change_pct: 1,
+const detail = (code: string, memberName: string, name = ({"885517.TI":"机器人概念","886069.TI":"人形机器人"} as Record<string,string>)[code] ?? `概念 ${code}`): ConceptDetail => ({
+  code, name, source:"ths_official",kind:"concept",total: 1, limit_up_count: 0, meta_note: "fixture",
+  tag_groups: [], members: [{ symbol: code, name:memberName, price: 20, change_pct: 1,
     limit_up: false, turnover_rate: null, float_market_cap_yi: null,
     boards: null, break_count: null, seal_amount: null, reason: null, tags: [] }],
 });
@@ -47,7 +47,7 @@ describe("概念详情读取身份与无感刷新", () => {
     initial.members[0].tags = ["芯片"];
     vi.mocked(getConceptDetail).mockResolvedValueOnce(initial).mockRejectedValueOnce(new Error("offline"))
       .mockResolvedValueOnce(detail("A", "可读成员")).mockResolvedValueOnce(initial);
-    render(<ConceptDetailModal code="A" name="概念" onClose={() => {}} />);
+    render(<ConceptDetailModal code="A" name="概念 A" onClose={() => {}} />);
     fireEvent.click(await screen.findByRole("button", { name: "芯片 1" }));
     fireEvent.change(screen.getByPlaceholderText("搜代码/名称"), { target: { value: "可读成员" } });
     fireEvent(document, new Event("visibilitychange"));
@@ -69,8 +69,8 @@ describe("概念详情读取身份与无感刷新", () => {
     let finish!: (value: ConceptDetail) => void;
     vi.mocked(getConceptDetail).mockImplementationOnce(() => new Promise(resolve => { finish = resolve; }))
       .mockResolvedValueOnce(detail("B", "新概念"));
-    const view = render(<ConceptDetailModal code="A" name="旧概念" onClose={() => {}} />);
-    view.rerender(<ConceptDetailModal code="B" name="新概念" onClose={() => {}} />);
+    const view = render(<ConceptDetailModal code="A" name="概念 A" onClose={() => {}} />);
+    view.rerender(<ConceptDetailModal code="B" name="概念 B" onClose={() => {}} />);
     await screen.findByText("新概念", { selector: "span" });
     await act(async () => finish(detail("A", "旧概念")));
     expect(screen.queryByText("旧概念")).toBeNull();
@@ -79,7 +79,7 @@ describe("概念详情读取身份与无感刷新", () => {
     vi.mocked(getConceptDetail).mockResolvedValueOnce(detail("A", "可读成分"))
       .mockRejectedValueOnce(new Error("source unavailable"))
       .mockResolvedValueOnce(detail("A", "恢复成分"));
-    render(<ConceptDetailModal code="A" name="概念" onClose={() => {}} />);
+    render(<ConceptDetailModal code="A" name="概念 A" onClose={() => {}} />);
     await screen.findByText("可读成分", { selector: "span" });
     fireEvent(document, new Event("visibilitychange"));
     expect(await screen.findByRole("alert")).toHaveProperty("textContent", expect.stringContaining("上次"));
@@ -90,7 +90,7 @@ describe("概念详情读取身份与无感刷新", () => {
   });
   it("首次失败明确反馈，不无限显示加载中", async () => {
     vi.mocked(getConceptDetail).mockRejectedValue(new Error("offline"));
-    render(<ConceptDetailModal code="A" name="概念" onClose={() => {}} />);
+    render(<ConceptDetailModal code="A" name="概念 A" onClose={() => {}} />);
     expect(await screen.findByRole("alert")).toHaveProperty("textContent", expect.stringContaining("offline"));
     expect(screen.queryByText("加载中…")).toBeNull();
   });
@@ -99,14 +99,14 @@ describe("概念详情读取身份与无感刷新", () => {
     let finish!: (value: ConceptDetail) => void;
     vi.mocked(getConceptDetail).mockImplementationOnce(() => new Promise(resolve => {finish = resolve;}))
       .mockResolvedValueOnce(detail("A", "重新打开的成分"));
-    const view = render(<ConceptDetailModal code="A" name="概念" onClose={() => {}} />);
-    view.rerender(<ConceptDetailModal code="A" name="概念" active={false} onClose={() => {}} />);
+    const view = render(<ConceptDetailModal code="A" name="概念 A" onClose={() => {}} />);
+    view.rerender(<ConceptDetailModal code="A" name="概念 A" active={false} onClose={() => {}} />);
     fireEvent(document, new Event("visibilitychange"));
     expect(getConceptDetail).toHaveBeenCalledTimes(1);
     expect(screen.queryByPlaceholderText("搜代码/名称")).toBeNull();
     await act(async () => finish(detail("A", "已关闭的晚到成分")));
     expect(screen.queryByText("已关闭的晚到成分")).toBeNull();
-    view.rerender(<ConceptDetailModal code="A" name="概念" onClose={() => {}} />);
+    view.rerender(<ConceptDetailModal code="A" name="概念 A" onClose={() => {}} />);
     await screen.findByText("重新打开的成分", {selector:"span"});
     expect(getConceptDetail).toHaveBeenCalledTimes(2);
   });
@@ -120,7 +120,7 @@ describe("概念基础成分与按需完整归因", () => {
       options?.enrichment === "full" ? full.promise : Promise.resolve(base));
     render(<ConceptDetailModal code={base.code} name="机器人概念" onClose={() => {}} />);
     await screen.findByText("基础成分", { selector: "span" });
-    expect(getConceptDetail).toHaveBeenCalledExactlyOnceWith(base.code);
+    expect(getConceptDetail).toHaveBeenCalledExactlyOnceWith(base.code, {catalogKind:"concept"});
     fireEvent.click(screen.getByRole("button", { name: "读取涨停归因" }));
     await waitFor(() => expect(getConceptDetail).toHaveBeenCalledTimes(2));
     expect(screen.getByText("基础成分", { selector: "span" })).toBeTruthy();
@@ -186,7 +186,7 @@ describe("概念基础成分与按需完整归因", () => {
     vi.mocked(getConceptDetail).mockResolvedValueOnce(withAttribution(next, "新完整归因"));
     fireEvent.click(screen.getByRole("button", { name: "读取涨停归因" }));
     await screen.findByRole("button", { name: "新完整归因 1" });
-    expect(getConceptDetail).toHaveBeenLastCalledWith(base.code, { enrichment: "full" });
+    expect(getConceptDetail).toHaveBeenLastCalledWith(base.code, {catalogKind:"concept", enrichment: "full" });
   });
 
   it("概念A→B→A清除完整读取scope，旧完整晚回与返回A都不自动重读完整归因", async () => {
@@ -212,4 +212,39 @@ describe("概念基础成分与按需完整归因", () => {
     expect(getConceptDetail).toHaveBeenCalledTimes(4);
     expect(vi.mocked(getConceptDetail).mock.calls.filter(([, options]) => options?.enrichment === "full")).toHaveLength(1);
   });
+});
+
+
+it("行业详情按同类身份读取，切类别不复用旧成分",async()=>{
+  vi.mocked(getConceptDetail).mockResolvedValueOnce({...detail("881126.TI","行业原成员","汽车零部件"),kind:"industry"}).mockResolvedValueOnce({...detail("881126.TI","概念新成员","同码概念"),kind:"concept"});
+  const view=render(<ConceptDetailModal code="881126.TI" name="汽车零部件" catalogKind="industry" referenceDate="2026-10-23" onClose={()=>{}}/>);
+  await screen.findByText("行业原成员",{selector:"span"});
+  expect(getConceptDetail).toHaveBeenCalledWith("881126.TI",{catalogKind:"industry"});
+  expect(screen.getByText("当前成分参考，非2026-10-23当时归属。")).toBeTruthy();
+  view.rerender(<ConceptDetailModal code="881126.TI" name="同码概念" catalogKind="concept" onClose={()=>{}}/>);
+  await screen.findByText("概念新成员",{selector:"span"});
+  expect(screen.queryByText("行业原成员",{selector:"span"})).toBeNull();
+  expect(getConceptDetail).toHaveBeenLastCalledWith("881126.TI",{catalogKind:"concept"});
+});
+it.each([{source:"eastmoney"},{kind:"industry"}])("同码但来源或类别不符不显示成分 %j",async patch=>{
+  vi.mocked(getConceptDetail).mockResolvedValue({...detail("885517.TI","不应显示的成员"),...patch} as ConceptDetail);
+  render(<ConceptDetailModal code="885517.TI" name="机器人概念" onClose={()=>{}}/>);
+  await screen.findByRole("alert");
+  expect(screen.queryByText("不应显示的成员",{selector:"span"})).toBeNull();
+});
+
+
+it("真实基础loader拒绝同码同类异名刷新，保留原已核标题与成员",async()=>{
+  const original={...detail("885517.TI","原已核成员"),name:"机器人概念"};
+  const renamed={...original,name:"人形机器人",members:[{...original.members[0],name:"异名包成员"}]};
+  vi.mocked(getConceptDetail).mockResolvedValueOnce(original).mockResolvedValueOnce(renamed);
+  render(<ConceptDetailModal code="885517.TI" name="机器人概念" onClose={()=>{}}/>);
+  await screen.findByText("原已核成员",{selector:"span"});
+  fireEvent(document,new Event("visibilitychange"));
+  expect(await screen.findByRole("alert")).toHaveProperty("textContent",expect.stringContaining("名称与入口不符"));
+  expect(screen.getByRole("heading",{name:/机器人概念/})).toBeTruthy();
+  expect(screen.getByText("原已核成员",{selector:"span"})).toBeTruthy();
+  expect(screen.queryByText("异名包成员")).toBeNull();
+  expect(screen.queryByRole("heading",{name:/人形机器人/})).toBeNull();
+  expect(getConceptDetail).toHaveBeenCalledTimes(2);
 });

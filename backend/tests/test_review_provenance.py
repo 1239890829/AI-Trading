@@ -282,6 +282,39 @@ def test_requested_theme_date_does_not_prove_mixed_current_board_facts(monkeypat
     assert "历史复盘不调用" in old.provenance["themes"].reason
 
 
+def test_new_report_freezes_shared_mapping_without_promoting_theme_facts(monkeypatch, tmp_path):
+    from copy import deepcopy
+    import app.services.theme_service as themes
+
+    hub, svc, _ = setup_market(monkeypatch, tmp_path)
+    cards = [{"theme": "汽车零部件", "stocks": [{"symbol": "001317"}]}, {"theme": "具身智能"}]
+    original = deepcopy(cards)
+
+    async def board(*args):
+        return {"themes": cards, "summary": {}}
+
+    async def directory(kind):
+        rows = [{"code": "881126.TI", "name": "汽车零部件", "kind": kind,
+                 "source": "ths_official"}] if kind == "industry" else [
+                    {"code": "885001.TI", "name": "无关正式概念", "kind": kind, "source": "ths_official"}]
+        return {"kind": kind, "source": "ths_official", "catalog_state": "ready", "total": len(rows),
+                "synced_at": NOW.isoformat(), "items": rows}
+
+    monkeypatch.setattr(themes, "build_theme_board", board)
+    catalog = NS(read_board_catalog=directory, revision=0)
+    got = asyncio.run(collect_market(hub, svc, DAY, theme_catalog=catalog))
+    frozen = got.reported_values["themes"]
+    assert frozen[0]["exact_catalog"]["code"] == "881126.TI"
+    assert frozen[0]["exact_catalog"]["kind"] == "industry"
+    assert frozen[1]["catalog_mapping_state"] == "unmapped"
+    assert got.themes == [] and got.provenance["themes"].state == "unverified"
+    assert got.provenance["themes"].source_trade_date is None
+    assert cards == original, "collector cannot mutate the source cache or saved historical cards"
+    encoded = got.model_dump_json()
+    restored = MarketSnapshot.model_validate_json(encoded)
+    assert restored.reported_values["themes"] == frozen
+
+
 def test_market_collector_consumes_bound_board_sample_without_hiding_it(monkeypatch, tmp_path):
     import app.market.board_review as boards
     from app.review.provenance import evidence

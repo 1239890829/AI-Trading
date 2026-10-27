@@ -6,6 +6,8 @@ import { useId, useState, type KeyboardEvent, type ReactNode } from "react";
 import { CardHead, CardShell } from "@/components/picks/card-shell";
 import { CardEntryRow } from "@/components/picks/card-entries";
 import { LimitReason } from "@/components/detail/limit-reason";
+import {CurrentThemeReference, SourceThemeIdentity} from "@/components/source-theme-identity";
+import type {CurrentThemeCatalogReference} from "@/types/market";
 import {StockAttributionPanel} from "@/components/detail/attribution-evidence";
 import {PaperSelectionAction} from "@/components/picks/paper-selection-action";
 import {TradingAgentsResearchPanel} from "@/components/detail/tradingagents-research-panel";
@@ -120,6 +122,7 @@ export interface TradingCard {
   roleBasis: string | null;
   boards: number | null;
   theme: string | null;
+  currentThemeCatalog?: CurrentThemeCatalogReference;
   stage: string | null;
   riskTier: string | null;
   strengthTier: string | null;
@@ -292,7 +295,7 @@ function ResearchState({item}: {item: TradingCard}) {
 }
 
 /** 盘前名单（DailyPickItem）→ 统一模型。 */
-export function fromDailyPick(it: DailyPickItem, current?: {date: string; version: string | null}): TradingCard {
+export function fromDailyPick(it: DailyPickItem, current?: {date: string; version: string | null; currentThemeCatalog?: CurrentThemeCatalogReference}): TradingCard {
   const basisRows: { label: string; value: string }[] = [];
   const execution = it.execution ?? null;
   const executable = execution?.executable_snapshot;
@@ -330,6 +333,7 @@ export function fromDailyPick(it: DailyPickItem, current?: {date: string; versio
     roleBasis: it.echelon_basis ?? null,
     boards: it.boards ?? null,
     theme: it.theme ?? null,
+    currentThemeCatalog: current?.currentThemeCatalog,
     stage: it.theme_stage ?? null,
     riskTier: it.risk_tier ?? null,
     strengthTier: null,
@@ -362,7 +366,7 @@ export function fromDailyPick(it: DailyPickItem, current?: {date: string; versio
  *
  * 两者字段天然互认（除分层名单独有的 tier / pick_basis，与手风琴独有的无 stage 之外）。
  */
-export function fromIntradayStock(it: IntradayTopStock | OpportunityStock): TradingCard {
+export function fromIntradayStock(it: IntradayTopStock | OpportunityStock, currentReference?: CurrentThemeCatalogReference): TradingCard {
   const basisRows: TradingCard["basisRows"] = [];
   // 「入选」= pick_basis——只有分层名单才产生（要解释「为什么在这档」）
   const pickBasis = "pick_basis" in it ? it.pick_basis : null;
@@ -402,6 +406,7 @@ export function fromIntradayStock(it: IntradayTopStock | OpportunityStock): Trad
     roleBasis: null,
     boards: it.boards ?? null,
     theme: "theme" in it ? (it.theme ?? null) : null,
+    currentThemeCatalog: currentReference,
     stage: "stage" in it ? (it.stage ?? null) : null,
     riskTier: null,
     strengthTier: "strength_tier" in it ? (it.strength_tier ?? null) : null,
@@ -553,7 +558,7 @@ function CompactPickSummary({item, scores, reading, positionLabel, dailyEvidence
     <QualificationSummary item={item} readError={readError}/>
     {item.origin === "intraday" && dailyEvidence?.item.symbol === item.symbol && <SelectionEntryRow compact entry={dailyEvidence.item.selection_entry} scope="daily"/>}
     {(item.theme || item.role || item.board || item.riskTier || item.linkage) && <p className={compactStyles.theme}>
-      {item.theme && <span>{item.theme}{item.stage ? ` · ${item.stage}` : ""}</span>}
+      {item.theme && <span>{item.theme}{item.stage ? ` · ${item.stage}` : ""} <SourceThemeIdentity reason={item.theme} historical/><CurrentThemeReference reason={item.theme} reference={item.currentThemeCatalog}/></span>}
       {item.role && <span title={item.roleBasis || undefined}>{item.role}{item.boards ? ` · ${item.boards}板` : ""}</span>}
       {item.board && <span>{item.board}</span>}{item.riskTier && <span title={item.exit?.note}>{item.riskTier}</span>}
       {item.linkage && <span title={item.linkage.basis}>题材关联 {triText(item.linkage.level)}</span>}
@@ -1009,11 +1014,11 @@ export function PickCard({
             />
           )}
           {item.theme && (
-            <Chip
+            <span className="inline-flex min-w-0 flex-wrap items-center gap-1"><Chip
               text={`${item.theme}${item.stage ? ` · ${item.stage}` : ""}`}
-              title="所属题材与题材天梯阶段（启动/发酵/高潮/分歧/退潮）——同一个梯队角色在不同阶段价值不同"
+              title="原入选标签与原阶段；不证明正式目录归属或当日受益"
               className="border-zinc-300 text-zinc-600 dark:border-zinc-600 dark:text-zinc-300"
-            />
+            /><SourceThemeIdentity reason={item.theme} historical/><CurrentThemeReference reason={item.theme} reference={item.currentThemeCatalog}/></span>
           )}
           {item.strengthTier && <Chip text={item.strengthTier} title="题材强度档" />}
           {item.board && (

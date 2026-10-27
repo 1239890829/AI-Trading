@@ -20,6 +20,13 @@ def _identity(code="885517.TI", name="机器人概念"):
 def _request(catalog, fetch):
     svc = SimpleNamespace(get_catalog=lambda **_: [SimpleNamespace(**{**r, "catalog_active": True}) for r in catalog],
                           fetch_board_bars=fetch, revision=0)
+    async def directory(kind):
+        rows = (await asyncio.to_thread(svc.get_catalog, limit=1000) if kind == "concept" else
+                [SimpleNamespace(code="881126.TI", name="汽车零部件", source="ths_official")])
+        return {"kind": kind, "source": "ths_official", "catalog_state": "ready", "total": len(rows),
+                "synced_at": "2026-10-27T08:00:00+00:00", "items": [
+                    {"code": row.code, "name": row.name, "source": row.source, "kind": kind} for row in rows]}
+    svc.read_board_catalog = directory
     return SimpleNamespace(app=SimpleNamespace(state=SimpleNamespace(theme_catalog=svc)))
 
 
@@ -104,7 +111,7 @@ def test_ambiguous_same_name_does_not_choose_a_source_code():
     card = {"theme": "机器人概念", "board": {"name": "机器人概念", "chg_5d": 3.0}}
     asyncio.run(_verify(request, {"themes": [card]}))
     assert card["candidate_board"]["chg_5d"] == 3.0
-    assert card["official_interval"]["state"] == "unmapped" and card["official_interval"]["code"] is None
+    assert card["official_interval"]["state"] == "ambiguous" and card["official_interval"]["code"] is None
 
 
 
@@ -437,7 +444,8 @@ def test_catalog_read_failure_preserves_base_payload_and_briefly_recovers(monkey
         result = await market_themes._official_identities_cached(request)
         result["identities"].clear()
         again = await market_themes._official_identities_cached(request)
-        assert again["identities"]["机器人概念"] == _identity()
+        assert {key: again["identities"]["机器人概念"][key] for key in _identity()} == _identity()
+        assert again["identities"]["机器人概念"]["kind"] == "concept"
 
     asyncio.run(run())
     assert len(catalog_calls) == 2 and bar_calls == ["885517.TI"]

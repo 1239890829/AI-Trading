@@ -1343,3 +1343,38 @@ it("紧凑风险栏保留当前风险与撤区间提示，市场数字在原依�
   expect(disclosure.open).toBe(true);
   expect(within(disclosure).getByText("昨日涨停中位 -1.81%",{exact:false})).toBeTruthy();
 });
+
+
+it("未冻结映射的原题材不冒称同花顺正式归属",()=>{
+  render(<PickCard item={fromDailyPick({...base,theme:"具身智能"})}/>);
+  expect(screen.getByText("原标签 · 当时未记录映射")).toBeTruthy();
+  expect(screen.queryByText(/^同花顺 ·/)).toBeNull();
+});
+
+
+it("每日原标签仅旁列读取时目录参考，不改变原入选资料",()=>{
+  const original={...base,theme:"汽车零部件"};const before=JSON.stringify(original);
+  const reference={scope:"current_directory_reference" as const,catalog_version:"a".repeat(64),observed_at:"2026-10-27T12:00:00+08:00",items:[{theme:"汽车零部件",catalog_mapping_state:"exact" as const,exact_catalog:{code:"881126.TI",name:"汽车零部件",source:"ths_official",basis:"exact_name",kind:"industry" as const,catalog_version:"a".repeat(64),observed_at:"2026-10-27T12:00:00+08:00"}}]};
+  render(<PickCard compact item={fromDailyPick(original,{date:"2026-10-23",version:null,currentThemeCatalog:reference})}/>);
+  expect(screen.getByText("当前目录同名参考，非当时归属 · 881126.TI")).toBeTruthy();
+  expect(screen.getByText("原标签 · 当时未记录映射")).toBeTruthy();
+  expect(JSON.stringify(original)).toBe(before);
+});
+
+
+it("盘中映射只承接同响应目录参考，不改原标签、来源或执行资格",()=>{
+  const original={...assessedStock(),theme:"汽车零部件",theme_sources:[{theme:"原入选标签",stage:"观察",strength_tier:"原档"}]};
+  const before=JSON.stringify(original), baseline=fromIntradayStock(original);
+  const reference={scope:"current_directory_reference" as const,catalog_version:"a".repeat(64),observed_at:"2026-10-27T12:00:00+08:00",items:[{theme:"汽车零部件",catalog_mapping_state:"exact" as const,exact_catalog:{code:"881126.TI",name:"汽车零部件",source:"ths_official",basis:"exact_name",kind:"industry" as const,catalog_version:"a".repeat(64),observed_at:"2026-10-27T12:00:00+08:00"}}]};
+  const card=fromIntradayStock(original,reference);
+  expect(card).toEqual({...baseline,currentThemeCatalog:reference});
+  expect(card.executionQualification).toBe(original.execution_qualification);
+  expect(card.themeSources).toBe(original.theme_sources);
+  expect(card.theme).toBe("汽车零部件");
+  expect(JSON.stringify(original)).toBe(before);
+  const observed=fromIntradayStock({...original,reference_only:true},reference);
+  expect(observed.executionQualification).toBeNull();expect(observed.qualificationIdentityValid).toBe(false);
+  render(<PickCard compact item={card}/>);
+  expect(screen.getByText("当前目录同名参考，非当时归属 · 881126.TI")).toBeTruthy();
+  expect(screen.getByText("原标签 · 当时未记录映射")).toBeTruthy();
+});

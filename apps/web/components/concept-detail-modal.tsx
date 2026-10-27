@@ -12,7 +12,7 @@
 import { useMemo, useState } from "react";
 
 import { useResource } from "@/hooks/use-resource";
-import { getConceptDetail } from "@/lib/api";
+import { getConceptDetail, type OfficialCatalogKind } from "@/lib/api";
 import { fmtAmount, pctColor, pctText } from "@/lib/format";
 import { useStockRowNav } from "@/components/stock-link";
 import { ModalShell } from "@/components/ui/modal-shell";
@@ -23,43 +23,49 @@ export function ConceptDetailModal({
   name,
   onClose,
   active = true,
+  catalogKind = "concept",
+  referenceDate,
 }: {
   code: string;
   name: string;
   onClose: () => void;
   active?: boolean;
+  catalogKind?: OfficialCatalogKind;
+  referenceDate?: string;
 }) {
   const stockNav = useStockRowNav();
+  const scope = `ths_official:${catalogKind}:${code}`;
   const resource = useResource(async () => {
-    const value = await getConceptDetail(code);
-    if (value.code !== code) throw new Error("返回成分代码不符");
+    const value = await getConceptDetail(code, {catalogKind});
+    if (value.code !== code || value.source !== "ths_official" || value.kind !== catalogKind) throw new Error("返回成分来源、类别或代码不符");
+    if (value.name !== name) throw new Error("返回名称与入口不符，请返回刷新原目录后重试");
     return value;
-  }, { key: code, enabled: active });
+  }, { key: scope, enabled: active });
   const [enrichmentCode, setEnrichmentCode] = useState("");
-  const [previousCode, setPreviousCode] = useState(code);
-  if (previousCode !== code) {setPreviousCode(code); setEnrichmentCode("");}
+  const [previousScope, setPreviousScope] = useState(scope);
+  if (previousScope !== scope) {setPreviousScope(scope); setEnrichmentCode("");}
   const enrichment = useResource(async () => {
     const base = resource.data;
-    const value = await getConceptDetail(code, {enrichment: "full"});
-    if (value.code !== code) throw new Error("返回归因代码不符");
+    const value = await getConceptDetail(code, {catalogKind, enrichment: "full"});
+    if (value.code !== code || value.source !== "ths_official" || value.kind !== catalogKind) throw new Error("返回归因来源、类别或代码不符");
     if (base && (value.name !== base.name || JSON.stringify(value.members.map(row => [row.symbol, row.name]).sort()) !== JSON.stringify(base.members.map(row => [row.symbol, row.name]).sort()))) throw new Error("成分版本已变，请先刷新成分后读取归因");
     return {base, detail: value};
-  }, {key: code, enabled: active && enrichmentCode === code, refreshOnVisible: false});
+  }, {key: scope, enabled: active && enrichmentCode === scope, refreshOnVisible: false});
   const currentEnrichment = enrichment.data?.base === resource.data ? enrichment.data?.detail : undefined;
   const detail = currentEnrichment ?? resource.data;
   const error = resource.error instanceof Error ? resource.error.message : String(resource.error);
-  const [filters, setFilters] = useState({ code, tab: "__all__", q: "", detail: undefined as typeof detail });
+  const [filters, setFilters] = useState({ scope, tab: "__all__", q: "", detail: undefined as typeof detail });
   // A scope change resets its filters before commit. Within the same concept,
   // only a successful new result can retire a tag; failure keeps the selection.
-  if (filters.code !== code || (detail !== undefined && filters.detail !== detail)) {
-    const current = filters.code === code ? filters : { code, tab: "__all__", q: "", detail: undefined };
+  if (filters.scope !== scope || (detail !== undefined && filters.detail !== detail)) {
+    const current = filters.scope === scope ? filters : { scope, tab: "__all__", q: "", detail: undefined };
     setFilters({
       ...current, detail,
       tab: detail && current.tab !== "__all__" && !detail.tag_groups.some(group => group.tag === current.tab) ? "__all__" : current.tab,
     });
   }
-  const tab = filters.code === code ? filters.tab : "__all__";
-  const q = filters.code === code ? filters.q : "";
+  const tab = filters.scope === scope ? filters.tab : "__all__";
+  const q = filters.scope === scope ? filters.q : "";
   const setTab = (tab: string) => setFilters(current => ({ ...current, tab }));
 
   const members = useMemo(() => {
@@ -74,7 +80,7 @@ export function ConceptDetailModal({
     <ModalShell
       open={active}
       onClose={onClose}
-      label={`${detail?.name ?? name} 概念详情`}
+      label={`${detail?.name ?? name} ${catalogKind === "industry" ? "行业" : "概念"}详情`}
       size="md"
       radius="2xl"
       bodyClassName="overflow-hidden"
@@ -100,8 +106,9 @@ export function ConceptDetailModal({
       {active && <>
         <div className="flex flex-wrap items-center justify-between gap-2 px-4 py-2 text-[11px] text-zinc-600 dark:text-zinc-400">
           <span>名称与成分先读；完整涨停归因按需补充。</span>
-          <button type="button" className="quiet-action" disabled={!resource.data || enrichment.pending && enrichmentCode === code} onClick={() => {if (enrichmentCode === code) enrichment.refresh(); else setEnrichmentCode(code);}}>
-            {enrichment.pending && enrichmentCode === code ? "读取归因中…" : currentEnrichment ? "刷新涨停归因" : "读取涨停归因"}
+          {referenceDate && <span role="note">当前成分参考，非{referenceDate}当时归属。</span>}
+          <button type="button" className="quiet-action" disabled={!resource.data || enrichment.pending && enrichmentCode === scope} onClick={() => {if (enrichmentCode === scope) enrichment.refresh(); else setEnrichmentCode(scope);}}>
+            {enrichment.pending && enrichmentCode === scope ? "读取归因中…" : currentEnrichment ? "刷新涨停归因" : "读取涨停归因"}
           </button>
           {enrichment.error != null && <><span role="alert">归因读取失败或成分版本已变；已存成分仍可查看。</span><button type="button" className="quiet-action" disabled={resource.pending} onClick={resource.refresh}>重读正式成分</button></>}
           {detail?.membership_state === "stale" && <span role="status">成员记录已过保鲜期，当前变动待核。</span>}

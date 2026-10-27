@@ -79,6 +79,21 @@ def _svc() -> ThemeCatalogService:
     return ThemeCatalogService(get_session_factory(), api_key="test-key")
 
 
+def _isolate_industry_catalog(svc: ThemeCatalogService) -> None:
+    """Keep the real dual-kind owner; the added kind must never reach the network."""
+    import httpx
+
+    asyncio.run(svc._client.aclose())
+
+    def industry(request):
+        assert request.url.path.endswith("/catalog/ths-index-list")
+        assert request.url.params.get("tag") == "industry"
+        return httpx.Response(200, json={"code": 0, "data": {"item": [
+            {"thscode": "881126.TI", "name": "汽车零部件"}]}})
+
+    svc._client = httpx.AsyncClient(transport=httpx.MockTransport(industry))
+
+
 def test_sync_catalog_upserts_idempotently(monkeypatch: pytest.MonkeyPatch):
     svc = _svc()
 
@@ -395,6 +410,7 @@ def test_official_multi_day_changes():
 def test_verify_board_multi_day_replaces_and_flags(monkeypatch: pytest.MonkeyPatch):
     """官方值覆盖推断值、保留 *_inferred、verified 标志与 caveats 同步更新。"""
     svc = _svc()
+    _isolate_industry_catalog(svc)
 
     async def fake_catalog():
         return [{"code": GRAIN, "name": "粮食概念"}]
@@ -457,6 +473,7 @@ def test_verify_board_multi_day_upgrades_persistence_position(monkeypatch: pytes
     from app.services.dragon_service import news_persistence
 
     svc = _svc()
+    _isolate_industry_catalog(svc)
 
     async def fake_catalog():
         return [{"code": GRAIN, "name": "粮食概念"}]

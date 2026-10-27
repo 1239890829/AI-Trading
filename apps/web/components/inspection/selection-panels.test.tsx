@@ -2,10 +2,11 @@ import { act, cleanup, fireEvent, render, screen, waitFor } from "@testing-libra
 import { afterEach, beforeEach, expect, it, vi } from "vitest";
 import { SelectionReviewPanel, SelectionPreviewPanel } from "./selection-panels";
 import * as api from "@/lib/api";
+import {fromDailyPick,fromIntradayStock} from "@/components/picks/pick-card";
 
 vi.mock("@/lib/api", () => ({getPickReviews: vi.fn(), getTodayPicks: vi.fn(), getIntradayTop: vi.fn(), getMorningBriefToday: vi.fn(), getWatcherState: vi.fn(), getIntradayOpportunities: vi.fn(), ApiError: class extends Error {}}));
 vi.mock("@/components/hunting/pick-sections", () => ({DailyReviews: ({reviews}: {reviews: api.PickReviewRow[]}) => <div>{reviews.map(row => <span key={row.symbol}>{row.symbol}:{row.selection_version}</span>)}</div>}));
-vi.mock("@/components/picks/pick-card", () => ({fromDailyPick: (it: object) => ({...it, origin: "picks"}), fromIntradayStock: (it: object) => ({...it, origin: "intraday"}), PickCard: ({item}: {item: {symbol: string}}) => <div>候选 {item.symbol}</div>}));
+vi.mock("@/components/picks/pick-card", () => ({fromDailyPick: vi.fn((it: object) => ({...it, origin: "picks"})), fromIntradayStock: vi.fn((it: object) => ({...it, origin: "intraday"})), PickCard: ({item}: {item: {symbol: string}}) => <div>候选 {item.symbol}</div>}));
 vi.mock("@/components/picks/pick-detail-modal", () => ({PickDetailModal: () => null}));
 vi.mock("@/components/hunting/opportunity-evidence-panel", () => ({OpportunityEvidencePanel: ({date, onDateChange}: {date?: string; onDateChange?: (date: string) => void}) => <div>依据:{date}<button onClick={() => onDateChange?.("2026-10-02")}>切依据日期</button></div>}));
 vi.mock("@/components/hunting/leader-research-panel", () => ({LeaderResearchPanel: () => null}));
@@ -82,4 +83,26 @@ it("keeps the intraday candidate section separate and retains the sealed referen
   expect(api.getTodayPicks).not.toHaveBeenCalled();
   fireEvent.click(screen.getByText(/已封板 \/ 仅参考/));
   expect(screen.getByText("候选 002636")).toBeTruthy();
+});
+
+
+it("每日与盘中旁览只传各自响应的目录参考，不跨包拼接或新取源",async()=>{
+  const dailyItem={symbol:"600001",theme:"汽车零部件"} as api.DailyPickItem;
+  const intradayItem={symbol:"600002",theme:"汽车零部件"} as api.IntradayTopStock;
+  const referenceItem={symbol:"600003",theme:"汽车零部件",reference_only:true} as api.IntradayTopStock;
+  const dailyReference={scope:"current_directory_reference" as const,catalog_version:"a".repeat(64),observed_at:"2026-10-09T10:00:00+08:00",items:[]};
+  const intradayReference={...dailyReference,catalog_version:"b".repeat(64),observed_at:"2026-10-09T10:00:01+08:00"};
+  const daily:api.DailyPicksPayload={date:"2026-10-09",items:[dailyItem],meta:{weights:{},selection_version:"daily-original"},current_theme_catalog:dailyReference};
+  const intraday:api.IntradayTopPayload={trade_date:"2026-10-09",items:[intradayItem],reference_items:[referenceItem],total_candidates:1,criteria:"原条件",hot_available:false,caveats:[],current_theme_catalog:intradayReference};
+  const before=JSON.stringify({daily,intraday});
+  vi.mocked(api.getTodayPicks).mockResolvedValue(daily);vi.mocked(api.getIntradayTop).mockResolvedValue(intraday);
+  render(<SelectionPreviewPanel request={{kind:"selection-preview"}}/>);
+  await screen.findByText("候选 600001");await screen.findByText("候选 600002");
+  fireEvent.click(screen.getByText(/已封板 \/ 仅参考/));
+  expect(screen.getByText("候选 600003")).toBeTruthy();
+  expect(fromDailyPick).toHaveBeenCalledWith(dailyItem,{date:"2026-10-09",version:"daily-original",currentThemeCatalog:dailyReference});
+  expect(fromIntradayStock).toHaveBeenCalledWith(intradayItem,intradayReference);
+  expect(fromIntradayStock).toHaveBeenCalledWith(referenceItem,intradayReference);
+  expect(api.getTodayPicks).toHaveBeenCalledTimes(1);expect(api.getIntradayTop).toHaveBeenCalledTimes(1);
+  expect(api.getIntradayOpportunities).not.toHaveBeenCalled();expect(JSON.stringify({daily,intraday})).toBe(before);
 });

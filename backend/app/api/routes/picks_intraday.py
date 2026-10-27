@@ -21,6 +21,7 @@ from __future__ import annotations
 import asyncio
 import contextlib
 import logging
+from copy import deepcopy
 from datetime import datetime
 
 from fastapi import APIRouter, Depends, HTTPException, Query, Request
@@ -439,6 +440,8 @@ async def intraday_top(
     from app.services.tradingagents_research import attach_saved_summaries
     data["items"] = await asyncio.to_thread(attach_saved_summaries, data.get("items") or [],
                                            session_factory=get_session_factory())
+    if "current_theme_catalog" in payload["data"]:
+        data["current_theme_catalog"] = deepcopy(payload["data"]["current_theme_catalog"])
 
     # The shared assembly already froze price/risk fields with its evidence snapshot.
     # A later quote must not overwrite one half of this decision.

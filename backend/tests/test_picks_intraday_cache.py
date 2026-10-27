@@ -471,7 +471,9 @@ def test_sixth_theme_is_researchable_without_expanding_live_scope(monkeypatch):
         return board
     monkeypatch.setattr(themes, "build_theme_board", read)
     monkeypatch.setattr(themes, "_pick_provider", lambda *_: None)
-    monkeypatch.setattr(official, "attach_official", lambda *_: None)
+    def attach(holder, themes_list, *, resolution=None):
+        return None
+    monkeypatch.setattr(official, "attach_official", attach)
     monkeypatch.setattr(boards, "get_index_cache", lambda _: SimpleNamespace(get=lambda: ({}, {})))
     monkeypatch.setattr(tradability, "index_views", lambda _: ({}, {}))
     seen = []
