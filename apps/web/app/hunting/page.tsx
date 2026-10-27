@@ -11,6 +11,7 @@ import Link from "next/link";
 import { inspectionClick, useInspection } from "@/components/inspection/inspection-context";
 
 import { useRouter, useSearchParams } from "next/navigation";
+import { legacyDiscoveryFundsMarketUrl } from "@/lib/routing";
 import { useResource } from "@/hooks/use-resource";
 import {
   ApiError,
@@ -740,7 +741,19 @@ function StyleRoutingChip({ sr }: { sr: StyleRouting }) {
 export default function HuntingPage() {
   return (
     <Suspense fallback={<PageSkeletonFallback label="选股加载中" />}>
-      <HuntingInner />
+      <HuntingEntry />
     </Suspense>
   );
+}
+
+function HuntingEntry() {
+  const params = useSearchParams();
+  const moved = legacyDiscoveryFundsMarketUrl(params.toString());
+  return moved ? <MovedFunds href={moved}/> : <HuntingInner/>;
+}
+
+function MovedFunds({href}:{href:string}) {
+  const router = useRouter();
+  useEffect(()=>{router.replace(href);},[router,href]);
+  return <div className="p-4 text-sm" role="status">资金方向已并入市场板块资金流。<Link href={href} className="ml-2 underline">前往市场板块</Link></div>;
 }

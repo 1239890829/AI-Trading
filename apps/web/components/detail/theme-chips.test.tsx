@@ -4,6 +4,7 @@ import { afterEach } from "vitest";
 import { cleanup } from "@testing-library/react";
 import { ThemeChipsRow } from "./theme-chips";
 import type { StockThemes } from "@/lib/api";
+import { InspectionContext } from "@/components/inspection/inspection-context";
 
 // vitest 未开 globals 时 RTL 自动 cleanup 不注册，必须手动（见 trade-form.test.tsx 注释）
 afterEach(() => {cleanup(); vi.useRealTimers();});
@@ -15,15 +16,21 @@ const fixture: StockThemes = {
 };
 
 describe("ThemeChipsRow", () => {
-  it("精确同名只渲染一个题材入口，官方、来源归因和公司资料均保留", () => {
+  it("同名官方概念与未核身份的归因、公司标签分开，重复公司标签不重复", () => {
     render(<ThemeChipsRow themes={fixture} companyNames={["粮食概念", "粮食概念"]} />);
 
-    // 合并入口保留每个来源，不把公司概念升级成当日催化。
+    // A matching name alone cannot transfer source identity or membership.
     const chips = screen.getAllByText("粮食概念");
-    expect(chips.length).toBe(1);
-    expect(chips[0].closest("a")?.getAttribute("href")).toBe("/tape?tab=themes&focus=%E7%B2%AE%E9%A3%9F%E6%A6%82%E5%BF%B5");
-    expect(chips[0].closest("a")?.getAttribute("title")).toContain("官方成分 · 2026-08-28 来源归因 · 公司资料");
-    expect(screen.getByText("官方 / 归因 / 资料")).toBeTruthy();
+    expect(chips.length).toBe(3);
+    expect(chips[0].closest("a")?.getAttribute("href")).toBe("/hunting?view=discover&browse=catalog&disc_kind=concept&disc_code=885995.TI");
+    expect(chips[0].closest("a")?.getAttribute("title")).toContain("官方成分 · 同花顺 885995.TI");
+    for (const chip of chips.slice(1)) {
+      expect(chip.closest("a")?.getAttribute("href")).toBe("/tape?tab=themes&focus=%E7%B2%AE%E9%A3%9F%E6%A6%82%E5%BF%B5");
+      expect(chip.closest("a")?.getAttribute("title")).toContain("正式概念身份未核");
+    }
+    expect(screen.getByText("官方")).toBeTruthy();
+    expect(screen.getByText("归因")).toBeTruthy();
+    expect(screen.getByText("资料")).toBeTruthy();
   });
 
   it("官方 chip 内嵌板块当日涨跌幅徽标", () => {
@@ -31,11 +38,23 @@ describe("ThemeChipsRow", () => {
     expect(screen.getByText("+1.23%")).toBeTruthy();
   });
 
-  it("点击 chip 携带 focus 参数跳题材看板", () => {
-    render(<ThemeChipsRow themes={fixture} />);
-    const link = screen.getAllByRole("link")[0] as HTMLAnchorElement;
-    fireEvent.click(link);
-    expect(link.getAttribute("href")).toContain("focus=");
+  it("正式 chip 保留代码导航，未核标签只按名字检索，不拦成同名旁览", () => {
+    const open = vi.fn();
+    render(<InspectionContext.Provider value={{open, close:vi.fn()}}><ThemeChipsRow themes={fixture} /></InspectionContext.Provider>);
+    const links = screen.getAllByRole("link");
+    fireEvent.click(links[0]);
+    expect(links[0].getAttribute("href")).toContain("disc_code=885995.TI");
+    expect(open).not.toHaveBeenCalled();
+    fireEvent.click(links[1]);
+    expect(open).toHaveBeenCalledWith(expect.objectContaining({kind:"themes",focus:"粮食概念"}));
+  });
+
+  it("同名不同正式代码的概念各自保留原身份", () => {
+    render(<ThemeChipsRow themes={{...fixture, attribution:[], official:[fixture.official[0], {...fixture.official[0],theme_code:"886069.TI"}]}} />);
+    expect(screen.getAllByRole("link").map(link=>link.getAttribute("href"))).toEqual([
+      "/hunting?view=discover&browse=catalog&disc_kind=concept&disc_code=885995.TI",
+      "/hunting?view=discover&browse=catalog&disc_kind=concept&disc_code=886069.TI",
+    ]);
   });
 
   it("多题材按涨跌幅降序排前，超出部分折叠", () => {

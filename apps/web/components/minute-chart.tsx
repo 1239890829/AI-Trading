@@ -11,7 +11,7 @@ import {
   LineData,
   Time,
 } from "lightweight-charts";
-import type { MinutePoint as P } from "@/lib/api";
+import type { MinutePoint } from "@/lib/api";
 import {
   computeMinuteAxis,
   formatMinutePercentTick,
@@ -20,27 +20,28 @@ import {
   minuteLimitPriceState,
 } from "@/lib/minute-axis";
 import { bjDate } from "@/lib/format";
-import {openingAnchorObservationTime} from "@/lib/index-overlay";
+import {indexOverlayMayDraw, openingAnchorObservationTime, type IndexOverlay} from "@/lib/index-overlay";
 import styles from "./minute-chart.module.css";
 import { tradingSeqFromHHMM } from "@/lib/market-hours";
 import { getMinuteAmount } from "@/lib/kline-live";
 import { readChartTheme, useChartTheme, type ChartTheme } from "@/lib/chart-theme";
 import type { MinuteNewsEvent } from "@/lib/event-markers";
 
+// Local display projection keeps the original source label; sourcePoints are immutable.
+type P = MinutePoint & {source_label_ts?: string};
+
 /**
  * 当日分时图（docs/archive/minute-chart-plan.md 模块 1+2+P1，2026-08-30）。
  *
- * 坐标系：单一价格域派生涨跌幅上下界，横盘日保留 0.5% 地板；
+ * 坐标系：单一价格域派生涨跌幅上下界，横盘总域至少约 0.2% / 两个价格刻度；
  * 右轴绝对价格、左轴涨跌幅（隐藏 % 序列承载）；昨收虚线基准。
  * 曲线：价格（面积）+ 均价线（黄）+ 上证叠加（紫虚线，左轴 % 归一）+ 量能副图（红涨绿跌）。
  * 量比：精确口径（TDX 5 日同期基线）优先，缺失回退近似（昨日量 × 已开市分钟/240）。
  * 昨日量取日 K 倒数第二根提供（bars[-2] 在盘中是今日实时 bar，休市日是分时日本身，
  * 两种场景下 bars[-2] 都恰好是"分时日的上一交易日"）。分子分母同为股，单位已实测一致。
  * 交互：十字光标浮层（触摸同源），ref 直改 DOM 不走 React state。
- * 纵轴区间（2026-09-04 用户需求）：有板块涨跌幅限制（limitPct，来自 lib/price-limit：
- * 主板 ±10（含 ST）/ 创业·科创 ±20 / 北交 ±30）→ 以名义限制区间为参考，
- * 涨停/跌停线只使用调用方提供的实际价格；指数/无法识别 → 回退原「当日波幅
- * 对称区间」（昨收中心，0.5% 地板防抖）。
+ * 纵轴区间：实际价格/均价/竞价、可见指数归一值与昨收共同定非对称域，少量留白。
+ * 涨停/跌停线只使用调用方提供的实际价格，窗外保留参考说明，不强行撑开价格域。
  * ⚠️ 2026-09-11：真实行情若越出名义带（除权/换源/昨收口径不一致），区间并入越界点，
  * 不再把曲线裁到图外；两轴及所有叠加序列随新极值同步更新。
  * prevClose 缺失时整体降级为库默认自适应坐标 + 浮层隐藏涨跌幅，绝不臆造基准。
@@ -195,13 +196,14 @@ type SeriesBundle = {
   /** 叠加线（大盘/竞价点/事件点）与价格线：主题切换要一并换色，故留引用（P2-26）。 */
   index: ISeriesApi<"Line"> | null;
   auction: ISeriesApi<"Line"> | null;
+  observedAuction: ISeriesApi<"Line"> | null;
   events: ISeriesApi<"Line"> | null;
   /** 昨收/涨停/跌停虚线：颜色随主题走，`pick` 指向调色板色槽（不依赖数组顺序）。 */
   priceLines: { pl: IPriceLine; pick: (p: MinutePalette) => string }[];
   slots: number[];
   base0: number;
   axisRange?: readonly [number, number, number, number];
-  rendered?: Partial<Record<"price" | "pct" | "avg" | "vol", {time: Time; value?: number; color?: string}[]>>;
+  rendered?: Partial<Record<"price" | "pct" | "avg" | "vol" | "observedAuction", {time: Time; value?: number; color?: string}[]>>;
 };
 
 const emptyBundle = (): SeriesBundle => ({
@@ -212,6 +214,7 @@ const emptyBundle = (): SeriesBundle => ({
   vol: null,
   index: null,
   auction: null,
+  observedAuction: null,
   events: null,
   priceLines: [],
   slots: [],
@@ -226,6 +229,10 @@ export function MinuteChart({
   referenceDate,
   yesterdayVol,
   index: sourceIndex,
+  indexSelected = false,
+  indexPaused = false,
+  indexWaiting = false,
+  onIndexToggle,
   auction,
   exactBaseline,
   newsEvents,
@@ -244,16 +251,19 @@ export function MinuteChart({
    */
   referenceDate?: string | null;
   yesterdayVol?: number | null;
-  index?: { points: P[]; prevClose: number; referenceDate?: string | null } | null;
+  index?: { points: P[]; prevClose: number; referenceDate?: string | null; mode?: IndexOverlay["mode"] } | null;
+  indexSelected?: boolean;
+  indexPaused?: boolean;
+  indexWaiting?: boolean;
+  onIndexToggle?: () => void;
   auction?: { price: number; pct: number | null } | null;
   /** 精确量比基线（最近 5 个完整交易日逐 5min 槽同期累计量均值）。缺失回退近似口径。 */
   exactBaseline?: number[] | null;
   /** 当日新闻分钟事件点（仅含时刻落在槽区间的条目；公告只有日期不进分时）。 */
   newsEvents?: MinuteNewsEvent[] | null;
   /**
-   * 板块名义涨跌幅限制（%，来自 lib/price-limit）：有值 → 作为显示范围参考；
-   * null/undefined（指数/判不出）→
-   * 回退当日波幅对称区间。缺失绝不臆造。
+   * 板块名义涨跌幅限制（%，来自 lib/price-limit），仅作个股越界参考；
+   * 显示域始终由实际曲线与昨收决定。缺失不补造交易限价。
    */
   limitPct?: number | null;
   /** 实际限价只用 Quote 的已有字段，缺失一侧不推算、不画线。 */
@@ -261,9 +271,13 @@ export function MinuteChart({
   lowerPrice?: number | null;
   className?: string;
 }) {
-  // Opening auction labels remain source facts even after 09:30. They are never
-  // continuous minute prices, volume baselines, read-points or index overlays.
-  const points = useMemo(() => sourcePoints.filter(point => point.time_label !== "opening_anchor"), [sourcePoints]);
+  // A proved auction observation is a separate plotted point, never a 09:30
+  // continuous minute or a minute-volume/average-price baseline.
+  const points = useMemo(() => sourcePoints.flatMap((point): P[] => {
+    if (point.time_label !== "opening_anchor") return [point];
+    if (openingAnchorObservationTime(point) === null) return [];
+    return [{...point, source_label_ts: point.ts, ts: point.observation_ts!, volume: null, minute_amount: null, avg: null}];
+  }), [sourcePoints]);
   const openingAnchor = sourcePoints.findLast(point => point.time_label === "opening_anchor");
   const openingObserved = openingAnchor ? openingAnchorObservationTime(openingAnchor) : null;
   const index = useMemo(() => sourceIndex ? {...sourceIndex, points: sourceIndex.points.filter(point => point.time_label !== "opening_anchor")} : sourceIndex, [sourceIndex]);
@@ -340,7 +354,7 @@ export function MinuteChart({
                   ? "session-mismatch"
                   : null;
   const usableIndex =
-    index && indexIssue === null && isPositivePrice(index.prevClose) && index.points.length > 0
+    indexSelected && !indexPaused && index && indexOverlayMayDraw(index) && indexIssue === null && isPositivePrice(index.prevClose) && index.points.length > 0
       ? index
       : null;
 
@@ -369,14 +383,17 @@ export function MinuteChart({
   const axis = useMemo(() => {
     if (!isPositivePrice(effectivePrevClose)) return null;
     const prices = points.flatMap((p) => [p.price, p.avg]);
-    prices.push(upperPrice, lowerPrice);
+    const comparisonPrices: number[] = [];
     if (usableIndex) {
       for (const p of usableIndex.points) {
-        if (isPositivePrice(p.price)) prices.push(effectivePrevClose * p.price / usableIndex.prevClose);
+        if (isPositivePrice(p.price)) comparisonPrices.push(effectivePrevClose * p.price / usableIndex.prevClose);
       }
     }
-    return computeMinuteAxis({ prevClose: effectivePrevClose, limitPct: limitPct ?? null, prices, auctionPrice: auction?.price, upperPrice, lowerPrice });
+    return computeMinuteAxis({ prevClose: effectivePrevClose, limitPct: limitPct ?? null, prices, comparisonPrices, auctionPrice: auction?.price, upperPrice, lowerPrice });
   }, [points, effectivePrevClose, limitPct, upperPrice, lowerPrice, auction, usableIndex]);
+  const outsideLimits = axis ? [["涨停", upperPrice], ["跌停", lowerPrice]]
+    .flatMap(([name, price]) => isPositivePrice(price) && (price < axis.min || price > axis.max)
+      ? [`${name} ${price.toFixed(2)}（窗外）`] : []).join("；") : "";
   const invalidPrices = points.flatMap((p) => [p.price, p.avg]).concat(auction?.price, index?.points.map(p => p.price) ?? [])
     .filter((v) => v != null && !isPositivePrice(v)).length;
 
@@ -402,7 +419,7 @@ export function MinuteChart({
   const badges = useMemo(() => {
     const last = sessionDate ? points[points.length - 1] : undefined;
     let lb: number | null = null;
-    if (last) {
+    if (last && last.time_label !== "opening_anchor") {
       const bjIso = new Date(new Date(last.ts).getTime() + 8 * 3600 * 1000).toISOString();
       lb = computeLB(last.cum_volume, bjIso);
     }
@@ -441,11 +458,12 @@ export function MinuteChart({
   const tipPatchRef = useRef<{ key: string; x: number; y: number }>({ key: "", x: -1, y: -1 });
   const renderTipRef = useRef<((time: Time, point: { x: number; y: number }) => void) | null>(null);
 
-  /** 槽序列：09:25(竞价) + 09:30-11:30 + 13:00-15:00 共 243 槽，当日固定。 */
+  /** Auction observation slots plus the existing full-day axis; gaps remain empty. */
   function buildSlots(first: P): { slots: number[]; base0: number } {
     const bjDate = new Date(new Date(first.ts).getTime() + BJ_OFFSET * 1000).toISOString().slice(0, 10);
     const base0 = Math.floor(new Date(`${bjDate}T00:00:00Z`).getTime() / 1000); // 伪 UTC 当日 00:00
-    const slotSecs: number[] = [base0 + 9 * 3600 + 25 * 60];
+    const slotSecs: number[] = [];
+    for (let m = 555; m < 570; m++) slotSecs.push(base0 + Math.floor(m / 60) * 3600 + (m % 60) * 60);
     for (let m = 570; m <= 690; m++) slotSecs.push(base0 + Math.floor(m / 60) * 3600 + (m % 60) * 60);
     for (let m = 780; m <= 900; m++) slotSecs.push(base0 + Math.floor(m / 60) * 3600 + (m % 60) * 60);
     return { slots: slotSecs, base0 };
@@ -454,10 +472,10 @@ export function MinuteChart({
   /**
    * 全量重灌四个数据序列（首灌 / 每帧增量路径）。
    * ⚠️ 必须用 setData 而非 series.update()：槽位序列以全天 whitespace 占位
-   * （X 轴固定 9:25-15:00 的视觉需求），series 内部"最后时间点"恒为 15:00——
+   * （X 轴固定 9:15-15:00），series 内部"最后时间点"恒为 15:00——
    * update() 只允许写入不早于最后时间点的数据，盘中 update(当前分钟) 必抛
    * "Cannot update oldest data"（2026-09-02 实测把页面打进 error boundary）。
-   * setData 使用已排序的全天槽并做 Canvas 原位重绘（不重建图表、不闪）：243 槽 ×
+   * setData 使用已排序的全天槽并做 Canvas 原位重绘（不重建图表、不闪）：257 槽 ×
    * 序列逐项核对，仅变化序列重灌；保留固定轴与同槽校准，不假定1Hz成本可忽略。
    */
   function fillAll(s: SeriesBundle, pts: P[], base: number | null | undefined, palette: MinutePalette) {
@@ -483,7 +501,7 @@ export function MinuteChart({
         const v = p ? pick(p) : null;
         return (v == null ? { time: sec as Time } : { time: sec as Time, value: v }) as { time: Time; value?: T };
       });
-    const write = (name: "price" | "pct" | "avg" | "vol", data: {time: Time; value?: number; color?: string}[]) => {
+    const write = (name: "price" | "pct" | "avg" | "vol" | "observedAuction", data: {time: Time; value?: number; color?: string}[]) => {
       const target = s[name]; if (!target) return;
       const previous = s.rendered?.[name];
       if (previous?.length === data.length && previous.every((row, i) =>
@@ -491,7 +509,8 @@ export function MinuteChart({
       target.setData(data as never);
       (s.rendered ??= {})[name] = data;
     };
-    write("price", over((p) => isPositivePrice(p.price) ? p.price : null));
+    write("price", over((p) => p.time_label !== "opening_anchor" && isPositivePrice(p.price) ? p.price : null));
+    write("observedAuction", over((p) => p.time_label === "opening_anchor" && isPositivePrice(p.price) ? p.price : null));
     if (s.pct && isPositivePrice(base)) {
       write("pct", over((p) => (isPositivePrice(p.price) ? ((p.price - base) / base) * 100 : null)));
     }
@@ -698,7 +717,7 @@ export function MinuteChart({
       }
     }
 
-    // ---- 集合竞价点（09:25，金色）：槽序列首点即 9:25 ----
+    // 集合竞价终态保留明确的09:25标签。
     if (isPositivePrice(auction?.price) && cur.length > 0) {
       const auctionSeries = chart.addLineSeries({
         color: p.auction,
@@ -709,7 +728,7 @@ export function MinuteChart({
         lastValueVisible: false,
         crosshairMarkerVisible: false,
       });
-      auctionSeries.setData([{ time: slots[0] as never, value: auction.price }]);
+      auctionSeries.setData([{ time: (base0 + 9 * 3600 + 25 * 60) as never, value: auction.price }]);
       s.auction = auctionSeries; // 留引用：主题切换换色用（P2-26）
     }
 
@@ -741,6 +760,13 @@ export function MinuteChart({
       }
     }
 
+    s.observedAuction = chart.addLineSeries({
+      title: "竞价观察", color: p.auction, lineVisible: false,
+      pointMarkersVisible: true, pointMarkersRadius: 4,
+      priceLineVisible: false, lastValueVisible: false, crosshairMarkerVisible: false,
+    });
+    fillAll(s, cur, effectivePrevClose, p);
+
     // ---- 十字光标浮层（手术式 DOM 更新，2026-09-02 悬停闪烁修复）----
     // 实测根因：库在每次行情更新后经 updateCrosshair 重放 crosshairMove（鼠标
     // 静止也 ~2次/秒），原 handler 每次全量重建 tooltip innerHTML（48 节点/秒
@@ -754,7 +780,7 @@ export function MinuteChart({
       `<div class="mt-0.5 grid grid-cols-[auto,1fr] gap-x-2 gap-y-0.5 text-[11px] tabular-nums">` +
       `<span class="text-zinc-600 dark:text-zinc-400">均价</span><span class="font-mono text-amber-800 dark:text-amber-500"><span data-f="avg"></span> <span data-f="avgdev"></span></span>` +
       `<span class="text-zinc-600 dark:text-zinc-400">量比</span><span class="font-mono" data-f="lb"></span>` +
-      `<span class="text-zinc-600 dark:text-zinc-400">分钟量</span><span class="font-mono" data-f="vol"></span>` +
+      `<span class="text-zinc-600 dark:text-zinc-400" data-f="vollabel">分钟量</span><span class="font-mono" data-f="vol"></span>` +
       `<span class="text-zinc-600 dark:text-zinc-400">分钟额</span><span class="font-mono" data-f="amt"></span>` +
       `<span class="text-zinc-600 dark:text-zinc-400">累计额</span><span class="font-mono" data-f="cum"></span>` +
       `</div>` +
@@ -803,10 +829,11 @@ export function MinuteChart({
         focusTime = d.ts;
       }
       const avgDevPct = isPositivePrice(d.avg) && isPositivePrice(d.price) ? ((d.price - d.avg) / d.avg) * 100 : null;
-      const lb = lbRef.current(d.cum_volume, bjIso);
+      const auctionObservation = d.time_label === "opening_anchor";
+      const lb = auctionObservation ? null : lbRef.current(d.cum_volume, bjIso);
       const pts = pointsRef.current;
       const i = pts.indexOf(d);
-      const amount = getMinuteAmount(d, i > 0 ? pts[i - 1] : undefined);
+      const amount = auctionObservation ? null : getMinuteAmount(d, i > 0 ? pts[i - 1] : undefined);
       const minuteAmount = amount != null ? amount / 1e4 : null; // 万
       const pctCls = (v: number | null) => (v == null ? "text-zinc-600 dark:text-zinc-400" : v > 0 ? "text-red-700 dark:text-red-500" : v < 0 ? "text-emerald-700 dark:text-emerald-500" : "text-zinc-600 dark:text-zinc-400");
       const lbCls = lb == null ? "text-zinc-600 dark:text-zinc-400" : lb >= 1.5 ? "text-red-700 dark:text-red-500" : lb >= 0.8 ? "text-amber-800 dark:text-amber-500" : "text-sky-700 dark:text-sky-500";
@@ -843,7 +870,9 @@ export function MinuteChart({
         if (cls !== undefined && el.getAttribute("class") !== cls) el.setAttribute("class", cls);
       };
       const observation = d.observation_ts ? new Date(d.observation_ts).getTime() : NaN;
-      put("hhmm", d.time_label === "interval_end" && Number.isFinite(observation)
+      put("hhmm", auctionObservation && Number.isFinite(observation)
+        ? `竞价观察 ${new Date(observation + BJ_OFFSET * 1000).toISOString().slice(11, 19)} · 原标签 ${d.source_label_ts ? bjHHMM({ts: d.source_label_ts}) : "未核"}`
+        : d.time_label === "interval_end" && Number.isFinite(observation)
         ? `分钟截至 ${bjIso.slice(11, 16)} · 报价 ${new Date(observation + BJ_OFFSET * 1000).toISOString().slice(11, 19)}`
         : bjIso.slice(11, 16));
       put("price", isPositivePrice(d.price) ? d.price.toFixed(2) : "--");
@@ -851,7 +880,10 @@ export function MinuteChart({
       put("avg", isPositivePrice(d.avg) ? d.avg.toFixed(2) : "--");
       put("avgdev", avgDevPct != null ? fmtPct(avgDevPct) : "", pctCls(avgDevPct));
       put("lb", lb != null ? lb.toFixed(2) : "--", `font-mono ${lbCls}`);
-      put("vol", d.volume != null ? Math.round(d.volume / 100).toLocaleString() + " 手" : "--");
+      put("vollabel", auctionObservation ? "累计量" : "分钟量");
+      put("vol", auctionObservation
+        ? typeof d.cum_volume === "number" && Number.isFinite(d.cum_volume) && d.cum_volume >= 0 ? `${d.cum_volume.toLocaleString("en-US")} 股` : "--"
+        : d.volume != null ? Math.round(d.volume / 100).toLocaleString() + " 手" : "--");
       put("amt", minuteAmount != null ? minuteAmount.toFixed(0) + " 万" : "--");
       put("cum", d.cum_amount != null ? (d.cum_amount / 1e8).toFixed(2) + " 亿" : "--");
       const evEl = tooltip.querySelector<HTMLElement>('[data-f="ev"]');
@@ -896,7 +928,7 @@ export function MinuteChart({
         return;
       }
       const best = nearestPoint(param.time);
-      const time = best ? (new Date(best.ts).getTime() / 1000 + BJ_OFFSET) as Time : param.time;
+      const time = best ? (Math.floor(Date.parse(best.ts) / 60000) * 60 + BJ_OFFSET) as Time : param.time;
       if (best && isPositivePrice(best.price)) {
         snapping = true;
         try { chart.setCrosshairPosition(best.price, time, series as never); }
@@ -940,8 +972,8 @@ export function MinuteChart({
     boxEl.addEventListener("pointercancel", markOutside);
 
     const unsub = chart.subscribeCrosshairMove(onMove);
-    // 全天槽已在数据集里（whitespace 撑满 9:25-15:00），fitContent 即完整交易时段；
-    // 左端 -1.5 给 9:25 竞价金点留出圆的空间
+    // 全天槽已在数据集里（whitespace 撑满9:15-15:00），不增加滚动区；
+    // 左端留出单点标记的空间。
     chart.timeScale().fitContent();
     chart.timeScale().setVisibleLogicalRange({ from: -1.5, to: slots.length + 0.5 });
 
@@ -1003,7 +1035,7 @@ export function MinuteChart({
     const nextRange = [axis.min, axis.max, axis.pctMin, axis.pctMax] as const;
     if (s.axisRange?.every((value, index) => value === nextRange[index])) return;
     s.axisRange = nextRange;
-    for (const series of [s.price, s.avg, s.auction, s.events]) {
+    for (const series of [s.price, s.avg, s.auction, s.observedAuction, s.events]) {
       series?.applyOptions({
         autoscaleInfoProvider: () => ({ priceRange: { minValue: axis.min, maxValue: axis.max } }),
         priceFormat: { type: "custom", minMove: 0.01, formatter: (value: number) => formatMinuteAxisTick(value, axis.min, axis.max) },
@@ -1080,6 +1112,7 @@ export function MinuteChart({
     s.avg?.applyOptions({ color: p.avg });
     s.index?.applyOptions({ color: p.index });
     s.auction?.applyOptions({ color: p.auction });
+    s.observedAuction?.applyOptions({ color: p.auction });
     s.events?.applyOptions({ color: p.event });
     for (const { pl, pick } of s.priceLines) pl.applyOptions({ color: pick(p) });
   }, []);
@@ -1132,7 +1165,17 @@ export function MinuteChart({
     <div className="flex h-full w-full flex-col">
       {/* 角标行：量比 + 竞价 + 上证叠加图例——独立文档流行（原 absolute right-2 top-1.5
           浮层压在图表右上角价格标签/最新价区域），不占图表绘制空间、互不遮挡 */}
-      <div className="flex shrink-0 flex-wrap items-center justify-end gap-2 px-2 pb-0.5 pt-1 text-[11px]">
+      <div className="kline-controls flex shrink-0 flex-wrap items-center gap-2 border-b border-zinc-100 px-3 py-2 text-[11px] dark:border-zinc-800/60">
+        <span className="text-zinc-600 dark:text-zinc-400">指标：</span>
+        <button type="button" aria-label="上证指数叠加" aria-pressed={indexSelected} onClick={onIndexToggle}
+          title={indexSelected && indexPaused ? "竞价期间暂停请求和叠加；连续交易时重新核验"
+            : indexSelected && indexWaiting ? "等待可比较的同日个股连续分时，尚未请求指数"
+              : "点击后读取上证指数，按同日昨收归一叠加"}
+          className={`rounded px-1.5 py-0.5 font-mono transition-colors ${indexSelected
+            ? "bg-zinc-100 font-medium text-purple-700 dark:bg-zinc-800 dark:text-purple-300"
+            : "text-zinc-600 dark:text-zinc-400 hover:text-zinc-900 dark:hover:text-zinc-100"}`}>
+          上证指数{indexSelected && indexPaused ? " · 暂停" : indexSelected && indexWaiting ? " · 等待" : ""}
+        </button>
         <span ref={focusRef} hidden={fixedMissing || inspection.ts === null} className="chart-focus" aria-label="图表当前焦点"><span data-focus-time /> <span data-focus-price className="chart-focus-price" /></span>
         {fixedMissing && <span role="status" className="text-amber-800 dark:text-amber-300">固定分钟已不在当前资料中；没有用近邻分钟替代。</span>}
         {invalidPrices > 0 && <span className="text-amber-800 dark:text-amber-300">{invalidPrices} 个无效价格已留空</span>}
@@ -1149,6 +1192,7 @@ export function MinuteChart({
             {limitState === "upper-only" ? "跌停价缺失" : limitState === "lower-only" ? "涨停价缺失" : "涨跌停价缺失"}
           </span>
         )}
+        {outsideLimits && <span className="whitespace-nowrap text-zinc-600 dark:text-zinc-400" title={outsideLimits} aria-label={outsideLimits}>限价</span>}
         {indexIssue === "invalid-price" && <span className="text-amber-800 dark:text-amber-300">叠加指数基准无效</span>}
         {indexIssue === "unknown-date" && <span className="text-amber-800 dark:text-amber-300">叠加指数参考日未知</span>}
         {indexIssue === "mixed-date" && <span className="text-amber-800 dark:text-amber-300">叠加指数交易日混合/无效</span>}

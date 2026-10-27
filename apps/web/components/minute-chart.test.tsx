@@ -55,24 +55,35 @@ describe("MinuteChart 图内读点与固定", () => {
   const tip = (container: HTMLElement, field: string) => container.querySelector(`[data-f="${field}"]`)?.textContent;
   const props = {symbol: "600410", name: "样本公司", prevClose: 10, referenceDate: "2026-09-17"};
 
-  it.each([0, 12_880_400])("开盘竞价锚点保留源观察与累计量%s，不画成09:30连续分钟", volume => {
+  it.each([0, 12_880_400])("开盘竞价锚点以真实观察单点显示，累计量%s不冒充分钟量", volume => {
     const anchor: MinutePoint = {...point(4.5), source: "tencent", time_label: "opening_anchor",
       observation_ts: "2026-09-17T09:25:19+08:00", received_at: "2026-09-17T09:30:02+08:00",
-      cum_volume: volume, cum_amount: volume * 4.5};
+      cum_volume: volume, cum_amount: volume * 4.5, volume, minute_amount: 42, avg: 4.5};
     const before = JSON.stringify(anchor);
     const view = render(<MinuteChart {...props} points={[anchor]}/>);
-    expect(charts).toHaveLength(0);
-    expect(surface().tabIndex).toBe(-1);
-    expect(screen.getByRole("status").textContent).toContain("尚无连续分时");
-    expect(screen.getByRole("status").textContent).toContain("竞价观察 09:25:19");
-    expect(screen.getByRole("status").textContent).toContain("4.50");
-    expect(screen.getByRole("status").textContent).toContain(volume === 0 ? "0 股" : "12,880,400 股");
+    expect(charts).toHaveLength(1);
+    expect(surface().tabIndex).toBe(0);
+    const observation = charts[0].series.find(series => series.opts.title === "竞价观察")!;
+    expect(observation.values.filter(row => row.value != null)).toEqual([{time: Date.UTC(2026, 8, 17, 9, 25) / 1000, value: 4.5}]);
+    expect(observation.opts.lineVisible).toBe(false);
+    expect(charts[0].series.find(series => series.kind === "price")!.values.every(row => row.value == null)).toBe(true);
+    expect(charts[0].series.find(series => series.kind === "volume")!.values.every(row => row.value == null)).toBe(true);
+    expect(charts[0].series[2].values.every(row => row.value == null)).toBe(true); // no auction average-price line
+    fireEvent.pointerEnter(surface()); fireEvent.keyDown(surface(), {key: "End"});
+    const move = charts[0].subscribeCrosshairMove.mock.calls[0][0] as (p: {time:number; point:{x:number;y:number}}) => void;
+    act(() => move({time: Date.UTC(2026, 8, 17, 9, 25) / 1000, point: {x: 20, y: 20}}));
+    expect(charts[0].setCrosshairPosition).toHaveBeenLastCalledWith(4.5, Date.UTC(2026, 8, 17, 9, 25) / 1000, expect.anything());
+    expect(tip(view.container, "hhmm")).toBe("竞价观察 09:25:19 · 原标签 09:30");
+    expect(tip(view.container, "lb")).toBe("--");
+    expect(tip(view.container, "vollabel")).toBe("累计量");
+    expect(tip(view.container, "vol")).toBe(volume === 0 ? "0 股" : "12,880,400 股");
+    expect(tip(view.container, "amt")).toBe("--");
     expect(JSON.stringify(anchor)).toBe(before);
-    // A later render/local clock cannot turn the retained anchor into a plotted minute.
+    // A later render cannot turn the retained source label into a continuous minute.
     view.rerender(<MinuteChart {...props} points={[{...anchor}]}/>);
-    expect(charts).toHaveLength(0);
+    expect(charts).toHaveLength(1);
     const actual = {...point(4.6, "31"), source: "tencent"};
-    view.rerender(<MinuteChart {...props} points={[anchor, actual]} index={{prevClose: 3000, referenceDate: "2026-09-17", points: [anchor]}}/>);
+    view.rerender(<MinuteChart {...props} points={[anchor, actual]} indexSelected index={{prevClose: 3000, referenceDate: "2026-09-17", points: [anchor]}}/>);
     expect(charts).toHaveLength(1);
     const values = charts[0].series.find(series => series.kind === "price")!.values;
     expect(values.find(row => row.time === Date.UTC(2026, 8, 17, 9, 30) / 1000)?.value).toBeUndefined();
@@ -80,6 +91,44 @@ describe("MinuteChart 图内读点与固定", () => {
     expect(screen.queryByText(/上证 [+-]/)).toBeNull();
     expect(screen.queryByRole("status")).toBeNull();
     expect(view.container.querySelector('[data-chart-surface]')?.className).toContain("h-full w-full");
+  });
+
+  it("09:18的单个源观察只画原时点，不填09:15至09:25的竞价轨迹", () => {
+    const anchor: MinutePoint = {...point(4.5), source: "tencent", time_label: "opening_anchor", observation_ts: "2026-09-17T09:18:22+08:00"};
+    const original = JSON.stringify(anchor);
+    render(<MinuteChart {...props} points={[anchor]}/>);
+    const observation = charts[0].series.find(series => series.opts.title === "竞价观察")!;
+    expect(observation.values.filter(row => row.value != null)).toEqual([{time: Date.UTC(2026, 8, 17, 9, 18) / 1000, value: 4.5}]);
+    expect(JSON.stringify(anchor)).toBe(original);
+  });
+
+  it.each(["09:18:00", "14:57:00", "14:59:59"])("%s个股真实观察保留，缓存live指数也不叠加", clock => {
+    vi.useFakeTimers(); vi.setSystemTime(new Date(`2026-09-17T${clock}+08:00`));
+    try {
+      const stock = {...point(10), ts: `2026-09-17T${clock}+08:00`};
+      const index = {prevClose: 3000, referenceDate: "2026-09-17", mode: "live" as const,
+        points: [{...stock, price: 9900}]};
+      const view = render(<MinuteChart {...props} points={[stock]} indexSelected index={index}/>);
+      expect(charts).toHaveLength(1);
+      expect(charts[0].series.find(series => series.kind === "price")!.values.some(row => row.value === 10)).toBe(true);
+      expect(range(charts[0].series.find(series => series.kind === "price")!)!.maxValue).toBeLessThan(11);
+      expect(charts[0].series.find(series => series.opts.lineStyle === 3)?.values.every(row => row.value == null) ?? true).toBe(true);
+      expect(screen.queryByText(/上证 [+-]/)).toBeNull();
+      view.unmount();
+    } finally {vi.useRealTimers();}
+  });
+
+  it("waiting指数即使有同日有效尾点也不画；09:30经核实live连续点才恢复", () => {
+    vi.useFakeTimers(); vi.setSystemTime(new Date("2026-09-17T09:30:02+08:00"));
+    try {
+      const index = {prevClose: 3000, referenceDate: "2026-09-17", mode: "waiting" as "waiting" | "live", points: [point(3030)]};
+      const view = render(<MinuteChart {...props} points={[point(10)]} indexSelected index={index}/>);
+      expect(charts[0].series.find(series => series.opts.lineStyle === 3)?.values.every(row => row.value == null) ?? true).toBe(true);
+      view.rerender(<MinuteChart {...props} points={[point(10)]} indexSelected index={{...index, mode: "live"}}/>);
+      expect(charts).toHaveLength(1);
+      expect(charts[0].series.find(series => series.opts.lineStyle === 3)!.values.some(row => row.value === 1)).toBe(true);
+      view.unmount();
+    } finally {vi.useRealTimers();}
   });
 
   it("错误竞价标记只说明未核，不能借未来接收钟绘图或伪造观察事实", () => {
@@ -90,9 +139,24 @@ describe("MinuteChart 图内读点与固定", () => {
     expect(screen.queryByText(/竞价观察 09:25:19/)).toBeNull();
   });
 
+  it.each([
+    {source: "tdx"}, {observation_ts: null}, {observation_ts: "2026-09-16T09:25:19+08:00"},
+    {observation_ts: "2026-09-17T09:25:23+08:00"}, {observation_ts: "2026-09-17T09:14:59+08:00"},
+    {ts: "2026-09-17T09:31:00+08:00"}, {price: 0},
+  ] as Partial<MinutePoint>[])("错误/未来竞价观察%j仍明确空，不补轨迹", patch => {
+    vi.useFakeTimers(); vi.setSystemTime(new Date("2026-09-17T09:25:22+08:00"));
+    try {
+      const view = render(<MinuteChart {...props} points={[{...point(4.5), source: "tencent", time_label: "opening_anchor",
+        observation_ts: "2026-09-17T09:25:19+08:00", ...patch}]}/>);
+      expect(charts).toHaveLength(0);
+      expect(screen.getByRole("status").textContent).toContain("竞价记录时点未核");
+      view.unmount();
+    } finally {vi.useRealTimers();}
+  });
+
   it("取消额外对照区域，图内读点与指数叠加仍按有效同日基准归一且不补指数缺槽", () => {
     const points = [point(10), point(10.5, "31")];
-    const view = render(<MinuteChart {...props} points={points} index={{prevClose: 3000, referenceDate: "2026-09-17", points: [point(3000), point(3030, "31")]}}/>);
+    const view = render(<MinuteChart {...props} points={points} indexSelected index={{prevClose: 3000, referenceDate: "2026-09-17", points: [point(3000), point(3030, "31")]}}/>);
     fireEvent.pointerEnter(surface());
     fireEvent.keyDown(surface(), {key:"End"});
     expect(screen.queryByRole("region", {name:"同分钟分时对照"})).toBeNull();
@@ -102,13 +166,13 @@ describe("MinuteChart 图内读点与固定", () => {
     const overlay = charts[0].series.find(series => series.opts.lineStyle === 3)!;
     const minute31 = Date.UTC(2026,8,17,9,31)/1000;
     expect(overlay.values.find(value => value.time === minute31)?.value).toBe(1);
-    view.rerender(<MinuteChart {...props} points={points} index={{prevClose: 3000, referenceDate: "2026-09-17", points: [point(3000)]}}/>);
+    view.rerender(<MinuteChart {...props} points={points} indexSelected index={{prevClose: 3000, referenceDate: "2026-09-17", points: [point(3000)]}}/>);
     expect(overlay.values.find(value => value.time === minute31)?.value).toBeUndefined();
     expect(tip(view.container, "pct")).toBe("+5.00%");
-    view.rerender(<MinuteChart {...props} points={points} index={{prevClose: 3000, referenceDate: "2026-09-18", points: [point(3030, "31", null, "18")]}}/>);
+    view.rerender(<MinuteChart {...props} points={points} indexSelected index={{prevClose: 3000, referenceDate: "2026-09-18", points: [point(3030, "31", null, "18")]}}/>);
     expect(overlay.values.every(value => value.value === undefined)).toBe(true);
     expect(screen.getByText("叠加指数与主图非同一交易日")).toBeTruthy();
-    view.rerender(<MinuteChart {...props} points={points} referenceDate={null} index={{prevClose: 3000, referenceDate: "2026-09-18", points: [point(3030, "31", null, "18")]}}/>);
+    view.rerender(<MinuteChart {...props} points={points} referenceDate={null} indexSelected index={{prevClose: 3000, referenceDate: "2026-09-18", points: [point(3030, "31", null, "18")]}}/>);
     fireEvent.pointerEnter(surface());
     fireEvent.keyDown(surface(), {key:"End"});
     expect(tip(view.container, "price")).toBe("10.50");
@@ -266,7 +330,7 @@ describe("MinuteChart 首提交主题工作", () => {
       points={[{ ...point(10), volume: 1000 }, { ...point(11, "31", 10.5), volume: 2000 }]}
       prevClose={10} upperPrice={11} lowerPrice={9}
       auction={{ price: 9.5, pct: -5 }}
-      index={{ prevClose: 3000, points: [point(3000), point(3030, "31")] }}
+      indexSelected index={{ prevClose: 3000, points: [point(3000), point(3030, "31")] }}
       newsEvents={[{ hhmm: "09:31", title: "fixture", count: 1, important: true }]}
     />);
     const chart = charts[0];
@@ -317,7 +381,7 @@ describe("MinuteChart 首提交主题工作", () => {
     expect(chart.series[0].setData).toHaveBeenCalledOnce();
     expect(chart.series[1].setData).toHaveBeenCalledOnce();
     for (const series of core(chart).slice(2)) expect(series.setData).not.toHaveBeenCalled();
-    view.rerender(<MinuteChart points={next} prevClose={10} index={{ prevClose: 3000, points: [point(3030, "31")] }} />);
+    view.rerender(<MinuteChart points={next} prevClose={10} indexSelected index={{ prevClose: 3000, points: [point(3030, "31")] }} />);
     expect(charts).toHaveLength(1);
     expect(chart.series[0].values.some(value => value.value === 10.5)).toBe(true);
     expect(chart.series.find(series => series.opts.lineStyle === 3)?.values.some(value => value.value === 1)).toBe(true);
@@ -358,12 +422,12 @@ describe("MinuteChart 实际轴域更新", () => {
     const view = render(<MinuteChart points={points} prevClose={100} />);
     const chart = charts[0];
     const overlay = {points: [point(3000)], prevClose: 3000, referenceDate: "2026-09-17"};
-    view.rerender(<MinuteChart points={points} prevClose={100} index={overlay} />);
+    view.rerender(<MinuteChart points={points} prevClose={100} indexSelected index={overlay} />);
     const series = chart.series.find(series => series.kind === "line" && series.opts.lineStyle === 3)!;
     expect(series.values.some(value => value.value === 0)).toBe(true);
-    view.rerender(<MinuteChart points={points} prevClose={100} index={{...overlay, points: [point(3000), point(3030, "31")]}} />);
+    view.rerender(<MinuteChart points={points} prevClose={100} indexSelected index={{...overlay, points: [point(3000), point(3030, "31")]}} />);
     expect(series.values.find(value => value.time === Date.UTC(2026, 8, 17, 9, 31) / 1000)?.value).toBe(1);
-    view.rerender(<MinuteChart points={points} prevClose={100} index={{...overlay, referenceDate: "2026-09-18"}} />);
+    view.rerender(<MinuteChart points={points} prevClose={100} indexSelected index={{...overlay, referenceDate: "2026-09-18"}} />);
     expect(series.values.every(value => value.value === undefined)).toBe(true);
     expect(charts).toHaveLength(1);
     expect(chart.remove).not.toHaveBeenCalled();
@@ -386,10 +450,10 @@ describe("MinuteChart 实际轴域更新", () => {
     expect(charts).toHaveLength(1);
   });
   it("域内 tick 继续更新数据，但不重复写入相同的坐标范围", () => {
-    const view = render(<MinuteChart points={[point(100)]} prevClose={100} limitPct={10} />);
+    const view = render(<MinuteChart points={[point(99), point(101, "31")]} prevClose={100} limitPct={10} />);
     const chart = charts[0];
     for (const series of chart.series) series.applyOptions.mockClear();
-    view.rerender(<MinuteChart points={[point(101, "31", 100.5)]} prevClose={100} limitPct={10} />);
+    view.rerender(<MinuteChart points={[point(99), point(101, "31", 100.5), point(100.5, "32")]} prevClose={100} limitPct={10} />);
     expect(charts).toHaveLength(1);
     expect(chart.series[0].values.some(value => value.value === 101)).toBe(true);
     const axisWrites = chart.series.flatMap(series => series.applyOptions.mock.calls)
@@ -510,15 +574,37 @@ it("magnetic focus shows the exact selected minute price and hides on leaving", 
 });
 
 describe("MinuteChart 轴契约", () => {
+  it("真实涨跌停线保留参考，但不撑大小波动显示域", () => {
+    render(<MinuteChart points={[point(9.99), point(10.01, "31")]} prevClose={10} limitPct={10} upperPrice={11} lowerPrice={9}/>);
+    const chart = charts[0], axis = range(chart.series[0])!;
+    expect(axis.minValue).toBeGreaterThan(9.95); expect(axis.maxValue).toBeLessThan(10.05);
+    expect(chart.series[0].createPriceLine.mock.calls.map(([opts]) => [opts.title, opts.price]))
+      .toEqual([["昨收", 10], ["涨停", 11], ["跌停", 9]]);
+    expect(screen.getByLabelText("涨停 11.00（窗外）；跌停 9.00（窗外）").getAttribute("title"))
+      .toBe("涨停 11.00（窗外）；跌停 9.00（窗外）");
+  });
+  it("指数极值参与可见显示域，但不成为个股真实越界提示，开关不重建或重置缩放", () => {
+    const props = {points: [point(10.01)], prevClose: 10, limitPct: 10, upperPrice: 11, lowerPrice: 9};
+    const index = {prevClose: 100, points: [point(120)]};
+    const view = render(<MinuteChart {...props} indexSelected index={index}/>);
+    const chart = charts[0];
+    expect(range(chart.series[0])!.maxValue).toBeGreaterThan(12);
+    expect(screen.queryByText("超出名义参考范围")).toBeNull();
+    chart.timeScale().setVisibleLogicalRange.mockClear(); chart.timeScale().fitContent.mockClear();
+    view.rerender(<MinuteChart {...props} indexSelected={false} index={index}/>);
+    expect(range(chart.series[0])!.maxValue).toBeLessThan(10.05);
+    expect(charts).toHaveLength(1); expect(chart.remove).not.toHaveBeenCalled();
+    expect(chart.timeScale().setVisibleLogicalRange).not.toHaveBeenCalled(); expect(chart.timeScale().fitContent).not.toHaveBeenCalled();
+  });
   it("新极值原位更新两轴，不销毁图表", () => {
     const view = render(<MinuteChart points={[point(10)]} prevClose={10} limitPct={10} />);
     const c = charts[0];
     view.rerender(<MinuteChart points={[point(10), point(11.5, "31")]} prevClose={10} limitPct={10} />);
     expect(charts).toHaveLength(1);
     expect(c.remove).not.toHaveBeenCalled();
-    expect(range(c.series[0])?.maxValue).toBeCloseTo(11.5);
-    expect(range(c.series[1])?.minValue).toBeCloseTo(-10);
-    expect(range(c.series[1])?.maxValue).toBeCloseTo(15);
+    expect(range(c.series[0])?.maxValue).toBeCloseTo(11.56);
+    expect(range(c.series[1])?.minValue).toBeCloseTo(-0.6);
+    expect(range(c.series[1])?.maxValue).toBeCloseTo(15.6);
   });
 
   it("百分比序列保留轴参与资格，仅隐藏线条；formatter 固定两位且无负零", () => {
@@ -528,7 +614,7 @@ describe("MinuteChart 轴契约", () => {
     expect(pct.opts.lineVisible).toBe(false);
     expect(pct.opts.priceFormat).toMatchObject({ type: "custom", minMove: 0.01 });
     const formatter = (pct.opts.priceFormat as { formatter: (value: number) => string }).formatter;
-    const labels = [-0.12, -0.08, -0.04, -0.0049, 0, 0.04, 0.08, 0.12].map(formatter);
+    const labels = [-0.10, -0.08, -0.04, -0.0049, 0, 0.04, 0.08, 0.10].map(formatter);
     expect(new Set(labels).size).toBe(labels.length - 1); // -0.0049 与 0 都应归一为同一个 0.00%
     expect(labels).not.toContain("−0.00%");
     expect(formatter(0.1)).toBe("0.10%");
@@ -543,13 +629,13 @@ describe("MinuteChart 轴契约", () => {
 
   it("均价、竞价和叠加共用同一价格域，叠加极值不会只撑大左轴", () => {
     render(<MinuteChart points={[point(10, "30", 12)]} prevClose={10} limitPct={10}
-      auction={{ price: 8, pct: -20 }} index={{ prevClose: 100, points: [point(150)] }} />);
+      auction={{ price: 8, pct: -20 }} indexSelected index={{ prevClose: 100, points: [point(150)] }} />);
     const s = charts[0].series;
     for (const entry of s.filter(x => x.kind !== "volume")) {
       const r = range(entry);
       expect(r).toBeDefined();
-      expect(r?.minValue).toBeCloseTo(entry.opts.priceScaleId === "left" ? -20 : 8);
-      expect(r?.maxValue).toBeCloseTo(entry.opts.priceScaleId === "left" ? 50 : 15);
+      expect(r?.minValue).toBeCloseTo(entry.opts.priceScaleId === "left" ? -22.8 : 7.72);
+      expect(r?.maxValue).toBeCloseTo(entry.opts.priceScaleId === "left" ? 52.8 : 15.28);
     }
   });
 
@@ -595,7 +681,7 @@ describe("MinuteChart 轴契约", () => {
   it("叠加指数必须与自身参考日及主图交易日一致，否则不画归一线", () => {
     const sameDay = { prevClose: 100, referenceDate: "2026-09-17", points: [point(101)] };
     const view = render(
-      <MinuteChart points={[point(10)]} prevClose={10} referenceDate="2026-09-17" index={sameDay} />
+      <MinuteChart points={[point(10)]} prevClose={10} referenceDate="2026-09-17" indexSelected index={sameDay} />
     );
     expect(charts[0].series.filter(x => x.opts.priceScaleId === "left")).toHaveLength(2);
 
@@ -604,7 +690,7 @@ describe("MinuteChart 轴契约", () => {
         points={[point(10)]}
         prevClose={10}
         referenceDate="2026-09-17"
-        index={{ prevClose: 100, referenceDate: "2026-09-18", points: [point(101, "30", null, "18")] }}
+        indexSelected index={{ prevClose: 100, referenceDate: "2026-09-18", points: [point(101, "30", null, "18")] }}
       />
     );
     expect(screen.getByText("叠加指数与主图非同一交易日")).toBeTruthy();
@@ -618,7 +704,7 @@ describe("MinuteChart 轴契约", () => {
         points={[point(10)]}
         prevClose={10}
         referenceDate="2026-09-17"
-        index={{ prevClose: 100, referenceDate: "2026-09-18", points: [point(101)] }}
+        indexSelected index={{ prevClose: 100, referenceDate: "2026-09-18", points: [point(101)] }}
       />
     );
     expect(screen.getByText("叠加指数参考日不一致")).toBeTruthy();
@@ -666,7 +752,7 @@ describe("MinuteChart 轴契约", () => {
   });
 
   it("叠加指数的无效价格和参考价同样披露", () => {
-    render(<MinuteChart points={[point(10)]} prevClose={10} index={{ prevClose: Infinity, points: [point(0)] }} />);
+    render(<MinuteChart points={[point(10)]} prevClose={10} indexSelected index={{ prevClose: Infinity, points: [point(0)] }} />);
     expect(screen.getByText("叠加指数基准无效")).toBeTruthy();
     expect(screen.getByText(/无效价格已留空/)).toBeTruthy();
   });
@@ -700,4 +786,26 @@ it("bounds price labels above volume without clipping actual out-of-band values"
   expect(formatter()(-15)).toBe("−15.00%");
   expect(charts).toHaveLength(1);
   expect(chart.remove).not.toHaveBeenCalled();
+});
+
+describe("MinuteChart 指数按钮", () => {
+  it("默认不画，原日K工具条样式和原生按钮语义；受控开启/暂停即时清线", () => {
+    const onToggle = vi.fn();
+    const props = {points: [point(10)], prevClose: 10, referenceDate: "2026-09-17", onIndexToggle: onToggle,
+      index: {points: [point(3030)], prevClose: 3000, referenceDate: "2026-09-17"}};
+    const view = render(<MinuteChart {...props}/>);
+    const control = screen.getByRole("button", {name: "上证指数叠加"});
+    expect(control.tagName).toBe("BUTTON"); expect(control.getAttribute("aria-pressed")).toBe("false");
+    expect(control.closest(".kline-controls")?.className).toContain("px-3 py-2");
+    const indexSeries = charts[0].series.find(series => series.opts.lineStyle === 3)!;
+    expect(indexSeries.values.every(row => row.value == null)).toBe(true);
+    fireEvent.click(control); expect(onToggle).toHaveBeenCalledOnce();
+    view.rerender(<MinuteChart {...props} indexSelected/>);
+    expect(control.getAttribute("aria-pressed")).toBe("true");
+    expect(indexSeries.values.some(row => row.value === 1)).toBe(true);
+    view.rerender(<MinuteChart {...props} indexSelected indexPaused/>);
+    expect(indexSeries.values.every(row => row.value == null)).toBe(true);
+    expect(control.getAttribute("title")).toContain("竞价期间暂停请求");
+    expect(charts).toHaveLength(1);
+  });
 });

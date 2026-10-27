@@ -1,13 +1,15 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { act, cleanup, fireEvent, render, screen } from "@testing-library/react";
+import { act, cleanup, fireEvent, render, screen, within } from "@testing-library/react";
 import { SearchBox } from "@/components/search-box";
-import { ApiError, searchSymbols } from "@/lib/api";
+import { ApiError, addToWatchlist, searchSymbols } from "@/lib/api";
 import type { SymbolSearchItem } from "@/types/market";
 
 // vitest 未开 globals 时 RTL 自动 cleanup 不注册，必须手动（见 trade-form.test.tsx 注释）
 afterEach(cleanup);
 
 vi.mock("next/navigation", () => ({ useRouter: () => ({ push: vi.fn() }) }));
+const detail = vi.hoisted(() => ({open: vi.fn()}));
+vi.mock("@/components/detail/symbol-detail-context", () => ({useSymbolDetail: () => detail}));
 
 vi.mock("@/lib/api", () => {
   // 组件用 instanceof ApiError 区分错误文案，mock 必须提供同名类
@@ -39,6 +41,8 @@ function typeQuery(value: string) {
 
 beforeEach(() => {
   vi.mocked(searchSymbols).mockReset();
+  vi.mocked(addToWatchlist).mockReset();
+  detail.open.mockClear();
 });
 
 describe("SearchBox 搜索体验（防抖/竞态/loading/失败/空结果）", () => {
@@ -436,20 +440,158 @@ describe("SearchBox 有界本地成功选择历史", () => {
     typeQuery(query); await act(async () => {vi.advanceTimersByTime(250);});
     fireEvent.click(screen.getByRole("button", {name: new RegExp(`${name}${symbol}`)}));
   }
-  it("只在有效结果选中后保存，重挂载可用历史重搜且焦点稳定", async () => {
+  it("只在有效结果选中后保存，重挂载后一键详情零重搜且焦点稳定", async () => {
     const view = render(<SearchBox/>); await act(async () => {});
     await choose("guizhoumaotai", "600519", "贵州茅台");
     expect(JSON.parse(localStorage.getItem(key)!)).toEqual([{query: "guizhoumaotai", symbol: "600519", name: "贵州茅台", market: "SH"}]);
     view.unmount(); render(<SearchBox/>); await act(async () => {});
     const input = screen.getByRole("textbox"); fireEvent.focus(input);
-    const history = screen.getByRole("button", {name: /重搜 贵州茅台/});
+    const history = screen.getByRole("button", {name: /查看 贵州茅台/});
     expect(searchSymbols).toHaveBeenCalledTimes(1);
     fireEvent.keyDown(input, {key: "ArrowDown"}); expect(document.activeElement).toBe(history);
     fireEvent.keyDown(history, {key: "ArrowUp"}); expect(document.activeElement).toBe(input);
-    vi.mocked(searchSymbols).mockResolvedValueOnce([item("600519", "贵州茅台")]); fireEvent.click(history);
-    expect(document.activeElement).toBe(input); await act(async () => {vi.advanceTimersByTime(250);});
-    expect(searchSymbols).toHaveBeenLastCalledWith("guizhoumaotai");
+    detail.open.mockClear(); fireEvent.click(history);
+    expect(document.activeElement).toBe(input); await act(async () => {vi.advanceTimersByTime(500);});
+    expect(searchSymbols).toHaveBeenCalledTimes(1);
+    expect(detail.open).toHaveBeenCalledExactlyOnceWith({symbol: "600519"});
+    expect(screen.queryByRole("region", {name: "证券搜索结果"})).toBeNull();
     expect(JSON.parse(localStorage.getItem(key)!)).toHaveLength(1);
+  });
+  it("同代码SH指数与SZ个股分别直达，历史去重保留市场身份", async () => {
+    localStorage.setItem(key, JSON.stringify([
+      {query: "shangzheng", symbol: "000001", name: "上证指数", market: "SH"},
+      {query: "pingan", symbol: "000001", name: "平安银行", market: "SZ"},
+    ]));
+    render(<SearchBox/>); await act(async () => {}); const input = screen.getByRole("textbox"); fireEvent.focus(input);
+    fireEvent.click(screen.getByRole("button", {name: /查看 上证指数/}));
+    expect(detail.open).toHaveBeenLastCalledWith({symbol: "sh000001"});
+    fireEvent.focus(input);
+    fireEvent.click(screen.getByRole("button", {name: /查看 平安银行/}));
+    expect(detail.open).toHaveBeenLastCalledWith({symbol: "000001"});
+    await act(async () => {vi.advanceTimersByTime(500);});
+    expect(searchSymbols).not.toHaveBeenCalled();
+    expect(JSON.parse(localStorage.getItem(key)!)).toHaveLength(2);
+  });
+  it("显式北交所指数市场不能被通用上证前缀回退覆盖", async () => {
+    localStorage.setItem(key, JSON.stringify([{query: "北证50", symbol: "899050", name: "北证50", market: "BJ"}]));
+    render(<SearchBox/>); await act(async () => {}); fireEvent.focus(screen.getByRole("textbox"));
+    fireEvent.click(screen.getByRole("button", {name: /查看 北证50/}));
+    expect(detail.open).toHaveBeenCalledExactlyOnceWith({symbol: "bj899050"});
+    expect(searchSymbols).not.toHaveBeenCalled();
+  });
+  it("已知代码段与市场冲突或未知段只保留检索词，不构成直接历史身份", async () => {
+    localStorage.setItem(key, JSON.stringify([
+      {query: "wrong-bj", symbol: "600519", name: "错误市场一", market: "BJ"},
+      {query: "wrong-sh", symbol: "920025", name: "错误市场二", market: "SH"},
+      {query: "wrong-prefix", symbol: "sh600519", name: "前缀冲突", market: "BJ"},
+      {query: "unknown-bond", symbol: "113001", name: "未知品种", market: "SH"},
+    ]));
+    render(<SearchBox/>); await act(async () => {}); fireEvent.focus(screen.getByRole("textbox"));
+    expect(screen.queryByRole("button", {name: /^查看/})).toBeNull();
+    expect(screen.getAllByRole("button", {name: /^检索词/})).toHaveLength(4);
+    vi.mocked(searchSymbols).mockResolvedValueOnce([]);
+    fireEvent.click(screen.getByRole("button", {name: "检索词 wrong-bj"}));
+    await act(async () => {vi.advanceTimersByTime(250);});
+    expect(searchSymbols).toHaveBeenCalledExactlyOnceWith("wrong-bj");
+    expect(detail.open).not.toHaveBeenCalled();
+    expect(JSON.parse(localStorage.getItem(key)!)).toHaveLength(4);
+  });
+  it.each([
+    ["600519", "BJ"], ["920025", "SH"], ["113001", "SH"],
+  ])("当前结果%s/%s身份冲突或未核不能直接开或保存成确定ID", async (symbol, market) => {
+    render(<SearchBox/>); await act(async () => {});
+    vi.mocked(searchSymbols).mockResolvedValueOnce([{...item(symbol, "待核证券"), market}]);
+    typeQuery("check-market"); await act(async () => {vi.advanceTimersByTime(250);});
+    fireEvent.click(screen.getByRole("button", {name: new RegExp(`待核证券${symbol}${market}`)}));
+    await act(async () => {vi.advanceTimersByTime(500);});
+    expect(detail.open).not.toHaveBeenCalled();
+    expect(screen.getByRole("alert").textContent).toContain("证券身份待核");
+    expect(searchSymbols).toHaveBeenCalledTimes(1);
+    expect(JSON.parse(localStorage.getItem(key)!)).toEqual([{query: "check-market"}]);
+  });
+  it("已核A股ETF与B股代码段保留原市场，均可直接查看", async () => {
+    const pairs = [["600519", "SH"], ["510300", "SH"], ["900901", "SH"], ["000001", "SZ"], ["200002", "SZ"], ["300750", "SZ"], ["430047", "BJ"], ["835185", "BJ"], ["920025", "BJ"]];
+    localStorage.setItem(key, JSON.stringify(pairs.map(([symbol, market]) => ({query: symbol, symbol, name: symbol, market}))));
+    render(<SearchBox/>); await act(async () => {}); const input = screen.getByRole("textbox");
+    for (const [symbol, market] of pairs) {
+      fireEvent.focus(input); fireEvent.click(screen.getByRole("button", {name: `查看 ${symbol} ${symbol} ${market}`}));
+      expect(detail.open).toHaveBeenLastCalledWith({symbol});
+    }
+    expect(searchSymbols).not.toHaveBeenCalled();
+    expect(JSON.parse(localStorage.getItem(key)!)).toHaveLength(9);
+  });
+  it("SZ1段证券沿原详情入口查看并可从已选历史直接再开", async () => {
+    render(<SearchBox/>); await act(async () => {});
+    vi.mocked(searchSymbols).mockResolvedValueOnce([{...item("159915", "创业板ETF"), market: "SZ"}]);
+    const input = typeQuery("cybetf"); await act(async () => {vi.advanceTimersByTime(250);});
+    fireEvent.click(screen.getByRole("button", {name: /创业板ETF159915SZ/}));
+    expect(detail.open).toHaveBeenCalledExactlyOnceWith({symbol: "159915"});
+    expect(JSON.parse(localStorage.getItem(key)!)[0]).toMatchObject({symbol: "159915", market: "SZ"});
+    fireEvent.focus(input); fireEvent.click(screen.getByRole("button", {name: /查看 创业板ETF/}));
+    expect(detail.open).toHaveBeenCalledTimes(2); expect(detail.open).toHaveBeenLastCalledWith({symbol: "159915"});
+    expect(searchSymbols).toHaveBeenCalledTimes(1);
+  });
+  it("指数不显示加自选或借裸码的已自选状态", async () => {
+    vi.mocked(searchSymbols).mockResolvedValueOnce([{...item("000001", "上证指数"), market: "SH", is_realtime: true}]);
+    render(<SearchBox/>); typeQuery("szzs"); await act(async () => {vi.advanceTimersByTime(250);});
+    const row = screen.getByRole("button", {name: /上证指数000001SH/}).closest(".search-result-row")!;
+    expect(within(row as HTMLElement).getByText("指数 · 仅查看")).toBeTruthy();
+    expect(within(row as HTMLElement).queryByText("已自选 ✓")).toBeNull();
+    expect(screen.queryByRole("button", {name: /加入自选/})).toBeNull();
+    expect(addToWatchlist).not.toHaveBeenCalled();
+  });
+  it("同批加入SZ000001不把SH000001指数标成已自选", async () => {
+    vi.mocked(searchSymbols).mockResolvedValueOnce([{...item("000001", "上证指数"), market: "SH"}, {...item("000001", "平安银行"), market: "SZ"}]);
+    vi.mocked(addToWatchlist).mockResolvedValueOnce({symbol: "000001", name: "平安银行", source: "manual", note: null, group_name: "默认", created_at: null, updated_at: null});
+    render(<SearchBox/>); typeQuery("000001"); await act(async () => {vi.advanceTimersByTime(250);});
+    await act(async () => {fireEvent.click(screen.getByRole("button", {name: "加入自选 平安银行"}));});
+    expect(addToWatchlist).toHaveBeenCalledExactlyOnceWith("000001", "平安银行");
+    const indexRow = screen.getByRole("button", {name: /上证指数000001SH/}).closest(".search-result-row")!;
+    const stockRow = screen.getByRole("button", {name: /平安银行000001SZ/}).closest(".search-result-row")!;
+    expect(within(indexRow as HTMLElement).getByText("指数 · 仅查看")).toBeTruthy();
+    expect(within(indexRow as HTMLElement).queryByText("已自选 ✓")).toBeNull();
+    expect(within(stockRow as HTMLElement).getByText("已自选 ✓")).toBeTruthy();
+  });
+  it("市场冲突或未知身份结果没有可能写错证券的快捷加入动作", async () => {
+    vi.mocked(searchSymbols).mockResolvedValueOnce([{...item("600519", "错市场"), market: "BJ"}, {...item("113001", "未知段"), market: "SH"}]);
+    render(<SearchBox/>); typeQuery("identity"); await act(async () => {vi.advanceTimersByTime(250);});
+    expect(screen.queryByRole("button", {name: /加入自选/})).toBeNull();
+    expect(screen.getAllByText("身份待核")).toHaveLength(2);
+    expect(addToWatchlist).not.toHaveBeenCalled();
+  });
+  it("正常结果与历史共用选中处理，指数显式市场不丢失", async () => {
+    render(<SearchBox/>); await act(async () => {});
+    vi.mocked(searchSymbols).mockResolvedValueOnce([{...item("000001", "上证指数"), market: "SH"}]);
+    typeQuery("szzs"); await act(async () => {vi.advanceTimersByTime(250);});
+    fireEvent.click(screen.getByRole("button", {name: /上证指数000001SH/}));
+    expect(detail.open).toHaveBeenCalledExactlyOnceWith({symbol: "sh000001"});
+    expect(JSON.parse(localStorage.getItem(key)!)[0]).toMatchObject({symbol: "sh000001", market: "SH", query: "szzs"});
+  });
+  it("旧纯检索词保留检索语义，不按代码或名称猜详情身份", async () => {
+    localStorage.setItem(key, JSON.stringify(["000001", {query: "贵州茅台"}, {query: "gmt", symbol: "600519", name: "贵州茅台", market: "SH"}]));
+    render(<SearchBox/>); await act(async () => {}); fireEvent.focus(screen.getByRole("textbox"));
+    expect(screen.getByRole("button", {name: "检索词 贵州茅台"})).toBeTruthy();
+    vi.mocked(searchSymbols).mockResolvedValueOnce([item("000001", "平安银行")]);
+    fireEvent.click(screen.getByRole("button", {name: "检索词 000001"}));
+    expect(detail.open).not.toHaveBeenCalled();
+    await act(async () => {vi.advanceTimersByTime(250);});
+    expect(searchSymbols).toHaveBeenCalledExactlyOnceWith("000001");
+    expect(detail.open).not.toHaveBeenCalled();
+    expect(JSON.parse(localStorage.getItem(key)!)).toHaveLength(3);
+  });
+  it("直接历史使在途旧搜索失效，不被晚包重新打开", async () => {
+    localStorage.setItem(key, JSON.stringify([{query: "gmt", symbol: "600519", name: "贵州茅台", market: "SH"}]));
+    let finish!: (items: SymbolSearchItem[]) => void;
+    vi.mocked(searchSymbols).mockImplementationOnce(() => new Promise(resolve => {finish = resolve;}));
+    render(<SearchBox/>); await act(async () => {});
+    const input = typeQuery("old-query"); await act(async () => {vi.advanceTimersByTime(250);});
+    fireEvent.change(input, {target: {value: ""}}); fireEvent.focus(input);
+    fireEvent.click(screen.getByRole("button", {name: /查看 贵州茅台/}));
+    await act(async () => {finish([item("600127", "迟到结果")]); vi.advanceTimersByTime(500);});
+    expect(detail.open).toHaveBeenCalledExactlyOnceWith({symbol: "600519"});
+    expect(searchSymbols).toHaveBeenCalledTimes(1);
+    expect(screen.queryByText("迟到结果")).toBeNull();
+    expect(screen.queryByRole("region", {name: "证券搜索结果"})).toBeNull();
   });
   it("成功记录最多12条且按证券去重移到最近，未命中和输入片段不留历史", async () => {
     render(<SearchBox/>); await act(async () => {});
@@ -467,7 +609,7 @@ describe("SearchBox 有界本地成功选择历史", () => {
     localStorage.setItem(key, JSON.stringify([{query: "x".repeat(100), symbol: "600519", market: "SH"},
       {query: "bad", symbol: "not-a-symbol", market: "SH"}, {query: "gmt", symbol: "600519", name: "贵州茅台", market: "SH"}]));
     const view = render(<SearchBox/>); await act(async () => {}); fireEvent.focus(screen.getByRole("textbox"));
-    expect(screen.getAllByRole("button", {name: /重搜/})).toHaveLength(1);
+    expect(screen.getAllByRole("button", {name: /查看/})).toHaveLength(1);
     fireEvent.click(screen.getByRole("button", {name: "清除搜索历史"}));
     expect(localStorage.getItem(key)).toBeNull();
     view.unmount();
@@ -487,6 +629,6 @@ describe("SearchBox 有界本地成功选择历史", () => {
   it.each(["not-json", "{}", "x".repeat(16_385)])("异常历史输入不生成可操作记录", async value => {
     localStorage.setItem(key, value); render(<SearchBox/>); await act(async () => {});
     fireEvent.focus(screen.getByRole("textbox"));
-    expect(screen.queryByRole("button", {name: /重搜/})).toBeNull(); expect(searchSymbols).not.toHaveBeenCalled();
+    expect(screen.queryByRole("button", {name: /查看|检索词/})).toBeNull(); expect(searchSymbols).not.toHaveBeenCalled();
   });
 });

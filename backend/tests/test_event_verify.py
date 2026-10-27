@@ -10,6 +10,8 @@ from __future__ import annotations
 
 from datetime import date, datetime, timedelta
 
+import pytest
+
 from app.events.verify import _parse_hhmmss, _seal_after, verify_event
 
 TODAY = date(2026, 9, 10)
@@ -222,8 +224,9 @@ def test_verify_active_events_orchestration(monkeypatch):
     pool = [{"symbol": "600001", "reason": "低空经济", "first_seal_time": "10:30:00"}]
     out = asyncio.run(ev.verify_active_events(_Store(), None, pool, TODAY, limit=10))
     by_id = {o["event_id"]: o for o in out}
-    assert by_id[1]["status"] == "confirmed"
-    assert by_id[1]["board_name"] == "低空经济"
+    assert by_id[1]["status"] == "fermenting"
+    assert by_id[1]["board_name"] is None and by_id[1]["net_inflow_yi"] is None
+    assert by_id[1]["candidate_boards"][0]["board_code"] == "BK1"
     assert by_id[2]["status"] == "unknown"          # 只有 symbol direction，无 theme → 不臆造
     assert by_id[2]["board_name"] is None
 
@@ -317,10 +320,47 @@ def test_verify_active_events_empty_events_short_circuit(monkeypatch):
     assert called["n"] == 0
 
 
+@pytest.mark.parametrize("net", [-999, 0, 999])
+@pytest.mark.parametrize("has_new", [False, True])
+def test_source_identity_orchestration_does_not_trust_a_named_bk_or_verified_flag(monkeypatch, net, has_new):
+    import asyncio
+    from types import SimpleNamespace
+    from app.events import verify as ev
+    from app.services import theme_service as ts
+
+    class Store:
+        def list_events(self, **_):
+            return [SimpleNamespace(id=1, title="名称线索", published_at=datetime(2026, 9, 10, 10),
+                interpretation_ref={"version_id": 1, "available_at": "2026-09-10T10:00:00"},
+                directions=[SimpleNamespace(target_type="theme", target="低空经济")])]
+
+    async def named(_):
+        return {"低空经济": {"board_code": "BK0001", "name": "低空经济", "main_net_yi": net,
+                           "identity_verified": True}}
+
+    monkeypatch.setattr(ts, "board_rows_for_names", named)
+    monkeypatch.setattr(ev, "beijing_now_naive", lambda: datetime(2026, 9, 10, 11))
+    pool = _pool(("10:30", "低空经济")) if has_new else []
+    item = asyncio.run(ev.verify_active_events(Store(), None, pool, TODAY))[0]
+    assert item["net_inflow_yi"] is None and item["status"] == ("fermenting" if has_new else "unknown")
+    assert "未净流入" not in item["basis"]
+    if has_new:
+        assert "资金未知" in item["basis"]
+    assert item["candidate_boards"][0]["main_net_yi"] == net
+    assert "identity_verified" not in item["candidate_boards"][0]
+
+
+def test_source_identity_reason_substring_does_not_count_as_same_source_label():
+    value = verify_event(published_at=datetime(2026, 9, 10, 10), visible_at=datetime(2026, 9, 10, 10),
+        theme_targets=["低空"], limit_up_pool=_pool(("10:30", "低空经济")), board_fund=None,
+        trade_date=TODAY, now=datetime(2026, 9, 10, 11))
+    assert value["new_limit_ups"] == 0 and value["status"] == "unknown"
+
+
 # ---------------------------------------------------------------- 端点 handler（受控桩）
 
 
-def test_verify_events_endpoint_produces_confirmed(monkeypatch):
+def test_verify_events_endpoint_keeps_named_funds_unknown(monkeypatch):
     """端点整链路（取涨停池 → 转 dict → 编排 → 判定）在受控数据下产出 confirmed。
 
     真实库当前无「盘中入库且已过窗口」的样本（事件皆盘后刚入库），故用受控桩
@@ -365,6 +405,8 @@ def test_verify_events_endpoint_produces_confirmed(monkeypatch):
     payload = asyncio.run(ev_routes.verify_events(request=request, limit=10, store=_Store()))
     items = payload["data"]["items"]
     assert payload["data"]["trade_date"] == "2026-09-10"
-    assert items[0]["status"] == "confirmed"
+    assert items[0]["status"] == "fermenting"
     assert items[0]["new_limit_ups"] == 1
-    assert items[0]["net_inflow_yi"] == 5.0
+    assert items[0]["net_inflow_yi"] is None
+    assert items[0]["candidate_boards"][0]["main_net_yi"] == 5.0
+    assert items[0]["candidate_boards"][0]["same_concept_verified"] is False

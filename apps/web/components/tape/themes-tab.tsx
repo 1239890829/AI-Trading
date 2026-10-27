@@ -87,10 +87,32 @@ export function ThemesTab() {
   // 飙升榜（B1）：「正在变热」信号，与人气榜口径不同；best-effort 同上
   const skyRead = useResource(() => getSkyrocket("day"), {intervalMs: 60_000, enabled: !date});
   const sky = !date && skyRead.data?.length ? skyRead.data : null;
-  const strengthRead = useResource(getThemeStrength, {intervalMs: 60_000, enabled: !date});
-  const strength = useMemo(() => !date && strengthRead.data ? new Map(Object.values(strengthRead.data).map(row => [row.name, row])) : null, [date, strengthRead.data]);
-  // 聚焦题材（L4 联动：详情页题材 chip → /tape?tab=themes&focus=名称）
   const focus = searchParams.get("focus") ?? "";
+  /** 聚焦过滤：题材名精确/包含 + 原始归因标签 + 官方概念挂靠名（09-08：搜「代糖」
+   *  命中「功能糖」簇——簇名与同花顺概念板块口径不同，靠 official_matches 桥接） */
+  const visibleThemes = useMemo(() => {
+    if (!data) return [];
+    const themes = brokenOnly ? data.themes.filter(theme => theme.performance.has_succession === false) : data.themes;
+    if (!focus) return themes;
+    return themes.filter(
+      (c) =>
+        c.theme === focus ||
+        c.theme.includes(focus) ||
+        (c.raw_tags ?? []).includes(focus) ||
+        (c.official_matches ?? []).some((m) => m.name === focus || m.name.includes(focus))
+    );
+  }, [data, focus, brokenOnly]);
+
+  const strengthCodes = useMemo(() => [...new Set(visibleThemes.flatMap(card =>
+    card.exact_catalog?.source === "ths_official" && card.exact_catalog.code ? [card.exact_catalog.code] : []))].sort(), [visibleThemes]);
+  const strengthRead = useResource(signal => getThemeStrength(strengthCodes, {signal}), {
+    key: strengthCodes.join(","), intervalMs: 60_000, enabled: !date && strengthCodes.length > 0, abortable: true,
+  });
+  const strength = useMemo(() => {
+    if (date || !strengthRead.data) return null;
+    const requested = new Set(strengthCodes);
+    return new Map(Object.entries(strengthRead.data).filter(([code, row]) => requested.has(code) && row.code === code));
+  }, [date, strengthRead.data, strengthCodes]);
   // 竞价标杆（ths 短线风向标）：best-effort，非交易日/无数据后端返回 502 → 静默不显示。
   // 把 date 一并存进 state：切日期时新数据到达前，靠 date 比对拒绝渲染上一日的榜单
   // （不同步 setBenchmark(null) 清空，避免 effect 内同步 setState 触发级联渲染）。
@@ -133,8 +155,10 @@ export function ThemesTab() {
 
   const broken = useMemo(() => data?.broken_ladder ?? [], [data]);
 
-  /** 题材名 → 人气聚合（官方成分口径，与卡片题材名精确匹配；对不上就不显示徽标） */
-  const hotByTheme = useMemo(() => new Map((hot?.themes ?? []).map((t) => [t.theme, t])), [hot]);
+  /** 正式同花顺代码连接成分热股交集；原因同名不能取得目录人气。 */
+  const hotByCode = useMemo(() => new Map((hot?.ranking_basis === "hot_stock_concentration" ? hot.themes : [])
+    .filter(row => row.source === "ths_official" && row.theme_code)
+    .map(row => [row.theme_code, row])), [hot]);
 
   /**
    * 竞价标杆按竞价涨幅降序（缺失沉底、不原地变异，规则见 lib/auction.ts）。
@@ -145,20 +169,6 @@ export function ThemesTab() {
     [benchmark, date]
   );
 
-  /** 聚焦过滤：题材名精确/包含 + 原始归因标签 + 官方概念挂靠名（09-08：搜「代糖」
-   *  命中「功能糖」簇——簇名与同花顺概念板块口径不同，靠 official_matches 桥接） */
-  const visibleThemes = useMemo(() => {
-    if (!data) return [];
-    const themes = brokenOnly ? data.themes.filter(theme => theme.performance.has_succession === false) : data.themes;
-    if (!focus) return themes;
-    return themes.filter(
-      (c) =>
-        c.theme === focus ||
-        c.theme.includes(focus) ||
-        (c.raw_tags ?? []).includes(focus) ||
-        (c.official_matches ?? []).some((m) => m.name === focus || m.name.includes(focus))
-    );
-  }, [data, focus, brokenOnly]);
 
   function clearFocus() {
     // 从 URL 移除 focus（保留 tab 等其余参数）
@@ -403,8 +413,8 @@ export function ThemesTab() {
               card={c}
               rank={i + 1}
               tradeDate={data?.trade_date ?? ""}
-              hot={hotByTheme.get(c.theme)}
-              strength={strength?.get(c.theme) ?? null}
+              hot={c.exact_catalog?.source === "ths_official" ? hotByCode.get(c.exact_catalog.code) : undefined}
+              strength={c.exact_catalog?.source === "ths_official" ? strength?.get(c.exact_catalog.code) ?? null : null}
             />
           ))}
         </div>

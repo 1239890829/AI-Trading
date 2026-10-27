@@ -1,5 +1,26 @@
 import { describe, expect, it } from "vitest";
-import { stockRedirectTarget, tapeUrl, themesUrl, withFrom, workbenchUrl } from "./routing";
+import { legacyDiscoveryFundsMarketUrl, stockRedirectTarget, tapeUrl, themesUrl, withFrom, workbenchUrl } from "./routing";
+
+describe("retired discovery funds migration",()=>{
+  it("moves one empty entry to market and preserves exact Eastmoney kind/code/range",()=>{
+    expect(legacyDiscoveryFundsMarketUrl("browse=funds")).toBe("/market?tab=fund&board_kind=concept&board_range=website");
+    expect(new URL(legacyDiscoveryFundsMarketUrl("browse=funds&disc_source=website&disc_code=BK1184")!,"https://local.invalid").searchParams.get("board_range")).toBe("website");
+    for(const range of ["website","intraday","5d","10d","20d","latest_saved","changes"]){
+      const url=new URL(legacyDiscoveryFundsMarketUrl(`browse=funds&disc_source=eastmoney&disc_kind=industry&disc_code=BK0475&disc_range=${range}`)!,"https://local.invalid");
+      expect(Object.fromEntries(url.searchParams)).toEqual({tab:"fund",board_kind:"industry",board_range:range,board_code:"BK0475"});
+    }
+    expect(legacyDiscoveryFundsMarketUrl("browse=catalog&disc_code=886069.TI")).toBeNull();
+  });
+  it.each(["disc_source=sina&disc_code=gn_ldc","disc_code=886069.TI","disc_source=ths&disc_code=886069.TI","disc_range=unknown","disc_kind=region"])("retains unmapped intent without inventing BK: %s",query=>{
+    const before=new URLSearchParams(query);
+    const url=new URL(legacyDiscoveryFundsMarketUrl(`browse=funds&${query}`)!,"https://local.invalid");
+    expect(url.searchParams.get("board_notice")).toBe("unmapped_legacy_funds");
+    expect(url.searchParams.has("board_code")).toBe(false);expect(url.searchParams.has("board_range")).toBe(false);
+    if(before.has("disc_code"))expect(url.searchParams.get("legacy_code")).toBe(before.get("disc_code"));
+    if(before.has("disc_source"))expect(url.searchParams.get("legacy_source")).toBe(before.get("disc_source"));
+    if(before.has("disc_kind"))expect(url.searchParams.get("legacy_kind")).toBe(before.get("disc_kind"));
+  });
+});
 
 describe("withFrom（任意站内 URL 追加来源参数；P2-28② 起深链也带返回入口）", () => {
   it("已有 query 时用 & 追加，不破坏原参数", () => {

@@ -98,7 +98,7 @@ async def market_fund_flow_history(
 @router.get("/market/board-fund-flow")
 async def market_board_fund_flow(
     kind: str = Query(default="concept", description="concept 概念 / industry 行业"),
-    range: str = Query(default="intraday", description="intraday 原资金榜 / 5d / 10d / 20d / latest_saved 最近单日 / changes 独立异动统计"),
+    range: str = Query(default="intraday", description="intraday 原资金榜 / 5d / 10d / 20d / latest_saved 最近单日 / changes 独立异动统计 / website 官网资金"),
     fresh: bool = Query(default=False, description="人工重读；沿原单飞核新来源，不修改来源时效"),
 ) -> dict:
     """板块资金流榜（L2 唯一实现，docs/summary/architecture-design.md §2 四层级模型）。
@@ -108,14 +108,15 @@ async def market_board_fund_flow(
     - 20d 与连续流入天数：只读落盘（每日收盘后自动沉淀 Top 板块 daykline），读路径零外呼；
     - latest_saved：只读已完成日的原净流入 Top50 样本，不替代即时榜或全市场目录；
     - changes：独立东财异动统计资金与当前正式目录交集，源批钟/覆盖独立，不接管f62；
+    - website：官网完整资金榜与正式目录逐码核验，资金源钟未知，报价钟独立；
     - 板块 f62 是东财官方板块口径，不与个股新浪口径混算。
     """
     from app.market.board_flow import get_board_fund_flow
 
     if kind not in ("concept", "industry"):
         raise HTTPException(status_code=422, detail="kind 仅允许 concept / industry")
-    if range not in ("intraday", "5d", "10d", "20d", "latest_saved", "changes"):
-        raise HTTPException(status_code=422, detail="range 仅允许 intraday / 5d / 10d / 20d / latest_saved / changes")
+    if range not in ("intraday", "5d", "10d", "20d", "latest_saved", "changes", "website"):
+        raise HTTPException(status_code=422, detail="range 仅允许 intraday / 5d / 10d / 20d / latest_saved / changes / website")
     return {"data": await get_board_fund_flow(kind, range, fresh=fresh is True), "meta": {}}
 
 
@@ -138,13 +139,18 @@ async def market_board_flow_minute(board_code: str) -> dict:
 
 
 @router.get("/market/board-fund-flow/{board_code}/members")
-async def market_board_flow_members(board_code: str) -> dict:
-    """板块成员个股资金排行 Top20（板块内资金龙头；东财成员口径）。"""
-    from app.market.board_flow import get_board_members
+async def market_board_flow_members(
+    board_code: str, view: Literal["clist", "website"] = "clist",
+    kind: Literal["concept", "industry"] = "concept", fresh: bool = False,
+) -> dict:
+    """默认原成员Top20；website读取经正式目录核验的官网完整成员资金。"""
+    from app.market.board_flow import get_board_members, get_official_website_members
 
     code = _valid_board_code(board_code)
     if code is None:
         raise HTTPException(status_code=422, detail=f"board_code 须为 BKxxxx 形式：{board_code!r}")
+    if view == "website":
+        return {"data": await get_official_website_members(code, kind=kind, fresh=fresh is True), "meta": {}}
     return {"data": await get_board_members(code), "meta": {}}
 
 

@@ -65,6 +65,8 @@ def to_secid(symbol: str) -> str:
     s = symbol.strip()
     if not s:
         raise ProviderError("empty symbol")
+    if s.startswith("920"):  # 北交所市场0；900沪B仍走下方市场1。
+        return f"0.{s}"
     if s.startswith(("6", "9", "5")):
         return f"1.{s}"
     return f"0.{s}"
@@ -451,7 +453,10 @@ class EastmoneyProvider:
         return sorted(dedup.values(), key=lambda r: r["report_date"], reverse=True)[:periods]
 
     async def get_company_profile(self, symbol: str) -> dict:
-        secucode = f"{symbol}.SH" if symbol.startswith(("6", "9", "5")) else f"{symbol}.SZ"
+        if symbol.startswith(("4", "8", "920")):
+            secucode = f"{symbol}.BJ"
+        else:
+            secucode = f"{symbol}.SH" if symbol.startswith(("6", "9", "5")) else f"{symbol}.SZ"
         payload = await self._get_json(
             "https://datacenter-web.eastmoney.com/api/data/v1/get",
             {

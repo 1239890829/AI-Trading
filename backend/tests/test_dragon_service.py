@@ -357,16 +357,34 @@ def test_news_persistence_main_net_inflow_participates():
     assert outflow["evidence"] < inflow["evidence"]
 
 
-def test_news_persistence_missing_inflow_is_neutral():
-    """数据缺失既不奖也不罚：不能把「没取到」当成「主力在出货」。"""
+def test_news_persistence_missing_inflow_is_unknown_not_a_funding_pass():
+    """缺资金不判流出，也不能用涨停广度补成资金证据通过。"""
     unknown = news_persistence(core_type="政策驱动", limit_up_count=5,
                                has_second_board=True, active_days=3,
                                main_net_inflow=None)
     known_good = news_persistence(core_type="政策驱动", limit_up_count=5,
                                   has_second_board=True, active_days=3,
                                   main_net_inflow=5e8)
-    assert unknown["evidence"] == known_good["evidence"]
+    assert unknown["evidence"] == known_good["evidence"] - 1
     assert "缺失" in next(c for c in unknown["checks"] if "真金白银" in c["q"])["value"]
+
+
+def test_source_identity_missing_money_cannot_gain_a_breadth_fallback_score():
+    result = news_persistence(core_type="业绩兑现", limit_up_count=5,
+                              has_second_board=True, active_days=3, main_net_inflow=None)
+    money = next(c for c in result["checks"] if "真金白银" in c["q"])
+    assert money["pass"] is None and money["state"] == "unknown"
+    assert money["breadth_pass"] is True
+    assert result["evidence"] == 2
+
+
+def test_source_identity_removing_false_outflow_cannot_promote_grade():
+    args = dict(core_type="业绩兑现", limit_up_count=5, has_second_board=True, active_days=3)
+    negative = news_persistence(**args, main_net_inflow=-5e8)
+    unknown = news_persistence(**args, main_net_inflow=None)
+    assert unknown["evidence"] == negative["evidence"]
+    assert unknown["grade"] == negative["grade"]
+    assert unknown["position_risk"] == negative["position_risk"]
 
 
 def test_news_persistence_requires_breadth():

@@ -58,6 +58,15 @@ describe("contextual inspection target contract", () => {
     }
   });
 
+  it("does not strip board or official-discovery identity from complete links",()=>{
+    const exact = "/market?tab=fund&board_kind=concept&board_range=website&board_code=BK1184";
+    expect(new URL(exact,"https://local.invalid").searchParams.get("board_code")).toBe("BK1184");
+    for(const href of [exact,"/market?tab=fund&board_range=20d","/market?tab=fund&board_notice=unmapped_legacy_funds&legacy_source=sina",
+      "/hunting?browse=catalog&disc_kind=concept&disc_code=886069.TI","/hunting?disc_code=886069.TI","/hunting?browse=funds&disc_code=BK1184"])
+      expect(inspectionRequestForHref(href)).toBeNull();
+    expect(inspectionRequestForHref("/market?tab=fund")).toEqual({kind:"fund"});
+  });
+
   it("intercepts ordinary clicks once while leaving modified or handled clicks to the browser", () => {
     const open = vi.fn();
     const click = inspectionClick(open, {kind: "fund"});

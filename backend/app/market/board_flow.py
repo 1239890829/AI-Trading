@@ -84,6 +84,9 @@ _MINUTE_CACHE = TTLCache("boardflow-minute", ttl=60.0, maxsize=4)
 _MEMBERS_CACHE = TTLCache("boardflow-members", ttl=60.0, maxsize=8)
 _SINA_BOARD_CACHE = TTLCache("boardflow-sina-groups", ttl=60.0, maxsize=4)
 _SINA_MEMBER_CACHE = TTLCache("boardflow-sina-members", ttl=60.0, maxsize=8)
+_WEBSITE_DIRECTORY_CACHE = TTLCache("boardflow-website-directory", ttl=300.0, maxsize=1)
+_WEBSITE_BOARD_CACHE = TTLCache("boardflow-website-boards", ttl=30.0, maxsize=2)
+_WEBSITE_MEMBER_CACHE = TTLCache("boardflow-website-members", ttl=60.0, maxsize=8)
 
 _HTTP = None
 _STORE_WRITE_LOCK = threading.RLock()
@@ -316,6 +319,98 @@ async def get_board_minute(board_code: str) -> dict:
 async def get_board_members(board_code: str) -> dict:
     """成员 Top20 保留原 60s TTL；并发同板块共享一轮，失败下一轮可恢复。"""
     return await _drill_read(_MEMBERS_CACHE, board_code, lambda: _load_board_members(board_code))
+
+
+async def _website_cached_read(cache, identity, load, *, fresh):
+    """Share reads; successful TTLs and explicit 15s failure backoff stay distinct."""
+    async def read():
+        if fresh:
+            cache.invalidate(identity)
+        else:
+            hit, value = cache.get(identity)
+            if hit:
+                return value, True
+        value = await load()
+        cache.set(identity, value, ttl=15.0 if value.get("available") is False else None)
+        return value, False
+
+    value, cached = await read_inflight(sys.modules[__name__], ("website-board-read", cache, *identity), read)
+    if fresh and cached:
+        return await _website_cached_read(cache, identity, load, fresh=True)
+    return deepcopy(value)
+
+
+async def _website_get(url, *, params=None):
+    from app.market._board_website_source import MAX_BYTES
+
+    # The existing board-flow HTTP client and shutdown owner are reused. No
+    # private account, browser cookie, challenge or credentials are needed.
+    async with _http().stream("GET", url, params=params,
+                              headers={"Referer": "https://data.eastmoney.com/bkzj/gn.html",
+                                       "Accept": "application/json,text/html"}) as response:
+        response.raise_for_status()
+        parts, size = [], 0
+        async for part in response.aiter_bytes():
+            size += len(part)
+            if size > MAX_BYTES:
+                raise ValueError("官网资金响应超过有界大小")
+            parts.append(part)
+        return b"".join(parts)
+
+
+async def _get_website_directory(*, fresh=False):
+    from app.market._board_changes_source import DIRECTORY_URL, decode_directory
+
+    async def load():
+        return decode_directory((await _website_get(DIRECTORY_URL)).decode("utf-8"))
+
+    return await _website_cached_read(_WEBSITE_DIRECTORY_CACHE, (beijing_now().date().isoformat(),),
+                                     load, fresh=fresh)
+
+
+def _website_unavailable(kind, *, board_code=None, name=None, directory_total=None):
+    payload = {"available": False, "source": "eastmoney_official_funds", "source_product": "东财官网资金",
+               "kind": kind, "range": "website", "source_as_of": None, "as_of": None,
+               "received_at": None, "quality": "stale", "observation_state": "clock_unknown",
+               "quote_source_as_of": None, "coverage_state": "unknown", "source_total": None,
+               "source_returned": 0, "directory_total": directory_total,
+               "coverage": {"total": None, "returned": 0, "complete": False}, "rows": [],
+               "reason": "本次东财官网资金读取未完成；未展示旧金额或其他来源",
+               "degraded": ["资金来源未完成核验；资金日期及源钟未知"]}
+    if board_code is not None:
+        payload.update(board_code=board_code, name=name, delayed=False)
+    return payload
+
+
+async def _get_website_fund_flow(kind, *, board_code=None, fresh=False):
+    from app.market._board_website_source import BOARD_FS, FIELDS, FUNDS_URL, decode_response
+
+    if kind not in BOARD_FS or (board_code is not None and not re.fullmatch(r"BK\d{3,4}", board_code)):
+        raise ValueError("官网资金板块身份或类别无效")
+    identity = (beijing_now().date().isoformat(), kind, *(() if board_code is None else (board_code,)))
+    cache = _WEBSITE_BOARD_CACHE if board_code is None else _WEBSITE_MEMBER_CACHE
+    async def load():
+        known = {}
+        try:
+            async with asyncio.timeout(22):
+                directory = await _get_website_directory(fresh=fresh)
+                if board_code is not None and board_code not in directory[kind]:
+                    raise ValueError("板块不属于所请求的正式类别")
+                known.update(directory_total=len(directory[kind]),
+                             name=directory[kind].get(board_code) if board_code is not None else None)
+                code = BOARD_FS[kind] if board_code is None else f"b:{board_code}"
+                raw = await _website_get(FUNDS_URL, params={"key": FIELDS, "code": code})
+                return decode_response(json.loads(raw), directory, kind, beijing_now(), board_code=board_code)
+        except Exception as exc:  # A failed fresh read never falls back to prior money.
+            log.warning("official website funds read failed: %s", type(exc).__name__)
+            return _website_unavailable(kind, board_code=board_code, **known)
+
+    return await _website_cached_read(cache, identity, load, fresh=fresh)
+
+
+async def get_official_website_members(board_code, *, kind="concept", fresh=False):
+    """Complete official member response, distinct from the original clist Top20."""
+    return await _get_website_fund_flow(kind, board_code=board_code, fresh=fresh)
 
 
 async def _sina_read(cache, identity, load, *, fresh):
@@ -847,12 +942,15 @@ async def get_board_fund_flow(kind: str, range_key: str, *, fresh: bool = False)
     - 20d：只读落盘 daykline 自算（读路径零外呼），未沉淀板块不参与排名，显式 coverage；
     - latest_saved：独立的已完成单日 Top50 样本，身份/归档日独立，不代替即时榜；
     - changes：独立异动统计资金，保留源批钟/单位/目录交集，不能接管f62或策略；
+    - website：官网完整资金与正式目录逐码核验，资金源钟未知，报价钟独立；
     - 连续流入天数：只对落盘板块可判，其余 None。
     """
-    if range_key not in ("intraday", "5d", "10d", "20d", "latest_saved", "changes"):
+    if range_key not in ("intraday", "5d", "10d", "20d", "latest_saved", "changes", "website"):
         return {"available": False, "reason": f"range 非法：{range_key!r}", "rows": [], "degraded": []}
     if kind not in _KIND_FS:
         return {"available": False, "reason": f"kind 非法：{kind!r}", "rows": [], "degraded": []}
+    if range_key == "website":
+        return await _get_website_fund_flow(kind, fresh=fresh)
     if range_key == "changes":
         return await _get_changes_fund_flow(kind, fresh=fresh)
     if range_key == "latest_saved":

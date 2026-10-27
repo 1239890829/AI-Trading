@@ -2,6 +2,7 @@ import type {MinutePoint} from "@/lib/api";
 import {bjDate} from "@/lib/format";
 import {hasTrustedQuoteObservation} from "@/lib/kline-live";
 import {calendarPause, calendarPhase, hasExpectedPausedSource} from "@/lib/quote-quality-view";
+import {bjMinuteOfDay, bjToday, isAuctionComparisonWindow} from "@/lib/market-hours";
 import type {Quote} from "@/types/market";
 
 const KNOWN_SOURCES = new Set(["ths", "tencent", "eastmoney", "sina", "tdx", "tdx_m1"]);
@@ -27,6 +28,12 @@ export interface IndexOverlay {
   openingAnchor?: MinutePoint;
 }
 
+/** Additional display veto, including a cached live result at a phase boundary.
+ * This never grants source validity or changes stock/strategy eligibility. */
+export function indexOverlayMayDraw(value: {referenceDate?: string | null; mode?: IndexOverlay["mode"]}, now = new Date()): boolean {
+  return value.mode !== "waiting" && !(value.referenceDate === bjToday(now) && isAuctionComparisonWindow(bjMinuteOfDay(now)));
+}
+
 /** Tencent's explicit 09:30 opening label needs its own same-packet pre-open source clock. */
 export function openingAnchorObservationTime(point: MinutePoint, nowMs = Date.now()): number | null {
   if (point.time_label !== "opening_anchor" || point.source !== "tencent" || !positive(point.price)
@@ -36,6 +43,21 @@ export function openingAnchorObservationTime(point: MinutePoint, nowMs = Date.no
     || label !== Date.parse(`${date}T09:30:00+08:00`) || bjDate(point.observation_ts) !== date
     || observed < Date.parse(`${date}T09:15:00+08:00`) || observed >= label || observed > nowMs) return null;
   return observed;
+}
+
+/** Read the proved observation clock without replacing the provider's minute label. */
+export function minuteObservationTime(point: MinutePoint, referenceDate: string, nowMs = Date.now()): number | null {
+  const label = Date.parse(point.ts);
+  if (!ZONED.test(point.ts) || bjDate(point.ts) !== referenceDate || !positive(point.price)
+    || !KNOWN_SOURCES.has(point.source) || !Number.isFinite(label) || !Number.isFinite(nowMs)) return null;
+  if (point.time_label === "opening_anchor") return openingAnchorObservationTime(point, nowMs);
+  if (point.time_label === "interval_end") {
+    const observed = point.observation_ts && ZONED.test(point.observation_ts) ? Date.parse(point.observation_ts) : NaN;
+    if (point.source !== "tencent" || !Number.isFinite(observed) || observed > nowMs || observed > label
+      || bjDate(point.observation_ts) !== referenceDate || label - observed > 60_000) return null;
+    return observed;
+  }
+  return label <= nowMs ? label : null;
 }
 
 function requireIndexQuote(quote: Quote | undefined): asserts quote is Quote & {data_timestamp: string; prev_close: number} {
@@ -95,17 +117,9 @@ export function buildIndexOverlay(points: MinutePoint[], quote: Quote | undefine
   if (points.some(point => !positive(point.price) || !KNOWN_SOURCES.has(point.source))) {
     throw new IndexOverlayError("指数分钟价格或来源未确认", "minutes");
   }
-  if (points.some(point => {
-    const label = Date.parse(point.ts);
-    if (!Number.isFinite(label)) return true;
-    if (point.time_label === "opening_anchor") return openingAnchorObservationTime(point, nowMs) === null;
-    if (point.time_label === "interval_end") {
-      const observed = point.observation_ts && ZONED.test(point.observation_ts) ? Date.parse(point.observation_ts) : NaN;
-      return point.source !== "tencent" || !Number.isFinite(observed) || observed > nowMs || observed > label
-        || bjDate(point.observation_ts) !== referenceDate || label - observed > 60_000;
-    }
-    return label > nowMs;
-  })) throw new IndexOverlayError("指数基准或分钟来源时刻未确认", "minutes");
+  if (points.some(point => minuteObservationTime(point, referenceDate, nowMs) === null)) {
+    throw new IndexOverlayError("指数基准或分钟来源时刻未确认", "minutes");
+  }
   const openingAnchor = points.findLast(point => point.time_label === "opening_anchor");
   // Preserve the provider's original label/value separately. Neither a later
   // receive/local clock nor a fresh quote makes this old auction record a minute.

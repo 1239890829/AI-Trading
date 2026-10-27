@@ -1,5 +1,5 @@
 import {afterEach, beforeEach, describe, expect, it, vi} from "vitest";
-import {buildIndexOverlay, indexQuoteReference} from "./index-overlay";
+import {buildIndexOverlay, indexOverlayMayDraw, indexQuoteReference, minuteObservationTime} from "./index-overlay";
 import {hasTrustedQuoteObservation} from "./kline-live";
 import type {MinutePoint} from "./api";
 import type {Quote, QuoteDisplaySession} from "@/types/market";
@@ -17,7 +17,35 @@ beforeEach(() => {
 });
 afterEach(() => vi.unstubAllGlobals());
 
+describe("minute observation clock shared by the request gate and overlay", () => {
+  const date = "2026-10-14", at = Date.parse(`${date}T09:30:05+08:00`);
+  const point: MinutePoint = {ts: `${date}T09:31:00+08:00`, price: 20, source: "tencent",
+    time_label: "interval_end", observation_ts: `${date}T09:30:03+08:00`};
+  it.each(["09:30:03", "09:30:00"])("accepts proved future minute label with observation %s and keeps the raw label", clock => {
+    const input = {...point, observation_ts: `${date}T${clock}+08:00`}, before = JSON.stringify(input);
+    expect(minuteObservationTime(input, date, at)).toBe(Date.parse(input.observation_ts));
+    expect(JSON.stringify(input)).toBe(before);
+  });
+  it.each([
+    {source: "tdx"}, {source: "unknown"}, {time_label: null}, {observation_ts: undefined},
+    {observation_ts: `${date}T09:30:03`}, {observation_ts: "2026-10-13T09:30:03+08:00"},
+    {observation_ts: `${date}T09:30:06+08:00`}, {observation_ts: `${date}T09:31:01+08:00`},
+    {observation_ts: `${date}T09:29:59.999+08:00`}, {ts: "2026-10-13T09:31:00+08:00"},
+    {price: 0}, {price: Number.NaN},
+  ] as Partial<MinutePoint>[])("rejects unproved minute clock %j", patch => {
+    expect(minuteObservationTime({...point, ...patch}, date, at)).toBeNull();
+  });
+});
+
 describe("index overlay historical display is separate from live eligibility", () => {
+  it.each(["09:15:00", "09:25:00", "09:29:59", "14:57:00", "14:59:59"])("当前%s不因保留live缓存继续画指数", clock => {
+    expect(indexOverlayMayDraw({referenceDate: "2026-10-14", mode: "live"}, new Date(`2026-10-14T${clock}+08:00`))).toBe(false);
+  });
+  it("显示禁窗只加否决，不能把waiting或未核输入升级；有效09:30及15:00另走原校验", () => {
+    expect(indexOverlayMayDraw({referenceDate: "2026-10-14", mode: "waiting"}, new Date("2026-10-14T09:30:00+08:00"))).toBe(false);
+    for (const clock of ["09:30:00", "14:56:59", "15:00:00"])
+      expect(indexOverlayMayDraw({referenceDate: "2026-10-14", mode: "live"}, new Date(`2026-10-14T${clock}+08:00`))).toBe(true);
+  });
   it.each([
     ["reference_age", "age"], ["reference", "identity"], ["reference", "quote_future"],
     ["minutes", "minute_future"], ["minutes", "minute_date"], ["minutes", "minute_price"], ["minutes", "age_and_minute_future"],

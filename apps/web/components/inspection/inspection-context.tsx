@@ -80,7 +80,10 @@ export function inspectionRequestForHref(href: string): InspectionRequest | null
     // must remain a real link rather than silently opening current data.
     if (date) return null;
     if (params.get("tab") === "heatmap" && !date) return { kind: "heatmap" };
-    if (params.get("tab") === "fund") return { kind: "fund" };
+    if (params.get("tab") === "fund") {
+      if ([...params.keys()].some(key=>key.startsWith("board_") || key.startsWith("legacy_"))) return null;
+      return { kind: "fund" };
+    }
     if (params.get("tab") === "events") {
       const four = params.get("four") ?? undefined;
       const tag = params.get("tag") ?? undefined;
@@ -96,6 +99,7 @@ export function inspectionRequestForHref(href: string): InspectionRequest | null
     return null;
   }
   if (url.pathname === "/hunting") {
+    if ([...params.keys()].some(key=>key === "browse" || key.startsWith("disc_"))) return null;
     const version = params.get("version");
     const view = params.get("view");
     if (version || (date && (view === "review" || params.get("review") === "1"))) {

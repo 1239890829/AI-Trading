@@ -57,7 +57,7 @@ function moveFocus(event: KeyboardEvent<HTMLElement>) {
 export function DiscoveryNavigation({search}: {search: string}) {
   const {mode} = discoveryLocation(search);
   return <nav className="discovery-nav" aria-label="选股分类发现" onKeyDown={moveFocus}>
-    {MODES.map(([key, name]) => <Link key={key} scroll={false} aria-current={mode === key ? "page" : undefined}
+    {MODES.filter(([key])=>key!=="funds").map(([key, name]) => <Link key={key} scroll={false} aria-current={mode === key ? "page" : undefined}
       href={discoveryUrl(search, {browse: key === "selected" ? null : key, disc_code: null, disc_method: null, disc_group: null, disc_q: null, disc_sort: null, disc_kind: null, disc_range: null, disc_source: null, selection: null})}>{name}</Link>)}
   </nav>;
 }

@@ -189,12 +189,16 @@ export function ThemeCardView({
   rank: number;
   tradeDate?: string;
   hot?: HotTheme | null;
-  /** 资金合力（P1-5）：官方成分批量快照聚合，按题材名匹配；无数据静默 */
+  /** 仅由正式同花顺代码连接的成分样本；不是板块资金榜。 */
   strength?: ThemeStrengthRow | null;
 }) {
   const { open: inspect } = useInspection();
   const p = card.performance;
-  const board = card.board;
+  const exactCode = card.exact_catalog?.code;
+  const sample = exactCode && strength?.code === exactCode ? strength : null;
+  const candidate = card.candidate_board ?? sample?.candidate_board;
+  const interval = exactCode && card.official_interval?.code === exactCode
+    && card.official_interval.source === "ths_official_kline" ? card.official_interval : null;
   const stockNav = useStockRowNav();
   const [detailCode, setDetailCode] = useState<string | null>(null);
   const detailPresence = useExitPresence(detailCode);
@@ -210,7 +214,6 @@ export function ThemeCardView({
   }
   const boardLevels = [...ladderByBoard.keys()].sort((a, b) => b - a);
 
-  const boardPct = board?.change_pct;
   const tier = card.strength_tier ?? "观察";
 
   // 涨停池下钻：带日期 + 本题材梯队成员，涨停池页将高亮这些行（证据核对）
@@ -249,17 +252,7 @@ export function ThemeCardView({
         )}
 
         <SourceThemeIdentity reason={card.theme} exact={card.exact_catalog} related={card.official_matches} />
-        {/* 题材当日涨跌幅：板块口径（东财板块），匹配不到时明确留空不臆测 */}
-        <span className="flex items-baseline gap-1" title={`东财参考板块 ${board?.name || "未映射"} ${board?.board_code || ""}；名称/成分不等于同花顺概念，不能当同一题材核验`}>
-          <span className="text-[11px] text-zinc-600 dark:text-zinc-400">东财{board?.name ? `·${board.name}` : "参考"}</span>
-          {boardPct !== null && boardPct !== undefined ? (
-            <span className={`font-mono text-lg font-semibold tabular-nums ${pctColor(boardPct)}`}>
-              {pctText(boardPct)}
-            </span>
-          ) : (
-            <span className="font-mono text-lg text-zinc-600 dark:text-zinc-400">--</span>
-          )}
-        </span>
+        <span className="text-[11px] text-zinc-600 dark:text-zinc-400" title="尚无已核同概念身份的主力净流入；东财名称候选不作资金证据">资金待核</span>
 
         <Badge className={FORMATION_STYLE[card.formation]} title="按涨停家数判定题材是否成建制">
           {card.formation}
@@ -283,50 +276,25 @@ export function ThemeCardView({
           </Badge>
         )}
 
-        {/* 资金合力（P1-5）：官方成分批量快照聚合——涨跌家数/涨停家数/板块成交额。
-            按题材名匹配 strength 数据，匹配不到（成分未同步）静默不显示 */}
-        {strength && (
+        {/* 成员采样、涨幅有效数、金额有效数分别披露，不能当作全量题材。 */}
+        {sample && (
           <Badge
-            className="border-amber-500/40 bg-amber-500/10 text-amber-800 dark:text-amber-300"
-            title={`${strength.basis}（官方成分批量快照聚合，60s 缓存）`}
+            className="max-w-full flex-wrap gap-x-1 border-amber-500/40 bg-amber-500/10 text-amber-800 dark:text-amber-300"
+            title={`${sample.basis}（官方成分批量快照聚合，本地自算，60s 缓存）；${sample.code}；${sample.coverage ? `成员${sample.coverage.member_total}，样本${sample.coverage.sampled}，未采样${sample.coverage.not_sampled}；报价返回${sample.coverage.quote_returned}；有效涨幅${sample.coverage.valid_change_count}，有效金额${sample.coverage.amount_count}，金额缺失${sample.coverage.missing_amount}；采样上限${sample.coverage.sample_limit}；成员${sample.coverage.complete_members ? "已全取" : "未全取"}，报价完整性及源时点另核` : "覆盖未记录"}`}
           >
-            {strength.up}涨/{strength.down}跌
-            {strength.limit_up_count > 0 && ` · 涨停${strength.limit_up_count}`}
-            {` · 题材额 ${fmtAmount(strength.total_amount)}`}
+            <span>{sample.coverage ? `样本${sample.coverage.sampled}/${sample.coverage.member_total} · 涨幅${sample.coverage.valid_change_count}/${sample.coverage.sampled} · 金额${sample.coverage.amount_count}/${sample.coverage.sampled}` : "样本覆盖待核"}</span>
+            <span>{sample.up}涨/{sample.down}跌{sample.limit_up_count > 0 && ` · 涨停${sample.limit_up_count}`} · 样本成交额 {sample.total_amount == null ? "待核" : fmtAmount(sample.total_amount)}</span>
           </Badge>
         )}
 
-        {/* 板块资金（P1-5，东财 f62 口径，2026-09-10）：与上面的「合力」是**两套口径**
-            （合力 = ths 官方成分快照聚合），并列展示、**不可相加**。净额正负按 A 股
-            惯例红涨绿跌；连续流入天数只对本地已落盘的 Top 板块可判，判不出不加后缀
-            （不写 0——0 的语义是「今日净流出」，两者不同）。 */}
-        {strength?.board && (
+        {candidate && (
           <Badge
-            className="border-sky-500/40 bg-sky-500/10 text-sky-700 dark:text-sky-300"
-            title={`${strength.board.name}（东财板块 · ${
-              strength.board.kind === "industry" ? "行业" : "概念"
-            } · f62 主力净额口径）${signedYi(strength.board.main_net_yi)}${
-              strength.board.streak != null && strength.board.streak >= 1
-                ? `，连续 ${strength.board.streak} 日净流入`
-                : ""
-            }｜与「资金合力」口径不同，不可相加。连续流入天数基于本地日度沉淀，样本不足时不显示`}
+            className="max-w-full flex-wrap gap-x-1 border-sky-500/40 bg-sky-500/10 text-sky-700 dark:text-sky-300"
+            title={`东财 ${candidate.board_code} · 身份未核；${candidate.name}（${candidate.kind === "industry" ? "行业" : "概念"}，${candidate.source}/${candidate.source_product}）；名称候选 ${candidate.match_method}，不参与同花顺资金核验；f62 主力净额口径；源时点未记录${candidate.streak != null && candidate.streak >= 1 ? `；本地记录连续 ${candidate.streak} 日净流入` : ""}`}
           >
-            {strength.board.name}{" "}
-            <span
-              className={
-                strength.board.main_net_yi == null
-                  ? ""
-                  : strength.board.main_net_yi >= 0
-                    ? "text-up-ink dark:text-up"
-                    : "text-down-ink dark:text-down"
-              }
-            >
-              {signedYi(strength.board.main_net_yi)}
-            </span>
-            {/* streak 语义：>=1 才是「连续 N 日净流入」；0 = 今日转流出，
-                null = 本地未沉淀该板块。后两者都静默（净额值的正负已表达方向，
-                显示「连0日」会被误读成 bug）。 */}
-            {strength.board.streak != null && strength.board.streak >= 1 && ` · 连${strength.board.streak}日`}
+            <span>东财候选 · 身份未核</span>
+            <span>{candidate.name} {candidate.board_code}</span>
+            <span>{candidate.main_net_yi == null ? "净额待核" : `参考净额 ${signedYi(candidate.main_net_yi)}`}</span>
           </Badge>
         )}
 
@@ -475,34 +443,18 @@ export function ThemeCardView({
       {/* ── 核对目录：一次阅读一类资料，完整保留指标与原始依据 ─────── */}
       <div className="border-t border-zinc-200 px-4 py-3 dark:border-zinc-800"><ExplanationMap label="题材核对资料" identity={`${tradeDate}:${card.theme}`} steps={[
         {id: "metrics", label: "强度指标与板块表现", icon: "response", content: <div className="space-y-3">
-          {board && (
-            <div className="grid grid-cols-2 gap-x-4 gap-y-2 sm:grid-cols-3 lg:grid-cols-6">
-              <Stat label="板块涨幅" value={<span className={pctColor(board.change_pct)}>{pctText(board.change_pct)}</span>} />
-              <Stat label="涨跌家数" value={`${board.up_count ?? "--"} / ${board.down_count ?? "--"}`} hint="板块内上涨 / 下跌家数" />
-              <Stat label="成交额" value={fmtAmount(board.amount)} />
-              <Stat
-                label="主力净流入"
-                value={<span className={pctColor(board.main_net_inflow)}>{fmtAmount(board.main_net_inflow)}</span>}
-                hint="东财口径主力资金净流入"
-              />
-              <Stat
-                label="近 3 日"
-                value={<span className={pctColor(board.chg_3d)}>{pctText(board.chg_3d)}</span>}
-                hint={
-                  board.multi_day_verified
-                    ? "同花顺官方板块 K 线口径（已交叉验证）"
-                    : "东财字段序推断，未经 K 线交叉验证"
-                }
-              />
-              <Stat
-                label="近 5 日"
-                value={<span className={pctColor(board.chg_5d)}>{pctText(board.chg_5d)}</span>}
-                hint={
-                  board.multi_day_verified
-                    ? "同花顺官方板块 K 线口径（已交叉验证）"
-                    : "东财字段序推断，未经 K 线交叉验证"
-                }
-              />
+          {interval && (
+            <div className="space-y-2">
+              <div className="text-[11px] text-zinc-600 dark:text-zinc-400">
+                <p>同花顺区间 · 仅作风险参照</p>
+                <p>{interval.name} {interval.code} · 日线日期 {interval.source_as_of ?? "待核"} · {interval.state === "verified" ? "同源区间已核" : interval.state === "partial" ? "区间部分可用" : "区间待核"}</p>
+              </div>
+              <div className="grid grid-cols-3 gap-x-4 gap-y-2">
+                {([["近 3 日", interval.chg_3d], ["近 5 日", interval.chg_5d], ["近 10 日", interval.chg_10d]] as const).map(([label, value]) => (
+                  <Stat key={label} label={label} value={<span className={pctColor(value)}>{pctText(value)}</span>}
+                    hint={`同花顺官方 K 线；请求交易日 ${interval.requested_trade_date}；日线日期 ${interval.source_as_of ?? "待核"}；可能含当日形成条，仅风险参考；仅核同源身份与区间日期，不核验资金或价格准确性`} />
+                ))}
+              </div>
             </div>
           )}
 

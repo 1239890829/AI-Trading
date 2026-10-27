@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+import pytest
+
 from app.market.normalizer import (
     normalize_index,
     normalize_kline_row,
@@ -38,6 +40,34 @@ def test_normalize_quote_maps_fields_and_converts_volume():
     assert q.amount == 4.6e9
     assert q.turnover_rate == 0.25
     assert q.quality is Quality.high
+
+
+@pytest.mark.parametrize("symbol,source_market,market", [
+    ("920627", 0, "BJ"), ("430047", "0", "BJ"), ("833171", 0, "BJ"),
+    ("900901", 1, "SH"), ("200002", 0, "SZ"), ("510300", 1, "SH"),
+    ("600519", 1, "SH"), ("000001", 0, "SZ"),
+])
+def test_normalize_stock_quote_uses_code_with_eastmoney_market_id(symbol, source_market, market):
+    # 920627/f13=0身份来自已存官网成员；其余是合成ulist字段，
+    # 不把官网按f152缩放的价格冒充fltt=2报价实抓。
+    quote = normalize_quote({"f12": symbol, "f13": source_market, "f2": 17.61})
+    assert (quote.symbol, quote.market, quote.price) == (symbol, market, 17.61)
+
+
+@pytest.mark.parametrize("symbol,source_market", [
+    ("920627", 1), ("430047", 1), ("833171", 1), ("900901", 0),
+    ("200002", 1), ("510300", 0), ("600519", 0), ("000001", 1),
+])
+def test_normalize_stock_quote_rejects_conflicting_source_market(symbol, source_market):
+    with pytest.raises(ValueError, match="market identity"):
+        normalize_quote({"f12": symbol, "f13": source_market, "f2": 10})
+
+
+@pytest.mark.parametrize("symbol,source_market,market", [
+    ("920627", None, None), ("920627", 2, "2"), ("700001", 1, "SH"),
+])
+def test_normalize_stock_quote_does_not_infer_missing_or_unknown_source_market(symbol, source_market, market):
+    assert normalize_quote({"f12": symbol, "f13": source_market}).market == market
 
 
 def test_normalize_quote_handles_suspended_dash_values():

@@ -61,6 +61,11 @@ export function isContinuousSession(min: number): boolean {
   return inRanges(min, CONTINUOUS_SESSIONS);
 }
 
+/** Display comparison only; stock auction observations remain visible. */
+export function isAuctionComparisonWindow(min: number): boolean {
+  return (min >= MIN.auction && min < MIN.open) || (min >= 14 * 60 + 57 && min < MIN.close);
+}
+
 /** **宽松**：是否按盘中节奏轮询（入参 = 北京当日分钟数）。 */
 export function isPollingSession(min: number): boolean {
   return inRanges(min, POLLING_SESSIONS);

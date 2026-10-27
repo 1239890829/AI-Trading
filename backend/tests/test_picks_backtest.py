@@ -114,13 +114,138 @@ def test_tag_stats_leader_is_highest_board_then_pct():
 # ---------------------------------------------------------------- 题材→板块匹配
 
 
-def test_match_board_name_same_semantics_as_watcher():
+def test_match_board_name_requires_unique_exact_ths_identity():
     names = ["低空经济", "AI应用", "AI概念精选", "算力"]
     assert bt.match_board_name("AI应用", names) == "AI应用"  # 精确优先
-    assert bt.match_board_name("AI", names) == "AI应用"  # 双向包含取最短
-    assert bt.match_board_name("低空经济概念", names) == "低空经济"  # 板块名包含于标签
+    assert bt.match_board_name("AI", names) is None
+    assert bt.match_board_name("低空经济概念", names) is None
     assert bt.match_board_name("量子科技", names) is None  # 匹配不到不冒充
     assert bt.match_board_name("算力", ["", "算力"]) == "算力"  # 空名过滤
+
+
+def test_source_identity_replay_requires_unique_exact_ths_name():
+    assert bt.match_board_name("低空", ["低空经济"]) is None
+    assert bt.match_board_name("低空经济", ["低空经济", "低空经济"]) is None
+
+
+def test_source_identity_replay_ambiguous_or_foreign_catalog_cannot_fetch_bars():
+    async def pool(day):
+        return [Rec(str(day.day), reason="低空经济", consecutive_boards=2, change_pct=10)]
+    async def bars(*_):
+        raise AssertionError("ambiguous or foreign catalog must not fetch")
+    result = asyncio.run(bt.collect(trade_days=[date(2026, 1, 5), date(2026, 1, 6)], today=date(2026, 1, 10),
+        pool_fetcher=pool, bars_fetcher=bars, gap=0, metric_rows=[], catalog=[
+            {"code": "885001.TI", "name": "低空经济", "source": "ths_official"},
+            {"code": "885002.TI", "name": "低空经济", "source": "ths_official"},
+            {"code": "BK0001", "name": "低空经济", "source": "eastmoney"},
+        ]))
+    assert result["stats"]["unmatched"] == 1 and result["board_identities"] == {}
+    assert result["method_version"] == result["stats"]["method_version"] == bt.METHOD_VERSION
+
+
+def test_source_identity_archive_versions_default_path_without_rewriting_old_report(tmp_path, monkeypatch):
+    import importlib.util
+    from pathlib import Path
+    from types import SimpleNamespace
+
+    path = Path(__file__).resolve().parents[1] / "scripts" / "backtest_picks.py"
+    spec = importlib.util.spec_from_file_location("isolated_backtest_archive", path)
+    script = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(script)
+    day = date(2026, 10, 27)
+    monkeypatch.setattr(script, "ROOT", tmp_path)
+    monkeypatch.setattr(script, "beijing_today", lambda: day)
+    old = tmp_path / "docs" / "stock-picking-backtest-2026-10-27.md"
+    old.parent.mkdir()
+    old.write_text("原始旧方法报告")
+    stats = {"days": 0, "unmatched": 0, "no_board_bars": 0, "promo_cover": 0,
+             "method_version": bt.METHOD_VERSION}
+    report = bt.format_report([], [], stats, window=None)
+    assert bt.METHOD_VERSION in report
+
+    async def noop(*_):
+        return []
+    async def run(**_):
+        return report
+    monkeypatch.setattr(script, "ThsFuyaoProvider", lambda **_: SimpleNamespace(_client=SimpleNamespace(aclose=noop)))
+    monkeypatch.setattr(script, "ThemeCatalogService", lambda **_: SimpleNamespace(
+        fetch_catalog=noop, fetch_board_bars=noop, aclose=noop))
+    monkeypatch.setattr(script.bt, "run_backtest", run)
+    assert asyncio.run(script.main(120, None)) == 0
+    current = script.default_report_path(day)
+    assert current.name == f"stock-picking-backtest-2026-10-27-{bt.METHOD_VERSION}.md"
+    assert old.read_text() == "原始旧方法报告" and current.read_text() == report
+    explicit = tmp_path / "user-requested.md"
+    assert asyncio.run(script.main(120, explicit)) == 0
+    assert explicit.read_text() == report and old.read_text() == "原始旧方法报告"
+
+
+def test_source_identity_known_catalog_without_bars_keeps_its_formal_code():
+    fetched = []
+    async def pool(day):
+        return [Rec(str(day.day), reason="AI应用" if day.day == 5 else "算力", consecutive_boards=2, change_pct=10)]
+    async def bars(code, span):
+        fetched.append(code)
+        return []
+    result = asyncio.run(bt.collect(trade_days=[date(2026, 1, 5), date(2026, 1, 6)], today=date(2026, 1, 10),
+        pool_fetcher=pool, bars_fetcher=bars, gap=0, metric_rows=[], catalog=[
+            {"code": "885001.TI", "name": "AI应用"}, {"code": "885002.TI", "name": "算力"}]))
+    assert fetched == ["885002.TI"], "identity metadata must not expand source reads"
+    assert result["stats"]["unmatched"] == 0 and result["stats"]["no_board_bars"] == 1
+    assert result["samples"][0]["board_identity"] == {"code": "885001.TI", "source": "ths_official_kline",
+                                                       "method_version": bt.METHOD_VERSION}
+
+
+def test_io_excludes_accepted_today_midnight_forming_close_for_both_return_modes(monkeypatch):
+    from copy import deepcopy
+    from datetime import datetime
+    from types import SimpleNamespace
+    from app.core.bjtime import BJ_TZ
+    from app.market import trade_calendar as tc
+    from app.services import theme_catalog_service as catalog_service
+
+    now = datetime(2026, 10, 27, 10, 0, tzinfo=BJ_TZ)
+    days = [date(2026, 10, d) for d in (20, 21, 22, 23, 26, 27)]
+    raw = {"data": {"item": [{
+        "date_ms": int(datetime.combine(d, datetime.min.time(), tzinfo=BJ_TZ).timestamp() * 1000),
+        "close_price": 200 if d.day == 27 else 99 if d.day == 23 else 100,
+        "open_price": 100, "turnover": 1000, "volume": 100,
+    } for d in days]}}
+    monkeypatch.setattr(bt, "beijing_now", lambda: now)
+    monkeypatch.setattr(catalog_service, "beijing_now", lambda: now)
+    source_bars = catalog_service.parse_board_bars(raw)
+    stamps = {d.isoformat(): row["date_ms"] for d, row in zip(days, raw["data"]["item"])}
+    for bar in source_bars:
+        bar["source_date_ms"] = stamps[bar["date"]]
+    before = deepcopy(source_bars)
+    assert source_bars[-1]["date"] == "2026-10-27" and source_bars[-1]["close"] == 200
+
+    async def trading_days(*_, **__):
+        return days
+    async def pool(day):
+        return [Rec(str(day.day), reason="AI应用", consecutive_boards=2, change_pct=10)]
+    async def catalog():
+        return [{"code": "885001.TI", "name": "AI应用"}]
+    async def bars(*_):
+        return source_bars
+    captured = {}
+    def report(rows, samples, stats, **kwargs):
+        captured["open"] = (samples, stats)
+        captured["pullback"] = (kwargs["extra_runs"][0]["samples"], kwargs["extra_runs"][0]["stats"])
+        return "isolated report"
+    monkeypatch.setattr(tc, "trading_days", trading_days)
+    monkeypatch.setattr(bt, "metric_history_rows", lambda: [])
+    monkeypatch.setattr(bt, "format_report", report)
+    assert asyncio.run(bt.run_backtest(days=4, provider=SimpleNamespace(get_limit_up_pool=pool),
+        catalog_fetcher=catalog, bars_fetcher=bars)) == "isolated report"
+    assert source_bars == before, "IO cutoff must not relabel or mutate original source dates"
+    for samples, stats in captured.values():
+        by_day = {row["date"]: row for row in samples}
+        assert len(samples) == stats["days"] == 4
+        assert stats["bar_cutoff_exclusive"] == "2026-10-27"
+        assert by_day["2026-10-21"]["fwd"] == 0.0, "previous completed exit retains a true0% return"
+        assert by_day["2026-10-22"]["fwd"] is None, "today's forming close is not a T+3 closing return"
+        assert by_day["2026-10-26"]["fwd"] is None, "immature observations stay in the sample denominator"
 
 
 # ---------------------------------------------------------------- 板块日 K 视图
@@ -383,7 +508,7 @@ def test_collect_skips_identical_pool_and_fetches_needed_boards():
 
     async def fake_bars_fetcher(code, span):
         fetched.append(code)
-        if code == "885000":
+        if code == "885000.TI":
             raise RuntimeError("ths 打嗝")
         return _bars(
             ("2026-01-05", None, 100.0, 1000.0),
@@ -395,9 +520,10 @@ def test_collect_skips_identical_pool_and_fetches_needed_boards():
 
     data = asyncio.run(bt.collect(
         trade_days=[d0, d1, d2],
+        today=date(2026, 1, 10),
         pool_fetcher=fake_pool_fetcher,
         bars_fetcher=fake_bars_fetcher,
-        catalog=[{"code": "885000", "name": "算力"}, {"code": "885001", "name": "AI应用"}],
+        catalog=[{"code": "885000.TI", "name": "算力"}, {"code": "885001.TI", "name": "AI应用"}],
         metric_rows=[{"date": "2026-01-06", "promo_1to2": 50.0}],
         gap=0,
     ))
@@ -407,12 +533,14 @@ def test_collect_skips_identical_pool_and_fetches_needed_boards():
     assert [s["date"] for s in samples] == ["2026-01-06"]
     assert stats["days"] == 1
     # needed 覆盖 T 日池里的题材（AI应用+算力）→ 两个板块各拉一次；失败吞异常落空列表
-    assert sorted(fetched) == ["885000", "885001"]
+    assert sorted(fetched) == ["885000.TI", "885001.TI"]
     assert bars_by_board["算力"] == []
     ai = samples[0]
     assert ai["tag"] == "AI应用"
     assert ai["inputs"]["theme_pct"] == 2.0 and ai["fwd"] == 3.0
     assert stats["no_board_bars"] == 0 and stats["unmatched"] == 0
+    assert samples[0]["board_identity"] == {"code": "885001.TI", "source": "ths_official_kline",
+                                             "method_version": bt.METHOD_VERSION}
     # pools_by_day 随数据返回（第二执行口径复用，不重复拉池）
     assert sorted(data["pools_by_day"]) == ["2026-01-05", "2026-01-06"]
 

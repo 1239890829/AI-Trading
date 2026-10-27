@@ -8,6 +8,7 @@
 
 import type {
   ThemeBoardPayload,
+  ThemeBoardCandidate,
 } from "@/types/market";
 
 import { getJson, type ReadOptions } from "./internal";
@@ -77,6 +78,7 @@ export async function getThemesCatalog(search?: string): Promise<ThemeCatalogIte
 }
 
 export interface ThemeStrengthRow {
+  code: string;
   name: string;
   count: number;
   up: number;
@@ -85,16 +87,29 @@ export interface ThemeStrengthRow {
   missing: number;
   limit_up_count: number;
   avg_change_pct: number | null;
-  total_amount: number;
+  total_amount: number | null;
+  coverage: {
+    member_total: number;
+    sampled: number;
+    not_sampled: number;
+    quote_returned: number;
+    valid_change_count: number;
+    amount_count: number;
+    missing_amount: number;
+    sample_limit: number;
+    /** 仅表示成员全部进入样本，不代表报价覆盖或源时点已核。 */
+    complete_members: boolean;
+  };
   top_gainers: { symbol: string; name: string | null; change_pct: number }[];
   basis: string;
-  /** 同名东财板块的资金（f62 口径，P1-5 新口径；匹配不到为 null） */
+  /** 旧响应兼容，不再作为同花顺题材资金证据。 */
   board?: BoardFundRow | null;
+  candidate_board?: ThemeBoardCandidate | null;
 }
 
-export async function getThemeStrength(codes?: string[]): Promise<Record<string, ThemeStrengthRow>> {
+export async function getThemeStrength(codes?: string[], options: ReadOptions = {}): Promise<Record<string, ThemeStrengthRow>> {
   const qs = codes && codes.length > 0 ? `?codes=${codes.join(",")}` : "";
-  return (await getJson<{ themes: Record<string, ThemeStrengthRow> }>(`/api/themes/catalog/strength${qs}`, 20_000)).data.themes;
+  return (await getJson<{ themes: Record<string, ThemeStrengthRow> }>(`/api/themes/catalog/strength${qs}`, 20_000, options)).data.themes;
 }
 
 export async function getThemes(opts?: {

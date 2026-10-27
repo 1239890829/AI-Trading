@@ -772,10 +772,12 @@ def test_board_rows_for_names_attaches_streak_and_keeps_units(monkeypatch):
 
     _patch_boards(monkeypatch, _IND, _CON, {"BK1024": 4})
     out = asyncio.run(ts.board_rows_for_names(["绿色电力"]))
-    assert out["绿色电力"]["board_code"] == "BK1024"
-    assert out["绿色电力"]["streak"] == 4
-    assert out["绿色电力"]["main_net_yi"] == 32.33      # 亿，不因 streak 计算被改单位
-    assert out["绿色电力"]["main_net_inflow"] == 32.33 * 1e8  # 元，news_persistence 口径不变
+    candidate = out["绿色电力"]["candidate_board"]
+    assert candidate["board_code"] == "BK1024"
+    assert candidate["streak"] == 4
+    assert candidate["main_net_yi"] == 32.33      # 原EM候选仍保留亿单位
+    assert candidate["main_net_inflow"] == 32.33 * 1e8
+    assert out["绿色电力"]["main_net_inflow"] is None
 
 
 def test_board_rows_for_names_unknown_absent_not_fabricated(monkeypatch):
@@ -797,7 +799,7 @@ def test_board_rows_for_names_streak_none_when_not_settled(monkeypatch):
 
     _patch_boards(monkeypatch, _IND, _CON, {})
     out = asyncio.run(ts.board_rows_for_names(["绿色电力"]))
-    assert out["绿色电力"]["streak"] is None
+    assert out["绿色电力"]["candidate_board"]["streak"] is None
 
 
 def test_board_rows_for_codes_indexes_by_code(monkeypatch):
@@ -811,6 +813,55 @@ def test_board_rows_for_codes_indexes_by_code(monkeypatch):
     assert set(out) == {"BK1033"}
     assert out["BK1033"]["name"] == "电池"
     assert out["BK1033"]["streak"] == 2
+
+
+def test_source_identity_name_match_is_only_candidate_even_when_exact(monkeypatch):
+    import asyncio
+    from app.services import theme_service as ts
+
+    _patch_boards(monkeypatch, _IND, _CON, {"BK1024": 4})
+    row = asyncio.run(ts.board_rows_for_names(["绿色电力"]))["绿色电力"]
+    assert row["main_net_yi"] is None and row["change_pct"] is None
+    candidate = row["candidate_board"]
+    assert candidate["board_code"] == "BK1024" and candidate["main_net_yi"] == 32.33
+    assert candidate["match_method"] == "exact_name"
+    assert candidate["same_concept_verified"] is False
+
+
+@pytest.mark.parametrize("theme,name,method", [
+    ("低空经济", "低空经济", "exact_name"),
+    ("低空经济概念", "低空经济", "suffix"),
+    ("低空", "低空经济", "contains"),
+])
+def test_source_identity_b_candidates_keep_source_and_match_method(theme, name, method):
+    from app.services.theme_service import board_candidate_for_name
+    raw = {"board_code": "BK0001", "name": name, "kind": "concept", "main_net_inflow": -9e8}
+    candidate = board_candidate_for_name(theme, {name: raw})
+    assert candidate["match_method"] == method and candidate["source"] == "eastmoney"
+    assert candidate["board_code"] == "BK0001" and candidate["same_concept_verified"] is False
+    assert "same_concept_verified" not in raw
+
+
+@pytest.mark.parametrize("net", [-9e8, 9e8])
+def test_source_identity_card_never_scores_named_money_or_change(net):
+    from datetime import date
+    from app.schemas.market import LimitUpRecord
+    from app.services.theme_service import _build_card
+    records = [LimitUpRecord(symbol=str(600001 + i), name="身份夹具", source="ths",
+                            trade_date=date(2026, 9, 10), reason="低空经济", consecutive_boards=2)
+               for i in range(3)]
+    card = _build_card(theme="低空经济", members=records,
+        stock_themes={r.symbol: ["低空经济"] for r in records}, enhance={},
+        board_index={"低空经济": {"name": "低空经济", "board_code": "BK0001", "kind": "concept",
+                                  "change_pct": 99, "main_net_inflow": net}},
+        prev_boards_map={}, prev_theme_stats={}, market_max_boards=2, active_days=3,
+        daily_counts=[], market_break_rate=None, snapshot_map=None, prev_theme_symbols=set())
+    assert card["board"] is None and card["board_matched"] is False
+    assert card["candidate_board"]["main_net_inflow"] == net
+    money = next(c for c in card["persistence"]["checks"] if "真金白银" in c["q"])
+    assert money["pass"] is None and money["state"] == "unknown"
+    position = next(c for c in card["persistence"]["checks"] if c["axis"] == "risk")
+    assert "99%" not in position["value"]
 
 
 def test_board_rows_empty_input_no_upstream_call(monkeypatch):

@@ -12,9 +12,13 @@ import { themesUrl } from "@/lib/routing";
 const OFFICIAL_TOP_N = 6;
 
 /** One link shape for source-labelled membership and existing company concepts. */
-export function ThemeLinkChip({name, title, attributed = false, children}: {name: string; title: string; attributed?: boolean; children?: React.ReactNode}) {
+export function ThemeLinkChip({name, code, title, attributed = false, children}: {name: string; code?: string; title: string; attributed?: boolean; children?: React.ReactNode}) {
   const {open: inspect} = useInspection();
-  return <Link href={themesUrl(name)} onClick={inspectionClick(inspect, {kind: "themes", focus: name})} title={title} aria-label={name}
+  const officialCode = code && /^\d{6}\.TI$/.test(code) ? code : undefined;
+  const href = officialCode
+    ? `/hunting?view=discover&browse=catalog&disc_kind=concept&disc_code=${encodeURIComponent(officialCode)}`
+    : themesUrl(name);
+  return <Link href={href} onClick={officialCode ? undefined : inspectionClick(inspect, {kind: "themes", focus: name})} title={title} aria-label={name}
     className={`inline-flex max-w-full items-center rounded border px-1.5 py-0.5 text-zinc-700 dark:text-zinc-200 [overflow-wrap:anywhere] ${attributed ? "border-amber-500/30 bg-amber-500/5 hover:border-amber-500/60 dark:border-amber-400/30 dark:bg-amber-400/5" : "border-sky-500/30 bg-sky-500/5 hover:border-sky-500/60 dark:border-sky-400/30 dark:bg-sky-400/5"}`}>
     <span className="min-w-0">{name}</span>{children}
   </Link>;
@@ -22,7 +26,7 @@ export function ThemeLinkChip({name, title, attributed = false, children}: {name
 
 export function CompanyConceptChips({names, heading = true}: {names: string[]; heading?: boolean}) {
   if (!names.length) return null;
-  return <div className="space-y-1.5 text-xs">{heading && <h3 className="text-zinc-600 dark:text-zinc-400">公司资料概念</h3>}<div className="flex flex-wrap gap-1">{names.map(name => <ThemeLinkChip key={name} name={name} title="公司资料中的概念标签；不证明今日涨停或业务受益，查看现有题材看板" />)}</div></div>;
+  return <div className="space-y-1.5 text-xs">{heading && <h3 className="text-zinc-600 dark:text-zinc-400">公司资料概念</h3>}<div className="flex flex-wrap gap-1">{names.map(name => <ThemeLinkChip key={name} name={name} title="公司资料来源标签，正式代码未核；按名称检索，不证明今日涨停或业务受益" />)}</div></div>;
 }
 
 // 本地 pctText 已删（2026-09-11，P2-20 / 冗余清理）：改用 lib/format.ts 的权威实现。
@@ -49,8 +53,9 @@ export function ThemeChipsRow({themes, companyNames = []}: {themes: StockThemes 
     const result = new Map<string, {name: string; code?: string; sources: string[]; change: number | null; attributed: boolean}>();
     const add = (name: string, source: string, change: number | null = null, attributed = false, code?: string) => {
       const clean = name.trim(); if (!clean) return;
-      const existing = [...result.entries()].filter(([, item]) => item.name === clean && item.code);
-      const key = code || (existing.length === 1 ? existing[0][0] : `source:${clean}`);
+      // A shared display name does not establish identity across providers or
+      // turn a company/reason label into an official THS constituent claim.
+      const key = code ? `ths:${code}` : `source:${source}:${clean}`;
       const item = result.get(key) || {name: clean, code, sources: [], change: null, attributed: false};
       if (!item.sources.includes(source)) item.sources.push(source);
       if (item.change === null && typeof change === "number" && Number.isFinite(change)) item.change = change;
@@ -67,7 +72,7 @@ export function ThemeChipsRow({themes, companyNames = []}: {themes: StockThemes 
   }, [themes, companyNames]);
   if (!entries.length) return null;
   const visible = entries.slice(0, OFFICIAL_TOP_N), hidden = entries.slice(OFFICIAL_TOP_N);
-  const render = (item: typeof entries[number]) => <ThemeLinkChip key={item.code || `source:${item.name}`} name={item.name} attributed={item.attributed}
+  const render = (item: typeof entries[number]) => <ThemeLinkChip key={item.code || `source:${item.sources.join("|")}:${item.name}`} name={item.name} code={item.code} attributed={item.attributed}
     title={`${item.sources.join(" · ")}${item.code ? ` · 同花顺 ${item.code}` : " · 正式概念身份未核"}；概念归属不证明当日催化或个股受益`}>
     {item.change !== null && <span className={`ml-1 font-mono tabular-nums ${pctColor(item.change)}`}>{pctText(item.change)}</span>}
     <span className="ml-1 text-[10px] text-zinc-600 dark:text-zinc-400">{item.sources.map(value => value.endsWith("来源归因") ? "归因" : value === "官方成分" ? "官方" : value === "公司资料" ? "资料" : value).join(" / ")}</span>

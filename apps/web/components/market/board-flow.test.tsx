@@ -2,6 +2,7 @@ import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } 
 import { act, cleanup, fireEvent, render, screen } from "@testing-library/react";
 import { BoardFlowPanel } from "@/components/market/board-flow";
 import { getBoardFlowMembers, getBoardFlowMinute, getBoardFundFlow, type BoardFlowRow } from "@/lib/api";
+import { InspectionScope } from "@/components/inspection/surface-scope";
 
 // 板块资金流（L2 主视图）：排序纯内存（null 殿后不冒充 0）、筛选 chips、
 // 点行开下钻抽屉（分钟累计 + 成员排行 + 关闭即停轮询）。
@@ -71,7 +72,7 @@ const payload = (rows: BoardFlowRow[], over: Record<string, unknown> = {}) => ({
 });
 
 async function mount() {
-  render(<BoardFlowPanel />);
+  render(<InspectionScope initialSearch="board_range=intraday"><BoardFlowPanel /></InspectionScope>);
   await act(async () => {}); // flush usePollingFetch 首拍
 }
 
@@ -103,7 +104,7 @@ describe("BoardFlowPanel", () => {
     ]));
     await mount();
 
-    expect(getBoardFundFlow).toHaveBeenCalledWith("concept", "intraday");
+    expect(getBoardFundFlow).toHaveBeenCalledWith("concept", "intraday", {signal:expect.any(AbortSignal)});
     const table = screen.getByTestId("board-flow-table");
     // 卡片瀑布流：MasonryColumns 贪心重排不保证 DOM 顺序 = 排序序，
     // 排序正确性由「按序注入 → 三卡都渲染 + 数值/徽标语义正确」间接覆盖
@@ -172,7 +173,7 @@ describe("BoardFlowPanel", () => {
     expect(getBoardFundFlow).toHaveBeenCalledTimes(1);
     fireEvent.click(screen.getByRole("button", {name: "查看本地 20 日存档"}));
     await act(async () => {});
-    expect(getBoardFundFlow).toHaveBeenLastCalledWith("concept", "20d");
+    expect(getBoardFundFlow).toHaveBeenLastCalledWith("concept", "20d", {signal:expect.any(AbortSignal)});
     expect(screen.getByText(/存档截至 2026-09-22/)).toBeTruthy();
     expect(screen.getByRole("button", {name: /占比.*5%/}).hasAttribute("disabled")).toBe(true);
     expect(screen.getByRole("button", {name: "排名上升"}).hasAttribute("disabled")).toBe(true);
