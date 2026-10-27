@@ -205,3 +205,25 @@ describe("参数配置 · 独立读取", () => {
     expect(screen.getByRole("button", { name: "回滚原因：最新归因" })).toBeTruthy();
   });
 });
+
+it("reads saved review-action draft identity and validation plan as concise facts without enabling it", async () => {
+  const draft = {...change("draft"), source_type: "review_action_item", source_id: "42", evidence: {
+    review_action: {id: "42", review_id: "RV-20261026-160000", trade_date: "20261026", title: "核对候选容量"},
+    validation_plan: "冻结全候选，核对截断与反例；效果待验证",
+  }};
+  vi.mocked(getAgentParamChanges).mockResolvedValue([draft]);
+  render(<ParamsTab/>);
+  expect(await screen.findByText("原复盘 20261026 · 核对候选容量")).toBeTruthy();
+  expect(screen.getByText("验证计划：冻结全候选，核对截断与反例；效果待验证")).toBeTruthy();
+  expect(screen.queryByRole("button", {name: "确认生效"})).toBeNull();
+  expect(applyAgentParamChange).not.toHaveBeenCalled();
+});
+
+it("keeps unknown legacy or mismatched review-action identity explicit", async () => {
+  vi.mocked(getAgentParamChanges).mockResolvedValue([{...change("draft"), source_type: "review_action_item", source_id: "42",
+    evidence: {review_action: {id: "99", review_id: "RV-other", trade_date: "20261026", title: "不能冒充当前行动"}}}]);
+  render(<ParamsTab/>);
+  expect(await screen.findByText("原复盘行动身份未核实，请核对原始依据。")).toBeTruthy();
+  expect(screen.queryByText(/原复盘 20261026/)).toBeNull();
+  expect(applyAgentParamChange).not.toHaveBeenCalled();
+});

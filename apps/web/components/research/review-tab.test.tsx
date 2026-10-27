@@ -15,6 +15,8 @@ vi.mock("@/lib/api", async () => {
     getReviewEffectiveness: vi.fn(),
     getReviewReport: vi.fn(),
     updateActionItemStatus: vi.fn(),
+    getAgentParams: vi.fn(),
+    createAgentParamChange: vi.fn(),
   };
 });
 
@@ -335,4 +337,117 @@ it("implementation registration requires three evidence fields and keeps the not
   await waitFor(() => expect(mocked.updateActionItemStatus).toHaveBeenCalledWith(expect.any(Object),"applied","修复已完成", {
     implementation_ref:"PR #12",release_version:"release-abc",verification_ref:"离线检查通过；实盘效果待观察"
   }));
+});
+
+const PARAMETER = {key: "picks_replace_threshold", label: "替换优势分", desc: "保持现有候选的替换门槛", risk: "high", current: "15", default: "15", kind: "float" as const};
+
+async function openReviewDraft() {
+  fireEvent.click(await screen.findByRole("button", {name: "建立评估草案"}));
+  await screen.findByRole("combobox", {name: "评估参数"});
+  return screen.getByRole("form", {name: "为补齐阻断级数据缺失：breadth, sentiment建立评估草案"});
+}
+
+it("creates only an explicit draft bound to the original review action, with no parameter auto-selection or new-value prefill", async () => {
+  setup();
+  vi.mocked(mocked.getAgentParams).mockResolvedValue([PARAMETER]);
+  vi.mocked(mocked.createAgentParamChange).mockResolvedValue({id: 91, status: "draft", source_type: "review_action_item", source_id: "42"} as never);
+  render(<ReviewTab allowDispose/>);
+  await screen.findByRole("button", {name: "建立评估草案"});
+  expect(mocked.getAgentParams).not.toHaveBeenCalled();
+  const form = await openReviewDraft();
+  const select = within(form).getByRole("combobox", {name: "评估参数"});
+  const value = within(form).getByRole("textbox", {name: "候选新值"});
+  expect(select).toHaveProperty("value", "");
+  expect(value).toHaveProperty("value", "");
+  expect(within(form).getByRole("button", {name: "保存评估草案"})).toHaveProperty("disabled", true);
+  fireEvent.change(select, {target: {value: PARAMETER.key}});
+  expect(value).toHaveProperty("value", "");
+  fireEvent.change(value, {target: {value: "12"}});
+  expect(mocked.createAgentParamChange).not.toHaveBeenCalled();
+  fireEvent.change(within(form).getByRole("textbox", {name: "验证计划"}), {target: {value: "冻结同点全候选，核漏选和反例；效果待验证"}});
+  fireEvent.click(within(form).getByRole("button", {name: "保存评估草案"}));
+  await waitFor(() => expect(mocked.createAgentParamChange).toHaveBeenCalledExactlyOnceWith(PARAMETER.key, "12", {
+    source_type: "review_action_item", source_id: "42", evidence: {review_action: {
+      review_id: SUMMARY.review_id, trade_date: SUMMARY.trade_date, category: "data",
+      title: "补齐阻断级数据缺失：breadth, sentiment"}, validation_plan: "冻结同点全候选，核漏选和反例；效果待验证"},
+  }));
+  expect(await screen.findByText("已建草案 #91 · 未生效")).toBeTruthy();
+  expect(screen.getByRole("link", {name: "查看参数评估"}).getAttribute("href")).toBe("/agent?area=maintenance&tab=params");
+  expect(mocked.updateActionItemStatus).not.toHaveBeenCalled();
+});
+
+it("keeps the ordinary report read-only and never requests maintenance params", async () => {
+  setup(); render(<ReviewTab/>);
+  await screen.findByText(/管理处置在系统维护/);
+  expect(screen.queryByRole("button", {name: "建立评估草案"})).toBeNull();
+  expect(mocked.getAgentParams).not.toHaveBeenCalled();
+  expect(mocked.createAgentParamChange).not.toHaveBeenCalled();
+});
+
+it("shows a real maintenance permission failure without offering an unverified draft save", async () => {
+  setup();
+  vi.mocked(mocked.getAgentParams).mockRejectedValue(new mocked.ApiError(403, "需要维护授权", "maintenance_required"));
+  render(<ReviewTab allowDispose/>);
+  fireEvent.click(await screen.findByRole("button", {name: "建立评估草案"}));
+  expect(await screen.findByText(/参数读取失败：需要维护授权/)).toBeTruthy();
+  expect(screen.queryByRole("button", {name: "保存评估草案"})).toBeNull();
+  expect(mocked.createAgentParamChange).not.toHaveBeenCalled();
+  expect(mocked.updateActionItemStatus).not.toHaveBeenCalled();
+});
+
+it("does not carry a draft to a regenerated report even if SQLite reused the same action id", async () => {
+  setup(); vi.mocked(mocked.getAgentParams).mockResolvedValue([PARAMETER]);
+  render(<ReviewTab allowDispose/>);
+  const form = await openReviewDraft();
+  fireEvent.change(within(form).getByRole("combobox", {name: "评估参数"}), {target: {value: PARAMETER.key}});
+  fireEvent.change(within(form).getByRole("textbox", {name: "候选新值"}), {target: {value: "12"}});
+  const replacement = {...detailWith("42"), review_id: "RV-20260901-220000"};
+  vi.mocked(mocked.getReviewReport).mockResolvedValue(replacement);
+  fireEvent(document, new Event("visibilitychange"));
+  await waitFor(() => expect(mocked.getReviewReport).toHaveBeenCalledTimes(2));
+  await waitFor(() => expect(screen.queryByRole("form", {name: /建立评估草案/})).toBeNull());
+  expect(mocked.createAgentParamChange).not.toHaveBeenCalled();
+});
+
+it("retains the entered candidate after draft save failure and does not retry automatically", async () => {
+  setup(); vi.mocked(mocked.getAgentParams).mockResolvedValue([PARAMETER]);
+  vi.mocked(mocked.createAgentParamChange).mockRejectedValue(new mocked.ApiError(422, "复盘行动已变化，请刷新", "invalid"));
+  render(<ReviewTab allowDispose/>);
+  const form = await openReviewDraft();
+  fireEvent.change(within(form).getByRole("combobox", {name: "评估参数"}), {target: {value: PARAMETER.key}});
+  fireEvent.change(within(form).getByRole("textbox", {name: "候选新值"}), {target: {value: "12"}});
+  fireEvent.change(within(form).getByRole("textbox", {name: "验证计划"}), {target: {value: "全分母对照；未知不补"}});
+  fireEvent.click(within(form).getByRole("button", {name: "保存评估草案"}));
+  expect(await screen.findByText(/复盘行动已变化，请刷新/)).toBeTruthy();
+  expect(screen.getByRole("alert").textContent).toContain("请求被拒绝");
+  expect(screen.getByRole("alert").textContent).not.toContain("保存结果未确认");
+  expect(within(form).getByRole("textbox", {name: "候选新值"})).toHaveProperty("value", "12");
+  expect(mocked.createAgentParamChange).toHaveBeenCalledTimes(1);
+  expect(mocked.updateActionItemStatus).not.toHaveBeenCalled();
+});
+
+it.each([0, 500])("treats an unconfirmed draft response (%s) as possibly saved, keeps inputs and never resends", async status => {
+  setup(); vi.mocked(mocked.getAgentParams).mockResolvedValue([PARAMETER]);
+  // The server may have committed before the response was lost or returned 5xx.
+  const committed = {id: 91, after: "12"};
+  const stored: typeof committed[] = [];
+  vi.mocked(mocked.createAgentParamChange).mockImplementation(async () => {
+    stored.push(committed);
+    throw new mocked.ApiError(status, status ? "响应服务失败" : "连接中断", status ? "http_500" : "network_error");
+  });
+  render(<ReviewTab allowDispose/>);
+  const form = await openReviewDraft();
+  fireEvent.change(within(form).getByRole("combobox", {name: "评估参数"}), {target: {value: PARAMETER.key}});
+  fireEvent.change(within(form).getByRole("textbox", {name: "候选新值"}), {target: {value: "12"}});
+  fireEvent.change(within(form).getByRole("textbox", {name: "验证计划"}), {target: {value: "原输入留存，先核对保存记录"}});
+  fireEvent.click(within(form).getByRole("button", {name: "保存评估草案"}));
+  const alert = await screen.findByRole("alert");
+  expect(alert.textContent).toContain("保存结果未确认，请先到参数评估核对再操作");
+  expect(alert.textContent).not.toContain("保存失败");
+  expect(within(alert).getByRole("link", {name: "到参数评估核对"}).getAttribute("href")).toBe("/agent?area=maintenance&tab=params");
+  expect(within(form).getByRole("textbox", {name: "候选新值"})).toHaveProperty("value", "12");
+  expect(within(form).getByRole("textbox", {name: "验证计划"})).toHaveProperty("value", "原输入留存，先核对保存记录");
+  expect(stored).toHaveLength(1);
+  expect(mocked.createAgentParamChange).toHaveBeenCalledTimes(1);
+  expect(mocked.updateActionItemStatus).not.toHaveBeenCalled();
 });

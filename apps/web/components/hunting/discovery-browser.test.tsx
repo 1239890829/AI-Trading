@@ -84,6 +84,14 @@ function route(url: string) {
   if (query.pathname === "/api/themes/hot") return {data:hotPayload()};
   if (query.pathname === "/api/themes/catalog") return {data:officialCatalog(query.searchParams.get("kind")==="industry"?"industry":"concept")};
   if (query.pathname === "/api/themes/catalog/quotes") {
+    if(query.searchParams.get("scope")==="directory") {
+      const kind=query.searchParams.get("kind")==="industry"?"industry":"concept",names=officialCatalog(kind);
+      return {data:{scope:"directory",kind,source:"ths_official",source_basis:"index_snapshot",available:true,catalog_version:"a".repeat(64),
+        catalog_state:"ready",catalog_synced_at:null,directory_total:names.items.length,source_total:names.items.length,source_returned:names.items.length,
+        value_count:names.items.length,coverage_state:"source_complete",missing_codes:[],source_as_of:null,trade_date:null,quality:"stale",observation_state:"clock_unknown",
+        source_ready_from:null,source_ready_at:null,received_from:"2026-10-27T09:50:00+08:00",received_at:"2026-10-27T09:50:01+08:00",
+        rows:names.items.map((row,index)=>({...row,price:100,change_pct:index,quote_state:"value"}))}};
+    }
     const codes=(query.searchParams.get("codes")??"").split(",");
     return {data:{kind:query.searchParams.get("kind"),source:"ths_official",source_basis:"index_snapshot",source_as_of:null,source_ready_at:null,received_at:"2026-10-25T09:50:01+08:00",available:true,rows:codes.map(code=>({code,change_pct:null,price:null})),missing_codes:[]}};
   }
@@ -100,7 +108,7 @@ function route(url: string) {
   if (query.pathname === "/api/picks/strategy-registry") return {data:{strategies:[]}};
   throw new Error(`Unexpected read: ${query.pathname}`);
 }
-function Browser({search="browse=hot",selection=emptySelection}: {search?: string; selection?: DiscoverySelection}) {
+function Browser({search="browse=hot&disc_view=concentration",selection=emptySelection}: {search?: string; selection?: DiscoverySelection}) {
   return <DiscoveryBrowser search={search} selection={selection} onNavigate={navigateMock} onTarget={targetMock}/>;
 }
 function Harness({initial, selection=emptySelection}: {initial: string; selection?: DiscoverySelection}) {
@@ -141,7 +149,7 @@ describe("真实分类发现的来源与范围", () => {
     expect(discoveryLocation("browse=funds").fundsSource).toBe("sina");
     render(<Harness initial="browse=funds&disc_code=BK0001&disc_q=默认&selection=600519&disc_range=5d&date=2026-10-23"/>);
     await screen.findByRole("button",{name:"查看默认板块资金排行"});
-    expect(targetMock.mock.lastCall?.[1]).toMatchObject({source:"eastmoney",code:"BK0001"});
+    await waitFor(()=>expect(targetMock.mock.lastCall?.[1]).toMatchObject({source:"eastmoney",code:"BK0001"}));
     fireEvent.change(screen.getByRole("combobox",{name:"资金来源"}),{target:{value:"sina"}});
     await screen.findByRole("button",{name:"查看来源概念甲成分"});
     const next=new URL(navigateMock.mock.lastCall![0],"http://localhost");
@@ -276,6 +284,16 @@ describe("真实分类发现的来源与范围", () => {
     expect(screen.getByText(/本系统排序，不是来源官方热榜或全市场最强主线/)).toBeTruthy();
     expect(screen.getByText(/榜单时刻/).textContent).toContain("09:50（北京）");
   });
+  it("热门入口默认读取完整正式涨幅，只有明确切自算集中度才取热股样本",async()=>{
+    render(<Harness initial="browse=hot" selection={selected}/>);
+    await screen.findByRole("heading",{name:"概念/行业涨幅"});
+    await screen.findByRole("button",{name:"查看人形机器人成分"});
+    expect(jsonMock.mock.calls.map(call=>call[0])).toEqual(["/api/themes/catalog/quotes?kind=concept&scope=directory"]);
+    fireEvent.change(screen.getByRole("combobox",{name:"题材视角"}),{target:{value:"concentration"}});
+    await screen.findByRole("heading",{name:"热股集中度（本系统计算）"});
+    await screen.findByRole("button",{name:"查看机器人概念成分"});
+    expect(jsonMock.mock.calls.filter(([url])=>String(url).includes("themes/hot"))).toHaveLength(1);
+  });
   it("没有涨停梯队也可发现热门题材，归属未核热股仍能读取", async () => {
     render(<Browser/>);
     expect(await screen.findByRole("button",{name:"查看机器人概念成分"})).toBeTruthy();
@@ -309,7 +327,7 @@ describe("真实分类发现的来源与范围", () => {
       if(url.startsWith("/api/themes/catalog?"))return new Promise(resolve => {finishCatalog=resolve;});
       return Promise.resolve(route(url));
     });
-    const page = render(<Browser search="browse=hot"/>);
+    const page = render(<Browser search="browse=hot&disc_view=concentration"/>);
     await waitFor(() => expect(jsonMock).toHaveBeenCalledTimes(1));
     const hotSignal = jsonMock.mock.calls[0][2].signal as AbortSignal;
     page.rerender(<Browser search="browse=catalog&disc_kind=industry&disc_range=20d"/>);
@@ -358,7 +376,7 @@ describe("真实分类发现的来源与范围", () => {
       {...data.themes[1],hot_count:3,hot_symbols:symbols.slice(0,3),member_count:100,concentration_pct:3,heat:300},
       {...data.themes[1],theme:"机器视觉",theme_code:"886002.TI",hot_count:4,hot_symbols:symbols,member_count:200,concentration_pct:2,heat:400},
     ];
-    jsonMock.mockResolvedValue({data});render(<Harness initial="browse=hot"/>);
+    jsonMock.mockResolvedValue({data});render(<Harness initial="browse=hot&disc_view=concentration"/>);
     await screen.findByRole("button",{name:"查看机器人概念成分"});
     expect(resultRows()).toHaveLength(1);
     expect(screen.getByRole("button",{name:"查看人形机器人成分"}).textContent).toContain("886069.TI");
@@ -377,7 +395,7 @@ describe("真实分类发现的来源与范围", () => {
     if(issue==="source")(data.themes[0] as unknown as {source:string}).source="manual";
     if(issue==="code")data.themes[0].theme_code="机器人概念";
     if(issue==="hot_symbols")data.themes[0].hot_symbols=["600519","000001"];
-    jsonMock.mockResolvedValue({data});render(<Browser search="browse=hot&disc_code=885517.TI"/>);
+    jsonMock.mockResolvedValue({data});render(<Browser search="browse=hot&disc_view=concentration&disc_code=885517.TI"/>);
     expect((await screen.findByRole("alert")).textContent).toContain("分类返回身份或结构不一致");
     expect(screen.queryByRole("button",{name:"查看机器人概念成分"})).toBeNull();
     expect(targetMock.mock.calls.every(([,value])=>value===null)).toBe(true);
@@ -435,7 +453,7 @@ describe("真实分类发现的来源与范围", () => {
   });
 
   it("中文组合输入未完成不提交URL或提前过滤；完成后仅在本地筛选", async () => {
-    render(<Harness initial="browse=hot&disc_code=886069.TI&selection=daily&date=2026-10-23&account=paper"/>);
+    render(<Harness initial="browse=hot&disc_view=concentration&disc_code=886069.TI&selection=daily&date=2026-10-23&account=paper"/>);
     await screen.findByRole("button",{name:"查看机器人概念成分"});
     const input = screen.getByRole("textbox",{name:"搜索分类"});
     fireEvent.compositionStart(input);fireEvent.change(input,{target:{value:"机器人概念"}});
@@ -451,7 +469,7 @@ describe("真实分类发现的来源与范围", () => {
   });
 
   it("选择行进入相应来源scope，清原名单选中但保留日期/账户/返回位置", async () => {
-    const original="browse=hot&selection=daily&date=2026-10-23&account=paper&symbol=600519&from=%2Fmarket";
+    const original="browse=hot&disc_view=concentration&selection=daily&date=2026-10-23&account=paper&symbol=600519&from=%2Fmarket";
     render(<Harness initial={original}/>);
     await screen.findByRole("button",{name:"查看机器人概念成分"});
     fireEvent.click(screen.getByRole("button",{name:"查看机器人概念成分"}));
@@ -721,7 +739,7 @@ describe("分类导航的键盘与深链", () => {
     const nav=screen.getByRole("navigation",{name:"选股分类发现"});
     expect(within(nav).queryByRole("link",{name:"资金方向"})).toBeNull();
     expect(within(nav).getAllByRole("link")).toHaveLength(4);
-    const hot=within(nav).getByRole("link",{name:"热门题材"});
+    const hot=within(nav).getByRole("link",{name:"概念/行业涨幅"});
     const catalog=within(nav).getByRole("link",{name:"行业概念"});
     hot.focus();fireEvent.keyDown(hot,{key:"ArrowRight"});expect(document.activeElement).toBe(catalog);
     expect(hot.getAttribute("aria-current")).toBe("page");expect(catalog.hasAttribute("aria-current")).toBe(false);

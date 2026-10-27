@@ -263,6 +263,10 @@ export function ParamsTab() {
           <div className="space-y-1.5">
             {changes.map((c) => {
               const meta = STATUS_META[c.status] ?? { ...STATUS_META.rolled_back, label: "状态未知（待核实）" };
+              const rawSource = c.evidence?.review_action;
+              const source = rawSource && typeof rawSource === "object" && !Array.isArray(rawSource) ? rawSource as Record<string, unknown> : null;
+              const knownSource = c.source_type === "review_action_item" && source?.id === c.source_id
+                && ["review_id", "trade_date", "title"].every(key => typeof source[key] === "string");
               return (
                 <div key={c.id} className="rounded-lg border border-zinc-100 px-2 py-1.5 dark:border-zinc-800">
                   <div className="flex flex-wrap items-center justify-between gap-2">
@@ -271,6 +275,11 @@ export function ParamsTab() {
                     </span>
                     <span className={`shrink-0 rounded px-1 py-0.5 text-[10px] ${meta.cls}`}>{c.outcome?.label ?? (c.status === "rolled_back" ? "历史回滚结果待核实" : c.status === "applied" ? "已登记生效" : meta.label)}</span>
                   </div>
+                  {c.source_type === "review_action_item" && <div className="my-1 text-xs text-zinc-600 dark:text-zinc-400">
+                    {knownSource ? <><p>原复盘 {String(source?.trade_date)} · {String(source?.title)}</p>
+                      <p>验证计划：{typeof c.evidence?.validation_plan === "string" ? c.evidence.validation_plan : "未记录，不代表效果已验证"}</p></>
+                      : <p>原复盘行动身份未核实，请核对原始依据。</p>}
+                  </div>}
                   <ExplanationMap label="变更记录" identity={`${c.id}:${c.key}:${c.created_at}`} steps={[
                     {id:"values",label:"变更内容",icon:"relation",content:<dl className="grid grid-cols-[auto,minmax(0,1fr)] gap-x-3 gap-y-2 text-xs"><dt>记录原值</dt><dd className="min-w-0 whitespace-pre-wrap [overflow-wrap:anywhere]">{c.before === undefined ? "未记录" : pretty(c.before)}</dd><dt>记录新值</dt><dd className="min-w-0 whitespace-pre-wrap [overflow-wrap:anywhere]">{c.after === undefined ? "未记录" : pretty(c.after)}</dd></dl>},
                     {id:"evidence",label:"原始依据",icon:"source",content:c.evidence && Object.keys(c.evidence).length ? <pre className="data-scroll whitespace-pre-wrap [overflow-wrap:anywhere] text-xs" aria-label="变更原始依据 JSON">{JSON.stringify(c.evidence,null,2)}</pre> : <p>未记录依据，不代表已核实效果。</p>},

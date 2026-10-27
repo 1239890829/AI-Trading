@@ -27,10 +27,10 @@ function route(url:string) {
   if (parsed.pathname === "/api/themes/catalog/quotes") return {data:quoteReply(kind,(parsed.searchParams.get("codes") ?? "").split(","))};
   throw new Error(`unexpected read ${parsed.pathname}`);
 }
-function Harness({initial="browse=catalog&disc_kind=concept"}: {initial?:string}) {
+function Harness({initial="browse=catalog&disc_kind=concept", ranking=false}: {initial?:string; ranking?:boolean}) {
   const [search,setSearch] = useState(initial), params = new URLSearchParams(search);
   const kind = params.get("disc_kind") === "industry" ? "industry" : "concept";
-  return <DiscoveryOfficialDirectory kind={kind} search={search} onTarget={target} onNavigate={(href,push) => {navigate(href,push);setSearch(new URL(href,"http://localhost").search);}}/>;
+  return <DiscoveryOfficialDirectory ranking={ranking} kind={kind} search={search} onTarget={target} onNavigate={(href,push) => {navigate(href,push);setSearch(new URL(href,"http://localhost").search);}}/>;
 }
 function quoteCalls() {return jsonMock.mock.calls.filter(([url]) => String(url).includes("/catalog/quotes?"));}
 function quoteCodes(call:unknown[]) {return (new URL(String(call[0]),"http://localhost").searchParams.get("codes") ?? "").split(",");}
@@ -40,6 +40,80 @@ beforeEach(() => {
   vi.spyOn(HTMLElement.prototype,"getBoundingClientRect").mockReturnValue(far);
 });
 afterEach(() => {cleanup();vi.restoreAllMocks();});
+
+function rankingReply(kind:OfficialCatalogKind="concept", count=35) {
+  const names=catalog(kind,count);
+  return {scope:"directory",kind,source:"ths_official",source_basis:"index_snapshot",available:true,
+    catalog_version:"a".repeat(64),catalog_state:"ready",catalog_synced_at:names.synced_at,
+    directory_total:count,source_total:count,source_returned:count,value_count:count,
+    coverage_state:"source_complete",missing_codes:[],source_as_of:null,trade_date:null,quality:"stale",observation_state:"clock_unknown",
+    source_ready_from:"2026-10-25T21:19:41+08:00",source_ready_at:"2026-10-25T21:19:41+08:00",
+    received_from:"2026-10-27T09:50:00+08:00",received_at:"2026-10-27T09:50:01+08:00",
+    rows:names.items.map((row,index)=>({...row,price:1000,change_pct:index-10,quote_state:"value"}))};
+}
+
+describe("完整涨幅读者",()=>{
+  it("完整涨幅默认降序覆盖榜尾，不用展开报价或热股样本，时点未知首屏明示",async()=>{
+    jsonMock.mockResolvedValue({data:rankingReply()});
+    const page=render(<DiscoveryOfficialDirectory ranking kind="concept" search="browse=hot" onTarget={target} onNavigate={navigate}/>);
+    await screen.findByRole("button",{name:"查看正式概念34成分"});
+    expect(resultRows()[0].textContent).toContain("正式概念34");
+    expect(resultRows()).toHaveLength(24);
+    expect(jsonMock.mock.calls.map(call=>call[0])).toEqual(["/api/themes/catalog/quotes?kind=concept&scope=directory"]);
+    expect(screen.getByText(/来源交易日与行情时点未提供/)).toBeTruthy();
+    expect(screen.getByText(/有效涨幅 35 \/ 35/)).toBeTruthy();
+    fireEvent.click(screen.getByRole("button",{name:"继续加载"}));
+    expect(resultRows()).toHaveLength(35);expect(jsonMock).toHaveBeenCalledTimes(1);
+    expect(page.container.querySelector('[class*="overflow"]')).toBeNull();
+  });
+  it("完整涨幅缺值保留原名code置后，重试实际fresh；合法零不当缺值",async()=>{
+    const data=rankingReply("concept",3);
+    data.rows[0].change_pct=null as unknown as number; data.rows[0].price=null as unknown as number;
+    data.rows[0].quote_state="missing";data.rows[1].change_pct=0;data.rows[2].change_pct=-2;
+    Object.assign(data,{source_returned:2,value_count:2,coverage_state:"partial",missing_codes:[data.rows[0].code]});
+    jsonMock.mockResolvedValue({data});
+    render(<DiscoveryOfficialDirectory ranking kind="concept" search="browse=hot" onTarget={target} onNavigate={navigate}/>);
+    await screen.findByText(/有效涨幅 2 \/ 3/);
+    expect(resultRows().map(row=>row.textContent)).toEqual([expect.stringContaining("正式概念1"),expect.stringContaining("正式概念2"),expect.stringContaining("正式概念0")]);
+    expect(within(resultRows()[0]).getByText("0.00%")).toBeTruthy();
+    expect(within(resultRows()[2]).queryByText("0.00%")).toBeNull();
+    fireEvent.click(screen.getByRole("button",{name:"刷新涨幅"}));
+    await waitFor(()=>expect(jsonMock).toHaveBeenCalledTimes(2));
+    expect(String(jsonMock.mock.calls[1][0])).toContain("fresh=true");
+  });
+  it("完整涨幅错kind或覆盖伪全拒绝，不按部分包制造完整排名",async()=>{
+    jsonMock.mockResolvedValue({data:{...rankingReply(),source_returned:34}});
+    render(<DiscoveryOfficialDirectory ranking kind="concept" search="browse=hot" onTarget={target} onNavigate={navigate}/>);
+    expect(await screen.findByRole("alert")).toHaveProperty("textContent",expect.stringContaining("身份或覆盖不符"));
+    expect(screen.queryByRole("button",{name:"查看正式概念34成分"})).toBeNull();
+  });
+  it("完整涨幅切类别取消旧包；迟到概念不得覆盖行业或重写父身份",async()=>{
+    let finish!: (value:unknown)=>void;
+    jsonMock.mockImplementation((url:string)=>url.includes("kind=concept")?new Promise(resolve=>{finish=resolve;}):Promise.resolve({data:rankingReply("industry",3)}));
+    const page=render(<DiscoveryOfficialDirectory ranking kind="concept" search="browse=hot" scope="concept-owner" onTarget={target} onNavigate={navigate}/>);
+    await waitFor(()=>expect(jsonMock).toHaveBeenCalledTimes(1));
+    const signal=jsonMock.mock.calls[0][2].signal as AbortSignal;
+    page.rerender(<DiscoveryOfficialDirectory ranking kind="industry" search="browse=hot&disc_kind=industry&disc_code=400000.TI" scope="industry-owner" onTarget={target} onNavigate={navigate}/>);
+    await screen.findByRole("button",{name:"查看正式行业0成分"});
+    expect(signal.aborted).toBe(true);
+    await act(async()=>finish({data:rankingReply()}));
+    expect(screen.queryByRole("button",{name:"查看正式概念34成分"})).toBeNull();
+    expect(target.mock.lastCall).toEqual(["industry-owner",{kind:"theme",code:"400000.TI",name:"正式行业0",catalogKind:"industry"}]);
+  });
+  it("完整涨幅排序和搜索仅消费同包原值，保留日期账户与正式下钻",async()=>{
+    jsonMock.mockResolvedValue({data:rankingReply("concept",3)});
+    render(<Harness ranking initial="browse=hot&date=2026-10-22&account=paper"/>);
+    await screen.findByRole("button",{name:"查看正式概念2成分"});
+    fireEvent.change(screen.getByRole("combobox",{name:"涨幅顺序"}),{target:{value:"asc"}});
+    expect(resultRows()[0].textContent).toContain("正式概念0");
+    fireEvent.change(screen.getByRole("textbox",{name:"搜索官方目录"}),{target:{value:"300001.TI"}});
+    expect(resultRows()).toHaveLength(1);expect(jsonMock).toHaveBeenCalledTimes(1);
+    fireEvent.click(screen.getByRole("button",{name:"查看正式概念1成分"}));
+    const query=new URL(navigate.mock.lastCall![0],"http://localhost").searchParams;
+    expect(query.get("date")).toBe("2026-10-22");expect(query.get("account")).toBe("paper");
+    expect(target.mock.lastCall?.[1]).toEqual({kind:"theme",code:"300001.TI",name:"正式概念1",catalogKind:"concept"});
+  });
+});
 
 describe("官方目录与可选报价独立读取", () => {
   it("报价慢仍立即显示名称和代码并可下钻，原日期/名单不变，不等待额外行情",async()=>{

@@ -1,7 +1,7 @@
 "use client";
 
 import {useEffect, useMemo, useRef, useState} from "react";
-import {getOfficialBoardQuotes, getOfficialCatalog, type OfficialBoardQuotes, type OfficialCatalogItem, type OfficialCatalogKind, type OfficialCatalogPayload} from "@/lib/api/themes";
+import {getOfficialBoardQuotes, getOfficialBoardRanking, getOfficialCatalog, type OfficialBoardQuotes, type OfficialBoardRanking, type OfficialCatalogItem, type OfficialCatalogKind, type OfficialCatalogPayload} from "@/lib/api/themes";
 import {useResource} from "@/hooks/use-resource";
 import {useIncremental} from "@/hooks/use-incremental";
 import {IncrementalSentinel} from "@/components/ui/incremental-sentinel";
@@ -36,6 +36,7 @@ type QuoteFact = {signature: string; state: "value" | "missing" | "error"; chang
 type QuoteRequest = {kind: OfficialCatalogKind; signature: string; codes: string[]; controller: AbortController};
 
 export interface DiscoveryOfficialDirectoryProps {
+  ranking?: boolean;
   kind: OfficialCatalogKind;
   search: string;
   scope?: string;
@@ -45,7 +46,11 @@ export interface DiscoveryOfficialDirectoryProps {
 }
 
 /** Names and codes own their read. Optional quote batches cannot hold the directory hostage. */
-export function DiscoveryOfficialDirectory({kind, search, scope: suppliedScope, onNavigate, onTarget, selection}: DiscoveryOfficialDirectoryProps) {
+export function DiscoveryOfficialDirectory(props: DiscoveryOfficialDirectoryProps) {
+  return props.ranking ? <DirectoryRanking {...props}/> : <DirectoryBrowse {...props}/>;
+}
+
+function DirectoryBrowse({kind, search, scope: suppliedScope, onNavigate, onTarget, selection}: DiscoveryOfficialDirectoryProps) {
   const params = new URLSearchParams(search);
   const query = params.get("disc_q") ?? "";
   const code = params.get("disc_code") ?? "";
@@ -153,6 +158,97 @@ export function DiscoveryOfficialDirectory({kind, search, scope: suppliedScope, 
     <IncrementalSentinel sentinelRef={list.sentinelRef} visible={Math.min(list.visible, rows.length)} total={rows.length} unit="个目录" onLoadMore={list.loadMore}/>
     {selection?.readError && <div role="alert" className="discovery-error"><span>原名单读取失败，目录浏览不代表已完成入选对照。</span>{selection.retry && <button type="button" className="quiet-action" disabled={selection.pending} onClick={selection.retry}>{selection.pending ? "正在重试原名单…" : "重试原名单"}</button>}</div>}
     <p className="discovery-footnote">目录与报价分开读取；不按局部报价排名，不产生研究或模拟资格。{selection?.date ? `原名单日期 ${selection.date}，不代表当时归属。` : ""}</p>
+  </section>;
+}
+
+function checkedRanking(value: OfficialBoardRanking, kind: OfficialCatalogKind) {
+  const integer = (n: unknown): n is number => Number.isSafeInteger(n) && (n as number) >= 0;
+  if (!object(value) || value.scope !== "directory" || value.kind !== kind || value.source !== "ths_official"
+    || value.source_basis !== "index_snapshot" || !/^[a-f0-9]{64}$/.test(value.catalog_version)
+    || value.source_as_of !== null || value.trade_date !== null || value.quality !== "stale" || value.observation_state !== "clock_unknown"
+    || typeof value.available !== "boolean" || !integer(value.directory_total) || value.directory_total < 1 || value.directory_total > 1000
+    || value.source_total !== value.directory_total || !integer(value.source_returned) || value.source_returned > value.directory_total
+    || !integer(value.value_count) || !Array.isArray(value.rows) || value.rows.length !== value.directory_total
+    || !Array.isArray(value.missing_codes)
+    || value.rows.some(row => !object(row) || row.kind !== kind || row.source !== "ths_official" || !codeText(row.code) || !named(row.name)
+      || !numeric(row.price) || !numeric(row.change_pct) || row.change_pct === undefined || row.price !== null && (row.price === undefined || row.price <= 0)
+      || !["value", "missing", "unavailable"].includes(row.quote_state)
+      || row.quote_state !== "value" && (row.price !== null || row.change_pct !== null))
+    || new Set(value.rows.map(row => row.code)).size !== value.directory_total) throw new DirectoryIdentityError("完整涨幅身份或覆盖不符");
+  const missing=value.rows.filter(row=>row.quote_state!=="value").map(row=>row.code);
+  if (value.source_returned !== value.rows.length-missing.length || value.available !== (value.source_returned > 0)
+    || value.value_count !== value.rows.filter(row=>row.change_pct!==null).length
+    || value.missing_codes.length !== missing.length || new Set(value.missing_codes).size !== missing.length
+    || value.missing_codes.some(code=>!missing.includes(code))
+    || value.coverage_state !== (missing.length ? "partial" : "source_complete")) throw new DirectoryIdentityError("完整涨幅身份或覆盖不符");
+  return value;
+}
+
+function DirectoryRanking({kind, search, scope: suppliedScope, onNavigate, onTarget, selection}: DiscoveryOfficialDirectoryProps) {
+  const params=new URLSearchParams(search), query=params.get("disc_q")??"", code=params.get("disc_code")??"";
+  const ascending=params.get("disc_sort")==="asc";
+  const scope=suppliedScope??JSON.stringify(["hot",kind,"intraday",code]);
+  const freshRead=useRef(false);
+  const read=useResource(async signal=>{
+    const fresh=freshRead.current;freshRead.current=false;
+    return checkedRanking(await getOfficialBoardRanking(kind,{signal,fresh}),kind);
+  },{key:kind,abortable:true,intervalMs:null,marketHours:false});
+  const bad=read.error instanceof DirectoryIdentityError;
+  const data=!bad&&read.data?.kind===kind?read.data:undefined;
+  const [draft,setDraft]=useState({query,value:query}),[composing,setComposing]=useState(false);
+  if(draft.query!==query)setDraft({query,value:query});
+  const rows=useMemo(()=>{
+    const term=query.trim().toLocaleLowerCase();
+    return [...(data?.rows??[])].filter(row=>`${row.name} ${row.code}`.toLocaleLowerCase().includes(term)).sort((a,b)=>{
+      if(a.change_pct===null)return b.change_pct===null?a.code.localeCompare(b.code):1;
+      if(b.change_pct===null)return -1;
+      return (ascending?a.change_pct-b.change_pct:b.change_pct-a.change_pct)||a.code.localeCompare(b.code);
+    });
+  },[data,query,ascending]);
+  const list=useIncremental(rows,{pageSize:24,step:24,resetKey:JSON.stringify([kind,query,ascending])});
+  const chosen=data?.rows.find(row=>row.code===code);
+  const target=useMemo(()=>chosen?{kind:"theme" as const,code:chosen.code,name:chosen.name,catalogKind:kind}:null,[chosen,kind]);
+  useEffect(()=>{onTarget(scope,target);},[onTarget,scope,target]);
+  const navigate=(changes:Record<string,string|null>,push=false)=>{
+    const next=new URLSearchParams(search);next.set("view","discover");next.set("browse","hot");next.delete("disc_method");
+    for(const [key,value]of Object.entries(changes))value===null||value===""?next.delete(key):next.set(key,value);
+    onNavigate(`/hunting?${next}`,push);
+  };
+  const refresh=()=>{freshRead.current=true;read.refresh();};
+  return <section className="discovery-browser" aria-label="正式概念行业涨幅">
+    <header className="discovery-heading"><div><h2>概念/行业涨幅</h2><p>同花顺正式指数涨跌幅，按已读快照排序</p></div>
+      <button type="button" className="quiet-action" disabled={read.pending} onClick={refresh}>{read.pending?"读取涨幅…":"刷新涨幅"}</button></header>
+    <div className="discovery-controls">
+      <div className="discovery-kinds" aria-label="官方目录类别">{(["concept","industry"] as const).map(value=><button key={value} type="button" aria-pressed={kind===value}
+        onClick={()=>navigate({disc_kind:value,disc_code:null,disc_q:null})}>{value==="concept"?"概念":"行业"}</button>)}</div>
+      <label>视角<select aria-label="题材视角" value="index" onChange={event=>navigate({disc_view:event.target.value==="concentration"?"concentration":null,disc_code:null,disc_q:null})}>
+        <option value="index">指数涨幅</option><option value="concentration">热股集中度（自算）</option></select></label>
+      <label>排序<select aria-label="涨幅顺序" value={ascending?"asc":"desc"} onChange={event=>navigate({disc_sort:event.target.value==="asc"?"asc":null})}>
+        <option value="desc">涨幅降序</option><option value="asc">涨幅升序</option></select></label>
+      <label className="discovery-search"><span className="sr-only">搜索官方目录</span><input aria-label="搜索官方目录" placeholder="正式名称或代码" value={draft.value}
+        onCompositionStart={()=>setComposing(true)} onCompositionEnd={event=>{setComposing(false);navigate({disc_q:event.currentTarget.value,disc_code:null});}}
+        onChange={event=>{setDraft({query,value:event.target.value});if(!composing)navigate({disc_q:event.target.value,disc_code:null});}}/></label>
+      {query&&<button type="button" className="quiet-action" onClick={()=>navigate({disc_q:null})}>清除搜索</button>}
+    </div>
+    <p className="discovery-warning" role="note">来源交易日与行情时点未提供，不能确认当日实时；采集与数据就绪时间不替代行情源钟。</p>
+    <div className="discovery-basis" role="note"><span>同花顺正式{kind==="concept"?"概念":"行业"}原目录</span>
+      <span>目录 {data?.rows.length??"—"} / {data?.directory_total??"—"} · 快照返回 {data?.source_returned??"—"} / {data?.source_total??"—"}</span>
+      <span>有效涨幅 {data?.value_count??"—"} / {data?.directory_total??"—"} · {data?.coverage_state==="source_complete"?"来源身份已读全":"报价覆盖待齐"}</span>
+      <span>采集窗 {clockText(data?.received_from)} — {clockText(data?.received_at)}</span>
+      <span>数据就绪 {clockText(data?.source_ready_from)} — {clockText(data?.source_ready_at)}</span>
+      {kind==="industry"&&<span>来源未提供行业体系与层级，原项独立保留</span>}</div>
+    {data?.catalog_state!==undefined&&data.catalog_state!=="ready"&&<p role="status" className="discovery-warning">正式目录同步状态{data.catalog_state==="stale"?"已过保鲜期":"未核"}，不冒充最新目录。</p>}
+    {read.error!=null&&<div role="alert" className="discovery-error"><span>{bad?"正式涨幅身份或覆盖不符，已停止展示。":data?"涨幅读取失败，保留上次快照；不代表已刷新。":"正式涨幅读取失败；未用部分样本替代完整榜。"}</span><button type="button" className="quiet-action" disabled={read.pending} onClick={refresh}>重试涨幅</button></div>}
+    {read.pending&&!data&&<div role="status" className="discovery-skeleton">正在读取完整目录快照…</div>}
+    {data&&(data.coverage_state!=="source_complete"||data.value_count!==data.directory_total)&&<p role="status" className="discovery-warning">部分报价或涨幅未提供，缺数不补0；仅对有值快照排序，缺项保留在后。</p>}
+    {data&&rows.length===0&&<p role="status" className="discovery-empty">当前目录没有匹配名称或代码，可清除搜索。</p>}
+    {code&&data&&!chosen&&<p role="status" className="discovery-warning">该代码不在本次正式目录，未换成同名板块。</p>}
+    <ul className="discovery-results" aria-label="官方目录结果">{list.shown.map((row,index)=><DirectoryRow key={row.code} row={row} index={index} selected={row.code===code}
+      quote={{signature:data!.catalog_version,state:row.quote_state==="value"?"value":row.quote_state==="missing"?"missing":"error",change:row.change_pct,price:row.price,received:data!.received_at,sourceTime:null}}
+      onChoose={()=>navigate({disc_code:row.code},true)}/>)}</ul>
+    <IncrementalSentinel sentinelRef={list.sentinelRef} visible={Math.min(list.visible,rows.length)} total={rows.length} unit="个目录" onLoadMore={list.loadMore}/>
+    {selection?.readError&&<p role="alert" className="discovery-error">原名单读取失败，涨幅浏览不代表已完成入选对照。</p>}
+    <p className="discovery-footnote">原名、代码和成员独立保留；不合并行业层级，不以成分均值替代指数涨幅，不产生选股或模拟资格。{selection?.date?`原名单日期 ${selection.date}，不代表当时归属。`:""}</p>
   </section>;
 }
 

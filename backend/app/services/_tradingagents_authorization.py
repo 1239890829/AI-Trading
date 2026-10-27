@@ -54,6 +54,17 @@ REVIEWED_PACKET_OWNER_PAIRS = {"data_providers/tencent.py": frozenset({(
     # Old frozen packets/grants are neither recollected nor rebound here.
     "c4386ec9cd0d10e0a5e3931e4ee0046cfff48b4b35e70ae99a3cccee8f5273ab",
     "4b2fd81d0acfb07c925e9e26d48e976619795578a026467c61117f9f4a419856",
+)}), "data_providers/eastmoney.py": frozenset({(
+    # PR357 reviewed exact BJ market/F10 identity correction. Actual price and
+    # profile consumers can change; this is not an unaffected-source claim.
+    # Only this complete forward pair may enter explicit prepare/apply CAS.
+    "ffe9108f81f83d1a40d0fdb7d26fab2733aafab0eb62f6417e3b524d0b9fc1b4",
+    "fd5c9a055c4f14f3c3fd9851771c49e7b7efa5e779b0736d708daec118d88ccc",
+)}), "market/normalizer.py": frozenset({(
+    # Preserve original f13 validation before distinguishing BJ from SZ. This
+    # exact reviewed edge cannot migrate old packets/grants or expand scope.
+    "3a81768d35acc15f5168f363d54073516d978849f735e0ef419d9e6b6e08d5ec",
+    "53026c7530e54001b1dcfbb9f1fb4ab29794b119220cc506890c9e8d1b873b1b",
 )})}
 PIN_KEY = "ASHARE_TRADINGAGENTS_RESEARCH_AUTHORIZATION_DIGEST"
 PIN_LINE = re.compile(rb"(?im)^[ \t]*(?:export[ \t]+)?" + PIN_KEY.encode()

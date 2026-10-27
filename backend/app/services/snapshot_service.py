@@ -7,6 +7,8 @@
 from __future__ import annotations
 
 import asyncio
+import hashlib
+import json
 import logging
 from datetime import datetime, timezone
 from pathlib import Path
@@ -16,6 +18,7 @@ from typing import Any
 import httpx
 
 from app.core.freshness import Freshness
+from app.core.bjtime import BJ_TZ
 from app.data_providers.eastmoney import ProviderError
 from app.market import sina_market
 from app.market.breadth import compute_breadth
@@ -83,6 +86,9 @@ class MarketSnapshotService:
         # One refresh worth of rows + fact time, swapped as one Python object so
         # readers can never pair snapshot B with last_success A mid-refresh.
         self._snapshot_version: tuple[datetime, tuple[dict, ...]] | None = None
+        # Verified hs_a identities belong to the normal complete primary read,
+        # independently of quote quality. Fallback cannot establish this fact.
+        self._stock_universe_version: tuple[datetime, tuple[tuple[str, str], ...], str] | None = None
         # Exact durable version metadata. ``saved_files`` is incremented only after
         # these two fields are set, making the counter a safe scheduler cursor.
         self.last_saved_path: Path | None = None
@@ -97,15 +103,36 @@ class MarketSnapshotService:
         self.consecutive_save_failures = 0
 
     async def refresh(self) -> None:
-        rows = await sina_market.fetch_market_snapshot()
+        # Count, normal pages and one repair wave share this original poll slot.
+        # This bounds collection; it never renews an older version's source age.
+        deadline = monotonic() + self.poll_interval
+        rows = await sina_market.fetch_market_snapshot(deadline=deadline)
+        if monotonic() >= deadline:
+            raise sina_market.SinaSnapshotDeadline("sina snapshot returned after owner deadline")
+        if (not isinstance(rows, list) or not rows or any(
+                not isinstance(row, dict) or row.get("market") not in {"SH", "SZ", "BJ"}
+                or not isinstance(row.get("symbol"), str) or len(row["symbol"]) != 6
+                or not row["symbol"].isascii() or not row["symbol"].isdigit()
+                or row.get("source") != "sina_market" for row in rows)):
+            raise ProviderError("sina stock universe identity invalid")
+        identities = tuple(sorted((row["market"], row["symbol"]) for row in rows))
+        if len(set(identities)) != len(rows):
+            raise ProviderError("sina stock universe duplicate identity")
         breadth = compute_breadth(rows)
         success_at = datetime.now(timezone.utc)
+        universe_hash = hashlib.sha256(json.dumps({
+            "source": "sina_market", "node": "hs_a", "verified_at": success_at.isoformat(),
+            "total": len(rows), "identities": identities,
+        }, sort_keys=True, separators=(",", ":")).encode()).hexdigest()
+        if monotonic() >= deadline:
+            raise sina_market.SinaSnapshotDeadline("sina snapshot validation exceeded owner deadline")
         # Publish public fields, then atomically swap the evidence tuple.  A reader
         # racing this refresh sees either the complete previous version or this one.
         self.snapshot = rows
         self.breadth = breadth
         self.last_success = success_at
         self._snapshot_version = (success_at, tuple(dict(row) for row in rows))
+        self._stock_universe_version = (success_at, identities, universe_hash)
         self.last_error = None
         self.consecutive_failures = 0
         self.last_snapshot_source = "sina"
@@ -274,6 +301,29 @@ class MarketSnapshotService:
             return [dict(row) for row in self.snapshot], self.last_success
         as_of, rows = version
         return [dict(row) for row in rows], as_of
+
+    def stock_universe(self) -> dict:
+        """Read verified Sina hs_a identities, valid only on the same Beijing day.
+
+        verified_at is the identity read/validation clock, never a quote clock.
+        Historical metadata remains diagnostic; unknown exposes no usable IDs.
+        Every returned container is new, so consumers cannot mutate the owner.
+        """
+        version = self._stock_universe_version
+        if version is None:
+            return {"state": "unknown", "reason": "not_observed", "source": "sina_market", "node": "hs_a",
+                    "verified_at": None, "trade_date": None, "version": None,
+                    "source_total": None, "source_returned": 0, "source_unique": 0, "identities": []}
+        verified_at, identities, digest = version
+        now = datetime.now(timezone.utc)
+        day = verified_at.astimezone(BJ_TZ).date()
+        reason = ("verification_clock_future" if verified_at > now else
+                  "different_beijing_day" if day != now.astimezone(BJ_TZ).date() else None)
+        return {"state": "unknown" if reason else "ready", "reason": reason,
+                "source": "sina_market", "node": "hs_a", "verified_at": verified_at.isoformat(),
+                "trade_date": day.isoformat(), "version": digest,
+                "source_total": len(identities), "source_returned": len(identities), "source_unique": len(identities),
+                "identities": [] if reason else [{"symbol": symbol, "market": market} for market, symbol in identities]}
 
 
     def _maybe_save(self) -> None:

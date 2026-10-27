@@ -73,7 +73,7 @@ def rig(tmp_path, monkeypatch):
     monkeypatch.setattr(pl, "beijing_now", lambda: clock["now"])
     monkeypatch.setattr(ie, "window_issue", lambda *_: None)
     app = NS(state=NS(alert_repo=NS(_session_factory=sf), hub=NS(), event_store=NS(), snapshot_service=NS()))
-    quote = Quote(symbol=SYMBOL, name="五粮液", price=10.5, change_pct=2.1, source="fixture",
+    quote = Quote(symbol=SYMBOL, market="SZ", name="五粮液", price=10.5, change_pct=2.1, source="fixture",
         quality="high", data_timestamp=NOW, prev_close=10, limit_up_price=11, limit_down_price=9)
     calls = []
     async def quotes(_hub, symbols):

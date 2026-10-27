@@ -282,7 +282,7 @@ def test_refresh_publishes_one_atomic_version_bundle(monkeypatch, tmp_path):
 
     async def _fake_snapshot(**kwargs):
         return [{
-            "symbol": "600001", "name": "甲", "price": 10.0,
+            "symbol": "600001", "market": "SH", "source": "sina_market", "name": "甲", "price": 10.0,
             "change_pct": 1.0, "amount": 1.0e8,
         }]
 
@@ -315,7 +315,7 @@ def test_refresh_success_clears_rate_limited(monkeypatch, tmp_path):
     monkeypatch.setattr(s, "_maybe_save", lambda: None)
 
     async def _fake_snapshot(**kwargs):
-        return [{"symbol": "600519", "name": "贵州茅台", "price": 10.0,
+        return [{"symbol": "600519", "market": "SH", "source": "sina_market", "name": "贵州茅台", "price": 10.0,
                  "change_pct": 1.0, "amount": 1.0e8}]
 
     monkeypatch.setattr(sina_market, "fetch_market_snapshot", _fake_snapshot)
@@ -945,7 +945,8 @@ def test_source_failure_primary_recovery_clears_fallback_and_resumes_normal_dela
     svc.snapshot = _base_rows()
     primary_calls, backup_calls, sleeps = [], [], []
 
-    async def primary():
+    async def primary(*, deadline):
+        assert deadline > time.monotonic()
         primary_calls.append(True)
         if len(primary_calls) == 1:
             raise ProviderError("sina incomplete")

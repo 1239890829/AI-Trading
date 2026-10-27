@@ -573,3 +573,6 @@ CLI启动warning的兼容依据与固定版本见[语义纠错记录](../ai/sema
 用户对一条新的跨来源未知用量作具名许可后，原本机CLI支持`--prepare-retained-unknown USAGE_ID`，并必须显式给`--source-budget-date`、`--source-scope`、`--source-purpose`、`--source-state`、`--authorization-reason`及每个`--reviewed-source`。只准备0600私有计划，再由原`--apply PLAN_ID`比较源码、原行元数据hash、原授权和pin后安装；不接受任意路径/SQL，不保存整份环境备份，不改原用量行或自动重试模型。
 
 该入口追加独立历史许可，不覆旧七条/恢复grant或延期；只解除准确具名事实对selected_research_llm的阻断，其他消费者和新unknown继续拒绝。`agent_budget.py`是完整方法指纹的一部分，必须列入实际已审source差异；安装后重载及真实读取/复用/新任务分别验收。CLI已定义BudgetError输出稳定code，未知/含私路径错误继续脱敏。
+
+
+2026-10-27维护补证：PR #357的EM ffe910…→fd5c9a…及market/normalizer 3a817…→53026…为精确BJ身份修正；原私有绑定未随代码自动迁移，默认inspect会拒绝。根已审完整旧新blob及消费者影响，只登记这两条单步边并保留Hub c4386…→4b2fd81d…，发布后显式具名三个packet owner路径经原prepare/apply-CAS承接。反向/未来/其它模型与policy仍拒绝，不创建/延期授权、不迁移旧packet/恢复grant、不补算/清除unknown；非pin环境字节保持。

@@ -431,8 +431,13 @@ def test_imp046_unreviewed_apply_never_changes_runtime(sf, status):
 
 @pytest.mark.parametrize("source", ["ai_suggestion", "review_action_item", "scheduler", "", "unknown"])
 def test_imp046_nonmanual_draft_cannot_bypass_shadow_review(sf, source):
+    evidence = {"approved": True, "sample_days": 999}
+    source_id = ""
+    if source == "review_action_item":
+        evidence["review_action"] = _review_action_source(sf)
+        source_id = "42"
     change = ap.propose("picks_min_pick_score", 58, source_type=source,
-                        evidence={"approved": True, "sample_days": 999}, session_factory=sf)
+                        source_id=source_id, evidence=evidence, session_factory=sf)
     with pytest.raises(ValueError, match="审"):
         ap.apply_change(change["id"], sf, mutation_source="user")
     assert ap.current_value("picks_min_pick_score", sf) == ""
@@ -572,3 +577,64 @@ def test_imp025_decision_ledger_preserves_unknown_legacy_rollback(sf):
         db.add(row)
         db.commit()
     assert _from_param_changes(sf, limit=10)[0]["outcome"] == "历史回滚结果待核实"
+
+
+def _review_action_source(sf):
+    from app.review.models import ReviewActionItemRow
+
+    # Tables can be absent in a params-only isolated fixture.
+    ReviewActionItemRow.__table__.create(sf.kw['bind'], checkfirst=True)
+    with sf() as db:
+        db.add(ReviewActionItemRow(id=42, review_id='RV-20261026-160000', trade_date='20261026',
+            title='核对候选容量', category='strategy', priority='P1',
+            expected_impact='检验不同来源是否被截断', evidence='本日热榜18条未进入深评',
+            target='picks.candidate_cap', proposed_change='冻结同输入覆盖对照', status='confirmed'))
+        db.commit()
+    return {'review_id': 'RV-20261026-160000', 'trade_date': '20261026',
+            'category': 'strategy', 'title': '核对候选容量'}
+
+
+def test_review_action_draft_binds_original_identity_without_applying_or_resolving(sf):
+    from app.review.models import ReviewActionItemRow
+
+    source = _review_action_source(sf)
+    before = ap.current_value('picks_replace_threshold', sf)
+    change = ap.propose('picks_replace_threshold', '12', source_type='review_action_item', source_id='42',
+                        evidence={'review_action': source, 'validation_plan': '同点样本核拒因与漏失'},
+                        session_factory=sf)
+    assert change['status'] == 'draft' and change['source_id'] == '42'
+    assert change['evidence']['review_action'] == {
+        **source, 'id': '42', 'target': 'picks.candidate_cap', 'proposed_change': '冻结同输入覆盖对照',
+        'source_evidence': '本日热榜18条未进入深评', 'status_at_proposal': 'confirmed',
+    }
+    assert change['evidence']['validation_plan'] == '同点样本核拒因与漏失'
+    assert 'win_rate' not in change['evidence']
+    assert ap.current_value('picks_replace_threshold', sf) == before
+    with sf() as db:
+        row = db.get(ReviewActionItemRow, 42)
+        assert row.status == 'confirmed' and row.implementation_evidence == '{}'
+    with pytest.raises(ValueError):
+        ap.apply_change(change['id'], session_factory=sf)
+
+
+@pytest.mark.parametrize('field,value', [
+    ('review_id', 'RV-other'), ('trade_date', '20261027'), ('category', 'data'), ('title', '已被替换的行动'),
+])
+def test_review_action_draft_rejects_reused_or_stale_identity(sf, field, value):
+    source = _review_action_source(sf)
+    source[field] = value
+    with pytest.raises(ValueError, match='复盘行动'):
+        ap.propose('picks_replace_threshold', '12', source_type='review_action_item', source_id='42',
+                   evidence={'review_action': source, 'validation_plan': '保留原分母'}, session_factory=sf)
+    assert ap.list_changes(session_factory=sf) == []
+
+
+@pytest.mark.parametrize('source_id,identity', [('42', None), ('99', True), ('AI-42', True), ('042', True),
+                                             ('0', True), ('٤٢', True), ('9' * 100, True)])
+def test_review_action_draft_requires_exact_addressable_source(sf, source_id, identity):
+    source = _review_action_source(sf)
+    evidence = {'review_action': source} if identity else {}
+    with pytest.raises(ValueError, match='复盘行动'):
+        ap.propose('picks_replace_threshold', '12', source_type='review_action_item', source_id=source_id,
+                   evidence=evidence, session_factory=sf)
+    assert ap.list_changes(session_factory=sf) == []

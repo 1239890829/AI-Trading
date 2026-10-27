@@ -160,3 +160,29 @@ def test_ths_quote_preserves_bj_market():
             await provider.aclose()
 
     asyncio.run(run())
+
+
+@pytest.mark.parametrize('method,thscode,path,args', [
+    ('get_quotes', '600519.SH', '/api/a-share/prices/snapshot', (['600519'],)),
+    ('get_indices', '000001.SH', '/api/a-share-index/prices/snapshot', ()),
+])
+@pytest.mark.parametrize('field,expected', [
+    ({}, None), ({'price_change_ratio_pct': None}, None),
+    ({'price_change_ratio_pct': 0}, 0.0),
+    ({'price_change_ratio_pct': 1.236}, 1.24),
+    ({'price_change_ratio_pct': -1.236}, -1.24),
+    ({'price_change_ratio_pct': 0.004}, 0.0),
+])
+def test_ths_quote_percent_preserves_source_missing_and_real_zero(method, thscode, path, args, field, expected):
+    def respond(request):
+        assert request.url.path == path
+        return httpx.Response(200, json={'code': 0, 'data': {'timestamp': 1793061000000, 'item': [{
+            'thscode': thscode, 'last_price': 10.5, 'prev_price': 10, 'price_change': 0.5, **field,
+        }]}})
+
+    provider = ThsFuyaoProvider(api_key='test-only')
+    provider._names = {'600519': '贵州茅台'}  # Existing name cache; no unrelated metadata request.
+    quote = _run(provider, respond, method, *args)[0]
+    assert quote.change_pct == expected
+    assert (quote.price, quote.prev_close, quote.change) == (10.5, 10.0, 0.5)
+    assert quote.data_timestamp is None  # Envelope readiness is not a row source clock.

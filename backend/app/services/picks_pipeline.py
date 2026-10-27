@@ -22,6 +22,7 @@ from __future__ import annotations
 from app.services.source_reads import read_pool_input
 
 import asyncio
+import hashlib
 from copy import deepcopy
 import json
 import logging
@@ -91,6 +92,86 @@ log = logging.getLogger(__name__)
 CANDIDATE_CAP = 40      # 候选池上限（深度评分前）
 DEEP_DIVE_CAP = 24      # 深度评分上限（每只要拉 K 线/财务/资金流）
 CONCURRENCY = 6
+CANDIDATE_AUDIT_CAP = 1000
+CANDIDATE_AUDIT_VERSION = "daily-candidate-domain-v1"
+
+
+class SelectionInputUnavailable(ValueError):
+    """A missing stock identity must not replace an existing daily selection."""
+
+    def __init__(self, reason: str, universe: dict | None = None):
+        self.universe = {k: deepcopy(v) for k, v in (universe or {}).items() if k != "identities"}
+        super().__init__(f"A股证券身份尚未核实：{reason}；未生成或覆盖每日组合")
+
+
+def _stock_identities(universe, *, trade_date=None):
+    """Consume the existing owner's complete identity contract, never quote prices."""
+    if not isinstance(universe, dict) or universe.get("state") != "ready":
+        reason = (universe.get("reason") or "not_observed") if isinstance(universe, dict) else "not_observed"
+        raise SelectionInputUnavailable(reason,
+                                        universe if isinstance(universe, dict) else None)
+    rows = universe.get("identities")
+    if (universe.get("source") != "sina_market" or universe.get("node") != "hs_a"
+            or not isinstance(rows, list) or not rows or not universe.get("version")
+            or trade_date is not None and universe.get("trade_date") != trade_date):
+        raise SelectionInputUnavailable("invalid_or_different_day_universe", universe)
+    identities = {}
+    for row in rows:
+        if not isinstance(row, dict):
+            raise SelectionInputUnavailable("invalid_identity_row", universe)
+        symbol, market = row.get("symbol"), row.get("market")
+        if (not isinstance(symbol, str) or len(symbol) != 6 or not symbol.isdigit()
+                or market not in {"SH", "SZ", "BJ"} or symbol in identities):
+            raise SelectionInputUnavailable("invalid_or_ambiguous_identity", universe)
+        identities[symbol] = market
+    if any(type(universe.get(k)) is not int or universe[k] != len(identities)
+           for k in ("source_total", "source_returned", "source_unique")):
+        raise SelectionInputUnavailable("incomplete_universe", universe)
+    return identities
+
+
+def _read_stock_universe(deps, trade_date):
+    read = getattr(deps.snapshot_service, "stock_universe", None)
+    try:
+        universe = read() if callable(read) else {"state": "unknown", "reason": "not_observed"}
+    except Exception as exc:
+        raise SelectionInputUnavailable(f"identity_read_failed:{type(exc).__name__}") from None
+    return universe, _stock_identities(universe, trade_date=trade_date)
+
+
+def _audit_candidate(audit, candidate, reason_code, *, stage="candidate", **fields):
+    if audit is None:
+        return
+    symbol = str(candidate.get("symbol") or "")
+    rows = audit.setdefault("_candidate_rows", {})
+    row = rows.setdefault(symbol, {"symbol": symbol, "source": candidate.get("from"),
+        "candidate_sources": deepcopy(candidate.get("candidate_sources") or []),
+        "input_position": len(rows) + 1})
+    row.update(stage=stage, reason_code=reason_code, **fields)
+
+
+def _candidate_audit(audit):
+    """Bound saved rows, retain full counts/digest and never infer omitted reasons."""
+    rows = list(audit.get("_candidate_rows", {}).values())
+    input_rows = [{k: row.get(k) for k in ("symbol", "market", "source", "candidate_sources", "input_position")}
+                  for row in rows]
+    counts = {}
+    for row in rows:
+        key = row["reason_code"]
+        counts[key] = counts.get(key, 0) + 1
+    encoded = json.dumps(input_rows, ensure_ascii=False, sort_keys=True, separators=(",", ":"))
+    sources = audit.get("source_states") or {}
+    recall_known = bool(sources) and all(value == "available" for value in sources.values())
+    return {"version": CANDIDATE_AUDIT_VERSION, "universe": deepcopy(audit.get("stock_universe") or {}),
+        "source_states": deepcopy(audit.get("source_states") or {}),
+        "source_scope": {"active_events": 30, "members_per_event_theme": 30, "hot_rows": 20,
+                         "candidate_capacity": CANDIDATE_CAP, "deep_capacity": DEEP_DIVE_CAP},
+        "input_digest": hashlib.sha256(encoded.encode()).hexdigest(), "input_total": len(rows),
+        "saved_total": min(len(rows), CANDIDATE_AUDIT_CAP), "complete": len(rows) <= CANDIDATE_AUDIT_CAP,
+        "omitted_total": max(0, len(rows) - CANDIDATE_AUDIT_CAP), "counts": counts,
+        "rows": deepcopy(rows[:CANDIDATE_AUDIT_CAP]),
+        "absent_symbol_state": "not_recalled_in_recorded_scope" if recall_known and len(rows) <= CANDIDATE_AUDIT_CAP else "unknown",
+        "not_recalled_semantics": "仅完整已记录来源并且本表完整时可判本轮未召回；旧记录或来源失败为unknown"}
 
 #: 候选池装配顺序（来源优先级）。**不是**插入顺序的同义反复：本轮新增的
 #: 「题材联动」来源必须在最前占位（见 `candidate_pool` 的来源组装），
@@ -177,6 +258,7 @@ async def candidate_pool(
     active_events: list | None = None,
     linkages: list[dict] | None = None,
     audit: dict | None = None,
+    stock_universe: dict | None = None,
 ) -> list[dict]:
     """候选池 = 题材联动可参与股 ∪ 活跃事件标的池 ∪ 当日涨停池 ∪ 热股榜 top，去重剔 ST，cap 40。
 
@@ -197,6 +279,10 @@ async def candidate_pool(
         `sources`（各来源计数）、`excluded_open_sealed`（被剔除的开盘即涨停明细）、
         `theme_linkage`（题材集中度与补入结果）。
     """
+    identities = _stock_identities(stock_universe)
+    if audit is not None:
+        audit["stock_universe"] = {k: deepcopy(v) for k, v in stock_universe.items() if k != "identities"}
+        audit["source_states"] = {"events": "unknown", "hot": "unknown"}
     symbols: dict[str, dict] = {}
 
     def add_source(target, symbol, meta, evidence=None):
@@ -273,6 +359,8 @@ async def candidate_pool(
                         add_source(event_symbols, sym, {"from": "event_theme", "prio": 1}, evidence)
         # 全批读取/展开成功后才提交，避免后一条坏行留下前面的部分事件候选。
         symbols.update(event_symbols)
+        if audit is not None:
+            audit["source_states"]["events"] = "available"
     except Exception as exc:
         log.warning("picks candidate: events failed: %s", exc)
 
@@ -318,6 +406,8 @@ async def candidate_pool(
     try:
         for s in (await hub.provider.get_hot_stock_list("day"))[:20]:
             add_source(symbols, s["symbol"], {"from": "hot", "prio": 0})
+        if audit is not None:
+            audit["source_states"]["hot"] = "available"
     except Exception as exc:
         log.warning("picks candidate: hot list failed: %s", exc)
 
@@ -325,12 +415,23 @@ async def candidate_pool(
     # 直接点名与题材展开分档，避免早出现的大题材吞掉后出现的直接点名事件。
     ordered = sorted(symbols.items(), key=lambda kv: _SOURCE_ORDER.get(kv[1]["from"], 3))
     out = []
+    excluded_sources: dict[str, int] = {}
+    truncated_sources: dict[str, int] = {}
     for sym, meta in ordered:
         if not sym.isdigit() or len(sym) != 6:
+            _audit_candidate(audit, {"symbol": sym, **meta}, "invalid_security_identity", stage="identity")
             continue
-        out.append({"symbol": sym, **meta})
+        candidate = {"symbol": sym, **meta}
+        if sym not in identities:
+            excluded_sources[meta["from"]] = excluded_sources.get(meta["from"], 0) + 1
+            _audit_candidate(audit, candidate, "outside_a_share_universe", stage="identity", identity_state="outside_scope")
+            continue
         if len(out) >= CANDIDATE_CAP:
-            break
+            truncated_sources[meta["from"]] = truncated_sources.get(meta["from"], 0) + 1
+            _audit_candidate(audit, candidate, "candidate_capacity", market=identities[sym])
+            continue
+        out.append(candidate)
+        _audit_candidate(audit, candidate, "candidate_admitted", market=identities[sym], candidate_position=len(out))
 
     if audit is not None:
         sources: dict[str, int] = {}
@@ -342,8 +443,12 @@ async def candidate_pool(
             if symbol.isdigit() and len(symbol) == 6:
                 available[meta["from"]] = available.get(meta["from"], 0) + 1
         audit["available_sources"] = available
-        audit["truncated_sources"] = {source: n - sources.get(source, 0)
-                                      for source, n in available.items() if n > sources.get(source, 0)}
+        audit["truncated_sources"] = truncated_sources
+        audit["domain_excluded_sources"] = excluded_sources
+        for row in excluded:
+            if row["symbol"] not in symbols:
+                _audit_candidate(audit, {**row, "from": "limit_up"}, "open_sealed_source_excluded",
+                                 stage="source", market=identities.get(row["symbol"]))
         audit["excluded_open_sealed"] = {
             "count": len(excluded),
             "items": excluded[:20],  # 明细留痕有界（不把 40 行塞进 meta）
@@ -1391,6 +1496,14 @@ async def score_selected_candidates(deps, hub, candidates, quotes, *, assessed_a
     if not candidates:
         return {"items": [], "meta": {"requested_at": assessed_at.isoformat(),
                 "assessed_at": beijing_now().isoformat()}, "unscored": []}
+    try:
+        _universe, identities = _read_stock_universe(deps, assessed_at.date().isoformat())
+    except SelectionInputUnavailable as exc:
+        return {"items": [], "meta": {"requested_at": assessed_at.isoformat(),
+                "assessed_at": beijing_now().isoformat(), "stock_universe": exc.universe,
+                "execution_context": {"state": "unavailable", "reason": str(exc)}},
+                "unscored": [{"symbol": row.get("symbol"), "reason": str(exc),
+                              "reason_code": "stock_identity_unknown"} for row in candidates]}
     deep, unscored, seen = [], [], set()
     for row in candidates:
         symbol = str(row.get("symbol") or "")
@@ -1401,8 +1514,12 @@ async def score_selected_candidates(deps, hub, candidates, quotes, *, assessed_a
         reason = None
         if len(symbol) != 6 or not symbol.isdigit():
             reason = "证券身份无效"
+        elif symbol not in identities:
+            reason = "不在已核实的A股证券范围；未按股票评分"
         elif quote is None or quote.symbol != symbol or quote.price is None or quote.price <= 0:
             reason = "同股报价缺失或现价无效"
+        elif quote.market != identities[symbol]:
+            reason = "报价市场与已核实A股证券身份不一致"
         elif "ST" in (quote.name or "").upper() or "退" in (quote.name or "") or not is_tradable(symbol, quote.name or ""):
             reason = "现役账户或风险预筛不通过"
         elif len(deep) >= DEEP_DIVE_CAP:
@@ -1462,6 +1579,7 @@ async def generate_picks_pipeline(
     store = deps.event_store
     svc = deps.theme_catalog
     today = today or beijing_now().date().isoformat()
+    stock_universe, stock_identities = _read_stock_universe(deps, today)
 
     # ① 当日涨停池（**单次取数**，下游三处复用；P2-4）
     td, limit_up_pool = await _fetch_limit_up_pool(hub)
@@ -1506,7 +1624,12 @@ async def generate_picks_pipeline(
         active_events=usable_events,
         linkages=linkage.get("items") or [],
         audit=audit,
+        stock_universe=stock_universe,
     )
+    audit.setdefault("source_states", {}).update(
+        events="available" if events_available and event_index_available else "unknown",
+        limit_up="available" if td is not None else "unknown",
+        theme_linkage="unknown" if linkage.get("note") else "available")
 
     # ①d 昨日组合成员兜底纳入（carryover）：
     # 组合稳定性要求 incumbent 有"被重新评估的权利"——否则一只票今天没涨停、
@@ -1518,7 +1641,12 @@ async def generate_picks_pipeline(
     have = {c["symbol"] for c in candidates}
     for s in prev_symbols:
         if s not in have:
-            candidates.append({"symbol": s, "from": "carryover", "prio": 1})
+            candidate = {"symbol": s, "from": "carryover", "prio": 1}
+            if s not in stock_identities:
+                _audit_candidate(audit, candidate, "outside_a_share_universe", stage="identity", identity_state="outside_scope")
+                continue
+            candidates.append(candidate)
+            _audit_candidate(audit, candidate, "candidate_admitted", market=stock_identities[s], candidate_position=len(candidates))
     carryover_set = set(prev_symbols)
 
     # ①e 市场基准（上证当日涨跌幅）：题材基准匹配不到时的诚实回退
@@ -1530,10 +1658,19 @@ async def generate_picks_pipeline(
     board_excluded: list[dict] = []
     for c in candidates:
         q = quotes.get(c["symbol"])
+        # Defense in depth also covers carried-over legacy selections and injected callers.
+        if c["symbol"] not in stock_identities:
+            _audit_candidate(audit, c, "outside_a_share_universe", stage="identity", identity_state="outside_scope")
+            continue
         if q is None or q.price is None or q.price <= 0:
+            _audit_candidate(audit, c, "quote_missing", stage="quote")
+            continue
+        if q.symbol != c["symbol"] or q.market != stock_identities[c["symbol"]]:
+            _audit_candidate(audit, c, "quote_identity_mismatch", stage="quote")
             continue
         name = q.name or ""
         if "ST" in name.upper() or "退" in name:
+            _audit_candidate(audit, c, "risk_name_excluded", stage="eligibility", name=name)
             continue
         # 板块权限（用户 2026-09-15「只有主板的权限现在」）：创业板/科创板/北交所/B 股
         # 进不了组合 —— 与"买不进"同义。判据单点 = `picks/tradability.is_tradable`。
@@ -1544,6 +1681,7 @@ async def generate_picks_pipeline(
                 {"symbol": c["symbol"], "name": name,
                  "board": board_label(c["symbol"], name), "from": c.get("from")}
             )
+            _audit_candidate(audit, c, "account_board_excluded", stage="eligibility", name=name)
             continue
         c.update({"name": name, "price": q.price, "change_pct": q.change_pct, "amount": q.amount})
         c["_prio"] = c.get("prio", 0) * 1000 + (q.change_pct or 0)
@@ -1551,6 +1689,10 @@ async def generate_picks_pipeline(
     # 昨日成员优先进入深度评估：它们已经有仓位逻辑在身，不该因涨幅不高被截断
     deep.sort(key=lambda c: (-(1 if c["symbol"] in carryover_set else 0),
                              _SOURCE_ORDER.get(c.get("from"), 9), -c["_prio"]))
+    for index, candidate in enumerate(deep):
+        _audit_candidate(audit, candidate, "scoring_unavailable" if index < DEEP_DIVE_CAP else "deep_capacity",
+                         stage="score" if index < DEEP_DIVE_CAP else "deep", deep_position=index + 1,
+                         name=candidate.get("name"))
     deep = deep[:DEEP_DIVE_CAP]
 
     context = await _prepare_scoring_context(deps, hub, today=today, td=td,
@@ -1590,6 +1732,10 @@ async def generate_picks_pipeline(
     # 深评过但未进组合的候选（分数不够/门槛拦截/上限截断），精简摘要 + tech 分——
     # 30 个交易日积累后，tech-only 对照回放回答「六维组合是否优于单维筛选」
     kept_symbols = {k["symbol"] for k in kept}
+    for row in ranked:
+        _audit_candidate(audit, row, "selected" if row["symbol"] in kept_symbols else
+                         "below_min_score" if row["score"] < limits["min_pick_score"] else "capacity_or_replacement",
+                         stage="selection", score=row["score"])
     rejected = [
         {
             "symbol": r["symbol"],
@@ -1654,8 +1800,10 @@ async def generate_picks_pipeline(
         "classification_version": "official-catalyst-v1",
         "selection_funnel": {"available_sources": audit.get("available_sources") or {},
                              "truncated_sources": audit.get("truncated_sources") or {},
+                             "domain_excluded_sources": audit.get("domain_excluded_sources") or {},
                              "scored": len(ranked), "above_min_score": sum(r["score"] >= limits["min_pick_score"] for r in ranked),
                              "selected": len(items)},
+        "candidate_audit": _candidate_audit(audit),
         "deep_dives": len(deep),
         # max_picks 是容量上限、min_pick_score 是入选门槛：两者共同决定
         # 「今日名单 = 达到门槛者，最多 5 只」，不是「每天凑满 5 只」（2026-09-10）
@@ -1683,7 +1831,7 @@ async def generate_picks_pipeline(
         "generated_at": generated_at,
         "selection_contract": {"version": "daily_selection_v2", "trade_date": today, "generated_at": generated_at,
                                "strategy_version": "daily-six-dimension-v2.source-date-zero",
-                               "feature_version": "daily-entry-evidence-v2"},
+                               "feature_version": "daily-entry-evidence-v2", "candidate_version": CANDIDATE_AUDIT_VERSION},
         "selection_version": daily_selection_version(today, generated_at, items),
     }
     # G-2：落库是同步 SQLite 写（+ 大对象 json.dumps）→ 线程池（判据见 candidate_pool 顶部）

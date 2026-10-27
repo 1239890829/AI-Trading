@@ -30,6 +30,7 @@ from app.core.bjtime import beijing_today
 from app.core.db import get_session_factory
 from app.services.picks_pipeline import (
     PipelineDeps,
+    SelectionInputUnavailable,
     generate_picks_pipeline,
     parse_pick_meta,
 )
@@ -77,7 +78,11 @@ async def generate_picks(request: Request, hub: QuoteHub = Depends(get_hub), _: 
     常驻调度（`picks/picks_autogen.py`）直接调服务，不再反向 import 本模块、
     也不再伪造 `SimpleNamespace` 当 request。
     """
-    return await generate_picks_pipeline(PipelineDeps.from_state(request.app.state), hub)
+    try:
+        return await generate_picks_pipeline(PipelineDeps.from_state(request.app.state), hub)
+    except SelectionInputUnavailable as exc:
+        raise HTTPException(status_code=503, detail={"code": "stock_identity_unknown", "reason": str(exc),
+                            "stock_universe": exc.universe, "saved_selection_preserved": True}) from None
 
 
 async def _live_style_routing(request: Request, hub: QuoteHub, stored: dict | None) -> dict:

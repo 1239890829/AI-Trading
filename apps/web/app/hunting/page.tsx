@@ -1,6 +1,7 @@
 "use client";
 
 import { dailyEmptySummary } from "@/lib/picks-gate";
+import { CandidateDataUnavailableError } from "@/lib/api/picks";
 
 import "./hunting.css";
 import { SelectionValidationPanel } from "@/components/hunting/validation-panel";
@@ -253,6 +254,7 @@ function HuntingInner() {
   const top = intraday.data ?? null;
   const intradayLoaded = intraday.status !== "pending" && intraday.status !== "unknown";
   const topReadFailed = !!intraday.error || (intradayLoaded && top === null);
+  const candidateDataError = intraday.error instanceof CandidateDataUnavailableError ? intraday.error : null;
   const intradayFailed = briefReadFailed || !!statsResource.error || (isDiscoverView && (topReadFailed || !!opportunitiesResource.error || !!watcherResource.error || !!healthResource.error));
   // A failed re-read retains observation content, never current gate eligibility.
   const gateView = daily.error ? undefined : data?.meta?.gate_live ?? data?.meta?.gate;
@@ -588,10 +590,10 @@ function HuntingInner() {
               <p className="hunting-group-scope" title="名单与参考区均按账户交易权限过滤">权限 {top?.tradable_boards ?? "沪市主板 / 深市主板"}</p>
               <p className="hunting-group-summary">当日动态名单 · 当前未封板，进入参与评估不保证成交</p>
             </div>
-            {topReadFailed && top && <p role="alert" className="hunting-empty">盘中候选读取失败。以下保留上次读取的盘中候选，当前参与条件待重新核实。</p>}
+            {topReadFailed && top && <p role="alert" className="hunting-empty">{candidateDataError ? `候选数据待核：${candidateDataError.message}。` : "盘中候选读取失败。"}以下保留上次读取的盘中候选，当前参与条件待重新核实。</p>}
           </>}>
             {!intradayLoaded ? <div className="hunting-collection-placeholder"><CardListSkeleton count={2}/></div>
-              : !top ? <div role="alert" className="hunting-empty hunting-collection-placeholder">盘中候选读取失败。请刷新重试；当前无法判断是否有符合条件的标的。</div>
+              : !top ? <div role="alert" className="hunting-empty hunting-collection-placeholder">{candidateDataError ? `候选数据待核：${candidateDataError.message}。当前无法判断是否有符合条件的标的。` : "盘中候选读取失败。请刷新重试；当前无法判断是否有符合条件的标的。"}</div>
               : topItems.length > 0 ? topItems.map(it => <PickCard compact active={selectedGroup === "candidates" && selectedOnly} key={JSON.stringify([top.trade_date, top.selection_identity_version, it.symbol])} item={fromIntradayStock(it)}
                   readError={!!intraday.error}
                   dailyEvidence={dailyBySymbol.has(it.symbol) && data?.date ? {item: dailyBySymbol.get(it.symbol)!, date: data.date, generatedAt: data.meta?.generated_at ?? null, version: data.meta?.selection_version ?? null} : undefined}

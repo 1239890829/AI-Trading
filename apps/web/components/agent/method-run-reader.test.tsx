@@ -153,6 +153,82 @@ describe("reference research state paging",()=>{
     expect(screen.queryByText(/0 条原行/)).toBeNull();
   });
 });
+
+describe("saved candidate source traces",()=>{
+  const fund:SavedStrategyRunItem={item_id:"candidate:1",symbol:"510300",name:"场内基金原行",state:"rejected",score:null,
+    stage:"identity",reason_code:"outside_a_share_universe",reason:"不在当时已核实的A股证券范围；未占用股票评估名额",
+    evidence:{source:"hot",candidate_sources:[{from:"hot"}],input_position:1}};
+  it("renders a saved fund identity rejection as unscored while retaining the scored-rejection denominator",async()=>{
+    locate(original,"rejected");mocks.detail.mockResolvedValue({...detail(original,[row,fund]),
+      counts:{candidates:1,scored:1,selected:0,rejected_saved:1},
+      candidate_audit:{state:"saved",input_total:2,saved_total:2,omitted_total:0,complete:true,source_states:{events:"available",hot:"available"},absent_symbol_state:"not_recalled_in_recorded_scope"}});
+    render(<MethodRunReader method="daily_picks"/>);
+    const fundRow=(await screen.findByText("场内基金原行")).closest("li")!;
+    expect(within(fundRow).getByText("未评分")).toBeTruthy();
+    expect(within(fundRow).getByText("证券身份")).toBeTruthy();
+    expect(within(fundRow).getByText("原来源：人气榜")).toBeTruthy();
+    expect(within(fundRow).queryByText("原分 0")).toBeNull();
+    expect(screen.getByText("原分 0")).toBeTruthy();
+    const saved=screen.getByLabelText("原保存运行");
+    expect(within(saved).getByText("评分拒选",{selector:"dt"}).nextElementSibling?.textContent).toBe("1");
+    fireEvent.click(within(fundRow).getByRole("button",{name:"核对场内基金原行原候选留痕"}));
+    const trace=screen.getByRole("region",{name:"场内基金原行的原候选留痕"});
+    expect(within(trace).getByText("原输入位置 1")).toBeTruthy();
+    expect(within(trace).queryByLabelText("原运行六维评分")).toBeNull();
+    expect(mocks.detail).toHaveBeenCalledTimes(1);
+  });
+
+  it("shows bounded partial trace coverage and source capacity without deriving counts from visible rows",async()=>{
+    const capacity:SavedStrategyRunItem={...fund,item_id:"candidate:81",symbol:"600081",name:"容量截断原行",
+      stage:"candidate",reason_code:"candidate_capacity",reason:"原候选来源容量截断；没有评分",
+      evidence:{source:"event",candidate_sources:[{from:"event",event_id:"saved-event"},{from:"hot"}],input_position:81}};
+    locate(original,"rejected");mocks.detail.mockResolvedValue({...detail(original,[row,capacity]),
+      counts:{candidates:80,scored:12,selected:0,rejected_saved:1},
+      candidate_audit:{state:"partial",input_total:530,saved_total:500,omitted_total:30,complete:false,
+        source_states:{events:"available",hot:"unavailable"},absent_symbol_state:"unknown"}});
+    render(<MethodRunReader method="daily_picks"/>);
+    const summary=await screen.findByRole("region",{name:"原候选来源留痕"});
+    expect(summary.textContent).toContain("部分保存");
+    expect(summary.textContent).toContain("记录 500 / 原输入 530 · 未保存 30");
+    expect(summary.textContent).toContain("未出现不等于低分");
+    expect(summary.textContent).toContain("事件来源 可用");
+    expect(summary.textContent).toContain("热榜来源 不可用");
+    const candidate=screen.getByText("容量截断原行").closest("li")!;
+    expect(within(candidate).getByText("候选容量")).toBeTruthy();
+    expect(within(candidate).getByText("未评分")).toBeTruthy();
+    expect(within(candidate).getByText("原来源：事件点名 · 人气榜")).toBeTruthy();
+    expect(within(screen.getByLabelText("原保存运行")).getByText("评分拒选",{selector:"dt"}).nextElementSibling?.textContent).toBe("1");
+    expect(mocks.detail).toHaveBeenCalledTimes(1);
+  });
+
+  it("keeps old missing candidate provenance unknown rather than inventing zero records or low scores",async()=>{
+    locate(original,"rejected");mocks.detail.mockResolvedValue({...detail(),candidate_audit:{state:"missing",reason:"原版本未保存逐候选来源与截断依据，未按当前规则重算"}});
+    render(<MethodRunReader method="daily_picks"/>);
+    const summary=await screen.findByRole("region",{name:"原候选来源留痕"});
+    expect(summary.textContent).toContain("未保存");
+    expect(summary.textContent).toContain("未出现不等于低分");
+    expect(summary.textContent).not.toContain("记录 0");
+    expect(screen.getByText("原分 0")).toBeTruthy();
+  });
+
+  it("keeps an unsuccessful saved scoring attempt distinct from an unrecorded later stage",async()=>{
+    const attempted:SavedStrategyRunItem={...fund,item_id:"candidate:2",symbol:"600002",name:"评分尝试原行",state:"unknown",stage:"score",
+      reason_code:"scoring_unavailable",reason:"原批次尝试评分但没有保存成功评分；不能补成0分"};
+    const unknown:SavedStrategyRunItem={...fund,item_id:"candidate:3",symbol:"600003",name:"后续缺项原行",state:"unknown",stage:"candidate",
+      reason_code:"candidate_admitted",reason:"原候选已接纳；后续处理未记录"};
+    locate(original,"unknown");mocks.detail.mockResolvedValue({...detail(original,[attempted,unknown]),
+      candidate_audit:{state:"saved",input_total:2,saved_total:2,omitted_total:0,complete:true}});
+    render(<MethodRunReader method="daily_picks"/>);
+    const scored=(await screen.findByText("评分尝试原行")).closest("li")!;
+    expect(within(scored).getByText("未保存成功评分")).toBeTruthy();
+    expect(within(scored).getByText("评分")).toBeTruthy();
+    expect(within(scored).queryByText("未评分")).toBeNull();
+    const missing=screen.getByText("后续缺项原行").closest("li")!;
+    expect(within(missing).getByText("评分状态未记录")).toBeTruthy();
+    expect(screen.queryByText("原分 0")).toBeNull();
+    expect(mocks.detail).toHaveBeenCalledTimes(1);
+  });
+});
 afterEach(()=>{cleanup();vi.clearAllMocks();mocks.index.mockReset();mocks.detail.mockReset();});
 
 describe("saved method run reader",()=>{

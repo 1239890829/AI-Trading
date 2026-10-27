@@ -593,9 +593,30 @@ def top_watch_stocks(payload: dict, *, limit: int | None = None) -> dict:
     unavailable = bool(payload.get("linkage_note")) or stats.get("snapshot_state") != "ready"
     partial = bool(gates.get("mined_empty_unavailable") or stats.get("missing_quote"))
     read_state = "unavailable" if unavailable or (partial and not items) else "partial" if partial else "ready"
+    snapshot_state = stats.get("snapshot_state")
+    if snapshot_state not in ("ready", "degraded", "stale", "unavailable", "unknown"):
+        snapshot_state = "unknown"
+    snapshot_as_of = stats.get("snapshot_as_of")
+    read_context = {
+        "snapshot_state": snapshot_state,
+        # This is the existing snapshot version clock, not a fabricated source clock.
+        "snapshot_as_of": snapshot_as_of if isinstance(snapshot_as_of, str) else None,
+        "linkage_failed": bool(payload.get("linkage_note")),
+        "theme_gate_counts": {key: value for key in (
+            "unclassified", "missing_catalog", "not_concentrated", "mined_empty_unavailable"
+        ) if type(value := gates.get(key)) is int and value >= 0},
+        "missing_quote": stats.get("missing_quote") if type(stats.get("missing_quote")) is int
+        and stats["missing_quote"] >= 0 else None,
+    }
     empty_reasons = []
     if read_state == "unavailable":
-        empty_reasons.append("本轮数据不完整，暂时无法判断候选是否退出")
+        if snapshot_state != "ready":
+            label = {"degraded": "降级", "stale": "过期", "unavailable": "不可用", "unknown": "状态未知"}[snapshot_state]
+            empty_reasons.append(f"全市场数据未就绪（{label}），本轮候选资格暂不可核实")
+        if read_context["linkage_failed"]:
+            empty_reasons.append("题材联动计算失败，本轮候选资格待核")
+        if partial:
+            empty_reasons.append("部分候选缺少可用报价或成分数据，暂时无法判断是否退出")
     if gates.get("unclassified"):
         empty_reasons.append("部分涨停股缺少共同原因，不能合并为题材机会")
     if gates.get("missing_catalog"):
@@ -610,6 +631,7 @@ def top_watch_stocks(payload: dict, *, limit: int | None = None) -> dict:
         "trade_date": payload.get("trade_date"),
         "selection_identity_version": SELECTION_IDENTITY_VERSION,
         "read_state": read_state,
+        "read_context": read_context,
         "empty_reasons": empty_reasons,
         "selection_rule_version": "official-catalyst-v1",
         "effective_limit": limit,

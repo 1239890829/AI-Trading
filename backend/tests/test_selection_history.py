@@ -361,3 +361,31 @@ def test_existing_registry_route_keeps_original_rejection_diagnostics(sf, monkey
     assert original['scoring_trace']['dimensions']['tech']['contribution'] == 0
     assert original['dimension_evidence']['tech']['reason'] == '旧源缺项'
     assert original['vetoes'] == ['原停牌否决'] and original['score_shortfall'] == 0
+
+
+def test_saved_candidate_exclusions_read_without_replaying_today_or_inventing_old_reasons(sf):
+    pk = daily(sf, items=[{'symbol': '600001', 'score': 55}], rejected=[{'symbol': '600002', 'score': 45}])
+    with sf() as db:
+        row = db.get(DailyPickSet, pk)
+        meta = json.loads(row.meta)
+        meta['candidate_audit'] = {'version': 'daily-candidate-domain-v1', 'complete': True,
+            'input_digest': 'a' * 64, 'input_total': 4, 'saved_total': 4, 'omitted_total': 0,
+            'universe': {'source': 'sina_market', 'node': 'hs_a', 'version': 'original'},
+            'rows': [{'symbol': '600001', 'reason_code': 'selected', 'input_position': 1},
+                     {'symbol': '600002', 'reason_code': 'below_min_score', 'input_position': 2},
+                     {'symbol': '513880', 'reason_code': 'outside_a_share_universe', 'stage': 'identity', 'input_position': 3},
+                     {'symbol': '600003', 'reason_code': 'scoring_unavailable', 'stage': 'score', 'input_position': 4}]}
+        row.meta = json.dumps(meta)
+        db.commit()
+    run = detail(sf, identity(sf))
+    assert [item['symbol'] for item in run['items']] == ['600001', '600002', '513880', '600003']
+    assert run['candidate_audit']['state'] == 'saved' and 'rows' not in run['candidate_audit']
+    excluded, unknown = run['items'][2:]
+    assert excluded['score'] is None and excluded['state'] == 'rejected'
+    assert excluded['reason_code'] == 'outside_a_share_universe'
+    assert unknown['state'] == 'unknown' and '不能补成0分' in unknown['reason']
+    assert run['counts']['rejected_saved'] == 1  # Original scored rejection denominator is unchanged.
+    assert len(detail(sf, identity(sf), offset=2, limit=1)['items']) == 1
+    daily(sf, day='2026-10-22')
+    old = list_method_runs(sf, 'daily_picks', trade_date='2026-10-22')['items'][0]
+    assert detail(sf, old)['candidate_audit']['state'] == 'missing'

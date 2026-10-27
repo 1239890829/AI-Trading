@@ -16,6 +16,8 @@ from __future__ import annotations
 
 import asyncio
 from copy import deepcopy
+import hashlib
+import json
 import logging
 import math
 import re
@@ -36,6 +38,7 @@ from app.picks.pre_limit_radar import board_limit_pct, is_sealed
 log = logging.getLogger(__name__)
 
 CATALOG_TAG = "cn_concept"
+DIRECTORY_QUOTE_BUDGET = 15.0
 
 
 def source_saved_clock(value: datetime | None) -> str | None:
@@ -342,6 +345,7 @@ class ThemeCatalogService:
         self.revision = 0
         self._directory_reads = TTLCache("official_board_directory", ttl=86400, maxsize=2)
         self._snapshot_reads = TTLCache("official_board_snapshot", ttl=30, maxsize=32)
+        self._ranking_reads = TTLCache("official_board_ranking", ttl=30, maxsize=2)
         self._industry_members = TTLCache("official_industry_members", ttl=60, maxsize=8)
 
     async def read_board_catalog(self, kind: str) -> dict:
@@ -353,7 +357,12 @@ class ThemeCatalogService:
                 await self.sync_catalog()
 
             def stored():
-                rows = [row for row in self.get_catalog(limit=1000) if row.source == "ths_official"]
+                with self._sf() as db:
+                    rows = list(db.execute(select(Theme).where(
+                        Theme.catalog_active.is_(True), Theme.source == "ths_official",
+                    ).order_by(Theme.name).limit(1001)).scalars())
+                if len(rows) > 1000:
+                    raise RuntimeError("official concept directory exceeds supported complete range")
                 items = [{"code": row.code, "name": row.name, "source": row.source,
                           "kind": kind, "synced_at": source_saved_clock(row.catalog_synced_at)}
                          for row in rows if row.source == "ths_official"]
@@ -394,23 +403,32 @@ class ThemeCatalogService:
 
         return await read_inflight(self, ("official-directory", kind), fetch)
 
-    async def read_board_snapshots(self, codes: list[str]) -> dict:
+    async def read_board_snapshots(self, codes: list[str], *, fresh: bool = False, deadline: float | None = None) -> dict:
         """Explicit, bounded same-source batch. Readiness is not the market clock."""
         wanted = tuple(sorted(set(codes)))
         if not wanted or len(wanted) > 50 or any(not re.fullmatch(r"[0-9]{6}\.TI", code) for code in wanted):
             raise ValueError("1 to 50 exact official board codes required")
         hit, value = self._snapshot_reads.get(wanted)
-        if hit:
+        if hit and not fresh:
             return deepcopy(value)
 
         async def fetch():
             hit, value = self._snapshot_reads.get(wanted)
-            if hit:
+            if hit and not fresh:
                 return value
             received = None
+            stop_chain = False
             try:
-                response = await self._client.get(
-                    f"{self._base}/api/a-share-index/prices/snapshot", params={"thscodes": ",".join(wanted)})
+                remaining = None if deadline is None else deadline - time.monotonic()
+                if remaining is not None and remaining <= 0:
+                    raise TimeoutError("official directory quote deadline")
+                async with asyncio.timeout(remaining):
+                    response = await self._client.get(
+                        f"{self._base}/api/a-share-index/prices/snapshot", params={"thscodes": ",".join(wanted)},
+                        **({"timeout": remaining} if remaining is not None else {}))
+                # A received response must prove the complete successful contract
+                # before another directory batch may call this endpoint.
+                stop_chain = True
                 response.raise_for_status()
                 payload = response.json()
                 data = payload.get("data") if isinstance(payload, dict) else None
@@ -438,16 +456,103 @@ class ThemeCatalogService:
                          "source_as_of": None, "source_ready_at": ready,
                          "received_at": datetime.now(timezone.utc).isoformat(), "rows": rows,
                          "missing_codes": [code for code in wanted if code not in seen]}
+                stop_chain = False
             except Exception as exc:  # optional price failure cannot hide source identities
                 log.warning("official board snapshot unavailable: %s", type(exc).__name__)
                 value = {"available": False, "source": "ths_official", "source_basis": "index_snapshot",
                          "source_as_of": None, "source_ready_at": None,
                          "received_at": received or datetime.now(timezone.utc).isoformat(), "rows": [],
-                         "missing_codes": list(wanted), "reason": "同花顺板块报价暂不可用"}
-            self._snapshot_reads.set(wanted, value, ttl=30 if value["available"] else 5)
+                         "missing_codes": list(wanted), "reason": "同花顺板块报价暂不可用", "stop_chain": stop_chain}
+            hit, newer = self._snapshot_reads.get(wanted)
+            if not hit or datetime.fromisoformat(newer["received_at"]) <= datetime.fromisoformat(value["received_at"]):
+                self._snapshot_reads.set(wanted, value, ttl=30 if value["available"] else 5)
             return value
 
-        return await read_inflight(self, ("official-board-snapshot", wanted), fetch)
+        return await read_inflight(self, ("official-board-snapshot", wanted, fresh), fetch)
+
+    async def read_board_ranking(self, kind: str, *, fresh: bool = False) -> dict:
+        """Exhaust the formal directory; quote coverage never establishes its day."""
+        if kind not in ("concept", "industry"):
+            raise ValueError("unsupported official board kind")
+
+        def identity(directory):
+            items = directory.get("items")
+            if (directory.get("kind") != kind or directory.get("source") != "ths_official"
+                    or not isinstance(items, list) or not 0 < len(items) <= 1000
+                    or type(directory.get("total")) is not int or directory["total"] != len(items)
+                    or any(not isinstance(row, dict) or not isinstance(row.get("name"), str)
+                           or not row["name"].strip() or not re.fullmatch(r"[0-9]{6}\.TI", str(row.get("code") or ""))
+                           or row.get("source") != "ths_official" or row.get("kind") != kind for row in items)
+                    or len({row["code"] for row in items}) != len(items)):
+                raise RuntimeError("official ranking directory incomplete")
+            return hashlib.sha256(json.dumps(
+                [kind, directory.get("synced_at"), [(r["code"], r["name"]) for r in items]],
+                ensure_ascii=False, separators=(",", ":")).encode()).hexdigest()
+
+        async def fetch():
+            deadline = time.monotonic() + DIRECTORY_QUOTE_BUDGET
+            began = datetime.now(timezone.utc).isoformat()
+            async with asyncio.timeout(DIRECTORY_QUOTE_BUDGET):
+                directory = await self.read_board_catalog(kind)
+                version = identity(directory)
+                if time.monotonic() >= deadline:
+                    raise TimeoutError("official directory quote deadline")
+                hit, cached = self._ranking_reads.get(kind)
+                if hit and not fresh and cached["catalog_version"] == version:
+                    return cached
+                found, receipts, ready, failed = {}, [], [], []
+                items = directory["items"]
+                codes = [row["code"] for row in items]
+                try:
+                    for start in range(0, len(codes), 50):
+                        if time.monotonic() >= deadline:
+                            raise TimeoutError("official directory quote deadline")
+                        batch = await self.read_board_snapshots(codes[start:start + 50], fresh=fresh, deadline=deadline)
+                        receipts.append(batch["received_at"])
+                        if batch.get("source_ready_at"):
+                            ready.append(batch["source_ready_at"])
+                        if batch.get("available"):
+                            found.update({row["code"]: row for row in batch["rows"]})
+                        else:
+                            failed.extend(codes[start:start + 50])
+                        if batch.get("stop_chain"):
+                            failed.extend(codes[start + 50:])
+                            break
+                except TimeoutError:
+                    failed.extend(code for code in codes if code not in found)
+                # Detect any concurrent rename, removal or directory revision before publish.
+                if time.monotonic() >= deadline:
+                    raise TimeoutError("official directory quote deadline")
+                if identity(await self.read_board_catalog(kind)) != version:
+                    raise RuntimeError("official ranking directory changed during read")
+                if time.monotonic() >= deadline:
+                    raise TimeoutError("official directory quote deadline")
+                rows = [{**row, "price": found.get(row["code"], {}).get("price"),
+                         "change_pct": found.get(row["code"], {}).get("change_pct"),
+                         "quote_state": "value" if row["code"] in found else "unavailable" if row["code"] in failed else "missing"}
+                        for row in items]
+                missing = [code for code in codes if code not in found]
+                value = {"scope": "directory", "kind": kind, "source": "ths_official", "source_basis": "index_snapshot",
+                         "available": bool(found), "catalog_version": version,
+                         "catalog_state": directory.get("catalog_state", "unknown"), "catalog_synced_at": directory.get("synced_at"),
+                         "directory_total": len(items), "source_total": len(items), "source_returned": len(found),
+                         "value_count": sum(row["change_pct"] is not None for row in rows),
+                         "coverage_state": "partial" if missing else "source_complete", "missing_codes": missing,
+                         "source_as_of": None, "trade_date": None, "quality": "stale", "observation_state": "clock_unknown",
+                         "source_ready_from": min(ready) if ready else None, "source_ready_at": max(ready) if ready else None,
+                         "received_from": min(receipts) if receipts else began,
+                         "received_at": max(receipts) if receipts else datetime.now(timezone.utc).isoformat(), "rows": rows,
+                         "reason": "部分板块快照未提供，保留原目录；来源交易日及行情时点未提供" if missing
+                                   else "来源交易日及行情时点未提供；采集与就绪时间不代表当日实时"}
+                if time.monotonic() >= deadline:
+                    raise TimeoutError("official directory quote deadline")
+                hit, newer = self._ranking_reads.get(kind)
+                if (not hit or newer["catalog_version"] != version
+                        or datetime.fromisoformat(newer["received_at"]) <= datetime.fromisoformat(value["received_at"])):
+                    self._ranking_reads.set(kind, value, ttl=5 if missing else 30)
+                return value
+
+        return await read_inflight(self, ("official-board-ranking", kind, fresh), fetch)
 
     async def read_industry_members(self, code: str) -> list[dict]:
         hit, value = self._industry_members.get(code)

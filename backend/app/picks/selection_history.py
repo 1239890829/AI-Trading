@@ -85,6 +85,37 @@ def daily_reason(row: dict) -> str:
     return f'原入选原因未识别（{reason}）' if text(reason) else ''
 
 
+_CANDIDATE_REASONS = {
+    'outside_a_share_universe': '不在当时已核实的A股证券范围；未占用股票评估名额',
+    'invalid_security_identity': '原证券身份无效',
+    'candidate_capacity': '原候选来源容量截断；没有评分',
+    'deep_capacity': '原深度评估容量截断；没有评分',
+    'quote_missing': '原同股报价缺失或现价无效；没有评分',
+    'quote_identity_mismatch': '原报价市场或代码与已核证券身份不符；没有评分',
+    'risk_name_excluded': '原ST或退市名称预筛排除',
+    'account_board_excluded': '原账户交易板块权限不通过',
+    'scoring_unavailable': '原批次尝试评分但没有保存成功评分；不能补成0分',
+    'open_sealed_source_excluded': '原始涨停池来源在开盘已封；未据此直接晋级',
+    'candidate_admitted': '原候选已接纳；后续处理未记录',
+}
+
+
+def _saved_candidate_audit(meta):
+    audit = checked(meta.get('candidate_audit'), dict)
+    if not audit:
+        return {'state': 'missing', 'reason': '原版本未保存逐候选来源与截断依据，未按当前规则重算'}, []
+    rows = checked(audit.get('rows'), list)
+    valid = (audit.get('version') == 'daily-candidate-domain-v1' and rows is not None
+             and audit.get('saved_total') == len(rows)
+             and isinstance(audit.get('input_total'), int) and audit['input_total'] >= len(rows)
+             and audit.get('omitted_total') == audit['input_total'] - len(rows)
+             and all(isinstance(row, dict) and text(row.get('symbol'))
+                     and text(row.get('reason_code')) for row in rows))
+    summary = {key: value for key, value in audit.items() if key != 'rows'}
+    return {**summary, 'state': 'saved' if valid and audit.get('complete') is True else 'partial',
+            'reason': '' if valid else '原候选依据损坏；不猜测缺失原因'}, rows if valid else []
+
+
 def _json(value):
     return json.dumps(value, ensure_ascii=False, sort_keys=True, default=str, separators=(',', ':'))
 
@@ -278,6 +309,7 @@ def _daily(row, identity, *, offset=0, limit=200):
     if identity['version_state'] == 'mismatch':
         problems.append('原入选版本与当前保存内容不一致，不作为已核版本')
     meta = meta or {}
+    candidate_audit, candidate_rows = _saved_candidate_audit(meta)
     items, total = [], 0
     for state, entries in zip(('selected', 'rejected'), lists):
         for index, item in enumerate(entries or []):
@@ -290,12 +322,27 @@ def _daily(row, identity, *, offset=0, limit=200):
                 'item_id': f'{state}:{index}', 'state': state, 'score': number(item.get('score')),
                 'rank': number(item.get('rank')), 'reason': daily_reason(item),
                 'basis': checked(item.get('bases'), dict) or {}, 'diagnostics': diagnostics(item, meta)})
+    already_scored = {str(item.get('symbol') or '') for entries in lists for item in entries or [] if isinstance(item, dict)}
+    for original in candidate_rows:
+        if original['symbol'] in already_scored:
+            continue
+        total += 1
+        if total <= offset or total > offset + limit:
+            continue
+        code = original['reason_code']
+        unknown = code in {'quote_missing', 'quote_identity_mismatch', 'scoring_unavailable', 'candidate_admitted'}
+        items.append({'item_id': f"candidate:{original.get('input_position')}", 'symbol': original['symbol'],
+            'name': original.get('name') or original['symbol'], 'state': 'unknown' if unknown else 'rejected',
+            'score': None, 'rank': None, 'stage': original.get('stage'), 'reason_code': code,
+            'reason': _CANDIDATE_REASONS.get(code, '原候选原因未识别，未按当前规则推断'),
+            'basis': {}, 'diagnostics': diagnostics({}, meta), 'evidence': original})
     funnel = checked(meta.get('selection_funnel'), dict) or {}
     return {**identity, 'state': 'saved' if not problems else 'partial' if any(valid) or total else 'error',
         'reason': '；'.join(problems), 'elapsed_ms': None,
         'counts': {'candidates': number(meta.get('candidate_count')), 'scored': number(funnel.get('scored')),
                    'selected': len(lists[0]) if valid[0] else None, 'rejected_saved': len(lists[1]) if valid[1] else None},
         'criteria': {'min_pick_score': number(meta.get('min_pick_score')), 'max_picks': number(meta.get('max_picks'))},
+        'candidate_audit': candidate_audit,
         'items': items, '_items_total': total, 'semantics': 'saved_selection_not_execution_or_fill'}
 
 

@@ -1,7 +1,7 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { ApiError, getPickReviews, getPicksHistory } from "@/lib/api";
 import { DEFAULT_TIMEOUT_MS, clearDeviceSessionReads, getJson, sendJson } from "@/lib/api/internal";
-import {getIntradayTop} from "@/lib/api/picks";
+import {CandidateDataUnavailableError, getIntradayTop} from "@/lib/api/picks";
 import {getTradesPayload} from "@/lib/api/market";
 
 /**
@@ -196,4 +196,29 @@ it("intraday failure remains an error while a verified empty result is allowed",
   await expect(getIntradayTop()).rejects.toMatchObject({code: "candidate_data_unavailable"});
   stubFetch(200, JSON.stringify({data: {items: [], read_state: "ready", empty_reasons: ["本轮条件未满足"]}}));
   await expect(getIntradayTop()).resolves.toMatchObject({items: [], read_state: "ready"});
+});
+
+it("keeps only bounded plain-text business reasons and the original read context on an unavailable candidate response", async () => {
+  const context = {snapshot_state: "degraded", snapshot_as_of: "2026-10-27T14:53:27+08:00", linkage_failed: false,
+    theme_gate_counts: {missing_catalog: 2}, missing_quote: 7};
+  stubFetch(200, JSON.stringify({data: {items: [{symbol: "should-not-become-current"}], read_state: "unavailable",
+    empty_reasons: [null, "", " 全市场\n数据未就绪\u0000 ", "全市场 数据未就绪", "官方成分对应关系待核", "x".repeat(500), "第四条不铺长文"], read_context: context}}));
+  let error: unknown;
+  try {await getIntradayTop();} catch (value) {error = value;}
+  expect(error).toBeInstanceOf(CandidateDataUnavailableError);
+  expect(error).toBeInstanceOf(ApiError);
+  const unavailable = error as CandidateDataUnavailableError;
+  expect(unavailable).toMatchObject({status: 503, code: "candidate_data_unavailable", context});
+  expect(unavailable.reasons).toEqual(["全市场 数据未就绪", "官方成分对应关系待核", "x".repeat(160)]);
+  expect(unavailable.message).not.toMatch(/[\u0000-\u001f\u007f]/);
+  expect(unavailable).not.toHaveProperty("items");
+});
+
+it("does not present actual HTTP failures as successfully read business-unavailable evidence", async () => {
+  stubFetch(500, JSON.stringify({detail: "upstream failed"}));
+  let error: unknown;
+  try {await getIntradayTop();} catch (value) {error = value;}
+  expect(error).toBeInstanceOf(ApiError);
+  expect(error).not.toBeInstanceOf(CandidateDataUnavailableError);
+  expect(error).toMatchObject({status: 500});
 });
