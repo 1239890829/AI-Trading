@@ -14,6 +14,8 @@ import {
   getReviewEffectiveness,
   getReviewReport,
   getReviewReports,
+  getAgentParams,
+  createAgentParamChange,
   updateActionItemStatus,
   type ActionItemRef,
   type ActionItemStatus,
@@ -120,11 +122,13 @@ function useDispositionResource<T>(fn: () => Promise<T>, key: unknown, enabled =
  */
 function ActionItemDispose({
   item,
+  reviewId,
   status,
   onDisposed,
   disabled = false,
 }: {
   item: ActionItemRef;
+  reviewId: string;
   status: string;
   onDisposed: () => void;
   disabled?: boolean;
@@ -135,9 +139,44 @@ function ActionItemDispose({
   const [receipt, setReceipt] = useState({implementation_ref:"",release_version:"",verification_ref:""});
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const [draftOpen, setDraftOpen] = useState(false);
+  const draftTrigger = useRef<HTMLButtonElement>(null);
+  const [draftKey, setDraftKey] = useState("");
+  const [draftValue, setDraftValue] = useState("");
+  const [validationPlan, setValidationPlan] = useState("");
+  const [createdDraft, setCreatedDraft] = useState<number | null>(null);
+  const params = useDispositionResource(getAgentParams, reviewId, draftOpen && !disabled);
+  const parameter = params.data?.find(p => p.key === draftKey);
+  useEffect(() => {
+    if (createdDraft !== null && !draftOpen) draftTrigger.current?.focus();
+  }, [createdDraft, draftOpen]);
 
   // 旧报告的改进项 id 是报告内临时编号（AI-xxxxxxxx），不是数据库主键 → 不可寻址
   const addressable = /^\d+$/.test(item.id);
+
+  async function proposeDraft() {
+    if (disabled || busy || params.reading || params.error || !parameter || !draftValue.trim() || !validationPlan.trim()) return;
+    setBusy(true);
+    setError(null);
+    try {
+      const draft = await createAgentParamChange(draftKey, draftValue.trim(), {
+        source_type: "review_action_item", source_id: item.id,
+        evidence: {review_action: {review_id: reviewId, trade_date: item.trade_date,
+          category: item.category, title: item.title}, validation_plan: validationPlan.trim()},
+      });
+      if (draft.status !== "draft" || draft.source_type !== "review_action_item" || draft.source_id !== item.id) {
+        throw new Error("返回的草案身份或状态不符，请在参数评估中核对保存结果");
+      }
+      setCreatedDraft(draft.id);
+      setDraftOpen(false);
+      setDraftValue("");
+      setValidationPlan("");
+    } catch (e) {
+      setError(e instanceof Error ? e.message : String(e));
+    } finally {
+      setBusy(false);
+    }
+  }
 
   async function submit(next: ActionItemStatus, withNote: string) {
     if (disabled || busy) return;
@@ -177,6 +216,33 @@ function ActionItemDispose({
       <span className={`text-[11px] ${STATUS_CLS[status] ?? "text-zinc-600 dark:text-zinc-400"}`}>
         {STATUS_LABEL[status] ?? status}
       </span>
+      <button ref={draftTrigger} type="button" disabled={busy || disabled} aria-expanded={draftOpen}
+        onClick={() => {setDraftOpen(value => !value); setError(null);}}
+        className="rounded border border-zinc-300 px-1.5 py-0.5 text-[11px] text-zinc-600 hover:border-sky-500 disabled:opacity-40 dark:border-zinc-700 dark:text-zinc-400">
+        建立评估草案
+      </button>
+      {createdDraft !== null && <span role="status" className="text-xs text-sky-700 dark:text-sky-400">已建草案 #{createdDraft} · 未生效 <a href="/agent?area=maintenance&tab=params" className="underline">查看参数评估</a></span>}
+      {draftOpen && <form className="w-full space-y-2 rounded border border-zinc-200 p-2 text-xs dark:border-zinc-700" aria-label={`为${item.title}建立评估草案`}
+        onSubmit={event => {event.preventDefault(); void proposeDraft();}}>
+        <p>来源 {item.trade_date} · {item.title}</p>
+        <p className="text-zinc-600 dark:text-zinc-400">仅保存参数评估单，不改参数或行动状态。代码与数据修复走开发 PR；参数先验证，再走影子与独立晋级审批。</p>
+        {params.reading ? <p role="status">读取可评估参数…</p> : params.error ? <div role="alert">参数读取失败：{params.error instanceof Error ? params.error.message : "权限或来源尚未核实"}<button type="button" onClick={() => params.refresh()}>重试</button></div> : <>
+          <label className="block">评估参数<select aria-label="评估参数" value={draftKey} disabled={busy || disabled}
+            onChange={event => {setDraftKey(event.target.value); setDraftValue("");}}
+            className="ml-2 max-w-full rounded border border-zinc-300 bg-transparent p-1 dark:border-zinc-700">
+            <option value="">请选择，不自动代选</option>{params.data?.map(p => <option key={p.key} value={p.key}>{p.label}</option>)}
+          </select></label>
+          {parameter && <p className="text-zinc-600 dark:text-zinc-400">当前 {parameter.current || "未配置"} · {parameter.desc} · 风险 {parameter.risk}</p>}
+          <label className="block">候选新值<input aria-label="候选新值" value={draftValue} disabled={busy || disabled} onChange={event => setDraftValue(event.target.value)}
+            className="mt-1 w-full rounded border border-zinc-300 bg-transparent p-1 dark:border-zinc-700" /></label>
+          <label className="block">验证计划<textarea aria-label="验证计划" value={validationPlan} disabled={busy || disabled} maxLength={4000}
+            placeholder="写明基线、同点数据、反例与验收；没有效果证据就写待验证" onChange={event => setValidationPlan(event.target.value)}
+            className="mt-1 w-full rounded border border-zinc-300 bg-transparent p-1 dark:border-zinc-700" rows={2}/></label>
+          <button type="submit" disabled={busy || disabled || !parameter || !draftValue.trim() || !validationPlan.trim()}
+            className="rounded border border-sky-600 px-2 py-1 text-sky-700 disabled:opacity-40 dark:text-sky-400">保存评估草案</button>
+        </>}
+        <button type="button" disabled={busy} onClick={() => {setDraftOpen(false); draftTrigger.current?.focus();}} className="ml-2 text-zinc-600 dark:text-zinc-400">取消评估</button>
+      </form>}
       {status !== "confirmed" && (
         <button
           onClick={() => click("confirmed")}
@@ -253,7 +319,7 @@ function ActionItemDispose({
           </div>
         </div>
       )}
-      {error && <div className="w-full text-[11px] text-red-700 dark:text-red-400">处置失败：{error}</div>}
+      {error && <div role="alert" className="w-full text-[11px] text-red-700 dark:text-red-400">{draftOpen ? "草案保存失败" : "处置失败"}：{error}</div>}
     </div>
   );
 }
@@ -298,7 +364,7 @@ function ImprovementReport({
           </div>
           <div className="space-y-1.5">
             {report.action_items.map((a) => (
-              <div key={JSON.stringify([report.trade_date, a.id, a.category, a.title])} className="rounded-lg border border-zinc-200 px-3 py-2 dark:border-zinc-800">
+              <div key={JSON.stringify([report.review_id, report.trade_date, a.id, a.category, a.title])} className="rounded-lg border border-zinc-200 px-3 py-2 dark:border-zinc-800">
                 <div className="flex items-baseline gap-2 text-xs">
                   <span className={`font-mono font-semibold ${PRIORITY_CLS[a.priority] ?? "text-zinc-600 dark:text-zinc-400"}`}>{a.priority}</span>
                   <span className="text-zinc-900 dark:text-zinc-100">{a.title}</span>
@@ -313,6 +379,7 @@ function ImprovementReport({
                 </div>}
                 {allowDispose ? <ActionItemDispose
                   item={{ id: a.id, trade_date: report.trade_date, category: a.category, title: a.title }}
+                  reviewId={report.review_id}
                   status={a.status ?? "pending"}
                   onDisposed={onDisposed}
                   disabled={readError || a.disposition_basis === "disposition_unavailable"}

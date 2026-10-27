@@ -72,6 +72,39 @@ export async function getOfficialBoardQuotes(kind: OfficialCatalogKind, codes: r
   return (await getJson<OfficialBoardQuotes>(`/api/themes/catalog/quotes?${query}`, 15_000, options)).data;
 }
 
+export interface OfficialBoardRanking {
+  scope: "directory";
+  kind: OfficialCatalogKind;
+  source: "ths_official";
+  source_basis: "index_snapshot";
+  available: boolean;
+  catalog_version: string;
+  catalog_state: "ready" | "stale" | "unknown";
+  catalog_synced_at: string | null;
+  directory_total: number;
+  source_total: number;
+  source_returned: number;
+  value_count: number;
+  coverage_state: "source_complete" | "partial";
+  missing_codes: string[];
+  source_as_of: null;
+  trade_date: null;
+  quality: "stale";
+  observation_state: "clock_unknown";
+  source_ready_from: string | null;
+  source_ready_at: string | null;
+  received_from: string;
+  received_at: string;
+  rows: (OfficialCatalogItem & {price: number | null; change_pct: number | null; quote_state: "value" | "missing" | "unavailable"})[];
+  reason?: string;
+}
+
+export async function getOfficialBoardRanking(kind: OfficialCatalogKind, options: ReadOptions = {}): Promise<OfficialBoardRanking> {
+  const query = new URLSearchParams({kind, scope:"directory"});
+  if (options.fresh) query.set("fresh", "true");
+  return (await getJson<OfficialBoardRanking>(`/api/themes/catalog/quotes?${query}`, 20_000, options)).data;
+}
+
 export async function getThemesCatalog(search?: string): Promise<ThemeCatalogItem[]> {
   const qs = search ? `?search=${encodeURIComponent(search)}` : "";
   return (await getJson<{ items: ThemeCatalogItem[] }>(`/api/themes/catalog${qs}`, 30_000)).data.items;

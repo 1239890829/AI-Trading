@@ -371,3 +371,46 @@ def test_attach_participants_no_candidate_is_a_conclusion_not_a_data_gap():
     assert cards[0]["participants"] == []
     assert "不可判定" not in cards[0]["participants_note"]
     assert "无可参与成分" in cards[0]["participants_note"]
+
+
+def test_top_read_context_keeps_snapshot_gate_and_distinct_empty_causes():
+    from app.picks.intraday_opportunity import top_watch_stocks
+
+    payload = {'trade_date': '2026-10-27', 'themes': [], 'linkage_stats': {
+        'snapshot_state': 'degraded', 'snapshot_as_of': '2026-10-27T14:53:27+08:00',
+        'missing_quote': 7, 'theme_gate_counts': {'missing_catalog': 2, 'not_concentrated': 3}}}
+    out = top_watch_stocks(payload)
+    assert out['read_state'] == 'unavailable' and out['items'] == []
+    assert out['read_context'] == {
+        'snapshot_state': 'degraded', 'snapshot_as_of': '2026-10-27T14:53:27+08:00',
+        'linkage_failed': False, 'theme_gate_counts': {'missing_catalog': 2, 'not_concentrated': 3},
+        'missing_quote': 7,
+    }
+    reasons = out['empty_reasons']
+    assert any('全市场数据未就绪' in reason and '降级' in reason for reason in reasons)
+    assert any('官方成分' in reason for reason in reasons)
+    assert any('集中条件' in reason for reason in reasons)
+    assert not any('没有个股同时满足' in reason for reason in reasons)
+    assert payload['linkage_stats']['snapshot_state'] == 'degraded'
+
+
+def test_top_read_context_does_not_guess_missing_clock_source_or_counts():
+    from app.picks.intraday_opportunity import top_watch_stocks
+
+    out = top_watch_stocks({'themes': [], 'linkage_note': 'ProviderError: private details'})
+    assert out['read_state'] == 'unavailable'
+    assert out['read_context'] == {'snapshot_state': 'unknown', 'snapshot_as_of': None,
+        'linkage_failed': True, 'theme_gate_counts': {}, 'missing_quote': None}
+    assert any('联动计算失败' in reason for reason in out['empty_reasons'])
+    assert 'private details' not in str(out['empty_reasons'])
+    assert 'source' not in out['read_context']
+
+
+def test_top_valid_empty_retains_ready_and_reasons_without_turning_counts_into_facts():
+    from app.picks.intraday_opportunity import top_watch_stocks
+
+    out = top_watch_stocks({'themes': [], 'linkage_stats': {'snapshot_state': 'ready',
+        'theme_gate_counts': {'not_concentrated': 3, 'missing_catalog': True, 'unclassified': -1}}})
+    assert out['read_state'] == 'ready' and out['items'] == []
+    assert out['read_context']['theme_gate_counts'] == {'not_concentrated': 3}
+    assert out['read_context']['snapshot_as_of'] is None

@@ -719,3 +719,33 @@ it.each(["desktop", "mobile"])("returns %s method focus to search when unfollowi
   expect(screen.queryByLabelText("方法详情 每日精选六维组合")).toBeNull();
   expect(getStrategyRegistry).toHaveBeenCalledTimes(1);
 });
+
+it("shows original business data causes without pretending an unavailable response is a new current list", async () => {
+  const {CandidateDataUnavailableError} = await import("@/lib/api/picks");
+  vi.mocked(api.getIntradayTop).mockRejectedValue(new CandidateDataUnavailableError({
+    empty_reasons: ["全市场数据未就绪（降级），本轮候选资格暂不可核实", "部分题材与官方成分的对应关系尚未核实"],
+    read_context: {snapshot_state: "degraded", snapshot_as_of: "2026-10-27T14:53:27+08:00", linkage_failed: false,
+      theme_gate_counts: {missing_catalog: 2}, missing_quote: 7},
+  }));
+  render(<HuntingPage/>);
+  const message = await within(group("candidates")).findByRole("alert");
+  expect(message.textContent).toContain("候选数据待核：全市场数据未就绪（降级）");
+  expect(message.textContent).toContain("官方成分的对应关系尚未核实");
+  expect(message.textContent).not.toContain("读取失败");
+  expect(within(group("candidates")).queryByText("候选 600127")).toBeNull();
+  expect(screen.getByRole("link", {name: "盘中候选"}).textContent).not.toContain("0只");
+});
+
+it("retains the prior candidate only as a past observation when the next read has domain-unavailable evidence", async () => {
+  const {CandidateDataUnavailableError} = await import("@/lib/api/picks");
+  render(<HuntingPage/>);
+  await within(group("candidates")).findByText("候选 600127");
+  const before = card("600127");
+  vi.mocked(api.getIntradayTop).mockRejectedValue(new CandidateDataUnavailableError({empty_reasons: ["全市场数据未就绪（过期），候选资格待核"]}));
+  fireEvent.click(screen.getByRole("button", {name: "刷新数据"}));
+  await within(group("candidates")).findByText(/候选数据待核：全市场数据未就绪（过期）/);
+  expect(card("600127")).toBe(before);
+  expect(before.dataset.readError).toBe("true");
+  expect(within(group("candidates")).getByRole("alert").textContent).toContain("保留上次读取的盘中候选，当前参与条件待重新核实");
+  expect(screen.getByRole("link", {name: "盘中候选"}).textContent).not.toContain("1只");
+});

@@ -213,10 +213,21 @@ async def theme_catalog(
 
 @router.get("/themes/catalog/quotes")
 async def theme_catalog_quotes(
-    codes: str = Query(..., min_length=1, max_length=550),
+    codes: str | None = Query(default=None, min_length=1, max_length=550),
     kind: Annotated[str, Query(pattern="^(concept|industry)$")] = "concept",
+    scope: Annotated[str, Query(pattern="^(codes|directory)$")] = "codes",
+    fresh: bool = False,
     svc: ThemeCatalogService = Depends(get_service),
 ) -> dict:
+    if scope == "directory":
+        if codes is not None:
+            raise HTTPException(status_code=422, detail="完整目录范围不能同时指定代码")
+        try:
+            return {"data": await svc.read_board_ranking(kind, fresh=fresh), "meta": {}}
+        except Exception as exc:
+            raise HTTPException(status_code=502, detail="完整正式目录报价读取失败；未用局部数据替代全榜") from exc
+    if codes is None:
+        raise HTTPException(status_code=422, detail="须提供正式板块代码或明确选择完整目录范围")
     wanted = list(dict.fromkeys(codes.split(",")))
     if len(wanted) > 50:
         raise HTTPException(status_code=422, detail="每批最多50个正式板块代码")

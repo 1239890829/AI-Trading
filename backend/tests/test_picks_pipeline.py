@@ -239,6 +239,9 @@ class _Snapshot:
     snapshot = []
     last_success = None
 
+    def stock_universe(self):
+        return _verified_universe(["600519", "000858", "603638", "600111", "600112", "600113", "000001", "000002", "300750"] + [f"600{i:03d}" for i in range(40)] + [f"601{i:03d}" for i in range(30)])
+
     def freshness(self):
         from app.core.freshness import Freshness
 
@@ -270,7 +273,7 @@ class _Provider:
     async def get_quotes(self, symbols):
         return [
             Quote(
-                symbol=s, source="tencent",
+                symbol=s, market="SH" if s.startswith("6") else "SZ", source="tencent",
                 name="贵州茅台" if s == "600519" else "五粮液",
                 price=1500.0 if s == "600519" else 120.0, change_pct=9.9 if s == "600519" else 3.2,
                 amount=3.0e9, pe_ttm=30.0, pb=8.0, total_mktcap_yi=19000.0, float_mktcap_yi=19000.0,
@@ -451,6 +454,7 @@ def test_market_benchmark_rejects_stock_identity_and_stale_clock(deps, monkeypat
 
 
 def test_selected_scoring_reuses_full_pipeline_without_persist_or_reselection(deps, monkeypatch):
+    deps.snapshot_service.stock_universe = lambda: _verified_universe(["600519", "000858"], day=pl.beijing_now().date().isoformat())
     hub = _Hub()
     def forbidden(*_args, **_kwargs):
         raise AssertionError("selected scoring must not persist or reselect")
@@ -473,6 +477,7 @@ def test_selected_scoring_reuses_full_pipeline_without_persist_or_reselection(de
 
 
 def test_selected_scoring_context_keeps_source_clock_without_second_gate_read(deps, monkeypatch):
+    deps.snapshot_service.stock_universe = lambda: _verified_universe(["600519", "000858"], day=pl.beijing_now().date().isoformat())
     from app.services import market_context
     from app.picks.execution_qualification import context_issue
     now = pl.beijing_now()
@@ -499,6 +504,7 @@ def test_selected_scoring_caps_unique_stocks_and_preserves_independent_observati
     monkeypatch.setattr(pl, "evaluate_stand_aside", _benign_gate)
     hub = _Hub()
     symbols = [f"600{i:03d}" for i in range(100, 125)]
+    deps.snapshot_service.stock_universe = lambda: _verified_universe(symbols, day=pl.beijing_now().date().isoformat())
     quotes = asyncio.run(hub.provider.get_quotes(symbols))
     rows = [{"symbol": s} for s in symbols]
     rows[0].update(observation_only=True, follow_state="observe")
@@ -519,6 +525,7 @@ def test_empty_selected_batch_does_not_read_sources(deps, monkeypatch):
 
 
 def test_unquoted_selected_batch_does_not_read_sources(deps, monkeypatch):
+    deps.snapshot_service.stock_universe = lambda: _verified_universe(["600519", "000858"], day=pl.beijing_now().date().isoformat())
     async def forbidden(*_args):
         raise AssertionError("unquoted batch must not read market")
     monkeypatch.setattr(pl, "_fetch_limit_up_pool", forbidden)
@@ -671,6 +678,7 @@ def test_generated_selection_contract_uses_original_final_items_digest(deps, mon
         "version": "daily_selection_v2", "trade_date": data["date"], "generated_at": generated_at,
         "strategy_version": "daily-six-dimension-v2.source-date-zero",
         "feature_version": "daily-entry-evidence-v2",
+        "candidate_version": "daily-candidate-domain-v1",
     }
     assert data["meta"]["selection_version"] == daily_selection_version(data["date"], generated_at, data["items"])
 
@@ -794,7 +802,7 @@ def test_candidate_pool_reads_directions_from_loaded_relation(deps, monkeypatch)
     warnings: list[str] = []
     monkeypatch.setattr(pl.log, "warning", lambda msg, *a: warnings.append(msg % a if a else msg))
 
-    pool = asyncio.run(pl.candidate_pool(_BareHub(), _Store(), _Catalog(), limit_up_pool=[]))
+    pool = asyncio.run(pl.candidate_pool(_BareHub(), _Store(), _Catalog(), limit_up_pool=[], stock_universe=_Snapshot().stock_universe()))
 
     assert [p["symbol"] for p in pool] == ["600519"], (
         "事件方向没进候选池——多半是回退成 store.directions_of 后异常被吞"
@@ -819,7 +827,7 @@ def test_candidate_pool_drops_whole_event_batch_after_late_bad_row(monkeypatch):
         _BareHub(), _Store(), None,
         active_events=[_Event(1, "先处理的事件", target="600519"), bad],
         limit_up_pool=[_PoolRec("600000", 1, "涨停池")], audit=audit,
-    ))
+     stock_universe=_Snapshot().stock_universe()))
 
     assert [item["symbol"] for item in pool] == ["600000"]
     assert audit["sources"] == {"limit_up": 1}
@@ -841,7 +849,7 @@ def test_candidate_pool_theme_members_go_through_bulk_only(monkeypatch):
     monkeypatch.setattr(pl.log, "warning", lambda msg, *a: None)
     cat = _Catalog()
 
-    pool = asyncio.run(pl.candidate_pool(_BareHub(), _ThemeStore(), cat, limit_up_pool=[]))
+    pool = asyncio.run(pl.candidate_pool(_BareHub(), _ThemeStore(), cat, limit_up_pool=[], stock_universe=_Snapshot().stock_universe()))
 
     # 次序即断言：批量版按 symbol 定序 ⇒ 000858 排在 600519 之前
     assert [p["symbol"] for p in pool] == ["000858", "600519"]
@@ -860,13 +868,13 @@ def test_candidate_pool_does_not_expand_llm_theme_hypothesis():
 
     only_hypothesis = asyncio.run(pl.candidate_pool(
         _BareHub(), _Store(), cat, active_events=[hypothesis], limit_up_pool=[],
-    ))
+     stock_universe=_Snapshot().stock_universe()))
     assert only_hypothesis == []
     assert cat.member_bulk_calls == 0
 
     with_rule = asyncio.run(pl.candidate_pool(
         _BareHub(), _Store(), cat, active_events=[hypothesis, rule], limit_up_pool=[],
-    ))
+     stock_universe=_Snapshot().stock_universe()))
     assert [item["symbol"] for item in with_rule] == ["000858", "600519"]
 
 
@@ -879,7 +887,7 @@ def test_candidate_pool_unknown_theme_name_triggers_no_query(monkeypatch):
         def list_events(self, *, active_only: bool = False, limit: int = 30):
             return [_Event(8, "未知题材事件", target="目录里没有的题材", target_type="theme")]
 
-    pool = asyncio.run(pl.candidate_pool(_BareHub(), _UnknownThemeStore(), cat, limit_up_pool=[]))
+    pool = asyncio.run(pl.candidate_pool(_BareHub(), _UnknownThemeStore(), cat, limit_up_pool=[], stock_universe=_Snapshot().stock_universe()))
 
     assert pool == []
     assert cat.member_bulk_calls == 0 and cat.member_single_calls == 0
@@ -1112,7 +1120,7 @@ def test_candidate_pool_drops_open_sealed_from_raw_pool_source_and_audits_it():
     ]
     audit: dict = {}
     got = asyncio.run(
-        pl.candidate_pool(_BareHub(), _Store(), None, limit_up_pool=pool, audit=audit)
+        pl.candidate_pool(_BareHub(), _Store(), None, limit_up_pool=pool, audit=audit, stock_universe=_Snapshot().stock_universe())
     )
     syms = [p["symbol"] for p in got]
     assert "600111" not in syms, "没有 current 重评证据时，开盘即封不应通过 raw pool 来源晋级"
@@ -1135,7 +1143,7 @@ def test_candidate_pool_puts_linkage_sources_first():
         pl.candidate_pool(
             _BareHub(), _Store(), None,
             limit_up_pool=[_SealRec("600113", "14:20:00")], linkages=linkages,
-        )
+         stock_universe=_Snapshot().stock_universe())
     )
     # theme_linkage(0) → event(1) → limit_up(2)；同档内保持插入序
     assert [p["symbol"] for p in got] == ["000001", "000002", "600519", "600113"]
@@ -1146,7 +1154,7 @@ def test_candidate_pool_records_linkage_absence():
     """未预取联动股（linkages=None）时来源缺席必须**显式记账**，不能静默少一路。"""
     audit: dict = {}
     asyncio.run(
-        pl.candidate_pool(_BareHub(), _Store(), None, limit_up_pool=[], audit=audit)
+        pl.candidate_pool(_BareHub(), _Store(), None, limit_up_pool=[], audit=audit, stock_universe=_Snapshot().stock_universe())
     )
     assert "未预取" in audit["theme_linkage"]["note"]
     assert audit["sources"] == {"event": 1}
@@ -1260,7 +1268,7 @@ def test_pipeline_excludes_boards_without_permission(deps):
             for s in symbols:
                 out.append(
                     Quote(
-                        symbol=s, source="tencent",
+                        symbol=s, market="SH" if s.startswith("6") else "SZ", source="tencent",
                         name={"600519": "贵州茅台", "000858": "五粮液",
                               "300750": "宁德时代"}.get(s, f"票{s}"),
                         price=100.0, change_pct=3.2, amount=3.0e9,
@@ -1316,7 +1324,7 @@ def test_open_sealed_raw_source_can_reenter_only_via_linkage_recheck():
     audit={}
     got=asyncio.run(pl.candidate_pool(
         _BareHub(), _Store(), None, limit_up_pool=pool, linkages=[linkage], audit=audit
-    ))
+    , stock_universe=_Snapshot().stock_universe()))
     row=next(x for x in got if x["symbol"]=="600111")
     assert row["from"] == "theme_linkage"
     assert audit["excluded_open_sealed"]["count"] == 1  # 原始涨停池来源仍未直接授权
@@ -1327,7 +1335,7 @@ def test_candidate_overlap_retains_qualified_linkage_and_original_event():
                "tradability": {"level": "可参与"}}
     got = asyncio.run(pl.candidate_pool(
         _BareHub(), _Store(), None, limit_up_pool=[], linkages=[linkage],
-    ))
+     stock_universe=_Snapshot().stock_universe()))
     row = next(item for item in got if item["symbol"] == "600519")
     assert row["from"] == "theme_linkage"
     assert row["linkage"] == linkage
@@ -1350,7 +1358,7 @@ def test_named_event_survives_earlier_wide_theme_expansion_without_raising_cap()
     got = asyncio.run(pl.candidate_pool(
         _BareHub(), _Store(), Catalog(), active_events=events,
         limit_up_pool=[], linkages=[],
-    ))
+     stock_universe=_Snapshot().stock_universe()))
     assert len(got) == 40
     assert got[0]["symbol"] == "603638" and got[0]["from"] == "event"
 
@@ -1367,7 +1375,7 @@ def test_named_event_upgrades_its_earlier_theme_membership():
         _BareHub(), _Store(), Catalog(), active_events=[
             _Event(1, "题材", "题材", "theme"), _Event(2, "直接公告", "603638")],
         limit_up_pool=[], linkages=[],
-    ))
+     stock_universe=_Snapshot().stock_universe()))
     assert len(got) == 1 and got[0]["from"] == "event"
     assert {s["from"] for s in got[0]["candidate_sources"]} == {"event_theme", "event"}
 
@@ -1438,3 +1446,127 @@ def test_execution_seed_preserves_independent_observation_constraint_and_unknown
     card["buy_range"]["low"] = 0
     card["vetoes"].append("later-display-change")
     assert seed["buy_range"]["low"] > 0 and seed["vetoes"] == []
+
+
+def _verified_universe(symbols, *, day=None):
+    import hashlib
+    identities = [{"symbol": s, "market": "SH" if s.startswith("6") else "SZ"} for s in symbols]
+    return {"state": "ready", "reason": None, "source": "sina_market", "node": "hs_a",
+            "verified_at": pl.beijing_now().isoformat(), "trade_date": day or TRADE_DAY.isoformat(),
+            "version": hashlib.sha256(json.dumps(identities, sort_keys=True).encode()).hexdigest(),
+            "source_total": len(identities), "source_returned": len(identities),
+            "source_unique": len(identities), "identities": identities}
+
+
+def test_stock_domain_filters_funds_before_candidate_capacity_and_records_unknown(deps, monkeypatch):
+    """Real saved fund identities must not occupy stock candidate/deep slots."""
+    deps.snapshot_service.stock_universe = lambda: _verified_universe(["600519", "000858"])
+    events = [_Event(i, "来源直接点名", symbol) for i, symbol in enumerate(
+        ["513880", "161631", "161032", "600519"], 1)]
+    monkeypatch.setattr(deps.event_store, "list_events", lambda **_: events)
+    captured = []
+    async def score(deep, **_):
+        captured.extend(deep)
+        return []
+    monkeypatch.setattr(pl, "deep_score_candidates", score)
+    result = _run(deps, _Hub())["data"]
+    assert {row["symbol"] for row in captured}.isdisjoint({"513880", "161631", "161032"})
+    audit = result["meta"]["candidate_audit"]
+    excluded = {row["symbol"]: row for row in audit["rows"]}
+    assert all(excluded[s]["reason_code"] == "outside_a_share_universe" for s in ["513880", "161631", "161032"])
+    assert audit["universe"]["source"] == "sina_market"
+    assert audit["universe"]["version"] and "identities" not in audit["universe"]
+
+
+def test_unknown_stock_universe_preserves_existing_daily_selection(deps, monkeypatch):
+    original = _run(deps, _Hub())["data"]
+    deps.snapshot_service.stock_universe = lambda: {"state": "unknown", "reason": "not_observed"}
+    monkeypatch.setattr(pl, "_persist_picks", lambda *_: pytest.fail("unknown identity must not overwrite a saved selection"))
+    with pytest.raises(pl.SelectionInputUnavailable, match="A股证券身份"):
+        _run(deps, _Hub())
+    with pl._db() as db:
+        saved = db.query(DailyPickSet).filter_by(date=TRADE_DAY.isoformat()).one()
+        assert json.loads(saved.meta)["selection_version"] == original["meta"]["selection_version"]
+
+
+def test_candidate_audit_distinguishes_source_cap_and_deep_capacity(deps, monkeypatch):
+    symbols = [f"600{i:03d}" for i in range(45)]
+    deps.snapshot_service.stock_universe = lambda: _verified_universe(symbols + ["600519", "000858"])
+    events = [_Event(i, "同点候选", symbol) for i, symbol in enumerate(symbols, 1)]
+    monkeypatch.setattr(deps.event_store, "list_events", lambda **_: events)
+    async def no_scores(*_, **__):
+        return []
+    monkeypatch.setattr(pl, "deep_score_candidates", no_scores)
+    result = _run(deps, _Hub())["data"]
+    audit = result["meta"]["candidate_audit"]
+    from collections import Counter
+    counts = Counter(row["reason_code"] for row in audit["rows"])
+    assert counts["candidate_capacity"] == 7
+    assert counts["deep_capacity"] == 16
+    assert counts["scoring_unavailable"] == 24
+    assert audit["complete"] is True and audit["input_digest"]
+    assert result["meta"]["selection_funnel"]["truncated_sources"] == {"event": 5, "limit_up": 2}
+
+
+@pytest.mark.parametrize('mutation', ['source', 'day', 'duplicate', 'count', 'unknown'])
+def test_stock_identity_contract_failure_stops_before_any_source_or_persist(deps, monkeypatch, mutation):
+    universe = _verified_universe(['600519', '000858'])
+    if mutation == 'source': universe['source'] = 'not_an_identity_owner'
+    elif mutation == 'day': universe['trade_date'] = '2026-09-09'
+    elif mutation == 'duplicate': universe['identities'].append(universe['identities'][0])
+    elif mutation == 'count': universe['source_total'] += 1
+    else: universe['state'] = 'unknown'
+    deps.snapshot_service.stock_universe = lambda: universe
+    monkeypatch.setattr(pl, '_fetch_limit_up_pool', lambda *_: pytest.fail('unknown identity must not fetch data'))
+    monkeypatch.setattr(pl, '_persist_picks', lambda *_: pytest.fail('unknown identity must not persist'))
+    with pytest.raises(pl.SelectionInputUnavailable):
+        _run(deps, _Hub())
+
+
+def test_known_stock_identity_is_independent_of_zero_or_degraded_snapshot_prices(deps, monkeypatch):
+    deps.snapshot_service.snapshot = [{'symbol': '600519', 'market': 'SH', 'source': 'sina_market', 'price': 0}]
+    deps.snapshot_service.stock_universe = lambda: _verified_universe(['600519', '000858'])
+    monkeypatch.setattr(pl, 'evaluate_stand_aside', _benign_gate)
+    result = _run(deps, _Hub())['data']
+    assert result['items'] and result['meta']['candidate_audit']['universe']['state'] == 'ready'
+    assert result['meta']['input_readiness']['snapshot_state'] != 'ready'
+
+
+def test_quote_market_mismatch_is_not_a_stock_or_source_priority_fallback(deps, monkeypatch):
+    hub = _Hub()
+    original = hub.provider.get_quotes
+    async def quotes(symbols):
+        rows = await original(symbols)
+        for row in rows:
+            row.market = 'SZ' if row.market == 'SH' else 'SH'
+        return rows
+    monkeypatch.setattr(hub.provider, 'get_quotes', quotes)
+    result = _run(deps, hub)['data']
+    assert result['items'] == []
+    assert result['meta']['candidate_audit']['counts']['quote_identity_mismatch'] == 2
+
+
+def test_generate_route_reports_identity_unknown_as_503_without_successful_empty_payload(monkeypatch):
+    from fastapi import HTTPException
+    from types import SimpleNamespace as NS
+    from app.api.routes import picks as route
+    async def unavailable(*_):
+        raise pl.SelectionInputUnavailable('not_observed', {'state': 'unknown'})
+    monkeypatch.setattr(route, 'generate_picks_pipeline', unavailable)
+    with pytest.raises(HTTPException) as result:
+        asyncio.run(route.generate_picks(NS(app=NS(state=NS(event_store=object()))), object(), None))
+    assert result.value.status_code == 503
+    assert result.value.detail['code'] == 'stock_identity_unknown'
+    assert result.value.detail['saved_selection_preserved'] is True
+
+
+def test_candidate_evidence_is_bounded_and_source_failure_does_not_infer_not_recalled():
+    audit = {'source_states': {'events': 'unknown', 'hot': 'available'}, '_candidate_rows': {
+        str(i): {'symbol': str(i), 'source': 'event', 'reason_code': 'candidate_capacity', 'input_position': i + 1}
+        for i in range(pl.CANDIDATE_AUDIT_CAP + 1)}}
+    result = pl._candidate_audit(audit)
+    assert len(result['rows']) == pl.CANDIDATE_AUDIT_CAP
+    assert result['input_total'] == pl.CANDIDATE_AUDIT_CAP + 1
+    assert result['omitted_total'] == 1 and result['complete'] is False
+    assert result['absent_symbol_state'] == 'unknown'
+    assert result['counts']['candidate_capacity'] == pl.CANDIDATE_AUDIT_CAP + 1

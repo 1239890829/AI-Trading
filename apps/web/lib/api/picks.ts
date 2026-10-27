@@ -961,6 +961,14 @@ export interface IntradayTopStock {
 export interface IntradayTopPayload {
   read_state?: "ready" | "partial" | "unavailable";
   empty_reasons?: string[];
+  read_context?: {
+    snapshot_state: "ready" | "degraded" | "stale" | "unavailable" | "unknown";
+    /** Existing snapshot version clock; it is not the original provider source clock. */
+    snapshot_as_of: string | null;
+    linkage_failed: boolean;
+    theme_gate_counts: Record<string, number>;
+    missing_quote: number | null;
+  };
   selection_identity_version?: string;
   effective_limit?: number;
   trade_date: string | null;
@@ -980,10 +988,27 @@ export interface IntradayTopPayload {
   caveats: string[];
 }
 
+/** A successfully read response whose candidate evidence is unavailable. Never a valid new list. */
+export class CandidateDataUnavailableError extends ApiError {
+  readonly reasons: readonly string[];
+  readonly context: IntradayTopPayload["read_context"];
+
+  constructor(data: Pick<IntradayTopPayload, "empty_reasons" | "read_context">) {
+    const reasons = [...new Set((Array.isArray(data.empty_reasons) ? data.empty_reasons : [])
+      .filter((value): value is string => typeof value === "string")
+      .map(value => value.replace(/[\u0000-\u001f\u007f]/g, " ").replace(/\s+/g, " ").trim().slice(0, 160))
+      .filter(Boolean))].slice(0, 3);
+    super(503, reasons.join("；") || "本轮数据不完整，候选状态待核实", "candidate_data_unavailable");
+    this.name = "CandidateDataUnavailableError";
+    this.reasons = reasons;
+    this.context = data.read_context;
+  }
+}
+
 export async function getIntradayTop(limit?: number): Promise<IntradayTopPayload> {
   const query = limit === undefined ? "" : `?limit=${limit}`;
   const data = (await getJson<IntradayTopPayload>(`/api/picks/intraday-top${query}`, 15_000)).data;
-  if (data.read_state === "unavailable") throw new ApiError(503, "本轮数据不完整，候选状态待核实", "candidate_data_unavailable");
+  if (data.read_state === "unavailable") throw new CandidateDataUnavailableError(data);
   return data;
 }
 
@@ -1068,6 +1093,7 @@ export interface SavedStrategyRunItem {
   state: "selected" | "rejected" | "candidate" | "unknown" | "matched" | "not_matched";
   stage?: string;
   decision?: string;
+  reason_code?: string;
   score: number | null;
   reason?: string;
   basis?: Record<string, string>;
@@ -1176,6 +1202,18 @@ export interface SavedStrategyRun {
   elapsed_ms?: number | null;
   data_state?: string | null;
   counts?: Record<string, number | null>;
+  candidate_audit?: {
+    state: "saved" | "partial" | "missing";
+    reason?: string;
+    version?: string;
+    input_total?: number | null;
+    saved_total?: number | null;
+    omitted_total?: number | null;
+    complete?: boolean;
+    source_states?: Record<string, string>;
+    absent_symbol_state?: "not_recalled_in_recorded_scope" | "unknown";
+    not_recalled_semantics?: string;
+  };
   criteria?: { min_pick_score?: number | null; max_picks?: number | null };
   items?: SavedStrategyRunItem[];
   possibly_truncated?: boolean;

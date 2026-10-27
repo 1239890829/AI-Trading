@@ -677,6 +677,29 @@ def _dump(row: AgentParamChange) -> dict:
     }
 
 
+def _review_action_evidence(db, source_id: str, evidence: dict | None) -> dict:
+    """Bind a draft to the action the operator read, not a reusable SQLite id."""
+    from app.review.models import ReviewActionItemRow
+
+    if (not isinstance(source_id, str) or len(source_id) > 18
+            or not source_id.isascii() or not source_id.isdecimal()):
+        raise ValueError("复盘行动需要可寻址的原始编号")
+    if source_id != str(int(source_id)) or int(source_id) < 1:
+        raise ValueError("复盘行动编号无效")
+    expected = evidence.get("review_action") if isinstance(evidence, dict) else None
+    fields = ("review_id", "trade_date", "category", "title")
+    if not isinstance(expected, dict) or any(not isinstance(expected.get(key), str) for key in fields):
+        raise ValueError("复盘行动需要原报告、日期、类别和标题；请刷新后重试")
+    action = db.get(ReviewActionItemRow, int(source_id))
+    if action is None or any(expected[key] != getattr(action, key) for key in fields):
+        raise ValueError("复盘行动已变化或不存在；请刷新报告后重试")
+    return {**evidence, "review_action": {
+        **{key: getattr(action, key) for key in fields}, "id": source_id,
+        "target": action.target, "proposed_change": action.proposed_change,
+        "source_evidence": action.evidence, "status_at_proposal": action.status,
+    }}
+
+
 def propose(key: str, after: Any, *, source_type: str = "manual", source_id: str = "",
             evidence: dict | None = None, session_factory=None) -> dict:
     """生成变更单（draft，不生效）。值域非法直接抛错——不静默收敛。"""
@@ -686,6 +709,8 @@ def propose(key: str, after: Any, *, source_type: str = "manual", source_id: str
     if normalized == before:
         raise ValueError("新值与当前生效值相同，无需变更")
     with sf() as db:
+        if source_type == "review_action_item":
+            evidence = _review_action_evidence(db, source_id, evidence)
         row = AgentParamChange(
             key=key, before=before, after=normalized,
             source_type=source_type, source_id=source_id,

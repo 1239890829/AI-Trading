@@ -14,7 +14,7 @@ import type { DiscoveryDetailTarget } from "./discovery-detail";
 import { getBoardFundFlow, getSinaBoardFundFlow, getDiscoveryMemberships, getThemesHot, type BoardFlowKind, type BoardFlowRange, type BoardFlowRow, type HotTheme, type ThemesHotPayload, type BoardFundFlowPayload, type SinaBoardFundFlowPayload, type SinaBoardFlowRow } from "@/lib/api";
 import { dateTimeTextBJ, pctColor, pctText } from "@/lib/format";
 
-const MODES = [["selected", "入选名单"], ["hot", "热门题材"], ["catalog", "行业概念"], ["funds", "资金方向"], ["methods", "战法分类"]] as const;
+const MODES = [["selected", "入选名单"], ["hot", "概念/行业涨幅"], ["catalog", "行业概念"], ["funds", "资金方向"], ["methods", "战法分类"]] as const;
 export type DiscoveryMode = typeof MODES[number][0];
 export type DiscoverySelection = {date: string | null; loaded: boolean; readError?: boolean; pending?: boolean; retry?: () => void; entries: readonly {symbol: string; name?: string | null; open: () => void}[]};
 
@@ -58,7 +58,7 @@ export function DiscoveryNavigation({search}: {search: string}) {
   const {mode} = discoveryLocation(search);
   return <nav className="discovery-nav" aria-label="选股分类发现" onKeyDown={moveFocus}>
     {MODES.filter(([key])=>key!=="funds").map(([key, name]) => <Link key={key} scroll={false} aria-current={mode === key ? "page" : undefined}
-      href={discoveryUrl(search, {browse: key === "selected" ? null : key, disc_code: null, disc_method: null, disc_group: null, disc_q: null, disc_sort: null, disc_kind: null, disc_range: null, disc_source: null, selection: null})}>{name}</Link>)}
+      href={discoveryUrl(search, {browse: key === "selected" ? null : key, disc_code: null, disc_method: null, disc_group: null, disc_q: null, disc_sort: null, disc_kind: null, disc_range: null, disc_source: null, disc_view:null, selection: null})}>{name}</Link>)}
   </nav>;
 }
 
@@ -135,10 +135,11 @@ export function DiscoveryBrowser({search, selection, onNavigate, onTarget, onMet
 }) {
   const location = discoveryLocation(search);
   const {mode, kind, range, code, fundsSource, query, sort, scope} = location;
+  const concentration = mode === "hot" && new URLSearchParams(search).get("disc_view") === "concentration";
   const sinaFunds = mode === "funds" && fundsSource === "sina";
   const savedDirectory = (mode === "catalog" || mode === "funds") && range === "latest_saved";
   const freshBoardRead = useRef<string | null>(null);
-  const hot = useResource(async signal => checkHot(await getThemesHot(30, {signal})), {enabled: mode === "hot", key: "hot/30", abortable: true});
+  const hot = useResource(async signal => checkHot(await getThemesHot(30, {signal})), {enabled: concentration, key: "hot/30", abortable: true});
   const boards = useResource(async signal => {
     const key = `${kind}/${range}`;
     const fresh = freshBoardRead.current === key;
@@ -154,7 +155,7 @@ export function DiscoveryBrowser({search, selection, onNavigate, onTarget, onMet
   const symbols = [...new Set(selection.entries.map(entry => entry.symbol).filter(symbol => /^\d{6}$/.test(symbol)))].sort();
   const membershipKey = JSON.stringify([selection.date, symbols]);
   const memberships = useResource(signal => getDiscoveryMemberships(symbols, selection.date, {signal}), {
-    enabled: mode === "hot" && selection.loaded && !selection.readError && symbols.length > 0 && symbols.length <= 200, key: membershipKey, abortable: true,
+    enabled: concentration && selection.loaded && !selection.readError && symbols.length > 0 && symbols.length <= 200, key: membershipKey, abortable: true,
   });
   const [draft, setDraft] = useState({query, value: query});
   const [composing, setComposing] = useState(false);
@@ -169,7 +170,7 @@ export function DiscoveryBrowser({search, selection, onNavigate, onTarget, onMet
   const sinaRows = useMemo(()=>sinaMismatch ? [] : sina.data?.available ? sina.data.rows : [],[sinaMismatch,sina.data]);
   const targetName = !code ? undefined : mode === "hot" ? hotRows.find(row => row.theme_code === code)?.theme : sinaFunds ? sinaRows.find(row=>row.category===code)?.name : mode === "catalog" || mode === "funds" ? boardRows.find(row => row.board_code === code)?.name : undefined;
   const targetKind = mode === "hot" ? "theme" : "board";
-  useEffect(() => {if (mode !== "methods" && !(mode === "catalog" && !savedDirectory)) onTarget(scope, targetName ? {kind: targetKind, code, name: targetName, ...(targetKind === "board" ? {catalogKind: kind, source:sinaFunds?"sina" as const:"eastmoney" as const} : {})} : null);}, [onTarget, scope, targetKind, code, targetName, mode, savedDirectory, kind, sinaFunds]);
+  useEffect(() => {if (mode !== "methods" && !(mode === "catalog" && !savedDirectory) && !(mode === "hot" && !concentration)) onTarget(scope, targetName ? {kind: targetKind, code, name: targetName, ...(targetKind === "board" ? {catalogKind: kind, source:sinaFunds?"sina" as const:"eastmoney" as const} : {})} : null);}, [onTarget, scope, targetKind, code, targetName, mode, savedDirectory, kind, sinaFunds, concentration]);
   const q = query.trim().toLocaleLowerCase();
   const isHot = mode === "hot";
   const source = isHot ? hot : sinaFunds ? sina : boards;
@@ -187,6 +188,7 @@ export function DiscoveryBrowser({search, selection, onNavigate, onTarget, onMet
     : filteredBoards.map(row => ({key: `eastmoney:${kind}:${row.board_code}`, hot: null, board: row}));
   const list = useIncremental(rows, {pageSize: 24, step: 24, resetKey: JSON.stringify([mode, kind, range, fundsSource, query, sort]), active: mode !== "methods"});
   if (mode === "methods") return <DiscoveryMethods active date={methodDate ?? new URLSearchParams(search).get("date") ?? undefined} search={search} onNavigate={onNavigate} onMethodTarget={onMethodTarget}/>;
+  if (mode === "hot" && !concentration) return <DiscoveryOfficialDirectory ranking kind={kind} search={search} scope={scope} selection={selection} onNavigate={onNavigate} onTarget={onTarget}/>;
   if (mode === "catalog" && !savedDirectory) return <DiscoveryOfficialDirectory kind={kind} search={search} scope={scope} selection={selection} onNavigate={onNavigate} onTarget={onTarget}/>;
   const malformed = isHot ? malformedHot : sinaFunds ? sinaMismatch : boardMismatch;
   const pending = source.pending && source.data === undefined;
@@ -195,10 +197,11 @@ export function DiscoveryBrowser({search, selection, onNavigate, onTarget, onMet
   const refresh = () => {if (!isHot) freshBoardRead.current = sinaFunds?`sina/${kind}`:`${kind}/${range}`; source.refresh(); if (isHot && selection.loaded && !selection.readError && symbols.length > 0 && symbols.length <= 200) memberships.refresh();};
   const select = (next: DiscoveryDetailTarget) => onNavigate(discoveryUrl(search, {disc_code: next.code, selection: null}), true);
   return <section className="discovery-browser" aria-label={isHot ? "热门题材发现" : mode === "catalog" ? "行业概念发现" : "资金方向发现"}>
-    <header className="discovery-heading"><div><h2>{isHot ? "热门题材" : mode === "catalog" ? "行业与概念" : "资金方向"}</h2>
+    <header className="discovery-heading"><div><h2>{isHot ? "热股集中度（本系统计算）" : mode === "catalog" ? "行业与概念" : "资金方向"}</h2>
       <p>{isHot ? "同花顺正式概念 · 按热股集中度观察" : mode === "catalog" ? "先看板块强弱，再核对成分与原名单" : sinaFunds ? "按新浪全部净流入看方向，再核对同源成员" : "按东财统计口径查看资金方向"}</p></div>
       <button className="quiet-action" type="button" disabled={source.pending} onClick={refresh}>{source.pending ? "读取中…" : "刷新分类"}</button></header>
     <div className="discovery-controls">
+      {isHot && <label>视角<select aria-label="题材视角" value="concentration" onChange={()=>change({disc_view:null,disc_kind:null,disc_q:null})}><option value="index">指数涨幅</option><option value="concentration">热股集中度（自算）</option></select></label>}
       {!isHot && <div className="discovery-kinds" aria-label="板块类别">{(["industry", "concept"] as const).map(value => <button key={value} type="button" aria-pressed={kind === value} onClick={() => change({disc_kind: value})}>{value === "industry" ? "行业" : "概念"}</button>)}</div>}
       {mode === "catalog" && <label>目录范围<select aria-label="目录范围" value={range} onChange={event => changeDirectoryRange(event.target.value === "latest_saved" ? "latest_saved" : "intraday")}>
         <option value="intraday">本次榜单</option><option value="latest_saved">最近存档</option></select></label>}
