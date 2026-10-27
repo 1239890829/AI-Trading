@@ -1168,7 +1168,8 @@ export function MinuteChart({
     <div className="flex h-full w-full flex-col">
       {/* 角标行：量比 + 竞价 + 上证叠加图例——独立文档流行（原 absolute right-2 top-1.5
           浮层压在图表右上角价格标签/最新价区域），不占图表绘制空间、互不遮挡 */}
-      <div className="kline-controls flex shrink-0 flex-wrap items-center gap-2 border-b border-zinc-100 px-3 py-2 text-[11px] dark:border-zinc-800/60">
+      {/* Owner suspension masks cover retained Canvas data, never its status/retry controls. */}
+      <div className="kline-controls relative z-20 flex shrink-0 flex-wrap items-center gap-2 border-b border-zinc-100 px-3 py-2 text-[11px] dark:border-zinc-800/60">
         <span className="text-zinc-600 dark:text-zinc-400">指标：</span>
         <button type="button" aria-label="上证指数叠加" aria-pressed={indexSelected} onClick={onIndexToggle}
           title={indexSelected && indexPaused ? "竞价期间暂停请求和叠加；连续交易时重新核验"

@@ -7,6 +7,7 @@ import type { MinutePoint } from "@/lib/api";
 import { mergeQuoteIntoMinutes } from "@/lib/kline-live";
 import type { Quote } from "@/types/market";
 import { ModalShell } from "./ui/modal-shell";
+import {DetailReadStatus} from "./detail/read-status";
 
 const charts = vi.hoisted(() => [] as ReturnType<typeof makeChart>[]);
 type Options = Record<string, unknown> & { autoscaleInfoProvider?: () => { priceRange: { minValue: number; maxValue: number } } };
@@ -574,6 +575,23 @@ it("magnetic focus shows the exact selected minute price and hides on leaving", 
 });
 
 describe("MinuteChart 轴契约", () => {
+  it("停牌遮罩仍盖Canvas，真实工具条的错误、诊断和重试在遮罩上层", () => {
+    const retry = vi.fn();
+    const view = render(<div className="relative"><div data-testid="suspension-mask" className="absolute inset-0 z-10">停牌遮罩</div>
+      <MinuteChart points={[point(10)]} prevClose={10} indexStatus={<DetailReadStatus inline label="分钟" state={{pending: false, loaded: true, error: "合成停牌重取失败", readAt: null}} onRetry={retry} diagnostics={<p>旧分钟源钟仍保留</p>}/>}/>
+    </div>);
+    const controls = view.container.querySelector(".kline-controls")!;
+    expect(controls.classList.contains("relative")).toBe(true);
+    expect(controls.classList.contains("z-20")).toBe(true);
+    expect(view.getByTestId("suspension-mask").classList.contains("z-10")).toBe(true);
+    expect(view.container.querySelector("[data-chart-surface]")!.closest(".z-20")).toBeNull();
+    expect(screen.getByRole("alert").parentElement).toBe(controls);
+    fireEvent.click(screen.getByRole("button", {name: "重新读取分钟"})); expect(retry).toHaveBeenCalledOnce();
+    fireEvent.click(screen.getByRole("button", {name: "分钟诊断"}));
+    expect(screen.getByRole("dialog", {name: "分钟诊断"})).toBeTruthy();
+    expect(screen.getByText("旧分钟源钟仍保留")).toBeTruthy();
+    expect(view.getByTestId("suspension-mask")).toBeTruthy();
+  });
   it("历史、等待与错误状态进入原工具条，不新增占高行或重建图表", () => {
     const points = [point(10)], retry = vi.fn();
     const view = render(<MinuteChart points={points} prevClose={10} indexStatus={<span role="status" title="上证叠加 · 2026-09-17 · 非实时" aria-label="上证叠加 · 2026-09-17 · 非实时">非实时</span>}/>);

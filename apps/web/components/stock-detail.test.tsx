@@ -2207,6 +2207,27 @@ describe("StockDetailPanel · 指数竞价暂停与真实失败", () => {
   });
 });
 
+it("停牌且旧分钟刷新失败时保留遮罩，诊断与重试仍由工具条承接", async () => {
+  api.getKlinePayload.mockResolvedValue({...kline(), trading_status: {status: "suspended", suspended_days: 1, reason: "合成停牌依据"}});
+  const retained = {...minute(), points: [{...minute().points[0], ts: "2026-10-08T15:00:00+08:00"}]};
+  api.getMinuteLineWithBaseline.mockResolvedValue(retained);
+  const view = render(<StockDetailPanel symbol="600519" chartTab="minute"/>); await settle();
+  expect(view.getByText("该股当前停牌，当日无分时数据")).toBeTruthy();
+  expect(view.getByTestId("minute-price").textContent).toBe("20");
+  api.getMinuteLineWithBaseline.mockRejectedValueOnce(new Error("合成停牌分钟重取失败"));
+  await advance(60_000);
+  const toolbar = view.getByTestId("minute-controls");
+  expect(within(toolbar).getByRole("alert").getAttribute("aria-label")).toBe("分钟读取失败 · 保留结果");
+  fireEvent.click(within(toolbar).getByRole("button", {name: "分钟诊断"}));
+  expect(within(view.getByRole("dialog", {name: "分钟诊断"})).getByText(/合成停牌分钟重取失败/)).toBeTruthy();
+  fireEvent.click(within(view.getByRole("dialog")).getByRole("button", {name: "关闭"})); await advance(200);
+  fireEvent.click(within(toolbar).getByRole("button", {name: "重新读取分钟"})); await settle();
+  expect(api.getMinuteLineWithBaseline).toHaveBeenCalledTimes(3);
+  expect(view.queryByRole("alert")).toBeNull();
+  expect(view.getByTestId("minute-price").textContent).toBe("20");
+  expect(view.getByText("该股当前停牌，当日无分时数据")).toBeTruthy();
+});
+
 it("无分钟基座时保留原加载和失败行，重试成功才把状态交给工具条", async () => {
   const pending = deferred<ReturnType<typeof minute>>();
   api.getMinuteLineWithBaseline.mockReturnValueOnce(pending.promise);
