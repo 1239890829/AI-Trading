@@ -64,17 +64,40 @@ describe("唯一市场板块官网全集",()=>{
 
   it("完整BK深链只开对应成员，314成员按涨幅排序并沿原drawer滚动加载至尾部",async()=>{
     read.mockImplementation(async(url:string)=>url.includes("/members")?{data:members(Array.from({length:314},(_,index)=>member(index)))}:route(url));
+    const isDrawerBody=(node:HTMLElement)=>node.classList.contains("overflow-y-auto") && !!node.closest('[data-testid="board-flow-drawer"]');
+    vi.spyOn(HTMLElement.prototype,"scrollHeight","get").mockImplementation(function(this:HTMLElement){return isDrawerBody(this)?2000:0;});
+    vi.spyOn(HTMLElement.prototype,"clientHeight","get").mockImplementation(function(this:HTMLElement){return isDrawerBody(this)?300:0;});
     mount("board_kind=concept&board_range=website&board_code=BK1184");
     await screen.findByText("覆盖 314/314 · 已读全");
-    expect(read.mock.calls.map(([url])=>url)).toEqual(["/api/market/board-fund-flow?kind=concept&range=website","/api/market/board-fund-flow/BK1184/members?view=website&kind=concept"]);
-    expect(names()).toHaveLength(30);expect(names()[0]).toBe("成员0");
-    fireEvent.click(screen.getByRole("button",{name:"继续加载"}));expect(names()).toHaveLength(60);
-    for(let index=0;index<9;index++)fireEvent.click(screen.getByRole("button",{name:"继续加载"}));
-    expect(names()).toHaveLength(314);expect(screen.getByText("已全部加载（314 只成员）")).toBeTruthy();
-    expect(screen.getByTestId("board-flow-drawer").querySelectorAll('[class*="overflow-y-auto"]')).toHaveLength(1);
+    const requested=["/api/market/board-fund-flow?kind=concept&range=website","/api/market/board-fund-flow/BK1184/members?view=website&kind=concept"];
+    expect(read.mock.calls.map(([url])=>url)).toEqual(requested);
+    const drawer=screen.getByTestId("board-flow-drawer");
+    const table=within(drawer).getByRole<HTMLTableElement>("table",{name:"完整成员资金"});
+    // Resolve accessible controls once while only 30 rows exist. Re-scanning the
+    // growing whole document by role obscures the behavior under test in jsdom.
+    const more=within(drawer).getByRole("button",{name:"继续加载"});
+    const sort=within(drawer).getByRole("button",{name:"涨跌幅降序，点击切换"});
+    const renderedNames=()=>Array.from(table.tBodies[0].rows,row=>row.cells[1].querySelector("a")?.textContent);
+    expect(renderedNames()).toHaveLength(30);expect(renderedNames()[0]).toBe("成员0");
+    fireEvent.click(more);expect(renderedNames()).toHaveLength(60);
+    for(let index=0;index<7;index++)fireEvent.click(more);
+    expect(renderedNames()).toHaveLength(270);
+    const scrollOwner=table.closest<HTMLElement>(".overflow-y-auto")!;
+    expect(scrollOwner).toBeTruthy();
+    const sentinel=screen.getByTestId("board-members-sentinel");
+    const position=vi.spyOn(sentinel,"getBoundingClientRect").mockReturnValue({...far,top:200,bottom:201,y:200});
+    fireEvent.scroll(scrollOwner);expect(renderedNames()).toHaveLength(300);
+    fireEvent.scroll(scrollOwner);
+    expect(renderedNames()).toHaveLength(314);
+    expect(renderedNames()).toEqual(Array.from({length:314},(_,index)=>`成员${index}`));
+    expect(within(drawer).getByText("已全部加载（314 只成员）")).toBeTruthy();
+    expect(drawer.querySelectorAll('[class*="overflow-y-auto"]')).toHaveLength(1);
     expect(screen.getByTestId("website-member-facts").parentElement!.querySelector('[class*="overflow"]')).toBeNull();
     expect(read.mock.calls.some(([url])=>String(url).includes("/minute"))).toBe(false);
-    fireEvent.click(screen.getByRole("button",{name:"涨跌幅降序，点击切换"}));expect(names()[0]).toBe("成员313");expect(names().length).toBeLessThan(314);
+    expect(read.mock.calls.map(([url])=>url)).toEqual(requested);
+    position.mockReturnValue(far);
+    fireEvent.click(sort);expect(renderedNames()[0]).toBe("成员313");expect(renderedNames().length).toBeLessThan(314);
+    expect(read.mock.calls.map(([url])=>url)).toEqual(requested);
   });
 
   it("名称代码搜索与排序纯本地，缺值排后且资金0不丢，报价旧日常显",async()=>{
