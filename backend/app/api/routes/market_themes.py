@@ -254,6 +254,53 @@ async def _verify_board_multi_day(request: Request, board_payload: dict, trade_d
 
 
 
+@router.get("/themes/research-clusters")
+async def research_clusters(
+    request: Request,
+    date_str: str | None = Query(default=None, alias="date"),
+    version: str | None = Query(default=None, pattern=r"^[0-9a-f]{64}$"),
+    historical: bool = False,
+    hub: QuoteHub = Depends(get_hub),
+) -> dict:
+    """One research overlay; historical reads never fetch or reconstruct inputs."""
+    from app.core.bjtime import beijing_today
+    from app.services.research_cluster_storage import read_research_clusters
+
+    try:
+        day = date.fromisoformat(date_str) if date_str else await default_trade_date(hub)
+    except ValueError as exc:
+        raise HTTPException(status_code=422, detail="研究簇日期需为 YYYY-MM-DD") from exc
+    if day > beijing_today():
+        raise HTTPException(status_code=422, detail="研究簇不能读取未来日期")
+    if historical or version is not None or day != beijing_today():
+        data = await asyncio.to_thread(read_research_clusters, day.isoformat(), version=version)
+        return {"data": data, "meta": {}}
+
+    from app.api.routes.market_pools import limit_up
+    from app.services.official_match import resolve_official_catalog
+    from app.services.research_cluster_reader import freeze_research_clusters
+
+    async def load():
+        # Reuse the exact existing 60s pool/cache and directory owners. No
+        # historical board enrichments, per-stock calls, models or new sources.
+        pool, resolution = await asyncio.gather(
+            limit_up(request=request, date_str=day.isoformat(), hub=hub, include_breaks=False),
+            resolve_official_catalog(request),
+        )
+        try:
+            return await freeze_research_clusters(
+                pool["data"]["pool"], trade_date=day.isoformat(), resolution=resolution,
+            )
+        except (ValueError, OSError) as exc:
+            log.warning("research cluster publication failed: %s", type(exc).__name__)
+            raise HTTPException(status_code=503, detail="研究簇版本保存失败，未替换已存版本") from exc
+
+    state = request.app.state
+    revision = getattr(getattr(state, "theme_catalog", None), "revision", 0)
+    data = await read_inflight(state, ("research-theme-clusters", day.isoformat(), revision), load)
+    return {"data": data, "meta": {}}
+
+
 @router.get("/themes", response_model=Envelope[ThemeBoardPayload])
 async def themes(
     date_str: str | None = Query(default=None, alias="date", description="YYYY-MM-DD，默认最近交易日"),

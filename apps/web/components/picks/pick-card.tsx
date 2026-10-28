@@ -8,6 +8,8 @@ import { CardEntryRow } from "@/components/picks/card-entries";
 import { LimitReason } from "@/components/detail/limit-reason";
 import {CurrentThemeReference, SourceThemeIdentity} from "@/components/source-theme-identity";
 import type {CurrentThemeCatalogReference} from "@/types/market";
+import type {ResearchClustersPayload} from "@/types/research-clusters";
+import {ResearchClusterBadges} from "@/components/research-clusters";
 import {StockAttributionPanel} from "@/components/detail/attribution-evidence";
 import {PaperSelectionAction} from "@/components/picks/paper-selection-action";
 import {TradingAgentsResearchPanel} from "@/components/detail/tradingagents-research-panel";
@@ -123,6 +125,7 @@ export interface TradingCard {
   boards: number | null;
   theme: string | null;
   currentThemeCatalog?: CurrentThemeCatalogReference;
+  currentResearchClusters?: ResearchClustersPayload;
   stage: string | null;
   riskTier: string | null;
   strengthTier: string | null;
@@ -295,7 +298,7 @@ function ResearchState({item}: {item: TradingCard}) {
 }
 
 /** 盘前名单（DailyPickItem）→ 统一模型。 */
-export function fromDailyPick(it: DailyPickItem, current?: {date: string; version: string | null; currentThemeCatalog?: CurrentThemeCatalogReference}): TradingCard {
+export function fromDailyPick(it: DailyPickItem, current?: {date: string; version: string | null; currentThemeCatalog?: CurrentThemeCatalogReference;currentResearchClusters?:ResearchClustersPayload}): TradingCard {
   const basisRows: { label: string; value: string }[] = [];
   const execution = it.execution ?? null;
   const executable = execution?.executable_snapshot;
@@ -334,6 +337,7 @@ export function fromDailyPick(it: DailyPickItem, current?: {date: string; versio
     boards: it.boards ?? null,
     theme: it.theme ?? null,
     currentThemeCatalog: current?.currentThemeCatalog,
+    currentResearchClusters:current?.currentResearchClusters,
     stage: it.theme_stage ?? null,
     riskTier: it.risk_tier ?? null,
     strengthTier: null,
@@ -366,7 +370,7 @@ export function fromDailyPick(it: DailyPickItem, current?: {date: string; versio
  *
  * 两者字段天然互认（除分层名单独有的 tier / pick_basis，与手风琴独有的无 stage 之外）。
  */
-export function fromIntradayStock(it: IntradayTopStock | OpportunityStock, currentReference?: CurrentThemeCatalogReference): TradingCard {
+export function fromIntradayStock(it: IntradayTopStock | OpportunityStock, currentReference?: CurrentThemeCatalogReference,currentResearchClusters?:ResearchClustersPayload): TradingCard {
   const basisRows: TradingCard["basisRows"] = [];
   // 「入选」= pick_basis——只有分层名单才产生（要解释「为什么在这档」）
   const pickBasis = "pick_basis" in it ? it.pick_basis : null;
@@ -407,6 +411,7 @@ export function fromIntradayStock(it: IntradayTopStock | OpportunityStock, curre
     boards: it.boards ?? null,
     theme: "theme" in it ? (it.theme ?? null) : null,
     currentThemeCatalog: currentReference,
+    currentResearchClusters,
     stage: "stage" in it ? (it.stage ?? null) : null,
     riskTier: null,
     strengthTier: "strength_tier" in it ? (it.strength_tier ?? null) : null,
@@ -556,9 +561,10 @@ function CompactPickSummary({item, scores, reading, positionLabel, dailyEvidence
     </div>
     <SelectionEntryRow compact entry={item.selectionEntry} scope={item.origin === "picks" ? "daily" : "intraday"} referenceOnly={item.referenceOnly}/>
     <QualificationSummary item={item} readError={readError}/>
+    {!item.theme && <ResearchClusterBadges data={item.currentResearchClusters} symbol={item.symbol}/>}
     {item.origin === "intraday" && dailyEvidence?.item.symbol === item.symbol && <SelectionEntryRow compact entry={dailyEvidence.item.selection_entry} scope="daily"/>}
     {(item.theme || item.role || item.board || item.riskTier || item.linkage) && <p className={compactStyles.theme}>
-      {item.theme && <span>{item.theme}{item.stage ? ` · ${item.stage}` : ""} <SourceThemeIdentity reason={item.theme} historical/><CurrentThemeReference reason={item.theme} reference={item.currentThemeCatalog}/></span>}
+      {item.theme && <span>{item.theme}{item.stage ? ` · ${item.stage}` : ""} <SourceThemeIdentity reason={item.theme} historical/><CurrentThemeReference reason={item.theme} reference={item.currentThemeCatalog}/><ResearchClusterBadges data={item.currentResearchClusters} symbol={item.symbol}/></span>}
       {item.role && <span title={item.roleBasis || undefined}>{item.role}{item.boards ? ` · ${item.boards}板` : ""}</span>}
       {item.board && <span>{item.board}</span>}{item.riskTier && <span title={item.exit?.note}>{item.riskTier}</span>}
       {item.linkage && <span title={item.linkage.basis}>题材关联 {triText(item.linkage.level)}</span>}
@@ -928,6 +934,7 @@ export function PickCard({
 
       <SelectionEntryRow entry={item.selectionEntry} scope={item.origin === "picks" ? "daily" : "intraday"} referenceOnly={item.referenceOnly} />
       <QualificationSummary item={item} readError={readError}/>
+    {!item.theme && <ResearchClusterBadges data={item.currentResearchClusters} symbol={item.symbol}/>}
       {item.origin === "intraday" && dailyEvidence?.item.symbol === item.symbol && <SelectionEntryRow entry={dailyEvidence.item.selection_entry} scope="daily" />}
 
       {/* IMP-006：参考价与动作时执行快照分开呈现；两者都不是成交。 */}
@@ -1018,7 +1025,7 @@ export function PickCard({
               text={`${item.theme}${item.stage ? ` · ${item.stage}` : ""}`}
               title="原入选标签与原阶段；不证明正式目录归属或当日受益"
               className="border-zinc-300 text-zinc-600 dark:border-zinc-600 dark:text-zinc-300"
-            /><SourceThemeIdentity reason={item.theme} historical/><CurrentThemeReference reason={item.theme} reference={item.currentThemeCatalog}/></span>
+            /><SourceThemeIdentity reason={item.theme} historical/><CurrentThemeReference reason={item.theme} reference={item.currentThemeCatalog}/><ResearchClusterBadges data={item.currentResearchClusters} symbol={item.symbol}/></span>
           )}
           {item.strengthTier && <Chip text={item.strengthTier} title="题材强度档" />}
           {item.board && (

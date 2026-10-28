@@ -9,6 +9,8 @@ import { bjDate, dateTimeTextBJ, fmt, fmtAmount, pctColor, pctText, signedYi } f
 import { readerExcerpt } from "@/lib/reader-copy";
 import { getReviewReport, type ReviewData, type ReviewProvenance, type ReviewReportDetail, type ReviewSectorBoard } from "@/lib/api";
 import {useThemeCatalogReference} from "@/hooks/use-theme-catalog-reference";
+import {ResearchClustersPanel} from "@/components/research-clusters";
+import {unrecordedResearchClusters,validateResearchClusters} from "@/lib/research-clusters";
 import { ReviewMetricTrends } from "./review-metric-trends";
 import {CurrentThemeReference, SourceThemeIdentity} from "@/components/source-theme-identity";
 import {officialThemeIdentity} from "@/lib/theme-identity";
@@ -126,6 +128,15 @@ export function MarketReview({report, previousDate, active = true}: {report: Rev
   const [allBoards, setAllBoards] = useState(false);
   const data = report.data;
   const market = data?.market;
+  let researchClusters=unrecordedResearchClusters(report.trade_date);
+  let clusterError:unknown=null;
+  if (market?.research_clusters) {
+    try {const candidate=validateResearchClusters(market.research_clusters,{date:report.trade_date});
+      if (!/(?:Z|[+-]\d{2}:?\d{2})$/i.test(report.generated_at) || !Number.isFinite(Date.parse(report.generated_at))
+        || candidate.observed_at && Date.parse(candidate.observed_at)>Date.parse(report.generated_at)) throw new Error("研究簇观察晚于原报告或原报告时刻未核");
+      researchClusters=candidate;
+    } catch(problem) {clusterError=problem;}
+  }
   const provenance = market?.provenance;
   const bound = (key: string) => reviewSegmentBound(data, key, report.trade_date);
   const breadth = bound("breadth") ? market?.breadth : undefined;
@@ -212,6 +223,7 @@ export function MarketReview({report, previousDate, active = true}: {report: Rev
       <div className="market-review-controls"><div role="group" aria-label="板块分类">{(["industry","concept"] as const).map(key=><button key={key} type="button" aria-pressed={sector===key} onClick={()=>{setSector(key);setAllBoards(false);}}>{key==="industry"?"行业":"概念"}</button>)}</div><div role="group" aria-label="板块排序"><button type="button" aria-pressed={sectorOrder==="strong"} onClick={()=>setSectorOrder("strong")}>涨幅优先</button><button type="button" aria-pressed={sectorOrder==="weak"} onClick={()=>setSectorOrder("weak")}>跌幅优先</button></div></div>
       {sortedBoards.length ? <><ol className="market-review-board-list">{sortedBoards.slice(0,allBoards?undefined:8).map((board,i)=><li key={`${sector}:${board.board_code}`}><span className="market-review-rank">{i+1}</span><strong title={board.source_as_of?`来源时刻 ${dateTimeTextBJ(board.source_as_of)}`:undefined}>{board.name}{boardSummary && <span className="block text-[11px] font-normal text-zinc-600 dark:text-zinc-400">{board.board_code} · {["ths","ths_official_kline"].includes(board.source ?? "")?"同花顺":board.source || "来源未记录"}</span>}</strong><span className={pctColor(board.change_pct)}>{pctText(board.change_pct)}</span><span title="主力净额（亿元），不是该板块全部资金">{finite(board.main_net_yi)===null?"未提供":signedYi(board.main_net_yi)}</span></li>)}</ol><p className="market-review-caption">本报告已存 {boards.length} 条{boards.length>8 && <button type="button" aria-expanded={allBoards} onClick={()=>setAllBoards(!allBoards)}>{allBoards?"只看前8条":"展示本报告全部记录"}</button>}；有限存档不代表全市场全集。</p></> : <MissingSegment label={sector==="industry"?"行业榜":"概念榜"} record={provenance?.sector_boards}/>}
       <SourceRecord record={provenance?.sector_boards} bound={bound("sector_boards")}/>
+      <ResearchClustersPanel data={researchClusters} error={clusterError} historical/>
       {!!savedThemes.length && <div className="market-review-themes"><h5>{bound("themes") ? "原题材记录" : "原采集标签 · 当日归属未核"}</h5>{savedThemes.map((value,i)=>{
         const theme=objectValue(value), name=text(theme?.theme) || text(theme?.name) || "未命名标签";
         const state=["exact","unmapped","ambiguous","unclassified","unavailable"].includes(String(theme?.catalog_mapping_state)) ? theme?.catalog_mapping_state as ThemeMappingState : undefined;

@@ -104,8 +104,8 @@ it("每日与盘中旁览只传各自响应的目录参考，不跨包拼接或�
   fireEvent.click(screen.getByText(/已封板 \/ 仅参考/));
   expect(screen.getByText("候选 600003")).toBeTruthy();
   expect(fromDailyPick).toHaveBeenCalledWith(dailyItem,{date:"2026-10-09",version:"daily-original",currentThemeCatalog:dailyReference});
-  expect(fromIntradayStock).toHaveBeenCalledWith(intradayItem,intradayReference);
-  expect(fromIntradayStock).toHaveBeenCalledWith(referenceItem,intradayReference);
+  expect(fromIntradayStock).toHaveBeenCalledWith(intradayItem,intradayReference,undefined);
+  expect(fromIntradayStock).toHaveBeenCalledWith(referenceItem,intradayReference,undefined);
   expect(api.getTodayPicks).toHaveBeenCalledTimes(1);expect(api.getIntradayTop).toHaveBeenCalledTimes(1);
   expect(api.getIntradayOpportunities).not.toHaveBeenCalled();expect(JSON.stringify({daily,intraday})).toBe(before);
 });
@@ -125,7 +125,7 @@ it("旁览每日和盘中共享完成等待，原业务只读一次且不改日�
   await act(async()=>finish({scope:"current_directory_resolution",completion_key:key,state:"available",catalog_version:version,observed_at:clock,identities:{汽车零部件:{code:"881126.TI",name:"汽车零部件",source:"ths_official",basis:"exact_name",kind:"industry",catalog_version:version,observed_at:clock}},ambiguous:[],reason:null}));
   const overlay=expect.objectContaining({completion_key:undefined,items:[expect.objectContaining({theme:"汽车零部件",catalog_mapping_state:"exact",exact_catalog:expect.objectContaining({kind:"industry",code:"881126.TI"})})]});
   expect(fromDailyPick).toHaveBeenLastCalledWith(dailyItem,{date:"2026-10-09",version:null,currentThemeCatalog:overlay});
-  expect(fromIntradayStock).toHaveBeenLastCalledWith(intradayItem,overlay);
+  expect(fromIntradayStock).toHaveBeenLastCalledWith(intradayItem,overlay,undefined);
   expect(api.getTodayPicks).toHaveBeenCalledTimes(1);expect(api.getIntradayTop).toHaveBeenCalledTimes(1);
   expect(JSON.stringify({daily,intraday})).toBe(before);
 });

@@ -12,6 +12,8 @@ import { ModalShell } from "@/components/ui/modal-shell";
 import { QualityBadge } from "@/components/quality-badge";
 import { LimitReason } from "@/components/detail/limit-reason";
 import { EventPanel } from "@/components/event-panel";
+import {useResearchClusters} from "@/hooks/use-research-clusters";
+import {ResearchClustersPanel} from "@/components/research-clusters";
 import { HeatmapTab } from "@/components/market/heatmap-tab";
 import { EventsTab } from "@/components/market/events-tab";
 import { FundTab } from "@/components/market/fund-tab";
@@ -65,6 +67,7 @@ function MarketInner() {
   // Only the active overview owns these reads. Returning results lets useResource
   // discard flights from a departed lens while retaining each source's last value.
   const enabled = view === "overview";
+  const clusterRead=useResearchClusters(undefined,{active:enabled});
   const overview = useResource(async (signal) => ({
     value: await getMarketOverview({signal}),
     readAt: new Date().toLocaleTimeString("zh-CN", { hour12: false }),
@@ -124,7 +127,7 @@ function MarketInner() {
         {view === "heatmap" ? <HeatmapTab /> : view === "events" ? <EventsTab /> : view === "fund" ? <FundTab /> : (
           <div className="bc-market-overview">
             {(error || contextError) && <div className="bc-market-notices">
-              {error && <p role="alert">{error}</p>}
+              {error && <p role="alert" aria-label="市场概览读取失败">{error}</p>}
               {contextError && <p role="status">宽度或情绪来源未就绪，缺项不能解读为零或健康。</p>}
             </div>}
 
@@ -143,6 +146,7 @@ function MarketInner() {
               </div>
             </section>
 
+            <ResearchClustersPanel data={clusterRead.data} pending={clusterRead.pending} error={clusterRead.error} onRetry={clusterRead.refresh}/>
             <div className="bc-market-metrics">
             <section className="bc-market-environment" aria-label="成交与市场宽度">
               <div className="bc-market-turnover">

@@ -3,16 +3,19 @@ import { afterEach, beforeEach, expect, it, vi } from "vitest";
 import MarketPage from "@/app/market/page";
 import * as api from "@/lib/api";
 import type { Quote } from "@/types/market";
+import {getResearchClusters} from "@/lib/api/themes";
+import {clusterFixture} from "@/test/research-clusters-fixture";
 
 const state = vi.hoisted(() => ({ search: "", openSymbol: vi.fn() }));
 vi.mock("next/navigation", () => ({useSearchParams: () => new URLSearchParams(state.search)}));
-vi.mock("@/lib/market-hours", () => ({isTradingSession: () => true}));
+vi.mock("@/lib/market-hours", () => ({isTradingSession: () => true,bjToday:()=>"2026-10-28"}));
 vi.mock("@/components/ui/workspace-deck", () => ({ MarketLensPicker: () => null }));
 vi.mock("@/components/detail/symbol-detail-context", () => ({ useSymbolDetail: () => ({open: state.openSymbol}) }));
 vi.mock("@/components/event-panel", () => ({ EventPanel: () => null }));
 vi.mock("@/components/market/heatmap-tab", () => ({ HeatmapTab: () => null }));
 vi.mock("@/components/market/events-tab", () => ({ EventsTab: () => null }));
 vi.mock("@/components/market/fund-tab", () => ({ FundTab: () => null }));
+vi.mock("@/lib/api/themes",async()=>({...await vi.importActual<typeof import("@/lib/api/themes")>("@/lib/api/themes"),getResearchClusters:vi.fn()}));
 vi.mock("@/lib/api", () => ({
   getMarketOverview: vi.fn(), getLimitUpPool: vi.fn(), getBreadth: vi.fn(),
   getSentiment: vi.fn(), getSentimentHistory: vi.fn(),
@@ -33,6 +36,7 @@ beforeEach(() => {
   vi.mocked(api.getBreadth).mockResolvedValue({up: 3000, down: 1000} as api.Breadth);
   vi.mocked(api.getSentiment).mockResolvedValue(sentiment);
   vi.mocked(api.getSentimentHistory).mockResolvedValue({items: []} as unknown as api.SentimentHistoryPayload);
+  vi.mocked(getResearchClusters).mockResolvedValue({...clusterFixture(),clusters:[]});
   vi.stubGlobal("matchMedia", () => ({matches: true, addEventListener: vi.fn(), removeEventListener: vi.fn()}));
 });
 afterEach(() => { cleanup(); vi.useRealTimers(); vi.resetAllMocks(); vi.unstubAllGlobals(); });
@@ -167,5 +171,5 @@ it("a failed overview refresh retains its last result with a visible failure war
   vi.mocked(api.getMarketOverview).mockRejectedValueOnce(new Error("offline"));
   await act(async () => { await vi.advanceTimersByTimeAsync(10_000); });
   expect(screen.getByText("已知上证指数")).toBeTruthy();
-  expect(screen.getByRole("alert").textContent).toContain("保留值仅作上次结果参考");
+  expect(screen.getByRole("alert",{name:"市场概览读取失败"}).textContent).toContain("保留值仅作上次结果参考");
 });

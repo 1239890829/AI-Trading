@@ -23,7 +23,10 @@ export interface ReadOptions {
 // Only unfinished reads share; source times and completed values are never cached here.
 // events/impact can build its leader archive, paper GET can settle/init, and digest
 // can generate a model summary. Those consumers deliberately remain outside this list.
-const SAFE_READ_PATHS = new Set(["/api/watchlist", "/api/watchlist/groups", "/api/market/overview", "/api/limit-up", "/api/limit-down", "/api/minute-line/sh000001"]);
+// Research clusters are a narrow exception: current reads idempotently retain
+// content-addressed observations. Joining one owner preserves that same snapshot;
+// this does not allow other archive/model/settlement GETs into shared reads.
+const SAFE_READ_PATHS = new Set(["/api/watchlist", "/api/watchlist/groups", "/api/market/overview", "/api/limit-up", "/api/limit-down", "/api/minute-line/sh000001", "/api/themes/research-clusters"]);
 const sharedReads = new Map<string, SharedRead>();
 const MAX_SHARED_READS = 32;
 let readEpoch = 0;

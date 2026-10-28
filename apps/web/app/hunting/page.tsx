@@ -15,6 +15,9 @@ import { useRouter, useSearchParams } from "next/navigation";
 import { legacyDiscoveryFundsMarketUrl } from "@/lib/routing";
 import { useResource } from "@/hooks/use-resource";
 import {useThemeCatalogReference} from "@/hooks/use-theme-catalog-reference";
+import {useResearchClusters} from "@/hooks/use-research-clusters";
+import {ResearchClustersPanel} from "@/components/research-clusters";
+import {clusterSelection} from "@/lib/research-clusters";
 import {
   ApiError,
   getIntradayOpportunities,
@@ -308,6 +311,14 @@ function HuntingInner() {
   const posLabels = positions.data ?? {};
 
   const pickItems = data?.items ?? [];
+  const clusterDate=selectedOnly ? selectedGroup === "daily" ? data?.date : top?.trade_date : undefined;
+  const clusterRead=useResearchClusters(clusterDate ?? undefined,{active:isDiscoverView && (!selectedOnly || !!clusterDate)});
+  const clusterScope=JSON.stringify([selectedGroup,clusterDate,clusterRead.data?.version,selectedGroup === "daily" ? data?.meta?.selection_version : top?.selection_identity_version]);
+  const [clusterFilter,setClusterFilter]=useState<{scope:string;id:string|null}>({scope:clusterScope,id:null});
+  const clusterId=clusterFilter.scope === clusterScope && clusterRead.data?.clusters.some(c=>c.id === clusterFilter.id) ? clusterFilter.id : null;
+  const visibleTopItems=clusterSelection(topItems,clusterRead.data,clusterId);
+  const visibleReferenceItems=clusterSelection(topRefItems,clusterRead.data,clusterId);
+  const visiblePickItems=clusterSelection(pickItems,clusterRead.data,clusterId);
   // Keep the original daily count, including symbols also present in the intraday group.
   const pickTotal = data?.items?.length ?? 0;
   const dailyBySymbol = useMemo(() => new Map(
@@ -515,7 +526,7 @@ function HuntingInner() {
       <header className="workspace-masthead hunting-masthead">
         <div><h1>选股</h1><p className="hunting-page-intro">先发现，再核对条件，持续跟踪变化。</p></div>
         <div className="workspace-context">
-        <span role="status" aria-live="polite" aria-atomic="true" className="hunting-read-status">
+        <span role="status" aria-label="选股读取状态" aria-live="polite" aria-atomic="true" className="hunting-read-status">
         {isDiscovery && !selectedOnly ? <span>按需读取</span> : isDiscovery && extraReading ? <span>{primaryReading ? "正在读取名单…" : "正在读取附加资料…"}</span> : isDiscovery && (picksFailed || intradayFailed || (reviewOptions.enabled && reviewReadFailures.length > 0)) ? (
           <span
             className="rounded border border-amber-500/40 bg-amber-500/10 px-1.5 py-0.5 text-[10px] text-amber-800 dark:text-amber-300"
@@ -555,7 +566,7 @@ function HuntingInner() {
       {accessory.value && <ModalShell open={accessory.active} label={accessory.value === "evidence" ? "机会证据台" : "参考跟踪"} size="lg" presentation="drawer" expandable onClose={() => router.replace(patchWorkspaceUrl("/hunting", sp.toString(), {panel: null}), {scroll: false})} header={<div><h2 className="text-lg font-semibold">{accessory.value === "evidence" ? "机会证据台" : "参考跟踪"}</h2></div>} footer="保留当前机会位置；参考价与观察记录不是成交，不构成买卖建议。">
         {accessory.active && (accessory.value === "evidence" ? <OpportunityEvidencePanel date={sp.get("date") ?? undefined} onDateChange={date => router.replace(patchWorkspaceUrl("/hunting", sp.toString(), {date}), {scroll: false})} /> : <WatchLedgerPanel date={sp.get("date") ?? undefined} />)}
       </ModalShell>}
-      <PickDetailModal target={detailItem ? {kind: "pick", item: detailItem, current: data?.date ? {date: data.date, version: data.meta?.selection_version ?? null,currentThemeCatalog:dailyCatalog} : undefined} : null} readError={!!daily.error} onClose={() => setDailyDetail(null)} />
+      <PickDetailModal target={detailItem ? {kind: "pick", item: detailItem, current: data?.date ? {date: data.date, version: data.meta?.selection_version ?? null,currentThemeCatalog:dailyCatalog,currentResearchClusters:clusterRead.data} : undefined} : null} readError={!!daily.error} onClose={() => setDailyDetail(null)} />
       <div className="hunting-content min-h-0 flex-1" data-view={view} aria-label="选股内容">
         {view === "validation" ? <SelectionValidationPanel /> : view === "evidence" ? <OpportunityEvidencePanel date={sp.get("date") ?? undefined} onDateChange={date => { const p = new URLSearchParams(sp.toString()); p.set("date", date); router.replace(`/hunting?${p.toString()}`, {scroll:false}); }} /> : view === "tracking" ? <WatchLedgerPanel date={sp.get("date") ?? undefined} /> : view === "research" ? <LeaderResearchPanel date={sp.get("date") ?? undefined} onDateChange={date => router.replace(patchWorkspaceUrl("/hunting", sp.toString(), {date: date ?? null}), {scroll: false})} /> : <>
         {view === "discover" && <>
@@ -568,6 +579,9 @@ function HuntingInner() {
               onClick={() => setCollectionViews(previous => previous[selectedGroup] === mode ? previous : {...previous, [selectedGroup]:mode})}>{mode === "cards" ? "卡片" : "列表"}</button>)}
           </SelectionRail>
         </div>
+        <ResearchClustersPanel data={clusterRead.data} pending={clusterRead.pending} error={clusterRead.error} onRetry={clusterRead.refresh}
+          selectedId={selectedOnly?clusterId:undefined} onSelect={selectedOnly?id=>setClusterFilter({scope:clusterScope,id}):undefined}
+          selectionSymbols={selectedOnly?(selectedGroup === "daily"?pickItems:topItems).map(row=>row.symbol):undefined}/>
         {!selectedOnly && <DiscoveryBrowser search={sp.toString()} selection={discoverySelection} onNavigate={navigateDiscovery} onTarget={resolveDiscovery} onMethodTarget={resolveMethod} methodDate={methodDate} />}
         <div className="hunting-candidate-notices" hidden={!selectedOnly} inert={!selectedOnly}>
         {/* ── 空仓闸门横幅（风险提示置顶）──
@@ -597,25 +611,25 @@ function HuntingInner() {
           </>}>
             {!intradayLoaded ? <div className="hunting-collection-placeholder"><CardListSkeleton count={2}/></div>
               : !top ? <div role="alert" className="hunting-empty hunting-collection-placeholder">{candidateDataError ? `候选数据待核：${candidateDataError.message}。当前无法判断是否有符合条件的标的。` : "盘中候选读取失败。请刷新重试；当前无法判断是否有符合条件的标的。"}</div>
-              : topItems.length > 0 ? topItems.map(it => <PickCard compact active={selectedGroup === "candidates" && selectedOnly} key={JSON.stringify([top.trade_date, top.selection_identity_version, it.symbol])} item={fromIntradayStock(it,intradayCatalog)}
+              : visibleTopItems.length > 0 ? visibleTopItems.map(it => <PickCard compact active={selectedGroup === "candidates" && selectedOnly} key={JSON.stringify([top.trade_date, top.selection_identity_version, it.symbol])} item={fromIntradayStock(it,intradayCatalog,clusterRead.data)}
                   readError={!!intraday.error}
                   dailyEvidence={dailyBySymbol.has(it.symbol) && data?.date ? {item: dailyBySymbol.get(it.symbol)!, date: data.date, generatedAt: data.meta?.generated_at ?? null, version: data.meta?.selection_version ?? null} : undefined}
                   onShowDailyEvidence={showDailyDetail} positionLabel={(posLabels[it.symbol] as "sim" | "real" | undefined) ?? null} />)
-              : <div className="hunting-empty hunting-collection-placeholder">{topReadFailed ? "上次读取的名单为空，当前状态待重试核实。" : (top.empty_reasons?.join("；") || "当前没有同时满足条件的候选，系统不会凑满名额。")}</div>}
+              : <div className="hunting-empty hunting-collection-placeholder">{clusterId ? "此研究簇没有对应的原盘中候选；仅筛选展示，不改变参与资格。" : topReadFailed ? "上次读取的名单为空，当前状态待重试核实。" : (top.empty_reasons?.join("；") || "当前没有同时满足条件的候选，系统不会凑满名额。")}</div>}
           </CandidateCollection>
           <button type="button" className="hunting-source-note" onClick={() => router.replace(patchWorkspaceUrl("/hunting", sp.toString(), {view: "validation"}), {scroll: false})}>查看已保存的入选记录 →</button>
           {top?.read_state === "partial" && <p role="status" className="hunting-empty">部分题材数据不完整，当前展示已核实的候选。</p>}
           {top?.criteria && <p className="hunting-source-note">{top.criteria}</p>}
-          {topRefItems.length > 0 && <div className="hunting-reference-fold">
+          {visibleReferenceItems.length > 0 && <div className="hunting-reference-fold">
             <button type="button" className="hunting-reference-trigger" aria-expanded={referenceOpen} aria-controls={referenceId} onClick={() => setReferenceOpen(value => !value)}>
               <svg aria-hidden width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.6"><path d="m9 5 7 7-7 7" /></svg>
-              涨停梯队 {topRefItems.length} 只<span>参考集合，当前状态逐股核对</span>
+              涨停梯队 {visibleReferenceItems.length} 只<span>参考集合，当前状态逐股核对</span>
             </button>
             <div id={referenceId} className="motion-disclosure" data-open={referencePresence.active} aria-hidden={!referencePresence.active} inert={!referencePresence.active}>
               <div className="motion-disclosure-body">
                 {referencePresence.value !== null && <>
                   <p className="hunting-source-note">{top?.reference_criteria ?? "保留今日曾封板身份；当前仍封、已开板或未判，以卡片对应时点为准。仅用于观察资金集中方向。"}</p>
-                  <CandidateCollection>{topRefItems.map(it => <PickCard compact active={selectedGroup === "candidates" && selectedOnly && referencePresence.active} key={JSON.stringify([top?.trade_date, top?.selection_identity_version, it.symbol])} item={fromIntradayStock(it,intradayCatalog)} readError={!!intraday.error} positionLabel={(posLabels[it.symbol] as "sim" | "real" | undefined) ?? null} />)}</CandidateCollection>
+                  <CandidateCollection>{visibleReferenceItems.map(it => <PickCard compact active={selectedGroup === "candidates" && selectedOnly && referencePresence.active} key={JSON.stringify([top?.trade_date, top?.selection_identity_version, it.symbol])} item={fromIntradayStock(it,intradayCatalog,clusterRead.data)} readError={!!intraday.error} positionLabel={(posLabels[it.symbol] as "sim" | "real" | undefined) ?? null} />)}</CandidateCollection>
                 </>}
               </div>
             </div>
@@ -629,7 +643,7 @@ function HuntingInner() {
             {!picksLoaded ? <div className="hunting-collection-placeholder"><CardListSkeleton count={2}/></div>
               : !data ? <div role="alert" className="hunting-empty hunting-collection-placeholder">每日精选读取失败。请刷新重试；读取失败不表示没有组合。</div>
               : pickTotal === 0 ? <div className="hunting-empty hunting-collection-placeholder">{dailyEmptySummary(data)}</div>
-              : pickItems.map(it => <PickCard compact active={selectedGroup === "daily" && selectedOnly} key={JSON.stringify([data.date, data.meta?.selection_version, it.symbol])} item={fromDailyPick(it, {date: data.date!, version: data.meta?.selection_version ?? null, currentThemeCatalog:dailyCatalog})} readError={!!daily.error} positionLabel={(posLabels[it.symbol] as "sim" | "real" | undefined) ?? null} />)}
+              : visiblePickItems.length === 0 ? <p role="status" className="hunting-empty">此研究簇没有对应的原每日精选；可切回全部原名单。</p> : visiblePickItems.map(it => <PickCard compact active={selectedGroup === "daily" && selectedOnly} key={JSON.stringify([data.date, data.meta?.selection_version, it.symbol])} item={fromDailyPick(it, {date: data.date!, version: data.meta?.selection_version ?? null, currentThemeCatalog:dailyCatalog,currentResearchClusters:clusterRead.data})} readError={!!daily.error} positionLabel={(posLabels[it.symbol] as "sim" | "real" | undefined) ?? null} />)}
           </CandidateCollection>
           <p className="hunting-source-note">{minPickScore != null ? `综合分≥${minPickScore} · ` : ""}{replaceThreshold != null ? `换股门槛 ${replaceThreshold} 分` : "换股门槛未返回"} · {maxSwaps != null ? `每日换股上限 ${maxSwaps} 只` : "换股上限未返回"}；够格几只就保留几只。</p>
         </section>
@@ -639,7 +653,7 @@ function HuntingInner() {
           {selectedOnly && (opps ? (
             <FadeIn>
               {!!opportunitiesResource.error && <p role="alert" className="hunting-empty">题材机会读取失败，保留上次题材结果；当前参与条件待重新核实。</p>}
-              <OpportunitySection opps={opps} expanded={expandedTheme} onToggle={toggleTheme} showLedger={false} readError={!!opportunitiesResource.error} />
+              <OpportunitySection researchClusters={clusterRead.data} opps={opps} expanded={expandedTheme} onToggle={toggleTheme} showLedger={false} readError={!!opportunitiesResource.error} />
             </FadeIn>
           ) : (
             opportunitiesResource.pending ? <CardListSkeleton count={3} /> : <p role="alert" className="hunting-empty">题材参与数据读取失败，请刷新重试。无法据此判断没有题材机会。</p>

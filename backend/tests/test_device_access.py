@@ -299,6 +299,24 @@ def test_actual_catalog_completion_requires_pairing_but_not_maintenance(store, m
     assert calls == []
 
 
+def test_actual_research_cluster_history_is_paired_read_without_maintenance(store, monkeypatch, tmp_path):
+    from app.main import app
+    from app.services import research_cluster_storage
+
+    monkeypatch.setattr(research_cluster_storage, 'ROOT', tmp_path / 'clusters')
+    probe = TestClient(app)  # Real router registration, no lifespan or source calls.
+    path = '/api/themes/research-clusters?date=2026-10-23&historical=true'
+    admin, _ = owner(store)
+    pending, _ = store.start('待配对', PHONE)
+    assert probe.get(path).status_code == 401
+    assert probe.get(path, headers=headers(pending, PHONE)).status_code == 401
+    token, _ = phone(store, admin)
+    assert store.authorize(token, PHONE)['maintenance'] is False
+    response = probe.get(path, headers=headers(token, PHONE))
+    assert response.status_code == 200
+    assert response.json()['data']['state'] == 'not_recorded'
+
+
 def test_missing_or_mismatched_route_context_does_not_inherit_business_access():
     from types import SimpleNamespace
     from app.core.device_policy import matched_route_template

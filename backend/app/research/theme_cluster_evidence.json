@@ -1,0 +1,19 @@
+{
+  "version": "humanoid-structure-2026-v1",
+  "cluster_name": "人形机器人产业链",
+  "anchor_tags": ["人形机器人"],
+  "partial_tags": ["机器人", "机器人概念", "机器人零部件", "机器人轴承", "机器人减速器", "具身智能", "汽车零部件", "汽车轴承"],
+  "evidence": {
+    "id": "humanoid-embodied-standards-2026",
+    "source": "北京经济技术开发区管理委员会",
+    "url": "https://kfqgw.beijing.gov.cn/ywdt/gzdt/202603/t20260302_4546918.html",
+    "published_at": "2026-03-02",
+    "excerpt": "公开说明将肢体与关键部组件、整机与系统、应用等列为人形机器人与具身智能标准体系的组成部分；这里只支持产业结构关系。",
+    "evidence_type": "published_industry_structure"
+  },
+  "limits": [
+    "产业结构关系不证明当日共同催化、公司供货或订单受益",
+    "具身智能、通用机器人和汽车零部件均不等同于人形机器人",
+    "较宽分支只连接同时带有人形机器人来源标签的观察股，不吸收整个板块或其余成分"
+  ]
+}

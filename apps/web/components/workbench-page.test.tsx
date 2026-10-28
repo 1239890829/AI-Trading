@@ -20,7 +20,7 @@ const state = vi.hoisted(() => ({
   reloadReal: vi.fn(async () => undefined), mobile: false, mediaListeners: new Set<() => void>(),
 }));
 vi.mock("next/navigation", () => ({useRouter: () => ({push: state.push, replace: state.replace}), useSearchParams: () => state.params}));
-vi.mock("@/lib/market-hours", () => ({isTradingSession: () => true}));
+vi.mock("@/lib/market-hours", async () => ({...await vi.importActual<typeof import("@/lib/market-hours")>("@/lib/market-hours"),isTradingSession: () => true}));
 vi.mock("@/hooks/use-quote-stream", () => ({
   STREAM_STATUS_LABEL: {live: {text: "已连接", cls: "", title: "通信夹具，不证明源报价已更新"}},
   useQuoteStream: (symbols: string[]) => {state.streamSymbols = symbols; return state.quoteStream;},

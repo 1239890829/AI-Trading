@@ -4,7 +4,9 @@ import { act, cleanup, fireEvent, render, screen, waitFor, within } from "@testi
 import HuntingPage from "@/app/hunting/page";
 import * as api from "@/lib/api";
 import { getStrategyRegistry } from "@/lib/api/picks";
-import { getOfficialBoardRanking, type OfficialBoardRanking } from "@/lib/api/themes";
+import { getOfficialBoardRanking, getResearchClusters, type OfficialBoardRanking } from "@/lib/api/themes";
+import {clusterFixture} from "@/test/research-clusters-fixture";
+import {unrecordedResearchClusters} from "@/lib/research-clusters";
 import {CardEntryRow} from "@/components/picks/card-entries";
 
 let search = new URLSearchParams();
@@ -27,7 +29,7 @@ vi.mock("@/components/picks/pick-card", () => ({ PickCard: ({item, readError, da
 }, fromDailyPick: (item: unknown) => item, fromIntradayStock: (item: unknown) => item, StandAsideBanner: () => <div data-testid="risk-gate">原风险闸门</div> }));
 vi.mock("@/components/picks/pick-detail-modal", () => ({PickDetailModal: ({target, readError}: {target: {item: api.DailyPickItem} | null; readError?: boolean}) => target ? <div data-testid="daily-detail" data-read-error={String(!!readError)}>原依据 {target.item.symbol} · 执行价 {target.item.execution?.executable_snapshot.price}</div> : null}));
 vi.mock("@/components/detail/detail-modal", () => ({useDetailModal: () => ({open: vi.fn()})}));
-vi.mock("@/lib/market-hours", () => ({isTradingSession: () => true}));
+vi.mock("@/lib/market-hours", async () => ({...await vi.importActual<typeof import("@/lib/market-hours")>("@/lib/market-hours"),isTradingSession: () => true}));
 vi.mock("@/components/hunting/intraday-sections", () => ({ AlertItem: () => null, DirectionCard: () => null, DailyPlanBlock: () => null, EnvStrip: () => null, MacroCalendar: () => null, MarketOverviewStrip: () => null, OpportunitySection: ({showLedger}: {showLedger: boolean}) => <div>题材原消费者：台账嵌入 {String(showLedger)}</div>, ClimateBlock: () => null, OvernightBiasBlock: () => null, ReviewOutcomeTable: ({reviewed}: {reviewed: {direction: string}[]}) => <div>{reviewed.map(row => <p key={row.direction}>原对照 {row.direction}</p>)}</div>, StatsPanel: ({stats}: {stats: {sample_note: string}}) => <div>{stats.sample_note}</div>, WatcherPanel: () => null }));
 vi.mock("@/components/hunting/pick-sections", () => ({ DailyReviews: ({reviews}: {reviews: {selection_version?: string | null}[]}) => <div>{reviews.map((row, i) => <span key={i}>复盘版本 {row.selection_version}</span>)}</div>, HistoryList: ({history}: {history: {date: string}[]}) => <div>{history.map(row => <p key={row.date}>原历史 {row.date}</p>)}</div>, ReasonDistribution: () => null, RolePerformanceTable: () => null }));
 vi.mock("@/components/hunting/stats-bar", () => ({ HuntingStatsBar: () => null }));
@@ -37,7 +39,7 @@ vi.mock("@/components/hunting/watch-ledger-panel", () => ({ WatchLedgerPanel: ()
 vi.mock("@/components/hunting/leader-research-panel", () => ({ LeaderResearchPanel: () => <div>真实研究组件</div> }));
 vi.mock("@/lib/api", () => ({ ApiError: class extends Error { status = 500; }, getTodayPicks: vi.fn(), getPicksHistory: vi.fn(), getPickReviews: vi.fn(), getPicksMeta: vi.fn(), getSignalHealth: vi.fn(), getMorningBriefToday: vi.fn(), getWatcherState: vi.fn(), getIntradayReview: vi.fn(), getIntradayOpportunities: vi.fn(), getIntradayTop: vi.fn(), getPositionLabels: vi.fn(), getEventsForSymbol: vi.fn(), getThemesHot: vi.fn(), getBoardFundFlow: vi.fn(), getDiscoveryMemberships: vi.fn(), getConceptDetail: vi.fn(), getBoardFlowMembers: vi.fn() }));
 vi.mock("@/lib/api/picks", async () => ({...await vi.importActual<typeof import("@/lib/api/picks")>("@/lib/api/picks"), getStrategyRegistry:vi.fn()}));
-vi.mock("@/lib/api/themes", async () => ({...await vi.importActual<typeof import("@/lib/api/themes")>("@/lib/api/themes"), getOfficialBoardRanking:vi.fn()}));
+vi.mock("@/lib/api/themes", async () => ({...await vi.importActual<typeof import("@/lib/api/themes")>("@/lib/api/themes"), getOfficialBoardRanking:vi.fn(),getResearchClusters:vi.fn()}));
 
 const officialRankingFixture = (): OfficialBoardRanking => ({
   scope:"directory",kind:"concept",source:"ths_official",source_basis:"index_snapshot",available:true,
@@ -66,6 +68,7 @@ beforeEach(() => {
   vi.mocked(api.getEventsForSymbol).mockImplementation(async symbol => ({symbol, themes: [], count: 0, items: []}));
   vi.mocked(api.getThemesHot).mockResolvedValue({ranking_basis:"hot_stock_concentration",catalog_revision:1,catalog_state:"ready",membership_state:"ready",scope:"隔离夹具：热股×正式目录",ts:"2026-10-25T02:00:00Z", stocks:[{rank:1,symbol:"600127",name:"原标的",heat:10,rank_change:0,themes:["机器人概念"]}],themes:[{theme:"机器人概念",theme_code:"885517.TI",heat:10,heat_complete:true,hot_count:1,hot_symbols:["600127"],source:"ths_official",member_count:100,member_as_of:"2026-10-25T02:00:00Z",concentration_pct:1,best:null,basis:"隔离夹具：正式目录归属"}]});
   vi.mocked(getOfficialBoardRanking).mockResolvedValue(officialRankingFixture());
+  vi.mocked(getResearchClusters).mockResolvedValue(unrecordedResearchClusters("2026-10-08"));
   vi.mocked(api.getDiscoveryMemberships).mockResolvedValue({scope:"current_not_historical", requested_trade_date:"2026-10-08",content_version:"a".repeat(64),state:"unknown",source:"local_theme_catalog",source_as_of:null,observed_at:"2026-10-25T10:00:00+08:00",count:1,matched_count:0,unknown_count:1,items:[{symbol:"600127",state:"unknown",themes:[],reason:"未核"}]});
   vi.mocked(api.getConceptDetail).mockResolvedValue({code:"885517.TI",name:"机器人概念",total:1,limit_up_count:0,members:[{symbol:"600127",name:"原标的",price:10,change_pct:0,tags:[]}],tag_groups:[],meta_note:"当前目录"} as unknown as api.ConceptDetail);
   HTMLElement.prototype.scrollIntoView = vi.fn();
@@ -75,6 +78,28 @@ afterEach(() => { cleanup(); vi.useRealTimers(); vi.clearAllMocks(); vi.unstubAl
 
 const group = (name: "candidates" | "daily") => document.getElementById(`sec-${name}`)!;
 const card = (symbol: string, name: "candidates" | "daily" = "candidates") => within(group(name)).getByText(`候选 ${symbol}`).closest("article")!;
+
+it("research cluster filters only original visible daily cards, keeps original counts and restores them without more reads",async()=>{
+  search=new URLSearchParams({sec:"daily"});
+  const source=clusterFixture("2026-10-08");source.reference_mode="saved";
+  source.clusters[0].stocks[0].symbol="600127";source.clusters[0].branches.forEach(b=>{b.symbols=["600127"];});
+  source.clusters[1].stocks[0].symbol="002636";source.clusters[1].branches[0].symbols=["002636"];
+  vi.mocked(getResearchClusters).mockResolvedValue(source);
+  const frozen=JSON.stringify(source);render(<HuntingPage/>);
+  expect(await within(group("daily")).findByText("候选 600127")).toBeTruthy();
+  expect(within(group("daily")).getByText("候选 002636")).toBeTruthy();
+  fireEvent.click(await screen.findByRole("button",{name:/单股线索/}));
+  const chooser=await screen.findByRole("button",{name:/“羊”字辈.*名单1只/});
+  const calls=vi.mocked(getResearchClusters).mock.calls.length;
+  fireEvent.click(chooser);
+  expect(within(group("daily")).queryByText("候选 600127")).toBeNull();
+  expect(within(group("daily")).getByText("候选 002636")).toBeTruthy();
+  expect(within(group("candidates")).queryByText("候选 002636")).toBeNull();
+  fireEvent.click(screen.getByRole("button",{name:"全部原名单"}));
+  expect(within(group("daily")).getByText("候选 600127")).toBeTruthy();
+  expect(getResearchClusters).toHaveBeenCalledTimes(calls);
+  expect(JSON.stringify(source)).toBe(frozen);
+});
 
 it.each(["browse=funds&disc_kind=industry&disc_code=BK0475&disc_range=5d","browse=funds&disc_source=sina&disc_code=gn_ldc","browse=funds&disc_code=886069.TI"])("旧资金链接先迁移、不挂载原选股或资金读取：%s",async query=>{
   search=new URLSearchParams(query);render(<HuntingPage/>);
@@ -430,7 +455,7 @@ it("acknowledges manual reads, prevents duplicate primary reads and reports part
   const busy = screen.getByRole("button", {name: "读取中…"});
   expect(busy.hasAttribute("disabled")).toBe(true);
   expect(busy.getAttribute("aria-busy")).toBe("true");
-  expect(screen.getByRole("status").textContent).toContain("正在读取名单");
+  expect(screen.getByRole("status",{name:"选股读取状态"}).textContent).toContain("正在读取名单");
   fireEvent.click(busy);
   await waitFor(() => expect(api.getTodayPicks).toHaveBeenCalledTimes(2));
   expect(api.getIntradayTop).toHaveBeenCalledTimes(2);
@@ -440,8 +465,8 @@ it("acknowledges manual reads, prevents duplicate primary reads and reports part
     reject(new Error("source-offline"));
   });
   await screen.findByRole("button", {name: "刷新数据"});
-  expect(screen.getByRole("status").textContent).toContain("部分读取失败");
-  expect(screen.getByRole("status").textContent).not.toContain("本轮读取完成");
+  expect(screen.getByRole("status",{name:"选股读取状态"}).textContent).toContain("部分读取失败");
+  expect(screen.getByRole("status",{name:"选股读取状态"}).textContent).not.toContain("本轮读取完成");
   expect(card("600127")).toBe(instance);
   expect(instance.dataset.readError).toBe("true");
   expect(api.getEventsForSymbol).not.toHaveBeenCalled();
@@ -454,7 +479,7 @@ it("an auxiliary slow read does not disable refreshing the ready candidate list 
   await screen.findByText("候选 002636");
   const refresh = screen.getByRole("button", {name: "刷新数据"});
   expect(refresh.hasAttribute("disabled")).toBe(false);
-  expect(screen.getByRole("status").textContent).toContain("附加资料");
+  expect(screen.getByRole("status",{name:"选股读取状态"}).textContent).toContain("附加资料");
   fireEvent.click(refresh);
   await waitFor(() => expect(api.getTodayPicks).toHaveBeenCalledTimes(2));
   expect(api.getSignalHealth).toHaveBeenCalledTimes(1);
@@ -462,7 +487,7 @@ it("an auxiliary slow read does not disable refreshing the ready candidate list 
   expect(api.getPickReviews).not.toHaveBeenCalled();
   expect(api.getPicksMeta).not.toHaveBeenCalled();
   await act(async () => finishHealth(null as unknown as api.SignalHealthPayload));
-  await waitFor(() => expect(screen.getByRole("status").textContent).toContain("本轮读取完成"));
+  await waitFor(() => expect(screen.getByRole("status",{name:"选股读取状态"}).textContent).toContain("本轮读取完成"));
 });
 
 it("a successful same-version daily reply updates the open evidence, while removal or version changes close it permanently", async () => {
