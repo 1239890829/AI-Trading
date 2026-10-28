@@ -274,6 +274,31 @@ def test_real_app_business_routes_reach_consumer_without_maintenance(store, monk
         assert response.status_code == 418, (method, template, response.json())
 
 
+def test_actual_catalog_completion_requires_pairing_but_not_maintenance(store, monkeypatch):
+    from types import SimpleNamespace
+    from app.main import app
+
+    calls = []
+    async def forbidden_source(kind):
+        calls.append(kind)
+        raise AssertionError('completion cannot start a source')
+
+    monkeypatch.setattr(app.state, 'theme_catalog', SimpleNamespace(revision=0, read_board_catalog=forbidden_source), raising=False)
+    probe = TestClient(app)  # Actual assembled router; no lifespan/schedulers.
+    path = '/api/themes/catalog/completions/' + '0' * 32
+    admin, _ = owner(store)
+    pending, _ = store.start('待配对', PHONE)
+    assert probe.get(path).status_code == 401
+    assert probe.get(path, headers=headers('unknown')).status_code == 401
+    assert probe.get(path, headers=headers(pending, PHONE)).status_code == 401
+    assert store.authorize(admin, ORIGIN)['maintenance'] is False
+    response = probe.get(path, headers=headers(admin))
+    assert response.status_code == 200
+    assert response.json()['data']['reason'] == 'completion_expired_or_unknown'
+    assert probe.get('/api/themes/catalog/completions/not-a-ticket', headers=headers(admin)).status_code == 422
+    assert calls == []
+
+
 def test_missing_or_mismatched_route_context_does_not_inherit_business_access():
     from types import SimpleNamespace
     from app.core.device_policy import matched_route_template

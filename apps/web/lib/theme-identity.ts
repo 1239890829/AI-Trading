@@ -20,19 +20,21 @@ export function officialThemeIdentity(reason: string, candidate: unknown, state:
 }
 
 /** A read-time reference stays separate from the original selection/report evidence. */
-export function currentThemeMapping(reason: string, reference: unknown): {state: ThemeMappingState; identity: OfficialThemeIdentity | null} | null {
+export function currentThemeMapping(reason: string, reference: unknown): {state: ThemeMappingState; identity: OfficialThemeIdentity | null; reason?:string|null} | null {
   if (!reference || typeof reference !== "object" || Array.isArray(reference)) return null;
   const value = reference as Record<string, unknown>;
   if (value.scope !== "current_directory_reference" || !Array.isArray(value.items)) return null;
   const matches = value.items.filter((item): item is Record<string, unknown> => !!item && typeof item === "object" && !Array.isArray(item) && item.theme === reason);
   if (matches.length !== 1) return null;
   const state=matches[0].catalog_mapping_state;
+  const context=matches[0].catalog_mapping_context;
+  const readReason=context && typeof context === "object" && !Array.isArray(context) && typeof (context as Record<string,unknown>).reason === "string" ? (context as Record<string,string>).reason : null;
   if (!["exact","unmapped","ambiguous","unclassified","unavailable"].includes(String(state))) return null;
-  if (state === "unavailable" && value.catalog_version == null && value.observed_at == null) return {state,identity:null};
+  if (state === "unavailable" && value.catalog_version == null && value.observed_at == null) return {state,identity:null,reason:readReason};
   if (typeof value.catalog_version !== "string" || !/^[a-f0-9]{64}$/i.test(value.catalog_version)
     || typeof value.observed_at !== "string" || !/(?:Z|[+-]\d{2}:?\d{2})$/i.test(value.observed_at)
     || !Number.isFinite(Date.parse(value.observed_at))) return null;
   const identity = officialThemeIdentity(reason,matches[0].exact_catalog,matches[0].catalog_mapping_state);
   if (state === "exact" && identity?.catalog_version !== value.catalog_version) return null;
-  return {state:state as ThemeMappingState,identity};
+  return {state:state as ThemeMappingState,identity,reason:readReason};
 }

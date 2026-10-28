@@ -82,6 +82,8 @@ PATH_VALUES = {
     "event_id": "1",
     "run_id": "missing-run",
     "method": "daily_picks",
+    # Unknown observer identity is a terminal read; it must never start a source.
+    "completion_key": "0" * 32,
 }
 
 #: 必需查询参数的填充值（同样与 api-sweep.js 的 QUERY_VALUES 同口径）

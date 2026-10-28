@@ -310,9 +310,10 @@ async def themes(
 
     out = dict(payload["data"])
     out["themes"] = themes_list[:limit]
-    if not current_day:
-        out["current_theme_catalog"] = await current_catalog_reference(
-            request, [card.get("theme") for card in out["themes"]], resolution=resolution)
+    # The same read-time reference also carries an unfinished owner's handle.
+    # Receiving its eventual mapping never changes these market metrics/gates.
+    out["current_theme_catalog"] = await current_catalog_reference(
+        request, [card.get("theme") for card in out["themes"]], resolution=resolution)
     out["filters"] = {"sort": sort, "min_boards": min_boards, "min_count": min_count, "limit": limit}
     return {"data": out, "meta": payload["meta"]}
 

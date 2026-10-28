@@ -1,7 +1,10 @@
-import { act, cleanup, fireEvent, render, screen } from "@testing-library/react";
+import { act, cleanup, fireEvent, render, screen,waitFor } from "@testing-library/react";
 import { afterEach, expect, it, vi } from "vitest";
 import { IntradayThemeRow, OpportunitySection } from "./intraday-sections";
 import type { IntradayOpportunities, OpportunityTheme } from "@/lib/api";
+import {getThemeCatalogCompletion} from "@/lib/api/themes";
+
+vi.mock("@/lib/api/themes",async()=>({...await vi.importActual<typeof import("@/lib/api/themes")>("@/lib/api/themes"),getThemeCatalogCompletion:vi.fn()}));
 
 vi.mock("@/components/concept-detail-modal",()=>({ConceptDetailModal:({code,catalogKind,referenceDate,active}: {code:string;catalogKind:string;referenceDate?:string;active:boolean})=>active?<div data-testid="official-detail">{catalogKind}:{code}:{referenceDate}</div>:null}));
 vi.mock("@/components/picks/pick-card", () => ({
@@ -63,4 +66,23 @@ it("行业官方成分保留类别与原日期，旧catalog_code不形成入口"
   expect(screen.getByTestId("official-detail").textContent).toBe("industry:881126.TI:2026-10-23");
   view.rerender(<IntradayThemeRow t={{...theme,catalog_code:"885999.TI",catalog_mapping_state:"unmapped"}} expanded={false} onToggle={()=>{}}/>);
   expect(screen.queryByRole("button",{name:"官方成分"})).toBeNull();
+});
+
+it("机会组头完成目录核对后同步展示当前参考和行业成分入口，不改原候选资格",async()=>{
+  const key="b".repeat(32),version="a".repeat(64),clock="2026-10-28T00:00:00+00:00";
+  const source={...opps,themes:[{...theme,theme:"汽车零部件",catalog_mapping_state:"unavailable" as const}],current_theme_catalog:{scope:"current_directory_reference" as const,catalog_version:null,observed_at:null,completion_key:key,items:[{theme:"汽车零部件",catalog_mapping_state:"unavailable" as const,exact_catalog:null,catalog_mapping_context:{reason:"catalog_read_pending",completion_key:key}}]}};
+  const before=JSON.stringify(source);
+  let finish!:(value:Awaited<ReturnType<typeof getThemeCatalogCompletion>>)=>void;
+  vi.mocked(getThemeCatalogCompletion).mockReturnValueOnce(new Promise(resolve=>{finish=resolve;}));
+  render(<OpportunitySection opps={source} expanded="汽车零部件" onToggle={()=>{}} showLedger={false}/>);
+  await waitFor(()=>expect(getThemeCatalogCompletion).toHaveBeenCalledTimes(1));
+  expect(screen.getByText("目录核对中")).toBeTruthy();
+  await act(async()=>finish({scope:"current_directory_resolution",completion_key:key,state:"available",catalog_version:version,observed_at:clock,identities:{汽车零部件:{code:"881126.TI",name:"汽车零部件",source:"ths_official",basis:"exact_name",kind:"industry",catalog_version:version,observed_at:clock}},ambiguous:[],reason:null}));
+  expect(screen.getByText("现目录同名参考 · 881126.TI")).toBeTruthy();
+  expect(screen.getByText("当时目录未就绪 · 保留原标签")).toBeTruthy();
+  fireEvent.click(screen.getByRole("button",{name:"当前成分"}));
+  expect(screen.getByTestId("official-detail").textContent).toBe("industry:881126.TI:2026-10-09");
+  expect(screen.getByTestId("600001").dataset.readError).toBe("false");
+  expect(screen.getByTestId("600002").dataset.readError).toBe("false");
+  expect(JSON.stringify(source)).toBe(before);
 });

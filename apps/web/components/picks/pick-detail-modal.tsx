@@ -4,6 +4,7 @@ import { PickCard, SUB_LABELS, fromDailyPick, fromIntradayStock } from "@/compon
 import { ModalShell } from "@/components/ui/modal-shell";
 import type { DailyPickItem, IntradayTopStock } from "@/lib/api";
 import { useExitPresence } from "@/hooks/use-exit-presence";
+import type {CurrentThemeCatalogReference} from "@/types/market";
 
 /**
  * 选股详情弹窗（2026-09-07 用户需求）：工作台「每日精选」「盘中跟踪」动态分组
@@ -17,7 +18,7 @@ import { useExitPresence } from "@/hooks/use-exit-presence";
  */
 
 export type PickDetailTarget =
-  | { kind: "pick"; item: DailyPickItem; current?: {date: string; version: string | null} }
+  | { kind: "pick"; item: DailyPickItem; current?: {date: string; version: string | null;currentThemeCatalog?:CurrentThemeCatalogReference} }
   | { kind: "top"; item: IntradayTopStock }
   | null;
 

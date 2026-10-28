@@ -13,6 +13,39 @@ import type {
 
 import { getJson, type ReadOptions } from "./internal";
 import type { BoardFundRow } from "./market";
+import {ApiError} from "./client";
+import {officialThemeIdentity, type OfficialThemeIdentity} from "@/lib/theme-identity";
+
+export interface ThemeCatalogCompletion {
+  scope: "current_directory_resolution";
+  completion_key: string;
+  state: "available" | "unavailable";
+  catalog_version: string | null;
+  observed_at: string | null;
+  identities: Record<string, OfficialThemeIdentity>;
+  ambiguous: string[];
+  reason: string | null;
+}
+
+/** Wait only for the named existing owner. The server never starts a source read here. */
+export async function getThemeCatalogCompletion(key: string, options: ReadOptions = {}): Promise<ThemeCatalogCompletion> {
+  if (!/^[a-f0-9]{32}$/.test(key)) throw new ApiError(422,"目录完成标识无效","invalid_completion_key");
+  const value = (await getJson<ThemeCatalogCompletion>(`/api/themes/catalog/completions/${key}`,20_000,options)).data;
+  const object = (item: unknown): item is Record<string, unknown> => !!item && typeof item === "object" && !Array.isArray(item);
+  const validClock = (item: unknown) => typeof item === "string" && /(?:Z|[+-]\d{2}:?\d{2})$/i.test(item) && Number.isFinite(Date.parse(item));
+  if (!object(value) || value.scope !== "current_directory_resolution" || value.completion_key !== key
+    || !["available","unavailable"].includes(value.state) || !object(value.identities) || Object.keys(value.identities).length > 2000
+    || !Array.isArray(value.ambiguous) || value.ambiguous.length > 2000
+    || value.ambiguous.some(name=>typeof name !== "string" || !name.trim() || Object.hasOwn(value.identities,name))
+    || new Set(value.ambiguous).size !== value.ambiguous.length || !(value.reason === null || typeof value.reason === "string")
+    || value.state === "unavailable" && (value.catalog_version !== null || value.observed_at !== null || Object.keys(value.identities).length > 0 || value.ambiguous.length > 0)
+    || value.state === "available" && (typeof value.catalog_version !== "string" || !/^[a-f0-9]{64}$/i.test(value.catalog_version) || !validClock(value.observed_at)
+      || Object.entries(value.identities).some(([name, identity])=>!officialThemeIdentity(name,identity,"exact")
+        || identity.catalog_version !== value.catalog_version || identity.observed_at !== value.observed_at))) {
+    throw new ApiError(502,"目录完成结果身份或结构不符","bad_catalog_completion");
+  }
+  return value;
+}
 
 export interface BoardRow {
   name: string;

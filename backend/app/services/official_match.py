@@ -13,12 +13,13 @@ import json
 import logging
 import re
 import threading
+from uuid import uuid4
 
 from copy import deepcopy
 from datetime import datetime, timezone
 
-from app.core.inflight_reads import read_inflight
-from app.core.ttl_cache import cache_on
+from app.core.inflight_reads import join_existing_inflight, peek_inflight, read_inflight
+from app.core.ttl_cache import TTLCache, cache_on
 
 log = logging.getLogger(__name__)
 
@@ -30,6 +31,8 @@ MIN_HITS = 2
 MAX_MATCHES = 3
 # Existing optional theme-view wait, shared by all foreground projections.
 OFFICIAL_CATALOG_VIEW_BUDGET_SECONDS = 0.25
+# Observation transport only; it does not extend the existing source client's 15s budget.
+CATALOG_COMPLETION_WAIT_SECONDS = 15.0
 
 _INDEX_LOCK_INIT = threading.Lock()
 
@@ -139,6 +142,21 @@ def _directory_resolution(directories: dict, observed_at: str) -> dict:
             "catalog_version": version, "observed_at": observed_at, "directories": details, "reason": None}
 
 
+def _registered_owner_completion_key(svc, revision, owner) -> str | None:
+    """Assign once on the existing task, even before its factory is scheduled."""
+    if owner is None or type(revision) is not int or not 0 <= revision <= 0xFFFFFFFF:
+        return None
+    inflight_key = ("theme-official-identities", ("source-identity-v4-kinds", revision))
+    if peek_inflight(svc, inflight_key) is not owner:
+        return None
+    value = getattr(owner, "_official_catalog_completion_key", None)
+    if value is None:
+        nonce = hashlib.sha256(f"{id(svc)}:{uuid4().hex}".encode()).hexdigest()[:24]
+        value = f"{revision:08x}{nonce}"
+        owner._official_catalog_completion_key = value
+    return value
+
+
 async def resolve_official_catalog(holder) -> dict:
     """Share the existing directory owners; no name aliases or independent registry."""
     state = _state(holder)
@@ -149,6 +167,9 @@ async def resolve_official_catalog(holder) -> dict:
     if svc is None or not callable(getattr(svc, "read_board_catalog", None)):
         return unavailable
     revision = getattr(svc, "revision", 0)
+    caller = asyncio.current_task()
+    if caller is not None:
+        caller._official_catalog_revision = revision
     # This replaces the former route-local primitive cache, not the source owner.
     cache = cache_on(svc, "themes.official.identities", 60, maxsize=4)
     key = ("source-identity-v4-kinds", revision)
@@ -160,6 +181,9 @@ async def resolve_official_catalog(holder) -> dict:
         hit, result = cache.get(key)
         if hit:
             return result
+        # Opaque to consumers. The revision prefix locates the original bounded
+        # cache entry; the nonce binds this service instance and this attempt.
+        completion_key = _registered_owner_completion_key(svc, revision, asyncio.current_task())
         try:
             values = await asyncio.gather(*(svc.read_board_catalog(kind) for kind in
                                             ("concept", "industry")), return_exceptions=True)
@@ -170,6 +194,7 @@ async def resolve_official_catalog(holder) -> dict:
             result["catalog_revision"] = revision
         except Exception as exc:
             result = {**unavailable, "reason": str(exc) if isinstance(exc, RuntimeError) else type(exc).__name__}
+        result["completion_key"] = completion_key
         cache.set(key, result, ttl=60 if result["state"] == "available" else 5)
         return result
 
@@ -183,8 +208,77 @@ async def resolve_official_catalog_view(holder, *, wait_seconds: float = OFFICIA
         done, _pending = await asyncio.wait({waiter}, timeout=max(0, wait_seconds))
         if done:
             return waiter.result()
-        return {"state": "unavailable", "identities": {}, "ambiguous": [], "catalog_version": None,
-                "observed_at": None, "directories": {}, "reason": "catalog_read_pending"}
+        svc = getattr(_state(holder), "theme_catalog", None)
+        revision = getattr(waiter, "_official_catalog_revision", None)
+        key = ("source-identity-v4-kinds", revision)
+        cache = getattr(svc, "_ttl_cache_themes.official.identities", None)
+        if isinstance(cache, TTLCache):
+            hit, completed = cache.get(key)
+            if hit:
+                return deepcopy(completed)
+        owner = peek_inflight(svc, ("theme-official-identities", key)) if svc is not None else None
+        pending = {"state": "unavailable", "identities": {}, "ambiguous": [], "catalog_version": None,
+                   "observed_at": None, "directories": {}, "reason": "catalog_read_pending"}
+        completion_key = _registered_owner_completion_key(svc, revision, owner)
+        if completion_key:
+            pending["completion_key"] = completion_key
+        else:
+            pending["reason"] = "completion_owner_untracked"
+        return pending
+    finally:
+        if not waiter.done():
+            waiter.cancel()
+            await asyncio.gather(waiter, return_exceptions=True)
+
+
+async def complete_official_catalog(holder, completion_key: str) -> dict:
+    """Observe a prior read only: cache miss is terminal and never calls a factory."""
+    def terminal(reason, result=None):
+        value = result or {}
+        return {"scope": "current_directory_resolution", "completion_key": completion_key,
+                "state": value.get("state", "unavailable"),
+                "catalog_version": value.get("catalog_version"), "observed_at": value.get("observed_at"),
+                "identities": deepcopy(value.get("identities") or {}),
+                "ambiguous": list(value.get("ambiguous") or []), "reason": reason}
+
+    if not isinstance(completion_key, str) or not re.fullmatch(r"[0-9a-f]{32}", completion_key):
+        return terminal("invalid_completion_key")
+    svc = getattr(_state(holder), "theme_catalog", None)
+    if svc is None:
+        return terminal("catalog_service_unavailable")
+    revision = int(completion_key[:8], 16)
+    if getattr(svc, "revision", 0) != revision:
+        return terminal("catalog_revision_changed")
+    key = ("source-identity-v4-kinds", revision)
+    cache = getattr(svc, "_ttl_cache_themes.official.identities", None)
+    if isinstance(cache, TTLCache):
+        hit, result = cache.get(key)
+        if hit:
+            if result.get("completion_key") == completion_key:
+                return terminal(result.get("reason"), result)
+            return terminal("completion_unknown_or_superseded")
+    inflight_key = ("theme-official-identities", key)
+    owner = peek_inflight(svc, inflight_key)
+    if owner is None:
+        return terminal("completion_expired_or_unknown")
+    if getattr(owner, "_official_catalog_completion_key", None) != completion_key:
+        return terminal("completion_unknown_or_superseded")
+    waiter = asyncio.create_task(join_existing_inflight(svc, inflight_key, owner))
+    try:
+        done, _pending = await asyncio.wait({waiter}, timeout=CATALOG_COMPLETION_WAIT_SECONDS)
+        if not done:
+            return terminal("completion_wait_timeout")
+        try:
+            found, result = waiter.result()
+        except asyncio.CancelledError:
+            return terminal("completion_owner_cancelled")
+        except Exception:
+            return terminal("completion_owner_failed")
+        if getattr(svc, "revision", 0) != revision:
+            return terminal("catalog_revision_changed")
+        if not found or result.get("completion_key") != completion_key:
+            return terminal("completion_expired_or_unknown")
+        return terminal(result.get("reason"), result)
     finally:
         if not waiter.done():
             waiter.cancel()
@@ -196,6 +290,8 @@ def mapping_for_name(name: str, resolution: dict | None) -> dict:
     context = {"catalog_version": (resolution or {}).get("catalog_version"),
                "observed_at": (resolution or {}).get("observed_at"),
                "reason": (resolution or {}).get("reason")}
+    if context["reason"] == "catalog_read_pending" and (resolution or {}).get("completion_key"):
+        context["completion_key"] = resolution["completion_key"]
     identity = None
     if name == "未分类":
         state = "unclassified"
@@ -213,9 +309,12 @@ async def current_catalog_reference(holder, names, *, resolution: dict | None = 
     wanted = list(dict.fromkeys(name for name in names if isinstance(name, str) and name.strip()))
     if resolution is None:
         resolution = await resolve_official_catalog_view(holder) if wanted else {}
-    return {"scope": "current_directory_reference", "catalog_version": resolution.get("catalog_version"),
-            "observed_at": resolution.get("observed_at"),
-            "items": [mapping_for_name(name, resolution) for name in wanted]}
+    reference = {"scope": "current_directory_reference", "catalog_version": resolution.get("catalog_version"),
+                 "observed_at": resolution.get("observed_at"),
+                 "items": [mapping_for_name(name, resolution) for name in wanted]}
+    if resolution.get("reason") == "catalog_read_pending" and resolution.get("completion_key"):
+        reference["completion_key"] = resolution["completion_key"]
+    return reference
 
 
 def attach_official(holder, themes_list: list[dict], *, resolution: dict | None = None) -> None:

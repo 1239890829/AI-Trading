@@ -3,6 +3,9 @@ import { afterEach, beforeEach, expect, it, vi } from "vitest";
 import { SelectionReviewPanel, SelectionPreviewPanel } from "./selection-panels";
 import * as api from "@/lib/api";
 import {fromDailyPick,fromIntradayStock} from "@/components/picks/pick-card";
+import {getThemeCatalogCompletion} from "@/lib/api/themes";
+import type {CurrentThemeCatalogReference} from "@/types/market";
+vi.mock("@/lib/api/themes",async()=>({...await vi.importActual<typeof import("@/lib/api/themes")>("@/lib/api/themes"),getThemeCatalogCompletion:vi.fn()}));
 
 vi.mock("@/lib/api", () => ({getPickReviews: vi.fn(), getTodayPicks: vi.fn(), getIntradayTop: vi.fn(), getMorningBriefToday: vi.fn(), getWatcherState: vi.fn(), getIntradayOpportunities: vi.fn(), ApiError: class extends Error {}}));
 vi.mock("@/components/hunting/pick-sections", () => ({DailyReviews: ({reviews}: {reviews: api.PickReviewRow[]}) => <div>{reviews.map(row => <span key={row.symbol}>{row.symbol}:{row.selection_version}</span>)}</div>}));
@@ -105,4 +108,24 @@ it("每日与盘中旁览只传各自响应的目录参考，不跨包拼接或�
   expect(fromIntradayStock).toHaveBeenCalledWith(referenceItem,intradayReference);
   expect(api.getTodayPicks).toHaveBeenCalledTimes(1);expect(api.getIntradayTop).toHaveBeenCalledTimes(1);
   expect(api.getIntradayOpportunities).not.toHaveBeenCalled();expect(JSON.stringify({daily,intraday})).toBe(before);
+});
+
+it("旁览每日和盘中共享完成等待，原业务只读一次且不改日期资格",async()=>{
+  const key="f".repeat(32),version="a".repeat(64),clock="2026-10-28T00:00:00+00:00";
+  const reference:CurrentThemeCatalogReference={scope:"current_directory_reference",catalog_version:null,observed_at:null,completion_key:key,items:[{theme:"汽车零部件",catalog_mapping_state:"unavailable",catalog_mapping_context:{reason:"catalog_read_pending",completion_key:key}}]};
+  const dailyItem={symbol:"600001",theme:"汽车零部件"} as api.DailyPickItem,intradayItem={symbol:"600002",theme:"汽车零部件"} as api.IntradayTopStock;
+  const daily={date:"2026-10-09",items:[dailyItem],current_theme_catalog:reference} as api.DailyPicksPayload;
+  const intraday={trade_date:"2026-10-09",items:[intradayItem],current_theme_catalog:reference} as api.IntradayTopPayload;
+  const before=JSON.stringify({daily,intraday});
+  vi.mocked(api.getTodayPicks).mockResolvedValue(daily);vi.mocked(api.getIntradayTop).mockResolvedValue(intraday);
+  let finish!:(result:Awaited<ReturnType<typeof getThemeCatalogCompletion>>)=>void;
+  vi.mocked(getThemeCatalogCompletion).mockReturnValueOnce(new Promise(resolve=>{finish=resolve;}));
+  render(<SelectionPreviewPanel request={{kind:"selection-preview"}}/>);
+  await waitFor(()=>expect(getThemeCatalogCompletion).toHaveBeenCalledTimes(1));
+  await act(async()=>finish({scope:"current_directory_resolution",completion_key:key,state:"available",catalog_version:version,observed_at:clock,identities:{汽车零部件:{code:"881126.TI",name:"汽车零部件",source:"ths_official",basis:"exact_name",kind:"industry",catalog_version:version,observed_at:clock}},ambiguous:[],reason:null}));
+  const overlay=expect.objectContaining({completion_key:undefined,items:[expect.objectContaining({theme:"汽车零部件",catalog_mapping_state:"exact",exact_catalog:expect.objectContaining({kind:"industry",code:"881126.TI"})})]});
+  expect(fromDailyPick).toHaveBeenLastCalledWith(dailyItem,{date:"2026-10-09",version:null,currentThemeCatalog:overlay});
+  expect(fromIntradayStock).toHaveBeenLastCalledWith(intradayItem,overlay);
+  expect(api.getTodayPicks).toHaveBeenCalledTimes(1);expect(api.getIntradayTop).toHaveBeenCalledTimes(1);
+  expect(JSON.stringify({daily,intraday})).toBe(before);
 });

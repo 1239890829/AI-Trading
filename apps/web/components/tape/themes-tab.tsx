@@ -1,5 +1,6 @@
 "use client";
 
+import {useThemeCatalogReference} from "@/hooks/use-theme-catalog-reference";
 import {officialThemeIdentity} from "@/lib/theme-identity";
 import { useId, useMemo, useState, useSyncExternalStore } from "react";
 import { useExitPresence } from "@/hooks/use-exit-presence";
@@ -74,6 +75,7 @@ export function ThemesTab() {
     key: `${date}:${sort}:${minBoards}:${minCount}`, intervalMs: date ? null : 60_000,
   });
   const data: ThemeBoardPayload | null = resource.data ?? null;
+  const currentCatalog=useThemeCatalogReference(data?.current_theme_catalog,`themes:${date}:${sort}:${minBoards}:${minCount}`);
   const loading = resource.pending;
   const error = resource.error instanceof Error ? resource.error.message : resource.error ? "读取失败" : null;
   const [showCaveats, setShowCaveats] = useState(false);
@@ -413,7 +415,7 @@ export function ThemesTab() {
               card={c}
               rank={i + 1}
               tradeDate={data?.trade_date ?? ""}
-              currentThemeCatalog={data?.current_theme_catalog}
+              currentThemeCatalog={currentCatalog}
               hot={officialThemeIdentity(c.theme,c.exact_catalog,c.catalog_mapping_state)?.kind === "concept" ? hotByCode.get(c.exact_catalog!.code) : undefined}
               strength={officialThemeIdentity(c.theme,c.exact_catalog,c.catalog_mapping_state)?.kind === "concept" ? strength?.get(c.exact_catalog!.code) ?? null : null}
             />

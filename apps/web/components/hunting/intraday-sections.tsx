@@ -1,7 +1,9 @@
 "use client";
 
-import {officialThemeIdentity} from "@/lib/theme-identity";
-import { SourceThemeIdentity } from "@/components/source-theme-identity";
+import {currentThemeMapping,officialThemeIdentity,type OfficialThemeIdentity} from "@/lib/theme-identity";
+import { CurrentThemeReference,SourceThemeIdentity } from "@/components/source-theme-identity";
+import {useThemeCatalogReference} from "@/hooks/use-theme-catalog-reference";
+import type {CurrentThemeCatalogReference} from "@/types/market";
 
 import { useId, useState } from "react";
 import { HugeiconsIcon } from "@hugeicons/react";
@@ -89,18 +91,25 @@ export function IntradayThemeRow({
   onToggle,
   readError = false,
   tradeDate,
+  currentThemeCatalog,
 }: {
   t: OpportunityTheme;
   expanded: boolean;
   onToggle: () => void;
   readError?: boolean;
   tradeDate?: string;
+  currentThemeCatalog?: CurrentThemeCatalogReference;
 }) {
   const stage = t.stage ?? "未知";
   const detailsId = useId();
-  const [detailOpen, setDetailOpen] = useState(false);
   const identity = officialThemeIdentity(t.theme,t.exact_catalog,t.catalog_mapping_state);
-  const detailPresence = useExitPresence(detailOpen ? identity?.code ?? null : null);
+  const currentIdentity=!identity ? currentThemeMapping(t.theme,currentThemeCatalog)?.identity ?? null : null;
+  const [detailTarget,setDetailTarget]=useState<{identity:OfficialThemeIdentity;date?:string}|null>(null);
+  const detailIdentity=detailTarget && [identity,currentIdentity].some(value=>value?.code === detailTarget.identity.code
+    && value.kind === detailTarget.identity.kind && value.catalog_version === detailTarget.identity.catalog_version)
+    && detailTarget.date === tradeDate ? detailTarget : null;
+  if(detailTarget && !detailIdentity)setDetailTarget(null);
+  const detailPresence = useExitPresence(detailIdentity);
   const bodyPresence = useExitPresence(expanded ? true : null);
   const { open: openInspection } = useInspection();
   return (
@@ -129,6 +138,7 @@ export function IntradayThemeRow({
             </span>
           )}
           <SourceThemeIdentity reason={t.theme} exact={t.exact_catalog} state={t.catalog_mapping_state} related={t.official_matches} historical={!!tradeDate} />
+          {!identity && <CurrentThemeReference reason={t.theme} reference={currentThemeCatalog} compact/>}
           <span className={`rounded px-1.5 py-0.5 text-[10px] ${STAGE_TONE[stage] ?? "bg-zinc-500/10 text-zinc-600 dark:text-zinc-400"}`} title={(t.stage_basis || []).join("；")}>
             {stage}
           </span>
@@ -159,16 +169,19 @@ export function IntradayThemeRow({
           <button
             type="button"
             data-reading-action
-            onClick={() => setDetailOpen(true)}
+            onClick={() => setDetailTarget({identity,date:tradeDate})}
             className={`${readingRowClasses.action} ${JUMP_PILL_CLASS}`}
             title="读取同花顺正式目录成分；当前记录不证明历史归属"
           >
             官方成分
           </button>
         )}
+        {currentIdentity && <button type="button" data-reading-action className={`${readingRowClasses.action} ${JUMP_PILL_CLASS}`}
+          onClick={()=>setDetailTarget({identity:currentIdentity,date:tradeDate})}
+          title="读取当前正式成分参考，不证明原日期归属">当前成分</button>}
       </div>
       {detailPresence.value && (
-        <ConceptDetailModal key={`${identity?.kind}:${detailPresence.value}`} code={detailPresence.value} name={t.theme} catalogKind={identity?.kind} referenceDate={tradeDate} active={detailPresence.active && !!identity} onClose={() => setDetailOpen(false)} />
+        <ConceptDetailModal key={`${detailPresence.value.identity.kind}:${detailPresence.value.identity.code}`} code={detailPresence.value.identity.code} name={detailPresence.value.identity.name} catalogKind={detailPresence.value.identity.kind} referenceDate={detailPresence.value.date} active={detailPresence.active && !!detailIdentity} onClose={() => setDetailTarget(null)} />
       )}
       {!expanded && <ConditionList label="题材风险" items={t.risks} tone="warning" />}
       {bodyPresence.value && (
@@ -252,6 +265,7 @@ export function OpportunitySection({
   // 板块权限挡下的容器成分只数：>0 时口径行要说明——「候选为什么这么少」
   // 与「没有候选」是两件事，页面必须能区分（三态纪律）
   const boardBlocked = opps.linkage_stats?.excluded_board ?? 0;
+  const currentCatalog=useThemeCatalogReference(opps.current_theme_catalog,`opportunities:${opps.trade_date}`);
   return (
     <section className="space-y-2">
       <div className="flex flex-wrap items-baseline justify-between gap-2">
@@ -267,7 +281,7 @@ export function OpportunitySection({
       ) : (
         <div className="space-y-2">
           {opps.themes.map((t) => (
-            <IntradayThemeRow key={t.theme} t={t} tradeDate={opps.trade_date ?? undefined} expanded={expanded === t.theme} onToggle={() => onToggle(t.theme)} readError={readError} />
+            <IntradayThemeRow key={t.theme} t={t} tradeDate={opps.trade_date ?? undefined} currentThemeCatalog={currentCatalog} expanded={expanded === t.theme} onToggle={() => onToggle(t.theme)} readError={readError} />
           ))}
         </div>
       )}

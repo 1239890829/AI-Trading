@@ -15,6 +15,8 @@ export interface CurrentThemeCatalogReference {
   scope: "current_directory_reference";
   catalog_version: string | null;
   observed_at: string | null;
+  /** Present only when this response left an existing directory owner running. */
+  completion_key?: string | null;
   items: {theme: string; exact_catalog?: ThemeCatalogIdentity | null; catalog_mapping_state?: ThemeMappingState;
     catalog_mapping_context?: Record<string, unknown> | null}[];
 }
