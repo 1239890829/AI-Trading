@@ -17,6 +17,7 @@ import { useResource } from "@/hooks/use-resource";
 import {useThemeCatalogReference} from "@/hooks/use-theme-catalog-reference";
 import {useResearchClusters} from "@/hooks/use-research-clusters";
 import {ResearchClustersPanel} from "@/components/research-clusters";
+import researchClusterStyles from "@/components/research-clusters.module.css";
 import {clusterSelection} from "@/lib/research-clusters";
 import {
   ApiError,
@@ -311,7 +312,9 @@ function HuntingInner() {
   const posLabels = positions.data ?? {};
 
   const pickItems = data?.items ?? [];
-  const clusterDate=selectedOnly ? selectedGroup === "daily" ? data?.date : top?.trade_date : undefined;
+  const clusterDate=selectedOnly ? selectedGroup === "daily" ? data?.date : top?.trade_date ?? opps?.trade_date : undefined;
+  const clusterDatePending=selectedGroup === "daily" ? daily.pending : intraday.pending || opportunitiesResource.pending;
+  const clusterDateLabel=selectedGroup === "daily" ? "每日精选" : "盘中";
   const clusterRead=useResearchClusters(clusterDate ?? undefined,{active:isDiscoverView && (!selectedOnly || !!clusterDate)});
   const clusterScope=JSON.stringify([selectedGroup,clusterDate,clusterRead.data?.version,selectedGroup === "daily" ? data?.meta?.selection_version : top?.selection_identity_version]);
   const [clusterFilter,setClusterFilter]=useState<{scope:string;id:string|null}>({scope:clusterScope,id:null});
@@ -579,9 +582,14 @@ function HuntingInner() {
               onClick={() => setCollectionViews(previous => previous[selectedGroup] === mode ? previous : {...previous, [selectedGroup]:mode})}>{mode === "cards" ? "卡片" : "列表"}</button>)}
           </SelectionRail>
         </div>
-        <ResearchClustersPanel data={clusterRead.data} pending={clusterRead.pending} error={clusterRead.error} onRetry={clusterRead.refresh}
+        {selectedOnly && !clusterDate ? <section className={researchClusterStyles.panel} aria-label="研究主题簇">
+          <header className={researchClusterStyles.head}><h3>研究簇 · 范围待核</h3></header>
+          <p role={clusterDatePending ? "status" : "alert"} className={clusterDatePending ? researchClusterStyles.empty : researchClusterStyles.warning}>
+            {clusterDatePending ? `正在确认${clusterDateLabel}交易日期，确认后读取研究簇。` : `${clusterDateLabel}交易日期未核实，暂不读取研究簇。请刷新数据重试。`}
+          </p>
+        </section> : <ResearchClustersPanel data={clusterRead.data} pending={clusterRead.pending} error={clusterRead.error} onRetry={clusterRead.refresh}
           selectedId={selectedOnly?clusterId:undefined} onSelect={selectedOnly?id=>setClusterFilter({scope:clusterScope,id}):undefined}
-          selectionSymbols={selectedOnly?(selectedGroup === "daily"?pickItems:topItems).map(row=>row.symbol):undefined}/>
+          selectionSymbols={selectedOnly?(selectedGroup === "daily"?pickItems:topItems).map(row=>row.symbol):undefined}/>}
         {!selectedOnly && <DiscoveryBrowser search={sp.toString()} selection={discoverySelection} onNavigate={navigateDiscovery} onTarget={resolveDiscovery} onMethodTarget={resolveMethod} methodDate={methodDate} />}
         <div className="hunting-candidate-notices" hidden={!selectedOnly} inert={!selectedOnly}>
         {/* ── 空仓闸门横幅（风险提示置顶）──

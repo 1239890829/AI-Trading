@@ -26,6 +26,7 @@
 .bc-market-dashboard {display:grid;grid-template-columns:minmax(270px,.37fr) minmax(0,1fr);flex:1 1 0%;min-height:0;min-width:0;gap:20px;}
 .bc-market-dashboard>.bc-market-context {display:grid;grid-template-rows:max-content minmax(0,1fr);min-height:0;min-width:0;gap:16px;}
 .bc-market-metrics {display:flex;flex-direction:column;min-height:0;min-width:0;gap:16px;overflow-y:auto;overscroll-behavior:contain;}
+.bc-market-research {flex:none;min-width:0;}
 :root .bc-market-dashboard>.bc-market-context .bc-market-indices {grid-template-columns:repeat(2,minmax(0,1fr));align-content:start;align-self:start;min-height:max-content;gap:8px;padding:0;border:0;overflow:visible;}
 :root .bc-market-dashboard>.bc-market-context .bc-index-quote,:root .bc-market-dashboard>.bc-market-context .bc-index-skeleton {min-height:90px;padding:12px;border:0;border-radius:8px;background:var(--workspace-surface);}
 .bc-market-dashboard>.bc-market-context .bc-index-value {flex-wrap:wrap;gap:3px 8px;justify-content:flex-start;}

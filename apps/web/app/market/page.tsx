@@ -146,7 +146,6 @@ function MarketInner() {
               </div>
             </section>
 
-            <ResearchClustersPanel data={clusterRead.data} pending={clusterRead.pending} error={clusterRead.error} onRetry={clusterRead.refresh}/>
             <div className="bc-market-metrics">
             <section className="bc-market-environment" aria-label="成交与市场宽度">
               <div className="bc-market-turnover">
@@ -188,6 +187,9 @@ function MarketInner() {
               </section>
             ) : pending ? <div className="bc-market-sentiment"><Skeleton className="h-5 w-14" /><Skeleton className="h-4 w-40" /><Skeleton className="h-4 w-24" /></div> : null}
 
+            <div className="bc-market-research">
+              <ResearchClustersPanel data={clusterRead.data} pending={clusterRead.pending} error={clusterRead.error} onRetry={clusterRead.refresh}/>
+            </div>
             </div>
             </div>
             <div className="bc-market-reading">

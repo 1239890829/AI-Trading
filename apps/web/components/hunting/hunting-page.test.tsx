@@ -3,7 +3,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { act, cleanup, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import HuntingPage from "@/app/hunting/page";
 import * as api from "@/lib/api";
-import { getStrategyRegistry } from "@/lib/api/picks";
+import { CandidateDataUnavailableError, getStrategyRegistry } from "@/lib/api/picks";
 import { getOfficialBoardRanking, getResearchClusters, type OfficialBoardRanking } from "@/lib/api/themes";
 import {clusterFixture} from "@/test/research-clusters-fixture";
 import {unrecordedResearchClusters} from "@/lib/research-clusters";
@@ -78,6 +78,66 @@ afterEach(() => { cleanup(); vi.useRealTimers(); vi.clearAllMocks(); vi.unstubAl
 
 const group = (name: "candidates" | "daily") => document.getElementById(`sec-${name}`)!;
 const card = (symbol: string, name: "candidates" | "daily" = "candidates") => within(group(name)).getByText(`候选 ${symbol}`).closest("article")!;
+
+it("reads research clusters from the dated opportunity scope while retaining the unavailable candidate warning", async () => {
+  const date = "2026-10-27";
+  vi.mocked(api.getIntradayTop).mockRejectedValue(new CandidateDataUnavailableError({empty_reasons:["涨停快照未就绪"]}));
+  vi.mocked(api.getIntradayOpportunities).mockResolvedValue({trade_date:date,themes:[],caveats:[]} as unknown as api.IntradayOpportunities);
+  vi.mocked(getResearchClusters).mockResolvedValue(clusterFixture(date));
+  render(<HuntingPage/>);
+  expect(await screen.findByText(/候选数据待核：涨停快照未就绪/)).toBeTruthy();
+  const panel = screen.getByRole("region", {name:"研究主题簇"});
+  expect(await within(panel).findByRole("button", {name:/人形机器人产业链/})).toBeTruthy();
+  expect(panel.textContent).toContain(date);
+  expect(getResearchClusters).toHaveBeenCalledTimes(1);
+  expect(vi.mocked(getResearchClusters).mock.calls[0][0]).toEqual(expect.objectContaining({date}));
+  expect(screen.queryByText(/当前没有同时满足条件的候选/)).toBeNull();
+});
+
+it("shows the pending and unverified research scope without requesting a guessed date or offering an inactive retry", async () => {
+  let failTop!: (reason:Error) => void;
+  let finishOpportunities!: (value:api.IntradayOpportunities) => void;
+  vi.mocked(api.getIntradayTop).mockReturnValue(new Promise((_resolve,reject) => {failTop=reject;}));
+  vi.mocked(api.getIntradayOpportunities).mockReturnValue(new Promise(resolve => {finishOpportunities=resolve;}));
+  render(<HuntingPage/>);
+  const panel = screen.getByRole("region", {name:"研究主题簇"});
+  expect(within(panel).getByRole("status").textContent).toContain("正在确认盘中交易日期");
+  expect(within(panel).queryByRole("button", {name:"重读研究簇"})).toBeNull();
+  expect(getResearchClusters).not.toHaveBeenCalled();
+  await act(async () => {
+    failTop(new Error("candidate-offline"));
+    finishOpportunities({trade_date:null,themes:[],caveats:[]} as unknown as api.IntradayOpportunities);
+  });
+  expect(within(panel).getByRole("alert").textContent).toContain("盘中交易日期未核实");
+  expect(within(panel).queryByRole("button", {name:"重读研究簇"})).toBeNull();
+  expect(getResearchClusters).not.toHaveBeenCalled();
+  expect(screen.getByText(/盘中候选读取失败/)).toBeTruthy();
+});
+
+it("keeps the candidate date ahead of different opportunity and daily dates", async () => {
+  const date = "2026-10-08";
+  vi.mocked(api.getIntradayOpportunities).mockResolvedValue({trade_date:"2026-10-27",themes:[],caveats:[]} as unknown as api.IntradayOpportunities);
+  vi.mocked(api.getTodayPicks).mockResolvedValue({date:"2026-10-26",items:[]} as unknown as api.DailyPicksPayload);
+  vi.mocked(getResearchClusters).mockResolvedValue(clusterFixture(date));
+  render(<HuntingPage/>);
+  expect(await screen.findByRole("button", {name:/人形机器人产业链/})).toBeTruthy();
+  const panel = screen.getByRole("region", {name:"研究主题簇"});
+  expect(panel.textContent).toContain(date);
+  expect(getResearchClusters).toHaveBeenCalledTimes(1);
+  expect(vi.mocked(getResearchClusters).mock.calls[0][0]).toEqual(expect.objectContaining({date}));
+});
+
+it("does not borrow intraday dates when the selected daily scope has no verified date", async () => {
+  search=new URLSearchParams({sec:"daily"});
+  vi.mocked(api.getTodayPicks).mockRejectedValue(new Error("daily-offline"));
+  vi.mocked(api.getIntradayOpportunities).mockResolvedValue({trade_date:"2026-10-27",themes:[],caveats:[]} as unknown as api.IntradayOpportunities);
+  render(<HuntingPage/>);
+  await screen.findByText(/每日精选读取失败。请刷新重试/);
+  const panel = screen.getByRole("region", {name:"研究主题簇"});
+  expect(within(panel).getByRole("alert").textContent).toContain("每日精选交易日期未核实");
+  expect(within(panel).queryByRole("button", {name:"重读研究簇"})).toBeNull();
+  expect(getResearchClusters).not.toHaveBeenCalled();
+});
 
 it("research cluster filters only original visible daily cards, keeps original counts and restores them without more reads",async()=>{
   search=new URLSearchParams({sec:"daily"});
