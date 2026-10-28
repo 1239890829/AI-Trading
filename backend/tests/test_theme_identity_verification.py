@@ -212,6 +212,10 @@ def test_deferred_optional_read_drains_and_is_reused_by_next_payload(monkeypatch
     original = {"themes": [{"theme": "机器人概念", "board": {"name": "机器人概念", "chg_5d": 88.0}}]}
 
     async def run():
+        # This case tests the K-line owner's deadline after the directory is
+        # ready. A cold directory has its own bounded-wait coverage below.
+        resolution = await market_themes._official_identities_cached(request)
+        assert resolution["state"] == "available"
         one, two = deepcopy(original), deepcopy(original)
         reads = [asyncio.create_task(_verify(request, payload)) for payload in (one, two)]
         try:
