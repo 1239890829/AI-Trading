@@ -10,7 +10,10 @@ const state = vi.hoisted(() => ({ search: "", openSymbol: vi.fn() }));
 vi.mock("next/navigation", () => ({useSearchParams: () => new URLSearchParams(state.search)}));
 vi.mock("@/lib/market-hours", () => ({isTradingSession: () => true,bjToday:()=>"2026-10-28"}));
 vi.mock("@/components/ui/workspace-deck", () => ({ MarketLensPicker: () => null }));
-vi.mock("@/components/detail/symbol-detail-context", () => ({ useSymbolDetail: () => ({open: state.openSymbol}) }));
+vi.mock("@/components/detail/symbol-detail-context", async () => ({
+  ...await vi.importActual<typeof import("@/components/detail/symbol-detail-context")>("@/components/detail/symbol-detail-context"),
+  useSymbolDetail: () => ({open: state.openSymbol}),
+}));
 vi.mock("@/components/event-panel", () => ({ EventPanel: () => null }));
 vi.mock("@/components/market/heatmap-tab", () => ({ HeatmapTab: () => null }));
 vi.mock("@/components/market/events-tab", () => ({ EventsTab: () => null }));
@@ -40,6 +43,18 @@ beforeEach(() => {
   vi.stubGlobal("matchMedia", () => ({matches: true, addEventListener: vi.fn(), removeEventListener: vi.fn()}));
 });
 afterEach(() => { cleanup(); vi.useRealTimers(); vi.resetAllMocks(); vi.unstubAllGlobals(); });
+
+it("keeps research evidence in the existing metrics reader without a third context grid row", async () => {
+  vi.mocked(getResearchClusters).mockResolvedValue(clusterFixture());
+  const {container} = render(<MarketPage />);
+  await act(async () => {});
+  const panel = screen.getByRole("region", {name:"研究主题簇"});
+  expect(panel.closest(".bc-market-metrics")).toBeTruthy();
+  expect(container.querySelector(".bc-market-context")?.children).toHaveLength(2);
+  fireEvent.click(within(panel).getByRole("button", {name:/人形机器人产业链产业结构有据/}));
+  expect(within(panel).getByRole("group", {name:"保留的原始分支"})).toBeTruthy();
+  expect(getResearchClusters).toHaveBeenCalledTimes(1);
+});
 
 it("closes failed sentiment evidence and requires a fresh user click after recovery", async () => {
   render(<MarketPage />);
