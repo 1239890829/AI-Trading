@@ -14,8 +14,9 @@ export function CurrentThemeReference({reason, reference, compact = false}: {rea
   const mapping=currentThemeMapping(reason,reference);
   if (!mapping) return null;
   const identity=mapping.identity;
-  if (!identity) return <span className="text-[10px] text-zinc-600 dark:text-zinc-400" title="读取时的正式目录核对参考，不改写原记录或历史归属。">
-    {mapping.state === "unmapped" ? "当前目录无同名对应" : mapping.state === "ambiguous" ? "当前目录同名对应不唯一" : mapping.state === "unavailable" ? "当前目录核对未就绪" : "当前标签未分类"}
+  if (!identity) return <span className="text-[10px] text-zinc-600 dark:text-zinc-400" title="读取时的正式目录核对参考，不改写原记录或历史归属；未完成时可用原入口重新读取。">
+    {mapping.state === "unmapped" ? "当前目录无同名对应" : mapping.state === "ambiguous" ? "当前目录同名对应不唯一" : mapping.state === "unavailable"
+      ? mapping.reason === "catalog_read_pending" ? "目录核对中" : mapping.reason?.startsWith("completion_") ? "目录核对未完成，请重读" : "当前目录不可用" : "当前标签未分类"}
   </span>;
   return <span className="inline-flex min-w-0 flex-wrap items-center gap-1 text-[10px] text-zinc-600 dark:text-zinc-400"
     title={`当前同花顺正式${identity.kind === "industry" ? "行业" : "概念"} · ${identity.name} · ${identity.code}；映射核对 ${identity.observed_at}；目录版本 ${identity.catalog_version}。不替换原标签、原指标或日期。`}>
@@ -26,7 +27,7 @@ export function CurrentThemeReference({reason, reference, compact = false}: {rea
 /** A related membership must never become an official identity or an alias. */
 export function SourceThemeIdentity({reason, exact, state, historical = false, notAfter, related = []}: SourceThemeIdentityProps) {
   const official = officialThemeIdentity(reason, exact, state, notAfter);
-  const unconfirmed = state === "unavailable" ? "目录未就绪 · 保留原标签" : state === "ambiguous" ? "原标签 · 目录对应不唯一"
+  const unconfirmed = state === "unavailable" ? historical ? "当时目录未就绪 · 保留原标签" : "目录未就绪 · 保留原标签" : state === "ambiguous" ? "原标签 · 目录对应不唯一"
     : state === "unclassified" ? "来源未分类" : !state && historical ? "原标签 · 当时未记录映射"
       : state === "unmapped" ? "原标签 · 无正式目录对应" : "原标签 · 映射未确认";
   return <span className="inline-flex min-w-0 flex-wrap items-center gap-1 text-[10px] text-zinc-600 dark:text-zinc-400">

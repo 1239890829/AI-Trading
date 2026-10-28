@@ -1,9 +1,11 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { cleanup, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
+import { act,cleanup, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import type { ReactNode } from "react";
 import { MarketReview, reviewSegmentBound } from "./market-review";
+import {getThemeCatalogCompletion} from "@/lib/api/themes";
 import type { ReviewData, ReviewProvenance, ReviewReportDetail } from "@/lib/api";
 
+vi.mock("@/lib/api/themes",async()=>({...await vi.importActual<typeof import("@/lib/api/themes")>("@/lib/api/themes"),getThemeCatalogCompletion:vi.fn()}));
 vi.mock("@/components/stock-link", () => ({StockLink: ({symbol,children}: {symbol: string;children: ReactNode}) => <a href={`/workbench?symbol=${symbol}`}>{children}</a>}));
 vi.mock("@/lib/api", async () => ({...await vi.importActual<typeof import("@/lib/api")>("@/lib/api"),getReviewReport: vi.fn(),getOfficialCatalog:vi.fn(),getThemesCatalog:vi.fn()}));
 const api = await import("@/lib/api");
@@ -312,4 +314,21 @@ it("旧报告只旁列当前同名参考，可信冻结映射优先且不借当�
   expect(screen.queryByText("当前目录同名参考，非当时归属 · 885502.TI")).toBeNull();
   expect(JSON.stringify(value.data)).toBe(before);
   expect(api.getOfficialCatalog).not.toHaveBeenCalled();
+});
+
+
+it("目录慢读完成后自动更新独立参考，不手刷或重取完整报告",async()=>{
+  const key="e".repeat(32),version="a".repeat(64);
+  const value=report();value.data!.market.themes=[{theme:"汽车零部件"},{theme:"具身智能"}];
+  value.current_theme_catalog={scope:"current_directory_reference",catalog_version:null,observed_at:null,completion_key:key,items:["汽车零部件","具身智能"].map(theme=>({theme,catalog_mapping_state:"unavailable" as const,exact_catalog:null,catalog_mapping_context:{reason:"catalog_read_pending",completion_key:key}}))};
+  const before=JSON.stringify(value);
+  let finish!: (value: Awaited<ReturnType<typeof getThemeCatalogCompletion>>) => void;
+  vi.mocked(getThemeCatalogCompletion).mockReturnValueOnce(new Promise(resolve=>{finish=resolve;}));
+  render(<MarketReview report={value}/>);
+  await waitFor(()=>expect(getThemeCatalogCompletion).toHaveBeenCalledTimes(1));
+  await act(async()=>finish({scope:"current_directory_resolution",completion_key:key,state:"available",catalog_version:version,observed_at:"2026-10-28T00:00:00+00:00",identities:{汽车零部件:{code:"881126.TI",name:"汽车零部件",source:"ths_official",basis:"exact_name",kind:"industry",catalog_version:version,observed_at:"2026-10-28T00:00:00+00:00"}},ambiguous:[],reason:null}));
+  expect(await screen.findByText("当前目录同名参考，非当时归属 · 881126.TI")).toBeTruthy();
+  expect(screen.getByText("当前目录无同名对应")).toBeTruthy();
+  expect(api.getReviewReport).not.toHaveBeenCalled();expect(api.getOfficialCatalog).not.toHaveBeenCalled();
+  expect(JSON.stringify(value)).toBe(before);
 });

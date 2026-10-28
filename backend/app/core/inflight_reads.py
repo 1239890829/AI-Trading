@@ -12,6 +12,16 @@ class InflightReads:
         self.tasks: dict[tuple, asyncio.Task] = {}
         self.closing = False
 
+    def peek(self, key: tuple) -> asyncio.Task | None:
+        """Observe an existing owner on this loop; never register or run a factory."""
+        return self.tasks.get((asyncio.get_running_loop(), key))
+
+    async def join_existing(self, key: tuple, expected: asyncio.Task) -> tuple[bool, Any]:
+        """Join only the exact observed owner, including its done-callback race."""
+        if self.peek(key) is not expected and not expected.done():
+            return False, None
+        return True, deepcopy(await asyncio.shield(expected))
+
     async def read(self, key: tuple, factory: Callable) -> Any:
         if self.closing:
             raise RuntimeError("read owner is closing")
@@ -68,6 +78,16 @@ async def read_inflight(holder, key: tuple, factory: Callable):
         reads = InflightReads()
         holder._inflight_source_reads = reads
     return await reads.read(key, factory)
+
+
+def peek_inflight(holder, key: tuple) -> asyncio.Task | None:
+    reads = getattr(holder, "_inflight_source_reads", None)
+    return reads.peek(key) if isinstance(reads, InflightReads) else None
+
+
+async def join_existing_inflight(holder, key: tuple, expected: asyncio.Task) -> tuple[bool, Any]:
+    reads = getattr(holder, "_inflight_source_reads", None)
+    return await reads.join_existing(key, expected) if isinstance(reads, InflightReads) else (False, None)
 
 
 async def close_inflight_reads(holder) -> None:

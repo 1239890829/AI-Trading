@@ -135,6 +135,7 @@ READ_PATHS = frozenset({
     '/stock-flow',
     '/themes',
     '/themes/catalog',
+    '/themes/catalog/completions/{completion_key}',
     '/themes/catalog/index',
     '/themes/catalog/quotes',
     '/themes/catalog/strength',

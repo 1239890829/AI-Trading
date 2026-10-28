@@ -3,6 +3,7 @@ import { ApiError, getPickReviews, getPicksHistory } from "@/lib/api";
 import { DEFAULT_TIMEOUT_MS, clearDeviceSessionReads, getJson, sendJson } from "@/lib/api/internal";
 import {CandidateDataUnavailableError, getIntradayTop} from "@/lib/api/picks";
 import {getTradesPayload} from "@/lib/api/market";
+import {getThemeCatalogCompletion} from "@/lib/api/themes";
 
 /**
  * 回归（2026-09-10 实测事故）：`undefined is not an object (evaluating 'reviews.length')`。
@@ -221,4 +222,44 @@ it("does not present actual HTTP failures as successfully read business-unavaila
   expect(error).toBeInstanceOf(ApiError);
   expect(error).not.toBeInstanceOf(CandidateDataUnavailableError);
   expect(error).toMatchObject({status: 500});
+});
+
+describe("目录完成等待只承接已命名 owner",()=>{
+  const key="c".repeat(32),version="a".repeat(64),clock="2026-10-28T00:00:00+00:00";
+  const identity=()=>({code:"881126.TI",name:"汽车零部件",source:"ths_official",basis:"exact_name",kind:"industry",catalog_version:version,observed_at:clock});
+  const payload=()=>({scope:"current_directory_resolution",completion_key:key,state:"available",catalog_version:version,observed_at:clock,identities:{汽车零部件:identity()} as Record<string,ReturnType<typeof identity>>,ambiguous:[],reason:null});
+
+  it("保留原 15s owner 等待预算，正确读取行业并且只有一个 cache-only 请求",async()=>{
+    vi.useFakeTimers();
+    const fetcher=vi.fn<typeof fetch>(()=>new Promise<Response>(resolve=>setTimeout(()=>resolve(Response.json({data:payload()})),15_000)));
+    vi.stubGlobal("fetch",fetcher);
+    const work=getThemeCatalogCompletion(key);
+    await vi.advanceTimersByTimeAsync(15_000);
+    expect((await work).identities.汽车零部件.kind).toBe("industry");
+    expect(fetcher).toHaveBeenCalledTimes(1);
+    expect(String(fetcher.mock.calls[0][0])).toContain(`/api/themes/catalog/completions/${key}`);
+  });
+
+  it.each(["scope","key","kind","name","version","clock","count"])("拒绝 %s 漂移，不将错包当正式身份",async fault=>{
+    const data=payload();
+    if(fault==="scope")data.scope="current_directory_reference";
+    if(fault==="key")data.completion_key="d".repeat(32);
+    if(fault==="kind")data.identities.汽车零部件.kind="other";
+    if(fault==="name")data.identities.汽车零部件.name="其他名称";
+    if(fault==="version")data.identities.汽车零部件.catalog_version="b".repeat(64);
+    if(fault==="clock")data.identities.汽车零部件.observed_at="2026-10-28T00:01:00+00:00";
+    if(fault==="count")data.identities=Object.fromEntries(Array.from({length:2001},(_,i)=>[String(i),identity()]));
+    stubFetch(200,JSON.stringify({data}));
+    await expect(getThemeCatalogCompletion(key)).rejects.toMatchObject({code:"bad_catalog_completion"});
+  });
+
+  it("不可用是终态，过期不重试，损坏 key 不发请求",async()=>{
+    const fetcher=stubFetch(200,JSON.stringify({data:{...payload(),state:"unavailable",catalog_version:null,observed_at:null,identities:{},reason:"completion_wait_timeout"}}));
+    expect((await getThemeCatalogCompletion(key)).state).toBe("unavailable");
+    await expect(getThemeCatalogCompletion("not-a-key")).rejects.toMatchObject({code:"invalid_completion_key"});
+    expect(fetcher).toHaveBeenCalledTimes(1);
+    const expired=stubFetch(410,JSON.stringify({detail:"owner expired"}));
+    await expect(getThemeCatalogCompletion(key)).rejects.toMatchObject({status:410});
+    expect(expired).toHaveBeenCalledTimes(1);
+  });
 });

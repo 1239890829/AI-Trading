@@ -56,6 +56,8 @@ const PATH_VALUES = {
   category: "gn_ldc", // 新浪锂电池分类，与BK身份独立。
   run_id: "missing-run",
   method: "daily_picks",
+  // Unknown observer identity exercises the terminal read without starting a source.
+  completion_key: "0".repeat(32),
 };
 
 // 查询参数默认值：只给**必需**参数填，选填的一律不带（走后端默认）

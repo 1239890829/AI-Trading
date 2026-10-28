@@ -816,6 +816,7 @@ export interface OpportunityTheme {
 export interface IntradayOpportunities {
   trade_date: string | null;
   themes: OpportunityTheme[];
+  current_theme_catalog?: CurrentThemeCatalogReference;
   summary: { limit_up_total: number | null; market_max_boards: number | null; top_theme: string | null;
     market_max_board_stocks?: {symbol: string; name: string | null; boards: number}[] };
   hot_available: boolean;

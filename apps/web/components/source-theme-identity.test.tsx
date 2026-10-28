@@ -91,8 +91,8 @@ it("当前目录确认无对应时只说明缺口，不编正式代码",()=>{
 });
 
 
-it("当前目录失败保留未就绪，不以空映射冒充没有对应",()=>{
+it("当前目录失败明确不可用，不以空映射冒充没有对应",()=>{
   render(<CurrentThemeReference reason="具身智能" reference={{scope:"current_directory_reference",catalog_version:null,observed_at:null,items:[{theme:"具身智能",catalog_mapping_state:"unavailable",exact_catalog:null}]}}/>);
-  expect(screen.getByText("当前目录核对未就绪")).toBeTruthy();
+  expect(screen.getByText("当前目录不可用")).toBeTruthy();
   expect(screen.queryByText("当前目录无同名对应")).toBeNull();
 });

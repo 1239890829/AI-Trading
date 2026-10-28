@@ -14,7 +14,7 @@ import logging
 from datetime import date, datetime
 from typing import Annotated, Any
 
-from fastapi import APIRouter, Depends, HTTPException, Query, Request
+from fastapi import APIRouter, Depends, HTTPException, Path, Query, Request
 from pydantic import BaseModel
 
 from app.api.deps import get_hub, normalize_symbol, require_write_token
@@ -193,6 +193,17 @@ async def stock_themes(
         },
         "meta": {},
     }
+
+
+@router.get("/themes/catalog/completions/{completion_key}")
+async def theme_catalog_completion(
+    request: Request,
+    completion_key: Annotated[str, Path(pattern=r"^[0-9a-f]{32}$")],
+) -> dict:
+    """Observe one existing directory read; missing scope never restarts a source."""
+    from app.services.official_match import complete_official_catalog
+
+    return {"data": await complete_official_catalog(request, completion_key), "meta": {}}
 
 
 @router.get("/themes/catalog")

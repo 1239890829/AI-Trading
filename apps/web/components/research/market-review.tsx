@@ -8,6 +8,7 @@ import { useResource } from "@/hooks/use-polling-fetch";
 import { bjDate, dateTimeTextBJ, fmt, fmtAmount, pctColor, pctText, signedYi } from "@/lib/format";
 import { readerExcerpt } from "@/lib/reader-copy";
 import { getReviewReport, type ReviewData, type ReviewProvenance, type ReviewReportDetail, type ReviewSectorBoard } from "@/lib/api";
+import {useThemeCatalogReference} from "@/hooks/use-theme-catalog-reference";
 import { ReviewMetricTrends } from "./review-metric-trends";
 import {CurrentThemeReference, SourceThemeIdentity} from "@/components/source-theme-identity";
 import {officialThemeIdentity} from "@/lib/theme-identity";
@@ -118,6 +119,7 @@ function ReportComparison({report, previousDate, active}: {report: ReviewReportD
 }
 
 export function MarketReview({report, previousDate, active = true}: {report: ReviewReportDetail; previousDate?: string; active?: boolean}) {
+  const currentCatalog=useThemeCatalogReference(report.current_theme_catalog,`review:${report.trade_date}:${report.review_id}:${report.generated_at}`,active);
   const prefix = useId();
   const [sector, setSector] = useState<"industry" | "concept">("industry");
   const [sectorOrder, setSectorOrder] = useState<"strong" | "weak">("strong");
@@ -215,7 +217,7 @@ export function MarketReview({report, previousDate, active = true}: {report: Rev
         const state=["exact","unmapped","ambiguous","unclassified","unavailable"].includes(String(theme?.catalog_mapping_state)) ? theme?.catalog_mapping_state as ThemeMappingState : undefined;
         const completionClock=/(?:Z|[+-]\d{2}:?\d{2})$/i.test(report.generated_at) ? report.generated_at : "unknown";
         const exact=officialThemeIdentity(name,theme?.exact_catalog,state,completionClock);
-        return <span key={`${name}:${i}`}><span>{name}</span> <SourceThemeIdentity reason={name} exact={exact} state={state} historical notAfter={completionClock}/>{!exact && <CurrentThemeReference reason={name} reference={report.current_theme_catalog}/>}</span>;
+        return <span key={`${name}:${i}`}><span>{name}</span> <SourceThemeIdentity reason={name} exact={exact} state={state} historical notAfter={completionClock}/>{!exact && <CurrentThemeReference reason={name} reference={currentCatalog}/>}</span>;
       })}<p className="market-review-caption">映射仅取本报告已存凭据，不证明当时成分或板块涨幅；未用今日目录补写。</p></div>}
       <SourceRecord record={provenance?.themes} bound={bound("themes")}/>
     </section>

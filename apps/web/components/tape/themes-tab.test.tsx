@@ -2,14 +2,16 @@ import {act, cleanup, render, screen, waitFor} from "@testing-library/react";
 import {afterEach, beforeEach, describe, expect, it, vi} from "vitest";
 import {getThemes, getThemesHot, getThemeStrength, getAuctionBenchmark, getSkyrocket} from "@/lib/api";
 import {ThemesTab} from "./themes-tab";
-import type {ThemeBoardPayload} from "@/types/market";
+import type {ThemeBoardPayload,CurrentThemeCatalogReference} from "@/types/market";
 import type {ThemeStrengthRow, HotTheme} from "@/lib/api";
+import {getThemeCatalogCompletion} from "@/lib/api/themes";
+vi.mock("@/lib/api/themes",async()=>({...await vi.importActual<typeof import("@/lib/api/themes")>("@/lib/api/themes"),getThemeCatalogCompletion:vi.fn()}));
 
 const scope = vi.hoisted(() => ({params: new URLSearchParams()}));
 vi.mock("@/components/inspection/surface-scope", () => ({useSurfaceScope: () => ({searchParams: scope.params, replaceSearch: vi.fn()})}));
 vi.mock("@/components/detail/symbol-detail-context", () => ({useSymbolDetail: () => ({open: vi.fn()}), symbolDetailClick: () => () => {}}));
-vi.mock("@/components/theme-card", () => ({RankDelta: () => null, ThemeCardView: ({card, strength, hot, currentThemeCatalog}: {card: {theme: string}; strength: ThemeStrengthRow | null; hot?: HotTheme; currentThemeCatalog?: {scope:string}}) =>
-  <div data-testid={card.theme}>{strength ? `${strength.code}:${strength.count}` : "无正式成分样本"}{hot && <span data-testid={`${card.theme}-hot`}>{hot.theme_code}:{hot.heat}</span>}{currentThemeCatalog && <span data-testid={`${card.theme}-current-reference`}>{currentThemeCatalog.scope}</span>}</div>}));
+vi.mock("@/components/theme-card", () => ({RankDelta: () => null, ThemeCardView: ({card, strength, hot, currentThemeCatalog}: {card: {theme: string}; strength: ThemeStrengthRow | null; hot?: HotTheme; currentThemeCatalog?: CurrentThemeCatalogReference}) =>
+  <div data-testid={card.theme}>{strength ? `${strength.code}:${strength.count}` : "无正式成分样本"}{hot && <span data-testid={`${card.theme}-hot`}>{hot.theme_code}:{hot.heat}</span>}{currentThemeCatalog && <><span data-testid={`${card.theme}-current-reference`}>{currentThemeCatalog.scope}</span><span data-testid={`${card.theme}-current-state`}>{currentThemeCatalog.items.find(item=>item.theme===card.theme)?.catalog_mapping_state}</span></>}</div>}));
 vi.mock("@/lib/api", () => ({getThemes: vi.fn(), getThemesHot: vi.fn(), getThemeStrength: vi.fn(), getAuctionBenchmark: vi.fn(), getSkyrocket: vi.fn()}));
 vi.mock("@/lib/market-hours", () => ({isTradingSession: () => true}));
 
@@ -191,4 +193,21 @@ it("历史市场旁列当前目录sidecar但不请求当前概念合力或人气
   render(<ThemesTab/>);
   expect((await screen.findByTestId("汽车零部件-current-reference")).textContent).toBe("current_directory_reference");
   expect(getThemeStrength).not.toHaveBeenCalled();expect(getThemesHot).not.toHaveBeenCalled();
+});
+
+it("慢目录完成只更新同请求旁列，不重读题材或触发新的成分合力",async()=>{
+  scope.params=new URLSearchParams({date:"2026-10-23"});
+  const key="d".repeat(32),version="a".repeat(64),clock="2026-10-28T00:00:00+00:00";
+  const value=payload([{theme:"汽车零部件",exact_catalog:null,catalog_mapping_state:"unavailable"}]);
+  value.current_theme_catalog={scope:"current_directory_reference",catalog_version:null,observed_at:null,completion_key:key,items:[{theme:"汽车零部件",catalog_mapping_state:"unavailable",catalog_mapping_context:{reason:"catalog_read_pending",completion_key:key}}]};
+  const before=JSON.stringify(value);vi.mocked(getThemes).mockResolvedValue(value);
+  let finish!:(result:Awaited<ReturnType<typeof getThemeCatalogCompletion>>)=>void;
+  vi.mocked(getThemeCatalogCompletion).mockReturnValueOnce(new Promise(resolve=>{finish=resolve;}));
+  render(<ThemesTab/>);
+  await waitFor(()=>expect(getThemeCatalogCompletion).toHaveBeenCalledTimes(1));
+  expect(screen.getByTestId("汽车零部件-current-state").textContent).toBe("unavailable");
+  await act(async()=>finish({scope:"current_directory_resolution",completion_key:key,state:"available",catalog_version:version,observed_at:clock,identities:{汽车零部件:{code:"881126.TI",name:"汽车零部件",source:"ths_official",basis:"exact_name",kind:"industry",catalog_version:version,observed_at:clock}},ambiguous:[],reason:null}));
+  expect(screen.getByTestId("汽车零部件-current-state").textContent).toBe("exact");
+  expect(getThemes).toHaveBeenCalledTimes(1);expect(getThemeStrength).not.toHaveBeenCalled();expect(getThemesHot).not.toHaveBeenCalled();
+  expect(JSON.stringify(value)).toBe(before);
 });
