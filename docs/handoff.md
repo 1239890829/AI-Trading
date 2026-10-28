@@ -1,10 +1,25 @@
-# 本批：正式目录映射与原始题材承接
+# 本批：目录慢读完成后的自动承接
 
-> **摘要**：补齐同花顺正式概念/行业的唯一精确原名对应，原题材不改名，未对应保留原文。选股、市场与复盘共用身份投影，历史旁列当前目录参考，不拿现成员/涨幅改当时判断。
+> **摘要**：接续已发布正式映射，补上慢读结束后的自动状态承接。仅等待原目录owner，不重拉业务报告或数据源；旧记录、指标与资格保留。
 
 ## 1. 本轮范围与已核现场
 
-### 本批：正式目录映射与原始题材承接
+### 本批：目录完成状态自动承接
+
+从最新master `935c9cb56fb6ef39ff53a6606a58f698dc5d6e4b`（PR #360）在`codex/catalog-read-completion`接续。DEGRADED_FULL_CONTROL仍有效；selector仍G4/IMP-019。用户直派修正上一轮明确保留的人工重读缺口，不领取下一业务任务。主目录5份用户原件、2545份研究文件、34份保存复盘、凭据与模拟表已冻结；无模型调用、生产库修补或RSH-031重试。
+
+根因是HTTP200中的`catalog_read_pending`被读者保存成成功快照，原owner完成只写原cache，历史/复盘无轮询便可永久停留。修补沿原250ms首屏等待，以service实例/revision/attempt绑定的可选completion_key承接一次共享完成GET；只查原60/5s完成cache或join原future，missing/过期/新attempt/重启/版本变化均终态，不启动factory。等待传输上限不扩原源预算，前端同设备会话/原origin/key合并，不逐标签或重拉选股/报告/源，也不新增timer。
+
+完成只更新当前目录参考与同源展示/成分入口，旧存档、原分数/position/interval/候选资格不回写。失败、超时和过期分别反馈；页面换scope后旧包不可覆盖。完整门、精确HEAD发布、主目录加载和实际页面结果按本批最终回执分别记实，未取得前不预写通过。
+
+首完整后端8894 passed／1 failed／87 skipped／372 subtests，原防遗漏门准确抓出新completion_key未进全接口巡检参数表；离线冒烟和实际api-sweep已同步格式合法但不存在的标识，验证终态且不发源。原断言保留，初批失败与输入冻结保全；新冻结完整门另跑，不将首批称通过。真实组件的隔离1500ms慢传实页已见三消费者同key仅一条完成GET、自动exact/无对应、失败终态、A→B隔离、缺key不请求、重挂无重复及390px可读；冻结目录与合成延迟不冒充主源SLO，主目录三处实页另按发布后回执。
+
+实现提交`71f0651130a4cd5deefdfc71a5ea3d6b01093b31`共29个代码/测试文件，9份现役文档同步；源码冻结后的完整后端8896 passed／87 skipped／372 subtests（pytest576.58秒、命令585.549秒），1048个门输入运行时无漂移，全pyflakes通过。前端178文件默认/UTC各2884 passed（命令245.514／286.844秒），类型、ESLint（0错、3项既有warning）和构建29.469秒通过，build`gD5f_gseKhmtdHH9pcakt`；两项生成引用按原字节恢复后类型复验，429个前端输入无漂移。文档回填另核原文档守卫，不借首批失败或旧HEAD CI。准确HEAD的DegradedRelease/三项CI/release_check、合并后master CI、主目录加载及三处真实页面按该实现关联PR最终运行回执接续；本段是发布前冻结事实，不预写已激活或全域行情SLO。
+
+### 上批已发布：正式目录映射与原始题材承接
+
+PR #360以HEAD`0bfceff9c10eaa8a0caee9e03c823bca3902fe46`、DegradedRelease6443628440及原release_check exit0合并为上述935c；PR CI40515709633/master CI40517237120三项成功，主目录已加载build`2H2JooAC0551IM_aXTjtz`。三页、行业277成分搜索/历史概念482当前参考已实际读取；旧原件与用户修改保全，14个结束沙箱清理。运行证据见[最终回执](https://github.com/1239890829/AI-Trading/pull/360#issuecomment-6444911920)。该轮仍需人工重读的状态缺口由本轮承接，原发布前快照如下。
+
 
 基点master `54c1590ee9c324ae18fc1e382a5383e982ba67e9`（PR #359已合并、主干三项CI通过且主目录生效），分支`codex/formal-theme-mapping`。用户明确要求整项完成；DEGRADED_FULL_CONTROL未撤销。重算首选仍G4/IMP-019，此为该任务的来源身份/读者正确性切片，不领取第二项业务任务。
 
