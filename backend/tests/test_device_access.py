@@ -303,6 +303,13 @@ def test_actual_research_cluster_history_is_paired_read_without_maintenance(stor
     from app.main import app
     from app.services import research_cluster_storage
 
+    class NoLiveHub:
+        def __getattr__(self, name):
+            raise AssertionError(f'historical read must not access live hub: {name}')
+
+    # The real dependency still resolves through app.state, without relying on
+    # another test's lifespan or allowing a historical read to fetch a source.
+    monkeypatch.setattr(app.state, 'hub', NoLiveHub(), raising=False)
     monkeypatch.setattr(research_cluster_storage, 'ROOT', tmp_path / 'clusters')
     probe = TestClient(app)  # Real router registration, no lifespan or source calls.
     path = '/api/themes/research-clusters?date=2026-10-23&historical=true'
