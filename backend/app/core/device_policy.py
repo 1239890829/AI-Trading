@@ -142,6 +142,7 @@ READ_PATHS = frozenset({
     '/themes/catalog/{code}/detail',
     '/themes/catalog/{code}/members',
     '/themes/hot',
+    '/themes/research-clusters',
     '/themes/stock/{symbol}',
     '/trades/{symbol}',
     '/watchlist',

@@ -74,6 +74,8 @@ class MarketSnapshot(BaseModel):
     sentiment: dict[str, Any] = Field(default_factory=dict)
     themes: list[dict[str, Any]] = Field(default_factory=list)
     theme_summary: dict[str, Any] = Field(default_factory=dict)
+    # A separately observed research version, not certified same-day market facts.
+    research_clusters: dict[str, Any] | None = None
     gaps: list[DataGap] = Field(default_factory=list)
     #: 数据链健康快照（provider 熔断/切换 + ths 涨停原因哨兵）。
     #: None = 未采集（单源部署或采集失败）——三态纪律：缺失不冒充"健康"。

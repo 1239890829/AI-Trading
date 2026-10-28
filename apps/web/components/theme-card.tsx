@@ -2,6 +2,8 @@
 
 import {currentThemeMapping, officialThemeIdentity, type OfficialThemeIdentity} from "@/lib/theme-identity";
 import { CurrentThemeReference, SourceThemeIdentity } from "@/components/source-theme-identity";
+import {ResearchClusterBadges} from "@/components/research-clusters";
+import type {ResearchClustersPayload} from "@/types/research-clusters";
 
 import { Fragment, useState } from "react";
 import { useExitPresence } from "@/hooks/use-exit-presence";
@@ -186,6 +188,7 @@ export function ThemeCardView({
   hot,
   strength,
   currentThemeCatalog,
+  researchClusters,
 }: {
   card: ThemeCardType;
   rank: number;
@@ -194,6 +197,7 @@ export function ThemeCardView({
   /** 仅由正式同花顺代码连接的成分样本；不是板块资金榜。 */
   strength?: ThemeStrengthRow | null;
   currentThemeCatalog?: CurrentThemeCatalogReference;
+  researchClusters?:ResearchClustersPayload;
 }) {
   const { open: inspect } = useInspection();
   const p = card.performance;
@@ -263,7 +267,7 @@ export function ThemeCardView({
         )}
 
         <SourceThemeIdentity reason={card.theme} exact={card.exact_catalog} state={card.catalog_mapping_context?.reason === "historical_identity_not_frozen" ? undefined : card.catalog_mapping_state} related={card.official_matches} historical={!!tradeDate} />
-        {!identity && <CurrentThemeReference reason={card.theme} reference={currentThemeCatalog} compact/>}
+        {!identity && <CurrentThemeReference reason={card.theme} reference={currentThemeCatalog} compact/>}<ResearchClusterBadges data={researchClusters} theme={card.theme}/>
         {currentIdentity && <button type="button" className={JUMP_PILL_CLASS} onClick={event=>{
           event.preventDefault();event.stopPropagation();setDetailTarget({identity:currentIdentity,date:tradeDate});
         }} title="读取当前正式成分参考，不证明原日期归属">当前成分 ↗</button>}

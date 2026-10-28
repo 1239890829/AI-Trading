@@ -116,6 +116,7 @@ backend/data/lhb/
 backend/data/minute_decisions/
 backend/data/position_plans/
 backend/data/company_impact/
+backend/data/research_clusters/
 # Local native research manifests, authorization, claims and reports.
 backend/data/tradingagents_research/
 backend/data/picks/reference-runs/

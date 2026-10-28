@@ -1,6 +1,8 @@
 "use client";
 
 import {useThemeCatalogReference} from "@/hooks/use-theme-catalog-reference";
+import {useResearchClusters} from "@/hooks/use-research-clusters";
+import {ResearchClustersPanel} from "@/components/research-clusters";
 import {officialThemeIdentity} from "@/lib/theme-identity";
 import { useId, useMemo, useState, useSyncExternalStore } from "react";
 import { useExitPresence } from "@/hooks/use-exit-presence";
@@ -67,6 +69,7 @@ export function ThemesTab() {
   // href 保留（右键新窗口/复制链接仍走工作台深链）
   const { open } = useSymbolDetail();
   const date = searchParams.get("date") ?? "";
+  const clusterRead=useResearchClusters(date||undefined,{historical:!!date});
   const rawSort = searchParams.get("sort");
   const sort: SortKey = rawSort === "boards" || rawSort === "count" ? rawSort : "strength";
   const minBoards = Number(searchParams.get("min_boards")) || 0;
@@ -408,6 +411,7 @@ export function ThemesTab() {
 
       {/* ── 唯一滚动容器：全部卡片 + 断板股 + 口径说明 ─────────── */}
       <div className="theme-card-scroll min-h-0 flex-1 overflow-y-auto pr-1">
+        <ResearchClustersPanel data={clusterRead.data} pending={clusterRead.pending} error={clusterRead.error} onRetry={clusterRead.refresh}/>
         <div className={`theme-card-list ${loading && data ? "opacity-60 transition-opacity" : ""}`}>
           {visibleThemes.map((c, i) => (
             <ThemeCardView
@@ -416,6 +420,7 @@ export function ThemesTab() {
               rank={i + 1}
               tradeDate={data?.trade_date ?? ""}
               currentThemeCatalog={currentCatalog}
+              researchClusters={clusterRead.data}
               hot={officialThemeIdentity(c.theme,c.exact_catalog,c.catalog_mapping_state)?.kind === "concept" ? hotByCode.get(c.exact_catalog!.code) : undefined}
               strength={officialThemeIdentity(c.theme,c.exact_catalog,c.catalog_mapping_state)?.kind === "concept" ? strength?.get(c.exact_catalog!.code) ?? null : null}
             />

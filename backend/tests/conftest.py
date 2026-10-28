@@ -197,6 +197,10 @@ _tradingagents_research.ROOT = _DATA_SANDBOX / "tradingagents_research"
 import app.picks.reference_research as _reference_research  # noqa: E402
 _reference_research.ROOT = _DATA_SANDBOX / "reference-runs"
 
+# Current research observations and historical readers share one isolated store.
+import app.services.research_cluster_storage as _research_cluster_storage  # noqa: E402
+_research_cluster_storage.ROOT = _DATA_SANDBOX / "research_clusters"
+
 
 # TDX 分钟 K 是另一条独立 TCP 7709 外部边界（不受逐笔 fallback 开关控制）。
 # 默认测试必须在该边界失败；专项 minute-backfill 测试会显式 monkeypatch 自己的 fake。

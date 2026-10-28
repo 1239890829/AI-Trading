@@ -594,6 +594,7 @@ async def build_theme_board(
     if not today_pool:
         return {
             "trade_date": trade_date.isoformat(),
+            "source_observations": [],
             "themes": [],
             "summary": {"limit_up_total": 0, "theme_count": 0, "market_max_boards": 0,
                         "market_max_board_stocks": [], "note": "当日无涨停数据"},
@@ -706,6 +707,9 @@ async def build_theme_board(
 
     return {
         "trade_date": trade_date.isoformat(),
+        # Retain the complete source labels before single-primary display
+        # allocation. Secondary labels must not disappear from research views.
+        "source_observations": [r.model_dump(mode="json") for r in today_pool],
         "prev_trade_date": (prev_pool[0].trade_date.isoformat() if prev_pool else None),
         "themes": cards,
         "broken_ladder": broken,

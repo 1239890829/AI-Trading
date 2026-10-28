@@ -13,7 +13,7 @@ vi.mock("@/components/detail/symbol-detail-context", () => ({useSymbolDetail: ()
 vi.mock("@/components/theme-card", () => ({RankDelta: () => null, ThemeCardView: ({card, strength, hot, currentThemeCatalog}: {card: {theme: string}; strength: ThemeStrengthRow | null; hot?: HotTheme; currentThemeCatalog?: CurrentThemeCatalogReference}) =>
   <div data-testid={card.theme}>{strength ? `${strength.code}:${strength.count}` : "无正式成分样本"}{hot && <span data-testid={`${card.theme}-hot`}>{hot.theme_code}:{hot.heat}</span>}{currentThemeCatalog && <><span data-testid={`${card.theme}-current-reference`}>{currentThemeCatalog.scope}</span><span data-testid={`${card.theme}-current-state`}>{currentThemeCatalog.items.find(item=>item.theme===card.theme)?.catalog_mapping_state}</span></>}</div>}));
 vi.mock("@/lib/api", () => ({getThemes: vi.fn(), getThemesHot: vi.fn(), getThemeStrength: vi.fn(), getAuctionBenchmark: vi.fn(), getSkyrocket: vi.fn()}));
-vi.mock("@/lib/market-hours", () => ({isTradingSession: () => true}));
+vi.mock("@/lib/market-hours", async () => ({...await vi.importActual<typeof import("@/lib/market-hours")>("@/lib/market-hours"),isTradingSession: () => true}));
 
 const row = (code: string, name: string, count: number) => ({code, name, count} as ThemeStrengthRow);
 const payload = (themes: Record<string, unknown>[]) => ({trade_date: "2026-10-27", themes: themes.map(theme=>{const identity=theme.exact_catalog as Record<string,unknown>|null;return {...theme,...(identity?{catalog_mapping_state:"exact",exact_catalog:{name:theme.theme,basis:"exact_name",kind:"concept",catalog_version:"a".repeat(64),observed_at:"2026-10-27T12:00:00+08:00",...identity}}:{})};}), broken_ladder: [], caveats: [],

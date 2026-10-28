@@ -15,6 +15,25 @@ import { getJson, type ReadOptions } from "./internal";
 import type { BoardFundRow } from "./market";
 import {ApiError} from "./client";
 import {officialThemeIdentity, type OfficialThemeIdentity} from "@/lib/theme-identity";
+import type {ResearchClustersPayload} from "@/types/research-clusters";
+import {researchDate,validateResearchClusters} from "@/lib/research-clusters";
+import {bjToday} from "@/lib/market-hours";
+
+export async function getResearchClusters(query: {date?:string;version?:string;historical?:boolean} = {}, options: ReadOptions = {}): Promise<ResearchClustersPayload> {
+  const clientDay=bjToday();
+  const day=query.date ? researchDate(query.date) : undefined;
+  if (query.version && !/^[a-f0-9]{64}$/.test(query.version)) throw new ApiError(422,"研究簇版本无效","invalid_cluster_version");
+  const params=new URLSearchParams();
+  if (day) params.set("date",day);
+  if (query.version) params.set("version",query.version);
+  if (query.historical) params.set("historical","true");
+  // Transport margin only; the directory owner's source budget remains unchanged.
+  const result=(await getJson<unknown>(`/api/themes/research-clusters${params.size?`?${params}`:""}`,20_000,options)).data;
+  const value=result && typeof result === "object" && !Array.isArray(result) ? result as Record<string,unknown> : null;
+  const resolved=day ?? (typeof value?.trade_date === "string" ? researchDate(value.trade_date) : "");
+  if (!resolved || resolved>clientDay) throw new ApiError(502,"研究簇日期、版本或证据结构不符","bad_research_clusters");
+  return validateResearchClusters(result,{date:resolved,version:query.version,historical:query.historical || !!query.version || resolved < clientDay});
+}
 
 export interface ThemeCatalogCompletion {
   scope: "current_directory_resolution";

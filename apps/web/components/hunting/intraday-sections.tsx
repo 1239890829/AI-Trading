@@ -3,6 +3,8 @@
 import {currentThemeMapping,officialThemeIdentity,type OfficialThemeIdentity} from "@/lib/theme-identity";
 import { CurrentThemeReference,SourceThemeIdentity } from "@/components/source-theme-identity";
 import {useThemeCatalogReference} from "@/hooks/use-theme-catalog-reference";
+import type {ResearchClustersPayload} from "@/types/research-clusters";
+import {ResearchClusterBadges} from "@/components/research-clusters";
 import type {CurrentThemeCatalogReference} from "@/types/market";
 
 import { useId, useState } from "react";
@@ -92,6 +94,7 @@ export function IntradayThemeRow({
   readError = false,
   tradeDate,
   currentThemeCatalog,
+  researchClusters,
 }: {
   t: OpportunityTheme;
   expanded: boolean;
@@ -99,6 +102,7 @@ export function IntradayThemeRow({
   readError?: boolean;
   tradeDate?: string;
   currentThemeCatalog?: CurrentThemeCatalogReference;
+  researchClusters?:ResearchClustersPayload;
 }) {
   const stage = t.stage ?? "未知";
   const detailsId = useId();
@@ -138,7 +142,7 @@ export function IntradayThemeRow({
             </span>
           )}
           <SourceThemeIdentity reason={t.theme} exact={t.exact_catalog} state={t.catalog_mapping_state} related={t.official_matches} historical={!!tradeDate} />
-          {!identity && <CurrentThemeReference reason={t.theme} reference={currentThemeCatalog} compact/>}
+          {!identity && <CurrentThemeReference reason={t.theme} reference={currentThemeCatalog} compact/>}<ResearchClusterBadges data={researchClusters} theme={t.theme}/>
           <span className={`rounded px-1.5 py-0.5 text-[10px] ${STAGE_TONE[stage] ?? "bg-zinc-500/10 text-zinc-600 dark:text-zinc-400"}`} title={(t.stage_basis || []).join("；")}>
             {stage}
           </span>
@@ -254,12 +258,14 @@ export function OpportunitySection({
   expanded,
   onToggle,
   showLedger = true,
+  researchClusters,
   readError = false,
 }: {
   opps: IntradayOpportunities;
   expanded: string | null;
   onToggle: (theme: string) => void;
   showLedger?: boolean;
+  researchClusters?:ResearchClustersPayload;
   readError?: boolean;
 }) {
   // 板块权限挡下的容器成分只数：>0 时口径行要说明——「候选为什么这么少」
@@ -281,7 +287,7 @@ export function OpportunitySection({
       ) : (
         <div className="space-y-2">
           {opps.themes.map((t) => (
-            <IntradayThemeRow key={t.theme} t={t} tradeDate={opps.trade_date ?? undefined} currentThemeCatalog={currentCatalog} expanded={expanded === t.theme} onToggle={() => onToggle(t.theme)} readError={readError} />
+            <IntradayThemeRow key={t.theme} t={t} tradeDate={opps.trade_date ?? undefined} currentThemeCatalog={currentCatalog} researchClusters={researchClusters} expanded={expanded === t.theme} onToggle={() => onToggle(t.theme)} readError={readError} />
           ))}
         </div>
       )}

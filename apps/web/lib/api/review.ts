@@ -73,6 +73,7 @@ export interface ReviewData {
     sentiment: Record<string, unknown>;
     themes: Record<string, unknown>[];
     theme_summary?: Record<string, unknown>;
+    research_clusters?: import("@/types/research-clusters").ResearchClustersPayload;
     sector_boards?: {industry: ReviewSectorBoard[]; concept: ReviewSectorBoard[]};
     sector_board_summary?: Record<string, unknown>;
     auction_premium?: Record<string, unknown> | null;

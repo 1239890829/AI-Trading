@@ -4,6 +4,7 @@ import type { ReactNode } from "react";
 import { MarketReview, reviewSegmentBound } from "./market-review";
 import {getThemeCatalogCompletion} from "@/lib/api/themes";
 import type { ReviewData, ReviewProvenance, ReviewReportDetail } from "@/lib/api";
+import {clusterFixture} from "@/test/research-clusters-fixture";
 
 vi.mock("@/lib/api/themes",async()=>({...await vi.importActual<typeof import("@/lib/api/themes")>("@/lib/api/themes"),getThemeCatalogCompletion:vi.fn()}));
 vi.mock("@/components/stock-link", () => ({StockLink: ({symbol,children}: {symbol: string;children: ReactNode}) => <a href={`/workbench?symbol=${symbol}`}>{children}</a>}));
@@ -30,6 +31,24 @@ function auction(value: Record<string, number | null> = {total:4,judged:3,unknow
 }
 
 describe("market review dated evidence",()=>{
+  it("reads the embedded original cluster version without mutating it or fetching a current replacement",()=>{
+    const value=report();value.data!.market.research_clusters=clusterFixture("2026-10-23");
+    const before=JSON.stringify(value);render(<MarketReview report={value}/>);
+    expect(screen.getByText("研究簇 · 原记录")).toBeTruthy();
+    fireEvent.click(screen.getByRole("button",{name:/人形机器人产业链/}));
+    expect(screen.getByText("共同驱动仍为候选")).toBeTruthy();
+    expect(JSON.stringify(value)).toBe(before);
+    expect(api.getReviewReport).not.toHaveBeenCalled();
+  });
+  it.each(["2026-10-23T16:00:00+08:00","invalid"])("rejects future or unverifiable cluster clocks without leaving the rejected payload visible: %s",clock=>{
+    const value=report();value.data!.market.research_clusters=clusterFixture("2026-10-23");
+    if(clock==="invalid")value.generated_at=clock;
+    else value.data!.market.research_clusters.observed_at=clock;
+    render(<MarketReview report={value}/>);
+    expect(screen.queryByRole("button",{name:/人形机器人产业链/})).toBeNull();
+    expect(screen.queryByText(/当时未记录研究簇/)).toBeNull();
+    expect(screen.getByText(/已存研究簇未通过日期或证据核对/)).toBeTruthy();
+  });
   it("requires source date and requested date, not merely the report label",()=>{
     const value=report();
     expect(reviewSegmentBound(value.data,"indices",value.trade_date)).toBe(true);

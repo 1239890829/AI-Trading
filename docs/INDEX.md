@@ -406,3 +406,5 @@ RSH-031有限前向运行与触发修复入口：[研究§39.5](research/limit-u
 2026-10-27正式题材身份修补入口：[同源目录联合映射与历史参照](product/hunting-decision-design.md#2026-10-27-同源目录联合映射与历史参照)、[来源合同](data/data-sources.md#2026-10-27-正式目录映射与原始标签)、[细功能对账](product/feature-closure-audit.md#2026-10-27-正式目录映射子功能)。准确原名/source/kind/code及版本共用；旧档旁列当前参考，不改历史输入、指标或成员。
 
 2026-10-28目录完成状态入口：[同owner完成承接](system/runtime-performance.md#2026-10-28-目录慢读完成承接)、[三处读者](product/hunting-decision-design.md#2026-10-28-目录完成后的读者承接)、[细功能](product/feature-closure-audit.md#2026-10-28-目录完成状态)。旧报告与原资格不改，准确发布/运行按handoff及本批PR最终回执。
+
+2026-10-28研究簇入口：[唯一关系与版本合同](product/hunting-decision-design.md#2026-10-28-有据研究簇与原始题材) → [来源/时钟](data/data-sources.md#2026-10-28-研究簇来源与证据分层)、[三页子功能](product/feature-closure-audit.md#2026-10-28-有据研究簇子功能)、[复盘冻结](review/review-agent.md#2026-10-28-研究簇参考与历史读取)。正式分类/原数值不并改，真实非正式热点有据保留候选；阶段事实仍归原W06/W07，准确发布/运行查handoff及本批PR回执。

@@ -204,6 +204,7 @@ async def collect_market(
 
     themes: list[dict] = []
     theme_summary: dict = {}
+    research_clusters = None
     try:
         if trade_date != now.date():
             raise ValueError("题材构建含当前板块指标；历史复盘不调用当前混合数据构建")
@@ -215,7 +216,20 @@ async def collect_market(
         from app.services.official_match import attach_official_async
 
         observed_themes = deepcopy([t for t in board.get("themes", []) if isinstance(t, dict)][:10])
-        await attach_official_async(SimpleNamespace(theme_catalog=theme_catalog), observed_themes, view_budget=None)
+        resolution = await attach_official_async(SimpleNamespace(theme_catalog=theme_catalog), observed_themes, view_budget=None)
+        observations = board.get("source_observations")
+        if isinstance(observations, list):
+            from app.services.research_cluster_reader import freeze_research_clusters
+
+            try:
+                research_clusters = await freeze_research_clusters(
+                    observations, trade_date=trade_date.isoformat(), resolution=resolution,
+                )
+            except Exception as exc:
+                # Research persistence must not suppress the original market
+                # capture, nor silently claim that a version has been saved.
+                log.warning("review research cluster freeze failed: %s", type(exc).__name__)
+                gap("research_clusters", "研究簇版本未能保存，原市场采集保留", source="research_clusters")
         reported["themes"] = observed_themes
         reported["theme_summary"] = {
             "theme_count": len(board.get("themes") or []),
@@ -306,7 +320,7 @@ async def collect_market(
 
     return MarketSnapshot(trade_date=td, contract_version="date_bound_v1", provenance=provenance,
         reported_values=reported, indices=indices, breadth=breadth, sentiment=sentiment,
-        themes=themes, theme_summary=theme_summary, sector_boards=sector_boards,
+        themes=themes, theme_summary=theme_summary, research_clusters=research_clusters, sector_boards=sector_boards,
         sector_board_summary=sector_board_summary, gaps=gaps,
         provider_health=provider_health, auction_premium=auction_premium)
 

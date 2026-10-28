@@ -62,6 +62,8 @@ def _is_real_data_path(p: Path) -> bool:
 #: 「是」= 必须在 conftest 里改指沙箱（本文件第 2 项守卫会验）；
 #: 「否」= 保留真实路径，理由写清楚（新增常量时必须逐条判断，不许默认填否）。
 _DECLARED: dict[str, tuple[bool, str]] = {
+    "services/research_cluster_storage.py:ROOT": (
+        True, "研究簇普通读取与新观察归档共用沙箱；旧日期不重建，不接触实际版本"),
     "services/tradingagents_research.py:ROOT": (
         True, "完整图读取与写入替身统一沙箱隔离，普通GET及冒烟也不读真实研究报告"),
     "picks/reference_research.py:ROOT": (
@@ -389,11 +391,13 @@ def test_test_writable_paths_are_sandboxed():
     import app.services.leader_archive as leader_archive
     import app.services.tradingagents_research as tradingagents_research
     import app.picks.reference_research as reference_research
+    import app.services.research_cluster_storage as research_cluster_storage
 
     writable = [k for k, (flag, _) in _DECLARED.items() if flag]
     assert writable, "登记表里没有任何「测试可写」项，疑似登记被误清空"
 
     modules = {
+        "services/research_cluster_storage.py:ROOT": research_cluster_storage,
         "picks/reference_research.py:ROOT": reference_research,
         "services/tradingagents_research.py:ROOT": tradingagents_research,
         "events/company_impact.py:ROOT": company_impact,
