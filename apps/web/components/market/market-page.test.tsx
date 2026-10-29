@@ -44,16 +44,18 @@ beforeEach(() => {
 });
 afterEach(() => { cleanup(); vi.useRealTimers(); vi.resetAllMocks(); vi.unstubAllGlobals(); });
 
-it("keeps research evidence in the existing metrics reader without a third context grid row", async () => {
-  vi.mocked(getResearchClusters).mockResolvedValue(clusterFixture());
+it("keeps a lightweight research destination without mounting the full reader or adding market requests", async () => {
   const {container} = render(<MarketPage />);
   await act(async () => {});
-  const panel = screen.getByRole("region", {name:"研究主题簇"});
-  expect(panel.closest(".bc-market-metrics")).toBeTruthy();
+  expect(screen.queryByRole("region", {name:"研究主题簇"})).toBeNull();
   expect(container.querySelector(".bc-market-context")?.children).toHaveLength(2);
-  fireEvent.click(within(panel).getByRole("button", {name:/人形机器人产业链产业结构有据/}));
-  expect(within(panel).getByRole("group", {name:"保留的原始分支"})).toBeTruthy();
-  expect(getResearchClusters).toHaveBeenCalledTimes(1);
+  const link=screen.getByRole("link",{name:"题材关联研究"});
+  expect(link.getAttribute("href")).toBe("/hunting?view=research");
+  expect(link.closest(".bc-market-metrics")).toBeTruthy();
+  expect(getResearchClusters).not.toHaveBeenCalled();
+  await act(async () => { await vi.advanceTimersByTimeAsync(60_000); });
+  expect(getResearchClusters).not.toHaveBeenCalled();
+  expect(screen.queryByRole("region", {name:"研究主题簇"})).toBeNull();
 });
 
 it("closes failed sentiment evidence and requires a fresh user click after recovery", async () => {

@@ -1,8 +1,15 @@
-import { afterEach, describe, expect, it, vi } from "vitest";
-import { cleanup, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { act, cleanup, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import { LeaderResearchPanel } from "./leader-research-panel";
 import { getLeaderResearch, type LeaderResearchPayload } from "@/lib/api/picks";
+import { getResearchClusters } from "@/lib/api/themes";
+import { clusterFixture } from "@/test/research-clusters-fixture";
+import { unrecordedResearchClusters } from "@/lib/research-clusters";
 vi.mock("@/lib/api/picks", () => ({ getLeaderResearch: vi.fn() }));
+vi.mock("@/lib/api/themes", () => ({ getResearchClusters: vi.fn() }));
+beforeEach(() => {
+  vi.mocked(getResearchClusters).mockImplementation(async query => unrecordedResearchClusters(query?.date ?? "2026-09-29"));
+});
 afterEach(() => { cleanup(); vi.resetAllMocks(); });
 
 const payload = (date = "2026-09-29"): LeaderResearchPayload => ({
@@ -102,4 +109,48 @@ it("separates event relationships, source metadata and real clocks without inven
   fireEvent(document,new Event("visibilitychange"));await waitFor(()=>expect(getLeaderResearch).toHaveBeenCalledTimes(2));
   await waitFor(()=>expect(screen.getByRole("button",{name:"研究完整依据"}).getAttribute("aria-expanded")).toBe("false"));
   fireEvent.click(screen.getByRole("button",{name:"研究完整依据"}));expect(screen.getByText("不得补推公司关联")).toBeTruthy();
+});
+
+
+it("waits for a verified research day and keeps the complete relation reader inside the existing records viewport", async () => {
+  let finish!:(value:LeaderResearchPayload)=>void;
+  vi.mocked(getLeaderResearch).mockReturnValueOnce(new Promise(resolve=>{finish=resolve;}));
+  render(<LeaderResearchPanel/>);
+  expect(getResearchClusters).not.toHaveBeenCalled();
+  expect(screen.queryByRole("region",{name:"研究主题簇"})).toBeNull();
+  await act(async()=>finish(payload()));
+  const panel=await screen.findByRole("region",{name:"研究主题簇"});
+  expect(panel.closest(".hunting-research-records")).toBe(screen.getByRole("region",{name:"强势候选研究记录"}));
+  await within(panel).findByText(/当时未记录研究簇/);
+  expect(getResearchClusters).toHaveBeenCalledTimes(1);
+  expect(vi.mocked(getResearchClusters).mock.calls[0][0]).toEqual(expect.objectContaining({date:"2026-09-29",historical:false}));
+  expect(getLeaderResearch).toHaveBeenCalledTimes(1);
+});
+
+it("uses saved-only relation observations for an explicitly selected historical research date",async()=>{
+  vi.mocked(getLeaderResearch).mockResolvedValue(payload("2026-09-28"));
+  render(<LeaderResearchPanel date="20260928"/>);
+  expect(await screen.findByText("研究簇 · 原记录")).toBeTruthy();
+  expect(await screen.findByText(/当时未记录研究簇/)).toBeTruthy();
+  expect(vi.mocked(getLeaderResearch).mock.calls[0][0]).toBe("2026-09-28");
+  expect(vi.mocked(getResearchClusters).mock.calls[0][0]).toEqual(expect.objectContaining({date:"2026-09-28",historical:true}));
+  expect(getResearchClusters).toHaveBeenCalledTimes(1);
+});
+
+it("does not accept an old relation response after changing the historical research day",async()=>{
+  let finishOld!:(value:ReturnType<typeof clusterFixture>)=>void;
+  vi.mocked(getLeaderResearch).mockImplementation(async date=>payload(date??"2026-09-29"));
+  const later=clusterFixture("2026-09-28");later.reference_mode="saved";later.clusters[0].name="新日期结构关系";
+  vi.mocked(getResearchClusters).mockImplementationOnce(()=>new Promise(resolve=>{finishOld=resolve;})).mockResolvedValueOnce(later);
+  render(<LeaderResearchPanel/>);
+  await waitFor(()=>expect(getResearchClusters).toHaveBeenCalledTimes(1));
+  fireEvent.change(screen.getByLabelText("研究日期"),{target:{value:"2026-09-28"}});
+  const panel=screen.getByRole("region",{name:"研究主题簇"});
+  expect(await within(panel).findByRole("button",{name:/新日期结构关系/})).toBeTruthy();
+  const old=clusterFixture("2026-09-29");old.reference_mode="saved";
+  await act(async()=>finishOld(old));
+  expect(within(panel).getByRole("button",{name:/新日期结构关系/})).toBeTruthy();
+  expect(within(panel).queryByRole("button",{name:/人形机器人产业链/})).toBeNull();
+  expect(getResearchClusters).toHaveBeenCalledTimes(2);
+  expect(vi.mocked(getResearchClusters).mock.calls[1][0]).toEqual(expect.objectContaining({date:"2026-09-28",historical:true}));
 });

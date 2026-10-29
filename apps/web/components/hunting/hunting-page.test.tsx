@@ -79,37 +79,35 @@ afterEach(() => { cleanup(); vi.useRealTimers(); vi.clearAllMocks(); vi.unstubAl
 const group = (name: "candidates" | "daily") => document.getElementById(`sec-${name}`)!;
 const card = (symbol: string, name: "candidates" | "daily" = "candidates") => within(group(name)).getByText(`候选 ${symbol}`).closest("article")!;
 
-it("reads research clusters from the dated opportunity scope while retaining the unavailable candidate warning", async () => {
+it("keeps the original candidate warning and dated optional read without a research panel above the list", async () => {
   const date = "2026-10-27";
   vi.mocked(api.getIntradayTop).mockRejectedValue(new CandidateDataUnavailableError({empty_reasons:["涨停快照未就绪"]}));
   vi.mocked(api.getIntradayOpportunities).mockResolvedValue({trade_date:date,themes:[],caveats:[]} as unknown as api.IntradayOpportunities);
   vi.mocked(getResearchClusters).mockResolvedValue(clusterFixture(date));
   render(<HuntingPage/>);
   expect(await screen.findByText(/候选数据待核：涨停快照未就绪/)).toBeTruthy();
-  const panel = screen.getByRole("region", {name:"研究主题簇"});
-  expect(await within(panel).findByRole("button", {name:/人形机器人产业链/})).toBeTruthy();
-  expect(panel.textContent).toContain(date);
-  expect(getResearchClusters).toHaveBeenCalledTimes(1);
+  await waitFor(() => expect(getResearchClusters).toHaveBeenCalledTimes(1));
   expect(vi.mocked(getResearchClusters).mock.calls[0][0]).toEqual(expect.objectContaining({date}));
+  expect(screen.queryByRole("region", {name:"研究主题簇"})).toBeNull();
+  expect(screen.queryByRole("combobox", {name:"题材关联"})).toBeNull();
   expect(screen.queryByText(/当前没有同时满足条件的候选/)).toBeNull();
 });
 
-it("shows the pending and unverified research scope without requesting a guessed date or offering an inactive retry", async () => {
+it("does not guess a pending or unverified date, mount a blank panel or offer an inactive research retry", async () => {
   let failTop!: (reason:Error) => void;
   let finishOpportunities!: (value:api.IntradayOpportunities) => void;
   vi.mocked(api.getIntradayTop).mockReturnValue(new Promise((_resolve,reject) => {failTop=reject;}));
   vi.mocked(api.getIntradayOpportunities).mockReturnValue(new Promise(resolve => {finishOpportunities=resolve;}));
   render(<HuntingPage/>);
-  const panel = screen.getByRole("region", {name:"研究主题簇"});
-  expect(within(panel).getByRole("status").textContent).toContain("正在确认盘中交易日期");
-  expect(within(panel).queryByRole("button", {name:"重读研究簇"})).toBeNull();
+  expect(screen.queryByRole("region", {name:"研究主题簇"})).toBeNull();
+  expect(screen.queryByRole("button", {name:"重读研究簇"})).toBeNull();
   expect(getResearchClusters).not.toHaveBeenCalled();
   await act(async () => {
     failTop(new Error("candidate-offline"));
     finishOpportunities({trade_date:null,themes:[],caveats:[]} as unknown as api.IntradayOpportunities);
   });
-  expect(within(panel).getByRole("alert").textContent).toContain("盘中交易日期未核实");
-  expect(within(panel).queryByRole("button", {name:"重读研究簇"})).toBeNull();
+  expect(screen.queryByRole("region", {name:"研究主题簇"})).toBeNull();
+  expect(screen.queryByRole("combobox", {name:"题材关联"})).toBeNull();
   expect(getResearchClusters).not.toHaveBeenCalled();
   expect(screen.getByText(/盘中候选读取失败/)).toBeTruthy();
 });
@@ -118,11 +116,11 @@ it("keeps the candidate date ahead of different opportunity and daily dates", as
   const date = "2026-10-08";
   vi.mocked(api.getIntradayOpportunities).mockResolvedValue({trade_date:"2026-10-27",themes:[],caveats:[]} as unknown as api.IntradayOpportunities);
   vi.mocked(api.getTodayPicks).mockResolvedValue({date:"2026-10-26",items:[]} as unknown as api.DailyPicksPayload);
-  vi.mocked(getResearchClusters).mockResolvedValue(clusterFixture(date));
+  const source=clusterFixture(date);source.clusters[0].stocks[0].symbol="600127";
+  vi.mocked(getResearchClusters).mockResolvedValue(source);
   render(<HuntingPage/>);
-  expect(await screen.findByRole("button", {name:/人形机器人产业链/})).toBeTruthy();
-  const panel = screen.getByRole("region", {name:"研究主题簇"});
-  expect(panel.textContent).toContain(date);
+  expect(await screen.findByRole("combobox", {name:"题材关联"})).toBeTruthy();
+  expect(screen.queryByRole("region", {name:"研究主题簇"})).toBeNull();
   expect(getResearchClusters).toHaveBeenCalledTimes(1);
   expect(vi.mocked(getResearchClusters).mock.calls[0][0]).toEqual(expect.objectContaining({date}));
 });
@@ -133,32 +131,152 @@ it("does not borrow intraday dates when the selected daily scope has no verified
   vi.mocked(api.getIntradayOpportunities).mockResolvedValue({trade_date:"2026-10-27",themes:[],caveats:[]} as unknown as api.IntradayOpportunities);
   render(<HuntingPage/>);
   await screen.findByText(/每日精选读取失败。请刷新重试/);
-  const panel = screen.getByRole("region", {name:"研究主题簇"});
-  expect(within(panel).getByRole("alert").textContent).toContain("每日精选交易日期未核实");
-  expect(within(panel).queryByRole("button", {name:"重读研究簇"})).toBeNull();
+  expect(screen.queryByRole("region", {name:"研究主题簇"})).toBeNull();
+  expect(screen.queryByRole("combobox", {name:"题材关联"})).toBeNull();
+  expect(screen.queryByRole("button", {name:"重读研究簇"})).toBeNull();
   expect(getResearchClusters).not.toHaveBeenCalled();
 });
 
-it("research cluster filters only original visible daily cards, keeps original counts and restores them without more reads",async()=>{
-  search=new URLSearchParams({sec:"daily"});
+function selectedClusters() {
   const source=clusterFixture("2026-10-08");source.reference_mode="saved";
   source.clusters[0].stocks[0].symbol="600127";source.clusters[0].branches.forEach(b=>{b.symbols=["600127"];});
   source.clusters[1].stocks[0].symbol="002636";source.clusters[1].branches[0].symbols=["002636"];
+  return source;
+}
+
+it("filters only original visible daily cards, distinguishes candidate relations and restores original counts and order without more reads",async()=>{
+  search=new URLSearchParams({sec:"daily"});
+  const source=selectedClusters();
   vi.mocked(getResearchClusters).mockResolvedValue(source);
   const frozen=JSON.stringify(source);render(<HuntingPage/>);
   expect(await within(group("daily")).findByText("候选 600127")).toBeTruthy();
   expect(within(group("daily")).getByText("候选 002636")).toBeTruthy();
-  fireEvent.click(await screen.findByRole("button",{name:/单股线索/}));
-  const chooser=await screen.findByRole("button",{name:/“羊”字辈.*名单1只/});
-  const calls=vi.mocked(getResearchClusters).mock.calls.length;
-  fireEvent.click(chooser);
+  const chooser=await screen.findByRole("combobox",{name:"题材关联"});
+  expect(within(chooser).getByRole("option",{name:/人形机器人产业链.*1只.*结构关联/})).toBeTruthy();
+  expect(within(chooser).getByRole("option",{name:/“羊”字辈.*1只.*候选关联/})).toBeTruthy();
+  expect(chooser).toHaveProperty("value", "");
+  expect(screen.queryByRole("region",{name:"研究主题簇"})).toBeNull();
+  expect(screen.queryByRole("textbox",{name:"搜索全部原始题材标签"})).toBeNull();
+  const calls=vi.mocked(getResearchClusters).mock.calls.length, pickCalls=vi.mocked(api.getTodayPicks).mock.calls.length;
+  fireEvent.change(chooser,{target:{value:"research-sheep"}});
   expect(within(group("daily")).queryByText("候选 600127")).toBeNull();
   expect(within(group("daily")).getByText("候选 002636")).toBeTruthy();
   expect(within(group("candidates")).queryByText("候选 002636")).toBeNull();
-  fireEvent.click(screen.getByRole("button",{name:"全部原名单"}));
-  expect(within(group("daily")).getByText("候选 600127")).toBeTruthy();
+  expect(screen.getByRole("link",{name:"每日精选"}).textContent).toContain("2只");
+  fireEvent.click(screen.getByRole("button",{name:"清除题材筛选"}));
+  expect(document.activeElement).toBe(chooser);
+  expect(within(group("daily")).getAllByText(/^候选 /).map(node=>node.textContent)).toEqual([expect.stringContaining("600127"),expect.stringContaining("002636")]);
+  expect(chooser).toHaveProperty("value", "");
   expect(getResearchClusters).toHaveBeenCalledTimes(calls);
+  expect(api.getTodayPicks).toHaveBeenCalledTimes(pickCalls);
   expect(JSON.stringify(source)).toBe(frozen);
+});
+
+it("offers only current original candidates, excludes reference-only relations and keeps zero matches out of the toolbar",async()=>{
+  const source=selectedClusters();
+  vi.mocked(getResearchClusters).mockResolvedValue(source);
+  vi.mocked(api.getIntradayTop).mockResolvedValue({trade_date:"2026-10-08",items:[{symbol:"600127"}],reference_items:[{symbol:"002636"}]} as unknown as api.IntradayTopPayload);
+  const page=render(<HuntingPage/>);
+  const chooser=await screen.findByRole("combobox",{name:"题材关联"});
+  expect(within(chooser).getAllByRole("option")).toHaveLength(2);
+  expect(within(chooser).queryByRole("option",{name:/羊/})).toBeNull();
+  expect(screen.queryByRole("region",{name:"研究主题簇"})).toBeNull();
+  vi.mocked(api.getIntradayTop).mockResolvedValue({trade_date:"2026-10-08",items:[{symbol:"600825"}],reference_items:[{symbol:"600127"}]} as unknown as api.IntradayTopPayload);
+  fireEvent.click(screen.getByRole("button",{name:"刷新数据"}));
+  await within(group("candidates")).findByText("候选 600825");
+  expect(screen.queryByRole("group",{name:"题材关联筛选"})).toBeNull();
+  expect(within(group("candidates")).getByText("候选 600825")).toBeTruthy();
+  page.unmount();
+});
+
+it("retires a filter across group round trips even when date, source version and original lists are unchanged",async()=>{
+  search=new URLSearchParams({sec:"daily"});
+  vi.mocked(getResearchClusters).mockResolvedValue(selectedClusters());
+  const page=render(<HuntingPage/>);
+  const chooser=await screen.findByRole("combobox",{name:"题材关联"});
+  fireEvent.change(chooser,{target:{value:"research-sheep"}});
+  expect(within(group("daily")).queryByText("候选 600127")).toBeNull();
+  search=new URLSearchParams({sec:"candidates"});page.rerender(<HuntingPage/>);
+  expect(screen.getByRole("combobox",{name:"题材关联"})).toHaveProperty("value", "");
+  search=new URLSearchParams({sec:"daily"});page.rerender(<HuntingPage/>);
+  expect(screen.getByRole("combobox",{name:"题材关联"})).toHaveProperty("value", "");
+  expect(within(group("daily")).getByText("候选 600127")).toBeTruthy();
+  expect(within(group("daily")).getByText("候选 002636")).toBeTruthy();
+  expect(screen.queryByRole("button",{name:"清除题材筛选"})).toBeNull();
+  expect(getResearchClusters).toHaveBeenCalledTimes(1);
+});
+
+it("retires filters when original symbols change without a version bump and does not revive them when the old set returns",async()=>{
+  search=new URLSearchParams({sec:"daily"});
+  vi.mocked(getResearchClusters).mockResolvedValue(selectedClusters());
+  render(<HuntingPage/>);
+  const chooser=await screen.findByRole("combobox",{name:"题材关联"});
+  fireEvent.change(chooser,{target:{value:"research-structure"}});
+  expect(within(group("daily")).queryByText("候选 002636")).toBeNull();
+  vi.mocked(api.getTodayPicks).mockResolvedValue({date:"2026-10-08",items:[{symbol:"600127"},{symbol:"002636"},{symbol:"600825"}],meta:{gate:{},min_pick_score:53}} as unknown as api.DailyPicksPayload);
+  fireEvent.click(screen.getByRole("button",{name:"刷新数据"}));
+  await within(group("daily")).findByText("候选 600825");
+  expect(screen.getByRole("combobox",{name:"题材关联"})).toHaveProperty("value", "");
+  expect(within(group("daily")).getByText("候选 002636")).toBeTruthy();
+  vi.mocked(api.getTodayPicks).mockResolvedValue({date:"2026-10-08",items:[{symbol:"600127"},{symbol:"002636"}],meta:{gate:{},min_pick_score:53}} as unknown as api.DailyPicksPayload);
+  fireEvent.click(screen.getByRole("button",{name:"刷新数据"}));
+  await waitFor(()=>expect(within(group("daily")).queryByText("候选 600825")).toBeNull());
+  expect(screen.getByRole("combobox",{name:"题材关联"})).toHaveProperty("value", "");
+  expect(within(group("daily")).getByText("候选 002636")).toBeTruthy();
+  expect(getResearchClusters).toHaveBeenCalledTimes(3);
+  for(const [query] of vi.mocked(getResearchClusters).mock.calls) expect(query?.date).toBe("2026-10-08");
+});
+
+it("drops a retired research-date response instead of attaching its relations to a new daily list",async()=>{
+  search=new URLSearchParams({sec:"daily"});
+  let finishOld!:(value:ReturnType<typeof clusterFixture>)=>void;
+  vi.mocked(getResearchClusters).mockImplementationOnce(()=>new Promise(resolve=>{finishOld=resolve;}));
+  const fresh=selectedClusters();fresh.trade_date="2026-10-09";fresh.version="b".repeat(64);fresh.clusters[0].name="新版结构关系";
+  vi.mocked(getResearchClusters).mockResolvedValueOnce(fresh);
+  render(<HuntingPage/>);
+  await waitFor(()=>expect(getResearchClusters).toHaveBeenCalledTimes(1));
+  vi.mocked(api.getTodayPicks).mockResolvedValue({date:"2026-10-09",items:[{symbol:"600127"}],meta:{gate:{}}} as unknown as api.DailyPicksPayload);
+  fireEvent.click(screen.getByRole("button",{name:"刷新数据"}));
+  expect(await screen.findByRole("option",{name:/新版结构关系/})).toBeTruthy();
+  await act(async()=>finishOld(selectedClusters()));
+  expect(screen.getByRole("option",{name:/新版结构关系/})).toBeTruthy();
+  expect(screen.queryByRole("option",{name:/人形机器人产业链/})).toBeNull();
+  expect(vi.mocked(getResearchClusters).mock.calls[1][0]).toEqual(expect.objectContaining({date:"2026-10-09"}));
+});
+
+it("recovers an initially failed optional relation read through the existing refresh without reloading the page",async()=>{
+  search=new URLSearchParams({sec:"daily"});
+  vi.mocked(getResearchClusters).mockRejectedValueOnce(new Error("relation-offline")).mockResolvedValueOnce(selectedClusters());
+  render(<HuntingPage/>);
+  await within(group("daily")).findByText("候选 002636");
+  await waitFor(()=>expect(getResearchClusters).toHaveBeenCalledTimes(1));
+  expect(screen.queryByRole("combobox",{name:"题材关联"})).toBeNull();
+  expect(screen.queryByRole("region",{name:"研究主题簇"})).toBeNull();
+  fireEvent.click(screen.getByRole("button",{name:"刷新数据"}));
+  const chooser=await screen.findByRole("combobox",{name:"题材关联"});
+  expect(getResearchClusters).toHaveBeenCalledTimes(2);
+  const calls=vi.mocked(getResearchClusters).mock.calls.length;
+  fireEvent.change(chooser,{target:{value:"research-sheep"}});
+  fireEvent.click(screen.getByRole("button",{name:"清除题材筛选"}));
+  expect(getResearchClusters).toHaveBeenCalledTimes(calls);
+  expect(within(group("daily")).getByText("候选 600127")).toBeTruthy();
+  expect(within(group("daily")).getByText("候选 002636")).toBeTruthy();
+});
+
+it("marks retained relation filters as unverified after refresh failure while keeping clearing and original risk available",async()=>{
+  search=new URLSearchParams({sec:"daily"});
+  vi.mocked(getResearchClusters).mockResolvedValueOnce(selectedClusters()).mockRejectedValueOnce(new Error("relation-offline"));
+  render(<HuntingPage/>);
+  const chooser=await screen.findByRole("combobox",{name:"题材关联"});
+  fireEvent.change(chooser,{target:{value:"research-sheep"}});
+  fireEvent.click(screen.getByRole("button",{name:"刷新数据"}));
+  expect(await screen.findByText("关联待核")).toHaveProperty("role","status");
+  expect(screen.getByTestId("risk-gate")).toBeTruthy();
+  expect(within(group("daily")).queryByText("候选 600127")).toBeNull();
+  fireEvent.click(screen.getByRole("button",{name:"清除题材筛选"}));
+  expect(document.activeElement).toBe(chooser);
+  expect(within(group("daily")).getByText("候选 600127")).toBeTruthy();
+  expect(getResearchClusters).toHaveBeenCalledTimes(2);
 });
 
 it.each(["browse=funds&disc_kind=industry&disc_code=BK0475&disc_range=5d","browse=funds&disc_source=sina&disc_code=gn_ldc","browse=funds&disc_code=886069.TI"])("旧资金链接先迁移、不挂载原选股或资金读取：%s",async query=>{
@@ -305,6 +423,7 @@ describe("真实选股消费者迁移", () => {
     await waitFor(() => expect(api.getIntradayTop).not.toHaveBeenCalled());
     expect(api.getTodayPicks).not.toHaveBeenCalled();
     expect(api.getPositionLabels).not.toHaveBeenCalled();
+    expect(getResearchClusters).not.toHaveBeenCalled();
   });
 
   it("distinguishes failed intraday reads from a valid empty candidate list", async () => {
