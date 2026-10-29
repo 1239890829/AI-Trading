@@ -36,6 +36,12 @@ HOST_SOURCES = {"driver.py", "tradingagents_research.py", "tradingagents_recover
 REVIEWED_PACKET_OWNER_PAIRS = {"data_providers/tencent.py": frozenset({(
     "32699b46cc03f0038e8e9d4969461bd336d9465c0363f984f8dca56b0b828aa9",
     "73af8b2ff111c04b57deda0dc3432c678815d0c2cef0c884f6f022ac51ea1af5",
+), (
+    # Reviewed K-line metadata/segment-basis change, not the old minute-only
+    # unaffected-consumer claim. Offline real-builder replay keeps qfq facts
+    # and rejects raw in both versions; normalization audit hashes change.
+    "73af8b2ff111c04b57deda0dc3432c678815d0c2cef0c884f6f022ac51ea1af5",
+    "1e87719aeddebba7ad4991917fa72c6b9110031fb59216246d3bcede3f857607",
 )}), "services/quote_hub.py": frozenset({(
     # Reviewed market admission fix and connection-local subscription metadata.
     # Cached get_quotes/present_quote AST is unchanged. The visible copy also
@@ -60,11 +66,22 @@ REVIEWED_PACKET_OWNER_PAIRS = {"data_providers/tencent.py": frozenset({(
     # Only this complete forward pair may enter explicit prepare/apply CAS.
     "ffe9108f81f83d1a40d0fdb7d26fab2733aafab0eb62f6417e3b524d0b9fc1b4",
     "fd5c9a055c4f14f3c3fd9851771c49e7b7efa5e779b0736d708daec118d88ccc",
+), (
+    # Reviewed dated-history request and explicit K-line price basis. The
+    # original 400-day date-label boundary can now include its first day;
+    # original packets/results/grants are never rewritten or rebound here.
+    "fd5c9a055c4f14f3c3fd9851771c49e7b7efa5e779b0736d708daec118d88ccc",
+    "68f289bdc9f68755d769be0d424413a059ee56e40e606ee05ae8f48b1379a811",
 )}), "market/normalizer.py": frozenset({(
     # Preserve original f13 validation before distinguishing BJ from SZ. This
     # exact reviewed edge cannot migrate old packets/grants or expand scope.
     "3a81768d35acc15f5168f363d54073516d978849f735e0ef419d9e6b6e08d5ec",
     "53026c7530e54001b1dcfbb9f1fb4ab29794b119220cc506890c9e8d1b873b1b",
+)}), "schemas/market.py": frozenset({(
+    # Additive source-declared price_basis; legacy rows remain unknown.
+    # No source, consumer, window, model or automatic dispatch is added.
+    "b5ea26d92b7b7a900c3b00251d5be5c49143dfae4e593ca3e0475b9a88636790",
+    "21014fb3ef5d2ab93cb5ece3492f24dc3623b2544e1b91ad4190030bd86953d4",
 )})}
 PIN_KEY = "ASHARE_TRADINGAGENTS_RESEARCH_AUTHORIZATION_DIGEST"
 PIN_LINE = re.compile(rb"(?im)^[ \t]*(?:export[ \t]+)?" + PIN_KEY.encode()

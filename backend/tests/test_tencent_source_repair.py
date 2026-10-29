@@ -22,6 +22,25 @@ def test_star_quote_minute_and_kline_keep_shares_book_keeps_lots():
     assert points[1]['volume'] == 758189
     bars = parse_kline_payload('688981','1d',{'data':{'sh688981':{'day':[['2026-09-30','117.77','111.99','118.18','111.29','42874573']]}}})
     assert bars[0].volume == 42874573
+    assert bars[0].price_basis == "none"
+    assert bars[0].quality.value == "medium"
+    assert "腾讯未返回前复权序列，使用不复权价格" in bars[0].quality_reasons
+
+
+@pytest.mark.parametrize("timeframe,key,date_label", [("1d", "qfqday", "2026-09-30"), ("1w", "qfqweek", "2026-09-30")])
+def test_qfq_history_marks_only_stock_adjustment(timeframe, key, date_label):
+    row = [date_label, "10", "10.5", "11", "9", "3"]
+    stock = parse_kline_payload("600519", timeframe, {"data": {"sh600519": {key: [row]}}})[0]
+    index = parse_kline_payload("sh000001", timeframe, {"data": {"sh000001": {key: [row]}}})[0]
+    assert stock.price_basis == "qfq" and stock.quality.value == "high"
+    assert index.price_basis == "none"
+
+
+def test_minute_history_is_unadjusted():
+    bar = parse_kline_payload("600519", "5m", {"data": {"sh600519": {
+        "m5": [["202609300935", "10", "10.5", "11", "9", "3"]],
+    }}})[0]
+    assert bar.price_basis == "none"
 
 
 def _run_kline(handler, start=None, end=None):

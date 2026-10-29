@@ -64,6 +64,7 @@ def test_kline_params_and_parsing(monkeypatch):
     assert bars[0].change_pct is None  # 首根无前收
     assert bars[1].change_pct == 10.0  # (11.55-10.5)/10.5 自算
     assert all(b.source == "ths" and b.symbol == "600519" and b.timeframe == "1d" for b in bars)
+    assert all(b.price_basis == "qfq" for b in bars)
     assert bars[-1].ts.tzinfo is not None  # 上海时区 aware
 
 
@@ -86,6 +87,7 @@ def test_raw_daily_kline_uses_none_adjust(monkeypatch):
     assert captured["path"] == "/api/a-share/prices/historical"
     assert captured["params"]["adjust"] == "none"
     assert bars[0].close == 10.5 and bars[0].source == "ths"
+    assert bars[0].price_basis == "none"
 
 
 def test_kline_empty_raises(monkeypatch):
@@ -123,6 +125,7 @@ def test_explicit_catalog_index_uses_index_history_without_stock_adjust(monkeypa
     assert "adjust" not in captured["params"]
     assert bars[0].symbol == symbol and bars[0].close == 3730.92
     assert bars[0].volume == 41779125000  # Official index history is already shares.
+    assert bars[0].price_basis == "none"
 
 
 @pytest.mark.parametrize("symbol,thscode", [
@@ -146,6 +149,7 @@ def test_stock_identity_and_forward_adjust_survive_index_routing(monkeypatch, sy
     assert captured["params"]["thscode"] == thscode
     assert captured["params"]["adjust"] == "forward"
     assert bars[0].symbol == symbol
+    assert bars[0].price_basis == "qfq"
 
 
 @pytest.mark.parametrize("symbol", [
@@ -191,6 +195,19 @@ def test_raw_index_history_still_has_no_adjust_parameter(monkeypatch):
     bars = asyncio.run(p.get_raw_daily_kline("sh000001"))
     assert captured["path"] == "/api/a-share-index/prices/historical"
     assert "adjust" not in captured["params"] and bars[0].symbol == "sh000001"
+    assert bars[0].price_basis == "none"
+
+
+@pytest.mark.parametrize("patch", [{"interval": "1w"}, {"adjust": "none"}, {"adjust": None}])
+def test_stock_rejects_explicit_response_basis_conflict(monkeypatch, patch):
+    async def fake_get(*_args):
+        return {"thscode": "600519.SH", "item": [{"date_ms": 1756684800000,
+                "open_price": 10, "high_price": 11, "low_price": 9, "close_price": 10.5}], **patch}
+
+    p = _provider()
+    monkeypatch.setattr(p, "_get", fake_get)
+    with pytest.raises(ProviderError, match="口径"):
+        asyncio.run(p.get_kline("600519", "1d"))
 
 
 def test_index_source_failure_falls_back_without_changing_market_identity(monkeypatch):

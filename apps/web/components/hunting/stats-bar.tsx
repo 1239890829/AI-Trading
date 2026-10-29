@@ -37,6 +37,7 @@ function StatCard({
   label,
   tip,
   badge,
+  className = "",
   children,
 }: {
   label: string;
@@ -44,11 +45,12 @@ function StatCard({
   tip?: string;
   /** 右上状态徽标（文案 + 类名） */
   badge?: { text: string; tone: string };
+  className?: string;
   children: React.ReactNode;
 }) {
   return (
-    <div className="hunting-stat rounded-lg border border-zinc-200 px-2.5 py-1.5 dark:border-zinc-800" title={tip}>
-      <div className="flex items-center gap-1.5">
+    <div className={`hunting-stat rounded-lg border border-zinc-200 px-2.5 py-1.5 dark:border-zinc-800 ${className}`} title={tip}>
+      <div className="hunting-stat-heading flex flex-wrap items-center gap-1.5">
         <span className="text-[11px] text-zinc-600 dark:text-zinc-400">{label}</span>
         {badge && (
           <span className={`rounded border px-1 py-0.5 text-[9px] font-medium ${badge.tone}`}>{badge.text}</span>
@@ -80,6 +82,7 @@ export function HuntingStatsBar({
     <div className="hunting-stat-strip grid grid-cols-2 gap-2 md:grid-cols-4">
       {/* 精选口径 ①：可信价格观察的滚动走好占比 + CUSUM 下漂 */}
       <StatCard
+        className="hunting-stat--detail"
         label="精选 · 信号健康"
         tip="口径：同版同窗可信价格观察的滚动走好占比 + CUSUM 均值下漂检测；不是成交胜率（与跟踪口径独立不混算）"
         badge={health ? { text: HEALTH_LABEL[health.status], tone: HEALTH_TONE[health.status] } : undefined}
@@ -107,6 +110,7 @@ export function HuntingStatsBar({
 
       {/* 精选口径 ②：最优梯队角色（role_performance 已有端点，此处挑样本达标的最优角色） */}
       <StatCard
+        className="hunting-stat--detail"
         label="精选 · 最优角色"
         tip="口径：同版同窗可信价格观察（/api/picks/meta），按角色走好占比排序；单角色有效记录 ≥3 条才参与排名。不是成交胜率或上涨概率"
       >

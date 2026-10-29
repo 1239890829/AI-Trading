@@ -22,7 +22,7 @@ import { MasonryColumns } from "@/components/masonry-columns";
 import { WatchLedgerPanel } from "@/components/hunting/watch-ledger-panel";
 import { PickCard, fromIntradayStock } from "@/components/picks/pick-card";
 import { StockLink } from "@/components/stock-link";
-import { pctColor, pctText, timeText, winRateColor } from "@/lib/format";
+import { pctColor, pctText, timeText, dateTimeTextBJ, winRateColor } from "@/lib/format";
 import { tapeUrl } from "@/lib/routing";
 import type {
   BriefAlert,
@@ -682,33 +682,35 @@ export function ClimateBlock({ climate }: { climate?: Climate | null }) {
 export function DirectionCard({ d }: { d: BriefDirection }) {
   const rv = d.review;
   return (
-    <div className="ui-card rounded-xl border border-zinc-200 p-3 text-xs dark:border-zinc-800">
-      <div className="flex flex-wrap items-center gap-2">
-        <span className="text-sm font-semibold text-zinc-900 dark:text-zinc-50">{d.direction}</span>
-        {d.defensive && (
-          <span className="rounded border border-sky-500/40 bg-sky-500/10 px-1 py-0.5 text-[10px] text-sky-700 dark:text-sky-300">
-            防守
+    <div className="hunting-direction-card ui-card rounded-xl border border-zinc-200 p-3 text-xs dark:border-zinc-800">
+      <div className="hunting-direction-head flex flex-wrap items-center gap-2">
+        <span className="hunting-direction-title text-sm font-semibold text-zinc-900 dark:text-zinc-50">{d.direction}</span>
+        <div className="hunting-direction-meta flex flex-wrap items-center gap-2">
+          {d.defensive && (
+            <span className="rounded border border-sky-500/40 bg-sky-500/10 px-1 py-0.5 text-[10px] text-sky-700 dark:text-sky-300">
+              防守
+            </span>
+          )}
+          <span className="hunting-direction-score font-mono tabular-nums text-zinc-600 dark:text-zinc-400" title={d.basis}>
+            {d.score} 分
           </span>
-        )}
-        <span className="font-mono tabular-nums text-zinc-600 dark:text-zinc-400" title={d.basis}>
-          {d.score} 分
-        </span>
-        <span
-          className={`rounded px-1.5 py-0.5 text-[10px] ${
-            d.entry_mode === "追涨"
-              ? "bg-up/10 text-up-ink dark:text-up"
-              : d.entry_mode === "追涨减半"
-                ? "bg-amber-500/10 text-amber-800 dark:text-amber-300"
-                : d.entry_mode === "潜伏"
-                  ? "bg-violet-500/10 text-violet-700 dark:text-violet-300"
-                  : "bg-zinc-500/10 text-zinc-600 dark:text-zinc-400"
-          }`}
-          title={d.entry_basis}
-        >
-          {d.entry_mode}
-        </span>
+          <span
+            className={`hunting-direction-entry rounded px-1.5 py-0.5 text-[10px] ${
+              d.entry_mode === "追涨"
+                ? "bg-up/10 text-up-ink dark:text-up"
+                : d.entry_mode === "追涨减半"
+                  ? "bg-amber-500/10 text-amber-800 dark:text-amber-300"
+                  : d.entry_mode === "潜伏"
+                    ? "bg-violet-500/10 text-violet-700 dark:text-violet-300"
+                    : "bg-zinc-500/10 text-zinc-600 dark:text-zinc-400"
+            }`}
+            title={d.entry_basis}
+          >
+            {d.entry_mode}
+          </span>
+        </div>
         {rv && (
-          <span className={`ml-auto font-medium ${outcomeTone(rv.outcome)}`}>
+          <span className={`hunting-direction-review ml-auto font-medium ${outcomeTone(rv.outcome)}`}>
             盘后对照：{rv.outcome}
             {rv.failure_class ? ` · ${FAILURE_LABELS[rv.failure_class] ?? rv.failure_class}` : ""}
           </span>
@@ -724,7 +726,7 @@ export function DirectionCard({ d }: { d: BriefDirection }) {
         {id: "falsify", label: "证伪条件", icon: "risk", tone: "warning", summary: `${d.falsify_conditions.length} 条`, content: d.falsify_conditions.length ? <ConditionList label="证伪" items={d.falsify_conditions} tone="warning" /> : <p>未提供证伪条件。</p>},
       ]} />
       {rv && (
-        <p className="mt-1 text-[11px] text-zinc-600 dark:text-zinc-400">
+        <p className="hunting-direction-facts mt-1 text-[11px] text-zinc-600 dark:text-zinc-400">
           实际：板块 {rv.actual_pct == null ? "unknown" : `${pctText(rv.actual_pct)}`}
           {" · "}涨停 {rv.actual_limit_up ?? "?"} 家 / 最高 {rv.actual_max_boards ?? "?"} 板
           {rv.actual_leader ? ` · 龙头 ${rv.actual_leader}` : ""}
@@ -734,12 +736,12 @@ export function DirectionCard({ d }: { d: BriefDirection }) {
         </p>
       )}
       {d.pool.length > 0 && (
-        <div className="mt-2 flex flex-wrap gap-1">
+        <div className="hunting-direction-pool mt-2 flex flex-wrap gap-1">
           {d.pool.map((p) => (
             <StockLink
               key={p.symbol}
               symbol={p.symbol}
-              className="bg-zinc-100 px-1.5 py-0.5 text-[10px] text-zinc-600 no-underline dark:bg-zinc-800 dark:text-zinc-300"
+              className="hunting-direction-stock bg-zinc-100 px-1.5 py-0.5 text-[10px] text-zinc-600 no-underline dark:bg-zinc-800 dark:text-zinc-300"
               title={`${p.name || p.symbol} · ${p.role}${p.boards ? ` · ${p.boards} 板` : ""} — 点击进工作台`}
             >
               {p.name || p.symbol}
@@ -758,15 +760,21 @@ export function DirectionCard({ d }: { d: BriefDirection }) {
 export function AlertItem({ a }: { a: BriefAlert }) {
   const ret = a.meta?.returns;
   const isConfirm = a.kind === "confirm";
+  const alertLabels: Record<string, string> = {
+    confirm: "确认", falsify: "证伪", pre_limit: "临板预警", board_reopen: "开板提醒",
+    buy_point: "买点条件", flow_surge: "个股资金异动", board_flow_surge: "板块资金异动",
+    board_low_absorb: "板块低位承接",
+  };
+  const tone = isConfirm ? "bg-up/10 text-up-ink dark:text-up"
+    : a.kind === "falsify" ? "bg-down/10 text-down-ink dark:text-down"
+      : "bg-zinc-500/10 text-zinc-600 dark:text-zinc-300";
   return (
     <div className="rounded-lg border border-zinc-200 p-2.5 dark:border-zinc-800">
       <div className="flex flex-wrap items-center gap-2 text-xs">
         <span
-          className={`rounded px-1.5 py-0.5 text-[10px] font-medium ${
-            isConfirm ? "bg-up/10 text-up-ink dark:text-up" : "bg-down/10 text-down-ink dark:text-down"
-          }`}
+          className={`rounded px-1.5 py-0.5 text-[10px] font-medium ${tone}`}
         >
-          {isConfirm ? "确认" : "证伪"}
+          {alertLabels[a.kind] ?? "未分类提醒"}
         </span>
         <span className="font-medium text-zinc-900 dark:text-zinc-50">{a.direction}</span>
         {a.symbol && (
@@ -774,7 +782,7 @@ export function AlertItem({ a }: { a: BriefAlert }) {
             {a.name}（{a.symbol}）
           </StockLink>
         )}
-        <span className="ml-auto text-[10px] text-zinc-600 dark:text-zinc-400">{timeText(a.at)}</span>
+        <span className="ml-auto text-[10px] text-zinc-600 dark:text-zinc-400">{a.at ? dateTimeTextBJ(a.at, { seconds: true }) : "原时间未记录"}</span>
         {isConfirm && ret && (ret.t1_return != null || ret.t3_return != null) && (
           <span className="text-[10px] text-zinc-600 dark:text-zinc-400">
             T+1{" "}
@@ -783,7 +791,7 @@ export function AlertItem({ a }: { a: BriefAlert }) {
             </span>
             {" · "}T+3{" "}
             <span className={`font-mono ${pctColor(ret.t3_return)}`}>
-              {ret.t3_return != null ? pctText(ret.t3_return) : "未到期"}
+              {ret.t3_return != null ? pctText(ret.t3_return) : "待核"}
             </span>
           </span>
         )}
@@ -797,29 +805,29 @@ export function AlertItem({ a }: { a: BriefAlert }) {
 
 export function ReviewOutcomeTable({ reviewed }: { reviewed: BriefDirection[] }) {
   return (
-    <div className="ui-card rounded-xl border border-zinc-200 p-3 text-xs dark:border-zinc-800">
-      <table className="w-full">
-        <thead>
-          <tr className="text-zinc-600 dark:text-zinc-400">
-            <th className="text-left font-normal">方向</th>
-            <th className="text-left font-normal">盘前模式</th>
-            <th className="text-left font-normal">盘后分类</th>
-            <th className="text-right font-normal">实际板块</th>
-            <th className="text-left font-normal">误判归因 / 备注</th>
+    <div className="hunting-recap-outcomes ui-card rounded-xl border border-zinc-200 p-3 text-xs dark:border-zinc-800">
+      <table role="table" className="hunting-recap-table hunting-outcome-table w-full" aria-label="盘前盘后方向对照">
+        <thead role="rowgroup">
+          <tr role="row" className="text-zinc-600 dark:text-zinc-400">
+            <th role="columnheader" scope="col" className="text-left font-normal">方向</th>
+            <th role="columnheader" scope="col" className="text-left font-normal">盘前模式</th>
+            <th role="columnheader" scope="col" className="text-left font-normal">盘后分类</th>
+            <th role="columnheader" scope="col" className="text-right font-normal">实际板块</th>
+            <th role="columnheader" scope="col" className="text-left font-normal">误判归因 / 备注</th>
           </tr>
         </thead>
-        <tbody>
+        <tbody role="rowgroup">
           {reviewed.map((d) => {
             const rv = d.review!;
             return (
-              <tr key={d.direction} className="border-t border-zinc-100 dark:border-zinc-800/60">
-                <td className="py-1">{d.direction}</td>
-                <td className="text-zinc-600 dark:text-zinc-400">{d.entry_mode}</td>
-                <td className={`font-medium ${outcomeTone(rv.outcome)}`}>{rv.outcome}</td>
-                <td className={`text-right font-mono tabular-nums ${pctColor(rv.actual_pct)}`}>
+              <tr role="row" key={d.direction} className="border-t border-zinc-100 dark:border-zinc-800/60">
+                <td role="cell" data-label="方向" className="py-1">{d.direction}</td>
+                <td role="cell" data-label="盘前模式" className="text-zinc-600 dark:text-zinc-400">{d.entry_mode}</td>
+                <td role="cell" data-label="盘后分类" className={`font-medium ${outcomeTone(rv.outcome)}`}>{rv.outcome}</td>
+                <td role="cell" data-label="实际板块" className={`text-right font-mono tabular-nums ${pctColor(rv.actual_pct)}`}>
                   {rv.actual_pct != null ? pctText(rv.actual_pct) : "unknown"}
                 </td>
-                <td className="text-zinc-600 dark:text-zinc-400">
+                <td role="cell" data-label="误判归因 / 备注" className="text-zinc-600 dark:text-zinc-400">
                   {rv.failure_class ? FAILURE_LABELS[rv.failure_class] ?? rv.failure_class : "—"}
                   {rv.note ? ` · ${rv.note}` : ""}
                 </td>
@@ -883,16 +891,16 @@ export function StatsPanel({ stats }: { stats: IntradayReviewStats }) {
   const t3 = stats.alert_t3;
   const reviewedDays = stats.daily.filter((x) => x.reviewed > 0);
   return (
-    <div className="space-y-3">
-      <div className="grid grid-cols-2 gap-2 text-xs md:grid-cols-4">
-        <div className="ui-card rounded-xl border border-zinc-200 p-3 dark:border-zinc-800">
+    <div className="hunting-recap-stats space-y-3">
+      <div className="hunting-recap-metrics grid grid-cols-2 gap-2 text-xs md:grid-cols-4">
+        <div className="hunting-recap-metric hunting-recap-metric--summary ui-card rounded-xl border border-zinc-200 p-3 dark:border-zinc-800">
           <div className="text-zinc-600 dark:text-zinc-400">已复盘方向</div>
           <div className="mt-1 font-mono text-lg tabular-nums text-zinc-900 dark:text-zinc-50">{d.total}</div>
           <div className="mt-0.5 text-[10px] text-zinc-600 dark:text-zinc-400">
             发酵 {d.outcomes["发酵"] ?? 0} · 半发酵 {d.outcomes["半发酵"] ?? 0} · 证伪 {d.outcomes["证伪"] ?? 0} · 无波动 {d.outcomes["无波动"] ?? 0}
           </div>
         </div>
-        <div className="ui-card rounded-xl border border-zinc-200 p-3 dark:border-zinc-800">
+        <div className="hunting-recap-metric ui-card rounded-xl border border-zinc-200 p-3 dark:border-zinc-800">
           <div className="text-zinc-600 dark:text-zinc-400">确认提醒 T+1 胜率</div>
           <div className={`mt-1 font-mono text-lg tabular-nums ${winRateColor(t1.win_rate, "pct")}`}>
             {t1.win_rate != null ? `${t1.win_rate}%` : "—"}
@@ -901,7 +909,7 @@ export function StatsPanel({ stats }: { stats: IntradayReviewStats }) {
             样本 {t1.n} · 均值 {t1.avg_return != null ? pctText(t1.avg_return) : "—"}
           </div>
         </div>
-        <div className="ui-card rounded-xl border border-zinc-200 p-3 dark:border-zinc-800">
+        <div className="hunting-recap-metric ui-card rounded-xl border border-zinc-200 p-3 dark:border-zinc-800">
           <div className="text-zinc-600 dark:text-zinc-400">盈亏比（T+1）</div>
           <div className="mt-1 font-mono text-lg tabular-nums text-zinc-900 dark:text-zinc-50">
             {t1.profit_loss_ratio != null ? t1.profit_loss_ratio : "—"}
@@ -910,7 +918,7 @@ export function StatsPanel({ stats }: { stats: IntradayReviewStats }) {
             均盈 {t1.avg_win != null ? pctText(t1.avg_win) : "—"} / 均亏 {t1.avg_loss != null ? pctText(t1.avg_loss) : "—"}
           </div>
         </div>
-        <div className="ui-card rounded-xl border border-zinc-200 p-3 dark:border-zinc-800">
+        <div className="hunting-recap-metric ui-card rounded-xl border border-zinc-200 p-3 dark:border-zinc-800">
           <div className="text-zinc-600 dark:text-zinc-400">T+3 胜率</div>
           <div className={`mt-1 font-mono text-lg tabular-nums ${winRateColor(t3.win_rate, "pct")}`}>
             {t3.win_rate != null ? `${t3.win_rate}%` : "—"}
@@ -920,37 +928,37 @@ export function StatsPanel({ stats }: { stats: IntradayReviewStats }) {
       </div>
 
       {reviewedDays.length >= 2 && (
-        <div className="ui-card rounded-xl border border-zinc-200 p-3 text-xs dark:border-zinc-800">
+        <div className="hunting-recap-curve ui-card rounded-xl border border-zinc-200 p-3 text-xs dark:border-zinc-800">
           <div className="mb-2 font-medium text-zinc-900 dark:text-zinc-50">近 30 日方向对照走势</div>
           <DailyCurve daily={reviewedDays} />
         </div>
       )}
 
       {reviewedDays.length > 0 && (
-        <div className="ui-card rounded-xl border border-zinc-200 p-3 text-xs dark:border-zinc-800">
+        <div className="hunting-recap-daily ui-card rounded-xl border border-zinc-200 p-3 text-xs dark:border-zinc-800">
           <div className="mb-1 font-medium text-zinc-900 dark:text-zinc-50">逐日对照</div>
-          <table className="w-full">
-            <thead>
-              <tr className="text-zinc-600 dark:text-zinc-400">
-                <th className="text-left font-normal">日期</th>
-                <th className="text-right font-normal">方向</th>
-                <th className="text-right font-normal">发酵</th>
-                <th className="text-right font-normal">半发酵</th>
-                <th className="text-right font-normal">证伪</th>
-                <th className="text-right font-normal">无波动</th>
-                <th className="text-right font-normal">提醒</th>
+          <table role="table" className="hunting-recap-table hunting-daily-table w-full" aria-label="逐日对照">
+            <thead role="rowgroup">
+              <tr role="row" className="text-zinc-600 dark:text-zinc-400">
+                <th role="columnheader" scope="col" className="text-left font-normal">日期</th>
+                <th role="columnheader" scope="col" className="text-right font-normal">方向</th>
+                <th role="columnheader" scope="col" className="text-right font-normal">发酵</th>
+                <th role="columnheader" scope="col" className="text-right font-normal">半发酵</th>
+                <th role="columnheader" scope="col" className="text-right font-normal">证伪</th>
+                <th role="columnheader" scope="col" className="text-right font-normal">无波动</th>
+                <th role="columnheader" scope="col" className="text-right font-normal">提醒</th>
               </tr>
             </thead>
-            <tbody>
+            <tbody role="rowgroup">
               {reviewedDays.map((x) => (
-                <tr key={x.date} className="border-t border-zinc-100 dark:border-zinc-800/60">
-                  <td className="py-1 font-mono text-zinc-600 dark:text-zinc-400">{x.date}</td>
-                  <td className="text-right font-mono tabular-nums">{x.reviewed}/{x.directions}</td>
-                  <td className="text-right font-mono tabular-nums text-up-ink dark:text-up">{x.fermented}</td>
-                  <td className="text-right font-mono tabular-nums text-amber-800 dark:text-amber-400">{x.half}</td>
-                  <td className="text-right font-mono tabular-nums text-down-ink dark:text-down">{x.falsified}</td>
-                  <td className="text-right font-mono tabular-nums text-zinc-600 dark:text-zinc-400">{x.flat}</td>
-                  <td className="text-right font-mono tabular-nums">{x.alerts}</td>
+                <tr role="row" key={x.date} className="border-t border-zinc-100 dark:border-zinc-800/60">
+                  <td role="cell" data-label="日期" className="py-1 font-mono text-zinc-600 dark:text-zinc-400">{x.date}</td>
+                  <td role="cell" data-label="方向" className="text-right font-mono tabular-nums">{x.reviewed}/{x.directions}</td>
+                  <td role="cell" data-label="发酵" className="text-right font-mono tabular-nums text-up-ink dark:text-up">{x.fermented}</td>
+                  <td role="cell" data-label="半发酵" className="text-right font-mono tabular-nums text-amber-800 dark:text-amber-400">{x.half}</td>
+                  <td role="cell" data-label="证伪" className="text-right font-mono tabular-nums text-down-ink dark:text-down">{x.falsified}</td>
+                  <td role="cell" data-label="无波动" className="text-right font-mono tabular-nums text-zinc-600 dark:text-zinc-400">{x.flat}</td>
+                  <td role="cell" data-label="提醒" className="text-right font-mono tabular-nums">{x.alerts}</td>
                 </tr>
               ))}
             </tbody>
@@ -959,15 +967,15 @@ export function StatsPanel({ stats }: { stats: IntradayReviewStats }) {
       )}
 
       {stats.alerts.length > 0 && (
-        <div className="ui-card rounded-xl border border-zinc-200 p-3 text-xs dark:border-zinc-800">
+        <div className="hunting-recap-alerts ui-card rounded-xl border border-zinc-200 p-3 text-xs dark:border-zinc-800">
           <div className="mb-1 font-medium text-zinc-900 dark:text-zinc-50">确认提醒收益明细（T+1 / T+3，参考价=提醒日收盘）</div>
           {stats.alerts.map((a) => (
-            <div key={a.date + a.symbol} className="flex flex-wrap gap-2 border-b border-zinc-100 py-1 last:border-0 dark:border-zinc-800/60">
+            <div key={a.date + a.symbol} className="hunting-recap-alert flex flex-wrap gap-2 border-b border-zinc-100 py-1 last:border-0 dark:border-zinc-800/60">
               <span className="font-mono text-zinc-600 dark:text-zinc-400">{a.date}</span>
               <span>{a.name || a.symbol}</span>
               <span className="text-zinc-600 dark:text-zinc-400">{a.direction}</span>
               <span className={`ml-auto font-mono tabular-nums ${pctColor(a.t1_return)}`}>
-                T+1 {a.t1_return != null ? pctText(a.t1_return) : "未到期"}
+                T+1 {a.t1_return != null ? pctText(a.t1_return) : "待核"}
               </span>
               <span className={`w-20 text-right font-mono tabular-nums ${pctColor(a.t3_return)}`}>
                 T+3 {a.t3_return != null ? pctText(a.t3_return) : "—"}
@@ -976,7 +984,7 @@ export function StatsPanel({ stats }: { stats: IntradayReviewStats }) {
           ))}
         </div>
       )}
-      <p className="text-[10px] text-zinc-600 dark:text-zinc-400">{stats.sample_note}</p>
+      <p className="hunting-recap-note text-[10px] text-zinc-600 dark:text-zinc-400">{stats.sample_note}</p>
     </div>
   );
 }
@@ -984,7 +992,7 @@ export function StatsPanel({ stats }: { stats: IntradayReviewStats }) {
 /** watcher 状态表（原 /intraday sec-watcher 内容体）。 */
 export function WatcherPanel({ watcher, pending }: { watcher: WatcherState | null; pending: boolean }) {
   return (
-    <div className="ui-card rounded-xl border border-zinc-200 p-3 text-xs dark:border-zinc-800">
+    <div className="hunting-watcher-panel ui-card rounded-xl border border-zinc-200 p-3 text-xs dark:border-zinc-800">
       {pending && watcher === null ? (
         <div className="text-zinc-600 dark:text-zinc-400">加载中…</div>
       ) : watcher?.active ? (
@@ -993,31 +1001,31 @@ export function WatcherPanel({ watcher, pending }: { watcher: WatcherState | nul
             <span>已推进 {watcher.beat_count ?? 0} 拍</span>
             <span>启动于 {timeText(watcher.started_at ?? null)}</span>
           </div>
-          <table className="w-full">
-            <thead>
-              <tr className="text-zinc-600 dark:text-zinc-400">
-                <th className="text-left font-normal">方向</th>
-                <th className="text-right font-normal">拍数</th>
-                <th className="text-right font-normal">缺数据拍</th>
-                <th className="text-right font-normal">峰值涨幅</th>
-                <th className="text-right font-normal">确认</th>
-                <th className="text-right font-normal">证伪</th>
-                <th className="text-right font-normal">已提醒</th>
+          <table role="table" className="hunting-recap-table hunting-watcher-table w-full" aria-label="盘中跟踪状态">
+            <thead role="rowgroup">
+              <tr role="row" className="text-zinc-600 dark:text-zinc-400">
+                <th role="columnheader" scope="col" className="text-left font-normal">方向</th>
+                <th role="columnheader" scope="col" className="text-right font-normal">拍数</th>
+                <th role="columnheader" scope="col" className="text-right font-normal">缺数据拍</th>
+                <th role="columnheader" scope="col" className="text-right font-normal">峰值涨幅</th>
+                <th role="columnheader" scope="col" className="text-right font-normal">确认</th>
+                <th role="columnheader" scope="col" className="text-right font-normal">证伪</th>
+                <th role="columnheader" scope="col" className="text-right font-normal">已提醒</th>
               </tr>
             </thead>
-            <tbody>
+            <tbody role="rowgroup">
               {(watcher.trackers ?? []).map((t) => (
-                <tr key={t.direction} className="border-t border-zinc-100 dark:border-zinc-800/60">
-                  <td className="py-1">{t.direction}</td>
-                  <td className="text-right font-mono tabular-nums">{t.beats}</td>
-                  <td className="text-right font-mono tabular-nums text-zinc-600 dark:text-zinc-400">{t.missing_beats}</td>
-                  <td className={`text-right font-mono tabular-nums ${pctColor(t.peak_pct)}`}>
+                <tr role="row" key={t.direction} className="border-t border-zinc-100 dark:border-zinc-800/60">
+                  <td role="cell" data-label="方向" className="py-1">{t.direction}</td>
+                  <td role="cell" data-label="拍数" className="text-right font-mono tabular-nums">{t.beats}</td>
+                  <td role="cell" data-label="缺数据拍" className="text-right font-mono tabular-nums text-zinc-600 dark:text-zinc-400">{t.missing_beats}</td>
+                  <td role="cell" data-label="峰值涨幅" className={`text-right font-mono tabular-nums ${pctColor(t.peak_pct)}`}>
                     {t.peak_pct != null ? pctText(t.peak_pct) : "—"}
                   </td>
-                  <td className="text-right">
+                  <td role="cell" data-label="确认" className="text-right">
                     {t.confirmed ? <span className="text-up-ink dark:text-up">是</span> : <span className="text-zinc-600 dark:text-zinc-400">否</span>}
                   </td>
-                  <td className="text-right">
+                  <td role="cell" data-label="证伪" className="text-right">
                     {t.falsified ? (
                       <span className="text-down-ink dark:text-down" title={t.falsify_triggers.map((x) => x.detail).join("；")}>
                         是
@@ -1026,7 +1034,7 @@ export function WatcherPanel({ watcher, pending }: { watcher: WatcherState | nul
                       <span className="text-zinc-600 dark:text-zinc-400">否</span>
                     )}
                   </td>
-                  <td className="text-right font-mono text-[11px] text-zinc-600 dark:text-zinc-400">
+                  <td role="cell" data-label="已提醒" className="text-right font-mono text-[11px] text-zinc-600 dark:text-zinc-400">
                     {t.alerted_symbols.join("、") || "—"}
                   </td>
                 </tr>

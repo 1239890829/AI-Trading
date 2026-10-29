@@ -22,7 +22,7 @@ import httpx
 
 from app.data_providers.eastmoney import ProviderError
 from app.core.inflight_reads import InflightReads
-from app.market.indices import INDEX_CATALOG
+from app.market.indices import INDEX_CATALOG, INDEX_SUBSCRIPTIONS
 from app.schemas.market import (
     Kline,
     OrderBook,
@@ -321,6 +321,7 @@ def parse_kline_payload(symbol: str, timeframe: str, payload: dict) -> list[Klin
     if not isinstance(node, dict):
         raise ProviderError(f"tencent kline bad payload for {symbol}")
     rows = node.get(key) if minute else (node.get(f"qfq{key}") or node.get(key)) or []
+    price_basis = "none" if minute or to_tencent_symbol(symbol) in INDEX_SUBSCRIPTIONS else "qfq" if node.get(f"qfq{key}") else "none"
     bars: list[Kline] = []
     for row in rows:
         if not isinstance(row, (list, tuple)) or len(row) < 6:
@@ -348,6 +349,7 @@ def parse_kline_payload(symbol: str, timeframe: str, payload: dict) -> list[Klin
                 low=_num(str(row[4])),
                 volume=volume_to_shares(symbol, vol_hand),
                 source=SOURCE,
+                price_basis=price_basis,
             )
         )
     bars.sort(key=lambda b: b.ts)
@@ -487,7 +489,7 @@ class TencentProvider:
                         break
                     first = stop + timedelta(days=1)
                 bars = sorted(bars_by_ts.values(), key=lambda b: b.ts)
-                if len({tuple(b.quality_reasons) for b in bars}) > 1:
+                if len({(b.price_basis, tuple(b.quality_reasons)) for b in bars}) > 1:
                     raise ProviderError("tencent kline mixed adjustment basis across segments")
             else:
                 bars = await self._kline_segment(symbol, timeframe, f"{to_tencent_symbol(symbol)},{spec},,320", "/appstock/app/kline/mkline")

@@ -1,3 +1,8 @@
+.scoreSummary {min-width:0;container-type:inline-size;container-name:pick-score-summary;}
+.dimensionScores {display:grid;grid-template-columns:repeat(3,minmax(0,1fr));flex:1 1 100%;min-width:0;gap:8px 12px;}
+.dimensionScore {min-width:0;}
+@container pick-score-summary (min-width:600px) {.dimensionScores {grid-template-columns:repeat(6,minmax(0,1fr));}}
+
 .compactCard.compactCard {
   min-width: 0;
   padding: 2px;

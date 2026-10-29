@@ -725,7 +725,7 @@ export function PickCard({
 
       {/* 六维评分（仅盘前名单）+ meta 置信档 */}
       {item.sub_scores && (
-        <div className="mt-2 flex items-center gap-2">
+        <div className={`${compactStyles.scoreSummary} mt-2 flex flex-wrap items-center gap-2`}>
           <span
             className="rounded bg-zinc-100 px-1.5 py-0.5 font-mono text-xs font-semibold dark:bg-zinc-800"
             title="六维加权综合分（一票否决后）"
@@ -746,7 +746,7 @@ export function PickCard({
               {item.confidence.label}
             </span>
           )}
-          <div className="flex flex-1 gap-1">
+          <div className={compactStyles.dimensionScores}>
             {SUB_LABELS.map(([key, label]) => {
               const v = item.sub_scores?.[key];
               const evidence = item.dimensionEvidence?.[key];
@@ -754,7 +754,7 @@ export function PickCard({
               const measured = typeof v === "number" && Number.isFinite(v) && v >= 0 && v <= 100
                 && (evidence?.state === "success" || evidence?.state === "valid_empty" || evidence?.state === "partial");
               return (
-                <div key={key} className="flex-1" title={`${label}：${evidence?.reason || item.basisRows.find((r) => r.label === label)?.value || "--"}`}>
+                <div key={key} className={compactStyles.dimensionScore} title={`${label}：${evidence?.reason || item.basisRows.find((r) => r.label === label)?.value || "--"}`}>
                   {absent ? <span className="block text-center text-[9px] text-zinc-600 dark:text-zinc-400" aria-label={`${label}依据缺失，计算占位 ${v ?? "未知"}`} title={evidence.reason}>缺项</span> : !measured ? <span className="block text-center text-[9px] text-zinc-600 dark:text-zinc-400" aria-label={v == null ? `${label}评分缺失` : `${label}原值 ${v}，读取状态待核`}>{v == null ? "暂无" : `${v}·待核`}</span> : <div role="meter" aria-label={`${label}评分`} aria-valuemin={0} aria-valuemax={100} aria-valuenow={v} className="score-track h-1 w-full overflow-hidden rounded bg-zinc-100 dark:bg-zinc-800">
                     <div className="h-full rounded bg-zinc-500 dark:bg-zinc-400" style={{ width: `${v}%` }} />
                   </div>}

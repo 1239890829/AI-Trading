@@ -17,6 +17,7 @@ import type { RealPositionsResource } from "@/hooks/use-real-positions";
 import { analyze } from "@/lib/technical-analysis";
 import { buildEventMarks, buildMinuteNewsEvents } from "@/lib/event-markers";
 import { hasTrustedQuoteObservation, mergeQuoteIntoBars, mergeQuoteIntoMinutes } from "@/lib/kline-live";
+import {checkKlineIdentity, klineDay, klineHistoryWindow, prependKlineHistory, refreshKlineHistory} from "@/lib/kline-history";
 import {buildIndexOverlay, IndexOverlayError, indexQuoteReference, minuteObservationTime} from "@/lib/index-overlay";
 import {bjMinuteOfDay, bjToday, isAuctionComparisonWindow, isContinuousSession} from "@/lib/market-hours";
 import {limitQualification} from "@/lib/limit-qualification";
@@ -202,6 +203,9 @@ export const StockDetailPanel = memo(function StockDetailPanel({
   // 采用保守方案：不改整体布局与右列宽度，随时可一键还原为常显。
   const [techOpen, setTechOpen] = useState(false);
   const [bars, setBars] = useState<Kline[]>([]);
+  const klineCalibrationRef = useRef(0);
+  const klineDataRef = useRef({symbol, bars: [] as Kline[], expanded: false, stoppedBoundary: null as string | null, blocked: false});
+  const [historyStatus, setHistoryStatus] = useState<{pending: boolean; error: string | null; note: string | null}>({pending:false,error:null,note:null});
   // 停牌判定（UI 缺陷 #1）：随日K 一同返回，非日线为 null（未判定，非"正常"）
   const [tradingStatus, setTradingStatus] = useState<TradingStatusInfo | null>(null);
   // 三态数据纪律（2026-09-08 审查 F1，修"加载中闪现错误文案"）：undefined=尚未
@@ -450,6 +454,9 @@ export const StockDetailPanel = memo(function StockDetailPanel({
     setPrevDataSymbol(symbol);
     setThemesEnhanceSymbol("");
     setBars([]);
+    klineCalibrationRef.current += 1;
+    klineDataRef.current = {symbol, bars:[], expanded:false, stoppedBoundary:null, blocked:false};
+    setHistoryStatus({pending:false,error:null,note:null});
     setTradingStatus(null);
     setMinutes([]);
     setVrBaseline(null);
@@ -464,6 +471,7 @@ export const StockDetailPanel = memo(function StockDetailPanel({
   const dataReadsRef = useRef<{
     alive: boolean;
     kline: (fresh?: boolean) => ReturnType<typeof getKlinePayload>;
+    history: (retry?: boolean) => Promise<void>;
     book: (fresh?: boolean) => ReturnType<typeof getOrderBook>;
     minute: (fresh?: boolean) => ReturnType<typeof getMinuteLineWithBaseline>;
     trades: (fresh?: boolean) => ReturnType<typeof getTradesPayload>;
@@ -473,6 +481,8 @@ export const StockDetailPanel = memo(function StockDetailPanel({
 
   useEffect(() => {
     if (!active || !symbol) return;
+    let historyFlight: Promise<void> | null = null;
+    const currentOwner = () => reads.alive && reads === dataReadsRef.current && klineDataRef.current.symbol === symbol;
     // Prefetch and a visible perspective share one application of each result.
     // A manual retry owns a new generation, so a slow old read cannot overwrite it.
     const managedRead = <T,>(kind: DetailReadKind, load: (fresh: boolean) => Promise<T>, apply: (value: T) => void) => {
@@ -510,8 +520,66 @@ export const StockDetailPanel = memo(function StockDetailPanel({
       alive: true,
       kline: managedRead("kline", () => getKlinePayload(symbol, "1d", 120), payload => {
         if (payload.symbol !== symbol || payload.timeframe !== "1d" || payload.bars.some(row => row.symbol !== symbol)) throw new Error("K线证券身份不匹配");
-        setBars(payload.bars); setTradingStatus(payload.trading_status);
+        checkKlineIdentity(payload.bars, symbol);
+        const owner = klineDataRef.current;
+        let next = payload.bars;
+        if (!owner.expanded) {
+          let note: string | null = null;
+          try {if (payload.bars.length) klineHistoryWindow(payload.bars);}
+          catch (error) {note = `当前仅显示本次日K，未作历史混拼：${error instanceof Error ? error.message : "来源口径待核"}`;}
+          setHistoryStatus(previous => previous.pending || previous.error ? previous : {pending:false,error:null,note});
+        }
+        if (owner.expanded) {
+          try {next = refreshKlineHistory(owner.bars, payload.bars, symbol, bjToday());}
+          catch (error) {
+            owner.blocked = true;
+            owner.stoppedBoundary = owner.bars.length ? klineDay(owner.bars[0]) : null;
+            setHistoryStatus({pending:false,error:error instanceof Error ? error.message : "日K修订待核，未混拼历史",note:null});
+            throw error;
+          }
+          if (owner.blocked) setHistoryStatus({pending:false,error:null,note:"最新日K与原历史已重新核对一致"});
+          owner.blocked = false;
+        }
+        if (next !== owner.bars) klineCalibrationRef.current += 1;
+        owner.bars = next;
+        setBars(next); setTradingStatus(payload.trading_status);
       }),
+      history: (retry = false) => {
+        if (!currentOwner() || dataTabsRef.current.chartTab !== "kline") return Promise.resolve();
+        if (historyFlight) return historyFlight;
+        const owner = klineDataRef.current;
+        const boundary = owner.bars.length ? klineDay(owner.bars[0]) : null;
+        if (!retry && owner.stoppedBoundary === boundary && boundary !== null) return Promise.resolve();
+        const next = Promise.resolve().then(async () => {
+          if (!currentOwner()) return;
+          try {
+            if (owner.blocked) throw new Error("最新日K发生修订，保留旧历史；待同源复权锚重新核实后再加载");
+            const window = klineHistoryWindow(owner.bars);
+            setHistoryStatus({pending:true,error:null,note:null});
+            const payload = await getKlinePayload(symbol, "1d", 1000, {start:window.start,end:window.end});
+            if (!currentOwner() || dataTabsRef.current.chartTab !== "kline") return;
+            if (owner.blocked) throw new Error("最新日K发生修订，本次历史页未混拼");
+            if (payload.symbol !== symbol || payload.timeframe !== "1d") throw new Error("历史K线证券或周期不匹配");
+            const merged = prependKlineHistory(owner.bars, payload.bars, symbol, window);
+            const added = merged.length - owner.bars.length;
+            owner.bars = merged;
+            owner.expanded = true;
+            owner.stoppedBoundary = null;
+            setBars(merged);
+            setHistoryStatus({pending:false,error:null,note:`已加载更早 ${added} 个交易日；来源及重叠OHLC已核对`});
+          } catch (error) {
+            if (currentOwner()) {
+              owner.stoppedBoundary = boundary;
+              setHistoryStatus({pending:false,error:error instanceof Error ? error.message : "历史K线读取失败，保留原图",note:null});
+            }
+          } finally {
+            if (currentOwner()) setHistoryStatus(previous => previous.pending ? {...previous,pending:false} : previous);
+          }
+        });
+        historyFlight = next;
+        void next.then(() => {if (historyFlight === next) historyFlight = null;});
+        return next;
+      },
       book: managedRead("book", () => getOrderBook(symbol), value => {
         if (value.symbol !== symbol) throw new Error("盘口证券身份不匹配");
         setBook(value);
@@ -535,10 +603,12 @@ export const StockDetailPanel = memo(function StockDetailPanel({
       flow: managedRead("flow", () => getCapitalFlow<CapitalFlow>(symbol, 30), value => setFlow(value)),
     };
     dataReadsRef.current = reads;
+    void Promise.resolve().then(() => {if (currentOwner()) setHistoryStatus(previous => previous.pending ? {...previous,pending:false} : previous);});
     const ignoreFailure = () => {};
     if (dataTabsRef.current.chartTab !== "kline") void reads.kline().catch(ignoreFailure);
     return () => {reads.alive = false;};
   }, [symbol, active]);
+  const loadKlineHistory = useCallback((retry = false) => {void dataReadsRef.current?.history(retry);}, []);
 
   // ---- 盘中实时刷新（2026-08-31 修复"K线/分时/盘口/逐笔拉一次就死"）----
   // 此前所有图表数据只在切股时拉取一次，盘中永不更新——K 线最后一根
@@ -561,14 +631,21 @@ export const StockDetailPanel = memo(function StockDetailPanel({
   const chartContext = `${symbol}:1d`;
   const quoteClock = liveQuote?.data_timestamp;
   const sourceDate = quoteClock && /(?:Z|[+-]\d{2}:\d{2})$/.test(quoteClock) && Number.isFinite(Date.parse(quoteClock)) ? bjDate(quoteClock) : null;
-  const [acceptedChart, setAcceptedChart] = useState(() => ({context: chartContext, sourceDate, bars, minutes, quote: liveQuote,
+  const [acceptedChart, setAcceptedChart] = useState(() => ({context: chartContext, sourceDate, bars, calibration:klineCalibrationRef.current, minutes, quote: liveQuote,
     displayBars: projectedBars ?? bars, displayMinutes: projectedMinutes ?? minutes}));
   let chartView = acceptedChart;
   if (acceptedChart.context !== chartContext || acceptedChart.bars !== bars || acceptedChart.minutes !== minutes || acceptedChart.quote !== liveQuote) {
     const rejected = !hasTrustedQuoteObservation(liveQuote);
     const sameContext = acceptedChart.context === chartContext && (!sourceDate || !acceptedChart.sourceDate || sourceDate === acceptedChart.sourceDate);
-    chartView = {context: chartContext, sourceDate: sourceDate || (acceptedChart.context === chartContext ? acceptedChart.sourceDate : null), bars, minutes, quote: liveQuote,
-      displayBars: projectedBars ?? (rejected && sameContext && acceptedChart.bars === bars ? acceptedChart.displayBars : bars),
+    const prefixLength = bars.length - acceptedChart.bars.length;
+    // History only extends an unchanged REST suffix. It does not recalibrate
+    // an accepted live tail; a real latest REST read still owns that boundary.
+    const purePrepend = rejected && sameContext && acceptedChart.calibration === klineCalibrationRef.current
+      && prefixLength > 0 && acceptedChart.bars.length > 0 && acceptedChart.displayBars.length === acceptedChart.bars.length
+      && acceptedChart.bars.every((row,index) => bars[prefixLength + index] === row);
+    chartView = {context: chartContext, sourceDate: sourceDate || (acceptedChart.context === chartContext ? acceptedChart.sourceDate : null), bars, calibration:klineCalibrationRef.current, minutes, quote: liveQuote,
+      displayBars: projectedBars ?? (purePrepend ? [...bars.slice(0,prefixLength),...acceptedChart.displayBars]
+        : rejected && sameContext && acceptedChart.bars === bars ? acceptedChart.displayBars : bars),
       displayMinutes: projectedMinutes ?? (rejected && sameContext && acceptedChart.minutes === minutes ? acceptedChart.displayMinutes : minutes)};
     setAcceptedChart(chartView);
   }
@@ -956,7 +1033,7 @@ export const StockDetailPanel = memo(function StockDetailPanel({
                   {/* 技术评估条已移至图表工具栏（与依据同行，2026-09-04 用户
                       反馈浮层遮挡 K 线）：图区只留图表本身 */}
                   <div className="relative min-h-0 flex-1">
-                    <KlineChartPro bars={displayBars} costPrice={costPrice} eventMarks={eventMarks} className="h-full" />
+                    <KlineChartPro bars={displayBars} costPrice={costPrice} eventMarks={eventMarks} className="h-full" onLoadHistory={loadKlineHistory} historyStatus={historyStatus} />
                   </div>
                 </div>
               ) : (

@@ -168,11 +168,12 @@ export function dateTimesInTextBJ(text: string): string {
  * 分钟点逐点调用（构建索引 + 每次 tick），Intl formatter 的构造开销高出约一个数量级。
  * 两者对 UTC 锚定的 ISO 输出一致，改动时**不要顺手"合并"那一份**。
  */
+const beijingDayFormatter = new Intl.DateTimeFormat("sv-SE", {timeZone: "Asia/Shanghai", year: "numeric", month: "2-digit", day: "2-digit"});
 export function bjDate(ts: string | null | undefined): string {
   if (!ts) return "";
   const d = new Date(ts);
   if (Number.isNaN(d.getTime())) return "";
-  return d.toLocaleDateString("sv-SE", { timeZone: "Asia/Shanghai" });
+  return beijingDayFormatter.format(d);
 }
 
 /**

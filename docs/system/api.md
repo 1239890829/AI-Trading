@@ -80,7 +80,7 @@ curl -H "X-API-Token: $ASHARE_API_TOKEN" http://127.0.0.1:8000/api/market/overvi
 |---|---|---|
 | GET | `/api/quotes?symbols=` | 批量缓存行情；缺省返回全部自选 |
 | GET | `/api/quotes/{symbol}` | 单只；缓存 miss → 实时链；`?source=` 指定源 |
-| GET | `/api/kline/{symbol}?timeframe=1d&limit=250` | K 线（1m~1w，前复权） |
+| GET | `/api/kline/{symbol}?timeframe=1d&start=&end=&limit=250` | K线（1m~1w），沿既有日期范围读取，单页`limit≤1000`；`price_basis`显式为`qfq`前复权／`hfq`后复权／`none`不复权／`unknown`未核，不笼统承诺全部前复权 |
 | GET | `/api/order-book/{symbol}` | 五档盘口（经交叉校验） |
 | GET | `/api/trades/{symbol}?limit=50` | 逐笔成交 |
 | GET | `/api/minute-line/{symbol}` | 当日分时（含均价/精确量比基线） |
@@ -94,6 +94,8 @@ curl -H "X-API-Token: $ASHARE_API_TOKEN" http://127.0.0.1:8000/api/market/overvi
 | GET | `/api/adjustment-events/{symbol}` | 复权事件（分红/送股，回测修正用） |
 | GET | `/api/sparkline?symbols=&days=30` | 批量迷你走势（TDX 日K收盘，5min 缓存） |
 | GET | `/api/search?q=` | 股票搜索（失败回退内置词表） |
+
+K线复权口径仅由实际来源构造标注，缺失时为`unknown`，不能从价格数值推断。向左读取沿原`start/end`和单页上限，不新增权限或无界全集接口；空页、源失败或现有保留范围结束均不能单独证明已到上市日期。历史拼接、刷新与悬停计算边界见[运行合同](runtime-performance.md#2026-10-29-k线历史读取与同口径变化)，来源分段上限见[来源合同](../data/data-sources.md)§8.11。
 
 ## 投研数据
 

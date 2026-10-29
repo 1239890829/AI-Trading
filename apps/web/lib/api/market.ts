@@ -55,10 +55,13 @@ export interface KlinePayload {
   trading_status: TradingStatusInfo | null;
 }
 
-export async function getKlinePayload(symbol: string, timeframe = "1d", limit = 250): Promise<KlinePayload> {
+export async function getKlinePayload(symbol: string, timeframe = "1d", limit = 250, dates: {start?: string; end?: string} = {}): Promise<KlinePayload> {
+  const query = new URLSearchParams({timeframe, limit: String(limit)});
+  if (dates.start) query.set("start", dates.start);
+  if (dates.end) query.set("end", dates.end);
   return (
     await getJson<KlinePayload>(
-      `/api/kline/${symbol}?timeframe=${timeframe}&limit=${limit}`, 15_000
+      `/api/kline/${symbol}?${query}`, 15_000
     )
   ).data;
 }

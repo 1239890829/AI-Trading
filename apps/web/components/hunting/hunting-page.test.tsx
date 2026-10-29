@@ -30,7 +30,7 @@ vi.mock("@/components/picks/pick-card", () => ({ PickCard: ({item, readError, da
 vi.mock("@/components/picks/pick-detail-modal", () => ({PickDetailModal: ({target, readError}: {target: {item: api.DailyPickItem} | null; readError?: boolean}) => target ? <div data-testid="daily-detail" data-read-error={String(!!readError)}>原依据 {target.item.symbol} · 执行价 {target.item.execution?.executable_snapshot.price}</div> : null}));
 vi.mock("@/components/detail/detail-modal", () => ({useDetailModal: () => ({open: vi.fn()})}));
 vi.mock("@/lib/market-hours", async () => ({...await vi.importActual<typeof import("@/lib/market-hours")>("@/lib/market-hours"),isTradingSession: () => true}));
-vi.mock("@/components/hunting/intraday-sections", () => ({ AlertItem: () => null, DirectionCard: () => null, DailyPlanBlock: () => null, EnvStrip: () => null, MacroCalendar: () => null, MarketOverviewStrip: () => null, OpportunitySection: ({showLedger}: {showLedger: boolean}) => <div>题材原消费者：台账嵌入 {String(showLedger)}</div>, ClimateBlock: () => null, OvernightBiasBlock: () => null, ReviewOutcomeTable: ({reviewed}: {reviewed: {direction: string}[]}) => <div>{reviewed.map(row => <p key={row.direction}>原对照 {row.direction}</p>)}</div>, StatsPanel: ({stats}: {stats: {sample_note: string}}) => <div>{stats.sample_note}</div>, WatcherPanel: () => null }));
+vi.mock("@/components/hunting/intraday-sections", () => ({ AlertItem: ({a}: {a: api.BriefAlert}) => <article data-testid="brief-alert">{a.text}</article>, DirectionCard: () => null, DailyPlanBlock: () => null, EnvStrip: () => null, MacroCalendar: () => null, MarketOverviewStrip: () => null, OpportunitySection: ({showLedger}: {showLedger: boolean}) => <div>题材原消费者：台账嵌入 {String(showLedger)}</div>, ClimateBlock: () => null, OvernightBiasBlock: () => null, ReviewOutcomeTable: ({reviewed}: {reviewed: {direction: string}[]}) => <div>{reviewed.map(row => <p key={row.direction}>原对照 {row.direction}</p>)}</div>, StatsPanel: ({stats}: {stats: {sample_note: string}}) => <div>{stats.sample_note}</div>, WatcherPanel: () => null }));
 vi.mock("@/components/hunting/pick-sections", () => ({ DailyReviews: ({reviews}: {reviews: {selection_version?: string | null}[]}) => <div>{reviews.map((row, i) => <span key={i}>复盘版本 {row.selection_version}</span>)}</div>, HistoryList: ({history}: {history: {date: string}[]}) => <div>{history.map(row => <p key={row.date}>原历史 {row.date}</p>)}</div>, ReasonDistribution: () => null, RolePerformanceTable: () => null }));
 vi.mock("@/components/hunting/stats-bar", () => ({ HuntingStatsBar: () => null }));
 vi.mock("@/components/hunting/post-market-enhance", () => ({ PostMarketEnhance: ({initiallyOpen}: {initiallyOpen: boolean}) => <div>原接力潜伏：{String(initiallyOpen)}</div> }));
@@ -975,4 +975,53 @@ it("retains the prior candidate only as a past observation when the next read ha
   expect(before.dataset.readError).toBe("true");
   expect(within(group("candidates")).getByRole("alert").textContent).toContain("保留上次读取的盘中候选，当前参与条件待重新核实");
   expect(screen.getByRole("link", {name: "盘中候选"}).textContent).not.toContain("1只");
+});
+
+
+const reminderBrief=(date:string):api.MorningBrief=>({brief_date:date,generated_at:`${date}T09:55:00+08:00`,trigger:'schedule',engine_version:'test',env:{phase:null,promo_percentile:null,bands_source:null,pool_date:null,is_trading_day:true},missing:[],directions:[],alerts:Array.from({length:45},(_,i)=>({key:`${date}:${i}`,kind:'pre_limit',direction:'原方向',symbol:'',name:'',at:`${date}T09:55:00+08:00`,text:`原提醒 ${date} ${i}`,meta:{}}))});
+
+it('reveals the complete reminder list locally in bounded batches and resets it for the original brief date', async () => {
+  vi.spyOn(HTMLElement.prototype,'getBoundingClientRect').mockReturnValue({top:5000,bottom:5001,left:0,right:1,width:1,height:1,x:0,y:5000,toJSON:()=>({})});
+  vi.mocked(api.getMorningBriefToday).mockResolvedValue(reminderBrief('2026-10-08'));
+  render(<HuntingPage/>);
+  await screen.findByText('原提醒 2026-10-08 0');
+  expect(screen.getAllByTestId('brief-alert')).toHaveLength(20);
+  const fold=screen.getByText('盘中节拍').closest('details')!;
+  fold.open=true;fireEvent(fold,new Event('toggle'));
+  expect(screen.getByRole('heading',{name:'盘中提醒（2026-10-08 · 45 条，原记录去重）'})).toBeTruthy();
+  const reads=vi.mocked(api.getMorningBriefToday).mock.calls.length;
+  fireEvent.click(screen.getByRole('button',{name:'继续加载'}));
+  expect(screen.getAllByTestId('brief-alert')).toHaveLength(40);
+  fireEvent.click(screen.getByRole('button',{name:'继续加载'}));
+  expect(screen.getAllByTestId('brief-alert')).toHaveLength(45);
+  expect(screen.getByText('原提醒 2026-10-08 44')).toBeTruthy();
+  expect(api.getMorningBriefToday).toHaveBeenCalledTimes(reads);
+  vi.mocked(api.getMorningBriefToday).mockResolvedValue(reminderBrief('2026-10-09'));
+  fireEvent.click(screen.getByRole('button',{name:'刷新数据'}));
+  await screen.findByText('原提醒 2026-10-09 0');
+  expect(screen.getAllByTestId('brief-alert')).toHaveLength(20);
+  expect(screen.queryByText('原提醒 2026-10-08 0')).toBeNull();
+});
+
+
+it('rebinds reminder scrolling after leaving and returning to the same saved list', async () => {
+  let near=false;
+  vi.spyOn(HTMLElement.prototype,'getBoundingClientRect').mockImplementation(()=>({top:near?500:5000,bottom:near?501:5001,left:0,right:1,width:1,height:1,x:0,y:near?500:5000,toJSON:()=>({})}));
+  vi.spyOn(HTMLElement.prototype,'scrollHeight','get').mockImplementation(function(this:HTMLElement){return this.classList.contains('hunting-context-column')?1000:100;});
+  vi.spyOn(HTMLElement.prototype,'clientHeight','get').mockReturnValue(100);
+  vi.mocked(api.getMorningBriefToday).mockResolvedValue(reminderBrief('2026-10-08'));
+  const page=render(<HuntingPage/>);
+  await screen.findByText('原提醒 2026-10-08 0');
+  const fold=screen.getByText('盘中节拍').closest('details')!;
+  fold.open=true;fireEvent(fold,new Event('toggle'));
+  search=new URLSearchParams({view:'research'});page.rerender(<HuntingPage/>);
+  expect(screen.queryByTestId('brief-alert')).toBeNull();
+  search=new URLSearchParams({view:'discover'});page.rerender(<HuntingPage/>);
+  await screen.findByText('原提醒 2026-10-08 0');
+  expect(screen.getAllByTestId('brief-alert')).toHaveLength(20);
+  const reads=vi.mocked(api.getMorningBriefToday).mock.calls.length;
+  near=true;
+  fireEvent.scroll(screen.getByLabelText('市场环境、节拍与复盘'));
+  expect(screen.getAllByTestId('brief-alert')).toHaveLength(40);
+  expect(api.getMorningBriefToday).toHaveBeenCalledTimes(reads);
 });
