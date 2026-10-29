@@ -14,6 +14,8 @@ import { inspectionClick, useInspection } from "@/components/inspection/inspecti
 import { useRouter, useSearchParams } from "next/navigation";
 import { legacyDiscoveryFundsMarketUrl } from "@/lib/routing";
 import { useResource } from "@/hooks/use-resource";
+import { useIncremental } from "@/hooks/use-incremental";
+import { IncrementalSentinel } from "@/components/ui/incremental-sentinel";
 import {useThemeCatalogReference} from "@/hooks/use-theme-catalog-reference";
 import {useResearchClusters} from "@/hooks/use-research-clusters";
 import {clusterSelection} from "@/lib/research-clusters";
@@ -285,6 +287,7 @@ function HuntingInner() {
   };
 
   const alerts = brief?.alerts ?? [];
+  const alertList = useIncremental(alerts, {pageSize: 20, step: 20, resetKey: brief?.brief_date, active: beatsOpen && isDiscoverView && selectedOnly && !discoveryTarget});
   const reviewed = (brief?.directions ?? []).filter((d) => d.review);
   const topItems = top?.items ?? [];
   const topRefItems = top?.reference_items ?? [];
@@ -374,7 +377,7 @@ function HuntingInner() {
         >
           <summary>
             <span><strong>盘中节拍</strong><span className="fold-caption">盘前简报 · 监测状态 · 提醒</span></span>
-            {alerts.length > 0 && <span className="fold-meta">今日 {alerts.length} 条</span>}
+            {alerts.length > 0 && <span className="fold-meta">{brief?.brief_date ?? "日期待核"} · {alerts.length} 条</span>}
             <span className="fold-chevron" aria-hidden="true"><svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.5"><path d="m7 10 5 5 5-5" /></svg></span>
           </summary>
           <div className="mt-3 space-y-4">
@@ -429,7 +432,7 @@ function HuntingInner() {
 
                 <section id="sec-reminders" className="space-y-2 scroll-mt-2">
                   <h3 className="text-xs font-medium text-zinc-600 dark:text-zinc-400">
-                    盘中提醒（{alerts.length} 条，当日去重）
+                    盘中提醒（{brief?.brief_date ?? "日期待核"} · {alerts.length} 条，原记录去重）
                   </h3>
                   {pending && alerts.length === 0 ? (
                     <CardListSkeleton count={1} />
@@ -441,9 +444,10 @@ function HuntingInner() {
                   ) : (
                     <FadeIn>
                       <div className="space-y-2">
-                        {alerts.map((a, i) => (
+                        {alertList.shown.map((a, i) => (
                           <AlertItem key={a.key || `${a.kind}:${a.symbol}:${i}`} a={a} />
                         ))}
+                        <IncrementalSentinel sentinelRef={alertList.sentinelRef} visible={Math.min(alertList.visible, alerts.length)} total={alerts.length} onLoadMore={alertList.loadMore}/>
                       </div>
                     </FadeIn>
                   )}

@@ -1,6 +1,6 @@
 import { act, cleanup, fireEvent, render, screen,waitFor,within } from "@testing-library/react";
 import { afterEach, expect, it, vi } from "vitest";
-import { DirectionCard, IntradayThemeRow, OpportunitySection, ReviewOutcomeTable, StatsPanel, WatcherPanel } from "./intraday-sections";
+import { AlertItem, DirectionCard, IntradayThemeRow, OpportunitySection, ReviewOutcomeTable, StatsPanel, WatcherPanel } from "./intraday-sections";
 import type { BriefDirection, IntradayOpportunities, IntradayReviewStats, OpportunityTheme, WatcherState } from "@/lib/api";
 import {getThemeCatalogCompletion} from "@/lib/api/themes";
 
@@ -152,4 +152,19 @@ it("机会组头完成目录核对后同步展示当前参考和行业成分入�
   expect(screen.getByTestId("600001").dataset.readError).toBe("false");
   expect(screen.getByTestId("600002").dataset.readError).toBe("false");
   expect(JSON.stringify(source)).toBe(before);
+});
+
+
+it.each([['pre_limit', '临板预警'], ['falsify', '证伪'], ['future_kind', '未分类提醒']])('keeps reminder type %s distinct from a failed thesis', (kind, label) => {
+  render(<AlertItem a={{key:'original',kind,direction:'原方向',symbol:'',name:'',text:'原提醒依据',at:'2026-10-27T09:57:58+08:00',meta:{}}}/>);
+  expect(screen.getByText(label)).toBeTruthy();
+  expect(screen.getByText('2026-10-27 09:57:58')).toBeTruthy();
+  if(kind !== 'falsify')expect(screen.queryByText('证伪')).toBeNull();
+});
+
+it('does not invent a timestamp or treat a missing matured return as not yet due', () => {
+  render(<AlertItem a={{key:'original',kind:'confirm',direction:'原方向',symbol:'',name:'',text:'原提醒依据',at:'',meta:{returns:{ref_date:'2026-10-01',ref_price:10,t1_date:'2026-10-09',t1_return:2,t3_date:'2026-10-13',t3_return:null,complete:false}}}}/>);
+  expect(screen.getByText('原时间未记录')).toBeTruthy();
+  expect(screen.getByText('待核')).toBeTruthy();
+  expect(screen.queryByText('未到期')).toBeNull();
 });

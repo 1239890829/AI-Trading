@@ -22,7 +22,7 @@ import { MasonryColumns } from "@/components/masonry-columns";
 import { WatchLedgerPanel } from "@/components/hunting/watch-ledger-panel";
 import { PickCard, fromIntradayStock } from "@/components/picks/pick-card";
 import { StockLink } from "@/components/stock-link";
-import { pctColor, pctText, timeText, winRateColor } from "@/lib/format";
+import { pctColor, pctText, timeText, dateTimeTextBJ, winRateColor } from "@/lib/format";
 import { tapeUrl } from "@/lib/routing";
 import type {
   BriefAlert,
@@ -760,15 +760,21 @@ export function DirectionCard({ d }: { d: BriefDirection }) {
 export function AlertItem({ a }: { a: BriefAlert }) {
   const ret = a.meta?.returns;
   const isConfirm = a.kind === "confirm";
+  const alertLabels: Record<string, string> = {
+    confirm: "确认", falsify: "证伪", pre_limit: "临板预警", board_reopen: "开板提醒",
+    buy_point: "买点条件", flow_surge: "个股资金异动", board_flow_surge: "板块资金异动",
+    board_low_absorb: "板块低位承接",
+  };
+  const tone = isConfirm ? "bg-up/10 text-up-ink dark:text-up"
+    : a.kind === "falsify" ? "bg-down/10 text-down-ink dark:text-down"
+      : "bg-zinc-500/10 text-zinc-600 dark:text-zinc-300";
   return (
     <div className="rounded-lg border border-zinc-200 p-2.5 dark:border-zinc-800">
       <div className="flex flex-wrap items-center gap-2 text-xs">
         <span
-          className={`rounded px-1.5 py-0.5 text-[10px] font-medium ${
-            isConfirm ? "bg-up/10 text-up-ink dark:text-up" : "bg-down/10 text-down-ink dark:text-down"
-          }`}
+          className={`rounded px-1.5 py-0.5 text-[10px] font-medium ${tone}`}
         >
-          {isConfirm ? "确认" : "证伪"}
+          {alertLabels[a.kind] ?? "未分类提醒"}
         </span>
         <span className="font-medium text-zinc-900 dark:text-zinc-50">{a.direction}</span>
         {a.symbol && (
@@ -776,7 +782,7 @@ export function AlertItem({ a }: { a: BriefAlert }) {
             {a.name}（{a.symbol}）
           </StockLink>
         )}
-        <span className="ml-auto text-[10px] text-zinc-600 dark:text-zinc-400">{timeText(a.at)}</span>
+        <span className="ml-auto text-[10px] text-zinc-600 dark:text-zinc-400">{a.at ? dateTimeTextBJ(a.at, { seconds: true }) : "原时间未记录"}</span>
         {isConfirm && ret && (ret.t1_return != null || ret.t3_return != null) && (
           <span className="text-[10px] text-zinc-600 dark:text-zinc-400">
             T+1{" "}
@@ -785,7 +791,7 @@ export function AlertItem({ a }: { a: BriefAlert }) {
             </span>
             {" · "}T+3{" "}
             <span className={`font-mono ${pctColor(ret.t3_return)}`}>
-              {ret.t3_return != null ? pctText(ret.t3_return) : "未到期"}
+              {ret.t3_return != null ? pctText(ret.t3_return) : "待核"}
             </span>
           </span>
         )}
@@ -969,7 +975,7 @@ export function StatsPanel({ stats }: { stats: IntradayReviewStats }) {
               <span>{a.name || a.symbol}</span>
               <span className="text-zinc-600 dark:text-zinc-400">{a.direction}</span>
               <span className={`ml-auto font-mono tabular-nums ${pctColor(a.t1_return)}`}>
-                T+1 {a.t1_return != null ? pctText(a.t1_return) : "未到期"}
+                T+1 {a.t1_return != null ? pctText(a.t1_return) : "待核"}
               </span>
               <span className={`w-20 text-right font-mono tabular-nums ${pctColor(a.t3_return)}`}>
                 T+3 {a.t3_return != null ? pctText(a.t3_return) : "—"}
