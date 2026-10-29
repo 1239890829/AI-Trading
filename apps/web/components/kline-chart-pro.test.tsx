@@ -1,4 +1,4 @@
-import { StrictMode } from "react";
+import { Profiler, StrictMode } from "react";
 import { hydrateRoot } from "react-dom/client";
 import { renderToString } from "react-dom/server";
 import { act, cleanup, fireEvent, render, screen } from "@testing-library/react";
@@ -118,6 +118,21 @@ it("retires a historical hover when the security changes, including a return to 
   expect(screen.queryByLabelText("历史收盘至最新K线变化")).toBeNull();
   view.rerender(<KlineChartPro bars={input}/>);
   expect(screen.queryByLabelText("历史收盘至最新K线变化")).toBeNull();
+});
+
+it("does not commit repeated renders while the pointer stays on the same historical candle", () => {
+  let commits=0;
+  const input=bars();
+  render(<Profiler id="kline-hover" onRender={()=>{commits++;}}><KlineChartPro bars={input}/></Profiler>);
+  const cross=charts[0].subscribeCrosshairMove.mock.calls[0][0] as (value:{time?:string})=>void;
+  act(()=>cross({time:input[4].ts.slice(0,10)}));
+  const reading=screen.getByLabelText("历史收盘至最新K线变化").textContent, afterMove=commits;
+  for(let i=0;i<8;i++)act(()=>cross({time:input[4].ts.slice(0,10)}));
+  expect(commits).toBe(afterMove);
+  expect(screen.getByLabelText("历史收盘至最新K线变化").textContent).toBe(reading);
+  act(()=>cross({}));const afterLeave=commits;
+  for(let i=0;i<8;i++)act(()=>cross({}));
+  expect(commits).toBe(afterLeave);
 });
 
 describe("KlineChartPro first-paint data ownership", () => {

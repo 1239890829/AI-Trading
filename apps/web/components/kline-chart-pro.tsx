@@ -205,6 +205,8 @@ export function KlineChartPro({ bars, className, tradeMarks, costPrice, eventMar
     setHover(currentHover);
   }
   const hoverDate = currentHover.date;
+  const hoverEventRef = useRef(currentHover);
+  useEffect(() => {hoverEventRef.current = currentHover;}, [currentHover]);
   const historyRef = useRef({onLoadHistory, historyStatus});
   useEffect(() => {historyRef.current = {onLoadHistory, historyStatus};}, [onLoadHistory, historyStatus]);
   const appliedDatesRef = useRef<{symbol: string; timeframe: string; dates: string[]} | null>(null);
@@ -453,12 +455,12 @@ export function KlineChartPro({ bars, className, tradeMarks, costPrice, eventMar
     const onCross = (param: { time?: Time }) => {
       const currentBars = barsRef.current;
       const context = `${currentBars[0]?.symbol ?? ""}:${currentBars[0]?.timeframe ?? ""}`;
-      if (!param.time) {
-        setHover({context, date: null});
-        return;
-      }
-      const d = String(param.time).slice(0, 10);
-      setHover({context, date: currentBars.some((b) => b.ts.slice(0, 10) === d) ? d : null});
+      const d = param.time ? String(param.time).slice(0, 10) : null;
+      const date = d && currentBars.some((b) => b.ts.slice(0, 10) === d) ? d : null;
+      if (hoverEventRef.current.context === context && hoverEventRef.current.date === date) return;
+      const next = {context, date};
+      hoverEventRef.current = next;
+      setHover(next);
     };
     chart.subscribeCrosshairMove(onCross);
     const onRange = (range: {from: number; to: number} | null) => {
