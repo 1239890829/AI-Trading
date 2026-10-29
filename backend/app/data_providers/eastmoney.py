@@ -6,6 +6,7 @@ from datetime import date, datetime
 
 import httpx
 
+from app.core.bjtime import BJ_TZ
 from app.market import normalizer as nz
 from app.market.indices import INDEX_CATALOG
 from app.schemas.market import (
@@ -156,25 +157,39 @@ class EastmoneyProvider:
         klt = TIMEFRAME_KLT.get(timeframe)
         if klt is None:
             raise ProviderError(f"unsupported timeframe: {timeframe}")
+        start_dt = start.replace(tzinfo=BJ_TZ) if start is not None and start.tzinfo is None else start
+        end_dt = end.replace(tzinfo=BJ_TZ) if end is not None and end.tzinfo is None else end
+        if start_dt is not None and end_dt is not None and start_dt > end_dt:
+            raise ProviderError("eastmoney kline start exceeds end")
+        index_identity = next(((code, market) for code, market, _ in INDEX_CATALOG
+            if symbol.strip().lower() in {market.lower() + code, code + "." + market.lower()}), None)
+        secid = f"{'1' if index_identity[1] == 'SH' else '0'}.{index_identity[0]}" if index_identity else to_secid(symbol)
+        actual_fqt = "0" if index_identity else fqt
+        params = {
+            "secid": secid,
+            "fields1": "f1,f2,f3,f4,f5,f6",
+            "fields2": "f51,f52,f53,f54,f55,f56,f57,f58,f59,f60,f61",
+            "klt": str(klt),
+            "fqt": actual_fqt,
+            "end": end_dt.astimezone(BJ_TZ).strftime("%Y%m%d") if end_dt else "20500101",
+            "lmt": "1000",
+        }
+        if start_dt is not None:
+            params["beg"] = start_dt.astimezone(BJ_TZ).strftime("%Y%m%d")
         payload = await self._get_json(
             "https://push2his.eastmoney.com/api/qt/stock/kline/get",
-            {
-                "secid": to_secid(symbol),
-                "fields1": "f1,f2,f3,f4,f5,f6",
-                "fields2": "f51,f52,f53,f54,f55,f56,f57,f58,f59,f60,f61",
-                "klt": str(klt),
-                "fqt": fqt,
-                "end": "20500101",
-                "lmt": "1000",
-            },
+            params,
         )
         klines_data = (payload.get("data") or {}).get("klines") or []
         bars = [nz.normalize_kline_row(symbol, timeframe, row) for row in klines_data]
         bars = [b for b in bars if b is not None]
-        if start is not None:
-            bars = [b for b in bars if b.ts >= start]
-        if end is not None:
-            bars = [b for b in bars if b.ts <= end]
+        for bar in bars:
+            bar.price_basis = {"0": "none", "1": "qfq", "2": "hfq"}.get(actual_fqt, "unknown")
+        daily_label = timeframe in {"1d", "1w"}
+        if start_dt is not None:
+            bars = [b for b in bars if (b.ts.date() >= start_dt.astimezone(BJ_TZ).date() if daily_label else b.ts >= start_dt)]
+        if end_dt is not None:
+            bars = [b for b in bars if (b.ts.date() <= end_dt.astimezone(BJ_TZ).date() if daily_label else b.ts <= end_dt)]
         return bars
 
     async def get_kline(

@@ -640,6 +640,9 @@ class ThsFuyaoProvider:
             raise ProviderError("ths index kline 返回证券身份或日线无复权口径不一致")
         if not is_index and data.get("thscode") not in (None, thscode):
             raise ProviderError("ths stock kline 返回证券身份不一致")
+        if not is_index and (("interval" in data and data["interval"] != "1d")
+                             or ("adjust" in data and data["adjust"] != adjust)):
+            raise ProviderError("ths stock kline 返回日线复权口径不一致")
         bars: list[Kline] = []
         prev_close: float | None = None
         for it in data.get("item") or []:
@@ -656,6 +659,7 @@ class ThsFuyaoProvider:
                 open=it.get("open_price"), high=it.get("high_price"),
                 low=it.get("low_price"), close=close, volume=it.get("volume"),
                 amount=it.get("turnover"), change_pct=change_pct, source=SOURCE,
+                price_basis="none" if is_index else {"forward": "qfq", "backward": "hfq", "none": "none"}[adjust],
             ))
             if close is not None:
                 prev_close = close

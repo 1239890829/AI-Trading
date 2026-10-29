@@ -1,7 +1,7 @@
 """Behavioral fixtures are not a model-quality admission."""
 import asyncio
 from copy import deepcopy
-from datetime import date, timedelta
+from datetime import date, datetime, timedelta
 import json
 import os
 from pathlib import Path
@@ -983,6 +983,71 @@ def test_explicit_builder_uses_cache_and_existing_free_owners_only(monkeypatch):
     assert summary["units"]["revenue_yoy"] == "percent" and "完整三张财务报表" in built["facts"]["missing"]
     assert built["facts"]["market_inputs"]["history"]["normalized_payload_bytes"] > 100
     assert driver.validate_packet(built, "600000")["facts"] == built["facts"]
+
+
+@pytest.mark.parametrize("source,hour,raw", [("tencent", 10, False), ("tencent", 10, True),
+    ("eastmoney", 0, False), ("eastmoney", 10, False)])
+def test_current_kline_owner_packet_path_keeps_source_basis_date_window_and_raw_denial(monkeypatch, source, hour, raw):
+    import httpx
+    from app.core.bjtime import BJ_TZ
+    from app.data_providers.eastmoney import EastmoneyProvider
+    from app.data_providers.tencent import TencentProvider
+
+    at = datetime(2026, 10, 29, hour, tzinfo=BJ_TZ)
+    first = (at - timedelta(days=400)).date()
+    days = [first + timedelta(days=i) for i in range(401) if (first + timedelta(days=i)).weekday() < 5]
+    rows = [[day.isoformat(), "10", "11", "12", "9", "100", "1100"] for day in days]
+    requests, observed_basis = [], []
+
+    def transport(request):
+        requests.append(request.url)
+        if source == "tencent":
+            fields = request.url.params["param"].split(",")
+            assert fields[2:4] == [first.isoformat(), at.date().isoformat()]
+            return httpx.Response(200, json={"data": {"sh600000": {"day" if raw else "qfqday": [row[:6] for row in rows]}}})
+        assert request.url.params["beg"] == first.strftime("%Y%m%d")
+        assert request.url.params["end"] == at.strftime("%Y%m%d")
+        assert request.url.params["fqt"] == "1"
+        return httpx.Response(200, json={"data": {"klines": [",".join(row) for row in rows]}})
+
+    monkeypatch.setattr(driver, "read_profile", lambda _: _public_profile("600000", at))
+    monkeypatch.setattr(driver, "beijing_now", lambda: at)
+
+    async def run():
+        app, _, financial, _ = _market_app(at, source=source)
+        provider = TencentProvider() if source == "tencent" else EastmoneyProvider()
+        await provider._client.aclose()
+        provider._client = httpx.AsyncClient(transport=httpx.MockTransport(transport))
+        original = provider.get_kline
+
+        async def clocked(*args, **kwargs):
+            values = await original(*args, **kwargs)
+            observed_basis.extend(row.price_basis for row in values)
+            for row in values:
+                row.received_at = at - timedelta(seconds=1)  # Offline receive-clock fixture only.
+            return values
+
+        provider.get_kline = clocked
+        if source == "eastmoney":
+            provider.get_financials = financial.get_financials
+        app.state.hub.provider.providers[1] = provider
+        try:
+            built = await driver.StoredCompanyPacketBuilder()("600000", at, app)
+        finally:
+            await provider.aclose()
+        audit = built["facts"]["market_inputs"]["history"]
+        assert len(requests) == 1 and set(observed_basis) == ({"none"} if raw else {"qfq"})
+        if raw:
+            assert "price_history" not in built["facts"]
+            assert audit["status"] == "unavailable" and "adjustment_unproven" in audit["reason"]
+        else:
+            history = built["facts"]["price_history"]
+            assert [row["session"] for row in history["observations"]] == [day.isoformat() for day in days if day < at.date()]
+            assert history["price_basis"] == "qfq_current_vendor_observation"
+            assert audit["excluded_rows"] == 1  # Today's forming row remains excluded.
+            assert history["complete_history"] is False and len(history["observations"]) <= 300
+
+    asyncio.run(run())
 
 
 @pytest.mark.parametrize("mutate", [lambda q: setattr(q, "data_timestamp", None),

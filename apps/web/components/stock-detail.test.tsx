@@ -91,13 +91,16 @@ vi.mock("@/hooks/use-quote-stream", async (importOriginal) => {
 
 // Canvas is outside this request-count check; book/trades use their real view.
 vi.mock("@/components/kline-chart-pro", () => ({
-  KlineChartPro: ({ bars, costPrice, tradeMarks }: { bars: Kline[]; costPrice?: number | null; tradeMarks?: PaperFill[] }) => <div data-testid="kline-price" data-cost-price={costPrice ?? "none"} data-fill-count={tradeMarks?.length ?? 0}>{bars.at(-1)?.close}</div>,
+  KlineChartPro: ({ bars, costPrice, tradeMarks, onLoadHistory, historyStatus }: { bars: Kline[]; costPrice?: number | null; tradeMarks?: PaperFill[]; onLoadHistory?: (retry?:boolean)=>void; historyStatus?: {pending:boolean;error:string|null;note:string|null} }) => <><div data-testid="kline-price" data-days={bars.map(row=>row.ts).join(",")} data-cost-price={costPrice ?? "none"} data-fill-count={tradeMarks?.length ?? 0}>{bars.at(-1)?.close}</div><button type="button" onClick={()=>onLoadHistory?.()}>图表左沿</button><button type="button" onClick={()=>onLoadHistory?.(true)}>重试历史</button><p data-testid="history-status">{historyStatus?.pending?"历史读取中":historyStatus?.error??historyStatus?.note}</p></>,
 }));
 vi.mock("@/components/minute-chart", () => ({
   MinuteChart: ({ points, index, prevClose, referenceDate, upperPrice, lowerPrice, indexSelected, indexWaiting, onIndexToggle, indexStatus }: { points: MinutePoint[]; index?: {points: MinutePoint[]; prevClose?: number} | null; prevClose?: number | null; referenceDate?: string | null; upperPrice?: number | null; lowerPrice?: number | null; indexSelected?: boolean; indexWaiting?: boolean; onIndexToggle?: () => void; indexStatus?: ReactNode }) => <><div data-testid="minute-controls"><button type="button" aria-label="上证指数叠加" aria-pressed={indexSelected ?? false} title={indexWaiting ? "等待可比较的同日个股连续分时" : undefined} onClick={onIndexToggle}>上证指数</button>{indexStatus}</div><div data-testid="minute-price" data-index-last={index?.points.at(-1)?.price ?? "none"} data-index-clock={index?.points.at(-1)?.ts ?? "none"} data-index-prev-close={index?.prevClose ?? "none"} data-avg={points.at(-1)?.avg ?? "none"} data-prev-close={prevClose ?? "none"} data-reference-date={referenceDate ?? "none"} data-upper-price={upperPrice ?? "none"} data-lower-price={lowerPrice ?? "none"}>{points.at(-1)?.price}</div></>,
 }));
 
 const audit = { source: "tdx", quality: "high" as const, quality_reasons: [], received_at: "2026-10-09T02:00:00Z" };
+function historyPayload(days = ["2026-10-07","2026-10-08","2026-10-09"], symbol = "600519"): KlinePayload {
+  return {symbol,timeframe:"1d",trading_status:{status:"trading"},bars:days.map(ts=>({...audit,symbol,timeframe:"1d",ts,price_basis:"qfq",open:10,high:10,low:10,close:10}))};
+}
 function book(symbol = "600519", price = 20): OrderBook {
   return { ...audit, symbol, bids: [{ price, volume: 100 }], asks: [] };
 }
@@ -2359,5 +2362,156 @@ describe("StockDetailPanel · 技术分析按真实消费者计算", () => {
     view.rerender(<StockDetailPanel symbol="600519" chartTab="kline" liveQuote={observation(1)}/>); await settle();
     expect(analyzeTechnical).not.toHaveBeenCalled();
     await advance(160); expect(view.container.querySelector('[aria-label="技术评估依据"]')).toBeNull();
+  });
+});
+
+describe("StockDetailPanel · 有界历史日K", () => {
+  it.each(["stale","invalid"] as const)("a pure history prepend preserves the accepted live tail after a %s frame", async quality => {
+    const older=deferred<KlinePayload>(), feed=testQuoteFeed();
+    const trusted: Quote={...audit,symbol:"600519",price:12,data_timestamp:"2026-10-09T02:00:30Z"};
+    feed.publish("600519",trusted);
+    api.getKlinePayload.mockResolvedValueOnce(historyPayload()).mockReturnValueOnce(older.promise);
+    const view=render(<StockDetailPanel symbol="600519" chartTab="kline" quoteFeed={feed} streamStatus="live"/>);await settle();
+    fireEvent.click(view.getByRole("button",{name:"图表左沿"}));await settle();
+    await act(async()=>feed.publish("600519",{...trusted,quality,price:8,quality_reasons:["source_time_regress_ignored"]}));
+    expect(view.getByTestId("kline-price").textContent).toBe("12");
+    await act(async()=>older.resolve(historyPayload(["2026-09-30","2026-10-07","2026-10-08"])));
+    expect(view.getByTestId("kline-price").dataset.days).toBe("2026-09-30,2026-10-07,2026-10-08,2026-10-09");
+    expect(view.getByTestId("kline-price").textContent).toBe("12");
+    expect(view.container.querySelector(`[data-quality=${quality}]`)).toBeTruthy();
+  });
+  it.each([false,true])("history extension never resurrects a prior-day projection, including a real REST recalibration=%s", async recalibrate => {
+    const older=deferred<KlinePayload>(),feed=testQuoteFeed();
+    const trusted: Quote={...audit,symbol:"600519",price:12,data_timestamp:"2026-10-09T02:00:30Z"};
+    feed.publish("600519",trusted);
+    api.getKlinePayload.mockResolvedValueOnce(historyPayload()).mockReturnValueOnce(older.promise);
+    const view=render(<StockDetailPanel symbol="600519" chartTab="kline" quoteFeed={feed} streamStatus="live"/>);await settle();
+    fireEvent.click(view.getByRole("button",{name:"图表左沿"}));await settle();
+    await act(async()=>feed.publish("600519",{...trusted,quality:"stale",price:8,quality_reasons:["refresh_failed"]}));
+    await act(async()=>older.resolve(historyPayload(["2026-09-30","2026-10-07","2026-10-08"])));
+    expect(view.getByTestId("kline-price").textContent).toBe("12");
+    if(recalibrate) {
+      const latest=historyPayload();latest.bars[2]={...latest.bars[2],close:11,high:11};
+      api.getKlinePayload.mockResolvedValueOnce(latest);await advance(60_000);
+      expect(view.getByTestId("kline-price").textContent).toBe("11");
+    }
+    const next=deferred<KlinePayload>();api.getKlinePayload.mockReturnValueOnce(next.promise);
+    fireEvent.click(view.getByRole("button",{name:"图表左沿"}));await settle();
+    await act(async()=>feed.publish("600519",{...trusted,quality:"invalid",price:40,data_timestamp:"2026-10-10T02:00:30Z",quality_reasons:["refresh_failed"]}));
+    const base=recalibrate?"11":"10";
+    expect(view.getByTestId("kline-price").textContent).toBe(base);
+    await act(async()=>next.resolve(historyPayload(["2026-09-29","2026-09-30","2026-10-07"])));
+    expect(view.getByTestId("kline-price").dataset.days).toContain("2026-09-29");
+    expect(view.getByTestId("kline-price").textContent).toBe(base);
+  });
+  it("shares one left-edge flight, validates overlap and ignores historical trading status", async () => {
+    const older=deferred<KlinePayload>();
+    api.getKlinePayload.mockResolvedValueOnce(historyPayload()).mockReturnValueOnce(older.promise);
+    const view=render(<StockDetailPanel symbol="600519" chartTab="kline"/>);await settle();
+    expect(api.getKlinePayload).toHaveBeenCalledWith("600519","1d",120);
+    fireEvent.click(view.getByRole("button",{name:"图表左沿"}));
+    fireEvent.click(view.getByRole("button",{name:"图表左沿"}));await settle();
+    expect(api.getKlinePayload).toHaveBeenCalledTimes(2);
+    expect(api.getKlinePayload.mock.lastCall).toEqual(["600519","1d",1000,{start:"2025-05-25",end:"2026-10-09"}]);
+    expect(view.getByTestId("history-status").textContent).toBe("历史读取中");
+    const page=historyPayload(["2026-09-30","2026-10-07","2026-10-08"]);page.trading_status={status:"suspended",reason:"仅旧窗状态"};
+    await act(async()=>older.resolve(page));
+    expect(view.getByTestId("kline-price").dataset.days).toBe("2026-09-30,2026-10-07,2026-10-08,2026-10-09");
+    expect(view.queryByText("该股当前停牌")).toBeNull();
+    expect(view.queryByText("仅旧窗状态")).toBeNull();
+    expect(view.getByTestId("history-status").textContent).toContain("更早 1 个交易日");
+  });
+  it.each(["empty","no-earlier","source","anchor"])("stops the same automatic edge after %s and keeps manual retry at the same entry", async failure => {
+    let page=historyPayload(["2026-09-30","2026-10-07"]);
+    if(failure==="empty")page={...page,bars:[]};
+    if(failure==="no-earlier")page=historyPayload(["2026-10-07"]);
+    if(failure==="source")page.bars=page.bars.map(row=>({...row,source:"other"}));
+    if(failure==="anchor")page.bars[1]={...page.bars[1],open:11,high:11,low:11,close:11};
+    api.getKlinePayload.mockResolvedValueOnce(historyPayload()).mockResolvedValue(page);
+    const view=render(<StockDetailPanel symbol="600519" chartTab="kline"/>);await settle();
+    fireEvent.click(view.getByRole("button",{name:"图表左沿"}));await settle();
+    const days=view.getByTestId("kline-price").dataset.days;
+    expect(view.getByTestId("history-status").textContent).not.toBe("");
+    fireEvent.click(view.getByRole("button",{name:"图表左沿"}));await settle();
+    expect(api.getKlinePayload).toHaveBeenCalledTimes(2);
+    fireEvent.click(view.getByRole("button",{name:"重试历史"}));await settle();
+    expect(api.getKlinePayload).toHaveBeenCalledTimes(3);
+    expect(view.getByTestId("kline-price").dataset.days).toBe(days);
+  });
+  it("does not spend a history request on legacy unknown adjustment metadata", async () => {
+    api.getKlinePayload.mockResolvedValue(kline());
+    const view=render(<StockDetailPanel symbol="600519" chartTab="kline"/>);await settle();
+    expect(view.getByTestId("history-status").textContent).toContain("当前仅显示本次日K");
+    fireEvent.click(view.getByRole("button",{name:"图表左沿"}));await settle();
+    expect(view.getByTestId("history-status").textContent).toContain("复权口径未知");
+    fireEvent.click(view.getByRole("button",{name:"图表左沿"}));await settle();
+    expect(api.getKlinePayload).toHaveBeenCalledTimes(1);
+    expect(view.getByTestId("kline-price").textContent).toBe("20");
+  });
+  it.each(["low","stale","invalid"] as const)("stops unknown-quality %s at the current edge without a network loop", async quality => {
+    const value=historyPayload();value.bars=value.bars.map(row=>({...row,quality}));
+    api.getKlinePayload.mockResolvedValue(value);
+    const view=render(<StockDetailPanel symbol="600519" chartTab="kline"/>);await settle();
+    expect(view.getByTestId("history-status").textContent).toContain("来源质量不足");
+    fireEvent.click(view.getByRole("button",{name:"图表左沿"}));await settle();
+    fireEvent.click(view.getByRole("button",{name:"图表左沿"}));await settle();
+    expect(api.getKlinePayload).toHaveBeenCalledTimes(1);
+    expect(view.getByTestId("kline-price").dataset.days).toBe("2026-10-07,2026-10-08,2026-10-09");
+  });
+  it("a latest refresh completing after prepend updates the tail without truncating history", async () => {
+    const latest=deferred<KlinePayload>(),older=deferred<KlinePayload>();
+    api.getKlinePayload.mockResolvedValueOnce(historyPayload()).mockReturnValueOnce(latest.promise).mockReturnValueOnce(older.promise);
+    const view=render(<StockDetailPanel symbol="600519" chartTab="kline"/>);await settle();
+    await advance(60_000);
+    fireEvent.click(view.getByRole("button",{name:"图表左沿"}));await settle();
+    await act(async()=>older.resolve(historyPayload(["2026-09-30","2026-10-07","2026-10-08"])));
+    const reply=historyPayload();reply.bars[2]={...reply.bars[2],close:12,high:12};
+    await act(async()=>latest.resolve(reply));
+    expect(view.getByTestId("kline-price").dataset.days).toBe("2026-09-30,2026-10-07,2026-10-08,2026-10-09");
+    expect(view.getByTestId("kline-price").textContent).toBe("12");
+    expect(api.getKlinePayload).toHaveBeenCalledTimes(3);
+  });
+  it("a history page completing after a latest refresh preserves the newer tail", async () => {
+    const older=deferred<KlinePayload>();
+    api.getKlinePayload.mockResolvedValueOnce(historyPayload()).mockReturnValueOnce(older.promise);
+    const view=render(<StockDetailPanel symbol="600519" chartTab="kline"/>);await settle();
+    fireEvent.click(view.getByRole("button",{name:"图表左沿"}));await settle();
+    const fresh=historyPayload(["2026-10-08","2026-10-09"]);fresh.bars[1]={...fresh.bars[1],close:12,high:12};
+    api.getKlinePayload.mockResolvedValueOnce(fresh);await advance(60_000);
+    await act(async()=>older.resolve(historyPayload(["2026-09-30","2026-10-07","2026-10-08"])));
+    expect(view.getByTestId("kline-price").dataset.days).toBe("2026-09-30,2026-10-07,2026-10-08,2026-10-09");
+    expect(view.getByTestId("kline-price").textContent).toBe("12");
+  });
+  it("keeps loaded history and blocks a changed closed-day adjustment anchor from both refresh and further paging", async () => {
+    api.getKlinePayload.mockResolvedValueOnce(historyPayload()).mockResolvedValueOnce(historyPayload(["2026-09-30","2026-10-07","2026-10-08"]));
+    const view=render(<StockDetailPanel symbol="600519" chartTab="kline"/>);await settle();
+    fireEvent.click(view.getByRole("button",{name:"图表左沿"}));await settle();
+    const oldDays=view.getByTestId("kline-price").dataset.days;
+    const revised=historyPayload();revised.bars[0]={...revised.bars[0],open:9,high:9,low:9,close:9};
+    api.getKlinePayload.mockResolvedValueOnce(revised);await advance(60_000);
+    expect(view.getByTestId("history-status").textContent).toContain("已收盘重叠OHLC修订");
+    expect(view.getByTestId("kline-price").dataset.days).toBe(oldDays);
+    expect(view.getByTestId("kline-price").textContent).toBe("10");
+    const count=api.getKlinePayload.mock.calls.length;
+    fireEvent.click(view.getByRole("button",{name:"图表左沿"}));await settle();
+    fireEvent.click(view.getByRole("button",{name:"重试历史"}));await settle();
+    expect(api.getKlinePayload).toHaveBeenCalledTimes(count);
+    expect(view.getByTestId("history-status").textContent).toContain("保留旧历史");
+  });
+  it.each(["symbol-roundtrip","inactive"])("rejects a late historical page after %s", async exit => {
+    const older=deferred<KlinePayload>();
+    api.getKlinePayload.mockImplementation(async symbol=>historyPayload(undefined,symbol));
+    api.getKlinePayload.mockResolvedValueOnce(historyPayload()).mockReturnValueOnce(older.promise);
+    const view=render(<StockDetailPanel symbol="600519" chartTab="kline"/>);await settle();
+    fireEvent.click(view.getByRole("button",{name:"图表左沿"}));await settle();
+    if(exit==="inactive")view.rerender(<StockDetailPanel symbol="600519" chartTab="kline" active={false}/>);
+    else {
+      view.rerender(<StockDetailPanel symbol="000001" chartTab="kline"/>);await settle();
+      view.rerender(<StockDetailPanel symbol="600519" chartTab="kline"/>);await settle();
+    }
+    await act(async()=>older.resolve(historyPayload(["2026-09-30","2026-10-07"])));
+    if(exit==="inactive") {view.rerender(<StockDetailPanel symbol="600519" chartTab="kline" active/>);await settle();}
+    expect(view.getByTestId("kline-price").dataset.days).toBe("2026-10-07,2026-10-08,2026-10-09");
+    expect(view.getByTestId("history-status").textContent).not.toContain("历史读取中");
   });
 });

@@ -102,6 +102,8 @@ export interface Kline extends AuditFields {
   symbol: string;
   timeframe: string;
   ts: string;
+  /** Explicit source price basis; missing legacy metadata remains unknown. */
+  price_basis?: "qfq" | "hfq" | "none" | "unknown";
   open?: number | null;
   high?: number | null;
   low?: number | null;

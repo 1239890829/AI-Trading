@@ -1,6 +1,6 @@
 import {afterEach, expect, it, vi} from "vitest";
-import {cleanup, fireEvent, render, screen} from "@testing-library/react";
-import {DailyReviews} from "./pick-sections";
+import {cleanup, fireEvent, render, screen, within} from "@testing-library/react";
+import {DailyReviews, HistoryList, RolePerformanceTable} from "./pick-sections";
 
 vi.mock("next/navigation", () => ({useRouter: () => ({push: vi.fn()})}));
 afterEach(cleanup);
@@ -13,4 +13,22 @@ it("retains the whole review note and its original version and observation bound
   expect(screen.getByText("收益观察未知")).toBeTruthy();
   expect(screen.getByTitle("original-v1").textContent).toContain("未进入可信统计");
   expect(screen.getByTitle("original-v1").textContent).toContain("终点未知");
+});
+
+it("keeps role observation values attached to their field labels when the table is rearranged", () => {
+  render(<RolePerformanceTable rows={[{role: "中军", count: 6, win_rate: 70, avg_excess: 1.5}]}/>);
+  const table = screen.getByRole("table", {name: "梯队角色价格观察"});
+  const cells = within(within(table).getAllByRole("row")[1]).getAllByRole("cell");
+  expect(cells.map(cell => [cell.getAttribute("data-label"), cell.textContent])).toEqual([
+    ["角色", "中军"], ["样本", "6"], ["走好观察占比", "70%"], ["平均超额", "+1.50%"],
+  ]);
+  expect(screen.getByText(/同版窗口；不是成交胜率/)).toBeTruthy();
+});
+
+it("retains the complete original symbol list, date and average in a long historical group", () => {
+  const symbols = ["000333", "601229", "001318", "001317", "600127", "002264", "002315", "002261"];
+  render(<HistoryList history={[{date: "2026-10-28", score_avg: 67.25, symbols}]}/>);
+  expect(screen.getByText("2026-10-28")).toBeTruthy();
+  expect(screen.getByText("均分 67.25")).toBeTruthy();
+  expect(screen.getByText(symbols.join(" · ")).textContent).toBe(symbols.join(" · "));
 });

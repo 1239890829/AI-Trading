@@ -18,7 +18,8 @@ function makeSeries(kind: string, options: Options) {
 }
 function makeChart(options: Options) {
   const series: ReturnType<typeof makeSeries>[] = [];
-  const timeScale = { setVisibleLogicalRange: vi.fn(), getVisibleLogicalRange: () => ({ from: 4, to: 12 }) };
+  const timeScale = { setVisibleLogicalRange: vi.fn(), getVisibleLogicalRange: () => ({ from: 4, to: 12 }),
+    subscribeVisibleLogicalRangeChange: vi.fn(), unsubscribeVisibleLogicalRangeChange: vi.fn() };
   const add = (kind: string, options: Options) => {
     const value = makeSeries(kind, options); series.push(value); return value;
   };
@@ -45,6 +46,7 @@ const bars = (count = 120, shift = 0): Kline[] => Array.from({ length: count }, 
     open: close + (index % 2 ? 0.2 : -0.2), close, high: close + 0.4, low: close - 0.4,
     volume: 1000 + index, amount: 10_000 + index,
     source: "test_fixture", quality: "high", quality_reasons: [], received_at: "2026-10-14T15:01:00+08:00",
+    price_basis: "qfq",
   };
 });
 const candle = (chart = charts.at(-1)!) => chart.series.find(series => series.kind === "candle")!;
@@ -59,6 +61,64 @@ beforeEach(() => {
   charts.length = 0; localStorage.clear(); document.documentElement.classList.remove("dark");
 });
 afterEach(() => { cleanup(); localStorage.clear(); document.documentElement.classList.remove("dark"); });
+
+it("loads history near the visible left edge and retires the chart listener on cleanup", () => {
+  const load = vi.fn();
+  const view = render(<KlineChartPro bars={bars()} onLoadHistory={load} historyStatus={{pending:false,error:null,note:null}}/>);
+  const scale = charts[0].timeScale();
+  const range = scale.subscribeVisibleLogicalRangeChange.mock.calls[0][0] as (range:{from:number;to:number}|null)=>void;
+  act(()=>range({from:40,to:80}));expect(load).not.toHaveBeenCalled();
+  act(()=>range({from:7,to:40}));expect(load).toHaveBeenCalledOnce();
+  view.rerender(<KlineChartPro bars={bars()} onLoadHistory={load} historyStatus={{pending:true,error:null,note:null}}/>);
+  act(()=>range({from:-10,to:40}));expect(load).toHaveBeenCalledOnce();
+  view.rerender(<KlineChartPro bars={bars()} onLoadHistory={load} historyStatus={{pending:false,error:"源读取失败",note:null}}/>);
+  act(()=>range({from:-10,to:40}));expect(load).toHaveBeenCalledOnce();
+  fireEvent.click(screen.getByRole("button",{name:"重试历史"}));expect(load).toHaveBeenLastCalledWith(true);
+  view.unmount();expect(scale.unsubscribeVisibleLogicalRangeChange).toHaveBeenCalledWith(range);
+});
+
+it("prepends history without rebuilding, shifting the current date or losing the hovered candle", () => {
+  const input=bars();
+  const view=render(<KlineChartPro bars={input}/>);
+  const chart=charts[0];
+  const cross=chart.subscribeCrosshairMove.mock.calls[0][0] as (value:{time?:string})=>void;
+  act(()=>cross({time:input[4].ts.slice(0,10)}));
+  const observed=screen.getByLabelText("历史收盘至最新K线变化").textContent;
+  const older=Array.from({length:30},(_,i)=>({...input[0],ts:new Date(Date.UTC(2026,4,i+2)).toISOString()}));
+  chart.timeScale().setVisibleLogicalRange.mockClear();
+  view.rerender(<KlineChartPro bars={[...older,...input]}/>);
+  expect(charts).toHaveLength(1);
+  expect(chart.timeScale().setVisibleLogicalRange).toHaveBeenLastCalledWith({from:34,to:42});
+  expect(screen.getByLabelText("历史收盘至最新K线变化").textContent).toBe(observed);
+  expect(lastData(candle(chart))).toHaveLength(150);
+});
+
+it("calculates historical close to the latest comparable close and labels the endpoint, keeping unknown prices unknown", () => {
+  const input=bars(3);input[0].close=10;input[2].close=12.5;input[2].high=12.5;
+  const view=render(<KlineChartPro bars={input}/>);
+  const cross=charts[0].subscribeCrosshairMove.mock.calls[0][0] as (value:{time?:string})=>void;
+  act(()=>cross({time:input[0].ts.slice(0,10)}));
+  expect(screen.getByLabelText("历史收盘至最新K线变化").textContent).toContain("距今 +25.00%");
+  expect(screen.getByLabelText("历史收盘至最新K线变化").textContent).toContain("至 2026-06-03");
+  view.rerender(<KlineChartPro bars={input.map(b=>({...b,price_basis:"unknown"}))}/>);
+  expect(screen.getByLabelText("历史收盘至最新K线变化").textContent).toContain("距今 未知");
+  view.rerender(<KlineChartPro bars={input.map((b,i)=>i===0?{...b,close:0}:b)}/>);
+  expect(screen.getByLabelText("历史收盘至最新K线变化").textContent).toContain("距今 未知");
+  view.rerender(<KlineChartPro bars={input.map((b,i)=>i===2?{...b,source:"other_source"}:b)}/>);
+  expect(screen.getByLabelText("历史收盘至最新K线变化").textContent).toContain("距今 未知");
+  act(()=>cross({}));expect(screen.queryByLabelText("历史收盘至最新K线变化")).toBeNull();
+});
+
+it("retires a historical hover when the security changes, including a return to the old security", () => {
+  const input=bars(3), view=render(<KlineChartPro bars={input}/>);
+  const cross=charts[0].subscribeCrosshairMove.mock.calls[0][0] as (value:{time?:string})=>void;
+  act(()=>cross({time:input[0].ts.slice(0,10)}));
+  expect(screen.getByLabelText("历史收盘至最新K线变化")).toBeTruthy();
+  view.rerender(<KlineChartPro bars={input.map(b=>({...b,symbol:"000333"}))}/>);
+  expect(screen.queryByLabelText("历史收盘至最新K线变化")).toBeNull();
+  view.rerender(<KlineChartPro bars={input}/>);
+  expect(screen.queryByLabelText("历史收盘至最新K线变化")).toBeNull();
+});
 
 describe("KlineChartPro first-paint data ownership", () => {
   it.each(["light", "dark"])("synchronously fills each initial %s series and marker once", theme => {

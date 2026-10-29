@@ -29,6 +29,8 @@ interface Props {
   eventMarks?: EventMark[];
   /** 数据更新时重聚焦最近 20 根（历史回放跟随进度）；详情页 false，保用户缩放位置 */
   followLatest?: boolean;
+  onLoadHistory?: (retry?: boolean) => void;
+  historyStatus?: {pending: boolean; error: string | null; note: string | null};
 }
 
 type Indicators = { ma5: boolean; ma10: boolean; ma20: boolean; ma60: boolean; vol: boolean; macd: boolean; boll: boolean; amt: boolean; bs: boolean; events: boolean };
@@ -164,7 +166,7 @@ function calcBOLL(closes: number[], n = 20, k = 2) {
  * 销毁重建——闪烁且丢失用户的缩放/平移位置，实时刷新根本没法用。现在 chart/series
  * 只随指标开关重建，数据变化走 fill() 对既有 series setData。
  */
-export function KlineChartPro({ bars, className, tradeMarks, costPrice, eventMarks, followLatest = false }: Props) {
+export function KlineChartPro({ bars, className, tradeMarks, costPrice, eventMarks, followLatest = false, onLoadHistory, historyStatus }: Props) {
   const containerRef = useRef<HTMLDivElement>(null);
   const chartRef = useRef<IChartApi | null>(null);
   // 画布配色随主题走（P2-26）：theme 变化 → 下面的 applyTheme 把新色套到既有 series 上，
@@ -195,7 +197,18 @@ export function KlineChartPro({ bars, className, tradeMarks, costPrice, eventMar
   useEffect(() => {
     barsRef.current = bars;
   }, [bars]);
-  const [hoverIdx, setHoverIdx] = useState<number | null>(null);
+  const hoverContext = `${bars[0]?.symbol ?? ""}:${bars[0]?.timeframe ?? ""}`;
+  const [hover, setHover] = useState<{context: string; date: string | null}>(() => ({context: hoverContext, date: null}));
+  let currentHover = hover;
+  if (hover.context !== hoverContext) {
+    currentHover = {context: hoverContext, date: null};
+    setHover(currentHover);
+  }
+  const hoverDate = currentHover.date;
+  const historyRef = useRef({onLoadHistory, historyStatus});
+  useEffect(() => {historyRef.current = {onLoadHistory, historyStatus};}, [onLoadHistory, historyStatus]);
+  const appliedDatesRef = useRef<{symbol: string; timeframe: string; dates: string[]} | null>(null);
+  const fillingRef = useRef(false);
   // fill 时算好的 MA 序列快照（按 data 索引），hover 信息条直接取值
   const maSnapRef = useRef<Record<string, (number | null)[]>>({});
 
@@ -215,7 +228,7 @@ export function KlineChartPro({ bars, className, tradeMarks, costPrice, eventMar
   const markedInputsRef = useRef<readonly unknown[] | null>(null);
   const appliedThemeRef = useRef<{ chart: IChartApi; palette: KlinePalette } | null>(null);
 
-  // fill：把当前 props 数据灌入已存在的 series（幂等，全量 setData；bars 只有 120 根，成本低）。
+  // Fill existing series; prepending keeps the user's current visible dates.
   // 存进 ref 供创建 effect 调用最新版本，避免把 bars 放进创建依赖导致整图重建。
   // 2026-09-02：markers 与成本线拆到独立 effect——原实现每次 WS 合成 tick（每秒）
   // 都 setMarkers + removePriceLine/createPriceLine，高频重设造成视觉扰动。
@@ -229,6 +242,11 @@ export function KlineChartPro({ bars, className, tradeMarks, costPrice, eventMar
     const data: CandlestickData[] = bars
       .filter((b) => b.open != null && b.close != null)
       .map((b) => ({ time: b.ts.slice(0, 10) as Time, open: b.open as number, high: (b.high ?? b.open) as number, low: (b.low ?? b.open) as number, close: b.close as number }));
+    const previous = appliedDatesRef.current;
+    const sameSeries = previous?.symbol === bars[0]?.symbol && previous?.timeframe === bars[0]?.timeframe;
+    const addedBefore = sameSeries && previous?.dates.length ? data.findIndex(row => row.time === previous.dates[0]) : 0;
+    const visible = !followLatest && addedBefore > 0 ? chart.timeScale().getVisibleLogicalRange() : null;
+    fillingRef.current = true;
     s.candle.setData(data);
     const closes = data.map((d) => d.close);
     const times = data.map((d) => d.time);
@@ -297,7 +315,11 @@ export function KlineChartPro({ bars, className, tradeMarks, costPrice, eventMar
     if (followLatest) {
       const n = data.length;
       chart.timeScale().setVisibleLogicalRange({ from: Math.max(0, n - 20), to: n + 2 });
+    } else if (visible && addedBefore > 0) {
+      chart.timeScale().setVisibleLogicalRange({from: visible.from + addedBefore, to: visible.to + addedBefore});
     }
+    appliedDatesRef.current = {symbol: bars[0].symbol, timeframe: bars[0].timeframe, dates: data.map(row => String(row.time))};
+    fillingRef.current = false;
     filledInputsRef.current = inputs;
   };
   // markers 与成本线：只随标记/开关/成本变化重设（低频），不进每秒的 fill 路径。
@@ -429,16 +451,24 @@ export function KlineChartPro({ bars, className, tradeMarks, costPrice, eventMar
     // hover 联动（用户反馈 #2/#3）：十字光标 → 顶部信息条切换到该日数据；
     // 离开图表（param.time 为空）回退最新。param.time 即 bar 的 'YYYY-MM-DD'。
     const onCross = (param: { time?: Time }) => {
+      const currentBars = barsRef.current;
+      const context = `${currentBars[0]?.symbol ?? ""}:${currentBars[0]?.timeframe ?? ""}`;
       if (!param.time) {
-        setHoverIdx(null);
+        setHover({context, date: null});
         return;
       }
       const d = String(param.time).slice(0, 10);
-      const idx = barsRef.current.findIndex((b) => b.ts.slice(0, 10) === d);
-      setHoverIdx(idx >= 0 ? idx : null);
+      setHover({context, date: currentBars.some((b) => b.ts.slice(0, 10) === d) ? d : null});
     };
     chart.subscribeCrosshairMove(onCross);
+    const onRange = (range: {from: number; to: number} | null) => {
+      const owner = historyRef.current;
+      if (!range || range.from > 8 || fillingRef.current || owner.historyStatus?.pending || owner.historyStatus?.error) return;
+      owner.onLoadHistory?.();
+    };
+    chart.timeScale().subscribeVisibleLogicalRangeChange(onRange);
     return () => {
+      chart.timeScale().unsubscribeVisibleLogicalRangeChange(onRange);
       chart.remove();
       chartRef.current = null;
       seriesRef.current = { candle: null, ma: [], boll: { up: null, low: null, mid: null }, vol: null, vma: [], amt: null, macd: { hist: null, dif: null, dea: null } };
@@ -446,6 +476,8 @@ export function KlineChartPro({ bars, className, tradeMarks, costPrice, eventMar
       filledInputsRef.current = null;
       markedInputsRef.current = null;
       appliedThemeRef.current = null;
+      appliedDatesRef.current = null;
+      fillingRef.current = false;
     };
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [ind, hasBars]);
@@ -552,7 +584,8 @@ export function KlineChartPro({ bars, className, tradeMarks, costPrice, eventMar
   }
 
   // 信息条数据（用户反馈 #2/#3）：hover 的 bar，未 hover 取最新一根
-  const idx = hoverIdx ?? bars.length - 1;
+  const hoverIdx = hoverDate === null ? -1 : bars.findIndex(bar => bar.ts.slice(0, 10) === hoverDate);
+  const idx = hoverIdx >= 0 ? hoverIdx : bars.length - 1;
   const d = bars.length > 0 ? bars[Math.max(0, Math.min(idx, bars.length - 1))] : null;
   const prev = d && idx > 0 ? bars[idx - 1] : null;
   const dPct = d?.close != null && prev?.close ? ((d.close - prev.close) / prev.close) * 100 : null;
@@ -573,18 +606,29 @@ export function KlineChartPro({ bars, className, tradeMarks, costPrice, eventMar
   const pctCls = (v: number | null) => (v == null ? "text-zinc-600 dark:text-zinc-400" : v > 0 ? "text-up-ink dark:text-up" : v < 0 ? "text-down-ink dark:text-down" : "text-zinc-600 dark:text-zinc-400");
   const dClose = d?.close ?? null;
   const dOpen = d?.open ?? null;
+  const latest = bars.at(-1);
+  const basis = d?.price_basis;
+  const comparable = !!d && !!latest && !!basis && basis !== "unknown"
+    && latest.price_basis === basis && !!d.source && latest.source === d.source
+    && [d, latest].every(bar => ["high", "medium"].includes(bar.quality) && bar.close != null && Number.isFinite(bar.close) && bar.close > 0);
+  const sincePct = comparable ? ((latest!.close! / d!.close!) - 1) * 100 : null;
+  const basisLabel = basis === "qfq" ? "前复权" : basis === "hfq" ? "后复权" : basis === "none" ? "未复权" : "口径未知";
 
   return (
     <div className={`relative flex min-h-0 flex-col ${className ?? ""}`}>
       {/* OHLC 信息条（对标同花顺）：hover 切换该日数据，离开回退最新 */}
       {d && (
         <div className="kline-ohlc flex shrink-0 flex-wrap items-center gap-x-3 gap-y-0.5 border-b border-zinc-100 px-3 py-1 font-mono text-[11px] tabular-nums dark:border-zinc-800/60">
-          <span className="text-zinc-600 dark:text-zinc-400">{d.ts.slice(0, 10)}{hoverIdx != null && hoverIdx !== bars.length - 1 && <span className="ml-1 text-zinc-600 dark:text-zinc-400">（历史）</span>}</span>
+          <span className="text-zinc-600 dark:text-zinc-400">{d.ts.slice(0, 10)}{hoverIdx >= 0 && hoverIdx !== bars.length - 1 && <span className="ml-1 text-zinc-600 dark:text-zinc-400">（历史）</span>}</span>
           <span className="text-zinc-600 dark:text-zinc-400">开 <span className={pctCls(dOpen != null && dClose != null ? dClose - dOpen : null)}>{fmt(d.open)}</span></span>
           <span className="text-zinc-600 dark:text-zinc-400">高 <span className="text-up-ink dark:text-up">{fmt(d.high)}</span></span>
           <span className="text-zinc-600 dark:text-zinc-400">低 <span className="text-down-ink dark:text-down">{fmt(d.low)}</span></span>
           <span className="text-zinc-600 dark:text-zinc-400">收 <span className={pctCls(dPct)}>{fmt(d.close)}</span></span>
           <span className={pctCls(dPct)}>{dPct != null ? `${dPct > 0 ? "+" : ""}${dPct.toFixed(2)}%` : "--"}</span>
+          {hoverIdx >= 0 && hoverIdx < bars.length - 1 && <span aria-label="历史收盘至最新K线变化" className={pctCls(sincePct)} title={`${d.ts.slice(0, 10)}收盘 → ${latest?.ts.slice(0, 10)}最新K线收盘；${basisLabel}。同口径价格变化，未另计交易费用或现金分红，不等于持有收益；口径或价格不可核实时不计算。`}>
+            距今 {sincePct != null && Number.isFinite(sincePct) ? `${sincePct > 0 ? "+" : ""}${sincePct.toFixed(2)}%` : "未知"}
+            <span className="ml-1 text-zinc-600 dark:text-zinc-400">至 {latest?.ts.slice(0, 10)}</span>
+          </span>}
           {d.volume != null && <span className="text-zinc-600 dark:text-zinc-400">量 <span className="text-zinc-700 dark:text-zinc-200">{(d.volume / 100).toLocaleString()}手</span></span>}
           {d.amount != null && <span className="text-zinc-600 dark:text-zinc-400">额 <span className="text-zinc-700 dark:text-zinc-200">{fmtAmount(d.amount)}</span></span>}
           {MA_DEFS.filter(([key]) => ind[key]).map(([key, , inkCls]) => (
@@ -621,6 +665,7 @@ export function KlineChartPro({ bars, className, tradeMarks, costPrice, eventMar
           <summary>标记说明</summary>
           <p>金叉/死叉：MA5与MA10交叉；紫色“榜”：龙虎榜日；B/S：模拟交易成交；黄虚线：持仓成本；琥珀色圆点：公告；蓝色圆点：新闻；感叹号：高重要度。移动到对应日期查看标题。</p>
         </details>
+        {onLoadHistory && <span className="text-zinc-600 dark:text-zinc-400" data-kline-history-summary="true">已载 {bars.length} 根 · 最早 {bars[0]?.ts.slice(0, 10)}</span>}
         {/* 缩放控件：入文档流（原 absolute right-2 top-2 会压住 OHLC 信息条右端的 MA 数值） */}
         <div className="ml-auto flex shrink-0 items-center gap-1 xl:ml-2">
           <button onClick={() => zoomTime(0.7)} className="h-6 w-6 rounded border border-zinc-300 bg-white/80 text-xs text-zinc-600 hover:bg-zinc-100 dark:border-zinc-700 dark:bg-zinc-900/80 dark:text-zinc-300 dark:hover:bg-zinc-800" aria-label="放大">＋</button>
@@ -637,6 +682,10 @@ export function KlineChartPro({ bars, className, tradeMarks, costPrice, eventMar
           </button>
         </div>
       </div>
+      {onLoadHistory && (historyStatus?.pending || historyStatus?.error || historyStatus?.note) && <div role={historyStatus.error ? "alert" : "status"} aria-label="K线历史读取" className="flex shrink-0 flex-wrap items-center gap-2 px-3 py-1 text-[11px] text-zinc-600 dark:text-zinc-400">
+        <span>{historyStatus.pending ? "正在加载更早K线…" : historyStatus.error || historyStatus.note}</span>
+        {!historyStatus.pending && <button type="button" className="underline underline-offset-2" onClick={() => onLoadHistory(true)}>重试历史</button>}
+      </div>}
       <div className={`relative min-h-0 w-full flex-1 ${className ?? ""}`}>
         <div ref={containerRef} data-chart-surface="true" className="h-full w-full" />
         {/* 副图高度拖拽条：贴在副图区顶缘（mouseup 挂 window——释放时鼠标已离开拖拽条） */}

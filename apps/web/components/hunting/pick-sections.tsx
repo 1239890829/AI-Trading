@@ -30,28 +30,28 @@ export type RolePerformance = { role: string; count: number; win_rate: number; a
 /** 同版可信价格窗口的角色观察；不能证明实际成交或策略胜率。 */
 export function RolePerformanceTable({ rows }: { rows: RolePerformance[] }) {
   return (
-    <div className="ui-card rounded-xl border border-zinc-200 p-3 text-xs dark:border-zinc-800">
+    <div className="hunting-role-performance ui-card rounded-xl border border-zinc-200 p-3 text-xs dark:border-zinc-800">
       <div className="mb-1 font-medium">
         梯队角色价格观察（同版窗口；不是成交胜率）
       </div>
-      <table className="w-full">
-        <thead>
-          <tr className="text-zinc-600 dark:text-zinc-400">
-            <th className="text-left font-normal">角色</th>
-            <th className="text-right font-normal">样本</th>
-            <th className="text-right font-normal">走好观察占比</th>
-            <th className="text-right font-normal">平均超额</th>
+      <table role="table" className="hunting-recap-table hunting-role-table w-full" aria-label="梯队角色价格观察">
+        <thead role="rowgroup">
+          <tr role="row" className="text-zinc-600 dark:text-zinc-400">
+            <th role="columnheader" scope="col" className="text-left font-normal">角色</th>
+            <th role="columnheader" scope="col" className="text-right font-normal">样本</th>
+            <th role="columnheader" scope="col" className="text-right font-normal">走好观察占比</th>
+            <th role="columnheader" scope="col" className="text-right font-normal">平均超额</th>
           </tr>
         </thead>
-        <tbody>
+        <tbody role="rowgroup">
           {rows.map((r) => (
-            <tr key={r.role} className="border-t border-zinc-100 dark:border-zinc-800/60">
-              <td className="py-1">{r.role}</td>
-              <td className="text-right font-mono tabular-nums">{r.count}</td>
-              <td className={`text-right font-mono tabular-nums ${winRateColor(r.win_rate, "pct")}`}>
+            <tr role="row" key={r.role} className="border-t border-zinc-100 dark:border-zinc-800/60">
+              <td role="cell" data-label="角色" className="py-1">{r.role}</td>
+              <td role="cell" data-label="样本" className="text-right font-mono tabular-nums">{r.count}</td>
+              <td role="cell" data-label="走好观察占比" className={`text-right font-mono tabular-nums ${winRateColor(r.win_rate, "pct")}`}>
                 {r.win_rate}%
               </td>
-              <td className={`text-right font-mono tabular-nums ${pctColor(r.avg_excess)}`}>
+              <td role="cell" data-label="平均超额" className={`text-right font-mono tabular-nums ${pctColor(r.avg_excess)}`}>
                 {pctText(r.avg_excess)}
               </td>
             </tr>
@@ -128,13 +128,13 @@ export function HistoryList({
   history: { date: string; symbols: (string | null)[]; score_avg: number }[];
 }) {
   return (
-    <div className="ui-card rounded-xl border border-zinc-200 p-3 text-xs dark:border-zinc-800">
+    <div className="hunting-history ui-card rounded-xl border border-zinc-200 p-3 text-xs dark:border-zinc-800">
       <div className="mb-1 font-medium">历史组合（一致性可回溯）</div>
       {history.map((h) => (
-        <div key={h.date} className="flex gap-2 border-b border-zinc-100 py-1 last:border-0 dark:border-zinc-800/60">
-          <span className="font-mono text-zinc-600 dark:text-zinc-400">{h.date}</span>
-          <span>均分 {h.score_avg}</span>
-          <span className="text-zinc-600 dark:text-zinc-400">{h.symbols.join(" · ")}</span>
+        <div key={h.date} className="hunting-history-item flex flex-wrap gap-2 border-b border-zinc-100 py-1 last:border-0 dark:border-zinc-800/60">
+          <span className="hunting-history-date font-mono text-zinc-600 dark:text-zinc-400">{h.date}</span>
+          <span className="hunting-history-score">均分 {h.score_avg}</span>
+          <span className="hunting-history-symbols min-w-0 break-words text-zinc-600 dark:text-zinc-400">{h.symbols.join(" · ")}</span>
         </div>
       ))}
     </div>

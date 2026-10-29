@@ -2,7 +2,7 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 import { ApiError, getPickReviews, getPicksHistory } from "@/lib/api";
 import { DEFAULT_TIMEOUT_MS, clearDeviceSessionReads, getJson, sendJson } from "@/lib/api/internal";
 import {CandidateDataUnavailableError, getIntradayTop} from "@/lib/api/picks";
-import {getTradesPayload} from "@/lib/api/market";
+import {getKlinePayload, getTradesPayload} from "@/lib/api/market";
 import {getThemeCatalogCompletion} from "@/lib/api/themes";
 
 /**
@@ -31,6 +31,14 @@ afterEach(() => {
 });
 
 describe("api · Envelope 契约校验（2026-09-10 崩溃回归）", () => {
+  it("keeps dated K-line pages distinct from the latest read and preserves declared price basis", async () => {
+    const data={symbol:"600127",timeframe:"1d",bars:[{symbol:"600127",ts:"2024-01-02T00:00:00+08:00",price_basis:"qfq"}],trading_status:null};
+    const fetch=stubFetch(200,JSON.stringify({data,meta:{}}));
+    expect((await getKlinePayload("600127","1d",1000,{start:"2022-09-01",end:"2024-01-08"})).bars[0].price_basis).toBe("qfq");
+    await getKlinePayload("600127","1d",120);
+    const urls=fetch.mock.calls.map(call=>String((call as unknown[])[0]));
+    expect(urls).toEqual(["/backend/api/kline/600127?timeframe=1d&limit=1000&start=2022-09-01&end=2024-01-08","/backend/api/kline/600127?timeframe=1d&limit=120"]);
+  });
   it.each([200, 401])("配对更换后不交付旧会话响应或撤销新会话（%s）", async status => {
     let finish!: (response: Response) => void;
     vi.stubGlobal("fetch", vi.fn(() => new Promise<Response>(resolve => {finish = resolve;})));

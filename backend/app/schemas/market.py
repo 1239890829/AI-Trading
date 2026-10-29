@@ -198,6 +198,9 @@ class Kline(AuditFields):
     amount: float | None = None
     change_pct: float | None = None
     turnover_rate: float | None = None
+    # Old records have no proved adjustment contract. Only a source's actual
+    # response/construction path may declare a comparable price basis.
+    price_basis: Literal["qfq", "hfq", "none", "unknown"] = "unknown"
 
 
 class LimitUpRecord(AuditFields):

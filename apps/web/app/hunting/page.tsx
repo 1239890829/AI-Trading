@@ -411,7 +411,7 @@ function HuntingInner() {
                       <div className="mt-2">
                         <DailyPlanBlock plan={brief.daily_plan} />
                       </div>
-                      <div className="mt-2 grid grid-cols-1 gap-3 lg:grid-cols-3">
+                      <div className="hunting-direction-grid mt-2 grid grid-cols-1 gap-3">
                         {brief.directions.map((d) => (
                           <DirectionCard key={d.direction} d={d} />
                         ))}

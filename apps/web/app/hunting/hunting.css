@@ -46,7 +46,7 @@
 .hunting-candidate-flow>[hidden] {display:none}
 .hunting-section-title {color:var(--hunt-ink);font-size:15px;line-height:1.5;font-weight:600}
 .hunting-daily {padding-top:0;margin-top:0}
-.hunting-context-column {min-width:0;min-height:0;display:flex;flex-direction:column;gap:18px;overflow:auto;padding-inline:18px 6px;border-inline-start:1px solid var(--hunt-line);overscroll-behavior:contain}
+.hunting-context-column {min-width:0;min-height:0;display:flex;flex-direction:column;gap:18px;overflow:auto;padding-inline:18px 6px;border-inline-start:1px solid var(--hunt-line);overscroll-behavior:contain;container-type:inline-size;container-name:hunting-context}
 .hunting-context-column>* {min-width:0;flex:none}
 .hunting-workspace .hunting-stat-strip {grid-template-columns:1fr 1fr;padding:0;border:0;gap:16px 10px}
 .hunting-workspace .hunting-stat {padding:0;border:0;background:none;min-width:0}
@@ -83,7 +83,7 @@
 .hunting-candidate-flow .collection-items>[data-collection-item]:has(>.hunting-collection-placeholder) {grid-column:1/-1;}
 .hunting-candidate-flow .collection-items[data-view=cards] {grid-template-columns:repeat(auto-fit,minmax(min(100%,280px),1fr));gap:12px}
 @container hunting-candidates (min-width:864px) {
-  .hunting-candidate-flow .collection-items[data-view=cards] {grid-template-columns:repeat(3,minmax(0,1fr))}
+  .hunting-candidate-flow .collection-items[data-view=cards] {grid-template-columns:repeat(auto-fit,minmax(calc((100% - 24px)/3),1fr))}
 }
 .hunting-workspace .stock-card-slot {min-width:0;padding:0}
 .hunting-workspace .stock-card {padding:18px;border-radius:14px;background:var(--hunt-paper);color:var(--hunt-ink);box-shadow:none}
@@ -381,3 +381,42 @@
   .discovery-result-context {padding-left:24px;padding-right:0}
 }
 @media(pointer:coarse) { .discovery-nav a,.discovery-controls input,.discovery-controls select,.discovery-kinds button {min-height:44px} }
+
+/* The context pane is narrow even on a wide monitor. Size its contents here. */
+.hunting-context-column .hunting-direction-grid {grid-template-columns:minmax(0,1fr)}
+.hunting-context-column .hunting-direction-card {min-width:0;padding:12px;overflow-wrap:anywhere}
+.hunting-context-column .hunting-direction-head {align-items:flex-start;gap:6px 10px}
+.hunting-context-column .hunting-direction-title {flex:1 1 100%;min-width:0}
+.hunting-context-column .hunting-direction-meta {min-width:0;gap:6px 10px}
+.hunting-context-column .hunting-direction-score {white-space:nowrap;font-size:14px}
+.hunting-context-column .hunting-direction-review {margin-left:0;flex-basis:100%;line-height:1.6}
+.hunting-context-column .hunting-direction-stock {display:inline-flex;flex-wrap:wrap;align-items:center;min-height:28px;gap:0 4px}
+.hunting-context-column .hunting-direction-facts {line-height:1.8}
+.hunting-context-column .hunting-recap-metrics {grid-template-columns:repeat(2,minmax(0,1fr))}
+.hunting-context-column .hunting-recap-metric {min-width:0;padding:10px;overflow-wrap:anywhere}
+.hunting-context-column .hunting-recap-metric--summary {grid-column:1/-1}
+.hunting-context-column .hunting-history-item {align-items:baseline;gap:4px 12px;padding-block:9px}
+.hunting-context-column .hunting-history-symbols {flex-basis:100%;overflow-wrap:anywhere;line-height:1.8}
+.hunting-context-column .hunting-history-score {margin-left:auto}
+.hunting-context-column .hunting-recap-table {width:100%;font-size:11px;line-height:1.7}
+.hunting-context-column .hunting-recap-table :is(th,td) {padding:7px 5px;overflow-wrap:anywhere}
+@container hunting-context (max-width:599px) {
+  .hunting-context-column .hunting-stat--detail {grid-column:1/-1}
+  .hunting-context-column .hunting-stat-heading {justify-content:space-between}
+  .hunting-context-column .hunting-recap-table {display:block}
+  .hunting-context-column .hunting-recap-table thead {position:absolute;width:1px;height:1px;padding:0;overflow:hidden;clip-path:inset(50%);white-space:nowrap}
+  .hunting-context-column .hunting-recap-table tbody {display:block}
+  .hunting-context-column .hunting-recap-table tr {display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:8px 12px;padding-block:12px}
+  .hunting-context-column .hunting-recap-table td {display:flex;flex-direction:column;align-items:flex-start;gap:2px;min-width:0;padding:0;text-align:left}
+  .hunting-context-column .hunting-recap-table td::before {content:attr(data-label);color:var(--hunt-muted);font-family:inherit;font-size:10px;font-weight:400}
+  .hunting-context-column .hunting-recap-table td:first-child {grid-column:1/-1;font-weight:600}
+  .hunting-context-column .hunting-outcome-table td:last-child {grid-column:1/-1}
+}
+@container hunting-context (min-width:600px) {
+  .hunting-context-column .hunting-direction-grid {grid-template-columns:repeat(2,minmax(0,1fr))}
+  .hunting-context-column .hunting-recap-metrics {grid-template-columns:repeat(4,minmax(0,1fr))}
+  .hunting-context-column .hunting-recap-metric--summary {grid-column:auto}
+}
+@container hunting-context (min-width:950px) {
+  .hunting-context-column .hunting-direction-grid {grid-template-columns:repeat(3,minmax(0,1fr))}
+}
