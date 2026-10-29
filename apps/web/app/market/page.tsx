@@ -12,8 +12,6 @@ import { ModalShell } from "@/components/ui/modal-shell";
 import { QualityBadge } from "@/components/quality-badge";
 import { LimitReason } from "@/components/detail/limit-reason";
 import { EventPanel } from "@/components/event-panel";
-import {useResearchClusters} from "@/hooks/use-research-clusters";
-import {ResearchClustersPanel} from "@/components/research-clusters";
 import { HeatmapTab } from "@/components/market/heatmap-tab";
 import { EventsTab } from "@/components/market/events-tab";
 import { FundTab } from "@/components/market/fund-tab";
@@ -67,7 +65,6 @@ function MarketInner() {
   // Only the active overview owns these reads. Returning results lets useResource
   // discard flights from a departed lens while retaining each source's last value.
   const enabled = view === "overview";
-  const clusterRead=useResearchClusters(undefined,{active:enabled});
   const overview = useResource(async (signal) => ({
     value: await getMarketOverview({signal}),
     readAt: new Date().toLocaleTimeString("zh-CN", { hour12: false }),
@@ -188,7 +185,7 @@ function MarketInner() {
             ) : pending ? <div className="bc-market-sentiment"><Skeleton className="h-5 w-14" /><Skeleton className="h-4 w-40" /><Skeleton className="h-4 w-24" /></div> : null}
 
             <div className="bc-market-research">
-              <ResearchClustersPanel data={clusterRead.data} pending={clusterRead.pending} error={clusterRead.error} onRetry={clusterRead.refresh}/>
+              <Link href={lensHref("/hunting?view=research")} className="bc-market-text-action">题材关联研究<svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.6" aria-hidden="true"><path d="M7 17 17 7M7 7h10v10" /></svg></Link>
             </div>
             </div>
             </div>

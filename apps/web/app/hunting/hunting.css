@@ -64,6 +64,13 @@
 .hunting-list-toolbar {position:sticky;top:0;z-index:2;display:flex;align-items:center;justify-content:space-between;gap:6px;padding:4px 0 6px;background:var(--hunt-paper);border-bottom:1px solid var(--hunt-line);}
 .hunting-list-toolbar+.hunting-candidate-notices {margin-top:8px;}
 .hunting-list-toolbar .selection-rail {flex:none;}
+.hunting-list-toolbar {flex-wrap:wrap}
+.hunting-theme-filter {display:flex;align-items:center;gap:6px;min-width:0;margin-inline-start:auto;color:var(--hunt-muted);font-size:11px}
+.hunting-theme-filter label {display:flex;align-items:center;gap:5px;min-width:0}
+.hunting-theme-filter select {min-height:32px;max-width:180px;min-width:0;padding:4px 6px;border:1px solid var(--hunt-line);border-radius:6px;background:var(--hunt-paper);color:var(--hunt-ink);font:inherit}
+.hunting-theme-filter select:focus-visible {outline:2px solid var(--hunt-accent);outline-offset:2px}
+.hunting-theme-filter select:disabled {opacity:.65}
+.hunting-theme-filter button {white-space:nowrap}
 .hunting-candidate-switch {display:flex;align-items:stretch;gap:2px;min-width:0;}
 .hunting-candidate-switch a {display:inline-flex;align-items:center;justify-content:center;gap:5px;min-height:34px;padding:6px 10px;border-bottom:2px solid transparent;color:var(--hunt-muted);font-size:12px;white-space:nowrap;text-decoration:none;}
 .hunting-candidate-switch a[aria-current=page] {border-bottom-color:var(--hunt-accent);color:var(--hunt-ink);font-weight:600;}
@@ -304,7 +311,10 @@
   .hunting-workspace .hunting-task-links[data-count="2"] {grid-template-columns:repeat(2,minmax(0,1fr));}
   .hunting-candidate-switch {flex:1 1 auto;}
   .hunting-candidate-switch a {min-height:44px;flex:1 1 0%;gap:3px;padding:5px 6px;font-size:11px;}
-  .hunting-list-toolbar {flex-wrap:nowrap;}
+  .hunting-list-toolbar {flex-wrap:wrap;}
+  .hunting-theme-filter {flex:1 1 100%;justify-content:flex-end}
+  .hunting-theme-filter select {max-width:160px;min-height:44px}
+  .hunting-theme-filter button {min-height:44px;padding-inline:5px}
   .hunting-list-toolbar .selection-rail button {min-width:32px;min-height:44px;padding-inline:5px;font-size:11px;}
 }
 @media(pointer:coarse) { .hunting-candidate-switch a,.hunting-list-toolbar .selection-rail button {min-height:44px;} }

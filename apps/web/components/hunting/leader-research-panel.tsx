@@ -7,6 +7,8 @@ import { dateTimeTextBJ, pctColor, pctText } from "@/lib/format";
 import {readerExcerpt, readerCautions} from "@/lib/reader-copy";
 import {ReaderBrief, ResearchDisclosure} from "@/components/ui/reader-brief";
 import {StockLink} from "@/components/stock-link";
+import {ResearchClustersPanel} from "@/components/research-clusters";
+import {useResearchClusters} from "@/hooks/use-research-clusters";
 import { ConditionList, FactCards, FactTimeline } from "@/components/ui/explanation-map";
 
 const ROUTES: Record<string, string> = { public_event: "公共事件", company_event: "公司事件", trend: "相对强势" };
@@ -25,6 +27,8 @@ export function LeaderResearchPanel({date: requestedDate, onDateChange}: {date?:
   const result = useResource(() => getLeaderResearch(date || undefined), { key: date, intervalMs: 60_000 });
   const error = result.error ? String(result.error) : undefined;
   const data = result.data;
+  const clusterDate=date||data?.trade_date;
+  const clusters=useResearchClusters(clusterDate,{active:!!clusterDate,historical:!!date});
 
   return <div className="ui-card hunting-research mt-4 border border-zinc-200 p-4 text-xs text-zinc-700 dark:border-zinc-800 dark:text-zinc-300">
     <div className="flex flex-wrap items-center justify-between gap-2">
@@ -67,6 +71,7 @@ export function LeaderResearchPanel({date: requestedDate, onDateChange}: {date?:
       </section>
       <p className="mt-2 text-zinc-600 dark:text-zinc-400">{data.outcome_basis}</p>
     </>}
+    {clusterDate&&<ResearchClustersPanel data={clusters.data} pending={clusters.pending} error={clusters.error} onRetry={clusters.refresh} historical={!!date}/>}
     </div>
   </div>;
 }
