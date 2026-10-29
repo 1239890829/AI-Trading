@@ -292,3 +292,9 @@ LLM 增强层**已实现但默认关闭**（`app/events/llm_aux.py` → `POST /a
 ## 2026-10-29 报价补充字段来源
 
 Quote新增可选`field_sources`，键限`pe_ttm/pb/total_mktcap_yi/float_mktcap_yi/limit_up_price/limit_down_price`，值含真实`source/data_timestamp/received_at`。新后端默认为空对象；旧响应缺字段兼容。该对象只说明实际补入字段，原整行source/质量/源钟仍指主行情；缺来源不造腾讯身份。REST与撮合复用同一补价校验，WS主行情不因补价改变。详情慢读与即时帧合并时值和字段来源一起迁移，错股、错市场、跨日、过期估值不接纳，也不增加请求。
+
+## 2026-10-29 原候选去向与本地读取容量
+
+原`method-runs`每日运行读者新增只读`selection_summary`和逐行`evaluation`：原输入只计一次，六类为原入选、已评分落选、容量未评估、输入或评分未完成、预筛排除、过程待核。完整原审计且身份一对一一致才给全量`counts`；部分历史只给核实的`saved_counts`，坏计数/重复身份保持未知，不从请求页补分母。旧state/快照/内容指纹不改。`strategy_context`只承接原盘面、排行风格与权重路由，不代表模拟执行策略。
+
+本地共享读取满额时返回HTTP503及`local_read_capacity_exceeded`，无需泄漏请求key或内部参数；同key仍复用既有读取。此错误不代表供应商失败，不自动放宽权限或源时效。
