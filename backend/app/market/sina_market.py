@@ -56,7 +56,8 @@ def _raise_http(status: int, what: str) -> None:
 
 def _f(v) -> float | None:
     try:
-        return float(v)
+        number = float(v)
+        return number if math.isfinite(number) else None
     except (TypeError, ValueError):
         return None
 

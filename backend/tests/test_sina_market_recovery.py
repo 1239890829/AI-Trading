@@ -2,6 +2,8 @@
 from __future__ import annotations
 
 import asyncio
+import json
+import math
 from collections import Counter
 from datetime import datetime, timezone
 from time import monotonic
@@ -332,8 +334,9 @@ def test_verified_stock_identity_is_separate_from_quotes_and_survives_fallback(m
         damaged["identities"].clear()
         assert svc.stock_universe() == verified and len(calls) == 2
         async def quotes(_hub, symbols, **kwargs):
-            return {symbol: Quote(symbol=symbol, market="SH", price=11, prev_close=10, source="tencent",
-                                  data_timestamp=now[0]) for symbol in symbols}
+            markets = {row["code"]: row["symbol"][:2].upper() for row in source_rows}
+            return {symbol: Quote(symbol=symbol, market=markets[symbol], price=11, prev_close=10, source="tencent",
+                                  data_timestamp=now[0], received_at=now[0]) for symbol in symbols}
         monkeypatch.setattr(quote_enrich, "fetch_quotes_batched", quotes)
         await svc.refresh_fallback()
         assert svc.last_snapshot_source == "quote_fallback"
@@ -431,3 +434,25 @@ def test_short_followup_retains_the_previous_quote_and_identity_versions(monkeyp
         assert svc.stock_universe() == identity
         assert calls == {"count": 2, "data": 3}, "one failed page retries once; no old rows fill the gap"
     asyncio.run(check())
+
+
+@pytest.mark.parametrize("value", ["NaN", "Infinity", "-Infinity", float("nan"), float("inf")])
+def test_nonfinite_source_fields_are_missing_and_cannot_poison_breadth(value):
+    from app.market.breadth import compute_breadth
+
+    raw = raw_row(0)
+    for key in ("trade", "open", "high", "low", "settlement", "pricechange", "changepercent",
+                "volume", "amount", "turnoverratio", "mktcap", "nmc"):
+        raw[key] = value
+    row = sm.parse_row(raw)
+    for key in ("price", "open", "high", "low", "prev_close", "change", "change_pct", "volume",
+                "amount", "turnover_rate", "mktcap", "nmc"):
+        assert row[key] is None
+    # A valid price with a non-finite amount must not turn the whole market sum
+    # into NaN/Inf either; missing amount stays missing rather than becoming zero.
+    valid_price = sm.parse_row({**raw_row(1), "amount": value})
+    assert valid_price["amount"] is None
+    breadth = compute_breadth([row, valid_price, sm.parse_row(raw_row(2))])
+    assert breadth["suspended"] == 1
+    assert breadth["total_amount"] == 1000 and math.isfinite(breadth["total_amount"])
+    json.dumps([row, valid_price, breadth], allow_nan=False)

@@ -50,6 +50,7 @@ import {
   type MinutePoint,
 } from "@/lib/api";
 import { bjDate, fmt, pctColor, pctText, sourceLabel, dateTimeTextBJ } from "@/lib/format";
+import {inheritQuoteFields, quoteMatchesRequest} from "@/lib/quote-field-sources";
 import type { Kline, OrderBook, Quote, Trade, TradingStatusInfo } from "@/types/market";
 import { QuoteStrip } from "@/components/detail/quote-strip";
 import { ProfilePanel, type CompanyProfile, type FinRow, type BoardRows } from "@/components/detail/profile-panel";
@@ -264,17 +265,8 @@ export const StockDetailPanel = memo(function StockDetailPanel({
       // 跨股票切换时直接采用新行情：base 必须与当前 symbol 一致，
       // 否则旧股残留字段会混进新股的合并结果
       const base = prev && prev.symbol === live.symbol ? prev : null;
-      // ths 快照不含估值字段：合并时保留已补源的估值，避免被 undefined 覆盖
-      return {
-        ...(base ?? live),
-        ...live,
-        pe_ttm: valuationMetric(live.pe_ttm) ?? valuationMetric(base?.pe_ttm) ?? null,
-        pb: valuationMetric(live.pb) ?? valuationMetric(base?.pb) ?? null,
-        total_mktcap_yi: valuationMetric(live.total_mktcap_yi, true) ?? valuationMetric(base?.total_mktcap_yi, true) ?? null,
-        float_mktcap_yi: valuationMetric(live.float_mktcap_yi, true) ?? valuationMetric(base?.float_mktcap_yi, true) ?? null,
-        limit_up_price: live.limit_up_price ?? base?.limit_up_price ?? null,
-        limit_down_price: live.limit_down_price ?? base?.limit_down_price ?? null,
-      };
+      // Borrowed fields move with their original source and source clock.
+      return inheritQuoteFields(live, [base]);
     });
   }
   // 报价补源与模拟账户都自行写 state，不能只依赖轮询 hook 丢弃旧 key 的返回值。
@@ -313,6 +305,7 @@ export const StockDetailPanel = memo(function StockDetailPanel({
       try {
         const q = await getQuote(symbol, "tencent");
         if (!scope.alive || scope !== detailReadScopeRef.current) return;
+        if (!quoteMatchesRequest(q, symbol)) return;
         if (isIndex && q.symbol === symbol) {
           const paused = quoteQualityView({quality: q.quality, reasons: q.quality_reasons, symbol, market: q.market,
             dataTimestamp: q.data_timestamp, session: q.display_session});
@@ -325,18 +318,11 @@ export const StockDetailPanel = memo(function StockDetailPanel({
         }
         const currentLive = scope.status === "live" && scope.live?.symbol === symbol && hasTrustedQuoteObservation(scope.live) ? scope.live : undefined;
         setQuote((prev) => {
-          // 同股补估值；慢 REST 不覆盖已接纳报价的源钟、质量、量额与来源。
-          if (!prev || prev.symbol !== q.symbol) return q;
-          return {
-            ...q,
-            ...prev,
-            pe_ttm: valuationMetric(currentLive?.pe_ttm) ?? valuationMetric(q.pe_ttm) ?? prev.pe_ttm,
-            pb: valuationMetric(currentLive?.pb) ?? valuationMetric(q.pb) ?? prev.pb,
-            total_mktcap_yi: valuationMetric(currentLive?.total_mktcap_yi, true) ?? valuationMetric(q.total_mktcap_yi, true) ?? prev.total_mktcap_yi,
-            float_mktcap_yi: valuationMetric(currentLive?.float_mktcap_yi, true) ?? valuationMetric(q.float_mktcap_yi, true) ?? prev.float_mktcap_yi,
-            limit_up_price: prev.limit_up_price ?? q.limit_up_price,
-            limit_down_price: prev.limit_down_price ?? q.limit_down_price,
-          };
+          // A delayed supplementary read never replaces the primary facts.
+          if (!prev || !quoteMatchesRequest(prev, symbol)) return q;
+          const sameIdentity = q.market?.toUpperCase() === prev.market?.toUpperCase();
+          if (!sameIdentity) return prev;
+          return inheritQuoteFields({...prev, name: prev.name ?? (q.quality === "high" ? q.name : undefined)}, [currentLive, q], true);
         });
       } catch {
         if (!scope.alive || scope !== detailReadScopeRef.current) return;

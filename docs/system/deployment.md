@@ -576,3 +576,10 @@ CLI启动warning的兼容依据与固定版本见[语义纠错记录](../ai/sema
 
 
 2026-10-27维护补证：PR #357的EM ffe910…→fd5c9a…及market/normalizer 3a817…→53026…为精确BJ身份修正；原私有绑定未随代码自动迁移，默认inspect会拒绝。根已审完整旧新blob及消费者影响，只登记这两条单步边并保留Hub c4386…→4b2fd81d…，发布后显式具名三个packet owner路径经原prepare/apply-CAS承接。反向/未来/其它模型与policy仍拒绝，不创建/延期授权、不迁移旧packet/恢复grant、不补算/清除unknown；非pin环境字节保持。
+
+
+## 2026-10-29 运行时安全补丁与本机切换
+
+项目Node pin从22.22.2升至同一LTS主版本22.23.4，依据[Node官方安全发布](https://nodejs.org/en/blog/release/v22.23.4)，内置Undici由6.24.1升至6.29.1。npm依赖审计不覆盖Node内置fetch，因此包锁、真实Node版本及服务进程均需分别核实。沿现有NVM安装、校验官方SHA并保留旧版本，不改全局default别名；用项目pin对应PATH构建并经原local-services入口启动，不改启动器、端口或鉴权。原研究CLI的显式解释器pin与授权独立，不能借前端运行时维护自动改变模型方法。
+
+Next及开发依赖仅按官方修复范围最小更新，锁文件与npm ci一致；不使用audit fix --force，不把审计条目数当可利用漏洞数。仓内未见use cache/use server或next/image消费者，但这不免除修补与重新构建。安装、完整前端门、官方registry复验及主服务实际Node/Next/代理证据归当前handoff和准确PR回执。回退用原Git锁文件重新npm ci、保全的旧build及旧Node，通过原启动和检查入口恢复；不回写业务数据。

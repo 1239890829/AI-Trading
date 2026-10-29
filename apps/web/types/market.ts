@@ -40,6 +40,14 @@ export interface QuoteDisplaySession {
   expected_source_after?: string | null;
 }
 
+export type QuoteSupplementField = "pe_ttm" | "pb" | "total_mktcap_yi" | "float_mktcap_yi"
+  | "limit_up_price" | "limit_down_price";
+export interface QuoteFieldSource {
+  source: string;
+  data_timestamp: string;
+  received_at: string;
+}
+
 export interface Quote extends AuditFields {
   symbol: string;
   name?: string | null;
@@ -62,6 +70,8 @@ export interface Quote extends AuditFields {
   limit_down_price?: number | null;
   data_timestamp?: string | null;
   display_session?: QuoteDisplaySession | null;
+  /** Field origin survives supplemental reads; primary price/clock stays unchanged. */
+  field_sources?: Partial<Record<QuoteSupplementField, QuoteFieldSource>>;
 }
 
 export interface OrderBookLevel {

@@ -8,7 +8,10 @@
 ## 快速启动
 
 ```bash
-# 首次安装：后端 Python 3.11+，前端 Node.js 22（与CI一致）
+# 首次安装：后端 Python 3.11+，前端使用 .nvmrc 的 Node.js 22 安全补丁
+# 使用 nvm 时执行以下两行；也可按 .nvmrc 手动安装对应版本
+nvm install
+nvm use
 cd backend
 python3.11 -m venv .venv
 .venv/bin/pip install -r requirements.txt

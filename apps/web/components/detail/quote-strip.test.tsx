@@ -81,3 +81,22 @@ describe("QuoteStrip 限价展示", () => {
     expect(screen.getByRole("region", {name:"行情详细指标"})).toHaveProperty("textContent", expect.stringContaining("4,000.00"));
   });
 });
+
+
+describe("QuoteStrip field origin", () => {
+  it("shows supplementary PE source and source time while preserving the primary quote attribution", () => {
+    const row = {...quote(4344.9), source: "ths", pe_ttm: 18,
+      field_sources: {pe_ttm: {source: "tencent", data_timestamp: "2026-09-22T08:14:00Z", received_at: "2026-09-22T08:14:01Z"}}};
+    const view = render(<QuoteStrip quote={row} inWatchlist={false} onAdd={() => {}}/>);
+    const pe = screen.getByText("PE").parentElement!;
+    expect(pe.title).toContain("腾讯");
+    expect(pe.title).toContain("2026-09-22 16:14:00");
+    expect(view.container.querySelector(".quote-source")?.textContent).toContain("同花顺");
+    expect(screen.getByText("涨停").parentElement?.title).toContain("同花顺");
+  });
+  it("native field without a source clock says unknown instead of using reception time", () => {
+    render(<QuoteStrip quote={{...quote(4344.9), pe_ttm: 18, data_timestamp: null}} inWatchlist={false} onAdd={() => {}}/>);
+    expect(screen.getByText("PE").parentElement?.title).toContain("截至 未知");
+    expect(screen.getByText("PE").parentElement?.title).not.toContain("16:14");
+  });
+});
