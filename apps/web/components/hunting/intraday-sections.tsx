@@ -901,7 +901,7 @@ export function StatsPanel({ stats }: { stats: IntradayReviewStats }) {
           </div>
         </div>
         <div className="hunting-recap-metric ui-card rounded-xl border border-zinc-200 p-3 dark:border-zinc-800">
-          <div className="text-zinc-600 dark:text-zinc-400">确认提醒 T+1 胜率</div>
+          <div className="text-zinc-600 dark:text-zinc-400">确认提醒 T+1 上涨占比</div>
           <div className={`mt-1 font-mono text-lg tabular-nums ${winRateColor(t1.win_rate, "pct")}`}>
             {t1.win_rate != null ? `${t1.win_rate}%` : "—"}
           </div>
@@ -919,7 +919,7 @@ export function StatsPanel({ stats }: { stats: IntradayReviewStats }) {
           </div>
         </div>
         <div className="hunting-recap-metric ui-card rounded-xl border border-zinc-200 p-3 dark:border-zinc-800">
-          <div className="text-zinc-600 dark:text-zinc-400">T+3 胜率</div>
+          <div className="text-zinc-600 dark:text-zinc-400">T+3 上涨占比</div>
           <div className={`mt-1 font-mono text-lg tabular-nums ${winRateColor(t3.win_rate, "pct")}`}>
             {t3.win_rate != null ? `${t3.win_rate}%` : "—"}
           </div>

@@ -20,7 +20,7 @@ from time import monotonic
 
 import httpx
 
-from app.data_providers.eastmoney import ProviderError
+from app.data_providers.eastmoney import HistoryRangeUnavailable, ProviderError
 from app.core.inflight_reads import InflightReads
 from app.market.indices import INDEX_CATALOG, INDEX_SUBSCRIPTIONS
 from app.schemas.market import (
@@ -482,6 +482,7 @@ class TencentProvider:
         start, end = _as_aware(start), _as_aware(end)
         if start and end and start > end:
             raise ProviderError("tencent kline start exceeds end")
+        observed_basis = set()
         async with asyncio.timeout(10):  # 整段预算，不能每段重新获得10秒
             if isinstance(spec, tuple):
                 first = start.astimezone(BJ_TZ).date() if start else None
@@ -493,6 +494,7 @@ class TencentProvider:
                     stop = min(first + timedelta(days=699 if timeframe == "1d" else 3649), last) if first else last
                     param = f"{to_tencent_symbol(symbol)},{spec[0]},{first.isoformat() if first else ''},{stop.isoformat() if end or first else ''},640,{spec[1]}"
                     segment = await self._kline_segment(symbol, timeframe, param, "/appstock/app/fqkline/get")
+                    observed_basis.update((bar.price_basis, tuple(bar.quality_reasons)) for bar in segment)
                     for bar in segment:
                         # 日/周线ts为日期标签；只收本段，防上游忽略区间。
                         if (not first or bar.ts.date() >= first) and bar.ts.date() <= stop:
@@ -505,6 +507,7 @@ class TencentProvider:
                     raise ProviderError("tencent kline mixed adjustment basis across segments")
             else:
                 bars = await self._kline_segment(symbol, timeframe, f"{to_tencent_symbol(symbol)},{spec},,320", "/appstock/app/kline/mkline")
+                observed_basis.update((bar.price_basis, tuple(bar.quality_reasons)) for bar in bars)
         # 调用方习惯传 naive datetime，而 bar 时间戳是 UTC aware；不归一化的话
         # 比较会抛 TypeError，表现为"K 线取不到"而非类型错误，极难排查。
         if start is not None:
@@ -512,6 +515,13 @@ class TencentProvider:
         if end is not None:
             bars = [b for b in bars if (b.ts.date() <= end.astimezone(BJ_TZ).date() if isinstance(spec, tuple) else b.ts <= end)]
         if not bars:
+            # A validated nonempty reply outside this explicit interval is not
+            # proof that the whole source is down, or that history ends here.
+            # Empty/malformed replies never reach this branch.
+            if (start is not None or end is not None) and len(observed_basis) == 1:
+                raise HistoryRangeUnavailable(
+                    f"tencent kline 请求区间未覆盖 for {symbol} {timeframe}; 历史完整性未知"
+                )
             raise ProviderError(f"tencent kline empty for {symbol} {timeframe}")
         return bars
 
@@ -527,6 +537,8 @@ class TencentProvider:
                 payload = resp.json()
                 if not isinstance(payload, dict) or not isinstance(payload.get("data"), dict) or to_tencent_symbol(symbol) not in payload["data"]:
                     raise ProviderError("missing requested symbol")
+                if payload.get("code") not in {None, 0}:
+                    raise ProviderError("kline business response failed")
                 node = payload['data'][to_tencent_symbol(symbol)]
                 spec = _TIMEFRAME_PARAM[timeframe]
                 if not isinstance(node, dict):
@@ -542,6 +554,10 @@ class TencentProvider:
                     raise ProviderError("malformed/duplicate price rows")
                 if any(any(v is None or not math.isfinite(v) or v <= 0 for v in (b.open, b.high, b.low, b.close)) for b in bars):
                     raise ProviderError("invalid/nonpositive adjusted price")
+                if any(not b.low <= min(b.open, b.close) <= max(b.open, b.close) <= b.high for b in bars):
+                    raise ProviderError("inconsistent adjusted OHLC range")
+                if any(b.volume is None or not math.isfinite(b.volume) or b.volume < 0 for b in bars):
+                    raise ProviderError("invalid adjusted volume")
                 return bars
             except (httpx.HTTPError, ValueError, TypeError, ProviderError) as exc:
                 self._kline_down_until[host] = monotonic() + 120

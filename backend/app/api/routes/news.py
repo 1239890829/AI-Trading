@@ -12,6 +12,7 @@ from fastapi import APIRouter, Depends, HTTPException, Query, Request
 from app.api.deps import get_hub
 from app.core.config import settings
 from app.core.ttl_cache import cache_on
+from app.core.inflight_reads import LocalReadCapacityExceeded
 from app.services.source_reads import read_news_input
 from app.news.llm import LLMSummarizer
 from app.news.router import SummaryRouter
@@ -56,13 +57,19 @@ async def news_digest(
         async def _read(method: str):
             try:
                 return await read_news_input(hub.provider, method, symbol, limit), None
+            except LocalReadCapacityExceeded:
+                raise
             except Exception as exc:
                 return [], str(exc)
 
         # These sources are independent; retain each side's failure separately.
-        (news_rows, news_error), (ann_rows, ann_error) = await asyncio.gather(
-            _read("get_news"), _read("get_announcements"),
+        results = await asyncio.gather(
+            _read("get_news"), _read("get_announcements"), return_exceptions=True,
         )
+        for value in results:
+            if isinstance(value, BaseException):
+                raise value
+        (news_rows, news_error), (ann_rows, ann_error) = results
         if news_error and ann_error:
             raise HTTPException(
                 status_code=502,

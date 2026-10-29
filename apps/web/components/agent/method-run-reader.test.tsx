@@ -25,6 +25,30 @@ beforeEach(()=>{
   mocks.detail.mockImplementation(async(identity:SavedMethodRunIdentity)=>detail(identity));
 });
 
+describe("daily original input classification",()=>{
+  it("filters saved categories locally without another request and never calls a partial page complete",async()=>{
+    locate(original,"selected");
+    const selected:SavedStrategyRunItem={item_id:"selected:0",symbol:"600001",name:"原入选甲",state:"selected",score:55,evaluation:{state:"selected",label:"原入选"}};
+    const capacity:SavedStrategyRunItem={item_id:"candidate:1",symbol:"600002",name:"容量未评估乙",state:"rejected",score:null,reason_code:"candidate_capacity",evaluation:{state:"not_evaluated",label:"容量未评估"}};
+    const value=detail(original,[selected,capacity],0,3);
+    value.counts={selected:1};
+    value.selection_summary={state:"saved",scope:"recorded_inputs_not_all_market",input_total:3,saved_total:3,omitted_total:0,
+      counts:{selected:1,score_rejected:1,not_evaluated:1,input_unavailable:0,excluded:0,unknown:0},
+      saved_counts:{selected:1,score_rejected:1,not_evaluated:1,input_unavailable:0,excluded:0,unknown:0},candidate_capacity:40,deep_capacity:24,reason:"原分布"};
+    mocks.detail.mockResolvedValue(value);
+    render(<MethodRunReader method="daily_picks"/>);await screen.findByText("原入选甲");
+    expect(screen.queryByText(/已全部加载/)).toBeNull();
+    fireEvent.click(screen.getByRole("button",{name:"容量未评估 1"}));
+    await screen.findByText("容量未评估乙");
+    expect(screen.queryByText("原入选甲")).toBeNull();
+    expect(mocks.detail).toHaveBeenCalledTimes(1);
+    expect(window.location.search).toContain("run_state=not_evaluated");
+    expect(screen.getByText(/本批已读 2 \/ 3/)).toBeTruthy();
+    expect(readMethodRunLocation(window.location.search,"daily_picks").filter).toBe("not_evaluated");
+    expect(readMethodRunLocation("?run_state=not_evaluated","intraday_watch").filter).toBe("selected");
+  });
+});
+
 describe("reference research state paging",()=>{
   const identity:SavedMethodRunIdentity={...original,method:"reference:macd_golden_cross",run_id:"research-state-23",trade_date:"2026-10-23",strategy_version:"v1"};
   const counts={universe:5580,eligible:5434,matched:353,not_matched:5081,unknown:146};

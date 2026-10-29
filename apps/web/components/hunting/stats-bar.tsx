@@ -133,7 +133,7 @@ export function HuntingStatsBar({
 
       {/* 跟踪口径 ①：确认提醒 T+1（近 30 日） */}
       <StatCard
-        label="跟踪 · T+1 胜率"
+        label="跟踪 · T+1 上涨占比"
         tip="口径：盘中确认提醒次日收益 >0 占比（近 30 日）；与精选口径独立不混算"
       >
         <div className={`mt-0.5 font-mono text-sm font-semibold tabular-nums ${winRateColor(t1?.win_rate, "pct")}`}>
@@ -145,7 +145,7 @@ export function HuntingStatsBar({
       </StatCard>
 
       {/* 跟踪口径 ②：确认提醒 T+3 */}
-      <StatCard label="跟踪 · T+3 胜率" tip="口径：确认提醒三日收益 >0 占比（未到期不计）">
+      <StatCard label="跟踪 · T+3 上涨占比" tip="口径：确认提醒三日收益 >0 占比（未到期不计）">
         <div className={`mt-0.5 font-mono text-sm font-semibold tabular-nums ${winRateColor(t3?.win_rate, "pct")}`}>
           {t3?.win_rate != null ? `${t3.win_rate}%` : <span className="font-sans font-normal text-zinc-600 dark:text-zinc-400">样本不足</span>}
         </div>

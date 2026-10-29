@@ -99,6 +99,110 @@ _CANDIDATE_REASONS = {
     'candidate_admitted': '原候选已接纳；后续处理未记录',
 }
 
+_EVALUATION_LABELS = {
+    'selected': '原入选', 'score_rejected': '已评分落选',
+    'not_evaluated': '容量未评估', 'input_unavailable': '输入或评分未完成',
+    'excluded': '预筛排除', 'unknown': '原过程待核',
+}
+_UNSCORED_CAPACITY = {'candidate_capacity', 'deep_capacity'}
+_INPUT_UNAVAILABLE = {'quote_missing', 'quote_identity_mismatch', 'scoring_unavailable'}
+_PREFILTER_EXCLUDED = {'outside_a_share_universe', 'invalid_security_identity', 'risk_name_excluded',
+                       'account_board_excluded', 'open_sealed_source_excluded'}
+_SCORE_REJECTED = {'below_min_score', 'capacity_or_replacement'}
+
+
+def _evaluation(code=None, *, selected=False, scored=False):
+    code = text(code)
+    state = ('selected' if selected else 'score_rejected' if scored and code in _SCORE_REJECTED
+             else 'not_evaluated' if code in _UNSCORED_CAPACITY
+             else 'input_unavailable' if code in _INPUT_UNAVAILABLE
+             else 'excluded' if code in _PREFILTER_EXCLUDED else 'unknown')
+    return {'state': state, 'label': _EVALUATION_LABELS[state]}
+
+
+def _count(value):
+    return value if type(value) is int and value >= 0 else None
+
+
+def _selection_summary(audit, rows, lists, valid):
+    """Partition original recorded identities, never the requested page or current rules.
+
+    Old final lists duplicate some candidate audit identities. Only an exact
+    one-to-one symbol relationship permits a complete input distribution. An
+    incomplete audit can still expose its saved subset without inventing the
+    omitted rows' decisions, even when the old aggregate counts look plausible.
+    """
+    empty = {key: None for key in _EVALUATION_LABELS}
+    source_scope = checked(audit.get('source_scope'), dict) or {}
+    result = {'state': audit['state'], 'scope': 'recorded_inputs_not_all_market',
+              **{key: _count(audit.get(key)) for key in ('input_total', 'saved_total', 'omitted_total')},
+              'counts': dict(empty), 'saved_counts': dict(empty),
+              'candidate_capacity': _count(source_scope.get('candidate_capacity')),
+              'deep_capacity': _count(source_scope.get('deep_capacity')),
+              'reason': audit.get('reason') or ''}
+    if audit['state'] == 'missing':
+        return result, {}
+    input_total, saved_total, omitted = (result[key] for key in ('input_total', 'saved_total', 'omitted_total'))
+    counts_valid = (input_total is not None and saved_total == len(rows) and omitted is not None
+                    and input_total >= saved_total and omitted == input_total - saved_total)
+    symbols = [row['symbol'] for row in rows]
+    input_symbols = set(symbols)
+    if not counts_valid or len(symbols) != len(input_symbols):
+        return {**result, 'state': 'partial', 'reason': '原输入计数或证券身份冲突，未生成全量分布'}, {}
+    final = {}
+    conflicts = set()
+    invalid_final_identity = False
+    for state, entries in zip(('selected', 'rejected'), lists):
+        for item in entries or []:
+            if not isinstance(item, dict) or not (symbol := text(item.get('symbol'))):
+                invalid_final_identity = True
+                continue
+            if symbol in final:
+                conflicts.add(symbol)
+            else:
+                final[symbol] = (state, item)
+    distribution = {key: 0 for key in _EVALUATION_LABELS}
+    evaluations = {}
+    contradictions = not all(valid) or bool(conflicts) or invalid_final_identity
+    if omitted == 0 and any(symbol not in input_symbols for symbol in final):
+        contradictions = True
+    for row in rows:
+        code, symbol = row['reason_code'], row['symbol']
+        outcome = final.get(symbol)
+        is_selected = outcome is not None and outcome[0] == 'selected'
+        is_scored_reject = outcome is not None and outcome[0] == 'rejected' and number(outcome[1].get('score')) is not None
+        consistent = (symbol not in conflicts
+                      and (code == 'selected') == is_selected
+                      and (code in _SCORE_REJECTED) == is_scored_reject
+                      and (outcome is None or code == 'selected' or code in _SCORE_REJECTED))
+        if not consistent:
+            contradictions = True
+        evaluation = _evaluation(code, selected=is_selected, scored=is_scored_reject) if consistent else _evaluation()
+        evaluations[symbol] = evaluation
+        distribution[evaluation['state']] += 1
+    result['saved_counts'] = distribution
+    complete = (omitted == 0 and audit.get('complete') is True
+                and audit.get('state') == 'saved' and not contradictions)
+    result['state'] = 'saved' if complete else 'partial'
+    if complete:
+        result['counts'] = dict(distribution)
+        result['reason'] = '只覆盖本批已记录来源，不代表全市场；每个原输入证券只计一次'
+    else:
+        result['reason'] = ('原入选、落选与候选身份或结果不一致；全量分布待核' if contradictions
+                            else '原输入留痕不完整；已保存分布不能代表未保存部分')
+    return result, evaluations
+
+
+def _strategy_context(meta):
+    style = checked(meta.get('style_routing'), dict) or {}
+    phase = text(meta.get('market_phase'))
+    name, basis = text(style.get('style')), text(style.get('basis'))
+    routed = style.get('routed') if type(style.get('routed')) is bool else None
+    known = (phase is not None, name is not None, basis is not None, routed is not None)
+    return {'state': 'saved' if all(known) else 'partial' if any(known) else 'missing',
+            'market_phase': phase, 'style': name, 'style_basis': basis, 'routed': routed,
+            'semantics': 'saved_ranking_style_not_execution_strategy'}
+
 
 def _saved_candidate_audit(meta):
     audit = checked(meta.get('candidate_audit'), dict)
@@ -310,6 +414,7 @@ def _daily(row, identity, *, offset=0, limit=200):
         problems.append('原入选版本与当前保存内容不一致，不作为已核版本')
     meta = meta or {}
     candidate_audit, candidate_rows = _saved_candidate_audit(meta)
+    selection_summary, evaluations = _selection_summary(candidate_audit, candidate_rows, lists, valid)
     items, total = [], 0
     for state, entries in zip(('selected', 'rejected'), lists):
         for index, item in enumerate(entries or []):
@@ -321,7 +426,10 @@ def _daily(row, identity, *, offset=0, limit=200):
             items.append({'symbol': str(item.get('symbol') or ''), 'name': str(item.get('name') or item.get('symbol') or ''),
                 'item_id': f'{state}:{index}', 'state': state, 'score': number(item.get('score')),
                 'rank': number(item.get('rank')), 'reason': daily_reason(item),
-                'basis': checked(item.get('bases'), dict) or {}, 'diagnostics': diagnostics(item, meta)})
+                'basis': checked(item.get('bases'), dict) or {}, 'diagnostics': diagnostics(item, meta),
+                'evaluation': evaluations.get(str(item.get('symbol') or ''),
+                    _evaluation(item.get('selection_reason'), selected=state == 'selected',
+                                scored=number(item.get('score')) is not None))})
     already_scored = {str(item.get('symbol') or '') for entries in lists for item in entries or [] if isinstance(item, dict)}
     for original in candidate_rows:
         if original['symbol'] in already_scored:
@@ -335,7 +443,8 @@ def _daily(row, identity, *, offset=0, limit=200):
             'name': original.get('name') or original['symbol'], 'state': 'unknown' if unknown else 'rejected',
             'score': None, 'rank': None, 'stage': original.get('stage'), 'reason_code': code,
             'reason': _CANDIDATE_REASONS.get(code, '原候选原因未识别，未按当前规则推断'),
-            'basis': {}, 'diagnostics': diagnostics({}, meta), 'evidence': original})
+            'basis': {}, 'diagnostics': diagnostics({}, meta), 'evidence': original,
+            'evaluation': evaluations.get(original['symbol'], _evaluation(code))})
     funnel = checked(meta.get('selection_funnel'), dict) or {}
     return {**identity, 'state': 'saved' if not problems else 'partial' if any(valid) or total else 'error',
         'reason': '；'.join(problems), 'elapsed_ms': None,
@@ -343,6 +452,8 @@ def _daily(row, identity, *, offset=0, limit=200):
                    'selected': len(lists[0]) if valid[0] else None, 'rejected_saved': len(lists[1]) if valid[1] else None},
         'criteria': {'min_pick_score': number(meta.get('min_pick_score')), 'max_picks': number(meta.get('max_picks'))},
         'candidate_audit': candidate_audit,
+        'selection_summary': selection_summary,
+        'strategy_context': _strategy_context(meta),
         'items': items, '_items_total': total, 'semantics': 'saved_selection_not_execution_or_fill'}
 
 

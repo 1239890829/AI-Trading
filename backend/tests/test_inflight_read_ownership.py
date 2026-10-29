@@ -7,7 +7,7 @@ from types import SimpleNamespace
 
 import pytest
 
-from app.core.inflight_reads import InflightReads, close_inflight_reads, read_inflight
+from app.core.inflight_reads import InflightReads, LocalReadCapacityExceeded, close_inflight_reads, read_inflight
 
 
 async def settle():
@@ -132,12 +132,12 @@ def test_all_waiters_cancel_and_close_really_drains_owned_thread():
     asyncio.run(run())
 
 
-def test_full_mapping_preserves_caller_owned_overflow_and_exact_key_isolation():
+def test_full_mapping_rejects_new_source_work_but_keeps_existing_key_shared():
     async def run():
         owner = InflightReads(maxsize=1)
         release = asyncio.Event()
         entered = asyncio.Event()
-        calls, cancelled = [], []
+        calls = []
         async def first():
             calls.append("first")
             entered.set()
@@ -145,23 +145,21 @@ def test_full_mapping_preserves_caller_owned_overflow_and_exact_key_isolation():
             return [1]
         async def overflow():
             calls.append("overflow")
-            try:
-                await asyncio.Event().wait()
-            finally:
-                cancelled.append(True)
+            return [2]
         one = asyncio.create_task(owner.read(("input", 1), first))
         two = None
         try:
             await entered.wait()
-            two = asyncio.create_task(owner.read(("input", 2), overflow))
+            two = asyncio.create_task(owner.read(("input", 1), first))
             await settle()
-            assert calls == ["first", "overflow"] and len(owner.tasks) == 1
-            two.cancel()
-            with pytest.raises(asyncio.CancelledError):
-                await two
-            assert cancelled == [True]
+            with pytest.raises(RuntimeError, match="local active-read capacity"):
+                await owner.read(("input", 2), overflow)
+            assert calls == ["first"] and len(owner.tasks) == 1
             release.set()
-            assert await one == [1]
+            a, b = await asyncio.gather(one, two)
+            assert a == b == [1] and a is not b
+            assert await owner.read(("input", 2), overflow) == [2]
+            assert calls == ["first", "overflow"]
             await owner.close()
         finally:
             release.set()
@@ -199,6 +197,47 @@ def test_composite_close_drains_helper_owner_before_closing_source():
         finally:
             release.set()
             await asyncio.gather(read, *([closing] if closing else []), return_exceptions=True)
+    asyncio.run(run())
+
+
+def test_saturated_burst_starts_no_overflow_and_does_not_queue_retries():
+    async def run():
+        owner = InflightReads(maxsize=2)
+        release = asyncio.Event()
+        calls = []
+        async def factory():
+            calls.append(True)
+            await release.wait()
+            return [10]
+        started = [asyncio.create_task(owner.read(("input", i), factory)) for i in range(2)]
+        try:
+            await settle()
+            overflow = await asyncio.gather(*(owner.read(("input", i), factory) for i in range(2, 22)),
+                                            return_exceptions=True)
+            assert all(isinstance(result, LocalReadCapacityExceeded) for result in overflow)
+            assert len(calls) == len(owner.tasks) == 2
+            release.set()
+            await asyncio.gather(*started)
+            await settle()
+            assert len(calls) == 2 and not owner.tasks  # No deferred overflow runs later.
+        finally:
+            release.set()
+            await asyncio.gather(*started, return_exceptions=True)
+            await owner.close()
+    asyncio.run(run())
+
+
+def test_finished_owner_with_pending_cleanup_does_not_consume_active_capacity():
+    async def run():
+        owner = InflightReads(maxsize=1)
+        async def factory():
+            return [10]
+        finished = asyncio.create_task(factory())
+        await finished
+        owner.tasks[(asyncio.get_running_loop(), ("old",))] = finished
+        assert await owner.read(("new",), factory) == [10]
+        await owner.close()
+        assert not owner.tasks
     asyncio.run(run())
 
 

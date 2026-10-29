@@ -14,7 +14,7 @@ from datetime import date
 from fastapi import APIRouter, Depends, HTTPException, Query, Request
 from app.api.deps import get_hub
 from app.core.ttl_cache import cache_on
-from app.core.inflight_reads import read_inflight
+from app.core.inflight_reads import LocalReadCapacityExceeded, read_inflight
 from app.schemas.envelope import (
     Envelope,
     OverviewPayload,
@@ -390,6 +390,8 @@ async def _theme_board_cached(request: Request, hub: QuoteHub, trade_date: date)
                 hub.provider, trade_date,
                 snapshot_map=await asyncio.to_thread(load_snapshot_map, request.app.state.snapshot_service, trade_date),
             )
+        except LocalReadCapacityExceeded:
+            raise
         except RuntimeError as exc:
             raise HTTPException(status_code=502, detail=str(exc)) from exc
         return {"data": board, "meta": await dated_meta(hub, trade_date)}

@@ -321,6 +321,7 @@ def test_cancelling_recovery_preserves_normal_primary_progress_and_rejection(cur
         hub._domains["quotes"].last_success = previous_completed
         hub._domains["quotes"].succeeded = True
         hub._domains["quotes"].generation = 1
+        await hub._refresh_watchlist()  # Membership of the prior completed round.
         normal_queue = hub.subscribe({"600002"})
         task = asyncio.create_task(hub._refresh_domain("quotes"))
         await asyncio.wait_for(entered.wait(), 1)

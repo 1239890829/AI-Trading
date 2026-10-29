@@ -13,6 +13,7 @@ from fastapi import APIRouter, Depends, HTTPException, Query, Request
 from fastapi.responses import JSONResponse
 from app.api.deps import get_hub
 from app.core.ttl_cache import cache_on
+from app.core.inflight_reads import LocalReadCapacityExceeded
 from app.services.source_reads import read_news_input
 from app.data_providers.eastmoney import ProviderError
 from app.market.article import ArticleFetchError, classify_url, fetch_article
@@ -99,6 +100,8 @@ async def announcements(
 
     try:
         hit, data = await _cached_read(request, cache, key, load)
+    except LocalReadCapacityExceeded:
+        raise
     except Exception as exc:
         raise HTTPException(status_code=502, detail=f"公告数据源失败：{exc}")
     return {"data": data, "meta": {**meta_payload(hub), **({"cached": True} if hit else {})}}
@@ -148,6 +151,8 @@ async def news(
 
     try:
         hit, data = await _cached_read(request, cache, key, load)
+    except LocalReadCapacityExceeded:
+        raise
     except Exception as exc:
         raise HTTPException(status_code=502, detail=f"新闻数据源失败：{exc}")
     return {"data": data, "meta": {**meta_payload(hub), **({"cached": True} if hit else {})}}

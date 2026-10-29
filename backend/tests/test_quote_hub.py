@@ -489,7 +489,12 @@ def test_first_invalid_quote_is_not_fabricated_as_current_value(isolate_calendar
     hub, _prov = _hub_with([bad, b])
     queue = hub.subscribe({"600105"})
 
-    asyncio.run(hub.refresh())
+    async def check():
+        # This coverage test requires both confirmed watchlist members. A cold
+        # subscription now starts independently while membership is pending.
+        await hub._refresh_watchlist()
+        await hub.refresh()
+    asyncio.run(check())
 
     assert "600105" not in hub.quotes
     assert hub.last_missing_symbols == ["600105"]

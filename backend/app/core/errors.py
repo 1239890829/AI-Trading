@@ -2,14 +2,15 @@
 
 目标：前端与调用方可以对**所有**错误响应依赖同一形态 `{detail, code}`——
 - `detail`：人可读原因（沿用旧契约，前端 api.ts 已按此读取，零破坏）
-- `code`：机器可读分支键（`upstream_failed` / `validation_error` / `internal_error` /
-  `http_<status>`），前端据此做重试/降级分类，不再靠猜 status
+- `code`：机器可读分支键（`upstream_failed` / `local_read_capacity_exceeded` /
+  `validation_error` / `internal_error` / `http_<status>`），前端据此做重试/降级分类
 
-四层 handler（由 `register_error_handlers` 统一挂载）：
-1. AppError        业务异常基类，显式 code
-2. HTTPException   既有 23 处路由抛出，保持 detail 兼容并补 code
-3. RequestValidationError 入参校验失败，格式化明细
-4. Exception       兜底 500：log.exception + 统一体（绝不把堆栈漏给客户端）
+handler 由 `register_error_handlers` 统一挂载：
+1. LocalReadCapacityExceeded 本地读取准入拒绝，503，不计作数据源故障
+2. AppError        业务异常基类，显式 code
+3. HTTPException   既有路由异常，保持 detail 兼容并补 code
+4. RequestValidationError 入参校验失败，格式化明细
+5. Exception       兜底 500：log.exception + 统一体（绝不把堆栈漏给客户端）
 """
 from __future__ import annotations
 
@@ -19,6 +20,8 @@ from fastapi import FastAPI, Request
 from fastapi.exceptions import RequestValidationError
 from fastapi.responses import JSONResponse
 from starlette.exceptions import HTTPException as StarletteHTTPException
+
+from app.core.inflight_reads import LocalReadCapacityExceeded
 
 log = logging.getLogger(__name__)
 
@@ -58,6 +61,11 @@ def _fmt_validation(exc: RequestValidationError) -> str:
 
 
 def register_error_handlers(app: FastAPI) -> None:
+    @app.exception_handler(LocalReadCapacityExceeded)
+    async def _local_read_capacity(request: Request, exc: LocalReadCapacityExceeded):
+        return JSONResponse(status_code=503, content=error_body(
+            "当前读取繁忙，请稍后重试", "local_read_capacity_exceeded"))
+
     @app.exception_handler(AppError)
     async def _app_error(request: Request, exc: AppError):
         return JSONResponse(status_code=exc.status_code, content=error_body(exc.detail, exc.code))

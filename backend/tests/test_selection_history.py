@@ -389,3 +389,148 @@ def test_saved_candidate_exclusions_read_without_replaying_today_or_inventing_ol
     daily(sf, day='2026-10-22')
     old = list_method_runs(sf, 'daily_picks', trade_date='2026-10-22')['items'][0]
     assert detail(sf, old)['candidate_audit']['state'] == 'missing'
+
+
+def _selection_summary_fixture(sf, *, omitted=0):
+    selected = {'symbol': '600001', 'score': 65}
+    rejected = {'symbol': '600002', 'score': 45, 'selection_reason': 'below_min_score'}
+    key = daily(sf, items=[selected], rejected=[rejected])
+    reasons = ['selected', 'below_min_score', 'candidate_capacity', 'deep_capacity',
+               'quote_missing', 'account_board_excluded', 'candidate_admitted']
+    with sf() as db:
+        row = db.get(DailyPickSet, key)
+        meta = json.loads(row.meta)
+        meta['candidate_count'] = 4
+        meta['selection_funnel'] = {'scored': 2}
+        meta['style_routing'] = {'style': '趋势防守', 'basis': '原权重偏移', 'routed': True}
+        meta['market_phase'] = '冰点'
+        meta['candidate_audit'] = {
+            'version': 'daily-candidate-domain-v1', 'complete': omitted == 0,
+            'input_total': 7 + omitted, 'saved_total': 7, 'omitted_total': omitted,
+            'source_scope': {'candidate_capacity': 40, 'deep_capacity': 24},
+            'rows': [{'symbol': f'60000{index}', 'reason_code': reason, 'input_position': index}
+                     for index, reason in enumerate(reasons, 1)]}
+        row.meta = json.dumps(meta)
+        db.commit()
+        original = (row.items, row.rejected, row.meta)
+    return key, original
+
+
+def test_full_selection_distribution_uses_original_input_not_scored_or_page_denominator(sf, monkeypatch):
+    from app.picks import style_router
+    monkeypatch.setattr(style_router, 'route_style', lambda *_: pytest.fail('must not route historical style again'))
+    key, original = _selection_summary_fixture(sf)
+    ident = identity(sf)
+    first = detail(sf, ident, limit=1)
+    tail = detail(sf, ident, offset=2, limit=2)
+    summary = first['selection_summary']
+    assert summary == tail['selection_summary']
+    assert summary['state'] == 'saved'
+    assert summary['input_total'] == 7 and first['counts']['candidates'] == 4
+    assert summary['counts'] == dict(selected=1, score_rejected=1, not_evaluated=2,
+                                     input_unavailable=1, excluded=1, unknown=1)
+    assert sum(summary['counts'].values()) == summary['input_total']
+    assert summary['saved_counts'] == summary['counts']
+    assert summary['scope'] == 'recorded_inputs_not_all_market'
+    assert first['items'][0]['state'] == 'selected'
+    assert first['items'][0]['evaluation']['state'] == 'selected'
+    assert all(row['state'] == 'rejected' and row['evaluation']['state'] == 'not_evaluated'
+               for row in tail['items'])
+    assert first['strategy_context'] == {
+        'state': 'saved', 'market_phase': '冰点', 'style': '趋势防守',
+        'style_basis': '原权重偏移', 'routed': True,
+        'semantics': 'saved_ranking_style_not_execution_strategy'}
+    with sf() as db:
+        row = db.get(DailyPickSet, key)
+        assert (row.items, row.rejected, row.meta) == original
+
+
+def test_partial_audit_shows_saved_distribution_without_fabricating_whole_population(sf):
+    _selection_summary_fixture(sf, omitted=3)
+    summary = detail(sf, identity(sf), limit=1)['selection_summary']
+    assert summary['state'] == 'partial' and summary['input_total'] == 10
+    assert summary['saved_total'] == 7 and summary['omitted_total'] == 3
+    assert all(value is None for value in summary['counts'].values())
+    assert summary['saved_counts']['not_evaluated'] == 2
+    assert sum(summary['saved_counts'].values()) == 7
+
+
+@pytest.mark.parametrize('damage', ['duplicate_input', 'duplicate_scored', 'selected_rejected_conflict', 'bool_total'])
+def test_candidate_summary_conflicts_do_not_create_a_complete_distribution(sf, damage):
+    key, _ = _selection_summary_fixture(sf)
+    with sf() as db:
+        row = db.get(DailyPickSet, key)
+        meta = json.loads(row.meta)
+        if damage == 'duplicate_input':
+            meta['candidate_audit']['rows'][-1]['symbol'] = '600001'
+        elif damage == 'bool_total':
+            meta['candidate_audit']['input_total'] = True
+        elif damage == 'duplicate_scored':
+            row.rejected = json.dumps([{'symbol': '600002', 'score': 45}] * 2)
+        else:
+            row.rejected = json.dumps([{'symbol': '600001', 'score': 45}])
+        row.meta = json.dumps(meta)
+        db.commit()
+    result = detail(sf, identity(sf))
+    summary = result['selection_summary']
+    assert summary['state'] == 'partial'
+    assert all(value is None for value in summary['counts'].values())
+    assert summary['reason']
+    if damage in {'duplicate_scored', 'selected_rejected_conflict'}:
+        symbol = '600002' if damage == 'duplicate_scored' else '600001'
+        conflicting = [item for item in result['items'] if item['symbol'] == symbol]
+        assert len(conflicting) == 2
+        assert all(item['evaluation']['state'] == 'unknown' for item in conflicting)
+        assert {item['state'] for item in conflicting} == ({'rejected'} if damage == 'duplicate_scored'
+                                                        else {'selected', 'rejected'})
+
+
+def test_missing_candidate_audit_and_style_never_inherit_current_defaults(sf):
+    daily(sf)
+    result = detail(sf, identity(sf))
+    assert result['selection_summary']['state'] == 'missing'
+    assert result['selection_summary']['input_total'] is None
+    assert all(value is None for value in result['selection_summary']['counts'].values())
+    assert result['strategy_context']['state'] == 'missing'
+    assert result['strategy_context']['style'] is None
+    assert result['strategy_context']['routed'] is None
+
+
+@pytest.mark.parametrize('reason', [{'value': 'below_min_score'}, ['below_min_score'], None])
+def test_malformed_original_reason_is_unknown_without_breaking_other_rows(sf, reason):
+    daily(sf, rejected=[{'symbol': '600001', 'score': 40, 'selection_reason': reason},
+                        {'symbol': '600002', 'score': 0, 'selection_reason': 'below_min_score'}])
+    items = detail(sf, identity(sf))['items']
+    assert items[0]['evaluation']['state'] == 'unknown'
+    assert items[1]['evaluation']['state'] == 'score_rejected'
+
+
+def test_zero_input_unknown_audit_version_cannot_claim_complete_distribution(sf):
+    key = daily(sf)
+    with sf() as db:
+        row = db.get(DailyPickSet, key)
+        meta = json.loads(row.meta)
+        meta['candidate_audit'] = {'version': 'future-unrecognized-version', 'complete': True,
+                                   'input_total': 0, 'saved_total': 0, 'omitted_total': 0, 'rows': []}
+        row.meta = json.dumps(meta)
+        db.commit()
+    summary = detail(sf, identity(sf))['selection_summary']
+    assert summary['state'] == 'partial'
+    assert all(value is None for value in summary['counts'].values())
+
+
+@pytest.mark.parametrize('invalid_item', [{}, {'symbol': ''}, {'symbol': 600001}])
+def test_unidentified_final_row_cannot_validate_zero_input_distribution(sf, invalid_item):
+    key = daily(sf, items=[invalid_item])
+    with sf() as db:
+        row = db.get(DailyPickSet, key)
+        meta = json.loads(row.meta)
+        meta['candidate_audit'] = {'version': 'daily-candidate-domain-v1', 'complete': True,
+                                  'input_total': 0, 'saved_total': 0, 'omitted_total': 0, 'rows': []}
+        row.meta = json.dumps(meta)
+        db.commit()
+    result = detail(sf, identity(sf))
+    assert result['selection_summary']['state'] == 'partial'
+    assert all(value is None for value in result['selection_summary']['counts'].values())
+    assert result['counts']['selected'] == 1
+    assert result['items'][0]['state'] == 'selected'

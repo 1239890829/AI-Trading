@@ -187,7 +187,7 @@ def test_registered_owner_gets_one_ticket_before_factory_starts(monkeypatch):
 
 def test_full_existing_registry_cannot_claim_unjoinable_pending():
     async def run():
-        holder, release, _calls = service()
+        holder, release, calls = service()
         reads = inflight_reads.InflightReads()
         holder.theme_catalog._inflight_source_reads = reads
         occupied = asyncio.Event()
@@ -201,14 +201,61 @@ def test_full_existing_registry_cannot_claim_unjoinable_pending():
             while len(reads.tasks) < 128:
                 await asyncio.sleep(0)
             value = await official.resolve_official_catalog_view(holder, wait_seconds=0.001)
-            assert value["state"] == "unavailable" and value["reason"] == "completion_owner_untracked"
+            assert value["state"] == "unavailable" and value["reason"] == "local_read_capacity_exceeded"
             assert "completion_key" not in value
+            assert calls == [], "local admission must not start untracked source reads"
+            cache = getattr(holder.theme_catalog, "_ttl_cache_themes.official.identities")
+            assert cache.get(("source-identity-v4-kinds", 0))[0] is False
+            occupied.set()
+            release.set()
+            await asyncio.gather(*owners)
+            recovered = await official.resolve_official_catalog_view(holder, wait_seconds=1)
+            assert recovered["state"] == "available"
+            assert sorted(calls) == ["concept", "industry"]
         finally:
             occupied.set()
             release.set()
             await asyncio.gather(*owners)
             await reads.close()
 
+    asyncio.run(run())
+
+
+@pytest.mark.parametrize("other_source_failed", [False, True])
+def test_nested_directory_admission_does_not_cache_failure_or_issue_completion(other_source_failed):
+    async def run():
+        holder, release, calls = service()
+        svc = holder.theme_catalog
+        original_read = svc.read_board_catalog
+        reads = inflight_reads.InflightReads(maxsize=1)
+        svc._inflight_source_reads = reads
+        source_factories = []
+
+        async def directory(kind):
+            if kind == "concept":
+                if other_source_failed:
+                    raise OSError("offline independent source failure")
+                return await original_read(kind)
+            async def fetch():
+                source_factories.append(kind)
+                return await original_read(kind)
+            return await inflight_reads.read_inflight(svc, ("official-directory", kind), fetch)
+
+        svc.read_board_catalog = directory
+        release.set()
+        try:
+            for _ in range(2):
+                value = await official.resolve_official_catalog_view(holder, wait_seconds=1)
+                assert value["reason"] == "local_read_capacity_exceeded"
+                assert "completion_key" not in value and value["identities"] == {}
+                cache = getattr(svc, "_ttl_cache_themes.official.identities")
+                assert cache.get(("source-identity-v4-kinds", 0))[0] is False
+            assert source_factories == []
+            reads.maxsize = 2
+            svc.read_board_catalog = original_read
+            assert (await official.resolve_official_catalog_view(holder, wait_seconds=1))["state"] == "available"
+        finally:
+            await reads.close()
     asyncio.run(run())
 
 

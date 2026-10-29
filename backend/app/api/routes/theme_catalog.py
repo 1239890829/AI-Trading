@@ -19,6 +19,7 @@ from pydantic import BaseModel
 
 from app.api.deps import get_hub, normalize_symbol, require_write_token
 from app.core.ttl_cache import cache_on
+from app.core.inflight_reads import LocalReadCapacityExceeded
 from app.picks.pre_limit_radar import board_limit_pct, is_sealed
 from app.services.quote_hub import QuoteHub
 from app.services.market_snapshot import default_trade_date, load_snapshot_map
@@ -216,6 +217,8 @@ async def theme_catalog(
     """题材全集（官方目录）。空库时自动同步一次（首次访问建库）。"""
     try:
         payload = await svc.read_board_catalog(kind)
+    except LocalReadCapacityExceeded:
+        raise
     except Exception as exc:
         raise HTTPException(status_code=502, detail="同花顺正式目录暂不可用") from exc
     items = [row for row in payload["items"] if not search or search in row["name"] or search in row["code"]][:limit]
@@ -235,6 +238,8 @@ async def theme_catalog_quotes(
             raise HTTPException(status_code=422, detail="完整目录范围不能同时指定代码")
         try:
             return {"data": await svc.read_board_ranking(kind, fresh=fresh), "meta": {}}
+        except LocalReadCapacityExceeded:
+            raise
         except Exception as exc:
             raise HTTPException(status_code=502, detail="完整正式目录报价读取失败；未用局部数据替代全榜") from exc
     if codes is None:
@@ -248,6 +253,8 @@ async def theme_catalog_quotes(
         if not set(wanted) <= allowed:
             raise HTTPException(status_code=404, detail="代码不在所选来源正式目录中")
         payload = await svc.read_board_snapshots(wanted)
+    except LocalReadCapacityExceeded:
+        raise
     except ValueError as exc:
         raise HTTPException(status_code=422, detail="板块代码格式无效") from exc
     except HTTPException:

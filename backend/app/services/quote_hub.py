@@ -218,6 +218,13 @@ class QuoteHub:
         self._closed_marked = False
         self._domains = {"indices": RefreshDomain(), "quotes": RefreshDomain(requested=False)}
         self._domain_tasks: dict[str, asyncio.Task] = {}
+        # Membership refresh is a single owned DB read, independent of source
+        # quotes. A slow repository must not delay an already known subscriber.
+        self._watchlist_task: asyncio.Task | None = None
+        self._watchlist_symbols: tuple[str, ...] | None = None
+        self._watchlist_last_success: datetime | None = None
+        self._watchlist_last_error_type: str | None = None
+        self._watchlist_read_ms: float | None = None
         self._complete_generations = {"indices": 0, "quotes": 0}
         self._pending_domains: set[str] = set()
         self._publish_task: asyncio.Task | None = None
@@ -724,12 +731,29 @@ class QuoteHub:
             return list(self.quotes.keys())
 
     async def _poll_symbols_for_refresh(self) -> list[str]:
-        # The repository owns its Session. Only its blocking read enters a worker;
-        # fallback cache access and current subscriptions stay on the event loop.
-        # The existing quotes-domain singleflight owns this read until it drains.
+        if self._stopping:
+            raise RuntimeError("QuoteHub is stopping")
+        task = self._watchlist_task
+        if task is None or task.done():
+            task = asyncio.create_task(self._refresh_watchlist(), name="quote-hub-watchlist")
+            self._watchlist_task = task
+        # With no known membership or current stock subscription, the initial
+        # read is necessary. Otherwise source work can proceed on the last
+        # successful membership plus the current subscription set. A successful
+        # empty DB result replaces that membership; cached prices are never
+        # treated as evidence that a removed stock remains in the watchlist.
+        known = self._merge_poll_symbols(list(self._watchlist_symbols or ()))
+        if self._watchlist_symbols is None and not known:
+            await asyncio.shield(task)
+        return self._merge_poll_symbols(list(self._watchlist_symbols or ()))
+
+    async def _refresh_watchlist(self) -> None:
+        # Only the repository enters a worker. Membership and subscription state
+        # remain on the event loop; shutdown owns and drains the worker as well.
+        started = asyncio.get_running_loop().time()
         read = asyncio.create_task(asyncio.to_thread(self.get_watchlist))
         try:
-            watchlist = await asyncio.shield(read)
+            watchlist = tuple(await asyncio.shield(read))
         except asyncio.CancelledError:
             while not read.done():
                 try:
@@ -741,10 +765,15 @@ class QuoteHub:
             if not read.cancelled():
                 read.exception()
             raise
-        except Exception:
-            log.exception("watchlist lookup failed; keeping previous watchlist")
-            watchlist = list(self.quotes.keys())
-        return self._merge_poll_symbols(watchlist)
+        except Exception as exc:
+            self._watchlist_last_error_type = type(exc).__name__
+            log.exception("watchlist lookup failed; retaining last confirmed membership")
+        else:
+            self._watchlist_symbols = watchlist
+            self._watchlist_last_success = utcnow()
+            self._watchlist_last_error_type = None
+        finally:
+            self._watchlist_read_ms = max(0.0, (asyncio.get_running_loop().time() - started) * 1000)
 
     def _poll_symbols(self) -> list[str]:
         """轮询池 = 自选 ∪ 各订阅者订阅集中的裸 6 位代码。
@@ -835,6 +864,17 @@ class QuoteHub:
                 "rejected_count": len(self.last_index_rejections if domain == "indices" else self.last_quote_rejections),
                 "coverage": self.last_index_coverage if domain == "indices" else self.last_batch_coverage,
             }
+            if domain == "quotes":
+                pending = self._watchlist_task is not None and not self._watchlist_task.done()
+                result[domain]["watchlist_sync"] = {
+                    "state": "pending" if pending else "failed" if self._watchlist_last_error_type else
+                             "ready" if self._watchlist_symbols is not None else "unknown",
+                    "last_success": (self._watchlist_last_success.isoformat()
+                                     if self._watchlist_last_success else None),
+                    "last_error_type": self._watchlist_last_error_type,
+                    "last_read_ms": self._watchlist_read_ms,
+                    "known_count": len(self._watchlist_symbols) if self._watchlist_symbols is not None else None,
+                }
         return result
 
     def is_stale(self) -> bool:
@@ -1116,6 +1156,8 @@ class QuoteHub:
                 self._publish_timer = None
             self._publish_deadline = None
             owned = set(loops) | set(self._domain_tasks.values())
+            if self._watchlist_task is not None:
+                owned.add(self._watchlist_task)
             if self._publish_task is not None:
                 owned.add(self._publish_task)
             for task in owned:
@@ -1128,6 +1170,7 @@ class QuoteHub:
                     continue
             drained.result()
             self._domain_tasks.clear()
+            self._watchlist_task = None
             self._publish_task = None
             self._pending_domains.clear()
             self._last_publish_at = None

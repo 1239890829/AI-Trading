@@ -463,7 +463,7 @@ function HuntingInner() {
           className="opportunity-fold hunting-journal"
         >
           <summary>
-            <span><strong>当日对照与精选复盘</strong><span className="fold-caption">盘前与实际 · 胜率统计 · 逐日归因</span></span>
+            <span><strong>当日对照与精选复盘</strong><span className="fold-caption">盘前与实际 · 上涨占比 · 逐日归因</span></span>
             {brief?.review && <span className="fold-meta">{timeText(brief.review.reviewed_at)} 复盘</span>}
             <span className="fold-chevron" aria-hidden="true"><svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.5"><path d="m7 10 5 5 5-5" /></svg></span>
           </summary>
@@ -492,15 +492,15 @@ function HuntingInner() {
             {stats ? (
               <FadeIn>
                 <section className="space-y-2">
-                  <h3 className="text-xs font-medium text-zinc-600 dark:text-zinc-400">近 30 日胜率统计（跟踪）</h3>
+                  <h3 className="text-xs font-medium text-zinc-600 dark:text-zinc-400">近 30 日上涨占比（跟踪）</h3>
                   {!!statsResource.error && <p role="alert" className="hunting-empty">统计读取失败。以下保留上次读取结果，当前状态待重试核实。</p>}
                   <StatsPanel stats={stats} />
                 </section>
               </FadeIn>
             ) : (
               <section className="space-y-2">
-                <h3 className="text-xs font-medium text-zinc-600 dark:text-zinc-400">近 30 日胜率统计（跟踪）</h3>
-                {statsResource.pending ? <StatsSkeleton /> : <p className="hunting-empty">统计暂不可用。缺少统计不表示胜率为零，等待重试读取。</p>}
+                <h3 className="text-xs font-medium text-zinc-600 dark:text-zinc-400">近 30 日上涨占比（跟踪）</h3>
+                {statsResource.pending ? <StatsSkeleton /> : <p className="hunting-empty">统计暂不可用。缺少统计不表示上涨占比为零，等待重试读取。</p>}
               </section>
             )}
 
@@ -756,7 +756,7 @@ function StyleRoutingChip({ sr }: { sr: StyleRouting }) {
       className="shrink-0 rounded-lg border border-zinc-200 px-3 py-1.5 text-[11px] dark:border-zinc-800"
       title={`${sr.basis}（${sr.phase ?? "相位缺失"}${srcNote}）· 偏移在 regime 基础权重上叠加，配置可覆盖（picks_style_offsets_json）`}
     >
-      <span className="text-zinc-600 dark:text-zinc-400">当日风格</span>{" "}
+      <span className="text-zinc-600 dark:text-zinc-400">排行风格</span>{" "}
       <span className="font-medium text-zinc-700 dark:text-zinc-200">{sr.label}</span>
       {offsets.length > 0 ? (
         <span className="ml-1.5 font-mono text-[10px] tabular-nums text-zinc-600 dark:text-zinc-400">

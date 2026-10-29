@@ -67,6 +67,7 @@ from typing import Awaitable, Callable
 
 from app.core.bjtime import BJ_OFFSET, beijing_today
 from app.core.config import settings
+from app.core.inflight_reads import LocalReadCapacityExceeded
 from app.schemas.market import Trade
 
 log = logging.getLogger(__name__)
@@ -298,7 +299,9 @@ async def fetch_trades_with_tdx_fallback(
     limit: int = 50,
     timeout: float | None = None,
 ) -> tuple[list[Trade], str, str]:
-    """`primary`（provider 链）→ **TDX 直连备源**。**不抛异常**。
+    """`primary`（provider 链）→ **TDX 直连备源**。
+
+    源故障按下述 detail 返回；本地准入拒绝原样传播，不启动额外备源请求。
 
     返回 `(trades, source, detail)`：
 
@@ -332,6 +335,8 @@ async def fetch_trades_with_tdx_fallback(
         if rows:
             return rows, _row_source(rows[0]), ""
         detail.append("chain: empty")
+    except LocalReadCapacityExceeded:
+        raise
     except Exception as exc:  # noqa: BLE001  降级链必须吞掉主源异常
         detail.append(f"chain: {exc}")
         log.warning("chain trades failed for %s: %s", symbol, exc)

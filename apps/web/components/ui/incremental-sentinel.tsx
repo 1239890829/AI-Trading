@@ -16,6 +16,7 @@ export function IncrementalSentinel({
   unit = "条",
   testId,
   onLoadMore,
+  moreRemote = false,
 }: {
   sentinelRef: React.RefObject<HTMLDivElement | null>;
   visible: number;
@@ -23,6 +24,7 @@ export function IncrementalSentinel({
   unit?: string;
   testId?: string;
   onLoadMore?: () => void;
+  moreRemote?: boolean;
 }) {
   return (
     <>
@@ -33,6 +35,8 @@ export function IncrementalSentinel({
           {onLoadMore && <button type="button" onClick={onLoadMore} title="显示已读取列表的下一部分，不重新请求数据"
             className="ml-2 inline-flex min-h-8 items-center rounded border border-zinc-300 px-2 text-xs text-zinc-700 focus-visible:outline-2 focus-visible:outline-offset-2 dark:border-zinc-600 dark:text-zinc-200">继续加载</button>}
         </p>
+      ) : moreRemote ? (
+        <p className="py-2 text-center text-[10px] text-zinc-600 dark:text-zinc-400">当前已读部分展示 {total} {unit}；下拉继续读取原批次。</p>
       ) : (
         total > 0 && (
           <p className="py-2 text-center text-[10px] text-zinc-600 dark:text-zinc-400">
