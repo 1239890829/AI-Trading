@@ -7,9 +7,11 @@
 from __future__ import annotations
 
 import asyncio
+import datetime as dt
 import hashlib
 import json
 import logging
+import math
 from datetime import datetime, timezone
 from pathlib import Path
 from time import monotonic
@@ -17,13 +19,15 @@ from typing import Any
 
 import httpx
 
-from app.core.freshness import Freshness
+from app.core.freshness import MAX_FUTURE_SKEW_SECONDS, Freshness
 from app.core.bjtime import BJ_TZ
+from app.data_quality.validator import validate_quote
 from app.data_providers.eastmoney import ProviderError
 from app.market import sina_market
 from app.market.breadth import compute_breadth
 from app.market.sina_market import SinaRateLimited
 from app.market.trade_calendar import in_trading_window
+from app.schemas.market import Quality, Quote, QuoteDisplaySession
 
 log = logging.getLogger(__name__)
 
@@ -119,6 +123,8 @@ class MarketSnapshotService:
         if len(set(identities)) != len(rows):
             raise ProviderError("sina stock universe duplicate identity")
         breadth = compute_breadth(rows)
+        if not math.isfinite(breadth["total_amount"]):
+            raise ProviderError("sina snapshot breadth amount is non-finite")
         success_at = datetime.now(timezone.utc)
         universe_hash = hashlib.sha256(json.dumps({
             "source": "sina_market", "node": "hs_a", "verified_at": success_at.isoformat(),
@@ -166,21 +172,76 @@ class MarketSnapshotService:
         return rows, f"parquet:{read.path}"
 
     @staticmethod
+    def _usable_fallback_quote(symbol, base, quote, *, now, live, fresh_within, session):
+        """Count only the requested fact; receipt time never establishes source age."""
+        if (not isinstance(quote, Quote) or quote.symbol != symbol
+                or base.get("market") not in {"SH", "SZ", "BJ"}
+                or quote.market != base["market"] or not quote.source
+                or not isinstance(quote.price, (int, float))
+                or not math.isfinite(quote.price) or quote.price <= 0
+                or quote.quality in {Quality.invalid, Quality.low}):
+            return False
+        stamp = quote.data_timestamp
+        if (not isinstance(stamp, dt.datetime) or stamp.tzinfo is None
+                or stamp.utcoffset() is None or stamp > now):
+            return False
+        if (not isinstance(quote.received_at, dt.datetime) or quote.received_at.tzinfo is None
+                or quote.received_at.utcoffset() is None or quote.received_at > now):
+            return False
+        if (stamp - quote.received_at).total_seconds() > MAX_FUTURE_SKEW_SECONDS:
+            return False
+        checked = quote.model_copy(deep=True)
+        validate_quote(checked, live=live)
+        if checked.quality is not Quality.high:
+            return False
+        if live:
+            return quote.freshness(fresh_within=fresh_within).state == "ready"
+        # A paused source need not advance every minute. Keep its original clock
+        # and quality; only normal pause reasons may support this degraded batch.
+        reasons = set(quote.quality_reasons)
+        if (not reasons <= {"market_closed", "off_session"}
+                or (quote.quality is not Quality.high and not reasons)):
+            return False
+        if session is not None:
+            if session.phase in {"auction", "pre_open_gap"}:
+                # Completeness validation is paused before continuous trading,
+                # but these are active source observations, not closed tails.
+                return (session.trade_day_result is True
+                        and session.expected_source_date == now.astimezone(BJ_TZ).date()
+                        and session.as_of <= now
+                        and stamp.astimezone(BJ_TZ).date() == session.expected_source_date
+                        and stamp <= session.as_of
+                        and quote.freshness(fresh_within=fresh_within).state == "ready")
+            return (session.phase == "closed" and session.trade_day_result is not None
+                    and session.expected_source_date is not None
+                    and session.expected_source_after is not None
+                    and session.as_of <= now
+                    and stamp.astimezone(BJ_TZ).date() == session.expected_source_date
+                    and session.expected_source_after <= stamp <= session.as_of)
+        # Older integrations do not expose a session reader. Do not invent the
+        # previous trading day or a close tail from the newly received batch.
+        return stamp.astimezone(BJ_TZ).date() == now.astimezone(BJ_TZ).date()
+
+    @staticmethod
     def _fallback_row(base: dict, quote, *, now: datetime) -> dict:
         """把批量备源 Quote 映射回全市场 snapshot 行；动态字段绝不沿用旧值。"""
         row = dict(base)
         dynamic = (
             "price", "open", "high", "low", "prev_close", "change",
             "change_pct", "volume", "amount", "turnover_rate", "ticktime",
-            "limit_up_price", "limit_down_price", "quality", "data_timestamp",
+            "limit_up_price", "limit_down_price", "quality", "data_timestamp", "mktcap", "nmc", "received_at",
         )
         if quote is None:
             for key in dynamic:
                 row[key] = None
             row["source"] = f"{FALLBACK_SOURCE}:missing"
-            row["received_at"] = now.isoformat()
+            row["quality_reasons"] = ["missing_quote"]
+            row["collected_at"] = now.isoformat()
             return row
 
+        caps = {key: value * 1e4 if isinstance(value, (int, float)) and math.isfinite(value)
+                and value > 0 and math.isfinite(value * 1e4) else None
+                for key, value in (("mktcap", quote.total_mktcap_yi), ("nmc", quote.float_mktcap_yi))}
         row.update({
             "symbol": str(quote.symbol).zfill(6),
             "name": quote.name or row.get("name"),
@@ -198,16 +259,16 @@ class MarketSnapshotService:
             "limit_up_price": quote.limit_up_price,
             "limit_down_price": quote.limit_down_price,
             "quality": quote.quality.value,
-            "mktcap": (quote.total_mktcap_yi * 1e4
-                       if quote.total_mktcap_yi is not None else row.get("mktcap")),
-            "nmc": (quote.float_mktcap_yi * 1e4
-                    if quote.float_mktcap_yi is not None else row.get("nmc")),
+            "quality_reasons": list(quote.quality_reasons),
+            "mktcap": caps["mktcap"],
+            "nmc": caps["nmc"],
             "ticktime": (quote.data_timestamp.isoformat()
                          if quote.data_timestamp is not None else None),
             "data_timestamp": (quote.data_timestamp.isoformat()
                                if quote.data_timestamp is not None else None),
             "source": f"{quote.source or 'unknown'}_fallback",
-            "received_at": now.isoformat(),
+            "received_at": quote.received_at.isoformat(),
+            "collected_at": now.isoformat(),
         })
         return row
 
@@ -227,6 +288,7 @@ class MarketSnapshotService:
         })
         if not symbols:
             raise RuntimeError("snapshot fallback 股票池无有效 symbol")
+        requested = set(symbols)
 
         fresh_within = max(self.poll_interval * 3, 60.0)
         collection_started = monotonic()
@@ -242,28 +304,34 @@ class MarketSnapshotService:
                 raise TimeoutError
         except TimeoutError:
             raise TimeoutError("snapshot fallback quote collection exceeded freshness window") from None
-        # 盘中只把“当前可据此下结论”的报价计入覆盖率。HTTP 200 也可能
-        # 携带旧时点/invalid 行，不能把它们算成 100% 的假覆盖。
-        if in_trading_window():
-            found = {
-                symbol: quote for symbol, quote in found.items()
-                if quote is not None
-                and quote.freshness(fresh_within=fresh_within).state == "ready"
-                and isinstance(quote.price, (int, float)) and quote.price > 0
-            }
+        by_symbol = {str(row.get("symbol") or "").zfill(6): row for row in base_rows}
+        live = in_trading_window()
+        session = None
+        session_reader = getattr(self.quote_hub, "_display_session", None)
+        if not live and callable(session_reader):
+            session = session_reader()  # Existing local calendar projection; never fetches.
+            if not isinstance(session, QuoteDisplaySession):
+                raise RuntimeError("snapshot fallback session unavailable")
+        now = datetime.now(timezone.utc)
+        # Extra/mismatched payloads cannot inflate coverage, change the frozen
+        # universe identity, or substitute the old dynamic values of rejected rows.
+        found = {symbol: quote for symbol, quote in found.items()
+                 if symbol in requested and self._usable_fallback_quote(
+                     symbol, by_symbol[symbol], quote, now=now, live=live,
+                     fresh_within=fresh_within, session=session)}
         coverage = len(found) / len(symbols)
         if coverage < FALLBACK_MIN_COVERAGE:
             raise RuntimeError(
                 f"snapshot fallback coverage {coverage:.1%} < {FALLBACK_MIN_COVERAGE:.0%}"
             )
 
-        now = datetime.now(timezone.utc)
-        by_symbol = {str(row.get("symbol") or "").zfill(6): row for row in base_rows}
         rows = [
             self._fallback_row(by_symbol[symbol], found.get(symbol), now=now)
             for symbol in symbols
         ]
         breadth = compute_breadth(rows)
+        if not math.isfinite(breadth["total_amount"]):
+            raise ProviderError("fallback snapshot breadth amount is non-finite")
         self.snapshot = rows
         self.breadth = breadth
         self.last_success = now

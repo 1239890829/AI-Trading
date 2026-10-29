@@ -50,12 +50,16 @@ def _make(quotes: dict[str, _Quotes], *, scope: str = "main") -> PaperTradingEng
 
 
 def _reset() -> None:
+    from app.models.alert import AlertEvent, AlertRule
+    from app.models.notification_outbox import BuyPointConsumption
     from app.models.paper import PaperAccount, PaperOrder, PaperPosition
     from app.models.watchlist import Base
 
+    # Cold runs register the durable execution owner and its model dependencies.
+    Base.metadata.create_all(get_engine(), tables=[AlertRule.__table__, AlertEvent.__table__])
     Base.metadata.create_all(get_engine())
     with get_session_factory()() as db:
-        for model in (PaperAccount, PaperOrder, PaperPosition):
+        for model in (BuyPointConsumption, PaperAccount, PaperOrder, PaperPosition):
             db.query(model).delete()
         db.commit()
 

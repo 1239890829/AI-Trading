@@ -131,3 +131,47 @@ def test_shared_index_read_preserves_duplicate_rows_for_the_hub_identity_gate():
             await provider.aclose()
 
     asyncio.run(run())
+
+
+@pytest.mark.parametrize("method,symbol", [
+    ("get_quote", "600127"), ("get_quote", "sh600127"),
+    ("get_order_book", "600127"), ("get_indices", None),
+])
+def test_snapshot_header_cannot_relabel_another_security(method, symbol):
+    from app.data_providers.eastmoney import ProviderError
+
+    async def run():
+        provider = TencentProvider()
+        await provider._client.aclose()
+        provider._client = httpx.AsyncClient(transport=httpx.MockTransport(
+            lambda request: httpx.Response(200, content=(
+                f'v_sh600127="{raw("600519")}";'
+            ).encode("gbk"))))
+        try:
+            with pytest.raises(ProviderError, match="identity"):
+                call = getattr(provider, method)
+                await (call(symbol) if symbol is not None else call())
+        finally:
+            await provider.aclose()
+
+    asyncio.run(run())
+
+
+@pytest.mark.parametrize("method", ["get_quote", "get_order_book"])
+def test_single_security_snapshot_cannot_silently_choose_duplicate(method):
+    from app.data_providers.eastmoney import ProviderError
+
+    async def run():
+        provider = TencentProvider()
+        await provider._client.aclose()
+        provider._client = httpx.AsyncClient(transport=httpx.MockTransport(
+            lambda request: httpx.Response(200, content=(
+                f'v_sh600127="{raw("600127")}";v_sh600127="{raw("600127")}";'
+            ).encode("gbk"))))
+        try:
+            with pytest.raises(ProviderError, match="duplicate"):
+                await getattr(provider, method)("600127")
+        finally:
+            await provider.aclose()
+
+    asyncio.run(run())

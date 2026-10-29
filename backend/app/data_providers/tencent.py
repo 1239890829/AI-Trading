@@ -403,8 +403,15 @@ class TencentProvider:
             found = _ROW_RE.findall(resp.content.decode("gbk", errors="replace"))
             if not found:
                 raise ProviderError("tencent snapshot empty reply")
-            return [(prefix, code, fields) for prefix, code, raw in found
-                    if (fields := raw.split("~"))]
+            rows = []
+            for prefix, code, raw in found:
+                fields = raw.split("~")
+                # Validate before any caller-specific symbol normalization. A
+                # response header must not relabel another stock's quote/book.
+                if len(fields) < 3 or fields[2] != code:
+                    raise ProviderError("tencent snapshot payload identity mismatch")
+                rows.append((prefix, code, fields))
+            return rows
 
         rows = await self._snapshot_reads.read(key, load)
         owner_requested = set(key[1])
@@ -413,7 +420,12 @@ class TencentProvider:
                 if prefix + code in requested or prefix + code not in owner_requested]
 
     async def _snapshot(self, symbols: list[str]) -> dict[str, tuple[str, list[str]]]:
-        by_code = {prefix + code: (prefix, fields) for prefix, code, fields in await self._raw_snapshot(symbols)}
+        by_code = {}
+        for prefix, code, fields in await self._raw_snapshot(symbols):
+            identity = prefix + code
+            if identity in by_code:
+                raise ProviderError("tencent snapshot duplicate identity")
+            by_code[identity] = (prefix, fields)
         # key 用调用方传入的原始 symbol：个股（裸 6 位）与指数（sh000001 等带前缀）
         # 都能命中。旧实现 key 是响应里的裸代码，带前缀查询永远 miss——
         # 表现为"tencent snapshot no rows"假象而非"不支持"，2026-08-31 修复。

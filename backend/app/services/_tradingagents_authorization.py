@@ -42,6 +42,13 @@ REVIEWED_PACKET_OWNER_PAIRS = {"data_providers/tencent.py": frozenset({(
     # and rejects raw in both versions; normalization audit hashes change.
     "73af8b2ff111c04b57deda0dc3432c678815d0c2cef0c884f6f022ac51ea1af5",
     "1e87719aeddebba7ad4991917fa72c6b9110031fb59216246d3bcede3f857607",
+), (
+    # Reviewed raw-snapshot identity/duplicate rejection. The stored packet
+    # consumes cached primary quotes and the unchanged get_kline path. Same
+    # offline builder input retains selected facts and source-input identity;
+    # no earlier owner may skip the intervening exact forward edges.
+    "1e87719aeddebba7ad4991917fa72c6b9110031fb59216246d3bcede3f857607",
+    "2e780e88b511dfb0663e8720c80cd818f64886728354dfe88a7a83ecc03296c2",
 )}), "services/quote_hub.py": frozenset({(
     # Reviewed market admission fix and connection-local subscription metadata.
     # Cached get_quotes/present_quote AST is unchanged. The visible copy also
@@ -82,6 +89,13 @@ REVIEWED_PACKET_OWNER_PAIRS = {"data_providers/tencent.py": frozenset({(
     # No source, consumer, window, model or automatic dispatch is added.
     "b5ea26d92b7b7a900c3b00251d5be5c49143dfae4e593ca3e0475b9a88636790",
     "21014fb3ef5d2ab93cb5ece3492f24dc3623b2544e1b91ad4190030bd86953d4",
+), (
+    # Additive quote field provenance for explicit REST enrichment. Hub's
+    # primary cache remains unenriched. Real old/new Quote-builder replay
+    # changes the normalization audit hash, not selected snapshot facts; old
+    # packets, scopes, deadlines, model choices and recovery grants stay exact.
+    "21014fb3ef5d2ab93cb5ece3492f24dc3623b2544e1b91ad4190030bd86953d4",
+    "ae1b44b4e2adee051fd0aa903b208362c04db0e032d11032d5077396de24f1f6",
 )})}
 PIN_KEY = "ASHARE_TRADINGAGENTS_RESEARCH_AUTHORIZATION_DIGEST"
 PIN_LINE = re.compile(rb"(?im)^[ \t]*(?:export[ \t]+)?" + PIN_KEY.encode()

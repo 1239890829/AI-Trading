@@ -70,6 +70,18 @@ def test_plan_buys_observation_only_skipped():
     plan = plan_buys(items, cash=100_000.0)
     assert plan["plans"] == []
     assert plan["skipped"][0]["symbol"] == "600001"
+    assert plan["skipped"][0]["observation_only"] is True
+    assert plan["skipped"][0]["gate_reason"] == "r"
+    assert "仅观察" in plan["skipped"][0]["reason"]
+
+
+def test_plan_buys_observation_constraint_does_not_hide_a_gate_rejection():
+    item = {"symbol": "600001", "state": "blocked", "reason": "竞价接近涨停，禁买",
+            "observation_only": True, "open_price": 10.0}
+    plan = plan_buys([item], cash=100_000.0)
+    assert plan["plans"] == []
+    assert plan["skipped"][0]["state"] == "blocked"
+    assert plan["skipped"][0]["reason"] == item["reason"]
 
 
 def test_plan_buys_missing_price_rejected():
@@ -85,12 +97,17 @@ def test_plan_buys_missing_price_rejected():
 def _reset_paper_tables():
     from app.core.db import get_engine
     from app.models.paper import PaperAccount, PaperOrder, PaperPosition
+    from app.models.notification_outbox import BuyPointConsumption
+    from app.models.alert import AlertEvent, AlertRule
     from app.models.watchlist import Base
 
+    # Matching inspects durable ownership even when this fixture has no owner.
+    # Register its real table before create_all instead of borrowing an earlier import.
+    Base.metadata.create_all(get_engine(), tables=[AlertRule.__table__, AlertEvent.__table__])
     Base.metadata.create_all(get_engine())
     sf = get_session_factory()
     with sf() as db:
-        for m in (PaperAccount, PaperOrder, PaperPosition):
+        for m in (BuyPointConsumption, PaperAccount, PaperOrder, PaperPosition):
             db.query(m).delete()
         db.commit()
 
@@ -333,6 +350,301 @@ def test_run_morning_sells_yesterday_position(tmp_path, monkeypatch):
     assert summary["sold"][0]["status"] == "filled"
     assert runner.engine.positions_with_pnl({}) == []
     assert summary["bought"] == []
+
+
+@pytest.fixture
+def settlement_runner(tmp_path, monkeypatch):
+    """Real settlement/matching against a file DB and quotes owned by this test."""
+    from sqlalchemy import create_engine
+    from sqlalchemy.orm import sessionmaker
+    from app.models.paper import PaperAccount, PaperOrder, PaperPosition
+    from app.picks import shadow as shadow_mod
+
+    db_engine = create_engine(f"sqlite:///{tmp_path / 'shadow.db'}",
+                              connect_args={"check_same_thread": False})
+    for model in (PaperAccount, PaperOrder, PaperPosition):
+        model.__table__.create(db_engine)
+    sf = sessionmaker(bind=db_engine, expire_on_commit=False)
+    quotes, reads = {}, []
+
+    async def quote(symbol):
+        reads.append(symbol)
+        return quotes.get(symbol)
+
+    async def days():
+        return ["20260928", "20260929"]
+
+    engine = PaperTradingEngine(sf, quote, trading_days_fn=days, scope="shadow")
+    runner = ShadowRunner(engine, sf)
+    monkeypatch.setattr(shadow_mod, "_shadow_dir", lambda: tmp_path / "logs")
+    monkeypatch.setattr(shadow_mod, "beijing_now", lambda: NOW)
+    yield SimpleNamespace(runner=runner, sf=sf, quotes=quotes, reads=reads,
+                          hub=SimpleNamespace(provider=SimpleNamespace(get_quote=quote)),
+                          logs=tmp_path / "logs")
+    db_engine.dispose()
+
+
+def test_run_morning_settles_old_shadow_positions_before_reading_available(settlement_runner):
+    from app.models.paper import PaperAccount, PaperOrder, PaperPosition
+
+    env = settlement_runner
+    old_symbols = [f"60000{i}" for i in range(1, 6)]
+    for symbol in old_symbols:
+        env.quotes[symbol] = FIXED_QUOTE.model_copy(update={"symbol": symbol})
+    with env.sf() as db:
+        db.add(PaperAccount(scope="shadow", cash=100_000, initial_cash=107_000))
+        db.add(PaperAccount(scope="main", cash=50_000, initial_cash=51_000))
+        for symbol in old_symbols:
+            db.add(PaperPosition(scope="shadow", symbol=symbol, quantity=100,
+                                 frozen_today=100, cost_price=10, buy_date="20260922"))
+        for scope in ("main", "hunting_shadow"):
+            db.add(PaperPosition(scope=scope, symbol="600001", quantity=100,
+                                 frozen_today=100, cost_price=10, buy_date="20260922"))
+        db.add(PaperPosition(scope="shadow", symbol="600006", quantity=100,
+                             frozen_today=100, cost_price=10, buy_date="20260929"))
+        db.add(PaperPosition(scope="shadow", symbol="600007", quantity=100,
+                             frozen_today=100, cost_price=10, buy_date=""))
+        db.commit()
+    summary = asyncio.run(env.runner.run_morning(env.hub, _gate([])))
+    assert {row["symbol"] for row in summary["sold"]} == set(old_symbols)
+    assert all(row["status"] == "filled" for row in summary["sold"])
+    assert {row["symbol"] for row in summary["sell_failed"]} == {"600006", "600007"}
+    with env.sf() as db:
+        positions = {(row.scope, row.symbol): row for row in db.query(PaperPosition).all()}
+        assert set(positions) == {("main", "600001"), ("hunting_shadow", "600001"),
+                                 ("shadow", "600006"), ("shadow", "600007")}
+        assert all(row.quantity == row.frozen_today == 100 for row in positions.values())
+        assert db.query(PaperOrder).count() == 5
+        assert {row.scope for row in db.query(PaperOrder).all()} == {"shadow"}
+        assert db.query(PaperAccount).filter_by(scope="main").one().cash == 50_000
+
+
+def test_shadow_keeps_completed_sale_when_later_quote_fails(settlement_runner):
+    from app.models.paper import PaperOrder, PaperPosition
+
+    env = settlement_runner
+    env.quotes["600001"] = FIXED_QUOTE
+    with env.sf() as db:
+        for symbol in ("600001", "600002"):
+            db.add(PaperPosition(scope="shadow", symbol=symbol, quantity=100,
+                                 frozen_today=100, cost_price=10, buy_date="20260922"))
+        db.commit()
+
+    async def quote(symbol):
+        if symbol == "600002":
+            raise TimeoutError("quote unavailable")
+        return env.quotes.get(symbol)
+
+    hub = SimpleNamespace(provider=SimpleNamespace(get_quote=quote))
+    first = asyncio.run(env.runner.run_morning(hub, _gate([])))
+    assert [(row["symbol"], row["status"]) for row in first["sold"]] == [("600001", "filled")]
+    assert first["sell_failed"][0]["symbol"] == "600002"
+    assert "quote unavailable" in first["sell_failed"][0]["reason"]
+    second = asyncio.run(env.runner.run_morning(hub, _gate([])))
+    saved = json.loads((env.logs / f"{first['day']}.json").read_text())
+    assert saved["sold"] == first["sold"] == second["sold"]
+    with env.sf() as db:
+        assert db.query(PaperOrder).count() == 1
+        assert db.query(PaperPosition).one().symbol == "600002"
+
+
+@pytest.mark.parametrize("quote_state", ["missing", "limit_down"])
+def test_shadow_settlement_does_not_bypass_missing_quote_or_limit_down(settlement_runner, quote_state):
+    from app.models.paper import PaperPosition
+
+    env = settlement_runner
+    with env.sf() as db:
+        db.add(PaperPosition(scope="shadow", symbol="600001", quantity=100,
+                             frozen_today=100, cost_price=10, buy_date="20260922"))
+        db.commit()
+    if quote_state == "limit_down":
+        env.quotes["600001"] = FIXED_QUOTE.model_copy(update={"price": 9.0})
+    summary = asyncio.run(env.runner.run_morning(env.hub, _gate([])))
+    if quote_state == "missing":
+        assert summary["sold"] == []
+        assert summary["sell_failed"][0]["reason"] == "停牌或无行情"
+    else:
+        assert summary["sold"][0]["status"] == "rejected"
+        assert "跌停" in summary["sold"][0]["reason"]
+    with env.sf() as db:
+        position = db.query(PaperPosition).one()
+        assert position.quantity == 100 and position.frozen_today == 0
+
+
+def test_shadow_settlement_failure_does_not_submit_and_can_retry(settlement_runner, monkeypatch):
+    from unittest.mock import AsyncMock
+    from app.models.paper import PaperOrder, PaperPosition
+
+    env = settlement_runner
+    env.quotes["600001"] = FIXED_QUOTE
+    with env.sf() as db:
+        db.add(PaperPosition(scope="shadow", symbol="600001", quantity=100,
+                             frozen_today=100, cost_price=10, buy_date="20260922"))
+        db.commit()
+    settle = env.runner.engine.settle_t1
+    monkeypatch.setattr(env.runner.engine, "settle_t1", AsyncMock(side_effect=RuntimeError("test failure")))
+    summary = asyncio.run(env.runner.run_morning(env.hub, _gate([])))
+    assert summary["skipped"] == "t1_settlement_unavailable"
+    assert "RuntimeError" in summary["caveat"]
+    assert "executed_at" not in summary
+    assert env.reads == []
+    path = env.logs / f"{summary['day']}.json"
+    assert json.loads(path.read_text())["skipped_reason"] == "t1_settlement_unavailable"
+    with env.sf() as db:
+        assert db.query(PaperOrder).count() == 0
+        assert db.query(PaperPosition).one().frozen_today == 100
+    monkeypatch.setattr(env.runner.engine, "settle_t1", settle)
+    retried = asyncio.run(env.runner.run_morning(env.hub, _gate([])))
+    assert retried["sold"][0]["status"] == "filled"
+
+
+def test_shadow_observation_reason_survives_without_unused_open_quote(settlement_runner):
+    env = settlement_runner
+    gate = _gate([{"symbol": "600001", "state": "normal", "reason": "开盘溢价正常",
+                   "observation_only": True}])
+    summary = asyncio.run(env.runner.run_morning(env.hub, gate))
+    assert summary["bought"] == [] and summary["sold"] == []
+    assert env.reads == []
+    assert summary["skipped"][0]["gate_reason"] == "开盘溢价正常"
+    assert "仅观察" in summary["skipped"][0]["reason"]
+
+
+def test_later_empty_beat_keeps_real_sell_and_allows_new_buy(settlement_runner):
+    from app.models.paper import PaperOrder, PaperPosition
+
+    env = settlement_runner
+    env.quotes["600001"] = FIXED_QUOTE
+    env.quotes["600002"] = FIXED_QUOTE.model_copy(update={"symbol": "600002"})
+    with env.sf() as db:
+        db.add(PaperPosition(scope="shadow", symbol="600001", quantity=100,
+                             frozen_today=0, cost_price=10, buy_date="20260922"))
+        db.commit()
+    first = asyncio.run(env.runner.run_morning(env.hub, _gate([])))
+    assert first["sold"][0]["status"] == "filled"
+    second = asyncio.run(env.runner.run_morning(env.hub, _gate([])))
+    saved = json.loads((env.logs / f"{first['day']}.json").read_text())
+    assert len(saved["sold"]) == 1
+    assert saved["sold"][0]["status"] == "filled"
+    assert len(second["sold"]) == 1
+    with env.sf() as db:
+        assert db.query(PaperOrder).filter_by(side="sell").count() == 1
+    later = asyncio.run(env.runner.run_morning(env.hub, _gate([
+        {"symbol": "600002", "state": "normal", "reason": "开盘溢价正常"}])))
+    assert later["bought"][0]["status"] == "filled"
+    assert len(later["sold"]) == 1
+    with env.sf() as db:
+        assert db.query(PaperOrder).filter_by(side="sell").count() == 1
+        assert db.query(PaperOrder).filter_by(side="buy").count() == 1
+
+
+@pytest.mark.parametrize("failure", ["limit_down", "order_error"])
+def test_repeated_sell_failures_survive_success_and_empty_beats(settlement_runner, monkeypatch, failure):
+    from unittest.mock import AsyncMock
+    from app.models.paper import PaperOrder, PaperPosition
+
+    env = settlement_runner
+    env.quotes["600001"] = FIXED_QUOTE.model_copy(update={"price": 9 if failure == "limit_down" else 10})
+    with env.sf() as db:
+        db.add(PaperPosition(scope="shadow", symbol="600001", quantity=100,
+                             frozen_today=0, cost_price=10, buy_date="20260922"))
+        db.commit()
+    place_order = env.runner.engine.place_order
+    if failure == "order_error":
+        monkeypatch.setattr(env.runner.engine, "place_order", AsyncMock(side_effect=RuntimeError("isolated order failure")))
+    for _ in range(2):
+        asyncio.run(env.runner.run_morning(env.hub, _gate([])))
+    env.quotes["600001"] = FIXED_QUOTE
+    monkeypatch.setattr(env.runner.engine, "place_order", place_order)
+    asyncio.run(env.runner.run_morning(env.hub, _gate([])))
+    result = asyncio.run(env.runner.run_morning(env.hub, _gate([])))
+    saved = json.loads((env.logs / f"{result['day']}.json").read_text())
+    assert sum(row["status"] == "filled" for row in saved["sold"]) == 1
+    if failure == "limit_down":
+        assert sum(row["status"] == "rejected" and "跌停" in row["reason"] for row in saved["sold"]) == 2
+    else:
+        assert [row["reason"] for row in saved["sell_failed"]] == ["isolated order failure"] * 2
+    with env.sf() as db:
+        assert db.query(PaperOrder).filter_by(status="filled").count() == 1
+
+
+def test_settlement_failure_keeps_an_earlier_sell_receipt(settlement_runner, monkeypatch):
+    from unittest.mock import AsyncMock
+    from app.models.paper import PaperPosition
+
+    env = settlement_runner
+    env.quotes["600001"] = FIXED_QUOTE
+    with env.sf() as db:
+        db.add(PaperPosition(scope="shadow", symbol="600001", quantity=100,
+                             frozen_today=0, cost_price=10, buy_date="20260922"))
+        db.commit()
+    first = asyncio.run(env.runner.run_morning(env.hub, _gate([])))
+    path = env.logs / f"{first['day']}.json"
+    before = path.read_bytes()
+    monkeypatch.setattr(env.runner.engine, "settle_t1", AsyncMock(side_effect=RuntimeError("isolated settlement failure")))
+    failed = asyncio.run(env.runner.run_morning(env.hub, _gate([])))
+    assert failed["skipped"] == "t1_settlement_unavailable"
+    assert path.read_bytes() == before
+
+
+@pytest.mark.parametrize("original", ["{unreadable", json.dumps({"day": "2026-09-28", "sold": []}),
+    json.dumps({"day": "2026-09-29", "executed_at": NOW.isoformat(), "sold": "unknown"})])
+def test_shadow_preserves_unreadable_or_wrong_day_receipts(settlement_runner, original):
+    env = settlement_runner
+    env.logs.mkdir()
+    path = env.logs / "2026-09-29.json"
+    path.write_text(original)
+    with pytest.raises(ValueError, match="preserving original"):
+        asyncio.run(env.runner.run_morning(env.hub, _gate([])))
+    assert path.read_text() == original
+
+
+def test_shadow_replace_failure_does_not_truncate_previous_receipts(settlement_runner, monkeypatch):
+    from pathlib import Path
+
+    env = settlement_runner
+    env.logs.mkdir()
+    path = env.logs / "2026-09-29.json"
+    original = json.dumps({"day": "2026-09-29", "executed_at": NOW.isoformat(), "bought": [],
+                           "sold": [{"symbol": "600001", "status": "rejected", "reason": "原拒绝"}],
+                           "sell_failed": [], "skipped": []})
+    path.write_text(original)
+
+    def fail_replace(_source, _target):
+        raise OSError("isolated replace failure")
+
+    monkeypatch.setattr(Path, "replace", fail_replace)
+    with pytest.raises(OSError, match="isolated replace failure"):
+        asyncio.run(env.runner.run_morning(env.hub, _gate([])))
+    assert path.read_text() == original
+
+
+def test_nontrading_shadow_beat_never_settles_or_submits(settlement_runner, monkeypatch):
+    from unittest.mock import AsyncMock
+    from datetime import date
+    from app.picks import shadow as shadow_mod
+    from app.market import trade_calendar
+
+    env = settlement_runner
+    sunday = datetime(2026, 10, 4, 9, 30, tzinfo=BJ_TZ)
+    monkeypatch.setattr(shadow_mod, "beijing_now", lambda: sunday)
+    settle = AsyncMock(side_effect=AssertionError("nontrading settlement"))
+    monkeypatch.setattr(env.runner.engine, "settle_t1", settle)
+
+    async def beat():
+        stop = asyncio.Event()
+
+        async def days(_provider):
+            stop.set()
+            return [date(2026, 9, 30)]
+
+        monkeypatch.setattr(trade_calendar, "trading_days", days)
+        app = SimpleNamespace(state=SimpleNamespace(hub=env.hub, paper_shadow=env.runner))
+        await shadow_mod.shadow_loop(app, stop)
+
+    asyncio.run(beat())
+    settle.assert_not_awaited()
+    assert env.reads == []
+    assert json.loads((env.logs / "2026-10-04.json").read_text())["skipped"] == "not_trading_day"
 
 
 def test_collect_shadow_for_review(tmp_path, monkeypatch):

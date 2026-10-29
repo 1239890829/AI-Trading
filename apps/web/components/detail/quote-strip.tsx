@@ -13,6 +13,7 @@ import type { Quote, TradingStatusInfo } from "@/types/market";
 import {STREAM_STATUS_LABEL, type StreamStatus} from "@/hooks/use-quote-stream";
 import {ModalShell} from "@/components/ui/modal-shell";
 import {quoteQualityView} from "@/lib/quote-quality-view";
+import {quoteFieldSourceText} from "@/lib/quote-field-sources";
 
 const COMPACT_QUERY = "(max-width: 767px), (min-width: 1024px) and (max-height: 740px)";
 function compactSnapshot() {return typeof window.matchMedia === "function" && window.matchMedia(COMPACT_QUERY).matches;}
@@ -74,13 +75,13 @@ export function QuoteStrip({
     ["换手", quote.turnover_rate != null ? `${fmt(quote.turnover_rate)}%` : "--"],
     // PE/PB 兜底（2026-09-01）：后端已补全（fill_valuation），仍缺失说明数据源
     // 确实未提供——显示「暂无」并注明原因，不留白
-    ["PE", quote.pe_ttm != null ? fmt(quote.pe_ttm) : "暂无", quote.pe_ttm != null ? undefined : peMissing],
-    ["PB", quote.pb != null ? fmt(quote.pb) : "暂无", quote.pb != null ? undefined : "数据源未提供市净率"],
-    ["市值", quote.total_mktcap_yi != null ? `${fmt(quote.total_mktcap_yi)}亿` : "--"],
+    ["PE", quote.pe_ttm != null ? fmt(quote.pe_ttm) : "暂无", quote.pe_ttm != null ? quoteFieldSourceText(quote, "pe_ttm") : peMissing],
+    ["PB", quote.pb != null ? fmt(quote.pb) : "暂无", quote.pb != null ? quoteFieldSourceText(quote, "pb") : "数据源未提供市净率"],
+    ["市值", quote.total_mktcap_yi != null ? `${fmt(quote.total_mktcap_yi)}亿` : "--", quote.total_mktcap_yi != null ? quoteFieldSourceText(quote, "total_mktcap_yi") : undefined],
     [
       "涨停",
       isPositivePrice(quote.limit_up_price) ? fmt(quote.limit_up_price) : "--",
-      isPositivePrice(quote.limit_up_price) ? undefined : "数据源未提供有效涨停价",
+      isPositivePrice(quote.limit_up_price) ? quoteFieldSourceText(quote, "limit_up_price") : "数据源未提供有效涨停价",
     ],
   ];
 

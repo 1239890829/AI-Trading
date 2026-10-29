@@ -653,14 +653,16 @@ def test_fallback_rejects_stale_quotes_from_coverage_in_live_window(monkeypatch,
 def test_fallback_missing_quote_clears_dynamic_fields():
     now = datetime.now(timezone.utc)
     base = {**_base_rows(1)[0], "limit_up_price": 88.0, "limit_down_price": 72.0, "quality": "high",
+            "quality_reasons": ["old"], "received_at": "2026-10-08T02:30:01+00:00",
             "data_timestamp": "2026-10-08T02:30:00+00:00"}
     row = MarketSnapshotService._fallback_row(base, None, now=now)
     for key in ("price", "open", "high", "low", "prev_close", "change",
                 "change_pct", "volume", "amount", "turnover_rate", "ticktime",
-                "limit_up_price", "limit_down_price", "quality", "data_timestamp"):
+                "limit_up_price", "limit_down_price", "quality", "data_timestamp", "mktcap", "nmc", "received_at"):
         assert row[key] is None
     assert row["name"] == "S0"
     assert row["source"] == "quote_fallback:missing"
+    assert row["quality_reasons"] == ["missing_quote"] and row["collected_at"] == now.isoformat()
 
 
 def test_fallback_keeps_limit_price_current_price_source_time_and_quality_from_same_quote():
@@ -679,6 +681,21 @@ def test_fallback_keeps_limit_price_current_price_source_time_and_quality_from_s
     assert row["ticktime"] == quote.data_timestamp.isoformat()
     assert row["data_timestamp"] == row["ticktime"]
     assert row["quality"] == "medium" and row["source"] == f"{quote.source}_fallback"
+
+
+def test_fallback_clears_unavailable_caps_and_preserves_observation_and_collection_clocks():
+    now = datetime.fromisoformat("2026-10-29T12:10:00+08:00")
+    quote = _quote("600001")
+    quote.received_at = now - timedelta(seconds=30)
+    quote.data_timestamp = now - timedelta(minutes=10)
+    quote.total_mktcap_yi = quote.float_mktcap_yi = None
+    quote.quality_reasons = ["market_closed"]
+    row = MarketSnapshotService._fallback_row(_base_rows(1)[0], quote, now=now)
+    assert row["mktcap"] is None and row["nmc"] is None
+    assert row["received_at"] == quote.received_at.isoformat() and row["collected_at"] == now.isoformat()
+    assert row["quality_reasons"] == ["market_closed"]
+    row["quality_reasons"].append("local")
+    assert quote.quality_reasons == ["market_closed"]
 
 
 def test_rate_limit_run_invokes_fallback_but_preserves_primary_cooldown(monkeypatch):
@@ -1066,3 +1083,280 @@ def test_fallback_collection_cancellation_drains_without_publishing(monkeypatch)
 
     asyncio.run(scenario())
     assert drained == [True] and svc.versioned_snapshot() == before
+
+
+@pytest.mark.parametrize("live", [True, False])
+@pytest.mark.parametrize("bad", ["extra_key", "payload_symbol", "market", "source", "missing_clock",
+                                "naive_clock", "old_clock", "future_clock", "invalid", "stale", "price",
+                                "negative_volume", "negative_amount", "received_clock"])
+def test_fallback_counts_only_bound_valid_quotes_and_keeps_previous_version(monkeypatch, tmp_path, live, bad):
+    from app.schemas.market import Quality
+    from app.services import quote_enrich
+
+    svc = MarketSnapshotService(60, 300, tmp_path, quote_hub=object())
+    base = _base_rows(1)
+    svc.snapshot = base
+    svc.last_success = datetime.now(timezone.utc) - timedelta(seconds=181)
+    svc._snapshot_version = (svc.last_success, tuple(dict(row) for row in base))
+    before = svc.versioned_snapshot()
+    quote = _quote("600001")
+    found = {"600001": quote}
+    if bad == "extra_key":
+        found = {"600002": _quote("600002")}
+    elif bad == "payload_symbol":
+        quote.symbol = "600002"
+    elif bad == "market":
+        quote.market = "SZ"
+    elif bad == "source":
+        quote.source = ""
+    elif bad == "missing_clock":
+        quote.data_timestamp = None
+    elif bad == "naive_clock":
+        quote.data_timestamp = datetime.now(timezone.utc).replace(tzinfo=None)
+    elif bad == "old_clock":
+        quote.data_timestamp = datetime.now(timezone.utc) - (timedelta(seconds=181) if live else timedelta(days=1))
+    elif bad == "future_clock":
+        quote.data_timestamp = datetime.now(timezone.utc) + timedelta(days=1)
+    elif bad in {"invalid", "stale"}:
+        quote.quality = Quality(bad)
+    elif bad == "price":
+        quote.price = float("inf")  # Mutation is possible after schema construction.
+    elif bad == "negative_volume":
+        quote.volume = -1
+    elif bad == "negative_amount":
+        quote.amount = -1
+    elif bad == "received_clock":
+        quote.received_at = datetime.now(timezone.utc).replace(tzinfo=None)
+
+    async def quotes(_hub, symbols, **_kwargs):
+        assert symbols == ["600001"]
+        return found
+
+    monkeypatch.setattr(snapshot_service, "in_trading_window", lambda: live)
+    monkeypatch.setattr(quote_enrich, "fetch_quotes_batched", quotes)
+    monkeypatch.setattr(svc, "_maybe_save", lambda: pytest.fail("unusable coverage cannot save"))
+    with pytest.raises(RuntimeError, match="coverage"):
+        asyncio.run(svc.refresh_fallback())
+    assert svc.versioned_snapshot() == before
+    assert svc.last_snapshot_source is None
+    assert svc.stock_universe()["state"] == "unknown"
+
+
+@pytest.mark.parametrize("use_session", [True, False])
+def test_fallback_closed_retains_legal_paused_source_clock_without_renewing_it(monkeypatch, tmp_path, use_session):
+    from types import SimpleNamespace
+    from app.data_quality import validator
+    from app.schemas.market import Quality, QuoteDisplaySession
+    from app.services import quote_enrich
+
+    now = datetime.fromisoformat("2026-10-29T12:10:00+08:00").astimezone(timezone.utc)
+    class Clock(datetime):
+        @classmethod
+        def now(cls, tz=None):
+            return now.astimezone(tz) if tz else now.replace(tzinfo=None)
+    monkeypatch.setattr(snapshot_service, "datetime", Clock)
+    monkeypatch.setattr(validator, "utcnow", lambda: now)
+    stamp = now - timedelta(seconds=181)
+    session = QuoteDisplaySession(phase="closed", trade_date=now.astimezone(snapshot_service.BJ_TZ).date(),
+        as_of=now, trade_day_result=True, expected_source_date=stamp.astimezone(snapshot_service.BJ_TZ).date(),
+        expected_source_after=stamp - timedelta(seconds=1))
+    hub = SimpleNamespace(_display_session=lambda: session) if use_session else object()
+    svc = MarketSnapshotService(60, 300, tmp_path, quote_hub=hub)
+    svc.snapshot = _base_rows(1)
+    quote = _quote("600001")
+    quote.data_timestamp, quote.received_at = stamp, now
+    quote.quality, quote.quality_reasons = Quality.stale, ["market_closed"]
+
+    async def quotes(_hub, _symbols, **_kwargs):
+        return {quote.symbol: quote}
+
+    monkeypatch.setattr(snapshot_service, "in_trading_window", lambda: False)
+    monkeypatch.setattr(quote_enrich, "fetch_quotes_batched", quotes)
+    monkeypatch.setattr(svc, "_maybe_save", lambda: None)
+    assert asyncio.run(svc.refresh_fallback()) == 1
+    row = svc.snapshot[0]
+    assert row["data_timestamp"] == row["ticktime"] == stamp.isoformat()
+    assert row["quality"] == "stale" and row["source"] == "tencent_fallback"
+    assert svc.last_degraded_reason and svc.stock_universe()["state"] == "unknown"
+    assert quote.data_timestamp == stamp and quote.quality is Quality.stale
+
+
+@pytest.mark.parametrize("bad", ["tail", "source_day", "unknown_session", "reason"])
+def test_fallback_closed_requires_existing_session_proof_when_available(monkeypatch, tmp_path, bad):
+    from types import SimpleNamespace
+    from app.schemas.market import Quality, QuoteDisplaySession
+    from app.services import quote_enrich
+
+    now = datetime.now(timezone.utc)
+    session = QuoteDisplaySession(phase="closed", trade_date=now.astimezone(snapshot_service.BJ_TZ).date(),
+        as_of=now, trade_day_result=True, expected_source_date=now.astimezone(snapshot_service.BJ_TZ).date(),
+        expected_source_after=now - timedelta(seconds=10))
+    quote = _quote("600001")
+    quote.data_timestamp, quote.quality, quote.quality_reasons = now, Quality.stale, ["market_closed"]
+    if bad == "tail":
+        quote.data_timestamp = now - timedelta(seconds=11)
+    elif bad == "source_day":
+        session.expected_source_date -= timedelta(days=1)
+    elif bad == "unknown_session":
+        session.phase, session.trade_day_result = "unknown", None
+    elif bad == "reason":
+        quote.quality_reasons.append("refresh_timeout")
+    svc = MarketSnapshotService(60, 300, tmp_path, quote_hub=SimpleNamespace(_display_session=lambda: session))
+    svc.snapshot = _base_rows(1)
+
+    async def quotes(_hub, _symbols, **_kwargs):
+        return {quote.symbol: quote}
+
+    monkeypatch.setattr(snapshot_service, "in_trading_window", lambda: False)
+    monkeypatch.setattr(quote_enrich, "fetch_quotes_batched", quotes)
+    monkeypatch.setattr(svc, "_maybe_save", lambda: pytest.fail("unproved paused data cannot save"))
+    with pytest.raises(RuntimeError, match="coverage"):
+        asyncio.run(svc.refresh_fallback())
+
+
+def test_fallback_retains_existing_coverage_threshold_without_using_rejected_old_price(monkeypatch, tmp_path):
+    from app.services import quote_enrich
+
+    svc = MarketSnapshotService(60, 300, tmp_path, quote_hub=object())
+    base = _base_rows(10)
+    svc.snapshot = base
+    found = {row["symbol"]: _quote(row["symbol"]) for row in base}
+    found["600010"].market = "SZ"  # One rejected row leaves exactly the existing 90%.
+
+    async def quotes(_hub, symbols, **_kwargs):
+        assert len(symbols) == 10
+        return found
+
+    monkeypatch.setattr(snapshot_service, "in_trading_window", lambda: True)
+    monkeypatch.setattr(quote_enrich, "fetch_quotes_batched", quotes)
+    monkeypatch.setattr(svc, "_maybe_save", lambda: None)
+    assert asyncio.run(svc.refresh_fallback()) == 0.9
+    assert svc.last_snapshot_source == "quote_fallback" and svc.freshness(live=True).state == "degraded"
+    rejected = next(row for row in svc.snapshot if row["symbol"] == "600010")
+    assert rejected["market"] == "SH" and rejected["price"] is None
+    assert rejected["source"] == "quote_fallback:missing"
+    assert svc.stock_universe()["state"] == "unknown"
+
+
+@pytest.mark.parametrize("primary", [True, False])
+def test_snapshot_finite_rows_whose_total_overflows_cannot_publish(monkeypatch, tmp_path, primary):
+    from app.services import quote_enrich
+
+    svc = MarketSnapshotService(60, 300, tmp_path, quote_hub=object())
+    svc.snapshot = _base_rows(2)
+    svc.last_success = datetime.now(timezone.utc)
+    svc._snapshot_version = (svc.last_success, tuple(dict(row) for row in svc.snapshot))
+    before = svc.versioned_snapshot()
+
+    async def source(*, deadline):
+        return [{**row, "amount": 1e308} for row in svc.snapshot]
+
+    async def quotes(_hub, symbols, **_kwargs):
+        found = {symbol: _quote(symbol) for symbol in symbols}
+        for quote in found.values():
+            quote.amount = 1e308
+        return found
+
+    monkeypatch.setattr(sina_market, "fetch_market_snapshot", source)
+    monkeypatch.setattr(quote_enrich, "fetch_quotes_batched", quotes)
+    monkeypatch.setattr(snapshot_service, "in_trading_window", lambda: True)
+    monkeypatch.setattr(svc, "_maybe_save", lambda: pytest.fail("non-finite breadth must not save"))
+    with pytest.raises(ProviderError, match="breadth amount is non-finite"):
+        asyncio.run(svc.refresh() if primary else svc.refresh_fallback())
+    assert svc.versioned_snapshot() == before and svc.last_snapshot_source is None
+
+
+@pytest.mark.parametrize("live", [True, False])
+@pytest.mark.parametrize("gap", [300, 301])
+def test_fallback_source_after_own_receipt_uses_existing_skew_boundary(monkeypatch, tmp_path, live, gap):
+    from app.core import freshness
+    from app.data_quality import validator
+    from app.services import quote_enrich
+
+    now = datetime.fromisoformat("2026-10-29T14:00:00+08:00").astimezone(timezone.utc)
+    class Clock(datetime):
+        @classmethod
+        def now(cls, tz=None):
+            return now.astimezone(tz) if tz else now.replace(tzinfo=None)
+    monkeypatch.setattr(snapshot_service, "datetime", Clock)
+    monkeypatch.setattr(freshness, "datetime", Clock)
+    monkeypatch.setattr(validator, "utcnow", lambda: now)
+    monkeypatch.setattr(snapshot_service, "in_trading_window", lambda: live)
+    svc = MarketSnapshotService(60, 300, tmp_path, quote_hub=object())
+    svc.snapshot = _base_rows(1)
+    before = svc.versioned_snapshot()
+    quote = _quote("600001")
+    quote.data_timestamp = now - timedelta(seconds=60)
+    quote.received_at = quote.data_timestamp - timedelta(seconds=gap)
+
+    async def quotes(_hub, _symbols, **_kwargs):
+        return {quote.symbol: quote}
+
+    monkeypatch.setattr(quote_enrich, "fetch_quotes_batched", quotes)
+    monkeypatch.setattr(svc, "_maybe_save", lambda: None)
+    if gap > freshness.MAX_FUTURE_SKEW_SECONDS:
+        with pytest.raises(RuntimeError, match="coverage"):
+            asyncio.run(svc.refresh_fallback())
+        assert svc.versioned_snapshot() == before
+    else:
+        assert asyncio.run(svc.refresh_fallback()) == 1
+        assert svc.snapshot[0]["received_at"] == quote.received_at.isoformat()
+        assert svc.snapshot[0]["data_timestamp"] == quote.data_timestamp.isoformat()
+
+
+@pytest.mark.parametrize("moment", ["2026-10-29T09:20:00+08:00", "2026-10-29T09:26:00+08:00"])
+@pytest.mark.parametrize("bad", [None, "stale", "previous_day", "unknown_day"])
+def test_fallback_opening_auction_and_gap_use_real_session_and_fresh_source(monkeypatch, tmp_path, moment, bad):
+    from types import SimpleNamespace
+    from app.core import freshness
+    from app.data_quality import validator
+    from app.market import trade_calendar
+    from app.services import quote_enrich, quote_hub
+
+    now = datetime.fromisoformat(moment)
+    class Clock(datetime):
+        @classmethod
+        def now(cls, tz=None):
+            return now.astimezone(tz) if tz else now.replace(tzinfo=None)
+    days = [] if bad == "unknown_day" else [now.date()]
+    monkeypatch.setattr(snapshot_service, "datetime", Clock)
+    monkeypatch.setattr(freshness, "datetime", Clock)
+    monkeypatch.setattr(validator, "utcnow", lambda: now)
+    monkeypatch.setattr(trade_calendar, "known_trade_days", lambda: days)
+    monkeypatch.setattr(trade_calendar, "_load_persisted", lambda: days)
+    monkeypatch.setattr(quote_hub, "beijing_now", lambda: now)
+    monkeypatch.setattr(snapshot_service, "in_trading_window", lambda: trade_calendar.in_trading_window(now))
+    hub = SimpleNamespace(stale_after=60)
+    hub._display_session = lambda: quote_hub.QuoteHub._display_session(hub)
+    assert trade_calendar.in_trading_window(now) is False
+    session = hub._display_session()
+    expected = "auction" if now.minute == 20 else "pre_open_gap"
+    assert session.phase == ("unknown" if bad == "unknown_day" else expected)
+    assert session.expected_source_after is None
+    quote = Quote(symbol="600001", market="SH", source="tencent", price=10, prev_close=10,
+                  open=0, high=0, low=0, change=0, change_pct=0,
+                  data_timestamp=now - timedelta(seconds=60), received_at=now)
+    if bad == "stale":
+        quote.data_timestamp = now - timedelta(seconds=181)
+    elif bad == "previous_day":
+        quote.data_timestamp = now - timedelta(days=1)
+    before_quote = quote.model_dump()
+    svc = MarketSnapshotService(60, 300, tmp_path, quote_hub=hub)
+    svc.snapshot = _base_rows(1)
+    before = svc.versioned_snapshot()
+
+    async def quotes(_hub, symbols, **_kwargs):
+        assert symbols == ["600001"]
+        return {quote.symbol: quote}
+
+    monkeypatch.setattr(quote_enrich, "fetch_quotes_batched", quotes)
+    monkeypatch.setattr(svc, "_maybe_save", lambda: None)
+    if bad is not None:
+        with pytest.raises(RuntimeError, match="coverage"):
+            asyncio.run(svc.refresh_fallback())
+        assert svc.versioned_snapshot() == before
+    else:
+        assert asyncio.run(svc.refresh_fallback()) == 1
+        assert svc.snapshot[0]["data_timestamp"] == quote.data_timestamp.isoformat()
+        assert svc.last_degraded_reason and svc.stock_universe()["state"] == "unknown"
+    assert quote.model_dump() == before_quote

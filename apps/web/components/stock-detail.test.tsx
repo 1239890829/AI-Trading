@@ -403,10 +403,11 @@ describe("StockDetailPanel · 即时报价复用", () => {
   it("late valuation enrichment cannot mix older REST flow fields or provenance into the latest accepted quote", async () => {
     const enrichment = deferred<Quote>(); api.getQuote.mockReturnValueOnce(enrichment.promise);
     const feed = testQuoteFeed();
-    const first = {...audit, symbol: "600519", price: 20, volume: 100_000, amount: 2_000_000, data_timestamp: "2026-10-09T02:00:00Z"};
+    const first = {...audit, symbol: "600519", market: "SH", price: 20, volume: 100_000, amount: 2_000_000, data_timestamp: "2026-10-09T02:00:00Z"};
     feed.publish("600519", first);
     const view = render(<StockDetailPanel symbol="600519" quoteFeed={feed} />); await settle();
     const latest = {...first, price: 22, volume: 200_000, amount: 4_400_000, high: 23, data_timestamp: "2026-10-09T02:00:30Z", received_at: "2026-10-09T02:00:31Z"};
+    vi.setSystemTime(new Date("2026-10-09T02:00:45Z"));
     await act(async () => {feed.publish("600519", latest); enrichment.resolve({...first, price: 19, source: "tencent", received_at: "2026-10-09T02:00:45Z", pe_ttm: 32});});
     const metrics = view.getByRole("region", {name: "行情详细指标"});
     const metric = (name: string) => [...metrics.querySelectorAll(".quote-metric")].find(node => node.firstElementChild?.textContent === name)?.textContent;
@@ -414,6 +415,7 @@ describe("StockDetailPanel · 即时报价复用", () => {
     expect(metric("成交额")).toContain("440.00 万");
     expect(metric("最高")).toContain("23.00");
     expect(metric("PE")).toContain("32.00");
+    expect([...metrics.querySelectorAll(".quote-metric")].find(node => node.firstElementChild?.textContent === "PE")?.getAttribute("title")).toContain("腾讯");
     expect(view.container.querySelector(".quote-source")?.textContent).toContain("通达信");
     expect(view.getByTestId("kline-price").textContent).toBe("22");
   });
@@ -465,13 +467,13 @@ describe("StockDetailPanel · 估值和模拟持仓回包归属", () => {
     let first = true;
     api.getQuote.mockImplementation((symbol: string) => {
       if (symbol === "600519" && first) { first = false; return old.promise; }
-      return Promise.resolve({ ...audit, symbol, name: "当前标的", price: 220, pe_ttm: 32 });
+      return Promise.resolve({ ...audit, symbol, market: symbol === "600519" ? "SH" : "SZ", data_timestamp: "2026-10-09T02:00:00Z", name: "当前标的", price: 220, pe_ttm: 32 });
     });
     const view = render(<StockDetailPanel symbol="600519" chartTab="flow" />);
-    view.rerender(<StockDetailPanel symbol="000001" chartTab="flow" liveQuote={{ ...audit, symbol: "000001", price: 222 }} />);
+    view.rerender(<StockDetailPanel symbol="000001" chartTab="flow" liveQuote={{ ...audit, symbol: "000001", market: "SZ", data_timestamp: "2026-10-09T02:00:00Z", price: 222 }} />);
     await settle();
     if (returnToOriginal) {
-      view.rerender(<StockDetailPanel symbol="600519" chartTab="flow" liveQuote={{ ...audit, symbol: "600519", price: 222 }} />);
+      view.rerender(<StockDetailPanel symbol="600519" chartTab="flow" liveQuote={{ ...audit, symbol: "600519", market: "SH", data_timestamp: "2026-10-09T02:00:00Z", price: 222 }} />);
       await settle();
     }
     expect(view.getByText("当前标的")).toBeTruthy();
@@ -492,7 +494,7 @@ describe("StockDetailPanel · 估值和模拟持仓回包归属", () => {
     view.rerender(<StockDetailPanel symbol="000001" chartTab="flow" />);
     await act(async () => { old.reject(new Error("old failure")); });
     expect(view.queryByText("行情数据暂不可用（数据源失败，稍后自动重试）")).toBeNull();
-    await act(async () => { current.resolve({ ...audit, symbol: "000001", name: "当前标的", price: 222 }); });
+    await act(async () => { current.resolve({ ...audit, symbol: "000001", market: "SZ", name: "当前标的", price: 222 }); });
     expect(view.getByText("当前标的")).toBeTruthy();
   });
 
@@ -1715,7 +1717,7 @@ describe("StockDetailPanel · 已有指数观察驱动一次恢复校准", () =>
 
 
 describe("StockDetailPanel · 首次报价与真实恢复", () => {
-  const firstQuote = (symbol = "600519"): Quote => ({...audit, symbol, source: "tencent", name: "首报证券", price: 22, data_timestamp: "2026-10-09T02:00:30Z"});
+  const firstQuote = (symbol = "600519"): Quote => ({...audit, symbol, market: symbol === "600519" ? "SH" : "SZ", source: "tencent", name: "首报证券", price: 22, data_timestamp: "2026-10-09T02:00:30Z"});
 
   it("空首帧后REST成功不假称已有报价待恢复，收到真实live后缺帧仍提醒", async () => {
     const feed = testQuoteFeed(); feed.publish("600519", null);
@@ -1867,7 +1869,7 @@ describe("StockDetailPanel · 同owner请求复用", () => {
   const currentIndex = (): Quote => ({...audit, symbol: "000001", market: "SH", source: "tencent", price: 3000,
     prev_close: 2990, data_timestamp: "2026-10-09T02:00:00Z",
     display_session: {phase: "continuous", trade_date: "2026-10-09", as_of: "2026-10-09T10:00:00+08:00", trade_day_result: true}});
-  const completeQuote = (symbol = "600519"): Quote => ({...audit, symbol, source: "tencent", price: 22,
+  const completeQuote = (symbol = "600519"): Quote => ({...audit, symbol, market: symbol === "600519" ? "SH" : "SZ", source: "tencent", price: 22,
     data_timestamp: "2026-10-09T02:00:00Z", pe_ttm: -2, pb: 1, total_mktcap_yi: 100, float_mktcap_yi: 50});
   beforeEach(() => {
     vi.stubGlobal("fetch", vi.fn(() => {throw new Error("offline request ownership test: unexpected fetch");}));
@@ -2006,6 +2008,7 @@ describe("StockDetailPanel · 同owner请求复用", () => {
     api.getQuote.mockResolvedValue({...completeQuote(), pe_ttm: 32, pb: 3});
     const feed = testQuoteFeed(); feed.publish("600519", {...completeQuote(), pe_ttm: null, pb: null});
     const view = render(<StockDetailPanel symbol="600519" quoteFeed={feed}/>); await settle();
+    vi.setSystemTime(new Date("2026-10-09T02:00:02Z"));
     await act(async () => {feed.publish("600519", {...completeQuote(), price: 23, pe_ttm: NaN, pb: NaN,
       total_mktcap_yi: NaN, float_mktcap_yi: NaN, data_timestamp: "2026-10-09T02:00:01Z"});});
     const metrics = within(view.getByRole("region", {name: "行情详细指标"}));
@@ -2513,5 +2516,33 @@ describe("StockDetailPanel · 有界历史日K", () => {
     if(exit==="inactive") {view.rerender(<StockDetailPanel symbol="600519" chartTab="kline" active/>);await settle();}
     expect(view.getByTestId("kline-price").dataset.days).toBe("2026-10-07,2026-10-08,2026-10-09");
     expect(view.getByTestId("history-status").textContent).not.toContain("历史读取中");
+  });
+});
+
+
+describe("StockDetailPanel supplemental field lifecycle", () => {
+  const current: Quote = {...audit, symbol: "600519", market: "SH", source: "ths", price: 20, data_timestamp: "2026-10-09T02:00:00Z"};
+  it.each([
+    {market: "SZ"}, {symbol: "000001"}, {quality: "stale"}, {quality: "invalid"},
+    {data_timestamp: "2026-10-08T02:00:00Z"}, {data_timestamp: "2026-10-09T02:02:00Z"},
+  ] as Partial<Quote>[])("does not borrow PE from an incompatible slow REST row %j", async change => {
+    api.getQuote.mockResolvedValue({...current, source: "tencent", pe_ttm: 32, ...change});
+    const view = render(<StockDetailPanel symbol="600519" chartTab="flow" liveQuote={current}/>); await settle();
+    expect(view.container.querySelector(".quote-sheet")?.textContent).toContain("20.00");
+    expect(screen.getByText("PE").parentElement?.textContent).toContain("暂无");
+  });
+  it("keeps the field origin across new same-day native frames and drops it at the new source day", async () => {
+    const feed = testQuoteFeed(); feed.publish("600519", current);
+    api.getQuote.mockResolvedValue({...current, source: "tencent", pe_ttm: 32});
+    const view = render(<StockDetailPanel symbol="600519" chartTab="flow" quoteFeed={feed}/>); await settle();
+    expect(screen.getByText("PE").parentElement?.title).toContain("腾讯");
+    vi.setSystemTime(new Date("2026-10-09T02:00:31Z"));
+    await act(async () => {feed.publish("600519", {...current, price: 21, data_timestamp: "2026-10-09T02:00:30Z", received_at: "2026-10-09T02:00:31Z"});});
+    expect(screen.getByText("PE").parentElement?.title).toContain("腾讯");
+    expect(view.container.querySelector(".quote-source")?.textContent).toContain("同花顺");
+    vi.setSystemTime(new Date("2026-10-12T02:00:01Z"));
+    await act(async () => {feed.publish("600519", {...current, price: 22, data_timestamp: "2026-10-12T02:00:00Z", received_at: "2026-10-12T02:00:01Z"});});
+    expect(screen.getByText("PE").parentElement?.textContent).toContain("暂无");
+    expect(api.getQuote).toHaveBeenCalledTimes(1);
   });
 });

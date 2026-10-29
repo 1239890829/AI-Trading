@@ -44,6 +44,19 @@ KLINE_UNAFFECTED_AST = {
     OWNER_PATH: "e77c88547c80a6283b6518539c622313a2b0dd3ede868b47656bbed6f5f84249",
     "data_providers/eastmoney.py": "1a9096290bf2ef8e6ab74ba7339fea2f777181cde87491945664373d7aef51c9",
 }
+# The preceding K-line proofs retain their historical identity. Current source
+# evidence reviews only these two direct edges, without composing either chain.
+DATA_CHAIN_OWNER_PAIRS = {
+    "schemas/market.py": (KLINE_OWNER_PAIRS["schemas/market.py"][1],
+        "ae1b44b4e2adee051fd0aa903b208362c04db0e032d11032d5077396de24f1f6"),
+    OWNER_PATH: (KLINE_OWNER_PAIRS[OWNER_PATH][1],
+        "2e780e88b511dfb0663e8720c80cd818f64886728354dfe88a7a83ecc03296c2"),
+}
+DATA_CHAIN_UNAFFECTED_AST = {
+    "schemas/market.py": "49dffce8beff80999c2dff00c6b8a29d9cde097f785ea83df7a46f1bca8a9cd3",
+    OWNER_PATH: "15010ca01de5ca29cb0055c4b6a77bab91b79829affe2d6359436255b825d702",
+}
+CURRENT_OWNER_PAIRS = {**KLINE_OWNER_PAIRS, **DATA_CHAIN_OWNER_PAIRS}
 HUB_OWNER_PATH = "services/quote_hub.py"
 HUB_OWNER_REVIEW = "packet_builder.owner_sources." + HUB_OWNER_PATH
 LEGACY_HUB_OWNER = "5d970afc948ea70e8d5ef3cc6a1efe68d2a3df09d3044fc1c92c405c864db0b0"
@@ -145,9 +158,9 @@ def native_owner_env(env, tmp_path, monkeypatch):
 
     monkeypatch.setattr(driver.packet_builder, "method_identity", current_packet)
     identity = driver.method_identity()
-    assert identity["packet_builder"]["owner_sources"][OWNER_PATH] == KLINE_OWNER_PAIRS[OWNER_PATH][1]
+    assert identity["packet_builder"]["owner_sources"][OWNER_PATH] == DATA_CHAIN_OWNER_PAIRS[OWNER_PATH][1]
     old = deepcopy(identity)
-    old["packet_builder"]["owner_sources"][OWNER_PATH] = NEW_OWNER
+    old["packet_builder"]["owner_sources"][OWNER_PATH] = DATA_CHAIN_OWNER_PAIRS[OWNER_PATH][0]
     _replace_original(env, monkeypatch, old)
     env.driver, env.kwargs["driver"] = driver, driver
     env.current = identity
@@ -157,18 +170,24 @@ def native_owner_env(env, tmp_path, monkeypatch):
 
 
 @pytest.mark.parametrize("name,pair", KLINE_OWNER_PAIRS.items())
-def test_reviewed_kline_owner_proof_matches_current_whole_module_and_unaffected_ast(name, pair):
+def test_historical_kline_proof_is_retained_and_current_owner_has_its_own_evidence(name, pair):
     from app.services import tradingagents_driver as native
 
     path = Path(native.__file__).resolve().parents[1] / name
     raw = path.read_bytes()
-    assert hashlib.sha256(raw).hexdigest() == pair[1]
+    assert hashlib.sha256(raw).hexdigest() == CURRENT_OWNER_PAIRS[name][1]
     if name == OWNER_PATH:
-        assert owner.REVIEWED_PACKET_OWNER_PAIRS[name] == frozenset({(OLD_OWNER, NEW_OWNER), pair})
+        assert owner.REVIEWED_PACKET_OWNER_PAIRS[name] == frozenset({(OLD_OWNER, NEW_OWNER), pair,
+                                                                   DATA_CHAIN_OWNER_PAIRS[name]})
     elif name == "schemas/market.py":
-        assert owner.REVIEWED_PACKET_OWNER_PAIRS[name] == frozenset({pair})
+        assert owner.REVIEWED_PACKET_OWNER_PAIRS[name] == frozenset({pair, DATA_CHAIN_OWNER_PAIRS[name]})
     else:
         assert pair in owner.REVIEWED_PACKET_OWNER_PAIRS[name]
+    if name in DATA_CHAIN_OWNER_PAIRS:
+        # The original AST receipt does not claim today's raw-quote/schema
+        # methods are unchanged. Their applicable proof is exercised below.
+        assert DATA_CHAIN_OWNER_PAIRS[name][0] == pair[1]
+        return
     tree = ast.parse(raw)
     if name == "schemas/market.py":
         for node in tree.body:
@@ -189,6 +208,47 @@ def test_reviewed_kline_owner_proof_matches_current_whole_module_and_unaffected_
             if isinstance(node, ast.ClassDef) and node.name == "EastmoneyProvider":
                 node.body = [child for child in node.body if getattr(child, "name", None) != "_get_kline_with_fqt"]
     assert hashlib.sha256(ast.dump(tree, include_attributes=False).encode()).hexdigest() == KLINE_UNAFFECTED_AST[name]
+
+
+@pytest.mark.parametrize("name,pair", DATA_CHAIN_OWNER_PAIRS.items())
+def test_current_data_chain_owner_proof_matches_complete_blob_and_unaffected_ast(name, pair):
+    from app.services import tradingagents_driver as native
+
+    raw = (Path(native.__file__).resolve().parents[1] / name).read_bytes()
+    assert hashlib.sha256(raw).hexdigest() == pair[1]
+    assert pair in owner.REVIEWED_PACKET_OWNER_PAIRS[name]
+    tree = ast.parse(raw)
+    if name == "schemas/market.py":
+        tree.body = [node for node in tree.body if getattr(node, "name", None) != "QuoteFieldSource"
+            and not (isinstance(node, ast.Assign) and any(isinstance(target, ast.Name)
+                and target.id == "QuoteSupplementField" for target in node.targets))]
+        for node in tree.body:
+            if isinstance(node, ast.ImportFrom) and node.module == "pydantic":
+                node.names = [alias for alias in node.names if alias.name != "AwareDatetime"]
+            if isinstance(node, ast.ClassDef) and node.name == "Quote":
+                node.body = [child for child in node.body if not isinstance(child, ast.AnnAssign)
+                    or not isinstance(child.target, ast.Name) or child.target.id != "field_sources"]
+    else:
+        for node in tree.body:
+            if isinstance(node, ast.ClassDef) and node.name == "TencentProvider":
+                node.body = [child for child in node.body if getattr(child, "name", None)
+                    not in {"_raw_snapshot", "_snapshot"}]
+    assert hashlib.sha256(ast.dump(tree, include_attributes=False).encode()).hexdigest() == DATA_CHAIN_UNAFFECTED_AST[name]
+
+
+@pytest.mark.parametrize("name,pair", KLINE_OWNER_PAIRS.items())
+def test_historical_kline_owner_edges_remain_exact_and_reject_reverse(name, pair):
+    for before, after, allowed in [(pair[0], pair[1], True), (pair[1], pair[0], False)]:
+        old = {"packet_builder": {"owner_sources": {name: before}}}
+        new = {"packet_builder": {"owner_sources": {name: after}}}
+        original = deepcopy(old)
+        if allowed:
+            assert owner._reviewed_packet_owner_changes(old, new) == ["packet_builder.owner_sources." + name]
+            assert old == new
+        else:
+            with pytest.raises(owner.AuthorizationBlocked, match="unreviewed_packet_owner_changed"):
+                owner._reviewed_packet_owner_changes(old, new)
+            assert old == original
 
 
 def test_reviewed_hub_owner_proof_matches_current_whole_module_and_unaffected_ast():
@@ -821,21 +881,21 @@ def test_reviewed_bj_owner_changes_do_not_authorize_other_method_changes(native_
 
 
 @pytest.fixture
-def native_kline_owner_env(native_owner_env, monkeypatch):
+def native_packet_owner_env(native_owner_env, monkeypatch):
     env = native_owner_env
     current = env.driver.method_identity()
     old = deepcopy(current)
-    for name, pair in KLINE_OWNER_PAIRS.items():
+    for name, pair in CURRENT_OWNER_PAIRS.items():
         assert current["packet_builder"]["owner_sources"][name] == pair[1]
         old["packet_builder"]["owner_sources"][name] = pair[0]
     _replace_original(env, monkeypatch, old)
     env.current = current
-    env.kline_reviews = sorted("packet_builder.owner_sources." + name for name in KLINE_OWNER_PAIRS)
+    env.kline_reviews = sorted("packet_builder.owner_sources." + name for name in CURRENT_OWNER_PAIRS)
     return env
 
 
-def test_current_three_owner_kline_rebind_preserves_complete_original_scope(native_kline_owner_env, monkeypatch):
-    env = native_kline_owner_env
+def test_current_three_owner_packet_rebind_preserves_complete_original_scope(native_packet_owner_env, monkeypatch):
+    env = native_packet_owner_env
     assert owner.inspect_rebind(**env.kwargs)["changed_sources"] == env.kline_reviews
     for incomplete in ([], env.kline_reviews[:-1], [OWNER_REVIEW]):
         with pytest.raises(owner.AuthorizationBlocked, match="exact_source_review_required"):
@@ -862,14 +922,14 @@ def test_current_three_owner_kline_rebind_preserves_complete_original_scope(nati
     assert owner.inspect_rebind(**env.kwargs)["already_bound"] is True
 
 
-@pytest.mark.parametrize("name", KLINE_OWNER_PAIRS)
+@pytest.mark.parametrize("name", CURRENT_OWNER_PAIRS)
 @pytest.mark.parametrize("mutation", ["reverse", "future"])
-def test_current_kline_owner_edges_never_authorize_reverse_or_future(native_kline_owner_env, monkeypatch, name, mutation):
-    env = native_kline_owner_env
+def test_current_packet_owner_edges_never_authorize_reverse_or_future(native_packet_owner_env, monkeypatch, name, mutation):
+    env = native_packet_owner_env
     target = "f" * 64
     if mutation == "reverse":
         _replace_original(env, monkeypatch, env.current)
-        target = KLINE_OWNER_PAIRS[name][0]
+        target = CURRENT_OWNER_PAIRS[name][0]
     env.native.packet_overrides["packet"] = lambda packet: packet["owner_sources"].update({name: target})
     with pytest.raises(owner.AuthorizationBlocked, match="unreviewed_packet_owner_changed"):
         owner.inspect_rebind(**env.kwargs)
@@ -877,10 +937,11 @@ def test_current_kline_owner_edges_never_authorize_reverse_or_future(native_klin
     assert env.env_path.read_bytes() == env.env_before
 
 
-@pytest.mark.parametrize("name,earlier", [(OWNER_PATH, OLD_OWNER),
+@pytest.mark.parametrize("name,earlier", [(OWNER_PATH, OLD_OWNER), (OWNER_PATH, NEW_OWNER),
+    ("schemas/market.py", KLINE_OWNER_PAIRS["schemas/market.py"][0]),
     ("data_providers/eastmoney.py", BJ_OWNER_PAIRS["data_providers/eastmoney.py"][0])])
-def test_kline_owner_rebind_does_not_compose_historical_edges(native_kline_owner_env, monkeypatch, name, earlier):
-    env = native_kline_owner_env
+def test_packet_owner_rebind_does_not_compose_historical_edges(native_packet_owner_env, monkeypatch, name, earlier):
+    env = native_packet_owner_env
     original = deepcopy(env.auth["method_identity"])
     original["packet_builder"]["owner_sources"][name] = earlier
     _replace_original(env, monkeypatch, original)
@@ -888,9 +949,9 @@ def test_kline_owner_rebind_does_not_compose_historical_edges(native_kline_owner
         owner.inspect_rebind(**env.kwargs)
 
 
-@pytest.mark.parametrize("name", KLINE_OWNER_PAIRS)
-def test_kline_owner_apply_rechecks_actual_blob_before_cas(native_kline_owner_env, monkeypatch, tmp_path, name):
-    env, native = native_kline_owner_env, native_kline_owner_env.native.module
+@pytest.mark.parametrize("name", CURRENT_OWNER_PAIRS)
+def test_packet_owner_apply_rechecks_actual_blob_before_cas(native_packet_owner_env, monkeypatch, tmp_path, name):
+    env, native = native_packet_owner_env, native_packet_owner_env.native.module
     plan = owner.prepare_rebind(env.kline_reviews, **env.kwargs)
     original = Path(native.__file__).resolve().parents[1] / name
     changed = tmp_path / (original.name + ".unreviewed")
@@ -901,3 +962,36 @@ def test_kline_owner_apply_rechecks_actual_blob_before_cas(native_kline_owner_en
         owner.apply_plan(plan["plan_id"], **env.kwargs)
     assert (env.root / "authorization.json").read_bytes() == env.before
     assert env.env_path.read_bytes() == env.env_before
+
+
+def test_only_current_two_data_chain_owners_can_rebind_without_scope_or_history_changes(native_owner_env, monkeypatch):
+    env = native_owner_env
+    current = env.driver.method_identity()
+    old = deepcopy(current)
+    for name, pair in DATA_CHAIN_OWNER_PAIRS.items():
+        assert current["packet_builder"]["owner_sources"][name] == pair[1]
+        old["packet_builder"]["owner_sources"][name] = pair[0]
+    _replace_original(env, monkeypatch, old)
+    reviews = sorted("packet_builder.owner_sources." + name for name in DATA_CHAIN_OWNER_PAIRS)
+    assert owner.inspect_rebind(**env.kwargs)["changed_sources"] == reviews
+    for incomplete in ([], reviews[:1], reviews[1:]):
+        with pytest.raises(owner.AuthorizationBlocked, match="exact_source_review_required"):
+            owner.prepare_rebind(incomplete, **env.kwargs)
+    assert (env.root / "authorization.json").read_bytes() == env.before
+    assert env.env_path.read_bytes() == env.env_before
+    plan = owner.prepare_rebind(reviews, **env.kwargs)
+    result = owner.apply_plan(plan["plan_id"], **env.kwargs)
+    assert result["changed_sources"] == reviews
+    assert result["expiry_extended"] is False
+    assert result["unknowns_added"] == result["new_cooperative_grants"] == 0
+    expected = deepcopy(env.auth)
+    expected["method_identity"] = current
+    expected["unknown_usage_exception"]["method_sha256"] = research._digest(current)
+    installed = (env.root / "authorization.json").read_bytes()
+    assert json.loads(installed) == expected
+    _, span = owner._pin(env.env_before)
+    environment = env.env_path.read_bytes()
+    assert environment[:span[0]] == env.env_before[:span[0]]
+    assert environment[span[1]:] == env.env_before[span[1]:]
+    monkeypatch.setattr(settings, "tradingagents_research_authorization_digest", owner._pin(environment)[0])
+    assert owner.inspect_rebind(**env.kwargs)["already_bound"] is True

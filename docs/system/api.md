@@ -288,3 +288,7 @@ LLM 增强层**已实现但默认关闭**（`app/events/llm_aux.py` → `POST /a
 - `GET /api/agent/experiments` — 实验记录本（A 类变更 30 日后置验证，劣化自动回滚）
 - `GET /api/agent/meta-review` · `POST /api/agent/meta-review/run` 🔒 — 元评估周报
 - `GET /api/agent/kb/tree` · `GET /api/agent/kb/file?path=` — 知识库浏览（docs/kb）
+
+## 2026-10-29 报价补充字段来源
+
+Quote新增可选`field_sources`，键限`pe_ttm/pb/total_mktcap_yi/float_mktcap_yi/limit_up_price/limit_down_price`，值含真实`source/data_timestamp/received_at`。新后端默认为空对象；旧响应缺字段兼容。该对象只说明实际补入字段，原整行source/质量/源钟仍指主行情；缺来源不造腾讯身份。REST与撮合复用同一补价校验，WS主行情不因补价改变。详情慢读与即时帧合并时值和字段来源一起迁移，错股、错市场、跨日、过期估值不接纳，也不增加请求。

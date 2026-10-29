@@ -5,7 +5,7 @@ from datetime import date, datetime, timezone
 from enum import Enum
 from typing import Literal
 
-from pydantic import BaseModel, Field
+from pydantic import AwareDatetime, BaseModel, Field
 
 from app.core.freshness import DEFAULT_FRESH_WITHIN_SECONDS, Freshness
 
@@ -46,6 +46,20 @@ class QuoteDisplaySession(BaseModel):
     expected_source_after: datetime | None = None  # 暂停前应达到的源尾点下界，仅用于解释。
 
 
+QuoteSupplementField = Literal[
+    "pe_ttm", "pb", "total_mktcap_yi", "float_mktcap_yi",
+    "limit_up_price", "limit_down_price",
+]
+
+
+class QuoteFieldSource(BaseModel):
+    """Origin of a copied field; never a replacement for the primary quote clock."""
+
+    source: str
+    data_timestamp: AwareDatetime
+    received_at: AwareDatetime
+
+
 class Quote(AuditFields):
     symbol: str
     name: str | None = None
@@ -68,6 +82,7 @@ class Quote(AuditFields):
     limit_down_price: float | None = None
     data_timestamp: datetime | None = None
     display_session: QuoteDisplaySession | None = None
+    field_sources: dict[QuoteSupplementField, QuoteFieldSource] = Field(default_factory=dict)
 
     def model_post_init(self, __context) -> None:
         for f in ("price", "open", "high", "low", "prev_close", "change", "change_pct",

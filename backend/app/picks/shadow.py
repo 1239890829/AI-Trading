@@ -44,7 +44,11 @@ def plan_buys(gate_items: list[dict], cash: float) -> dict:
     buyable = [i for i in gate_items if i.get("state") == "normal" and not i.get("observation_only")]
     skipped = [
         {"symbol": i.get("symbol"), "name": i.get("name"),
-         "state": i.get("state"), "gap_pct": i.get("gap_pct"), "reason": i.get("reason")}
+         "state": i.get("state"), "gap_pct": i.get("gap_pct"),
+         "reason": "原精选仅观察，不生成影子买入计划"
+         if i.get("state") == "normal" and i.get("observation_only") else i.get("reason"),
+         **({"observation_only": True, "gate_reason": i.get("reason")}
+            if i.get("observation_only") else {})}
         for i in gate_items
         if i.get("state") != "normal" or i.get("observation_only")
     ]
@@ -97,6 +101,7 @@ SKIP_NOT_TRADING_DAY = "not_trading_day"
 SKIP_WINDOW_CLOSED = "window_not_open"
 SKIP_GATE_NOT_JUDGEABLE = "gate_not_judgeable"
 SKIP_NO_RUNNER = "runner_not_ready"
+SKIP_T1_SETTLEMENT_UNAVAILABLE = "t1_settlement_unavailable"
 
 
 def has_execution_evidence(record: dict) -> bool:
@@ -248,6 +253,18 @@ class ShadowRunner:
         if self.executed_today():
             return {"day": day, "skipped": "already_executed"}
 
+        # available is persisted quantity minus frozen_today. Settle this engine's
+        # scope before reading it; otherwise the zero-available branch below can
+        # prevent reaching place_order's own settlement forever.
+        try:
+            await self.engine.settle_t1()
+        except Exception as exc:
+            log.exception("shadow T+1 settlement failed; morning execution skipped")
+            caveat = f"影子 T+1 结算失败（{type(exc).__name__}），本拍未执行委托，等待重试"
+            persist_shadow_skip(day, SKIP_T1_SETTLEMENT_UNAVAILABLE, caveat=caveat,
+                                pick_date=gate.get("pick_date"), gate_summary=gate.get("summary"))
+            return {"day": day, "skipped": SKIP_T1_SETTLEMENT_UNAVAILABLE, "caveat": caveat}
+
         # 1) 卖出：可卖持仓全部市价卖出（机械轮动，持有一个交易日）
         sold: list[dict] = []
         sell_failed: list[dict] = []
@@ -266,13 +283,14 @@ class ShadowRunner:
             if p["available"] <= 0:
                 sell_failed.append({"symbol": p["symbol"], "reason": "T+1 未解冻（昨买今卖不可）"})
                 continue
-            q = await hub.provider.get_quote(p["symbol"])
-            if q is None or not q.price or q.price <= 0:
-                sell_failed.append({"symbol": p["symbol"], "reason": "停牌或无行情"})
-                continue
             try:
+                q = await hub.provider.get_quote(p["symbol"])
+                if q is None or not q.price or q.price <= 0:
+                    sell_failed.append({"symbol": p["symbol"], "reason": "停牌或无行情"})
+                    continue
                 o = await self.engine.place_order(p["symbol"], "sell", q.price, p["available"])
                 sold.append({"symbol": p["symbol"], "qty": p["available"],
+                             "order_id": o.id,
                              "status": o.status, "filled_price": o.filled_price,
                              "reason": o.reason})
             except Exception as exc:  # noqa: BLE001
@@ -288,6 +306,7 @@ class ShadowRunner:
             try:
                 o = await self.engine.place_order(pl["symbol"], "buy", pl["price"], pl["qty"])
                 bought.append({"symbol": pl["symbol"], "name": pl.get("name"),
+                               "order_id": o.id,
                                "qty": pl["qty"], "price": pl["price"],
                                "status": o.status, "filled_price": o.filled_price,
                                "reason": o.reason})
@@ -315,7 +334,7 @@ class ShadowRunner:
         out: dict[str, float] = {}
         for it in gate.get("items") or []:
             sym = it.get("symbol")
-            if not sym or it.get("state") != "normal":
+            if not sym or it.get("state") != "normal" or it.get("observation_only"):
                 continue
             try:
                 q = await hub.provider.get_quote(sym)
@@ -329,7 +348,33 @@ class ShadowRunner:
         d = _shadow_dir()
         d.mkdir(parents=True, exist_ok=True)
         p = d / f"{summary['day']}.json"
-        p.write_text(json.dumps(summary, ensure_ascii=False, indent=1), encoding="utf-8")
+        existing = load_execution_log(summary["day"])
+        if p.exists() and not isinstance(existing, dict):
+            raise ValueError("existing shadow execution log is unreadable; preserving original")
+        if isinstance(existing, dict) and existing.get("day") != summary["day"]:
+            raise ValueError("existing shadow execution day is mismatched; preserving original")
+        # A sell-only beat does not complete the buy evaluation for the day.
+        # Keep its real order/error receipts when a later beat is empty, without
+        # changing the original retry or executed_today rule.
+        preserve = isinstance(existing, dict) and has_execution_evidence(existing)
+        for field in ("sold", "sell_failed", "bought"):
+            rows = summary[field]
+            for row in rows:
+                row.setdefault("recorded_at", summary["executed_at"])
+            if preserve:
+                previous = existing.get(field, [])
+                if not isinstance(previous, list):
+                    raise ValueError(f"existing shadow {field} is invalid; preserving original")
+                known = {(row.get("order_id"), row.get("status")) for row in previous
+                         if isinstance(row, dict) and type(row.get("order_id")) is int}
+                rows = [row for row in rows if type(row.get("order_id")) is not int
+                        or (row["order_id"], row.get("status")) not in known]
+                summary[field] = [*previous, *rows]
+        if preserve:
+            summary["first_executed_at"] = existing.get("first_executed_at") or existing.get("executed_at")
+        temporary = p.with_suffix(".json.tmp")
+        temporary.write_text(json.dumps(summary, ensure_ascii=False, indent=1), encoding="utf-8")
+        temporary.replace(p)
         log.info("[SHADOW] executed: bought=%d skipped=%d sold=%d → %s",
                  len(summary["bought"]), len(summary["skipped"]),
                  len(summary["sold"]), p)
@@ -461,6 +506,8 @@ async def shadow_loop(app, stop: asyncio.Event) -> None:
                             summary = await runner.run_morning(app.state.hub, gate)
                             if summary.get("skipped") == "already_executed":
                                 log.info("[SHADOW] already executed today")
+                            elif summary.get("skipped") == SKIP_T1_SETTLEMENT_UNAVAILABLE:
+                                log.warning("[SHADOW] %s", summary["caveat"])
                             else:
                                 log.warning("[SHADOW] morning run: bought=%d skipped=%d sold=%d",
                                             len(summary.get("bought") or []),

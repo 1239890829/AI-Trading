@@ -15,7 +15,16 @@
 from __future__ import annotations
 
 import logging
+import math
+from copy import deepcopy
+from datetime import datetime
 from typing import Any
+
+from app.core.bjtime import BJ_TZ, beijing_now
+from app.core.freshness import DEFAULT_FRESH_WITHIN_SECONDS, MAX_FUTURE_SKEW_SECONDS
+from app.data_quality.validator import validate_quote
+from app.market.trade_calendar import in_trading_window
+from app.schemas.market import Quality, Quote, QuoteFieldSource
 
 log = logging.getLogger(__name__)
 
@@ -78,27 +87,120 @@ async def fetch_quotes_list(hub, symbols: list[str], *, prefer_cache: bool = Fal
     return list(found.values())
 
 
+def _identity(q) -> tuple[str, str] | None:
+    symbol, market = q.symbol.lower(), q.market
+    if market not in {"SH", "SZ", "BJ"}:
+        return None
+    if len(symbol) == 8 and symbol[:2] in {"sh", "sz", "bj"}:
+        if symbol[:2].upper() != market:
+            return None
+        symbol = symbol[2:]
+    return (symbol, market) if len(symbol) == 6 and symbol.isdigit() else None
+
+
+def _source_clock(q) -> datetime | None:
+    stamp = q.data_timestamp
+    # No received_at fallback: reception does not prove a field's source day.
+    if not isinstance(stamp, datetime) or stamp.tzinfo is None or stamp.utcoffset() is None:
+        return None
+    return stamp.astimezone(BJ_TZ)
+
+
+def _finite(value, *, positive: bool = False) -> bool:
+    return (isinstance(value, (int, float)) and not isinstance(value, bool)
+            and math.isfinite(value) and (value > 0 if positive else value != 0))
+
+
+def _supplement_rejection(q, tq, now: datetime) -> str | None:
+    if not isinstance(tq, Quote) or tq.source != "tencent":
+        return "source_identity_unknown"
+    if _identity(q) is None or _identity(q) != _identity(tq):
+        return "security_identity_mismatch"
+    if (not isinstance(tq.received_at, datetime) or tq.received_at.tzinfo is None
+            or tq.received_at.utcoffset() is None or tq.received_at > now):
+        return "received_clock_unknown"
+    if tq.quality != Quality.high or set(tq.quality_reasons) - {"off_session"}:
+        return "source_quality_untrusted"
+    primary_time, source_time = _source_clock(q), _source_clock(tq)
+    if primary_time is None or source_time is None:
+        return "source_clock_unknown"
+    if primary_time > now or source_time > now:
+        return "source_clock_future"
+    if (source_time - tq.received_at).total_seconds() > MAX_FUTURE_SKEW_SECONDS:
+        return "source_receipt_clock_mismatch"
+    if primary_time.date() != source_time.date() or source_time.date() != now.date():
+        return "source_day_mismatch"
+    # Parse-only providers default to high. Validate a copy so their original
+    # verdict and the primary fact are never rewritten by this supplement.
+    checked = tq.model_copy(deep=True, update={"symbol": _identity(tq)[0]})
+    validate_quote(checked, live=in_trading_window(now))
+    if checked.quality != Quality.high or not _finite(tq.price, positive=True):
+        return "source_values_untrusted"
+    return None
+
+
+def _record_source(q, tq, field: str) -> None:
+    # Route callers may hold a shallow model_copy of a shared Hub row.
+    q.field_sources = deepcopy(q.field_sources)
+    q.field_sources[field] = QuoteFieldSource(source=tq.source,
+        data_timestamp=tq.data_timestamp, received_at=tq.received_at)
+
+
 def _apply_limit_prices(q, tq):
-    """涨跌停价字段映射（唯一实现；两个入口共用，避免口径漂移）。"""
-    q.limit_up_price = q.limit_up_price if q.limit_up_price is not None else tq.limit_up_price
-    q.limit_down_price = q.limit_down_price if q.limit_down_price is not None else tq.limit_down_price
+    """Only same-day finite source limits; no calculated limit percentages."""
+    up, down = tq.limit_up_price, tq.limit_down_price
+    valid_up, valid_down = _finite(up, positive=True), _finite(down, positive=True)
+    if ((valid_up and tq.price > up) or (valid_down and tq.price < down)
+            or (valid_up and valid_down and down >= up)):
+        log.warning("tencent limit supplement rejected %s: inconsistent_source_limits", q.symbol)
+        return
+    next_up = q.limit_up_price if q.limit_up_price is not None else (up if valid_up else None)
+    next_down = q.limit_down_price if q.limit_down_price is not None else (down if valid_down else None)
+    if (_finite(next_up, positive=True) and _finite(next_down, positive=True)
+            and next_down >= next_up):
+        log.warning("tencent limit supplement rejected %s: inconsistent_primary_limits", q.symbol)
+        return
+    if (not _finite(q.price, positive=True)
+            or (_finite(next_up, positive=True) and q.price > next_up)
+            or (_finite(next_down, positive=True) and q.price < next_down)):
+        log.warning("tencent limit supplement rejected %s: primary_price_outside_limits", q.symbol)
+        return
+    if q.limit_up_price is None and valid_up:
+        _record_source(q, tq, "limit_up_price")
+        q.limit_up_price = up
+    if q.limit_down_price is None and valid_down:
+        _record_source(q, tq, "limit_down_price")
+        q.limit_down_price = down
 
 
 def _apply_valuation(q, tq):
-    """估值/市值字段映射（唯一实现）。"""
-    q.pe_ttm = q.pe_ttm if q.pe_ttm is not None else tq.pe_ttm
-    q.pb = q.pb if q.pb is not None else tq.pb
-    q.total_mktcap_yi = q.total_mktcap_yi if q.total_mktcap_yi is not None else tq.total_mktcap_yi
-    q.float_mktcap_yi = q.float_mktcap_yi if q.float_mktcap_yi is not None else tq.float_mktcap_yi
+    """Price-dependent ratios/caps cannot borrow a different observation window."""
+    source_time, primary_time = _source_clock(tq), _source_clock(q)
+    if abs((source_time - primary_time).total_seconds()) > DEFAULT_FRESH_WITHIN_SECONDS:
+        log.warning("tencent valuation supplement rejected %s: source_window_mismatch", q.symbol)
+        return
+    # Negative PE/PB can be a real loss/negative-equity fact. Never turn it into
+    # zero or a positive ratio; market capitalisation, unlike ratios, is positive.
+    for field in ("pe_ttm", "pb", "total_mktcap_yi", "float_mktcap_yi"):
+        value = getattr(tq, field)
+        if (getattr(q, field) is None
+                and _finite(value, positive=field.endswith("mktcap_yi"))):
+            _record_source(q, tq, field)
+            setattr(q, field, value)
 
 
 async def _tencent_snapshot(provider, q):
-    """取一次腾讯快照（补全失败一律返回 None——尽力而为，不抛）。"""
+    """Read once and fail closed before copying any supplementary field."""
     tencent = _tencent_of(provider)
     if tencent is None:
         return None
     try:
-        return await tencent.get_quote(q.symbol)
+        tq = await tencent.get_quote(q.symbol)
+        reason = _supplement_rejection(q, tq, beijing_now())
+        if reason is not None:
+            log.warning("tencent quote supplement rejected %s: %s", q.symbol, reason)
+            return None
+        return tq
     except Exception as exc:  # noqa: BLE001  补全是尽力而为
         log.warning("tencent 补全失败 %s: %s", q.symbol, exc)
         return None
