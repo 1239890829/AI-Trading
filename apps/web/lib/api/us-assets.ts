@@ -9,7 +9,7 @@ export interface UsInstrument {
 }
 export interface UsSearchCandidate {
   symbol: string; source_symbol: string; market: "US"; name: string;
-  source_kind: string; security_type?: "stock" | "etf"; source: "tencent";
+  source_kind: string; security_type: "stock" | "etf" | null; source: "tencent";
 }
 export interface UsSearchResult {
   query: string; asset_type: "us_equity"; state: "ready" | "partial" | "blocked";

@@ -15,7 +15,7 @@
 | GET `/api/agent/research/company-relations/{symbol}?event_id=&version_id=&observation_id=` | 普通配对读取 | 只读精确已存Decisions结果，无模型/取源/写副作用 |
 | POST `/api/agent/tasks` type=`company_relation_research` | 原维护任务能力 | 参数严格symbol与三个原版本ID；未验证窄研究，不改资格 |
 
-手工基金记录返回basis=manual_not_broker_verified，份额/同币种总成本成对；缺NAV不拿成本冒充市场价。US identity保留`us_equity:US:{source_symbol}:USD`，venue仅来源已核OQ/N/AM、类股不拆；GP/GP-ETF推导stock/etf，美股只允许自选，份额和成本输入拒绝。错误保留AppError和local_read_capacity_exceeded分层。所有新router均挂现有鉴权；新增普通能力精确登记，未登记路径仍默认维护。
+手工基金记录返回basis=manual_not_broker_verified，份额/同币种总成本成对；缺NAV不拿成本冒充市场价。US identity保留`us_equity:US:{source_symbol}:USD`，venue仅来源已核OQ/N/AM、类股不拆；仅标准quote的GP/GP-ETF推导stock/etf；搜索hint的GP不确认类别，UsSearchCandidate.security_type为null并保留source_kind，拼音列不参与身份匹配。候选仍核US/来源/白名单后缀/代码形状/名称，点选quote才确立币种与类别；美股只允许自选，份额和成本输入拒绝。错误保留AppError和local_read_capacity_exceeded分层。所有新router均挂现有鉴权；新增普通能力精确登记，未登记路径仍默认维护。
 
 基金snapshot的`public_profile`逐字段带source/source_url及可核源时点；无发布时间就为null。只向terms补来源中非空的缺失值，显式代码/币种冲突隔离，原NAV、费率、披露与旧记录不被公开页覆盖。`reference.scope=reported_top_holdings_reference`保留新浪前季前十重仓警告、nav_pct/nav2_pct两口径及日期/缺点；`estimated_fund_nav`、`estimated_fund_percent`为空，不能当整基金估值。原`estimate.state`继续不可用。
 

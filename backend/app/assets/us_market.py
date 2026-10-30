@@ -114,6 +114,11 @@ def observe_quote(quote: UsRegularQuote, at: datetime) -> UsRegularQuote:
 
 def parse_quote(body: bytes, requested: str, evidence: AssetEvidence) -> tuple[UsInstrument, UsRegularQuote]:
     ticker, canonical = _identity(requested)
+    return _parse_quote(body, ticker, evidence, canonical=canonical)
+
+
+def _parse_quote(body: bytes, ticker: str, evidence: AssetEvidence, *, canonical: str | None = None):
+    """Use only a ticker already validated by _identity; no caller venue in shared reads."""
     header = "us" + ticker.replace(".", "__")
     try:
         text = body.decode("gb18030")
@@ -170,7 +175,10 @@ def parse_search(body: bytes, query: str, evidence: AssetEvidence, limit: int = 
     items, issues, seen = [], set(), set()
     for line in lines:
         row = line.split("~")
-        if len(row) != 5 or row[0] != "us" or row[3] != "pg" or row[4] not in US_SECURITY_TYPES:
+        # Column four is the source pinyin hint (or "*"), not an identity
+        # discriminator. A hint's GP also includes ETFs; only quote field 56
+        # establishes stock/ETF type after the candidate is selected.
+        if len(row) != 5 or row[0] != "us" or row[4] not in US_SECURITY_TYPES:
             issues.add("unsupported_source_identity")
             continue
         code = row[1].upper()
@@ -179,8 +187,7 @@ def parse_search(body: bytes, query: str, evidence: AssetEvidence, limit: int = 
             issues.add("invalid_or_duplicate_source_identity")
             continue
         seen.add(code)
-        items.append(UsSearchCandidate(symbol=match[1], source_symbol=code, name=row[2], source_kind=row[4],
-                                      security_type=US_SECURITY_TYPES[row[4]]))
+        items.append(UsSearchCandidate(symbol=match[1], source_symbol=code, name=row[2], source_kind=row[4]))
     if len(items) > limit:
         issues.add("source_results_truncated")
     return UsSearchResult(query=query, state="partial" if issues else "ready", items=items[:limit],
@@ -343,8 +350,10 @@ class UsMarketService:
         request = "us" + ticker.replace(".", "__")
         # A shared raw quote may serve a bare ticker and its exact canonical
         # alias; identity validation belongs to each caller after that read.
+        # Retain class tickers such as BRK.B without reparsing them as a bare
+        # public input or binding this shared owner to the first caller's venue.
         instrument, quote = await self._raw(QUOTE_URL, {"q": request}, 15,
-            lambda content, receipt: parse_quote(content, ticker, receipt))
+            lambda content, receipt: _parse_quote(content, ticker, receipt))
         _, canonical = _identity(code)
         if canonical is not None and instrument.source_symbol != canonical:
             raise UsSourceError("美股来源证券身份不一致", code="us_identity_mismatch")

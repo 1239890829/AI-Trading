@@ -735,6 +735,8 @@ qfq是前复权。固定stockstats 0.6.9实际MFI为0–1，原上游80/20描述
 | [腾讯官方AAPL页](https://gu.qq.com/usAAPL/gp)及其公开脚本、`qt.gtimg.cn/?q=usAAPL,usNVDA` | GB编码标准quote，73字段；canonical AAPL.OQ/NVDA.OQ、币种USD及纽约源钟 | 搜索/点选身份、标准报价、原涨跌与量股/额美元；feed延迟未知，不称全市场实时。canonical只接原站映射OQ/N/AM |
 | 腾讯`smartbox.gtimg.cn/s3/?t=us&q=AAPL` | 原始source-only候选aapl.oq及中文源名，无币种 | 候选不造Instrument；quote确认后才保存US自选，不借A股名称或账户 |
 | 腾讯`appstock/app/kline/kline?param=usAAPL.OQ,day,,,120,` | code0，120根原始day；qfq另有不同历史值，不能混入 | 固定原canonical、`price_basis=none`，row为date/open/close/high/low/volume_shares；历史失败局部处理 |
+| 真实SPY搜索hint（后续实页反例） | 同源605B/10行；第四列bp500zsetfspdr或*，不是固定pg；SPY hint为GP而quote为GP-ETF | 拼音不作身份，保留US/代码/venue/source_kind/名称硬校验；候选类别unknown，实际quote后才确认股票/ETF与USD，不重抓已保存回包 |
+| 搜索修补后的真实service补核SPY/BRK.B/F | 三个完整来源代码均返回USD报价及各120根raw日K；单字符F源搜索返回10个原候选、类别保留未知 | 覆盖ETF、点号类股、单字母股票的真实owner路径；不只测独立parser、不外推全市场稳定率；BRK/F的16:04:51仍是时段待核 |
 | 新身份正控SPY/BRK.B/BABA | SPY.AM/GP-ETF、BRK.B.N/GP、BABA.N/GP；后两者源钟16:04:51 | source字段区分stock/etf；窗外合法报价`session_unverified`，不叫盘后。BABA同日末daily close与quote相同只证明本次交叉事实，不外推未来时段 |
 | 腾讯US分钟 | 两种已核代码均缺有效日期/完整序列，只有空或收盘哨点 | 当前分钟不可用，不以一条收盘点绘分时；独立盘前/盘后/夜盘缺口不抹去标准quote/day |
 | Yahoo chart | 实际429；官方help也未正常取得 | 停止该方法，无换域、Cookie、代理或header重试；yfinance代码许可不授予Yahoo数据再分发权 |
