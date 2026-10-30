@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import asyncio
+import threading
 from collections import Counter
 from datetime import datetime, timedelta, timezone
 from types import SimpleNamespace as NS
@@ -303,7 +304,7 @@ def test_bad_backup_falls_through_existing_order_to_next_trusted_source(bad_rows
 
 
 @pytest.mark.parametrize("current_age", [2, 20])
-def test_cancelling_recovery_preserves_normal_primary_progress_and_rejection(current_age):
+def test_cancelling_recovery_preserves_normal_primary_progress_and_rejection(current_age, monkeypatch):
     async def check():
         entered, cancelled = asyncio.Event(), []
         async def hung(method, symbols):
@@ -312,8 +313,8 @@ def test_cancelling_recovery_preserves_normal_primary_progress_and_rejection(cur
                 await asyncio.Event().wait()
             finally:
                 cancelled.append(True)
-        hub, _, _ = hub_for([quote(age=current_age + 1), quote("600002", price=10.2)], hung,
-                            current_age=current_age)
+        hub, primary, backup = hub_for([quote(age=current_age + 1), quote("600002", price=10.2)], hung,
+                                      current_age=current_age)
         before = hub.quotes["600105"].model_dump()
         # Regressions require a previous accepted observation in production.
         # Keep that completed round distinct from this still-in-flight recovery.
@@ -322,30 +323,94 @@ def test_cancelling_recovery_preserves_normal_primary_progress_and_rejection(cur
         hub._domains["quotes"].succeeded = True
         hub._domains["quotes"].generation = 1
         await hub._refresh_watchlist()  # Membership of the prior completed round.
+        lookup_entered = asyncio.Event()
+        lookup_release, lookup_finished = threading.Event(), threading.Event()
+        loop = asyncio.get_running_loop()
+        def blocked_lookup():
+            loop.call_soon_threadsafe(lookup_entered.set)
+            try:
+                if not lookup_release.wait(5):
+                    raise RuntimeError("offline watchlist deadman expired")
+                return ["600105", "600002"]
+            finally:
+                lookup_finished.set()
+        hub.get_watchlist = blocked_lookup
+        worker_tasks = []
+        real_to_thread = asyncio.to_thread
+        async def observe_worker(func, *args, **kwargs):
+            if func is blocked_lookup:
+                worker_tasks.append(asyncio.current_task())
+            return await real_to_thread(func, *args, **kwargs)
+        monkeypatch.setattr(qh.asyncio, "to_thread", observe_worker)
         normal_queue = hub.subscribe({"600002"})
         task = asyncio.create_task(hub._refresh_domain("quotes"))
-        await asyncio.wait_for(entered.wait(), 1)
-        assert hub.quotes["600002"].price == 10.2
-        assert_retained_source_unchanged(hub.quotes["600105"], before, expired=current_age == 20)
-        assert hub.last_quote_rejections == {"600105": "source_time_regress_ignored"}
-        assert hub.last_batch_coverage == 0.5
-        assert len(hub.quote_history) == 1
-        assert "quotes" in hub._pending_domains
-        assert hub._domains["quotes"].last_success == previous_completed
-        assert hub._domains["quotes"].last_error is None and hub._domains["quotes"].succeeded
-        hub._broadcast("quotes", changed_domains={"quotes"})
-        normal_frame = normal_queue.get_nowait()
-        assert normal_frame["type"] == "quotes"
-        assert normal_frame["data"][0]["price"] == 10.2
-        task.cancel()
-        await asyncio.gather(task, return_exceptions=True)
-        assert cancelled == [True]
-        assert_retained_source_unchanged(hub.quotes["600105"], before, expired=current_age == 20)
-        assert hub.quotes["600002"].price == 10.2
-        assert len(hub.quote_history) == 1
-        assert hub.provider.provider_health()["method_attempts"]["get_quotes@backup"]["method_cancelled"] == 1
-        assert ("get_quotes", "backup") not in hub.provider._failures
-        assert asyncio.all_tasks() == {asyncio.current_task()}
+        poller = None
+        try:
+            await asyncio.wait_for(lookup_entered.wait(), 1)
+            await asyncio.wait_for(entered.wait(), 1)
+            assert hub.quotes["600002"].price == 10.2
+            assert_retained_source_unchanged(hub.quotes["600105"], before, expired=current_age == 20)
+            assert hub.last_quote_rejections == {"600105": "source_time_regress_ignored"}
+            assert hub.last_batch_coverage == 0.5
+            assert len(hub.quote_history) == 1
+            assert "quotes" in hub._pending_domains
+            assert hub._domains["quotes"].last_success == previous_completed
+            assert hub._domains["quotes"].last_error is None and hub._domains["quotes"].succeeded
+            hub._broadcast("quotes", changed_domains={"quotes"})
+            normal_frame = normal_queue.get_nowait()
+            assert normal_frame["type"] == "quotes"
+            assert normal_frame["data"][0]["price"] == 10.2
+            task.cancel()
+            await asyncio.gather(task, return_exceptions=True)
+            assert cancelled == [True]
+            assert_retained_source_unchanged(hub.quotes["600105"], before, expired=current_age == 20)
+            assert hub.quotes["600002"].price == 10.2
+            assert len(hub.quote_history) == 1
+            assert hub.provider.provider_health()["method_attempts"]["get_quotes@backup"]["method_cancelled"] == 1
+            assert ("get_quotes", "backup") not in hub.provider._failures
+            # A domain cancellation does not own the independent membership
+            # worker. Account for its exact owner and actual to_thread task;
+            # any other outstanding task is still a leak.
+            watchlist = hub._watchlist_task
+            assert watchlist is not None and not watchlist.done()
+            assert len(worker_tasks) == 1 and not worker_tasks[0].done()
+            assert not lookup_finished.is_set()
+            assert asyncio.all_tasks() == {asyncio.current_task(), watchlist, worker_tasks[0]}
+
+            # Exercise the real Hub stop contract without starting another
+            # source round. Only the recurring poll loops are parked here.
+            loops_started, started_domains = asyncio.Event(), set()
+            async def parked_domain(domain):
+                started_domains.add(domain)
+                if started_domains == {"indices", "quotes"}:
+                    loops_started.set()
+                await asyncio.Event().wait()
+            monkeypatch.setattr(hub, "_run_domain", parked_domain)
+            poller = asyncio.create_task(hub.run())
+            await asyncio.wait_for(loops_started.wait(), 1)
+            poller.cancel()
+            async def stopping():
+                while not hub._stopping:
+                    await asyncio.sleep(0)
+            await asyncio.wait_for(stopping(), 1)
+            assert hub._running and not poller.done()
+            assert not lookup_finished.is_set() and not watchlist.done()
+            lookup_release.set()
+            await asyncio.gather(poller, return_exceptions=True)
+            assert lookup_finished.is_set() and worker_tasks[0].done() and watchlist.done()
+            assert not hub._running and hub._watchlist_task is None
+            assert primary.calls == backup.calls == {"get_quotes": 1}
+            assert asyncio.all_tasks() == {asyncio.current_task()}
+        finally:
+            lookup_release.set()
+            task.cancel()
+            await asyncio.gather(task, return_exceptions=True)
+            if poller is not None:
+                poller.cancel()
+                await asyncio.gather(poller, return_exceptions=True)
+            if hub._watchlist_task is not None:
+                hub._watchlist_task.cancel()
+                await asyncio.gather(hub._watchlist_task, return_exceptions=True)
     asyncio.run(check())
 
 
