@@ -233,7 +233,6 @@ main[data-workspace="workbench"].bc-workbench .detail-chart-panel {border:0;back
 
 }
 @media(max-width:1023px) {
- main[data-workspace="workbench"].bc-workbench:has(.bc-workbench-layout:not([data-mobile-view="list"]))>.bc-workbench-header {display:none;}
  main[data-workspace="workbench"].bc-workbench .stock-workspace {gap:4px;}
  .bc-workbench .detail-context-disclosure>summary {min-height:32px;}
  main[data-workspace="workbench"].bc-workbench .quote-sheet-head {display:grid;grid-template-columns:minmax(0,1fr) auto;align-items:center;gap:4px 8px;}
@@ -310,7 +309,7 @@ main[data-workspace="workbench"].bc-workbench .detail-chart-panel {border:0;back
 .asset-chart-toolbar output strong {margin-inline:6px;font-weight:550;color:var(--ui-ink);}
 .asset-segments {display:flex;align-items:center;gap:3px;flex-wrap:wrap;}
 .asset-nav-chart {min-width:0;}
-.asset-nav-chart svg {display:block;width:100%;height:clamp(190px,28dvh,300px);touch-action:pan-y;}
+.asset-nav-chart svg {display:block;width:100%;height:auto;aspect-ratio:744 / 220;max-height:300px;touch-action:pan-y;}
 .asset-nav-chart svg text {font-family:inherit;font-size:10px;fill:var(--ui-muted);font-variant-numeric:tabular-nums;}
 .asset-chart-grid {stroke:var(--ui-line);stroke-width:.6;}
 .asset-chart-line {stroke:var(--ui-accent);stroke-width:1.6;vector-effect:non-scaling-stroke;}
@@ -357,7 +356,6 @@ main[data-workspace="workbench"].bc-workbench .detail-chart-panel {border:0;back
  .asset-disclosure-list summary:hover {background:var(--control-surface);}
 }
 @media(max-width:1023px) {
- main[data-workspace="workbench"].bc-workbench:not([data-asset="cn_equity"])>.bc-workbench-header {display:flex;}
  .asset-detail-heading {padding-bottom:8px;}
  .asset-detail-heading h2 {font-size:15px;}
  .asset-reading-pane {padding-top:10px;}
@@ -366,6 +364,7 @@ main[data-workspace="workbench"].bc-workbench .detail-chart-panel {border:0;back
  .asset-detail-tabs {gap:0;}
  .asset-detail-tabs>button {flex:1;padding:6px 4px;font-size:11px;min-height:40px;}
  .asset-chart-toolbar output {font-size:11px;}
+ .asset-nav-chart svg text {font-size:18px;}
  .asset-section-heading {gap:6px;}
  .asset-record-form {grid-template-columns:minmax(0,1fr);}
  .asset-term-list>div {grid-template-columns:minmax(80px,1fr) minmax(0,2fr);}
