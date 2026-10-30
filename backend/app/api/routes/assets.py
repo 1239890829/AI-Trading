@@ -41,6 +41,6 @@ async def catalog(purchase: Literal["all", "source_buyable"] = "all", tab: Liter
 
 
 @router.get("/us/{code}/snapshot")
-async def us_snapshot(code: str, limit: Literal[120] = 120,
+async def us_snapshot(code: str, limit: int = Query(default=120, ge=120, le=120),
                       service: AssetReadService = Depends(get_asset_service)) -> dict:
     return {"data": (await service.us_snapshot(code, limit)).model_dump(mode="json")}
