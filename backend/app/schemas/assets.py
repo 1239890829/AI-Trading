@@ -6,6 +6,9 @@ from typing import Literal
 
 from pydantic import BaseModel, Field
 
+from app.schemas.asset_evidence import AssetEvidence
+from app.schemas.fund_public import FundPublicProfile, FundPublicReference
+
 
 class AssetInstrument(BaseModel):
     instrument_id: str
@@ -17,15 +20,6 @@ class AssetInstrument(BaseModel):
     currency: str
     name: str
     source: Literal["ths_official"] = "ths_official"
-
-
-class AssetEvidence(BaseModel):
-    endpoint: str
-    params: dict[str, str | int]
-    received_at: datetime
-    payload_sha256: str
-    receipt_id: str
-    raw_available: bool = False
 
 
 class AssetReadSection(BaseModel):
@@ -159,6 +153,7 @@ class FundTerm(BaseModel):
 
 
 class FundTermsSection(AssetReadSection):
+    source: Literal["ths_official", "mixed_public_sources"] = "ths_official"
     manager_name: str | None = None
     fees: list[FundTerm] = Field(default_factory=list)
     dealing_rules: list[FundTerm] = Field(default_factory=list)
@@ -191,6 +186,8 @@ class FundSnapshot(BaseModel):
     terms: FundTermsSection
     research: FundResearchSection
     estimate: FundEstimateSection
+    public_profile: FundPublicProfile | None = None
+    reference: FundPublicReference | None = None
 
 
 class AssetSearchResult(BaseModel):

@@ -360,7 +360,7 @@ def test_same_public_body_from_different_queries_is_stored_once(monkeypatch, tmp
     asyncio.run(run())
 
 
-def test_snapshot_capacity_failure_drains_children_without_starting_fallback(monkeypatch):
+def test_snapshot_source_capacity_keeps_completed_sections_without_starting_fallback(monkeypatch):
     async def run():
         release, loaded = asyncio.Event(), asyncio.Event()
         calls = []
@@ -374,11 +374,14 @@ def test_snapshot_capacity_failure_drains_children_without_starting_fallback(mon
         service, _, _ = setup(monkeypatch, handler=source)
         service._requests.maxsize = 1
         try:
-            with pytest.raises(LocalReadCapacityExceeded):
-                await service.snapshot("040046.OF")
+            pending = asyncio.create_task(service.snapshot("040046.OF"))
             await loaded.wait()
             assert calls == [SEARCH, NAV]
             release.set()
+            result = await pending
+            assert result.nav.latest.unit_nav == 8.1932
+            assert result.terms.missing == result.holdings.missing == ["fund_source_local_busy"]
+            assert result.lookthrough.covered_weight_pct == 0
             await service.aclose()
             await asyncio.sleep(0)
             assert asyncio.all_tasks() == {asyncio.current_task()}

@@ -62,6 +62,9 @@ class Settings(BaseSettings):
     ths_base_url: str = "https://fuyao.aicubes.cn"
     # Read-only asset research is independent of A-share quote polling.
     asset_reads_enabled: bool = False
+    # Optional personal Market Data credentials; never used for account/order APIs.
+    alpaca_data_key: str = Field(default="", repr=False)
+    alpaca_data_secret: str = Field(default="", repr=False)
     # 题材官方成分视为有效的时长（architecture-design §1）；过期后懒同步。
     # 2026-09-08 用户指令（成分与同花顺完全一致）：168h 曾让 stale 判定 7 天不命中
     # ——30min×40 的补齐调度因此空转，成分调整（如代糖概念新增 920230）最长一周

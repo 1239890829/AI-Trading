@@ -583,3 +583,10 @@ CLI启动warning的兼容依据与固定版本见[语义纠错记录](../ai/sema
 项目Node pin从22.22.2升至同一LTS主版本22.23.4，依据[Node官方安全发布](https://nodejs.org/en/blog/release/v22.23.4)，内置Undici由6.24.1升至6.29.1。npm依赖审计不覆盖Node内置fetch，因此包锁、真实Node版本及服务进程均需分别核实。沿现有NVM安装、校验官方SHA并保留旧版本，不改全局default别名；用项目pin对应PATH构建并经原local-services入口启动，不改启动器、端口或鉴权。原研究CLI的显式解释器pin与授权独立，不能借前端运行时维护自动改变模型方法。
 
 Next及开发依赖仅按官方修复范围最小更新，锁文件与npm ci一致；不使用audit fix --force，不把审计条目数当可利用漏洞数。仓内未见use cache/use server或next/image消费者，但这不免除修补与重新构建。安装、完整前端门、官方registry复验及主服务实际Node/Next/代理证据归当前handoff和准确PR回执。回退用原Git锁文件重新npm ci、保全的旧build及旧Node，通过原启动和检查入口恢复；不回写业务数据。
+
+
+### 统一工作台的只读补充来源
+
+沿原`ASHARE_ASSET_READS_ENABLED`启用基金公开产品资料/前季重仓参考与腾讯美股常规报价/raw日K；不创建后台批量拉取或连接A股执行。基金仍需原THS配置，腾讯US独立可用；没有夜盘Key不能关闭已有常规报价。源异常和时段缺失按段返回，不用旧价格冒充当前价。
+
+可选`ASHARE_ALPACA_DATA_KEY`、`ASHARE_ALPACA_DATA_SECRET`仅经用户明确授权保存在`backend/.env`，不传前端或抄入启动命令。只允许固定`data.alpaca.markets`的`feed=overnight`行情读取，不访问账户、订单、实盘或paper交易域，不用付费SIP/BOATS。配置存在不等授权通过；缺Key零外发，401/403终止该owner后续取源，修正配置后正常重启再核，不换域/头绕拒绝。纽约时钟只定请求窗口，源报价还须独立时点/币种/身份核验；仅显示指示性买卖价，非最新成交价。公共/商业再展示与免费计划权限分别核，不由开源许可外推。

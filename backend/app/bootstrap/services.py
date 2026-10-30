@@ -133,6 +133,10 @@ def build_services(app: FastAPI) -> AppServices:
         api_key=settings.ths_api_key if settings.asset_reads_enabled else "",
         base_url=settings.ths_base_url if settings.asset_reads_enabled else "https://fuyao.aicubes.cn",
         enabled=settings.asset_reads_enabled,
+        us_enabled=settings.asset_reads_enabled,
+        public_enabled=settings.asset_reads_enabled,
+        alpaca_data_key=settings.alpaca_data_key,
+        alpaca_data_secret=settings.alpaca_data_secret,
         evidence_dir=ASSET_EVIDENCE_DIR if settings.asset_reads_enabled else None,
     )
     app.state.asset_service = asset_service

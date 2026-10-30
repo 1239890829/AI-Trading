@@ -362,6 +362,13 @@ main[data-workspace="workbench"].bc-workbench .detail-chart-panel {border:0;back
 .asset-catalog-evidence summary {min-height:36px;}
 .asset-catalog-evidence .asset-receipt {display:block;}
 .asset-source-alias {overflow-wrap:anywhere;}
+.asset-fund-reference {padding-bottom:14px;margin-bottom:16px;border-bottom:1px solid var(--ui-line);}
+.asset-reference-reading {display:flex;align-items:center;gap:16px;flex-wrap:wrap;margin-block:10px;}
+.asset-reference-reading>strong {font-size:22px;font-weight:550;font-variant-numeric:tabular-nums;}
+.asset-reference-reading>span {font-size:12px;color:var(--ui-muted);max-width:52ch;}
+.asset-us-quote {display:flex;align-items:flex-start;justify-content:space-between;gap:12px;flex-wrap:wrap;}
+.asset-us-price {display:block;font-size:24px;font-weight:550;font-variant-numeric:tabular-nums;}
+.asset-us-quote small {display:block;font-size:11px;color:var(--ui-muted);}
 @media(hover:hover) and (pointer:fine) {
  .asset-detail-tabs>button:hover,.asset-segments>button:hover,.bc-asset-switch>a:hover {background:var(--control-surface);color:var(--ui-ink);}
  .asset-disclosure-list summary:hover {background:var(--control-surface);}

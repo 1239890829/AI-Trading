@@ -56,6 +56,7 @@ import { indexDetailSymbol } from "@/lib/api/client";
 import type { Quote } from "@/types/market";
 import {WorkbenchFrame} from "@/components/workbench-frame";
 import {AssetWorkbench} from "@/components/asset-workbench";
+import {UsAssetWorkbench} from "@/components/us-asset-workbench";
 import {workbenchAsset} from "@/lib/asset-identity";
 
 const STATUS_LABEL = STREAM_STATUS_LABEL;
@@ -691,5 +692,5 @@ function UnifiedWorkbench() {
   if (raw && !["cn_equity", "fund", "us_equity"].includes(raw) || asset === "cn_equity" && params.has("symbol") && !/^(?:(?:sh|sz|bj))?\d{6}$/i.test(params.get("symbol") ?? "")) {
     return <WorkbenchFrame asset={asset}><div className="asset-empty" role="alert"><h2>资产身份无法确认</h2><p>请使用上方资产切换和搜索重新选择，不按同号证券读取。</p></div></WorkbenchFrame>;
   }
-  return asset === "cn_equity" ? <WorkbenchInner/> : <AssetWorkbench key={asset} asset={asset}/>;
+  return asset === "cn_equity" ? <WorkbenchInner/> : asset === "us_equity" ? <UsAssetWorkbench/> : <AssetWorkbench key={asset} asset={asset}/>;
 }

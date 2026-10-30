@@ -3,6 +3,7 @@
 import {useState} from "react";
 import {FundNavChart} from "@/components/fund-nav-chart";
 import {FundRecordEditor} from "@/components/fund-record-editor";
+import {FundReferencePanel} from "@/components/fund-reference-panel";
 import type {AssetReadSection, AssetRecord, FundCatalogCandidate, FundSnapshot, FundTerm} from "@/lib/api/assets";
 
 const stateLabel = {ready: "已读取", partial: "部分资料", unavailable: "暂无资料"};
@@ -15,7 +16,7 @@ function stamp(value: string | null) {
 
 function SectionEvidence({section}: {section: AssetReadSection}) {
   return <div className="asset-evidence">
-    <span>{section.source === "system_calculation" ? "系统计算 · 非官方结论" : "同花顺官方来源"} · {stateLabel[section.state]}</span>
+    <span>{section.source === "system_calculation" ? "系统计算 · 非官方结论" : section.source === "mixed_public_sources" ? "同花顺与公开基金资料 · 逐字段核源" : "同花顺官方来源"} · {stateLabel[section.state]}</span>
     {section.reason && <p>{section.reason}</p>}
     {section.missing.length > 0 && <details><summary>缺少 {section.missing.length} 项资料</summary><ul>{section.missing.map(item => <li key={item}>{item}</li>)}</ul></details>}
     {section.evidence.length > 0 && <details><summary>来源核对 · {section.evidence.length} 份回执</summary><ul>{section.evidence.map((item, index) => <li key={`${item.receipt_id}:${index}`}>接收：{stamp(item.received_at)}<br/><span className="asset-receipt">回执 {item.receipt_id} · SHA-256 {item.payload_sha256}</span></li>)}</ul></details>}
@@ -23,7 +24,8 @@ function SectionEvidence({section}: {section: AssetReadSection}) {
 }
 
 function Terms({rows, empty}: {rows: FundTerm[]; empty: string}) {
-  return rows.length ? <dl className="asset-term-list">{rows.map((row, index) => <div key={`${row.label}:${index}`}><dt>{row.label}</dt><dd>{row.value}{row.condition && <small>{row.condition}</small>}</dd></div>)}</dl> : <p className="asset-note">{empty}</p>;
+  const names: Record<string, string> = {purchase: "申购费", redemption: "赎回费", management: "管理费", custody: "托管费"};
+  return rows.length ? <dl className="asset-term-list">{rows.map((row, index) => <div key={`${row.label}:${index}`}><dt title={row.label}>{names[row.label] ?? row.label}</dt><dd>{row.value}{row.condition && <small>{row.condition}</small>}</dd></div>)}</dl> : <p className="asset-note">{empty}</p>;
 }
 
 export function FundDetail({snapshot, sourceCandidate, range, setRange, record, recordPending, onRefreshRecords, refreshing, onRefresh}: {
@@ -34,16 +36,19 @@ export function FundDetail({snapshot, sourceCandidate, range, setRange, record, 
   const [view, setView] = useState<"reported" | "lookthrough">("reported");
   const {instrument, nav, holdings, lookthrough, terms, research} = snapshot;
   const sourceName = sourceCandidate?.state === "candidate" && sourceCandidate.source_symbol === instrument.source_symbol ? sourceCandidate.source_name : null;
+  const profile = snapshot.public_profile?.source_symbol === instrument.source_symbol ? snapshot.public_profile : null;
+  const publicName = profile?.fields.find(item => item.key === "name")?.value;
+  const displayName = sourceName ?? publicName ?? instrument.name;
   const tabs = [{key: "nav", label: "净值与记录"}, {key: "holdings", label: "披露持仓"}, {key: "terms", label: "费用与申赎"}, {key: "research", label: "研究核对"}] as const;
   return <div className="asset-detail">
-    <header className="asset-detail-heading"><div><h2 title="同花顺来源名称，按完整份额代码对应">{sourceName ?? instrument.name}</h2><p>{instrument.source_symbol} · {instrument.currency} 份额 · 同花顺来源名称</p>{sourceName && sourceName !== instrument.name && <p className="asset-source-alias">标的目录原名：{instrument.name}；中文名来自同花顺基金栏目。</p>}</div><button className="bc-compact-button" disabled={refreshing} onClick={onRefresh}>{refreshing ? "读取中…" : "刷新资料"}</button></header>
+    <header className="asset-detail-heading"><div><h2 title="来源名称，按完整份额代码对应">{displayName}</h2><p>{instrument.source_symbol} · {instrument.currency} 份额 · 来源名称</p>{displayName !== instrument.name && <p className="asset-source-alias">标的目录原名：{instrument.name}；中文名为同代码来源参考。</p>}</div><button className="bc-compact-button" disabled={refreshing} onClick={onRefresh}>{refreshing ? "读取中…" : "刷新资料"}</button></header>
     <nav className="asset-detail-tabs" aria-label="基金详情">{tabs.map(item => <button key={item.key} type="button" aria-pressed={tab === item.key} onClick={() => setTab(item.key)}>{item.label}</button>)}</nav>
     <div className="asset-reading-pane" tabIndex={0} aria-label={tabs.find(item => item.key === tab)!.label}>
       {tab === "nav" && <>
+        <FundReferencePanel reference={snapshot.reference} sourceSymbol={instrument.source_symbol}/>
         <div className="asset-section-heading"><div><h3>官方净值</h3><span>净值日 {nav.latest?.nav_date ?? "未提供"} · 发布时刻 {nav.publication_time_known ? stamp(nav.published_at) : "未提供"}</span></div><div className="asset-segments" aria-label="净值区间"><button aria-pressed={range === "month"} onClick={() => setRange("month")}>近一月</button><button aria-pressed={range === "year"} onClick={() => setRange("year")}>近一年</button></div></div>
         <FundNavChart points={nav.points} currency={nav.currency}/>
         <SectionEvidence section={nav}/>
-        <p className="asset-note">盘中估值暂不提供；披露持仓不能代表实时仓位。</p>
         <FundRecordEditor key={instrument.instrument_id} instrument={instrument} record={record} latest={nav.state !== "unavailable" && nav.currency === instrument.currency ? nav.latest : null} loading={recordPending} onRefresh={onRefreshRecords}/>
       </>}
       {tab === "holdings" && <>
@@ -60,6 +65,10 @@ export function FundDetail({snapshot, sourceCandidate, range, setRange, record, 
         </>}
       </>}
       {tab === "terms" && <>
+        {profile && <><h3>基金资料</h3>{profile.state === "unavailable" && <p className="asset-note" role="status">公开资料未通过核对，未覆盖已读取的净值和费用。</p>}
+          {profile.missing.length > 0 && <details className="asset-evidence"><summary>资料缺项与隔离原因 · {profile.missing.length}</summary><ul>{profile.missing.map(item => <li key={item}>{item}</li>)}</ul></details>}
+          <dl className="asset-term-list">{profile.fields.filter(item => ["full_name", "fund_type", "fund_manager", "currency", "net_assets", "established_date", "redemption_status"].includes(item.key)).map(item => <div key={item.key}><dt>{item.label}</dt><dd>{item.value}<small>{item.source === "huaan_fund" ? "基金公司官网" : "天天基金公开资料"}{item.source_as_of ? ` · ${stamp(item.source_as_of)}` : " · 源更新时点未提供"}</small></dd></div>)}</dl>
+          {profile.conflicts.length > 0 && <p className="asset-note" role="status">来源字段存在差异：{profile.conflicts.join("、")}。保留各自来源，不能视为口径相同。</p>}</>}
         <h3>费用与申赎</h3><dl className="asset-term-list"><div><dt>管理人</dt><dd>{terms.manager_name ?? "未提供"}</dd></div><div><dt>申购状态</dt><dd>{terms.subscription_status ?? "未提供，请以正式公告为准"}</dd></div><div><dt>跟踪基准</dt><dd>{terms.benchmark ?? "未提供"}</dd></div></dl>
         <h3>费用条件</h3><Terms rows={terms.fees} empty="未取得费用条款，不推算费率。"/>
         <h3>申购与赎回条件</h3><Terms rows={terms.dealing_rules} empty="未取得完整申赎条件，不按其他份额套用。"/>

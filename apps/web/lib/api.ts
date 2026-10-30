@@ -28,3 +28,4 @@ export * from "./api/themes";
 export * from "./api/watchlist";
 
 export * from "./api/validation";
+export * from "./api/us-assets";

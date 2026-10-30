@@ -697,9 +697,9 @@ qfq是前复权。固定stockstats 0.6.9实际MFI为0–1，原上游80/20描述
 
 正式目录搜索限定fund-otc与完整份额身份；NAV、profile、持仓分段取证。新服务真实读取040046.OF：年度243个净值点，最新2026-10-28单位/复权净值8.1932；根披露目标159632.SZ占90.01%，同报告期目标10只股票合计43.25%，可核一层乘积38.929325%，剩余61.070675%未知，不归一到100%。目录原名100RMBA保留为来源名，不硬编码中文别名。公开回包hash去重、接收钟和参数小回执保存在本机忽略证据，不含Key/header。该一例证明此时此份额可读，不是全基金覆盖或稳定率。
 
-profile费率/规则未给出可核完整投资范围、基准和当前申购状态；境外同口径行情及估值FX不具备。因此不输出已推荐、当日估值或完整实时穿透。既有接口准许应用集成、不设累计调用上限的依据仍归§22；Key可访问不另推导第三方公开再展示/永久留存权，公共部署仍未授权。
+早期仅看THS profile时，未取到完整投资范围、基准和当前申购状态；不能将该范围外推为所有正式来源均没有这些资料。现已由§23.2的公开F10/管理人字段补缺，监管文件、当前持仓、同口径境外行情及估值FX仍未核齐。因此不输出已推荐、可靠整基金当日估值或完整实时穿透。既有THS接口准许应用集成、不设累计调用上限的依据仍归§22；Key可访问不另推导第三方公开再展示/永久留存权，公共部署仍未授权。
 
-美股只读框架共用/workbench，但尚未准入满足完整免费时段/覆盖的源。Alpaca个人免费IEX及夜盘指示报价/延迟成交边界见[来源合同](../product/cross-asset-workbench.md#4-美股只读的条件)；未申请新Key或开收费服务。腾讯/新浪/东财页面可读不代接口、时效及用途许可。保留来源待核状态，不调用同号A股冒充美股。工程、准确HEAD发布、主目录加载和真实页面分别留证，不把源探针当已发布。
+美股已按§23.3实证拆开搜索、标准报价、raw日K及独立扩展时段，不再以“没有完整免费全时段源”阻断全部证券查看。Alpaca个人免费IEX与夜盘指示报价/延迟成交分别处理；用户已自行注册并确认保存Key；北京时间15:28固定行情域的AAPL夜盘指示性双边报价实测通过，未启用付费服务，不外推全标的/全时段稳定率。工程、准确HEAD发布、主目录加载和真实页面分别留证，不把源探针或离线adapter测试当已发布/已获权。合同见[统一工作台](../product/cross-asset-workbench.md#4-美股只读的条件)。
 
 
 ### 23.1 独立QDII额度名单的补核与纠正
@@ -707,3 +707,47 @@ profile费率/规则未给出可核完整投资范围、基准和当前申购状
 2026-10-30同一Key分别一次调用正式`fund/quota/list`：tab=[meiguo]、省略buy返回218归属/78唯一代码（77场外OF、1场内501312.SH）；独立buy=true返回156归属/60唯一（59OF+同1SH）。两份HTTP200/code0，各留原请求参数、接收钟和正文SHA；这不是“全部美股基金”分母，也不能拼成未返回即不可购。原件本次同代码未见字段冲突，原栏目有真实重复，完整代码/份额不合并。
 
 040046.OF在该名单给出中文全名“华安纳斯达克100ETF联接(QDII)A”，补足metadata/profile的100RMBA短名；原名、原来源和旧记录仍保留。先前仅由profile缺项外推供应商没有这些字段不成立，现就地缩小该限制。名单可购筛选、quota、year仍不证明完整投资范围/正式基准/当时渠道资格；meiguo实际含新兴市场、富时100、全球配置。原接口源钟未提供，quota单位未知、0非停售，明确null才按正式合同解释无限额，year不擅自转百分比或年化。新读者为原asset owner，非A股Provider路由或自动荐基器，不逐只批量查metadata。
+
+### 23.2 公开基金产品资料与前季重仓参考
+
+2026-10-30实际公开响应、原始哈希、接收钟与离线真实包重放留`artifacts/runs/asset-source-closure-20261030/fund-source/`；本轮无模型、账户或交易调用。公开网页成功不是监管文件或再分发许可证明。
+
+| 原始来源/方法 | 本轮实际结果 | 采用与边界 |
+|---|---|---|
+| [东财F10 040046](https://fundf10.eastmoney.com/jbgk_040046.html) | 可读法定名、投资目标/范围/策略、基准、跟踪标的等原文字段 | 按精确份额补产品描述；不执行远端JS。资料发布时间未给，不冒充新披露；不是已核监管文件 |
+| [华安040046官网](https://www.huaan.com.cn/funds/040046/index.shtml) | 明确CNY、暂停申购/开放赎回/暂停定投；当次基准字段空 | 原管理人名称确认后才读取；非空管理人字段优先，空不覆盖F10。成立日期等冲突保留，页面状态不等任意渠道购买资格 |
+| [新浪前季重仓参考](https://stock.finance.sina.com.cn/fundInfo/api/openapi.php/FdFundService.getEstimateNetworthPic?symbol=040046) | code0，两个原曲线与源日期/分钟、已公布NAV日期及明确前季前十重仓警告 | 只作`reported_top_holdings_reference`，不是整基金当天涨跌/NAV。nav_pct/nav2_pct含义差异未披露，不互算、不择优，不回填缺点或把旧日当今日 |
+| `fundgz.1234567.com.cn/js/{code}.js` | 三只QDII及普通基金对照均HTTP200，但实际为相同“页面未找到”HTML | 软404，不解析成成功估值，不因GitHub代码仍引用便认为当前可用 |
+| 东财`FundGuZhi/GetFundGZList`、移动`FundMNFInfo` | 分别业务ErrCode=-999/空数据、61136 | 不伪造设备参数、Token或换头绕拒绝；不接作估值后备 |
+| 腾讯`fundSsgz/getSsgz` | code21，接口下线 | 不接，不用空值填0 |
+| 东财QDII估值页面、好ETF公开参考 | 前者所见首200条估值空且非完整QDII覆盖；后者是ETF参考 | 不把首屏当全集，也不把ETF价格当场外联接基金NAV；本轮不接好ETF |
+
+`FundPublicService`与父snapshot已有逐代码/币种核验、局部失败、缓存/在飞共享及关闭排空；公共字段只补terms的真实缺失，原THS NAV/费率/披露独立保留。页面研究核对可随字段改善，不表示推荐资格或监管原文已验。来源原文、许可与失败事实不被展示汇总抹去。THS目录/额度的全名补足已有证据，不改旧自选记录；中文短名、法定名、份额和币种不能混成猜测别名。
+
+当日整基金估算继续明确不可提供：当前持仓、同口径价格和估值FX仍不足，`estimate`不可用，`estimated_fund_nav/estimated_fund_percent`为空。[东财官网协议与免责声明入口](https://about.eastmoney.com/)不构成公共再用许可；当前限有界个人本机读取，未来公共/商业再展示须另核，不能由SDK/开源代码许可外推。
+
+### 23.3 美股按能力开放与可选夜盘权限
+
+本轮正常公开取源保存在`artifacts/runs/asset-source-closure-20261030/us-source/`，带参数、源/接收钟和原始SHA；只复用旧包做parser回放，不重复旧Notebook或GB原料。不存在全市场或全天稳定率结论。
+
+| 原始来源/方法 | 实际证据 | 当前可用合同 |
+|---|---|---|
+| [腾讯官方AAPL页](https://gu.qq.com/usAAPL/gp)及其公开脚本、`qt.gtimg.cn/?q=usAAPL,usNVDA` | GB编码标准quote，73字段；canonical AAPL.OQ/NVDA.OQ、币种USD及纽约源钟 | 搜索/点选身份、标准报价、原涨跌与量股/额美元；feed延迟未知，不称全市场实时。canonical只接原站映射OQ/N/AM |
+| 腾讯`smartbox.gtimg.cn/s3/?t=us&q=AAPL` | 原始source-only候选aapl.oq及中文源名，无币种 | 候选不造Instrument；quote确认后才保存US自选，不借A股名称或账户 |
+| 腾讯`appstock/app/kline/kline?param=usAAPL.OQ,day,,,120,` | code0，120根原始day；qfq另有不同历史值，不能混入 | 固定原canonical、`price_basis=none`，row为date/open/close/high/low/volume_shares；历史失败局部处理 |
+| 新身份正控SPY/BRK.B/BABA | SPY.AM/GP-ETF、BRK.B.N/GP、BABA.N/GP；后两者源钟16:04:51 | source字段区分stock/etf；窗外合法报价`session_unverified`，不叫盘后。BABA同日末daily close与quote相同只证明本次交叉事实，不外推未来时段 |
+| 腾讯US分钟 | 两种已核代码均缺有效日期/完整序列，只有空或收盘哨点 | 当前分钟不可用，不以一条收盘点绘分时；独立盘前/盘后/夜盘缺口不抹去标准quote/day |
+| Yahoo chart | 实际429；官方help也未正常取得 | 停止该方法，无换域、Cookie、代理或header重试；yfinance代码许可不授予Yahoo数据再分发权 |
+| 新浪 | [官方App发布](https://finance.sina.com.cn/stock/usstock/c/2026-05-12/doc-inhxrmyk1537833.shtml)确认有夜盘；既有PC hq实际403 | 不再说新浪没有夜盘；本轮未得不同的可用公开夜盘合同，不改头重试403、不反编译私有认证 |
+| Tiger | 正常公开页面有独立night源钟和值，但[服务协议](https://www.laohu8.com/agreement/CHN-ServiceAgreement?skin=2)及[社区协议](https://www.laohu8.com/agreement/laohu8)限制未授权第三方取用/再发布 | 明确不接页面抓取；公开可见不等本项目自动采集获准 |
+| Finnhub | [官方quote文档](https://finnhub.io/docs/api/quote)公开HTML200及内嵌OpenAPI可读；bidask/candles明示Premium，无已核免费overnight合同 | 不为夜盘缺口另索Key；[个人条款](https://finnhub.io/terms-of-service)不允许未经书面许可分享数据/派生结果，订阅结束须删除相关数据 |
+
+纽约源钟按其日期的`America/New_York`转换，不用当前偏移替历史夏令时。`clock_phase`仅时钟窗口；假日/半日市和实际开市未核，不从本机钟推开市或实时。US标准报价保留原日和真实质量，不能以接收钟续龄。
+
+Alpaca已通过一次具名免费夜盘取源验证，现有可选owner只访问`data.alpaca.markets/v2/stocks/quotes/latest`、精确已核证券、`feed=overnight&currency=USD`；无账户/资产名单/订单或券商API。用户自行注册保存Paper Only Key后，于北京时间15:28实读AAPL夜盘指示性双边报价成功，源龄约9.89秒，常规报价/raw120日K及可选夜盘整次约1.22秒。原始公开行情与源/接收钟、hash仅保存在本机忽略证据，不含凭据；该单次观察不外推全标的/整日稳定率。离线59项与账号实证分开，缺Key仍不外发。
+
+[个人Trading API 24/5文档](https://docs.alpaca.markets/us/docs/245-trading-for-trading-api)明确免费overnight报价是实时指示性bid/ask，成交延迟15分钟；本实现不读成交，不造last/mid。当前[Basic计划](https://docs.alpaca.markets/us/docs/about-market-data-api)的200请求/分钟是速率限制，未见累计用尽型次数上限，IEX不是全市场。可用邮箱注册[Paper Only](https://docs.alpaca.markets/us/docs/paper-trading)，不等于实盘券商开户；旧Paper页only IEX与新夜盘页的范围差异已按该账号AAPL实证缩小，不外推所有账户/标的。缺Key/授权未验/过窗/源龄超60秒/零活动边分别呈现；缺可选tape保留null及missing，不伪造N，非N拒绝。60秒是本地新鲜判据，不是供应商延迟或准确率保证。
+
+另核[Alpaca维护者的免费延迟SIP说明](https://forum.alpaca.markets/t/alcapa-current-quote-price-is-way-off-from-market-price/18063)及正式latest-quotes文档后，仅对该独立候选做一次固定数据域`feed=delayed_sip`取证：HTTP200，约0.98秒，返回前一纽约交易日19:59:53盘后末报价；不当作当前夜盘或供应商延迟7.5小时。该通道合同为15分钟延迟，不能用来填本轮即期报价、盘前后实时状态或修改原时效门；不采用为当前价不等于供应商没有盘前后数据。原值/钟/hash留本机，未增加运行消费者或改feed回退。
+
+401/403为该owner终态，不更换feed探权限、不升级付费、不跟随redirect转发secret；Key/header不进入证据。Alpaca[个人非商业条款](https://files.alpaca.markets/disclosures/library/TermsAndConditions.pdf)与公开再分发另核；向他人提供用户应用须事先书面通知，不能把免费数据Key当公共展示许可。真实页面、准确HEAD发布与主目录激活由本批最终回执单独确认。

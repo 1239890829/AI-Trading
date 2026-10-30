@@ -3,19 +3,55 @@ import {act, cleanup, fireEvent, render, screen} from "@testing-library/react";
 import {SearchBox} from "@/components/search-box";
 import {getAssetRecords, getFundCatalog, saveAssetRecord, searchAssets, type AssetInstrument, type AssetSearchResult, type FundCatalog} from "@/lib/api/assets";
 import {searchSymbols} from "@/lib/api";
+import {searchUsAssets} from "@/lib/api/us-assets";
 
 const nav = vi.hoisted(() => ({push: vi.fn(), open: vi.fn()}));
 vi.mock("next/navigation", () => ({useRouter: () => ({push: nav.push})}));
 vi.mock("@/components/detail/symbol-detail-context", () => ({useSymbolDetail: () => ({open: nav.open})}));
 vi.mock("@/lib/api", () => ({ApiError: class extends Error {constructor(readonly status: number, message: string) {super(message);}}, addToWatchlist: vi.fn(), searchSymbols: vi.fn()}));
 vi.mock("@/lib/api/assets", () => ({getAssetRecords: vi.fn(), getFundCatalog: vi.fn(), saveAssetRecord: vi.fn(), searchAssets: vi.fn()}));
+vi.mock("@/lib/api/us-assets", async original => ({...await original<typeof import("@/lib/api/us-assets")>(), searchUsAssets: vi.fn()}));
 const instrument: AssetInstrument = {instrument_id: "fund:OF:040046:CNY", asset_type: "fund", fund_type: "fund-otc", market: "OF", symbol: "040046", source_symbol: "040046.OF", currency: "CNY", name: "测试纳指联接", source: "ths_official"};
 const result = (): AssetSearchResult => ({query: "纳指", asset_type: "fund", state: "ready", items: [instrument], reason: null, issues: [], coverage: "source_search_window", evidence: []});
 const sourceCatalog = (): FundCatalog => ({state: "ready", tab: "meiguo", purchase: "all", source: "ths_official", items: [{source_symbol: "040047.OF", source_name: "来源纳指联接C", state: "candidate"}]} as FundCatalog);
-beforeEach(() => {vi.resetAllMocks(); localStorage.clear(); vi.mocked(searchAssets).mockResolvedValue(result()); vi.mocked(getFundCatalog).mockResolvedValue({state: "unavailable", items: []} as unknown as FundCatalog); vi.mocked(getAssetRecords).mockResolvedValue({items: []}); vi.mocked(saveAssetRecord).mockResolvedValue({} as never);});
+beforeEach(() => {vi.resetAllMocks(); localStorage.clear(); vi.mocked(searchAssets).mockResolvedValue(result()); vi.mocked(searchUsAssets).mockImplementation(async query => ({query, asset_type: "us_equity", state: "blocked", reason: "美股源未核验", items: [], issues: [], evidence: []})); vi.mocked(getFundCatalog).mockResolvedValue({state: "unavailable", items: []} as unknown as FundCatalog); vi.mocked(getAssetRecords).mockResolvedValue({items: []}); vi.mocked(saveAssetRecord).mockResolvedValue({} as never);});
 afterEach(() => {cleanup(); vi.useRealTimers();});
 
 describe("分资产搜索与历史身份", () => {
+  it("美股来源候选和历史一次直达，不造完整身份或触发A股/基金读写", async () => {
+    vi.useFakeTimers();
+    vi.mocked(searchUsAssets).mockImplementation(async query => ({query, asset_type: "us_equity", state: "ready", reason: null,
+      items: [{symbol: "AAPL", source_symbol: "AAPL.OQ", market: "US", name: "苹果", source_kind: "GP", security_type: "stock", source: "tencent"}], issues: [], evidence: []}));
+    const view = render(<SearchBox asset="us_equity"/>);
+    fireEvent.change(screen.getByRole("textbox"), {target: {value: "AAPL"}}); await act(async () => vi.advanceTimersByTime(250));
+    expect(screen.getByText("美股来源 · 点选核对")).toBeTruthy();
+    expect(screen.queryByRole("button", {name: /加入自选/})).toBeNull();
+    fireEvent.click(screen.getByRole("button", {name: "苹果 AAPL.OQ US"}));
+    expect(nav.push).toHaveBeenLastCalledWith("/workbench?mode=watch&asset=us_equity&symbol=AAPL.OQ");
+    const saved = JSON.parse(localStorage.getItem("ashare-asset-search-history-v1:us_equity")!)[0];
+    expect(saved.us_candidate).toBe(true); expect(saved.instrument).toBeUndefined();
+    view.unmount(); render(<SearchBox asset="us_equity"/>); await act(async () => {});
+    fireEvent.focus(screen.getByRole("textbox")); fireEvent.click(screen.getByRole("button", {name: "查看 苹果 AAPL.OQ US"}));
+    expect(nav.push).toHaveBeenCalledTimes(2); expect(searchUsAssets).toHaveBeenCalledTimes(1);
+    expect(searchSymbols).not.toHaveBeenCalled(); expect(searchAssets).not.toHaveBeenCalled();
+    expect(getFundCatalog).not.toHaveBeenCalled(); expect(saveAssetRecord).not.toHaveBeenCalled();
+  });
+  it("错误US来源和证券身份不允许展示、迁入A股或保存", async () => {
+    vi.useFakeTimers(); vi.mocked(searchUsAssets).mockImplementation(async query => ({query, asset_type: "us_equity", state: "ready", reason: null,
+      items: [{symbol: "AAPL", source_symbol: "AAPL.HK", market: "US", name: "错市场", source_kind: "GP", security_type: "stock", source: "tencent"}], issues: [], evidence: []}));
+    const view = render(<SearchBox asset="us_equity"/>); fireEvent.change(screen.getByRole("textbox"), {target: {value: "AAPL"}}); await act(async () => vi.advanceTimersByTime(250));
+    expect(screen.queryByText("错市场")).toBeNull();
+    view.unmount(); localStorage.setItem("ashare-security-search-history-v1", JSON.stringify([{query:"AAPL",symbol:"AAPL.OQ",name:"苹果",market:"US",us_candidate:true}]));
+    render(<SearchBox/>); await act(async () => {}); fireEvent.focus(screen.getByRole("textbox"));
+    expect(screen.queryByRole("button", {name: /查看.*苹果/})).toBeNull(); expect(nav.open).not.toHaveBeenCalled();
+  });
+  it.each(["provider", "kind"])("同代码但来源或证券分类不符时不冒充腾讯：%s", async mismatch => {
+    vi.useFakeTimers();
+    vi.mocked(searchUsAssets).mockImplementation(async query => ({query, asset_type: "us_equity", state: "ready", reason: null,
+      items: [{symbol: "AAPL", source_symbol: "AAPL.OQ", market: "US", name: "错误来源名称", source_kind: mismatch === "kind" ? "GP-ETF" : "GP", security_type: "stock", source: mismatch === "provider" ? "other" : "tencent"} as never], issues: [], evidence: []}));
+    render(<SearchBox asset="us_equity"/>); fireEvent.change(screen.getByRole("textbox"), {target: {value: "AAPL"}}); await act(async () => vi.advanceTimersByTime(250));
+    expect(screen.queryByText("错误来源名称")).toBeNull(); expect(nav.push).not.toHaveBeenCalled(); expect(saveAssetRecord).not.toHaveBeenCalled();
+  });
   it("基金选择直接打开同一工作台，历史点击不重新取源且不污染 A 股 v1", async () => {
     vi.useFakeTimers(); const aHistory = JSON.stringify([{query: "茅台", symbol: "600519", name: "贵州茅台", market: "SH"}]); localStorage.setItem("ashare-security-search-history-v1", aHistory);
     const view = render(<SearchBox asset="fund"/>); const input = screen.getByRole("textbox");

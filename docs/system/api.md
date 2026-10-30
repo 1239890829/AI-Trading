@@ -4,17 +4,24 @@
 
 | 接口 | 消费者与权限 | 关键边界 |
 |---|---|---|
-| GET `/api/assets/capabilities` | 普通配对读取 | 实际来源能力，US尚阻断 |
-| GET `/api/assets/search?q=&asset_type=fund或us_equity&limit=` | 普通配对读取 | 源目录窗口，不称全市场全集；US不取A股源 |
+| GET `/api/assets/capabilities` | 普通配对读取 | 基金与US按实际启用/缺失能力分别报告，不因缺夜盘而封禁标准报价 |
+| GET `/api/assets/search?q=&asset_type=fund或us_equity&limit=` | 普通配对读取 | 源目录窗口，不称全市场全集；US是source-only候选，币种/完整资产身份由点选quote核，不取A股源 |
 | GET `/api/assets/funds/catalog?tab=meiguo&purchase=all或source_buyable` | 普通配对读取 | 独立来源候选，保留原栏目/顺序/名称/原额度/缺失/冲突和超域；不含推断币种或购买资格 |
-| GET `/api/assets/funds/{code}/snapshot?range=month或year` | 普通配对读取 | 完整正式份额代码、分段状态/来源/日期/缺失 |
-| GET `/api/assets/records?asset_type=fund` | 普通配对读取 | 手工记录，不接行情、不属paper账户 |
+| GET `/api/assets/funds/{code}/snapshot?range=month或year` | 普通配对读取 | 正式份额、NAV/披露/费用分段；可选public_profile与reference独立身份/来源/状态，参考不是整基金估值 |
+| GET `/api/assets/us/{code}/snapshot?limit=120` | 普通配对读取 | 腾讯核US canonical/USD、标准quote与120根raw日K；分钟/扩展时段分别缺失，Alpaca可选overnight_data不替换原字段 |
+| GET `/api/assets/records?asset_type=fund或us_equity` | 普通配对读取 | 基金手工记录与US只读自选隔离，不属paper/real账户 |
 | PUT `/api/assets/records/{instrument_id}` | 普通配对写 | 核正式身份/币种；创建expected_version=0，修改须当前version |
 | DELETE `/api/assets/records/{instrument_id}?expected_version=` | 普通配对写 | CAS冲突409，不盲删 |
 | GET `/api/agent/research/company-relations/{symbol}?event_id=&version_id=&observation_id=` | 普通配对读取 | 只读精确已存Decisions结果，无模型/取源/写副作用 |
 | POST `/api/agent/tasks` type=`company_relation_research` | 原维护任务能力 | 参数严格symbol与三个原版本ID；未验证窄研究，不改资格 |
 
-手工基金记录返回basis=manual_not_broker_verified，份额/同币种总成本成对；缺NAV不拿成本冒充市场价。错误保留AppError和local_read_capacity_exceeded分层。所有新router均挂现有鉴权；新增普通能力精确登记，未登记路径仍默认维护。完整产品边界见[统一工作台](../product/cross-asset-workbench.md)，语义合同归[现役蓝图](../ai/semantic-decisions.md#2026-10-30-decisions具名研究与统一工作台)。
+手工基金记录返回basis=manual_not_broker_verified，份额/同币种总成本成对；缺NAV不拿成本冒充市场价。US identity保留`us_equity:US:{source_symbol}:USD`，venue仅来源已核OQ/N/AM、类股不拆；GP/GP-ETF推导stock/etf，美股只允许自选，份额和成本输入拒绝。错误保留AppError和local_read_capacity_exceeded分层。所有新router均挂现有鉴权；新增普通能力精确登记，未登记路径仍默认维护。
+
+基金snapshot的`public_profile`逐字段带source/source_url及可核源时点；无发布时间就为null。只向terms补来源中非空的缺失值，显式代码/币种冲突隔离，原NAV、费率、披露与旧记录不被公开页覆盖。`reference.scope=reported_top_holdings_reference`保留新浪前季前十重仓警告、nav_pct/nav2_pct两口径及日期/缺点；`estimated_fund_nav`、`estimated_fund_percent`为空，不能当整基金估值。原`estimate.state`继续不可用。
+
+US `regular.observation`区分regular_quote/regular_close/session_unverified/stale；窗外来源报价不改名盘后。`daily.price_basis=none`，成交量为股；源钟为纽约aware、received_at独立，`clock_phase`不等于实际开市，延迟未知不填0。日K失败返回局部unavailable，不能因此丢标准quote；分钟缺有效序列不造曲线。
+
+可选`overnight_data`沿`AlpacaOvernightResult`：disabled/missing_credentials/authorization_unverified/unavailable/stale/available，缺Key不外发；本轮用户自行注册并确认保存Key后，已于北京时间15:28实测AAPL夜盘指示性双边报价通过；其他标的与时段仍逐项核实。只在固定数据域用`feed=overnight`，没有账户/交易端点；quote仅指示性bid/ask、源时间与接收钟，不提供last/mid。缺tape保留null和missing，非N拒绝；零边、未来钟、源龄超60秒、过窗分别保留真实状态。401/403停止该owner后续取源，不换feed探权限；Key/header不入返回或证据。原`overnight`不可用段保留兼容，不迁写旧记录。完整产品边界见[统一工作台](../product/cross-asset-workbench.md)，语义合同归[现役蓝图](../ai/semantic-decisions.md#2026-10-30-decisions具名研究与统一工作台)。
 
 > **定位**：后端 HTTP 接口的**按域检索手册**。统一契约、鉴权边界、逐端点说明都在这里。
 > **上游**：`backend/app/api/routes/**`（端点实现）＋ `backend/app/core/auth.py`（鉴权策略单点）
