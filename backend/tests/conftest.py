@@ -42,6 +42,9 @@ os.environ["ASHARE_DATABASE_URL"] = "sqlite:///:memory:"
 os.environ["ASHARE_AGENT_AUTONOMY_ENABLED"] = "false"
 # Complete-research admission is now a manual feature gate, not a scheduler switch.
 os.environ["ASHARE_TRADINGAGENTS_RESEARCH_ENABLED"] = "false"
+os.environ["ASHARE_ASSET_READS_ENABLED"] = "false"
+os.environ["ASHARE_DECISIONS_RESEARCH_ENABLED"] = "false"
+os.environ["OPENAI_API_KEY"] = ""
 
 # 带配置开关的调度器在测试里关闭；无开关任务不在这份清单内。
 #
@@ -114,6 +117,11 @@ import app.review.storage as _review_storage  # noqa: E402
 
 _review_storage.REPORT_DIR = _TMP_REPORT_DIR
 _TMP_REPORT_DIR.mkdir(parents=True, exist_ok=True)
+
+# Enabled assembly tests must not place public source receipts in project data.
+import app.bootstrap.services as _bootstrap_services  # noqa: E402
+
+_bootstrap_services.ASSET_EVIDENCE_DIR = _TMP_REPORT_DIR / "assets" / "source-evidence"
 
 
 # ------------------------------------------- 运行期落盘隔离（第二批，2026-09-12）

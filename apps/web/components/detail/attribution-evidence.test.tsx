@@ -25,6 +25,18 @@ beforeEach(() => {vi.mocked(getStockAttribution).mockResolvedValue(payload());})
 afterEach(() => {cleanup(); vi.clearAllMocks(); vi.restoreAllMocks(); vi.useRealTimers();});
 
 describe("shared attribution evidence", () => {
+  it("mounts relation research only for an expanded current source-bound A-share event", () => {
+    const view = render(<AttributionEvidence item={evidence} symbol="600825"/>);
+    expect(screen.queryByRole("button", {name: "读取关联核验"})).toBeNull();
+    view.rerender(<AttributionEvidence item={evidence} symbol="600825" complete/>);
+    expect(screen.getByRole("button", {name: "读取关联核验"})).toBeTruthy();
+    for (const props of [{selectedAt: "2026-10-12T09:31:00+08:00"}, {selectionContext: true}, {symbol: "us:AAPL"},
+      {item: {...evidence, is_active: false}}, {item: {...evidence, source_context: null}},
+      {item: {...evidence, interpretation_ref: {...evidence.interpretation_ref, event_id: 99}}}]) {
+      view.rerender(<AttributionEvidence item={evidence} symbol="600825" complete {...props}/>);
+      expect(screen.queryByRole("button", {name: "读取关联核验"})).toBeNull();
+    }
+  });
   it.each(["regular", "inline", "summary"] as const)("%s separates source-only records from saved neutral AI results without launching judgement", async (mode) => {
     const auxiliary = {event_id: 18, input_version_id: 21, observation_id: 19, direction: 0, theme: null,
       reason: "来源仍需审批", chain: "", evidence: {field: "summary" as const, quote: "尚未完成审计"},

@@ -13,6 +13,7 @@ import {ReaderBrief, ResearchDisclosure} from "@/components/ui/reader-brief";
 import {readerExcerpt, readerCautions} from "@/lib/reader-copy";
 import {ModalShell} from "@/components/ui/modal-shell";
 import {SelectionDecisionExplorer, type SelectionSummary, type SelectionDecisionEvent} from "./selection-decision-explorer";
+import {CompanyRelationResearch} from "./company-relation-research";
 
 /** A primary clue must bind a saved source and its exact interpretation. */
 function boundPrimaryItem(data: StockAttributionPayload): AttributionEvidenceItem | null {
@@ -373,6 +374,10 @@ export function AttributionEvidence({item, symbol, selectedAt, recordedRef, sele
     <p className={styles.boundary}>来源收录不等于消息属实；关联与方向仍须核对。</p>
     <StockReasoningEvidence item={item} symbol={symbol} now={companyNow}/>
     <CompanyImpactEvidence item={item} symbol={symbol} now={companyNow}/>
+    {selectedAt == null && !selectionContext && sourceBound && symbol && /^[0-9]{6}$/.test(symbol)
+      && item.state === "active" && item.is_active && item.interpretation_ref.state === "active"
+      && item.interpretation_ref.event_id === item.event_id && Number.isSafeInteger(item.event_id) && item.event_id > 0
+      && <CompanyRelationResearch identity={{symbol, event_id: item.event_id, version_id: version!, observation_id: observation!}}/>}
     {item.timing_relation && <p role="note" className="text-zinc-600 dark:text-zinc-400">{item.timing_relation.label}。时点关系不证明涨停因果。</p>}
     {stageUnknown && <p role="note" className="text-amber-800 dark:text-amber-300">事件阶段尚未核实，不能按已落地事件解读。</p>}
     {(late || lateInterpretation || revised) && <p role="note" className="text-amber-800 dark:text-amber-300">{late ? "消息可用时间晚于首次加入，仅供后续复盘。" : lateInterpretation ? "当前解释形成晚于首次加入，仅供后续复盘。" : selectionContext ? "当前解释与选股记录引用的原版本不同。" : "当前解释与列表入口引用的版本不同。"}{selectionContext || selectedAt ? "不回填当时入选依据。" : "列表快照保留原记录。"}</p>}

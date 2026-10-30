@@ -54,6 +54,9 @@ import { subscribeWatchlist, notifyWatchlistChanged } from "@/lib/watchlist-sync
 import { LAST_SYMBOL_KEY, originLabel } from "@/lib/routing";
 import { indexDetailSymbol } from "@/lib/api/client";
 import type { Quote } from "@/types/market";
+import {WorkbenchFrame} from "@/components/workbench-frame";
+import {AssetWorkbench} from "@/components/asset-workbench";
+import {workbenchAsset} from "@/lib/asset-identity";
 
 const STATUS_LABEL = STREAM_STATUS_LABEL;
 const MOBILE_QUERY = "(max-width: 1023px)";
@@ -568,22 +571,15 @@ function WorkbenchInner() {
   const readWarning = [error, ...Object.values(baseErrors)].filter(Boolean).join("；");
 
   return (
-    <main data-workspace="workbench" className="task-page bc-workbench">
-      <h1 className="sr-only">工作台</h1>
-      <header className="bc-workbench-header">
-        <div className="bc-workbench-title">
-          {backLabel && backFrom && <button className="bc-back-button" onClick={() => router.push(backFrom)} title={`返回${backLabel}（跳转前状态已保留）`}>返回{backLabel}</button>}
-          <h2>关注与核对</h2>
-          <span className="bc-connection inline-flex w-[8.4em] shrink-0" data-transport={status} title={STATUS_LABEL[status].title}><span className={STATUS_LABEL[status].cls}>{STATUS_LABEL[status].text}</span></span>
-        </div>
-        <div className="bc-workbench-objects">
+    <WorkbenchFrame asset="cn_equity"
+      back={backLabel && backFrom && <button className="bc-back-button" onClick={() => router.push(backFrom)} title={`返回${backLabel}（跳转前状态已保留）`}>返回{backLabel}</button>}
+      connection={<span className="bc-connection inline-flex w-[8.4em] shrink-0" data-transport={status} title={STATUS_LABEL[status].title}><span className={STATUS_LABEL[status].cls}>{STATUS_LABEL[status].text}</span></span>}
+      actions={
           <nav aria-label="个人对象" className="bc-object-switch">
             <Link href={patchWorkspaceUrl("/workbench", sp.toString(), {mode: "watch", rt: null})} aria-current={mode === "watch" ? "page" : undefined}>自选跟踪</Link>
             <Link href={patchWorkspaceUrl("/workbench", sp.toString(), {mode: "positions", account: "manual", rt: null})} aria-current={mode === "positions" ? "page" : undefined}>实际持仓</Link>
           </nav>
-
-        </div>
-      </header>
+      }>
       {readWarning && <div role="alert" className="bc-read-warning bc-base-warning"><details><summary>部分数据读取失败 · 查看原因</summary><p className="data-scroll" tabIndex={0}>{readWarning}。保留值仅为上次结果，不能判断当前为空。</p></details>{Object.keys(baseErrors).length > 0 && <button onClick={retryFailedBase}>重试读取</button>}</div>}
 
       <nav className="bc-mobile-views" aria-label="工作台内容">
@@ -676,14 +672,24 @@ function WorkbenchInner() {
         </section>
       </div>
       <PickDetailModal target={detailTarget} onClose={() => setDetailTarget(null)} />
-    </main>
+    </WorkbenchFrame>
   );
 }
 
 export default function WorkbenchPage() {
   return (
     <Suspense fallback={<PageSkeletonFallback label="工作台加载中" />}>
-      <WorkbenchInner />
+      <UnifiedWorkbench />
     </Suspense>
   );
+}
+
+function UnifiedWorkbench() {
+  const params = useSearchParams();
+  const raw = params.get("asset");
+  const asset = workbenchAsset(raw);
+  if (raw && !["cn_equity", "fund", "us_equity"].includes(raw) || asset === "cn_equity" && params.has("symbol") && !/^(?:(?:sh|sz|bj))?\d{6}$/i.test(params.get("symbol") ?? "")) {
+    return <WorkbenchFrame asset={asset}><div className="asset-empty" role="alert"><h2>资产身份无法确认</h2><p>请使用上方资产切换和搜索重新选择，不按同号证券读取。</p></div></WorkbenchFrame>;
+  }
+  return asset === "cn_equity" ? <WorkbenchInner/> : <AssetWorkbench key={asset} asset={asset}/>;
 }

@@ -27,6 +27,8 @@ from app.api.routes import selection_validation as selection_validation_route
 from app.api.routes import assistant as assistant_route
 from app.api.routes import ext_data as ext_data_route
 from app.api.routes import notifications as notifications_route
+from app.api.routes import assets as assets_route
+from app.api.routes import asset_records as asset_records_route
 from app.bootstrap import build_services, register_schedulers
 from app.core.auth import validate_auth_posture
 from app.core.config import settings
@@ -58,6 +60,7 @@ from app.models.opportunity_learning import (  # noqa: F401  point-in-time 机�
     OpportunityOutcomeRevision,
 )
 from app.models.leader_research import LeaderResearchObservation, LeaderResearchSession
+from app.models.asset_records import AssetRecord
 from app.websocket.routes import router as ws_router
 
 # 显式持有引用：确保各模块的表注册进 Base.metadata，否则 create_all 不会建表
@@ -76,6 +79,7 @@ _REGISTERED_MODELS = (
     OpportunityDecisionSnapshot, OpportunityDecisionRun,
     OpportunityOutcomeLabel, OpportunityOutcomeRevision,
     LeaderResearchObservation, LeaderResearchSession,
+    AssetRecord,
 )
 
 logging.basicConfig(level=settings.log_level.upper(), format="%(asctime)s %(levelname)s %(name)s: %(message)s")
@@ -203,6 +207,8 @@ app.include_router(picks_intraday_route.router, prefix="/api", dependencies=_AUT
 app.include_router(assistant_route.router, prefix="/api", dependencies=_AUTH_GUARD)
 app.include_router(ext_data_route.router, prefix="/api", dependencies=_AUTH_GUARD)
 app.include_router(notifications_route.router, prefix="/api", dependencies=_AUTH_GUARD)
+app.include_router(assets_route.router, prefix="/api", dependencies=_AUTH_GUARD)
+app.include_router(asset_records_route.router, prefix="/api", dependencies=_AUTH_GUARD)
 # WebSocket 走**子协议**凭据（浏览器不允许自定义请求头），无法复用上面的
 # HTTP 依赖注入 ⇒ 在 `websocket/routes.py` 内于 `accept()` 之前自行校验。
 app.include_router(ws_router)

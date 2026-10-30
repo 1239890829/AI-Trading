@@ -41,6 +41,7 @@ from app.services.snapshot_service import MarketSnapshotService
 from app.services.theme_catalog_service import ThemeCatalogService
 
 log = logging.getLogger(__name__)
+ASSET_EVIDENCE_DIR = Path(__file__).resolve().parents[2] / "data" / "assets" / "source-evidence"
 
 
 @dataclass
@@ -63,6 +64,7 @@ class AppServices:
     theme_catalog: ThemeCatalogService | None
     event_store: EventStore
     review: ReviewService
+    asset_service: Any | None = None
 
     async def aclose(self) -> None:
         """停机收尾：关闭外部连接。"""
@@ -73,20 +75,25 @@ class AppServices:
         from app.market import board_flow
 
         try:
-            await close_inflight_reads(board_flow)
+            if self.asset_service is not None:
+                with contextlib.suppress(Exception, TimeoutError):
+                    await asyncio.wait_for(self.asset_service.aclose(), timeout=SHUTDOWN_GRACE_SECONDS)
         finally:
             try:
-                with contextlib.suppress(Exception, TimeoutError):
-                    try:
-                        await close_inflight_reads(self.provider)
-                    finally:
-                        await asyncio.wait_for(self.provider.aclose(), timeout=SHUTDOWN_GRACE_SECONDS)
+                await close_inflight_reads(board_flow)
             finally:
-                if self.theme_catalog is not None:
+                try:
                     with contextlib.suppress(Exception, TimeoutError):
-                        await asyncio.wait_for(
-                            self.theme_catalog.aclose(), timeout=SHUTDOWN_GRACE_SECONDS
-                        )
+                        try:
+                            await close_inflight_reads(self.provider)
+                        finally:
+                            await asyncio.wait_for(self.provider.aclose(), timeout=SHUTDOWN_GRACE_SECONDS)
+                finally:
+                    if self.theme_catalog is not None:
+                        with contextlib.suppress(Exception, TimeoutError):
+                            await asyncio.wait_for(
+                                self.theme_catalog.aclose(), timeout=SHUTDOWN_GRACE_SECONDS
+                            )
 
 
 def build_services(app: FastAPI) -> AppServices:
@@ -117,6 +124,18 @@ def build_services(app: FastAPI) -> AppServices:
     )
     app.state.hub = hub
     app.state.watchlist_repo = repo
+
+    # A selected asset view owns these reads. No new scheduler, subscription or
+    # A-share watchlist member is created for a fund/US instrument.
+    from app.assets.service import AssetReadService
+
+    asset_service = AssetReadService(
+        api_key=settings.ths_api_key if settings.asset_reads_enabled else "",
+        base_url=settings.ths_base_url if settings.asset_reads_enabled else "https://fuyao.aicubes.cn",
+        enabled=settings.asset_reads_enabled,
+        evidence_dir=ASSET_EVIDENCE_DIR if settings.asset_reads_enabled else None,
+    )
+    app.state.asset_service = asset_service
 
     # --- 预警引擎（Phase 8）：规则轮询 + 通知通道抽象 ---
     alert_repo = AlertRepository(session_factory)
@@ -263,4 +282,5 @@ def build_services(app: FastAPI) -> AppServices:
         theme_catalog=theme_catalog,
         event_store=event_store,
         review=review_svc,
+        asset_service=asset_service,
     )

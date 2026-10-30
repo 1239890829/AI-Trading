@@ -18,6 +18,7 @@ from app.models.real_position import RealPositionOverride, RealTrade  # noqa: F4
 from app.models.leader_research import LeaderResearchObservation, LeaderResearchSession  # noqa: F401
 from app.models.hunting_shadow import HuntingShadowAttempt  # noqa: F401
 from app.models.watchlist import Base
+from app.models.asset_records import AssetRecord  # noqa: F401
 from app.predict.models import PredictionReportRow, PredictionThemeRow  # noqa: F401
 from app.review.models import (  # noqa: F401
     MinuteDecisionRow,

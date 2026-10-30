@@ -1,5 +1,7 @@
 # 文档索引（INDEX）
 
+2026-10-30用户批准[统一资产工作台](product/cross-asset-workbench.md)：A股、国内QDII/联接及有源条件的美股共用`/workbench`，不合并事实/账户/执行；[Decisions手动关系研究](ai/semantic-decisions.md#2026-10-30-decisions具名研究与统一工作台)不替代完整TradingAgents或质量准入。三项项目中性研究Skills归`skills/qdii-fund-research`、`skills/research-thesis-tracking`、`skills/us-filing-review`；数据、工程、运行与效果分别取证，未合格来源不冒称已接入。
+
 2026-10-27选股续修：[正式指数涨幅与来源交易题材](product/hunting-decision-design.md#2026-10-27-正式指数涨幅与来源交易题材) / [股票身份与逐阶段留痕](product/hunting-decision-design.md#2026-10-27-股票身份与逐阶段候选留痕) / [原复盘行动到评估草案](review/review-agent.md#2026-10-27-原行动到评估草案)。原风格/评分/晋级门保留，发布与实页按handoff核。
 
 
@@ -22,6 +24,7 @@
 
 | 编号 | 文档 | 层 | 领域 | 用途 / 维护触发 |
 |---|---|---|---|---|
+| **MD-13** | `product/cross-asset-workbench.md` | L2 | 产品/资产研究 | 统一工作台、基金净值/披露/币种/手工记录、估算与推荐条件、美股来源能力及恢复；不进入A股选股执行 |
 | **AG-01** | `AGENTS.md`（根） | L3 | 工程治理 | 作业边界、简明中文交付、整任务连续交付、证据可行性与发布纪律；测试实测只在 handoff |
 | **AG-02** | `README.md`（根） | L3 | 对外 | 项目简介 + 指针式入口。维护：结构性变化 |
 | **KW-00** | `CONTEXT.md`（根） | L2 | 术语 | **领域词汇表（Ubiquitous Language）唯一权威**；只放术语、不放实现。维护：grilling 会话即时更新 |
@@ -44,7 +47,7 @@
 | **MD-09** | `research/limit-up-dragon-research.md` | L2 | 选股研究 | 历史涨停/强连板/龙头研究协议与证据；§30 纠正未来筛选，§32 为已纠错的旧裁决，§33 为价格基线，§34–35 为近期多路径案例与样本纠错，§36–38 为首板后候选状态、共同机制及 2016–2025 跨年份反证；§39 为持续观察、猎场消费和复盘契约，§39.4为隔离前向运行入口与覆盖限制；状态归 W04/RSH-031 |
 | **KW-00..11** | `kb/00-INDEX.md` … `kb/11-doc-catalog.md` | L2/L3 | 知识 | 见下方「KB 知识库」分表 |
 | **SM-01..08** | `summary/stock-strategy` · `factor-system` · `data-market` · `architecture-design` · `ai-evolution` · `review-governance` · `system-final-blueprint` · `pick-signal-chain` | L2 | 主题汇总 | **查主题先看这里**；`system-final-blueprint` 是任务四后目标架构与验收总纲，§5.1给KB正文回执与有限对照协议；**`pick-signal-chain` = 选股提醒链路（`dispatch_alert` 扇出 / 双家族断点 / §11 通知读侧 / §12 来源事件与投递合同 / §14 零成交分母 / §15 低分归因与盘中完整执行评估）**。维护：主题结论更新 |
-| **DT-01** | `data/data-source-comparison.md` | L2 | 数据源 | 四源实测对比与选型；§17工作台个股/指数故障分母与身份/失败契约，§21为东财官网全集与THS/SuperMind/TSP边界。**改数据源前必读，改完回填** |
+| **DT-01** | `data/data-source-comparison.md` | L2 | 数据源 | 四源实测对比与选型；§17工作台个股/指数故障分母与身份/失败契约，§21为东财官网全集与THS/SuperMind/TSP边界，§22全域核验，§23基金实抓与美股条件。**改数据源前必读，改完回填** |
 | **DT-02** | `data/data-sources.md` | L2 | 数据源 | 接入策略：主源 → 备源 → 降级链；[东财官网资金全集](data/data-sources.md#2026-10-27-东财官网全集资金与成员)的同源成员、完整计数和报价/资金双钟；[TradingAgents显式构包](data/data-sources.md#tradingagents显式研究构包2026-10-21)的现有免费owner、单位/双钟/缺失与指标边界；[金十新闻许可复核](data/data-sources.md#2026-10-25-金十新闻接入许可复核)区分已停服引用、MCP禁存与未承诺费用 |
 | **DT-03** | `archive/external-data-source-survey-2026-09-11.md` | L1 | 调研 | 外部付费源调研。§0–§7 = 官方公开信息（零实测，📎）；**§8 = 2026-09-16 复评（本机实测）**：FTShare 免费档实测 + 1000 次/天预算精算 + 四家价格/覆盖横向对比 + **升级决策 = 不升级**。**已拍板不接入付费档** ⇒ 只读留痕 |
 | **MD-01** | `strategy/theme-sentiment-methodology.md` | L2 | 方法论 | A 股热点题材与情绪分析 v1 |

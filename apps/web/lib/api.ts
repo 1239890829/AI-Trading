@@ -11,6 +11,8 @@
  */
 
 export * from "./api/client";
+export * from "./api/assets";
+export * from "./api/company-decisions";
 export * from "./api/agent";
 export * from "./api/alerts";
 export * from "./api/events";

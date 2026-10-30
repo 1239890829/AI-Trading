@@ -57,6 +57,10 @@ async def agent_task_types():
 @router.post("/agent/tasks", dependencies=[Depends(require_write_token)])
 async def create_task(body: TaskCreateIn, request: Request):
     try:
+        if body.type == "company_relation_research":
+            from app.services.company_decisions import validate_params
+
+            validate_params(body.params)
         if body.type == "tradingagents_research":
             from app.services.tradingagents_research import require_start
 
@@ -104,6 +108,21 @@ async def recover_task(
         })
     except Exception:
         raise HTTPException(status_code=500, detail="tradingagents_recovery_unavailable") from None
+
+
+@router.get("/agent/research/company-relations/{symbol}")
+async def company_relation_research_view(
+    request: Request, symbol: str = Path(pattern=r"^[0-9]{6}$"),
+    event_id: int = Query(gt=0), version_id: int = Query(gt=0), observation_id: int = Query(gt=0),
+):
+    from app.services.company_decisions import read_company_decisions
+
+    try:
+        result = await at._db_thread(read_company_decisions, symbol, event_id, version_id,
+                                     observation_id, request.app)
+    except ValueError as exc:
+        raise HTTPException(status_code=422, detail=str(exc)) from None
+    return {"data": result}
 
 
 @router.get("/agent/research/tradingagents/{symbol}")

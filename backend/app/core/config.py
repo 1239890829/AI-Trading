@@ -11,6 +11,8 @@ from pydantic_settings import BaseSettings, SettingsConfigDict
 REPO_ROOT = Path(__file__).resolve().parents[3]
 # Approved selected-stock research model; authorization must bind this exact transport.
 TRADINGAGENTS_SELECTED_MODEL = "gpt-6.1-sol"
+# Approved manual Decisions transport; separate from the text-generation channel.
+DECISIONS_RESEARCH_MODEL = "gpt-6-luna"
 
 log = logging.getLogger(__name__)
 
@@ -58,6 +60,8 @@ class Settings(BaseSettings):
     trades_tencent_http_fallback_enabled: bool = True
     ths_api_key: str = ""  # 同花顺 fuyao 官方 API Key（放 .env，勿提交）
     ths_base_url: str = "https://fuyao.aicubes.cn"
+    # Read-only asset research is independent of A-share quote polling.
+    asset_reads_enabled: bool = False
     # 题材官方成分视为有效的时长（architecture-design §1）；过期后懒同步。
     # 2026-09-08 用户指令（成分与同花顺完全一致）：168h 曾让 stale 判定 7 天不命中
     # ——30min×40 的补齐调度因此空转，成分调整（如代糖概念新增 920230）最长一周
@@ -360,6 +364,10 @@ class Settings(BaseSettings):
     company_evidence_interval_seconds: float = 900.0
     company_evidence_startup_delay_seconds: float = 90.0
     company_evidence_batch_size: int = 4  # Worker hard-caps both selected stocks and model batches at eight.
+    decisions_research_enabled: bool = False  # Explicit manual research, never a scoring/notification gate.
+    decisions_api_key: str = Field(default="", validation_alias="OPENAI_API_KEY", repr=False, exclude=True)
+    decisions_proxy: str = ""  # Explicit existing HTTP(S) proxy; never change system proxy settings.
+    decisions_timeout_seconds: float = Field(default=30.0, gt=0, le=30)
     tradingagents_research_enabled: bool = False  # Requires exact-method research authorization or quality admission.
     tradingagents_auto_research_enabled: bool = False  # New automatic dispatch only; manual tasks and saved readers stay independent.
     tradingagents_research_admission_digest: str = ""  # Server-pinned data/tradingagents_research/admission.json.

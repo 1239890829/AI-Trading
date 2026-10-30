@@ -198,7 +198,7 @@ def test_all_cancelled_waiters_keep_owner_until_application_close_drains(monkeyp
 
         monkeypatch.setattr(bf, "_clist_pages", pages)
         services = SimpleNamespace(provider=SimpleNamespace(aclose=close_provider),
-                                   theme_catalog=SimpleNamespace(aclose=close_catalog))
+                                   theme_catalog=SimpleNamespace(aclose=close_catalog), asset_service=None)
         first = asyncio.create_task(ts._board_index())
         second = closing = None
         try:
