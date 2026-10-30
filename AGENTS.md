@@ -2,7 +2,7 @@
 
 项目是 A 股实时行情、量化投研、模拟交易与事件选股工作台。先读本手册，状态与知识按入口查找；这里不复制历史任务或测试计数。
 
-2026-10-30用户批准统一资产工作台扩展：基金以国内QDII/联接优先，与A股共用`/workbench`，但身份、币种、净值/披露时点、手工记录和执行消费者隔离；美股仅在合格来源具备后只读开放。合同见`docs/product/cross-asset-workbench.md`。基金尽调、原研究论点/催化剂跟踪、SEC财报核验分别读`skills/qdii-fund-research`、`skills/research-thesis-tracking`、`skills/us-filing-review`的入口；不把这些助手流程当已部署自动服务。
+2026-10-30用户批准统一资产工作台扩展：基金以国内QDII/联接优先，原栏目候选不当推荐，与A股共用`/workbench`，但身份、币种、净值/披露时点、手工记录和执行消费者隔离；美股仅在合格来源具备后只读开放。合同见`docs/product/cross-asset-workbench.md`。基金尽调、原研究论点/催化剂跟踪、SEC财报核验分别读`skills/qdii-fund-research`、`skills/research-thesis-tracking`、`skills/us-filing-review`的入口；不把这些助手流程当已部署自动服务。
 
 **回答与交付表达**：默认用简明中文，借鉴 ASD-STE100 的简明原则。一句表达一个主要意思，先给结论，再给依据；使用具体词语，保留关键条件、来源和未知项。按理解需要选择短文字、关系图、交互网页或配音视频，不强制每次生成四份；长证据放在可追溯记录中。中文表达不宣称符合 ASD-STE100 英文规范，形式变化不替代事实核验。
 

@@ -1,5 +1,5 @@
 import {beforeEach, describe, expect, it, vi} from "vitest";
-import {deleteAssetRecord, getAssetCapabilities, getAssetRecords, getFundSnapshot, saveAssetRecord, searchAssets} from "@/lib/api/assets";
+import {deleteAssetRecord, getAssetCapabilities, getAssetRecords, getFundCatalog, getFundSnapshot, saveAssetRecord, searchAssets} from "@/lib/api/assets";
 import {getJson, sendJson} from "@/lib/api/internal";
 import {assetWorkbenchUrl, fundIdentityMatches} from "@/lib/asset-identity";
 
@@ -9,8 +9,8 @@ beforeEach(() => {vi.resetAllMocks(); vi.mocked(getJson).mockResolvedValue({data
 describe("资产请求与跨市场身份合同", () => {
   it("全部读取走资产域、完整OF代码和AbortSignal，不进入A股行情API", async () => {
     const signal = new AbortController().signal;
-    await getAssetCapabilities({signal}); await searchAssets("纳指 联接", "fund", {signal}); await getFundSnapshot("040046.OF", "month", {signal}); await getAssetRecords({signal});
-    expect(vi.mocked(getJson).mock.calls.map(call => call[0])).toEqual(["/api/assets/capabilities", "/api/assets/search?q=%E7%BA%B3%E6%8C%87+%E8%81%94%E6%8E%A5&asset_type=fund&limit=20", "/api/assets/funds/040046.OF/snapshot?range=month", "/api/assets/records?asset_type=fund"]);
+    await getAssetCapabilities({signal}); await searchAssets("纳指 联接", "fund", {signal}); await getFundSnapshot("040046.OF", "month", {signal}); await getAssetRecords({signal}); await getFundCatalog("source_buyable", {signal});
+    expect(vi.mocked(getJson).mock.calls.map(call => call[0])).toEqual(["/api/assets/capabilities", "/api/assets/search?q=%E7%BA%B3%E6%8C%87+%E8%81%94%E6%8E%A5&asset_type=fund&limit=20", "/api/assets/funds/040046.OF/snapshot?range=month", "/api/assets/records?asset_type=fund", "/api/assets/funds/catalog?tab=meiguo&purchase=source_buyable"]);
     expect(vi.mocked(getJson).mock.calls.every(call => call[2]?.signal === signal)).toBe(true);
   });
   it("持有写入带完整资产币种与版本，不写paper或real账户", async () => {

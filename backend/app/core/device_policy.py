@@ -34,7 +34,7 @@ def matched_route_template(scope: Mapping[str, Any]) -> str:
 
 
 READ_PATHS = frozenset({
-    "/assets/capabilities", "/assets/search", "/assets/funds/{code}/snapshot", "/assets/records",
+    "/assets/capabilities", "/assets/search", "/assets/funds/catalog", "/assets/funds/{code}/snapshot", "/assets/records",
     "/agent/research/company-relations/{symbol}",
     "/paper/selection-action",
     "/picks/watcher/state", "/picks/signal-health",

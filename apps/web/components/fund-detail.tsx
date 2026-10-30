@@ -3,7 +3,7 @@
 import {useState} from "react";
 import {FundNavChart} from "@/components/fund-nav-chart";
 import {FundRecordEditor} from "@/components/fund-record-editor";
-import type {AssetReadSection, AssetRecord, FundSnapshot, FundTerm} from "@/lib/api/assets";
+import type {AssetReadSection, AssetRecord, FundCatalogCandidate, FundSnapshot, FundTerm} from "@/lib/api/assets";
 
 const stateLabel = {ready: "已读取", partial: "部分资料", unavailable: "暂无资料"};
 function pct(value: number | null) {return value == null ? "未知" : `${value.toFixed(2)}%`;}
@@ -26,16 +26,17 @@ function Terms({rows, empty}: {rows: FundTerm[]; empty: string}) {
   return rows.length ? <dl className="asset-term-list">{rows.map((row, index) => <div key={`${row.label}:${index}`}><dt>{row.label}</dt><dd>{row.value}{row.condition && <small>{row.condition}</small>}</dd></div>)}</dl> : <p className="asset-note">{empty}</p>;
 }
 
-export function FundDetail({snapshot, range, setRange, record, recordPending, onRefreshRecords, refreshing, onRefresh}: {
-  snapshot: FundSnapshot; range: "month" | "year"; setRange: (value: "month" | "year") => void;
+export function FundDetail({snapshot, sourceCandidate, range, setRange, record, recordPending, onRefreshRecords, refreshing, onRefresh}: {
+  snapshot: FundSnapshot; sourceCandidate?: FundCatalogCandidate; range: "month" | "year"; setRange: (value: "month" | "year") => void;
   record?: AssetRecord; recordPending: boolean; onRefreshRecords: () => void; refreshing: boolean; onRefresh: () => void;
 }) {
   const [tab, setTab] = useState<"nav" | "holdings" | "terms" | "research">("nav");
   const [view, setView] = useState<"reported" | "lookthrough">("reported");
   const {instrument, nav, holdings, lookthrough, terms, research} = snapshot;
+  const sourceName = sourceCandidate?.state === "candidate" && sourceCandidate.source_symbol === instrument.source_symbol ? sourceCandidate.source_name : null;
   const tabs = [{key: "nav", label: "净值与记录"}, {key: "holdings", label: "披露持仓"}, {key: "terms", label: "费用与申赎"}, {key: "research", label: "研究核对"}] as const;
   return <div className="asset-detail">
-    <header className="asset-detail-heading"><div><h2 title="同花顺目录中的来源名称">{instrument.name}</h2><p>{instrument.source_symbol} · {instrument.currency} 份额 · 同花顺来源名称</p></div><button className="bc-compact-button" disabled={refreshing} onClick={onRefresh}>{refreshing ? "读取中…" : "刷新资料"}</button></header>
+    <header className="asset-detail-heading"><div><h2 title="同花顺来源名称，按完整份额代码对应">{sourceName ?? instrument.name}</h2><p>{instrument.source_symbol} · {instrument.currency} 份额 · 同花顺来源名称</p>{sourceName && sourceName !== instrument.name && <p className="asset-source-alias">标的目录原名：{instrument.name}；中文名来自同花顺基金栏目。</p>}</div><button className="bc-compact-button" disabled={refreshing} onClick={onRefresh}>{refreshing ? "读取中…" : "刷新资料"}</button></header>
     <nav className="asset-detail-tabs" aria-label="基金详情">{tabs.map(item => <button key={item.key} type="button" aria-pressed={tab === item.key} onClick={() => setTab(item.key)}>{item.label}</button>)}</nav>
     <div className="asset-reading-pane" tabIndex={0} aria-label={tabs.find(item => item.key === tab)!.label}>
       {tab === "nav" && <>

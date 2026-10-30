@@ -15,7 +15,7 @@ import httpx
 
 from app.assets.funds import (
     AssetSourceError, FUND_CODE, fund_code, instrument, parse_holdings, parse_nav,
-    parse_terms, rows,
+    parse_terms, rows, parse_catalog, validate_quota_shape,
 )
 from app.core.bjtime import BJ_TZ
 from app.core.errors import AppError
@@ -24,13 +24,14 @@ from app.core.ttl_cache import TTLCache
 from app.schemas.assets import (
     AssetCapabilities, AssetCapability, AssetEvidence, AssetInstrument, AssetSearchResult,
     FundEstimateSection, FundExposure, FundHoldingsSection, FundLookthroughSection,
-    FundNavSection, FundResearchSection, FundSnapshot, FundTerm, FundTermsSection,
+    FundCatalog, FundNavSection, FundResearchSection, FundSnapshot, FundTerm, FundTermsSection,
 )
 
 SEARCH = "/api/meta/tickers/search"
 NAV = "/api/fund/performance/nav"
 HOLDINGS = "/api/fund/portfolio/holdings"
 PROFILE = "/api/fund/profile/detail"
+QUOTA = "/api/fund/quota/list"
 MAX_BODY = 1_048_576
 
 
@@ -71,7 +72,7 @@ class AssetReadService:
         return AssetCapabilities(items=[
             AssetCapability(asset_type="fund", state="available" if self.enabled else "blocked",
                             reason="正式净值与披露研究；不提供基金交易" if self.enabled else "基金数据读取尚未启用或来源未配置",
-                            capabilities=["search", "official_nav", "disclosed_holdings", "lookthrough", "fees_and_rules"] if self.enabled else [],
+                            capabilities=["search", "official_nav", "disclosed_holdings", "lookthrough", "fees_and_rules", "source_qdii_catalog"] if self.enabled else [],
                             unavailable=["realtime_nav", "verified_investment_mandate", "automatic_recommendation"],
                             source="ths_official"),
             AssetCapability(asset_type="us_equity", state="blocked", source=None,
@@ -87,7 +88,7 @@ class AssetReadService:
 
     async def _raw(self, endpoint: str, params: dict[str, str | int]):
         self._check_enabled()
-        if endpoint not in {SEARCH, NAV, HOLDINGS, PROFILE}:
+        if endpoint not in {SEARCH, NAV, HOLDINGS, PROFILE, QUOTA}:
             raise ValueError("unsupported fund endpoint")
         key = (endpoint, tuple(sorted(params.items())))
         hit, value = self._cache.get(key)
@@ -110,12 +111,21 @@ class AssetReadService:
                                 raise AssetSourceError("基金来源响应超出本次读取范围", code="fund_source_too_large")
                 received = _utcnow()
                 payload = json.loads(body)
-                if not isinstance(payload, dict) or payload.get("code") != 0 or not isinstance(payload.get("data"), dict):
+                if not isinstance(payload, dict) or payload.get("code") != 0 or "data" not in payload:
                     raise AssetSourceError("基金来源未返回有效业务数据", code="fund_source_request_failed")
                 data = payload["data"]
-                rows(data, max_rows=400)
+                if endpoint == QUOTA:
+                    validate_quota_shape(data)
+                    has_items = bool(data)
+                else:
+                    if not isinstance(data, dict):
+                        raise AssetSourceError("基金来源未返回有效业务数据", code="fund_source_request_failed")
+                    has_items = bool(rows(data, max_rows=400))
                 digest = hashlib.sha256(body).hexdigest()
-                identity = json.dumps([endpoint, sorted(params.items()), digest], ensure_ascii=False)
+                # The body is content-addressed, but a receipt describes this
+                # actual observation. An unchanged body fetched after TTL must
+                # not reuse an older receipt carrying a different receive clock.
+                identity = json.dumps([endpoint, sorted(params.items()), digest, received.isoformat()], ensure_ascii=False)
                 receipt = hashlib.sha256(identity.encode()).hexdigest()
                 evidence = AssetEvidence(endpoint=endpoint, params=params, received_at=received,
                                          payload_sha256=digest, receipt_id=receipt)
@@ -128,8 +138,8 @@ class AssetReadService:
                         raise
                     evidence.raw_available = True
                 result = (data, evidence)
-                ttl = 300 if endpoint == NAV else 1800 if endpoint == PROFILE else 900
-                self._cache.set(key, deepcopy(result), ttl=ttl if data["item"] else 30)
+                ttl = 300 if endpoint in {NAV, QUOTA} else 1800 if endpoint == PROFILE else 900
+                self._cache.set(key, deepcopy(result), ttl=ttl if has_items else 30)
                 return result
             except (AssetSourceError, LocalReadCapacityExceeded):
                 raise
@@ -185,6 +195,21 @@ class AssetReadService:
         finally:
             if temporary is not None:
                 temporary.unlink(missing_ok=True)
+
+    async def catalog(self, purchase: str = "all", tab: str = "meiguo") -> FundCatalog:
+        if purchase not in {"all", "source_buyable"} or tab != "meiguo":
+            raise AppError("来源候选目录参数未支持", code="invalid_fund_catalog", status_code=422)
+        params = {"tab": '["meiguo"]'}
+        # Omitting buy is distinct from explicitly asking for the source's
+        # buyable list. Neither result establishes a negative purchase verdict.
+        if purchase == "source_buyable":
+            params["buy"] = "true"
+        data, evidence = await self._raw(QUOTA, params)
+        try:
+            return parse_catalog(data, purchase, evidence)
+        except AssetSourceError:
+            self._discard(QUOTA, params)
+            raise
 
     async def search(self, query: str, asset_type: str = "fund", limit: int = 20) -> AssetSearchResult:
         query = query.strip()

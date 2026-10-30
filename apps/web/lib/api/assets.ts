@@ -12,6 +12,22 @@ export interface AssetReadSection {
   state: "ready" | "partial" | "unavailable"; reason: string | null; missing: string[];
   source: "ths_official" | "system_calculation"; evidence: AssetEvidence[];
 }
+export interface FundCatalogCandidate {
+  source_symbol: string; source_name: string | null; state: "candidate" | "conflict" | "out_of_scope";
+  source_position: number; memberships: {group_key: string; group_position: number; row_position: number}[]; occurrence_count: number;
+  quota_raw: string | null; quota_status: "reported" | "unlimited" | "unknown" | "conflict"; quota_unit: null;
+  year_raw: string | null; classify: string[] | null; missing: string[]; conflicting_fields: string[];
+}
+export type FundCatalogPurchase = "all" | "source_buyable";
+export interface FundCatalog {
+  state: "ready" | "partial" | "unavailable"; source: "ths_official"; tab: "meiguo"; purchase: FundCatalogPurchase;
+  groups: {source_key: string; source_position: number; source_rows: number; unique_symbols: number}[];
+  items: FundCatalogCandidate[];
+  excluded: {group_key: string | null; group_position: number | null; row_position: number | null; source_symbol: string | null; reason: string}[];
+  coverage: {source_rows: number; unique_symbols: number; of_symbols: number; candidate_symbols: number; out_of_scope_symbols: number; conflict_symbols: number; placeholder_count: number; excluded_rows: number; complete_source_response: boolean};
+  source_as_of: null; evidence: AssetEvidence[]; missing: string[];
+  scope: "source_meiguo_catalog_not_investment_mandate"; scope_note: string; purchase_note: string; recommendation: false;
+}
 export interface FundNavPoint {nav_date: string; unit_nav: number | null; adj_nav: number | null}
 export interface FundHolding {
   source_symbol: string; name: string; asset_type: string; weight_pct: number | null;
@@ -55,6 +71,9 @@ export async function searchAssets(query: string, asset: "fund" | "us_equity", o
 }
 export async function getFundSnapshot(symbol: string, range: "month" | "year", options?: ReadOptions): Promise<FundSnapshot> {
   return (await getJson<FundSnapshot>(`/api/assets/funds/${encodeURIComponent(symbol)}/snapshot?range=${range}`, 60_000, options)).data;
+}
+export async function getFundCatalog(purchase: FundCatalogPurchase = "all", options?: ReadOptions): Promise<FundCatalog> {
+  return (await getJson<FundCatalog>(`/api/assets/funds/catalog?tab=meiguo&purchase=${purchase}`, 30_000, options)).data;
 }
 export async function getAssetRecords(options?: ReadOptions): Promise<{items: AssetRecord[]}> {
   return (await getJson<{items: AssetRecord[]}>("/api/assets/records?asset_type=fund", 15_000, options)).data;

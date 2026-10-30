@@ -14,7 +14,7 @@ export function WorkbenchFrame({asset, children, actions, connection, back}: {
       <div className="bc-workbench-title">{back}<h2>关注与核对</h2>{connection}</div>
       <div className="bc-workbench-objects">
         <nav aria-label="资产类型" className="bc-object-switch bc-asset-switch">
-          {(["cn_equity", "fund", "us_equity"] as const).map(value => <Link key={value} href={assetWorkbenchUrl(value)} aria-current={value === asset ? "page" : undefined}>{ASSET_LABELS[value]}</Link>)}
+          {(["cn_equity", "fund", "us_equity"] as const).map(value => <Link key={value} href={assetWorkbenchUrl(value, undefined, value === "fund" ? "research" : "watch")} aria-current={value === asset ? "page" : undefined}>{ASSET_LABELS[value]}</Link>)}
         </nav>
         {actions}
       </div>

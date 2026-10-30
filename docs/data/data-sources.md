@@ -2,11 +2,11 @@
 
 ## 2026-10-30 基金数据与美股来源条件
 
-统一工作台的基金沿原THS金融数据服务，只新增正式目录搜索、基金NAV、profile和披露持仓读者，不增加行情供应商。本轮能力与实抓对照见[能力比较§23](data-source-comparison.md#23-2026-10-30-基金同源读取与美股条件)。官方合同：[基金概览](https://fuyao.aicubes.cn/docs/api-reference/funds/)、[净值](https://fuyao.aicubes.cn/docs/api-reference/fund-performance/)、[披露持仓](https://fuyao.aicubes.cn/docs/api-reference/fund-holdings/)。保留完整source_symbol/asset_type/币种；不猜同号股票、后缀、中文别名或基准。
+统一工作台的基金沿原THS金融数据服务，增加正式目录搜索、基金NAV、profile、披露持仓及独立QDII栏目候选读者，不增加行情供应商。本轮能力与实抓对照见[能力比较§23](data-source-comparison.md#23-2026-10-30-基金同源读取与美股条件)。官方合同：[基金概览](https://fuyao.aicubes.cn/docs/api-reference/funds/)、[净值](https://fuyao.aicubes.cn/docs/api-reference/fund-performance/)、[披露持仓](https://fuyao.aicubes.cn/docs/api-reference/fund-holdings/)。保留完整source_symbol/asset_type/币种；不猜同号股票、后缀、中文别名或基准。
 
 读取独立TTL/同key在飞共享与小并发上限，不进入A股Hub和全市场循环；满额明确本地忙，不称供应商失败。公开回包按原始正文hash单存，小回执分别记录端点/参数/接收时刻，避免同数据重复下载/存储；Key/header不入证据。NAV所属日、持仓报告/披露/修改钟与接收钟分开，响应timestamp不冒充源发布时间。坏身份/值/日期不缓存成成功，未知和未覆盖保留。
 
-已有最小实抓确认净值/联接一层披露可读，也发现源中文名称和范围字段缺口。profile的经理/费率/规则不等于完整投资范围或当前申购状态；diagnostics的上游概率不作事实或gold；资讯标题不代招募书。缺正式范围/基准/境外价格/估值FX时分别标研究待核、估算不可提供，不造推荐。
+已有实抓确认净值/联接一层披露可读。metadata/profile的短名不能外推为供应商完全没有中文名：独立[QDII额度列表](https://fuyao.aicubes.cn/docs/api-reference/fund-quota/)提供按完整thscode关联的中文全名和源额度字段，原目录名称仍保留。profile的经理/费率/规则不等于完整投资范围或当前申购状态；diagnostics的上游概率不作事实或gold；资讯标题不代招募书。缺正式范围/基准/境外价格/估值FX时分别标研究待核、估算不可提供，不造推荐。
 
 美股现无满足用户完整免费要求的已准入源。Alpaca个人免费IEX不覆盖全市场，免费夜盘成交延迟15分钟且quote是指示性；新Key未申请、未实接。THS现有合同未证明支持美股/纳指100。腾讯/新浪/东财公开页面可读性也不自动证明完整时段、时效及留存/展示许可。资料依据见[统一工作台](../product/cross-asset-workbench.md#4-美股只读的条件)，源限制不靠换成A股或估值隐藏。
 

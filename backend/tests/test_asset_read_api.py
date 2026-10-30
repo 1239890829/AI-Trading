@@ -39,7 +39,7 @@ def test_read_routes_require_pairing_but_not_maintenance(tmp_path, monkeypatch):
     try:
         with TestClient(assembled(service, authenticated=True)) as client:
             for path in ("/api/assets/capabilities", "/api/assets/search?q=040046",
-                         "/api/assets/funds/040046.OF/snapshot"):
+                         "/api/assets/funds/040046.OF/snapshot", "/api/assets/funds/catalog"):
                 assert client.get(path).status_code == 401
             caps = client.get("/api/assets/capabilities", headers=headers)
             assert caps.status_code == 200
@@ -47,6 +47,8 @@ def test_read_routes_require_pairing_but_not_maintenance(tmp_path, monkeypatch):
             result = client.get("/api/assets/funds/040046.OF/snapshot", headers=headers)
             assert result.status_code == 503
             assert result.json()["code"] == "asset_source_disabled"
+            catalog = client.get("/api/assets/funds/catalog", headers=headers)
+            assert catalog.status_code == 503 and catalog.json()["code"] == "asset_source_disabled"
             us = client.get("/api/assets/search?q=AAPL&asset_type=us_equity", headers=headers)
             assert us.status_code == 200 and us.json()["data"]["state"] == "blocked"
     finally:
@@ -70,7 +72,8 @@ def test_capacity_and_scope_errors_keep_global_http_contract_without_source_call
                 assert busy.status_code == 503
                 assert busy.json() == {"detail": "当前读取繁忙，请稍后重试", "code": "local_read_capacity_exceeded"}
                 for path in ("/api/assets/funds/040046/snapshot", "/api/assets/funds/159632.SZ/snapshot",
-                             "/api/assets/funds/040046.OF/snapshot?range=all", "/api/assets/search?q=a&limit=21"):
+                             "/api/assets/funds/040046.OF/snapshot?range=all", "/api/assets/search?q=a&limit=21",
+                             "/api/assets/funds/catalog?tab=global", "/api/assets/funds/catalog?purchase=true"):
                     assert (await client.get(path)).status_code == 422
                 assert calls == []
         finally:
