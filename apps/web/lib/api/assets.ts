@@ -10,7 +10,25 @@ export interface AssetEvidence {
 }
 export interface AssetReadSection {
   state: "ready" | "partial" | "unavailable"; reason: string | null; missing: string[];
-  source: "ths_official" | "system_calculation"; evidence: AssetEvidence[];
+  source: "ths_official" | "system_calculation" | "mixed_public_sources"; evidence: AssetEvidence[];
+}
+export interface FundPublicField {
+  key: string; label: string; value: string; source: "eastmoney_fund" | "huaan_fund";
+  source_url: string; source_as_of: string | null;
+}
+export interface FundPublicProfile {
+  source_symbol: string; state: "ready" | "partial" | "unavailable"; fields: FundPublicField[];
+  missing: string[]; conflicts: string[]; evidence: AssetEvidence[];
+  document_scope: "public_product_description_not_verified_regulatory_document"; recommendation: false;
+}
+export interface FundPublicReference {
+  source_symbol: string; state: "ready" | "partial" | "stale" | "unavailable";
+  scope: "reported_top_holdings_reference"; source: "sina_fund"; warning: string; scope_note: string;
+  source_as_of: string | null; trading_date: string | null; is_current_day: boolean; age_seconds: number | null;
+  disclosed_nav: number | null; disclosed_nav_date: string | null; heavy_stock_us: boolean | null;
+  curves: {key: "nav_pct" | "nav2_pct"; label: string; latest_pct: number | null;
+    points: {as_of: string; percent_pct: number | null; reference_value: number | null}[]}[];
+  missing: string[]; evidence: AssetEvidence[]; estimated_fund_nav: null; estimated_fund_percent: null;
 }
 export interface FundCatalogCandidate {
   source_symbol: string; source_name: string | null; state: "candidate" | "conflict" | "out_of_scope";
@@ -43,6 +61,8 @@ export interface FundSnapshot {
   terms: AssetReadSection & {manager_name: string | null; fees: FundTerm[]; dealing_rules: FundTerm[]; investment_scope: string | null; benchmark: string | null; subscription_status: string | null};
   research: AssetReadSection & {eligible: boolean; checks: FundTerm[]; disclaimer: string};
   estimate: AssetReadSection & {value: number | null; currency: string; basis: "estimate"};
+  public_profile?: FundPublicProfile | null;
+  reference?: FundPublicReference | null;
 }
 export interface AssetCapability {
   asset_type: "fund" | "us_equity"; state: "available" | "blocked"; reason: string;

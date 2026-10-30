@@ -6,6 +6,7 @@ import {FundRecordEditor} from "@/components/fund-record-editor";
 import {FundNavChart} from "@/components/fund-nav-chart";
 import {ApiError} from "@/lib/api/client";
 import * as api from "@/lib/api/assets";
+import * as usApi from "@/lib/api/us-assets";
 import type {AssetRecord, FundCatalog, FundSnapshot} from "@/lib/api/assets";
 
 const state = vi.hoisted(() => ({params: new URLSearchParams("asset=fund&mode=watch&symbol=040046.OF"), push: vi.fn(), replace: vi.fn(), quotes: vi.fn(), positions: vi.fn()}));
@@ -13,6 +14,8 @@ vi.mock("next/navigation", () => ({useSearchParams: () => state.params, useRoute
 vi.mock("@/hooks/use-quote-stream", () => ({useQuoteStream: state.quotes, STREAM_STATUS_LABEL: {}}));
 vi.mock("@/hooks/use-real-positions", () => ({useRealPositions: state.positions}));
 vi.mock("@/lib/api/assets", () => ({getAssetCapabilities: vi.fn(), getFundCatalog: vi.fn(), getAssetRecords: vi.fn(), getFundSnapshot: vi.fn(), saveAssetRecord: vi.fn(), deleteAssetRecord: vi.fn()}));
+
+vi.mock("@/lib/api/us-assets", async original => ({...await original<typeof import("@/lib/api/us-assets")>(), getUsAssetRecords: vi.fn(), getUsSnapshot: vi.fn()}));
 
 function fixture(symbol = "040046.OF"): FundSnapshot {
   const section = {state: "ready" as const, reason: null, missing: [], source: "ths_official" as const, evidence: []};
@@ -51,21 +54,89 @@ beforeEach(() => {
 });
 afterEach(() => {cleanup(); vi.useRealTimers();});
 
+describe("基金显示名称不依赖候选视图", () => {
+  it.each(["watch", "positions"])("直接进入%s按正式完整代码显示中文名，旧记录名保留且不写库", async mode => {
+    const stored = {...record(), name: "100RMBA"};
+    const original = structuredClone(stored);
+    state.params = new URLSearchParams(`asset=fund&mode=${mode}&symbol=040046.OF`);
+    vi.mocked(api.getAssetRecords).mockResolvedValue({items: [stored]});
+    render(<WorkbenchPage/>);
+    expect(await screen.findByRole("heading", {name: "来源中文基金0"})).toBeTruthy();
+    const list = screen.getByRole("region", {name: "基金列表"});
+    expect(within(list).getByRole("button", {name: /来源中文基金0.*040046.OF/})).toBeTruthy();
+    expect(within(list).getByText("记录名：100RMBA")).toBeTruthy();
+    expect(screen.getByText(/标的目录原名：测试美股联接/)).toBeTruthy();
+    expect(api.getFundCatalog).toHaveBeenCalledExactlyOnceWith("all", {signal: expect.any(AbortSignal)});
+    expect(api.saveAssetRecord).not.toHaveBeenCalled(); expect(stored).toEqual(original);
+  });
+  it("不同份额分别对应中文名，币种或记录ID不符不借用中文名", async () => {
+    const records = [record(), {...record(), instrument_id: "fund:OF:040046:USD", currency: "USD", name: "美元旧记录"},
+      {...record(), instrument_id: "fund:OF:040047:CNY", source_symbol: "040047.OF", name: "另一份额旧名"},
+      {...record(), instrument_id: "fund:OF:040048:CNY", source_symbol: "040048.OF", currency: "USD", name: "身份矛盾记录"}];
+    vi.mocked(api.getAssetRecords).mockResolvedValue({items: records}); render(<WorkbenchPage/>);
+    await screen.findByRole("heading", {name: "来源中文基金0"});
+    const list = screen.getByRole("region", {name: "基金列表"});
+    expect(within(list).getAllByText("来源中文基金0")).toHaveLength(1);
+    expect(within(list).getByRole("button", {name: /来源中文基金1.*040047.OF/})).toBeTruthy();
+    expect(within(list).getByText("美元旧记录")).toBeTruthy();
+    expect(within(list).getByText("身份矛盾记录")).toBeTruthy();
+    expect(within(list).getAllByText("记录身份待核，保留原名")).toHaveLength(2);
+    expect(api.getFundSnapshot).toHaveBeenCalledTimes(1); expect(api.saveAssetRecord).not.toHaveBeenCalled();
+  });
+  it("目录无对应或名称冲突时保留原名及具体来源状态", async () => {
+    const catalog = catalogFixture(2); catalog.items[0].state = "conflict"; catalog.items[0].conflicting_fields = ["fund_name"];
+    vi.mocked(api.getFundCatalog).mockResolvedValue(catalog);
+    vi.mocked(api.getAssetRecords).mockResolvedValue({items: [record(), {...record(), instrument_id: "fund:OF:040199:CNY", source_symbol: "040199.OF", name: "原目录外记录"}]});
+    render(<WorkbenchPage/>); await screen.findByRole("heading", {name: "测试美股联接"});
+    const list = screen.getByRole("region", {name: "基金列表"});
+    expect(within(list).getByText("我的标签")).toBeTruthy();
+    expect(within(list).getByText("来源名称冲突，保留原名")).toBeTruthy();
+    expect(within(list).getByText("原目录外记录")).toBeTruthy();
+    expect(within(list).getByText("中文名称未对应，保留原名")).toBeTruthy();
+    expect(api.saveAssetRecord).not.toHaveBeenCalled();
+  });
+  it("慢目录不阻断原详情和记录，完成后自动补名且切自选持有不重复读取", async () => {
+    let finish!: (data: FundCatalog) => void;
+    vi.mocked(api.getFundCatalog).mockImplementation(() => new Promise(resolve => {finish = resolve;}));
+    const view = render(<WorkbenchPage/>);
+    expect(await screen.findByRole("heading", {name: "测试美股联接"})).toBeTruthy();
+    expect(screen.getByRole("img", {name: /净值曲线/})).toBeTruthy();
+    expect(screen.getByRole("button", {name: "编辑持有"}).hasAttribute("disabled")).toBe(false);
+    expect(screen.getAllByText("中文名称读取中，暂保留原名").length).toBeGreaterThan(0);
+    state.params = new URLSearchParams("asset=fund&mode=positions&symbol=040046.OF"); view.rerender(<WorkbenchPage/>);
+    await act(async () => finish(catalogFixture()));
+    expect(await screen.findByRole("heading", {name: "来源中文基金0"})).toBeTruthy();
+    state.params = new URLSearchParams("asset=fund&mode=watch&symbol=040046.OF"); view.rerender(<WorkbenchPage/>);
+    expect(api.getFundCatalog).toHaveBeenCalledTimes(1); expect(api.getFundSnapshot).toHaveBeenCalledTimes(1);
+  });
+  it("中文目录失败不阻断已有净值或编辑，失败状态不伪装成无匹配", async () => {
+    vi.mocked(api.getFundCatalog).mockRejectedValue(new Error("来源超时")); render(<WorkbenchPage/>);
+    await screen.findByRole("heading", {name: "测试美股联接"});
+    expect(await screen.findAllByText("中文名称来源读取失败，保留原名")).not.toHaveLength(0);
+    expect(screen.getByRole("img", {name: /净值曲线/})).toBeTruthy();
+    expect(screen.getByRole("button", {name: "编辑持有"}).hasAttribute("disabled")).toBe(false);
+    expect(api.saveAssetRecord).not.toHaveBeenCalled();
+  });
+});
+
 describe("统一工作台资产边界", () => {
   it("基金挂原工作台外壳，按完整身份读取，完全不挂 A 股行情和持仓消费者", async () => {
     const {container} = render(<WorkbenchPage/>);
-    expect(await screen.findByText("测试美股联接")).toBeTruthy();
+    expect(await screen.findByRole("heading", {name: "来源中文基金0"})).toBeTruthy();
+    expect(screen.getByText(/标的目录原名：测试美股联接/)).toBeTruthy();
     expect(container.querySelectorAll('main[data-workspace="workbench"]')).toHaveLength(1);
     expect(screen.getByRole("navigation", {name: "资产类型"}).querySelector('[aria-current="page"]')?.textContent).toBe("基金");
     expect(api.getFundSnapshot).toHaveBeenCalledWith("040046.OF", "year", {signal: expect.any(AbortSignal)});
     expect(state.quotes).not.toHaveBeenCalled(); expect(state.positions).not.toHaveBeenCalled();
     expect(screen.queryByRole("button", {name: "模拟买入"})).toBeNull();
   });
-  it("美股只显示能力阻断，不请求基金、记录或 A 股行情", async () => {
+  it("美股能力阻断仍读原美股自选，不请求基金或 A 股行情", async () => {
+    vi.mocked(usApi.getUsAssetRecords).mockResolvedValue({items: []});
     state.params = new URLSearchParams("asset=us_equity&symbol=AAPL"); render(<WorkbenchPage/>);
-    expect(await screen.findByText("美股来源待核验")).toBeTruthy();
+    expect(await screen.findByText("美股来源暂不可用")).toBeTruthy();
     expect(screen.getByText("缺少合规、可核时效的美股行情源")).toBeTruthy();
     expect(api.getFundSnapshot).not.toHaveBeenCalled(); expect(api.getAssetRecords).not.toHaveBeenCalled(); expect(state.quotes).not.toHaveBeenCalled();
+    expect(usApi.getUsAssetRecords).toHaveBeenCalledTimes(1); expect(usApi.getUsSnapshot).not.toHaveBeenCalled();
   });
   it.each(["asset=fund&symbol=040046", "asset=unknown&symbol=040046.OF", "symbol=040046.OF"])("无效链接不向A股或基金取错对象：%s", async query => {
     state.params = new URLSearchParams(query); render(<WorkbenchPage/>); await act(async () => {});
@@ -78,9 +149,10 @@ describe("统一工作台资产边界", () => {
     const view = render(<WorkbenchPage/>); await waitFor(() => expect(api.getFundSnapshot).toHaveBeenCalledTimes(1));
     const oldSignal = vi.mocked(api.getFundSnapshot).mock.calls[0][2]!.signal!;
     state.params = new URLSearchParams("asset=fund&mode=watch&symbol=040047.OF"); view.rerender(<WorkbenchPage/>);
-    expect(await screen.findByText("另一只基金")).toBeTruthy(); expect(oldSignal.aborted).toBe(true);
+    expect(await screen.findByRole("heading", {name: "来源中文基金1"})).toBeTruthy();
+    expect(screen.getByText(/标的目录原名：另一只基金/)).toBeTruthy(); expect(oldSignal.aborted).toBe(true);
     await act(async () => resolveOld(fixture()));
-    expect(screen.queryByText("测试美股联接")).toBeNull();
+    expect(screen.queryByText(/标的目录原名：测试美股联接/)).toBeNull();
   });
   it("返回另一基金身份时拒绝展示与写入", async () => {
     vi.mocked(api.getFundSnapshot).mockResolvedValue(fixture("040047.OF")); render(<WorkbenchPage/>);
@@ -153,19 +225,33 @@ describe("基金来源候选与按需详情", () => {
     expect(api.getFundCatalog).toHaveBeenCalledTimes(1); expect(api.saveAssetRecord).not.toHaveBeenCalled();
     await choose("基金：来源候选", "自选");
     state.params = new URLSearchParams("asset=fund&mode=watch&symbol=040046.OF"); view.rerender(<WorkbenchPage/>);
-    expect(screen.getByText("我的标签")).toBeTruthy(); expect(api.getFundCatalog).toHaveBeenCalledTimes(1);
+    expect(screen.getByText("记录名：我的标签")).toBeTruthy(); expect(api.getFundCatalog).toHaveBeenCalledTimes(1);
   });
   it("来源可购独立key，迟到的全部名单不能冒充可购，选中详情保持独立", async () => {
     let finish!: (data: FundCatalog) => void;
     vi.mocked(api.getFundCatalog).mockImplementation(purchase => purchase === "all" ? new Promise(resolve => {finish = resolve;}) : Promise.resolve({...catalogFixture(2), purchase: "source_buyable", items: [catalogFixture(2).items[1]]}));
-    state.params = new URLSearchParams("asset=fund&mode=research&symbol=040046.OF"); render(<WorkbenchPage/>);
+    state.params = new URLSearchParams("asset=fund&mode=research&symbol=040046.OF"); const view = render(<WorkbenchPage/>);
     expect(await screen.findByRole("heading", {name: "测试美股联接"})).toBeTruthy();
     const signal = vi.mocked(api.getFundCatalog).mock.calls[0][1]!.signal!;
     await choose("名单：全部来源", "来源可购");
-    expect(await screen.findByText("来源中文基金1")).toBeTruthy(); expect(signal.aborted).toBe(true);
+    expect(await screen.findByText("来源中文基金1")).toBeTruthy(); expect(signal.aborted).toBe(false);
     await act(async () => finish(catalogFixture()));
-    expect(screen.queryByText("来源中文基金0")).toBeNull(); expect(screen.getByRole("heading", {name: "测试美股联接"})).toBeTruthy();
+    // The identity reference still consumes all; it cannot change buyable membership.
+    const list = screen.getByRole("region", {name: "基金列表"});
+    expect(within(list).queryByText("来源中文基金0")).toBeNull();
+    expect(screen.getByRole("heading", {name: "来源中文基金0"})).toBeTruthy();
     expect(api.getFundSnapshot).toHaveBeenCalledTimes(1); expect(api.getFundCatalog).toHaveBeenCalledTimes(2);
+    await choose("名单：来源可购", "全部来源");
+    expect(within(list).getByText("来源中文基金0")).toBeTruthy();
+    await choose("名单：全部来源", "来源可购");
+    expect(within(list).queryByText("来源中文基金0")).toBeNull();
+    state.params = new URLSearchParams("asset=fund&mode=watch&symbol=040046.OF"); view.rerender(<WorkbenchPage/>);
+    expect(within(screen.getByRole("region", {name: "基金列表"})).getByText("来源中文基金0")).toBeTruthy();
+    state.params = new URLSearchParams("asset=fund&mode=positions&symbol=040046.OF"); view.rerender(<WorkbenchPage/>);
+    state.params = new URLSearchParams("asset=fund&mode=research&symbol=040046.OF"); view.rerender(<WorkbenchPage/>);
+    expect(within(screen.getByRole("region", {name: "基金列表"})).queryByText("来源中文基金0")).toBeNull();
+    expect(screen.getByRole("heading", {name: "来源中文基金0"})).toBeTruthy();
+    expect(api.getFundCatalog).toHaveBeenCalledTimes(2); expect(api.getFundSnapshot).toHaveBeenCalledTimes(1);
   });
   it("候选名单失败不阻断净值和记录，冲突/超域候选不开放详情", async () => {
     state.params = new URLSearchParams("asset=fund&mode=research&symbol=040046.OF");

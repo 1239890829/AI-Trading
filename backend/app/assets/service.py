@@ -17,6 +17,9 @@ from app.assets.funds import (
     AssetSourceError, FUND_CODE, fund_code, instrument, parse_holdings, parse_nav,
     parse_terms, rows, parse_catalog, validate_quota_shape,
 )
+from app.assets.us_market import UsMarketService, observe_quote
+from app.assets.alpaca_data import AlpacaDataService
+from app.assets.fund_public import FundPublicService
 from app.core.bjtime import BJ_TZ
 from app.core.errors import AppError
 from app.core.inflight_reads import InflightReads, LocalReadCapacityExceeded
@@ -26,6 +29,8 @@ from app.schemas.assets import (
     FundEstimateSection, FundExposure, FundHoldingsSection, FundLookthroughSection,
     FundCatalog, FundNavSection, FundResearchSection, FundSnapshot, FundTerm, FundTermsSection,
 )
+from app.schemas.us_assets import UsSearchResult
+from app.schemas.fund_public import FundPublicProfile, FundPublicReference
 
 SEARCH = "/api/meta/tickers/search"
 NAV = "/api/fund/performance/nav"
@@ -42,11 +47,14 @@ def _utcnow():
 class AssetReadService:
     def __init__(self, api_key: str = "", base_url: str = "https://fuyao.aicubes.cn", *,
                  enabled: bool = True, evidence_dir: Path | None = None,
-                 http_client: httpx.AsyncClient | None = None):
+                 http_client: httpx.AsyncClient | None = None, us_enabled: bool = False,
+                 public_enabled: bool = False, alpaca_data_key: str = "", alpaca_data_secret: str = ""):
         # Only the documented official host receives the existing credential.
         if base_url.rstrip("/") != "https://fuyao.aicubes.cn":
             raise ValueError("asset reads require the official THS HTTPS origin")
         self.enabled = enabled and bool(api_key)
+        self.us = UsMarketService(enabled=us_enabled,
+                                  evidence_dir=Path(evidence_dir) / "us" if evidence_dir is not None else None)
         self.evidence_dir = Path(evidence_dir) if evidence_dir is not None else None
         self._client = http_client
         self._client_options = dict(
@@ -60,6 +68,11 @@ class AssetReadService:
         self._closing = False
         self._close_task: asyncio.Task | None = None
         self._evidence_lock = threading.Lock()
+        self.public = FundPublicService(enabled=public_enabled,
+                                       evidence_writer=self._save_evidence if self.evidence_dir is not None else None)
+        self.overnight = AlpacaDataService(enabled=us_enabled, api_key=alpaca_data_key,
+                                          secret_key=alpaca_data_secret,
+                                          evidence_writer=self._save_evidence if self.evidence_dir is not None else None)
 
     def _http(self):
         # An unused/disabled asset view must not allocate a TLS context or pool
@@ -75,9 +88,10 @@ class AssetReadService:
                             capabilities=["search", "official_nav", "disclosed_holdings", "lookthrough", "fees_and_rules", "source_qdii_catalog"] if self.enabled else [],
                             unavailable=["realtime_nav", "verified_investment_mandate", "automatic_recommendation"],
                             source="ths_official"),
-            AssetCapability(asset_type="us_equity", state="blocked", source=None,
-                            reason="尚无获准的完整美股行情源；不以单交易所或延迟行情冒充完整实时行情",
-                            capabilities=[], unavailable=["regular", "pre_market", "post_market", "overnight"]),
+            AssetCapability(asset_type="us_equity", state="available" if self.us.enabled else "blocked", source="tencent",
+                            reason="公开常规报价、日K与自选查看；时段覆盖和延迟分别标注" if self.us.enabled else "美股公开读取尚未启用",
+                            capabilities=["search", "regular_quote", "daily_history", "watchlist"] if self.us.enabled else [],
+                            unavailable=["pre_market", "post_market", "overnight_last_trade", "intraday", "verified_feed_delay"]),
         ])
 
     def _check_enabled(self):
@@ -154,7 +168,7 @@ class AssetReadService:
         self._cache.invalidate((endpoint, tuple(sorted(params.items()))))
 
     def _save_evidence(self, evidence: AssetEvidence, body: bytes):
-        """One public response per content identity. Never save auth/headers/URL."""
+        """One body per content identity; only fixed source URLs and public params."""
         with self._evidence_lock:
             self._write_evidence(evidence, body)
 
@@ -211,12 +225,14 @@ class AssetReadService:
             self._discard(QUOTA, params)
             raise
 
-    async def search(self, query: str, asset_type: str = "fund", limit: int = 20) -> AssetSearchResult:
+    async def search(self, query: str, asset_type: str = "fund", limit: int = 20):
         query = query.strip()
         if not 1 <= len(query) <= 80 or not 1 <= limit <= 20:
             raise AppError("搜索参数不在支持范围", code="invalid_asset_search", status_code=422)
         if asset_type == "us_equity":
-            return AssetSearchResult(query=query, asset_type="us_equity", state="blocked", reason=self.capabilities().items[1].reason)
+            if not self.us.enabled:
+                return UsSearchResult(query=query, state="blocked", reason=self.capabilities().items[1].reason)
+            return await self.us.search(query, limit)
         if asset_type != "fund":
             raise AppError("资产类别未支持", code="invalid_asset_search", status_code=422)
         data, evidence = await self._raw(SEARCH, {"q": query, "asset_type": "fund-otc", "limit": limit})
@@ -238,6 +254,21 @@ class AssetReadService:
         return AssetSearchResult(query=query, asset_type="fund", state="partial" if issues else "ready", items=found,
                                  reason="名称目录可能不完整，可用基金正式代码查询" if not found else None,
                                  issues=sorted(issues), evidence=[evidence])
+
+    async def resolve_us(self, code: str):
+        return await self.us.resolve(code)
+
+    async def us_snapshot(self, code: str, limit: int = 120):
+        snapshot = (await self.us.snapshot(code, limit)).model_copy(deep=True)
+        # This optional observation never replaces the Tencent last price or
+        # claims a trade, consolidated feed or all-session availability.
+        snapshot.overnight_data = await self.overnight.latest(snapshot.instrument)
+        if snapshot.overnight_data.state == "available" and snapshot.overnight_data.authorization_verified and snapshot.overnight_data.quote is not None:
+            snapshot.missing = [item for item in snapshot.missing if item != "overnight_source"]
+            # A bid/ask observation does not establish a latest trade.
+            snapshot.missing.append("overnight_last_trade")
+        snapshot.regular = observe_quote(snapshot.regular, _utcnow())
+        return snapshot
 
     async def resolve_fund(self, code: str) -> AssetInstrument:
         code = fund_code(code)
@@ -261,14 +292,18 @@ class AssetReadService:
             raise AppError("净值区间未支持", code="invalid_fund_range", status_code=422)
         async def load():
             try:
-                async with asyncio.timeout(30):
-                    return await self._snapshot(code, range)
+                # The same total budget includes identity resolution. A slow
+                # optional section must not discard already completed facts.
+                deadline = asyncio.get_running_loop().time() + 30
+                return await self._snapshot(code, range, deadline)
             except TimeoutError as exc:
                 raise AssetSourceError("基金读取超过本次时限", code="fund_source_timeout") from exc
         return await self._snapshots.read((code, range), load)
 
-    async def _snapshot(self, code: str, range: str) -> FundSnapshot:
-        verified = await self.resolve_fund(code)
+    async def _snapshot(self, code: str, range: str, deadline: float) -> FundSnapshot:
+        loop = asyncio.get_running_loop()
+        async with asyncio.timeout(max(0, deadline - loop.time())):
+            verified = await self.resolve_fund(code)
         today = _utcnow().astimezone(BJ_TZ).date()
 
         async def nav_read():
@@ -276,9 +311,10 @@ class AssetReadService:
             try:
                 data, evidence = await self._raw(NAV, {"thscode": code, "range": range, "nav_type": "unit,adj"})
                 return parse_nav(data, code, verified.currency, today, evidence)
-            except AssetSourceError as exc:
+            except (AssetSourceError, LocalReadCapacityExceeded) as exc:
                 self._discard(NAV, {"thscode": code, "range": range, "nav_type": "unit,adj"})
-                return FundNavSection(state="unavailable", reason=exc.detail, missing=[exc.code], currency=verified.currency,
+                return FundNavSection(state="unavailable", reason=getattr(exc, "detail", "本机来源读取忙"),
+                                      missing=[getattr(exc, "code", "fund_source_local_busy")], currency=verified.currency,
                                       evidence=[evidence] if evidence else [])
 
         async def terms_read():
@@ -286,42 +322,102 @@ class AssetReadService:
             try:
                 data, evidence = await self._raw(PROFILE, {"thscode": code})
                 return parse_terms(data, code, evidence)
-            except AssetSourceError as exc:
+            except (AssetSourceError, LocalReadCapacityExceeded) as exc:
                 self._discard(PROFILE, {"thscode": code})
-                return FundTermsSection(state="unavailable", reason=exc.detail, missing=[exc.code],
+                return FundTermsSection(state="unavailable", reason=getattr(exc, "detail", "本机来源读取忙"),
+                                        missing=[getattr(exc, "code", "fund_source_local_busy")],
                                         evidence=[evidence] if evidence else [])
 
-        children = [asyncio.create_task(nav_read()), asyncio.create_task(terms_read())]
+        holdings_task = None
+
+        async def lookthrough_read():
+            root = await asyncio.shield(holdings_task)
+            try:
+                return await self._lookthrough(code, root, today)
+            except (AssetSourceError, LocalReadCapacityExceeded) as exc:
+                return FundLookthroughSection(state="unavailable", reason=getattr(exc, "detail", "本机来源读取忙"),
+                    missing=[getattr(exc, "code", "fund_source_local_busy")], evidence=root.evidence)
+
+        children = {"nav": asyncio.create_task(nav_read()), "terms": asyncio.create_task(terms_read()),
+                    "holdings": asyncio.create_task(self._holdings(code, today))}
+        holdings_task = children["holdings"]
+        children["lookthrough"] = asyncio.create_task(lookthrough_read())
+        children["public_profile"] = asyncio.create_task(self.public.profile(code))
+        children["reference"] = asyncio.create_task(self.public.reference(code))
         try:
-            nav, terms = await asyncio.gather(*children)
-        except BaseException:
-            for child in children:
+            _, pending = await asyncio.wait(children.values(), timeout=max(0, deadline - loop.time()))
+            # Only local waiters are canceled. Source owners remain registered
+            # until their own deadlines and aclose drains them before shutdown.
+            for child in pending:
                 child.cancel()
-            await asyncio.gather(*children, return_exceptions=True)
+            await asyncio.gather(*pending, return_exceptions=True)
+            timeout_reason = "本次30秒读取预算已用尽"
+            unavailable = {
+                "nav": FundNavSection(state="unavailable", reason=timeout_reason,
+                    missing=["fund_source_timeout"], currency=verified.currency),
+                "terms": FundTermsSection(state="unavailable", reason=timeout_reason, missing=["fund_source_timeout"]),
+                "holdings": FundHoldingsSection(state="unavailable", reason=timeout_reason, missing=["fund_source_timeout"]),
+                "lookthrough": FundLookthroughSection(state="unavailable", reason=timeout_reason, missing=["fund_source_timeout"]),
+                "public_profile": FundPublicProfile(source_symbol=code, state="unavailable", missing=["fund_public_timeout"]),
+                "reference": FundPublicReference(source_symbol=code, state="unavailable", missing=["fund_public_timeout"]),
+            }
+            result = {key: unavailable[key] if task in pending else task.result() for key, task in children.items()}
+        except BaseException:
+            for child in children.values():
+                child.cancel()
+            await asyncio.gather(*children.values(), return_exceptions=True)
             raise
-        holdings = await self._holdings(code, today)
-        lookthrough = await self._lookthrough(code, holdings, today)
+        nav, terms, holdings, lookthrough = (result[key] for key in ("nav", "terms", "holdings", "lookthrough"))
+        public_profile, reference = result["public_profile"], result["reference"]
+        public_fields = {field.key: field for field in public_profile.fields}
+        currency = public_fields.get("currency")
+        if public_profile.source_symbol != code or currency is not None and currency.value != verified.currency:
+            reason = "fund_public_identity_mismatch" if public_profile.source_symbol != code else "fund_public_currency_mismatch"
+            public_profile = public_profile.model_copy(update={"state": "unavailable", "fields": [],
+                "missing": sorted(set(public_profile.missing + [reason]))})
+            reference = FundPublicReference(source_symbol=code, state="unavailable", missing=[reason],
+                                            evidence=reference.evidence)
+            public_fields = {}
+        if reference.source_symbol != code:
+            reference = FundPublicReference(source_symbol=code, state="unavailable", missing=["fund_reference_identity_mismatch"],
+                                            evidence=reference.evidence)
+        supplemented = False
+        for key in ("investment_scope", "benchmark", "subscription_status"):
+            field = public_fields.get(key)
+            if field is not None and getattr(terms, key) is None:
+                setattr(terms, key, field.value)
+                terms.missing = [value for value in terms.missing if value != key]
+                supplemented = True
+        if supplemented:
+            terms.source = "mixed_public_sources"
+            terms.evidence = list({item.receipt_id: item for item in terms.evidence + public_profile.evidence}.values())
+            terms.state = "partial" if terms.missing or public_profile.conflicts else "ready"
+            terms.reason = "费率及规则按来源原文；投资范围、基准和申购状态由逐字段公开产品说明补充"
         checks = [FundTerm(label="净值", value="可核" if nav.latest and nav.latest.unit_nav is not None else "缺失"),
                   FundTerm(label="费率", value="可核" if terms.fees else "缺失"),
                   FundTerm(label="申赎规则", value="有来源规则" if terms.dealing_rules else "缺失"),
-                  FundTerm(label="投资范围", value="缺正式文件"),
-                  FundTerm(label="业绩基准", value="缺正式文件")]
-        research = FundResearchSection(state="unavailable", reason="正式投资范围、基准与申购状态未核实，暂不列为可推荐",
+                  FundTerm(label="投资范围", value="公开资料具备" if terms.investment_scope else "缺失"),
+                  FundTerm(label="业绩基准", value="公开资料具备" if terms.benchmark else "缺失"),
+                  FundTerm(label="申购状态", value=terms.subscription_status or "缺失")]
+        research = FundResearchSection(state="partial" if any(check.value != "缺失" for check in checks) else "unavailable",
+                                       reason="按已取得资料逐项核对；公开产品说明不等于监管文件核验，不构成推荐或策略准入",
                                        missing=sorted(set(terms.missing + (["unit_nav"] if not nav.latest or nav.latest.unit_nav is None else []))),
                                        checks=checks, evidence=terms.evidence)
         estimate = FundEstimateSection(state="unavailable", reason="缺同口径当前持仓、境外行情与估值汇率，不能可靠估算",
                                        missing=["current_positions", "same_basis_market_prices", "valuation_fx"], currency=verified.currency)
         return FundSnapshot(instrument=verified, state="partial", received_at=_utcnow(), nav=nav, holdings=holdings,
-                            lookthrough=lookthrough, terms=terms, research=research, estimate=estimate)
+                            lookthrough=lookthrough, terms=terms, research=research, estimate=estimate,
+                            public_profile=public_profile, reference=reference)
 
     async def _holdings(self, code, today):
         evidence = None
         try:
             data, evidence = await self._raw(HOLDINGS, {"thscode": code})
             return parse_holdings(data, code, today, evidence)
-        except AssetSourceError as exc:
+        except (AssetSourceError, LocalReadCapacityExceeded) as exc:
             self._discard(HOLDINGS, {"thscode": code})
-            return FundHoldingsSection(state="unavailable", reason=exc.detail, missing=[exc.code],
+            return FundHoldingsSection(state="unavailable", reason=getattr(exc, "detail", "本机来源读取忙"),
+                                       missing=[getattr(exc, "code", "fund_source_local_busy")],
                                        evidence=[evidence] if evidence else [])
 
     async def _lookthrough(self, code, root, today):
@@ -362,10 +458,23 @@ class AssetReadService:
         self._closing = True
         if self._close_task is None:
             async def drain():
-                await self._snapshots.close()
-                await self._requests.close()
-                if self._client is not None:
-                    await self._client.aclose()
+                try:
+                    await self._snapshots.close()
+                finally:
+                    try:
+                        await self._requests.close()
+                    finally:
+                        try:
+                            await self.public.aclose()
+                        finally:
+                            try:
+                                await self.us.aclose()
+                            finally:
+                                try:
+                                    await self.overnight.aclose()
+                                finally:
+                                    if self._client is not None:
+                                        await self._client.aclose()
             self._close_task = asyncio.create_task(drain())
         cancelled = False
         while not self._close_task.done():

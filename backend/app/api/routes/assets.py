@@ -38,3 +38,9 @@ async def snapshot(code: str, range: Literal["month", "year"] = "year",
 async def catalog(purchase: Literal["all", "source_buyable"] = "all", tab: Literal["meiguo"] = "meiguo",
                   service: AssetReadService = Depends(get_asset_service)) -> dict:
     return {"data": (await service.catalog(purchase, tab)).model_dump(mode="json")}
+
+
+@router.get("/us/{code}/snapshot")
+async def us_snapshot(code: str, limit: Literal[120] = 120,
+                      service: AssetReadService = Depends(get_asset_service)) -> dict:
+    return {"data": (await service.us_snapshot(code, limit)).model_dump(mode="json")}
