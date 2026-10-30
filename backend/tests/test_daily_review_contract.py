@@ -318,7 +318,7 @@ def test_old_head_upgrade_keeps_legacy_row_unbound_and_column_nullable(tmp_path)
         config.attributes['connection'] = conn
         command.upgrade(config, 'head')
         assert conn.execute(text('SELECT note,excess_pct,review_context,selection_version FROM daily_pick_review')).one() == ('legacy evidence', 4.0, None, None)
-        assert conn.execute(text('SELECT version_num FROM alembic_version')).scalar() == 'd2f4b6e8a0c1'
+        assert conn.execute(text('SELECT version_num FROM alembic_version')).scalar() == 'e3a5c7d9f1b2'
         assert conn.execute(text('SELECT fill_price,executed_at,fee_known,selection_ref FROM real_trade')).one() == (10, None, None, None)
     col = next(c for c in inspect(engine).get_columns('daily_pick_review') if c['name'] == 'review_context')
     assert col['nullable'] is True

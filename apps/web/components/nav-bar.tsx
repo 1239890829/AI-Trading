@@ -13,6 +13,7 @@ import { CommandPalette } from "@/components/ui/command-palette";
 import { TaskBrowser } from "@/components/ui/task-browser";
 import { activeTask, TASK_LINKS } from "@/lib/task-navigation";
 import { SearchBox } from "@/components/search-box";
+import {workbenchAsset} from "@/lib/asset-identity";
 import { NotificationBell } from "@/components/notifications/notification-drawer";
 
 function NavBarInner() {
@@ -82,7 +83,7 @@ function NavBarInner() {
           })}
         </nav>
         <div className="header-spacer flex-1" />
-        <SearchBox collapsible />
+        <SearchBox key={pathname === "/workbench" ? workbenchAsset(params.get("asset")) : "cn_equity"} asset={pathname === "/workbench" ? workbenchAsset(params.get("asset")) : "cn_equity"} collapsible />
         <div className="header-tools" aria-label="全局工具">
         <CommandPalette maintenance={Boolean(device?.maintenance)} />
         <NotificationBell />

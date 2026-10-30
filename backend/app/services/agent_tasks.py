@@ -58,6 +58,10 @@ TASK_TYPES: dict[str, dict[str, str]] = {
         "label": "采集公司依据与判读", "risk": "L0",
         "desc": "读取当前选股或指定证券的公开公司披露，生成有界研究解释；不改变排序或资格",
     },
+    "company_relation_research": {
+        "label": "核验公司事件关联", "risk": "L0",
+        "desc": "手动读取已保存依据，以Decisions做固定关系判断；未验证研究，不改变评分、通知或执行资格",
+    },
     "tradingagents_research": {
         "label": "完整多角色研究", "risk": "L0",
         "desc": "真正入选后运行完整TradingAgents；独立研究授权不设每日次数配额，保留用量/来源/恢复核验；报告待核",
@@ -586,6 +590,12 @@ async def _h_company_evidence(rec: _StepRecorder, params: dict, app: Any) -> dic
     return await run_company_evidence(rec, params, app)
 
 
+async def _h_company_relations(rec: _StepRecorder, params: dict, app: Any) -> dict:
+    from app.services.company_decisions import run_company_decisions
+
+    return await run_company_decisions(rec, params, app)
+
+
 async def _h_tradingagents_research(rec: _StepRecorder, params: dict, app: Any) -> dict:
     if "native_recovery" in params:
         from app.services.tradingagents_recovery import run_recovery
@@ -610,6 +620,7 @@ async def _h_reference_strategies(rec: _StepRecorder, params: dict, app: Any) ->
 _HANDLERS: dict[str, Callable[[_StepRecorder, dict, Any], Awaitable[dict]]] = {
     "reference_strategies": _h_reference_strategies,
     "company_evidence": _h_company_evidence,
+    "company_relation_research": _h_company_relations,
     "tradingagents_research": _h_tradingagents_research,
     "review": _h_review,
     "data_check": _h_data_check,

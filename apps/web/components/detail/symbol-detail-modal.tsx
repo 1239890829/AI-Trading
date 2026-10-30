@@ -86,7 +86,7 @@ export function SymbolDetailProvider({ children }: { children: React.ReactNode }
         const from =
           typeof window === "undefined" ? null : new URLSearchParams(window.location.search).get("from");
         router.replace(
-          patchWorkspaceUrl("/workbench", window.location.search, {symbol: r.symbol, ...(r.chartTab ? {ct: r.chartTab} : {}), ...(r.rightTab ? {rt: r.rightTab} : {}), from}),
+          patchWorkspaceUrl("/workbench", window.location.search, {asset: null, symbol: r.symbol, ...(r.chartTab ? {ct: r.chartTab} : {}), ...(r.rightTab ? {rt: r.rightTab} : {}), from}),
           { scroll: false },
         );
         return;

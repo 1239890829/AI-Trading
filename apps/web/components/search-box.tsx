@@ -12,6 +12,9 @@ import {indexDetailSymbol} from "@/lib/api/client";
 import { notifyWatchlistChanged } from "@/lib/watchlist-sync";
 import { useSymbolDetail } from "@/components/detail/symbol-detail-context";
 import type { SymbolSearchItem } from "@/types/market";
+import {useRouter} from "next/navigation";
+import {getAssetRecords, saveAssetRecord, searchAssets, type AssetInstrument} from "@/lib/api/assets";
+import {ASSET_LABELS, assetWorkbenchUrl, fundIdentityMatches, notifyAssetRecordsChanged, type WorkbenchAsset} from "@/lib/asset-identity";
 
 /** 输入停稳后的防抖时长（ms）。Enter 可跳过防抖立即搜索。 */
 const DEBOUNCE_MS = 250;
@@ -19,10 +22,11 @@ const DEBOUNCE_MS = 250;
 const MIN_QUERY_LEN = 2;
 const HISTORY_KEY = "ashare-security-search-history-v1";
 const HISTORY_LIMIT = 12;
-type SelectedHistory = {query: string; symbol: string; name: string; market: string};
+type SelectedHistory = {query: string; symbol: string; name: string; market: string; instrument?: AssetInstrument};
 type SearchHistory = SelectedHistory | {query: string};
+type SearchItem = SymbolSearchItem & {instrument?: AssetInstrument};
 function selectedHistory(entry: SearchHistory): entry is SelectedHistory {return "symbol" in entry;}
-function historyIdentity(entry: SearchHistory) {return selectedHistory(entry) ? `${entry.market}:${entry.symbol}` : `query:${entry.query}`;}
+function historyIdentity(entry: SearchHistory) {return selectedHistory(entry) ? entry.instrument?.instrument_id ?? `${entry.market}:${entry.symbol}` : `query:${entry.query}`;}
 
 /** Market-qualified index segments use the existing detail contract; names never supply identity. */
 function historySymbol(symbol: string, market: string): string | null {
@@ -35,7 +39,7 @@ function historySymbol(symbol: string, market: string): string | null {
   const knownMarket = /^(6|5|900)/.test(code) ? "SH" : /^[0123]/.test(code) ? "SZ" : /^(4|8|920)/.test(code) ? "BJ" : null;
   return knownMarket === market ? code : null;
 }
-function validHistory(value: unknown): SearchHistory[] {
+function validHistory(value: unknown, asset: WorkbenchAsset = "cn_equity"): SearchHistory[] {
   if (!Array.isArray(value)) return [];
   const result: SearchHistory[] = [];
   for (const raw of value.slice(0, HISTORY_LIMIT * 4)) {
@@ -43,12 +47,21 @@ function validHistory(value: unknown): SearchHistory[] {
     if (!entry || typeof entry !== "object" || typeof entry.query !== "string" || entry.query.trim().length < MIN_QUERY_LEN || entry.query.length > 64) continue;
     const query = entry.query.trim();
     let record: SearchHistory;
+    if (asset !== "cn_equity") {
+      const instrument = entry.instrument;
+      if (asset !== "fund" || !instrument || typeof instrument !== "object" || !fundIdentityMatches(instrument)
+        || typeof instrument.name !== "string" || instrument.name.length > 160 || entry.symbol !== instrument.source_symbol) continue;
+      record = {query, symbol: instrument.source_symbol, name: instrument.name, market: instrument.market, instrument};
+    } else {
+    // Never migrate a non-A-share identity into the legacy six-digit history.
+    if (entry.instrument) continue;
     if (!("symbol" in entry) && !("market" in entry)) record = {query};
     else {
       if (typeof entry.symbol !== "string" || !["SH", "SZ", "BJ"].includes(entry.market)
         || typeof entry.name !== "string" || entry.name.length > 80) continue;
       const symbol = historySymbol(entry.symbol, entry.market);
       record = symbol ? {query, symbol, name: entry.name, market: entry.market} : {query};
+    }
     }
     if (result.some(row => historyIdentity(row) === historyIdentity(record))) continue;
     result.push(record);
@@ -60,7 +73,9 @@ function validHistory(value: unknown): SearchHistory[] {
 // 搜不到结果还消耗上游配额；选字 Enter 属于 IME 操作不是搜索指令。
 // compositionEnd 后用最终上屏词立即搜索（跳过防抖）。
 
-export function SearchBox({collapsible = false}: {collapsible?: boolean}) {
+export function SearchBox({collapsible = false, asset = "cn_equity"}: {collapsible?: boolean; asset?: WorkbenchAsset}) {
+  const router = useRouter();
+  const historyKey = asset === "cn_equity" ? HISTORY_KEY : `ashare-asset-search-history-v1:${asset}`;
   const [expanded,setExpanded] = useState(!collapsible);
   const triggerRef = useRef<HTMLButtonElement>(null);
   // 选中搜索结果 → **就地弹窗**看详情（2026-09-15 详情弹窗化）。
@@ -71,7 +86,7 @@ export function SearchBox({collapsible = false}: {collapsible?: boolean}) {
   const [adding, setAdding] = useState<string | null>(null);
   const [addNote, setAddNote] = useState<string | null>(null);
   const addLock = useRef(false);
-  const [items, setItems] = useState<SymbolSearchItem[]>([]);
+  const [items, setItems] = useState<SearchItem[]>([]);
   const [open, setOpen] = useState(false);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
@@ -82,12 +97,12 @@ export function SearchBox({collapsible = false}: {collapsible?: boolean}) {
     let alive = true;
     queueMicrotask(() => {
       try {
-        const saved = localStorage.getItem(HISTORY_KEY);
-        if (alive) setHistory(saved && saved.length <= 16_384 ? validHistory(JSON.parse(saved)) : []);
+        const saved = localStorage.getItem(historyKey);
+        if (alive) setHistory(saved && saved.length <= 16_384 ? validHistory(JSON.parse(saved), asset) : []);
       } catch {}
     });
     return () => {alive = false;};
-  }, []);
+  }, [historyKey, asset]);
   const boxRef = useRef<HTMLDivElement>(null);
   const inputRef = useRef<HTMLInputElement>(null);
   const panelId = useId();
@@ -110,7 +125,16 @@ export function SearchBox({collapsible = false}: {collapsible?: boolean}) {
     setLoading(true);
     setError(null);
     setOpen(true); // 请求飞行中立即打开面板显示「搜索中…」，不等响应
-    searchSymbols(kw)
+    const request = asset === "cn_equity" ? searchSymbols(kw) : searchAssets(kw, asset).then(result => {
+      if (result.asset_type !== asset || result.query !== kw) throw new ApiError(502, "搜索返回的资产或关键词不匹配，请重新搜索", "asset_identity_mismatch");
+      if (seq === seqRef.current) {
+        if (result.state === "blocked") setError(result.reason ?? "该资产来源尚未通过核验");
+        else if (result.state === "partial") setAddNote(result.reason ?? "来源只返回部分结果，请核对覆盖范围");
+      }
+      return result.items.map(instrument => ({symbol: instrument.source_symbol, name: instrument.name, market: instrument.market,
+        source: instrument.source, is_realtime: false, instrument}));
+    });
+    request
       .then((res) => {
         if (seq !== seqRef.current) return; // 已被更新的输入取代，丢弃旧响应
         setItems(res);
@@ -128,7 +152,7 @@ export function SearchBox({collapsible = false}: {collapsible?: boolean}) {
       .finally(() => {
         if (seq === seqRef.current) setLoading(false);
       });
-  }, []);
+  }, [asset]);
 
   useEffect(() => {
     const kw = q.trim();
@@ -186,11 +210,11 @@ export function SearchBox({collapsible = false}: {collapsible?: boolean}) {
   function remember(entry: SearchHistory) {
     const next = [entry, ...history.filter(row => historyIdentity(row) !== historyIdentity(entry))].slice(0, HISTORY_LIMIT);
     setHistory(next);
-    try {localStorage.setItem(HISTORY_KEY, JSON.stringify(next));} catch {}
+    try {localStorage.setItem(historyKey, JSON.stringify(next));} catch {}
   }
 
-  function go(item: Pick<SymbolSearchItem, "symbol" | "name" | "market">, recalled?: SelectedHistory) {
-    const parsed = validHistory([{query: q.trim(), symbol: item.symbol, name: item.name ?? item.symbol, market: item.market}])[0];
+  function go(item: Pick<SearchItem, "symbol" | "name" | "market" | "instrument">, recalled?: SelectedHistory) {
+    const parsed = validHistory([{query: q.trim(), symbol: item.symbol, name: item.name ?? item.symbol, market: item.market, ...(item.instrument ? {instrument: item.instrument} : {})}], asset)[0];
     const entry = recalled ?? (parsed && selectedHistory(parsed) ? parsed : undefined);
     if (!entry) {
       const term = parsed ?? validHistory([q.trim()])[0];
@@ -204,7 +228,8 @@ export function SearchBox({collapsible = false}: {collapsible?: boolean}) {
     inputRef.current?.focus();
     dismiss();
     setQ("");
-    openSymbolDetail({symbol: entry?.symbol ?? item.symbol});
+    if (entry.instrument) router.push(assetWorkbenchUrl("fund", entry.instrument.source_symbol));
+    else openSymbolDetail({symbol: entry.symbol});
   }
 
   function recall(entry: SearchHistory) {
@@ -229,8 +254,23 @@ export function SearchBox({collapsible = false}: {collapsible?: boolean}) {
     setSearched(false);
   }
 
-  async function quickAdd(e: React.MouseEvent, item: SymbolSearchItem) {
+  async function quickAdd(e: React.MouseEvent, item: SearchItem) {
     e.stopPropagation();
+    if (item.instrument) {
+      if (!fundIdentityMatches(item.instrument) || addLock.current) return;
+      addLock.current = true; setAdding(item.instrument.instrument_id); setAddNote(null);
+      const seq = seqRef.current;
+      try {
+        const record = (await getAssetRecords()).items.find(row => row.instrument_id === item.instrument!.instrument_id);
+        if (!record?.is_watched) await saveAssetRecord(item.instrument.instrument_id, {source_symbol: item.instrument.source_symbol,
+          name: record?.name ?? (item.instrument.name.length <= 80 ? item.instrument.name : null), is_watched: true, units: record?.units ?? null,
+          cost_total: record?.cost_total ?? null, note: record?.note ?? null, expected_version: record?.version ?? 0});
+        if (seq === seqRef.current) {setItems(previous => previous.map(row => row.instrument?.instrument_id === item.instrument!.instrument_id ? {...row, is_realtime: true} : row)); setAddNote(`${item.name} 已加入基金自选`);}
+        notifyAssetRecordsChanged();
+      } catch (exc) {if (seq === seqRef.current) setAddNote(`加入自选失败：${exc instanceof Error ? exc.message : "请重试"}`);}
+      finally {addLock.current = false; setAdding(null);}
+      return;
+    }
     const symbol = historySymbol(item.symbol, item.market ?? "");
     // WatchlistAdd accepts bare six-digit securities, never canonical index IDs.
     if (!symbol || !/^\d{6}$/.test(symbol) || addLock.current) return;
@@ -342,7 +382,7 @@ export function SearchBox({collapsible = false}: {collapsible?: boolean}) {
         onKeyDown={onKeyDown}
         aria-label="搜索证券代码或名称"
         placeholder="搜索代码 / 名称"
-        title="支持证券代码、名称、拼音全拼与缩写"
+        title={asset === "cn_equity" ? "支持证券代码、名称、拼音全拼与缩写" : `搜索${ASSET_LABELS[asset]}官方名称或代码；结果不混入 A 股`}
         aria-busy={loading}
         className="w-full rounded-md border border-zinc-200 bg-transparent px-3 py-1.5 pr-8 text-sm outline-none placeholder:text-zinc-600 dark:placeholder:text-zinc-400 focus:border-up/60 dark:border-zinc-700"
       />
@@ -356,11 +396,11 @@ export function SearchBox({collapsible = false}: {collapsible?: boolean}) {
       {panel && (
         <section id={panelId} data-motion-state={showPanel ? "open" : "closed"} aria-hidden={!showPanel || undefined} inert={!showPanel} className="ui-glass-overlay search-popover motion-float" aria-label="证券搜索结果">
           <header className="search-popover-heading">
-            <div><strong>证券搜索</strong><span>{panel.historyMode ? "最近查看 / 检索词" : "代码、名称或拼音"}</span></div>
+            <div><strong>{asset === "cn_equity" ? "证券搜索" : `${ASSET_LABELS[asset]}搜索`}</strong><span>{panel.historyMode ? "最近查看 / 检索词" : asset === "cn_equity" ? "代码、名称或拼音" : "官方名称或完整代码"}</span></div>
             <CloseButton onClose={closeAndFocus} label="关闭搜索结果" autoFocus={false} />
           </header>
         <ul className="search-result-list">
-          {panel.historyMode && <li className="flex items-center justify-between px-3 py-2 text-xs text-zinc-600 dark:text-zinc-400"><span>仅保存在本机</span><button type="button" className="quiet-action" aria-label="清除搜索历史" onClick={() => {setHistory([]); try {localStorage.removeItem(HISTORY_KEY);} catch {} inputRef.current?.focus();}}>清除历史</button></li>}
+          {panel.historyMode && <li className="flex items-center justify-between px-3 py-2 text-xs text-zinc-600 dark:text-zinc-400"><span>仅保存在本机</span><button type="button" className="quiet-action" aria-label="清除搜索历史" onClick={() => {setHistory([]); try {localStorage.removeItem(historyKey);} catch {} inputRef.current?.focus();}}>清除历史</button></li>}
           {panel.historyMode && panel.history.map(entry => <li key={historyIdentity(entry)}><button type="button" className="search-result-open search-history-open"
             aria-label={selectedHistory(entry) ? `查看 ${entry.name} ${entry.symbol} ${entry.market}` : `检索词 ${entry.query}`}
             title={selectedHistory(entry) ? `直接查看详情；原检索词 ${entry.query}` : "仅保存了检索词，尚未确认证券身份"}
@@ -382,12 +422,12 @@ export function SearchBox({collapsible = false}: {collapsible?: boolean}) {
           )}
           {!panel.loading && panel.error === null && panel.searched && panel.results.length === 0 && (
             <li className="px-3 py-2 text-xs text-zinc-600 dark:text-zinc-400" role="status">
-              未找到与「{panel.kw}」匹配的股票
+              未找到与「{panel.kw}」匹配的{asset === "fund" ? "基金" : "股票"}
             </li>
           )}
           {panel.results.map((it) => {
-            const symbol = historySymbol(it.symbol, it.market ?? "");
-            const index = symbol !== null && !/^\d{6}$/.test(symbol);
+            const symbol = it.instrument ? fundIdentityMatches(it.instrument) ? it.instrument.source_symbol : null : historySymbol(it.symbol, it.market ?? "");
+            const index = !it.instrument && symbol !== null && !/^\d{6}$/.test(symbol);
             return <li key={`${it.source}-${it.market ?? "unknown"}-${it.symbol}`}>
               <div className="search-result-row">
                 <button type="button" onClick={() => go(it)} className="search-result-open" onKeyDown={moveChoice}>
@@ -398,7 +438,7 @@ export function SearchBox({collapsible = false}: {collapsible?: boolean}) {
                   <span className="search-watch-state">已自选 ✓</span>
                 ) : (
                   <button type="button" disabled={panel.adding !== null} aria-label={`加入自选 ${it.name ?? it.symbol}`} onClick={(e) => void quickAdd(e, it)} className="search-watch-action" title="加入自选">
-                    {panel.adding === `${it.market}:${symbol}` ? "保存中" : "＋"}
+                    {panel.adding === (it.instrument?.instrument_id ?? `${it.market}:${symbol}`) ? "保存中" : "＋"}
                   </button>
                 )}
               </div>

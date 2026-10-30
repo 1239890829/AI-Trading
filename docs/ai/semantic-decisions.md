@@ -1,5 +1,19 @@
 # 语义判断与外部决策服务
 
+> **摘要**：规则与原生成链保留；Decisions只用于2026-10-30具名手动公司关联研究，完整TradingAgents不变。数据/用量/版本/权限按确定性门核验，模型预测不当事实正确率或策略收益。
+
+## 2026-10-30 Decisions具名研究与统一工作台
+
+用户批准前轮方案，并明确工作台合一。当前新增消费者只为手动`company_relation_research`：读取已保存、同股且准确event/version/observation绑定的公开公司profile，不重新取源、不接受自由prompt。固定四选项为材料支持/反驳/不足/无关，保留逐fact身份、拒答、版本/哈希/源时点与实际用量。新闻新颖性、基金资料归类等仍为后续待验证消费者，未自动接入。
+
+官方合同为固定HTTPS `/v1/decisions`、`gpt-6-luna`；无自动重试，不跟随重定向，TLS正常验证；代理只显式使用原获准通道，不修改系统设置。Key仅后端`OPENAI_API_KEY`，不保存完整请求/context。首次直连超时的未知保留；已有探针的HTTP200/1.714秒/553输入只证明访问，参考费用不是实际账单。
+
+通过原AgentTask生命周期和`autonomy_llm`实际用量账本预留/启动/结束，不新建scope逃避未知门，也不扩大selected_research旧具名许可。HTTP返回的真实usage先独立保存；错误答案不入可用报告，但已知用量不能因此丢失。终态/用量未知保留原事实，取消等真实线程排空；同输入复用，资料漂移/过期/历史截止排除。数据库计账失败的恢复只处理绑定原回执，不重发成功请求。
+
+旧公司解释/TradingAgents图、七报告、旧结果/授权/未知均保留。窄判断输出明确`unvalidated_model_research`、human_gold_count=0、eligibility_changed=false；不改原六维、通知、模拟/真实账户或策略参数。现有11份已见材料只作构造与回归，不能当独立盲测或报告accuracy/收益。未来限定质量启用须新未见材料和独立人工标签及同质量端到端收益证据。
+
+生成沿原受控任务维护权限；准确结果GET可供普通配对读者，读取不调用模型/采集/写计量。应用入口、字段合同和资产隔离见[统一工作台](../product/cross-asset-workbench.md)，后续工程、真实调用、发布与页面事实归handoff；代码存在不冒充启用。
+
 > 2026-10-11用户要求退役不可用Jev；本页取代原Jev现役蓝图。退出范围与状态只在[W07/IMP-091](../stages/w07-simplification.md#imp-091)。原蓝图与调用实测保留历史身份，不产生当前采用或调用义务。
 
 ## 1. 当前执行路径
@@ -111,13 +125,13 @@ LAB校验版本`news-classification-validator-v1.1`，提示仍为`news-classifi
 
 因此采用确定性的LAB记录`news_context_record.py`保留完整白名单`source_context`，模型结果独立命名`unverified_model_output`，每项`review_required=True`、`semantic_verified=False`。缺/错引用保持unknown、批次身份错失败关闭，不模糊修复预测。原句底稿8/8逐字等于已发送输入，预声明来源条件31/31仍在底稿；这只是保存成功，不是网页全文完整或模型语义覆盖证明。新增来源记录在4调用结束后离线生成，无额外模型调用；原计划/回执hash不变。保留有限研究整理价值，不将context-v2改为生产默认或批准自动解释/评分/通知。
 
-## 3. OpenAI Decisions API：原评估资料，当前不接入
+## 3. OpenAI Decisions API：原评估资料与限定重开
 
-2026-10-11已打开官方[指南](https://developers.openai.com/api/docs/guides/decisions)及[Python API参考](https://developers.openai.com/api/reference/python/resources/decisions/methods/create)。接口为`POST /v1/decisions`，公开beta，指南当前列出的模型为`gpt-6-luna`。支持文本/图像与多问题，返回`predicate`条件概率、`choice`固定选项、`score`有序等级加权评分；也可能返回refusal。
+2026-10-11调查时已打开官方[指南](https://developers.openai.com/api/docs/guides/decisions)及[Python API参考](https://developers.openai.com/api/reference/python/resources/decisions/methods/create)。当时接口为公开beta；2026-10-30重读官方指南已为GA，`POST /v1/decisions`与`gpt-6-luna`不变。支持文本/图像与多问题，返回`predicate`条件概率、`choice`固定选项、`score`有序等级加权评分；也可能返回refusal。它不生成自由长文或执行工具，不是完整TradingAgents的替换物。
 
-基础价格按指南为每百万输入token 0.10美元，只计输入；地区处理与长上下文可能加价。官方约10倍于Responses的速度是厂商描述，未经本项目同输入、同质量、端到端实测，不能写成已取得收益。账户权限、地区/网关支持和余额当前未验证；Codex/ChatGPT订阅不当API额度。
+基础价格按指南为每百万输入token 0.10美元，只计输入；地区处理与长上下文可能加价。官方约10倍于Responses的速度是厂商描述，未经本项目同输入、同质量、端到端实测，不能写成已取得收益。2026-10-11账户权限未验，2026-10-30仅已证明当前Key最小请求可用；余额、实际账单与其他地区/网关支持仍未知，Codex/ChatGPT订阅不当API额度。
 
-以上保留先前调查的事实；用户已改为只用现有DeepSeek，本轮及后续常规继续不恢复Decisions实验、安装SDK或要求新Key。当前`claude_cli`兼容生成链不能证明它能代理`/v1/decisions`，不得猜测可复用凭据。未来重新研究须新的明确授权。
+2026-10-11只用DeepSeek、不接Decisions的决定是历史边界。2026-10-30用户已提供独立项目Key并明确批准窄判断研究与统一工作台方案；只在下节具名消费者重开，不恢复Jev或扩大旧许可。`claude_cli`不能据此代理`/v1/decisions`。官方访问已由一次三道合成题、553输入token、1.714秒、HTTP200证明；首次直连超时及未知用量保留，实际账单未读。该结果不证明真实目标域准确率、端到端速度收益或生产资格。
 
 ### 3.1 对应关系与不兼容点（历史候选）
 

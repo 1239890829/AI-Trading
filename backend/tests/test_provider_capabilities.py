@@ -118,7 +118,6 @@ _THS_UNWIRED_ENDPOINTS = (
     "financials/balance-sheets",
     "financials/cash-flow-statements",
     "valuations/snapshot",
-    "meta/tickers/search",
 )
 
 
@@ -193,3 +192,14 @@ def test_ths_docstring_unimplemented_endpoints_stay_unwired():
     assert not misplaced, f"未接入栏缺 {misplaced} ⇒ 清单被删或写错了栏（GOV-016 要求「不要直接删」）"
     leaked = [ep for ep in _THS_UNWIRED_ENDPOINTS if ep in impl]
     assert not leaked, f"已实现栏出现 {leaked} ⇒ 未接入端点被当成了已具备能力（GOV-016 复发）"
+
+
+def test_formal_search_is_documented_under_the_fund_owner_not_the_quote_provider():
+    """正式搜索已真实用于基金；不能继续标未接入或冒充A股Provider能力。"""
+    endpoint = "meta/tickers/search"
+    bullets = _doc_bullets(ths_mod.__doc__ or "")
+    owner = next(b for b in bullets if b.startswith("- **已用但不在本 Provider**"))
+    assert endpoint in owner and "assets/service.py" in owner and "场外基金" in owner
+    assert all(endpoint not in b for b in bullets if b.startswith(("- **已实现**", "- **官方有端点但本项目未接入**")))
+    actual_owners = [rel for rel, literals in _app_code_string_literals() if endpoint in literals]
+    assert actual_owners == ["assets/service.py"]

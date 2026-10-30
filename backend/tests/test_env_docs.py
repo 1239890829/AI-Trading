@@ -9,6 +9,8 @@ from __future__ import annotations
 import re
 from pathlib import Path
 
+from app.core.config import Settings
+
 REPO_ROOT = Path(__file__).resolve().parents[2]
 CONFIG = REPO_ROOT / "backend" / "app" / "core" / "config.py"
 ENV_EXAMPLE = REPO_ROOT / ".env.example"
@@ -17,14 +19,17 @@ ENV_EXAMPLE = REPO_ROOT / ".env.example"
 INTERNAL = {"app_name", "version"}
 
 _FIELD = re.compile(r"^    ([a-z_]+): ", re.M)
-_KEY = re.compile(r"^#?\s*ASHARE_([A-Z0-9_]+)=", re.M)
+_KEY = re.compile(r"^#?\s*((?:ASHARE_|OPENAI_)[A-Z0-9_]+)=", re.M)
 
 
 def _config_fields() -> set[str]:
     src = CONFIG.read_text(encoding="utf-8")
     # 只取 Settings 类体内的类型注解字段；@property 是 def，不会命中
     body = src.split("class Settings", 1)[1]
-    return {m for m in _FIELD.findall(body) if m not in INTERNAL}
+    names = {m for m in _FIELD.findall(body) if m not in INTERNAL}
+    # Credentials may explicitly use an official API alias instead of the
+    # project's ordinary prefix. Check the actual accepted key, not a dead alias.
+    return {Settings.model_fields[name].validation_alias or "ASHARE_" + name.upper() for name in names}
 
 
 def _env_keys() -> list[str]:
@@ -33,7 +38,7 @@ def _env_keys() -> list[str]:
 
 def test_env_example_covers_every_setting():
     fields = _config_fields()
-    documented = {k.lower() for k in _env_keys()}
+    documented = set(_env_keys())
     missing = sorted(fields - documented)
     assert not missing, (
         f".env.example 缺少配置项：{missing}\n"
@@ -50,8 +55,17 @@ def test_env_example_has_no_duplicate_keys():
 def test_env_example_has_no_dead_keys():
     """.env.example 里的 ASHARE_* 必须真在 config.py 中，否则是过期占位符。"""
     fields = _config_fields()
-    dead = sorted({k.lower() for k in _env_keys()} - fields)
+    dead = sorted(set(_env_keys()) - fields)
     assert not dead, (
         f".env.example 里的配置项在 config.py 中已不存在：{dead}\n"
         "（删字段时同步清理示例，否则部署方会配了一堆无效环境变量）"
     )
+
+
+def test_official_decisions_credential_alias_is_loaded_and_never_dumped():
+    value = "fixture-only-decisions-credential"
+    config = Settings(_env_file=None, OPENAI_API_KEY=value)
+    assert config.decisions_api_key == value
+    assert "decisions_api_key" not in config.model_dump()
+    assert value not in repr(config)
+    assert "OPENAI_API_KEY" in _config_fields()

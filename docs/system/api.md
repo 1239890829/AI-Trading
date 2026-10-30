@@ -1,5 +1,20 @@
 # REST API
 
+## 2026-10-30 统一资产与手动关系研究
+
+| 接口 | 消费者与权限 | 关键边界 |
+|---|---|---|
+| GET `/api/assets/capabilities` | 普通配对读取 | 实际来源能力，US尚阻断 |
+| GET `/api/assets/search?q=&asset_type=fund或us_equity&limit=` | 普通配对读取 | 源目录窗口，不称全市场全集；US不取A股源 |
+| GET `/api/assets/funds/{code}/snapshot?range=month或year` | 普通配对读取 | 完整正式份额代码、分段状态/来源/日期/缺失 |
+| GET `/api/assets/records?asset_type=fund` | 普通配对读取 | 手工记录，不接行情、不属paper账户 |
+| PUT `/api/assets/records/{instrument_id}` | 普通配对写 | 核正式身份/币种；创建expected_version=0，修改须当前version |
+| DELETE `/api/assets/records/{instrument_id}?expected_version=` | 普通配对写 | CAS冲突409，不盲删 |
+| GET `/api/agent/research/company-relations/{symbol}?event_id=&version_id=&observation_id=` | 普通配对读取 | 只读精确已存Decisions结果，无模型/取源/写副作用 |
+| POST `/api/agent/tasks` type=`company_relation_research` | 原维护任务能力 | 参数严格symbol与三个原版本ID；未验证窄研究，不改资格 |
+
+手工基金记录返回basis=manual_not_broker_verified，份额/同币种总成本成对；缺NAV不拿成本冒充市场价。错误保留AppError和local_read_capacity_exceeded分层。所有新router均挂现有鉴权；新增普通能力精确登记，未登记路径仍默认维护。完整产品边界见[统一工作台](../product/cross-asset-workbench.md)，语义合同归[现役蓝图](../ai/semantic-decisions.md#2026-10-30-decisions具名研究与统一工作台)。
+
 > **定位**：后端 HTTP 接口的**按域检索手册**。统一契约、鉴权边界、逐端点说明都在这里。
 > **上游**：`backend/app/api/routes/**`（端点实现）＋ `backend/app/core/auth.py`（鉴权策略单点）
 > ｜ **下游**：前端 `apps/web/lib/api.ts` 分片、`scripts/api-sweep.js` 巡检、任何联调任务。

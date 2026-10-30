@@ -34,6 +34,8 @@ def matched_route_template(scope: Mapping[str, Any]) -> str:
 
 
 READ_PATHS = frozenset({
+    "/assets/capabilities", "/assets/search", "/assets/funds/{code}/snapshot", "/assets/records",
+    "/agent/research/company-relations/{symbol}",
     "/paper/selection-action",
     "/picks/watcher/state", "/picks/signal-health",
     "/picks/strategy-health", "/picks/strategy-registry",
@@ -149,6 +151,7 @@ READ_PATHS = frozenset({
     '/watchlist/groups',
 })
 WRITE_PATHS = frozenset({
+    ("PUT", "/assets/records/{instrument_id}"), ("DELETE", "/assets/records/{instrument_id}"),
     ("POST", "/watchlist"), ("DELETE", "/watchlist/{symbol}"),
     ("POST", "/watchlist/groups"), ("PUT", "/watchlist/groups/{name}"),
     ("DELETE", "/watchlist/groups/{name}"), ("PUT", "/watchlist/{symbol}/group"),
