@@ -16,6 +16,7 @@ from datetime import date
 from fastapi import APIRouter, Depends, HTTPException, Query, Request
 from app.api.deps import get_hub
 from app.core.ttl_cache import cache_on
+from app.core.inflight_reads import LocalReadCapacityExceeded
 from app.schemas.envelope import (
     AnomalyPayload,
     Envelope,
@@ -128,6 +129,8 @@ async def limit_up(
     async def build() -> dict:
         try:
             records = await read_pool_input(hub.provider, "get_limit_up_pool", trade_date)
+        except LocalReadCapacityExceeded:
+            raise
         except Exception as exc:
             raise HTTPException(status_code=502, detail=f"涨停池数据源失败：{exc}") from exc
         if any(getattr(row, "trade_date", None) != trade_date for row in records):
@@ -171,6 +174,9 @@ async def limit_up(
         # Only domain reads have a TTL. Caching this assembled response would
         # restart an already cached domain's age and retain it for up to 119s.
         up, broken = await asyncio.gather(read_up(), read_breaks(), return_exceptions=True)
+        for value in (up, broken):
+            if isinstance(value, LocalReadCapacityExceeded):
+                raise value
         if isinstance(up, BaseException):
             if isinstance(up, asyncio.CancelledError):
                 raise up

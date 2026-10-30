@@ -49,6 +49,13 @@ REVIEWED_PACKET_OWNER_PAIRS = {"data_providers/tencent.py": frozenset({(
     # no earlier owner may skip the intervening exact forward edges.
     "1e87719aeddebba7ad4991917fa72c6b9110031fb59216246d3bcede3f857607",
     "2e780e88b511dfb0663e8720c80cd818f64886728354dfe88a7a83ecc03296c2",
+), (
+    # Reviewed history response validation and range-unavailable diagnosis.
+    # Real offline builder replay preserves valid qfq facts, rejects business
+    # errors/invalid volume, and never treats an uncovered range as complete.
+    # This exact edge does not collect again or amend frozen packets/grants.
+    "2e780e88b511dfb0663e8720c80cd818f64886728354dfe88a7a83ecc03296c2",
+    "bf2d71e4888ddecb0cd3ef48a87d917fd639e5874d340564737ceb6dbefd93f8",
 )}), "services/quote_hub.py": frozenset({(
     # Reviewed market admission fix and connection-local subscription metadata.
     # Cached get_quotes/present_quote AST is unchanged. The visible copy also
@@ -67,6 +74,13 @@ REVIEWED_PACKET_OWNER_PAIRS = {"data_providers/tencent.py": frozenset({(
     # Old frozen packets/grants are neither recollected nor rebound here.
     "c4386ec9cd0d10e0a5e3931e4ee0046cfff48b4b35e70ae99a3cccee8f5273ab",
     "4b2fd81d0acfb07c925e9e26d48e976619795578a026467c61117f9f4a419856",
+), (
+    # Reviewed single-owner membership refresh; subscribed reads need not wait
+    # for its DB worker. Real old/new Hub cache-reader replay preserves normal
+    # packet facts and stale/low/future/identity rejection. Poll membership may
+    # change which fresh cache facts exist; scope/cutoff/grants do not change.
+    "4b2fd81d0acfb07c925e9e26d48e976619795578a026467c61117f9f4a419856",
+    "75d5d3d81a173d190beb7fc29e00ab2f743b8695a235ec31eb312f36fe97d55d",
 )}), "data_providers/eastmoney.py": frozenset({(
     # PR357 reviewed exact BJ market/F10 identity correction. Actual price and
     # profile consumers can change; this is not an unaffected-source claim.
@@ -79,6 +93,12 @@ REVIEWED_PACKET_OWNER_PAIRS = {"data_providers/tencent.py": frozenset({(
     # original packets/results/grants are never rewritten or rebound here.
     "fd5c9a055c4f14f3c3fd9851771c49e7b7efa5e779b0736d708daec118d88ccc",
     "68f289bdc9f68755d769be0d424413a059ee56e40e606ee05ae8f48b1379a811",
+), (
+    # Only a ProviderError subclass was added. All other AST nodes are exact;
+    # real offline Eastmoney-builder qfq replay returns the same complete
+    # packet. No new source, maintenance permission or unknown exemption.
+    "68f289bdc9f68755d769be0d424413a059ee56e40e606ee05ae8f48b1379a811",
+    "5c205af2fc8667f9bc1ed02895a4cd9f207e655e8ebec556621f78486c70f410",
 )}), "market/normalizer.py": frozenset({(
     # Preserve original f13 validation before distinguishing BJ from SZ. This
     # exact reviewed edge cannot migrate old packets/grants or expand scope.

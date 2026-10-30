@@ -52,6 +52,40 @@ async def settle():
         await asyncio.sleep(0)
 
 
+def test_current_subscription_quotes_do_not_wait_for_repository():
+    async def check():
+        release = threading.Event()
+        source = Source()
+        observed = []
+        calls = []
+        def lookup():
+            calls.append(True)
+            if not release.wait(2):
+                raise RuntimeError("offline deadman expired")
+            return ["600105"]
+        def unblock():
+            observed.append(list(source.requested))
+            release.set()
+        timer = threading.Timer(0.25, unblock)
+        timer.daemon = True
+        hub = qh.QuoteHub(source, 0.5, get_watchlist=lookup)
+        hub.subscribe({"300750", "sh000001"})
+        timer.start()
+        read = asyncio.create_task(hub._read_domain("quotes"))
+        try:
+            await read
+            await asyncio.to_thread(timer.join, 1)
+            assert observed == [[["300750"]]]
+            assert len(calls) == 1
+            assert hub.quotes["300750"].source == source.name
+        finally:
+            release.set()
+            timer.cancel()
+            await asyncio.gather(read, return_exceptions=True)
+            timer.join(1)
+    asyncio.run(check())
+
+
 def test_blocked_watchlist_repository_does_not_block_index_or_heartbeat():
     async def check():
         release, heartbeat = threading.Event(), threading.Event()
@@ -128,13 +162,127 @@ def test_watchlist_singleflight_merges_current_subscriptions_and_falls_back_on_l
             await asyncio.gather(first, return_exceptions=True)
             release.set()
             await second
+            await hub._watchlist_task
             assert len(calls) == 1
-            assert source.requested == [["002594", "600127" if failed else "600105"]]
+            # The first active subscription did not wait for the DB. After it
+            # completes the next generation uses current subscriptions and the
+            # actual successful membership, never all old cached quote keys.
+            assert source.requested == [["300750"]]
+            await hub._read_domain("quotes")
+            assert source.requested[-1] == (["002594"] if failed else ["002594", "600105"])
+            assert "600127" not in source.requested[-1]
         finally:
             release.set()
             timer.cancel()
             await asyncio.gather(first, second, return_exceptions=True)
             timer.join(1)
+    asyncio.run(check())
+
+
+def test_pending_membership_is_single_owned_read_and_removal_applies_next_generation():
+    async def check():
+        loop = asyncio.get_running_loop()
+        release = threading.Event()
+        entered = asyncio.Event()
+        calls = []
+        rows = [["600105"], []]
+        def lookup():
+            calls.append(True)
+            if len(calls) == 1:
+                return rows[0]
+            loop.call_soon_threadsafe(entered.set)
+            if not release.wait(2):
+                raise RuntimeError("offline deadman expired")
+            return rows[1]
+        source = Source()
+        hub = qh.QuoteHub(source, 0.5, get_watchlist=lookup)
+        await hub._read_domain("quotes")
+        assert source.requested == [["600105"]]
+        sub = hub.subscribe({"300750"})
+        try:
+            await hub._read_domain("quotes")
+            await asyncio.wait_for(entered.wait(), 1)
+            hub.update_symbols(sub, {"002594"})
+            await hub._read_domain("quotes")
+            assert source.requested[-2:] == [["300750", "600105"], ["002594", "600105"]]
+            assert len(calls) == 2  # No DB task per incoming refresh.
+            state = hub.refresh_domains()["quotes"]["watchlist_sync"]
+            assert state["state"] == "pending" and state["known_count"] == 1
+            release.set()
+            await hub._watchlist_task
+            hub.unsubscribe(sub)
+            before = source.calls["quotes"]
+            await hub._read_domain("quotes")
+            assert source.calls["quotes"] == before  # Successful empty membership removes old symbol.
+            assert hub._domains["quotes"].requested_symbols == ()
+            await hub._watchlist_task
+            state = hub.refresh_domains()["quotes"]["watchlist_sync"]
+            assert state["state"] == "ready" and state["known_count"] == 0
+            assert state["last_read_ms"] >= 0 and state["last_success"]
+        finally:
+            release.set()
+            await hub._watchlist_task
+    asyncio.run(check())
+
+
+def test_invalid_repository_result_is_reported_and_old_membership_can_recover():
+    async def check():
+        values = iter([["600105"], None, ["600127"]])
+        hub = qh.QuoteHub(Source(), 0.5, get_watchlist=lambda: next(values))
+        await hub._refresh_watchlist()
+        original_success = hub.refresh_domains()["quotes"]["watchlist_sync"]["last_success"]
+        await hub._refresh_watchlist()
+        state = hub.refresh_domains()["quotes"]["watchlist_sync"]
+        assert state["state"] == "failed" and state["last_error_type"] == "TypeError"
+        assert state["known_count"] == 1 and state["last_success"] == original_success
+        assert hub._watchlist_symbols == ("600105",)
+        await hub._refresh_watchlist()
+        state = hub.refresh_domains()["quotes"]["watchlist_sync"]
+        assert state["state"] == "ready" and state["last_error_type"] is None
+        assert hub._watchlist_symbols == ("600127",)
+    asyncio.run(check())
+
+
+def test_stop_drains_background_membership_after_current_quotes_have_returned():
+    async def check():
+        loop = asyncio.get_running_loop()
+        release, finished = threading.Event(), threading.Event()
+        entered, quoted = asyncio.Event(), asyncio.Event()
+        def lookup():
+            loop.call_soon_threadsafe(entered.set)
+            try:
+                if not release.wait(2):
+                    raise RuntimeError("offline deadman expired")
+                return ["600105"]
+            finally:
+                finished.set()
+        class CurrentSource(Source):
+            async def get_quotes(self, symbols):
+                rows = await super().get_quotes(symbols)
+                quoted.set()
+                return rows
+        source = CurrentSource()
+        hub = qh.QuoteHub(source, 0.5, get_watchlist=lookup)
+        hub.subscribe({"300750"})
+        poller = asyncio.create_task(hub.run())
+        try:
+            await asyncio.wait_for(entered.wait(), 1)
+            await asyncio.wait_for(quoted.wait(), 1)
+            assert source.requested == [["300750"]]
+            poller.cancel()
+            await settle()
+            poller.cancel()
+            await settle()
+            assert hub._running and not poller.done() and not finished.is_set()
+            assert not hub._watchlist_task.done()
+            release.set()
+            await asyncio.gather(poller, return_exceptions=True)
+            assert finished.is_set() and not hub._running and hub._watchlist_task is None
+            assert source.requested == [["300750"]]
+        finally:
+            release.set()
+            poller.cancel()
+            await asyncio.gather(poller, return_exceptions=True)
     asyncio.run(check())
 
 
@@ -166,7 +314,7 @@ def test_hub_shutdown_drains_real_lookup_and_rejects_an_overlapping_owner():
             await settle()
             assert not finished.is_set() and not poller.done()
             assert hub._running
-            assert not hub._domain_tasks["quotes"].done()
+            assert not hub._watchlist_task.done()  # DB owner stays alive after its quote waiter cancels.
             with pytest.raises(RuntimeError, match="already running"):
                 await hub.run()
             assert calls == [True] and source.calls["quotes"] == 0

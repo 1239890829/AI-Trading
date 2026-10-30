@@ -20,7 +20,8 @@ from datetime import date, datetime
 from enum import Enum
 from typing import Callable
 
-from app.data_providers.eastmoney import ProviderError
+from app.core.inflight_reads import LocalReadCapacityExceeded
+from app.data_providers.eastmoney import HistoryRangeUnavailable, ProviderError
 from app.schemas.market import Quote
 
 log = logging.getLogger(__name__)
@@ -98,6 +99,7 @@ class CompositeProvider:
                 "method_started": 0, "method_returned": 0, "provider_method_error": 0,
                 "deadline_before_method": 0, "method_budget_exhausted": 0, "method_cancelled": 0,
                 "source_observation_rejected": 0,
+                "local_admission_rejected": 0, "history_range_unavailable": 0,
                 "last_phase": None, "last_error_type": None,
             }
             for p in providers for method in _OBSERVABLE_METHODS if hasattr(p, method)
@@ -275,6 +277,12 @@ class CompositeProvider:
                 self._observe_attempt(method, p.name, "method_budget_exhausted", "BudgetExhausted")
                 log.warning("provider %s %s phase=method_budget_exhausted error_type=BudgetExhausted", p.name, method)
                 return p, None, BudgetExhausted(f"请求预算耗尽（剩余 {left:.2f}s 未应答）")
+            if isinstance(exc, LocalReadCapacityExceeded):
+                self._observe_attempt(method, p.name, "local_admission_rejected", type(exc).__name__)
+                return p, None, exc
+            if isinstance(exc, HistoryRangeUnavailable) and method in {"get_kline", "get_raw_daily_kline"}:
+                self._observe_attempt(method, p.name, "history_range_unavailable", type(exc).__name__)
+                return p, None, exc
             self._observe_attempt(method, p.name, "provider_method_error", type(exc).__name__)
             log.warning("provider %s %s phase=provider_method_error error_type=%s: %s",
                         p.name, method, type(exc).__name__, exc)
@@ -287,7 +295,13 @@ class CompositeProvider:
             row["last_phase"], row["last_error_type"] = phase, error_type
 
     def _note_failure(self, method: str, name: str, exc: Exception | None, errors: list[str]) -> None:
+        if isinstance(exc, LocalReadCapacityExceeded):
+            # No source request started: retrying another source only amplifies
+            # local load, and must not trip or clear a provider circuit breaker.
+            raise exc
         errors.append(f"{name}: {'empty' if exc is None else exc}")
+        if isinstance(exc, HistoryRangeUnavailable) and method in {"get_kline", "get_raw_daily_kline"}:
+            return
         self._record_failure(method, name)
 
     def _settle_last_good(self, method: str, name: str) -> None:
@@ -357,6 +371,7 @@ class CompositeProvider:
             while tasks:
                 done, _ = await asyncio.wait(set(tasks), return_when=asyncio.FIRST_COMPLETED)
                 winner = None
+                local_rejection = None
                 # 同轮完成时按原源顺序收割，也保留已完成失败的真实观测。
                 for t in [task for task in tasks if task in done]:
                     p = tasks.pop(t)
@@ -364,6 +379,8 @@ class CompositeProvider:
                     if exc is None and not self._is_empty(result):
                         if winner is None:
                             winner = p, result
+                    elif isinstance(exc, LocalReadCapacityExceeded):
+                        local_rejection = exc
                     else:
                         self._note_failure(method, p.name, exc, errors)
                 if winner is not None:
@@ -380,6 +397,8 @@ class CompositeProvider:
                     p, result = winner
                     self._settle_last_good(method, p.name)
                     return result
+                if local_rejection is not None:
+                    raise local_rejection
                 if tasks == {p_task: primary}:
                     if next_index < len(live) and (deadline is None or time.monotonic() < deadline):
                         backup = live[next_index]
@@ -441,6 +460,8 @@ class CompositeProvider:
                 break
             args = ([key[0] for key in remaining if key in targets],) if method == "get_quotes" else ()
             _, rows, exc = await self._attempt(method, p, args, deadline)
+            if isinstance(exc, LocalReadCapacityExceeded):
+                break  # Keep accepted recovery rows; do not amplify local load.
             accepted = {}
             nonadvancing = set()
             expired = set()
@@ -580,6 +601,8 @@ class CompositeProvider:
                 continue
             try:
                 result = await p.search(query)
+            except LocalReadCapacityExceeded:
+                raise
             except Exception as exc:
                 errors.append(f"{p.name}: {exc}")
                 log.warning("provider %s search failed: %s", p.name, exc)
@@ -674,6 +697,8 @@ class CompositeProvider:
                 continue
             try:
                 result = await getattr(p, method)(*args)
+            except LocalReadCapacityExceeded:
+                raise
             except Exception as exc:
                 log.warning("provider %s %s failed: %s", p.name, method, exc)
                 self._record_failure(method, p.name)

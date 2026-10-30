@@ -131,6 +131,48 @@ def test_failure_is_not_cached(monkeypatch):
     assert counter["n"] == 2, "失败那次不该被缓存，恢复后应重新计算"
 
 
+@pytest.mark.parametrize("busy_method", ["get_limit_up_pool", "get_limit_break_pool"])
+def test_local_pool_admission_never_becomes_zero_sentiment_or_cached_phase(monkeypatch, busy_method):
+    from datetime import date
+    from app.core.inflight_reads import LocalReadCapacityExceeded
+
+    day, previous = date(2026, 10, 29), date(2026, 10, 28)
+    state = _State(breadth={"up": 1})
+    state.snapshot_service.snapshot = {}
+    busy, computed = [True], []
+
+    async def days(_provider):
+        return [previous, day]
+
+    async def pool(_provider, method, _day):
+        if busy[0] and method == busy_method:
+            raise LocalReadCapacityExceeded()
+        return []
+
+    def compute(**kwargs):
+        assert not busy[0], "local admission must not become a zero-count phase"
+        computed.append(kwargs)
+        return {"phase": "观察", "caveats": []}
+
+    monkeypatch.setattr(mc.tc, "trading_days", days)
+    monkeypatch.setattr(mc.tc, "last_trade_date", lambda _: day)
+    monkeypatch.setattr(mc.tc, "prev_trade_date", lambda *_: previous)
+    monkeypatch.setattr(mc, "read_pool_input", pool)
+    monkeypatch.setattr(mc, "compute_sentiment", compute)
+    monkeypatch.setattr(mc, "resolve_bands", lambda **_: ({}, {}, "offline", {}))
+
+    async def run():
+        for _ in range(2):
+            with pytest.raises(LocalReadCapacityExceeded):
+                await mc.get_cached_sentiment(state, HUB)
+            assert not computed
+            assert getattr(state, "_ttl_cache_market.sentiment").get(())[0] is False
+        busy[0] = False
+        result = await mc.get_cached_sentiment(state, HUB)
+        assert result["phase"] == "观察" and len(computed) == 1
+    _run(run())
+
+
 # ---------------------------------------------------------------- 多消费方共用
 
 

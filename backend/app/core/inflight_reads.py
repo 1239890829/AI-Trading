@@ -6,6 +6,13 @@ from copy import deepcopy
 from typing import Any, Callable
 
 
+class LocalReadCapacityExceeded(RuntimeError):
+    """No new source work was started; this is not a provider failure."""
+
+    def __init__(self):
+        super().__init__("local active-read capacity reached")
+
+
 class InflightReads:
     def __init__(self, maxsize: int = 128):
         self.maxsize = maxsize
@@ -28,10 +35,16 @@ class InflightReads:
         identity = (asyncio.get_running_loop(), key)
         task = self.tasks.get(identity)
         if task is None or task.done():
-            # At capacity retain the original caller-owned read. It creates no
-            # detached owner; close() only drains owners created by this helper.
+            # Completed callbacks may be queued for the next loop turn. They
+            # no longer consume active capacity, even before callback cleanup.
+            for finished_key, finished in tuple(self.tasks.items()):
+                if finished.done() and self.tasks.get(finished_key) is finished:
+                    self.tasks.pop(finished_key, None)
+            # Do not bypass ownership at capacity. A queue here would run before
+            # the factory's own deadline and silently extend its end-to-end
+            # budget. Existing keys still join; new work fails without starting.
             if len(self.tasks) >= self.maxsize:
-                return deepcopy(await factory())
+                raise LocalReadCapacityExceeded()
             task = asyncio.create_task(factory())
             self.tasks[identity] = task
 

@@ -13,7 +13,7 @@ from datetime import date, datetime, timezone
 from fastapi import APIRouter, Depends, HTTPException, Query, Request
 from app.api.deps import get_hub
 from app.core.ttl_cache import cache_on
-from app.core.inflight_reads import read_inflight, read_policy
+from app.core.inflight_reads import LocalReadCapacityExceeded, read_inflight, read_policy
 from app.core.config import settings
 from app.data_quality.validator import validate_order_book
 from app.schemas.envelope import (
@@ -340,6 +340,8 @@ async def _kline_payload(hub: QuoteHub, symbol: str, timeframe: str, limit: int,
     async def load():
         try:
             bars = await hub.provider.get_kline(symbol, timeframe, start, end)
+        except LocalReadCapacityExceeded:
+            raise
         except Exception as exc:
             log.warning("kline failed for %s: %s", symbol, exc)
             raise HTTPException(status_code=502, detail=f"K线数据源失败：{exc}")
@@ -380,6 +382,8 @@ async def order_book(symbol: str, hub: QuoteHub = Depends(get_hub)) -> dict:
     async def load():
         try:
             ob = await hub.provider.get_order_book(symbol)
+        except LocalReadCapacityExceeded:
+            raise
         except Exception as exc:
             raise HTTPException(status_code=502, detail=f"盘口数据源失败：{exc}")
         if ob is None:
@@ -448,6 +452,8 @@ async def minute_line(symbol: str, hub: QuoteHub = Depends(get_hub)) -> dict:
     async def load():
         try:
             points = await hub.provider.get_minute_line(symbol)
+        except LocalReadCapacityExceeded:
+            raise
         except Exception as exc:
             from app.market.minute_backfill import tdx_minute_line_fallback
 

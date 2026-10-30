@@ -189,7 +189,7 @@ describe("方法目录 · 保存运行与联动", () => {
     render(<StrategyHealthTab/>);
     expect(await screen.findByText("原分 0")).toBeTruthy();
     expect(screen.getByText(/耗时未记录/)).toBeTruthy();
-    expect(screen.getByText("候选母集").nextElementSibling?.textContent).toBe("40");
+    expect(screen.getByText("进入候选").nextElementSibling?.textContent).toBe("40");
     expect(screen.getByText("评分成功").nextElementSibling?.textContent).toBe("24");
     expect(screen.queryByText("美的集团")).toBeNull();
     fireEvent.click(screen.getByRole("button",{name:"拒绝存档"}));

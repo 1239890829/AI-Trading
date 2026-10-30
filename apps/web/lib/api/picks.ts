@@ -1090,6 +1090,19 @@ export interface StrategyHealthPayload {
   caveat?: string;
 }
 
+export type SelectionEvaluation = "selected" | "score_rejected" | "not_evaluated" | "input_unavailable" | "excluded" | "unknown";
+export interface SavedSelectionSummary {
+  state: "saved" | "partial" | "missing";
+  scope: "recorded_inputs_not_all_market";
+  input_total: number | null;
+  saved_total: number | null;
+  omitted_total: number | null;
+  counts: Record<SelectionEvaluation, number | null>;
+  saved_counts: Record<SelectionEvaluation, number | null>;
+  candidate_capacity: number | null;
+  deep_capacity: number | null;
+  reason: string;
+}
 export interface SavedStrategyRunItem {
   item_id?: string;
   symbol: string;
@@ -1098,6 +1111,7 @@ export interface SavedStrategyRunItem {
   stage?: string;
   decision?: string;
   reason_code?: string;
+  evaluation?: {state: SelectionEvaluation; label: string};
   score: number | null;
   reason?: string;
   basis?: Record<string, string>;
@@ -1206,6 +1220,15 @@ export interface SavedStrategyRun {
   elapsed_ms?: number | null;
   data_state?: string | null;
   counts?: Record<string, number | null>;
+  selection_summary?: SavedSelectionSummary;
+  strategy_context?: {
+    state: "saved" | "partial" | "missing";
+    market_phase: string | null;
+    style: string | null;
+    style_basis: string | null;
+    routed: boolean | null;
+    semantics: "saved_ranking_style_not_execution_strategy";
+  };
   candidate_audit?: {
     state: "saved" | "partial" | "missing";
     reason?: string;

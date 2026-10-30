@@ -15,6 +15,7 @@ from datetime import date
 from app.core.bjtime import beijing_today
 from app.core.config import settings
 from app.core.freshness import Freshness
+from app.core.inflight_reads import LocalReadCapacityExceeded
 from app.market import trade_calendar as tc
 from app.sentiment import metric_history
 from app.sentiment.band_config import load_bands
@@ -168,6 +169,8 @@ async def compute_market_sentiment(
     async def _pool(d: date) -> list:
         try:
             return await read_pool_input(hub.provider, "get_limit_up_pool", d)
+        except LocalReadCapacityExceeded:
+            raise
         except Exception as exc:
             log.warning("sentiment pool %s failed: %s", d, exc)
             return []
@@ -175,6 +178,8 @@ async def compute_market_sentiment(
     async def _breaks(d: date) -> list:
         try:
             return await read_pool_input(hub.provider, "get_limit_break_pool", d)
+        except LocalReadCapacityExceeded:
+            raise
         except Exception as exc:
             log.warning("sentiment break pool %s failed: %s", d, exc)
             return []

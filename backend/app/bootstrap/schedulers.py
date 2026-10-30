@@ -289,11 +289,12 @@ def register_schedulers(reg: SchedulerRegistry, app: FastAPI, services: AppServi
         非盘中轮次（≥15:05 或 <09:15）附带把最近交易日涨停股纳入采集范围
         （R6，2026-09-01）：盘中轮次范围保持 自选∪组合∪持仓，控上游配额。
         """
-        from datetime import datetime as _dt, time as _time
+        from datetime import time as _time
 
         from app.api.routes.events import collect_news_events
+        from app.core.bjtime import beijing_now
 
-        now = _dt.now().time()
+        now = beijing_now().time()
         after_hours = now >= _time(15, 5) or now < _time(9, 15)
         stats = await collect_news_events(app.state, include_limit_up=after_hours)
         if stats.get("created") or stats.get("unverified_stock_links"):

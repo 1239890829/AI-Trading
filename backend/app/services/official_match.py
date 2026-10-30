@@ -18,7 +18,7 @@ from uuid import uuid4
 from copy import deepcopy
 from datetime import datetime, timezone
 
-from app.core.inflight_reads import join_existing_inflight, peek_inflight, read_inflight
+from app.core.inflight_reads import LocalReadCapacityExceeded, join_existing_inflight, peek_inflight, read_inflight
 from app.core.ttl_cache import TTLCache, cache_on
 
 log = logging.getLogger(__name__)
@@ -107,6 +107,9 @@ def _directory_resolution(directories: dict, observed_at: str) -> dict:
     """Validate the complete declared source scope before exact-name resolution."""
     from types import SimpleNamespace
 
+    for value in directories.values():
+        if isinstance(value, LocalReadCapacityExceeded):
+            raise value
     rows, details = [], {}
     for kind in ("concept", "industry"):
         value = directories[kind]
@@ -192,6 +195,8 @@ async def resolve_official_catalog(holder) -> dict:
             if getattr(svc, "revision", 0) != revision:
                 raise RuntimeError("catalog_revision_changed")
             result["catalog_revision"] = revision
+        except LocalReadCapacityExceeded:
+            raise
         except Exception as exc:
             result = {**unavailable, "reason": str(exc) if isinstance(exc, RuntimeError) else type(exc).__name__}
         result["completion_key"] = completion_key
@@ -225,6 +230,11 @@ async def resolve_official_catalog_view(holder, *, wait_seconds: float = OFFICIA
         else:
             pending["reason"] = "completion_owner_untracked"
         return pending
+    except LocalReadCapacityExceeded:
+        # No source owner was admitted. Do not issue a completion ticket or
+        # cache local contention as a directory-source failure.
+        return {"state": "unavailable", "identities": {}, "ambiguous": [], "catalog_version": None,
+                "observed_at": None, "directories": {}, "reason": "local_read_capacity_exceeded"}
     finally:
         if not waiter.done():
             waiter.cancel()
@@ -272,6 +282,8 @@ async def complete_official_catalog(holder, completion_key: str) -> dict:
             found, result = waiter.result()
         except asyncio.CancelledError:
             return terminal("completion_owner_cancelled")
+        except LocalReadCapacityExceeded:
+            return terminal("local_read_capacity_exceeded")
         except Exception:
             return terminal("completion_owner_failed")
         if getattr(svc, "revision", 0) != revision:

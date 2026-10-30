@@ -47,6 +47,10 @@ class ProviderError(RuntimeError):
     """数据源请求失败。调用方必须停止将其当作实时数据使用。"""
 
 
+class HistoryRangeUnavailable(ProviderError):
+    """Valid source rows do not cover the requested range; history completeness is unknown."""
+
+
 def _num(v) -> float | None:
     """东财大量字段以 '-' 表示缺失，且数值/字符串混用。"""
     if v is None or v == "-":
