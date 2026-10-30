@@ -1,9 +1,11 @@
 """Actual asset read routes retain paired reads and unified error contracts."""
 import asyncio
+from types import SimpleNamespace
 
 from fastapi import Depends, FastAPI
 from fastapi.testclient import TestClient
 import httpx
+import pytest
 
 from app.api.deps import require_api_token
 from app.api.routes.assets import router
@@ -21,6 +23,39 @@ def assembled(service=None, *, authenticated=False):
     app.include_router(router, prefix="/api",
                        dependencies=[Depends(require_api_token)] if authenticated else [])
     return app
+
+
+@pytest.mark.parametrize("query", ["", "?limit=120"])
+def test_us_snapshot_http_query_accepts_only_the_supported_integer_and_forwards_it(query):
+    async def run():
+        calls = []
+        async def read(code, limit):
+            calls.append((code, limit))
+            assert type(limit) is int
+            return SimpleNamespace(model_dump=lambda **kwargs: {"source_symbol": code, "limit": limit})
+        service = SimpleNamespace(us_snapshot=read)
+        async with httpx.AsyncClient(transport=httpx.ASGITransport(app=assembled(service)),
+                                     base_url="http://test") as client:
+            response = await client.get("/api/assets/us/AAPL.OQ/snapshot" + query)
+            assert response.status_code == 200
+            assert response.json() == {"data": {"source_symbol": "AAPL.OQ", "limit": 120}}
+            assert calls == [("AAPL.OQ", 120)]
+    asyncio.run(run())
+
+
+@pytest.mark.parametrize("limit", ["119", "121", "not-an-integer", "120.5"])
+def test_us_snapshot_http_query_rejects_unsupported_limits_before_reading_source(limit):
+    async def run():
+        calls = []
+        async def read(code, count):
+            calls.append((code, count))
+            raise AssertionError("invalid query must not reach the asset reader")
+        async with httpx.AsyncClient(transport=httpx.ASGITransport(app=assembled(SimpleNamespace(us_snapshot=read))),
+                                     base_url="http://test") as client:
+            response = await client.get("/api/assets/us/AAPL.OQ/snapshot", params={"limit": limit})
+            assert response.status_code == 422
+            assert calls == []
+    asyncio.run(run())
 
 
 def test_read_routes_require_pairing_but_not_maintenance(tmp_path, monkeypatch):
