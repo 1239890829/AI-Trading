@@ -30,8 +30,9 @@ class UsSearchCandidate(BaseModel):
     market: Literal["US"] = "US"
     name: str
     source_kind: str
-    security_type: Literal["stock", "etf"]
+    security_type: Literal["stock", "etf"] | None = None
     source: Literal["tencent"] = "tencent"
+    # A search kind is a hint, not the quote's independently verified asset type.
     # Search does not establish denomination or a complete record identity.
 
 

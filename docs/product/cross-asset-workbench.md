@@ -9,7 +9,7 @@
 ## 2. 数据身份与时点
 
 - 基金身份为`fund:{market}:{source_symbol_without_suffix}:{currency}`；目录返回的source_symbol、asset_type、ticker、exchange、currency必须一致。根对象仅本轮获准场外`.OF`份额；联接穿透可读取其披露指向的场内目标基金。
-- 美股只读身份为`us_equity:US:{source_symbol}:USD`，保留来源确认的OQ/N/AM及类股，如`BRK.B.N`；GP/GP-ETF明确区分stock/etf。搜索候选仅有来源代码/名称，点选后由报价确认身份和USD，不凭名称构造记录或市场后缀。美股记录只供自选，不录份额/成本或接任何交易账户。
+- 美股只读身份为`us_equity:US:{source_symbol}:USD`，保留来源确认的OQ/N/AM及类股，如`BRK.B.N`；标准报价GP/GP-ETF明确区分stock/etf；搜索hint GP同时包含ETF，不确认类别。搜索候选仅有来源代码/名称与原source_kind，security_type未知，点选后由报价确认身份和USD，不凭名称构造记录或市场后缀。美股记录只供自选，不录份额/成本或接任何交易账户。
 - 货币须来源明确，不从名称/后缀猜人民币。A/C和币种独立；同号A股仍由原股票接口处理，不合并存储或订阅。
 - 官方NAV的nav_date、发布日期、持仓报告期/披露日/修改日、接收时刻独立。接口data.timestamp可能只是响应组装钟，不升级为NAV发布时间或市场报价钟。
 - 基金核心读取沿原THS通道，公开产品说明、重仓参考及美股价格各标独立来源；相同事实不跨源改身份或借用钟。普通用户页面不携Key。代码许可不授予第三方数据再分发、公开展示或永久留存权；本机受控读者与未来公共部署许可分开，部署继续搁置。

@@ -19,8 +19,8 @@ import {searchUsAssets, validUsSourceSymbol} from "@/lib/api/us-assets";
 
 /** 输入停稳后的防抖时长（ms）。Enter 可跳过防抖立即搜索。 */
 const DEBOUNCE_MS = 250;
-/** 触发搜索的最小关键词长度（少于 2 字符不发请求）。 */
-const MIN_QUERY_LEN = 2;
+/** 美股存在 F / T 等合法单字符 ticker；其他资产沿用两字符门槛。 */
+function minimumQueryLength(asset: WorkbenchAsset) {return asset === "us_equity" ? 1 : 2;}
 const HISTORY_KEY = "ashare-security-search-history-v1";
 const HISTORY_LIMIT = 12;
 type SelectedHistory = {query: string; symbol: string; name: string; market: string; instrument?: AssetInstrument; source_candidate?: true; us_candidate?: true};
@@ -42,10 +42,11 @@ function historySymbol(symbol: string, market: string): string | null {
 }
 function validHistory(value: unknown, asset: WorkbenchAsset = "cn_equity"): SearchHistory[] {
   if (!Array.isArray(value)) return [];
+  const minLength = minimumQueryLength(asset);
   const result: SearchHistory[] = [];
   for (const raw of value.slice(0, HISTORY_LIMIT * 4)) {
     const entry = typeof raw === "string" ? {query: raw} : raw;
-    if (!entry || typeof entry !== "object" || typeof entry.query !== "string" || entry.query.trim().length < MIN_QUERY_LEN || entry.query.length > 64) continue;
+    if (!entry || typeof entry !== "object" || typeof entry.query !== "string" || entry.query.trim().length < minLength || entry.query.length > 64) continue;
     const query = entry.query.trim();
     let record: SearchHistory;
     if (asset !== "cn_equity") {
@@ -85,6 +86,7 @@ function validHistory(value: unknown, asset: WorkbenchAsset = "cn_equity"): Sear
 
 export function SearchBox({collapsible = false, asset = "cn_equity"}: {collapsible?: boolean; asset?: WorkbenchAsset}) {
   const router = useRouter();
+  const minLength = minimumQueryLength(asset);
   const historyKey = asset === "cn_equity" ? HISTORY_KEY : `ashare-asset-search-history-v1:${asset}`;
   const [expanded,setExpanded] = useState(!collapsible);
   const triggerRef = useRef<HTMLButtonElement>(null);
@@ -147,7 +149,8 @@ export function SearchBox({collapsible = false, asset = "cn_equity"}: {collapsib
         }
         if (seq === seqRef.current && result.state === "partial") setAddNote(result.reason ?? "来源只返回部分美股结果");
         return result.items.filter(item => item.market === "US" && item.source === "tencent"
-          && (item.source_kind === "GP" && item.security_type === "stock" || item.source_kind === "GP-ETF" && item.security_type === "etf")
+          && (item.source_kind === "GP" && (item.security_type === null || item.security_type === "stock")
+            || item.source_kind === "GP-ETF" && (item.security_type === null || item.security_type === "etf"))
           && validUsSourceSymbol(item.source_symbol)
           && item.symbol === item.source_symbol.replace(/\.(OQ|N|AM)$/, ""))
           .map(item => ({symbol: item.source_symbol, name: item.name, market: "US", source: "tencent", is_realtime: false, us_candidate: true as const}));
@@ -238,7 +241,7 @@ export function SearchBox({collapsible = false, asset = "cn_equity"}: {collapsib
       }
       return;
     }
-    if (kw.length < MIN_QUERY_LEN) {
+    if (kw.length < minLength) {
       seqRef.current += 1; // 作废飞行中的请求（状态清理在 onChange/go 的 resetTransient）
       return;
     }
@@ -250,10 +253,10 @@ export function SearchBox({collapsible = false, asset = "cn_equity"}: {collapsib
       // 输入变化 → 作废飞行中的旧请求（其响应回来时 seq 不匹配被丢弃）
       seqRef.current += 1;
     };
-  }, [q, runSearch]);
+  }, [q, runSearch, minLength]);
 
-  // 少于 2 字时直接派生空列表（旧写法在 effect 里同步 setItems([])，会触发级联渲染）
-  const results = useMemo(() => q.trim().length >= MIN_QUERY_LEN && resultQuery === q.trim() ? items : [], [q, resultQuery, items]);
+  // 少于当前资产门槛时直接派生空列表，避免 effect 同步清空引发级联渲染。
+  const results = useMemo(() => q.trim().length >= minLength && resultQuery === q.trim() ? items : [], [q, resultQuery, items, minLength]);
 
   const dismiss = useCallback(() => {
     if (timerRef.current) {
@@ -371,7 +374,7 @@ export function SearchBox({collapsible = false, asset = "cn_equity"}: {collapsib
 
   function onKeyDown(e: React.KeyboardEvent<HTMLInputElement>) {
     if (composingRef.current || e.nativeEvent.isComposing || e.keyCode === 229) return; // IME 组合中：Enter=选字上屏、Escape=取消组合，不是搜索指令
-    if ((e.key === "ArrowDown" || e.key === "ArrowUp") && open && (results.length || q.trim().length < MIN_QUERY_LEN && history.length)) {
+    if ((e.key === "ArrowDown" || e.key === "ArrowUp") && open && (results.length || q.trim().length < minLength && history.length)) {
       e.preventDefault();
       const choices = boxRef.current?.querySelectorAll<HTMLButtonElement>(".search-result-open, .search-history-open");
       choices?.[e.key === "ArrowDown" ? 0 : choices.length - 1]?.focus();
@@ -385,7 +388,7 @@ export function SearchBox({collapsible = false, asset = "cn_equity"}: {collapsib
       // 旧实现 Enter 只在已有结果时生效——输完代码立刻回车（结果尚未返回）
       // 会被吞掉，是「输入后搜索无响应」最直观的场景。此处跳过防抖立即搜索。
       const kw = q.trim();
-      if (kw.length >= MIN_QUERY_LEN) {
+      if (kw.length >= minLength) {
         if (timerRef.current) {
           clearTimeout(timerRef.current);
           timerRef.current = null;
@@ -397,10 +400,10 @@ export function SearchBox({collapsible = false, asset = "cn_equity"}: {collapsib
   }
 
   const kw = q.trim();
-  const historyMode = kw.length < MIN_QUERY_LEN && !composing && history.length > 0;
+  const historyMode = kw.length < minLength && !composing && history.length > 0;
   const showPanel =
     open &&
-    (historyMode || kw.length >= MIN_QUERY_LEN && (results.length > 0 || loading || error !== null || searched));
+    (historyMode || kw.length >= minLength && (results.length > 0 || loading || error !== null || searched));
   // Closing cancels the query immediately; its last visible reading stays intact during exit.
   const panelSnapshot = useMemo(() => ({results, loading, error, searched, addNote, adding, kw, historyMode, history}), [results, loading, error, searched, addNote, adding, kw, historyMode, history]);
   const panelPresence = useExitPresence(showPanel ? panelSnapshot : null);
@@ -431,7 +434,7 @@ export function SearchBox({collapsible = false, asset = "cn_equity"}: {collapsib
           setAddNote(null);
           setQ(v);
           // 删短到阈值以下：立即作废飞行中请求并清理搜索状态
-          if (v.trim().length < MIN_QUERY_LEN) resetTransient();
+          if (v.trim().length < minLength) resetTransient();
         }}
         onCompositionStart={() => {
           composingRef.current = true;
@@ -452,7 +455,7 @@ export function SearchBox({collapsible = false, asset = "cn_equity"}: {collapsib
           }
           // 常规路径：上屏词已在状态（组合中被门控跳过调度）→ 跳过防抖立即搜
           const kw = v.trim();
-          if (kw.length >= MIN_QUERY_LEN) runSearch(kw);
+          if (kw.length >= minLength) runSearch(kw);
         }}
         onFocus={() => (results.length > 0 || historyMode) && setOpen(true)}
         onKeyDown={onKeyDown}
@@ -498,7 +501,7 @@ export function SearchBox({collapsible = false, asset = "cn_equity"}: {collapsib
           )}
           {!panel.loading && panel.error === null && panel.searched && panel.results.length === 0 && (
             <li className="px-3 py-2 text-xs text-zinc-600 dark:text-zinc-400" role="status">
-              未找到与「{panel.kw}」匹配的{asset === "fund" ? "基金" : "股票"}
+              未找到与「{panel.kw}」匹配的{asset === "fund" ? "基金" : asset === "us_equity" ? "证券" : "股票"}
             </li>
           )}
           {panel.results.map((it) => {

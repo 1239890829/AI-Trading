@@ -14,6 +14,14 @@ from app.schemas.asset_evidence import AssetEvidence
 
 NOW = datetime(2026, 10, 30, 5, 45, tzinfo=timezone.utc)
 
+# Saved public Tencent search response, SHA-256 e52fd1ec8fbf93b2f20b799477c792ab40217a75db22fcad72cae81b1abfe4fb.
+# Column four is a source pinyin hint, including "*" for English names.
+SPY_SEARCH_BODY = br'v_hint="us~spy.am~\u6807\u666e500\u6307\u6570etfspdr~bp500zsetfspdr~GP^us~sgp.oq~spyglass pharma, inc~*~GP^us~spya.am~twin oak endure etf~*~GP^us~spyc.am~simplify exchange traded funds us equity plus convexity etf~*~GP^us~spyd.am~\u6807\u666e500\u9ad8\u80a1\u606fetfspdr~bp500ggxetfspdr~GP^us~spyg.am~\u6807\u666e500\u6210\u957f\u80a1etfspdr~bp500czgetfspdr~GP^us~spyh.am~neos s&p 500 hedged equity income etf~*~GP^us~spyi.am~\u6807\u666e500\u9ad8\u6536\u76caetfneos~bp500gsyetfneos~GP^us~spym.am~\u6807\u666e500\u7ec4\u5408\u578betfspdr~bp500zhxetfspdr~GP^us~spyq.oq~tradr 2x long spy quarterly etf~*~GP"'
+
+# Exact assignments extracted from the already saved public batched quotes.
+BRK_QUOTE_BODY = 'v_usBRK__B="200~伯克希尔B~BRK.B.N~541.96~540.34~545.30~4164425~0~0~545.00~120~0~0~0~0~0~0~0~0~545.80~80~0~0~0~0~0~0~0~0~~2026-10-29 16:04:51~1.62~0.30~548.77~541.80~USD~4164425~2263773724~0.19~13.63~~17.46~~1.29~6761.56457~11601.79080~Berkshire Hathaway Inc. New~39.77~549.96~464.01~40~1.55~~11601.79080~7.82~-0.92~GP~12.11~7.07~3.10~8.28~4.45~2140709794~1247613213~0.99~16.33~~543.60~~~~~";'.encode('gb18030')
+NVDA_QUOTE_BODY = 'v_usNVDA="200~英伟达~NVDA.OQ~213.66~215.38~214.36~77568070~0~0~210.02~200~0~0~0~0~0~0~0~0~210.17~7700~0~0~0~0~0~0~0~0~~2026-10-29 16:00:01~-1.72~-0.80~215.33~212.08~USD~77568070~16557630493~0.32~27.01~~43.60~~1.51~49547.09760~51592.48020~Nvidia Corporation~7.91~243.37~163.89~-7500~22.53~0.24~51592.48020~14.84~0.68~GP~117.21~83.68~-1.64~-7.45~-2.43~24147000000~23189692783~0.82~22.03~0.52~213.46~~~~~";'.encode('gb18030')
+
 
 def quote_body(code="AAPL.OQ", **changes):
     # Source positions and small public values were checked against Tencent's
@@ -102,8 +110,8 @@ def test_source_etf_kind_and_amex_venue_are_preserved_without_name_guessing():
     instrument, _ = us.parse_quote(quote_body("SPY.AM", **{"56": "GP-ETF"}), "SPY.AM", evidence())
     assert instrument.security_type == "etf" and instrument.exchange_source_code == "AM"
     assert instrument.asset_type == "us_equity"
-    result = us.parse_search(b'v_hint="us~spy.am~SPY~pg~GP-ETF"', "SPY", evidence())
-    assert result.items[0].security_type == "etf" and result.items[0].source_kind == "GP-ETF"
+    result = us.parse_search(b'v_hint="us~spy.am~SPY~bp500zsetfspdr~GP"', "SPY", evidence())
+    assert result.items[0].security_type is None and result.items[0].source_kind == "GP"
     stock, _ = us.parse_quote(quote_body(**{"1": "NotAnETF"}), "AAPL", evidence())
     assert stock.security_type == "stock"
 
@@ -135,12 +143,48 @@ def test_search_is_source_only_and_does_not_execute_javascript():
     assert [(item.name, item.source_symbol) for item in result.items] == [("苹果", "AAPL.OQ"), ("BRK B", "BRK.B.N")]
     row = result.items[0].model_dump()
     assert "instrument_id" not in row and "currency" not in row
+    assert row["security_type"] is None
     with pytest.raises(us.UsSourceError):
         us.parse_search(body + b';fetch("private")', "AAPL", evidence())
 
 
+def test_real_spy_search_keeps_all_candidates_without_pinyin_or_asset_class_guessing():
+    assert hashlib.sha256(SPY_SEARCH_BODY).hexdigest() == "e52fd1ec8fbf93b2f20b799477c792ab40217a75db22fcad72cae81b1abfe4fb"
+    result = us.parse_search(SPY_SEARCH_BODY, "SPY", evidence())
+    assert result.state == "ready" and result.issues == [] and len(result.items) == 10
+    assert result.items[0].source_symbol == "SPY.AM" and result.items[0].name == "标普500指数etfspdr"
+    assert result.items[1].source_symbol == "SGP.OQ" and result.items[1].name == "spyglass pharma, inc"
+    assert all(item.source_kind == "GP" and item.security_type is None for item in result.items)
+    truncated = us.parse_search(SPY_SEARCH_BODY, "SPY", evidence(), 2)
+    assert len(truncated.items) == 2 and truncated.state == "partial"
+    assert truncated.issues == ["source_results_truncated"]
+    verified, quote = us.parse_quote(quote_body("SPY.AM", **{"56": "GP-ETF"}), "SPY.AM", evidence())
+    assert verified.security_type == "etf"
+    assert quote.price > 0
+
+
+@pytest.mark.parametrize("code,name,pinyin,kind", [
+    ("msft.oq", "Microsoft Corporation", "*", "GP"),
+    ("tsla.oq", "特斯拉", "tsl", "GP"),
+    ("baba.n", "阿里巴巴", "albb", "GP"),
+    ("spy.am", "标普500指数ETF-SPDR", "bp500zsetfspdr", "GP-ETF"),
+])
+def test_source_search_hints_do_not_identify_share_type(code, name, pinyin, kind):
+    body = ("v_hint=" + json.dumps(f"us~{code}~{name}~{pinyin}~{kind}") + ";").encode()
+    result = us.parse_search(body, name, evidence())
+    assert result.state == "ready" and len(result.items) == 1
+    candidate = result.items[0]
+    assert candidate.source_symbol == code.upper() and candidate.name == name
+    assert candidate.source_kind == kind and candidate.security_type is None
+    assert "currency" not in candidate.model_dump() and "instrument_id" not in candidate.model_dump()
+
+
 def test_search_keeps_unsupported_and_duplicate_identities_out_of_candidates():
-    body = b'v_hint="sh~600519~wrong~pg~GP^us~aapl.oq~Apple~pg~GP^us~aapl.oq~Again~pg~GP^us~qqq.oq~QQQ~zs~ZS"'
+    raw = ("sh~600519~wrong~pg~GP^us~aapl.oq~Apple~pg~GP^us~aapl.oq~Again~pg~GP"
+           "^us~qqq.oq~QQQ~*~ZS^us~baba.n~Missing kind~albb"
+           "^us~tsla.oq~Extra column~tsl~GP~extra^us~meta.oq~ ~*~GP"
+           "^us~nvda.oq~" + "n" * 161 + "~ywd~GP")
+    body = ("v_hint=" + json.dumps(raw)).encode()
     result = us.parse_search(body, "a", evidence())
     assert result.state == "partial"
     assert len(result.items) == 1 and result.items[0].source_symbol == "AAPL.OQ"
@@ -207,6 +251,115 @@ def test_resolve_only_uses_quote_and_valid_alias_shares_cache(monkeypatch):
             assert len(calls) == 1
         finally:
             await service.aclose()
+    monkeypatch.setattr(us, "_utcnow", lambda: NOW)
+    asyncio.run(run())
+
+
+@pytest.mark.parametrize("code,wrong,body,price,source_request,digest", [
+    ("BRK.B.N", "BRK.B.OQ", BRK_QUOTE_BODY, 541.96, "usBRK__B",
+     "af987cb414a5cb4f8f8ae0652e5776f2ee008056ebb76b0ac9fb3a561206da1a"),
+    ("NVDA.OQ", "NVDA.N", NVDA_QUOTE_BODY, 213.66, "usNVDA",
+     "d5cf7cb108886a838fde9191aacbdb01a3ed74f6e789474c4a3df4ae6f72ba00"),
+], ids=["BRK.B.N", "NVDA.OQ"])
+def test_real_service_resolve_and_snapshot_preserve_class_identity_and_cached_venue(
+        monkeypatch, code, wrong, body, price, source_request, digest):
+    assert hashlib.sha256(body).hexdigest() == digest
+    async def run():
+        calls = []
+        async def source(request):
+            calls.append(request)
+            if request.url.host == "qt.gtimg.cn":
+                assert dict(request.url.params) == {"q": source_request}
+                return httpx.Response(200, content=body)
+            # This is an explicit partial-history failure, not a new real bar.
+            return httpx.Response(503)
+        owner = make_service(source)
+        try:
+            resolved = await owner.resolve(code)
+            assert resolved.source_symbol == code and resolved.security_type == "stock"
+            snapshot = await owner.snapshot(code)
+            assert snapshot.instrument == resolved and snapshot.regular.price == price
+            assert snapshot.daily.state == "unavailable"
+            with pytest.raises(us.UsSourceError) as error:
+                await owner.resolve(wrong)
+            assert error.value.code == "us_identity_mismatch"
+            assert (await owner.resolve(code)) == resolved
+            assert len(calls) == 2 and sum(r.url.host == "qt.gtimg.cn" for r in calls) == 1
+        finally:
+            await owner.aclose()
+    monkeypatch.setattr(us, "_utcnow", lambda: NOW)
+    asyncio.run(run())
+
+
+def test_wrong_class_venue_first_caches_only_the_verified_source_identity(monkeypatch):
+    async def run():
+        calls = []
+        async def source(request):
+            calls.append(request)
+            return httpx.Response(200, content=BRK_QUOTE_BODY)
+        owner = make_service(source)
+        try:
+            with pytest.raises(us.UsSourceError) as error:
+                await owner.resolve("BRK.B.OQ")
+            assert error.value.code == "us_identity_mismatch"
+            resolved = await owner.resolve("BRK.B.N")
+            assert resolved.source_symbol == "BRK.B.N" and resolved.symbol == "BRK.B"
+            assert len(calls) == 1
+            with pytest.raises(us.UsSourceError) as error:
+                await owner.resolve("BRK.B.OQ")
+            assert error.value.code == "us_identity_mismatch" and len(calls) == 1
+        finally:
+            await owner.aclose()
+    monkeypatch.setattr(us, "_utcnow", lambda: NOW)
+    asyncio.run(run())
+
+
+@pytest.mark.parametrize("code", ["BRK.B", "BRK.B.L", "AAPL.L", "AAPL.HK"])
+def test_class_read_fix_does_not_widen_public_ticker_or_unverified_venue(monkeypatch, code):
+    async def run():
+        calls = []
+        async def source(request):
+            calls.append(request)
+            raise AssertionError("unsupported public identity must not reach the source")
+        owner = make_service(source)
+        try:
+            with pytest.raises(AppError) as error:
+                await owner.resolve(code)
+            assert error.value.code == "invalid_us_identity" and calls == []
+        finally:
+            await owner.aclose()
+    monkeypatch.setattr(us, "_utcnow", lambda: NOW)
+    asyncio.run(run())
+
+
+@pytest.mark.parametrize("code,wrong,body", [
+    ("BRK.B.N", "BRK.B.OQ", BRK_QUOTE_BODY),
+    ("NVDA.OQ", "NVDA.N", NVDA_QUOTE_BODY),
+], ids=["BRK.B.N", "NVDA.OQ"])
+def test_wrong_venue_first_inflight_does_not_reject_correct_same_ticker_waiter(monkeypatch, code, wrong, body):
+    async def run():
+        entered, release = asyncio.Event(), asyncio.Event()
+        calls = []
+        async def source(request):
+            calls.append(request)
+            entered.set()
+            await release.wait()
+            return httpx.Response(200, content=body)
+        owner = make_service(source)
+        try:
+            wrong_read = asyncio.create_task(owner.resolve(wrong))
+            await entered.wait()
+            correct_read = asyncio.create_task(owner.resolve(code))
+            await asyncio.sleep(0)
+            release.set()
+            rejected, accepted = await asyncio.gather(wrong_read, correct_read, return_exceptions=True)
+            assert isinstance(rejected, us.UsSourceError) and rejected.code == "us_identity_mismatch"
+            assert not isinstance(accepted, BaseException), repr(accepted)
+            assert accepted.source_symbol == code and len(calls) == 1
+            assert (await owner.resolve(code)).source_symbol == code and len(calls) == 1
+        finally:
+            release.set()
+            await owner.aclose()
     monkeypatch.setattr(us, "_utcnow", lambda: NOW)
     asyncio.run(run())
 

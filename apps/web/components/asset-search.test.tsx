@@ -3,7 +3,7 @@ import {act, cleanup, fireEvent, render, screen} from "@testing-library/react";
 import {SearchBox} from "@/components/search-box";
 import {getAssetRecords, getFundCatalog, saveAssetRecord, searchAssets, type AssetInstrument, type AssetSearchResult, type FundCatalog} from "@/lib/api/assets";
 import {searchSymbols} from "@/lib/api";
-import {searchUsAssets} from "@/lib/api/us-assets";
+import {searchUsAssets, type UsSearchResult} from "@/lib/api/us-assets";
 
 const nav = vi.hoisted(() => ({push: vi.fn(), open: vi.fn()}));
 vi.mock("next/navigation", () => ({useRouter: () => ({push: nav.push})}));
@@ -14,10 +14,101 @@ vi.mock("@/lib/api/us-assets", async original => ({...await original<typeof impo
 const instrument: AssetInstrument = {instrument_id: "fund:OF:040046:CNY", asset_type: "fund", fund_type: "fund-otc", market: "OF", symbol: "040046", source_symbol: "040046.OF", currency: "CNY", name: "测试纳指联接", source: "ths_official"};
 const result = (): AssetSearchResult => ({query: "纳指", asset_type: "fund", state: "ready", items: [instrument], reason: null, issues: [], coverage: "source_search_window", evidence: []});
 const sourceCatalog = (): FundCatalog => ({state: "ready", tab: "meiguo", purchase: "all", source: "ths_official", items: [{source_symbol: "040047.OF", source_name: "来源纳指联接C", state: "candidate"}]} as FundCatalog);
+const singleTickerResult = (query: string): UsSearchResult => ({query, asset_type: "us_equity", state: "ready", reason: null,
+  items: [{symbol: "F", source_symbol: "F.N", market: "US", name: "福特汽车", source_kind: "GP", security_type: null, source: "tencent"}], issues: [], evidence: []});
 beforeEach(() => {vi.resetAllMocks(); localStorage.clear(); vi.mocked(searchAssets).mockResolvedValue(result()); vi.mocked(searchUsAssets).mockImplementation(async query => ({query, asset_type: "us_equity", state: "blocked", reason: "美股源未核验", items: [], issues: [], evidence: []})); vi.mocked(getFundCatalog).mockResolvedValue({state: "unavailable", items: []} as unknown as FundCatalog); vi.mocked(getAssetRecords).mockResolvedValue({items: []}); vi.mocked(saveAssetRecord).mockResolvedValue({} as never);});
 afterEach(() => {cleanup(); vi.useRealTimers();});
 
 describe("分资产搜索与历史身份", () => {
+  it("单字符美股ticker防抖搜索一次，点选及其历史均以完整身份一次直达", async () => {
+    vi.useFakeTimers(); vi.mocked(searchUsAssets).mockImplementation(async query => singleTickerResult(query));
+    const view = render(<SearchBox asset="us_equity"/>), input = screen.getByRole("textbox");
+    fireEvent.change(input, {target: {value: "F"}});
+    await act(async () => vi.advanceTimersByTime(249)); expect(searchUsAssets).not.toHaveBeenCalled();
+    await act(async () => vi.advanceTimersByTime(1));
+    expect(searchUsAssets).toHaveBeenCalledExactlyOnceWith("F");
+    fireEvent.click(screen.getByRole("button", {name: "福特汽车 F.N US"}));
+    expect(nav.push).toHaveBeenCalledExactlyOnceWith("/workbench?mode=watch&asset=us_equity&symbol=F.N");
+    const saved = JSON.parse(localStorage.getItem("ashare-asset-search-history-v1:us_equity")!)[0];
+    expect(saved.query).toBe("F"); expect(saved.symbol).toBe("F.N"); expect(saved.instrument).toBeUndefined();
+    view.unmount(); render(<SearchBox asset="us_equity"/>); await act(async () => {});
+    fireEvent.focus(screen.getByRole("textbox"));
+    fireEvent.click(screen.getByRole("button", {name: "查看 福特汽车 F.N US"}));
+    expect(nav.push).toHaveBeenCalledTimes(2); expect(searchUsAssets).toHaveBeenCalledTimes(1);
+    expect(searchSymbols).not.toHaveBeenCalled(); expect(searchAssets).not.toHaveBeenCalled();
+    expect(getAssetRecords).not.toHaveBeenCalled(); expect(saveAssetRecord).not.toHaveBeenCalled();
+  });
+  it("单字符美股Enter立即搜索并取消原防抖，结果后再Enter只打开来源详情", async () => {
+    vi.useFakeTimers(); vi.mocked(searchUsAssets).mockImplementation(async query => singleTickerResult(query));
+    render(<SearchBox asset="us_equity"/>); const input = screen.getByRole("textbox");
+    fireEvent.change(input, {target: {value: "F"}}); fireEvent.keyDown(input, {key: "Enter"});
+    await act(async () => {});
+    expect(searchUsAssets).toHaveBeenCalledExactlyOnceWith("F");
+    await act(async () => vi.advanceTimersByTime(300)); expect(searchUsAssets).toHaveBeenCalledTimes(1);
+    fireEvent.keyDown(input, {key: "Enter"});
+    expect(nav.push).toHaveBeenCalledExactlyOnceWith("/workbench?mode=watch&asset=us_equity&symbol=F.N");
+    expect(searchUsAssets).toHaveBeenCalledTimes(1); expect(saveAssetRecord).not.toHaveBeenCalled();
+  });
+  it("单字符美股组合输入结束后才取源，真实空集正常显示证券空态", async () => {
+    vi.useFakeTimers();
+    vi.mocked(searchUsAssets).mockImplementation(async query => ({...singleTickerResult(query), items: []}));
+    render(<SearchBox asset="us_equity"/>); const input = screen.getByRole("textbox");
+    fireEvent.compositionStart(input); fireEvent.change(input, {target: {value: "F"}});
+    fireEvent.keyDown(input, {key: "Enter", isComposing: true});
+    await act(async () => vi.advanceTimersByTime(500)); expect(searchUsAssets).not.toHaveBeenCalled();
+    fireEvent.compositionEnd(input); await act(async () => {});
+    expect(searchUsAssets).toHaveBeenCalledExactlyOnceWith("F");
+    expect(screen.getByText("未找到与「F」匹配的证券")).toBeTruthy();
+    expect(nav.push).not.toHaveBeenCalled();
+  });
+  it.each(["cn_equity", "fund"] as const)("%s仍要求两个字符，单字符输入或Enter不发请求", async asset => {
+    vi.useFakeTimers(); render(<SearchBox asset={asset}/>); const input = screen.getByRole("textbox");
+    fireEvent.change(input, {target: {value: "F"}}); fireEvent.keyDown(input, {key: "Enter"});
+    await act(async () => vi.advanceTimersByTime(500));
+    expect(searchSymbols).not.toHaveBeenCalled(); expect(searchAssets).not.toHaveBeenCalled();
+    expect(getFundCatalog).not.toHaveBeenCalled(); expect(searchUsAssets).not.toHaveBeenCalled();
+    expect(screen.queryByText(/未找到与/)).toBeNull();
+  });
+  it.each(["GP", "GP-ETF"])("美股提示%s未确认证券子类时仍可点选核对SPY，不从候选造完整自选身份", async kind => {
+    vi.useFakeTimers();
+    vi.mocked(searchUsAssets).mockImplementation(async query => ({query, asset_type: "us_equity", state: "ready", reason: null,
+      items: [{symbol: "SPY", source_symbol: "SPY.AM", market: "US", name: "SPDR标普500", source_kind: kind, security_type: null, source: "tencent"}], issues: [], evidence: []}));
+    render(<SearchBox asset="us_equity"/>);
+    fireEvent.change(screen.getByRole("textbox"), {target: {value: "SPY"}}); await act(async () => vi.advanceTimersByTime(250));
+    expect(screen.getByText("美股来源 · 点选核对")).toBeTruthy();
+    expect(screen.queryByRole("button", {name: /加入自选/})).toBeNull();
+    fireEvent.click(screen.getByRole("button", {name: "SPDR标普500 SPY.AM US"}));
+    expect(nav.push).toHaveBeenCalledExactlyOnceWith("/workbench?mode=watch&asset=us_equity&symbol=SPY.AM");
+    const saved = JSON.parse(localStorage.getItem("ashare-asset-search-history-v1:us_equity")!)[0];
+    expect(saved.us_candidate).toBe(true); expect(saved.instrument).toBeUndefined(); expect(saved.currency).toBeUndefined();
+    expect(saved.security_type).toBeUndefined();
+    expect(searchSymbols).not.toHaveBeenCalled(); expect(searchAssets).not.toHaveBeenCalled();
+    expect(getFundCatalog).not.toHaveBeenCalled(); expect(getAssetRecords).not.toHaveBeenCalled();
+    expect(saveAssetRecord).not.toHaveBeenCalled(); expect(nav.open).not.toHaveBeenCalled();
+  });
+  it.each([
+    {source_kind: "ZS", security_type: null},
+    {source_kind: "GP", security_type: "etf"},
+    {source_kind: "GP", security_type: null, source: "other"},
+    {source_kind: "GP", security_type: null, market: "HK"},
+    {source_kind: "GP", security_type: null, symbol: "NVDA"},
+  ])("候选子类未知不能绕过种类、来源、市场或完整代码核对：%j", async changes => {
+    vi.useFakeTimers();
+    vi.mocked(searchUsAssets).mockImplementation(async query => ({query, asset_type: "us_equity", state: "ready", reason: null,
+      items: [{symbol: "SPY", source_symbol: "SPY.AM", market: "US", name: "不合格候选", source: "tencent", ...changes} as never], issues: [], evidence: []}));
+    render(<SearchBox asset="us_equity"/>);
+    fireEvent.change(screen.getByRole("textbox"), {target: {value: "SPY"}}); await act(async () => vi.advanceTimersByTime(250));
+    expect(screen.queryByText("不合格候选")).toBeNull();
+    expect(nav.push).not.toHaveBeenCalled(); expect(saveAssetRecord).not.toHaveBeenCalled();
+    expect(searchSymbols).not.toHaveBeenCalled(); expect(getAssetRecords).not.toHaveBeenCalled();
+  });
+  it.each([{asset: "us_equity", noun: "证券"}, {asset: "cn_equity", noun: "股票"}] as const)("空结果称谓只调整美股，$asset显示$noun", async ({asset, noun}) => {
+    vi.useFakeTimers(); vi.mocked(searchSymbols).mockResolvedValue([]);
+    vi.mocked(searchUsAssets).mockImplementation(async query => ({query, asset_type: "us_equity", state: "ready", reason: null, items: [], issues: [], evidence: []}));
+    render(<SearchBox asset={asset}/>);
+    fireEvent.change(screen.getByRole("textbox"), {target: {value: "SPY"}}); await act(async () => vi.advanceTimersByTime(250));
+    expect(screen.getByText(`未找到与「SPY」匹配的${noun}`)).toBeTruthy();
+  });
   it("美股来源候选和历史一次直达，不造完整身份或触发A股/基金读写", async () => {
     vi.useFakeTimers();
     vi.mocked(searchUsAssets).mockImplementation(async query => ({query, asset_type: "us_equity", state: "ready", reason: null,
