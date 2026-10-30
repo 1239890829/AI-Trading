@@ -13,8 +13,8 @@ import { notifyWatchlistChanged } from "@/lib/watchlist-sync";
 import { useSymbolDetail } from "@/components/detail/symbol-detail-context";
 import type { SymbolSearchItem } from "@/types/market";
 import {useRouter} from "next/navigation";
-import {getAssetRecords, saveAssetRecord, searchAssets, type AssetInstrument} from "@/lib/api/assets";
-import {ASSET_LABELS, assetWorkbenchUrl, fundIdentityMatches, notifyAssetRecordsChanged, type WorkbenchAsset} from "@/lib/asset-identity";
+import {getAssetRecords, getFundCatalog, saveAssetRecord, searchAssets, type AssetInstrument, type FundCatalog} from "@/lib/api/assets";
+import {ASSET_LABELS, assetWorkbenchUrl, fundIdentityMatches, notifyAssetRecordsChanged, validFundSymbol, type WorkbenchAsset} from "@/lib/asset-identity";
 
 /** 输入停稳后的防抖时长（ms）。Enter 可跳过防抖立即搜索。 */
 const DEBOUNCE_MS = 250;
@@ -22,11 +22,11 @@ const DEBOUNCE_MS = 250;
 const MIN_QUERY_LEN = 2;
 const HISTORY_KEY = "ashare-security-search-history-v1";
 const HISTORY_LIMIT = 12;
-type SelectedHistory = {query: string; symbol: string; name: string; market: string; instrument?: AssetInstrument};
+type SelectedHistory = {query: string; symbol: string; name: string; market: string; instrument?: AssetInstrument; source_candidate?: true};
 type SearchHistory = SelectedHistory | {query: string};
-type SearchItem = SymbolSearchItem & {instrument?: AssetInstrument};
+type SearchItem = SymbolSearchItem & {instrument?: AssetInstrument; source_candidate?: true};
 function selectedHistory(entry: SearchHistory): entry is SelectedHistory {return "symbol" in entry;}
-function historyIdentity(entry: SearchHistory) {return selectedHistory(entry) ? entry.instrument?.instrument_id ?? `${entry.market}:${entry.symbol}` : `query:${entry.query}`;}
+function historyIdentity(entry: SearchHistory) {return selectedHistory(entry) ? (entry.instrument || entry.source_candidate ? `fund:${entry.symbol}` : `${entry.market}:${entry.symbol}`) : `query:${entry.query}`;}
 
 /** Market-qualified index segments use the existing detail contract; names never supply identity. */
 function historySymbol(symbol: string, market: string): string | null {
@@ -49,12 +49,18 @@ function validHistory(value: unknown, asset: WorkbenchAsset = "cn_equity"): Sear
     let record: SearchHistory;
     if (asset !== "cn_equity") {
       const instrument = entry.instrument;
-      if (asset !== "fund" || !instrument || typeof instrument !== "object" || !fundIdentityMatches(instrument)
-        || typeof instrument.name !== "string" || instrument.name.length > 160 || entry.symbol !== instrument.source_symbol) continue;
-      record = {query, symbol: instrument.source_symbol, name: instrument.name, market: instrument.market, instrument};
+      if (asset !== "fund") continue;
+      if (entry.source_candidate === true && !instrument && validFundSymbol(entry.symbol) && entry.market === "OF"
+        && typeof entry.name === "string" && entry.name.length <= 160) {
+        record = {query, symbol: entry.symbol, name: entry.name, market: "OF", source_candidate: true};
+      } else {
+        if (!instrument || typeof instrument !== "object" || !fundIdentityMatches(instrument)
+          || typeof instrument.name !== "string" || instrument.name.length > 160 || entry.symbol !== instrument.source_symbol) continue;
+        record = {query, symbol: instrument.source_symbol, name: typeof entry.name === "string" && entry.name.length <= 160 ? entry.name : instrument.name, market: instrument.market, instrument};
+      }
     } else {
     // Never migrate a non-A-share identity into the legacy six-digit history.
-    if (entry.instrument) continue;
+    if (entry.instrument || entry.source_candidate) continue;
     if (!("symbol" in entry) && !("market" in entry)) record = {query};
     else {
       if (typeof entry.symbol !== "string" || !["SH", "SZ", "BJ"].includes(entry.market)
@@ -113,6 +119,8 @@ export function SearchBox({collapsible = false, asset = "cn_equity"}: {collapsib
    * 后发先至覆盖新结果——表现就是「输入后搜索无响应/结果不对」。
    */
   const seqRef = useRef(0);
+  // Reuse a bounded source list while its evidence is within the backend cache lifetime.
+  const fundCatalogRead = useRef<{promise: Promise<FundCatalog>; expires: number} | null>(null);
   const timerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   /** 中文 IME 组合中（拼音未上屏）：期间不调度搜索、Enter/Escape 归 IME 所有。 */
   const composingRef = useRef(false);
@@ -125,19 +133,66 @@ export function SearchBox({collapsible = false, asset = "cn_equity"}: {collapsib
     setLoading(true);
     setError(null);
     setOpen(true); // 请求飞行中立即打开面板显示「搜索中…」，不等响应
-    const request = asset === "cn_equity" ? searchSymbols(kw) : searchAssets(kw, asset).then(result => {
-      if (result.asset_type !== asset || result.query !== kw) throw new ApiError(502, "搜索返回的资产或关键词不匹配，请重新搜索", "asset_identity_mismatch");
-      if (seq === seqRef.current) {
-        if (result.state === "blocked") setError(result.reason ?? "该资产来源尚未通过核验");
-        else if (result.state === "partial") setAddNote(result.reason ?? "来源只返回部分结果，请核对覆盖范围");
+    const request: Promise<SearchItem[]> = asset === "cn_equity" ? searchSymbols(kw) : (async () => {
+      if (asset === "fund" && (!fundCatalogRead.current || fundCatalogRead.current.expires <= Date.now())) {
+        const entry = {promise: getFundCatalog("all"), expires: Infinity};
+        fundCatalogRead.current = entry;
+        void entry.promise.then(catalog => {
+          const ttl = catalog.state === "unavailable" || !catalog.items.length ? 30_000 : 300_000;
+          const received = (catalog.evidence ?? []).map(item => Date.parse(item.received_at)).filter(Number.isFinite);
+          entry.expires = Math.min(Date.now() + ttl, ...received.map(time => time + ttl));
+        }, () => {if (fundCatalogRead.current === entry) fundCatalogRead.current = null;});
       }
-      return result.items.map(instrument => ({symbol: instrument.source_symbol, name: instrument.name, market: instrument.market,
-        source: instrument.source, is_realtime: false, instrument}));
-    });
+      let publishedVerified = false;
+      let invalidAssetResponse = false;
+      const publishEarly = (rows: SearchItem[]) => {
+        if (seq !== seqRef.current || !rows.length) return;
+        setItems(rows); setSearched(true); setLoading(false);
+      };
+      const assetRead = searchAssets(kw, asset).then(result => {
+        if (result.asset_type !== asset || result.query !== kw) {invalidAssetResponse = true; throw new ApiError(502, "搜索返回的资产或关键词不匹配，请重新搜索", "asset_identity_mismatch");}
+        if (seq === seqRef.current && result.state === "partial") setAddNote(result.reason ?? "来源只返回部分结果，请核对覆盖范围");
+        if (result.state !== "blocked" && result.items.length) {
+          publishedVerified = true;
+          publishEarly(result.items.map(instrument => ({symbol: instrument.source_symbol, name: instrument.name, market: instrument.market, source: instrument.source, is_realtime: false, instrument})));
+        }
+        return result;
+      });
+      const sourceRead = asset === "fund" ? fundCatalogRead.current!.promise.then(catalog => {
+        if (!publishedVerified && catalog.tab === "meiguo" && catalog.purchase === "all" && catalog.source === "ths_official" && catalog.state !== "unavailable") {
+          publishEarly(catalog.items.filter(item => item.state === "candidate" && validFundSymbol(item.source_symbol)
+            && (item.source_symbol.toLowerCase().includes(kw.toLowerCase()) || item.source_name?.toLowerCase().includes(kw.toLowerCase()))).slice(0, 20)
+            .map(item => ({symbol: item.source_symbol, name: item.source_name ?? item.source_symbol, market: "OF", source: "ths_official", is_realtime: false, source_candidate: true})));
+        }
+        return catalog;
+      }) : Promise.resolve(null);
+      const [searchedAssets, catalogRead] = await Promise.allSettled([assetRead, sourceRead]);
+      if (searchedAssets.status === "rejected" && (invalidAssetResponse || searchedAssets.reason instanceof ApiError && [401, 403].includes(searchedAssets.reason.status))) throw searchedAssets.reason;
+      const result = searchedAssets.status === "fulfilled" ? searchedAssets.value : null;
+      if (result && (result.asset_type !== asset || result.query !== kw)) throw new ApiError(502, "搜索返回的资产或关键词不匹配，请重新搜索", "asset_identity_mismatch");
+      const catalog = catalogRead.status === "fulfilled" ? catalogRead.value : null;
+      const sourceItems = asset === "fund" && catalog?.tab === "meiguo" && catalog.purchase === "all" && catalog.source === "ths_official" && catalog.state !== "unavailable"
+        ? catalog.items.filter(item => item.state === "candidate" && validFundSymbol(item.source_symbol)) : [];
+      const matched = sourceItems.filter(item => item.source_symbol.toLowerCase().includes(kw.toLowerCase()) || item.source_name?.toLowerCase().includes(kw.toLowerCase()));
+      const verified = result?.state !== "blocked" ? result?.items ?? [] : [];
+      if (!result && !matched.length) throw searchedAssets.status === "rejected" ? searchedAssets.reason : new Error("基金来源未返回结果");
+      const unverified = matched.filter(item => !verified.some(instrument => instrument.source_symbol === item.source_symbol));
+      if (seq === seqRef.current) {
+        if (result?.state === "blocked") setError(result.reason ?? "该资产来源尚未通过核验");
+        else if (result?.state === "partial") setAddNote(result.reason ?? "来源只返回部分结果，请核对覆盖范围");
+        else if (!result) setAddNote("标的搜索暂不可用；以下为来源栏目候选，点选后核对份额资料。");
+        else if (asset === "fund" && (!catalog || catalog.state === "unavailable")) setAddNote("候选目录暂不可用；仅展示已取得的标的搜索结果。");
+        if (unverified.length > 20) setAddNote(previous => `${previous ? `${previous} ` : ""}来源候选匹配 ${unverified.length} 只，仅展示前 20 只；完整名单可在工作台查看。`);
+      }
+      if (result?.state === "blocked") return [];
+      return [...verified.map(instrument => ({symbol: instrument.source_symbol, name: sourceItems.find(item => item.source_symbol === instrument.source_symbol)?.source_name ?? instrument.name, market: instrument.market,
+        source: instrument.source, is_realtime: false, instrument})),
+        ...unverified.slice(0, 20).map(item => ({symbol: item.source_symbol, name: item.source_name ?? item.source_symbol, market: "OF", source: "ths_official", is_realtime: false, source_candidate: true as const}))];
+    })();
     request
       .then((res) => {
         if (seq !== seqRef.current) return; // 已被更新的输入取代，丢弃旧响应
-        setItems(res);
+        setItems(previous => res.map(item => ({...item, is_realtime: item.is_realtime || previous.some(row => row.symbol === item.symbol && row.market === item.market && row.is_realtime)})));
         setSearched(true);
         setOpen(true);
       })
@@ -213,8 +268,8 @@ export function SearchBox({collapsible = false, asset = "cn_equity"}: {collapsib
     try {localStorage.setItem(historyKey, JSON.stringify(next));} catch {}
   }
 
-  function go(item: Pick<SearchItem, "symbol" | "name" | "market" | "instrument">, recalled?: SelectedHistory) {
-    const parsed = validHistory([{query: q.trim(), symbol: item.symbol, name: item.name ?? item.symbol, market: item.market, ...(item.instrument ? {instrument: item.instrument} : {})}], asset)[0];
+  function go(item: Pick<SearchItem, "symbol" | "name" | "market" | "instrument" | "source_candidate">, recalled?: SelectedHistory) {
+    const parsed = validHistory([{query: q.trim(), symbol: item.symbol, name: item.name ?? item.symbol, market: item.market, ...(item.instrument ? {instrument: item.instrument} : item.source_candidate ? {source_candidate: true} : {})}], asset)[0];
     const entry = recalled ?? (parsed && selectedHistory(parsed) ? parsed : undefined);
     if (!entry) {
       const term = parsed ?? validHistory([q.trim()])[0];
@@ -228,7 +283,8 @@ export function SearchBox({collapsible = false, asset = "cn_equity"}: {collapsib
     inputRef.current?.focus();
     dismiss();
     setQ("");
-    if (entry.instrument) router.push(assetWorkbenchUrl("fund", entry.instrument.source_symbol));
+    if (entry.source_candidate) router.push(assetWorkbenchUrl("fund", entry.symbol, "research"));
+    else if (entry.instrument) router.push(assetWorkbenchUrl("fund", entry.instrument.source_symbol, "research"));
     else openSymbolDetail({symbol: entry.symbol});
   }
 
@@ -256,6 +312,7 @@ export function SearchBox({collapsible = false, asset = "cn_equity"}: {collapsib
 
   async function quickAdd(e: React.MouseEvent, item: SearchItem) {
     e.stopPropagation();
+    if (item.source_candidate) return;
     if (item.instrument) {
       if (!fundIdentityMatches(item.instrument) || addLock.current) return;
       addLock.current = true; setAdding(item.instrument.instrument_id); setAddNote(null);
@@ -412,7 +469,7 @@ export function SearchBox({collapsible = false, asset = "cn_equity"}: {collapsib
           {panel.error !== null && (
             <li className="px-3 py-2 text-xs text-red-700 dark:text-red-400" role="alert">
               <p>{panel.error}</p>
-              <button type="button" className="quiet-action search-retry" onClick={() => runSearch(kw)}>重新搜索</button>
+              <button type="button" className="quiet-action search-retry" onClick={() => {fundCatalogRead.current = null; runSearch(kw);}}>重新搜索</button>
             </li>
           )}
           {panel.loading && panel.results.length === 0 && panel.error === null && (
@@ -427,14 +484,14 @@ export function SearchBox({collapsible = false, asset = "cn_equity"}: {collapsib
           )}
           {panel.results.map((it) => {
             const symbol = it.instrument ? fundIdentityMatches(it.instrument) ? it.instrument.source_symbol : null : historySymbol(it.symbol, it.market ?? "");
-            const index = !it.instrument && symbol !== null && !/^\d{6}$/.test(symbol);
+            const index = !it.instrument && !it.source_candidate && symbol !== null && !/^\d{6}$/.test(symbol);
             return <li key={`${it.source}-${it.market ?? "unknown"}-${it.symbol}`}>
               <div className="search-result-row">
                 <button type="button" onClick={() => go(it)} className="search-result-open" onKeyDown={moveChoice}>
                   <span className="search-result-name">{it.name ?? it.symbol}</span>
                   <span className="search-result-code">{it.symbol}<span>{it.market}</span></span>
                 </button>
-                {index ? <span className="search-watch-state">指数 · 仅查看</span> : symbol === null ? <span className="search-watch-state">身份待核</span> : it.is_realtime ? (
+                {it.source_candidate ? <span className="search-watch-state">来源候选 · 份额待核</span> : index ? <span className="search-watch-state">指数 · 仅查看</span> : symbol === null ? <span className="search-watch-state">身份待核</span> : it.is_realtime ? (
                   <span className="search-watch-state">已自选 ✓</span>
                 ) : (
                   <button type="button" disabled={panel.adding !== null} aria-label={`加入自选 ${it.name ?? it.symbol}`} onClick={(e) => void quickAdd(e, it)} className="search-watch-action" title="加入自选">

@@ -3,12 +3,15 @@ from __future__ import annotations
 
 import math
 import re
+import json
 from datetime import date, datetime, timezone
 
 from app.core.bjtime import BJ_TZ
 from app.core.errors import AppError
 from app.schemas.assets import (
-    AssetInstrument, FundHolding, FundHoldingsSection, FundNavPoint,
+    AssetInstrument, FundCatalog, FundCatalogCandidate, FundCatalogCoverage,
+    FundCatalogExcluded, FundCatalogGroup, FundCatalogMembership,
+    FundHolding, FundHoldingsSection, FundNavPoint,
     FundNavSection, FundTerm, FundTermsSection,
 )
 
@@ -17,11 +20,174 @@ FUND_TYPES = {"fund-otc", "fund-etf", "fund-lof", "fund-reits"}
 # Explicitly supported settlement currencies. A syntactically valid unknown
 # three-letter marker (including ISO XXX = no currency) cannot price a holding.
 CURRENCIES = {"CNY", "USD", "HKD", "EUR", "GBP", "JPY", "CHF", "CAD", "AUD", "NZD", "SGD"}
+CATALOG_MAX_ROWS = 2000
 
 
 class AssetSourceError(AppError):
     status_code = 502
     code = "asset_source_unavailable"
+
+
+def validate_quota_shape(data) -> None:
+    """Only the quota endpoint allows this nested list/null response shape."""
+    if data is None:
+        return
+    if not isinstance(data, list) or len(data) > 8:
+        raise AssetSourceError("来源候选目录结构无效", code="fund_catalog_shape_invalid")
+    total = 0
+    for tab in data:
+        if tab is None:
+            continue
+        if not isinstance(tab, dict):
+            raise AssetSourceError("来源目录分类结构无效", code="fund_catalog_shape_invalid")
+        sub = tab.get("sub_tab")
+        if sub is None:
+            continue
+        if not isinstance(sub, list) or len(sub) > 32:
+            raise AssetSourceError("来源目录子分类结构无效", code="fund_catalog_shape_invalid")
+        for group in sub:
+            if group is None:
+                continue
+            if not isinstance(group, dict):
+                raise AssetSourceError("来源目录子分类无效", code="fund_catalog_shape_invalid")
+            members = group.get("fund_list")
+            if members is None:
+                continue
+            if not isinstance(members, list) or any(row is not None and not isinstance(row, dict) for row in members):
+                raise AssetSourceError("来源基金列表结构无效", code="fund_catalog_shape_invalid")
+            total += len(members)
+            if total > CATALOG_MAX_ROWS:
+                raise AssetSourceError("来源候选目录超出读取范围", code="fund_catalog_too_large")
+
+
+def parse_catalog(data, purchase: str, evidence) -> FundCatalog:
+    """Deduplicate exact source identities, never invent currency or a mandate."""
+    validate_quota_shape(data)
+    groups, excluded, grouped, missing = [], [], {}, set()
+    placeholders, source_rows, group_position = 0, 0, 0
+    group_keys = set()
+
+    def placeholder(reason, **position):
+        nonlocal placeholders
+        placeholders += 1
+        missing.add(reason)
+        excluded.append(FundCatalogExcluded(reason=reason, **position))
+
+    if data is None:
+        placeholder("source_catalog_null")
+    for tab in data or []:
+        if tab is None:
+            placeholder("source_tab_null")
+            continue
+        if tab.get("name") is None:
+            placeholder("source_tab_name_missing")
+            continue
+        if tab["name"] != "meiguo":
+            raise AssetSourceError("来源目录与请求栏目不一致", code="fund_catalog_tab_mismatch")
+        if tab.get("sub_tab") is None:
+            placeholder("source_groups_missing")
+            continue
+        for group in tab["sub_tab"]:
+            current_group = group_position
+            group_position += 1
+            if group is None:
+                placeholder("source_group_null", group_position=current_group)
+                continue
+            name = group.get("name")
+            if name is None:
+                placeholder("source_group_name_missing", group_position=current_group)
+                continue
+            if not isinstance(name, str) or not re.fullmatch(r"[a-z0-9_]{1,60}", name):
+                raise AssetSourceError("来源子分类身份无效", code="fund_catalog_shape_invalid")
+            if name in group_keys:
+                missing.add("duplicate_source_group")
+            group_keys.add(name)
+            members = group.get("fund_list")
+            if members is None:
+                placeholder("source_group_members_missing", group_key=name, group_position=current_group)
+                groups.append(FundCatalogGroup(source_key=name, source_position=current_group, source_rows=0, unique_symbols=0))
+                continue
+            identities = set()
+            for position, row in enumerate(members):
+                order = source_rows
+                source_rows += 1
+                location = dict(group_key=name, group_position=current_group, row_position=position)
+                if row is None:
+                    placeholder("source_fund_null", **location)
+                    continue
+                code = row.get("thscode")
+                if code is None:
+                    placeholder("source_symbol_missing", **location)
+                    continue
+                if not isinstance(code, str) or not FUND_CODE.fullmatch(code):
+                    missing.add("invalid_source_symbol")
+                    excluded.append(FundCatalogExcluded(source_symbol=code[:40] if isinstance(code, str) else None,
+                                                        reason="invalid_source_symbol", **location))
+                    continue
+                identities.add(code)
+                entry = grouped.setdefault(code, {"position": order, "rows": [], "memberships": []})
+                entry["rows"].append(row)
+                entry["memberships"].append(FundCatalogMembership(**location))
+            groups.append(FundCatalogGroup(source_key=name, source_position=current_group,
+                                           source_rows=len(members), unique_symbols=len(identities)))
+
+    items = []
+    for code, entry in grouped.items():
+        rows_for_code = entry["rows"]
+        conflicts, absent, values = set(), set(), {}
+        for field in ("fund_name", "quota", "year", "classify"):
+            # Missing and explicit null have different semantics, especially quota.
+            variants = {(field in row, json.dumps(row.get(field), ensure_ascii=False, sort_keys=True))
+                        for row in rows_for_code}
+            if len(variants) != 1:
+                conflicts.add(field)
+                values[field] = None
+                continue
+            present = field in rows_for_code[0]
+            value = rows_for_code[0].get(field)
+            valid = (value is None or isinstance(value, list) and len(value) <= 20
+                     and all(isinstance(v, str) and len(v) <= 40 for v in value)) if field == "classify" else (
+                         value is None or isinstance(value, str) and len(value) <= (240 if field == "fund_name" else 80))
+            if not valid:
+                conflicts.add(field)
+                values[field] = None
+            else:
+                values[field] = value
+                if not present or field in {"fund_name", "year"} and (value is None or not value.strip()):
+                    absent.add(field)
+        if "quota" in conflicts:
+            quota_status = "conflict"
+        elif "quota" in absent:
+            quota_status = "unknown"
+        elif values["quota"] is None:
+            quota_status = "unlimited"
+        elif not re.fullmatch(r"[0-9]+(?:\.[0-9]+)?", values["quota"]):
+            quota_status = "unknown"
+            absent.add("quota_value")
+        else:
+            quota_status = "reported"
+        state = "conflict" if conflicts else "candidate" if code.endswith(".OF") else "out_of_scope"
+        if conflicts:
+            missing.add("conflicting_source_fields")
+        if absent:
+            missing.add("incomplete_source_fields")
+        items.append(FundCatalogCandidate(
+            source_symbol=code, source_name=values["fund_name"], state=state, source_position=entry["position"],
+            memberships=entry["memberships"], occurrence_count=len(rows_for_code),
+            quota_raw=values["quota"], quota_status=quota_status, year_raw=values["year"],
+            classify=values["classify"], missing=sorted(absent), conflicting_fields=sorted(conflicts),
+        ))
+    complete = not missing
+    return FundCatalog(
+        state="unavailable" if not items and missing else "partial" if missing else "ready",
+        purchase=purchase, groups=groups, items=items, excluded=excluded, missing=sorted(missing), evidence=[evidence],
+        coverage=FundCatalogCoverage(source_rows=source_rows, unique_symbols=len(items),
+            of_symbols=sum(item.source_symbol.endswith(".OF") for item in items),
+            candidate_symbols=sum(item.state == "candidate" for item in items),
+            out_of_scope_symbols=sum(not item.source_symbol.endswith(".OF") for item in items),
+            conflict_symbols=sum(item.state == "conflict" for item in items), placeholder_count=placeholders,
+            excluded_rows=sum(item.row_position is not None for item in excluded), complete_source_response=complete),
+    )
 
 
 def fund_code(value: str, *, root: bool = True) -> str:

@@ -36,6 +36,73 @@ class AssetReadSection(BaseModel):
     evidence: list[AssetEvidence] = Field(default_factory=list)
 
 
+class FundCatalogMembership(BaseModel):
+    group_key: str
+    group_position: int
+    row_position: int
+
+
+class FundCatalogGroup(BaseModel):
+    source_key: str
+    source_position: int
+    source_rows: int
+    unique_symbols: int
+
+
+class FundCatalogCandidate(BaseModel):
+    source_symbol: str
+    source_name: str | None = None
+    state: Literal["candidate", "conflict", "out_of_scope"]
+    source_position: int
+    memberships: list[FundCatalogMembership] = Field(default_factory=list)
+    occurrence_count: int
+    quota_raw: str | None = None
+    quota_status: Literal["reported", "unlimited", "unknown", "conflict"]
+    quota_unit: None = None
+    year_raw: str | None = None
+    classify: list[str] | None = None
+    missing: list[str] = Field(default_factory=list)
+    conflicting_fields: list[str] = Field(default_factory=list)
+
+
+class FundCatalogExcluded(BaseModel):
+    group_key: str | None = None
+    group_position: int | None = None
+    row_position: int | None = None
+    source_symbol: str | None = None
+    reason: str
+
+
+class FundCatalogCoverage(BaseModel):
+    source_rows: int = 0
+    unique_symbols: int = 0
+    of_symbols: int = 0
+    candidate_symbols: int = 0
+    out_of_scope_symbols: int = 0
+    conflict_symbols: int = 0
+    placeholder_count: int = 0
+    excluded_rows: int = 0
+    complete_source_response: bool = False
+
+
+class FundCatalog(BaseModel):
+    state: Literal["ready", "partial", "unavailable"]
+    source: Literal["ths_official"] = "ths_official"
+    tab: Literal["meiguo"] = "meiguo"
+    purchase: Literal["all", "source_buyable"]
+    groups: list[FundCatalogGroup] = Field(default_factory=list)
+    items: list[FundCatalogCandidate] = Field(default_factory=list)
+    excluded: list[FundCatalogExcluded] = Field(default_factory=list)
+    coverage: FundCatalogCoverage
+    source_as_of: None = None
+    evidence: list[AssetEvidence] = Field(default_factory=list)
+    missing: list[str] = Field(default_factory=list)
+    scope: Literal["source_meiguo_catalog_not_investment_mandate"] = "source_meiguo_catalog_not_investment_mandate"
+    scope_note: str = "同花顺美国栏目含全球、新兴市场等基金；栏目归属不等于正式投资范围，不代表全部为纯美国敞口。"
+    purchase_note: str = "源可购仅表示出现在该次筛选结果；未出现或限额为0不据此判定不可购，实际规则以公告及渠道为准。"
+    recommendation: Literal[False] = False
+
+
 class FundNavPoint(BaseModel):
     nav_date: date
     unit_nav: float | None = None

@@ -13,8 +13,9 @@
   `financials/cash-flow-statements`、估值 `valuations/snapshot`
 - **已用但不在本 Provider**：全市场快照 `prices/snapshot` 由 `scripts/sync_marketdb.py`
   直连（绕过 Provider 链 ⇒ 不进熔断 / 请求预算 / health 视图，见 `IMP-037`）；
-  正式搜索 `meta/tickers/search` 与基金净值/披露/档案由 `assets/service.py` 独立有界读取，
-  搜索限定场外基金身份，不代表本 Provider 或 A股搜索已接入该端点。
+  正式搜索 `meta/tickers/search` 与基金净值/披露/档案及 `fund/quota/list` 来源候选目录
+  由 `assets/service.py` 独立有界读取；后者保留源栏目和限额原文，不证明投资范围或可购资格。
+  搜索限定场外基金身份，不代表本 Provider 或 A股搜索已接入这些端点。
 - 端点清单与接入评估见 `docs/data/data-sources.md` §8.3 / §8.6
 - 边界：不含 L2 十档/逐笔/分钟K（官方 capability-map 声明）
 

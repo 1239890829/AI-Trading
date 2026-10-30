@@ -5,7 +5,8 @@ export function workbenchAsset(value: string | null | undefined): WorkbenchAsset
 }
 export const ASSET_LABELS: Record<WorkbenchAsset, string> = {cn_equity: "A 股", fund: "基金", us_equity: "美股"};
 
-export function assetWorkbenchUrl(asset: WorkbenchAsset, sourceSymbol?: string, mode: "watch" | "positions" = "watch") {
+export type AssetWorkbenchMode = "research" | "watch" | "positions";
+export function assetWorkbenchUrl(asset: WorkbenchAsset, sourceSymbol?: string, mode: AssetWorkbenchMode = "watch") {
   const params = new URLSearchParams({mode});
   if (asset !== "cn_equity") params.set("asset", asset);
   if (sourceSymbol) params.set("symbol", sourceSymbol);

@@ -14,7 +14,7 @@ export function FundNavChart({points, currency}: {points: FundNavPoint[]; curren
   const low = Math.min(...numeric), high = Math.max(...numeric);
   const padding = Math.max((high - low) * 0.12, Math.abs(high) * 0.002, 0.0001);
   const min = low - padding, max = high + padding;
-  const x = (index: number) => 56 + index / Math.max(1, rows.length - 1) * 664;
+  const x = (index: number) => 70 + index / Math.max(1, rows.length - 1) * 650;
   const y = (value: number) => 16 + (max - value) / (max - min) * 178;
   const selectedIndex = selectedDate ? rows.findIndex(row => row.nav_date === selectedDate) : -1;
   const selected = selectedIndex < 0 ? rows.length - 1 : selectedIndex;
@@ -33,7 +33,7 @@ export function FundNavChart({points, currency}: {points: FundNavPoint[]; curren
     if (!Number.isFinite(clientX) || !Number.isFinite(scale) || scale <= 0) return;
     const insetX = (rect.width - 744 * scale) / 2;
     const position = (clientX - rect.left - insetX) / scale;
-    const index = Math.max(0, Math.min(rows.length - 1, Math.round((position - 56) / 664 * (rows.length - 1))));
+    const index = Math.max(0, Math.min(rows.length - 1, Math.round((position - 70) / 650 * (rows.length - 1))));
     setSelectedDate(rows[index].nav_date);
   };
   return <div className="asset-nav-chart">
@@ -45,10 +45,10 @@ export function FundNavChart({points, currency}: {points: FundNavPoint[]; curren
       <output aria-live="polite">{point.nav_date} <strong>{point[basis]?.toFixed(4) ?? "缺失"}</strong> {currency}</output>
     </div>
     <svg viewBox="0 0 744 220" role="img" aria-label={`${label}曲线，${rows[0].nav_date}至${rows.at(-1)!.nav_date}`} onPointerMove={event => selectAt(event.clientX, event.currentTarget.getBoundingClientRect())}>
-      {[max, (min + max) / 2, min].map(value => <g key={value}><line x1="56" x2="720" y1={y(value)} y2={y(value)} className="asset-chart-grid"/><text x="49" y={y(value) + 4} textAnchor="end">{value.toFixed(4)}</text></g>)}
+      {[max, (min + max) / 2, min].map(value => <g key={value}><line x1="70" x2="720" y1={y(value)} y2={y(value)} className="asset-chart-grid"/><text x="63" y={y(value) + 4} textAnchor="end">{value.toFixed(4)}</text></g>)}
       <path d={path} className="asset-chart-line" fill="none"/>
       {point[basis] !== null && <><line x1={x(selected)} x2={x(selected)} y1="12" y2="194" className="asset-chart-cursor"/><circle cx={x(selected)} cy={y(point[basis]!)} r="3" className="asset-chart-point"/></>}
-      <text x="56" y="216">{rows[0].nav_date}</text><text x="720" y="216" textAnchor="end">{rows.at(-1)!.nav_date}</text>
+      <text x="70" y="216">{rows[0].nav_date}</text><text x="720" y="216" textAnchor="end">{rows.at(-1)!.nav_date}</text>
     </svg>
     <input type="range" min={0} max={rows.length - 1} value={selected} onChange={event => setSelectedDate(rows[Number(event.target.value)].nav_date)} aria-label="选择净值日期" aria-valuetext={`${point.nav_date}，${label}${point[basis] ?? "缺失"} ${currency}`} />
     <p className="asset-note">按官方净值日期展示；单位净值变化不等于含分红总回报。</p>

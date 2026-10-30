@@ -32,3 +32,9 @@ async def search(q: str = Query(min_length=1, max_length=80),
 async def snapshot(code: str, range: Literal["month", "year"] = "year",
                    service: AssetReadService = Depends(get_asset_service)) -> dict:
     return {"data": (await service.snapshot(code, range)).model_dump(mode="json")}
+
+
+@router.get("/funds/catalog")
+async def catalog(purchase: Literal["all", "source_buyable"] = "all", tab: Literal["meiguo"] = "meiguo",
+                  service: AssetReadService = Depends(get_asset_service)) -> dict:
+    return {"data": (await service.catalog(purchase, tab)).model_dump(mode="json")}

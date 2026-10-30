@@ -6,6 +6,7 @@
 |---|---|---|
 | GET `/api/assets/capabilities` | 普通配对读取 | 实际来源能力，US尚阻断 |
 | GET `/api/assets/search?q=&asset_type=fund或us_equity&limit=` | 普通配对读取 | 源目录窗口，不称全市场全集；US不取A股源 |
+| GET `/api/assets/funds/catalog?tab=meiguo&purchase=all或source_buyable` | 普通配对读取 | 独立来源候选，保留原栏目/顺序/名称/原额度/缺失/冲突和超域；不含推断币种或购买资格 |
 | GET `/api/assets/funds/{code}/snapshot?range=month或year` | 普通配对读取 | 完整正式份额代码、分段状态/来源/日期/缺失 |
 | GET `/api/assets/records?asset_type=fund` | 普通配对读取 | 手工记录，不接行情、不属paper账户 |
 | PUT `/api/assets/records/{instrument_id}` | 普通配对写 | 核正式身份/币种；创建expected_version=0，修改须当前version |
