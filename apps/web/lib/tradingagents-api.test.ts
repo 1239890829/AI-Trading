@@ -16,7 +16,7 @@ const completed = () => ({...fixture(), latest: {symbol: "002121", version: 1, s
 beforeEach(() => {vi.clearAllMocks();});
 
 it("accepts a completed report reuse only with the exact succeeded task result", async () => {
-  const task = {id: "task", status: "succeeded", result_run_id: "2".repeat(32), reused_identical_selection: true};
+  const task = {id: "1".repeat(32), status: "succeeded", result_run_id: "2".repeat(32), reused_identical_selection: true};
   vi.mocked(getJson).mockResolvedValue({data: {...completed(), task}, meta: {}} as never);
   expect((await getTradingAgentsResearch("002121")).task?.reused_identical_selection).toBe(true);
 });
@@ -156,4 +156,97 @@ it("reads only the exact submitted maintenance task and rejects a foreign task r
 it.each(["../task", "A".repeat(32), ""])("rejects unsafe single-task read identity %s", async id => {
   await expect(getAgentTask(id)).rejects.toThrow("准确任务编号");
   expect(getJson).not.toHaveBeenCalled();
+});
+
+const selectedTaskId = "1".repeat(32);
+function taskResult() {
+  return {...completed(), requested_task_id: selectedTaskId, saved_result_state: "available",
+    executable: false, startup_conditions_not_checked: true, required_model_slots: null, budget: null,
+    admission: {state: "not_checked", method_sha256: null},
+    task: {id: selectedTaskId, status: "succeeded", result_run_id: "2".repeat(32)},
+    recovery: {state: "not_checked", source_task_id: null, run_id: null, blockers: []}};
+}
+
+it("reads the selected historical task's exact saved run through its task-specific URL", async () => {
+  vi.mocked(getJson).mockResolvedValue({data: taskResult(), meta: {}} as never);
+  const result = await getTradingAgentsResearch("002121", {taskId: selectedTaskId});
+  expect(getJson).toHaveBeenCalledExactlyOnceWith(`/api/agent/research/tradingagents/002121/tasks/${selectedTaskId}`);
+  expect(result.requested_task_id).toBe(selectedTaskId);
+  expect(result.latest!.run_id).toBe(result.task!.result_run_id);
+  expect(sendJson).not.toHaveBeenCalled();
+});
+
+it.each(["../task", "A".repeat(32), "", "task"])("rejects unsafe task-report identity %s before any request", async taskId => {
+  await expect(getTradingAgentsResearch("002121", {taskId})).rejects.toThrow("准确任务编号");
+  expect(getJson).not.toHaveBeenCalled();
+});
+
+it("rejects recovery checks in task-report mode before any request", async () => {
+  await expect(getTradingAgentsResearch("002121", {taskId: selectedTaskId, checkRecovery: true})).rejects.toThrow("仅可只读");
+  expect(getJson).not.toHaveBeenCalled();
+});
+
+it.each([
+  {...taskResult(), requested_task_id: "3".repeat(32)},
+  {...taskResult(), requested_task_id: undefined},
+  {...taskResult(), task: null},
+  {...taskResult(), task: {...taskResult().task, id: "3".repeat(32)}},
+  {...taskResult(), task: {...taskResult().task, result_run_id: "4".repeat(32)}},
+  {...taskResult(), task: {...taskResult().task, status: "running", result_run_id: null}},
+  {...taskResult(), latest: {...completed().latest, run_id: "not-a-run"}, task: {...taskResult().task, result_run_id: "not-a-run"}},
+  {...taskResult(), latest: {...completed().latest, symbol: "600276"}},
+  {...taskResult(), latest: {...completed().latest, reports: {market_report: "仅一个原文"}}},
+  {...taskResult(), executable: true, enabled: true},
+  {...taskResult(), startup_conditions_not_checked: false},
+  {...taskResult(), task_read_unavailable: true},
+  {...taskResult(), required_model_slots: 22},
+  {...taskResult(), budget: {limit: 2, used: 0, remaining: 2}},
+  {...taskResult(), admission: {state: "research_only_authorized", method_sha256: null}},
+  {...taskResult(), admission: {state: "not_checked", method_sha256: "b".repeat(64)}},
+  {...taskResult(), recovery: recovery()},
+  {...taskResult(), recovery: undefined},
+  {...taskResult(), saved_result_state: "unavailable"},
+  {...taskResult(), latest: null, saved_result_state: "available"},
+])("rejects a mismatched or executable selected-task report envelope", async data => {
+  vi.mocked(getJson).mockResolvedValue({data, meta: {}} as never);
+  await expect(getTradingAgentsResearch("002121", {taskId: selectedTaskId})).rejects.toThrow("身份或报告不完整");
+  expect(getJson).toHaveBeenCalledTimes(1);
+  expect(sendJson).not.toHaveBeenCalled();
+});
+
+it.each(["succeeded", "failed", "canceled", "running", "queued"])("keeps an explicit unavailable saved result for a %s task without a latest fallback", async status => {
+  const value = {...taskResult(), latest: null, saved_result_state: "unavailable", task: {...taskResult().task, status, result_run_id: null}};
+  vi.mocked(getJson).mockResolvedValue({data: value, meta: {}} as never);
+  expect((await getTradingAgentsResearch("002121", {taskId: selectedTaskId})).latest).toBeNull();
+  expect(getJson).toHaveBeenCalledExactlyOnceWith(`/api/agent/research/tradingagents/002121/tasks/${selectedTaskId}`);
+});
+
+it.each([0, false, "", 42, [], [completed().latest]])("rejects a non-object task saved result instead of accepting it as unavailable: %j", async latest => {
+  vi.mocked(getJson).mockResolvedValue({data: {...taskResult(), latest, saved_result_state: "unavailable"}, meta: {}} as never);
+  await expect(getTradingAgentsResearch("002121", {taskId: selectedTaskId})).rejects.toThrow("身份或报告不完整");
+  expect(getJson).toHaveBeenCalledExactlyOnceWith(`/api/agent/research/tradingagents/002121/tasks/${selectedTaskId}`);
+});
+
+it("never falls back to a symbol's latest report after a denied or missing task read", async () => {
+  vi.mocked(getJson).mockRejectedValue(new Error("404 task not found"));
+  await expect(getTradingAgentsResearch("002121", {taskId: selectedTaskId})).rejects.toThrow("404 task not found");
+  expect(getJson).toHaveBeenCalledExactlyOnceWith(`/api/agent/research/tradingagents/002121/tasks/${selectedTaskId}`);
+});
+
+it("keeps valid task-bound originals when only their optional role projection is malformed", async () => {
+  const value = taskResult();
+  vi.mocked(getJson).mockResolvedValue({data: {...value, latest: {...value.latest, roles: []}}, meta: {}} as never);
+  const result = await getTradingAgentsResearch("002121", {taskId: selectedTaskId});
+  expect(result.latest!.reports).toEqual(value.latest.reports);
+  expect(result.latest!.role_projection_state).toBe("unavailable");
+  expect(result.requested_task_id).toBe(selectedTaskId);
+});
+
+it("accepts an explicitly bound reused run for another task without assuming run ids are unique per task", async () => {
+  const taskId = "3".repeat(32);
+  vi.mocked(getJson).mockResolvedValue({data: {...taskResult(), requested_task_id: taskId,
+    task: {...taskResult().task, id: taskId, reused_identical_selection: true}}, meta: {}} as never);
+  const result = await getTradingAgentsResearch("002121", {taskId});
+  expect(result.task!.id).toBe(taskId);
+  expect(result.latest!.run_id).toBe("2".repeat(32));
 });

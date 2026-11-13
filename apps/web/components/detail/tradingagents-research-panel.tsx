@@ -11,8 +11,8 @@ import {useDeviceAccess} from "@/components/access/device-access";
 const STATUS: Record<string, string> = {queued: "排队中", running: "执行中", succeeded: "任务已结束", failed: "研究失败", canceled: "已取消", needs_confirm: "待确认"};
 
 /** Existing stock drawer and task center share the same read-only report consumer. */
-export function TradingAgentsResearchPanel({symbol, active = true, defaultOpen = false, compact = false, allowStart = !compact}: {
-  symbol: string; active?: boolean; defaultOpen?: boolean; allowStart?: boolean; compact?: boolean;
+export function TradingAgentsResearchPanel({symbol, taskId, active = true, defaultOpen = false, compact = false, allowStart = !compact}: {
+  symbol: string; taskId?: string; active?: boolean; defaultOpen?: boolean; allowStart?: boolean; compact?: boolean;
 }) {
   const [open, setOpen] = useState(defaultOpen || compact);
   const [readSymbol, setReadSymbol] = useState(defaultOpen || compact ? symbol : null);
@@ -23,13 +23,14 @@ export function TradingAgentsResearchPanel({symbol, active = true, defaultOpen =
       setOpen(value => !value);
     }}>{compact ? "TradingAgents 研究记录" : "TradingAgents 完整研究"}{open ? " · 收起" : " · 查看"}</button>
     {compact && !open && <p className="mt-1 text-zinc-600 dark:text-zinc-400">{readSymbol !== symbol ? "未读取 · " : ""}展开只查已有结果，不会运行模型。</p>}
-    {open && <ResearchReader key={symbol} symbol={symbol} allowStart={allowStart} compact={compact}/>}
+    {open && <ResearchReader key={`${symbol}:${taskId === undefined ? "latest" : `task:${taskId}`}`} symbol={symbol} taskId={taskId} allowStart={allowStart} compact={compact}/>}
   </section>;
 }
 
-function ResearchReader({symbol, allowStart, compact}: {symbol: string; allowStart: boolean; compact: boolean}) {
+function ResearchReader({symbol, taskId, allowStart, compact}: {symbol: string; taskId?: string; allowStart: boolean; compact: boolean}) {
   const access = useDeviceAccess();
-  const canStart = allowStart && access.device?.state === "active" && access.device.maintenance === true;
+  const taskMode = taskId !== undefined;
+  const canStart = !taskMode && allowStart && access.device?.state === "active" && access.device.maintenance === true;
   const [startupChecked, setStartupChecked] = useState(false);
   const [recoveryChecked, setRecoveryChecked] = useState(false);
   const [priorPermission, setPriorPermission] = useState(canStart);
@@ -46,14 +47,14 @@ function ResearchReader({symbol, allowStart, compact}: {symbol: string; allowSta
   const resource = useResource(async () => {
     const generation = ++readGeneration.current;
     setReadNotice(null);
-    const next = await getTradingAgentsResearch(symbol, {savedOnly: !readConditions, ...(readRecovery ? {checkRecovery: true} : {})});
+    const next = await getTradingAgentsResearch(symbol, taskMode ? {taskId} : {savedOnly: !readConditions, ...(readRecovery ? {checkRecovery: true} : {})});
     if (alive.current && generation === readGeneration.current && manualRead.current?.generation === generation) {
       const prior = manualRead.current.run;
       setReadNotice(next.latest ? next.latest.run_id === prior ? "已重新读取，仍是同一保存版本；没有生成新报告。" : "已读到另一份保存报告；本次读取没有调用模型。" : "已重新读取，暂无可读报告；没有启动生成。" );
       manualRead.current = null;
     }
     return next;
-  }, {key: `${symbol}:${readConditions ? "conditions" : "saved"}:${readRecovery ? "recovery" : "ordinary"}`, marketHours: false, intervalMs: null});
+  }, {key: `${symbol}:${taskMode ? `task:${taskId}` : "latest"}:${readConditions ? "conditions" : "saved"}:${readRecovery ? "recovery" : "ordinary"}`, marketHours: false, intervalMs: null, refreshOnVisible: !taskMode});
   const view = resource.data;
   const [submitting, setSubmitting] = useState<"start" | "recover" | "cancel" | null>(null);
   const [submitted, setSubmitted] = useState<AgentTask | null>(null);
@@ -70,10 +71,10 @@ function ResearchReader({symbol, allowStart, compact}: {symbol: string; allowSta
   const unavailable = resource.pending || resource.error != null || view?.task_read_unavailable || !!submitting || receiptPending || uncertain;
   const {pending, error: readError, refresh} = resource;
   useEffect(() => {
-    if (pending || readError || !activeTask && !receiptPending) return;
+    if (taskMode || pending || readError || !activeTask && !receiptPending) return;
     const timer = setTimeout(() => { if (document.visibilityState !== "hidden") refresh(); }, 3_000);
     return () => clearTimeout(timer);
-  }, [pending, readError, refresh, activeTask, receiptPending, task?.status]);
+  }, [taskMode, pending, readError, refresh, activeTask, receiptPending, task?.status]);
 
   async function submit(operation: "start" | "recover" | "cancel") {
     if (!canStart || busy.current || unavailable || !view) return;
@@ -135,25 +136,26 @@ function ResearchReader({symbol, allowStart, compact}: {symbol: string; allowSta
       {canStart && <a href="/agent?area=maintenance&tab=tasks" data-action="quiet">任务中心查看或取消</a>}
     </div>
     {readNotice && !resource.pending && !resource.error && <p role="status" aria-label="研究重读结果">{readNotice}</p>}
-    {allowStart && !canStart && <p className="text-zinc-600 dark:text-zinc-400">已有报告可直接读取。生成新研究需要维护授权。<button type="button" data-action="quiet" className="ml-2" onClick={access.open}>设备与权限</button></p>}
+    {!taskMode && allowStart && !canStart && <p className="text-zinc-600 dark:text-zinc-400">已有报告可直接读取。生成新研究需要维护授权。<button type="button" data-action="quiet" className="ml-2" onClick={access.open}>设备与权限</button></p>}
     {readConditions && view && !resource.pending && !resource.error && !view.executable && <section aria-label="新研究启动阻断" className="text-amber-800 dark:text-amber-300">
       <strong>暂不能生成新研究</strong><ul className="list-disc space-y-1 pl-4">{view.blockers.map((item, index) => <li key={`${item.code}:${index}`}>{item.message}</li>)}</ul>
       <p>旧报告仍可读；重新读取不会解除这些阻断。</p>
     </section>}
     {!compact && <p className="text-zinc-600 dark:text-zinc-400">独立的完整多角色研究，区别于已有消息解读和公司依据。结果待核，不构成买卖建议。</p>}
     {compact && <p role="status" className="font-medium">{symbol} · {reportTitle}{report ? ` · ${!report.generated_today || methodChanged ? "历史报告" : "已保存报告"} · 待核` : ""}</p>}
-    {resource.error != null && <p role="alert" className="text-amber-800 dark:text-amber-300">完整研究读取失败。{report ? "保留本股上次读取报告，当前状态未确认。" : "尚不能确认是否有已保存报告。"}</p>}
+    {taskMode && <p className="font-medium">所选任务保存报告 · {taskId}</p>}
+    {resource.error != null && <p role="alert" className="text-amber-800 dark:text-amber-300">完整研究读取失败。{report ? taskMode ? "保留所选任务上次读取报告，当前状态未确认。" : "保留本股上次读取报告，当前状态未确认。" : taskMode ? "尚不能确认所选任务是否有可核保存报告。" : "尚不能确认是否有已保存报告。"}</p>}
     {!view && resource.pending && <p role="status">正在读取 {symbol} 的完整研究…</p>}
     {view && <>
-      {!compact && <details><summary className="cursor-pointer">运行条件</summary>{runtimeConditions}</details>}
+      {!taskMode && !compact && <details><summary className="cursor-pointer">运行条件</summary>{runtimeConditions}</details>}
       {view.task_read_unavailable && <p role="alert">任务状态读取失败，不能确认是否仍有研究在运行。</p>}
-      {task && (!compact || task.error || canceling || task.status === "succeeded" && !report) && <p role="status">本股最近任务{resource.error ? "（上次读取）" : ""}：{canceling ? "取消请求已记录，等待当前步骤结束" : STATUS[task.status] ?? "状态未知"}{task.error ? ` · ${task.error.message}（${task.error.code}）` : ""}。{task.status === "succeeded" && !report ? "尚无可读取的完整七报告，不能据任务状态当作研究通过。" : ""}</p>}
+      {task && (!compact || task.error || canceling || task.status === "succeeded" && !report) && <p role="status">{taskMode ? "所选任务" : "本股最近任务"}{resource.error ? "（上次读取）" : ""}：{canceling ? "取消请求已记录，等待当前步骤结束" : STATUS[task.status] ?? "状态未知"}{task.error ? ` · ${task.error.message}（${task.error.code}）` : ""}。{task.status === "succeeded" && !report ? "尚无可读取的完整七报告，不能据任务状态当作研究通过。" : ""}</p>}
       {receiptPending && <p role="status">任务已提交，持久状态待校准；不会重复提交。</p>}
       {task?.reused_identical_selection && boundReport && <p role="status" aria-label="研究复用结果">本次入选已完成研究，已复用原保存报告；没有重复生成。原生成时间与方法身份保留。</p>}
-      {!report && <p>暂无可核验的完整七报告；不代表从未研究。</p>}
+      {!report && <p>{taskMode ? "所选任务暂无可核验的完整七报告；未读取该证券的其他报告。" : "暂无可核验的完整七报告；不代表从未研究。"}</p>}
       {report && <div>
         {!compact && <p className="font-medium">{symbol} · 已保存完整七报告 · 待核</p>}
-        {task && <p aria-label="报告与任务关联" className="text-zinc-600 dark:text-zinc-400">{boundReport ? "本次任务的保存报告。" : "上次已保存报告，不是本次任务结果。"}</p>}
+        {task && <p aria-label="报告与任务关联" className="text-zinc-600 dark:text-zinc-400">{taskMode ? "所选任务的保存报告。" : boundReport ? "本次任务的保存报告。" : "上次已保存报告，不是本次任务结果。"}</p>}
         {report.review_state === "finite_failed_requires_review" && <p role="alert" className="text-amber-800 dark:text-amber-300">自动来源或引用检查有{report.review_summary.finite_failures}项未通过，原报告保留待复核，不能视为已验证结论。</p>}
         {!compact && <p>同伴释义待审：{report.review_summary.peer_review_required}项。尚无独立人工验收，不代表投资正确率。</p>}
         <p>生成：{dateTimeTextBJ(report.generated_at)} · 材料截点：{dateTimeTextBJ(report.as_of)}。来源披露日期见各原报告。</p>
@@ -166,7 +168,7 @@ function ResearchReader({symbol, allowStart, compact}: {symbol: string; allowSta
         <details><summary className="cursor-pointer">报告版本与核验身份</summary><p className="break-all">报告方法：{report.method_sha256}<br/>上游：{report.upstream_sha}<br/>输入：{report.input_sha256}<br/>核验身份：完整原图未验证研究；原答与结论仍待复核。</p>{lineage && <p aria-label="恢复任务与方法来源" className="break-all">原任务：{lineage.source_task_id}<br/>原运行：{lineage.source_run_id}<br/>接续任务：{lineage.recovery_task_id}<br/>原方法：{lineage.source_method_sha256}<br/>接续方法：{lineage.recovery_method_sha256}<br/>新增调用编号：{lineage.new_call_from}–{lineage.new_call_to}</p>}{compact && <p>同伴释义待审：{report.review_summary.peer_review_required}项。尚无独立人工验收，不代表投资正确率。</p>}</details>
 
       </div>}
-      {compact && <details><summary className="cursor-pointer">运行条件与承接状态</summary><div className="mt-2 space-y-2">{runtimeConditions}<p>此处只读已保存结果；查看或重读都不会发起模型调用。</p></div></details>}
+      {!taskMode && compact && <details><summary className="cursor-pointer">运行条件与承接状态</summary><div className="mt-2 space-y-2">{runtimeConditions}<p>此处只读已保存结果；查看或重读都不会发起模型调用。</p></div></details>}
     </>}
     {error && <p role="alert" className="text-amber-800 dark:text-amber-300">{error.message}。{uncertain ? "提交结果未确认，已停止重复操作；请先到任务中心核对。" : "本次操作被拒绝，可重读条件后再试。"}</p>}
     {canStart && recovery && recovery.state !== "not_checked" && <div className="text-zinc-600 dark:text-zinc-400" aria-label="原任务恢复条件">

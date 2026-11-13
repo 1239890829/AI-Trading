@@ -34,6 +34,12 @@ Base URL：`http://127.0.0.1:8000`（`/api` 前缀）。**177 个操作 / 166 �
 统一响应：`{"data": ..., "meta": {...}}`（Envelope[T]，meta 含 `provider / is_realtime / is_stale / last_success_refresh / generated_at`）。
 数据源失败返回 **HTTP 502**（前端显示错误态，绝不降级伪造）；错误统一契约 `{detail, code}`。
 
+## 2026-11-13 所选研究任务的保存读取
+
+`GET /api/agent/research/tradingagents/{symbol}/tasks/{task_id}` 为设备普通只读能力，路径精确登记；维护恢复和生成权限不变。证券为六位代码，任务编号为32位小写hex，服务端核任务类型、证券和持久结果引用。任务缺失或身份不符返回404，数据库不可读返回503；存在的任务尚未成功、引用坏或归档不可核时返回200，但`latest=null`、`saved_result_state=unavailable`，不借其它任务报告补空。
+
+响应沿原研究视图，增加`requested_task_id`与`available/unavailable`两态的`saved_result_state`。其中`task`是所选任务，`latest`在此路径专指该任务绑定的原run；成功时必须与`task.result_run_id`一致。`executable=false`、`startup_conditions_not_checked=true`、预算/所需slot为null，恢复为`not_checked`。客户端同时校验任务、证券、run及只读信封，不能把错误回执显示为成功。GET不生成报告、不读启动资格或触发恢复；原按证券读取最新保存结果的接口保持。
+
 ## 鉴权（R22 统一鉴权边界，2026-09-15 起）
 
 **默认拒绝**：`ASHARE_API_TOKEN` 配置后，**所有** HTTP 路由都要求 `X-API-Token` 头，

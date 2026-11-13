@@ -216,7 +216,7 @@ describe("完整研究的维护恢复与任务关联", () => {
   });
 });
 const saved = (symbol = "002121"): TradingAgentsResearchView => ({...view(symbol), latest: {
-  symbol, version: 1, state: "completed", run_id: `${symbol}-run`, generated_at: "2026-10-19T21:00:00+08:00",
+  symbol, version: 1, state: "completed", run_id: symbol.padEnd(32, "0"), generated_at: "2026-10-19T21:00:00+08:00",
   as_of: "2026-10-19T15:00:00+08:00", generated_today: false, upstream_sha: "upstream", input_sha256: "input", method_sha256: "old-method",
   verification: "unverified_full_graph_research", production_eligible: false,
   review_state: "unreviewed", review_summary: {finite_failures: 0, peer_review_required: 7, source_verified: false, independent_human_gold: false},
@@ -235,10 +235,85 @@ const recovered = (symbol = "002121"): TradingAgentsResearchView => {
 beforeEach(() => {vi.clearAllMocks(); vi.mocked(useDeviceAccess).mockReturnValue({device:{state:"active",maintenance:true},open:vi.fn(),refresh:vi.fn(async()=>{})}); vi.mocked(getTradingAgentsResearch).mockResolvedValue(view());});
 afterEach(() => {cleanup(); vi.useRealTimers();});
 
+function taskSaved(taskId = sourceTaskId, runId = sourceRunId): TradingAgentsResearchView {
+  const result = saved();
+  return {...result, requested_task_id: taskId, saved_result_state: "available", startup_conditions_not_checked: true,
+    required_model_slots: null, budget: null, blockers: [], admission: {state: "not_checked", method_sha256: null},
+    latest: {...result.latest!, run_id: runId, reports: {...result.latest!.reports, final_trade_decision: `所选运行 ${runId}`}},
+    task: {id: taskId, status: "succeeded", cancel_requested: false, failed: false,
+      created_at: "2026-10-19T20:00:00+08:00", finished_at: "2026-10-19T21:00:00+08:00", error: null, result_run_id: runId},
+    recovery: {state: "not_checked", source_task_id: null, run_id: null, blockers: []}};
+}
+
+describe("所选历史任务的保存报告", () => {
+  it("reads the exact task and remains read-only even with maintenance and allowStart", async () => {
+    vi.mocked(getTradingAgentsResearch).mockResolvedValue({...taskSaved(), enabled: true, executable: true,
+      recovery: {...recoveryView("available").recovery!}});
+    render(<TradingAgentsResearchPanel symbol="002121" taskId={sourceTaskId} defaultOpen allowStart/>);
+    expect((await screen.findByLabelText("报告与任务关联")).textContent).toBe("所选任务的保存报告。");
+    expect(getTradingAgentsResearch).toHaveBeenCalledExactlyOnceWith("002121", {taskId: sourceTaskId});
+    expect(screen.getByText(`所选任务保存报告 · ${sourceTaskId}`)).toBeTruthy();
+    expect(screen.queryByText("运行条件")).toBeNull();
+    expect(screen.queryByRole("button", {name: /开始完整研究|检查启动条件|检查原任务恢复|恢复未完成步骤|取消本次研究|设备与权限/})).toBeNull();
+    expect(screen.queryByText(/本股最近任务/)).toBeNull();
+    expect(createAgentTask).not.toHaveBeenCalled();
+    expect(recoverTradingAgentsResearch).not.toHaveBeenCalled();
+    expect(cancelAgentTask).not.toHaveBeenCalled();
+  });
+
+  it("does not poll a selected running task or refresh it on visibility changes", async () => {
+    vi.useFakeTimers();
+    const result = taskSaved();
+    vi.mocked(getTradingAgentsResearch).mockResolvedValue({...result, latest: null, saved_result_state: "unavailable",
+      task: {...result.task!, status: "running", result_run_id: null, finished_at: null}});
+    render(<TradingAgentsResearchPanel symbol="002121" taskId={sourceTaskId} defaultOpen allowStart/>);
+    await act(async () => {await Promise.resolve();});
+    expect(screen.getByText(/所选任务暂无可核验的完整七报告/)).toBeTruthy();
+    await act(async () => {await vi.advanceTimersByTimeAsync(30_000);});
+    fireEvent(document, new Event("visibilitychange"));
+    await act(async () => {await Promise.resolve();});
+    expect(getTradingAgentsResearch).toHaveBeenCalledTimes(1);
+    fireEvent.click(screen.getByRole("button", {name: "重新读取研究"}));
+    await act(async () => {await Promise.resolve();});
+    expect(getTradingAgentsResearch).toHaveBeenCalledTimes(2);
+    expect(getTradingAgentsResearch).toHaveBeenLastCalledWith("002121", {taskId: sourceTaskId});
+    expect(cancelAgentTask).not.toHaveBeenCalled();
+  });
+
+  it("retires a late response when switching between two tasks for the same stock", async () => {
+    let finish!: (value: TradingAgentsResearchView) => void;
+    vi.mocked(getTradingAgentsResearch).mockImplementationOnce(() => new Promise(resolve => {finish = resolve;}))
+      .mockResolvedValueOnce(taskSaved(recoveryTaskId, "4".repeat(32)));
+    const panel = render(<TradingAgentsResearchPanel symbol="002121" taskId={sourceTaskId} defaultOpen/>);
+    await waitFor(() => expect(getTradingAgentsResearch).toHaveBeenCalledTimes(1));
+    panel.rerender(<TradingAgentsResearchPanel symbol="002121" taskId={recoveryTaskId} defaultOpen/>);
+    await screen.findByText(`所选运行 ${"4".repeat(32)}`);
+    await act(async () => {finish(taskSaved());});
+    expect(panel.container.textContent).not.toContain(`所选运行 ${sourceRunId}`);
+    expect(panel.container.textContent).toContain(`所选运行 ${"4".repeat(32)}`);
+    expect(getTradingAgentsResearch).toHaveBeenLastCalledWith("002121", {taskId: recoveryTaskId});
+  });
+
+  it("preserves only the same task's report after a failed reread and clears it on a different task failure", async () => {
+    vi.mocked(getTradingAgentsResearch).mockResolvedValueOnce(taskSaved());
+    const panel = render(<TradingAgentsResearchPanel symbol="002121" taskId={sourceTaskId} defaultOpen/>);
+    await screen.findByText(`所选运行 ${sourceRunId}`);
+    vi.mocked(getTradingAgentsResearch).mockRejectedValue(new Error("saved read failed"));
+    fireEvent.click(screen.getByRole("button", {name: "重新读取研究"}));
+    await screen.findByText(/保留所选任务上次读取报告/);
+    expect(panel.container.textContent).toContain(`所选运行 ${sourceRunId}`);
+    panel.rerender(<TradingAgentsResearchPanel symbol="002121" taskId={recoveryTaskId} defaultOpen/>);
+    await screen.findByText(/尚不能确认所选任务是否有可核保存报告/);
+    expect(panel.container.textContent).not.toContain(`所选运行 ${sourceRunId}`);
+    expect(screen.queryByRole("tab", {name: /最终判断/})).toBeNull();
+    expect(getTradingAgentsResearch).toHaveBeenLastCalledWith("002121", {taskId: recoveryTaskId});
+  });
+});
+
 describe("完整TradingAgents研究读者", () => {
   it("makes an exact server-confirmed completed-selection reuse visible without implying a new report", async () => {
     const result = saved();
-    result.task = {id: "task", status: "succeeded", cancel_requested: false, failed: false,
+    result.task = {id: sourceTaskId, status: "succeeded", cancel_requested: false, failed: false,
       created_at: "2026-10-26T20:00:00+08:00", finished_at: "2026-10-26T20:00:01+08:00", error: null,
       result_run_id: result.latest!.run_id, reused_identical_selection: true};
     vi.mocked(getTradingAgentsResearch).mockResolvedValue(result);
@@ -308,7 +383,7 @@ describe("完整TradingAgents研究读者", () => {
 
   it("an explicitly enabled compact entry starts only after maintenance preflight and a user command", async () => {
     vi.mocked(getTradingAgentsResearch).mockResolvedValue({...view(),enabled:true,executable:true,blockers:[]});
-    vi.mocked(createAgentTask).mockResolvedValue({id:"started",type:"tradingagents_research",params:{symbol:"002121"},status:"queued",steps:[],result_ref:null,error:null,risk_level:"L0",created_by:"user",created_at:null,started_at:null,finished_at:null});
+    vi.mocked(createAgentTask).mockResolvedValue({id:recoveryTaskId,type:"tradingagents_research",params:{symbol:"002121"},status:"queued",steps:[],result_ref:null,error:null,risk_level:"L0",created_by:"user",created_at:null,started_at:null,finished_at:null});
     render(<TradingAgentsResearchPanel symbol="002121" compact allowStart/>);
     await screen.findByRole("button",{name:"检查启动条件"});
     expect(createAgentTask).not.toHaveBeenCalled();
@@ -431,7 +506,7 @@ describe("完整TradingAgents研究读者", () => {
   });
 
   it.each(["queued", "running", "canceled", "failed"] as const)("shows %s separately from a retained report and never equates cancellation request with completion", async status => {
-    const result = saved(); result.task = {id: "task", status, cancel_requested: status === "running", failed: status === "failed", created_at: "2026-10-20T10:00:00+08:00", finished_at: null, error: status === "failed" ? {code: "SourceError", message: "本轮失败，旧报告保留"} : null};
+    const result = saved(); result.task = {id: sourceTaskId, status, cancel_requested: status === "running", failed: status === "failed", created_at: "2026-10-20T10:00:00+08:00", finished_at: null, error: status === "failed" ? {code: "SourceError", message: "本轮失败，旧报告保留"} : null};
     vi.mocked(getTradingAgentsResearch).mockResolvedValue(result);
     const panel = render(<TradingAgentsResearchPanel symbol="002121" defaultOpen/>);
     await screen.findByText(/已保存完整七报告/);
@@ -454,7 +529,7 @@ describe("完整TradingAgents研究读者", () => {
     fireEvent.click(button); fireEvent.click(button);
     expect(createAgentTask).toHaveBeenCalledTimes(1);
     expect(createAgentTask).toHaveBeenCalledWith("tradingagents_research", {symbol: "002121"});
-    await act(async () => {finish({id: "new-task", type: "tradingagents_research", params: {symbol: "002121"}, status: "queued", steps: [], result_ref: null, error: null, risk_level: "L0", created_by: "operator", created_at: "2026-10-20T21:00:00+08:00", started_at: null, finished_at: null});});
+    await act(async () => {finish({id: recoveryTaskId, type: "tradingagents_research", params: {symbol: "002121"}, status: "queued", steps: [], result_ref: null, error: null, risk_level: "L0", created_by: "operator", created_at: "2026-10-20T21:00:00+08:00", started_at: null, finished_at: null});});
     await screen.findByText(/持久状态待校准/);
     expect((screen.getByRole("button", {name: "开始完整研究"}) as HTMLButtonElement).disabled).toBe(true);
   });
@@ -548,7 +623,7 @@ describe("完整TradingAgents研究读者", () => {
 
   it("shows a completed cancellation as canceled while keeping a failed new run separate from a historical report", async () => {
     const result = saved();
-    result.task = {id: "task", status: "canceled", cancel_requested: true, failed: false, created_at: "2026-10-20T10:00:00+08:00", finished_at: "2026-10-20T10:01:00+08:00", error: null};
+    result.task = {id: sourceTaskId, status: "canceled", cancel_requested: true, failed: false, created_at: "2026-10-20T10:00:00+08:00", finished_at: "2026-10-20T10:01:00+08:00", error: null};
     vi.mocked(getTradingAgentsResearch).mockResolvedValueOnce(result);
     render(<TradingAgentsResearchPanel symbol="002121" defaultOpen compact/>);
     await screen.findByText("002121 · 已取消 · 历史报告 · 待核");

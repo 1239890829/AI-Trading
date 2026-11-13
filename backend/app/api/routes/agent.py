@@ -146,6 +146,22 @@ async def tradingagents_research_recovery_view(symbol: str, request: Request):
         raise HTTPException(status_code=422, detail=str(exc))
 
 
+@router.get("/agent/research/tradingagents/{symbol}/tasks/{task_id}")
+async def tradingagents_research_task_view(symbol: str, task_id: str):
+    """Paired saved reading only; task identity is resolved by the server."""
+    from sqlalchemy.exc import SQLAlchemyError
+    from app.services.tradingagents_research import read_task_view
+
+    try:
+        return {"data": await at._db_thread(read_task_view, symbol, task_id)}
+    except LookupError:
+        raise HTTPException(status_code=404, detail="研究任务不存在") from None
+    except ValueError:
+        raise HTTPException(status_code=422, detail="研究证券代码无效") from None
+    except SQLAlchemyError:
+        raise HTTPException(status_code=503, detail="研究任务暂不可读") from None
+
+
 
 
 @router.get("/agent/resource-usage")

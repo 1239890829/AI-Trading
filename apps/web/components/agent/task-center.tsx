@@ -475,8 +475,8 @@ export function TaskCenter() {
                 </p>
               )}
               {detail.type === "tradingagents_research" && typeof detail.params.symbol === "string" && /^\d{6}$/.test(detail.params.symbol) && <div>
-                <p className="text-[11px] text-zinc-600 dark:text-zinc-400">以下读取本股最近完整研究，不表示所选任务已生成报告或通过效果验证。</p>
-                <TradingAgentsResearchPanel key={`${detail.id}:${detail.status}`} symbol={detail.params.symbol} defaultOpen allowStart={false}/>
+                <p className="text-[11px] text-zinc-600 dark:text-zinc-400">以下只读取所选任务的保存报告；任务已结束不表示报告通过效果验证。</p>
+                <TradingAgentsResearchPanel key={detail.id} symbol={detail.params.symbol} taskId={detail.id} defaultOpen allowStart={false}/>
               </div>}
 
               <FactTimeline label="任务时点" items={[{label:"创建",value:detail.created_at ? timeText(detail.created_at) : "未记录",kind:"time"},{label:"开始",value:detail.started_at ? timeText(detail.started_at) : "未记录",kind:"time"},{label:"结束",value:detail.finished_at ? timeText(detail.finished_at) : "未记录",kind:"time"}]}/>

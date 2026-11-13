@@ -51,6 +51,10 @@ vi.mock("@/lib/api", () => ({
   cancelAgentTask: (...args: unknown[]) => cancelAgentTask(...(args as [])),
   createAgentTask: (...args: unknown[]) => createAgentTask(...(args as [])),
 }));
+vi.mock("@/components/detail/tradingagents-research-panel", () => ({
+  TradingAgentsResearchPanel: ({symbol, taskId, allowStart}: {symbol: string; taskId?: string; allowStart?: boolean}) =>
+    <div aria-label="研究任务目标" data-allow-start={String(allowStart)}>{symbol}:{taskId ?? "latest"}</div>,
+}));
 
 beforeEach(() => {
   resolveAgentTask.mockReset().mockResolvedValue({ ...ESCALATION_TODO, status: "succeeded", finished_at: "2026-09-10T14:06:00" });
@@ -75,6 +79,23 @@ async function renderWithTodo() {
   fireEvent.click(item);
   return item;
 }
+
+it("binds historical research selection to its task id even when two tasks share a stock", async () => {
+  const ids = ["1".repeat(32), "2".repeat(32)];
+  vi.mocked(getAgentTasks).mockResolvedValue(ids.map((id, index) => ({...ESCALATION_TODO,
+    id, type: "tradingagents_research", status: "succeeded", params: {symbol: "002121"},
+    result_ref: {kind: "tradingagents_research", id: `legacy-artifact-${index}`}})));
+  render(<TaskCenter/>);
+  const entries = await screen.findAllByText("TradingAgents完整研究");
+  fireEvent.click(entries[0]);
+  expect(screen.getByLabelText("研究任务目标").textContent).toBe(`002121:${ids[0]}`);
+  expect(screen.getByLabelText("研究任务目标").getAttribute("data-allow-start")).toBe("false");
+  expect(screen.getByText(/以下只读取所选任务的保存报告/)).toBeTruthy();
+  expect(screen.queryByText(/本股最近完整研究/)).toBeNull();
+  fireEvent.click(screen.getAllByText("TradingAgents完整研究")[1]);
+  expect(screen.getByLabelText("研究任务目标").textContent).toBe(`002121:${ids[1]}`);
+  expect(createAgentTask).not.toHaveBeenCalled();
+});
 
 it("groups a long execution trace without losing step conditions or changing disposition eligibility",async()=>{
   vi.mocked(getAgentTasks).mockResolvedValue([{...ESCALATION_TODO,steps:Array.from({length:20},(_,index)=>({index,name:`步骤 ${index}`,input_summary:`输入：尚未审议 ${index}.25 亿元`,output_summary:`输出：未执行交易 ${index}`,duration_ms:index,ok:index % 2 === 0}))}]);
