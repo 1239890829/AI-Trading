@@ -10,11 +10,15 @@
 
 旧任务的精确ID和证券共同绑定服务器持久结果引用，原发布hash与完整校验保留；TaskCenter、请求缓存、组件及迟到响应归属贯通。任务视图只读，不查当前启动/恢复资格，不触发取源、预算或模型。缺原件只显示不可核，角色原答缺失可独立降级；原证券最新读者不改。合同见[任务保存读取](ai/semantic-decisions.md#2026-11-13-所选任务的保存报告)和[API](system/api.md#2026-11-13-所选研究任务的保存读取)。
 
-Docker现场仍为`ai-trading-local:25956a7f-r1`且healthy，完整revision与本基点一致；完整研究/自动研究均关闭，持久任务0、研究结果文件0。本轮不能用夹具冒称已迁移历史或真实研究成功。源码完整指纹变化仍使旧生成授权拒绝漂移，没有承接pin/模型/scope/期限或旧unknown；原未合并CLI桥不在本批。新镜像只在准确PR/HEAD门与合并后CI通过后切换，继承原容器配置和三个数据卷，构建期间原服务保留。
+切换前冻结现场为`ai-trading-local:25956a7f-r1`且healthy，完整revision与本基点一致；完整研究/自动研究均关闭，持久任务0、研究结果文件0。本轮不能用夹具冒称已迁移历史或真实研究成功。源码完整指纹变化仍使旧生成授权拒绝漂移，没有承接pin/模型/scope/期限或旧unknown；原未合并CLI桥不在本批。新镜像只在准确PR/HEAD门与合并后CI通过后切换，继承原容器配置和三个数据卷，构建期间原服务保留；实际生效版本以[本批PR回执](https://github.com/1239890829/AI-Trading/pulls?q=is%3Apr+head%3Acodex%2Fresearch-history-reader)与本机忽略的`artifacts/local-services/windows-runtime/runtime-identity.json`核定。
 
-前端定向169项、类型/限定lint及隔离恢复原缺陷的判红已取得；后端首稿定向曾直接RO挂主目录，不计最终无密钥快照门。最终以Git树归档的隔离快照重跑后端、两时区前端、构建、文档/卫生/公开扫描；准确版本、最终计数、DegradedRelease/required CI/release_check、合并后CI与部署结果归本批PR回执及忽略的`artifacts/runs/research-history-reader-20261113/`，不沿用旧门绿色或预写已部署。
+代码实现提交`342ff5ba4ecc844293e0cd363c33750295afa7fe`。最终后端Git树`90adf4a8…`在禁网络、无实际.env/运行数据的容器内完整通过：9645 passed、103 skipped、372 subtests，pytest204.85秒，命令207.26秒；全pyflakes通过。前端Git树`27acd05e…`的194文件默认/UTC各3230 passed，命令319.13/227.28秒；类型32.24秒、ESLint68.53秒（0错误/3既有warning）、生产构建33.46秒。两树前端子树完全相同；后续仅三份后端测试冻结时钟和两份KB摘要变化，实际读取docs的MarkdownView已在90ad候选默认/UTC各11项补验。最终文档回填不改这些源/测试/脚本输入；原守卫与Markdown消费者按最终字节补验，准确HEAD CI仍重新取得。
 
-传播核对：原语义专题/API/细功能/W04和当前handoff同步；这是既有保存读取合同纠错，模型、图、数据源、评分、参数批准、整体产品导航和长期取舍不变，implementation-plan、plan-registry、INDEX、AGENTS及Skills不新增规则/文档，不适用修改。所有外部候选仍按完整审计去重结论分别判断，本轮不把导出、全局版本对照或自动评价平台写成已上线。
+首完整后端批9637通过/8失败：5项由本机测试tmpfs默认noexec导致，显式exec的同源合成CLI对照6项通过；本任务时区引用改用原BJ_TZ；两项旧榜单夹具在当前日已超60天，精确master同日对照先红，固定各自源日期后两文件及BJ守卫37项通过。全部原断言、60天窗及生产源码保留。新读者/BJ定向67项、旧邻域310项及TaskCenter隔离删除taskId后准确判红已留证。早期RO挂主目录的作者测试和CRLF归档被树校验拒绝的尝试均不作最终门。Windows原生doc-health存在未改脚本的路径分隔符误报，最终门使用与部署/CI一致的Linux完整守卫，不加豁免。103跳过及已有警告不称覆盖增强。
+
+本批模型/付费API调用0，同花顺和Decisions Key只核容器与开发配置中的存在性，无遗漏，不比较/输出值或hash，不用开发配置覆盖运行副本。准确DegradedRelease/required CI/release_check、合并后CI、最终镜像和页面结果归本批PR回执及忽略的`artifacts/runs/research-history-reader-20261113/`，本段本地工程证据不预写已部署、真实来源/研究成功或投资收益。
+
+传播核对：原语义专题/API/细功能/W04、仓库追踪及KB索引和当前handoff同步；这是既有保存读取合同纠错，模型、图、数据源、评分、参数批准、整体产品导航和长期取舍不变，implementation-plan、plan-registry、INDEX、AGENTS及Skills不新增规则/文档，不适用修改。所有外部候选仍按完整审计去重结论分别判断，本轮不把导出、全局版本对照或自动评价平台写成已上线。
 
 ### 上批已发布：名称、公开基金资料与美股来源闭环（2026-10-30）
 
