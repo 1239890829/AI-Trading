@@ -51,7 +51,7 @@
 
 **Agent 权限、预算与能力就绪**
 
-- **状态**：已完成
+- **状态**：进行中
 - **优先级**：P0
 - **阶段门**：G4
 - **门内序**：10
@@ -59,11 +59,15 @@
 - **依赖**：无
 - **效果前置**：无
 - **方案依据**：主方案 §6.7–§6.9；智能体附件 A/E
-- **范围**：先核本项目 C 类宿主执行、参数晋级与权限/预算，再比较外部候选。涉及 backend/app/services/code_executor.py、agent_params.py、experiments.py、evolution.py；不以候选 SDK 修复替代本项目止险。
-- **验收**：无批准/无完整证据不写线上策略覆盖；不运行应用内未隔离补丁；提示注入、缺policy、取消及未知用量失败关闭；现有合法低风险能力不退化；返回任务状态反映实际副作用。
+- **范围**：2026-11-13按用户指定普通模型与进程拓扑重开限定子范围：Windows已登录Codex CLI以固定gpt-6-luna供Docker普通生成，独立桥凭据；OpenAI Key仅Decisions，不自动回退API或扩大TradingAgents授权。原C纯提案、参数晋级与权限/预算成果保留，不重开策略晋级或另建预算系统。
+- **验收**：本次普通生成固定模型/订阅认证/独立桥凭据；未授权、坏输入、工具可用、取消、超时或终态未知均失败关闭，不自动回退API。同步/流式保留原接口和用量事实，普通会话不扩大宿主或研究权限。原无批准不晋级策略、不运行应用内未隔离补丁、合法低风险能力不退化的判据保留。
 - **证据**：前轮C纯提案与影子止险已取证并保留。2026-09-22 本纵切继续关闭参数晋级权限缺口：新增独立 `agent_param_promotion_approval`，人工先读 exact review package，再用独立于普通 API token 的 `ASHARE_AGENT_PROMOTION_TOKEN` 创建最多 24h 的一次性批准；批准绑定候选/当前基线/影子证据三组 digest 与仓库内 `docs/review|docs/research|artifacts` 真实效果证据文件的 SHA-256。消费时再次重算全部身份，并把 candidate CAS、approval consume、live-baseline CAS、参数写入及 30 日后置实验创建放进同一事务；任何候选/证据/基线/文件漂移、批准撤销/过期/重复消费、负面或不足 shadow verdict、实验基线采集失败均不写运行值。提交后 runtime refresh 若失败不伪装“无副作用”，返回 `runtime_refreshed=false/restart_required=true`，同一批准幂等重试只做 reconciliation。#100 合并后的 U49 复核又发现首版专用 token 只挂在 HTTP dependency，内部代码可绕过路由直接调用 approval service；后续加固把同一 token 判定下沉为 `core/auth.py` 唯一判据，创建/撤销 service 也必须显式传入并通过，HTTP 只负责 transport。迁移已在隔离 worktree DB 验证 upgrade/downgrade；定向/全量与最终精确提交见 handoff/发布回执。预算/取消终片另见 `docs/review/imp052-budget-cancel-20260922.md`：跨进程 slot 竞争、真实 DB 副本部署日 backfill、unknown token、I/O/time/retry 高水位、跨 worker cancel、Jev/LLM metadata sink、前后端完整门均有反例/验收。PR #103 合并后的 U49 又发现 `asyncio.Task.cancel()` 无法杀掉已进入 `to_thread()` 的同步 worker：首版可能先写 terminal、线程仍继续；follow-up 改为 running cooperative cancel/timeout checkpoint，in-flight bounded stage 真实 drain 后才确认终态，并补“线程未释放前 DB 仍 running”的反例。
-- **下一步**：2026-09-22 最后一纵切已补齐 `agent_resource_usage` 持久预算/usage ledger、北京日原子 slot、部署日 legacy backfill、unknown token fail-closed、输入/输出/timeout/retry 高水位、跨进程 `cancel_requested_at` 与 owner-confirmed 终态；结合前序 C 纯提案和 promotion authority，本任务工程验收闭环。后续仅按 U48/GOV-027 做机制生命周期复核；若预算策略、模型 provider 或进程拓扑变化再重开，不另建第二预算系统。
-- **恢复**：撤销有风险能力，保留只读服务与审计；worktree 不当 OS 沙箱。
+2026-11-13限定子范围：原型完成、接入未发布。开发者单独进行的固定公开prompt验证中，ChatGPT登录为true、child API credentials absent，指定gpt-6-luna，exit0返回精确`CLI_QUOTA_OK`；末次可观测usage为input8102、cached6912、output8、cache_write0、reasoning0。CLI startup出现两个typed error项，严格decoder拒绝，不能称桥验收通过。精确源码tag/commit、签名可执行文件hash、Direct三字段metadata及额外config/feature关闭项已有证据；System/cloud/managed MCP有效合层仍未证空。生产接入门false，普通网关API Key仍空，无余额fallback。
+
+Python消费端离线专项105通过，Windows桥/策略34通过，Linux31通过/3项Windows专用跳过。覆盖显式SSE error转LLMError、合法usage先回调、底层HTTP流关闭，以及真实惰性进程排空。未知startup error仍拒绝答案，坏或未知usage仍unknown，不补0；MockTransport证据不替代真实assistant取消/计量集成，后者尚未完成。全量首批的环境差异及两处旧样本消费钟修复见handoff，最终完整复跑另取准确tree回执。
+
+- **下一步**：继续验证System/cloud/managed MCP有效合层及真实assistant取消/计量集成，保留功能分支checkpoint，不推生产。后端全量9611通过/103跳过/372子测试通过及全pyflakes已核，准确tree见handoff；前端全量、PR、新HEAD三项CI及DegradedRelease/release_check、部署与普通会话仍未完成。2026-09-22预算/取消、C纯提案和promotion authority已完成事实保留；不另建账本，不启动定时模型或候选API消费。
+- **恢复**：关闭宿主桥和对应普通生成配置，回原规则或明确不可用，不回退付费API；保留只读服务、旧用量与审计。worktree不当OS沙箱。
 - **实施步骤**：①补贴合现状的权限矩阵；②C 类不因禁改 tests 就安全，测试导入 app 同样执行源码；③将结构有效/风险未剧变与效果达标/批准晋级分开，保留实验与CAS恢复；④覆盖取消、凭据最小化、输入/输出/时间/重试预算；⑤核源码默认与运行有效值差别，禁止修改真实配置来验收；⑥候选累计模型预检额度单独核实，不因换任务重置。
 - **开工前置**：不依赖全仓审计完成或模型付费评测；先验证本项目确定性权限与副作用边界。
 - **本轮边界**：最终形态仍不改真实策略参数/交易权限：C 类只产待审 patch；A 类只产 shadow 候选，只有独立 promotion-operator 批准可晋级。预算层只约束资源与任务真实终态，不把 token/字符预算变成金融策略阈值；普通业务 LLM 只写统一 metadata telemetry，不偷占自主 8 次额度。部署日旧模型用量不可追溯时按 unknown fail-closed，不通过重启/换 task 重置额度。

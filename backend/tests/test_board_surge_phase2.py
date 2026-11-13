@@ -99,7 +99,11 @@ def _db_rows() -> list[tuple]:
     return rows
 
 
-def test_score_candidates_orders_and_breakdown(tmp_path):
+def test_score_candidates_orders_and_breakdown(tmp_path, monkeypatch):
+    # Replay the September fixture at its own fact time; it is not current data.
+    # Only the consumer clock is pinned, so the production 60-day filter remains real.
+    as_of = datetime.fromisoformat("2026-09-11T15:00:00+08:00")
+    monkeypatch.setattr(dv, "beijing_now", lambda: as_of)
     db = _make_db(tmp_path, _db_rows())
     sky = tmp_path / "skyrocket.jsonl"
     sky.write_text("\n".join(

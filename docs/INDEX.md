@@ -1,5 +1,7 @@
 # 文档索引（INDEX）
 
+2026-11-13普通生成：[Codex订阅额度与API隔离](ai/semantic-decisions.md#2026-11-13-普通生成与订阅额度) → [Windows宿主桥与Docker运行边界](system/deployment.md#2026-11-13-普通生成与宿主桥)。普通模型固定gpt-6-luna，OpenAI Key仅Decisions；原型完成、接入未发布，System/cloud/managed MCP有效合层未证空，生产继续关闭，状态归[W05/IMP-052](stages/w05-agents.md#imp-052)。不恢复历史协作自动Bridge。
+
 2026-10-30用户批准[统一资产工作台](product/cross-asset-workbench.md)：A股、国内QDII/联接及有源条件的美股共用`/workbench`，不合并事实/账户/执行；[Decisions手动关系研究](ai/semantic-decisions.md#2026-10-30-decisions具名研究与统一工作台)不替代完整TradingAgents或质量准入。三项项目中性研究Skills归`skills/qdii-fund-research`、`skills/research-thesis-tracking`、`skills/us-filing-review`；数据、工程、运行与效果分别取证，未合格来源不冒称已接入。
 
 2026-10-27选股续修：[正式指数涨幅与来源交易题材](product/hunting-decision-design.md#2026-10-27-正式指数涨幅与来源交易题材) / [股票身份与逐阶段留痕](product/hunting-decision-design.md#2026-10-27-股票身份与逐阶段候选留痕) / [原复盘行动到评估草案](review/review-agent.md#2026-10-27-原行动到评估草案)。原风格/评分/晋级门保留，发布与实页按handoff核。

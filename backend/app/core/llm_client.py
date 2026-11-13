@@ -187,14 +187,11 @@ def _normalized_usage(raw: Any) -> dict[str, int] | None:
         return None
     inp = raw.get("input_tokens", raw.get("prompt_tokens"))
     out = raw.get("output_tokens", raw.get("completion_tokens"))
-    try:
-        inp_i = int(inp) if inp is not None else None
-        out_i = int(out) if out is not None else None
-    except (TypeError, ValueError):
+    # JSON booleans, fractional counts and numeric strings are not token receipts.
+    # Do not turn a malformed/partial receipt into invented zero or truncated usage.
+    if any(not isinstance(value, int) or isinstance(value, bool) or value < 0 for value in (inp, out)):
         return None
-    if inp_i is None or out_i is None or inp_i < 0 or out_i < 0:
-        return None
-    return {"input_tokens": inp_i, "output_tokens": out_i}
+    return {"input_tokens": inp, "output_tokens": out}
 
 
 def _emit_usage(callback: Callable[[dict[str, int] | None], None] | None, raw: Any) -> None:
@@ -371,6 +368,11 @@ def chat_completion(
     except httpx.HTTPError as exc:
         raise LLMError(f"LLM 请求失败：{exc}", LLMFailure.GATEWAY_ERROR) from exc
     if resp.status_code != 200:
+        try:
+            failed_body = resp.json()
+        except ValueError:
+            failed_body = None
+        _emit_usage(usage_callback, failed_body.get("usage") if isinstance(failed_body, dict) else None)
         raise LLMError(
             f"LLM HTTP {resp.status_code}",
             classify_http_failure(resp.status_code),
@@ -379,15 +381,15 @@ def chat_completion(
         body = resp.json()
     except ValueError as exc:
         raise LLMError("LLM 响应不是 JSON", LLMFailure.BAD_RESPONSE) from exc
+    _emit_usage(usage_callback, body.get("usage") if isinstance(body, dict) else None)
     try:
         content = body["choices"][0]["message"]["content"]
     except (KeyError, IndexError, TypeError) as exc:
         raise LLMError(
-            f"LLM 响应缺少 choices/message/content：{body}", LLMFailure.BAD_RESPONSE,
+            "LLM 响应缺少 choices/message/content", LLMFailure.BAD_RESPONSE,
         ) from exc
     if not isinstance(content, str) or not content.strip():
         raise LLMError("LLM 回复为空", LLMFailure.EMPTY)
-    _emit_usage(usage_callback, body.get("usage"))
     return content
 
 
@@ -499,6 +501,7 @@ def _stream_openai(
     *,
     temperature: float,
     timeout: float,
+    usage_callback: Callable[[dict[str, int] | None], None] | None = None,
 ) -> ChatStream:
     """OpenAI 兼容 SSE 流式。read 超时按「字节间隔」计，思维链长不会误杀。"""
     if not (base_url and api_key and model):
@@ -518,13 +521,27 @@ def _stream_openai(
     except httpx.HTTPError as exc:
         client.close()
         raise LLMError(f"LLM 请求失败：{exc}", LLMFailure.GATEWAY_ERROR) from exc
+    def _close() -> None:
+        # The iterator may never have started when its caller cancels immediately
+        # after headers. Closing only the client does not close an active response.
+        try:
+            resp.close()
+        finally:
+            client.close()
+
     if resp.status_code != 200:
-        body = resp.read()[:200]
-        resp.close()
-        client.close()
+        try:
+            body = resp.read()
+            try:
+                failed_body = json.loads(body)
+            except ValueError:
+                failed_body = None
+            _emit_usage(usage_callback, failed_body.get("usage") if isinstance(failed_body, dict) else None)
+        finally:
+            _close()
         raise LLMError(
-            f"LLM HTTP {resp.status_code}: {body!r}",
-            classify_http_failure(resp.status_code, body.decode("utf-8", "replace")),
+            f"LLM HTTP {resp.status_code}",
+            classify_http_failure(resp.status_code, body[:200].decode("utf-8", "replace")),
         )
 
     def _iter() -> Iterator[str]:
@@ -540,6 +557,16 @@ def _stream_openai(
                     chunk = json.loads(payload)
                 except ValueError:
                     continue
+                local_error = (
+                    isinstance(chunk, dict) and isinstance(chunk.get("error"), dict)
+                    and chunk["error"].get("type") == "local_codex_bridge"
+                )
+                if isinstance(chunk, dict) and ("usage" in chunk or local_error):
+                    _emit_usage(usage_callback, chunk.get("usage"))
+                if local_error:
+                    # An HTTP-200 SSE connection is transport availability, not
+                    # an answer. Never forward upstream message/request/key text.
+                    raise LLMError("本地 Codex 生成桥返回错误", LLMFailure.GATEWAY_ERROR)
                 try:
                     delta = chunk["choices"][0]["delta"].get("content")
                 except (KeyError, IndexError, TypeError):
@@ -547,10 +574,9 @@ def _stream_openai(
                 if isinstance(delta, str) and delta:
                     yield delta
         finally:
-            resp.close()
-            client.close()
+            _close()
 
-    return ChatStream(_iter(), client.close)
+    return ChatStream(_iter(), _close)
 
 
 def _stream_cli(
@@ -677,6 +703,7 @@ def stream_chat_completion(
     timeout: float = 30.0,
     provider: str = "openai",
     cli_path: str = "",
+    usage_callback: Callable[[dict[str, int] | None], None] | None = None,
 ) -> ChatStream:
     """按 provider 分发流式调用，返回 ChatStream。
 
@@ -688,7 +715,7 @@ def stream_chat_completion(
         return _stream_cli(model, messages, cli_path=cli_path)
     return _stream_openai(
         base_url, api_key, model, messages,
-        temperature=temperature, timeout=timeout,
+        temperature=temperature, timeout=timeout, usage_callback=usage_callback,
     )
 
 

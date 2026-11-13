@@ -11,7 +11,7 @@ from __future__ import annotations
 
 import asyncio
 import json
-from datetime import date
+from datetime import date, datetime
 from types import SimpleNamespace
 
 import pytest
@@ -234,13 +234,18 @@ def sky_env(tmp_path, monkeypatch):
     return d
 
 
-def test_skyrocket_reader_reads_what_writer_wrote(sky_env, fake_clock):
+def test_skyrocket_reader_reads_what_writer_wrote(sky_env, fake_clock, monkeypatch):
     """**读写同源**（回归守卫）：写侧落盘后，读侧默认路径必须命中同一份文件。
 
     这条守卫的形式很关键——它**只 patch 写侧**。若读侧再出现一份自持路径，
     读写就会各指一处，此用例立刻判红（而不是像事故那样两边都静默成功）。
     """
     from app.picks import distinctiveness as dv
+
+    # The fake calendar writes a September fact. Read at that same Beijing day;
+    # an old fixture must not silently become current data or age out with the host.
+    as_of = datetime.fromisoformat("2026-09-01T15:00:00+08:00")
+    monkeypatch.setattr(dv, "beijing_now", lambda: as_of)
 
     state = SimpleNamespace(hub=SimpleNamespace(provider=_SkyProvider(_SKY_ROWS)))
     out = asyncio.run(hh.record_daily_skyrocket(state))

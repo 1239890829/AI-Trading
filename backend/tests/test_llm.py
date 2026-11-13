@@ -20,7 +20,7 @@ import pytest
 
 sys.path.insert(0, ".")
 
-from app.core.llm_client import LLMError, chat_completion, extract_json_object
+from app.core.llm_client import LLMError, LLMFailure, chat_completion, extract_json_object, stream_chat_completion
 from app.news.llm import LLMSummarizer
 from app.news.router import SummaryRouter
 from app.review.analyzers import LLMAnalyzer, RulesAnalyzer
@@ -124,6 +124,169 @@ def test_chat_completion_bad_body_shapes():
         client = _client_with(lambda req, r=resp: r)
         with pytest.raises(LLMError):
             chat_completion("https://x", "k", "m", [{"role": "user", "content": "hi"}], client=client)
+
+
+_BRIDGE_USAGE = {"prompt_tokens": 19, "completion_tokens": 4}
+_NORMALIZED_BRIDGE_USAGE = {"input_tokens": 19, "output_tokens": 4}
+_BAD_USAGE = [
+    None, {}, {"prompt_tokens": 19}, {"prompt_tokens": True, "completion_tokens": 4},
+    {"prompt_tokens": 19, "completion_tokens": 0.5},
+    {"prompt_tokens": "19", "completion_tokens": "4"},
+    {"prompt_tokens": -1, "completion_tokens": 4},
+]
+
+
+def _bridge_error(usage):
+    return {"error": {"code": "cli_process_failed", "message": "synthetic-key synthetic-request",
+                      "type": "local_codex_bridge"}, "usage": usage}
+
+
+def test_http_failure_preserves_known_usage_before_raising_without_echoing_error_text():
+    events = []
+    client = _client_with(lambda req: httpx.Response(503, json=_bridge_error(_BRIDGE_USAGE)))
+    with pytest.raises(LLMError) as failure:
+        chat_completion("https://bridge.invalid/v1", "synthetic-key", "fixture-model",
+                        [{"role": "user", "content": "synthetic-request"}], client=client,
+                        usage_callback=lambda value: events.append(("usage", value)))
+    events.append(("raised", failure.value.kind))
+    assert events == [("usage", _NORMALIZED_BRIDGE_USAGE), ("raised", LLMFailure.GATEWAY_ERROR)]
+    assert "synthetic-key" not in str(failure.value)
+    assert "synthetic-request" not in str(failure.value)
+
+
+@pytest.mark.parametrize("usage", _BAD_USAGE)
+def test_http_failure_bad_or_missing_usage_stays_unknown(usage):
+    seen = []
+    client = _client_with(lambda req: httpx.Response(503, json=_bridge_error(usage)))
+    with pytest.raises(LLMError):
+        chat_completion("https://bridge.invalid/v1", "fixture-key", "fixture-model", [],
+                        client=client, usage_callback=seen.append)
+    assert seen == [None]
+
+
+def test_rejected_success_body_keeps_usage_but_never_echoes_body_secrets():
+    seen = []
+    payload = _bridge_error({"prompt_tokens": 7, "completion_tokens": 0})
+    client = _client_with(lambda req: httpx.Response(200, json=payload))
+    with pytest.raises(LLMError) as failure:
+        chat_completion("https://bridge.invalid/v1", "fixture-key", "fixture-model", [],
+                        client=client, usage_callback=seen.append)
+    assert failure.value.kind is LLMFailure.BAD_RESPONSE
+    assert seen == [{"input_tokens": 7, "output_tokens": 0}]
+    assert "synthetic-key" not in str(failure.value)
+    assert "synthetic-request" not in str(failure.value)
+
+
+class _TrackedSSEBody(httpx.SyncByteStream):
+    def __init__(self, chunks):
+        self.chunks = chunks
+        self.reads = 0
+        self.closes = 0
+
+    def __iter__(self):
+        for chunk in self.chunks:
+            assert self.closes == 0, "response was read after cancellation"
+            self.reads += 1
+            yield chunk
+
+    def close(self):
+        self.closes += 1
+
+
+def _sse_frame(value):
+    return ("data: " + _json.dumps(value) + "\n\n").encode()
+
+
+def _mock_sse_client(monkeypatch, chunks, status=200):
+    body = _TrackedSSEBody(chunks)
+    client = _client_with(lambda req: httpx.Response(status, stream=body,
+                          headers={"Content-Type": "text/event-stream"}))
+    monkeypatch.setattr("app.core.llm_client.httpx.Client", lambda **kwargs: client)
+    return client, body
+
+
+@pytest.mark.parametrize("usage", [_BRIDGE_USAGE, *_BAD_USAGE])
+def test_local_bridge_sse_error_never_becomes_an_answer_and_keeps_usage(monkeypatch, usage):
+    events = []
+    frame = _bridge_error(usage)
+    # Error takes precedence even if an invalid peer puts a choice in the same frame.
+    frame["choices"] = [{"delta": {"content": "must not be yielded"}}]
+    client, body = _mock_sse_client(monkeypatch, [b": waiting for verified answer\n\n", _sse_frame(frame)])
+    stream = stream_chat_completion("https://bridge.invalid/v1", "fixture-key", "fixture-model", [],
+                                    usage_callback=lambda value: events.append(("usage", value)))
+    assert body.reads == 0  # Header receipt does not consume the pending body.
+    with pytest.raises(LLMError) as failure:
+        next(stream)
+    events.append(("raised", failure.value.kind))
+    expected = _NORMALIZED_BRIDGE_USAGE if usage == _BRIDGE_USAGE else None
+    assert events == [("usage", expected), ("raised", LLMFailure.GATEWAY_ERROR)]
+    assert "synthetic-key" not in str(failure.value)
+    assert "synthetic-request" not in str(failure.value)
+    assert body.closes == 1 and client.is_closed
+
+
+def test_sse_error_after_partial_text_is_not_swallowed_as_success(monkeypatch):
+    seen = []
+    _mock_sse_client(monkeypatch, [
+        _sse_frame({"choices": [{"delta": {"content": "partial"}}]}),
+        _sse_frame(_bridge_error(_BRIDGE_USAGE)),
+    ])
+    stream = stream_chat_completion("https://bridge.invalid/v1", "fixture-key", "fixture-model", [],
+                                    usage_callback=seen.append)
+    assert next(stream) == "partial"
+    with pytest.raises(LLMError):
+        next(stream)
+    assert seen == [_NORMALIZED_BRIDGE_USAGE]
+
+
+def test_local_bridge_sse_error_is_not_an_empty_success_without_a_usage_callback(monkeypatch):
+    _mock_sse_client(monkeypatch, [_sse_frame(_bridge_error(_BRIDGE_USAGE)), b"data: [DONE]\n\n"])
+    stream = stream_chat_completion("https://bridge.invalid/v1", "fixture-key", "fixture-model", [])
+    with pytest.raises(LLMError):
+        list(stream)
+
+
+def test_verified_sse_answer_keeps_terminal_usage(monkeypatch):
+    seen = []
+    client, body = _mock_sse_client(monkeypatch, [
+        b": waiting\n\n", _sse_frame({"choices": [{"delta": {"content": "verified answer"}}]}),
+        _sse_frame({"choices": [{"delta": {}, "finish_reason": "stop"}], "usage": _BRIDGE_USAGE}),
+        b"data: [DONE]\n\n",
+    ])
+    stream = stream_chat_completion("https://bridge.invalid/v1", "fixture-key", "fixture-model", [],
+                                    usage_callback=seen.append)
+    assert "".join(stream) == "verified answer"
+    assert seen == [_NORMALIZED_BRIDGE_USAGE]
+    assert body.closes == 1 and client.is_closed
+
+
+@pytest.mark.parametrize("consume_first", [False, True])
+def test_closing_sse_after_headers_closes_the_actual_response_body(monkeypatch, consume_first):
+    client, body = _mock_sse_client(monkeypatch, [
+        _sse_frame({"choices": [{"delta": {"content": "first"}}]}),
+        _sse_frame({"choices": [{"delta": {"content": "not consumed"}}]}),
+    ])
+    stream = stream_chat_completion("https://bridge.invalid/v1", "fixture-key", "fixture-model", [])
+    assert body.reads == 0
+    if consume_first:
+        assert next(stream) == "first"
+    reads_at_cancel = body.reads
+    stream.close()
+    stream.close()
+    assert body.closes == 1 and client.is_closed
+    assert body.reads == reads_at_cancel
+
+
+def test_stream_http_error_preserves_usage_and_closes_response_without_secret_text(monkeypatch):
+    seen = []
+    client, body = _mock_sse_client(monkeypatch, [_json.dumps(_bridge_error(_BRIDGE_USAGE)).encode()], 503)
+    with pytest.raises(LLMError) as failure:
+        stream_chat_completion("https://bridge.invalid/v1", "fixture-key", "fixture-model", [],
+                               usage_callback=seen.append)
+    assert seen == [_NORMALIZED_BRIDGE_USAGE]
+    assert body.closes == 1 and client.is_closed
+    assert "synthetic-key" not in str(failure.value)
+    assert "synthetic-request" not in str(failure.value)
 
 
 def test_extract_json_object_variants():

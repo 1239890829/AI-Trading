@@ -71,6 +71,9 @@ jobs:
         # 纯函数文件按需声明 Node 环境；组件/浏览器行为仍走 jsdom，保留默认隔离。
         run: npx vitest run
 
+      - name: 宿主Codex纯生成桥离线测试
+        run: node --test ../../scripts/tests/codex-text-bridge.test.mjs ../../scripts/tests/codex-tool-policy.test.mjs
+
       - name: ESLint
         run: npx eslint .
 

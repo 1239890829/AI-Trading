@@ -1,8 +1,30 @@
-# 本批：统一资产工作台与具名关系研究
+# 本批：普通生成的Codex订阅通道
 
-> **摘要**：用户批准统一A股/基金/有源条件的美股工作台，保持原左右风格和执行隔离。基金正式净值/披露/手工记录与Decisions手动关联研究按真实能力交付；缺正式范围、估值输入和合格美股源时不冒称推荐或实时可用。完整门、准确发布、主目录生效与实际页面分别留证，工程不当效果。
+> **摘要**：用户指定普通生成使用Windows本机Codex已登录套餐、固定gpt-6-luna；OpenAI Key仅供Decisions，无普通API回退。宿主桥原型完成、接入未发布；System/cloud/managed MCP有效合层未证空，生产继续关闭。现役旧Docker的THS配置已加载，目录当次读取成功。旧资产、研究与回执保留历史身份。
 
 ## 1. 本轮范围与已核现场
+
+### 当前接续：普通生成的宿主桥（2026-11-13）
+
+用户明确普通助手用本机Codex CLI登录套餐，模型固定gpt-6-luna，OPENAI_API_KEY只供Decisions，普通聊天不得消耗API余额或自动回退。已从核对的origin/master `25956a7fb629d919034a2ba5db4328f521178d6c`在独立工作区建立`codex/codex-luna-bridge`；DEGRADED_FULL_CONTROL未撤销，作者反证不当独立Review。状态单点归[W05/IMP-052](stages/w05-agents.md#imp-052)，不领取第二个业务任务。
+
+宿主`127.0.0.1:8766`受鉴权纯生成桥原型完成，Docker兼容消费尚未接入发布。独立桥token只存backend/.env；生产接入门为false，普通`ASHARE_REVIEW_LLM_API_KEY`仍空，宿主认证不挂入容器，无余额fallback。定时模型开关、专用研究授权与历史unknown保留。
+
+开发者对固定公开prompt做过独立CLI验证，非生产桥/非网页：ChatGPT登录为true，child API credentials absent，指定gpt-6-luna，实际exit0返回精确`CLI_QUOTA_OK`。末次可观测usage为input8102、cached6912、output8（cache_write0、reasoning0）；cached为输入子集，不重复相加。CLI startup有两个typed error项，严格decoder拒绝，不能称桥验收通过。
+
+已核精确源码tag `rust-v0.167.0-alpha.4.1`及commit `d2c035639366e0bf2c316aa2065c24aabc12bcdc`、签名可执行文件SHA-256 `83f5c2dd2ac2902e0d96ba5d8ccdd27d513f57df4a9ab73e06a5a518028e9a2f`。catalog覆写三字段metadata已回读`tool_mode=direct`、`apply_patch_tool_type=null`、`experimental_supported_tools=[]`，额外config/feature关闭项也已有实质源码证据；System/cloud/managed MCP有效合层仍未证空，不能称最终工具隔离已通过，生产继续失败关闭。
+
+未知startup error仍拒绝答案，合法终态usage先保全再报错，坏或未知usage保留unknown，不补0。Python消费端四文件专项105通过（1项既有Starlette弃用警告，10.17秒），pyflakes通过；Windows桥/策略合批34通过，Linux同入口31通过、3项Windows专用跳过。真实惰性子进程验收覆盖超时、断连、正常停桥、拥有者崩溃、后代排空与重启不重领；未知排空保持阻断。旧实现反例确实判红；MockTransport证据不替代真实assistant从等待headers阶段取消及计量回调集成，后者尚未完成。
+
+首批全量9600通过、103跳过、11失败已保留原日志：5项为Docker临时盘noexec，4项为把项目快照放在守卫允许的/tmp树，另2项为旧样本未钉消费钟而超过生产60自然日窗。环境修正不改断言；两正例只绑定各自带+08的固定消费时刻，原陈旧/边界拒绝保留，相关三文件46通过。完整复跑以忽略产物中准确tree回执为准，不把首批失败写绿。
+
+修正环境和两处测试钟后的后端全量9611通过、103跳过、372子测试通过（4 worker按文件分配，pytest244.83秒、命令247.24秒），全pyflakes通过；四项告警为各worker的既有Starlette弃用提醒。源码快照tree为`8651dd1ecbdf55a2dc6186deebb80e7bd1b5911d`，只使用隔离临时文件/测试库、无网络及真实配置/业务卷；同树原失败及后续定向日志保留，未放宽断言或生产时效。
+
+当前仅保留功能分支checkpoint；前端全量、PR/准确HEAD发布、新桥宿主/容器加载均未完成，用户任务尚未完成。前端应用源码未改，Linux已实跑新增CI的Node入口，但不把它当整项前端门通过。
+
+现役Docker仍为旧发布。THS运行配置已加载，正式目录接口当次概念390、行业320均HTTP200，资产读取开关为true；原服务token和设备配对保留。该取源结果独立于新桥，不作为普通模型或全系统数据已验收的证明。
+
+传播已覆盖总方案、plan-registry、语义/部署、.env.example、INDEX及本stage入口；AGENTS/Skills/协作与产品/策略/数据专题不适用原因见plan-registry§1.1。其他API消费者只作有用途、增量验证、预算和退出条件的候选，不自动花费或准入。Node桥测试入口已纳入frontend CI；完整门、准确HEAD的DegradedRelease/required CI/release_check、合并后CI和真实普通会话仍待后续实际回执，不沿用下文旧PR绿色。
 
 ### 当前接续：名称、公开基金资料与美股来源闭环（2026-10-30）
 
@@ -930,8 +952,8 @@ G4/IMP-094代码`6769563a11c0bd523dc3d6c885837b3aee951b8f`从最新master09765ab
 ## 1. 现场、授权与最新验收
 
 - **当前主门**：G4
-- **主切片首选**：IMP-019
-- **候选顺位与执行边界**：本轮IMP-093阅读工程已闭环，先完成其发布收尾，不自动领取第二业务任务。IMP-019；IMP-094首批已发布，用户追加执行验证结果收拢已实现，当前只做其完整门与发布收尾，补充运行以本批准确HEAD回执为准；原性能效果缺口保留，不自动增加观察窗口。PR #287已合并038db987，PR及post-master三job成功。用户明确要求的两窗已采集，AM/PM claim均保留；临时跟进已删除，手机仍暂缓，不追加观察窗或补造证据。
+- **主切片首选**：IMP-052
+- **候选顺位与执行边界**：IMP-052 → IMP-019；2026-11-13只推进用户直派普通生成桥，收尾后不自动领取第二业务任务。以下为旧接续事实，不是本轮执行授权：本轮IMP-093阅读工程已闭环，先完成其发布收尾，不自动领取第二业务任务。IMP-019；IMP-094首批已发布，用户追加执行验证结果收拢已实现，当前只做其完整门与发布收尾，补充运行以本批准确HEAD回执为准；原性能效果缺口保留，不自动增加观察窗口。PR #287已合并038db987，PR及post-master三job成功。用户明确要求的两窗已采集，AM/PM claim均保留；临时跟进已删除，手机仍暂缓，不追加观察窗或补造证据。
 - **基点与分支**：PR #288已合并dcc1b144437ac72c499859f7c9b74a1f52d849b3，PR/post-master CI各三job成功，准确HEAD DegradedRelease与release_check已核。15:07后端69452按统一入口激活；前端44673/09:18:28仍Next16.3.8/build gCR78igTpBCF3LAzv3fJQ。新批codex/workbench-context-read-state从经GitHub API核对的该最新master创建；fetch传输失败不冒充成功，已在本地的同SHA对象可用。主树三份未跟踪evolution原件保留。上述为施工前运行基线；新批完整门已过，准确HEAD发布及激活以artifacts/runs/workbench-context-20261015/release/及统一runtime-identity.json为权威，不能以施工树或旧PID冒充现役。
 - **双窗结果与当前修复**：AM55次额外GET中54次200、一次health约6048ms超时，114报价行7stale；PM57次额外GET均200，120报价行3stale。200不等于新鲜，快照完成钟不等于完整源钟。PM通知/模拟挂单读取出现真实SQLite锁等待；旧代码把同步读放在async事件循环，隔离真实文件锁反例7项先红，修后连相关回归92项通过。只将通知读取、挂单清单/计数、持仓快照移入工作线程，各Session在工作线程内开闭；过滤、通知资格、交易硬门、错误反馈、TTL/轮频不变。完整门已通过（BE5628/82跳过，FE默认/UTC各1702）；准确HEAD发布与必要后端激活按本批release/activation.json及统一runtime-identity回执分别核验，详见[报告§27](system/runtime-performance.md#27-2026-10-15-真实交易双窗与sqlite读取隔离)。
 - **当前追加切片**：用户明确选择“指数成分股，切回股票盘口”。旧涨速深链兼容到成分，指数/股票两向校正URL与面板；静态成员复用同花顺既有接口，不新增行情全量订阅。隐藏分时/资金/财报/公司/竞价/题材改由可见消费者首取；原行情刷新/过期标准、选股及消息规则不变。分组数字/勾选分列，异常仅文字着色。旧行为反例先红，六份真实成员完整响应离线验证，UI夹具420/390/320检查；本批BE5632/82跳过、FE两时区各1711/140文件、tsc/ESLint/build与文档门已过，ESLint仍只有2条既有warning。盘中偶发故障仍只依据已结束双窗，不补造新窗，见[报告§28](system/runtime-performance.md#28-2026-10-15-工作台标的视角与按需读取)。

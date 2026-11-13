@@ -42,6 +42,20 @@ backend/.venv/bin/python scripts/local-services.py check
 
 真实WS验收复用获准工作台，配对后完整刷新，核新101、当前证券非空帧与后续行情。每个连接使用新短效票据，不缓存长期凭据。不导出含票据的HAR/请求头，不为启动检查另建工具WS；握手不提升盘前/休市/失败报价质量。
 
+## 2026-11-13 普通生成与宿主桥
+
+源码入口为`scripts/codex-text-bridge.mjs`，固定版本工具策略为`scripts/codex-tool-policy.mjs`；对应离线测试为`scripts/tests/codex-text-bridge.test.mjs`及`scripts/tests/codex-tool-policy.test.mjs`。测试通过不等于允许启动。
+
+用户指定普通生成使用 Windows 本机已登录的 Codex CLI、ChatGPT 套餐额度和固定 `gpt-6-luna`。`scripts/codex-text-bridge.mjs` 原型设计为在宿主回环 `127.0.0.1:8766` 提供受鉴权的 `/v1/chat/completions` 兼容入口，Docker 后端拟使用 `http://host.docker.internal:8766/v1`。原型完成、接入未发布；生产接入门为false，普通`ASHARE_REVIEW_LLM_API_KEY`仍为空。这不是历史协作自动 Bridge，也不承担改码、PR 或发布动作。
+
+独立 `ASHARE_CODEX_BRIDGE_TOKEN` 只存 `backend/.env`；接入验收后，普通 `ASHARE_REVIEW_LLM_API_KEY` 才使用该网关 token，不是供应商 API Key。`OPENAI_API_KEY` 仅供 Decisions，不传给普通生成或宿主 CLI。宿主登录凭据不挂入容器，普通链失败不自动改用 API 余额、其它模型、Claude CLI 或 TradingAgents。
+
+桥只接收有界生成输入，固定模型和已登录认证通道。启动/执行前必须落实禁用宿主工具、shell、搜索、MCP、插件、hooks 和宿主 Skills；临时工作目录、read-only 或事后拒绝工具事件不能单独证明隔离。桥令牌、模型、结构、大小、并发或认证不符即拒绝；取消、超时及未知用量沿原生命周期如实记录，不以断开连接冒充进程已排空。
+
+接入不改变复盘、新闻模型、探针、自主任务等定时开关，也不扩大专用研究授权。普通生成与 Decisions 的用途和后续候选准入归[语义蓝图](../ai/semantic-decisions.md#2026-11-13-普通生成与订阅额度)。开发者固定公开prompt的独立CLI验证已返回目标文本，但两个typed startup error使严格decoder拒绝，不能当生产桥或网页验收。精确源码tag/commit、签名可执行文件hash、Direct三字段metadata及额外config/feature关闭项已有证据；System/cloud/managed MCP有效合层仍未证空，生产继续关闭。
+
+未知startup error仍拒绝答案，合法终态usage先保全再报错，未知或坏usage不补0。Python消费端离线专项105通过，含SSE error、错误用量回调和底层流关闭反例；真实assistant取消/计量集成尚未完成，不能用MockTransport关闭断言代替运行验收。完整本地门、PR/准确HEAD发布与新桥加载未完成，当前只保留功能分支checkpoint。
+
 ## Docker
 
 **生产部署**（2026-09-04，双镜像构建）：
