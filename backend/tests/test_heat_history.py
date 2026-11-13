@@ -11,11 +11,12 @@ from __future__ import annotations
 
 import asyncio
 import json
-from datetime import date
+from datetime import date, datetime
 from types import SimpleNamespace
 
 import pytest
 
+from app.core.bjtime import BJ_TZ
 from app.picks import heat_history as hh
 
 
@@ -234,14 +235,18 @@ def sky_env(tmp_path, monkeypatch):
     return d
 
 
-def test_skyrocket_reader_reads_what_writer_wrote(sky_env, fake_clock):
+def test_skyrocket_reader_reads_what_writer_wrote(sky_env, fake_clock, monkeypatch):
     """**读写同源**（回归守卫）：写侧落盘后，读侧默认路径必须命中同一份文件。
 
-    这条守卫的形式很关键——它**只 patch 写侧**。若读侧再出现一份自持路径，
+    这条守卫的形式很关键——路径**只 patch 写侧**。若读侧再出现一份自持路径，
     读写就会各指一处，此用例立刻判红（而不是像事故那样两边都静默成功）。
     """
     from app.picks import distinctiveness as dv
 
+    # fake_clock 的交易日历、写侧 asof 与读侧 60 日窗口使用同一北京日。
+    as_of = datetime(2026, 9, 1, 15, 30, tzinfo=BJ_TZ)
+    monkeypatch.setattr(hh, "beijing_now", lambda: as_of)
+    monkeypatch.setattr(dv, "beijing_now", lambda: as_of)
     state = SimpleNamespace(hub=SimpleNamespace(provider=_SkyProvider(_SKY_ROWS)))
     out = asyncio.run(hh.record_daily_skyrocket(state))
     assert out["recorded"] == len(_SKY_ROWS) and out["date"] == "2026-09-01"

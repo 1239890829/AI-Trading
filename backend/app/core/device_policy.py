@@ -43,6 +43,7 @@ READ_PATHS = frozenset({
     "/picks/discovery-memberships",
     "/agent/kb/tree", "/agent/kb/file",
     "/agent/research/tradingagents/{symbol}",
+    "/agent/research/tradingagents/{symbol}/tasks/{task_id}",
     '/announcements/{symbol}',
     '/assistant/daily-summary',
     '/assistant/entity-dict',

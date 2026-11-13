@@ -525,8 +525,15 @@ def _latest(symbol: str) -> dict | None:
         run_id = pointer["run_id"]
         if not isinstance(run_id, str) or not re.fullmatch(r"[0-9a-f]{32}", run_id):
             return None
-        path = folder / run_id / "result.json"
-        result, actual = _read_bound(path)
+        result, actual = _read_bound(folder / run_id / "result.json")
+        return _completed_result(symbol, run_id, result, actual, pointer.get("result_sha256"))
+    except (OSError, ValueError, TypeError, KeyError):
+        return None
+
+
+def _completed_result(symbol, run_id, result, actual, expected_sha) -> dict | None:
+    """The shared saved-report validator, independent of the current pointer."""
+    try:
         review = result.get("review_summary")
         if (result.get("review_state") not in {"unreviewed", "finite_failed_requires_review"}
                 or not isinstance(review, dict)
@@ -543,7 +550,7 @@ def _latest(symbol: str) -> dict | None:
                 or result.get("upstream_sha") != UPSTREAM_SHA
                 or not all(re.fullmatch(r"[0-9a-f]{64}", result.get(key, ""))
                            for key in ("input_sha256", "method_sha256"))
-                or pointer.get("result_sha256") != actual
+                or expected_sha != actual
                 or result.get("verification") != VERIFICATION or result.get("production_eligible") is not False
                 or not isinstance(result.get("reports"), dict) or set(result["reports"]) != set(REPORTS)
                 or any(not isinstance(v, str) or not v.strip() for v in result["reports"].values())):
@@ -715,6 +722,13 @@ def read_view(symbol: str, app, *, session_factory=None, saved_only=False, check
     state["recovery"] = projection(symbol, state["task"], app,
         session_factory=session_factory, check=check_recovery)
     return state
+
+
+def read_task_view(symbol: str, task_id: str, *, session_factory=None) -> dict:
+    """Read only the saved run named by this exact persisted successful task."""
+    from app.services._tradingagents_saved_task import read
+
+    return read(symbol, task_id, session_factory=session_factory)
 
 
 def read_saved_summary(symbol: str, *, session_factory=None) -> dict:

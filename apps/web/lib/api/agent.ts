@@ -145,6 +145,8 @@ export interface TradingAgentsResearchReport {
 }
 
 export interface TradingAgentsResearchView {
+  requested_task_id?: string;
+  saved_result_state?: "available" | "unavailable";
   startup_conditions_not_checked?: boolean;
   symbol: string; enabled: boolean; executable: boolean;
   blockers: {code: string; message: string}[];
@@ -165,12 +167,15 @@ export interface TradingAgentsResearchView {
   };
 }
 
-/** Ordinary paired read. Opening this reader never creates a research task. */
-export async function getTradingAgentsResearch(symbol: string, options: {savedOnly?: boolean; checkRecovery?: boolean} = {}): Promise<TradingAgentsResearchView> {
+/** Saved research read; taskId selects one persisted task without starting or recovering research. */
+export async function getTradingAgentsResearch(symbol: string, options: {savedOnly?: boolean; checkRecovery?: boolean; taskId?: string} = {}): Promise<TradingAgentsResearchView> {
   if (!/^\d{6}$/.test(symbol)) throw new Error("完整研究需要六位证券代码");
+  const taskMode = options.taskId !== undefined;
+  if (taskMode && (!/^[0-9a-f]{32}$/.test(options.taskId!) || options.checkRecovery)) throw new Error("任务报告需要准确任务编号且仅可只读");
   const params = new URLSearchParams();
-  if (options.savedOnly && !options.checkRecovery) params.set("saved_only", "true");
-  const data = (await getJson<TradingAgentsResearchView>(`/api/agent/research/tradingagents/${symbol}${options.checkRecovery ? "/recovery" : ""}${params.size ? `?${params}` : ""}`)).data;
+  if (!taskMode && options.savedOnly && !options.checkRecovery) params.set("saved_only", "true");
+  const suffix = taskMode ? `/tasks/${options.taskId}` : options.checkRecovery ? "/recovery" : "";
+  const data = (await getJson<TradingAgentsResearchView>(`/api/agent/research/tradingagents/${symbol}${suffix}${params.size ? `?${params}` : ""}`)).data;
   const keys: TradingAgentsReportKey[] = ["market_report", "sentiment_report", "news_report", "fundamentals_report", "investment_plan", "trader_investment_plan", "final_trade_decision"];
   const lineage = data?.latest?.recovery_lineage;
   const lineageKeys = ["version", "source_task_id", "source_run_id", "recovery_task_id", "source_method_sha256", "recovery_method_sha256",
@@ -191,12 +196,24 @@ export async function getTradingAgentsResearch(symbol: string, options: {savedOn
     || !Array.isArray(recovery.blockers) || recovery.blockers.some(row => !row || typeof row.code !== "string" || typeof row.message !== "string")
     || recovery.state === "available" && (!recovery.source_task_id || !recovery.run_id || recovery.blockers.length > 0)
     || recovery.state === "available" && !options.checkRecovery);
+  const invalidTaskResult = taskMode && (!data || data.requested_task_id !== options.taskId || !data.task || data.task.id !== options.taskId
+    || data.latest !== null && (typeof data.latest !== "object" || Array.isArray(data.latest))
+    || !["queued", "running", "succeeded", "failed", "canceled", "needs_confirm"].includes(data.task.status)
+    || data.executable !== false || data.startup_conditions_not_checked !== true || data.task_read_unavailable === true
+    || data.required_model_slots !== null || data.budget !== null
+    || data.admission?.state !== "not_checked" || data.admission.method_sha256 !== null
+    || !recovery || recovery.state !== "not_checked" || recovery.source_task_id !== null || recovery.run_id !== null
+    || !Array.isArray(recovery.blockers) || recovery.blockers.length !== 0
+    || data.saved_result_state !== (data.latest ? "available" : "unavailable")
+    || data.latest && (data.task.status !== "succeeded" || data.latest.state !== "completed"
+      || typeof data.latest.run_id !== "string" || !/^[0-9a-f]{32}$/.test(data.latest.run_id)
+      || data.latest.run_id !== data.task.result_run_id));
   if (!data || data.symbol !== symbol || typeof data.enabled !== "boolean" || typeof data.executable !== "boolean"
     || !Array.isArray(data.blockers) || data.blockers.some(row => !row || typeof row.code !== "string" || typeof row.message !== "string")
     || data.executable && (!data.enabled || data.blockers.length > 0)
     || !data.admission || typeof data.admission.state !== "string"
     || data.latest === undefined || data.task === undefined
-    || data.verification !== "unverified_full_graph_research" || data.production_eligible !== false || invalidLineage || invalidRecovery
+    || data.verification !== "unverified_full_graph_research" || data.production_eligible !== false || invalidLineage || invalidRecovery || invalidTaskResult
     || data.task?.result_run_id !== undefined && data.task.result_run_id !== null
       && (data.task.status !== "succeeded" || typeof data.task.result_run_id !== "string" || !/^[0-9a-f]{32}$/.test(data.task.result_run_id))
     || data.task?.reused_identical_selection !== undefined && (typeof data.task.reused_identical_selection !== "boolean"

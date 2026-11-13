@@ -10,7 +10,7 @@ from types import SimpleNamespace as NS
 import duckdb
 import pytest
 
-from app.core.bjtime import beijing_now
+from app.core.bjtime import BJ_TZ, beijing_now
 from app.market import lhb_archive
 from app.picks import board_surge as bs
 from app.picks import distinctiveness as dv
@@ -99,7 +99,10 @@ def _db_rows() -> list[tuple]:
     return rows
 
 
-def test_score_candidates_orders_and_breakdown(tmp_path):
+def test_score_candidates_orders_and_breakdown(tmp_path, monkeypatch):
+    # 行情夹具截止 09-11，榜单日期 09-10；固定同一北京时点，不随墙钟过期。
+    as_of = datetime(2026, 9, 11, 15, 30, tzinfo=BJ_TZ)
+    monkeypatch.setattr(dv, "beijing_now", lambda: as_of)
     db = _make_db(tmp_path, _db_rows())
     sky = tmp_path / "skyrocket.jsonl"
     sky.write_text("\n".join(
